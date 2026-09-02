@@ -5,6 +5,7 @@ import type {
   CollabChanges,
   CollabOpened,
   CollabWaitResult,
+  WorkspaceGitLogEntry,
   WorkspaceStreamEvent,
   TasksWorkspace,
 } from "./lib/tasks-api.ts";
@@ -64,8 +65,12 @@ type WorkspaceStub = {
     status(): Promise<unknown>;
     // scope names the mount to operate on — required in practice now that
     // every project repo is a mount (log always, commit whenever >1 dirty).
-    commit(input: { message: string; scope: string }): Promise<unknown>;
-    log(input: { limit?: number; scope: string }): Promise<unknown>;
+    commit(input: {
+      amendIfHead?: string;
+      message: string;
+      scope: string;
+    }): Promise<{ amended: boolean; commitOid: string }>;
+    log(input: { limit?: number; scope: string }): Promise<WorkspaceGitLogEntry[]>;
   };
 };
 
@@ -349,6 +354,16 @@ export class TasksWorkspaceApi extends RpcTarget implements TasksWorkspace {
     });
   }
 
+  glob(pattern: string): Promise<string[]> {
+    return this.#withWorkspace(async (ws) => {
+      const paths = await ws.glob(this.#qualified(pattern));
+      return paths.flatMap((path) => {
+        const key = this.#repoRelative(path);
+        return key === null ? [] : [key];
+      });
+    });
+  }
+
   read(path: string): Promise<string | null> {
     return this.#withWorkspace((ws) => ws.readFile(this.#qualified(path)));
   }
@@ -369,14 +384,23 @@ export class TasksWorkspaceApi extends RpcTarget implements TasksWorkspace {
     return this.#withWorkspace((ws) => ws.git.status());
   }
 
-  async commit(message: string): Promise<unknown> {
+  async commit(
+    message: string,
+    options: { amendIfHead?: string } = {},
+  ): Promise<{ amended: boolean; commitOid: string }> {
     this.#assertOwnerAct("commit");
     // scope pins the commit to this capability's mount — commits never span
     // mounts, and every project repo is one now.
-    return this.#withWorkspace((ws) => ws.git.commit({ message, scope: this.#repoPath }));
+    return this.#withWorkspace((ws) =>
+      ws.git.commit({
+        ...(options.amendIfHead === undefined ? {} : { amendIfHead: options.amendIfHead }),
+        message,
+        scope: this.#repoPath,
+      }),
+    );
   }
 
-  log(limit = 5): Promise<unknown> {
+  log(limit = 5): Promise<WorkspaceGitLogEntry[]> {
     return this.#withWorkspace((ws) => ws.git.log({ limit, scope: this.#repoPath }));
   }
 

@@ -3,9 +3,18 @@ import viteReact from "@vitejs/plugin-react";
 import { cloudflare } from "@cloudflare/vite-plugin";
 import tailwindcss from "@tailwindcss/vite";
 import { defineConfig } from "vite";
+import captunVite from "captun/vite";
 import { writeWranglerConfig } from "./scripts/generate-wrangler-config.ts";
 
 writeWranglerConfig();
+
+// Local development against a real project: the project's config worker can
+// only proxy to an HTTPS origin, so CAPTUN_TUNNEL_NAME exposes this dev
+// server as https://<name>.tunnels.iterate.com (HTTP and WebSockets, HMR
+// included) — the same plugin and knobs as apps/os. Point the project at it
+// with the docs-app-origin KV key (docs/remote-apps.md).
+const captunGateway = process.env.CAPTUN_GATEWAY?.trim() || "https://tunnels.iterate.com";
+const captunName = process.env.CAPTUN_TUNNEL_NAME?.trim();
 
 export default defineConfig({
   server: {
@@ -30,5 +39,14 @@ export default defineConfig({
       },
     }),
     viteReact(),
+    ...(captunName
+      ? [
+          captunVite({
+            gateway: captunGateway,
+            name: captunName,
+            token: process.env.CAPTUN_TOKEN?.trim() || undefined,
+          }),
+        ]
+      : []),
   ],
 });

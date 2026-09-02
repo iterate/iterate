@@ -57,6 +57,7 @@
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.2",
     "capnweb": "npm:@iterate-com/capnweb@^0.10.0",
+    "captun": "https://github.com/iterate/captun/releases/download/v0.0.3-websocket.6aa1207/captun-0.0.3.tgz",
     "iterate": "workspace:*",
     "lucide-react": "^0.553.0",
     "react": "^19.2.7",

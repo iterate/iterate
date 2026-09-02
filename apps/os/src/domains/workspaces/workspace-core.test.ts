@@ -58,7 +58,7 @@ function fakeKv() {
  * APPLY to the tree (content and deletions) exactly like production main, so
  * post-commit fall-through assertions test the real read-your-write shape. */
 function fakeRepo(tree: Record<string, string>) {
-  const commits: { changes: unknown[]; message: string }[] = [];
+  const commits: { amendIfHead?: string; changes: unknown[]; message: string }[] = [];
   const snapshotCalls: string[][] = [];
   const repo: MountRepoAccess = {
     readFile: async ({ encoding, path }) => {
@@ -88,13 +88,20 @@ function fakeRepo(tree: Record<string, string>) {
       return { commitOid: "head-oid", files };
     },
     commitFiles: async (input) => {
-      commits.push({ changes: input.changes, message: input.message });
+      commits.push({
+        ...(input.amendIfHead === undefined ? {} : { amendIfHead: input.amendIfHead }),
+        changes: input.changes,
+        message: input.message,
+      });
       for (const change of input.changes) {
         if ("delete" in change && change.delete) delete tree[change.path];
         else if ("content" in change) tree[change.path] = change.content;
         else if ("contentBase64" in change) tree[change.path] = atob(change.contentBase64);
       }
       return {
+        // The fake's head is always "head-oid"; matching it is what a real
+        // repo would call an amend.
+        amended: input.amendIfHead === "head-oid",
         branch: "main",
         changedPaths: input.changes.map((change) => change.path),
         commitOid: `commit-${commits.length}`,
@@ -307,6 +314,19 @@ describe("git status, commit, and log", () => {
     await expect(core.readFile(`${SCRATCH_ROOT}/notes.txt`)).resolves.toBe("survives");
     const statusAfter = await core.gitStatus();
     expect(statusAfter.mounts.find((mount) => mount.path === "/config")?.changes).toEqual([]);
+  });
+
+  test("commit forwards amendIfHead to the repo and reports whether it amended", async () => {
+    const { config, core } = subject();
+    await core.writeFile("/config/log.md", "## 2026-09-02\n- first\n");
+    const first = await core.gitCommit({ amendIfHead: "not-the-head", message: "log" });
+    expect(first.amended).toBe(false);
+    expect(config.commits[0]).toMatchObject({ amendIfHead: "not-the-head", message: "log" });
+
+    await core.writeFile("/config/log.md", "## 2026-09-02\n- first\n- second\n");
+    const second = await core.gitCommit({ amendIfHead: "head-oid", message: "log" });
+    expect(second.amended).toBe(true);
+    expect(config.commits[1]).toMatchObject({ amendIfHead: "head-oid" });
   });
 
   test("commit refuses to span mounts and names the scope choices", async () => {

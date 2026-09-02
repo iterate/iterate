@@ -9,9 +9,10 @@ export type DocsAppOptions = {
 };
 
 /**
- * One link capability, two lenses — the input shape picks the view:
+ * One link capability, three lenses — the input shape picks the view:
  * `path` mints the document view, `repo` (+ optional `task`) mints the
- * task-board view. Exactly one of the two.
+ * task-board view, `notes` (+ optional `note`) mints the notes view.
+ * Exactly one of the three.
  */
 export type DocsLinkInput =
   | {
@@ -30,6 +31,16 @@ export type DocsLinkInput =
       repo: string;
       /** Repo-relative task file to open (a .md file under a `tasks/` folder). */
       task?: string;
+    }
+  | {
+      /**
+       * Absolute /repos/** path of the repo whose `notes/` folder the view
+       * shows. Notes are scoped to a repo alone — the app keeps its own
+       * notes workspace per repo, so no `workspace` here.
+       */
+      notes: string;
+      /** Repo-relative note to open (a .md file under the `notes/` folder). */
+      note?: string;
     };
 
 type DocsProject = {
@@ -57,30 +68,56 @@ export class DocsAppRpcTarget extends RpcTarget {
   }
 
   /**
-   * Build a URL into the app for one workspace: the document view when the
-   * input carries `path`, the task-board view when it carries `repo`
-   * (+ optional `task`). Validation mirrors what each view applies on open,
-   * so a minted link can only address something the UI will accept.
+   * Build a URL into the app: the document view when the input carries
+   * `path`, the task-board view when it carries `repo` (+ optional `task`),
+   * the notes view when it carries `notes` (+ optional `note`). Validation
+   * mirrors what each view applies on open, so a minted link can only
+   * address something the UI will accept.
    */
   async link(input: DocsLinkInput): Promise<string> {
-    const workspace = requireWorkspacePath(input.workspace);
     // Discriminate by VALUE, not key presence: capnweb callers are loose
     // JSON, and a key that exists holding undefined must not pick a lens.
-    const loose = input as { path?: string; repo?: string; task?: string };
+    const loose = input as {
+      path?: string;
+      repo?: string;
+      task?: string;
+      notes?: string;
+      note?: string;
+      workspace?: string;
+    };
     const wantsDocument = typeof loose.path === "string";
     const wantsBoard = typeof loose.repo === "string";
-    if (wantsDocument === wantsBoard) {
-      throw new Error("pass exactly one of path (document view) or repo (board view)");
+    const wantsNotes = typeof loose.notes === "string";
+    if ([wantsDocument, wantsBoard, wantsNotes].filter(Boolean).length !== 1) {
+      throw new Error(
+        "pass exactly one of path (document view), repo (board view), or notes (notes view)",
+      );
     }
+    // The document and board views render inside ONE workspace; the notes
+    // view is scoped to a repo alone (the app keeps its own notes workspace
+    // per repo), so it neither needs nor reads a workspace.
+    if (!wantsNotes && typeof loose.workspace !== "string") {
+      throw new Error("the document and board views need a workspace");
+    }
+    const workspace = wantsNotes ? undefined : requireWorkspacePath(loose.workspace!);
     const path = wantsDocument ? requireDocumentPath(loose.path!) : undefined;
     const repo = wantsBoard ? requireRepoPath(loose.repo!) : undefined;
     // task belongs to the board lens alone — a document link ignores it
     // rather than failing board-path checks for a view that never reads it.
     const task = wantsBoard && loose.task !== undefined ? requireTaskPath(loose.task) : undefined;
+    // Same for note and the notes lens.
+    const notes = wantsNotes ? requireRepoPath(loose.notes!) : undefined;
+    const note = wantsNotes && loose.note !== undefined ? requireNotePath(loose.note) : undefined;
     const itx = await this.#env.ITX.get();
     try {
       const url = new URL(await itx.appUrl("docs"));
-      url.searchParams.set("workspace", workspace);
+      if (notes !== undefined) {
+        url.pathname = "/notes";
+        url.searchParams.set("repo", notes);
+        if (note !== undefined) url.searchParams.set("note", note);
+        return url.href;
+      }
+      url.searchParams.set("workspace", workspace!);
       if (path !== undefined) {
         url.searchParams.set("path", path);
         return url.href;
@@ -119,7 +156,12 @@ export const DocsApp = {
               : parseOverride(override, options.proxy.originOverrideKvKey);
           const target = new URL(request.url);
           target.protocol = origin.protocol;
-          target.host = origin.host;
+          // hostname + port, never `host`: the URL host setter keeps the
+          // request's own port when the new value carries none, and local
+          // project hosts always carry one (docs--slug.localhost:<port>) —
+          // that port would ride along to the vessel and dead-end there.
+          target.hostname = origin.hostname;
+          target.port = origin.port;
           return fetch(new Request(new Request(target, request), { redirect: "manual" }));
         } finally {
           itx[Symbol.dispose]();
@@ -183,6 +225,16 @@ export function requireTaskPath(value: string): string {
     throw new Error(
       `task path must be a .md file below a "tasks" folder: ${JSON.stringify(value)}`,
     );
+  }
+  return path;
+}
+
+/** A note path is repo-relative: a Markdown file below the top-level
+ * `notes/` folder — the SAME folder the notes view lists and writes. */
+export function requireNotePath(value: string): string {
+  const path = requireCanonicalPath(value, "note path");
+  if (!path.startsWith("notes/") || !/\.(?:md|markdown)$/i.test(path)) {
+    throw new Error(`note path must be a .md file under "notes/": ${JSON.stringify(value)}`);
   }
   return path;
 }

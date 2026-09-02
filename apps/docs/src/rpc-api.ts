@@ -23,6 +23,7 @@ import {
   boardWorkspacePath,
   isBoardId,
   normalizeRepoPath,
+  notesWorkspacePath,
 } from "./lib/board-shared.ts";
 import type { TasksWorkspace, WorkspaceListEntry } from "./lib/tasks-api.ts";
 import type {
@@ -63,7 +64,7 @@ export class DocsApiRoot extends RpcTarget implements DocsApi {
         `authentication failed: ${error instanceof Error ? error.message : String(error)}`,
       );
     }
-    return new DocsProjectApi(dial, projectId, resolved);
+    return new DocsProjectApi(dial, projectId, resolved, this.#env.OS_BASE_URL);
   }
 
   #resolveCredential(credential?: string | ProjectCredential): ProjectCredential {
@@ -93,12 +94,35 @@ class DocsProjectApi extends RpcTarget implements DocsProject {
   readonly #dial: ProjectDial;
   readonly #projectId: string;
   readonly #credential: ProjectCredential;
+  readonly #osBaseUrl: string;
 
-  constructor(dial: ProjectDial, projectId: string, credential: ProjectCredential) {
+  constructor(
+    dial: ProjectDial,
+    projectId: string,
+    credential: ProjectCredential,
+    osBaseUrl: string,
+  ) {
     super();
     this.#dial = dial;
     this.#projectId = projectId;
     this.#credential = credential;
+    this.#osBaseUrl = osBaseUrl;
+  }
+
+  /** The project's agents, newest first — the `@` completion source. */
+  async agents(): Promise<{ path: string; title: string | null }[]> {
+    const agents = (await this.#dial.withProject((project) => project.agents.list())) as {
+      path: string;
+      title?: string;
+    }[];
+    return agents.map((agent) => ({ path: agent.path, title: agent.title ?? null }));
+  }
+
+  /** The agent's page in OS — the same URL shape OS itself links to. */
+  async agentUrl(agentPath: string): Promise<string> {
+    const path = requireCanonicalAgentPath(agentPath);
+    const { slug } = await this.#dial.withProject((project) => project.identity());
+    return new URL(`/projects/${slug}/agents/streams${path}`, this.#osBaseUrl).href;
   }
 
   async projectId(): Promise<string> {
@@ -141,6 +165,19 @@ class DocsProjectApi extends RpcTarget implements DocsProject {
     if (normalized === null) throw new Error("bad repo path");
     return new TasksWorkspaceApi(this.#dial, requireWorkspacePath(workspacePath), normalized, {
       lazyCreate: false,
+    });
+  }
+
+  /**
+   * The notes of one repo: the same workspace capability as a board, bound
+   * to the app's one notes workspace for that repo (see notesWorkspacePath)
+   * and lazily created on first use.
+   */
+  notes(repoPath: string = DEFAULT_REPO_PATH): TasksWorkspace {
+    const normalized = normalizeRepoPath(repoPath);
+    if (normalized === null) throw new Error("bad repo path");
+    return new TasksWorkspaceApi(this.#dial, notesWorkspacePath(normalized), normalized, {
+      lazyCreate: true,
     });
   }
 
@@ -387,6 +424,17 @@ type WorkspaceDocumentStub = {
 export function resolveDocumentPath(workspacePath: string, value: string): string {
   const path = requireDocumentPath(value);
   return path.startsWith("/") ? path : `${workspacePath}/${path}`;
+}
+
+/** An agent path is a canonical `/agents/...` stream path. */
+function requireCanonicalAgentPath(value: string): string {
+  if (
+    !/^\/agents\/[A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)*$/.test(value) ||
+    value.split("/").some((segment) => segment === "." || segment === "..")
+  ) {
+    throw new Error(`invalid agent path: ${JSON.stringify(value)}`);
+  }
+  return value;
 }
 
 function stringClaim(value: unknown): string | null {

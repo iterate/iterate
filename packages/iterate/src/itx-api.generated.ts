@@ -3619,6 +3619,16 @@ export type RepoCreateInput =
 
 /** Command object for committing a batch of repo file mutations. */
 export type CommitRepoFilesInput = {
+  /**
+   * Tidy history: when the branch head is EXACTLY this commit (a full 40-hex
+   * oid), the new commit REPLACES it — same parents, the head's tree plus
+   * these changes, this message — instead of stacking on top. When the head
+   * has moved on (someone else committed in between) an ordinary commit lands
+   * on top; the result's `amended` says which happened. Decided inside the
+   * repo's serialized write, so "still the head" cannot race another writer.
+   * Content is never at stake either way, only the shape of history.
+   */
+  amendIfHead?: string;
   author?: { email: string; name: string };
   branch?: string;
   changes: RepoFileChange[];
@@ -3627,6 +3637,8 @@ export type CommitRepoFilesInput = {
 
 /** Result returned after a repo commit attempt, including no-op commits. */
 export type CommitRepoFilesResult = {
+  /** True when `amendIfHead` matched the head and the commit replaced it. */
+  amended: boolean;
   branch: string;
   changedPaths: string[];
   commitOid: string;
@@ -5442,6 +5454,13 @@ export type WorkspaceStatus = {
 
 /** Input to `WorkspaceGit.commit` — one mount's changes become one commit on its repo's main. */
 export type WorkspaceCommitInput = {
+  /**
+   * Tidy history: when the repo's head is EXACTLY this commit oid, the new
+   * commit REPLACES it (same parents, head's tree plus these changes, this
+   * message) instead of stacking on top; when the head has moved on, an
+   * ordinary commit lands on top. The result's `amended` says which happened.
+   */
+  amendIfHead?: string;
   author?: { email: string; name: string };
   message: string;
   /** The mount to commit (its mount path). Optional when exactly one mount is dirty. */
@@ -5450,6 +5469,8 @@ export type WorkspaceCommitInput = {
 
 /** Result of `WorkspaceGit.commit` — the commit landed on the scoped mount's repo main. */
 export type WorkspaceCommitResult = {
+  /** True when `amendIfHead` matched the head and the commit replaced it. */
+  amended: boolean;
   branch: string;
   /** Committed paths, spelled as absolute WORKSPACE paths (mount point included). */
   changedPaths: string[];

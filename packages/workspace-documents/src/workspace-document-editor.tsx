@@ -6,6 +6,7 @@ import { markdown } from "@codemirror/lang-markdown";
 import { useCollabEditor } from "./use-collab-editor.ts";
 import type { CollabEditorApi } from "./collab-editor-api.ts";
 import type { WorkspaceDocumentTransport } from "./types.ts";
+import { referencesExtension, type ReferenceHost } from "./references.ts";
 
 /**
  * Shared source editor: CodeMirror 6 over the workspace collab lane.
@@ -25,8 +26,12 @@ export function WorkspaceDocumentEditor({
   onStatus,
   onRequestClose,
   apiRef,
+  references,
 }: {
   transport: WorkspaceDocumentTransport;
+  /** Reference kinds to light up as pills (with `@` / `[[` completion).
+   * Referentially stable, please — a new object rebuilds the editor. */
+  references?: ReferenceHost;
   displayName?: string;
   /** Host-facing document identifier used in callbacks. */
   path: string;
@@ -68,12 +73,13 @@ export function WorkspaceDocumentEditor({
       ]),
       EditorView.lineWrapping,
       placeholder(emptyPlaceholder),
+      ...(references === undefined ? [] : [referencesExtension(references)]),
       EditorView.theme({
         "&": { fontSize: "14px", height: "100%" },
         ".cm-content": { fontFamily: "var(--font-mono, ui-monospace)", padding: "16px" },
       }),
     ],
-    [emptyPlaceholder, mode],
+    [emptyPlaceholder, mode, references],
   );
   const editor = useCollabEditor({
     apiRef,

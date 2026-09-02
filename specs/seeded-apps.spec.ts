@@ -2,6 +2,7 @@ import { expect } from "@playwright/test";
 import { spinnerWaiter } from "middlewright";
 import { E2E_HEAVY_TEST_TIMEOUT_MS } from "@iterate-com/shared/test-support/e2e-policy";
 import { uniqueFixtureSlug } from "@iterate-com/shared/test-support/fixture-slug";
+import { appUrl, docsOriginForBaseUrl } from "./test-support/app-hosts.ts";
 import {
   signUpWithEmailOtp,
   startEmailOtpSignIn,
@@ -271,33 +272,3 @@ test("review a workspace document in the seeded Docs app", async ({ baseURL, pag
     .waitFor();
   await commentsPanel.getByText("Selected text", { exact: true }).waitFor();
 });
-
-/**
- * App hosts are `<app>--<project>.<base>`, one origin per app. Locally the
- * base is the dev server's `.localhost` port (Chromium resolves `*.localhost`
- * to loopback natively — no Host-header tricks needed, unlike Node fetch);
- * deployed runs read the wildcard base from APP_CONFIG_PROJECT_HOSTNAME_BASES
- * with the same preview-hostname fallback as the ingress e2e.
- */
-function appUrl(appSlug: string, projectSlug: string, baseURL: string) {
-  const base = new URL(baseURL);
-  if (base.hostname === "localhost" || base.hostname.endsWith(".localhost")) {
-    return `${base.protocol}//${appSlug}--${projectSlug}.localhost${base.port ? `:${base.port}` : ""}/`;
-  }
-  const raw = process.env.APP_CONFIG_PROJECT_HOSTNAME_BASES?.trim();
-  const configuredBase = raw ? String((JSON.parse(raw) as string[])[0]) : undefined;
-  const previewMatch = /^os\.(iterate-preview-\d+)\.com$/.exec(base.hostname);
-  const projectBase = configuredBase || (previewMatch ? `${previewMatch[1]}.app` : base.hostname);
-  return `${base.protocol}//${appSlug}--${projectSlug}.${projectBase}/`;
-}
-
-function docsOriginForBaseUrl(baseURL: string): string {
-  const override = process.env.DOCS_APP_ORIGIN?.trim();
-  if (override) return override.replace(/\/+$/, "");
-  const previewMatch = /^os\.iterate-preview-(\d+)\.com$/.exec(new URL(baseURL).hostname);
-  if (previewMatch) {
-    return `https://docs-preview-${previewMatch[1]}.iterate-dev-preview.workers.dev`;
-  }
-  if (new URL(baseURL).hostname === "os.iterate.com") return "https://docs.iterate.workers.dev";
-  throw new Error("DOCS_APP_ORIGIN is required when running the Docs app spec outside preview.");
-}

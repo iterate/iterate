@@ -45,6 +45,17 @@ export interface DocsProject {
    * are refused.
    */
   workspaceAt(workspacePath: string, repoPath?: string): TasksWorkspace;
+  /**
+   * The notes of one repo (its `notes/` folder) through the app's ONE notes
+   * workspace for that repo — app-owned naming, lazily created on first use
+   * like a board, so the owner acts (commit) are allowed. Synchronous on
+   * purpose so calls pipeline through it.
+   */
+  notes(repoPath?: string): TasksWorkspace;
+  /** The project's agents — what `@` completion offers. */
+  agents(): Promise<{ path: string; title: string | null }[]>;
+  /** The OS page of one agent, on this deployment's OS origin. */
+  agentUrl(agentPath: string): Promise<string>;
   /** Every workspace stream in the project, newest first (the pickers).
    * Ancestor stream paths that were never created as workspaces are pruned;
    * `board` is resolved for the app's own board workspaces. */

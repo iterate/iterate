@@ -721,6 +721,15 @@ export class RepoDurableObject extends DurableObject<Env> {
       }
       console.warn(`lazy commit fell back to the clone lane (safe): ${attempt.detail}`);
     }
+    // The clone lane never amends: its git wrapper cannot re-parent a
+    // commit, and amending is only ever about history's SHAPE — so an
+    // ordinary commit on top is the correct degraded outcome, reported as
+    // `amended: false`.
+    if (parsed.amendIfHead !== undefined) {
+      console.warn(
+        `amendIfHead ${parsed.amendIfHead} requested but the clone lane stacks an ordinary commit instead`,
+      );
+    }
     const result = await commitFilesToArtifactRepo({
       author: parsed.author,
       branch,
@@ -752,6 +761,7 @@ export class RepoDurableObject extends DurableObject<Env> {
     await this.#flushPendingCommitCompleted();
 
     return {
+      amended: false,
       branch: result.branch,
       changedPaths: result.changedPaths,
       commitOid: result.commitOid,
@@ -776,6 +786,7 @@ export class RepoDurableObject extends DurableObject<Env> {
     const branch = REPO_DEFAULT_BRANCH;
     const reader = this.#lazyReader();
     const command = {
+      amendIfHead: parsed.amendIfHead,
       author: {
         date: new Date(),
         email: parsed.author?.email ?? ITERATE_GITHUB_BOT_COMMIT_AUTHOR.email,
@@ -795,7 +806,11 @@ export class RepoDurableObject extends DurableObject<Env> {
     // moment the push classifies as applied: the pushed floor and the new
     // snapshot become visible together, so no concurrent freshness read can
     // observe the snapshot under the old floor and sync backwards.
-    const onApplied = (applied: { commitOid: string; parentCommitOid: string }) => {
+    const onApplied = (applied: {
+      amended: boolean;
+      commitOid: string;
+      parentCommitOid: string;
+    }) => {
       this.#recordPushedHead({
         branch,
         commitOid: applied.commitOid,
@@ -806,7 +821,14 @@ export class RepoDurableObject extends DurableObject<Env> {
         branch,
         commitOid: applied.commitOid,
       });
-      this.#scheduleGithubMirrorPush(branch);
+      // An amend rewrote main: a plain mirror push would be a non-fast-forward
+      // against the commit it replaced, forever. Force it — but only while
+      // GitHub's head IS that replaced commit (a lease), so a commit pushed
+      // straight to GitHub in between is never discarded by the mirror.
+      this.#scheduleGithubMirrorPush(
+        branch,
+        applied.amended ? { forceIfHead: applied.parentCommitOid } : {},
+      );
       this.ctx.storage.kv.delete(repoHeadStorageKey(branch));
     };
     let outcome: Awaited<ReturnType<typeof reader.commitFiles>>;
@@ -844,7 +866,13 @@ export class RepoDurableObject extends DurableObject<Env> {
     if (outcome.changedPaths.length === 0) {
       return {
         kind: "completed",
-        result: { branch, changedPaths: [], commitOid: outcome.commitOid, noChanges: true },
+        result: {
+          amended: false,
+          branch,
+          changedPaths: [],
+          commitOid: outcome.commitOid,
+          noChanges: true,
+        },
       };
     }
 
@@ -874,6 +902,7 @@ export class RepoDurableObject extends DurableObject<Env> {
     return {
       kind: "completed",
       result: {
+        amended: outcome.amended,
         branch,
         changedPaths: outcome.changedPaths,
         commitOid: outcome.commitOid,
@@ -924,6 +953,7 @@ export class RepoDurableObject extends DurableObject<Env> {
     await this.#flushPendingCommitCompleted();
 
     return {
+      amended: false,
       branch: result.branch,
       changedPaths: result.changedPaths,
       commitOid: result.commitOid,
@@ -1297,13 +1327,24 @@ export class RepoDurableObject extends DurableObject<Env> {
     return this.#serializeWrite(() => this.#pushToGithub(input));
   }
 
-  async #pushToGithub(input: { force?: boolean }): Promise<{ branch: string; commitOid: string }> {
+  async #pushToGithub(input: {
+    force?: boolean;
+    /** Force-with-lease: force ONLY while GitHub's branch head is exactly
+     * this commit — the one an amend replaced. Anything else (someone pushed
+     * to GitHub directly) gets the ordinary non-forced push and its
+     * non-fast-forward failure, never a silent overwrite. */
+    forceIfHead?: string;
+  }): Promise<{ branch: string; commitOid: string }> {
     const link = this.#requireGithubLink();
     const branch = REPO_DEFAULT_BRANCH;
     let commitOid: string | null = null;
     try {
       const repo = await this.gitAccess();
       const token = await this.#mintGithubToken(link);
+      const force =
+        input.force === true ||
+        (input.forceIfHead !== undefined &&
+          (await this.#githubBranchHead({ branch, link, token })) === input.forceIfHead);
 
       // Full single-branch clone: a mirror push must be able to send every
       // commit GitHub is missing, not just the tip. `noCheckout` because a
@@ -1344,7 +1385,7 @@ export class RepoDurableObject extends DurableObject<Env> {
 
       await git.remote({ add: { name: "github", url: githubRemoteUrl(link) } });
       const pushed = await git.push({
-        force: input.force === true,
+        force,
         ref: branch,
         remote: "github",
         username: "x-access-token",
@@ -1765,9 +1806,9 @@ export class RepoDurableObject extends DurableObject<Env> {
    * The failure fact on the repo stream is the record; the next commit's push
    * self-heals the mirror.
    */
-  #scheduleGithubMirrorPush(branch: string): void {
+  #scheduleGithubMirrorPush(branch: string, options: { forceIfHead?: string } = {}): void {
     if (branch !== REPO_DEFAULT_BRANCH || this.getGithubLink() === null) return;
-    const push = this.#serializeWrite(() => this.#pushToGithub({}));
+    const push = this.#serializeWrite(() => this.#pushToGithub(options));
     this.ctx.waitUntil(
       push.catch((error: unknown) => {
         console.warn("github mirror push failed (recorded on the repo stream)", error);
@@ -2133,6 +2174,7 @@ async function mutateArtifactRepo<Extra extends Record<string, unknown>>(input: 
     const [head] = await git.log({ depth: 1 });
     if (!head) throw new Error("Repo has no commits.");
     return {
+      amended: false,
       branch: input.branch,
       changedPaths,
       commitOid: head.oid,
@@ -2164,6 +2206,7 @@ async function mutateArtifactRepo<Extra extends Record<string, unknown>>(input: 
   }
 
   return {
+    amended: false,
     branch: input.branch,
     changedPaths,
     commitOid: commit.oid,
@@ -2303,6 +2346,12 @@ function parseCommitFilesInput(input: CommitRepoFilesInput): CommitRepoFilesInpu
     ) {
       throw new Error("commitFiles author must include non-empty name and email.");
     }
+  }
+  if (input.amendIfHead !== undefined) {
+    if (typeof input.amendIfHead !== "string") {
+      throw new Error("commitFiles amendIfHead must be a commit oid string.");
+    }
+    assertCommitOid(input.amendIfHead);
   }
 
   return {

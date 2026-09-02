@@ -51,7 +51,8 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
   #todoApp = TodoApp.create(this.env);
 
   /** Agent-callable app helpers: `itx.worker.docs.link({ workspace, path })`
-   * mints the document view, `link({ workspace, repo, task? })` the board. */
+   * mints the document view, `link({ workspace, repo, task? })` the board,
+   * `link({ notes, note? })` the notes view. */
   get docs() {
     return this.#docsApp.rpc;
   }
@@ -89,10 +90,7 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
       file === null
         ? "(AGENTS.md was deleted from /repos/config — no standing project notes.)"
         : `Project AGENTS.md (auto-injected from /repos/config/AGENTS.md — commit updates there to teach every agent):\n\n${file.content}`;
-    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(content));
-    const hash = [...new Uint8Array(digest).slice(0, 8)]
-      .map((byte) => byte.toString(16).padStart(2, "0"))
-      .join("");
+    const hash = await sha256Prefix(content);
     const results = await Promise.allSettled(
       agentPaths.map(async (path) => {
         const agent = itx.agents.get(path);
@@ -114,6 +112,90 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
     // Attempt every agent before failing: the batch is redelivered
     // at-least-once on a throw, and the per-transition keys turn retries of
     // the agents that DID land into no-ops.
+    const failed = results.find((result) => result.status === "rejected");
+    if (failed !== undefined && failed.status === "rejected") throw failed.reason;
+  }
+
+  /**
+   * NOTE MENTIONS — agents addressed from plain text. Notes are Markdown
+   * files under notes/ (the Docs app's Notes view edits and auto-commits
+   * them; any other commit path works too). A note mentions an agent inline
+   * as `@/agents/<path>`, and frontmatter `agent: /agents/<path>` makes that
+   * agent a watcher of the whole note. Nothing runs at edit time — the commit
+   * that lands the text IS the trigger: this reads back the notes the commit
+   * changed and tells each distinct agent once, as a developer message
+   * carrying a link it can open (born on first mention if it does not exist
+   * yet). Content is read at HEAD, not at the commit: an autosave burst
+   * (several commits, one edit) then notifies once with the latest text. The
+   * idempotency key hashes the mentioning line (for a watcher: the whole
+   * file), so an amended commit re-landing the same text, a later commit that
+   * left the line alone, and an at-least-once redelivery are all no-ops —
+   * only a changed line (or file) speaks again.
+   */
+  async #notifyNoteMentions(event: StreamEvent): Promise<void> {
+    const commitOid = event.payload?.commitOid;
+    if (typeof commitOid !== "string") return;
+    const itx = this.itx;
+    const { files } = await itx.repo.commitDetails({ commitOid });
+    const notePaths = files
+      .filter((file) => file.status !== "deleted" && /^notes\/.+\.md$/.test(file.path))
+      .map((file) => file.path);
+    const results = await Promise.allSettled(
+      notePaths.map(async (path) => {
+        const file = await itx.repo.readFile({ path });
+        if (file === null) return;
+        const { mentions, watcher } = noteAgentMentions(file.content);
+        if (mentions.length === 0 && watcher === null) return;
+        const url = await this.#docsApp.rpc.link({ notes: "/repos/config", note: path });
+        const notifications: { agentPath: string; idempotencyKey: string; content: string }[] = [];
+        for (const { agentPath, line } of mentions) {
+          notifications.push({
+            agentPath,
+            idempotencyKey: `iterate/config/notes-mention:v1:${path}:${agentPath}:${await sha256Prefix(line)}`,
+            content: `You were mentioned in ${url} (${path}):\n\n> ${line}`,
+          });
+        }
+        if (watcher !== null) {
+          const content =
+            file.content.length > 8_000
+              ? `${file.content.slice(0, 8_000)}\n…(truncated; open the link for the rest)`
+              : file.content;
+          notifications.push({
+            agentPath: watcher,
+            idempotencyKey: `iterate/config/notes-watch:v1:${path}:${watcher}:${await sha256Prefix(file.content)}`,
+            content: `A note you watch changed: ${url} (${path}). Current content:\n\n${content}`,
+          });
+        }
+        const perAgent = await Promise.allSettled(
+          [...new Set(notifications.map((notification) => notification.agentPath))].map(
+            async (agentPath) => {
+              const agent = itx.agents.get(agentPath);
+              const snapshot = await agent.processor.snapshot();
+              if ((snapshot.state?.birthCertificate ?? null) === null) await agent.create();
+              // ONE append per agent: the batch commits atomically.
+              await agent.append(
+                ...notifications
+                  .filter((notification) => notification.agentPath === agentPath)
+                  .map(({ idempotencyKey, content }) => ({
+                    type: "events.iterate.com/agents/context-added" as const,
+                    idempotencyKey,
+                    payload: {
+                      content,
+                      llmRequestPolicy: { behaviour: "after-current-request" as const },
+                      role: "developer" as const,
+                    },
+                  })),
+              );
+            },
+          ),
+        );
+        const failed = perAgent.find((result) => result.status === "rejected");
+        if (failed !== undefined && failed.status === "rejected") throw failed.reason;
+      }),
+    );
+    // Attempt every note and agent before failing: the batch is redelivered
+    // at-least-once on a throw, and the per-line/per-file keys turn retries
+    // of the notifications that DID land into no-ops.
     const failed = results.find((result) => result.status === "rejected");
     if (failed !== undefined && failed.status === "rejected") throw failed.reason;
   }
@@ -206,10 +288,7 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
     // The platform's embedded copy is newline-stripped; the same
     // normalization keeps "unforked file" byte-identical.
     const content = file.content.replace(/\n$/, "");
-    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(content));
-    const hash = [...new Uint8Array(digest).slice(0, 8)]
-      .map((byte) => byte.toString(16).padStart(2, "0"))
-      .join("");
+    const hash = await sha256Prefix(content);
     return parsePromptSections({ content, fallbackKey: "agent/system-prompt" }).map(
       (section, index) => ({
         type: "events.iterate.com/agents/context-added" as const,
@@ -309,6 +388,7 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
         const itx = this.itx;
         const agents = await itx.agents.list();
         await this.#syncAgentsMdContext(agents.map((agent) => agent.path));
+        await this.#notifyNoteMentions(event);
         break;
       }
       case "events.iterate.com/project/heartbeat-triggered": {
@@ -409,4 +489,40 @@ function latestSectionOccurrence(
   );
   if (item === undefined) return null;
   return { offset: item.offset, content: item.payload?.content };
+}
+
+/**
+ * The agents a note addresses: every inline `@/agents/<path>` with the exact
+ * line that carries it, plus the frontmatter `agent:` watcher. Plain-text
+ * conventions — a path may contain dots but never ends in one, so a
+ * sentence-ending period ("ping @/agents/ops.") is prose, not path. The
+ * frontmatter parse is deliberately minimal: a `---` fence at the very top,
+ * one `agent:` line inside it, no YAML library.
+ */
+function noteAgentMentions(content: string): {
+  mentions: { agentPath: string; line: string }[];
+  watcher: string | null;
+} {
+  const mentions: { agentPath: string; line: string }[] = [];
+  for (const line of content.split(/\r?\n/)) {
+    for (const match of line.matchAll(/@(\/agents\/[A-Za-z0-9_./-]*[A-Za-z0-9_/-])/g)) {
+      mentions.push({ agentPath: match[1]!, line });
+    }
+  }
+  const frontmatter = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(content);
+  const agentValue = frontmatter === null ? null : /^agent:(.*)$/m.exec(frontmatter[1]!);
+  const watcher = agentValue === null ? "" : agentValue[1]!.trim();
+  return {
+    mentions,
+    watcher: /^\/agents\/[A-Za-z0-9_./-]*[A-Za-z0-9_/-]$/.test(watcher) ? watcher : null,
+  };
+}
+
+/** The first 16 hex chars of SHA-256(text) — the idempotency-key fingerprint
+ * every reaction in this file uses for "same content, same key". */
+async function sha256Prefix(text: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+  return [...new Uint8Array(digest).slice(0, 8)]
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
 }
