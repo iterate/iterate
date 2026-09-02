@@ -4,7 +4,7 @@
 //   Hundreds of clients connect into ONE stream (each providing a live capnweb capability at its
 //   own mount path, with a hibernatable stub pager WebSocket), the stream DO EVICTS — losing every
 //   in-memory paged-in stub — and on wake it can STILL call every client's capability:
-//   page → paged-in stub → invoke (context/hibernatable-rpc-stub.ts).
+//   page → paged-in stub → invoke (context/rpc-stub-directory.ts).
 //
 // The property made deterministic: a live deployment waits minutes for Cloudflare's own
 // eviction; here cloudflare:test's evictDurableObject() forces the

@@ -10,14 +10,13 @@
 
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { IterateContext } from "./iterate-context.ts";
-import type { BuiltInsEnv } from "./context/built-ins.ts";
 import { Parking } from "./context/rpc-stub-relay.ts";
 import { DurableObjectNameCodec } from "./context/durable-object-names.ts";
 import type { StreamEvent, StreamEventInput } from "./stream/events.ts";
 import type { WaitForEventFilter } from "./stream/stream.ts";
-import type { IterateContextDurableObject } from "./iterate-context-durable-object.ts";
+import type { Env, IterateContextDurableObject } from "./iterate-context-durable-object.ts";
 
-export class ItxEntrypoint extends WorkerEntrypoint<BuiltInsEnv, { contextName: string }> {
+export class ItxEntrypoint extends WorkerEntrypoint<Env, { contextName: string }> {
   /** The owning context, re-resolved per call (never a retained stub — the back-channel rule).
    *  `ctx.props.contextName` is the ONE prop this entrypoint is minted with (`itxEntrypointFor`). */
   #context(): DurableObjectStub<IterateContextDurableObject> {

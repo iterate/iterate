@@ -1,9 +1,10 @@
-// context/rpc-stub-relay.ts — THE DON'T-PIN PLUMBING behind a live rpc stub. When a client hands the
-// project a capnweb callback (`itx.provide(path, fn)`), the retained stub must live in the
+// context/rpc-stub-relay.ts — THE DON'T-PIN PLUMBING behind a live rpc stub, EDGE side. When a client
+// hands the project a capnweb callback (`itx.provide(path, fn)`), the retained stub must live in the
 // STATELESS relay worker (this side of `/api`), NEVER in the Durable Object — else the DO can't
-// hibernate while any client is connected. So the stream DO records only a transport id; when it
+// hibernate while any client is connected. So the context DO records only a transport id; when it
 // wants the client (a delivery, a request/response call), it PAGES the relay over a stub-pager
 // WebSocket, and the relay answers with a fresh Workers-RPC leg wrapping the retained capnweb stub.
+// The DO half — the pager door, the pages, the paged-in stubs — is context/rpc-stub-directory.ts.
 //
 // The stub's DO-side identity is the string it is parked under in the `itx.rpcStubs` built-in —
 // the canonicalized capability path, when it came through `itx.provide(path, fn)`. Parking is
@@ -18,7 +19,11 @@ import { RpcTarget as WorkersRpcTarget } from "cloudflare:workers";
 import type { IterateContextDurableObject } from "../iterate-context-durable-object.ts";
 import { codedError } from "../lib/errors.ts";
 import { dialLiveCapabilityFetch } from "../fetch/fetch-capabilities.ts";
-import { disposeStub, openStubPagerWebSocket } from "./hibernatable-rpc-stub.ts";
+import {
+  disposeStub,
+  STUB_PAGER_KEEPALIVE_REQUEST,
+  STUB_PAGER_WEBSOCKET_HEADER,
+} from "./rpc-stub-directory.ts";
 
 /** The context DO's Workers-RPC stub — what the edge proxies to and this relay pages against. */
 export type IterateContextStub = DurableObjectStub<IterateContextDurableObject>;
@@ -123,10 +128,10 @@ export class Parking {
 }
 
 /** Park a live capnweb stub in the DO's `itx.rpcStubs` registry under `key` (the canonical
- *  capability path — the stub's one identity there): reserve a transport on the DO, dup the provider stub,
- *  open the stub pager WebSocket, and answer every page with a fresh stub. The relay lives until
- *  disposed (explicitly, or at session end); its close makes the DO drop the stub — and nothing
- *  else: whatever mounts named it stay, answering CONNECTION_OFFLINE. */
+ *  capability path — the stub's one identity there): reserve a transport on the DO, dup the provider
+ *  stub, open the stub pager WebSocket, and answer every page with a fresh stub. The relay lives
+ *  until disposed (explicitly, or at session end); its close makes the DO drop the stub — and
+ *  nothing else: whatever mounts named it stay, answering CONNECTION_OFFLINE. */
 export async function startRpcStubRelay(
   context: IterateContextStub,
   provider: RetainedProviderStub,
@@ -139,9 +144,37 @@ export async function startRpcStubRelay(
   // onRpcBroken registration below flips it. (Registering per page would leak a listener per page:
   // capnweb has no offRpcBroken. rpc-stub-relay.test.ts pins it.)
   const broken = { value: false };
-  const pagerWebSocket = await openStubPagerWebSocket(context, transportId, () => {
-    // The page answer: re-mint the Workers-RPC stub around the retained capnweb callback and
-    // hand it to the DO, which keeps it warm until its idle quiesce.
+  // THE STUB PAGER WEBSOCKET, opened through the DO's fetch door carrying the transportId. Nothing
+  // but pages ever ride it — the pager is a pager (fetch-upgrade traffic has its own leg,
+  // fetch/fetch-capabilities.ts).
+  const response = await context.fetch("https://stub-pager.internal/", {
+    headers: { Upgrade: "websocket", [STUB_PAGER_WEBSOCKET_HEADER]: transportId },
+  });
+  const pagerWebSocket = response.webSocket;
+  if (!pagerWebSocket)
+    throw new Error(`stub pager upgrade returned ${response.status} without a WebSocket`);
+  pagerWebSocket.accept();
+  // Keep this leg warm: a 30s keepalive the DO auto-answers via setWebSocketAutoResponse WITHOUT
+  // waking it — defeats the ~100s idle-close and keeps the /api isolate warm. Dies with the isolate.
+  const keepalive = setInterval(() => {
+    try {
+      pagerWebSocket.send(STUB_PAGER_KEEPALIVE_REQUEST);
+    } catch {
+      clearInterval(keepalive);
+    }
+  }, 30_000);
+  pagerWebSocket.addEventListener("close", () => clearInterval(keepalive));
+  // The page answer: re-mint the Workers-RPC stub around the retained capnweb callback and hand it
+  // to the DO, which keeps it warm until its idle quiesce.
+  pagerWebSocket.addEventListener("message", (event: MessageEvent) => {
+    if (typeof event.data !== "string") return;
+    let page: unknown;
+    try {
+      page = JSON.parse(event.data);
+    } catch {
+      return; // not a page — ignore
+    }
+    if ((page as { type?: string } | null)?.type !== "page") return;
     waitUntil(
       context
         .rpcStubActivate({

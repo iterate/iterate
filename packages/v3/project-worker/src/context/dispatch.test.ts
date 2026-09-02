@@ -1,44 +1,47 @@
-// Executable spec for the capability-path matcher + the expression evaluator/dispatcher.
+// Executable spec for the capability-path matcher + the step walk (and the resolver over a fake
+// built-ins scope, where a walk is only observable through a mount).
 import { describe, expect, test } from "vitest";
-import { apply, evaluate, match, registerPipelinedRpcBrand } from "./dispatch.ts";
-import { parse, parseCapabilityPath } from "./expression.ts";
+import type { Mount } from "../stream/core-processor.ts";
+import { CapabilityResolver } from "./capability-table.ts";
+import { match, registerPipelinedRpcBrand, walkSteps } from "./dispatch.ts";
+import { parse, parseCapabilityPath, type Expression } from "./expression.ts";
 
 // ───────────────────────────── capability-path matching ─────────────────────────────
 // THE RULE, whole: segment by segment from the start; the longest matching path wins; ties go
-// to the newest mount. The FINAL segment may consume a call step's args (the boundary args).
+// to the newest mount. The FINAL segment may consume a call step's args (the args at the mount).
 
 describe("match", () => {
   test.each([
     [
-      "plain alias: remainder replays",
+      "plain alias: the steps after the mount replay",
       "itx.db",
       "itx.db.get('x')",
-      { segments: 2, remainder: [["get", "x"]] },
+      { segments: 2, stepsAfterMount: [["get", "x"]] },
     ],
     [
-      "boundary args: path name, call invokes",
+      "args at the mount: path name, call invokes",
       "itx.grok",
       "itx.grok({ messages: [] })",
-      { segments: 2, boundaryArgs: [{ messages: [] }], remainder: [] },
+      { segments: 2, argsAtMount: [{ messages: [] }], stepsAfterMount: [] },
     ],
     [
       "bare default route claims everything",
       "itx",
       "itx.some.thing.deep('x')",
-      { segments: 1, remainder: ["some", "thing", ["deep", "x"]] },
+      { segments: 1, stepsAfterMount: ["some", "thing", ["deep", "x"]] },
     ],
     [
-      "deep path, call at the boundary",
+      "deep path, call at the mount",
       "itx.robots.arm",
       "itx.robots.arm('batch')",
-      { segments: 3, boundaryArgs: ["batch"], remainder: [] },
+      { segments: 3, argsAtMount: ["batch"], stepsAfterMount: [] },
     ],
   ])("%s", (_label, path, call, expected) => {
     const m = match(parseCapabilityPath(path as string), parse(call as string))!;
     expect(m).not.toBeNull();
-    const e = expected as { segments: number; boundaryArgs?: unknown[]; remainder: unknown[] };
-    if (e.boundaryArgs) expect(m.boundaryArgs).toEqual(e.boundaryArgs);
-    expect(m.remainder).toEqual(e.remainder);
+    const e = expected as { segments: number; argsAtMount?: unknown[]; stepsAfterMount: unknown[] };
+    if (e.argsAtMount) expect(m.argsAtMount).toEqual(e.argsAtMount);
+    expect(m.stepsAfterMount).toEqual(e.stepsAfterMount);
   });
 
   test.each([
@@ -49,33 +52,35 @@ describe("match", () => {
     expect(match(parseCapabilityPath(path as string), parse(call as string))).toBeNull();
   });
 
-  test("ranking basis: the longer path consumes more of the call (less remainder to replay)", () => {
-    // #route ranks by the winning mount's own `path.length`; a longer matching path claims more
-    // segments, so it leaves a SHORTER remainder — the observable proof that it matched more.
+  test("ranking basis: the longer path consumes more of the call (fewer steps left to replay)", () => {
+    // route ranks by the winning mount's own `path.length`; a longer matching path claims more
+    // segments, so it leaves FEWER steps after the mount — the observable proof that it matched more.
     const call = parse("itx.robots.abc.ping()");
     const long = match(parseCapabilityPath("itx.robots.abc"), call)!;
     const short = match(parseCapabilityPath("itx.robots"), call)!;
-    expect(long.remainder.length).toBeLessThan(short.remainder.length);
+    expect(long.stepsAfterMount.length).toBeLessThan(short.stepsAfterMount.length);
   });
 });
 
-// ───────────────────────────── evaluate + apply (end to end) ─────────────────────────────
+// ───────────────────────────── the step walk + a mount, end to end ─────────────────────────────
 
+/** A fake built-ins scope: enough physical layer to walk into. `kv` is `this`-dependent on purpose
+ *  (a method detached from its receiver would lose its store). */
 const scope = () => {
   const log: string[] = [];
-  const kvStore = new Map<string, string>();
   return {
     log,
-    builtins: {
+    builtIns: {
       kv: {
-        get: (k: string) => kvStore.get(k),
-        put: (k: string, v: string) => {
-          kvStore.set(k, v);
+        store: new Map<string, string>(),
+        get(k: string) {
+          return this.store.get(k);
+        },
+        put(k: string, v: string) {
+          this.store.set(k, v);
           return { ok: true };
         },
       },
-    },
-    itx: {
       openai: {
         chat: (o: { model: string; messages?: unknown[] }) => `chat(${o.model})`,
       },
@@ -101,78 +106,73 @@ const scope = () => {
     },
   };
 };
+const mount = (path: string, target: string, providedAtOffset = 1): Mount => ({
+  path: parseCapabilityPath(path),
+  target: parse(target),
+  providedAtOffset,
+});
+const resolverOver = (s: ReturnType<typeof scope>, ...mounts: Mount[]) =>
+  new CapabilityResolver({ builtIns: s.builtIns, mounts: () => mounts });
 
-describe("evaluate/apply", () => {
+describe("walkSteps + resolve", () => {
   test("pipelined chain: call → await stub → call again", async () => {
     const s = scope();
-    const { value } = await evaluate(
-      s,
-      parse("itx.facets.get({ className: 'CounterDurableObject' }).counters.add(2)"),
+    const { value } = await walkSteps(
+      { value: s.builtIns, receiver: undefined },
+      parse("itx.facets.get({ className: 'CounterDurableObject' }).counters.add(2)").slice(1),
+      "expression",
     );
     expect(value).toBe(42);
   });
 
-  test("alias mount end to end — remainder replays on the live stub", async () => {
+  test("alias mount end to end — the steps after the mount replay on the live stub", async () => {
     const s = scope();
-    const m = match(parseCapabilityPath("itx.robot"), parse("itx.robot.arm.move(10)"))!;
-    const result = await apply(s, parse("itx.robots.get('robot-arm-1')"), m);
-    expect(result).toBe("moved");
+    const resolver = resolverOver(s, mount("itx.robot", "itx.robots.get('robot-arm-1')"));
+    expect(await resolver.resolve("itx.robot.arm.move(10)")).toBe("moved");
     expect(s.log).toEqual(["move 10 @robot-arm-1"]);
   });
 
-  test("boundary args apply the evaluated target as a call", async () => {
+  test("args at the mount apply the resolved target as a call", async () => {
     const s = scope();
-    const m = match(
-      parseCapabilityPath("itx.grok"),
-      parse("itx.grok({ model: 'grok-4', messages: ['hi'] })"),
-    )!;
-    const result = await apply(s, parse("itx.openai.chat"), m);
-    expect(result).toBe("chat(grok-4)");
-  });
-
-  test("boundary args on a non-callable target error LOUDLY (no silent drop)", async () => {
-    const s = scope();
-    const m = match(parseCapabilityPath("itx.db"), parse("itx.db('oops')"))!;
-    await expect(apply(s, parse("builtins.kv"), m)).rejects.toThrow(/not callable/);
-  });
-
-  test("boundary args on a method-valued target apply on the carried receiver", async () => {
-    const s = scope();
-    const m = match(parseCapabilityPath("itx.log"), parse("itx.log({ type: 'hi' })"))!;
-    const result = await apply(s, parse("itx.append"), m);
-    expect(result).toEqual({ offset: 1 });
-    expect(s.log).toEqual([`append {"type":"hi"}`]);
-  });
-
-  test("the built-ins are only reachable when in scope (the provenance gate)", async () => {
-    const s = scope();
-    const eventScope = { itx: s.itx }; // event provenance: no built-in keys at all
-    await expect(evaluate(eventScope, parse("builtins.kv.get('x')"))).rejects.toThrow(
-      /not in scope/,
+    const resolver = resolverOver(s, mount("itx.grok", "itx.openai.chat"));
+    expect(await resolver.resolve("itx.grok({ model: 'grok-4', messages: ['hi'] })")).toBe(
+      "chat(grok-4)",
     );
+  });
+
+  test("args at the mount on a non-callable target error LOUDLY (no silent drop)", async () => {
+    const s = scope();
+    const resolver = resolverOver(s, mount("itx.db", "itx.kv"));
+    await expect(resolver.resolve("itx.db('oops')")).rejects.toThrow(/not callable/);
+  });
+
+  test("args at the mount on a method-valued target apply on the carried receiver", async () => {
+    const s = scope();
+    const resolver = resolverOver(s, mount("itx.remember", "itx.kv.put"));
+    expect(await resolver.resolve("itx.remember('k', 'v')")).toEqual({ ok: true });
+    expect(await resolver.resolve("itx.kv.get('k')")).toBe("v"); // `this` was kv, not the mount
   });
 
   test("inherited built-ins are not capability surface (the RPC exposure doctrine)", async () => {
-    const s = { itx: { kv: { get: (k: string) => `v:${k}` } } };
+    const kv = { get: (k: string) => `v:${k}` };
+    const walk = (steps: Expression) =>
+      walkSteps({ value: kv, receiver: undefined }, steps, "expression");
     // an inherited method errs EXACTLY like a missing one — callers cannot probe
-    await expect(evaluate(s, ["itx", "kv", ["toString"]])).rejects.toThrow(/is not a method/);
-    await expect(evaluate(s, ["itx", "kv", ["hasOwnProperty", "get"]])).rejects.toThrow(
-      /is not a method/,
-    );
-    // the magic names never resolve — a property step yields undefined → the null guard
-    await expect(evaluate(s, ["itx", "kv", "constructor", "name"])).rejects.toThrow(
-      /hit undefined/,
-    );
+    await expect(walk([["toString"]])).rejects.toThrow(/is not a method/);
+    await expect(walk([["hasOwnProperty", "get"]])).rejects.toThrow(/is not a method/);
+    // the magic names never resolve (the codec refuses to even parse them — these are hand-built
+    // steps) — a property step yields undefined → the null guard
+    await expect(walk(["constructor", "name"])).rejects.toThrow(/hit undefined/);
     // an OWN override with the same name passes — the doctrine allows what the object chose
-    const own = { itx: { kv: { toString: () => "mine" } } };
-    await expect(evaluate(own, ["itx", "kv", ["toString"]])).resolves.toMatchObject({
-      value: "mine",
-    });
+    const own = { toString: () => "mine" };
+    await expect(
+      walkSteps({ value: own, receiver: undefined }, [["toString"]], "expression"),
+    ).resolves.toMatchObject({ value: "mine" });
   });
 
   test("calling the bare scope symbol is a loud error (the parser guards it)", () => {
-    // The dotted write-half is now `InvokeHandle`; the "can't call the scope root itself" guard
-    // lives in the codec parser (a bare `itx(...)` never becomes a legal expression).
+    // The dotted write-half is `InvokeHandle`; the "can't call the scope root itself" guard lives in
+    // the codec parser (a bare `itx(...)` never becomes a legal expression).
     expect(() => parse("itx(1)")).toThrow(/cannot call the scope symbol itself/);
   });
 });
@@ -205,13 +205,17 @@ describe("pipelined RPC promise threading", () => {
 
   test("a registered brand threads UNAWAITED through call-then-call — the terminal settles once", async () => {
     FakeRpcPromise.awaited = [];
-    const scope = { itx: { dial: () => new FakeRpcPromise("dial") } };
-    const { value } = await evaluate(scope, parse("itx.dial().svc('x').add(2, 3)"));
+    const itx = { dial: () => new FakeRpcPromise("dial") };
+    const { value } = await walkSteps(
+      { value: itx, receiver: undefined },
+      parse("itx.dial().svc('x').add(2, 3)").slice(1),
+      "expression",
+    );
     // no step awaited any intermediate — the chain BUILT on the promises
     expect(FakeRpcPromise.awaited).toEqual([]);
     expect(value).toBeInstanceOf(FakeRpcPromise);
     expect((value as FakeRpcPromise).chain).toBe("dial.svc(x).add(2,3)");
-    // the caller's terminal await is the single settle (what apply() does at its end)
+    // the caller's terminal await is the single settle (what resolve() does at its end)
     expect(await value).toEqual({ settled: "dial.svc(x).add(2,3)" });
     expect(FakeRpcPromise.awaited).toEqual(["dial.svc(x).add(2,3)"]);
   });
@@ -224,8 +228,12 @@ describe("pipelined RPC promise threading", () => {
         resolve({ svc: (name: string) => plain(`${chain}.svc(${name})`) });
       },
     });
-    const scope = { itx: { dial: () => plain("dial") } };
-    const { value } = await evaluate(scope, parse("itx.dial().svc('x')"));
+    const itx = { dial: () => plain("dial") };
+    const { value } = await walkSteps(
+      { value: itx, receiver: undefined },
+      parse("itx.dial().svc('x')").slice(1),
+      "expression",
+    );
     // the walk awaited the intermediate before stepping into it, and settled the tail too
     expect(awaited).toEqual(["dial", "dial.svc(x)"]);
     expect(value).toEqual({ svc: expect.any(Function) });

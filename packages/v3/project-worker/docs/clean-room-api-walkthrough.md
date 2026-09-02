@@ -49,7 +49,7 @@ flowchart LR
   end
   subgraph do["IterateContextDurableObject, one per {projectId, path}"]
     stream["Stream: log, offsets, idempotency, waitForEvent"]
-    inline["core(): the core reduce, reduced inside every commit<br/>(identity, wake, pause, mounts, subscriptions)"]
+    inline["the core reduce, reduced inside every commit<br/>(identity, wake, pause, mounts, subscriptions)"]
     delivery["SubscriptionDelivery: push or stream-kept cursor"]
     transport["RpcStubDirectory: pager sockets"]
     facets["Facets: loaded DurableObject classes,<br/>StreamProcessorDurableObject hosts"]
@@ -97,17 +97,17 @@ packages/v3/project-worker/
       built-ins.ts               the kernel roots: whoami, kv, append, read, cd, fetch, rpcStubs,
                                  facets, subscriptions, load, runScript
       capability-table.ts        the mounts' two commands (capabilityProvidedEvent / capabilityRevokedEvent)
-                                 + the reader: route(mounts, call), CapabilityResolver (resolve / resolveFetch)
+                                 + the reader: route(mounts, call), CapabilityResolver (resolve)
       expression.ts              the codec: "itx.a.b(1)" ⇄ ["itx","a",["b",1]]
-      dispatch.ts                match(path, call), evaluate / apply / invokePath
+      dispatch.ts                match(path, call), walkSteps / callOn / invokePath
       dotted-path-proxy.ts       the prototype hop: unknown dotted members reduce into ONE
                                  invokeCapability(expression)
       invoke-handle.ts           InvokeHandle + the two brands FacetHandle / RpcStubHandle
-      rpc-stub-directory.ts      the live transport table: key → pager socket; presence events
+      rpc-stub-directory.ts      the live rpc stubs, DO side: the pager door, pages, paged-in
+                                 stubs; key → transport; presence events
       rpc-stub-relay.ts          edge side: Parking, startRpcStubRelay
-      hibernatable-rpc-stub.ts   the stub pager WebSocket + HibernatableRpcStubManager
-      worker-loader.ts           confinedWorker, loadConfinedWorker, versionedFacet, WorkerSource
-      durable-object-names.ts    DurableObjectNameCodec, resolveContextPath, canonicalName
+      worker-loader.ts           loadConfinedWorker, facetLoaderOwner, WorkerSource
+      durable-object-names.ts    DurableObjectNameCodec, resolveContextPath
     fetch/                       chapter 2 — fetch, in both directions
       fetch-capabilities.ts      fetch-shaped capabilities, the x-itx-cap lane, the 101 tunnel
                                  (fenced WORKAROUND, delete-day checklist inside)
@@ -126,7 +126,7 @@ packages/v3/project-worker/
     sdk/                         what userspace imports from "./processor.js"
       index.ts                   the export list
       stream-processor-durable-object.ts  StreamProcessorDurableObject: the host, `processor = new X()`
-    lib/                         errors.ts  logs.ts  hash.ts  patch.ts (diff / applyPatch)
+    lib/                         errors.ts  logs.ts  patch.ts (diff / applyPatch)
     client/
       live-state-store.ts        pure store: seed + deltas → current state
       live-state-client.ts       connectLiveState(itx, { key, door, ... })
@@ -227,46 +227,30 @@ class ProjectCollection extends RpcTarget {
 
 ### 4.2 `IterateContext` (the `itx` you hold)
 
-`src/iterate-context.ts`. The class body is two banded sections. The AXIOMS are
-the doors that need the edge (a session-held stub, a live Request, the reduce);
-everything else is SUGAR: one-line compositions of the axioms that append no
-event shape of their own. Every method forwards to the context DO over Workers
-RPC; the DO owns every contract.
+`src/iterate-context.ts`. The DO owns every contract; the edge declares only
+the doors that need it — a session-held stub to park, an EDGE context to hand
+back, the one dispatch door, a wait with no built-in root — and everything else
+you call on `itx` is the dotted hop onto a DO built-in or a mount:
+`itx.append(...)`, `itx.read(...)`, `itx.fetch(request)`, `itx.rpcStubs.list()`,
+`itx.subscriptions.list()`, `itx.kv.get(k)`, `itx.myCap.hello()`.
 
 ```ts
 class IterateContext extends RpcTarget {
-  // ── AXIOMS ──
   /** Another context of the SAME project. Absolute by convention ("/agents/x"); relative
-   *  ("agents/x", "../inbox") resolves against this context's path. Pure addressing. */
+   *  ("agents/x", "../inbox") resolves against this context's path. Pure addressing; an EDGE
+   *  context, so a live provide on it parks in this session. */
   cd(path: string): IterateContext;
 
   /** THE ONE dispatch door. A dotted string or the parsed array. ONE routing rule: a call whose
    *  terminal step is `fetch(request)` with a live Request rides the DO's fetch channel (so a 101
-   *  comes back); everything else is `invoke`. */
+   *  comes back; the root `itx.fetch(request)` — egress — takes it too); everything else is `invoke`. */
   invokeCapability(call: ItxExpression): Promise<unknown>;
 
-  // the stream verbs, flattened onto itx
-  append(...events: StreamEventInput[]): Promise<StreamEvent[]>;
-  /** afterOffset default 0, limit default 500. A fresh context already holds its birth
-   *  certificate and wake record (offsets 1–2). `scannedThroughOffset` is the contiguity cursor
-   *  to chain: a full page's last row, a short page's DURABLE mark (never the in-memory head —
-   *  ephemeral offsets are not proven). */
-  read(
-    afterOffset?: number,
-    limit?: number,
-  ): Promise<{ events: StreamEvent[]; scannedThroughOffset: number }>;
   /** Next matching event (default afterOffset = head at call time). 30s default timeout, 120s cap,
-   *  rejects with code WAIT_TIMEOUT. */
+   *  rejects with code WAIT_TIMEOUT. The one stream verb with no built-in root. */
   waitForEvent(filter?: WaitForEventFilter): Promise<StreamEvent>;
 
-  /** Egress through the context: {{secret:project:NAME}} substituted in the DO, then FALLBACK. */
-  fetch(request: Request): Promise<Response>;
-
-  /** The live-stub registry, edge half: `provide(value, { key })` parks a capnweb value for the
-   *  session (DON'T-PIN relay); `get(key)` / `list()` reduce onto the DO's built-in; `close(key)`. */
-  get rpcStubs(): RpcStubs;
-
-  // ── SUGAR ──
+  // ── SUGAR over the events (each parks a live value when handed one) ──
   /** THE ONE provide door. `target` is EITHER an itx expression (a durable mount:
    *  `capability-provided { path, target }`, string at rest, same-path mounts shadow, newest wins)
    *  OR a live capnweb value (function | RpcTarget): parked under `path` in rpcStubs, then the
@@ -303,12 +287,19 @@ class IterateContext extends RpcTarget {
   /** unsubscribe(name) + delete the facet, storage included: a re-enable is a clean rebuild. */
   disableProcessor(name: string): Promise<void>;
 
-  // ── everything else ──
-  /** Any undeclared dotted access reduces into invokeCapability: itx.kv.get(k), itx.cd('/x').read(),
-   *  itx.facets.get('tally').snapshot(), itx.myCap.hello(), itx.site.fetch(request). */
+  // ── everything else: the DO's built-in roots and every mount ──
+  /** Any undeclared dotted access reduces into invokeCapability: itx.append({...}), itx.read(0),
+   *  itx.fetch(request), itx.kv.get(k), itx.cd('/x').read(), itx.facets.get('tally').snapshot(),
+   *  itx.rpcStubs.list(), itx.myCap.hello(), itx.site.fetch(request). */
   [dotted: string]: unknown;
 }
 ```
+
+The stream verbs `append` / `read` and egress `fetch` are DO built-ins (section
+4.4) reached through the hop — `itx.append({...})` and
+`itx.invokeCapability("itx.append({...})")` are the same call, and a full page of
+`read` chains `scannedThroughOffset` (a full page's last row, a short page's
+DURABLE mark — never the in-memory head).
 
 Semantics worth knowing:
 
@@ -1077,7 +1068,7 @@ calls the verbs; the edge relay calls the transport verbs; facets reach the
 context only through `env.ITX`.
 
 ```ts
-class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
+class IterateContextDurableObject extends DurableObject<Env> {
   // ── the stream ──
   append(...events: StreamEventInput[]): Promise<StreamEvent[]>;
   read(
@@ -1087,8 +1078,9 @@ class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
   waitForEvent(filter?: WaitForEventFilter): Promise<StreamEvent>;
 
   // ── dispatch: ONE door ──
-  /** parse → built-in-first / longest-path mount → evaluate → replay remainder. */
-  invoke(call: ItxExpression, depth?: number): Promise<unknown>;
+  /** parse → built-in-first / longest-path mount → the target resolved one level deeper →
+   *  replay the steps after the mount. */
+  invoke(call: ItxExpression): Promise<unknown>;
 
   // ── the capability table (pure data) ──
   provideCapability(input: {
@@ -1189,7 +1181,7 @@ Bindings (`wrangler.jsonc`):
 
 The loader cacheKey is `${kind}:${deploy}:${owner}:${contentHash}`. Every
 distinct key is a billed dynamic worker, so nothing per request may ever enter
-it. Loaded isolates run under one `LOADED_WORKER_COMPATIBILITY`: the same
+it. Loaded isolates run under one compatibility block (inline in `loadConfinedWorker`): the same
 compatibility date, `no_nodejs_compat` (userspace stays pure-play), and
 `allow_irrevocable_stub_storage` (loaded code may store its `env.ITX` stub and
 replay it; the parent config carries the same flag). The DO's lifecycle is the
@@ -1210,23 +1202,23 @@ sequenceDiagram
   C->>E: itx.greet.run("jonas")
   Note over E: prototype hop reduces to<br/>["itx","greet",["run","jonas"]]
   E->>D: invoke(expression)   (Workers RPC)
-  D->>T: resolve(core.mounts, expression)
+  D->>T: resolve(expression)
   alt root is a built-in (kv, cd, load, facets, rpcStubs, ...)
-    T->>T: apply against { ...builtIns, itx }
+    T->>T: the built-in root, then the steps after it
   else userspace mount
     T->>T: route: longest matching path, ties → newest
-    T->>T: evaluate target against { itx }, replay remainder
+    T->>T: resolve the target one level deeper, replay the steps after the mount
   end
   T-->>D: value (or NO_CAPABILITY_MATCH)
   D-->>E: value
   E-->>C: value
 ```
 
-The `itx` symbol inside a target is an `InvokeHandle` that re-enters `resolve`
-with the depth carried, so alias mounts compose (`itx.greet ⇒ itx.load(...).getEntrypoint()`,
+A mount's target is itself an `itx.…` expression, resolved by the same `resolve` one
+level deeper (the depth carried), so alias mounts compose (`itx.greet ⇒ itx.load(...).getEntrypoint()`,
 `itx.hello ⇒ itx.greet.run`). A terminal `.fetch(request)` takes the DO's fetch
-channel instead of `invoke`, with the capability in `x-itx-cap`; the table's
-`resolveFetch` walks the same rows.
+channel instead of `invoke`, with the capability in `x-itx-cap`; the DO resolves it as
+the terminal-fetch call (`expressionEndingInFetch`) against the same rows.
 
 ### 9.2 A live capability and the pager
 
@@ -1316,8 +1308,8 @@ sequenceDiagram
   participant C as child DO (/agents/support)
   participant R as root DO (/)
   Note over C: invoke(["itx","someRootCapability",["doThing",1]])
-  C->>C: "someRootCapability" is not a built-in → route → ["itx"] wins (remainder = whole tail)
-  C->>C: evaluate target itx.cd("/") → built-in cd → InvokeHandle for the root
+  C->>C: "someRootCapability" is not a built-in → route → ["itx"] wins (the steps after the mount = the whole tail)
+  C->>C: resolve target itx.cd("/") → built-in cd → InvokeHandle for the root
   C->>R: invoke(["itx","someRootCapability",["doThing",1]])   (one Workers-RPC hop)
   R->>R: resolve against the ROOT's table (its own default route may forward again)
   R-->>C: value
@@ -1370,7 +1362,7 @@ itself.
   the subscriptions and processors layers, with the decisions table.
 - The source headers of `context/built-ins.ts`, `context/capability-table.ts`,
   `iterate-context.ts`, `stream/subscription-delivery.ts`,
-  `fetch/fetch-capabilities.ts` and `context/hibernatable-rpc-stub.ts` each
+  `fetch/fetch-capabilities.ts` and `context/rpc-stub-directory.ts` each
   carry their doctrine at the top.
 - `e2e/*.e2e.test.ts` are the executable examples; `e2e/support/client.ts` is
   the whole client surface a test uses.

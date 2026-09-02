@@ -1,8 +1,8 @@
 // The capability table's executable spec (src/context/capability-table.ts): the two COMMANDS
 // (`capabilityProvidedEvent` / `capabilityRevokedEvent` BUILD the events — validation and the codec
 // round-trip fail LOUD at the door, the caller appends), the pure `route`, and `CapabilityResolver`
-// (built-ins first + unshadowable, longest path then newest, default-deny, recursion through the
-// `itx` scope symbol, the depth-32 budget). The mounts THEMSELVES are `core` state: this file reduces
+// (built-ins first + unshadowable, longest path then newest, default-deny, targets resolved through
+// the same resolver one level deeper, the depth-32 budget). The mounts THEMSELVES are `core` state: this file reduces
 // the durable log through `CoreStreamProcessor` per call, exactly as the DO does (the reduce's own
 // pins live in stream/core-processor.test.ts). The live-capability shape rides along: a live provide
 // is PURE DATA naming the `itx.rpcStubs` built-in (the physical registry), so reconnect is zero
@@ -50,14 +50,16 @@ const setup = () => {
   // No config, no base mounts: whoami/kv/openai are KEYS in fakeBuiltIns(), so `itx.<root>…`
   // resolves DIRECTLY against the physical scope (built-ins first, unshadowable).
   // INLINE HOSTING, exactly like the parent: the mounts are core state, reduced from the durable
-  // log per call.
+  // log per call — and, as in Stream.#reduceEventIntoCoreReducedState, a malformed control event is
+  // skipped (reported), never wedging the stream.
   const mounts = (): Mount[] =>
-    events.reduce(
-      (st, e) => core.reduce({ event: e, state: st }) ?? st,
-      core.contract.initialState(),
-    ).mounts;
-  const resolveNow = (call: ItxExpression, depth = 0): Promise<unknown> =>
-    resolver.resolve(mounts(), call, undefined, depth);
+    events.reduce((st, e) => {
+      try {
+        return core.reduce({ event: e, state: st }) ?? st;
+      } catch {
+        return st;
+      }
+    }, core.contract.initialState()).mounts;
   // The fake `itx.rpcStubs` BUILT-IN — the physical registry behind a live provide, keyed by the
   // string the stub was parked under, exactly like the DO's RpcStubDirectory. _connect/_disconnect
   // simulate a pager attach / final close. A mount names an entry through the pure-data target
@@ -75,10 +77,7 @@ const setup = () => {
       }),
     list: () => [...liveStubs.keys()],
   };
-  const resolver = new CapabilityResolver({
-    builtIns: { ...builtIns, rpcStubs },
-    resolveCurrent: resolveNow,
-  });
+  const resolver = new CapabilityResolver({ builtIns: { ...builtIns, rpcStubs }, mounts });
   /** The DO's `provideCapability`, minus its idempotency policy: build the event, append it, hand
    *  back the mount's identity. A refusal throws at the door — nothing is appended. */
   const provide = (input: { path: string; target: ItxExpression }) => {
@@ -96,8 +95,7 @@ const setup = () => {
     events,
     builtIns,
     mounts,
-    invoke: (call: string) => resolveNow(call),
-    resolveNow,
+    invoke: (call: ItxExpression) => resolver.resolve(call),
     provide,
     /** The DO's `revokeCapability` by identity: append the revoked event (idempotent through the reduce). */
     revoke: (providedAtOffset: number) => {
@@ -157,14 +155,14 @@ describe("route — pure: longest matching path, then newest; null when nothing 
     providedAtOffset,
   });
 
-  test("the LONGEST matching path wins, even over a newer shorter one; the remainder is what the path did not consume", () => {
+  test("the LONGEST matching path wins, even over a newer shorter one; the steps after the mount are what the path did not consume", () => {
     const table = [mount("itx.a.b", "itx.long", 1), mount("itx.a", "itx.short", 2)];
     const deep = route(table, parse("itx.a.b.f(1)"))!;
     expect(deep.mount.providedAtOffset).toBe(1);
-    expect(deep.m).toEqual({ boundaryArgs: undefined, remainder: [["f", 1]] });
+    expect(deep).toMatchObject({ argsAtMount: undefined, stepsAfterMount: [["f", 1]] });
     const shallow = route(table, parse("itx.a.c.f()"))!;
     expect(shallow.mount.providedAtOffset).toBe(2);
-    expect(shallow.m.remainder).toEqual(["c", ["f"]]);
+    expect(shallow.stepsAfterMount).toEqual(["c", ["f"]]);
   });
 
   test("same length → the NEWEST mount (highest providedAtOffset), whatever its position in the table", () => {
@@ -172,23 +170,17 @@ describe("route — pure: longest matching path, then newest; null when nothing 
     expect(route(table, parse("itx.g.hello()"))!.mount.providedAtOffset).toBe(5);
   });
 
-  test("a call AT the mount consumes its args as boundary args", () => {
+  test("a call AT the mount consumes its args as the args at the mount", () => {
     const hit = route(
       [mount("itx.grok", "itx.openai.chat", 1)],
       parse("itx.grok({ model: 'm' })"),
     )!;
-    expect(hit.m).toEqual({ boundaryArgs: [{ model: "m" }], remainder: [] });
+    expect(hit).toMatchObject({ argsAtMount: [{ model: "m" }], stepsAfterMount: [] });
   });
 
   test("nothing matches → null (the resolver turns this into default-deny)", () => {
     expect(route([mount("itx.a", "itx.kv", 1)], parse("itx.b.f()"))).toBeNull();
     expect(route([], parse("itx.a"))).toBeNull();
-  });
-
-  test("a call ON the scope symbol itself is a loud error, never a match", () => {
-    expect(() => route([], [["itx", 1]] as unknown as Expression)).toThrow(
-      /cannot call the scope symbol itself/,
-    );
   });
 });
 
@@ -207,14 +199,14 @@ describe("built-in resolution + default-deny", () => {
     );
   });
 
-  test("even a smuggled raw event cannot reach the built-ins (gate is scope-absence)", async () => {
+  test("even a smuggled raw event cannot reach the built-ins (a target not rooted at itx matches nothing — default-deny)", async () => {
     const { stream, invoke } = setup();
     // bypass the door entirely — append the raw string-at-rest event, as a hostile writer would
     stream.append({
       type: "events.iterate.com/capability-table/capability-provided",
       payload: { path: "itx.evil", target: "kv" },
     });
-    await expect(invoke("itx.evil.get('a')")).rejects.toThrow(/"kv" is not in scope/);
+    await expect(invoke("itx.evil.get('a')")).rejects.toThrow(/no capability matches "kv"/);
   });
 
   test("a malformed raw payload is skipped by the reduce, never wedging later resolves", async () => {
@@ -236,7 +228,7 @@ describe("event mounts + the shadow stack", () => {
     await expect(invoke("itx.loop.go()")).rejects.toThrow(/depth 32/);
   });
 
-  test("alias mount: remainder replays through the recursive itx scope", async () => {
+  test("alias mount: the target resolves one level deeper, the steps after the mount replay on it", async () => {
     const { provide, invoke } = setup();
     provide({ path: "itx.db", target: "itx.kv" });
     await invoke("itx.db.put('k', 'v')");
@@ -300,7 +292,7 @@ describe("event mounts + the shadow stack", () => {
     expect(await invoke("itx.mixed.who()")).toBe("the live stub"); // live row restored
   });
 
-  test("boundary args: a call at the mount itself applies the evaluated target", async () => {
+  test("args at the mount: a call at the mount itself applies the resolved target", async () => {
     const { provide, invoke, builtIns } = setup();
     provide({ path: "itx.grok", target: "itx.openai.chat" });
     expect(await invoke("itx.grok({ model: 'grok-4' })")).toBe("chat:grok-4");
@@ -328,8 +320,8 @@ describe("event mounts + the shadow stack", () => {
   });
 
   test("bare CALL on the scope symbol is a loud error even as a hand-crafted Expression", async () => {
-    const { resolveNow } = setup();
-    await expect(resolveNow([["itx", 1]] as unknown as Expression)).rejects.toThrow(
+    const { invoke } = setup();
+    await expect(invoke([["itx", 1]] as unknown as Expression)).rejects.toThrow(
       /cannot call the scope symbol itself/,
     );
   });

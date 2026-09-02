@@ -12,7 +12,7 @@
 import "../src/worker.ts";
 import * as cloudflareWorkers from "cloudflare:workers";
 import { expect, test } from "vitest";
-import { evaluate } from "../src/context/dispatch.ts";
+import { walkSteps } from "../src/context/dispatch.ts";
 import { stub } from "./support.ts";
 
 test("cloudflare:workers exports RpcPromise and native RPC calls are instanceof it", async () => {
@@ -22,12 +22,12 @@ test("cloudflare:workers exports RpcPromise and native RPC calls are instanceof 
 
   const p = stub("prj_rpc_pipelining").transportState();
   expect(p).toBeInstanceOf(RpcPromise);
-  const state = (await p) as Record<string, unknown>;
+  const state = await p;
   expect(typeof state.stubs).toBe("number");
 });
 
 test("the step walk threads a NATIVE RpcPromise unawaited — regression = this fails", async () => {
-  // THE regression detector for the native lane: evaluate() a chain whose call step returns a real
+  // THE regression detector for the native lane: walk a chain whose call step returns a real
   // workerd RpcPromise, with a property step AFTER it. Pipelined (correct), the walk builds on the
   // promise — the property step yields a still-open RpcProperty; if the walk regressed to
   // await-every-step (or worker.ts's registerPipelinedRpcBrand calls disappeared), the value comes
@@ -36,8 +36,12 @@ test("the step walk threads a NATIVE RpcPromise unawaited — regression = this 
     "RpcPromise" | "RpcProperty",
     abstract new () => unknown
   >;
-  const scope = { itx: { transport: () => stub("prj_rpc_pipelining").transportState() } };
-  const { value } = await evaluate(scope, ["itx", ["transport"], "stubs"]);
+  const itx = { transport: () => stub("prj_rpc_pipelining").transportState() };
+  const { value } = await walkSteps(
+    { value: itx, receiver: undefined },
+    [["transport"], "stubs"],
+    "expression",
+  );
   // NOT the settled number — the chain is still open (a pipelined property off a pipelined call)
   expect(value instanceof RpcProperty || value instanceof RpcPromise).toBe(true);
   expect(typeof (await value)).toBe("number"); // the terminal await settles the pipelined chain

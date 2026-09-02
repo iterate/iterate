@@ -11,14 +11,14 @@ facet's `processEventBatch`; a live stub is the physical thing all three may nam
 
 Every callable thing is a live object plus a small piece of durable data that gets the object back.
 
-| Built-in / kind                                                     | The durable data                                                            | Who restores it                                                                          | Where                                                                                    |
-| ------------------------------------------------------------------- | --------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
-| a context (`cd`, the DO)                                            | its codec name (`prj_x.iterate/path`)                                       | Cloudflare (`getByName`)                                                                 | `context/durable-object-names.ts`, `iterate-context-durable-object.ts`                   |
-| `env.ITX` (a loaded worker's world)                                 | the props `{ contextName }`                                                 | Cloudflare (`ctx.exports`, persistent stubs)                                             | `itx-entrypoint.ts`                                                                      |
-| `load(src).getEntrypoint()` / `.getDurableObjectClass(C).get(name)` | cacheKey + source; a facet's `props { contextName, name }` and startup memo | Cloudflare (Worker Loader, `ctx.facets`)                                                 | `context/worker-loader.ts`, the DO's `#facet`                                            |
-| **`rpcStubs`** (a live stub)                                        | a stub pager WebSocket attachment                                           | **us** — `{type:"page"}` pages the edge worker, which re-mints the stub over Workers RPC | `context/hibernatable-rpc-stub.ts`, `rpc-stub-directory.ts`, `context/rpc-stub-relay.ts` |
-| the stream (`append`/`read`)                                        | the log (SQLite)                                                            | —                                                                                        | `stream/stream.ts`                                                                       |
-| `kv`, `whoami`, `fetch`                                             | KV / the address / FALLBACK                                                 | —                                                                                        | `built-ins.ts`                                                                           |
+| Built-in / kind                                                     | The durable data                                                            | Who restores it                                                                          | Where                                                                  |
+| ------------------------------------------------------------------- | --------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| a context (`cd`, the DO)                                            | its codec name (`prj_x.iterate/path`)                                       | Cloudflare (`getByName`)                                                                 | `context/durable-object-names.ts`, `iterate-context-durable-object.ts` |
+| `env.ITX` (a loaded worker's world)                                 | the props `{ contextName }`                                                 | Cloudflare (`ctx.exports`, persistent stubs)                                             | `itx-entrypoint.ts`                                                    |
+| `load(src).getEntrypoint()` / `.getDurableObjectClass(C).get(name)` | cacheKey + source; a facet's `props { contextName, name }` and startup memo | Cloudflare (Worker Loader, `ctx.facets`)                                                 | `context/worker-loader.ts`, the DO's `#facet`                          |
+| **`rpcStubs`** (a live stub)                                        | a stub pager WebSocket attachment                                           | **us** — `{type:"page"}` pages the edge worker, which re-mints the stub over Workers RPC | `context/rpc-stub-directory.ts`, `context/rpc-stub-relay.ts`           |
+| the stream (`append`/`read`)                                        | the log (SQLite)                                                            | —                                                                                        | `stream/stream.ts`                                                     |
+| `kv`, `whoami`, `fetch`                                             | KV / the address / FALLBACK                                                 | —                                                                                        | `built-ins.ts`                                                         |
 
 The first three rows are Cloudflare features. `rpcStubs` is ours — a poor-man's sturdy ref whose
 restore hook must route through whichever stateless worker holds the client's capnweb socket. The
@@ -44,7 +44,7 @@ log-derived: a mount's id IS the offset of its capability-provided fact; a subsc
 subscription-configured fact.
 
 ONE reduce-only processor runs INLINE at the commit point: `CoreStreamProcessor`
-(`stream/core-processor.ts`, slug `core`, contract 3.0.0), owned by the `Stream` itself (`core()`) with
+(`stream/core-processor.ts`, slug `core`, contract 3.0.0), owned by the `Stream` itself (`#coreReducedState`) with
 zero runner apparatus. It reduces the context's own control events into
 `{ projectId, path, createdAt, incarnation, paused, mounts, subscriptions }` — layer 2's mounts and
 layer 3's rows are slices of that one state, each layer keeping its OWN event family. Runtime state
@@ -57,10 +57,11 @@ breaker is a facet processor that appends `stream/paused { reason }` (layer 4).
 `capability-revoked { providedAtOffset }` (the DO appends them) and the READER (`route(mounts, call)`
 and `CapabilityResolver`); the core reduce reduces the events into `state.mounts`, a shadow stack. That
 is the WHOLE event — no policies, no flags.
-One dispatch path: parse → longest-path-prefix match (final segment may consume boundary args, ties
-→ newest) → evaluate the target against `{ itx }` → replay the remainder. A built-in root resolves
-DIRECTLY (built-ins first); userspace mounts see only `itx` — a bare root is unspellable, so the
-built-ins are unshadowable. A live capability is no exception: `itx.provide(path, fn)` is SUGAR that
+One dispatch path: parse → a built-in root resolves DIRECTLY (built-ins first); else the
+longest-path-prefix match (the final segment may consume the args at the mount, ties → newest) →
+the target — itself an `itx.…` expression — resolves through the same method one level deeper →
+replay the steps after the mount. A target not rooted at `itx` matches nothing (default-deny), so a
+bare root is unspellable and the built-ins are unshadowable. A live capability is no exception: `itx.provide(path, fn)` is SUGAR that
 parks `fn` in `rpcStubs` under `path` and mounts `path ⇒ itx.rpcStubs.get('<path>')`. The door is
 idempotent (a reconnect appends nothing).
 

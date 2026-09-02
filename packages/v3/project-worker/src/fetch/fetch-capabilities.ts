@@ -14,7 +14,8 @@
 //   3. Fetch-shaped calls enter through TWO doors, both landing here: over HTTP via the
 //      capability fetch lane (`x-itx-cap`, below), and over the dotted door — any terminal
 //      `.fetch(request)` on a LIVE capability (`itx.<path>.fetch(...)` — a live table row) is recognized by
-//      `isFetchShapedCall` and routed into `LiveCapabilityFetchServer.serve`.
+//      the terminal-fetch branch of `RpcStubDirectory.invoke` and routed into
+//      `LiveCapabilityFetchServer.serve`.
 //
 //   4. Two platform facts force everything unusual in this file, and BOTH are workarounds we
 //      expect to delete one day:
@@ -29,16 +30,7 @@
 //      fence — and a live capability's terminal fetch simply rides the plain invoke() walk like
 //      every other call, its Response flowing back over the RPC legs.
 //
-// THE COMPOSITION PATTERN — the "partial fetch": `(request) => Response | null`, where null means
-// "not my door, try the next one". The stream DO's fetch is an ordered walk over partial fetches
-// (its own doors plus the ones exported here) ending in the egress terminal — middleware without
-// a framework.
-
-import { errorCode } from "../lib/errors.ts";
-import { parse, type Expression } from "../context/expression.ts";
-
-/** A composable door: answer the request, or `null` for "not mine — try the next door". */
-export type PartialFetch = (request: Request) => Response | null | Promise<Response | null>;
+import type { Expression } from "../context/expression.ts";
 
 /** The two hibernation-API hooks the DO-side machinery needs (`ctx.acceptWebSocket` /
  *  `ctx.getWebSockets`). Timeless — the stub pager uses it too. */
@@ -54,13 +46,6 @@ export type WebSocketHooks = {
 
 export const CAPABILITY_FETCH_HEADER = "x-itx-cap";
 
-/** The ENCODE side of the lane (exact mirror of `serveCapabilityFetchLane`'s parse): a dotted
- *  string rides verbatim, an Expression rides as JSON. Callers stamping the header use this so
- *  the two rules can never drift apart. */
-export function encodeCapabilityFetchHeader(cap: string | Expression): string {
-  return typeof cap === "string" ? cap : JSON.stringify(cap);
-}
-
 /** Normalize any spelling to the canonical terminal-fetch call (doctrine point 1): strip a
  *  trailing `fetch` step (property or call) and append the one `fetch` PROPERTY step — the live
  *  Request always rides as the runtime arg, never as expression data. A `fetch(...)` call
@@ -73,30 +58,6 @@ export function expressionEndingInFetch(expr: Expression): Expression {
     );
   const endsInFetch = last === "fetch" || (Array.isArray(last) && last[0] === "fetch");
   return [...(endsInFetch ? expr.slice(0, -1) : expr), "fetch"];
-}
-
-/** PARTIAL FETCH: the capability fetch lane. Parses the header (JSON Expression or dotted
- *  string), hands it to `resolveFetch` (the capability table's routed evaluation), and maps
- *  errors to honest statuses — classification by CODE, never message text. */
-export async function serveCapabilityFetchLane(
-  request: Request,
-  resolveFetch: (expr: Expression, request: Request) => Promise<unknown>,
-): Promise<Response | null> {
-  const capHeader = request.headers.get(CAPABILITY_FETCH_HEADER);
-  if (capHeader === null) return null;
-  try {
-    const expr = capHeader.trimStart().startsWith("[")
-      ? (JSON.parse(capHeader) as Expression)
-      : parse(capHeader);
-    const result = await resolveFetch(expr, request);
-    return result instanceof Response
-      ? result
-      : new Response(`fetch lane: ${JSON.stringify(result)}\n`);
-  } catch (error) {
-    const message = error instanceof Error ? (error.stack ?? error.message) : String(error);
-    const status = errorCode(error) === "NO_CAPABILITY_MATCH" ? 404 : 500;
-    return new Response(`fetch lane error: ${message}\n`, { status });
-  }
 }
 
 // ═══════════════════════════════════ WORKAROUND ══════════════════════════════════════
@@ -112,8 +73,8 @@ export async function serveCapabilityFetchLane(
 //   Transport side (dialLiveCapabilityFetch): dial the provider's real fetch. A socketless
 //   Response returns over the RPC leg as-is (it serializes fine). A socket-bearing one CANNOT —
 //   so the socket is accepted right there, ONE dedicated "upgrade leg" WebSocket is opened back
-//   into the DO (openFetchUpgradeLeg → acceptFetchUpgradeLeg, gated on the pending upgradeId),
-//   frames are wired provider⇄leg, and a plain marker returns instead.
+//   into the DO (a fetch upgrade carrying `x-itx-fetch-upgrade` → acceptFetchUpgradeLeg, gated on
+//   the pending upgradeId), frames are wired provider⇄leg, and a plain marker returns instead.
 //
 //   DO side again: on the marker, mint the eyeball's WebSocketPair natively (the DO ↔ eyeball
 //   hop is a real fetch — socket-legal) and forward frames eyeball⇄leg by tag. Both DO-side
@@ -121,13 +82,12 @@ export async function serveCapabilityFetchLane(
 //
 // DELETE-DAY CHECKLIST (all deletions, nothing rewritten): remove this whole fenced section,
 // then delete its call sites —
-//   • the isFetchShapedCall branch in HibernatableRpcStubManager.invoke, the manager's second
-//     ctor param + #liveFetch field (hibernatable-rpc-stub.ts), and the
-//     `LiveCapabilityFetchTransport &` half of RetainedCallbackInvoker;
+//   • the terminal-fetch branch in RpcStubDirectory.invoke, the directory's `liveCapabilityFetch`
+//     dep + `#liveCapabilityFetch` field, and the `LiveCapabilityFetchTransport &` half of
+//     RetainedCallbackInvoker (rpc-stub-directory.ts);
 //   • RetainedCallbackInvoker's `fetch` method (rpc-stub-relay.ts);
 //   • the stream DO's `#liveCapabilityFetch` field, its acceptFetchUpgradeLeg door, and the
-//     handleWebSocketMessage/Close forwarding (iterate-context-durable-object.ts);
-//   • the directory's `liveCapabilityFetch` dep + ctor pass-through (rpc-stub-directory.ts).
+//     handleWebSocketMessage/Close forwarding (iterate-context-durable-object.ts).
 // Terminal-fetch calls then ride the plain invoke() walk like any other call, their Responses —
 // sockets included — crossing the RPC legs.
 // ═════════════════════════════════════════════════════════════════════════════════════
@@ -202,8 +162,15 @@ export async function dialLiveCapabilityFetch(
   const providerSocket = response?.webSocket;
   if (!providerSocket) return response as unknown as Response;
   // Leg first, listeners second, accept LAST — accepting before the awaited leg round-trip would
-  // drop any frame the provider sends immediately after upgrading (a server hello).
-  const leg = await openFetchUpgradeLeg(host, upgradeId);
+  // drop any frame the provider sends immediately after upgrading (a server hello). The leg is a
+  // plain fetch upgrade into the DO, opened mid-dial: the DO is awaiting the dial RPC and serves
+  // this upgrade concurrently (no deadlock, probed); frames ride it RAW.
+  const legResponse = await host.fetch("https://fetch-upgrade.internal/", {
+    headers: { Upgrade: "websocket", [FETCH_UPGRADE_SOCKET_HEADER]: upgradeId },
+  });
+  const leg = legResponse.webSocket;
+  if (!leg) throw new Error(`fetch-upgrade leg returned ${legResponse.status} without a WebSocket`);
+  leg.accept();
   const wire = (from: ProviderSocket, to: ProviderSocket) => {
     from.addEventListener("message", (ev) => {
       try {
@@ -224,21 +191,6 @@ export async function dialLiveCapabilityFetch(
   wire(leg as unknown as ProviderSocket, providerSocket);
   providerSocket.accept?.();
   return { webSocketUpgrade: true };
-}
-
-/** Open the dedicated upgrade leg into the DO (transport side, mid-dial — the DO is awaiting the
- *  dial RPC and serves this upgrade concurrently; no deadlock, probed). Frames ride it RAW. */
-async function openFetchUpgradeLeg(
-  host: { fetch(url: string, init?: RequestInit): Promise<Response> },
-  upgradeId: string,
-): Promise<WebSocket> {
-  const response = await host.fetch("https://fetch-upgrade.internal/", {
-    headers: { Upgrade: "websocket", [FETCH_UPGRADE_SOCKET_HEADER]: upgradeId },
-  });
-  if (!response.webSocket)
-    throw new Error(`fetch-upgrade leg returned ${response.status} without a WebSocket`);
-  response.webSocket.accept();
-  return response.webSocket;
 }
 
 /** DO SIDE of live-capability fetch: the pending-dial gate, the leg door, the eyeball pair, and
@@ -350,13 +302,6 @@ export class LiveCapabilityFetchServer {
     const peerSide = upgrade.side === "eyeball" ? "leg" : "eyeball";
     return this.#hooks.getWebSockets(upgradeTag(peerSide, upgrade.upgradeId))[0] ?? null;
   }
-}
-
-/** Is this call a fetch-shaped capability call (doctrine point 1: a terminal `fetch` carrying the
- *  one live Request)? The routing predicate the RPC-stub door uses to send it down `serve`. Dies
- *  with the fence: post-delete-day, terminal fetch rides the plain invoke() walk unrecognized. */
-export function isFetchShapedCall(path: string[], args: unknown[]): boolean {
-  return path.at(-1) === "fetch" && args.length === 1 && args[0] instanceof Request;
 }
 
 // ════════════════════════════════ END WORKAROUND ═════════════════════════════════════

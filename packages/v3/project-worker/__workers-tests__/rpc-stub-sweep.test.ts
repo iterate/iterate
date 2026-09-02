@@ -5,7 +5,7 @@
 //
 // Target surface: RpcStubDirectory #pending + #sweepPending (src/context/rpc-stub-directory.ts). An attach
 // reservation whose stub pager WebSocket never arrives — a relay that died mid-handshake — is
-// dropped LAZILY after ATTACH_PENDING_TTL_MS = 10s: the sweep runs on the next attach()/fetch(),
+// dropped LAZILY after RELAY_TIMEOUT_MS = 10s: the sweep runs on the next attach()/fetch(),
 // NEVER on a timer (a pending timer would pin the DO out of hibernation). The pending map is
 // invisible to transportState() on purpose, so the sweep is observed through its ONE external
 // consequence, the 409 door: a pager upgrade carrying a swept transportId 409s ("attach first"),
@@ -16,11 +16,11 @@
 // cutoffs move while every RPC still completes.
 
 import { expect, test, vi } from "vitest";
-import { STUB_PAGER_WEBSOCKET_HEADER } from "../src/context/hibernatable-rpc-stub.ts";
+import { STUB_PAGER_WEBSOCKET_HEADER } from "../src/context/rpc-stub-directory.ts";
 import { Echo, openSession, stub } from "./support.ts";
 
-/** Open a pager upgrade straight at the DO's fetch door (what openStubPagerWebSocket does
- *  relay-side) — the raw request lets us carry a SWEPT transportId, which no live relay would. */
+/** Open a pager upgrade straight at the DO's fetch door (what startRpcStubRelay does relay-side)
+ *  — the raw request lets us carry a SWEPT transportId, which no live relay would. */
 const openPager = (ctx: string, transportId: string) =>
   stub(ctx).fetch("https://stub-pager.internal/", {
     headers: { Upgrade: "websocket", [STUB_PAGER_WEBSOCKET_HEADER]: transportId },

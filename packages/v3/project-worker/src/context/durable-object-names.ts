@@ -19,7 +19,7 @@ const PROJECT_ID = /^[A-Za-z0-9_-]+$/;
 export type DurableObjectAddress = { projectId: string; path: string; name: string };
 
 /** Normalize a path to leading-slash form (`""` → `"/"`, `"x"` → `"/x"`). */
-export function normalizePath(path: string): string {
+function normalizePath(path: string): string {
   return path === "" ? "/" : path.startsWith("/") ? path : `/${path}`;
 }
 
@@ -60,9 +60,3 @@ export const DurableObjectNameCodec = {
     return { ...parts, name: DurableObjectNameCodec.stringify(parts) };
   },
 };
-
-/** Canonical faux-URL form of any accepted name (bare or full), so getByName always hits the
- *  same DO. */
-export function canonicalName(raw: string): string {
-  return DurableObjectNameCodec.parse(raw).name;
-}

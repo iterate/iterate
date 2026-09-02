@@ -39,7 +39,7 @@ class FakePagerWebSocket {
 afterEach(() => vi.useRealTimers());
 
 test("a relay registers onRpcBroken on the retained stub ONCE per session, not once per page", async () => {
-  // Fake timers neutralize openStubPagerWebSocket's 30s keepalive interval (no real timer leaks).
+  // Fake timers neutralize the pager's 30s keepalive interval (no real timer leaks).
   vi.useFakeTimers();
 
   // The retained stub — what `provider.dup()` yields, held for the whole session. It counts every

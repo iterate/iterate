@@ -20,10 +20,12 @@ type InvokeCapabilityTarget = {
   invokeCapability(call: ItxExpression): unknown;
 };
 
-/** Names that must NEVER become dynamic capability segments: JS/RPC protocol machinery a
- *  framework or capnweb probes on any object. A dispatcher answering these would turn a plain
- *  property probe into a live capability call. */
-const RESERVED_DYNAMIC_PATH_SEGMENTS: ReadonlySet<string> = new Set([
+/** Names that must NEVER become dynamic capability segments — a dispatcher answering them would turn
+ *  a plain property probe into a live capability call. Enforced at the prototype-chain hop and at
+ *  every depth of the path proxies it hands out. Two kinds, one set: */
+const RESERVED: ReadonlySet<string> = new Set([
+  // JS/RPC protocol machinery a framework or capnweb probes on any object (`then` above all: an
+  // instance must never look thenable, or every `await` of it would resolve a capability).
   "__defineGetter__",
   "__defineSetter__",
   "__lookupGetter__",
@@ -46,29 +48,15 @@ const RESERVED_DYNAMIC_PATH_SEGMENTS: ReadonlySet<string> = new Set([
   "toLocaleString",
   "toString",
   "valueOf",
+  // Names common protocols LOOK UP on arbitrary objects and CALL if callable: JSON.stringify
+  // (toJSON) and vitest/jest equality (asymmetricMatch). The asymmetricMatch case is worse than
+  // noise — vitest treats any object with a callable asymmetricMatch as an asymmetric matcher, and
+  // a dispatcher returning a (truthy) Promise makes the equality SPURIOUSLY PASS. The bar for this
+  // half is HIGH (these names become unreachable as dotted segments; explicit invokeCapability still
+  // reaches them): probed-and-called by ubiquitous protocols AND implausible as capability names.
+  "toJSON",
+  "asymmetricMatch",
 ]);
-
-/**
- * Names common protocols LOOK UP on arbitrary objects and CALL if callable: JSON.stringify
- * (toJSON) and vitest/jest equality (asymmetricMatch). A dynamic fallback answering them turns
- * every stringify/assert of a capability surface into a live invokeCapability dispatch — and the
- * asymmetricMatch case is worse than noise: vitest treats any object with a callable
- * asymmetricMatch as an asymmetric matcher, and a dispatcher returning a (truthy) Promise makes
- * the equality SPURIOUSLY PASS.
- *
- * Enforced BOTH at the prototype-chain hop and at every depth of the path proxies it hands out
- * (stringify probes callables too). NOT in RESERVED_DYNAMIC_PATH_SEGMENTS, and the membership bar
- * is HIGH, because these names become unreachable as dotted capability segments (explicit
- * invokeCapability({ path }) still reaches them): only names that are (a) probed-and-called by
- * ubiquitous protocols AND (b) implausible as capability/method names belong here.
- */
-const PROTOCOL_PROBE_KEYS: ReadonlySet<string> = new Set(["toJSON", "asymmetricMatch"]);
-
-/** A key that must NOT conjure a dynamic capability segment — a JS/wire reserved name or a protocol
- *  probe. The ONE predicate for both the prototype hop and every path-proxy trap. */
-function isReserved(key: string): boolean {
-  return RESERVED_DYNAMIC_PATH_SEGMENTS.has(key) || PROTOCOL_PROBE_KEYS.has(key);
-}
 
 /**
  * Builds the dotted-path fallback used by dynamic itx capabilities.
@@ -93,13 +81,13 @@ export function createInvokeCapabilityPathProxy(
     },
     get(target, key, receiver) {
       if (typeof key === "symbol") return Reflect.get(target, key, receiver);
-      if (isReserved(key)) return undefined;
+      if (RESERVED.has(key)) return undefined;
       return valueFor(key);
     },
     getOwnPropertyDescriptor(target, key) {
       const descriptor = Reflect.getOwnPropertyDescriptor(target, key);
       if (descriptor) return descriptor;
-      if (typeof key === "symbol" || isReserved(key)) return undefined;
+      if (typeof key === "symbol" || RESERVED.has(key)) return undefined;
       // Cap'n Web's server-side path traversal probes own descriptors before reading a segment.
       // Dynamic roots need to look discoverable here so calls like
       // itx.slack.chat.postMessage(...) reach the apply trap.
@@ -107,7 +95,7 @@ export function createInvokeCapabilityPathProxy(
     },
     has(target, key) {
       if (typeof key === "symbol") return key in target;
-      return !isReserved(key);
+      return !RESERVED.has(key);
     },
   });
 }
@@ -168,15 +156,12 @@ export function installPrototypeInvokeCapabilityFallback<
   const parentPrototype = Object.getPrototypeOf(cls.prototype) as object;
   const hop = new Proxy(Object.create(parentPrototype) as object, {
     get(hopTarget, key, receiver) {
-      // `then` must stay absent or every `await` of an instance would treat it as a thenable and
-      // try to resolve it as a dynamic capability.
-      if (key === "then") return undefined;
       // Symbols and anything the parent chain already answers (dispose protocol, capnweb
       // internals, Object.prototype) pass through with the instance as receiver.
       if (typeof key === "symbol" || key in hopTarget) {
         return Reflect.get(hopTarget, key, receiver);
       }
-      if (isReserved(key)) return undefined;
+      if (RESERVED.has(key)) return undefined;
       // The dynamic fallback exists for INSTANCES. A lookup whose receiver is not one — someone
       // probing `Class.prototype.foo` directly, a framework walking prototypes — must see plain
       // "undefined", not conjure a dispatcher over an uninitialized receiver.

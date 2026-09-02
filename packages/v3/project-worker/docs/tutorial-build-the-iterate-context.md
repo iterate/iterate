@@ -477,7 +477,7 @@ in the toy it is deliberately _dumb_: storage in, committed events out.
 
 ```ts
 // The log and its one commit point. (The real Stream also OWNS the core reduce —
-// `core()`, reduced INSIDE the commit transaction, atomicity the toy gets for free,
+// `#coreReducedState`, reduced INSIDE the commit transaction, atomicity the toy gets for free,
 // each sql.exec being atomic — and takes one injected hook, onCommit, the fan-out.
 // Its deps add `path` and `projectId`; the pause check is one `if` in append reading
 // its own core state; facets ride the DO's ctx
@@ -683,8 +683,9 @@ socket and a retained capnweb reference — so it goes into a built-in registry,
 `itx.rpcStubs`, under the path. The mount is _data_: the same
 `capability-provided` event any expression mount appends, with the target
 `itx.rpcStubs.get('itx.runOnMyComputer')`. Read the log and that is exactly what
-you'll see; spell the two steps yourself if you like —
-`itx.rpcStubs.provide(fn, { key })` then `itx.provide(path, "itx.rpcStubs.get('<key>')")`.
+you'll see; the parking step has no client verb of its own (only `provide` and
+`subscribe` take a live value), but the mount step is spellable — `itx.provide(path,
+"itx.rpcStubs.get('<key>')")` points another name at an already-parked stub.
 The split buys three things you'll lean on: a reconnect re-parks the stub and
 appends nothing (the door is idempotent); if your laptop vanishes the mount
 stays and calls answer `CONNECTION_OFFLINE` until you `revoke` it; and "who is

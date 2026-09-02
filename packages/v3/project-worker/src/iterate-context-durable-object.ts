@@ -49,22 +49,23 @@ import {
   canonicalCapabilityPath,
   print,
   toExpression,
+  type Expression,
   type ItxExpression,
 } from "./context/expression.ts";
 import {
+  CAPABILITY_FETCH_HEADER,
+  expressionEndingInFetch,
   LiveCapabilityFetchServer,
-  serveCapabilityFetchLane,
-  type PartialFetch,
 } from "./fetch/fetch-capabilities.ts";
 import { invokePath } from "./context/dispatch.ts";
 import { FacetHandle, RpcStubHandle } from "./context/invoke-handle.ts";
 import { localContext, Stream, type WaitForEventFilter } from "./stream/stream.ts";
-import { RpcStubDirectory } from "./context/rpc-stub-directory.ts";
 import {
+  RpcStubDirectory,
   STUB_PAGER_KEEPALIVE_REQUEST,
   STUB_PAGER_KEEPALIVE_RESPONSE,
   type RetainedCallbackInvoker,
-} from "./context/hibernatable-rpc-stub.ts";
+} from "./context/rpc-stub-directory.ts";
 import { DurableObjectNameCodec } from "./context/durable-object-names.ts";
 import { itxEntrypointFor } from "./itx-entrypoint.ts";
 import {
@@ -72,11 +73,7 @@ import {
   capabilityProvidedEvent,
   capabilityRevokedEvent,
 } from "./context/capability-table.ts";
-import {
-  buildBuiltIns,
-  type BuiltInsEnv,
-  type SubscriptionListEntry,
-} from "./context/built-ins.ts";
+import { buildBuiltIns, type SubscriptionListEntry } from "./context/built-ins.ts";
 import { subscriptionConfiguredEvent, subscriptionRemovedEvent } from "./stream/subscriptions.ts";
 import { SubscriptionDelivery } from "./stream/subscription-delivery.ts";
 
@@ -92,9 +89,20 @@ function parseIterateContextDurableObjectName(name: string | undefined) {
  *  and reserved as a subscription name. */
 const CORE_SLUG = CoreContract.slug;
 
-// The parent reduces the CORE REDUCE inline (identity, pause, the routing table, the subscriptions),
-// so it needs the full roots env.
-export class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
+/** The context worker's bindings (wrangler.jsonc): the DO namespace, the Worker Loader, the two kv
+ *  namespaces, the deploy id, and the egress terminal. */
+export interface Env {
+  CONTEXT: DurableObjectNamespace<IterateContextDurableObject>;
+  LOADER: WorkerLoader;
+  ITX_KV: KVNamespace;
+  SECRETS_KV?: KVNamespace;
+  /** Deploy identity — reduced into loader cacheKeys so a redeploy mints fresh isolates. */
+  CF_VERSION_METADATA?: { id: string };
+  /** The egress terminal this context's `fetch` bottoms out at (secret-substituted, then sent). */
+  FALLBACK: Fetcher;
+}
+
+export class IterateContextDurableObject extends DurableObject<Env> {
   /** WHO THIS DO IS — the first line, the apps/os shape: the DO name parsed ONCE into `{ name,
    *  projectId, path }` (`name` is the codec string itself). A context is only ever reached
    *  `getByName`; an id-addressed instance fails right here, before it can touch anything. */
@@ -122,7 +130,7 @@ export class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
       }).catch(() => undefined),
   });
 
-  constructor(ctx: DurableObjectState, env: BuiltInsEnv) {
+  constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     // Auto-answer the edge relay's 30s keepalive at the RUNTIME level — the message never reaches a
     // handler, so it keeps the pager sockets warm (defeats the ~100s idle-close) WITHOUT waking
@@ -177,22 +185,23 @@ export class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
     return this.#stream.read(afterOffset, limit);
   }
 
-  #capabilityResolverInstance?: CapabilityResolver;
-  /** THE DISPATCHER, parent-constructed over the built-ins (context/capability-table.ts). */
-  #capabilityResolver(): CapabilityResolver {
-    if (this.#capabilityResolverInstance) return this.#capabilityResolverInstance;
-    const { projectId, path } = this.#name;
-    const ownContext = localContext(this); // the own DO as a uniform-async Context (stream/stream.ts)
-    const builtIns = buildBuiltIns({
-      projectId,
-      path,
+  /** THE DISPATCHER (context/capability-table.ts), built once over the physical built-ins — every
+   *  entry below closes over this context's identity, so cross-project access is unspellable. */
+  readonly #capabilityResolver = new CapabilityResolver({
+    mounts: () => this.#stream.coreReducedState.mounts,
+    builtIns: buildBuiltIns({
+      projectId: this.#name.projectId,
+      path: this.#name.path,
       contextName: this.#name.name,
       env: this.env,
       invoke: (call) => this.invoke(call),
+      // a sibling context by path; the own path is this DO as a uniform-async Context (stream.ts)
       context: (p) =>
-        p === path
-          ? ownContext
-          : this.env.CONTEXT.getByName(DurableObjectNameCodec.stringify({ projectId, path: p })),
+        p === this.#name.path
+          ? localContext(this)
+          : this.env.CONTEXT.getByName(
+              DurableObjectNameCodec.stringify({ projectId: this.#name.projectId, path: p }),
+            ),
       egress: (request) => this.#egress(request),
       // THE LIVE-STUB REGISTRY, DO half: `get(key)` is the transport's pipelinable handle (a GENUINE
       // RpcTarget so `itx.rpcStubs.get('k').hello()` pipelines the mid-chain `.hello()` on every lane
@@ -220,14 +229,9 @@ export class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
         list: () => this.#subscriptionList(),
         get: (name) => this.#subscriptionList().find((s) => s.name === name) ?? null,
       },
-      exportsCtx: this.ctx,
-    });
-    return (this.#capabilityResolverInstance = new CapabilityResolver({
-      builtIns,
-      // Resolve one call against the CURRENT mounts (the `itx` recursion symbol re-enters here).
-      resolveCurrent: (call, depth) => this.invoke(call, depth),
-    }));
-  }
+      host: this.#itxHost,
+    }),
+  });
 
   // ── SUBSCRIPTION DELIVERY: the one loop (subscription-delivery.ts), wired to this DO ──
 
@@ -389,21 +393,16 @@ export class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
       // THE LOAD, its source resolved once per materialization: a live facet's modules + contentHash
       // ride #liveFacets, so a commit re-fetches nothing.
       const live = this.#liveFacets.get(name);
-      const {
-        worker,
-        version: contentHash,
-        modules,
-      } = await loadConfinedWorker({
+      const { worker, contentHash, modules } = await loadConfinedWorker({
         env: this.env,
         invoke: (call) => this.invoke(call),
         host: this.#itxHost,
         kind: "facet",
         owner: facetLoaderOwner(this.#name.name, memo.className),
         source: parse(memo.source) as WorkerSource,
-        mainModule: "cap.js",
-        what: `facet "${name}"`,
+        where: `facet "${name}"`,
         ...(live?.source === memo.source && {
-          resolved: { version: live.contentHash, modules: live.modules },
+          resolved: { contentHash: live.contentHash, modules: live.modules },
         }),
       });
       // The load awaited: a `facets.delete(name)` (disableProcessor) may have landed meanwhile — its
@@ -496,14 +495,9 @@ export class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
   /** Resolve + run one call against the current table. The ONE dispatch door — `IterateContext` builds the
    *  call Expression client-side and hands it here (the ARRAY half can carry call args a dotted
    *  STRING never could — callbacks, Dates, bytes: `["itx","tools",["transform",21,cb]]`). */
-  async invoke(call: ItxExpression, depth = 0): Promise<unknown> {
+  async invoke(call: ItxExpression): Promise<unknown> {
     this.#recordActivityForQuietClock();
-    return this.#capabilityResolver().resolve(
-      this.#stream.coreReducedState.mounts,
-      toExpression(call),
-      undefined,
-      depth,
-    );
+    return this.#capabilityResolver.resolve(call);
   }
 
   /** Mount a capability: `path ⇒ target` (an expression rooted at itx). That is the whole event.
@@ -557,22 +551,37 @@ export class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
   // ── native fetch: the stub pager door, the fetch lane, observability, egress ──
 
   async fetch(request: Request): Promise<Response> {
-    // AN ORDERED WALK OVER PARTIAL FETCHES (the fetch/fetch-capabilities.ts convention: each door
-    // answers or returns null — middleware without a framework), ending in the egress terminal:
-    //   1. the stub pager + live-capability upgrade-leg doors (rpc-stub machinery);
-    //   2. the capability fetch lane (`x-itx-cap` — a fetch-shaped capability, 101s included);
+    // The doors, in order — each answers or declines:
+    //   1. the stub pager and the live-capability upgrade leg (the rpc-stub machinery);
+    //   2. THE CAPABILITY FETCH LANE — `x-itx-cap` names an itx expression (JSON from a session's
+    //      terminal `fetch(request)`, dotted text from the edge's `/cap?cap=`), resolved as a
+    //      terminal-fetch call against the table with the live Request as its one runtime arg; a
+    //      101 flows back untouched; errors map to statuses by CODE. The routing header itself is
+    //      stripped so it never reaches the capability or, below, egress;
     //   3. everything else is EGRESS (secret substitution → the FALLBACK terminal).
-    const doors: PartialFetch[] = [
-      (r) => this.#rpcStubs.fetch(r),
-      (r) => this.#liveCapabilityFetch.acceptFetchUpgradeLeg(r),
-      (r) =>
-        serveCapabilityFetchLane(r, (expr, req) =>
-          this.#capabilityResolver().resolveFetch(this.#stream.coreReducedState.mounts, expr, req),
-        ),
-    ];
-    for (const door of doors) {
-      const response = await door(request);
-      if (response) return response;
+    const pager = await this.#rpcStubs.fetch(request);
+    if (pager) return pager;
+    const upgradeLeg = await this.#liveCapabilityFetch.acceptFetchUpgradeLeg(request);
+    if (upgradeLeg) return upgradeLeg;
+    const capHeader = request.headers.get(CAPABILITY_FETCH_HEADER);
+    if (capHeader !== null) {
+      try {
+        const expr = capHeader.trimStart().startsWith("[")
+          ? (JSON.parse(capHeader) as Expression)
+          : parse(capHeader);
+        const headers = new Headers(request.headers);
+        headers.delete(CAPABILITY_FETCH_HEADER);
+        const result = await this.#capabilityResolver.resolve(expressionEndingInFetch(expr), [
+          new Request(request, { headers }),
+        ]);
+        return result instanceof Response
+          ? result
+          : new Response(`fetch lane: ${JSON.stringify(result)}\n`);
+      } catch (error) {
+        const message = error instanceof Error ? (error.stack ?? error.message) : String(error);
+        const status = errorCode(error) === "NO_CAPABILITY_MATCH" ? 404 : 500;
+        return new Response(`fetch lane error: ${message}\n`, { status });
+      }
     }
     return this.#egress(request);
   }
@@ -589,7 +598,7 @@ export class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
    *  verb for the hibernation/quiesce probes, deliberately OFF the itx surface: these are socket
    *  facts, not event-derivable state (`itx.rpcStubs.list()` is the edge half — the keys
    *  with a transport). */
-  transportState(): Record<string, unknown> {
+  transportState(): ReturnType<RpcStubDirectory["state"]> {
     return this.#rpcStubs.state();
   }
 

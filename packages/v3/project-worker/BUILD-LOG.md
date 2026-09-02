@@ -2090,3 +2090,41 @@ facts) and ranked opportunities across the engine + SDK host, the delivery loop,
   invoked `["wake"]` by name, so every `enableProcessor` reported an issue and skipped its
   configure-time catch-up. It is `catchUpFromLog()` now, at one call site. Lesson recorded: rename per
   call site, never by regex over a verb.
+- **The facet door (e8d9e42c9).** `#resolveFacet` + `#facet` + `versionedFacet` + `#resolvedFacetSource`
+  folded into ONE linear `#invokeFacet`: startup memo → load (source resolved once per
+  materialization, riding `#liveFacets`, now a Map with the resolved source) → racing-delete check →
+  class + version marker → the call under `lib/timeout`'s 60 s watchdog → copy + dispose the answer.
+  The two WebSocket-hook adapters are `this.ctx`; `webSocketError` is one line.
+- **The engine (0d810288c).** The constructor rehydrates the checkpoint and builds the LiveState
+  holder synchronously; `#loadProgress`, `#liveHolder`, `#projectionOf`, `PROJECTION_FAILED`, the
+  per-batch seed, the rebirth block, the impossible "row genuinely missing" fallback, `#catchUpBody`
+  and `#repairThrough` are gone. Six private methods instead of ten; `processEventBatch` → `reduce` is
+  four hops. The SDK host takes `Service<ItxEntrypoint>` and `ctx.storage.kv` directly (103 lines).
+- **The edge and the leaves (817923389).** `IterateContext` lost the `RpcStubs` class, the
+  `rpcStubs` getter and the `append`/`read`/`fetch` proxies — the built-in roots and the terminal-fetch
+  rule already serve them through the one door (410 → 315). The core reduce no longer catches what
+  the stream already contains; `logs.ts` keeps only `warn`; `LiveState.set` is one try with a separate
+  serialized diff base; the client store's rev sentinel is `null`.
+- **The context layer + the DO seams (this commit).** `CapabilityResolver.resolve` is one linear
+  method over `mounts: () => …` — `evaluate`, `apply`, `#itxAtDepth`, `resolveCurrent`, the `scope`
+  concept and the depth argument on the DO's public `invoke` are gone; `itx.kv.get('a')` is two
+  frames, an alias re-enters nothing (SEMANTIC NOTE: an alias target is now resolved as a VALUE and
+  the steps after the mount walk on it — a more specific mount under the alias's target path is no
+  longer consulted; nothing pinned the old behaviour). The rpc-stub trio is ONE `rpc-stub-directory.ts`
+  (the manager absorbed, the relay's dialer inlined; `hibernatable-rpc-stub.ts` deleted). The loader
+  is one function (`where`, `contentHash`, no `mainModule`; `hash.ts` deleted). Built-ins take the
+  DO's `host`; the DO declares its own `Env`. The capability fetch lane is INLINED into the DO's
+  `fetch` — four plain doors, no `PartialFetch`, no `serveCapabilityFetchLane` — and strips
+  `x-itx-cap` before resolving, so the routing header never reaches a capability or egress (the edge
+  review found it leaking to FALLBACK for root `itx.fetch`). `Match` reads `argsAtMount` /
+  `stepsAfterMount`; `dotted-path-proxy` has one `RESERVED` set.
+- **Where we are.** Production `src/`: this morning 4,233 code lines · 53 private methods · 116
+  exports → now 3,588 · 36 · 100 (−15% code, −17 helpers, −16 exported names); `context/` 3,097 →
+  1,747 lines; tests 11,069 → 11,668 (pins moved, none dropped). Key files: DO 768 → 675, engine 582
+  → 560, delivery 422 → 375, host 190 → 103, `IterateContext` 410 → 315, fetch-capabilities 362 → 307.
+- Not done, on purpose or pending a call: `Parking` → `session.ts`; the zod event envelope as plain
+  types (SDK surface); `rpcStubAttach`'s canonical-key assert (a deliberate review-round guard);
+  `configureSubscription` returning void; the alarm-quiesce pins that pass vacuously without a
+  facet or stub.
+- GATES: tsc×3 · unit+workers 234 (24 files) · e2e 136p/2xf (35 files) · tutorial-proof 8 ·
+  Playwright 2 · oxlint 0/0 · knip clean.

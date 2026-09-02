@@ -241,7 +241,7 @@ cursorLane.push / pump(name, sub):                               // one in fligh
   apply sub.resumed if newer than the row (seek + attempt 0)
   if sub.halted or row.nextAttemptAtMs > now: return             // alarm() pumps due rows
   if row.confirmedOffset < after: deliver read(row.confirmedOffset → after) in pages, acking each   // durable gap repair
-  try:   await apply({ itx }, sub.target, { boundaryArgs: [events, range] }, 20s watchdog)
+  try:   await callOn(await resolve(sub.target), [events, range]), 20s watchdog
          kv.put(row with confirmedOffset = next, attempt 0)
   catch: attempt++; if attempt ≥ 15 or error.retryable === false → append subscription-delivery-halted
          else row.nextAttemptAtMs = now + jitter(1s·2^attempt, ≤30m); kv.put(row); stream.armNoLaterThan(it)
@@ -433,21 +433,17 @@ class UnauthenticatedSession extends RpcTarget { authenticate(credentials?: unkn
 class Session extends RpcTarget { get projects(): ProjectCollection }                                // a GETTER: capnweb exposes prototype members only
 class ProjectCollection extends RpcTarget { get(projectId: string): IterateContext }               // the ROOT context; pure addressing
 
-// iterate-context.ts — AXIOMS: each is a built-in door that needs the edge (a session-held stub, a live Request, a reduce)
+// iterate-context.ts — the declared doors are the ones that NEED the edge (a session-held stub to park, an EDGE context, the dispatch door, a wait with no built-in root)
 class IterateContext extends RpcTarget {
   cd(path: string): IterateContext;                                    // absolute by convention; returns an EDGE context
-  invokeCapability(call: ItxExpression): Promise<unknown>;             // THE dispatch door; a terminal .fetch(Request) rides the fetch lane
-  append(...events: StreamEventInput[]): Promise<StreamEvent[]>;
-  read(afterOffset?: number, limit?: number): Promise<StreamPage>;
+  invokeCapability(call: ItxExpression): Promise<unknown>;             // THE dispatch door; a terminal .fetch(Request) rides the fetch lane (root egress included)
   waitForEvent(filter?: WaitForEventFilter): Promise<StreamEvent>;    // an HTTP-batch client's only "next event"
-  fetch(request: Request): Promise<Response>;                          // egress
-  get rpcStubs(): RpcStubs;                                            // provide(fn,{key}) · get(key) · list() · close(key) — the physical axiom
-  [dotted: string]: unknown;   // whoami · kv · facets · subscriptions · load · runScript · every mount
+  [dotted: string]: unknown;   // the DO built-ins — append · read · fetch · whoami · kv · rpcStubs.get/list · facets · subscriptions · load · runScript — and every mount
 }
 
 // SUGAR — the second banded section of the SAME class (no second file: a prototype-installed sugar.ts would need declaration merging to type).
-// Each is a one-line composition and appends no event shape of its own.
-provide(path: string, target: ItxExpression | ProviderStub): Promise<{ providedAtOffset: number }>;   // fn ⇒ rpcStubs.provide + mount itx.rpcStubs.get(path)
+// Each is a one-line composition and appends no event shape of its own; a live value is parked by a private relay step (#parkLiveStub), never a client-facing verb.
+provide(path: string, target: ItxExpression | ProviderStub): Promise<{ providedAtOffset: number }>;   // fn ⇒ park the stub + mount itx.rpcStubs.get(path)
 revoke(input: string | { providedAtOffset: number }): Promise<void>;                                 // + close this session's stub at that path
 subscribe(input: { name?: string; target: ItxExpression | ProviderStub; consumes?: string[] }): Promise<{ name: string }>;
 unsubscribe(name: string): Promise<void>;
@@ -568,12 +564,12 @@ never a file here (egress lives in `../shared`). `core/` is gone — it was not 
 src/
   worker.ts  session.ts  iterate-context.ts  iterate-context-durable-object.ts  itx-entrypoint.ts
   context/   built-ins.ts capability-table.ts expression.ts dispatch.ts invoke-handle.ts dotted-path-proxy.ts
-             rpc-stub-directory.ts rpc-stub-relay.ts hibernatable-rpc-stub.ts worker-loader.ts durable-object-names.ts
+             rpc-stub-directory.ts rpc-stub-relay.ts worker-loader.ts durable-object-names.ts
   fetch/     fetch-capabilities.ts
   stream/    stream.ts events.ts processor.ts reduce-checkpoint.ts core-processor.ts
              subscriptions.ts subscription-delivery.ts live-state.ts
   sdk/       index.ts (→ processor.js) stream-processor-durable-object.ts (the host)
-  lib/       errors.ts logs.ts hash.ts patch.ts        client/     generated/
+  lib/       errors.ts logs.ts patch.ts                client/     generated/
 ```
 
 Steps 1 and 3 can run as parallel agents once 0 and 2 are in. Step 2 touches the DO's commit path

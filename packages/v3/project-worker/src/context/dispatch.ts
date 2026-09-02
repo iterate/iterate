@@ -1,10 +1,11 @@
-// context/dispatch.ts — match a capability call to a mount, then EXECUTE it against a LIVE object graph
-// (the codec that turns strings ⇄ these structures is ./expression.ts). One engine (`walkSteps`)
-// under two doors — `invokePath` (from a bare target) and `apply` (a matched mount); `evaluate` is
-// apply's own scope-rooted walk (not a separate caller). The dotted write-half (a scope symbol whose access reduces into one
-// dispatch) is `InvokeHandle` (context/invoke-handle.ts) — the ONE such primitive, pipelinable over
-// Workers RPC. `match` claims a call for a capability path (longest-prefix; the final segment may
-// consume the call's args as boundary args; the unmatched tail is the remainder apply() replays).
+// context/dispatch.ts — match a capability call to a mount, then EXECUTE steps against a LIVE object
+// graph (the codec that turns strings ⇄ these structures is ./expression.ts). `match` claims a call
+// for a capability path (segment by segment; the final segment may consume the call's args as the
+// args at the mount; the unclaimed tail is the steps after the mount). `walkSteps` is THE step walk
+// — `CapabilityResolver.resolve` (capability-table.ts) replays the steps after a mount with it, and
+// `invokePath` walks a dotted path on a local object (a facet stub). `callOn` applies args to a
+// resolved value. The dotted write-half (a handle whose dotted access reduces into one dispatch) is
+// `InvokeHandle` (context/invoke-handle.ts) — the ONE such primitive, pipelinable over Workers RPC.
 
 import { codedError } from "../lib/errors.ts";
 import type { Expression } from "./expression.ts";
@@ -22,22 +23,22 @@ export function registerPipelinedRpcBrand(brand: abstract new (...args: never[])
 }
 const pipelined = (v: unknown): boolean => PIPELINED_RPC_BRANDS.some((b) => v instanceof b);
 
-/** A successful claim of a call by a capability path — the two things `apply` needs. (Ranking uses
- *  the mount's own `path.length`, held by the caller; `match` is all-or-nothing, so a "how many
- *  segments matched" count could only ever equal that length.) */
+/** A successful claim of a call by a capability path. (Ranking uses the mount's own `path.length`,
+ *  held by the caller; `match` is all-or-nothing, so a "how many segments matched" count could only
+ *  ever equal that length.) */
 export type Match = {
-  /** The call's args at the boundary, when the FINAL path segment matched a call step (`itx.grok`
-   *  vs `itx.grok({...})`) — applied to the evaluated target. */
-  boundaryArgs?: unknown[];
-  /** The call's unmatched tail, replayed on the evaluated target. */
-  remainder: Expression;
+  /** The call's args AT the mount — present when the FINAL path segment matched a call step
+   *  (`itx.grok({...})` against the path `itx.grok`); applied to the resolved target. */
+  argsAtMount?: unknown[];
+  /** The call's steps AFTER the mount, replayed on the resolved target. */
+  stepsAfterMount: Expression;
 };
 
 /** Claim `call` with a capability `path`, segment by segment from the start: each segment matches a
  *  string step of the same name, or — FINAL segment only — a call step of the same method (its args
- *  become the boundary args). No placeholders or captures. */
+ *  become the args at the mount). No placeholders or captures. */
 export function match(path: readonly string[], call: Expression): Match | null {
-  let boundaryArgs: unknown[] | undefined;
+  let argsAtMount: unknown[] | undefined;
   for (let i = 0; i < path.length; i++) {
     const c = call[i];
     if (c === undefined) return null; // path longer than the call
@@ -45,9 +46,9 @@ export function match(path: readonly string[], call: Expression): Match | null {
       if (c !== path[i]) return null;
     } else if (c[0] !== path[i] || i !== path.length - 1)
       return null; // call consume: final only
-    else boundaryArgs = c.slice(1);
+    else argsAtMount = c.slice(1);
   }
-  return { boundaryArgs, remainder: call.slice(path.length) };
+  return { argsAtMount, stepsAfterMount: call.slice(path.length) };
 }
 
 // RPC-EXPOSURE DOCTRINE (Kenton, workerd #1028), enforced at THE dispatch point: what an object
@@ -73,10 +74,9 @@ function stepGet(value: object, key: string): unknown {
 }
 
 /**
- * THE step walk (shared by `evaluate`, `apply`, `invokePath`): property steps `Reflect.get` with
- * the receiver carried; call steps `Reflect.apply` ON that receiver (detaching a method from a
- * Workers-RPC receiver breaks it); every step is awaited so stub-returning calls pipeline
- * naturally. `where` names the walk in errors (`expression` / `remainder`).
+ * THE step walk: property steps `Reflect.get` with the receiver carried; call steps `Reflect.apply`
+ * ON that receiver (detaching a method from a Workers-RPC receiver breaks it); every step is awaited
+ * so stub-returning calls pipeline naturally. `where` names the walk in errors.
  *
  * ⚠️  DataCloneError LEARNING (a full investigation — see FACET-RPC-INVESTIGATION.md): invoke
  * facet/RPC-stub methods with `Reflect.apply(fn, receiver, args)`, NEVER `stub[m].apply(stub,
@@ -85,7 +85,7 @@ function stepGet(value: object, key: string): unknown {
  * stub may never be serialized (`requireAllowsTransfer()` throws unconditionally) → `DataCloneError:
  * Durable Object Facet stubs cannot be transferred between Workers`. Do not "simplify" this away.
  */
-async function walkSteps(
+export async function walkSteps(
   start: { value: unknown; receiver: unknown },
   steps: Expression,
   where: string,
@@ -130,22 +130,6 @@ export async function invokePath(
   return (await walkSteps({ value: target, receiver: undefined }, steps, where)).value;
 }
 
-/**
- * Walk a CONCRETE expression against named scope roots (`itx`, plus the built-ins when the caller
- * passes them — a userspace target sees only `{ itx }`, so a bare root is unspellable, not policed).
- * `Object.hasOwn`, not `in`: scope absence IS the gate, and `in` would leak Object.prototype names
- * as phantom roots.
- */
-export async function evaluate(
-  scope: Record<string, unknown>,
-  expr: Expression,
-): Promise<{ value: unknown; receiver: unknown }> {
-  const [root, ...steps] = expr;
-  if (typeof root !== "string" || !Object.hasOwn(scope, root))
-    throw new Error(`expression root ${JSON.stringify(root)} is not in scope`);
-  return walkSteps({ value: scope[root], receiver: undefined }, steps, "expression");
-}
-
 /** Apply `args` to a resolved value on its carried receiver, or a LOUD error if it is not callable
  *  (never the silent arg-drop apps/os shipped). An `InvokeHandle` (a mid-chain capability handle —
  *  a live stub's transport bridge, a facet handle, a parked callback the delivery loop pushes to) is NOT a JS function
@@ -156,22 +140,4 @@ export async function callOn(value: unknown, receiver: unknown, args: unknown[])
   if (typeof value === "function") return Reflect.apply(value, receiver, args);
   if (value instanceof InvokeHandle) return value.applyRoot(args);
   throw new Error(`target is not callable but ${args.length} arg(s) were passed`);
-}
-
-/**
- * Finish a matched call: evaluate the target, apply the boundary args at the mount itself (on the
- * carried receiver), replay the remainder on the result, then apply any runtime `extraArgs` — the
- * fetch lane hands the live Request in here, since a Request is not expression data.
- */
-export async function apply(
-  scope: Record<string, unknown>,
-  target: Expression,
-  m: Pick<Match, "boundaryArgs" | "remainder">,
-  extraArgs?: unknown[],
-): Promise<unknown> {
-  let { value, receiver } = await evaluate(scope, target);
-  if (m.boundaryArgs) value = await callOn(value, receiver, m.boundaryArgs);
-  ({ value, receiver } = await walkSteps({ value, receiver }, m.remainder, "remainder"));
-  if (extraArgs) value = await callOn(value, receiver, extraArgs);
-  return await value;
 }

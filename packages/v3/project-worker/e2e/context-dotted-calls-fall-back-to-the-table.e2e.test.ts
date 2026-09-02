@@ -101,7 +101,7 @@ test("a leaf miss through the EXPLICIT door also rejects", async () => {
 });
 
 test("an unawaited dotted chain is await-safe: awaiting mid-chain yields a live handle", async () => {
-  // The dotted fallback's path proxies keep `then` absent (RESERVED_DYNAMIC_PATH_SEGMENTS), so
+  // The dotted fallback's path proxies keep `then` absent (RESERVED), so
   // awaiting a dangling chain node settles to a usable handle instead of dispatching — and the chain
   // stays callable afterwards (real client code parks chain nodes in variables and awaits them).
   const itx = await liveRig(freshCtx("await"), "b9");
@@ -133,7 +133,7 @@ test("JSON.stringify of a dangling chain node must not dispatch, and the node st
 
 // PINS context/dotted-path-proxy.ts's reserved-word promise AGAINST THE LIVE SURFACE (unit half:
 // dotted-path-proxy.test.ts "hides reserved path segments from function-backed path proxies").
-// RESERVED_DYNAMIC_PATH_SEGMENTS hides JS/transport machinery ('then', 'dup', 'onRpcBroken', …) at
+// RESERVED hides JS/transport machinery ('then', 'dup', 'onRpcBroken', …) at
 // the prototype hop AND inside every path proxy it hands out, so a protocol probe can never conjure
 // a dispatcher. Observable stakes on the live itx: a probe that DID dispatch would commit through
 // the capability table (an event, a tally tick) or resolve as a mount — so the pin is behavioral:

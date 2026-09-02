@@ -5,11 +5,10 @@
 import * as cloudflareWorkers from "cloudflare:workers";
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { newWorkersRpcResponse } from "capnweb";
-import { IterateContextDurableObject } from "./iterate-context-durable-object.ts";
-import type { BuiltInsEnv } from "./context/built-ins.ts";
+import { IterateContextDurableObject, type Env } from "./iterate-context-durable-object.ts";
 import { registerPipelinedRpcBrand } from "./context/dispatch.ts";
 import { CAPABILITY_FETCH_HEADER } from "./fetch/fetch-capabilities.ts";
-import { canonicalName } from "./context/durable-object-names.ts";
+import { DurableObjectNameCodec } from "./context/durable-object-names.ts";
 import { UnauthenticatedSession } from "./session.ts";
 import { DEMO_PAGE_HTML } from "./generated/demo-page.ts";
 
@@ -39,7 +38,7 @@ export class DummyControlPlane extends WorkerEntrypoint {
 const CODE_VERSION = "live-41";
 
 export default {
-  async fetch(request: Request, env: BuiltInsEnv, ctx: ExecutionContext): Promise<Response> {
+  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
 
     if (url.pathname === "/version") return new Response(CODE_VERSION + "\n");
@@ -79,7 +78,9 @@ export default {
         );
       const headers = new Headers(request.headers);
       headers.set(CAPABILITY_FETCH_HEADER, cap);
-      return env.CONTEXT.getByName(canonicalName(context)).fetch(new Request(request, { headers }));
+      return env.CONTEXT.getByName(DurableObjectNameCodec.parse(context).name).fetch(
+        new Request(request, { headers }),
+      );
     }
 
     return new Response("project-worker — /api (capnweb), /cap, /demo, /version\n", {

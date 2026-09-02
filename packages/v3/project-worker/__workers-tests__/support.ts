@@ -6,7 +6,7 @@ import { runDurableObjectAlarm, SELF } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { newWebSocketRpcSession, RpcTarget } from "capnweb";
 import { afterAll, vi } from "vitest";
-import { canonicalName } from "../src/context/durable-object-names.ts";
+import { DurableObjectNameCodec } from "../src/context/durable-object-names.ts";
 import type { IterateContextDurableObject } from "../src/iterate-context-durable-object.ts";
 
 /** The context DO for a ctx name (a project id or a full codec name), through the CONTEXT
@@ -15,7 +15,7 @@ import type { IterateContextDurableObject } from "../src/iterate-context-durable
 export const stub = (ctx: string) =>
   (
     env as unknown as { CONTEXT: DurableObjectNamespace<IterateContextDurableObject> }
-  ).CONTEXT.getByName(canonicalName(ctx));
+  ).CONTEXT.getByName(DurableObjectNameCodec.parse(ctx).name);
 
 /** One client's live capability: the per-instance tag (`echo-<i>:<s>`) proves no crosstalk. */
 export class Echo extends RpcTarget {

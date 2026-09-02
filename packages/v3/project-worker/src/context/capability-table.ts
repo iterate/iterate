@@ -20,14 +20,13 @@
 // table. What a target EVALUATES to (a stub that is offline, a kv key that is gone) is the physical
 // layer's business at call time.
 //
-// Resolution of a call: `itx.<root>…` where `<root>` is a BUILT-IN resolves directly against the
-// physical scope (as if by an implicit mount `itx.<root> ⇒ <root>`). Otherwise, match every
-// userspace mount's path → pick the winner (longest, then newest) → evaluate the target against
-// `{ itx }` → apply boundary args → replay the remainder. The scope's `itx` symbol re-enters THIS
-// resolver (so alias mounts compose); a userspace target names a built-in by recursing through it.
+// Resolution of a call `itx.<root>…`: a BUILT-IN root resolves directly against the built-ins record.
+// Otherwise the winning userspace mount (longest path, then newest) names a target — itself an
+// `itx.…` expression — which resolves through THIS SAME method one level deeper (so alias mounts
+// compose and a default route forwards whole calls), and the call's steps after the mount replay on
+// what came back. A target not rooted at `itx` matches nothing and default-denies.
 
 import { codedError } from "../lib/errors.ts";
-import { expressionEndingInFetch } from "../fetch/fetch-capabilities.ts";
 import { CoreContract, type Mount } from "../stream/core-processor.ts";
 import type { StreamEventInput } from "../stream/events.ts";
 import {
@@ -38,39 +37,28 @@ import {
   type Expression,
   type ItxExpression,
 } from "./expression.ts";
-import { apply, match, type Match } from "./dispatch.ts";
-import { InvokeHandle } from "./invoke-handle.ts";
+import { callOn, match, walkSteps } from "./dispatch.ts";
 
 // ── the two COMMANDS: build the event, the caller appends it ──
 
-/** `capability-provided`, STRING at rest — programmatic inputs are canonicalized through print.
- *  ROUND-TRIPS THE STORED STRINGS NOW: the reduce re-parses them and SKIPS anything that won't parse
- *  (a bad object key, an exponent number), which would make a provide report an identity for a
- *  capability that silently never exists. Fail loud at the door instead. */
+/** `capability-provided`, STRING at rest — programmatic inputs are canonicalized through print. The
+ *  target ROUND-TRIPS THE CODEC NOW (print, then parse the printed string): the reduce re-parses the
+ *  stored string and SKIPS one that will not parse — a mount that silently never exists — so a target
+ *  the parser refuses fails loud here, in the parser's own words. (A parsed path re-joined with dots
+ *  is dotted names, which is exactly what `parseCapabilityPath` accepts — no round-trip to check.) */
 export function capabilityProvidedEvent(input: {
   path: string;
   target: ItxExpression;
 }): StreamEventInput {
-  const path = parseCapabilityPath(input.path);
-  const target = toExpression(input.target);
+  const path = parseCapabilityPath(input.path).join(".");
+  const target = parse(print(toExpression(input.target)));
   if (target[0] !== "itx")
     throw new Error(
-      `a provided capability's target must be rooted at "itx" (a bare built-in root is unspellable — targets recurse through the itx symbol)`,
+      `a provided capability's target must be rooted at "itx" (a bare built-in root is unspellable — targets resolve through the table)`,
     );
-  const pathString = path.join(".");
-  const targetString = print(target);
-  try {
-    const reparsedPath = parseCapabilityPath(pathString);
-    if (reparsedPath.join(".") !== pathString || print(parse(targetString)) !== targetString)
-      throw new Error("re-parse diverged");
-  } catch (cause) {
-    throw new Error(
-      `provide: capability ${JSON.stringify(pathString)} → ${JSON.stringify(targetString)} does not round-trip (${cause instanceof Error ? cause.message : cause}); it would be stored and then silently dropped`,
-    );
-  }
   return CoreContract.buildEvent({
     type: "events.iterate.com/capability-table/capability-provided",
-    payload: { path: pathString, target: targetString },
+    payload: { path, target: print(target) },
   });
 }
 
@@ -85,16 +73,14 @@ export function capabilityRevokedEvent(providedAtOffset: number): StreamEventInp
 
 // ── the READER ──
 
-/** Pure routing: the winning userspace mount ROW for a call, or null (built-ins are resolved before
- *  this — see CapabilityResolver.resolve). Longest matching path wins; ties → newest mount
- *  (`providedAtOffset`). */
+/** Pure routing: the winning userspace mount for a call — with the call's args at the mount and its
+ *  steps after the mount — or null (built-ins are resolved before this — see
+ *  CapabilityResolver.resolve). Longest matching path wins; ties → newest mount (`providedAtOffset`). */
 export function route(
   mounts: readonly Mount[],
   call: Expression,
-): { mount: Mount; m: Match } | null {
-  if (typeof call[0] !== "string")
-    throw new Error("cannot call the scope symbol itself — name a capability first");
-  let best: { mount: Mount; m: Match } | null = null;
+): { mount: Mount; argsAtMount?: unknown[]; stepsAfterMount: Expression } | null {
+  let best: { mount: Mount; argsAtMount?: unknown[]; stepsAfterMount: Expression } | null = null;
   for (const mount of mounts) {
     const m = match(mount.path, call);
     if (!m) continue;
@@ -105,39 +91,31 @@ export function route(
       (mount.path.length === best.mount.path.length &&
         mount.providedAtOffset > best.mount.providedAtOffset)
     )
-      best = { mount, m };
+      best = { mount, ...m };
   }
   return best;
 }
 
-/** THE DISPATCHER, parent-constructed: resolve + run one call against the CURRENT mounts. Holds the
- *  two things routing cannot be pure about — the physical built-ins and the host's own re-entry. */
+/** THE DISPATCHER, parent-constructed over the physical built-ins and a reader of the CURRENT mounts. */
 export class CapabilityResolver {
   /** The built-ins: a plain record whose keys (kv, append, read, cd, …) are the physical-layer
    *  roots. A call `itx.<root>…` resolves DIRECTLY against these (no config, no mount). Userspace
-   *  mounts name NEW paths and their targets recurse through the `itx` symbol; they cannot spell a
-   *  bare root, so the built-ins are unshadowable. */
+   *  mounts name NEW paths and their targets are `itx.…` expressions; they cannot spell a bare root,
+   *  so the built-ins are unshadowable. */
   readonly #builtIns: Record<string, unknown>;
-  /** Resolve one call against the CURRENT mounts — the host's own dispatch. The `itx` recursion
-   *  symbol re-enters through this, so alias mounts compose and default routes forward whole calls. */
-  readonly #resolveCurrent: (call: Expression, depth?: number) => Promise<unknown>;
+  /** The CURRENT mounts (the core reduced state's shadow stack), read at every resolution. */
+  readonly #mounts: () => readonly Mount[];
 
-  constructor(args: {
-    builtIns: Record<string, unknown>;
-    resolveCurrent: (call: Expression, depth?: number) => Promise<unknown>;
-  }) {
+  constructor(args: { builtIns: Record<string, unknown>; mounts: () => readonly Mount[] }) {
     this.#builtIns = args.builtIns;
-    this.#resolveCurrent = args.resolveCurrent;
+    this.#mounts = args.mounts;
   }
 
-  /** Resolve + run one call. The winner is the LONGEST matching path; ties → recency (newest mount
-   *  by offset); nothing matches → default-deny with a readable error naming the call. */
-  async resolve(
-    mounts: readonly Mount[],
-    call: ItxExpression,
-    extraArgs?: unknown[],
-    depth = 0,
-  ): Promise<unknown> {
+  /** Resolve + run one call: built-in first, else the winning mount's target resolved one level
+   *  deeper, then the call's steps after the mount, then any runtime `extraArgs` (the fetch lane hands
+   *  the live Request in here — a Request is not expression data). Nothing matches → default-deny
+   *  with a readable error naming the call. */
+  async resolve(call: ItxExpression, extraArgs?: unknown[], depth = 0): Promise<unknown> {
     // Guard against self-referential mounts (itx.x ⇒ itx.x, or a default route whose target
     // re-misses): unbounded async recursion never overflows a stack, it just burns the DO.
     if (depth > 32)
@@ -145,59 +123,47 @@ export class CapabilityResolver {
     const expr = toExpression(call);
     if (typeof expr[0] !== "string")
       throw new Error("cannot call the scope symbol itself — name a capability first");
-    const itx = this.#itxAtDepth(depth + 1);
-    // Pick the scope + target + match, then ONE apply. BUILT-IN FIRST: `itx.<root>…` where `<root>`
-    // is a physical-layer built-in resolves DIRECTLY — as if by an implicit mount `itx.<root> ⇒
-    // <root>` (`match` consumes boundary/remainder the same way a userspace mount does), against
-    // `{ ...builtIns, itx }` (`itx` spreads LAST so no root shadows the recursion symbol). Otherwise
-    // the winning USERSPACE mount, against `{ itx }` alone (a bare root is unspellable).
     const root = Array.isArray(expr[1]) ? expr[1][0] : expr[1];
-    let scope: Record<string, unknown>, target: Expression, m: Match;
+    let value: unknown;
+    let receiver: unknown;
+    let stepsAfterMount: Expression;
     if (expr[0] === "itx" && typeof root === "string" && Object.hasOwn(this.#builtIns, root)) {
-      scope = { ...this.#builtIns, itx };
-      target = [root];
-      m = match(["itx", root], expr)!;
+      // BUILT-IN FIRST: `itx.<root>…` where `<root>` is a physical-layer built-in — as if by an
+      // implicit mount `itx.<root> ⇒ <root>`: a call step at the root applies its args to the root.
+      value = this.#builtIns[root];
+      receiver = undefined;
+      if (Array.isArray(expr[1])) value = await callOn(value, receiver, expr[1].slice(1));
+      stepsAfterMount = expr.slice(2);
     } else {
-      const winner = route(mounts, expr);
+      const winner = route(this.#mounts(), expr);
       if (!winner)
         throw codedError(
           "NO_CAPABILITY_MATCH",
           `no capability matches ${JSON.stringify(print(expr))} (default-deny; provide a capability first)`,
         );
-      // A live capability's mount targets `itx.rpcStubs.get('<path>')` — the built-in hands back
-      // the transport's pipelinable handle, so boundary-arg callOn (applyRoot), remainder replay,
-      // and the fetch-shaped rule ride the SAME apply as any expression mount. No transport ⇒
-      // CONNECTION_OFFLINE at call time (mounted-but-offline — a never-provided path already
-      // default-denied above).
-      scope = { itx };
-      target = winner.mount.target;
-      m = winner.m;
+      // The target is an `itx.…` expression: resolve it through THIS method one level deeper — a
+      // built-in, or another mount (alias mounts compose). Args at the mount fold into the target's
+      // final step when that step is a property (`itx.grok ⇒ itx.openai.chat`, called
+      // `itx.grok({...})`, resolves `itx.openai.chat({...})`); a target that already ends in a call is
+      // resolved as written and the args apply to what came back. A live capability's mount targets
+      // `itx.rpcStubs.get('<path>')` — the built-in hands back the transport's pipelinable handle, so
+      // the steps after the mount, root-calling (applyRoot) and the terminal-fetch rule all ride the
+      // same walk as any expression mount. No transport ⇒ CONNECTION_OFFLINE at call time
+      // (mounted-but-offline — a never-provided path already default-denied above).
+      let { target } = winner.mount;
+      let { argsAtMount } = winner;
+      const last = target.at(-1);
+      if (argsAtMount && typeof last === "string") {
+        target = [...target.slice(0, -1), [last, ...argsAtMount]];
+        argsAtMount = undefined;
+      }
+      value = await this.resolve(target, undefined, depth + 1);
+      receiver = undefined;
+      if (argsAtMount) value = await callOn(value, receiver, argsAtMount);
+      stepsAfterMount = winner.stepsAfterMount;
     }
-    return await apply(
-      scope,
-      target,
-      { boundaryArgs: m.boundaryArgs, remainder: m.remainder },
-      extraArgs,
-    );
-  }
-
-  /** THE FETCH LANE entry: resolve `expr.fetch` and call it with the live Request as a runtime
-   *  arg (a Request is not expression data). Everything stays in-isolate or on native stub
-   *  hops, so a 101 flows back out untouched. */
-  resolveFetch(mounts: readonly Mount[], expr: Expression, request: Request): Promise<unknown> {
-    // Doctrine point 1 (fetch/fetch-capabilities.ts): fetch-shaped capabilities are always called
-    // via the terminal `fetch`, with the live Request as the one runtime arg.
-    return this.resolve(mounts, expressionEndingInFetch(expr), [request]);
-  }
-
-  /** The `itx` scope symbol at a given recursion depth: dotted/called access re-enters
-   *  `resolve` with the CURRENT mounts, carrying the depth. This is what makes alias mounts
-   *  compose and default routes forward whole calls. An `InvokeHandle` (the ONE dotted-reduce
-   *  primitive). */
-  #itxAtDepth(depth: number): unknown {
-    return new InvokeHandle((segments, args) => {
-      const last = segments[segments.length - 1] as string;
-      return this.#resolveCurrent(["itx", ...segments.slice(0, -1), [last, ...args]], depth);
-    });
+    ({ value, receiver } = await walkSteps({ value, receiver }, stepsAfterMount, "remainder"));
+    if (extraArgs) value = await callOn(value, receiver, extraArgs);
+    return await value;
   }
 }

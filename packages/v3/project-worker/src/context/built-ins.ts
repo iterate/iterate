@@ -1,9 +1,8 @@
 // built-ins.ts — THE BUILT-INS: a plain record whose KEYS are the physical-layer roots (`whoami`,
 // `kv`, `append`, `read`, `cd`, `fetch`, `rpcStubs`, `facets`, `subscriptions`, `load`, `runScript`). A call
 // `itx.<root>…` resolves DIRECTLY against these (capability-table.ts `resolve`, built-in
-// first) — no config, no mount. Userspace `provide` mounts resolve against `{ itx }` alone and
-// recurse through the `itx` symbol to reach a root; a bare root is unspellable, so the built-ins
-// are unshadowable.
+// first) — no config, no mount. Userspace `provide` mounts name `itx.…` targets that resolve through
+// the same table to reach a root; a bare root is unspellable, so the built-ins are unshadowable.
 //
 // LOADING DYNAMIC CODE — `itx.load(source)` mirrors Cloudflare's Worker Loader: it loads the code
 // and hands back a WORKER, then you pick the host EXPLICITLY, the same two accessors Cloudflare
@@ -17,37 +16,14 @@
 // named instances) — address by name, no source. `itx.runScript(lambda)` is sugar for the one
 // bare-lambda case (wrap → `load(...).getEntrypoint().run`).
 
-import { itxEntrypointFor } from "../itx-entrypoint.ts";
 import type { Context, StreamPage } from "../stream/stream.ts";
 import type { StreamEvent, StreamEventInput } from "../stream/events.ts";
-import type { IterateContextDurableObject } from "../iterate-context-durable-object.ts";
 import { loadConfinedWorker, type WorkerSource } from "./worker-loader.ts";
 import { resolveContextPath } from "./durable-object-names.ts";
 import type { Expression } from "./expression.ts";
 import { FacetHandle, InvokeHandle, RpcStubHandle } from "./invoke-handle.ts";
 
-/** The `rpcStubs` view every context has: the live-stub REGISTRY, surfaced. One entry per parked
- *  live capnweb value (client callbacks and live subscribers — one registry), keyed by the string
- *  it was parked under (the mount path, when it came through `itx.provide(path, fn)`). Physical
- *  by nature: nothing here is event-sourced; a mount reaches an entry through the pure-data
- *  target `itx.rpcStubs.get('<key>')`. */
-type RpcStubsView = {
-  /** One stub by key: a pipelinable handle over its transport (page → RetainedCallbackInvoker leg
-   *  → invoke). Deep dots walk; a root call reaches the bare parked callable; offline ⇒
-   *  CONNECTION_OFFLINE at call time. Branded `RpcStubHandle`: the subscription delivery loop reads
-   *  the brand to know the callee owns its own progress. */
-  get(key: string): RpcStubHandle;
-  /** PRESENCE — the keys with an open transport right now. */
-  list(): string[];
-};
-
-/** The `subscriptions` view: the subscriptions table (an inline reduce) joined with each cursor
- *  target's cursor (kv, effect-side truth). Small and read-only — `subscribe` is edge sugar over the
- *  `subscription-configured` event, never a verb here. */
-type SubscriptionsView = {
-  list(): SubscriptionListEntry[];
-  get(name: string): SubscriptionListEntry | null;
-};
+/** One row of `itx.subscriptions.list()`. */
 export type SubscriptionListEntry = {
   name: string;
   target: string;
@@ -57,30 +33,6 @@ export type SubscriptionListEntry = {
   cursor?: { confirmedOffset: number; attempt: number; nextAttemptAtMs?: number };
   halted?: { afterOffset: number; attempts: number; error?: string };
 };
-
-/** The DEP shape (context-injected): the facet door reaches ANY method a facet's durable object
- *  exposes (facet stubs are non-transferable, so the walk happens parent-side). `ref` is a STRING
- *  (address an already-running facet by name — processors, named instances) OR `{ source, className,
- *  name? }` (materialize the loaded `className` durable object as a facet — the form `itx.load(...)
- *  .getDurableObjectClass(...).get(...)` routes here internally). The PUBLIC `itx.facets` root is
- *  string-only; the object form is spelled through `itx.load`. `delete` removes a facet, storage
- *  included (the mirror of `ctx.facets.delete`). */
-type FacetsView = {
-  get(ref: string | { source: WorkerSource; className: string; name?: string }): FacetHandle;
-  delete(name: string): void;
-};
-
-/** The bindings roots-building needs — present in BOTH hosting lanes (the worker env). */
-export interface BuiltInsEnv {
-  CONTEXT: DurableObjectNamespace<IterateContextDurableObject>;
-  LOADER: WorkerLoader;
-  ITX_KV?: KVNamespace;
-  SECRETS_KV?: KVNamespace;
-  /** Deploy identity — reduced into loader cacheKeys so a redeploy mints fresh isolates. */
-  CF_VERSION_METADATA?: { id: string };
-  /** The egress terminal this context's `fetch` bottoms out at (secret-substituted, then sent). */
-  FALLBACK: Fetcher;
-}
 
 /** The one bare-lambda wrapper — `itx.runScript("async (itx, x) => …")`. The lambda STRING becomes
  *  a `WorkerEntrypoint`'s default export, so `runScript` bottoms out at the SAME `load(...)
@@ -101,8 +53,8 @@ export default class RunScript extends WorkerEntrypoint {
 /** THE built-in scope, as ONE interface — the physical-layer roots a context resolves `itx.<root>…`
  *  against DIRECTLY (capability-table.ts `resolve`, built-in first; no config, no mount).
  *  This is the clean-room's whole kernel surface. It is a PLAIN OBJECT, not an RpcTarget class, on
- *  purpose: the resolver spreads it (`{ ...builtIns, itx }`) and gates on `Object.hasOwn`, so a
- *  prototype-method class would spread to `{}` and every root would go unreachable. */
+ *  purpose: the resolver gates on `Object.hasOwn`, so a prototype-method class would leave every
+ *  root unreachable. */
 interface BuiltInScope {
   /** Identify this context. */
   whoami(): { projectId: string; path: string };
@@ -130,16 +82,27 @@ interface BuiltInScope {
   /** The live rpc-stub REGISTRY — physical, never event-sourced: a client's live capnweb value
    *  parked under a key (the edge's `itx.rpcStubs.provide(value, { key? })` — relay-side, DON'T-PIN).
    *  `get(key)` is how a MOUNT names one: `itx.provide(path, fn)` is sugar for parking under `path`
-   *  and mounting the pure-data target `itx.rpcStubs.get('<path>')`. Offline ⇒ CONNECTION_OFFLINE
-   *  at call time; `list()` is presence (which keys have a transport right now). */
-  rpcStubs: RpcStubsView;
+   *  and mounting the pure-data target `itx.rpcStubs.get('<path>')`. */
+  rpcStubs: {
+    /** One stub by key: a pipelinable handle over its transport (page → RetainedCallbackInvoker leg
+     *  → invoke). Deep dots walk; a root call reaches the bare parked callable; offline ⇒
+     *  CONNECTION_OFFLINE at call time. Branded `RpcStubHandle`: the subscription delivery loop reads
+     *  the brand to know the callee owns its own progress. */
+    get(key: string): RpcStubHandle;
+    /** PRESENCE — the keys with an open transport right now. */
+    list(): string[];
+  };
   /** Address a facet that is ALREADY RUNNING by name (a processor, a named instance) — no source;
    *  to LOAD and host a class, use `itx.load(src).getDurableObjectClass(name).get(name?)`. `delete`
-   *  removes it, storage included. */
+   *  removes it, storage included (the mirror of `ctx.facets.delete`). */
   facets: { get(name: string): FacetHandle; delete(name: string): void };
-  /** The subscriptions layer, read: the table (an inline reduce) joined with the stream-kept
-   *  cursors. `subscribe` lives on the edge as sugar over the `subscription-configured` event. */
-  subscriptions: SubscriptionsView;
+  /** The subscriptions layer, read: the table (a slice of core) joined with the stream-kept
+   *  cursors. Small and read-only — `subscribe` lives on the edge as sugar over the
+   *  `subscription-configured` event, never a verb here. */
+  subscriptions: {
+    list(): SubscriptionListEntry[];
+    get(name: string): SubscriptionListEntry | null;
+  };
   /** Load dynamic code → a WORKER, then pick the host (mirror of Cloudflare's Worker Loader):
    *  `.getEntrypoint(name?, { props? })` → a stateless `WorkerEntrypoint` — ANY method it exports,
    *  reached by name (`run`, `fetch`, `processEventBatch`, …); `props` is Cloudflare's own
@@ -152,13 +115,15 @@ interface BuiltInScope {
   runScript(script: string, ...args: unknown[]): Promise<unknown>;
 }
 
-/** What the CONTEXT (the stream DO) injects: identity, bindings, and the three context seams. */
+/** What the CONTEXT (the DO) injects: identity, the bindings, and the seams only it can serve. */
 interface BuildBuiltInsDeps {
   projectId: string;
   path: string;
-  /** The codec name of the context these roots belong to (loader cache keys, self-stubs). */
+  /** The codec name of the context these roots belong to (loader cache keys). */
   contextName: string;
-  env: BuiltInsEnv;
+  /** The bindings the built-ins reach: the loader (+ the deploy id its cacheKey folds in) and the
+   *  project kv (bound in both wrangler configs). */
+  env: { LOADER: WorkerLoader; ITX_KV: KVNamespace; CF_VERSION_METADATA?: { id: string } };
   /** Resolve one call through THIS context's dispatch (dynamic-worker module loading). */
   invoke: (call: Expression) => Promise<unknown>;
   /** A context stream by CANONICAL path — the own-path parent adapter same-isolate, by-name DO
@@ -168,78 +133,77 @@ interface BuildBuiltInsDeps {
   egress: (request: Request) => Promise<Response>;
   /** The rpcStubs view — PARENT-LOCAL closures over the context's transport table (the pager
    *  sockets live in the DO and can never move). */
-  rpcStubs: RpcStubsView;
-  /** The subscriptions view — the inline reduce ⋈ the delivery loop's cursors. */
-  subscriptions: SubscriptionsView;
-  /** `facets.get(ref)` — address a facet by name, OR materialize `{ source, className }` (a loaded
-   *  durable object hosted as a facet of this stream; accepted trade: a busy stateful facet pins
-   *  its stream). */
-  facets: FacetsView;
-  /** The ctx whose `exports` mints the ItxEntrypoint loopback — a loaded worker's whole world
-   *  (see itx-entrypoint.ts for why it is never a raw getByName stub). */
-  exportsCtx: unknown;
+  rpcStubs: BuiltInScope["rpcStubs"];
+  /** The subscriptions view — the core slice ⋈ the delivery loop's cursors. */
+  subscriptions: BuiltInScope["subscriptions"];
+  /** `facets.get(ref)` — address a facet by name, OR materialize `{ source, className, name? }` (a
+   *  loaded durable object hosted as a facet of this stream — the form `itx.load(...)
+   *  .getDurableObjectClass(...).get(...)` routes here; accepted trade: a busy stateful facet pins
+   *  its stream). The PUBLIC `itx.facets` root is string-only. */
+  facets: {
+    get(ref: string | { source: WorkerSource; className: string; name?: string }): FacetHandle;
+    delete(name: string): void;
+  };
+  /** The `env.ITX` / `globalOutbound` stub every worker this context loads receives — the
+   *  ItxEntrypoint loopback minted once for this context (the DO's `#itxHost`; itx-entrypoint.ts
+   *  for why it is never a raw getByName stub). */
+  host: Fetcher;
 }
 
 /** Assemble the built-in scope for one context. Every entry closes over the context's identity —
- *  PRE-SCOPED, not policed: cross-project access is unspellable by construction. The builder
- *  must never register `itx` (asserted below — the resolver's recursion symbol always wins). */
+ *  PRE-SCOPED, not policed: cross-project access is unspellable by construction. */
 export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> {
   const { projectId, path, contextName, env } = deps;
+  const { host } = deps;
 
   /** THE stateless host — `worker.getEntrypoint(className?)`: a fresh confined isolate (no DO, no
-   *  storage, `env.ITX` bound), a `{ run, fetch }` handle over the loaded WorkerEntrypoint. Loading
-   *  is the shared `loadConfinedWorker` (kind "code"); the source EXPORTS the entrypoint (no
-   *  host-injected wrapper — the mirror of Cloudflare's `worker.getEntrypoint()`). Re-resolves per
-   *  call, but the loader caches by contentHash so a warm isolate is reused. */
-  const statelessHandle = (source: WorkerSource, className?: string, props?: unknown) => {
-    const entrypoint = async () => {
-      const { worker } = await loadConfinedWorker({
-        env,
-        invoke: deps.invoke,
-        host: itxEntrypointFor(deps.exportsCtx, contextName),
-        kind: "code",
-        owner: contextName,
-        source,
-        mainModule: "cap.js",
-        what: "load.getEntrypoint",
-      });
-      return worker.getEntrypoint(
-        className,
-        props === undefined ? undefined : { props },
-      ) as Fetcher & Record<string, (...a: unknown[]) => Promise<unknown>>;
-    };
-    return {
-      /** Any exported method by name — `run`, `processEventBatch`, whatever the class declares. */
-      call: async (method: string, args: unknown[]) => {
-        const ep = await entrypoint();
-        const fn = ep[method];
-        if (typeof fn !== "function")
-          throw new Error(`load(src).getEntrypoint(): the entrypoint has no method "${method}"`);
-        return Reflect.apply(fn, ep, args);
-      },
-      fetch: async (request: Request) => (await entrypoint()).fetch(request),
-    };
+   *  storage, `env.ITX` bound) over the loaded WorkerEntrypoint, and ONE method on it by name — `run`,
+   *  `fetch`, `processEventBatch`, whatever the class declares. A terminal `fetch(request)` is this
+   *  same call: `entrypoint.fetch(request)` IS the entrypoint's fetch channel, socket-bearing
+   *  Responses included (fetch/fetch-capabilities.ts doctrine, points 1 & 4). The source EXPORTS the
+   *  entrypoint (no host-injected wrapper — the mirror of Cloudflare's `worker.getEntrypoint()`).
+   *  Re-resolves per call, but the loader caches by contentHash so a warm isolate is reused. */
+  const callEntrypoint = async (
+    source: WorkerSource,
+    className: string | undefined,
+    props: unknown,
+    method: string,
+    args: unknown[],
+  ) => {
+    const { worker } = await loadConfinedWorker({
+      env,
+      invoke: deps.invoke,
+      host,
+      kind: "code",
+      owner: contextName,
+      source,
+      where: "load.getEntrypoint",
+    });
+    const entrypoint = worker.getEntrypoint(
+      className,
+      props === undefined ? undefined : { props },
+    ) as Fetcher & Record<string, (...a: unknown[]) => Promise<unknown>>;
+    const fn = entrypoint[method];
+    if (typeof fn !== "function")
+      throw new Error(`load(src).getEntrypoint(): the entrypoint has no method "${method}"`);
+    return Reflect.apply(fn, entrypoint, args);
   };
 
   const kvPrefix = `${projectId}:`;
   const own = () => deps.context(path);
-  const kvBinding = () => {
-    if (!env.ITX_KV) throw new Error("kv: no ITX_KV bound");
-    return env.ITX_KV;
-  };
 
   // Each root implements one member of the BuiltInScope interface above (the canonical doc of the
   // kernel surface); the comments here add only what the interface can't say — the WHY of a code branch.
-  const scope = {
+  return {
     whoami: () => ({ projectId, path }),
     kv: {
-      get: (k: string) => kvBinding().get(kvPrefix + k),
+      get: (k: string) => env.ITX_KV.get(kvPrefix + k),
       put: async (k: string, v: string) => {
-        await kvBinding().put(kvPrefix + k, String(v));
+        await env.ITX_KV.put(kvPrefix + k, String(v));
         return { ok: true };
       },
       delete: async (k: string) => {
-        await kvBinding().delete(kvPrefix + k);
+        await env.ITX_KV.delete(kvPrefix + k);
         return { ok: true };
       },
       list: async (start = "") => {
@@ -247,7 +211,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
         // `list()` would present page 1 as the whole truth (sweep/GC would orphan key 1001+). Drain.
         const out: string[] = [];
         for (let cursor: string | undefined; ; ) {
-          const page = await kvBinding().list({
+          const page = await env.ITX_KV.list({
             prefix: kvPrefix + start,
             ...(cursor && { cursor }),
           });
@@ -288,50 +252,51 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
     subscriptions: deps.subscriptions,
     // Each hop is its own InvokeHandle, so the whole `load(src).getEntrypoint().run()` /
     // `.getDurableObjectClass('C').get(name?)` chain pipelines on every lane (workerd#6873).
-    load: (source: WorkerSource) => {
-      const entrypointHandle = (className?: string, opts?: { props?: unknown }) => {
-        const h = statelessHandle(source, className, opts?.props);
-        return new InvokeHandle((seg, args) => {
-          if (seg.length !== 1)
-            throw new Error(
-              `load(src).getEntrypoint().${seg.join(".")}: a WorkerEntrypoint exposes flat methods`,
-            );
-          // Terminal fetch rides the entrypoint's REAL fetch channel — the only hop kind that
-          // carries socket Responses (fetch/fetch-capabilities.ts doctrine, points 1 & 4).
-          if (seg[0] === "fetch") return h.fetch(args[0] as Request);
-          return h.call(seg[0], args);
-        });
-      };
-      const classHandle = (className: string) =>
-        new InvokeHandle((seg, args) => {
-          if (seg.length === 1 && seg[0] === "get")
-            // .get(instance?) → the durable facet; deps.facets.get reduces the rest into the DO's facet door.
-            return deps.facets.get({ source, className, name: args[0] as string | undefined });
-          throw new Error(
-            `load(src).getDurableObjectClass('${className}').${seg.join(".")}: call .get(name?)`,
-          );
-        });
-      return new InvokeHandle((seg, args) => {
-        if (seg.length === 1 && seg[0] === "getEntrypoint")
-          return entrypointHandle(args[0] as string | undefined, args[1] as { props?: unknown });
-        if (seg.length === 1 && seg[0] === "getDurableObjectClass") {
+    load: (source: WorkerSource) =>
+      new InvokeHandle((segments, args) => {
+        if (segments.length === 1 && segments[0] === "getEntrypoint") {
+          const [className, options] = args as [
+            string | undefined,
+            { props?: unknown } | undefined,
+          ];
+          return new InvokeHandle((method, methodArgs) => {
+            if (method.length !== 1)
+              throw new Error(
+                `load(src).getEntrypoint().${method.join(".")}: a WorkerEntrypoint exposes flat methods`,
+              );
+            return callEntrypoint(source, className, options?.props, method[0], methodArgs);
+          });
+        }
+        if (segments.length === 1 && segments[0] === "getDurableObjectClass") {
           if (typeof args[0] !== "string")
             throw new Error("load(src).getDurableObjectClass(name): name the exported class");
-          return classHandle(args[0]);
+          const className = args[0];
+          return new InvokeHandle((method, methodArgs) => {
+            // .get(instance?) → the durable facet; deps.facets.get reduces the rest into the DO's facet door.
+            if (method.length === 1 && method[0] === "get")
+              return deps.facets.get({
+                source,
+                className,
+                name: methodArgs[0] as string | undefined,
+              });
+            throw new Error(
+              `load(src).getDurableObjectClass('${className}').${method.join(".")}: call .get(name?)`,
+            );
+          });
         }
         throw new Error(
-          `load(src).${seg.join(".")}: call .getEntrypoint(name?) or .getDurableObjectClass(name)`,
+          `load(src).${segments.join(".")}: call .getEntrypoint(name?) or .getDurableObjectClass(name)`,
         );
-      });
-    },
+      }),
     // `RUN_SCRIPT_ENTRYPOINT` wraps the lambda string into a WorkerEntrypoint default export, so even
     // this bare-lambda door bottoms out at `load(...).getEntrypoint().run(...)`.
     runScript: (script: string, ...args: unknown[]) =>
-      statelessHandle({
-        type: "inline",
-        files: { "cap.js": RUN_SCRIPT_ENTRYPOINT(script) },
-      }).call("run", args),
+      callEntrypoint(
+        { type: "inline", files: { "cap.js": RUN_SCRIPT_ENTRYPOINT(script) } },
+        undefined,
+        undefined,
+        "run",
+        args,
+      ),
   } satisfies BuiltInScope;
-  if (Object.hasOwn(scope, "itx")) throw new Error("built-in scope must never register 'itx'");
-  return scope;
 }
