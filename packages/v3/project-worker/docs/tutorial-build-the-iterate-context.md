@@ -24,7 +24,7 @@ call with `match` replaced by `target`.
 ## Part 0 — the whole platform in ~200 lines
 
 > **ORDER NOTE (2026-09-02).** The code's layer order is: **(1) rpc stubs** —
-> `provide(rpcStubKey, { stub })` + `invoke`, the directory's two layers being
+> `provide(rpcStubKey, stub)` + `invoke`, the directory's two layers being
 > the borrowed table first and the pager as "the second `if`"; **(2) itx
 > expressions** and the dotted surface (`invoke` takes an `ItxExpressionInput`;
 > `itx.a.b(x)` reduces onto it); **(3) rewrite rules** —
@@ -145,8 +145,8 @@ keys:
 const rpcStubs = new Map<string, unknown>();
 
 // inside IterateContext:
-  provide(rpcStubKey: string, provided: { stub: RpcStub<object> }) {
-    rpcStubs.set(rpcStubKey, provided.stub.dup()); // same rule as callMeLater: keep our own
+  provide(rpcStubKey: string, stub: RpcStub<object>) {
+    rpcStubs.set(rpcStubKey, stub.dup()); // same rule as callMeLater: keep our own
   }
 
   // The dispatch walker: longest lent key prefix, then walk the remaining dotted
@@ -200,8 +200,8 @@ const applyPath = (target: unknown, tail: string[], args: unknown[]) => {
 // the edge IterateContext now proxies (constructor takes env; #context() = getByName):
   // The stub is LENT across Workers RPC into the DO, which BORROWS it. Both hops dispose
   // params at return — the edge dups before passing, the DO dups what it holds.
-  async provide(rpcStubKey: string, provided: { stub: RpcStub<object> }) {
-    await this.#context().lendRpcStub({ rpcStubKey, stub: provided.stub.dup() });
+  async provide(rpcStubKey: string, stub: RpcStub<object>) {
+    await this.#context().lendRpcStub({ rpcStubKey, stub: stub.dup() });
   }
 
   invoke(call: string, args: unknown[] = []) { return this.#context().invoke(call, args); }
@@ -286,8 +286,8 @@ async function lendRpcStubOverPager(
 // the edge provide swaps ONE body line:
   // A live stub can't be held by a hibernating DO — an active reference pins it
   // awake — so its relay keeps it HERE and lends it over the pager.
-  async provide(rpcStubKey: string, provided: { stub: RpcStub<object> }) {
-    await lendRpcStubOverPager(this.#context(), provided.stub, rpcStubKey);
+  async provide(rpcStubKey: string, stub: RpcStub<object>) {
+    await lendRpcStubOverPager(this.#context(), stub, rpcStubKey);
   }
 ```
 
@@ -593,7 +593,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
 ```
 
 There is no `subscribe` method — a subscription **is**
-`provide("itx.subscribers.printer", { stub: callback })`, served by `#fanOut`
+`provide("itx.subscribers.printer", callback)`, served by `#fanOut`
 over the pager you already built. And `read(0)` shows your rewrite rules were
 events all along — and that your lent stubs never were. The proof's last beat:
 **kill the worker and restart it** — the constructor re-reduces the rule table
@@ -607,7 +607,7 @@ reduce rides an injected hook _inside_ the commit transaction, so the rule table
 is atomically exact with the batch. Same pieces, inverted wiring, one reason.
 Second, the toy's walker checks two tables — the directory, then the rules. The
 real platform has one: the directory is a **built-in** named `itx.rpcStubs`, and
-a live `provide(rpcStubKey, { stub, rewrite })` _also_ appends an ordinary rule
+a live `provide(rpcStubKey, stub, { rewrite })` _also_ appends an ordinary rule
 whose target is the expression `itx.rpcStubs.get('<rpcStubKey>')`. So the log
 says where every name points, live ones included, while never claiming a socket
 is open. The toy's stub-before-rule check at each prefix is that rule, reduced by
@@ -980,7 +980,7 @@ class Tunnel extends RpcTarget {
   }
 }
 
-using tunnel = await itx.provide("tunnel", { stub: new Tunnel(), rewrite: "itx.bla" });
+using tunnel = await itx.provide("tunnel", new Tunnel(), { rewrite: "itx.bla" });
 ```
 
 Now `https://example.com/expression?context=prj_demo&itx=itx.bla` serves your

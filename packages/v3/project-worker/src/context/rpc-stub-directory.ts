@@ -48,7 +48,7 @@ export const RPC_STUB_PAGER_KEEPALIVE_RESPONSE = "itx-pager-keepalive-ack";
 const RPC_STUB_PAGE_TIMEOUT_MS = 10_000;
 
 /** WHAT THIS SIDE BORROWS: the Workers-RPC stub a lender hands over — TWO doors: `invoke(steps)`
- *  walks the itx-expression steps on the lender's live value (a DIRECT dotted dispatch — never
+ *  walks the itx-expression steps on the client's rpc stub (a DIRECT dotted dispatch — never
  *  `.apply`), and `fetch(upgradeId, steps, request)` is the rpc-stub fetch dial
  *  (fetch/rpc-stub-fetch.ts — dies with that module's WORKAROUND fence). */
 export type BorrowedRpcStub = RpcStubFetchTransport & {

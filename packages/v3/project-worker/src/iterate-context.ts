@@ -15,13 +15,13 @@
 //                 expression) plus the one fetch-lane fork; every built-in root (`itx.append(…)`,
 //                 `itx.read(…)`, `itx.waitForEvent(…)`, `itx.kv.get(…)`, `itx.rpcStubs.list()`,
 //                 `itx.expressionRewriteRules.list()`, …) rides it with ZERO code here;
-//   • `provide` — THE ONE PHYSICAL ACT: a client's live capnweb value must live in this stateless
+//   • `provide` — THE ONE PHYSICAL ACT: a client's rpc stub (a function, an RpcTarget) must live in this stateless
 //                 worker, never in the DO (DON'T-PIN, below), so the lend happens here. A rule or
 //                 subscription naming the lent key is un-set by the DO when the key's last pager
 //                 closes — the physical fact decides, not this session's teardown;
 //   • `rewrite` / `subscribe` / `enableProcessor` / `disableProcessor` — each is visibly "build the
-//                 event, append it": the DO has `append` and no configuration verbs. `rewrite` and
-//                 `subscribe` are declared here only because their target may be a live value.
+//                 event, append it": the DO has `append` and no configuration verbs. `subscribe` is
+//                 declared here because its target may be a client's rpc stub; `rewrite` for symmetry.
 // `provide`, `rewrite` and `subscribe` hand back a DISPOSABLE handle (`using`): disposing un-does the act.
 // capnweb also disposes every exported handle when the session ends, so a rule or subscription made
 // through the verb is SESSION-SCOPED; one that must outlive the session is the raw event —
@@ -59,17 +59,12 @@ import type { SessionTeardown } from "./session.ts";
 import type { StreamEventInput } from "./stream/events.ts";
 import { subscriptionConfiguredEvent } from "./stream/subscriptions.ts";
 
-export type ContextNamespace = DurableObjectNamespace<IterateContextDurableObject>;
+export type IterateContextNamespace = DurableObjectNamespace<IterateContextDurableObject>;
 export type WaitUntil = (p: Promise<unknown>) => void;
 
-/** A live value a client hands over: a function or an RpcTarget — on the wire, a capnweb stub. */
-type LiveValue = unknown;
-
-/** What a verb hands back: dispose it — or let the session end; capnweb disposes every exported
- *  handle then — and the act is UNDONE: a provided stub is recalled (and its rewrite rule un-set), a
- *  rewrite rule is un-set. The caller already holds the key or match it passed, so the handle carries
- *  nothing else. */
-export class SessionScopedHandle extends RpcTarget {
+/** What `provide` hands back: dispose it — or let the session end; capnweb disposes every exported
+ *  handle then — and the stub is recalled (the DO un-sets what named it when its last pager closes). */
+export class ProvidedRpcStubHandle extends RpcTarget {
   readonly #undo: () => void;
   constructor(undo: () => void) {
     super();
@@ -80,37 +75,56 @@ export class SessionScopedHandle extends RpcTarget {
   }
 }
 
-/** `subscribe`'s handle: disposing removes the subscription (and recalls the callback lent for it).
- *  `name` is a GETTER (capnweb exposes prototype members only) — the generated one when none was given. */
-export class SubscriptionHandle extends SessionScopedHandle {
+/** What `rewrite` hands back: dispose it — or let the session end — and the rule at `match` is un-set.
+ *  The caller already holds the match it passed, so the handle carries nothing else. */
+export class RewriteRuleHandle extends RpcTarget {
+  readonly #undo: () => void;
+  constructor(undo: () => void) {
+    super();
+    this.#undo = undo;
+  }
+  [Symbol.dispose](): void {
+    this.#undo();
+  }
+}
+
+/** What `subscribe` hands back: dispose it — or let the session end — and the subscription is removed
+ *  (a lent callback is recalled with it). `name` is a GETTER (capnweb exposes prototype members only)
+ *  — the generated one when none was given. */
+export class SubscriptionHandle extends RpcTarget {
   readonly #name: string;
+  readonly #undo: () => void;
   constructor(name: string, undo: () => void) {
-    super(undo);
+    super();
     this.#name = name;
+    this.#undo = undo;
   }
   get name(): string {
     return this.#name;
+  }
+  [Symbol.dispose](): void {
+    this.#undo();
   }
 }
 
 /** The iterate context (`itx`) at one `{ projectId, path }`, as a client holds it. */
 export class IterateContext extends RpcTarget {
-  readonly #contexts: ContextNamespace;
-  readonly #address: DurableObjectAddress;
+  readonly #contextNamespace: IterateContextNamespace;
+  readonly #durableObjectAddress: DurableObjectAddress;
   readonly #durableObject: IterateContextDurableObjectStub;
   readonly #sessionTeardown: SessionTeardown;
   readonly #waitUntil: WaitUntil;
 
   constructor(
-    contexts: ContextNamespace,
-    address: DurableObjectAddress,
+    contextNamespace: IterateContextNamespace,
+    durableObjectAddress: DurableObjectAddress,
     sessionTeardown: SessionTeardown,
     waitUntil: WaitUntil,
   ) {
     super();
-    this.#contexts = contexts;
-    this.#address = address;
-    this.#durableObject = contexts.getByName(address.name);
+    this.#contextNamespace = contextNamespace;
+    this.#durableObjectAddress = durableObjectAddress;
+    this.#durableObject = contextNamespace.getByName(durableObjectAddress.name);
     this.#sessionTeardown = sessionTeardown;
     this.#waitUntil = waitUntil;
   }
@@ -120,13 +134,18 @@ export class IterateContext extends RpcTarget {
    *  with the built-in `itx.cd(...)` root. Returns an EDGE context, so `provide` on it lends in this
    *  same session. Pure addressing. */
   cd(path: string): IterateContext {
-    const address = DurableObjectNameCodec.parse(
+    const durableObjectAddress = DurableObjectNameCodec.parse(
       DurableObjectNameCodec.stringify({
-        projectId: this.#address.projectId,
-        path: resolveContextPath(this.#address.path, path),
+        projectId: this.#durableObjectAddress.projectId,
+        path: resolveContextPath(this.#durableObjectAddress.path, path),
       }),
     );
-    return new IterateContext(this.#contexts, address, this.#sessionTeardown, this.#waitUntil);
+    return new IterateContext(
+      this.#contextNamespace,
+      durableObjectAddress,
+      this.#sessionTeardown,
+      this.#waitUntil,
+    );
   }
 
   /** THE dispatch door (built-ins + every rewrite rule) — the ONE way to call the itx surface. Takes an
@@ -156,41 +175,42 @@ export class IterateContext extends RpcTarget {
 
   // ── (a) rpc stubs: the one physical act ──
 
-  /** PROVIDE a live value (a function, an RpcTarget) under an OPAQUE `rpcStubKey`: lend it to the DO's
-   *  `itx.rpcStubs` registry through a pager (owned HERE — DON'T-PIN). It is then callable as
-   *  `itx.rpcStubs.get('<rpcStubKey>')(…)`. With `rewrite`, the rule `rewrite ⇒
+  /** PROVIDE a client's rpc stub (a function, an RpcTarget) under an OPAQUE `rpcStubKey`: lend it to
+   *  the DO's `itx.rpcStubs` registry through a pager (owned HERE — DON'T-PIN). It is then callable as
+   *  `itx.rpcStubs.get('<rpcStubKey>')(…)`. With `options.rewrite`, the rule `rewrite ⇒
    *  itx.rpcStubs.get('<rpcStubKey>')` is configured with it — `itx.<rewrite>.method(x)` reaches the
-   *  value like any other rewrite — and un-set when the stub disappears. Re-providing the same key
+   *  stub like any other rewrite — and un-set when the stub disappears. Re-providing the same key
    *  re-lends (reconnect — the pager is replaced). Disposing the handle, or the session ending, recalls
-   *  the stub. */
+   *  the stub. `options` is where an idle policy or a timeout goes later. */
   async provide(
     rpcStubKey: string,
-    provided: { stub: LiveValue; rewrite?: ItxExpressionInput },
-  ): Promise<SessionScopedHandle> {
+    stub: ClientRpcStub,
+    options: { rewrite?: ItxExpressionInput } = {},
+  ): Promise<ProvidedRpcStubHandle> {
     const pager = await lendRpcStubOverPager(
       this.#durableObject,
-      provided.stub as ClientRpcStub,
+      stub,
       rpcStubKey,
       this.#waitUntil,
     );
-    const teardownKey = this.#sessionTeardownKey(rpcStubKey);
+    const sessionTeardownKey = this.#sessionTeardownKey(rpcStubKey);
     // Registered with the session so a dying session recalls it even when the handle was never
     // disposed; re-providing the same key replaces the entry (the old pager was "replaced" anyway).
     // The rule is NOT un-set here: the DO un-sets whatever names the key when its LAST pager closes
     // (a reconnect replaces the pager, so a late-dying old session cannot clobber the new one's rule).
-    this.#sessionTeardown.add(teardownKey, pager);
-    if (provided.rewrite !== undefined)
+    this.#sessionTeardown.add(sessionTeardownKey, pager);
+    if (options.rewrite !== undefined)
       try {
         await this.#append(
-          rewriteRuleConfiguredEvent(provided.rewrite, ["itx", "rpcStubs", ["get", rpcStubKey]]),
+          rewriteRuleConfiguredEvent(options.rewrite, ["itx", "rpcStubs", ["get", rpcStubKey]]),
         );
       } catch (e) {
         // The DO refused the rule (STREAM_PAUSED / a validation throw): recall the lend, or a stub
         // nothing names would linger for the session. Let the refusal propagate.
-        this.#sessionTeardown.dispose(teardownKey);
+        this.#sessionTeardown.dispose(sessionTeardownKey);
         throw e;
       }
-    return new SessionScopedHandle(() => this.#sessionTeardown.dispose(teardownKey));
+    return new ProvidedRpcStubHandle(() => this.#sessionTeardown.dispose(sessionTeardownKey));
   }
 
   // ── (b) itx-expression rewrite rules: pure data, ONE event ──
@@ -202,11 +222,11 @@ export class IterateContext extends RpcTarget {
   async rewrite(
     match: ItxExpressionInput,
     target: ItxExpressionInput | null,
-  ): Promise<SessionScopedHandle> {
+  ): Promise<RewriteRuleHandle> {
     const event = rewriteRuleConfiguredEvent(match, target);
     await this.#append(event);
     const matchString = (event.payload as { match: string }).match;
-    return new SessionScopedHandle(() => {
+    return new RewriteRuleHandle(() => {
       if (target !== null) this.#appendInBackground(rewriteRuleConfiguredEvent(matchString, null));
     });
   }
@@ -224,12 +244,12 @@ export class IterateContext extends RpcTarget {
    *  removes the row (and recalls the lent callback) when disposed or when the session ends. */
   async subscribe(input: {
     name?: string;
-    target: ItxExpressionInput | LiveValue | null;
+    target: ItxExpressionInput | ClientRpcStub | null;
     consumes?: string[];
   }): Promise<SubscriptionHandle> {
     const name = input.name ?? `sub-${crypto.randomUUID().slice(0, 8)}`;
     const rpcStubKey = `itx.subscriptions.${name}`;
-    const teardownKey = this.#sessionTeardownKey(rpcStubKey);
+    const sessionTeardownKey = this.#sessionTeardownKey(rpcStubKey);
     let target = input.target as ItxExpressionInput | null;
     if (target !== null && typeof target !== "string" && !Array.isArray(target)) {
       const pager = await lendRpcStubOverPager(
@@ -238,7 +258,7 @@ export class IterateContext extends RpcTarget {
         rpcStubKey,
         this.#waitUntil,
       );
-      this.#sessionTeardown.add(teardownKey, pager);
+      this.#sessionTeardown.add(sessionTeardownKey, pager);
       target = ["itx", "rpcStubs", ["get", rpcStubKey]];
     }
     await this.#append(
@@ -248,12 +268,12 @@ export class IterateContext extends RpcTarget {
         ...(input.consumes && { consumes: input.consumes }),
       }),
     );
-    if (target === null) this.#sessionTeardown.dispose(teardownKey);
-    const lent = Array.isArray(target) && target[1] === "rpcStubs";
+    if (target === null) this.#sessionTeardown.dispose(sessionTeardownKey);
+    const targetIsLentRpcStub = Array.isArray(target) && target[1] === "rpcStubs";
     return new SubscriptionHandle(name, () => {
       // A lent callback's row is un-set by the DO when its last pager closes (see provide); an
       // expression target has no pager, so the handle un-sets the row itself.
-      if (lent) this.#sessionTeardown.dispose(teardownKey);
+      if (targetIsLentRpcStub) this.#sessionTeardown.dispose(sessionTeardownKey);
       else if (target !== null)
         this.#appendInBackground(subscriptionConfiguredEvent({ name, target: null }));
     });
@@ -313,7 +333,7 @@ export class IterateContext extends RpcTarget {
    *  a stub key is only unique PER CONTEXT. A space separator is unambiguous: a context name has no
    *  spaces. */
   #sessionTeardownKey(rpcStubKey: string): string {
-    return `${this.#address.name} ${rpcStubKey}`;
+    return `${this.#durableObjectAddress.name} ${rpcStubKey}`;
   }
 }
 

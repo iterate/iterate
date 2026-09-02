@@ -2242,7 +2242,7 @@ createdAt, path }`); the SDK exports them as types. zod is unchanged where it ea
   still holds one rule). The table test is the table (`itx-expression-rewriting.test.ts`, rows
   `{ rules, call, becomes }`).
 - **The edge is a PROXY** (`iterate-context.ts`): declares `cd`, `invoke` (was invokeCapability),
-  `provide(rpcStubKey, { stub, rewrite? })`, `rewrite(match, target | null)`, `subscribe({ name?,
+  `provide(rpcStubKey, stub, { rewrite? })`, `rewrite(match, target | null)`, `subscribe({ name?,
 target | null, consumes? })`, `enableProcessor`, `disableProcessor`. Every built-in root — `append`,
   `read`, the NEW roots `waitForEvent` and `expressionRewriteRules.list/get`, `kv`, `rpcStubs`,
   `facets`, `load`, … — rides the prototype-hop fallback with ZERO edge code (`dotted-path-proxy.ts`:
@@ -2296,3 +2296,26 @@ target | null, consumes? })`, `enableProcessor`, `disableProcessor`. Every built
 - Tests: three pins deleted with their guards (ephemeral:false, ephemeral+idempotencyKey ×2), two
   flipped (dedupe hit + offset ⇒ the existing event; facet `toString()` ⇒ rejects). src 3,764 → 3,735.
 - GATES: tsc×3 · oxlint 0/0 · knip · unit+workers 250 · e2e 141p/2xf.
+
+## 2026-09-02 — `provide(rpcStubKey, stub, options?)`; `LiveValue` deleted; a names sweep
+
+- Jonas: "Is provide overloaded, or is this weird format with key, object the intended API?" → not
+  overloaded, but the stub sat inside the options bag. Now POSITIONAL: `provide(rpcStubKey, stub,
+options?)` with `options.rewrite`; chapter 1 reads `itx.provide("laptop", fn)`, and `options` is where
+  an idle policy or a timeout goes later. Every call site (tests, proofs, docs) re-spelled.
+- "Why would you call that live value and not client RPC stub? Please delete it." → `LiveValue`
+  (`= unknown`) is gone; the edge types the client's stub as `ClientRpcStub` (rpc-stub-relay.ts — the
+  name that already existed). "live value" is gone from every comment and title too.
+- The sweep for other invented or bare names, applied: `SessionScopedHandle` (a lifetime, not a noun)
+  → `ProvidedRpcStubHandle` / `RewriteRuleHandle` / `SubscriptionHandle`; `ContextNamespace` →
+  `IterateContextNamespace`; `#contexts`/`#address` → `#contextNamespace`/`#durableObjectAddress`;
+  `SessionTeardown.#undo` → `#undoByKey`; `#teardown` → `#sessionTeardown`; `InvokeHandle.#dispatch` →
+  `#dispatchItxExpressionSteps`; `LentRpcStub.#broken` → `#clientSessionBroken`, `#walk` →
+  `#walkItxExpressionSteps`; `SubscriptionDelivery`'s `type Deps` → `SubscriptionDeliveryDeps`,
+  `#evaluate` → `#evaluateItxExpression`; the DO's `#delivery` → `#subscriptionDelivery`, local `live`
+  → `liveFacet`; built-ins `own()` → `ownContext()`; stream.ts `interface Context` → `ReachableContext`
+  (+ `localReachableContext`); rpc-stub-fetch `ProviderSocket` → `ClientWebSocket`; `LiveState.#key /
+#sink / #rev` → `#liveStateKey / #liveStateSink / #liveStateRev`; client `LiveItx` → `LiveStateItx`;
+  `const lent` → `targetIsLentRpcStub`. Left as they are: `WaitUntil`, `Scalar`, `LogFields`,
+  `InvokeTarget`, `WebSocketHooks` — each already says what it holds.
+- GATES: tsc×3 · oxlint 0/0 · knip · unit 205 · workers 45 · e2e 141p/2xf · tutorial-proof 8 · Playwright 2.

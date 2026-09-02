@@ -25,21 +25,21 @@ import { toItxExpression, type ItxExpression, type ItxExpressionInput } from "./
  *  win over the fallback, so a capability cannot be named either — the two reserved words this
  *  wrapper adds. */
 export class InvokeHandle extends RpcTarget {
-  readonly #dispatch: (itxExpressionSteps: ItxExpression) => unknown;
-  constructor(dispatch: (itxExpressionSteps: ItxExpression) => unknown) {
+  readonly #dispatchItxExpressionSteps: (itxExpressionSteps: ItxExpression) => unknown;
+  constructor(dispatchItxExpressionSteps: (itxExpressionSteps: ItxExpression) => unknown) {
     super();
-    this.#dispatch = dispatch;
+    this.#dispatchItxExpressionSteps = dispatchItxExpressionSteps;
   }
   /** THE reduce door the prototype hop dispatches onto (the receiver IS the invoker — this instance).
    *  The expression is RELATIVE to this handle (empty scope root — the hop is installed with `[]`). */
   invoke(call: ItxExpressionInput): unknown {
-    return this.#dispatch(toItxExpression(call));
+    return this.#dispatchItxExpressionSteps(toItxExpression(call));
   }
   /** Root-apply: call the bare capability this handle fronts — the ANONYMOUS call step. `callOn`
    *  (dispatch.ts) uses this when a rewritten call's target IS an InvokeHandle and args are applied
    *  to it — `handle(events, range)` ⇒ the lent callback the handle delivers to. */
   applyRoot(args: unknown[]): unknown {
-    return this.#dispatch([["", ...args]]);
+    return this.#dispatchItxExpressionSteps([["", ...args]]);
   }
 }
 installPrototypeInvokeFallback(InvokeHandle, []);

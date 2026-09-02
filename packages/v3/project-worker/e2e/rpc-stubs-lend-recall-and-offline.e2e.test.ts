@@ -1,7 +1,7 @@
 // rpc-stubs-lend-recall-and-offline.e2e.test.ts — the two-layer stub machinery LIVE
 // (src/context/rpc-stub-directory.ts + rpc-stub-relay.ts + iterate-context.ts). TWO different
-// things, two lifetimes: an RPC STUB is physical — `itx.provide(rpcStubKey, { stub, rewrite })`
-// LENDS a client's live value to the `itx.rpcStubs` built-in under an OPAQUE key (it lives until the
+// things, two lifetimes: an RPC STUB is physical — `itx.provide(rpcStubKey, stub, { rewrite })`
+// LENDS a client's rpc stub to the `itx.rpcStubs` built-in under an OPAQUE key (it lives until the
 // handle is disposed or its session ends); an ITX-EXPRESSION REWRITE RULE is pure data —
 // `rewrite ⇒ itx.rpcStubs.get('<rpcStubKey>')`, ONE `itx/rewrite-rule-configured` event in a MAP
 // keyed by match (set replaces, null deletes). Provided together they are session-scoped as a pair:
@@ -71,7 +71,7 @@ test("same-key re-provide replaces the transport while online and appends ONE mo
   const ctx = freshCtx("replace");
   const observer = openItx(ctx);
   // First live provider under rpcStubKey itx.dupTool, rule itx.dupTool ⇒ itx.rpcStubs.get('itx.dupTool').
-  await openItx(ctx).provide("itx.dupTool", { stub: new Tools("one"), rewrite: "itx.dupTool" });
+  await openItx(ctx).provide("itx.dupTool", new Tools("one"), { rewrite: "itx.dupTool" });
   await until("first itx.dupTool transport present", async () =>
     (await presence(observer)).includes("itx.dupTool"),
   );
@@ -84,7 +84,7 @@ test("same-key re-provide replaces the transport while online and appends ONE mo
   // rpc-stub-directory drops every OTHER same-key pager with reason "replaced"), and the provide
   // appends its rule event like any other — NO dedupe: the log grows by exactly one
   // rewrite-rule-configured, and the MAP still holds exactly one rule at the match.
-  await openItx(ctx).provide("itx.dupTool", { stub: new Tools("two"), rewrite: "itx.dupTool" });
+  await openItx(ctx).provide("itx.dupTool", new Tools("two"), { rewrite: "itx.dupTool" });
   await until("itx.dupTool serves 'two' over exactly one transport", async () => {
     if ((await presence(observer)).filter((k) => k === "itx.dupTool").length !== 1)
       return undefined;
@@ -111,7 +111,7 @@ test("disposing a client session recalls its stubs (presence) AND un-sets their 
   await sA
     .authenticate()
     .projects.get(ctx)
-    .provide("itx.ghosttool", { stub: new Tools("ghost"), rewrite: "itx.ghosttool" });
+    .provide("itx.ghosttool", new Tools("ghost"), { rewrite: "itx.ghosttool" });
   expect(await observer.invoke(["itx", "ghosttool", ["hello"]])).toBe("hello-from-ghost");
   await until("the transport present", async () =>
     (await presence(observer)).includes("itx.ghosttool"),
@@ -158,7 +158,7 @@ test("a hand-configured rule naming a key nobody lent answers RPC_STUB_OFFLINE �
   const err = await rejection(itx.invoke("itx.laterTool.hello()"), "call on an un-lent key");
   expect(codeOf(err)).toBe("RPC_STUB_OFFLINE");
   // Lend the key from another session (no rewrite of its own — the hand-configured rule names it).
-  await openItx(ctx).provide("later", { stub: new Tools("later") });
+  await openItx(ctx).provide("later", new Tools("later"));
   await until("the key present", async () => (await presence(itx)).includes("later"));
   expect(await itx.invoke("itx.laterTool.hello()")).toBe("hello-from-later");
 });
@@ -175,7 +175,7 @@ test("killing the provider session mid-invoke rejects the in-flight call promptl
   await sA
     .authenticate()
     .projects.get(ctx)
-    .provide("itx.hanger", { stub: hangTools, rewrite: "itx.hanger" });
+    .provide("itx.hanger", hangTools, { rewrite: "itx.hanger" });
   await until("itx.hanger transport present", async () =>
     (await presence(observer)).includes("itx.hanger"),
   );
@@ -211,12 +211,12 @@ test("killing the provider session mid-invoke rejects the in-flight call promptl
 test("fan-out via the rpc-stub rewrite rules + map: a dead member leaves the set, an un-lent key is dropped as RPC_STUB_OFFLINE; a live subscriber never enters the fan-out", async () => {
   const ctx = freshCtx("each");
   const observer = openItx(ctx);
-  await openItx(ctx).provide("itx.alive", { stub: new Tools("alive"), rewrite: "itx.alive" });
+  await openItx(ctx).provide("itx.alive", new Tools("alive"), { rewrite: "itx.alive" });
   const { session: sDead, ws: wsDead } = rawSession();
   await sDead
     .authenticate()
     .projects.get(ctx)
-    .provide("itx.doomed", { stub: new Tools("doomed"), rewrite: "itx.doomed" });
+    .provide("itx.doomed", new Tools("doomed"), { rewrite: "itx.doomed" });
   // A rule to a key nobody lends: in the set, offline forever.
   await observer.rewrite("itx.ghost", "itx.rpcStubs.get('ghost')");
   // A lent live SUBSCRIBER: physically present (its stub under itx.subscriptions.<name>) but a
@@ -280,7 +280,7 @@ test("concurrent provides at one key collapse to ONE live transport; the map hol
   const observer = openItx(ctx);
   await Promise.all(
     [1, 2, 3, 4].map((i) =>
-      openItx(ctx).provide("itx.solo", { stub: new Tools(`r${i}`), rewrite: "itx.solo" }),
+      openItx(ctx).provide("itx.solo", new Tools(`r${i}`), { rewrite: "itx.solo" }),
     ),
   );
   await until(
@@ -373,8 +373,7 @@ test("storm of provide/dispose/subscribe/null-target/disconnect: presence AND th
     await observer.subscribe({ name: await subscription.name, target: null });
     // (b) provide a live stub with a rule, then dispose the handle — ONE door in, one door out
     //     (dispose recalls this session's stub AND un-sets the rule).
-    const provided = await observer.provide(`itx.tool${i}`, {
-      stub: new Tools(`s${i}`),
+    const provided = await observer.provide(`itx.tool${i}`, new Tools(`s${i}`), {
       rewrite: `itx.tool${i}`,
     });
     provided[Symbol.dispose]();
@@ -384,7 +383,7 @@ test("storm of provide/dispose/subscribe/null-target/disconnect: presence AND th
     await s
       .authenticate()
       .projects.get(ctx)
-      .provide(`itx.k${i}`, { stub: new Tools(`k${i}`), rewrite: `itx.k${i}` });
+      .provide(`itx.k${i}`, new Tools(`k${i}`), { rewrite: `itx.k${i}` });
     (s as any)[Symbol.dispose]?.();
   }
 
@@ -409,9 +408,9 @@ test("re-provide at one key replaces ONLY that key's transport and leaves a sepa
   const observer = openItx(ctx);
   const hangTools = new HangTools();
   const itxA = openItx(ctx);
-  await itxA.provide("itx.rk", { stub: new Tools("rk1"), rewrite: "itx.rk" });
+  await itxA.provide("itx.rk", new Tools("rk1"), { rewrite: "itx.rk" });
   // A SEPARATE live stub under its OWN key from the same session.
-  await itxA.provide("itx.slow", { stub: hangTools, rewrite: "itx.slow" });
+  await itxA.provide("itx.slow", hangTools, { rewrite: "itx.slow" });
   await until("both transports present", async () => {
     const keys = await presence(observer);
     return keys.includes("itx.rk") && keys.includes("itx.slow");
@@ -425,7 +424,7 @@ test("re-provide at one key replaces ONLY that key's transport and leaves a sepa
   // Re-provide at the SAME key itx.rk → replaces ONLY that key's transport (never itx.slow):
   // the new pager opening drops the old itx.rk transport "replaced"; the rule is re-set (one
   // more event, still one rule).
-  await openItx(ctx).provide("itx.rk", { stub: new Tools("rk2"), rewrite: "itx.rk" });
+  await openItx(ctx).provide("itx.rk", new Tools("rk2"), { rewrite: "itx.rk" });
   await until("itx.rk now resolves to the NEW transport", async () => {
     try {
       return (await observer.invoke("itx.rk.hello()")) === "hello-from-rk2";

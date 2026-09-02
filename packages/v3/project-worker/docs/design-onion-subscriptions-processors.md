@@ -7,7 +7,7 @@
 > written. Sections 0–6 are kept in line with the code AS BUILT — including the itx-surface rename
 > of 2026-09-02 (`docs/proposals/itx-surface-SYNTHESIS.md`, §9 "as built"): the noun is **rewrite
 > rule** (`{ match, target }`, ONE event `itx/rewrite-rule-configured { match, target | null }`, a MAP
-> by canonical match), a live value enters through `provide(rpcStubKey, { stub, rewrite? })` under an
+> by canonical match), a live value enters through `provide(rpcStubKey, stub, { rewrite? })` under an
 > OPAQUE key, the dispatch door is `invoke`, and every verb hands back a DISPOSABLE handle. Sections
 > 7–9 are the decision and sequence record and keep the names of their day.
 
@@ -49,7 +49,7 @@ flowchart TB
     misc["kv · whoami · cd · fetch (egress)"]
   end
   subgraph L1["Layer 1 — itx-expression rewrite rules (ONE event, a slice of the core reduce)"]
-    rule["itx/rewrite-rule-configured { match, target | null } — a MAP by canonical match<br/>provide(rpcStubKey, { stub, rewrite }) = lend to rpcStubs + rule rewrite ⇒ itx.rpcStubs.get(rpcStubKey)"]
+    rule["itx/rewrite-rule-configured { match, target | null } — a MAP by canonical match<br/>provide(rpcStubKey, stub, { rewrite }) = lend to rpcStubs + rule rewrite ⇒ itx.rpcStubs.get(rpcStubKey)"]
   end
   subgraph L2["Layer 2 — subscriptions (own events, reduced by the core reduce + ONE delivery loop)"]
     sub["subscription-configured { name, target | null, consumes? }<br/>push if the target owns progress (facet / rpc stub)<br/>else the stream keeps a kv cursor, at-least-once"]
@@ -77,7 +77,7 @@ const agent = itx.cd("/agents/support"); // absolute by convention; relative and
 
 const greetSource = { type: "inline", files: { "greet.js": GREET_SRC } };
 using greet = await itx.rewrite("itx.greet", ["itx", ["load", greetSource], ["getEntrypoint"]]); // a rewrite rule
-using robot = await itx.provide("robot", { stub: robotObject, rewrite: "itx.robot" }); // SUGAR: lends to rpcStubs under the opaque key + rule itx.robot ⇒ itx.rpcStubs.get('robot')
+using robot = await itx.provide("robot", robotObject, { rewrite: "itx.robot" }); // SUGAR: lends to rpcStubs under the opaque key + rule itx.robot ⇒ itx.rpcStubs.get('robot')
 await itx.rpcStubs.list(); // presence, physical
 await itx.expressionRewriteRules.list(); // the rules, printed
 
@@ -198,7 +198,7 @@ rewrites the call, repeating until the root is a built-in (32-rewrite budget; no
 `NO_ITX_EXPRESSION_MATCH`, default-deny). The `delivery`, `processor` and `lane` fields of the old
 row are gone; `itx.subscribers.*` stops being a convention; a rewrite rule is a name for a target
 and nothing else. The edge verb is `rewrite(match, target | null)` → a disposable
-`SessionScopedHandle`; a live value enters through `provide(rpcStubKey, { stub, rewrite? })`, which
+a disposable handle; a client's rpc stub enters through `provide(rpcStubKey, stub, { rewrite? })`, which
 lends under the OPAQUE key and configures the rule `rewrite ⇒ itx.rpcStubs.get('<rpcStubKey>')`.
 The rule dies with the stub: the handle's dispose un-sets it from the edge, and when the key's LAST
 pager closes the DO un-sets every rule and subscription whose target is that stub (a reconnect
@@ -303,8 +303,8 @@ processor: that shape needed an alarm proxy facets do not have (workerd#6810, st
  *  removes the row. Same name replaces. Literally `append(subscriptionConfiguredEvent(…))` — the
  *  returned handle removes the row (and recalls the lent callback) when disposed or when the
  *  session ends. */
-subscribe(input: { name?: string; target: ItxExpressionInput | LiveValue | null; consumes?: string[] }): Promise<SubscriptionHandle>;
-class SubscriptionHandle extends SessionScopedHandle { get name(): string; [Symbol.dispose](): void }
+subscribe(input: { name?: string; target: ItxExpressionInput | ClientRpcStub | null; consumes?: string[] }): Promise<SubscriptionHandle>;
+class SubscriptionHandle extends RpcTarget { get name(): string; [Symbol.dispose](): void }
 ```
 
 AS BUILT there is no `unsubscribe`: `subscribe({ name, target: null })` is the removal, and every
@@ -490,16 +490,14 @@ class IterateContext extends RpcTarget {
   // (a) rpc stubs — THE ONE PHYSICAL ACT: the client's capnweb stub must live in this stateless worker, never in the DO
   provide(
     rpcStubKey: string,
-    provided: { stub: LiveValue; rewrite?: ItxExpressionInput },
-  ): Promise<SessionScopedHandle>; // lend under the OPAQUE key (+ the rule rewrite ⇒ itx.rpcStubs.get('<rpcStubKey>'))
+    stub: ClientRpcStub,
+    options?: { rewrite?: ItxExpressionInput },
+  ): Promise<ProvidedRpcStubHandle>; // lend under the OPAQUE key (+ the rule rewrite ⇒ itx.rpcStubs.get('<rpcStubKey>'))
   // (b) rewrite rules · subscriptions · processors — each is visibly "build the event, append it" (the DO has append and no configuration verbs)
-  rewrite(
-    match: ItxExpressionInput,
-    target: ItxExpressionInput | null,
-  ): Promise<SessionScopedHandle>;
+  rewrite(match: ItxExpressionInput, target: ItxExpressionInput | null): Promise<RewriteRuleHandle>;
   subscribe(input: {
     name?: string;
-    target: ItxExpressionInput | LiveValue | null;
+    target: ItxExpressionInput | ClientRpcStub | null;
     consumes?: string[];
   }): Promise<SubscriptionHandle>;
   enableProcessor(
@@ -509,10 +507,10 @@ class IterateContext extends RpcTarget {
   disableProcessor(name: string): Promise<void>;
   [dotted: string]: unknown; // everything else
 }
-class SessionScopedHandle extends RpcTarget {
+class ProvidedRpcStubHandle extends RpcTarget {
   [Symbol.dispose](): void;
 } // provide / rewrite: disposing (or session end) undoes the act
-class SubscriptionHandle extends SessionScopedHandle {
+class SubscriptionHandle extends ProvidedRpcStubHandle {
   get name(): string;
 } // subscribe: the generated name when none was given
 ```

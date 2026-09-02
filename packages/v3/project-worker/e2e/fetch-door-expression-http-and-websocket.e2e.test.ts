@@ -63,7 +63,7 @@ test("lent stub HTTP fetch: an eyeball POST reaches the Node provider's fetch() 
   await session()
     .authenticate()
     .projects.get(ctx)
-    .provide("itx.ws-device", { stub: device, rewrite: "itx.ws-device" });
+    .provide("itx.ws-device", device, { rewrite: "itx.ws-device" });
 
   const res = await fetch(expressionUrl(ctx, "itx.ws-device", "http"), {
     method: "POST",
@@ -95,7 +95,7 @@ test("lent stub WebSocket fetch: a plain eyeball WebSocket opens (101), echoes, 
   await session()
     .authenticate()
     .projects.get(ctx)
-    .provide("itx.ws-device", { stub: new WsDevice(), rewrite: "itx.ws-device" });
+    .provide("itx.ws-device", new WsDevice(), { rewrite: "itx.ws-device" });
   // Sanity: the rule still answers plain HTTP (so the assertions below are about the UPGRADE).
   const plain = await fetch(expressionUrl(ctx, "itx.ws-device", "http"));
   expect(await plain.text()).toBe("http-fallback");

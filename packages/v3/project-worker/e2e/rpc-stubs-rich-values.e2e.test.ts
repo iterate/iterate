@@ -55,7 +55,7 @@ test("rich values through the longest path: Date, bytes, callbacks, RpcTarget ar
   const itxA = openItx(ctx);
   const itxB = openItx(ctx);
   await seedSources(itxB, ["probe"]);
-  await itxA.provide("itx.tools", { stub: new ToolsA(), rewrite: "itx.tools" });
+  await itxA.provide("itx.tools", new ToolsA(), { rewrite: "itx.tools" });
 
   // 1. a Date through the whole path
   const probed = await itxB.invoke(["itx", "tools", ["probe", new Date("2026-08-18T12:00:00Z")]]);
@@ -87,7 +87,7 @@ test("rich values through the longest path: Date, bytes, callbacks, RpcTarget ar
   expect(rich?.cbResult).toBe(42);
 
   // 5. RpcTarget WITH METHODS as an arg (not just a bare function): A calls TWO methods on it
-  await itxA.provide("itx.rich", { stub: new ToolsRich(), rewrite: "itx.rich" });
+  await itxA.provide("itx.rich", new ToolsRich(), { rewrite: "itx.rich" });
   const nbResult = await itxB.invoke(["itx", "rich", ["useNotebook", new Notebook()]]);
   expect(nbResult).toBe("one|two"); // provider called TWO methods on B's RpcTarget
 

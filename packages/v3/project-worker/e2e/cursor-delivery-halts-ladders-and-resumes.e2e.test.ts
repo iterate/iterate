@@ -66,7 +66,7 @@ async function cursorSubscribe(
   consumes?: string[],
 ): Promise<void> {
   const hook = `${name}Hook`;
-  await itx.provide(`itx.${hook}`, { stub: new Hook(fn), rewrite: `itx.${hook}` });
+  await itx.provide(`itx.${hook}`, new Hook(fn), { rewrite: `itx.${hook}` });
   await itx.kv.put(`src/${hook}.js`, HOOKED_SOURCE(hook));
   await itx.rewrite(
     `itx.${name}Worker`,

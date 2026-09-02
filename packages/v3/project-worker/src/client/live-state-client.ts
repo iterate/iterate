@@ -14,7 +14,7 @@ import {
 
 /** The slice of an itx session this needs — a capnweb `IterateContext` proxy satisfies it structurally:
  *  `subscribe` hands back a DISPOSABLE handle (disposing it removes the subscription server-side). */
-export type LiveItx = {
+export type LiveStateItx = {
   subscribe(input: {
     name?: string;
     consumes?: string[];
@@ -37,7 +37,7 @@ export type LiveStateConnection<S> = {
  *  frames triggers one door read, not one per frame); a failed heal is reported through `onResync`
  *  and retried by the next delivered delta (its `from` still mismatches, so it re-triggers). */
 export async function connectLiveState<S>(
-  itx: LiveItx,
+  itx: LiveStateItx,
   opts: {
     key: string;
     name?: string;

@@ -21,8 +21,8 @@ test("TWO CONTEXTS of one session provide live fns under the SAME rpc-stub key �
   const a = s.authenticate().projects.get(ctx); // the root context ("/")
   const b = a.cd("/sub"); // another context of the project — SAME session, so the SAME SessionTeardown
 
-  await a.provide("itx.clash", { stub: (x: number) => x + 1, rewrite: "itx.clash" });
-  await b.provide("itx.clash", { stub: (x: number) => x + 100, rewrite: "itx.clash" });
+  await a.provide("itx.clash", (x: number) => x + 1, { rewrite: "itx.clash" });
+  await b.provide("itx.clash", (x: number) => x + 100, { rewrite: "itx.clash" });
 
   // Both callable right away (each resolves through its OWN context's rule and registry) …
   expect(await a.invoke("itx.clash(1)")).toBe(2);

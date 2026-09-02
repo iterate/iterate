@@ -24,7 +24,7 @@
 //   5. Rewriting repeats until the root is a built-in; 32 rewrites is the budget (a self-referential
 //      rule errors, never spins); a call no rule matches is refused (default-deny).
 //
-// A LENT RPC STUB is no exception: `itx.provide(rpcStubKey, { stub, rewrite })` lends the stub to the
+// A LENT RPC STUB is no exception: `itx.provide(rpcStubKey, stub, { rewrite })` lends the stub to the
 // `itx.rpcStubs` built-in (physical) and configures the pure-data rule `rewrite ⇒
 // itx.rpcStubs.get('<rpcStubKey>')` — the log records the rule, never the socket. STRING AT REST: the
 // event stores both halves in the string half of the codec; the core reduce parses ONCE.

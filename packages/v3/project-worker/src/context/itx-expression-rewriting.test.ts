@@ -344,7 +344,7 @@ const setup = () => {
    *  door — nothing is appended. */
   const rewrite = (match: ItxExpressionInput, target: ItxExpressionInput | null) =>
     (stream.append(rewriteRuleConfiguredEvent(match, target)) as StreamEvent[])[0];
-  /** The edge's `provide(key, { stub, rewrite })`, spelled out: lend under the key, configure the
+  /** The edge's `provide(key, stub, { rewrite })`, spelled out: lend under the key, configure the
    *  pure-data rule. */
   const provide = (rpcStubKey: string, stub: unknown) => {
     lentRpcStubs.set(rpcStubKey, stub);

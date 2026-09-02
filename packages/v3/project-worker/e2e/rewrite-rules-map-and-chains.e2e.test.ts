@@ -13,9 +13,9 @@ const REWRITE_RULE_CONFIGURED = "events.iterate.com/itx/rewrite-rule-configured"
 
 test("the table is a MAP: 5 concurrent re-sets of ONE match leave exactly the last-committed target; null deletes (default-deny); a fresh set works", async () => {
   const itx = openItx(freshCtx("map"));
-  // five distinguishable live values, each behind its own rule
+  // five distinguishable client rpc stubs, each behind its own rule
   for (let i = 0; i < 5; i++)
-    await itx.provide(`itx.probe${i}`, { stub: () => i, rewrite: `itx.probe${i}` });
+    await itx.provide(`itx.probe${i}`, () => i, { rewrite: `itx.probe${i}` });
   const race = () => itx.invoke(["itx", ["race"]]);
 
   // five concurrent re-sets of itx.race — one event each, one row survives: the LAST committed

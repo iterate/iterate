@@ -102,7 +102,7 @@ export function createItxExpressionPathProxy(
 
 /**
  * Install the dynamic-capability fallback on a class's PROTOTYPE CHAIN: built-in members win
- * through normal property lookup, and only missing roots become dynamic capability paths — which
+ * through normal property lookup, and only missing roots become dynamic itx-expression paths — which
  * lets a surface expose concrete methods like `invoke` while also supporting provided paths such
  * as `itx.slack.chat.postMessage(...)`.
  *
@@ -124,7 +124,7 @@ export function createItxExpressionPathProxy(
  * - The instance is a genuine, natively-branded RpcTarget → workerd's pipeline classifier accepts
  *   it (SingleStub), so `x.get(p).method()` chains work in one expression.
  * - Declared members (own prototype methods/getters) resolve BEFORE the hop — built-ins win.
- * - Unknown string keys reach the hop's `get` trap and become dynamic capability path proxies,
+ * - Unknown string keys reach the hop's `get` trap and become dynamic itx-expression path proxies,
  *   dispatched via the receiver's own `invoke`.
  * - Instances stay clean of own properties, so Workers RPC's instance-property protection needs
  *   no `getOwnPropertyDescriptor` help.

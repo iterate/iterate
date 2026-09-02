@@ -203,7 +203,7 @@ test("A BORROW RACES THE QUIESCE ALARM: a stub invoke fired concurrently with th
   const ctx = "prj_pagein";
   const clientItx = await (await openSession()).authenticate().projects.get(ctx);
   for (let i = 0; i < 4; i++)
-    await clientItx.provide(`itx.p${i}`, { stub: new Echo(i), rewrite: `itx.p${i}` });
+    await clientItx.provide(`itx.p${i}`, new Echo(i), { rewrite: `itx.p${i}` });
   const caller = await (await openSession()).authenticate().projects.get(ctx);
 
   // THERE MUST BE AN ALARM TO RACE. Lending four stubs arms nothing — the quiet clock arms only
@@ -241,7 +241,7 @@ test("SCALE DROP + QUIESCE + EVICT + WAKE: a DISPOSED live provide stays gone; t
   const providedRpcStubs: any[] = [];
   for (let i = 0; i < K; i++)
     providedRpcStubs.push(
-      await clientItx.provide(`itx.k${i}`, { stub: new Echo(i), rewrite: `itx.k${i}` }),
+      await clientItx.provide(`itx.k${i}`, new Echo(i), { rewrite: `itx.k${i}` }),
     );
   const caller = await (await openSession()).authenticate().projects.get(ctx);
 

@@ -70,7 +70,7 @@ test("a provider drops and re-provides at the same key — default-deny in betwe
   await providerSession
     .authenticate()
     .projects.get(ctx)
-    .provide("itx.p", { stub: new Tools("v1"), rewrite: "itx.p" });
+    .provide("itx.p", new Tools("v1"), { rewrite: "itx.p" });
   const online = await until("callable online", async () =>
     (await itx.invoke("itx.p.echo('a')")) === "echo-v1:a" ? true : undefined,
   );
@@ -104,7 +104,7 @@ test("a provider drops and re-provides at the same key — default-deny in betwe
   await providerSession
     .authenticate()
     .projects.get(ctx)
-    .provide("itx.p", { stub: new Tools("v2"), rewrite: "itx.p" });
+    .provide("itx.p", new Tools("v2"), { rewrite: "itx.p" });
 
   // 4. THE CONTRACT: the stub is callable AGAIN through the same spelling — it resolves to the
   //    reconnected provider (v2), with no re-addressing by the caller.

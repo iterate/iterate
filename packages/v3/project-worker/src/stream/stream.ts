@@ -24,7 +24,7 @@
 // constructor calls `appendCreatedAndWokenEvents()` before any door opens (the apps/os shape), so a probe on a never-seen
 // context materializes it — deliberately; what is worth reaching is worth recording.
 //
-// The CONTEXT seam (`interface Context` + `localContext`) lives at the bottom: what one context
+// The CONTEXT seam (`interface ReachableContext` + `localContext`) lives at the bottom: what one context
 // reaches another THROUGH, uniform-async and REAL-typed.
 
 import { codedError, reportIssue } from "../lib/errors.ts";
@@ -568,7 +568,7 @@ export class Stream {
 // with the REAL event types (StreamEventInput / StreamEvent / StreamPage) and making the whole
 // surface Promise-returning is what lets every backing satisfy it with ZERO casts:
 //   • a sibling `DurableObjectStub<IterateContextDurableObject>` — Workers-RPC methods already return
-//     Promises of these exact types, so it IS a Context structurally (no `as unknown as`);
+//     Promises of these exact types, so it IS a ReachableContext structurally (no `as unknown as`);
 //   • the own parent — `localContext(this)`, whose only wrap is `read` (sync on the class, async
 //     on the wire — one microtask on a path that then does real I/O anyway);
 //   • an off-platform Pi — its `RpcTarget` returns Promises over capnweb.
@@ -576,20 +576,20 @@ export class Stream {
 /** A CONTEXT reachable over the wire: the stream verbs (append/read), plus `invoke` for capability
  *  dispatch. This is what `itx.cd('/x')` routes through and what `deps.context(path)`
  *  returns. The IterateContextDurableObject is one; a sibling DO stub and the own-path adapter satisfy it. */
-export interface Context {
+export interface ReachableContext {
   append(...events: StreamEventInput[]): Promise<StreamEvent[]>;
   read(afterOffset?: number, limit?: number): Promise<StreamPage>;
   invoke(call: ItxExpressionInput): Promise<unknown>;
 }
 
-/** The own IterateContextDurableObject (same isolate) as a uniform-async Context. The ONLY wrap is `read`
+/** The own IterateContextDurableObject (same isolate) as a uniform-async ReachableContext. The ONLY wrap is `read`
  *  (sync on the class, async on the seam); `append` and `invoke` are already async. Built once per
  *  DO, never per call. */
-export function localContext(self: {
+export function localReachableContext(self: {
   append(...events: StreamEventInput[]): Promise<StreamEvent[]>;
   read(afterOffset?: number, limit?: number): StreamPage;
   invoke(call: ItxExpressionInput): Promise<unknown>;
-}): Context {
+}): ReachableContext {
   return {
     append: (...events) => self.append(...events),
     read: async (afterOffset, limit) => self.read(afterOffset, limit),

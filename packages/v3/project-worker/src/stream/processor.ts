@@ -269,7 +269,7 @@ export class ProcessorEngine<State> {
   processEventBatch(events: StreamEventT[], range: ScannedRange): Promise<void> {
     // Recorded SYNCHRONOUSLY: the head this processor has been SHOWN. Read verbs skip their
     // wake when the reduce has provably reached it — the fast path that deletes one parent read
-    // RPC from every capability dispatch (and every level of mount-names-mount nesting) once caught up.
+    // RPC from every capability dispatch (and every level of rule-names-rule nesting) once caught up.
     this.#pushedThroughOffset = Math.max(this.#pushedThroughOffset ?? 0, range.through);
     return this.#runOnSerialChain(async () => {
       await this.#rereduceIfVersionChanged();

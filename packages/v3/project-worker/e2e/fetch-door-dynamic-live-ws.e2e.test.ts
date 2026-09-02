@@ -24,7 +24,7 @@ export default class Provider extends WorkerEntrypoint {
   async run(mode) {
     const itx = await this.env.ITX.get();
     const device = new WsDevice();
-    const provided = await itx.provide("itx.wsdyn", { stub: device, rewrite: "itx.wsdyn" });
+    const provided = await itx.provide("itx.wsdyn", device, { rewrite: "itx.wsdyn" });
     // Held on globalThis so nothing GC-recalls DURING this invocation; note it does NOT keep the
     // lent stub alive past the invocation (see the lifetime test below).
     globalThis.__keep = { itx, provided, device };

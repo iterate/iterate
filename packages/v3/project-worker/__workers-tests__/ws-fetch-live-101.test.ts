@@ -55,7 +55,7 @@ class LiveSite extends RpcTarget {
 async function provideLiveSite(ctx: string): Promise<LiveSite> {
   const itx = await (await openSession()).authenticate().projects.get(ctx);
   const site = new LiveSite();
-  await itx.provide("itx.wsdev", { stub: site, rewrite: "itx.wsdev" });
+  await itx.provide("itx.wsdev", site, { rewrite: "itx.wsdev" });
   return site;
 }
 

@@ -37,21 +37,21 @@ export type LiveStateSink = {
 };
 
 export class LiveState<S> {
-  readonly #sink: LiveStateSink;
-  readonly #key: string;
+  readonly #liveStateSink: LiveStateSink;
+  readonly #liveStateKey: string;
   #state: S;
   /** The DIFF BASE: the last value that serialized — what a client that applied every delta holds.
    *  Kept apart from `#state` so a value the wire cannot carry, adopted without an emit, never
    *  becomes the base every later diff would throw against. */
   #lastSerializedState: S;
-  #rev: number;
+  #liveStateRev: number;
 
   constructor(sink: LiveStateSink, key: string, initial: S) {
-    this.#sink = sink;
-    this.#key = key;
+    this.#liveStateSink = sink;
+    this.#liveStateKey = key;
     this.#state = initial;
     this.#lastSerializedState = initial;
-    this.#rev = Date.now() * 4096 + Math.floor(Math.random() * 4096);
+    this.#liveStateRev = Date.now() * 4096 + Math.floor(Math.random() * 4096);
   }
 
   /** The current value (reflects every `set`). */
@@ -62,7 +62,7 @@ export class LiveState<S> {
   /** THE seed door: `{rev, state}` read together (single-threaded ⇒ atomically), which is what lets
    *  a client chain patches exactly instead of guessing which changes its snapshot already contains. */
   snapshot(): { rev: number; state: S } {
-    return { rev: this.#rev, state: this.#state };
+    return { rev: this.#liveStateRev, state: this.#state };
   }
 
   /** Replace the value: diff the last serialized base → next; on a real change bump the revision
@@ -82,22 +82,22 @@ export class LiveState<S> {
       patch = diff(this.#lastSerializedState, next);
     } catch {
       this.#state = next;
-      this.#rev += 1;
+      this.#liveStateRev += 1;
       return;
     }
     this.#state = next;
     this.#lastSerializedState = next;
     if (!patch) return;
-    const from = this.#rev;
-    this.#rev = from + 1;
+    const from = this.#liveStateRev;
+    this.#liveStateRev = from + 1;
     // Both a sync throw and a rejection land in the same lossy contract: a dropped change payload
     // is a revision-chain gap the client heals (the rev already advanced above).
     try {
       void Promise.resolve(
-        this.#sink.append({
+        this.#liveStateSink.append({
           type: "events.iterate.com/live-state/changed",
           ephemeral: true,
-          payload: { key: this.#key, from, to: this.#rev, patch },
+          payload: { key: this.#liveStateKey, from, to: this.#liveStateRev, patch },
         }),
       ).catch(() => {});
     } catch {

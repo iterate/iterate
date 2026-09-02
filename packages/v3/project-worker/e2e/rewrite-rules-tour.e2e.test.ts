@@ -1,5 +1,5 @@
 // rewrite-rules-tour.e2e.test.ts — the itx surface, toured end to end against the local
-// project-worker. Covers: the built-in roots through the ONE dispatch door, live values through the
+// project-worker. Covers: the built-in roots through the ONE dispatch door, client rpc stubs through the
 // ONE provide door (an opaque rpcStubKey the stub is lent under + the REWRITE RULE that names it),
 // THE MAP (a re-set replaces, setting the old target back restores, null deletes — on expression
 // rules), expression rules running dynamic workers (stateless fetch+WS, stateful deep call), the two
@@ -38,9 +38,9 @@ test("itx tour: built-in roots, lent stubs, the rule map, dynamic-worker rules, 
   }
   const sessionA = session();
   const itxA = await sessionA.authenticate().projects.get(ctx);
-  await itxA.provide("itx.proverA", { stub: new ToolsA(), rewrite: "itx.proverA" });
+  await itxA.provide("itx.proverA", new ToolsA(), { rewrite: "itx.proverA" });
   const itxB = await session().authenticate().projects.get(ctx);
-  await itxB.provide("itx.proverB", { stub: new ToolsB(), rewrite: "itx.proverB" });
+  await itxB.provide("itx.proverB", new ToolsB(), { rewrite: "itx.proverB" });
   await seedSources(itxA, ["site", "counter"]);
 
   // 1. whoami — a built-in root, reached through the ONE dispatch door
@@ -62,7 +62,7 @@ test("itx tour: built-in roots, lent stubs, the rule map, dynamic-worker rules, 
   expect(got).toBe("hi-crisp");
 
   // 3. a lent stub: provide from A through the ONE door (rpcStubKey + the rule naming it), invoke from B
-  await itxA.provide("itx.tools", { stub: new ToolsA(), rewrite: "itx.tools" });
+  await itxA.provide("itx.tools", new ToolsA(), { rewrite: "itx.tools" });
   const echoed = await itxB.invoke(["itx", "tools", ["echo", "hello"]]);
   // lent stub: B invokes A's provider
   expect(echoed).toBe("echo-A:hello");
@@ -82,9 +82,9 @@ test("itx tour: built-in roots, lent stubs, the rule map, dynamic-worker rules, 
   //    match); setting the old target back RESTORES it; null DELETES it. Proven on DISTINCT
   //    EXPRESSION rules: each provider lends its stub behind its own rule, then points itx.greeter
   //    at that rule.
-  await itxA.provide("itx.greeterA", { stub: new ToolsA(), rewrite: "itx.greeterA" });
+  await itxA.provide("itx.greeterA", new ToolsA(), { rewrite: "itx.greeterA" });
   await itxA.rewrite("itx.greeter", "itx.greeterA");
-  await itxB.provide("itx.greeterB", { stub: new ToolsB(), rewrite: "itx.greeterB" });
+  await itxB.provide("itx.greeterB", new ToolsB(), { rewrite: "itx.greeterB" });
   await itxB.rewrite("itx.greeter", "itx.greeterB");
   const winB = await itxA.invoke(["itx", "greeter", ["hello"]]);
   // the map: a re-set replaces

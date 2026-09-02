@@ -9,7 +9,7 @@
 // owns the capnweb session; here the caller passes a ready `itx`).
 
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
-import { connectLiveState, type LiveItx } from "./live-state-client.ts";
+import { connectLiveState, type LiveStateItx } from "./live-state-client.ts";
 import type { LiveStateSeed, LiveStateStore } from "./live-state-store.ts";
 
 export type LiveStateStatus = "connecting" | "live" | "error";
@@ -20,7 +20,7 @@ export type LiveStateStatus = "connecting" | "live" | "error";
  *  session, `key`, or `name` changes; unmount (and every re-subscribe) disposes the previous
  *  server-side subscription. */
 export function useLiveState<S>(
-  itx: LiveItx | undefined,
+  itx: LiveStateItx | undefined,
   opts: { key: string; name?: string; door: () => Promise<LiveStateSeed<S>> },
 ): { value: S | undefined; rev: number | null; status: LiveStateStatus; error?: string } {
   const [store, setStore] = useState<LiveStateStore<S> | undefined>();

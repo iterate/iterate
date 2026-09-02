@@ -61,7 +61,7 @@ import {
 } from "./fetch/rpc-stub-fetch.ts";
 import { walkSteps } from "./context/dispatch.ts";
 import { FacetHandle, RpcStubHandle } from "./context/invoke-handle.ts";
-import { localContext, Stream, type WaitForEventFilter } from "./stream/stream.ts";
+import { localReachableContext, Stream, type WaitForEventFilter } from "./stream/stream.ts";
 import {
   RpcStubDirectory,
   RPC_STUB_PAGER_KEEPALIVE_REQUEST,
@@ -182,7 +182,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     path: this.#name.path,
     projectId: this.#name.projectId,
     onCommit: (freshEvents, afterOffset, nextOffset) =>
-      this.#delivery.onCommit(freshEvents, afterOffset, nextOffset),
+      this.#subscriptionDelivery.onCommit(freshEvents, afterOffset, nextOffset),
   });
 
   /** Commit events: idempotency-checked, offsets assigned from ONE shared sequence (ephemeral
@@ -220,10 +220,10 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       contextName: this.#name.name,
       env: this.env,
       invoke: (call) => this.invoke(call),
-      // a sibling context by path; the own path is this DO as a uniform-async Context (stream.ts)
+      // a sibling context by path; the own path is this DO as a uniform-async ReachableContext (stream.ts)
       context: (p) =>
         p === this.#name.path
-          ? localContext(this)
+          ? localReachableContext(this)
           : this.env.CONTEXT.getByName(
               DurableObjectNameCodec.stringify({ projectId: this.#name.projectId, path: p }),
             ),
@@ -273,20 +273,20 @@ export class IterateContextDurableObject extends DurableObject<Env> {
 
   // ── SUBSCRIPTION DELIVERY: the one loop (subscription-delivery.ts), wired to this DO ──
 
-  readonly #delivery = new SubscriptionDelivery({
+  readonly #subscriptionDelivery = new SubscriptionDelivery({
     kv: this.ctx.storage.kv,
     stream: this.#stream,
     // A target is evaluated through the ONE dispatch door — through every rewrite rule, one naming another included — so what
     // comes back is exactly what a caller would get: a FacetHandle, an RpcStubHandle, an entrypoint
     // handle, a value.
-    evaluate: (expression) => this.invoke(expression),
+    evaluateItxExpression: (itxExpression) => this.invoke(itxExpression),
     recordActivityForQuietClock: () => this.#recordActivityForQuietClock(),
   });
 
   /** The `itx.subscriptions` view: the reduced table joined with the delivery loop's cursors. */
   #subscriptionList(): SubscriptionListEntry[] {
     return Object.entries(this.#stream.coreReducedState.subscriptions).map(([name, s]) => {
-      const cursor = this.#delivery.cursor(name);
+      const cursor = this.#subscriptionDelivery.cursor(name);
       return {
         name,
         target: print(s.target),
@@ -339,7 +339,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     // here, AWAITED so a re-arm for a later retry lands before this actor hibernates. A cursor delivery
     // pins nothing local (a facet it calls into is counted by #facetWorkInFlight for the call), so the
     // quiesce below needs no count of its own.
-    await this.#delivery.deliverEveryCursorSubscription();
+    await this.#subscriptionDelivery.deliverEveryCursorSubscription();
     if (Date.now() - this.#lastActivityMs >= 60_000 && this.#facetWorkInFlight === 0) {
       for (const facetName of this.#liveFacets.keys()) {
         try {
@@ -411,7 +411,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     try {
       // THE LOAD, its source resolved once per materialization: a live facet's modules + contentHash
       // ride #liveFacets, so a commit re-fetches nothing.
-      const live = this.#liveFacets.get(name);
+      const liveFacet = this.#liveFacets.get(name);
       const { worker, contentHash, modules } = await loadConfinedWorker({
         env: this.env,
         invoke: (call) => this.invoke(call),
@@ -420,8 +420,8 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         owner: facetLoaderOwner(this.#name.name, memo.className),
         source: parse(memo.source) as WorkerSource,
         where: `facet "${name}"`,
-        ...(live?.source === memo.source && {
-          resolved: { contentHash: live.contentHash, modules: live.modules },
+        ...(liveFacet?.source === memo.source && {
+          resolved: { contentHash: liveFacet.contentHash, modules: liveFacet.modules },
         }),
       });
       // The load awaited: a `facets.delete(name)` (disableProcessor) may have landed meanwhile — its

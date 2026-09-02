@@ -16,7 +16,7 @@
 
 import { RpcTarget } from "capnweb";
 import { DurableObjectNameCodec } from "./context/durable-object-names.ts";
-import { IterateContext, type ContextNamespace, type WaitUntil } from "./iterate-context.ts";
+import { IterateContext, type IterateContextNamespace, type WaitUntil } from "./iterate-context.ts";
 
 /** WHAT THIS SESSION MUST UNDO AT ITS END — ONE entry per key: a lend relay (the session's copy of
  *  a client stub plus its pager socket, held so neither is GC'd) and anything else scoped to the
@@ -29,20 +29,20 @@ import { IterateContext, type ContextNamespace, type WaitUntil } from "./iterate
  *  the incumbent here is a harmless double-close that just keeps this map from accumulating dead
  *  relays. */
 export class SessionTeardown {
-  readonly #undo = new Map<string, { dispose(): void }>();
+  readonly #undoByKey = new Map<string, { dispose(): void }>();
   add(key: string, undo: { dispose(): void }): void {
-    this.#undo.get(key)?.dispose();
-    this.#undo.set(key, undo);
+    this.#undoByKey.get(key)?.dispose();
+    this.#undoByKey.set(key, undo);
   }
   dispose(key: string): void {
-    const undo = this.#undo.get(key);
+    const undo = this.#undoByKey.get(key);
     if (!undo) return;
-    this.#undo.delete(key);
+    this.#undoByKey.delete(key);
     undo.dispose();
   }
   disposeAll(): void {
-    for (const undo of this.#undo.values()) undo.dispose();
-    this.#undo.clear();
+    for (const undo of this.#undoByKey.values()) undo.dispose();
+    this.#undoByKey.clear();
   }
 }
 
@@ -51,16 +51,16 @@ export class SessionTeardown {
  *  session lent is recalled (the DO-side stubs die with their session instead of lying in the
  *  presence list). */
 export class UnauthenticatedSession extends RpcTarget {
-  readonly #teardown = new SessionTeardown(); // held for the session so lent stubs + pager sockets aren't GC'd
+  readonly #sessionTeardown = new SessionTeardown(); // held for the session so lent stubs + pager sockets aren't GC'd
   readonly #session: Session;
 
-  constructor(contexts: ContextNamespace, ctx: ExecutionContext) {
+  constructor(contextNamespace: IterateContextNamespace, ctx: ExecutionContext) {
     super();
-    this.#session = new Session(contexts, this.#teardown, (p) => ctx.waitUntil(p));
+    this.#session = new Session(contextNamespace, this.#sessionTeardown, (p) => ctx.waitUntil(p));
   }
 
   [Symbol.dispose](): void {
-    this.#teardown.disposeAll();
+    this.#sessionTeardown.disposeAll();
   }
 
   /** THE introduction door (the `authenticate()` pattern: the only way to hold authority is to be
@@ -77,9 +77,13 @@ export class UnauthenticatedSession extends RpcTarget {
 export class Session extends RpcTarget {
   readonly #projects: ProjectCollection;
 
-  constructor(contexts: ContextNamespace, teardown: SessionTeardown, waitUntil: WaitUntil) {
+  constructor(
+    contextNamespace: IterateContextNamespace,
+    sessionTeardown: SessionTeardown,
+    waitUntil: WaitUntil,
+  ) {
     super();
-    this.#projects = new ProjectCollection(contexts, teardown, waitUntil);
+    this.#projects = new ProjectCollection(contextNamespace, sessionTeardown, waitUntil);
   }
 
   /** The project catalog. A GETTER, not a field: capnweb (like Workers RPC) exposes prototype
@@ -92,14 +96,18 @@ export class Session extends RpcTarget {
 /** The project catalog. `get(projectId)` is pure addressing → that project's ROOT context. No
  *  `list`/`create` yet (owner: not now); when they come they ride a deployment context's events. */
 export class ProjectCollection extends RpcTarget {
-  readonly #contexts: ContextNamespace;
-  readonly #teardown: SessionTeardown;
+  readonly #contextNamespace: IterateContextNamespace;
+  readonly #sessionTeardown: SessionTeardown;
   readonly #waitUntil: WaitUntil;
 
-  constructor(contexts: ContextNamespace, teardown: SessionTeardown, waitUntil: WaitUntil) {
+  constructor(
+    contextNamespace: IterateContextNamespace,
+    sessionTeardown: SessionTeardown,
+    waitUntil: WaitUntil,
+  ) {
     super();
-    this.#contexts = contexts;
-    this.#teardown = teardown;
+    this.#contextNamespace = contextNamespace;
+    this.#sessionTeardown = sessionTeardown;
     this.#waitUntil = waitUntil;
   }
 
@@ -111,6 +119,11 @@ export class ProjectCollection extends RpcTarget {
       throw new Error(
         `projects.get(projectId): got a context name ${JSON.stringify(projectId)} — pass the project id and cd(path) from its root`,
       );
-    return new IterateContext(this.#contexts, address, this.#teardown, this.#waitUntil);
+    return new IterateContext(
+      this.#contextNamespace,
+      address,
+      this.#sessionTeardown,
+      this.#waitUntil,
+    );
   }
 }

@@ -79,7 +79,7 @@ async function quiesceLikeProduction(): Promise<void> {
 
 beforeAll(async () => {
   // ONE client session carrying all 200 stubs (capnweb multiplexes; each
-  // `itx.provide('itx.cN', { stub, rewrite: 'itx.cN' })` lends its own Echo to the `itx.rpcStubs`
+  // `itx.provide('itx.cN', new Echo(N), { rewrite: 'itx.cN' })` lends its own Echo to the `itx.rpcStubs`
   // registry, opens its own stub pager WebSocket into the DO, and configures the pure-data rule
   // `itx.cN ⇒ itx.rpcStubs.get('itx.cN')` — the registry is presence, the table is the rule; event
   // volume is fine).
@@ -89,7 +89,7 @@ beforeAll(async () => {
     await Promise.all(
       Array.from({ length: Math.min(BATCH, CLIENTS - base) }, (_, k) => {
         const i = base + k;
-        return clientItx.provide(`itx.c${i}`, { stub: new Echo(i), rewrite: `itx.c${i}` });
+        return clientItx.provide(`itx.c${i}`, new Echo(i), { rewrite: `itx.c${i}` });
       }),
     );
   }

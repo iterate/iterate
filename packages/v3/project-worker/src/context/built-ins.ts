@@ -17,7 +17,7 @@
 // named instances) — address by name, no source. `itx.runScript(lambda)` is sugar for the one
 // bare-lambda case (wrap → `load(...).getEntrypoint().run`).
 
-import type { Context, StreamPage, WaitForEventFilter } from "../stream/stream.ts";
+import type { ReachableContext, StreamPage, WaitForEventFilter } from "../stream/stream.ts";
 import type { StreamEvent, StreamEventInput } from "../stream/events.ts";
 import { loadConfinedWorker, type WorkerSource } from "./worker-loader.ts";
 import { resolveContextPath } from "./durable-object-names.ts";
@@ -86,7 +86,7 @@ interface BuiltInScope {
   fetch(request: Request): Promise<Response>;
   /** The rpc-stub REGISTRY — physical, never event-sourced: a client's live capnweb value lent under
    *  an OPAQUE key by its session (relay-side, DON'T-PIN — the edge owns it, this side borrows).
-   *  `get(rpcStubKey)` is how a REWRITE RULE names one: `itx.provide(key, { stub, rewrite })` is
+   *  `get(rpcStubKey)` is how a REWRITE RULE names one: `itx.provide(key, stub, { rewrite })` is
    *  sugar for lending under `key` and configuring the pure-data rule `rewrite ⇒
    *  itx.rpcStubs.get('<key>')`. */
   rpcStubs: {
@@ -140,8 +140,8 @@ interface BuildBuiltInsDeps {
   /** Resolve one call through THIS context's dispatch (dynamic-worker module loading). */
   invoke: (call: ItxExpression) => Promise<unknown>;
   /** A context stream by CANONICAL path — the own-path parent adapter same-isolate, by-name DO
-   *  stubs otherwise. Both satisfy Context (uniform-async, real-typed — see stream/stream.ts). */
-  context: (path: string) => Context;
+   *  stubs otherwise. Both satisfy ReachableContext (uniform-async, real-typed — see stream/stream.ts). */
+  context: (path: string) => ReachableContext;
   /** The context's egress terminal (secret substitution → FALLBACK). */
   egress: (request: Request) => Promise<Response>;
   /** The rpcStubs view — PARENT-LOCAL closures over the context's transport table (the pager
@@ -207,7 +207,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
   };
 
   const kvPrefix = `${projectId}:`;
-  const own = () => deps.context(path);
+  const ownContext = () => deps.context(path);
 
   // Each root implements one member of the BuiltInScope interface above (the canonical doc of the
   // kernel surface); the comments here add only what the interface can't say — the WHY of a code branch.
@@ -239,15 +239,15 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
       },
     },
     // Own-enumerable closures (NOT prototype methods) — the resolver's `Object.hasOwn` gate is why.
-    append: (...e: StreamEventInput[]) => own().append(...e),
-    read: (after?: number, limit?: number) => own().read(after, limit),
+    append: (...e: StreamEventInput[]) => ownContext().append(...e),
+    read: (after?: number, limit?: number) => ownContext().read(after, limit),
     waitForEvent: deps.waitForEvent,
     // `cd` routes through the target context's own table, EXCEPT append/read, which skip the facet
     // hop straight to the log door (the physical fast path). Codec-named, so only THIS project is
     // reachable; the path resolves against THIS context (absolute, or relative with `.`/`..`).
     cd: (target: string) =>
       new InvokeHandle((itxExpressionSteps) => {
-        const sibling = deps.context(resolveContextPath(path, target)); // a Context — real-typed seam
+        const sibling = deps.context(resolveContextPath(path, target)); // a ReachableContext — real-typed seam
         const [first] = itxExpressionSteps;
         if (itxExpressionSteps.length === 1 && Array.isArray(first) && first[0] === "append")
           return sibling.append(...(first.slice(1) as StreamEventInput[]));

@@ -41,7 +41,7 @@ discoverability to three names.
 
 **D3 — Where does a live value enter?** A: a separate physical `provide(rpcStubKey, stub)` that appends
 nothing, then a second call for the rewrite (loses lend-first/rewrite-second, opens a
-`RPC_STUB_OFFLINE` window, a refused rewrite leaves a dangling stub). C: `provide(path, { stub })` =
+`RPC_STUB_OFFLINE` window, a refused rewrite leaves a dangling stub). C: `provide(path, stub)` =
 lend + rewrite, two doors writing one table. D: intercept ANY live value in ANY `invoke` — D's own
 trade-off #1 shows this breaks call-scoped callbacks (`load-mid-chain-pipelining.e2e`: `callLater(200,
 cb)` must reach loaded code as a callable) and turns one-shot callbacks into session-lived pager
@@ -200,7 +200,7 @@ verbs a client types on `itx` (`provide`, `invoke`, `rewrite`, `subscribe`, `cd`
 
 ```ts
 // CHAPTER 1 · rpc stubs — the axiom. String keys, a stub, args. Nothing else exists yet.
-provide(rpcStubKey: string, provided: { stub: unknown }): Promise<ProvidedRpcStub>;   // ProvidedRpcStub is DISPOSABLE (8.4)
+provide(rpcStubKey: string, provided: unknown): Promise<ProvidedRpcStub>;   // ProvidedRpcStub is DISPOSABLE (8.4)
 invoke(rpcStubKey: string, ...args: unknown[]): Promise<unknown>;                       // borrow-or-page, then call
 // CHAPTER 2 · itx expressions — a call is data. `invoke` generalizes: its argument becomes an ItxExpressionInput
 //   (`invoke("itx.rpcStubs.get('k')('ls')")`), and the dotted surface reduces `itx.a.b(x)` onto it.
@@ -268,8 +268,8 @@ The code is the record; the differences from the sketches above, so this doc doe
   the caller already holds the key/match it passed); `subscribe` returns `SubscriptionHandle extends
 SessionScopedHandle` with a `name` getter (the generated name when none was given). No
   `ProvidedRpcStub` / `ItxExpressionRewriteRuleHandle`.
-- **`provide(rpcStubKey, { stub, rewrite? })`** is the chapter-1 door and the chapter-3b sugar in one
-  signature; `invoke` takes an `ItxExpressionInput` from the start (the chapter-1 `invoke(key, ...args)`
+- **`provide(rpcStubKey, stub, options?)`** (positional stub; `options.rewrite` is the chapter-3b sugar) is the chapter-1
+  door and the sugar in one signature; `invoke` takes an `ItxExpressionInput` from the start (the chapter-1 `invoke(key, ...args)`
   spelling is `itx.rpcStubs.get('<key>')(...args)`).
 - **The edge writes through `invoke(["itx", ["append", event]])`** — the same door a client's dotted
   `itx.append(...)` takes; the DO has no `append` verb the edge calls directly.

@@ -28,7 +28,7 @@ test("itx.slack — a live bridge replays the natural dotted spelling onto the S
   const bridgeItx = openItx(ctx);
   const slack = new SlackReplayTarget();
   // ONE provide door: the live bridge stub is lent under itx.slack with the rule at the same spelling.
-  const slackProvided = await bridgeItx.provide("itx.slack", { stub: slack, rewrite: "itx.slack" });
+  const slackProvided = await bridgeItx.provide("itx.slack", slack, { rewrite: "itx.slack" });
 
   const itx = openItx(ctx);
 
@@ -80,8 +80,7 @@ test("itx.slack — a live bridge replays the natural dotted spelling onto the S
       },
     },
   };
-  const slack2Provided = await bridgeItx.provide("itx.slack2", {
-    stub: replayOnto(slackSdk),
+  const slack2Provided = await bridgeItx.provide("itx.slack2", replayOnto(slackSdk), {
     rewrite: "itx.slack2",
   });
   const posted2 = await itx.invoke([

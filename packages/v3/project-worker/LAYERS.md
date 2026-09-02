@@ -80,7 +80,7 @@ SPECIFIC matching rule (longest match, then most pinned args; a match step may p
 `itx.ai.run('gpt-5')` — which are CONSUMED) rewrites the call, and rewriting repeats until the root
 is a built-in (32 rewrites is the budget; a call no rule matches is `NO_ITX_EXPRESSION_MATCH`,
 default-deny). A target must be rooted at `itx`, so a bare root is unspellable and the built-ins
-are unshadowable. A lent rpc stub is no exception: `itx.provide(rpcStubKey, { stub, rewrite })` lends
+are unshadowable. A lent rpc stub is no exception: `itx.provide(rpcStubKey, stub, { rewrite })` lends
 `stub` to `rpcStubs` under the opaque key and configures the pure-data rule
 `rewrite ⇒ itx.rpcStubs.get('<rpcStubKey>')` — the log records the rule, never the socket. The rule
 dies with the stub: the handle's dispose un-sets it from the edge, and when the key's LAST pager
@@ -88,7 +88,7 @@ closes the DO un-sets every rule and subscription whose target is that stub (a r
 the pager and is not a close).
 
 The edge verb `itx.rewrite(match, target | null)` is literally "build the event, append it", and
-hands back a DISPOSABLE `SessionScopedHandle`: disposing it — or the session ending, when capnweb
+hands back a DISPOSABLE handle (`ProvidedRpcStubHandle` / `RewriteRuleHandle` / `SubscriptionHandle`): disposing it — or the session ending, when capnweb
 disposes every exported handle — un-sets the rule. So a rule made through the verb is
 SESSION-SCOPED; a rule that must outlive its session is the raw event,
 `itx.append(rewriteRuleConfiguredEvent(match, target))` — the verb minus the handle. The read

@@ -30,7 +30,7 @@ test("callLater(cb) fires back in the caller — capnweb client AND dynamic work
 
   // bridge session provides a LIVE Demo under itx.demo, rule itx.demo ⇒ itx.rpcStubs.get('itx.demo').
   const bridgeItx = openItx(ctx);
-  const demo = await bridgeItx.provide("itx.demo", { stub: new Demo(), rewrite: "itx.demo" });
+  const demo = await bridgeItx.provide("itx.demo", new Demo(), { rewrite: "itx.demo" });
 
   // ── lane 1: a plain capnweb client ──
   const itx = openItx(ctx);

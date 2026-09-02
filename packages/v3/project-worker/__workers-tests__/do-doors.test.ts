@@ -86,7 +86,7 @@ async function deniedCode(itx: any, call: string): Promise<string | undefined> {
   return undefined;
 }
 
-/** The live value under test — a method receiver, so the registry reach is the documented
+/** The client rpc stub under test — a method receiver, so the registry reach is the documented
  *  pipelinable spelling `itx.rpcStubs.get('<rpcStubKey>').ping()`. */
 class Alive extends RpcTarget {
   ping(): string {
@@ -132,10 +132,10 @@ test("a core-snapshot probe on a NEVER-TOUCHED ctx materializes it (created@1 + 
 test("the quiet clock arms as soon as there IS something to quiesce: the invoke that borrows an rpc stub", async () => {
   const ctx = "prj_doors_stubarms";
   await runInDurableObject(stub(ctx), async (_instance, state) => {
-    // Lend a live value (a hibernatable pager socket — a transport, not yet a borrowed stub) with
+    // Lend a client's rpc stub (a hibernatable pager socket — a transport, not yet a borrowed stub) with
     // the rule `itx.armcap ⇒ itx.rpcStubs.get('itx.armcap')`…
     const itx = await (await openSession()).authenticate().projects.get(ctx);
-    await itx.provide("itx.armcap", { stub: new Alive(), rewrite: "itx.armcap" });
+    await itx.provide("itx.armcap", new Alive(), { rewrite: "itx.armcap" });
     expect(await state.storage.getAlarm()).toBeNull(); // a lent stub alone quiesces nothing
     // …then a call borrows it: a BORROWED stub pins this actor, so the clock must arm NOW.
     expect(await itx.invoke("itx.armcap.ping()")).toBe("alive");
@@ -204,11 +204,11 @@ test("the rule table is a MAP: a re-set at the same match REPLACES (one row, not
 test("un-setting a rule is pure data — the lent stub's transport is untouched: the census holds, the registry still lists the key, the match answers NO_ITX_EXPRESSION_MATCH, and the stub is still reachable THROUGH the registry", async () => {
   const ctx = "prj_doors_unsetlive";
   const s = stub(ctx);
-  // A PHYSICAL stub: a capnweb session lends a live value under `itx.livecap` (its pager socket is
+  // A PHYSICAL stub: a capnweb session lends a client's rpc stub under `itx.livecap` (its pager socket is
   // one transport in the DO's census) with the pure-data rule `itx.livecap ⇒
   // itx.rpcStubs.get('itx.livecap')` configured alongside it.
   const itx = await (await openSession()).authenticate().projects.get(ctx);
-  const provided = await itx.provide("itx.livecap", { stub: new Alive(), rewrite: "itx.livecap" });
+  const provided = await itx.provide("itx.livecap", new Alive(), { rewrite: "itx.livecap" });
   expect(typeof provided[Symbol.dispose]).toBe("function"); // a DISPOSABLE handle — no offsets, no identities
   expect(await s.invoke("itx.livecap.ping()")).toBe("alive");
   const rpcStubPagersBefore = await rpcStubPagersOf(ctx);
@@ -234,7 +234,7 @@ test("disposing the provide HANDLE is the other half: the stub is recalled — i
   const ctx = "prj_doors_disposehandle";
   const s = stub(ctx);
   const itx = await (await openSession()).authenticate().projects.get(ctx);
-  const provided = await itx.provide("itx.doomed", { stub: new Alive(), rewrite: "itx.doomed" });
+  const provided = await itx.provide("itx.doomed", new Alive(), { rewrite: "itx.doomed" });
   expect(await s.invoke("itx.doomed.ping()")).toBe("alive");
   expect(Object.keys(await rewriteRulesOf(ctx))).toEqual(["itx.doomed"]);
   expect(await rpcStubPagersOf(ctx)).toBe(1);

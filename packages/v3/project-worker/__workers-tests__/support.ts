@@ -18,8 +18,8 @@ export const stub = (ctx: string) =>
     env as unknown as { CONTEXT: DurableObjectNamespace<IterateContextDurableObject> }
   ).CONTEXT.getByName(DurableObjectNameCodec.parse(ctx).name);
 
-/** One client's live value, lent as an rpc stub: the per-instance tag (`echo-<i>:<s>`) proves no
- *  crosstalk. Provided as `itx.provide(rpcStubKey, { stub: new Echo(i), rewrite: rpcStubKey })`, so
+/** One client's rpc stub, lent under its key: the per-instance tag (`echo-<i>:<s>`) proves no
+ *  crosstalk. Provided as `itx.provide(rpcStubKey, new Echo(i), { rewrite: rpcStubKey })`, so
  *  the key is also the dotted match a caller spells. */
 export class Echo extends RpcTarget {
   readonly #i: number;

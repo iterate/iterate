@@ -129,8 +129,8 @@ function clampCloseCode(code: number | undefined): number {
   return 1000;
 }
 
-/** The provider-side socket a dial may receive — capnweb's TunneledWebSocket satisfies it. */
-type ProviderSocket = {
+/** The WebSocket a client's fetch answered with (capnweb's TunneledWebSocket satisfies it). */
+type ClientWebSocket = {
   accept?(): void;
   send(data: string | ArrayBuffer): void;
   close(code?: number, reason?: string): void;
@@ -157,7 +157,7 @@ export async function dialRpcStubFetch(
 ): Promise<Response | FetchUpgradeMarker> {
   const response = (await providerFetch(request)) as {
     status?: number;
-    webSocket?: ProviderSocket | null;
+    webSocket?: ClientWebSocket | null;
   };
   const providerSocket = response?.webSocket;
   if (!providerSocket) return response as unknown as Response;
@@ -171,7 +171,7 @@ export async function dialRpcStubFetch(
   const leg = legResponse.webSocket;
   if (!leg) throw new Error(`fetch-upgrade leg returned ${legResponse.status} without a WebSocket`);
   leg.accept();
-  const wire = (from: ProviderSocket, to: ProviderSocket) => {
+  const wire = (from: ClientWebSocket, to: ClientWebSocket) => {
     from.addEventListener("message", (ev) => {
       try {
         to.send(ev.data as string | ArrayBuffer);
@@ -187,8 +187,8 @@ export async function dialRpcStubFetch(
       }
     });
   };
-  wire(providerSocket, leg as unknown as ProviderSocket);
-  wire(leg as unknown as ProviderSocket, providerSocket);
+  wire(providerSocket, leg as unknown as ClientWebSocket);
+  wire(leg as unknown as ClientWebSocket, providerSocket);
   providerSocket.accept?.();
   return { webSocketUpgrade: true };
 }

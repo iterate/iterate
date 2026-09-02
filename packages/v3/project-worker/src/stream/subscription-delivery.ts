@@ -47,12 +47,12 @@ type SubscriptionCursor = {
   resumeAppliedAtOffset?: number;
 };
 
-type Deps = {
+type SubscriptionDeliveryDeps = {
   kv: DurableObjectStorage["kv"];
   /** The stream: its rows (`coreReducedState.subscriptions`), its log, its durable mark, its alarm. */
   stream: Stream;
   /** Evaluate an itx expression through the context's own dispatch — a handle, a function, a value. */
-  evaluate: (expression: ItxExpression) => Promise<unknown>;
+  evaluateItxExpression: (expression: ItxExpression) => Promise<unknown>;
   /** A delivery finished — the quiet clock restarts (the quiesce must not fire mid-traffic). */
   recordActivityForQuietClock: () => void;
 };
@@ -60,7 +60,7 @@ type Deps = {
 export class SubscriptionDelivery {
   readonly #kv: DurableObjectStorage["kv"];
   readonly #stream: Stream;
-  readonly #evaluate: Deps["evaluate"];
+  readonly #evaluateItxExpression: SubscriptionDeliveryDeps["evaluateItxExpression"];
   readonly #recordActivityForQuietClock: () => void;
   /** Deliveries queue per subscription: a slow target never lets a later batch overtake an earlier one. */
   readonly #deliveryChainBySubscription = new Map<string, Promise<unknown>>();
@@ -74,10 +74,10 @@ export class SubscriptionDelivery {
   readonly #cursorDeliveryRunning = new Set<string>();
   readonly #cursors = new Map<string, SubscriptionCursor>();
 
-  constructor(deps: Deps) {
+  constructor(deps: SubscriptionDeliveryDeps) {
     this.#kv = deps.kv;
     this.#stream = deps.stream;
-    this.#evaluate = deps.evaluate;
+    this.#evaluateItxExpression = deps.evaluateItxExpression;
     this.#recordActivityForQuietClock = deps.recordActivityForQuietClock;
     // The kv cursors seed memory once, here — after this, memory is the one truth.
     for (const [key, cursor] of this.#kv.list<SubscriptionCursor>({
@@ -117,7 +117,7 @@ export class SubscriptionDelivery {
             this.#deliveryChainBySubscription.set(
               name,
               (async () => {
-                const { head } = await this.#evaluateTargetHead(row.target);
+                const { head } = await this.#evaluateItxExpressionTargetHead(row.target);
                 if (
                   head instanceof FacetHandle &&
                   this.#stream.coreReducedState.subscriptions[name]
@@ -196,7 +196,7 @@ export class SubscriptionDelivery {
       // load chain materializes its facet, so a push racing `disableProcessor` must not call — and
       // must not resurrect what `facets.delete` just removed.
       if (!this.#stream.coreReducedState.subscriptions[name]) return;
-      const { head, call } = await this.#evaluateTargetHead(row.target);
+      const { head, call } = await this.#evaluateItxExpressionTargetHead(row.target);
       if (!this.#stream.coreReducedState.subscriptions[name]) return;
       if (head instanceof RpcStubHandle) {
         // A LIVE CLIENT owns its offset: fire-and-forget — the pager socket is the queue, its order is
@@ -234,12 +234,12 @@ export class SubscriptionDelivery {
    *  one call to make on it. A target ending in a call step names the callee itself (a bare lent
    *  callback: `itx.rpcStubs.get('k')`); a trailing property step names the method to call on it
    *  (`…get('presence').processEventBatch`). */
-  async #evaluateTargetHead(
+  async #evaluateItxExpressionTargetHead(
     target: ItxExpression,
   ): Promise<{ head: unknown; call: (args: unknown[]) => Promise<unknown> }> {
     const last = target.at(-1);
     const method = typeof last === "string" && target.length > 1 ? last : undefined;
-    const head = await this.#evaluate(method ? target.slice(0, -1) : target);
+    const head = await this.#evaluateItxExpression(method ? target.slice(0, -1) : target);
     const call = async (args: unknown[]): Promise<unknown> =>
       method
         ? (
@@ -326,7 +326,7 @@ export class SubscriptionDelivery {
           continue;
         }
         try {
-          call ??= (await this.#evaluateTargetHead(row.target)).call;
+          call ??= (await this.#evaluateItxExpressionTargetHead(row.target)).call;
           await withTimeout(call([eventBatch.events, range]), 20_000, `subscription "${name}"`);
           // Removed or replaced while the call was in flight? Its progress belonged to the old row.
           if (!this.#cursors.has(name)) continue;

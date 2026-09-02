@@ -96,7 +96,7 @@ packages/v3/project-worker/
                                  SessionTeardown (what a session undoes at its end)
     iterate-context.ts           IterateContext, the client-facing RpcTarget: a PROXY in front of the DO —
                                  cd · invoke · provide · rewrite · subscribe · enableProcessor · disableProcessor;
-                                 SessionScopedHandle / SubscriptionHandle (disposable)
+                                 ProvidedRpcStubHandle / RewriteRuleHandle / SubscriptionHandle (disposable)
     iterate-context-durable-object.ts  THE CONTEXT DO: stream + the core reduce + delivery + facets +
                                  rpc stubs + the fetch doors. One class, ~600 lines. First line:
                                  #name = parseIterateContextDurableObjectName(ctx.id.name)
@@ -267,17 +267,15 @@ class IterateContext extends RpcTarget {
    *  Re-providing the same key re-lends (reconnect — the pager is replaced). */
   provide(
     rpcStubKey: string,
-    provided: { stub: LiveValue; rewrite?: ItxExpressionInput },
-  ): Promise<SessionScopedHandle>;
+    stub: ClientRpcStub,
+    options?: { rewrite?: ItxExpressionInput },
+  ): Promise<ProvidedRpcStubHandle>;
 
   // ── (b) itx-expression rewrite rules: pure data, ONE event ──
   /** A call starting with `match` runs as the same call with `match` replaced by `target`
    *  (`match` may pin literal args: `itx.ai.run('gpt-5')`). `null` un-sets the rule at `match`.
    *  Literally `append(rewriteRuleConfiguredEvent(match, target))`. */
-  rewrite(
-    match: ItxExpressionInput,
-    target: ItxExpressionInput | null,
-  ): Promise<SessionScopedHandle>;
+  rewrite(match: ItxExpressionInput, target: ItxExpressionInput | null): Promise<RewriteRuleHandle>;
 
   // ── subscriptions: ONE event, over (a) when the target is live ──
   /** Have each committed batch — filtered by `consumes` — delivered to `target` as
@@ -287,7 +285,7 @@ class IterateContext extends RpcTarget {
    *  `append(subscriptionConfiguredEvent({ name, target, consumes }))`. */
   subscribe(input: {
     name?: string;
-    target: ItxExpressionInput | LiveValue | null;
+    target: ItxExpressionInput | ClientRpcStub | null;
     consumes?: string[];
   }): Promise<SubscriptionHandle>;
 
@@ -315,11 +313,18 @@ class IterateContext extends RpcTarget {
 /** What `provide` and `rewrite` hand back: ONLY `[Symbol.dispose]` — the caller already holds the
  *  key or match it passed. Disposing UNDOES the act: a provided stub is recalled (and its rewrite
  *  rule un-set); a rewrite rule is un-set. */
-class SessionScopedHandle extends RpcTarget {
-  [Symbol.dispose](): void;
+class ProvidedRpcStubHandle extends RpcTarget {
+  [Symbol.dispose](): void; // recall the stub (the DO un-sets what named it on its last pager close)
+}
+class RewriteRuleHandle extends RpcTarget {
+  [Symbol.dispose](): void; // un-set the rule at `match`
+}
+class SubscriptionHandle extends RpcTarget {
+  get name(): string; // the generated name when none was given
+  [Symbol.dispose](): void; // remove the subscription (and recall a lent callback)
 }
 /** `subscribe`'s handle: disposing removes the row (and recalls the callback lent for it). */
-class SubscriptionHandle extends SessionScopedHandle {
+class SubscriptionHandle extends ProvidedRpcStubHandle {
   get name(): string; // the generated `sub-<8hex>` when none was given
 }
 ```
@@ -455,7 +460,6 @@ type ScannedRange = { after: number; through: number };
 ```ts
 /** A live value a client hands to provide/subscribe: a function or an RpcTarget — on the wire, a
  *  capnweb stub. */
-type LiveValue = unknown;
 /** The client's live capnweb stub as the session holds it (`.dup()` keeps it past the call). */
 type ClientRpcStub = { dup(): ClientRpcStub; [k: string]: unknown };
 ```
@@ -1354,14 +1358,14 @@ sequenceDiagram
   participant C as client (capnweb)
   participant E as edge relay (owns the stub)
   participant D as context DO
-  C->>E: itx.provide("robot", { stub: robotObject, rewrite: "itx.robot" })
+  C->>E: itx.provide("robot", robotObject, { rewrite: "itx.robot" })
   E->>D: attachRpcStubPager({ rpcStubKey: "robot" })
   D-->>E: { transportId }
   E->>D: open the pager WebSocket (x-itx-rpc-stub-pager, carries transportId)
   Note over D: rpc-stub/attached { rpcStubKey: "robot" } (ephemeral)
   E->>D: invoke(["itx", ["append", rewrite-rule-configured { match: "itx.robot", target: "itx.rpcStubs.get('robot')" }]])
   Note over D: the rule appended — pure data; the log never records the socket
-  E-->>C: SessionScopedHandle
+  E-->>C: ProvidedRpcStubHandle
   Note over D: ... idle: DO hibernates, the pager socket survives ...
   C->>D: itx.robot.move(10)   (via edge, invoke)
   Note over D: rewrite → itx.rpcStubs.get('robot').move(10)
@@ -1475,7 +1479,7 @@ itself.
 | InvokeHandle          | a pipelinable `RpcTarget` returned mid-chain (`cd`, `load(...)`); `FacetHandle` and `RpcStubHandle` are its two brands                                                                                                                    |
 | rpc stub              | a live capnweb value a session LENDS under an opaque `rpcStubKey`; the edge owns it, the DO BORROWS it per page and RETURNS it at idle; `itx.rpcStubs.get(rpcStubKey)` is how a rule or a subscription names it; presence is `list()`     |
 | pager                 | the hibernatable WebSocket from the edge relay to the DO, one per key, carrying `{ transportId, rpcStubKey }`; the DO sends `{ type: "page" }` to get a fresh stub lent                                                                   |
-| session-scoped handle | what `provide` / `rewrite` / `subscribe` return (`SessionScopedHandle`, `SubscriptionHandle`): disposable; disposing — or the session ending — undoes the act; the durable spelling is the raw event                                      |
+| session-scoped handle | what `provide` / `rewrite` / `subscribe` return (`ProvidedRpcStubHandle`, `RewriteRuleHandle`, `SubscriptionHandle`): disposable; disposing — or the session ending — undoes the act; the durable spelling is the raw event               |
 | subscription          | a named row `{ target, consumes? }` in the subscriptions table; delivered every commit by the one loop                                                                                                                                    |
 | push                  | delivery to a target that owns its progress: `(events, range)`, fire-and-forget to a lent stub, awaited to a facet                                                                                                                        |
 | stream-kept cursor    | delivery to a target that cannot own progress: at-least-once from a kv cursor, retry ladder, halt fact                                                                                                                                    |

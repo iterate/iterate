@@ -7,19 +7,20 @@
 import { expect, test } from "vitest";
 import { freshCtx, openItx } from "./support/client.ts";
 
-test("client A: provide('itx.runOnMyComputer', { stub: async fn, rewrite }) · client B: await itx.runOnMyComputer('ls', ['-la']) runs A's function", async () => {
+test("client A: provide('itx.runOnMyComputer', async fn, rewrite) · client B: await itx.runOnMyComputer('ls', ['-la']) runs A's function", async () => {
   const ctx = freshCtx("barefn");
   const laptop = openItx(ctx);
   const otherClient = openItx(ctx);
   const ran: unknown[][] = [];
-  await laptop.provide("itx.runOnMyComputer", {
-    stub: async (cmd: string, args: string[]) => {
+  await laptop.provide(
+    "itx.runOnMyComputer",
+    async (cmd: string, args: string[]) => {
       ran.push([cmd, args]);
       await new Promise((r) => setTimeout(r, 5)); // genuinely async, like execFile
       return `stdout of ${cmd} ${args.join(" ")}`;
     },
-    rewrite: "itx.runOnMyComputer",
-  });
+    { rewrite: "itx.runOnMyComputer" },
+  );
   expect(await otherClient.runOnMyComputer("ls", ["-la"])).toBe("stdout of ls -la");
   expect(ran).toEqual([["ls", ["-la"]]]);
 });
