@@ -31,10 +31,9 @@ export default defineConfig({
           include: ["__tests__/**/*.test.ts"],
           testTimeout: 60_000,
           hookTimeout: 120_000,
-          // one worker + sequential files: each file boots its own workerd via createTestHarness;
-          // parallel boots thrash the port.
+          // sequential files: each file boots its own workerd via createTestHarness; parallel
+          // boots thrash the port.
           pool: "forks",
-          poolOptions: { forks: { singleFork: true } },
           fileParallelism: false,
         },
       },
@@ -42,7 +41,6 @@ export default defineConfig({
         plugins: [
           cloudflareTest({
             main: "./src/worker.ts",
-            remoteBindings: false,
             wrangler: { configPath: "./wrangler.test.jsonc" },
           }),
         ],

@@ -32,8 +32,7 @@ export class UnauthenticatedSession extends RpcTarget {
     this.#session = new Session(contexts, this.#parking, (p) => ctx.waitUntil(p));
   }
 
-  // Symbol.dispose referenced defensively (lib target predates it) — same trick as disposeStub.
-  [(Symbol as { dispose?: symbol }).dispose ?? Symbol.for("dispose")](): void {
+  [Symbol.dispose](): void {
     this.#parking.disposeAll();
   }
 

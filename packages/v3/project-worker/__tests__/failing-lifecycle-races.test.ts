@@ -397,8 +397,7 @@ test("churn 20×: no ghost deliveries; presence AND the tables return to baselin
   // dispose the session: PRESENCE (the physical registry) must return to baseline — every relay
   // the churn parked is gone (each unsubscribe closed its own; the pager closes are async, poll).
   // (transport socket counts are DO-only transportState(), pinned in __workers-tests__)
-  const DISPOSE: symbol | undefined = (Symbol as { dispose?: symbol }).dispose;
-  if (DISPOSE) (session as Record<symbol, () => void>)[DISPOSE]?.();
+  (session as Partial<Disposable>)[Symbol.dispose]?.();
   await until(
     "presence back to baseline",
     async () => (await presence(observer)).length === baselinePresence,

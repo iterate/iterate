@@ -62,7 +62,7 @@ function startDummyCapnweb(): Promise<{ url: string; server: Server }> {
 
 export default async function setup(project: TestProject): Promise<() => Promise<void>> {
   const config = soloWorkerConfig();
-  const server = createTestHarness({ root: PACKAGE_DIR, workers: [{ config: config as never }] });
+  const server = createTestHarness({ root: PACKAGE_DIR, workers: [{ config }] });
   const { url } = await server.listen();
   const dummy = await startDummyCapnweb();
   project.provide("workerBaseUrl", url.href);

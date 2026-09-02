@@ -1,4 +1,5 @@
 {
+  "$schema": "node_modules/wrangler/config-schema.json",
   "name": "project-worker",
   // The build hook regenerates the bundled processor SDK (src/generated/*) before wrangler
   // bundles src directly. (capnweb-validate was removed — no mirror, no decorators.)
@@ -7,10 +8,16 @@
     "command": "node build-sdk.mjs",
     "watch_dir": "src",
   },
-  "compatibility_flags": ["allow_irrevocable_stub_storage"],
+  // At this date nodejs_compat is ON by default for THIS worker (harmless: nothing here imports
+  // node:*). Loaded userspace isolates are the pure-play half — context/worker-loader.ts mints them
+  // with no_nodejs_compat, so what runs inside a context stays portable across workerd builds.
   "compatibility_date": "2026-09-01",
-  // Pure-play: NO nodejs_compat (workerd/miniflare/Raspberry-Pi portability). The runner is the lean half.
+  // allow_irrevocable_stub_storage (experimental, undocumented): lets loaded code STORE its env.ITX
+  // stub in its own durable storage and replay it (e2e/restore.e2e.test.ts pins it); every worker
+  // in the chain needs it, so the loaded isolates carry it too (context/worker-loader.ts).
+  "compatibility_flags": ["allow_irrevocable_stub_storage"],
   "account_id": "04b3b57291ef2626c6a8daa9d47065a7",
+  "observability": { "enabled": true, "logs": { "head_sampling_rate": 1 } },
   "workers_dev": true,
 
   // The Worker Loader that runs each project's confined config worker / agents.
@@ -28,19 +35,9 @@
   "durable_objects": {
     "bindings": [{ "name": "CONTEXT", "class_name": "IterateContextDurableObject" }],
   },
-  // RESET (2026-08-29): the worker + its DOs were destroyed and redeployed from a clean slate, so
-  // the old v1→v8 chain (which renamed classes that never exist in a fresh namespace) is dead
-  // history — collapsed to ONE fresh migration for the sole live class. This mirrors what
-  // wrangler.test.jsonc always did for fresh pool storage. prod is resettable by design.
-  // rename-2 (2026-09-01): the class renames to IterateContextDurableObject IN PLACE — a DO class
-  // rename is a DEPLOY EVENT (renamed_classes migration), so the deployed namespace keeps its data.
-  "migrations": [
-    { "tag": "reset-1", "new_sqlite_classes": ["StreamDurableObject"] },
-    {
-      "tag": "rename-2",
-      "renamed_classes": [{ "from": "StreamDurableObject", "to": "IterateContextDurableObject" }],
-    },
-  ],
+  // The DO's lifecycle, declaratively: one SQLite-backed class, no migration history to replay
+  // (the legacy `migrations` array is gone; a deployed namespace keeps its data across this change).
+  "exports": { "IterateContextDurableObject": { "type": "durable-object", "storage": "sqlite" } },
 
   // The DO's fallback (target-core §4.4). SELF-HOST/HOSTED: a service binding to the real control-plane shell
   // worker (deployed from packages/v3/control-plane-shell). SOLO would instead bind

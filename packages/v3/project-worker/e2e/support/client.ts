@@ -47,10 +47,9 @@ export function httpBatch(): any {
 
 /** Dispose every session opened since the last call — wired to afterEach in support/setup.ts. */
 export function disposeSessions(): void {
-  const DISPOSE: symbol | undefined = (Symbol as { dispose?: symbol }).dispose;
   for (const s of openSessions.splice(0)) {
     try {
-      if (DISPOSE) (s as Record<symbol, () => void>)[DISPOSE]?.();
+      (s as Partial<Disposable>)[Symbol.dispose]?.();
     } catch {
       /* already broken */
     }

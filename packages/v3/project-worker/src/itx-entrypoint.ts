@@ -20,13 +20,13 @@ interface Env {
   CONTEXT: DurableObjectNamespace<IterateContextDurableObject>;
 }
 
-export class ItxEntrypoint extends WorkerEntrypoint<Env> {
+export class ItxEntrypoint extends WorkerEntrypoint<Env, { contextName: string }> {
   /** The owning context's canonical name — the ONE prop this entrypoint is minted with. */
   #contextName(): string {
-    const props = (this.ctx as unknown as { props?: { contextName?: string } }).props;
-    if (!props?.contextName)
+    const { contextName } = this.ctx.props;
+    if (!contextName)
       throw new Error("ItxEntrypoint requires props.contextName (mint via ctx.exports)");
-    return props.contextName;
+    return contextName;
   }
 
   /** The owning context, re-resolved per call (never a retained stub — the back-channel rule). */

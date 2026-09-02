@@ -142,7 +142,6 @@ class Echo extends RpcTarget {
     return `echo-${this.#i}:${s}`;
   }
 }
-const DISPOSE: symbol | undefined = (Symbol as { dispose?: symbol }).dispose;
 const sessions: unknown[] = [];
 async function openSession(): Promise<any> {
   const res = await SELF.fetch(`https://test.local/api`, {
@@ -160,7 +159,7 @@ afterAll(async () => {
   await new Promise((r) => setTimeout(r, 50));
   for (const s of sessions) {
     try {
-      if (DISPOSE) (s as Record<symbol, () => void>)[DISPOSE]?.();
+      (s as Partial<Disposable>)[Symbol.dispose]?.();
     } catch {
       /* already broken */
     }

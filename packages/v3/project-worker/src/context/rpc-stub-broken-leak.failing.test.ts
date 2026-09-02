@@ -27,8 +27,6 @@ vi.mock("cloudflare:workers", () => ({ RpcTarget: class {} }));
 
 import { startRpcStubRelay } from "./rpc-stub-relay.ts";
 
-const DISPOSE = (Symbol as { dispose?: symbol }).dispose ?? Symbol.for("dispose");
-
 /** A fake stub-pager WebSocket: records listeners and lets the test fire the `{type:"page"}`
  *  message the DO sends down this socket to make the edge re-mint (page in) the stub. */
 class FakePagerWebSocket {
@@ -65,7 +63,7 @@ test("a relay registers onRpcBroken ONCE, not once per page (retained-stub liste
     onRpcBroken(_cb: () => void) {
       onRpcBrokenRegistrations += 1;
     },
-    [DISPOSE]() {},
+    [Symbol.dispose]() {},
   };
   const provider = { dup: () => retained };
 

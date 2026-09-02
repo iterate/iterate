@@ -28,17 +28,8 @@ vi.mock("cloudflare:workers", () => ({
 }));
 
 import { substituteHeaderSecrets } from "@v3/shared/egress";
-import {
-  idempotencyConflictMessage,
-  sameIdempotentEvent,
-  type StreamEvent,
-  type StreamEventInput,
-} from "../stream/events.ts";
-import type { ProcessorStream } from "../stream/processor.ts";
 import { confinedWorker, facetLoaderOwner } from "./worker-loader.ts";
 import { DurableObjectNameCodec } from "./durable-object-names.ts";
-import { type Expression } from "./expression.ts";
-import { CapabilityTableProcessor } from "./capability-table.ts";
 
 // ═══════════════ 1. confinedWorker cacheKey — ":"-joined owner composition (S3) ═══════════════
 

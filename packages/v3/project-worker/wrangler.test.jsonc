@@ -1,32 +1,30 @@
 {
-  // wrangler.test.jsonc — config for the @cloudflare/vitest-pool-workers lane ONLY
-  // (vitest.workers.config.ts; run with `pnpm test:workers`). wrangler.jsonc stays the deploy
+  // wrangler.test.jsonc — config for the `workers` project of vitest.config.ts (the lane that runs
+  // INSIDE workerd via @cloudflare/vitest-plugin; `pnpm test`). wrangler.jsonc stays the deploy
   // truth. The divergences, each deliberate and test-only:
   //
-  //  1. "main" points at SRC and there is no "build" block: the pool imports the worker through
-  //     Vite (same isolate as the tests). The generated SDK bundle (src/generated/*) is produced
-  //     by `node build-sdk.mjs`, which the test script runs before vitest.
-  //  2. MIGRATIONS COLLAPSED to the one live class: fresh pool storage cannot replay prod's
-  //     rename chains (v6/v7 rename classes that never existed in a fresh namespace) — the same
-  //     collapse __tests__/harness.ts performs programmatically.
-  //  3. FALLBACK REBOUND to this worker's own DummyControlPlane (the SOLO topology from
-  //     wrangler.jsonc's own comment): the pool rewrites a service binding that names this
+  //  1. no "build" block: the plugin imports the worker through Vite (same isolate as the tests).
+  //     The generated SDK bundle (src/generated/*) is produced by `node build-sdk.mjs`, which the
+  //     test script runs before vitest.
+  //  2. FALLBACK REBOUND to this worker's own DummyControlPlane (the SOLO topology from
+  //     wrangler.jsonc's own comment): the plugin rewrites a service binding that names this
   //     config's own worker name onto the runner worker itself, and src/worker.ts exports
   //     DummyControlPlane — so no external control-plane worker is needed.
   //
-  // KEPT identical on purpose: compatibility_date, the allow_irrevocable_stub_storage flag
-  // (miniflare 5.20260815 workerd accepts it), the LOADER worker-loader binding, the DO binding,
-  // and both KV bindings (ids are meaningless locally — miniflare keys namespaces by binding).
+  // KEPT identical on purpose: compatibility_date + flags, the declarative DO export, the LOADER
+  // worker-loader binding, the DO binding, and both KV bindings (ids are meaningless locally —
+  // miniflare keys namespaces by binding).
+  "$schema": "node_modules/wrangler/config-schema.json",
   "name": "project-worker",
   "main": "src/worker.ts",
-  "compatibility_flags": ["allow_irrevocable_stub_storage"],
   "compatibility_date": "2026-09-01",
+  "compatibility_flags": ["allow_irrevocable_stub_storage"],
   "worker_loaders": [{ "binding": "LOADER" }],
   "version_metadata": { "binding": "CF_VERSION_METADATA" },
   "durable_objects": {
     "bindings": [{ "name": "CONTEXT", "class_name": "IterateContextDurableObject" }],
   },
-  "migrations": [{ "tag": "test-1", "new_sqlite_classes": ["IterateContextDurableObject"] }],
+  "exports": { "IterateContextDurableObject": { "type": "durable-object", "storage": "sqlite" } },
   "services": [
     { "binding": "FALLBACK", "service": "project-worker", "entrypoint": "DummyControlPlane" },
   ],

@@ -124,21 +124,7 @@ export class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
   readonly #rpcStubs = new RpcStubDirectory({
     liveCapabilityFetch: this.#liveCapabilityFetch,
     hooks: {
-      acceptWebSocket: (ws, tags) => {
-        this.ctx.acceptWebSocket(ws, tags);
-        // Auto-answer the edge relay's 30s keepalive at the RUNTIME level — the message never
-        // reaches a handler, so it keeps the pager socket warm (defeats the ~100s idle-close)
-        // WITHOUT waking the DO, leaving hibernation intact. Reconnect still backs a hard drop.
-        // The literal is DELIBERATELY distinctive: setWebSocketAutoResponse is DO-WIDE (it also
-        // covers fetch-upgrade EYEBALL sockets), so a plain "ping" would silently hijack any client
-        // frame that happens to equal it — the ws-fetch-live-101 test caught exactly that.
-        this.ctx.setWebSocketAutoResponse(
-          new WebSocketRequestResponsePair(
-            STUB_PAGER_KEEPALIVE_REQUEST,
-            STUB_PAGER_KEEPALIVE_RESPONSE,
-          ),
-        );
-      },
+      acceptWebSocket: (ws, tags) => this.ctx.acceptWebSocket(ws, tags),
       getWebSockets: (tag) => this.ctx.getWebSockets(tag),
     },
     // PRESENCE, as it changes: an EPHEMERAL fact a live watcher can subscribe to (`consumes:
@@ -152,6 +138,19 @@ export class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
         payload: { key },
       }).catch(() => undefined),
   });
+
+  constructor(ctx: DurableObjectState, env: BuiltInsEnv) {
+    super(ctx, env);
+    // Auto-answer the edge relay's 30s keepalive at the RUNTIME level — the message never reaches a
+    // handler, so it keeps the pager sockets warm (defeats the ~100s idle-close) WITHOUT waking
+    // this DO, leaving hibernation intact. Set ONCE here: it is DO-wide and persisted (it also
+    // covers fetch-upgrade EYEBALL sockets, which is why the literal is deliberately distinctive —
+    // a plain "ping" would silently hijack any client frame that equals it; ws-fetch-live-101
+    // caught exactly that).
+    this.ctx.setWebSocketAutoResponse(
+      new WebSocketRequestResponsePair(STUB_PAGER_KEEPALIVE_REQUEST, STUB_PAGER_KEEPALIVE_RESPONSE),
+    );
+  }
 
   /** THE STREAM — the commit point (see stream/stream.ts: validation + admission + idempotency +
    *  offsets + the wake record + waitForEvent + the alarm armer, one DI'd class). The name check

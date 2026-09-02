@@ -85,7 +85,6 @@ const contextStub = () =>
 
 // capnweb sessions live for the whole file; dispose at teardown (the harness.ts lesson: sessions
 // left open turn into unhandled-rejection noise).
-const DISPOSE: symbol | undefined = (Symbol as { dispose?: symbol }).dispose;
 const sessions: unknown[] = [];
 
 /** Open a capnweb session to the worker over a WebSocket upgrade on SELF.fetch —
@@ -143,7 +142,7 @@ beforeAll(async () => {
 afterAll(() => {
   for (const s of sessions) {
     try {
-      if (DISPOSE) (s as Record<symbol, () => void>)[DISPOSE]?.();
+      (s as Partial<Disposable>)[Symbol.dispose]?.();
     } catch {
       /* already broken */
     }

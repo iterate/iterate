@@ -29,7 +29,7 @@ export type ProjectHarness = {
 
 export async function startProjectHarness(): Promise<ProjectHarness> {
   const config = soloWorkerConfig();
-  const server = createTestHarness({ root: PACKAGE_DIR, workers: [{ config: config as never }] });
+  const server = createTestHarness({ root: PACKAGE_DIR, workers: [{ config }] });
   const { url } = await server.listen();
   const wsBase = `ws://${url.host}`;
   const sessions: unknown[] = [];
@@ -38,7 +38,6 @@ export async function startProjectHarness(): Promise<ProjectHarness> {
     sessions.push(s);
     return s as any;
   };
-  const DISPOSE: symbol | undefined = (Symbol as { dispose?: symbol }).dispose;
   return {
     server,
     url,
@@ -48,7 +47,7 @@ export async function startProjectHarness(): Promise<ProjectHarness> {
     stop: async () => {
       for (const s of sessions) {
         try {
-          if (DISPOSE) (s as Record<symbol, () => void>)[DISPOSE]?.();
+          (s as Partial<Disposable>)[Symbol.dispose]?.();
         } catch {
           /* already broken */
         }

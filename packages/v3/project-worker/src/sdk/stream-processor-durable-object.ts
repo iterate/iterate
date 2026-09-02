@@ -14,8 +14,9 @@
 // Node-tested; this class is the DurableObject shell around one instance of it, ~a screen of wiring.
 // Bundled into `processor.js` (build-sdk.mjs), so userspace imports it from "./processor.js".
 //
-// NEVER define alarm(): facets have none (workerd#6810); a timer, when one is needed, will be a
-// scheduled append on the context, not an alarm here.
+// NEVER define alarm(): facets have none (workerd#6810 — the runtime answers "Facets currently
+// cannot set alarms."); a timer, when one is needed, will be a scheduled append on the context, not
+// an alarm here.
 
 import { DurableObject } from "cloudflare:workers";
 import {
@@ -45,6 +46,11 @@ export type ItxBinding = {
     afterOffset?: number,
     limit?: number,
   ): Promise<{ events: StreamEvent[]; scannedThroughOffset: number }>;
+  waitForEvent(filter?: {
+    type?: string;
+    afterOffset?: number;
+    timeoutMs?: number;
+  }): Promise<StreamEvent>;
   fetch(request: Request): Promise<Response>;
 };
 

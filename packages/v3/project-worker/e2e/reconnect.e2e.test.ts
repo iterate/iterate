@@ -31,7 +31,6 @@ import {
 // Disposing our own provider session mid-test surfaces the capnweb peer-close as an unhandled
 // rejection — the deliberate disconnect, not a failure. The e2e config's onUnhandledError filter
 // absorbs exactly that transport noise (e2e/vitest.config.ts); everything else stays fatal.
-const DISPOSE: symbol = (Symbol as { dispose?: symbol }).dispose ?? Symbol.for("dispose");
 
 class Tools extends RpcTarget {
   #tag: string;
@@ -74,7 +73,7 @@ test("a provider drops and re-provides at the same path — offline in between (
   // 2. provider goes OFFLINE — dispose its session (WS closes → the DO drops the itx.p transport).
   //    The path answers CONNECTION_OFFLINE — ONLY that code: the mount is still in the table (no
   //    auto-revoke ever pops a mount because a socket dropped), so it is never default-deny.
-  providerSession[DISPOSE]?.();
+  (providerSession as Partial<Disposable>)[Symbol.dispose]?.();
   const offline = await until("provider offline", async () => {
     try {
       await itx.invokeCapability("itx.p.echo('b')");

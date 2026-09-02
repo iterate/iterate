@@ -49,6 +49,21 @@ export function facetLoaderOwner(contextName: string, discriminator: string): st
  *  DEPLOY, not per use.) `kind` is a CLOSED union (`code` = stateless isolate; `facet` = durable
  *  class hosted as a facet) so a new key family is a deliberate type change; `owner` is composed
  *  collision-free by `facetLoaderOwner`; `contentHash` versions the source. */
+/** What every loaded isolate runs under. PURE-PLAY: no node:* — userspace code stays portable
+ *  across workerd builds (nodejs_compat is on by default at this date for the platform worker
+ *  itself; the loaded half opts out). `allow_irrevocable_stub_storage` (experimental) lets loaded
+ *  code store its `env.ITX` stub and replay it (restore.e2e pins it) — every worker in the chain
+ *  needs it, so the parent config carries it too. No `limits` (cpuMs / subRequests): trusted clients. Note the
+ *  platform bound of 10 distinct dynamic workers with in-flight requests per DO — the idle quiesce
+ *  is what keeps a context's facet isolates under it. */
+export const LOADED_WORKER_COMPATIBILITY: {
+  compatibilityDate: string;
+  compatibilityFlags: string[];
+} = {
+  compatibilityDate: "2026-09-01",
+  compatibilityFlags: ["no_nodejs_compat", "no_nodejs_compat_v2", "allow_irrevocable_stub_storage"],
+};
+
 export function confinedWorker(
   env: { LOADER: WorkerLoader; CF_VERSION_METADATA?: { id: string } },
   key: { kind: "code" | "facet"; owner: string; contentHash: string },
@@ -58,11 +73,7 @@ export function confinedWorker(
 ) {
   const deploy = env.CF_VERSION_METADATA?.id ?? "unversioned";
   return env.LOADER.get(`${key.kind}:${deploy}:${key.owner}:${key.contentHash}`, () => ({
-    compatibilityDate: "2026-09-01",
-    // Chain-enable Kenton's persistent-stub machinery: a loaded worker may STORE its env.ITX
-    // (a ctx.exports-minted entrypoint stub) in its own durable storage and get a replay-on-use
-    // handle back — every chain member needs the flag (see itx-entrypoint.ts).
-    compatibilityFlags: ["allow_irrevocable_stub_storage"],
+    ...LOADED_WORKER_COMPATIBILITY,
     mainModule,
     // The processor SDK ("processor.js", ~330KB) is injected by `loadConfinedWorker` (THE one
     // caller), not here, so `confinedWorker` stays a pure loader-primitive: every load gets
