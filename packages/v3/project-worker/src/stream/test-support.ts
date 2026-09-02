@@ -6,7 +6,7 @@
 // `memoryStream` mirrors the DO's commit semantics: one shared offset sequence (an ephemeral
 // consumes an offset but never lands in the durable log), idempotency at the door (same key + same
 // body → the existing event; a different body → the conflict error), the scanned-offset-range proof
-// on both pushes and reads, and THE PUMP — a fire-and-forget `processEventBatch` to every processor
+// on both pushes and reads, and THE PUMP — a fire-and-forget `processEventBatch` to every engine
 // registered in `procs` after each append (awaited, it would deadlock a processor that appends
 // during its own batch). A short page's proof is the in-memory head (`Math.max(after, head)`), so
 // the engine's stale-push and ephemeral-window rules are exercised directly; the real Stream stops
@@ -17,13 +17,13 @@ import {
   type StreamEvent,
   type StreamEventInput,
 } from "./events.ts";
-import type { ProcessorStream, StreamProcessor } from "./processor.ts";
+import type { ProcessorEngine, ProcessorStream } from "./processor.ts";
 
 export function memoryStream(path = "/") {
   const events: StreamEvent[] = []; // the durable log — what `read` answers
   const pushed: StreamEvent[] = []; // every committed event, ephemerals included (the pump's view)
   const byKey = new Map<string, StreamEvent>();
-  const procs: StreamProcessor<any>[] = [];
+  const procs: ProcessorEngine<any>[] = []; // the pump only needs `processEventBatch`
   let maxAssigned = 0;
   let reads = 0;
   const stream: ProcessorStream = {

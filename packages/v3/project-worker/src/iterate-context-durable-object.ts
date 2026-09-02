@@ -69,7 +69,7 @@ import {
 import { DurableObjectNameCodec } from "./context/durable-object-names.ts";
 import { itxEntrypointFor } from "./itx-entrypoint.ts";
 import { CapabilityTableProcessor, type CapabilityTable } from "./context/capability-table.ts";
-import type { ReduceOnlyProcessor } from "./stream/processor.ts";
+import type { StreamProcessor } from "./stream/processor.ts";
 import {
   buildBuiltIns,
   type BuiltInsEnv,
@@ -293,16 +293,16 @@ export class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
     ));
   }
 
-  #inlineReduceDefs(): { slug: string; proc: ReduceOnlyProcessor<unknown> }[] {
+  #inlineReduceDefs(): { slug: string; proc: StreamProcessor<unknown> }[] {
     return [
-      { slug: "core", proc: CORE_PROCESSOR as ReduceOnlyProcessor<unknown> },
+      { slug: "core", proc: CORE_PROCESSOR as StreamProcessor<unknown> },
       {
         slug: "capability-table",
-        proc: this.#capabilityTableProcessor() as ReduceOnlyProcessor<unknown>,
+        proc: this.#capabilityTableProcessor() as StreamProcessor<unknown>,
       },
       {
         slug: "subscriptions",
-        proc: this.#subscriptionsProcessor() as ReduceOnlyProcessor<unknown>,
+        proc: this.#subscriptionsProcessor() as StreamProcessor<unknown>,
       },
     ];
   }

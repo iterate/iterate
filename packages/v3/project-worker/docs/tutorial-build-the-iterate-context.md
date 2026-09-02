@@ -1011,15 +1011,17 @@ new Stream({
 
 ### Processors: react to the log, as facets
 
-A **stream processor** reduces the log into derived state — and it's just a
-facet (Chapter 1 machinery): a `DurableObject` extending the SDK's
-`StreamProcessorDurableObject`, whose `processEventBatch` is subscribed to the
+A **stream processor** reduces the log into derived state. The processor is a
+pure class extending the SDK's `StreamProcessor` (a contract and three hooks,
+unit-tested with `new`); its host is just a facet (Chapter 1 machinery): a
+`DurableObject` extending `StreamProcessorDurableObject` with one field,
+`processor = new UnreadCounter()`, whose `processEventBatch` is subscribed to the
 stream. `enableProcessor` is that subscribe, spelled for you:
 
 ```ts
 await itx.enableProcessor("unread-counts", {
   source: "itx.kv.get('counter.js')",
-  className: "UnreadCounter",
+  className: "UnreadCounterDurableObject", // the host; `processor = new UnreadCounter()` inside
 });
 ```
 
@@ -1099,7 +1101,7 @@ src/
   fetch/     fetch-capabilities
   stream/    stream, events, processor (the engine), reduce-checkpoint, inline-reduces, core-processor,
              subscriptions, subscription-delivery, live-state
-  sdk/       index (→ processor.js), stream-processor-durable-object
+  sdk/       index (→ processor.js), stream-processor-durable-object (the host)
   lib/       errors, logs, hash, patch
   client/    the browser LiveState client + demo page      generated/  build outputs
 e2e/         `pnpm e2e` — the real worker booted once, one <primitive>-<claim>.e2e.test.ts per claim,
@@ -1119,5 +1121,5 @@ specs/       `pnpm spec` — Playwright drives the hosted /demo page
 | Ch 2 auth gate                                                | `UnauthenticatedSession.authenticate()` → `Session` → `projects.get(id)` in `src/session.ts`                                                                                                                                                     |
 | Ch 3 stream                                                   | `Stream` in `src/stream/stream.ts`                                                                                                                                                                                                               |
 | Ch 3 subscribe / the one delivery loop                        | `src/stream/subscriptions.ts` (the events + reduce), `src/stream/subscription-delivery.ts` (push vs stream-kept cursor, decided by the evaluated target)                                                                                         |
-| Ch 3 processors                                               | `src/sdk/stream-processor-durable-object.ts` (the SDK base, bundled into `processor.js`) around the engine in `src/stream/processor.ts`                                                                                                          |
+| Ch 3 processors                                               | `StreamProcessor` (pure author class) + `ProcessorEngine` in `src/stream/processor.ts`; the host `src/sdk/stream-processor-durable-object.ts` (bundled into `processor.js`)                                                                      |
 | Ch 4 LiveState / control plane                                | `src/stream/live-state.ts`; `packages/v3/control-plane` (not yet wired)                                                                                                                                                                          |

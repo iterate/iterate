@@ -63,7 +63,7 @@ export default class Digest extends WorkerEntrypoint {
     return n;
   }
 }`,
-  "src/chunky.js": `import { StreamProcessorDurableObject, defineProcessorContract, z } from "./processor.js";
+  "src/chunky.js": `import { StreamProcessor, StreamProcessorDurableObject, defineProcessorContract, z } from "./processor.js";
 const contract = defineProcessorContract({
   slug: "chunky",
   version: "1.0.0",
@@ -73,20 +73,23 @@ const contract = defineProcessorContract({
   consumes: ["chunk", "mark"],
   emits: [],
 });
-export class Chunky extends StreamProcessorDurableObject {
+class Chunky extends StreamProcessor {
   contract = contract;
   reduce({ event, state }) {
     if (event.type === "chunk") return { ...state, chunks: state.chunks + 1 };
     if (event.type === "mark") return { ...state, marks: state.marks + 1 };
   }
   projectLiveState(state) { return { chunks: state.chunks, marks: state.marks }; }
+}
+export class ChunkyDurableObject extends StreamProcessorDurableObject {
+  processor = new Chunky();
 }`,
   // A processor whose live state COMBINES reduced state (ticks, folded from durable 'tick' events)
-  // with RUNTIME state (lastPokeMs — a plain field, NOT the reduce checkpoint, gone on eviction). A
-  // 'poke' ephemeral event bumps the runtime field in processEvent and publishes its delta out of
-  // band (the reduce never touches it). Proves reduced ⊕ runtime through ONE projection + ONE
-  // revision chain (live-state-chains-client-side.e2e).
-  "src/presence.js": `import { StreamProcessorDurableObject, defineProcessorContract, z } from "./processor.js";
+  // with RUNTIME state (lastPokeMs — a plain field on the pure class, NOT the reduce checkpoint, gone
+  // on eviction). A 'poke' ephemeral event bumps the runtime field in processEvent; the engine
+  // re-projects after the batch and emits the delta itself (the reduce never touches it). Proves
+  // reduced ⊕ runtime through ONE projection + ONE revision chain (live-state-chains-client-side.e2e).
+  "src/presence.js": `import { StreamProcessor, StreamProcessorDurableObject, defineProcessorContract, z } from "./processor.js";
 const contract = defineProcessorContract({
   slug: "presence",
   version: "1.0.0",
@@ -96,7 +99,7 @@ const contract = defineProcessorContract({
   consumes: ["tick", "poke"],
   emits: [],
 });
-export class Presence extends StreamProcessorDurableObject {
+class Presence extends StreamProcessor {
   contract = contract;
   #lastPokeMs = 0; // RUNTIME: a field, not reduced state — reset to 0 on eviction, never refolded
   reduce({ event, state }) {
@@ -104,14 +107,15 @@ export class Presence extends StreamProcessorDurableObject {
     // 'poke' is deliberately NOT folded — it drives a runtime field, not durable truth
   }
   processEvent({ event }) {
-    if (event && event.type === "poke") {
-      this.#lastPokeMs = Date.now();
-      this.publishLiveState(); // out-of-band runtime delta: no reduce changed, we emit ourselves
-    }
+    // no publish call: the engine re-projects after every batch and emits the delta itself
+    if (event && event.type === "poke") this.#lastPokeMs = Date.now();
   }
   projectLiveState(state) { return { ticks: state.ticks, lastPokeMs: this.#lastPokeMs }; }
+}
+export class PresenceDurableObject extends StreamProcessorDurableObject {
+  processor = new Presence();
 }`,
-  "src/user-tally.js": `import { StreamProcessorDurableObject, defineProcessorContract, z } from "./processor.js";
+  "src/user-tally.js": `import { StreamProcessor, StreamProcessorDurableObject, defineProcessorContract, z } from "./processor.js";
 const contract = defineProcessorContract({
   slug: "user-tally",
   version: "1.0.0",
@@ -121,15 +125,18 @@ const contract = defineProcessorContract({
   consumes: ["*"],
   emits: [],
 });
-export class UserTally extends StreamProcessorDurableObject {
+class UserTally extends StreamProcessor {
   contract = contract;
   reduce({ event, state }) {
     return { counts: { ...state.counts, [event.type]: (state.counts[event.type] ?? 0) + 1 } };
   }
+}
+export class UserTallyDurableObject extends StreamProcessorDurableObject {
+  processor = new UserTally();
 }`,
   // The facet-spine demo processor (was the platform's built-in `tally`): counts every durable event
   // by type. A userspace class like any other — there are no built-in processors.
-  "src/tally.js": `import { StreamProcessorDurableObject, defineProcessorContract, z } from "./processor.js";
+  "src/tally.js": `import { StreamProcessor, StreamProcessorDurableObject, defineProcessorContract, z } from "./processor.js";
 const contract = defineProcessorContract({
   slug: "tally",
   version: "1.0.0",
@@ -139,11 +146,14 @@ const contract = defineProcessorContract({
   consumes: ["*"],
   emits: [],
 });
-export class Tally extends StreamProcessorDurableObject {
+class Tally extends StreamProcessor {
   contract = contract;
   reduce({ event, state }) {
     return { counts: { ...state.counts, [event.type]: (state.counts[event.type] ?? 0) + 1 } };
   }
+}
+export class TallyDurableObject extends StreamProcessorDurableObject {
+  processor = new Tally();
 }`,
   "src/site.js": `import { WorkerEntrypoint } from "cloudflare:workers";
 export default class Site extends WorkerEntrypoint {
@@ -170,7 +180,9 @@ export async function seedSources(itx: any, names: string[]): Promise<void> {
 
 /** The one spelling of "enable the fixture processor `name` from its seeded source": seeds it, then
  *  `enableProcessor(name, { source, className })` — a processor is a named facet whose
- *  `processEventBatch` is subscribed. `tally`, `chunky`, `presence`, `user-tally` are the fixtures. */
+ *  `processEventBatch` is subscribed. `className` names the HOST (`<Name>DurableObject`, the one-line
+ *  `StreamProcessorDurableObject` subclass), never the pure `StreamProcessor` it hosts. `tally`,
+ *  `chunky`, `presence`, `user-tally` are the fixtures. */
 export async function enableFixtureProcessor(
   itx: any,
   name: string,
@@ -184,8 +196,8 @@ export async function enableFixtureProcessor(
   });
 }
 const FIXTURE_CLASS: Record<string, string> = {
-  tally: "Tally",
-  chunky: "Chunky",
-  presence: "Presence",
-  "user-tally": "UserTally",
+  tally: "TallyDurableObject",
+  chunky: "ChunkyDurableObject",
+  presence: "PresenceDurableObject",
+  "user-tally": "UserTallyDurableObject",
 };

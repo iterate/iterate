@@ -1,14 +1,17 @@
 // Executable spec for the processor layer — each block names the concurrency rule it proves.
 // The in-memory stream (stream/test-support.ts) mirrors the DO's commit semantics: one shared
 // offset sequence (ephemerals consume offsets but never land in the log), the scanned-offset-range
-// proof on both pushes and reads, and a fire-and-forget push to every registered processor after
-// each append. The rule-by-rule spec under slow blockers, failing batches and version bumps is
+// proof on both pushes and reads, and a fire-and-forget push to every registered engine after
+// each append. Every processor here is the PURE author class (`new X()` — no stream, no storage);
+// a `ProcessorEngine` drives it, and a test keeps the author handle where it reads a field. The
+// rule-by-rule spec under slow blockers, failing batches and version bumps is
 // processor-rules.test.ts.
 import { describe, expect, test } from "vitest";
 import { z } from "zod";
 import { defineProcessorContract, type StreamEvent } from "./events.ts";
 import {
   consumesEvent,
+  ProcessorEngine,
   StreamProcessor,
   type ProcessEventArgs,
   type ReduceArgs,
@@ -35,12 +38,12 @@ class CounterProcessor extends StreamProcessor<{ ticks: number }> {
   readonly contract = CounterContract;
   readonly trace: string[] = [];
 
-  protected override reduce({ event, state }: ReduceArgs<{ ticks: number }>) {
+  override reduce({ event, state }: ReduceArgs<{ ticks: number }>) {
     if (event.type !== "events.iterate.com/counter/ticked") return undefined;
     return { ticks: state.ticks + 1 };
   }
 
-  protected override processEvent(args: ProcessEventArgs<{ ticks: number }>): undefined {
+  override processEvent(args: ProcessEventArgs<{ ticks: number }>): undefined {
     if (args.event === null) {
       this.trace.push(`at-head ticks=${args.state.ticks}`);
       return;
@@ -67,17 +70,14 @@ class CounterProcessor extends StreamProcessor<{ ticks: number }> {
 const setup = () => {
   const mem = memoryStream();
   const storage = memoryStorage();
-  const processor = new CounterProcessor({
-    stream: mem.stream,
-    storage,
-    path: "/",
-    projectId: "prj_t",
-  });
-  mem.procs.push(processor);
+  const processor = new CounterProcessor();
+  const engine = new ProcessorEngine(processor, { stream: mem.stream, storage });
+  mem.procs.push(engine);
   return {
     ...mem,
     storage,
-    processor,
+    processor, // the author instance — `trace` lives here
+    engine, // drives it: wake / snapshot / processEventBatch
     tick: () =>
       (mem.stream.append({ type: "events.iterate.com/counter/ticked" }) as StreamEvent[])[0],
   };
@@ -142,11 +142,11 @@ describe("consumesEvent — THE ONE consumes rule (engine, delivery loop, inline
 
 describe("the concurrency contract", () => {
   test("rules 1+2 — strict per-event barrier: blocked work finishes before the next event starts", async () => {
-    const { processor, tick } = setup();
+    const { engine, processor, tick } = setup();
     tick();
     tick();
     tick();
-    await processor.wake();
+    await engine.wake();
     const starts = processor.trace.filter((t) => t.startsWith("start"));
     const dones = processor.trace.filter((t) => t.startsWith("blocked-done"));
     expect(starts).toEqual(["start 1", "start 2", "start 3"]);
@@ -174,7 +174,7 @@ describe("the concurrency contract", () => {
     });
     class Bg extends StreamProcessor<object> {
       readonly contract = Contract;
-      protected override processEvent(args: ProcessEventArgs<object>): undefined {
+      override processEvent(args: ProcessEventArgs<object>): undefined {
         if (!args.event) return;
         args.runInBackground(async () => {
           await new Promise((r) => setTimeout(r, 20));
@@ -183,7 +183,7 @@ describe("the concurrency contract", () => {
         order.push(`fg ${args.event.offset}`);
       }
     }
-    const bg = new Bg({ stream: mem.stream, storage: memoryStorage(), path: "/", projectId: "p" });
+    const bg = new ProcessorEngine(new Bg(), { stream: mem.stream, storage: memoryStorage() });
     mem.stream.append({ type: "e" }, { type: "e" }) as StreamEvent[];
     await bg.wake();
     expect(order).toEqual(["fg 1", "fg 2"]); // background hasn't landed — it overtakes/loiters
@@ -192,14 +192,14 @@ describe("the concurrency contract", () => {
   });
 
   test("rule 4 — one persist per pushed scannedOffsetRange, cursor advances only after", async () => {
-    const { storage, processor, stream } = setup();
+    const { storage, engine, stream } = setup();
     const before = storage.writes;
     stream.append(
       { type: "events.iterate.com/counter/ticked" },
       { type: "events.iterate.com/counter/ticked" },
       { type: "events.iterate.com/counter/ticked" },
     ) as StreamEvent[];
-    await processor.wake();
+    await engine.wake();
     await settle();
     // the whole 3-event scannedOffsetRange persists ONCE: cursor + state (2 writes). The milestone lands
     // as its own scannedOffsetRange — cursor only, its reduce didn't change state (1 write, no state blob).
@@ -207,17 +207,17 @@ describe("the concurrency contract", () => {
   });
 
   test("rule 5 — at-head pass fires exactly once when the scannedOffsetRange reaches the head", async () => {
-    const { processor, stream } = setup();
+    const { engine, processor, stream } = setup();
     stream.append({ type: "unrelated" }) as StreamEvent[]; // consumed by nobody
-    await processor.wake();
+    await engine.wake();
     expect(processor.trace).toEqual(["at-head ticks=0"]); // no consumable events → eventless pass
   });
 
   test("redelivery dedupes against the persisted cursor", async () => {
-    const { processor, tick } = setup();
+    const { engine, processor, tick } = setup();
     tick();
-    await processor.wake();
-    await processor.wake(); // nothing new — no re-processing
+    await engine.wake();
+    await engine.wake(); // nothing new — no re-processing
     expect(processor.trace.filter((t) => t === "start 1")).toHaveLength(1);
   });
 
@@ -236,10 +236,10 @@ describe("the concurrency contract", () => {
     });
     class Flaky extends StreamProcessor<{ seen: number }> {
       readonly contract = Contract;
-      protected override reduce({ state }: ReduceArgs<{ seen: number }>) {
+      override reduce({ state }: ReduceArgs<{ seen: number }>) {
         return { seen: state.seen + 1 };
       }
-      protected override processEvent(args: ProcessEventArgs<{ seen: number }>): undefined {
+      override processEvent(args: ProcessEventArgs<{ seen: number }>): undefined {
         if (!args.event) return;
         args.blockProcessorWhile(async () => {
           attempts++;
@@ -247,7 +247,7 @@ describe("the concurrency contract", () => {
         });
       }
     }
-    const flaky = new Flaky({ stream: mem.stream, storage, path: "/", projectId: "p" });
+    const flaky = new ProcessorEngine(new Flaky(), { stream: mem.stream, storage });
     mem.procs.push(flaky);
     mem.stream.append({ type: "e" }) as StreamEvent[]; // the auto-push fails (attempt 1)
     await settle();
@@ -272,8 +272,8 @@ describe("the push door (scan scannedOffsetRanges)", () => {
     const mem = memoryStream();
     mem.stream.append({ type: "events.iterate.com/counter/ticked" }) as StreamEvent[]; // history
     const storage = memoryStorage();
-    const late = new CounterProcessor({ stream: mem.stream, storage, path: "/", projectId: "p" });
-    mem.procs.push(late); // registered AFTER history exists
+    const late = new CounterProcessor();
+    mem.procs.push(new ProcessorEngine(late, { stream: mem.stream, storage })); // registered AFTER history exists
     mem.stream.append({ type: "events.iterate.com/counter/ticked" }) as StreamEvent[]; // gapped push
     await settle();
     expect(late.trace.filter((t) => t.startsWith("start"))).toEqual(["start 1", "start 2"]);
@@ -281,10 +281,10 @@ describe("the push door (scan scannedOffsetRanges)", () => {
   });
 
   test("a stale scannedOffsetRange (already behind the cursor) is a no-op", async () => {
-    const { processor, tick } = setup();
+    const { engine, processor, tick } = setup();
     tick();
-    await processor.wake();
-    await processor.processEventBatch([], { after: 0, through: 1 });
+    await engine.wake();
+    await engine.processEventBatch([], { after: 0, through: 1 });
     expect(processor.trace.filter((t) => t.startsWith("start"))).toEqual(["start 1"]);
   });
 });
@@ -313,16 +313,18 @@ const CaughtUpContract = defineProcessorContract({
 class CaughtUpProbe extends StreamProcessor<{ n: number }> {
   readonly contract = CaughtUpContract;
   caughtUps = 0;
-  protected override reduce({ state }: ReduceArgs<{ n: number }>) {
+  override reduce({ state }: ReduceArgs<{ n: number }>) {
     return { n: state.n + 1 };
   }
-  protected override processEvent(args: ProcessEventArgs<{ n: number }>): undefined {
+  override processEvent(args: ProcessEventArgs<{ n: number }>): undefined {
     if (args.delivery.caughtUp) this.caughtUps++;
   }
 }
-/** A probe over a stream with nothing to read; `readFails` makes every self-pull reject. */
-const caughtUpProbe = (readFails?: Error) =>
-  new CaughtUpProbe({
+/** A probe over a stream with nothing to read; `readFails` makes every self-pull reject. Returns
+ *  the author (`probe`, for its counter) and the engine that drives it. */
+const caughtUpProbe = (readFails?: Error) => {
+  const probe = new CaughtUpProbe();
+  const engine = new ProcessorEngine(probe, {
     stream: {
       append: () => [],
       read: () =>
@@ -331,26 +333,26 @@ const caughtUpProbe = (readFails?: Error) =>
           : Promise.resolve({ events: [], scannedThroughOffset: 0 }),
     },
     storage: memoryStorage(),
-    path: "/",
-    projectId: "prj_t",
   });
+  return { probe, engine };
+};
 
 describe("delivery.caughtUp is tied to the SHOWN head", () => {
   test("two contiguous pushes enqueued back-to-back — only the one reaching the shown head fires caughtUp", async () => {
     // Both pushes sit on the chain before either runs, so the processor has been SHOWN through=2
     // when the through=1 batch runs: that batch is not at head. Contiguity alone never earns the
     // at-head pass — the reconcile work it triggers must run against the head fold, not a stale one.
-    const p = caughtUpProbe();
-    const first = p.processEventBatch([ev(1)], { after: 0, through: 1 });
-    const second = p.processEventBatch([ev(2)], { after: 1, through: 2 });
+    const { probe, engine } = caughtUpProbe();
+    const first = engine.processEventBatch([ev(1)], { after: 0, through: 1 });
+    const second = engine.processEventBatch([ev(2)], { after: 1, through: 2 });
     await Promise.all([first, second]);
-    expect(p.caughtUps).toBe(1);
+    expect(probe.caughtUps).toBe(1);
   });
 
   test("a single push that reaches the shown head fires caughtUp once", async () => {
-    const p = caughtUpProbe();
-    await p.processEventBatch([ev(1)], { after: 0, through: 1 });
-    expect(p.caughtUps).toBe(1);
+    const { probe, engine } = caughtUpProbe();
+    await engine.processEventBatch([ev(1)], { after: 0, through: 1 });
+    expect(probe.caughtUps).toBe(1);
   });
 });
 
@@ -366,12 +368,12 @@ describe("ephemeral events", () => {
   });
   class Eph extends StreamProcessor<{ seen: string[] }> {
     readonly contract = EphContract;
-    protected override reduce({ event, state }: ReduceArgs<{ seen: string[] }>) {
+    override reduce({ event, state }: ReduceArgs<{ seen: string[] }>) {
       return { seen: [...state.seen, `${event.type}@${event.offset}`] };
     }
     // This suite asserts exact offsets; opt out of the default live-state emit (a constant projection
     // never diffs) so its ephemeral deltas don't consume offsets under test.
-    protected override projectLiveState() {
+    override projectLiveState() {
       return null;
     }
   }
@@ -386,10 +388,10 @@ describe("ephemeral events", () => {
   });
   class Star extends StreamProcessor<{ seen: string[] }> {
     readonly contract = StarContract;
-    protected override reduce({ event, state }: ReduceArgs<{ seen: string[] }>) {
+    override reduce({ event, state }: ReduceArgs<{ seen: string[] }>) {
       return { seen: [...state.seen, `${event.type}@${event.offset}`] };
     }
-    protected override projectLiveState() {
+    override projectLiveState() {
       return null;
     }
   }
@@ -398,8 +400,8 @@ describe("ephemeral events", () => {
     const mem = memoryStream();
     const ephStorage = memoryStorage();
     const starStorage = memoryStorage();
-    const eph = new Eph({ stream: mem.stream, storage: ephStorage, path: "/", projectId: "p" });
-    const star = new Star({ stream: mem.stream, storage: starStorage, path: "/", projectId: "p" });
+    const eph = new ProcessorEngine(new Eph(), { stream: mem.stream, storage: ephStorage });
+    const star = new ProcessorEngine(new Star(), { stream: mem.stream, storage: starStorage });
     mem.procs.push(eph, star);
 
     mem.stream.append({ type: "loud" }) as StreamEvent[]; // offset 1, durable
@@ -426,7 +428,7 @@ describe("ephemeral events", () => {
   test("a rebuilt reduce omits ephemerals (never derive durable truth from one)", async () => {
     const mem = memoryStream();
     const storage = memoryStorage();
-    const a = new Eph({ stream: mem.stream, storage, path: "/", projectId: "p" });
+    const a = new ProcessorEngine(new Eph(), { stream: mem.stream, storage });
     mem.procs.push(a);
     mem.stream.append({ type: "loud" }) as StreamEvent[];
     mem.stream.append({ type: "chunk", ephemeral: true }) as StreamEvent[];
@@ -435,7 +437,7 @@ describe("ephemeral events", () => {
     expect((await a.snapshot()).state.seen).toEqual(["loud@1", "chunk@2", "loud@3"]);
     // a fresh incarnation over the same storage: the ephemeral is gone from the log — the reduce
     // regresses to durable truth only, and the offsets are simply gaps
-    const b = new Eph({ stream: mem.stream, storage, path: "/", projectId: "p" });
+    const b = new ProcessorEngine(new Eph(), { stream: mem.stream, storage });
     // (simulate: the last durable persist covered through offset 3; state includes chunk@2 only
     //  because that scannedOffsetRange ALSO contained a durable event — the documented divergence rule)
     expect((await b.snapshot()).state.seen).toContain("loud@3");
@@ -448,7 +450,7 @@ describe("ephemeral events", () => {
     // nothing twice yet still deliver its named ephemeral (pushes are an ephemeral's ONLY delivery,
     // and a live processor was handed it).
     const mem = memoryStream();
-    const p = new Eph({ stream: mem.stream, storage: memoryStorage(), path: "/", projectId: "p" });
+    const p = new ProcessorEngine(new Eph(), { stream: mem.stream, storage: memoryStorage() });
     mem.stream.append({ type: "loud" }); // offset 1, durable
     await p.wake();
     // one commit: durable loud@2 + ephemeral chunk@3 → range (1,3]; hand-delivered below
@@ -477,12 +479,12 @@ describe("review round 1 regressions", () => {
     });
     class Echoer extends StreamProcessor<object> {
       readonly contract = Contract;
-      protected override processEvent(args: ProcessEventArgs<object>): undefined {
+      override processEvent(args: ProcessEventArgs<object>): undefined {
         if (args.event?.type !== "ping") return;
         args.blockProcessorWhile(() => args.append({ type: "echoed", idempotencyKey: "once" }));
       }
     }
-    mem.procs.push(new Echoer({ stream: mem.stream, storage, path: "/", projectId: "p" }));
+    mem.procs.push(new ProcessorEngine(new Echoer(), { stream: mem.stream, storage }));
     mem.stream.append({ type: "ping" }) as StreamEvent[]; // pre-fix shape: would hang forever
     await settle();
     expect(mem.events.some((e) => e.type === "echoed")).toBe(true);
@@ -503,15 +505,18 @@ describe("reduce cache + refold", () => {
         consumes: ["events.iterate.com/counter/ticked"],
         emits: [],
       });
-      return new (class extends StreamProcessor<{ n: number }> {
-        readonly contract = Contract;
-        protected override reduce({ state }: ReduceArgs<{ n: number }>) {
-          return { n: state.n + 1 };
-        }
-        protected override processEvent(args: ProcessEventArgs<{ n: number }>): undefined {
-          if (args.event) effects.push(`effect ${args.event.offset}`);
-        }
-      })({ stream: mem.stream, storage, path: "/", projectId: "p" });
+      return new ProcessorEngine(
+        new (class extends StreamProcessor<{ n: number }> {
+          readonly contract = Contract;
+          override reduce({ state }: ReduceArgs<{ n: number }>) {
+            return { n: state.n + 1 };
+          }
+          override processEvent(args: ProcessEventArgs<{ n: number }>): undefined {
+            if (args.event) effects.push(`effect ${args.event.offset}`);
+          }
+        })(),
+        { stream: mem.stream, storage },
+      );
     };
     const effects: string[] = [];
     const p1 = make("1.0.0", effects);
@@ -531,12 +536,12 @@ describe("reduce cache + refold", () => {
 
 describe("emit rules + idempotency", () => {
   test("milestone emitted with provenance stamp + idempotency key; re-wake dedupes", async () => {
-    const { processor, tick, events } = setup();
+    const { engine, tick, events } = setup();
     tick();
     tick();
     tick();
     tick(); // ticks: 1,2,3,4 — milestone at state.ticks===3 (after 3rd tick)
-    await processor.wake();
+    await engine.wake();
     await settle();
     const milestones = events.filter((e) => e.type === "events.iterate.com/counter/milestone");
     expect(milestones).toHaveLength(1);
@@ -544,7 +549,7 @@ describe("emit rules + idempotency", () => {
     expect(milestones[0].source?.processor?.slug).toBe("counter");
     expect(milestones[0].source?.processor?.whileProcessing?.offset).toBe(3);
     // the milestone append itself lands on the stream and re-delivers — wake again, still one
-    await processor.wake();
+    await engine.wake();
     expect(events.filter((e) => e.type === "events.iterate.com/counter/milestone")).toHaveLength(1);
   });
 
@@ -561,25 +566,23 @@ describe("emit rules + idempotency", () => {
     });
     class Rogue extends StreamProcessor<object> {
       readonly contract = Contract;
-      protected override processEvent(args: ProcessEventArgs<object>): undefined {
+      override processEvent(args: ProcessEventArgs<object>): undefined {
         if (args.event) args.blockProcessorWhile(() => args.append({ type: "not-declared" }));
       }
     }
-    const rogue = new Rogue({
+    const rogue = new ProcessorEngine(new Rogue(), {
       stream: mem.stream,
       storage: memoryStorage(),
-      path: "/",
-      projectId: "p",
     });
     mem.stream.append({ type: "e" }) as StreamEvent[];
     await expect(rogue.wake()).rejects.toThrow(/without declaring/);
   });
 
   test("waitUntilProcessed resolves at the cursor", async () => {
-    const { processor, tick } = setup();
+    const { engine, tick } = setup();
     tick();
     await expect(
-      processor.waitUntilProcessed({ offset: 1, timeoutMs: 1000 }),
+      engine.waitUntilProcessed({ offset: 1, timeoutMs: 1000 }),
     ).resolves.toBeUndefined();
   });
 });
@@ -610,12 +613,7 @@ describe("live state (the delta patches on the wire)", () => {
 
   test("a reduce that changes the projection emits ONE ephemeral change event carrying the patch", async () => {
     const mem = memoryStream();
-    const p = new Tally({
-      stream: mem.stream,
-      storage: memoryStorage(),
-      path: "/",
-      projectId: "p",
-    });
+    const p = new ProcessorEngine(new Tally(), { stream: mem.stream, storage: memoryStorage() });
     mem.procs.push(p);
     mem.stream.append({ type: "tick" }) as StreamEvent[];
     await settle();
@@ -630,12 +628,7 @@ describe("live state (the delta patches on the wire)", () => {
 
   test("revisions chain: each emission's `from` equals the previous emission's `to`", async () => {
     const mem = memoryStream();
-    const p = new Tally({
-      stream: mem.stream,
-      storage: memoryStorage(),
-      path: "/",
-      projectId: "p",
-    });
+    const p = new ProcessorEngine(new Tally(), { stream: mem.stream, storage: memoryStorage() });
     mem.procs.push(p);
     mem.stream.append({ type: "tick" }) as StreamEvent[];
     await settle();
@@ -649,12 +642,7 @@ describe("live state (the delta patches on the wire)", () => {
 
   test("liveSnapshot() mints the rev the next emission chains from ({rev,state} atomically)", async () => {
     const mem = memoryStream();
-    const p = new Tally({
-      stream: mem.stream,
-      storage: memoryStorage(),
-      path: "/",
-      projectId: "p",
-    });
+    const p = new ProcessorEngine(new Tally(), { stream: mem.stream, storage: memoryStorage() });
     mem.procs.push(p);
     mem.stream.append({ type: "other" }) as StreamEvent[]; // advance the cursor, no projection change
     await settle();
@@ -686,7 +674,7 @@ describe("live state (the delta patches on the wire)", () => {
       }
     }
     const mem = memoryStream();
-    const p = new Flat({ stream: mem.stream, storage: memoryStorage(), path: "/", projectId: "p" });
+    const p = new ProcessorEngine(new Flat(), { stream: mem.stream, storage: memoryStorage() });
     mem.procs.push(p);
     mem.stream.append({ type: "tick" }, { type: "tick" }) as StreamEvent[];
     await settle();
@@ -714,28 +702,99 @@ describe("live state (the delta patches on the wire)", () => {
       }
       // Opt out of its OWN live-state emit so the assertion counts only tally's change event — the
       // point here is that Sneaky never CONSUMES a change event (the loop guard), not what it emits.
-      protected override projectLiveState() {
+      override projectLiveState() {
         return null;
       }
     }
     const mem = memoryStream();
-    const tally = new Tally({
+    const tally = new ProcessorEngine(new Tally(), {
       stream: mem.stream,
       storage: memoryStorage(),
-      path: "/",
-      projectId: "p",
     });
-    const sneaky = new Sneaky({
+    const sneaky = new ProcessorEngine(new Sneaky(), {
       stream: mem.stream,
       storage: memoryStorage(),
-      path: "/",
-      projectId: "p",
     });
     mem.procs.push(tally, sneaky);
     mem.stream.append({ type: "tick" }) as StreamEvent[]; // tally emits a change event
     await settle();
     expect(changes(mem)).toHaveLength(1);
     expect((await sneaky.snapshot()).state.seen).toBe(1); // the tick — NOT the change event
+  });
+
+  // ── the two-class shape: the author class stands alone; the engine re-projects after every batch ──
+
+  test("the author class stands alone: constructible bare, `reduce` callable with no engine", () => {
+    // No stream, no storage, no constructor arguments — a processor is a unit-testable plain object.
+    const bare = new CounterProcessor();
+    const ticked = ev(1, "events.iterate.com/counter/ticked");
+    expect(bare.reduce({ event: ticked, state: { ticks: 0 } })).toEqual({ ticks: 1 });
+    expect(bare.reduce({ event: ev(2, "unrelated"), state: { ticks: 1 } })).toBeUndefined();
+    expect(bare.idempotencyKey("k")).toBe("counter/k");
+    expect(bare.idempotencyKey("k", ticked)).toBe("counter/k@1");
+  });
+
+  test("a runtime field bumped inside processEvent (folded in by projectLiveState) publishes ONE delta at batch end — no publishLiveState call", async () => {
+    const contract4 = defineProcessorContract({
+      slug: "runtime",
+      version: "1.0.0",
+      description:
+        "reduce owns nothing; processEvent moves a runtime field the projection folds in",
+      stateSchema: z.object({}),
+      events: {},
+      consumes: ["tick"],
+      emits: [],
+    });
+    class Runtime extends StreamProcessor<object> {
+      contract = contract4;
+      lastSeenOffset = 0; // RUNTIME state: on the instance, not in the reduce — gone with the host
+      override processEvent(args: ProcessEventArgs<object>): undefined {
+        if (args.event) this.lastSeenOffset = args.event.offset; // no publishLiveState() anywhere
+      }
+      override projectLiveState(state: object) {
+        return { ...state, lastSeenOffset: this.lastSeenOffset };
+      }
+    }
+    const mem = memoryStream();
+    const p = new ProcessorEngine(new Runtime(), { stream: mem.stream, storage: memoryStorage() });
+    mem.procs.push(p);
+    mem.stream.append({ type: "tick" }, { type: "tick" }) as StreamEvent[]; // ONE batch, two events
+    await settle();
+    // The reduce never moved (state is the same object), yet the engine's after-every-batch
+    // re-projection sees the runtime field at 2 and emits exactly one delta — not one per event.
+    expect(changes(mem)).toHaveLength(1);
+    expect(changes(mem)[0].payload).toMatchObject({
+      key: "runtime",
+      patch: [{ op: "replace", path: "/lastSeenOffset", value: 2 }],
+    });
+  });
+
+  test("a batch that moves neither the reduce nor the projection emits NO delta (the unconditional re-project never spams)", async () => {
+    const contract5 = defineProcessorContract({
+      slug: "still",
+      version: "1.0.0",
+      description: "consumes ticks, reduces nothing, projects the (unchanged) state verbatim",
+      stateSchema: z.object({ n: z.number().default(0) }),
+      events: {},
+      consumes: ["tick"],
+      emits: [],
+    });
+    class Still extends StreamProcessor<{ n: number }> {
+      contract = contract5;
+      fired = 0; // a runtime field the DEFAULT projection does NOT fold in
+      override processEvent(args: ProcessEventArgs<{ n: number }>): undefined {
+        if (args.event) this.fired++;
+      }
+    }
+    const still = new Still();
+    const mem = memoryStream();
+    mem.procs.push(new ProcessorEngine(still, { stream: mem.stream, storage: memoryStorage() }));
+    mem.stream.append({ type: "tick" }) as StreamEvent[];
+    await settle();
+    mem.stream.append({ type: "tick" }, { type: "tick" }) as StreamEvent[];
+    await settle();
+    expect(still.fired).toBe(3); // two batches ran every event to completion…
+    expect(changes(mem)).toHaveLength(0); // …and re-projecting after each emitted nothing
   });
 });
 
@@ -760,12 +819,7 @@ describe("live state emission failure is contained", () => {
       }
     }
     const mem = memoryStream();
-    const p = new Biggie({
-      stream: mem.stream,
-      storage: memoryStorage(),
-      path: "/",
-      projectId: "p",
-    });
+    const p = new ProcessorEngine(new Biggie(), { stream: mem.stream, storage: memoryStorage() });
     mem.procs.push(p);
     mem.stream.append({ type: "tick" }) as StreamEvent[];
     await settle();
@@ -794,17 +848,17 @@ const CountContract = (version: string) =>
 class CountProcessor extends StreamProcessor<{ ticks: number }> {
   readonly contract: ReturnType<typeof CountContract>;
   readonly effects: number[] = []; // offsets whose processEvent fired
-  constructor(args: ConstructorParameters<typeof StreamProcessor>[0], version = "1.0.0") {
-    super(args);
+  constructor(version = "1.0.0") {
+    super();
     this.contract = CountContract(version);
   }
-  protected override reduce({ event, state }: ReduceArgs<{ ticks: number }>) {
+  override reduce({ event, state }: ReduceArgs<{ ticks: number }>) {
     return event.type === "tick" ? { ticks: state.ticks + 1 } : undefined;
   }
-  protected override processEvent(args: ProcessEventArgs<{ ticks: number }>): undefined {
+  override processEvent(args: ProcessEventArgs<{ ticks: number }>): undefined {
     if (args.event) this.effects.push(args.event.offset);
   }
-  protected override projectLiveState() {
+  override projectLiveState() {
     return null; // exact-offset suite: opt out of the default live-state emit
   }
 }
@@ -821,10 +875,10 @@ const EffectOnlyContract = defineProcessorContract({
 class EffectOnlyProcessor extends StreamProcessor<Record<string, never>> {
   readonly contract = EffectOnlyContract;
   readonly effects: number[] = [];
-  protected override reduce(): undefined {
+  override reduce(): undefined {
     return undefined;
   }
-  protected override processEvent(args: ProcessEventArgs<Record<string, never>>): undefined {
+  override processEvent(args: ProcessEventArgs<Record<string, never>>): undefined {
     if (args.event) this.effects.push(args.event.offset);
   }
 }
@@ -836,45 +890,39 @@ describe("eviction honors the persisted cursor", () => {
     // fall back to offset 0 and re-drive the whole log WITH effects on every idle quiesce.
     const mem = memoryStream();
     const storage = memoryStorage();
-    const p1 = new EffectOnlyProcessor({
-      stream: mem.stream,
-      storage,
-      path: "/",
-      projectId: "prj_t",
-    });
-    mem.procs.push(p1);
+    const p1 = new EffectOnlyProcessor();
+    const e1 = new ProcessorEngine(p1, { stream: mem.stream, storage });
+    mem.procs.push(e1);
     for (let i = 0; i < 4; i++) mem.stream.append({ type: "boop" });
-    await p1.wake();
+    await e1.wake();
     expect(p1.effects).toEqual([1, 2, 3, 4]);
     // The cursor IS persisted (rule 4), even though state never changed.
     expect(storage.get("reduce:eff:progress")).toMatchObject({ reducedThroughOffset: 4 });
 
     // Eviction: fresh instance, SAME storage + log, SAME version.
-    const p2 = new EffectOnlyProcessor({
-      stream: mem.stream,
-      storage,
-      path: "/",
-      projectId: "prj_t",
-    });
+    const p2 = new EffectOnlyProcessor();
+    const e2 = new ProcessorEngine(p2, { stream: mem.stream, storage });
     mem.procs.length = 0;
-    mem.procs.push(p2);
-    await p2.wake();
+    mem.procs.push(e2);
+    await e2.wake();
     expect(p2.effects).toEqual([]); // the persisted cursor (4) means nothing to re-do
   });
 
   test("CONTROL: a state-changing processor does not replay effects across an eviction either", async () => {
     const mem = memoryStream();
     const storage = memoryStorage();
-    const p1 = new CountProcessor({ stream: mem.stream, storage, path: "/", projectId: "prj_t" });
-    mem.procs.push(p1);
+    const p1 = new CountProcessor();
+    const e1 = new ProcessorEngine(p1, { stream: mem.stream, storage });
+    mem.procs.push(e1);
     for (let i = 0; i < 4; i++) mem.stream.append({ type: "tick" });
-    await p1.wake();
+    await e1.wake();
     expect(p1.effects).toEqual([1, 2, 3, 4]);
 
-    const p2 = new CountProcessor({ stream: mem.stream, storage, path: "/", projectId: "prj_t" });
+    const p2 = new CountProcessor();
+    const e2 = new ProcessorEngine(p2, { stream: mem.stream, storage });
     mem.procs.length = 0;
-    mem.procs.push(p2);
-    await p2.wake();
+    mem.procs.push(e2);
+    await e2.wake();
     expect(p2.effects).toEqual([]); // cursor honored — no replay
   });
 
@@ -883,10 +931,7 @@ describe("eviction honors the persisted cursor", () => {
     const storage = memoryStorage();
     // A v1 cursor at offset 0 (as if nothing was ever consumed), then a v2 incarnation.
     storage.put("reduce:count:progress", { reducerVersion: "1.0.0", reducedThroughOffset: 0 });
-    const p2 = new CountProcessor(
-      { stream: mem.stream, storage, path: "/", projectId: "prj_t" },
-      "2.0.0",
-    );
+    const p2 = new ProcessorEngine(new CountProcessor("2.0.0"), { stream: mem.stream, storage });
     mem.procs.push(p2);
     expect(await p2.snapshot()).toEqual({ offset: 0, state: { ticks: 0 } });
   });
@@ -896,7 +941,7 @@ describe("waitUntilProcessed — resolution and failure modes", () => {
   test("resolves a waiter whose offset the version refold reached (no batch was ever pushed)", async () => {
     const mem = memoryStream();
     const storage = memoryStorage();
-    const p1 = new CountProcessor({ stream: mem.stream, storage, path: "/", projectId: "prj_t" });
+    const p1 = new ProcessorEngine(new CountProcessor(), { stream: mem.stream, storage });
     mem.procs.push(p1);
     for (let i = 0; i < 3; i++) mem.stream.append({ type: "tick" });
     await p1.wake();
@@ -904,20 +949,18 @@ describe("waitUntilProcessed — resolution and failure modes", () => {
     // A bumped incarnation waits for an offset the refold (ceiling = 3) covers. No new push, so
     // the wake's catch-up reads an empty page and never runs a batch — only the refold advances
     // progress; the post-wake re-check must still resolve the waiter.
-    const p2 = new CountProcessor(
-      { stream: mem.stream, storage, path: "/", projectId: "prj_t" },
-      "2.0.0",
-    );
+    const p2 = new CountProcessor("2.0.0");
+    const e2 = new ProcessorEngine(p2, { stream: mem.stream, storage });
     mem.procs.length = 0;
-    mem.procs.push(p2);
-    await expect(p2.waitUntilProcessed({ offset: 3, timeoutMs: 2000 })).resolves.toBeUndefined();
+    mem.procs.push(e2);
+    await expect(e2.waitUntilProcessed({ offset: 3, timeoutMs: 2000 })).resolves.toBeUndefined();
     expect(p2.effects).toEqual([]); // and the refold stayed reduce-only
   });
 
   test("does not spuriously resolve a waiter whose offset was NOT reached", async () => {
     const mem = memoryStream();
     const storage = memoryStorage();
-    const p = new CountProcessor({ stream: mem.stream, storage, path: "/", projectId: "prj_t" });
+    const p = new ProcessorEngine(new CountProcessor(), { stream: mem.stream, storage });
     mem.procs.push(p);
     mem.stream.append({ type: "tick" }); // only offset 1 exists
     await p.wake();
@@ -930,7 +973,7 @@ describe("waitUntilProcessed — resolution and failure modes", () => {
     // wake enqueues the catch-up on the serial chain, whose failure the chain swallows (a failed
     // batch must not wedge it); the waiter must still be told, so a transient read error is one
     // fast rejection the caller can retry instead of a full-timeout park.
-    const p = caughtUpProbe(new Error("self-pull read failed: boom"));
-    await expect(p.waitUntilProcessed({ offset: 5, timeoutMs: 1500 })).rejects.toThrow(/boom/);
+    const { engine } = caughtUpProbe(new Error("self-pull read failed: boom"));
+    await expect(engine.waitUntilProcessed({ offset: 5, timeoutMs: 1500 })).rejects.toThrow(/boom/);
   });
 });

@@ -70,7 +70,7 @@ test("live state chains client-side from the door — mini-app + processor flavo
   // ── processor flavor: chunky's fold, door = liveSnapshot() ──
   await itx.enableProcessor("chunky", {
     source: "itx.kv.get('src/chunky.js')",
-    className: "Chunky",
+    className: "ChunkyDurableObject",
   });
   const proc = liveClient(async () =>
     clone(await itx.invokeCapability("itx.facets.get('chunky').liveSnapshot()")),
@@ -113,10 +113,10 @@ test("a dynamic-worker processor's live state combines reduced (ticks) + runtime
   // consumes rule (absent = durable events only; naming a type opts its ephemerals in) sits in
   // front of the facet's own contract filter — hence `consumes` on the enable.
   const presenceClass =
-    "itx.load(\"itx.kv.get('src/presence.js')\").getDurableObjectClass('Presence')";
+    "itx.load(\"itx.kv.get('src/presence.js')\").getDurableObjectClass('PresenceDurableObject')";
   await itx.enableProcessor("presence", {
     source: "itx.kv.get('src/presence.js')",
-    className: "Presence",
+    className: "PresenceDurableObject",
     consumes: ["tick", "poke"],
   });
   // A FILTERED processor's facet only materializes on its first consumed push (the enablement

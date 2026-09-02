@@ -43,7 +43,7 @@ test("enableProcessor rejects a name that is not ONE segment (a dotted name)", a
     (async () => {
       await itx.enableProcessor("a.b", {
         source: "itx.kv.get('src/tally.js')",
-        className: "Tally",
+        className: "TallyDurableObject",
       });
     })(),
   ).rejects.toThrow(/one segment/);
@@ -72,7 +72,7 @@ test("an inline reduce's slug (core / capability-table / subscriptions) is refus
       (async () => {
         await itx.enableProcessor(slug, {
           source: "itx.kv.get('src/tally.js')",
-          className: "Tally",
+          className: "TallyDurableObject",
         });
       })(),
     ).rejects.toThrow(/inline reduce/);
@@ -89,7 +89,7 @@ test("the raw event-sourced door agrees with the verb — a hand-appended subscr
     payload: {
       name: "tally",
       target:
-        "itx.load(\"itx.kv.get('src/tally.js')\").getDurableObjectClass('Tally').get('tally').processEventBatch",
+        "itx.load(\"itx.kv.get('src/tally.js')\").getDurableObjectClass('TallyDurableObject').get('tally').processEventBatch",
     },
   });
   expect(await processorNames(itx)).toEqual(["tally"]); // listed as enabled — and it is

@@ -18,7 +18,7 @@
 import { z } from "zod";
 import { codedError } from "../lib/errors.ts";
 import { defineProcessorContract, type StreamEvent, type StreamEventInput } from "./events.ts";
-import type { ReduceArgs, ReduceOnlyProcessor } from "./processor.ts";
+import { StreamProcessor, type ReduceArgs } from "./processor.ts";
 
 const CONTROL_TYPES = new Set([
   "events.iterate.com/stream/paused",
@@ -71,10 +71,10 @@ const CoreContract = defineProcessorContract({
 
 export type CoreState = z.infer<typeof CoreContract.stateSchema>;
 
-export class CoreStreamProcessor implements ReduceOnlyProcessor<CoreState> {
+export class CoreStreamProcessor extends StreamProcessor<CoreState> {
   readonly contract = CoreContract;
 
-  reduce({ event, state }: ReduceArgs<CoreState>): CoreState | undefined {
+  override reduce({ event, state }: ReduceArgs<CoreState>): CoreState | undefined {
     if (event.type === "events.iterate.com/stream/woken") {
       // The platform's own wake record (injected by Stream.append after admission, once per
       // incarnation): fold the incarnation and spend NO token — the wake is never client growth.

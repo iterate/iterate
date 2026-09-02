@@ -1901,3 +1901,42 @@ against source again, and a lost-pin audit of the folded test suite.
   `pnpm e2e` twice: byte-identical pass sets, no flakes.
 - GATES: tsc×3 · unit 176 · workers 38 · e2e 141 (139p/2xf) · tutorial-proof 8 · Playwright 2 ·
   oxlint 0/0 · knip clean.
+
+## 2026-09-02 — the processor is a pure class: `StreamProcessor` + a one-field DurableObject host
+
+Jonas: "i still want stream processors to be pure classes that subclass a StreamProcessor class that
+are easy to unit test … a StreamProcessorDurableObject that … initialises the StreamProcessor
+subclass and hands it to the StreamProcessorDurableObject." The onion had landed the processor as the
+DurableObject itself (wrap, not split); this reverses that one decision.
+
+- **`stream/processor.ts` is two classes.** `StreamProcessor<State>` is the author class and is PURE:
+  `contract` + public `reduce` / `processEvent` / `projectLiveState` / `idempotencyKey`, no constructor
+  arguments, no stream, no storage — `new Presence().reduce({ event, state })` is a unit test.
+  `ProcessorEngine<State>` is everything below the hooks (serial chain, checkpoint, gap repair, at-head
+  pass, refold, live-state), built over one processor instance with `{ stream, storage }`. The private
+  `Engine`/`Hooks` forwarding adapter in the SDK is gone; `path`/`projectId` left the engine (the
+  idempotency key is `${slug}/${key}[@offset]` — a key is scoped to one stream anyway).
+- **The host is one field.** `StreamProcessorDurableObject` keeps identity (`ctx.props`), `itx`, the
+  five doors and `publishLiveState()`, and hosts `abstract readonly processor` — an author writes
+  `export class PresenceDurableObject extends StreamProcessorDurableObject { processor = new Presence() }`.
+  A field, so deps ride the processor's own constructor (`new Notifier(this.env.ITX)`) and the same
+  class is constructed bare in a test. `className` names the host.
+- **Live state re-projects after EVERY batch.** The holder diffs and no-ops when unchanged, so a
+  runtime field bumped inside `processEvent` publishes on its own; `publishLiveState()` remains on the
+  host for a field moved OUTSIDE a batch (an RPC method). Both `Presence` copies lost their explicit
+  call. Pinned: bare construction; one delta for an in-batch runtime bump with no call; zero deltas
+  for an unchanged batch.
+- **The built-ins are the same class.** `CoreStreamProcessor`, `CapabilityTableProcessor` and
+  `SubscriptionsProcessor` extend `StreamProcessor` too; `ReduceOnlyProcessor` is deleted. Hosted
+  inline only `reduce` is called, so `InlineReduces` refuses a processor that overrides `processEvent`
+  at registration — the reduce-only rule, checked where it matters instead of encoded in a type.
+- Userspace sources (fixtures, demo, workers/e2e toys, the gitignored tutorial-proof toy) are the two
+  classes, hosts named `<Name>DurableObject`; walkthrough §5.3, the design doc §5.1 (the "wrap, not
+  split" paragraph now records the reversal), LAYERS, the tutorial and the SDK header say the split.
+- `docs/plan-one-fetch-rules.md` re-aligned to the onion tree: `itx.fetch` already exists (it IS the
+  egress tail), mounts carry no policies (D3 reopened — the matcher's home is the open question, a
+  subscriptions-shaped table recommended), `fetchCap`/`DEFAULT_CTX`/`?ctx=`/defect 28 already gone,
+  the `cd` codec defect already fixed, the gate can be a processor host with a `fetch` door; a §6 lists
+  the eight questions for the jam.
+- GATES: tsc×3 · unit+workers 217 (24 files) · e2e 140p/2xf (34 files) · tutorial-proof 8 ·
+  Playwright 2 · oxlint 0/0 · knip clean.

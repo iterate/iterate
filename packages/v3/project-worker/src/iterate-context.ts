@@ -355,9 +355,9 @@ export class IterateContext extends RpcTarget {
 
   // ── PROCESSORS: sugar over subscribe + the facet built-ins ──
 
-  /** Enable a processor: host `className` (a `StreamProcessorDurableObject` subclass exported by
-   *  the loaded `source`) as the facet named `name`, and subscribe its `processEventBatch` to every
-   *  commit. Literally `subscribe({ name, target: itx.load(source).getDurableObjectClass(className)
+  /** Enable a processor: host `className` (the `StreamProcessorDurableObject` subclass exported by
+   *  the loaded `source` — the host whose `processor` field holds the pure `StreamProcessor`) as the
+   *  facet named `name`, and subscribe its `processEventBatch` to every commit. Literally `subscribe({ name, target: itx.load(source).getDurableObjectClass(className)
    *  .get(name).processEventBatch, consumes })` — a processor is a named facet that is pushed the
    *  log. `consumes` is the SUBSCRIPTION's filter (what is sent; absent = every durable event); the
    *  processor's contract is the FOLD's (what it reduces) — so a processor that folds ephemerals

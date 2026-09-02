@@ -1,12 +1,13 @@
 // processor-facet-folds-and-address.e2e.test.ts — THE FACET SPINE live: a processor is a userspace
-// `StreamProcessorDurableObject` in a real workerd facet on the context DO (there are no built-in
-// processors — `tally` is a fixture source like any other). enableFixtureProcessor(tally) → events
-// land → the facet folds them → snapshot through the parent. Proves COLD CATCH-UP (an event appended
-// BEFORE enable is counted), that the subscriptions table lists the processor (a processor IS a
-// subscription whose target is a facet's processEventBatch — no separate machinery, no cursor: a
-// facet owns its progress), same-name-replaces (no shadow stack), the facet ADDRESS (any facet method
-// through the routing table, aliasable, the barrier verb, probe-resistant), and two userspace
-// processors folding side by side.
+// pure `StreamProcessor` (`Tally`) hosted by its one-line `StreamProcessorDurableObject` subclass
+// (`TallyDurableObject`) in a real workerd facet on the context DO (there are no built-in processors —
+// `tally` is a fixture source like any other). enableFixtureProcessor(tally) → events land → the facet
+// folds them → snapshot through the parent. Proves COLD CATCH-UP (an event appended BEFORE enable is
+// counted), that the subscriptions table lists the processor (a processor IS a subscription whose
+// target is a facet's processEventBatch — no separate machinery, no cursor: a facet owns its
+// progress), same-name-replaces (no shadow stack), the facet ADDRESS (any facet method through the
+// routing table, aliasable, the barrier verb, probe-resistant), and two userspace processors folding
+// side by side.
 
 import { expect, test } from "vitest";
 import { freshCtx, openItx, processorNames, subscriptions, until } from "./support/client.ts";
@@ -48,7 +49,7 @@ test("facet spine: cold catch-up + driven folds + the subscriptions table lists 
   expect(await processorNames(itx)).toEqual(["tally"]);
   const row = (await subscriptions(itx)).find((r: { name: string }) => r.name === "tally");
   expect(row.target).toMatch(
-    /^itx\.load\(.*\)\.getDurableObjectClass\(["']Tally["']\)\.get\(["']tally["']\)\.processEventBatch$/,
+    /^itx\.load\(.*\)\.getDurableObjectClass\(["']TallyDurableObject["']\)\.get\(["']tally["']\)\.processEventBatch$/,
   );
   expect(row.cursor).toBeUndefined();
 });

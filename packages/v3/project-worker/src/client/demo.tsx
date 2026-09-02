@@ -13,20 +13,25 @@ import { useLiveState } from "./react.tsx";
 const CTX = "prj_demo_livestate";
 
 // The demo processor, inline (a self-contained page needs no repo files): reduced `ticks` folded
-// from durable 'tick' events, runtime `lastPokeMs` bumped by a 'poke' ephemeral in processEvent.
-const PRESENCE_SRC = `import { StreamProcessorDurableObject, defineProcessorContract, z } from "./processor.js";
+// from durable 'tick' events, runtime `lastPokeMs` bumped by a 'poke' ephemeral in processEvent (the
+// engine re-projects after the batch). Two classes: the pure `Presence`, and the one-line host
+// `PresenceDurableObject` that `enableProcessor`'s `className` names.
+const PRESENCE_SRC = `import { StreamProcessor, StreamProcessorDurableObject, defineProcessorContract, z } from "./processor.js";
 const contract = defineProcessorContract({
   slug: "presence", version: "1.0.0",
   description: "Reduced tick count beside a runtime lastPokeMs.",
   stateSchema: z.object({ ticks: z.number().default(0) }), events: {},
   consumes: ["tick", "poke"], emits: [],
 });
-export class Presence extends StreamProcessorDurableObject {
+class Presence extends StreamProcessor {
   contract = contract;
   #lastPokeMs = 0;
   reduce({ event, state }) { if (event.type === "tick") return { ...state, ticks: state.ticks + 1 }; }
-  processEvent({ event }) { if (event && event.type === "poke") { this.#lastPokeMs = Date.now(); this.publishLiveState(); } }
+  processEvent({ event }) { if (event && event.type === "poke") this.#lastPokeMs = Date.now(); }
   projectLiveState(state) { return { ticks: state.ticks, lastPokeMs: this.#lastPokeMs }; }
+}
+export class PresenceDurableObject extends StreamProcessorDurableObject {
+  processor = new Presence();
 }`;
 
 async function connectAndEnable(): Promise<any> {
@@ -38,7 +43,7 @@ async function connectAndEnable(): Promise<any> {
   await itx.invokeCapability(["itx", "kv", ["put", "src/presence.js", PRESENCE_SRC]]);
   await itx.enableProcessor("presence", {
     source: "itx.kv.get('src/presence.js')",
-    className: "Presence",
+    className: "PresenceDurableObject",
     // What is SENT: the contract above says what is folded. `poke` is ephemeral, and an
     // ephemeral reaches a processor only when its subscription names the type.
     consumes: ["tick", "poke"],

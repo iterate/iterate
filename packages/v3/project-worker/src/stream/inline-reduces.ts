@@ -1,7 +1,9 @@
 // stream/inline-reduces.ts — THE INLINE REDUCES: reduce-only processors reduced SYNCHRONOUSLY at the
 // stream's commit point. The engine apparatus (serial chain, cursors, gap repair) is
 // the price a facet pays for being AWAY from the commit point; these reduces run AT it and pay none
-// of it — so a ReduceOnlyProcessor (contract + `reduce`, no `processEvent`) is hosted here for free.
+// of it. A processor is the same `StreamProcessor` class wherever it runs; hosted here only its
+// `reduce` is ever called, so a processor that overrides `processEvent` is REFUSED at registration
+// (its effects would silently never run) — the reduce-only rule, checked where it matters.
 //
 // The whole engine is four moves: REHYDRATE from a versioned checkpoint (else the schema-initial
 // state), CATCH UP to the durable head by replaying the log, REDUCE fresh durables at commit, and
@@ -19,14 +21,14 @@
 // commit whose reduce changed that entry — see publishLiveStateChanges below.
 
 import { reportIssue } from "../lib/errors.ts";
-import { consumesEvent, type ReduceOnlyProcessor } from "./processor.ts";
+import { consumesEvent, StreamProcessor } from "./processor.ts";
 import { readReduceCheckpoint, writeReduceCheckpoint } from "./reduce-checkpoint.ts";
 import { LiveState, type LiveStateSink } from "./live-state.ts";
 import type { StreamEvent } from "./events.ts";
 
 type KvStore = { get<T>(key: string): T | undefined; put(key: string, value: unknown): void };
-type Def = { slug: string; proc: ReduceOnlyProcessor<unknown> };
-type Entry = { proc: ReduceOnlyProcessor<unknown>; state: unknown; throughOffset: number };
+type Def = { slug: string; proc: StreamProcessor<unknown> };
+type Entry = { proc: StreamProcessor<unknown>; state: unknown; throughOffset: number };
 
 export class InlineReduces {
   readonly #cache = new Map<string, Entry>();
@@ -87,6 +89,12 @@ export class InlineReduces {
     if (!entry) {
       const def = this.#defs().find((d) => d.slug === slug);
       if (!def) throw new Error(`no inline processor "${slug}"`);
+      // THE REDUCE-ONLY RULE: hosted here only `reduce` ever runs. A processor with effects must be a
+      // facet (the engine drives its processEvent); registering it inline would silently drop them.
+      if (def.proc.processEvent !== StreamProcessor.prototype.processEvent)
+        throw new Error(
+          `inline processor "${slug}" overrides processEvent — effects never run at the commit point; host it as a facet`,
+        );
       const cp = readReduceCheckpoint(this.#kv, slug, def.proc.contract.version, () =>
         def.proc.contract.initialState(),
       );
@@ -153,7 +161,7 @@ export class InlineReduces {
     }
   }
 
-  #reduce(entry: { proc: ReduceOnlyProcessor<unknown>; state: unknown }, e: StreamEvent): void {
+  #reduce(entry: { proc: StreamProcessor<unknown>; state: unknown }, e: StreamEvent): void {
     if (!consumesEvent(entry.proc.contract.consumes, e)) return;
     try {
       entry.state = entry.proc.reduce({ event: e, state: entry.state }) ?? entry.state;

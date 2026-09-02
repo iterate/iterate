@@ -30,7 +30,7 @@ import { codedError } from "../lib/errors.ts";
 import { expressionEndingInFetch } from "../fetch/fetch-capabilities.ts";
 import { createLogger } from "../lib/logs.ts";
 import { defineProcessorContract } from "../stream/events.ts";
-import type { ProcessorStream, ReduceArgs, ReduceOnlyProcessor } from "../stream/processor.ts";
+import { StreamProcessor, type ProcessorStream, type ReduceArgs } from "../stream/processor.ts";
 import {
   parse,
   parseCapabilityPath,
@@ -93,7 +93,7 @@ type State = CapabilityTable;
  *  methods the parent calls against that reduced state. Hosted INLINE at the parent's commit
  *  point (zero distance — no chain, no cursor, no facet); the provide/revoke side effects live
  *  in the VERBS below, which simply append. */
-export class CapabilityTableProcessor implements ReduceOnlyProcessor<State> {
+export class CapabilityTableProcessor extends StreamProcessor<State> {
   readonly contract = CapabilityTableContract;
   /** The parent's own append/read, in-process. */
   readonly stream: ProcessorStream;
@@ -112,6 +112,7 @@ export class CapabilityTableProcessor implements ReduceOnlyProcessor<State> {
     builtIns: Record<string, unknown>;
     resolveCurrent: (call: Expression, depth?: number) => Promise<unknown>;
   }) {
+    super();
     this.stream = args.stream;
     this.#builtIns = args.builtIns;
     this.#resolveCurrent = args.resolveCurrent;
@@ -122,7 +123,7 @@ export class CapabilityTableProcessor implements ReduceOnlyProcessor<State> {
   // rebuild); a malformed payload is SKIPPED loudly — one bad hand-appended event must not
   // wedge every later resolve. The STRING halves are parsed HERE, once, into the structured
   // in-memory table.
-  reduce({ event, state }: ReduceArgs<State>): State | undefined {
+  override reduce({ event, state }: ReduceArgs<State>): State | undefined {
     if (event.ephemeral) return undefined;
     if (event.type === "events.iterate.com/capability-table/capability-provided") {
       const { path, target } = event.payload as { path: string; target: string };

@@ -1,10 +1,10 @@
 // sdk/index.ts — THE userspace SDK surface, bundled (zod included) into every loaded processor
 // isolate as `processor.js` by build-sdk.mjs. Userspace writes exactly what built-ins write:
 //
-//   import { StreamProcessorDurableObject, defineProcessorContract, z } from "./processor.js";
+//   import { StreamProcessor, StreamProcessorDurableObject, defineProcessorContract, z } from "./processor.js";
 //
-// One contract shape, one base class, schemas everywhere (owner's call: isolates absolutely
-// get zod and full contract schemas as part of the SDK).
+// One contract shape, one pure author class + one host class, schemas everywhere (owner's call:
+// isolates absolutely get zod and full contract schemas as part of the SDK).
 
 export {
   StreamProcessorDurableObject,
@@ -12,6 +12,7 @@ export {
   type StreamProcessorProps,
 } from "./stream-processor-durable-object.ts";
 export {
+  StreamProcessor,
   type ProcessorContract,
   type ProcessorSnapshot,
   type ProcessorStream,

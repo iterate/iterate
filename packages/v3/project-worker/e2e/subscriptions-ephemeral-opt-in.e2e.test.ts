@@ -17,7 +17,7 @@ test("ephemeral lane: a named-type subscription folds ephemeral chunks, '*' neve
   await itx.subscribe({
     name: "chunky",
     target:
-      "itx.load(\"itx.kv.get('src/chunky.js')\").getDurableObjectClass('Chunky').get('chunky').processEventBatch",
+      "itx.load(\"itx.kv.get('src/chunky.js')\").getDurableObjectClass('ChunkyDurableObject').get('chunky').processEventBatch",
     consumes: ["chunk", "mark"],
   });
   await enableFixtureProcessor(itx, "tally");

@@ -12,14 +12,17 @@ import type { Expression } from "../src/context/expression.ts";
 import { quiesce, stub } from "./support.ts";
 
 const COUNTER_SRC = /* js */ `
-import { StreamProcessorDurableObject, defineProcessorContract, z } from "./processor.js";
+import { StreamProcessor, StreamProcessorDurableObject, defineProcessorContract, z } from "./processor.js";
 const contract = defineProcessorContract({
   slug: "counter", version: "1.0.0", description: "counts durable events",
   stateSchema: z.object({ n: z.number().default(0) }), events: {}, consumes: ["*"], emits: [],
 });
-export class Counter extends StreamProcessorDurableObject {
+class Counter extends StreamProcessor {
   contract = contract;
   reduce({ state }) { return { n: state.n + 1 }; }
+}
+export class CounterDurableObject extends StreamProcessorDurableObject {
+  processor = new Counter();
 }
 `;
 const DIGEST_SRC = /* js */ `
@@ -52,7 +55,7 @@ test("processor: a fresh facet's first snapshot (wake) with ephemerals at head c
   // enable with a consumes FILTER: the configured event is not pushed; the facet is materialized and woken at configure time
   await s.configureSubscription({
     name: "counter",
-    target: [...loadChain("procsrc", "Counter", "counter"), "processEventBatch"],
+    target: [...loadChain("procsrc", "CounterDurableObject", "counter"), "processEventBatch"],
     consumes: ["tick"],
   });
   // the subscriptions inline reduce's live-state delta already sits at head (ephemeral); add one more so the tail is ≥ 2
@@ -63,7 +66,7 @@ test("processor: a fresh facet's first snapshot (wake) with ephemerals at head c
 
   // READ-DRIVEN catch-up through the load chain: snapshot → wake() → read → durables ≤ mark
   const before = (await s.invoke([
-    ...loadChain("procsrc", "Counter", "counter"),
+    ...loadChain("procsrc", "CounterDurableObject", "counter"),
     ["snapshot"],
   ])) as { offset: number; state: { n: number } };
   expect(before.state.n).toBe(p0.events.length); // folded every durable
@@ -139,7 +142,7 @@ test("enable with a consumes filter: itx.facets.get(name) answers before the fir
   await s.invoke(["itx", "kv", ["put", "procsrc", COUNTER_SRC]]);
   await s.configureSubscription({
     name: "c2",
-    target: [...loadChain("procsrc", "Counter", "c2"), "processEventBatch"],
+    target: [...loadChain("procsrc", "CounterDurableObject", "c2"), "processEventBatch"],
     consumes: ["tick"],
   });
   await sleep(300); // onCommit's void #resolve(sub.target) has long finished
@@ -155,7 +158,7 @@ test("processor: a read-driven catch-up (snapshot after quiesce) with ephemerals
   await s.invoke(["itx", "kv", ["put", "procsrc", COUNTER_SRC]]);
   await s.configureSubscription({
     name: "counter",
-    target: [...loadChain("procsrc", "Counter", "counter"), "processEventBatch"],
+    target: [...loadChain("procsrc", "CounterDurableObject", "counter"), "processEventBatch"],
     consumes: ["tick", "events.iterate.com/stream/subscription-configured"],
   });
   await sleep(300); // the configured event is consumed → push → facet materialized, cursor = its offset (durable ground)

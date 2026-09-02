@@ -31,10 +31,11 @@ import { freshCtx, openItx, sleep } from "./support/client.ts";
 const SLUG = "mark-refetch";
 const M = 5; // durable 'mark' commits after warm-up
 
-// A TINY processor module — a StreamProcessorDurableObject subclass, seeded into kv so the source
-// lambda merely READS it back (no nested module-string escaping). The loader hosts the exported
-// className as the facet.
-const MARK_MODULE = `import { StreamProcessorDurableObject, defineProcessorContract, z } from "./processor.js";
+// A TINY processor module — the pure `Mark extends StreamProcessor` plus its one-line host
+// `MarkDurableObject extends StreamProcessorDurableObject`, seeded into kv so the source lambda merely
+// READS it back (no nested module-string escaping). The loader hosts the exported host class
+// (`className`) as the facet.
+const MARK_MODULE = `import { StreamProcessor, StreamProcessorDurableObject, defineProcessorContract, z } from "./processor.js";
 const contract = defineProcessorContract({
   slug: "${SLUG}",
   version: "1.0.0",
@@ -44,11 +45,14 @@ const contract = defineProcessorContract({
   consumes: ["mark"],
   emits: [],
 });
-export class Mark extends StreamProcessorDurableObject {
+class Mark extends StreamProcessor {
   contract = contract;
   reduce({ event, state }) {
     if (event.type === "mark") return { marks: state.marks + 1 };
   }
+}
+export class MarkDurableObject extends StreamProcessorDurableObject {
+  processor = new Mark();
 }`;
 
 // The SOURCE expression: evaluating it writes ONE unique kv key (an atomic count — a read-modify-
@@ -86,7 +90,7 @@ test("userspace processor source is evaluated exactly ONCE (at materialization, 
   await itx.invokeCapability(["itx", "kv", ["put", "src/mark-refetch.js", MARK_MODULE]]);
 
   // 2) enable the USERSPACE processor (source = the counting expression)
-  await itx.enableProcessor(SLUG, { source: SOURCE, className: "Mark" });
+  await itx.enableProcessor(SLUG, { source: SOURCE, className: "MarkDurableObject" });
 
   // 3) let the enablement's own push (the configured commit materializes the facet) settle, then
   //    take the baseline

@@ -1,6 +1,6 @@
 // reduce-checkpoint.ts — THE ONE spelling of a persisted reduce checkpoint, shared by BOTH hosts:
 // the INLINE reduces (`core`, `capability-table`, `subscriptions` — reduced synchronously at the
-// commit point in iterate-context-durable-object.ts) and the facet-hosted `StreamProcessor` engine
+// commit point in iterate-context-durable-object.ts) and the facet-hosted `ProcessorEngine`
 // (driven away from the commit point, processor.ts).
 //
 // TWO keys on purpose (not one blob): a tiny CURSOR (`reducerVersion` + `reducedThroughOffset`) and

@@ -3,10 +3,10 @@
 //
 //   • a mini-app DO (a chatroom, a lobby) owns one directly — `new LiveState(itx, "chat", {…})` —
 //     and treats it as its store: `get()` reads, `set(next)` replaces (and notifies).
-//   • the StreamProcessor base owns one per processor (stream/processor.ts): after every reduce it
-//     `set`s the current PROJECTION of its state, so a processor's reduced state is live by default,
-//     and a processor can fold runtime fields into the projection (projectLiveState) and `set` again
-//     out of band (publishLiveState) when one changes.
+//   • the ProcessorEngine owns one per processor (stream/processor.ts): after every batch it
+//     `set`s the current PROJECTION of the state, so a processor's reduced state is live by default,
+//     and a processor folds runtime fields into the projection (projectLiveState) — bumped inside
+//     a batch they publish on their own; changed outside one, the host's publishLiveState() `set`s.
 //
 // MUTATION AND NOTIFICATION ARE INSEPARABLE: `set(next)` diffs the held value → next; on a real
 // change it bumps the revision and appends the (ephemeral, unconsumable) live-state/changed delta

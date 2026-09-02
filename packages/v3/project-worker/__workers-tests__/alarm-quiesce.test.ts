@@ -18,22 +18,24 @@
 //      ("still has active references"). You must quiesce BEFORE you can evict — the exact
 //      production sequence (support.ts's `quiesce`).
 //
-// PROCESSORS here are what they are everywhere: userspace `StreamProcessorDurableObject`
-// subclasses loaded through the Worker Loader and hosted as facets (there are no built-in
-// processors). The workers lane materializes them fine (the loader accepts
-// allow_irrevocable_stub_storage), so every facet-lifecycle pin rides the inline `Counter` source
-// below, enabled the way the edge's `enableProcessor` spells it — ONE `subscription-configured`
-// whose target is the facet's `processEventBatch` through the load chain. Live stubs
-// (hibernatable stub pagers) work fully here too — see hibernation-at-scale.test.ts.
+// PROCESSORS here are what they are everywhere: userspace two-class sources — a pure
+// `StreamProcessor` (`Counter`) and its one-line `StreamProcessorDurableObject` host
+// (`CounterDurableObject`, the class the load chain names) — loaded through the Worker Loader and
+// hosted as facets (there are no built-in processors). The workers lane materializes them fine (the
+// loader accepts allow_irrevocable_stub_storage), so every facet-lifecycle pin rides the inline
+// `Counter` source below, enabled the way the edge's `enableProcessor` spells it — ONE
+// `subscription-configured` whose target is the facet's `processEventBatch` through the load chain.
+// Live stubs (hibernatable stub pagers) work fully here too — see hibernation-at-scale.test.ts.
 
 import { evictDurableObject, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { expect, test, vi } from "vitest";
 import { Echo, openSession, quiesce, stub } from "./support.ts";
 
 /** A tiny userspace processor: counts every durable event. The tally fixture's shape
- *  (e2e/support/sources.ts), reduced to one number. */
+ *  (e2e/support/sources.ts), reduced to one number — the pure `Counter` plus its host
+ *  `CounterDurableObject`, which is what the load chain names. */
 const COUNTER_SRC = /* js */ `
-import { StreamProcessorDurableObject, defineProcessorContract, z } from "./processor.js";
+import { StreamProcessor, StreamProcessorDurableObject, defineProcessorContract, z } from "./processor.js";
 const contract = defineProcessorContract({
   slug: "counter",
   version: "1.0.0",
@@ -43,9 +45,12 @@ const contract = defineProcessorContract({
   consumes: ["*"],
   emits: [],
 });
-export class Counter extends StreamProcessorDurableObject {
+class Counter extends StreamProcessor {
   contract = contract;
   reduce({ state }) { return { n: state.n + 1 }; }
+}
+export class CounterDurableObject extends StreamProcessorDurableObject {
+  processor = new Counter();
 }
 `;
 
@@ -70,7 +75,7 @@ async function enableCounter(ctx: string, name = "counter"): Promise<void> {
     target: [
       "itx",
       ["load", "itx.kv.get('procsrc')"],
-      ["getDurableObjectClass", "Counter"],
+      ["getDurableObjectClass", "CounterDurableObject"],
       ["get", name],
       "processEventBatch",
     ],

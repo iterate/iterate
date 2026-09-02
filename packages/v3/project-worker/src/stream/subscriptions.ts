@@ -23,7 +23,7 @@ import {
   type ItxExpression,
 } from "../context/expression.ts";
 import { defineProcessorContract } from "./events.ts";
-import type { ProcessorStream, ReduceArgs, ReduceOnlyProcessor } from "./processor.ts";
+import { StreamProcessor, type ProcessorStream, type ReduceArgs } from "./processor.ts";
 
 const log = createLogger("subscriptions");
 
@@ -113,7 +113,7 @@ export type Subscription = SubscriptionsState["subscriptions"][string];
  *  append (`configure` / `remove`), both idempotent against the CURRENT state so a reconnect or a
  *  repeated call appends nothing. The halted fact is appended by the delivery loop; the resumed
  *  fact by an operator's plain `itx.append`. */
-export class SubscriptionsProcessor implements ReduceOnlyProcessor<SubscriptionsState> {
+export class SubscriptionsProcessor extends StreamProcessor<SubscriptionsState> {
   readonly contract = SubscriptionsContract;
   readonly #stream: ProcessorStream;
   /** Names a subscription may not take — the host's own facet names (a processor's subscription
@@ -122,11 +122,15 @@ export class SubscriptionsProcessor implements ReduceOnlyProcessor<Subscriptions
   readonly #reservedNames: ReadonlySet<string>;
 
   constructor(stream: ProcessorStream, reservedNames: Iterable<string> = []) {
+    super();
     this.#stream = stream;
     this.#reservedNames = new Set(reservedNames);
   }
 
-  reduce({ event, state }: ReduceArgs<SubscriptionsState>): SubscriptionsState | undefined {
+  override reduce({
+    event,
+    state,
+  }: ReduceArgs<SubscriptionsState>): SubscriptionsState | undefined {
     if (event.ephemeral) return undefined;
     const p = event.payload as Record<string, unknown>;
     switch (event.type) {

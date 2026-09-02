@@ -1,10 +1,12 @@
-// stream/processor.ts — THE PROCESSOR ENGINE. The author surface mirrors apps/os
-// (`reduce`/`processEvent`/`projectLiveState`, `blockProcessorWhile`/`runInBackground`,
-// `delivery.caughtUp`) so processors port both ways. Authors never extend this class directly:
-// `StreamProcessorDurableObject` (sdk/) is the base class they write, and it wraps ONE instance of
-// this engine with its hooks pointed at the author's methods. Node-testable; bundled with zod into
-// every loaded isolate as `processor.js` via sdk/index.ts (build-sdk.mjs). Runtime imports: lib/,
-// stream/live-state.ts, stream/reduce-checkpoint.ts.
+// stream/processor.ts — THE PROCESSOR: two classes. `StreamProcessor` is what an author writes — a
+// PURE class (a contract and three hooks: `reduce` / `processEvent` / `projectLiveState`, no
+// constructor arguments, no storage, no stream), so `new Presence().reduce({ event, state })` is a
+// unit test. `ProcessorEngine` drives ONE such instance against a stream and a storage (serial
+// chain, checkpoint, gap repair, at-head pass, version refold, live-state publishing); the SDK's
+// `StreamProcessorDurableObject` (sdk/) builds one per hosted facet. The author surface mirrors
+// apps/os (`blockProcessorWhile`/`runInBackground`, `delivery.caughtUp`) so processors port both
+// ways. Node-testable; bundled with zod into every loaded isolate as `processor.js` via
+// sdk/index.ts (build-sdk.mjs). Runtime imports: lib/, stream/live-state.ts, stream/reduce-checkpoint.ts.
 //
 // THE CONCURRENCY CONTRACT:
 //   1. ONE SERIAL CHAIN per processor — batches never interleave.
@@ -107,18 +109,6 @@ export type ProcessEventArgs<State> = {
 
 export type ProcessorSnapshot<State> = { offset: number; state: State };
 
-/** A REDUCE-ONLY processor: pure reduce, no effects — hostable at ZERO DISTANCE (inline at the
- *  parent's commit point) because it needs none of the async engine below. The entire engine
- *  apparatus — serial chain, cursors, scanned offset ranges, gap repair — is the price of
- *  being AWAY from the commit point; a reduce that runs synchronously inside append pays none of
- *  it. Same `defineProcessorContract`, same `reduce({event, state})` signature; NOT having a
- *  `processEvent` is what qualifies a processor for inline hosting (the rule is the type).
- *  Inline reduces see DURABLE events only — their checkpoint must be rebuildable from the log. */
-export type ReduceOnlyProcessor<State> = {
-  contract: ProcessorContract<State>;
-  reduce(args: ReduceArgs<State>): State | null | undefined;
-};
-
 /** Returned by #projectionOf when `projectLiveState(state)` threw — distinct from a legitimate
  *  `undefined` projection, so a throw skips the emit while `undefined` is a real (patchable) value. */
 const PROJECTION_FAILED = Symbol("live-state-projection-failed");
@@ -142,11 +132,52 @@ export function consumesEvent(
 const foldsEvent = (consumes: readonly string[], event: { type: string; ephemeral?: boolean }) =>
   event.type !== "events.iterate.com/live-state/changed" && consumesEvent(consumes, event);
 
+/** THE AUTHOR CLASS. A processor is a contract and three hooks, nothing else: no constructor
+ *  arguments, no stream, no storage — a plain object a unit test constructs with `new` and calls
+ *  `reduce` on. Deps an effect needs (a client, a binding) arrive through the subclass's own
+ *  constructor, exactly as they would for any class. One instance lives as long as its host; a field
+ *  on it is RUNTIME state (gone with the host), which `projectLiveState` may fold into the live view. */
 export abstract class StreamProcessor<State> {
   abstract readonly contract: ProcessorContract<State>;
-  protected readonly stream: ProcessorStream;
-  protected readonly path: string;
-  protected readonly projectId: string;
+
+  /** Pure reduce. Return the NEXT state (a new object) — or null/undefined to keep the current. */
+  reduce(_args: ReduceArgs<State>): State | null | undefined {
+    return undefined;
+  }
+
+  /** Side-effect hook. Synchronous by design: register async work via the two helpers on args. */
+  processEvent(_args: ProcessEventArgs<State>): undefined {}
+
+  /** The live-state PROJECTION — the shape clients see and the shape the diffs are computed over.
+   *  DEFAULT: the reduced state verbatim, so EVERY processor's reduced state is live out of the box —
+   *  a delta emits on every change whether or not anyone is watching. That is deliberate: the delta
+   *  is an EPHEMERAL, unconsumable event (memory-only, no storage write, dropped at delivery if no
+   *  subscriber names its key), so "always live" costs an offset and a cheap diff, nothing durable.
+   *  Override to redact/trim, or to FOLD IN RUNTIME FIELDS the reduce doesn't own
+   *  (`return { ...state, lastSeenMs: this.lastSeenMs }`). The engine re-projects after EVERY batch,
+   *  so a runtime field bumped inside `processEvent` publishes on its own; one changed outside a batch
+   *  (an RPC method on the host) needs the host's `publishLiveState()`. */
+  projectLiveState(state: State): unknown {
+    return state;
+  }
+
+  /** Stable idempotency key namespaced by slug; add `whileProcessing` for per-event keys. */
+  idempotencyKey(key: string, whileProcessing?: StreamEventT): string {
+    return whileProcessing
+      ? `${this.contract.slug}/${key}@${whileProcessing.offset}`
+      : `${this.contract.slug}/${key}`;
+  }
+}
+
+/** THE ENGINE: drives one `StreamProcessor` against a stream and a storage. Everything below the
+ *  author's three hooks lives here — the serial chain, the checkpoint, gap repair from the
+ *  scanned-range proof, the at-head pass, version refolds, live-state publishing. Constructed by the
+ *  host (`StreamProcessorDurableObject` with the facet's kv and `env.ITX`; a test with the in-memory
+ *  stand-ins in test-support.ts). */
+export class ProcessorEngine<State> {
+  readonly processor: StreamProcessor<State>;
+  readonly #contract: ProcessorContract<State>;
+  readonly #stream: ProcessorStream;
   readonly #storage: ProcessorStorage;
 
   // Rule 1: the serial chain.
@@ -155,36 +186,14 @@ export abstract class StreamProcessor<State> {
   #pushedThroughOffset?: number; // highest scannedThroughOffset ever SHOWN to us (see processEventBatch)
   #waiters: { offset: number; resolve: () => void }[] = [];
 
-  constructor(args: {
-    stream: ProcessorStream;
-    storage: ProcessorStorage;
-    path: string;
-    projectId: string;
-  }) {
-    this.stream = args.stream;
-    this.#storage = args.storage;
-    this.path = args.path;
-    this.projectId = args.projectId;
-  }
-
-  /** Pure reduce. Return the NEXT state (a new object) — or null/undefined to keep the current. */
-  protected reduce(_args: ReduceArgs<State>): State | null | undefined {
-    return undefined;
-  }
-
-  /** Side-effect hook. Synchronous by design: register async work via the two helpers. */
-  protected processEvent(_args: ProcessEventArgs<State>): undefined {}
-
-  /** The live-state PROJECTION — the shape clients see and the shape the diffs are computed over.
-   *  DEFAULT: the reduced state verbatim, so EVERY processor's reduced state is live out of the box —
-   *  a delta emits on every change whether or not anyone is watching. That is deliberate: the delta
-   *  is an EPHEMERAL, unconsumable event (memory-only, no storage write, dropped at delivery if no
-   *  subscriber names its key), so "always live" costs an offset and a cheap diff, nothing durable.
-   *  Override to redact/trim, or to FOLD IN RUNTIME FIELDS the reduce doesn't own
-   *  (`return { ...state, lastSeenMs: this.#lastSeenMs }`); after a runtime field changes out of
-   *  band, call `publishLiveState()` to emit its delta. */
-  protected projectLiveState(state: State): unknown {
-    return state;
+  constructor(
+    processor: StreamProcessor<State>,
+    deps: { stream: ProcessorStream; storage: ProcessorStorage },
+  ) {
+    this.processor = processor;
+    this.#contract = processor.contract;
+    this.#stream = deps.stream;
+    this.#storage = deps.storage;
   }
 
   // One LiveState holder per processor (stream/live-state.ts) — it owns the revision chain and the
@@ -197,20 +206,20 @@ export abstract class StreamProcessor<State> {
     if (this.#live) return this.#live;
     const seed = this.#projectionOf(seedState ?? this.#loadProgress().state);
     return (this.#live = new LiveState(
-      this.stream,
-      this.contract.slug,
+      this.#stream,
+      this.#contract.slug,
       seed === PROJECTION_FAILED ? undefined : seed,
     ));
   }
 
-  /** `this.projectLiveState(state)`, CONTAINED: a throwing/unserializable projection loses only its
-   *  notification (the client re-seeds on the chain gap), never a batch or the holder. The sentinel
-   *  distinguishes "threw" (skip the emit) from a legitimate `undefined` projection. */
+  /** `processor.projectLiveState(state)`, CONTAINED: a throwing/unserializable projection loses only
+   *  its notification (the client re-seeds on the chain gap), never a batch or the holder. The
+   *  sentinel distinguishes "threw" (skip the emit) from a legitimate `undefined` projection. */
   #projectionOf(state: State): unknown {
     try {
-      return this.projectLiveState(state);
+      return this.processor.projectLiveState(state);
     } catch (error) {
-      reportIssue("processor.live-state", error, { slug: this.contract.slug });
+      reportIssue("processor.live-state", error, { slug: this.#contract.slug });
       return PROJECTION_FAILED;
     }
   }
@@ -223,18 +232,11 @@ export abstract class StreamProcessor<State> {
     return this.#liveHolder().snapshot();
   }
 
-  /** Emit a delta for the CURRENT projection (reduced + any runtime fields) if it changed. The base
-   *  calls this after every batch; call it yourself after mutating a runtime field out of band. */
-  protected publishLiveState(): void {
+  /** Emit a delta for the CURRENT projection (reduced + any runtime fields) if it changed. The engine
+   *  calls this after every batch; the host calls it after a runtime field moved outside a batch. */
+  publishLiveState(): void {
     const projection = this.#projectionOf(this.#loadProgress().state);
     if (projection !== PROJECTION_FAILED) this.#liveHolder().set(projection);
-  }
-
-  /** Stable idempotency key namespaced by slug; add `whileProcessing` for per-event keys. */
-  protected idempotencyKey(key: string, whileProcessing?: StreamEventT): string {
-    return whileProcessing
-      ? `${this.contract.slug}/${key}@${this.path}:${whileProcessing.offset}`
-      : `${this.contract.slug}/${key}`;
   }
 
   // ── the drive doors ──
@@ -311,7 +313,7 @@ export abstract class StreamProcessor<State> {
         this.#waiters.splice(this.#waiters.indexOf(waiter), 1);
         reject(
           new Error(
-            `processor "${this.contract.slug}" did not reach offset ${offset} in ${timeoutMs}ms`,
+            `processor "${this.#contract.slug}" did not reach offset ${offset} in ${timeoutMs}ms`,
           ),
         );
       }, timeoutMs);
@@ -355,14 +357,17 @@ export abstract class StreamProcessor<State> {
    *  would skip the refold and replay the whole log WITH side effects. */
   #loadProgress(): ReduceCheckpoint<State> {
     if (this.#progress) return this.#progress;
-    const cp = readReduceCheckpoint(this.#storage, this.contract.slug, this.contract.version, () =>
-      this.contract.initialState(),
+    const cp = readReduceCheckpoint(
+      this.#storage,
+      this.#contract.slug,
+      this.#contract.version,
+      () => this.#contract.initialState(),
     );
     if (cp) return (this.#progress = cp);
     return {
-      reducerVersion: this.contract.version,
+      reducerVersion: this.#contract.version,
       reducedThroughOffset: 0,
-      state: this.contract.initialState(),
+      state: this.#contract.initialState(),
     };
   }
 
@@ -371,32 +376,36 @@ export abstract class StreamProcessor<State> {
   async #rereduceIfVersionChanged(): Promise<void> {
     if (this.#progress) return; // version can't change within an incarnation — probe storage once
     const stored = this.#storage.get<{ reducerVersion: string; reducedThroughOffset: number }>(
-      reduceCursorKey(this.contract.slug),
+      reduceCursorKey(this.#contract.slug),
     );
-    if (!stored || stored.reducerVersion === this.contract.version) return;
+    if (!stored || stored.reducerVersion === this.#contract.version) return;
     // The OLD-version state blob, read before the refold overwrites it — the diff base for the one
     // heal delta emitted below.
-    const oldState = this.#storage.get<State>(reduceStateKey(this.contract.slug));
+    const oldState = this.#storage.get<State>(reduceStateKey(this.#contract.slug));
     // Rebuild ONLY through the offset the OLD cursor covered (reduce-only, no effects). Events
     // past it are the job of the normal flow that follows — refolding to the live head instead
     // would judge an already-queued in-flight push stale and swallow its effects.
     const target = stored.reducedThroughOffset;
-    let state = this.contract.initialState();
+    let state = this.#contract.initialState();
     let after = 0;
     while (after < target) {
-      const page = await this.stream.read(after, 500);
+      const page = await this.#stream.read(after, 500);
       for (const event of page.events) {
         if (event.offset > target) break;
-        if (foldsEvent(this.contract.consumes, event))
-          state = this.reduce({ event, state }) ?? state;
+        if (foldsEvent(this.#contract.consumes, event))
+          state = this.processor.reduce({ event, state }) ?? state;
       }
       const scannedTo = Math.min(page.scannedThroughOffset, target);
       if (scannedTo <= after) break;
       after = scannedTo;
       if (page.events.length < 500) break;
     }
-    this.#progress = { reducerVersion: this.contract.version, reducedThroughOffset: target, state };
-    writeReduceCheckpoint(this.#storage, this.contract.slug, this.#progress, state, true);
+    this.#progress = {
+      reducerVersion: this.#contract.version,
+      reducedThroughOffset: target,
+      state,
+    };
+    writeReduceCheckpoint(this.#storage, this.#contract.slug, this.#progress, state, true);
     // A refold jumped the state under the holder. Rebirth the chain NOW on a fresh epoch seeded at
     // the OLD-version projection, and publish the refolded one through it: clients synced to the old
     // chain get one delta whose `from` can't match any rev they hold → they re-seed — even when this
@@ -417,7 +426,7 @@ export abstract class StreamProcessor<State> {
     let sawFullPage = false;
     for (;;) {
       const after = this.#loadProgress().reducedThroughOffset;
-      const page = await this.stream.read(after, 500);
+      const page = await this.#stream.read(after, 500);
       if (page.scannedThroughOffset <= after) {
         // No new contiguous events beyond the cursor → we are AT HEAD. An EXACT full page (500)
         // was judged not-at-head and never got rule 5's caught-up pass; a log whose length is an
@@ -440,7 +449,7 @@ export abstract class StreamProcessor<State> {
     for (;;) {
       const after = this.#loadProgress().reducedThroughOffset;
       if (after >= target) return;
-      const page = await this.stream.read(after, 500);
+      const page = await this.#stream.read(after, 500);
       if (page.scannedThroughOffset <= after) return; // nothing more durable to repair
       const through = Math.min(page.scannedThroughOffset, target);
       await this.#processBatch(
@@ -467,7 +476,7 @@ export abstract class StreamProcessor<State> {
 
     const consumable = events.filter(
       (e) =>
-        foldsEvent(this.contract.consumes, e) &&
+        foldsEvent(this.#contract.consumes, e) &&
         (e.ephemeral || e.offset > progress.reducedThroughOffset),
     );
     let caughtUpDelivered = false;
@@ -489,19 +498,20 @@ export abstract class StreamProcessor<State> {
     const advanced = reducedThroughOffset > progress.reducedThroughOffset;
     const sawDurable = events.some((e) => !e.ephemeral);
     const next: ReduceCheckpoint<State> = {
-      reducerVersion: this.contract.version,
+      reducerVersion: this.#contract.version,
       reducedThroughOffset,
       state,
     };
     if (sawDurable && advanced)
-      writeReduceCheckpoint(this.#storage, this.contract.slug, next, state, state !== prevState);
+      writeReduceCheckpoint(this.#storage, this.#contract.slug, next, state, state !== prevState);
     this.#progress = next;
     this.#resolveWaiters(reducedThroughOffset);
     // Persist FIRST, emit the live-state delta second (a crash between loses only a notification,
     // healed by the chain gap; never state). #progress is already `next`, so publishLiveState reads
     // the just-committed state; the holder diffs against the previous projection and no-ops if
-    // unchanged. Runtime-only fields ride a separate publishLiveState() call from out of band.
-    if (state !== prevState) this.publishLiveState();
+    // unchanged. Re-projected after EVERY batch, not only when the reduce moved: a runtime field the
+    // author bumped inside `processEvent` (folded in by `projectLiveState`) publishes on its own.
+    this.publishLiveState();
   }
 
   /** THE per-event primitive (rules 2–3), shared by every path (batch, gap-repair, at-head pass):
@@ -513,17 +523,17 @@ export abstract class StreamProcessor<State> {
     if (event) {
       let next: State | null | undefined;
       try {
-        next = this.reduce({ event, state });
+        next = this.processor.reduce({ event, state });
       } catch (error) {
         // A malformed/hostile event must not wedge the reduce forever: record the skip, move on.
-        reportIssue("processor.reduce", error, { slug: this.contract.slug, offset: event.offset });
+        reportIssue("processor.reduce", error, { slug: this.#contract.slug, offset: event.offset });
         next = undefined;
       }
       state = next ?? state;
     }
     // FIFO blocker chain for THIS event (rule 2); background work escapes it (rule 3).
     let blockers: Promise<unknown> = Promise.resolve();
-    this.processEvent({
+    this.processor.processEvent({
       event,
       state,
       previousState,
@@ -533,7 +543,7 @@ export abstract class StreamProcessor<State> {
       },
       runInBackground: (work) => {
         void work().catch((error) =>
-          reportIssue("processor.background", error, { slug: this.contract.slug }),
+          reportIssue("processor.background", error, { slug: this.#contract.slug }),
         );
       },
       delivery: { caughtUp },
@@ -554,21 +564,21 @@ export abstract class StreamProcessor<State> {
   #makeAppend(whileProcessing: StreamEventT | null) {
     return async (...inputs: StreamEventInputT[]): Promise<StreamEventT[]> => {
       for (const input of inputs) {
-        if (!this.contract.emits.includes(input.type))
+        if (!this.#contract.emits.includes(input.type))
           throw new Error(
-            `processor "${this.contract.slug}" emits ${JSON.stringify(input.type)} without declaring it`,
+            `processor "${this.#contract.slug}" emits ${JSON.stringify(input.type)} without declaring it`,
           );
         input.source = {
           processor: {
-            slug: this.contract.slug,
-            version: this.contract.version,
+            slug: this.#contract.slug,
+            version: this.#contract.version,
             ...(whileProcessing && {
               whileProcessing: { offset: whileProcessing.offset, type: whileProcessing.type },
             }),
           },
         };
       }
-      return await this.stream.append(...inputs);
+      return await this.#stream.append(...inputs);
     };
   }
 

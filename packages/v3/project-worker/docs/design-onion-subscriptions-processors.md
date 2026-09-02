@@ -50,7 +50,7 @@ flowchart TB
     view["itx.subscriptions.list() / get(name): rows ⋈ cursors"]
   end
   subgraph L3["Layer 3 — processors (sugar)"]
-    proc["StreamProcessorDurableObject (SDK) hosted as a facet<br/>enableProcessor = subscribe to its .processEventBatch"]
+    proc["pure StreamProcessor inside a StreamProcessorDurableObject host, a facet<br/>enableProcessor = subscribe to its .processEventBatch"]
   end
   L1 --> L0
   L2 --> L0
@@ -78,7 +78,7 @@ await itx.subscribe({
 }); // cursor, at-least-once
 await itx.enableProcessor("presence", {
   source: "itx.kv.get('presence.js')",
-  className: "Presence",
+  className: "PresenceDurableObject", // the host; `processor = new Presence()` inside
 }); // SUGAR over subscribe
 await itx.facets.get("presence").snapshot();
 await itx.subscriptions.list(); // config rows joined with cursors and halts
@@ -278,20 +278,28 @@ into the SDK base, where it belongs.
 ### 5.1 The SDK base
 
 ```ts
-// sdk/stream-processor-durable-object.ts — bundled into processor.js
+// stream/processor.ts — THE AUTHOR CLASS, pure (as landed 2026-09-02, Jonas: "pure classes that
+// subclass a StreamProcessor class that are easy to unit test")
+export abstract class StreamProcessor<State> {
+  abstract readonly contract: ProcessorContract<State>;
+  reduce(args: ReduceArgs<State>): State | null | undefined;
+  processEvent(args: ProcessEventArgs<State>): undefined;
+  /** The live PROJECTION of the reduced state — what liveSnapshot() serves and what deltas are diffed over.
+   *  Default: the state verbatim. Override to trim, or to fold in runtime fields the reduce does not own;
+   *  the engine re-projects after every batch, so a field bumped in processEvent publishes on its own. */
+  projectLiveState(state: State): unknown;
+  idempotencyKey(key: string, whileProcessing?: StreamEvent): string;
+}
+
+// sdk/stream-processor-durable-object.ts — THE HOST, bundled into processor.js
 export type StreamProcessorProps = { contextName: string; name: string };
 
-export abstract class StreamProcessorDurableObject<State, Env = {}> extends DurableObject<
+export abstract class StreamProcessorDurableObject<State = unknown, Env = {}> extends DurableObject<
   Env, // Env extends { ITX: ItxBinding } — as landed
   StreamProcessorProps
 > {
-  abstract readonly contract: ProcessorContract<State>;
-  // the three hooks — the author surface
-  protected reduce(args: ReduceArgs<State>): State | null | undefined;
-  protected processEvent(args: ProcessEventArgs<State>): undefined;
-  /** The live PROJECTION of the reduced state — what liveSnapshot() serves and what deltas are diffed over.
-   *  Default: the state verbatim. Override to trim, or to fold in runtime fields the reduce does not own. */
-  protected projectLiveState(state: State): unknown;
+  /** `processor = new Presence()` at the top of the subclass — the one thing an author writes here. */
+  abstract readonly processor: StreamProcessor<State>;
   // what an author reaches
   /** The owning context's parsed address — the same `{ projectId, path, name }` object the DO holds as #address
    *  (`name` is the canonical codec string). Parsed once from ctx.props.contextName. */
@@ -300,9 +308,7 @@ export abstract class StreamProcessorDurableObject<State, Env = {}> extends Dura
   protected readonly name: string;
   /** The owning context's scope: the loaded isolate's env.ITX, bound at load. */
   protected get itx(): Promise<unknown>; // the owning context's scope, via env.ITX.get()
-  protected get stream(): ProcessorStream;
-  protected publishLiveState(): void;
-  protected idempotencyKey(key: string, whileProcessing?: StreamEvent): string;
+  protected publishLiveState(): void; // after a runtime field moved OUTSIDE a batch
   // the doors the delivery loop and itx.facets.get(name) reach
   processEventBatch(events: StreamEvent[], range: ScannedRange): Promise<void>;
   wake(): Promise<void>;
@@ -320,13 +326,16 @@ the `proc:`/`named:`/`stateful:` name prefixes all die. A processor IS a named f
 name is the subscription name is the `.get(name)` name.
 
 The `stream/processor.ts` engine (serial chain, checkpoint, gap repair, at-head pass, version
-refold, live-state publish) is **wrapped, not split** (as landed): `StreamProcessorDurableObject`
-builds one engine instance on first use with its hooks pointed at the DO's own `reduce` /
-`processEvent` / `projectLiveState`, so the engine and its tests stay untouched and still Node-
-testable, and it remains the home of `ReduceOnlyProcessor` and `consumesEvent` for the inline
-reduces. Authors never extend the engine directly: the author's DurableObject is the processor
-(deliberate divergence from apps/os's two-class `createProcessor(deps)`; that split existed so one
-processor could run either in a facet or its own DO, and the clean room has only facets).
+refold, live-state publish) was first landed **wrapped, not split** (the DurableObject was the
+processor, hooks forwarded to it). Jonas then asked for the split (2026-09-02): the author's
+processor is a PURE `StreamProcessor` subclass — constructible bare, `reduce` callable in a Node
+test — and the DurableObject is a one-field HOST (`processor = new Presence()`) that builds a
+`ProcessorEngine` over the pure instance with its facet kv and `env.ITX`. The engine calls the
+processor's public hooks directly (no forwarding adapter); the three inline reduces are
+`StreamProcessor` subclasses too (hosted at the commit point, `reduce` only — `ReduceOnlyProcessor` is
+gone), and re-projects live state after every batch so a
+runtime field bumped inside `processEvent` needs no explicit publish. apps/os's two-class shape
+returns, for a different reason than there (unit-testability, not facet-vs-DO hosting).
 
 ### 5.2 There are no built-in processors
 
@@ -342,10 +351,15 @@ enableProcessor(name, { source, className }) ⇒ subscribe({ name, target: `itx.
 disableProcessor(name)                       ⇒ unsubscribe(name); itx.facets.delete(name)      // storage included
 ```
 
-A userspace processor, plain JS, one class:
+A userspace processor, plain JS, two classes — the pure processor and its one-line host:
 
 ```js
-import { StreamProcessorDurableObject, defineProcessorContract, z } from "./processor.js";
+import {
+  StreamProcessor,
+  StreamProcessorDurableObject,
+  defineProcessorContract,
+  z,
+} from "./processor.js";
 const contract = defineProcessorContract({
   slug: "presence",
   version: "1.0.0",
@@ -355,21 +369,21 @@ const contract = defineProcessorContract({
   consumes: ["tick", "poke"],
   emits: [],
 });
-export class Presence extends StreamProcessorDurableObject {
+class Presence extends StreamProcessor {
   contract = contract;
   #lastPokeMs = 0;
   reduce({ event, state }) {
     if (event.type === "tick") return { ...state, ticks: state.ticks + 1 };
   }
   processEvent({ event }) {
-    if (event?.type === "poke") {
-      this.#lastPokeMs = Date.now();
-      this.publishLiveState();
-    }
+    if (event?.type === "poke") this.#lastPokeMs = Date.now(); // re-projected at batch end
   }
   projectLiveState(state) {
     return { ...state, lastPokeMs: this.#lastPokeMs };
   }
+}
+export class PresenceDurableObject extends StreamProcessorDurableObject {
+  processor = new Presence();
 }
 ```
 
@@ -445,7 +459,7 @@ the expression), `fetchCap`, `resumeSubscription`, `provide(opts)`, `unsubscribe
 | `laneOf`, `facetTarget`, `rpcStubTarget`, `SubscriptionMount`, `#subscriptionMounts`, `#activeSubscriptionMounts`, `#deliverToConnectedSubscriptions`, `#driveFacets`, `#facetEntries`, `#facet`, the resurrection pass, `revokeCapability.all`, DO-side `enable/disableProcessor` bodies | `stream-durable-object.ts`                           | ~400 → ~70 |
 | `delivery` / `processor` / `lane` on `capability-provided`; `ProcessorPolicy`; `deliverTo` by row                                                                                                                                                                                         | `capability-table-processor.ts` (→ 5.0.0)            | ~80        |
 | `DeliveryPolicy`, `SubscriptionLane`                                                                                                                                                                                                                                                      | `core/events.ts`                                     | ~35        |
-| abstract `StreamProcessor` as an author class                                                                                                                                                                                                                                             | `core/processor.ts` (reshaped into the runner)       | —          |
+| ~~abstract `StreamProcessor` as an author class~~ — REVERSED 2026-09-02: it IS the author class (pure); the DO is its host                                                                                                                                                                | `stream/processor.ts`                                | —          |
 | `connectToCapnweb` root (+ `connect.e2e`)                                                                                                                                                                                                                                                 | `built-ins.ts`, `worker.ts` brand registration stays | ~25        |
 | `ProjectSession.get`, `?ctx=`, `DEFAULT_CTX`, `fetchCap`, `resumeSubscription`, `provide` opts, live-state mode                                                                                                                                                                           | `itx-surface.ts`, `worker.ts`                        | ~110       |
 
@@ -454,7 +468,7 @@ the expression), `fetchCap`, `resumeSubscription`, `provide(opts)`, `unsubscribe
 | `UnauthenticatedSession` / `Session` / `ProjectCollection`; `cd` relative; `fetch` root; `/cap?context=`; `getEntrypoint(name, { props })` | `session.ts`, `iterate-context.ts`, `built-ins.ts`, `worker.ts` | ~95           |
 | `subscriptions` inline reduce (4 events) + the `subscriptions` built-in view                                                               | `stream/subscriptions.ts`                                       | ~80           |
 | the delivery loop + cursor lane over kv + alarm                                                                                            | `stream/subscription-delivery.ts`                               | ~140          |
-| `StreamProcessorRunner` (rename + hook-parameterize) + `StreamProcessorDurableObject`                                                      | `stream/`, `sdk/`                                               | ~30 net + ~60 |
+| `ProcessorEngine` (the engine, split from the pure `StreamProcessor`) + the `StreamProcessorDurableObject` host                            | `stream/`, `sdk/`                                               | ~30 net + ~60 |
 | `FacetHandle` / `RpcStubHandle` brands; `facet:<name>` startup memo; `facets.delete`                                                       | `invoke-handle.ts`, the DO, `built-ins.ts`                      | ~40           |
 | presence events on attach/final close; tally as a test-fixture source                                                                      | `rpc-stub-directory.ts`, `e2e/support/sources.ts`               | ~30           |
 
@@ -542,7 +556,7 @@ src/
   fetch/     fetch-capabilities.ts
   stream/    stream.ts events.ts processor.ts reduce-checkpoint.ts inline-reduces.ts core-processor.ts
              subscriptions.ts subscription-delivery.ts live-state.ts
-  sdk/       index.ts (→ processor.js) stream-processor-durable-object.ts
+  sdk/       index.ts (→ processor.js) stream-processor-durable-object.ts (the host)
   lib/       errors.ts logs.ts hash.ts patch.ts        client/     generated/
 ```
 

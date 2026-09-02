@@ -1,9 +1,10 @@
 // __workers-tests__/facet-props.test.ts — THE platform probe the processor layer leans on: a facet
 // started from a Worker-Loader class minted with `getDurableObjectClass(name, { props })` sees those
-// props as `this.ctx.props`. That is how a hosted StreamProcessorDurableObject learns its identity
-// (`{ contextName, name }`) with no configure() side channel — the parent passes props at mint,
-// the only party that knows them. Pinned here in the workers lane because it needs a real
-// DurableObjectState (`state.facets`) and a real LOADER: runInDurableObject hands us both.
+// props as `this.ctx.props`. That is how a processor's host (its `StreamProcessorDurableObject`
+// subclass) learns its identity (`{ contextName, name }`) with no configure() side channel — the
+// parent passes props at mint, the only party that knows them. Pinned here in the workers lane
+// because it needs a real DurableObjectState (`state.facets`) and a real LOADER: runInDurableObject
+// hands us both.
 
 import { runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";

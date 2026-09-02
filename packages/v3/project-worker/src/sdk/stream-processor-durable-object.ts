@@ -1,18 +1,26 @@
-// stream-processor-durable-object.ts — THE SDK BASE CLASS a processor author extends. A processor IS
-// a `DurableObject`: the author writes `reduce` / `processEvent` / `projectLiveState` on the class,
-// and the platform hosts it as a FACET of its context through the ordinary
-// `itx.load(src).getDurableObjectClass('Presence').get('presence')` — exactly the way any stateful
-// class is hosted; a processor is a named facet that additionally gets pushed every commit.
+// stream-processor-durable-object.ts — THE SDK HOST: the `DurableObject` shell that hosts ONE
+// `StreamProcessor` as a facet of its context. An author writes two classes — the processor, pure
+// (`class Presence extends StreamProcessor { contract; reduce(); processEvent() }`, unit-tested with
+// `new Presence()`), and its host, one line long:
+//
+//   export class PresenceDurableObject extends StreamProcessorDurableObject {
+//     processor = new Presence();
+//   }
+//
+// The platform hosts the host through the ordinary
+// `itx.load(src).getDurableObjectClass('PresenceDurableObject').get('presence')` — exactly the way
+// any stateful class is hosted; a processor is a named facet that additionally gets pushed every
+// commit. `processor` is a FIELD so it can take what its effects need from this object
+// (`new Notifier(this.env.ITX)`), and so the same class is constructed bare in a test.
 //
 // IDENTITY is `ctx.props` — `{ contextName, name }` minted by the parent at `getDurableObjectClass(C,
 // { props })`, the only party that knows it (pinned in __workers-tests__/facet-props.test.ts); nothing
-// else names a processor. THE STREAM is `env.ITX` — the loaded isolate's binding to
-// its owning context (itx-entrypoint.ts): `append`/`read` for the engine, `get()` for the scope.
+// else names a processor. THE STREAM is `env.ITX` — the loaded isolate's binding to its owning
+// context (itx-entrypoint.ts): `append`/`read` for the engine, `get()` for the scope.
 //
-// The engine — serial chain, checkpoint, gap repair from the scanned-range proof, the at-head pass,
-// version refolds, live-state publishing — is stream/processor.ts's `StreamProcessor`, unchanged and
-// Node-tested; this class is the DurableObject shell around one instance of it, ~a screen of wiring.
-// Bundled into `processor.js` (build-sdk.mjs), so userspace imports it from "./processor.js".
+// The engine — stream/processor.ts's `ProcessorEngine` — is built on first use with this object's kv
+// and `env.ITX`; this class is that wiring plus the doors, ~a screen. Bundled into `processor.js`
+// (build-sdk.mjs), so userspace imports it from "./processor.js".
 //
 // NEVER define alarm(): facets have none (workerd#6810 — the runtime answers "Facets currently
 // cannot set alarms."); a timer, when one is needed, will be a scheduled append on the context, not
@@ -20,13 +28,10 @@
 
 import { DurableObject } from "cloudflare:workers";
 import {
-  StreamProcessor,
-  type ProcessEventArgs,
-  type ProcessorContract,
+  ProcessorEngine,
   type ProcessorSnapshot,
-  type ProcessorStream,
-  type ReduceArgs,
   type ScannedRange,
+  type StreamProcessor,
 } from "../stream/processor.ts";
 import type { StreamEvent, StreamEventInput } from "../stream/events.ts";
 import {
@@ -55,26 +60,11 @@ export type ItxBinding = {
 };
 
 export abstract class StreamProcessorDurableObject<
-  State,
+  State = unknown,
   Env extends { ITX: ItxBinding } = { ITX: ItxBinding },
 > extends DurableObject<Env, StreamProcessorProps> {
-  abstract readonly contract: ProcessorContract<State>;
-
-  // ── the three hooks: the author surface ──
-
-  /** Pure reduce. Return the NEXT state (a new object) — or null/undefined to keep the current. */
-  protected reduce(_args: ReduceArgs<State>): State | null | undefined {
-    return undefined;
-  }
-  /** Side effects. Synchronous by design: register async work via `blockProcessorWhile` /
-   *  `runInBackground` on the args. */
-  protected processEvent(_args: ProcessEventArgs<State>): undefined {}
-  /** The live PROJECTION of the reduced state — what `liveSnapshot()` serves and what the deltas are
-   *  diffed over. Default: the state verbatim. Override to trim, or to fold in runtime fields the
-   *  reduce does not own; call `publishLiveState()` after such a field changes out of band. */
-  protected projectLiveState(state: State): unknown {
-    return state;
-  }
+  /** The processor this object hosts — `processor = new Presence()` at the top of the subclass. */
+  abstract readonly processor: StreamProcessor<State>;
 
   // ── what an author reaches ──
 
@@ -89,20 +79,11 @@ export abstract class StreamProcessorDurableObject<
   protected get itx(): Promise<unknown> {
     return this.env.ITX.get();
   }
-  /** The stream this processor folds: the context's log through `env.ITX`. */
-  protected get stream(): ProcessorStream {
-    return {
-      append: (...events) => this.env.ITX.append(...events),
-      read: (after, limit) => this.env.ITX.read(after, limit),
-    };
-  }
-  /** Emit a delta for the current projection if it changed (after a runtime field moved out of band). */
+  /** Emit a delta for the current projection if it changed — after a runtime field on the processor
+   *  moved OUTSIDE a batch (an RPC method on this object). Inside `processEvent` the engine
+   *  re-projects after the batch on its own. */
   protected publishLiveState(): void {
-    this.#engine().publish();
-  }
-  /** `${slug}/${key}`, or with `whileProcessing` `${slug}/${key}@${path}:${offset}`. */
-  protected idempotencyKey(key: string, whileProcessing?: StreamEvent): string {
-    return this.#engine().idempotency(key, whileProcessing);
+    this.#engine().publishLiveState();
   }
 
   // ── the doors the delivery loop and `itx.facets.get(name)` reach ──
@@ -128,63 +109,24 @@ export abstract class StreamProcessorDurableObject<
     return this.#engine().waitUntilProcessed(input);
   }
 
-  // ── the engine: one StreamProcessor whose hooks are this object's methods, built on first use
-  // (`contract` is a subclass field — it does not exist yet while this class constructs) ──
-  #built?: Engine<State>;
-  #engine(): Engine<State> {
-    return (this.#built ??= new Engine<State>(
-      {
-        contract: this.contract,
-        reduce: (a) => this.reduce(a),
-        processEvent: (a) => this.processEvent(a),
-        projectLiveState: (s) => this.projectLiveState(s),
+  // ── the engine: one ProcessorEngine over `processor`, built on first use (`processor` is a
+  // subclass field — it does not exist yet while this class constructs) ──
+  #built?: ProcessorEngine<State>;
+  #engine(): ProcessorEngine<State> {
+    if (this.#built) return this.#built;
+    if (!this.processor)
+      throw new Error(
+        `${this.constructor.name} hosts no processor — set \`processor = new YourProcessor()\` on the class`,
+      );
+    return (this.#built = new ProcessorEngine(this.processor, {
+      stream: {
+        append: (...events) => this.env.ITX.append(...events),
+        read: (after, limit) => this.env.ITX.read(after, limit),
       },
-      {
-        stream: this.stream,
-        storage: {
-          get: <T>(k: string) => this.ctx.storage.kv.get(k) as T | undefined,
-          put: (k: string, v: unknown) => this.ctx.storage.kv.put(k, v),
-        },
-        path: this.context.path,
-        projectId: this.context.projectId,
+      storage: {
+        get: <T>(k: string) => this.ctx.storage.kv.get(k) as T | undefined,
+        put: (k: string, v: unknown) => this.ctx.storage.kv.put(k, v),
       },
-    ));
-  }
-}
-
-/** The three author hooks, as the engine receives them. */
-type Hooks<State> = {
-  reduce: (a: ReduceArgs<State>) => State | null | undefined;
-  processEvent: (a: ProcessEventArgs<State>) => undefined;
-  projectLiveState: (s: State) => unknown;
-};
-
-/** The engine with its hooks pointed at the hosting object. `publish`/`idempotency` re-export the
- *  two protected helpers the shell forwards. */
-class Engine<State> extends StreamProcessor<State> {
-  readonly contract: ProcessorContract<State>;
-  readonly #hooks: Hooks<State>;
-  constructor(
-    hooks: { contract: ProcessorContract<State> } & Hooks<State>,
-    args: ConstructorParameters<typeof StreamProcessor<State>>[0],
-  ) {
-    super(args);
-    this.contract = hooks.contract;
-    this.#hooks = hooks;
-  }
-  protected override reduce(args: ReduceArgs<State>): State | null | undefined {
-    return this.#hooks.reduce(args);
-  }
-  protected override processEvent(args: ProcessEventArgs<State>): undefined {
-    return this.#hooks.processEvent(args);
-  }
-  protected override projectLiveState(state: State): unknown {
-    return this.#hooks.projectLiveState(state);
-  }
-  publish(): void {
-    this.publishLiveState();
-  }
-  idempotency(key: string, whileProcessing?: StreamEvent): string {
-    return this.idempotencyKey(key, whileProcessing);
+    }));
   }
 }
