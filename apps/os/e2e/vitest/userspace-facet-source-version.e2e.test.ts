@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { failing } from "@iterate-com/shared/test-support/failing-test";
+import { createFlake } from "@iterate-com/shared/test-support/flake-test";
 import type { StreamEventInput } from "iterate/processors";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
 import {
@@ -36,10 +36,21 @@ const WOKEN = "events.iterate.com/stream/woken";
 const ECHO_PATH = "version-echo.js";
 
 /*
- * A PINNED BUG, held by `failing(test, …)`: the body asserts the desired contract,
- * and while the bug exists it must fail with the SAME-BOOT STALENESS error
- * the wrapper matches. The moment somebody fixes the bug, the body succeeds
- * and the wrapper goes red with delete-me instructions.
+ * A PINNED BUG, now held by `createFlake(test, …)` rather than `failing`:
+ * the body asserts the desired contract, and while the bug exists it fails
+ * with the SAME-BOOT STALENESS error the wrapper allows (recorded as
+ * "flake-fail" — the bug reproduced). A body that succeeds is recorded as
+ * "pass" and is green too: it means every round's facet was replaced inside
+ * its 45s window, which the platform does under load without any fix —
+ * on 2026-09-02 (PR #2578, preview-8) the `failing` pin false-alarmed on
+ * four preview runs in a row while the same body, run alone against the
+ * same deployment, pinned the bug 3/3; a worker tail showed seven
+ * "Internal error in Durable Object storage caused object to be reset"
+ * events in twelve minutes of suite load, each one a parent restart that
+ * rebuilds the facet on the newest source. The flake dashboard's pass
+ * rate is therefore the signal: a real fix shows as passes on every run,
+ * quiet and loaded alike — unwrap to a plain test then. Anything but the
+ * two known outcomes (a different error, a hang) stays red.
  *
  * What is broken, reproduced 5/5 against a real deployment: a RUNNING
  * userspace facet never picks up a source commit. `resolveWorkerSource` sees
@@ -70,8 +81,8 @@ const ECHO_PATH = "version-echo.js";
  * still demonstrates the old comparisons' blind spot by forcing a recycle.
  */
 // timeoutMs: the wrapper's own hang deadline, just below the runner ceiling —
-// the expected run is ~60-110s, well past failing()'s 60s default.
-failing(test, /SAME-BOOT STALENESS/, { timeoutMs: 230_000 })(
+// the expected run is ~60-110s, well past createFlake()'s 30s default.
+createFlake(test, /SAME-BOOT STALENESS/, { timeoutMs: 230_000 })(
   "a userspace facet rebuilds on a source commit and only on a source commit",
   // Ceiling for the cold build, the two stability kills, and up to three
   // 45s observation rounds. The expected run (bug present, no recycles)
@@ -263,11 +274,11 @@ failing(test, /SAME-BOOT STALENESS/, { timeoutMs: 230_000 })(
       }
     }
     // Every round ended with the running facet replaced by one serving the
-    // just-committed revision — the fix's shape, three times in a row. The
-    // body succeeding here is what makes the failing() wrapper raise the
-    // delete-me alert. (Residual risk: three independent coincidental
-    // recycles in a row would masquerade as the fix — roughly the cube of an
-    // already-uncommon event, and the next run self-corrects.)
+    // just-committed revision — the fix's shape, three times in a row. Under
+    // suite load this happens without a fix (parent restarts from Durable
+    // Object resets land inside every window), which is why the wrapper
+    // records this outcome as "pass" instead of alarming: the dashboard's
+    // pass rate across quiet and loaded runs is what tells a fix apart.
   },
 );
 
