@@ -176,8 +176,11 @@ class DocsProjectApi extends RpcTarget implements DocsProject {
   notes(repoPath: string = DEFAULT_REPO_PATH): TasksWorkspace {
     const normalized = normalizeRepoPath(repoPath);
     if (normalized === null) throw new Error("bad repo path");
+    // Owner acts on purpose: the app minted this workspace for its notes
+    // view. Through the board's workspaceAt door the same path is a guest.
     return new TasksWorkspaceApi(this.#dial, notesWorkspacePath(normalized), normalized, {
       lazyCreate: true,
+      ownerActs: true,
     });
   }
 

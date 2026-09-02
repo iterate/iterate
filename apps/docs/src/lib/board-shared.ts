@@ -44,7 +44,10 @@ export function boardWorkspacePath(boardId: string, repoPath: string): string {
  * shared by every project member: notes are plain files on that repo's
  * main, so one overlay keeps concurrent writers from clobbering each other's
  * pending edits (two private overlays of the same file would each commit
- * the other's edits away). Same slug + hash recipe as boards.
+ * the other's edits away). Same slug + hash recipe as boards. Only the notes
+ * view commits here (its capability is minted with owner acts); to the
+ * board, this workspace is a GUEST lens like an agent's — a task opened from
+ * a note pill must never let the board commit or discard the notes overlay.
  */
 export function notesWorkspacePath(repoPath: string): string {
   const slug = repoPath.replace(/^\/+/, "").replaceAll("/", "--");
@@ -97,7 +100,6 @@ export type BoardAddress = {
  * Commit or Discard-all.
  */
 export function isGuestWorkspacePath(workspacePath: string, repoPath: string): boolean {
-  if (workspacePath === notesWorkspacePath(repoPath)) return false;
   const boardId = boardIdOf(workspacePath);
   return boardId === null || boardWorkspacePath(boardId, repoPath) !== workspacePath;
 }

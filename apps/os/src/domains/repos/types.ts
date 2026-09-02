@@ -36,7 +36,9 @@ export type CommitRepoFilesInput = {
    * has moved on (someone else committed in between) an ordinary commit lands
    * on top; the result's `amended` says which happened. Decided inside the
    * repo's serialized write, so "still the head" cannot race another writer.
-   * Content is never at stake either way, only the shape of history.
+   * Ignored on a GitHub-linked repo (its history stays append-only — a
+   * rewrite would need a force push through the mirror). Content is never at
+   * stake either way, only the shape of history.
    */
   amendIfHead?: string;
   author?: { email: string; name: string };

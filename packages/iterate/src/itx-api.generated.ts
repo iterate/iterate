@@ -3626,7 +3626,9 @@ export type CommitRepoFilesInput = {
    * has moved on (someone else committed in between) an ordinary commit lands
    * on top; the result's `amended` says which happened. Decided inside the
    * repo's serialized write, so "still the head" cannot race another writer.
-   * Content is never at stake either way, only the shape of history.
+   * Ignored on a GitHub-linked repo (its history stays append-only — a
+   * rewrite would need a force push through the mirror). Content is never at
+   * stake either way, only the shape of history.
    */
   amendIfHead?: string;
   author?: { email: string; name: string };
@@ -5458,7 +5460,9 @@ export type WorkspaceCommitInput = {
    * Tidy history: when the repo's head is EXACTLY this commit oid, the new
    * commit REPLACES it (same parents, head's tree plus these changes, this
    * message) instead of stacking on top; when the head has moved on, an
-   * ordinary commit lands on top. The result's `amended` says which happened.
+   * ordinary commit lands on top — as it always does on a GitHub-linked repo,
+   * whose history stays append-only. The result's `amended` says which
+   * happened.
    */
   amendIfHead?: string;
   author?: { email: string; name: string };

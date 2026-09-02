@@ -49,6 +49,25 @@ export function notesCommitMessage(date: string): string {
   return `Notes: ${date}`;
 }
 
+/**
+ * The repo-relative note paths a workspace status reports as changed under
+ * one repo mount — the dirty set the header and the list dots show. Only
+ * notes/ counts: the board's own change map keeps task files, so it is the
+ * wrong lens here (it would drop every note).
+ */
+export function noteChangesFrom(status: unknown, repoPath: string): Set<string> {
+  const changed = new Set<string>();
+  const mounts = (status as { mounts?: { changes?: { path: string }[]; path?: string }[] }).mounts;
+  for (const mount of mounts ?? []) {
+    if (mount.path !== repoPath) continue;
+    for (const change of mount.changes ?? []) {
+      const key = change.path.slice(repoPath.length).replace(/^\/+/, "");
+      if (key.startsWith(`${NOTES_DIR}/`)) changed.add(key);
+    }
+  }
+  return changed;
+}
+
 /** A new note's file, from its title: lowercase, dashes, `.md`. */
 export function noteFileName(title: string): string {
   const slug = title

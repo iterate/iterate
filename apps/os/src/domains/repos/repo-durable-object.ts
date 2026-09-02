@@ -699,7 +699,14 @@ export class RepoDurableObject extends DurableObject<Env> {
 
   async #commitFiles(input: CommitRepoFilesInput): Promise<CommitRepoFilesResult> {
     await this.#flushPendingCommitCompleted();
-    const parsed = parseCommitFilesInput(input);
+    let parsed = parseCommitFilesInput(input);
+    if (parsed.amendIfHead !== undefined && this.getGithubLink() !== null) {
+      // A linked GitHub repository has readers of its own: rewriting main
+      // there would need a force push, and no force push can be a true
+      // compare-and-swap through the mirror lane. History stays append-only
+      // on linked repos — an ordinary commit stacks and the result says so.
+      parsed = { ...parsed, amendIfHead: undefined };
+    }
     const repo = await this.gitAccess();
     const branch = parsed.branch ?? repo.defaultBranch;
     if (branch === REPO_DEFAULT_BRANCH) {
@@ -721,13 +728,13 @@ export class RepoDurableObject extends DurableObject<Env> {
       }
       console.warn(`lazy commit fell back to the clone lane (safe): ${attempt.detail}`);
     }
-    // The clone lane never amends: its git wrapper cannot re-parent a
+    // The clone fallback never amends: its git wrapper cannot re-parent a
     // commit, and amending is only ever about history's SHAPE — so an
     // ordinary commit on top is the correct degraded outcome, reported as
     // `amended: false`.
     if (parsed.amendIfHead !== undefined) {
       console.warn(
-        `amendIfHead ${parsed.amendIfHead} requested but the clone lane stacks an ordinary commit instead`,
+        `amendIfHead ${parsed.amendIfHead} requested but the clone fallback stacks an ordinary commit instead`,
       );
     }
     const result = await commitFilesToArtifactRepo({
@@ -821,14 +828,7 @@ export class RepoDurableObject extends DurableObject<Env> {
         branch,
         commitOid: applied.commitOid,
       });
-      // An amend rewrote main: a plain mirror push would be a non-fast-forward
-      // against the commit it replaced, forever. Force it — but only while
-      // GitHub's head IS that replaced commit (a lease), so a commit pushed
-      // straight to GitHub in between is never discarded by the mirror.
-      this.#scheduleGithubMirrorPush(
-        branch,
-        applied.amended ? { forceIfHead: applied.parentCommitOid } : {},
-      );
+      this.#scheduleGithubMirrorPush(branch);
       this.ctx.storage.kv.delete(repoHeadStorageKey(branch));
     };
     let outcome: Awaited<ReturnType<typeof reader.commitFiles>>;
@@ -1327,24 +1327,13 @@ export class RepoDurableObject extends DurableObject<Env> {
     return this.#serializeWrite(() => this.#pushToGithub(input));
   }
 
-  async #pushToGithub(input: {
-    force?: boolean;
-    /** Force-with-lease: force ONLY while GitHub's branch head is exactly
-     * this commit — the one an amend replaced. Anything else (someone pushed
-     * to GitHub directly) gets the ordinary non-forced push and its
-     * non-fast-forward failure, never a silent overwrite. */
-    forceIfHead?: string;
-  }): Promise<{ branch: string; commitOid: string }> {
+  async #pushToGithub(input: { force?: boolean }): Promise<{ branch: string; commitOid: string }> {
     const link = this.#requireGithubLink();
     const branch = REPO_DEFAULT_BRANCH;
     let commitOid: string | null = null;
     try {
       const repo = await this.gitAccess();
       const token = await this.#mintGithubToken(link);
-      const force =
-        input.force === true ||
-        (input.forceIfHead !== undefined &&
-          (await this.#githubBranchHead({ branch, link, token })) === input.forceIfHead);
 
       // Full single-branch clone: a mirror push must be able to send every
       // commit GitHub is missing, not just the tip. `noCheckout` because a
@@ -1385,7 +1374,7 @@ export class RepoDurableObject extends DurableObject<Env> {
 
       await git.remote({ add: { name: "github", url: githubRemoteUrl(link) } });
       const pushed = await git.push({
-        force,
+        force: input.force === true,
         ref: branch,
         remote: "github",
         username: "x-access-token",
@@ -1806,9 +1795,9 @@ export class RepoDurableObject extends DurableObject<Env> {
    * The failure fact on the repo stream is the record; the next commit's push
    * self-heals the mirror.
    */
-  #scheduleGithubMirrorPush(branch: string, options: { forceIfHead?: string } = {}): void {
+  #scheduleGithubMirrorPush(branch: string): void {
     if (branch !== REPO_DEFAULT_BRANCH || this.getGithubLink() === null) return;
-    const push = this.#serializeWrite(() => this.#pushToGithub(options));
+    const push = this.#serializeWrite(() => this.#pushToGithub({}));
     this.ctx.waitUntil(
       push.catch((error: unknown) => {
         console.warn("github mirror push failed (recorded on the repo stream)", error);

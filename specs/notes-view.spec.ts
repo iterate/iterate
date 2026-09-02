@@ -85,6 +85,15 @@ test("write in the notes view and amend the day's commit", async ({ baseURL, pag
   await page.keyboard.press("Enter");
   await editor.locator(".cm-reference-agent", { hasText: "@/agents/onboarding" }).waitFor();
 
+  // Edits are durable the moment they land: a reload finds them still
+  // uncommitted (the platform's status, not this tab's memory) and re-arms
+  // the countdown.
+  await page.reload();
+  await spinnerWaiter.settings.run({ disabled: true }, async () => {
+    await page.getByText(/Uncommitted · commits in/).waitFor({ timeout: 60_000 }); // timeout: manual — the vessel re-dials on reload with no spinner-waiter-visible UI
+  });
+  await editor.getByText("first entry cc").waitFor({ timeout: 30_000 }); // timeout: collab re-attach after reload — no spinner-waiter-visible UI
+
   // Commit now skips the 30s wait: an ordinary commit on top of the seed.
   await page.getByRole("button", { name: "Commit now" }).click();
   await page.getByText(/^committed [0-9a-f]{7}$/).waitFor({ timeout: 60_000 }); // timeout: a real commit to the Artifacts repo — no spinner-waiter-visible UI

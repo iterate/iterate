@@ -48,16 +48,16 @@ import type {
   ReferenceKind,
 } from "@iterate-com/workspace-documents/references";
 import type { WorkspaceDocumentTransport } from "@iterate-com/workspace-documents/types";
-import { withProject, withProjectOnce } from "../lib/project-rpc.ts";
+import { notesFor, withProject, withProjectOnce } from "../lib/project-rpc.ts";
 import { notesWorkspacePath } from "../lib/board-shared.ts";
 import type { TasksWorkspace } from "../lib/tasks-api.ts";
-import { changeMap } from "../lib/use-workspace-board.ts";
 import { parseTaskCard, setTaskCardAgent } from "../tasks-model.ts";
 import {
   DEFAULT_NOTE,
   NOTES_DIR,
   ensureTodayHeading,
   logDateStamp,
+  noteChangesFrom,
   noteFileName,
   noteLabel,
   notesCommitMessage,
@@ -144,27 +144,19 @@ export function NotesPage({
   note: string;
   onSelectNote: (note: string) => void;
 }) {
-  const lane = useCallback(
+  // Every call to the notes workspace goes through the app's one live
+  // project session (docs-client.ts owns the dial and its reconnect).
+  const withNotes = useCallback(
     <T,>(operation: (ws: TasksWorkspace) => PromiseLike<T>) =>
-      // The stub is a capnweb Proxy; the local cast names the door.
-      withProject((project) =>
-        operation(
-          (project as { notes(repoPath: string): unknown }).notes(repoPath) as TasksWorkspace,
-        ),
-      ),
+      withProject((project) => operation(notesFor(project, repoPath))),
     [repoPath],
   );
   const transport = useMemo<WorkspaceDocumentTransport>(
     () => ({
-      run: (operation) => lane((ws) => operation(ws)),
-      runOnce: (operation) =>
-        withProjectOnce((project) =>
-          operation(
-            (project as { notes(repoPath: string): unknown }).notes(repoPath) as TasksWorkspace,
-          ),
-        ),
+      run: (operation) => withNotes((ws) => operation(ws)),
+      runOnce: (operation) => withProjectOnce((project) => operation(notesFor(project, repoPath))),
     }),
-    [lane, repoPath],
+    [withNotes, repoPath],
   );
 
   const [notes, setNotes] = useState<string[] | null>(null);
@@ -192,18 +184,18 @@ export function NotesPage({
   const [liveSource, setLiveSource] = useState<string | null>(null);
 
   const refreshChanges = useCallback(async () => {
-    const status = await lane((ws) => ws.status());
-    const next = new Set(changeMap(status, repoPath).keys());
+    const status = await withNotes((ws) => ws.status());
+    const next = noteChangesFrom(status, repoPath);
     setChanges(next);
     return next;
-  }, [lane, repoPath]);
+  }, [withNotes, repoPath]);
 
   // Seed: the folder listing, who is typing, and what is still uncommitted
   // (edits left behind by a closed tab get their timer here).
   useEffect(() => {
     let cancelled = false;
     void Promise.all([
-      lane((ws) => ws.glob(`${NOTES_DIR}/**/*.md`)),
+      withNotes((ws) => ws.glob(`${NOTES_DIR}/**/*.md`)),
       refreshChanges(),
       withProject((project) => project.whoami()),
       withProject((project) => project.agents()).catch(() => []),
@@ -221,7 +213,7 @@ export function NotesPage({
     return () => {
       cancelled = true;
     };
-  }, [lane, refreshChanges]);
+  }, [withNotes, refreshChanges]);
 
   // Opening a note: it must exist before the editor joins its session (no
   // lazy file create anywhere in the editor). The log is the one note the
@@ -232,7 +224,7 @@ export function NotesPage({
     let cancelled = false;
     setOpenNote(null);
     setNoteError(null);
-    void lane(async (ws) => {
+    void withNotes(async (ws) => {
       const content = await ws.read(note);
       if (note === DEFAULT_NOTE) {
         const ensured = ensureTodayHeading(content, logDateStamp(new Date()));
@@ -264,7 +256,7 @@ export function NotesPage({
     return () => {
       cancelled = true;
     };
-  }, [lane, note, repoPath]);
+  }, [withNotes, note, repoPath]);
 
   // The editor reports the opened text, then every change (debounced inside
   // the editor) — and the text again after a re-sync, notably right after a
@@ -292,7 +284,7 @@ export function NotesPage({
       // settles it for the commit.
       await editorApiRef.current?.flushPending();
       const message = notesCommitMessage(logDateStamp(new Date()));
-      const result = await lane(async (ws) => {
+      const result = await withNotes(async (ws) => {
         const [head] = await ws.log(1);
         // The head is today's notes commit: propose replacing it. The
         // platform re-checks the head inside its serialized commit, so a
@@ -315,7 +307,7 @@ export function NotesPage({
     } finally {
       committingRef.current = false;
     }
-  }, [hasChanges, lane, refreshChanges]);
+  }, [hasChanges, withNotes, refreshChanges]);
 
   // The reference host the editor lights pills up with. ONE object per repo
   // (the editor rebuilds on identity change); it reads the live lists and
@@ -350,7 +342,7 @@ export function NotesPage({
               }),
             );
         }
-        tasksRef.current ??= lane((ws) => ws.glob("**/tasks/**/*.md")).catch(() => []);
+        tasksRef.current ??= withNotes((ws) => ws.glob("**/tasks/**/*.md")).catch(() => []);
         const tasks = await tasksRef.current;
         const files = [...(notesRef.current ?? []), ...tasks];
         return files
@@ -387,7 +379,7 @@ export function NotesPage({
         }
       },
     }),
-    [lane, navigate, repoPath],
+    [withNotes, navigate, repoPath],
   );
 
   // The `+` menu's insertions land at the caret of the open editor.
@@ -420,7 +412,7 @@ export function NotesPage({
       return;
     }
     try {
-      await lane((ws) => ws.write(path, `# ${title}\n\n`));
+      await withNotes((ws) => ws.write(path, `# ${title}\n\n`));
       setNotes((current) => sortNotes([...(current ?? []), path]));
       setChanges((current) => new Set(current).add(path));
       setDueAt(Date.now() + NOTES_AUTO_COMMIT_MS);

@@ -4,6 +4,7 @@ import {
   ensureTodayHeading,
   lastLogDate,
   logDateStamp,
+  noteChangesFrom,
   noteFileName,
   noteLabel,
   notesCommitMessage,
@@ -37,6 +38,27 @@ describe("notes model", () => {
     expect(lastLogDate("## 2026-09-01\n\na\n\n## 2026-09-02\n\nb\n")).toBe("2026-09-02");
     expect(lastLogDate("just text\n")).toBeNull();
     expect(notesCommitMessage("2026-09-02")).toBe("Notes: 2026-09-02");
+  });
+
+  test("the dirty set keeps only notes under the repo's own mount", () => {
+    const status = {
+      mounts: [
+        {
+          path: "/repos/config",
+          changes: [
+            { change: "modified", path: "/repos/config/notes/log.md" },
+            { change: "added", path: "/repos/config/notes/ideas.md" },
+            { change: "modified", path: "/repos/config/tasks/one.md" },
+          ],
+        },
+        { path: "/repos/other", changes: [{ change: "added", path: "/repos/other/notes/x.md" }] },
+      ],
+      unmounted: [],
+    };
+    expect([...noteChangesFrom(status, "/repos/config")].sort()).toEqual([
+      "notes/ideas.md",
+      "notes/log.md",
+    ]);
   });
 
   test("new notes get slug file names under notes/, and labels come from the stem", () => {
