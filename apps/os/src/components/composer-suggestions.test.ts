@@ -53,6 +53,6 @@ test("applyComposerSuggestion replaces the whole token and restores a useful car
 
   expect(applyComposerSuggestion(value, active, suggestions[0]!)).toEqual({
     value: "read @AGENTS.md next",
-    caret: 15,
+    caret: 16,
   });
 });

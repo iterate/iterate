@@ -60,13 +60,14 @@ function Harness({ source = provider, submit = vi.fn() }) {
   );
 }
 
-async function enterText(textarea: HTMLTextAreaElement, value: string) {
+async function enterText(textarea: HTMLTextAreaElement, value: string, caret = value.length) {
   await act(async () => {
     const valueSetter = Object.getOwnPropertyDescriptor(
       HTMLTextAreaElement.prototype,
       "value",
     )?.set;
     valueSetter?.call(textarea, value);
+    textarea.setSelectionRange(caret, caret);
     textarea.dispatchEvent(
       new InputEvent("input", { bubbles: true, inputType: "insertText", data: value.at(-1) }),
     );
@@ -121,6 +122,71 @@ test("a pointer selection works without moving focus away from the mobile textar
 
   expect(textarea.value).toBe("@worker.ts ");
   expect(document.activeElement).toBe(textarea);
+  await act(async () => root.unmount());
+});
+
+test("choosing a mention before existing text advances past its separator and closes the menu", async () => {
+  const host = document.createElement("div");
+  document.body.appendChild(host);
+  const root = createRoot(host);
+  await act(async () => root.render(<Harness />));
+  const textarea = host.querySelector("textarea");
+  if (textarea === null) throw new Error("missing textarea");
+
+  await act(async () => textarea.focus());
+  await enterText(textarea, "@ag later", 3);
+  await settleSuggestionSearch();
+  expect(document.body.textContent).toContain("AGENTS.md");
+
+  await act(async () =>
+    textarea.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }),
+    ),
+  );
+  expect(textarea.value).toBe("@AGENTS.md later");
+  expect(textarea.selectionStart).toBe(11);
+  expect(textarea.getAttribute("aria-expanded")).toBe("false");
+
+  await act(async () => root.unmount());
+});
+
+test("retry keeps textarea focus while refetching failed suggestions", async () => {
+  let attempts = 0;
+  const flaky: ComposerSuggestionProvider = {
+    id: "files",
+    trigger: "@",
+    label: "Config repo files",
+    cacheKey: ["flaky"],
+    search: async () => {
+      attempts += 1;
+      if (attempts === 1) throw new Error("temporary outage");
+      return [{ id: "worker", label: "worker.ts", text: "@worker.ts" }];
+    },
+  };
+  const host = document.createElement("div");
+  document.body.appendChild(host);
+  const root = createRoot(host);
+  await act(async () => root.render(<Harness source={flaky} />));
+  const textarea = host.querySelector("textarea");
+  if (textarea === null) throw new Error("missing textarea");
+
+  await act(async () => textarea.focus());
+  await enterText(textarea, "@wor");
+  await settleSuggestionSearch();
+  const retry = [...document.querySelectorAll("button")].find(
+    (button) => button.textContent === "Try again",
+  );
+  if (retry === undefined) throw new Error("missing retry button");
+
+  const pointerDown = new MouseEvent("pointerdown", { bubbles: true, cancelable: true });
+  await act(async () => retry.dispatchEvent(pointerDown));
+  expect(pointerDown.defaultPrevented).toBe(true);
+  expect(document.activeElement).toBe(textarea);
+  await act(async () => retry.click());
+  await settleSuggestionSearch();
+  expect(document.activeElement).toBe(textarea);
+  expect(document.body.textContent).toContain("worker.ts");
+
   await act(async () => root.unmount());
 });
 

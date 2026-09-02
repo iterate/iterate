@@ -68,7 +68,11 @@ export function applyComposerSuggestion(
 ): { value: string; caret: number } {
   const after = value.slice(active.to);
   const separator = after === "" || !/^\s/.test(after) ? " " : "";
+  const existingSeparatorLength = separator === "" && /^\s/.test(after) ? 1 : 0;
   const before = value.slice(0, active.from);
   const nextValue = `${before}${suggestion.text}${separator}${after}`;
-  return { value: nextValue, caret: before.length + suggestion.text.length + separator.length };
+  return {
+    value: nextValue,
+    caret: before.length + suggestion.text.length + separator.length + existingSeparatorLength,
+  };
 }

@@ -135,7 +135,12 @@ function suggestionMenuContent({
         <span>
           Couldn’t load {label}: {error.message}
         </span>
-        <Button variant="outline" size="sm" onClick={onRetry}>
+        <Button
+          variant="outline"
+          size="sm"
+          onPointerDown={(event) => event.preventDefault()}
+          onClick={onRetry}
+        >
           Try again
         </Button>
       </CommandEmpty>
@@ -212,9 +217,9 @@ export function ComposerTextarea({
   useLayoutEffect(() => {
     const pendingCaret = pendingCaretRef.current;
     if (pendingCaret === null) return;
-    pendingCaretRef.current = null;
     textareaRef.current?.focus();
     textareaRef.current?.setSelectionRange(pendingCaret, pendingCaret);
+    pendingCaretRef.current = null;
   }, [textareaRef, value]);
 
   function choose(suggestion: ComposerSuggestion) {
@@ -238,6 +243,7 @@ export function ComposerTextarea({
       onFocus={() => setFocused(true)}
       onBlur={() => setFocused(false)}
       onSelect={(event) => {
+        if (pendingCaretRef.current !== null) return;
         setCaret(event.currentTarget.selectionStart);
         setDismissedToken(null);
       }}
