@@ -374,3 +374,14 @@ MediaRecorder mechanisms, both hardened:
   eyes + 11 mouths (the lion no longer wears its eyes on its cheeks).
 - Harness gained ?open=<ratio> to force mouth openness (the synthetic face
   can't open its own).
+
+## Review round (Misha, on the PR)
+
+- Patch file: explanatory // comment now lives inside the diff itself.
+- The four generation .mjs scripts consolidated into
+  `scripts/generate-filters.ts`, a trpc-cli module CLI (`pnpm
+  generate-filters backdrops|flashcards|animals|animal-anchors`), shared
+  merge-mode/OpenAI/sips plumbing, TypeScript. Smoke-tested as a no-op
+  merge run.
+- The ✨ toggle is gone: the filter chip row is always visible above the
+  capture bar (None chip for a normal photo).

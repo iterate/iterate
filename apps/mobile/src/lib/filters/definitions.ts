@@ -1048,7 +1048,7 @@ for (const filter of FILTER_PICKER) {
 
 // Pictures an 18-month-old might know the word for. Tap anywhere to
 // advance. Words must exist in the generated image sets (keep in sync with
-// scripts/generate-flashcard-images.mjs); color cards draw a swatch. The
+// scripts/generate-filters.ts (flashcards)); color cards draw a swatch. The
 // deck shuffles once per camera session (module load) so the order varies.
 const PICTURE_WORDS = [
   "dog",

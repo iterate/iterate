@@ -73,7 +73,6 @@ export function CameraCaptureModal(props: {
   });
   const [recordingStartedAt, setRecordingStartedAt] = useState<number | null>(null);
   const [filterId, setFilterId] = useState<string | null>(null);
-  const [pickerOpen, setPickerOpen] = useState(false);
   const [filterCommand, setFilterCommand] = useState<FilterCameraCommand | null>(null);
   // Bridges between the imperative mutations below and the filter pipeline's
   // async result props: the mutation parks a promise here, the matching
@@ -291,54 +290,38 @@ export function CameraCaptureModal(props: {
               <Text style={styles.timerText}>{formatClipDuration(elapsedSeconds)}</Text>
             </View>
           ) : null}
-          <Pressable
-            accessibilityLabel="Choose a filter"
-            accessibilityRole="button"
-            hitSlop={12}
-            onPress={() => setPickerOpen(!pickerOpen)}
-            style={[styles.roundControl, filterId !== null && styles.activeFilterControl]}
-          >
-            <Text style={styles.sparkle}>✨</Text>
-          </Pressable>
         </View>
         {snap.isError || record.isError ? (
           <Text style={styles.error}>
             {String(((snap.error || record.error) as Error).message)}
           </Text>
         ) : null}
-        {pickerOpen ? (
-          <ScrollView
-            contentContainerStyle={styles.pickerContent}
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            style={[styles.picker, { bottom: insets.bottom + 120 }]}
-          >
-            {[null, ...FILTER_PICKER, ...(dynamicFilters.data || [])].map((filter) => {
-              const id = filter === null ? null : filter.id;
-              const selected = filterId === id;
-              return (
-                <Pressable
-                  accessibilityLabel={filter === null ? "No filter" : `${filter.label} filter`}
-                  accessibilityRole="button"
-                  disabled={record.isPending}
-                  key={id || "none"}
-                  onPress={() => {
-                    setFilterId(id);
-                    setPickerOpen(false);
-                  }}
-                  style={[styles.filterChip, selected && styles.filterChipSelected]}
-                >
-                  <Text style={styles.filterChipEmoji}>
-                    {filter === null ? "🚫" : filter.emoji}
-                  </Text>
-                  <Text style={styles.filterChipLabel}>
-                    {filter === null ? "None" : filter.label}
-                  </Text>
-                </Pressable>
-              );
-            })}
-          </ScrollView>
-        ) : null}
+        <ScrollView
+          contentContainerStyle={styles.pickerContent}
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          style={[styles.picker, { bottom: insets.bottom + 120 }]}
+        >
+          {[null, ...FILTER_PICKER, ...(dynamicFilters.data || [])].map((filter) => {
+            const id = filter === null ? null : filter.id;
+            const selected = filterId === id;
+            return (
+              <Pressable
+                accessibilityLabel={filter === null ? "No filter" : `${filter.label} filter`}
+                accessibilityRole="button"
+                disabled={record.isPending}
+                key={id || "none"}
+                onPress={() => setFilterId(id)}
+                style={[styles.filterChip, selected && styles.filterChipSelected]}
+              >
+                <Text style={styles.filterChipEmoji}>{filter === null ? "🚫" : filter.emoji}</Text>
+                <Text style={styles.filterChipLabel}>
+                  {filter === null ? "None" : filter.label}
+                </Text>
+              </Pressable>
+            );
+          })}
+        </ScrollView>
         <View style={[styles.bottomBar, { paddingBottom: insets.bottom + spacing.lg }]}>
           <Pressable
             accessibilityLabel="Flip camera"
@@ -408,8 +391,6 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  activeFilterControl: { borderColor: colors.text, borderWidth: 2 },
-  sparkle: { fontSize: 22 },
   recordingControl: { backgroundColor: colors.danger },
   shutter: {
     width: 76,
