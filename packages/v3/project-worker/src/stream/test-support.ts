@@ -7,7 +7,7 @@
 // consumes an offset but never lands in the durable log), idempotency at the door (same key + same
 // body → the existing event; a different body → the conflict error), the scanned-offset-range proof
 // on both pushes and reads, and THE PUMP — a fire-and-forget `processEventBatch` to every engine
-// registered in `procs` after each append (awaited, it would deadlock a processor that appends
+// registered in `engines` after each append (awaited, it would deadlock a processor that appends
 // during its own batch). A short page's proof is the in-memory head (`Math.max(after, head)`), so
 // the engine's stale-push and ephemeral-window rules are exercised directly; the real Stream stops
 // at the DURABLE mark (__workers-tests__/stream.test.ts pins that against real storage).
@@ -23,7 +23,7 @@ export function memoryStream(path = "/") {
   const durableEvents: StreamEvent[] = []; // the durable log — what `read` answers
   const pushedEvents: StreamEvent[] = []; // every committed event, ephemerals included (the pump's view)
   const eventsByIdempotencyKey = new Map<string, StreamEvent>();
-  const procs: ProcessorEngine<any>[] = []; // the pump only needs `processEventBatch`
+  const engines: ProcessorEngine<any>[] = []; // the pump only needs `processEventBatch`
   let maxAssigned = 0;
   let reads = 0;
   const stream: ProcessorStream = {
@@ -54,8 +54,8 @@ export function memoryStream(path = "/") {
       pushedEvents.push(...committedEvents);
       if (maxAssigned > scannedAfterOffset) {
         const scannedOffsetRange = { after: scannedAfterOffset, through: maxAssigned };
-        for (const p of procs)
-          void p.processEventBatch(committedEvents, scannedOffsetRange).catch(() => {});
+        for (const engine of engines)
+          void engine.processEventBatch(committedEvents, scannedOffsetRange).catch(() => {});
       }
       return committedEvents;
     },
@@ -73,7 +73,7 @@ export function memoryStream(path = "/") {
     stream,
     events: durableEvents,
     pushedEvents,
-    procs,
+    engines,
     get reads() {
       return reads;
     },

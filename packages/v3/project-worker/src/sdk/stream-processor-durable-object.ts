@@ -27,13 +27,9 @@
 // an alarm here.
 
 import { DurableObject } from "cloudflare:workers";
-import {
-  ProcessorEngine,
-  type ProcessorSnapshot,
-  type ScannedRange,
-  type StreamProcessor,
-} from "../stream/processor.ts";
-import type { StreamEvent, StreamEventInput } from "../stream/events.ts";
+import { ProcessorEngine, type ScannedRange, type StreamProcessor } from "../stream/processor.ts";
+import type { StreamEvent } from "../stream/events.ts";
+import type { ItxEntrypoint } from "../itx-entrypoint.ts";
 import {
   DurableObjectNameCodec,
   type DurableObjectAddress,
@@ -42,26 +38,9 @@ import {
 /** What the parent mints the class with — the whole identity. */
 export type StreamProcessorProps = { contextName: string; name: string };
 
-/** The `env.ITX` binding a loaded isolate holds (a stub of ItxEntrypoint): the stream verbs the
- *  engine drives, and `get()` — the owning context's itx scope, the same one a capnweb client holds. */
-export type ItxBinding = {
-  get(): Promise<unknown>;
-  append(...events: StreamEventInput[]): Promise<StreamEvent[]>;
-  read(
-    afterOffset?: number,
-    limit?: number,
-  ): Promise<{ events: StreamEvent[]; scannedThroughOffset: number }>;
-  waitForEvent(filter?: {
-    type?: string;
-    afterOffset?: number;
-    timeoutMs?: number;
-  }): Promise<StreamEvent>;
-  fetch(request: Request): Promise<Response>;
-};
-
 export abstract class StreamProcessorDurableObject<
   State = unknown,
-  Env extends { ITX: ItxBinding } = { ITX: ItxBinding },
+  Env extends { ITX: Service<ItxEntrypoint> } = { ITX: Service<ItxEntrypoint> },
 > extends DurableObject<Env, StreamProcessorProps> {
   /** The processor this object hosts — `processor = new PresenceProcessor()` at the top of the subclass. */
   abstract readonly processor: StreamProcessor<State>;
@@ -83,50 +62,42 @@ export abstract class StreamProcessorDurableObject<
    *  moved OUTSIDE a batch (an RPC method on this object). Inside `processEvent` the engine
    *  re-projects after the batch on its own. */
   protected publishLiveState(): void {
-    this.#engine().publishLiveState();
+    this.#engine.publishLiveState();
   }
 
   // ── the doors the delivery loop and `itx.facets.get(name)` reach ──
 
   /** THE push door: the context hands over each committed batch with its scanned-range proof. */
   processEventBatch(events: StreamEvent[], range: ScannedRange): Promise<void> {
-    return this.#engine().processEventBatch(events, range);
+    return this.#engine.processEventBatch(events, range);
   }
   /** Catch up from the log (the read-your-writes entry after an eviction). */
   catchUpFromLog(): Promise<void> {
-    return this.#engine().catchUpFromLog();
+    return this.#engine.catchUpFromLog();
   }
   /** Caught up through the log, then `{ offset, state }`. */
-  snapshot(): Promise<ProcessorSnapshot<State>> {
-    return this.#engine().snapshot();
+  snapshot(): Promise<{ offset: number; state: State }> {
+    return this.#engine.snapshot();
   }
   /** The live-state seed door: `{ rev, state: projectLiveState(reduced) }`. */
   liveSnapshot(): Promise<{ rev: number; state: unknown }> {
-    return this.#engine().liveSnapshot();
+    return this.#engine.liveSnapshot();
   }
   /** The barrier: resolves once processed at least through `offset` (default timeout 10s). */
   waitUntilProcessed(input: { offset: number; timeoutMs?: number }): Promise<void> {
-    return this.#engine().waitUntilProcessed(input);
+    return this.#engine.waitUntilProcessed(input);
   }
 
-  // ── the engine: one ProcessorEngine over `processor`, built on first use (`processor` is a
-  // subclass field — it does not exist yet while this class constructs) ──
-  #built?: ProcessorEngine<State>;
-  #engine(): ProcessorEngine<State> {
-    if (this.#built) return this.#built;
-    if (!this.processor)
-      throw new Error(
-        `${this.constructor.name} hosts no processor — set \`processor = new YourProcessor()\` on the class`,
-      );
-    return (this.#built = new ProcessorEngine(this.processor, {
+  // ── the engine: one ProcessorEngine over `processor` and this object's kv, built on first use —
+  // `processor` is a subclass field, which does not exist yet while this base class constructs. ──
+  #engineBuiltOnFirstUse?: ProcessorEngine<State>;
+  get #engine(): ProcessorEngine<State> {
+    return (this.#engineBuiltOnFirstUse ??= new ProcessorEngine(this.processor, {
       stream: {
         append: (...events) => this.env.ITX.append(...events),
         read: (after, limit) => this.env.ITX.read(after, limit),
       },
-      storage: {
-        get: <T>(k: string) => this.ctx.storage.kv.get(k) as T | undefined,
-        put: (k: string, v: unknown) => this.ctx.storage.kv.put(k, v),
-      },
+      storage: this.ctx.storage.kv,
     }));
   }
 }

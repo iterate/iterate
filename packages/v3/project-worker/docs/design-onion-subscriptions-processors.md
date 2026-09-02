@@ -295,14 +295,14 @@ export abstract class StreamProcessor<State> {
    *  Default: the state verbatim. Override to trim, or to reduce in runtime fields the reduce does not own;
    *  the engine re-projects after every batch, so a field bumped in processEvent publishes on its own. */
   projectLiveState(state: State): unknown;
-  idempotencyKey(key: string, whileProcessing?: StreamEvent): string;
+  idempotencyKey(key: string, event?: StreamEvent): string;
 }
 
 // sdk/stream-processor-durable-object.ts — THE HOST, bundled into processor.js
 export type StreamProcessorProps = { contextName: string; name: string };
 
 export abstract class StreamProcessorDurableObject<State = unknown, Env = {}> extends DurableObject<
-  Env, // Env extends { ITX: ItxBinding } — as landed
+  Env, // Env extends { ITX: Service<ItxEntrypoint> } — as landed
   StreamProcessorProps
 > {
   /** `processor = new PresenceProcessor()` at the top of the subclass — the one thing an author writes here. */
@@ -319,7 +319,7 @@ export abstract class StreamProcessorDurableObject<State = unknown, Env = {}> ex
   // the doors the delivery loop and itx.facets.get(name) reach
   processEventBatch(events: StreamEvent[], range: ScannedRange): Promise<void>;
   catchUpFromLog(): Promise<void>;
-  snapshot(): Promise<ProcessorSnapshot<State>>;
+  snapshot(): Promise<{ offset: number; state: State }>;
   liveSnapshot(): Promise<{ rev: number; state: unknown }>; // { rev, state: projectLiveState(reduced) } — the client's seed door
   waitUntilProcessed(input: { offset: number; timeoutMs?: number }): Promise<void>;
   // never define alarm(): facets have none (workerd#6810). Nothing in scope needs one — see §7 "what you lose".

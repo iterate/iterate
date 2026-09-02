@@ -306,7 +306,7 @@ describe("waitUntilProcessed", () => {
       stream: mem.stream,
       storage: memoryStorage(),
     });
-    mem.procs.push(p);
+    mem.engines.push(p);
     mem.stream.append({ type: "e" }, { type: "e" }) as StreamEvent[];
     // A: unreachable offset, times out at ~25ms — DURING the batch's 60ms blocker.
     const a = p.waitUntilProcessed({ offset: 999, timeoutMs: 25 }).then(
@@ -412,7 +412,7 @@ describe("live state with a projection that throws only sometimes", () => {
       stream: mem.stream,
       storage: memoryStorage(),
     });
-    mem.procs.push(p);
+    mem.engines.push(p);
     const changes = () =>
       mem.pushedEvents.filter((e) => e.type === "events.iterate.com/live-state/changed");
 
@@ -461,7 +461,7 @@ describe("ephemeral windows and repair", () => {
     const storage = memoryStorage();
     const a = new EphProcessor();
     const engine = new ProcessorEngine(a, { stream: mem.stream, storage });
-    mem.procs.push(engine);
+    mem.engines.push(engine);
 
     mem.stream.append({ type: "tick" }) as StreamEvent[]; // offset 1 — durable, cursor 1 persisted
     await settle();
@@ -473,7 +473,7 @@ describe("ephemeral windows and repair", () => {
     expect(storage.writes).toBe(writesAfterDurable); // …for ZERO storage writes (the ephemeral rule)
 
     // A durable push with a STALE scannedAfterOffset (1 — before the in-memory-only cursor 3):
-    mem.procs.length = 0; // hand-deliver, so the pump doesn't also push the true range
+    mem.engines.length = 0; // hand-deliver, so the pump doesn't also push the true range
     const [t4] = mem.stream.append({ type: "tick" }) as StreamEvent[]; // offset 4
     await engine.processEventBatch([t4], { after: 1, through: 4 });
     // The ephemerals were NOT consumed a second time and tick@4 arrived exactly once.
@@ -485,7 +485,7 @@ describe("ephemeral windows and repair", () => {
   test("EVICTION after an ephemeral-only window: the rebuilt incarnation repairs from its durable cursor; dead ephemerals are gaps, durables appear exactly once", async () => {
     const mem = memoryStream();
     const storage = memoryStorage();
-    mem.procs.push(new ProcessorEngine(new EphProcessor(), { stream: mem.stream, storage })); // the doomed incarnation
+    mem.engines.push(new ProcessorEngine(new EphProcessor(), { stream: mem.stream, storage })); // the doomed incarnation
     mem.stream.append({ type: "tick" }) as StreamEvent[]; // offset 1 — durable, cursor 1 persisted
     await settle();
     const writesAfterDurable = storage.writes;
@@ -495,10 +495,10 @@ describe("ephemeral windows and repair", () => {
     expect(storage.writes).toBe(writesAfterDurable); // the window persisted NOTHING (regression on eviction is by design)
 
     // EVICTION: the old incarnation dies; a fresh one shares its storage (durable cursor 1).
-    mem.procs.length = 0;
+    mem.engines.length = 0;
     const b = new EphProcessor();
     const engineB = new ProcessorEngine(b, { stream: mem.stream, storage });
-    mem.procs.push(engineB);
+    mem.engines.push(engineB);
     const readsBefore = mem.reads;
     mem.stream.append({ type: "tick" }) as StreamEvent[]; // offset 4 — pushed as range (3,4]
     await settle();
@@ -534,7 +534,7 @@ describe("ephemeral windows and repair", () => {
       }
     }
     const p = new FlakyProcessor();
-    mem.procs.push(new ProcessorEngine(p, { stream: mem.stream, storage }));
+    mem.engines.push(new ProcessorEngine(p, { stream: mem.stream, storage }));
     mem.stream.append({ type: "tick" }) as StreamEvent[]; // offset 1 — its push FAILS once (cursor stays 0)
     await settle();
     // One push carrying a fresh named ephemeral + a durable event, range (1,3] — non-contiguous
@@ -562,7 +562,7 @@ describe("ephemeral windows and repair", () => {
     }
     const p = new StarPlusProcessor();
     const engine = new ProcessorEngine(p, { stream: mem.stream, storage: memoryStorage() });
-    mem.procs.push(engine);
+    mem.engines.push(engine);
     mem.stream.append({ type: "tick" }) as StreamEvent[]; // durable → swept by "*" (emits a live-state change)
     await settle();
     mem.stream.append({ type: "chunk", ephemeral: true }) as StreamEvent[]; // named → consumed

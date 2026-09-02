@@ -638,7 +638,7 @@ is the whole userspace SDK, bundled into `./processor.js`:
 
 ```ts
 export { StreamProcessor }; // + ProcessorContract, ReduceArgs, ProcessEventArgs, ScannedRange, ...
-export { StreamProcessorDurableObject, type StreamProcessorProps, type ItxBinding };
+export { StreamProcessorDurableObject, type StreamProcessorProps };
 export { defineProcessorContract, StreamEvent, StreamEventInput, jsonEqual };
 export { z } from "zod";
 export { newHttpBatchRpcSession, newWebSocketRpcSession } from "capnweb";
@@ -658,8 +658,8 @@ abstract class StreamProcessor<State> {
   /** The live projection clients see. Default: the reduced state verbatim. Re-projected after
    *  EVERY batch, so a runtime field bumped inside processEvent publishes on its own. */
   projectLiveState(state: State): unknown;
-  /** `${slug}/${key}`, or `${slug}/${key}@${offset}` with `whileProcessing`. */
-  idempotencyKey(key: string, whileProcessing?: StreamEvent): string;
+  /** `${slug}/${key}`, or `${slug}/${key}@${offset}` with the event being processed. */
+  idempotencyKey(key: string, event?: StreamEvent): string;
 }
 ```
 
@@ -670,7 +670,7 @@ type StreamProcessorProps = { contextName: string; name: string };
 
 abstract class StreamProcessorDurableObject<
   State = unknown,
-  Env extends { ITX: ItxBinding } = { ITX: ItxBinding },
+  Env extends { ITX: Service<ItxEntrypoint> } = { ITX: Service<ItxEntrypoint> },
 > extends DurableObject<Env, StreamProcessorProps> {
   /** The processor this object hosts — `processor = new PresenceProcessor()` at the top of the subclass. */
   abstract readonly processor: StreamProcessor<State>;

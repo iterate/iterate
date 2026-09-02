@@ -8,13 +8,11 @@
 
 export {
   StreamProcessorDurableObject,
-  type ItxBinding,
   type StreamProcessorProps,
 } from "./stream-processor-durable-object.ts";
 export {
   StreamProcessor,
   type ProcessorContract,
-  type ProcessorSnapshot,
   type ProcessorStream,
   type ProcessEventArgs,
   type ReduceArgs,

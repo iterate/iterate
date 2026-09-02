@@ -72,7 +72,7 @@ const setup = () => {
   const storage = memoryStorage();
   const processor = new CounterProcessor();
   const engine = new ProcessorEngine(processor, { stream: mem.stream, storage });
-  mem.procs.push(engine);
+  mem.engines.push(engine);
   return {
     ...mem,
     storage,
@@ -251,7 +251,7 @@ describe("the concurrency contract", () => {
       }
     }
     const flaky = new ProcessorEngine(new FlakyProcessor(), { stream: mem.stream, storage });
-    mem.procs.push(flaky);
+    mem.engines.push(flaky);
     mem.stream.append({ type: "e" }) as StreamEvent[]; // the auto-push fails (attempt 1)
     await settle();
     expect(storage.get("reduce:flaky:progress")).toBeUndefined(); // nothing persisted
@@ -276,7 +276,7 @@ describe("the push door (scan scannedOffsetRanges)", () => {
     mem.stream.append({ type: "events.iterate.com/counter/ticked" }) as StreamEvent[]; // history
     const storage = memoryStorage();
     const late = new CounterProcessor();
-    mem.procs.push(new ProcessorEngine(late, { stream: mem.stream, storage })); // registered AFTER history exists
+    mem.engines.push(new ProcessorEngine(late, { stream: mem.stream, storage })); // registered AFTER history exists
     mem.stream.append({ type: "events.iterate.com/counter/ticked" }) as StreamEvent[]; // gapped push
     await settle();
     expect(late.trace.filter((t) => t.startsWith("start"))).toEqual(["start 1", "start 2"]);
@@ -411,7 +411,7 @@ describe("ephemeral events", () => {
       stream: mem.stream,
       storage: starStorage,
     });
-    mem.procs.push(eph, star);
+    mem.engines.push(eph, star);
 
     mem.stream.append({ type: "loud" }) as StreamEvent[]; // offset 1, durable
     await settle();
@@ -438,7 +438,7 @@ describe("ephemeral events", () => {
     const mem = memoryStream();
     const storage = memoryStorage();
     const a = new ProcessorEngine(new EphProcessor(), { stream: mem.stream, storage });
-    mem.procs.push(a);
+    mem.engines.push(a);
     mem.stream.append({ type: "loud" }) as StreamEvent[];
     mem.stream.append({ type: "chunk", ephemeral: true }) as StreamEvent[];
     mem.stream.append({ type: "loud" }) as StreamEvent[];
@@ -496,7 +496,7 @@ describe("review round 1 regressions", () => {
         args.blockProcessorWhile(() => args.append({ type: "echoed", idempotencyKey: "once" }));
       }
     }
-    mem.procs.push(new ProcessorEngine(new EchoerProcessor(), { stream: mem.stream, storage }));
+    mem.engines.push(new ProcessorEngine(new EchoerProcessor(), { stream: mem.stream, storage }));
     mem.stream.append({ type: "ping" }) as StreamEvent[]; // pre-fix shape: would hang forever
     await settle();
     expect(mem.events.some((e) => e.type === "echoed")).toBe(true);
@@ -629,7 +629,7 @@ describe("live state (the delta patches on the wire)", () => {
       stream: mem.stream,
       storage: memoryStorage(),
     });
-    mem.procs.push(p);
+    mem.engines.push(p);
     mem.stream.append({ type: "tick" }) as StreamEvent[];
     await settle();
     expect(changes(mem)).toHaveLength(1); // ONE change event per changed scannedOffsetRange, not per event
@@ -647,7 +647,7 @@ describe("live state (the delta patches on the wire)", () => {
       stream: mem.stream,
       storage: memoryStorage(),
     });
-    mem.procs.push(p);
+    mem.engines.push(p);
     mem.stream.append({ type: "tick" }) as StreamEvent[];
     await settle();
     mem.stream.append({ type: "other" }) as StreamEvent[]; // not consumed — a silent batch
@@ -664,7 +664,7 @@ describe("live state (the delta patches on the wire)", () => {
       stream: mem.stream,
       storage: memoryStorage(),
     });
-    mem.procs.push(p);
+    mem.engines.push(p);
     mem.stream.append({ type: "other" }) as StreamEvent[]; // advance the cursor, no projection change
     await settle();
     const seed = await p.liveSnapshot();
@@ -699,7 +699,7 @@ describe("live state (the delta patches on the wire)", () => {
       stream: mem.stream,
       storage: memoryStorage(),
     });
-    mem.procs.push(p);
+    mem.engines.push(p);
     mem.stream.append({ type: "tick" }, { type: "tick" }) as StreamEvent[];
     await settle();
     expect(changes(mem)).toHaveLength(0);
@@ -739,7 +739,7 @@ describe("live state (the delta patches on the wire)", () => {
       stream: mem.stream,
       storage: memoryStorage(),
     });
-    mem.procs.push(tally, sneaky);
+    mem.engines.push(tally, sneaky);
     mem.stream.append({ type: "tick" }) as StreamEvent[]; // tally emits a change event
     await settle();
     expect(changes(mem)).toHaveLength(1);
@@ -784,7 +784,7 @@ describe("live state (the delta patches on the wire)", () => {
       stream: mem.stream,
       storage: memoryStorage(),
     });
-    mem.procs.push(p);
+    mem.engines.push(p);
     mem.stream.append({ type: "tick" }, { type: "tick" }) as StreamEvent[]; // ONE batch, two events
     await settle();
     // The reduce never moved (state is the same object), yet the engine's after-every-batch
@@ -815,7 +815,7 @@ describe("live state (the delta patches on the wire)", () => {
     }
     const still = new StillProcessor();
     const mem = memoryStream();
-    mem.procs.push(new ProcessorEngine(still, { stream: mem.stream, storage: memoryStorage() }));
+    mem.engines.push(new ProcessorEngine(still, { stream: mem.stream, storage: memoryStorage() }));
     mem.stream.append({ type: "tick" }) as StreamEvent[];
     await settle();
     mem.stream.append({ type: "tick" }, { type: "tick" }) as StreamEvent[];
@@ -850,7 +850,7 @@ describe("live state emission failure is contained", () => {
       stream: mem.stream,
       storage: memoryStorage(),
     });
-    mem.procs.push(p);
+    mem.engines.push(p);
     mem.stream.append({ type: "tick" }) as StreamEvent[];
     await settle();
     // the reduce committed and the read surface works — the failure was only the notification
@@ -915,14 +915,14 @@ class EffectOnlyProcessor extends StreamProcessor<Record<string, never>> {
 
 describe("eviction honors the persisted cursor", () => {
   test("a caught-up EFFECT-ONLY processor does not replay effects across an eviction", async () => {
-    // #loadProgress accepts the persisted cursor whenever the version matches, materializing
+    // The engine constructor accepts the persisted cursor whenever the version matches, materializing
     // initialState() when the state key is absent — a processor that never changed state must not
     // fall back to offset 0 and re-drive the whole log WITH effects on every idle quiesce.
     const mem = memoryStream();
     const storage = memoryStorage();
     const p1 = new EffectOnlyProcessor();
     const e1 = new ProcessorEngine(p1, { stream: mem.stream, storage });
-    mem.procs.push(e1);
+    mem.engines.push(e1);
     for (let i = 0; i < 4; i++) mem.stream.append({ type: "boop" });
     await e1.catchUpFromLog();
     expect(p1.effects).toEqual([1, 2, 3, 4]);
@@ -932,8 +932,8 @@ describe("eviction honors the persisted cursor", () => {
     // Eviction: fresh instance, SAME storage + log, SAME version.
     const p2 = new EffectOnlyProcessor();
     const e2 = new ProcessorEngine(p2, { stream: mem.stream, storage });
-    mem.procs.length = 0;
-    mem.procs.push(e2);
+    mem.engines.length = 0;
+    mem.engines.push(e2);
     await e2.catchUpFromLog();
     expect(p2.effects).toEqual([]); // the persisted cursor (4) means nothing to re-do
   });
@@ -943,15 +943,15 @@ describe("eviction honors the persisted cursor", () => {
     const storage = memoryStorage();
     const p1 = new CountProcessor();
     const e1 = new ProcessorEngine(p1, { stream: mem.stream, storage });
-    mem.procs.push(e1);
+    mem.engines.push(e1);
     for (let i = 0; i < 4; i++) mem.stream.append({ type: "tick" });
     await e1.catchUpFromLog();
     expect(p1.effects).toEqual([1, 2, 3, 4]);
 
     const p2 = new CountProcessor();
     const e2 = new ProcessorEngine(p2, { stream: mem.stream, storage });
-    mem.procs.length = 0;
-    mem.procs.push(e2);
+    mem.engines.length = 0;
+    mem.engines.push(e2);
     await e2.catchUpFromLog();
     expect(p2.effects).toEqual([]); // cursor honored — no replay
   });
@@ -962,7 +962,7 @@ describe("eviction honors the persisted cursor", () => {
     // A v1 cursor at offset 0 (as if nothing was ever consumed), then a v2 incarnation.
     storage.put("reduce:count:progress", { reducerVersion: "1.0.0", reducedThroughOffset: 0 });
     const p2 = new ProcessorEngine(new CountProcessor("2.0.0"), { stream: mem.stream, storage });
-    mem.procs.push(p2);
+    mem.engines.push(p2);
     expect(await p2.snapshot()).toEqual({ offset: 0, state: { ticks: 0 } });
   });
 });
@@ -972,17 +972,17 @@ describe("waitUntilProcessed — resolution and failure modes", () => {
     const mem = memoryStream();
     const storage = memoryStorage();
     const p1 = new ProcessorEngine(new CountProcessor(), { stream: mem.stream, storage });
-    mem.procs.push(p1);
+    mem.engines.push(p1);
     for (let i = 0; i < 3; i++) mem.stream.append({ type: "tick" });
     await p1.catchUpFromLog();
 
     // A bumped incarnation waits for an offset the re-reduce (ceiling = 3) covers. No new push, so
     // the wake's catch-up reads an empty page and never runs a batch — only the re-reduce advances
-    // progress; the post-wake re-check must still resolve the waiter.
+    // the cursor — and the re-reduce itself must resolve the waiter.
     const p2 = new CountProcessor("2.0.0");
     const e2 = new ProcessorEngine(p2, { stream: mem.stream, storage });
-    mem.procs.length = 0;
-    mem.procs.push(e2);
+    mem.engines.length = 0;
+    mem.engines.push(e2);
     await expect(e2.waitUntilProcessed({ offset: 3, timeoutMs: 2000 })).resolves.toBeUndefined();
     expect(p2.effects).toEqual([]); // and the re-reduce stayed reduce-only
   });
@@ -991,7 +991,7 @@ describe("waitUntilProcessed — resolution and failure modes", () => {
     const mem = memoryStream();
     const storage = memoryStorage();
     const p = new ProcessorEngine(new CountProcessor(), { stream: mem.stream, storage });
-    mem.procs.push(p);
+    mem.engines.push(p);
     mem.stream.append({ type: "tick" }); // only offset 1 exists
     await p.catchUpFromLog();
     await expect(p.waitUntilProcessed({ offset: 5, timeoutMs: 120 })).rejects.toThrow(
