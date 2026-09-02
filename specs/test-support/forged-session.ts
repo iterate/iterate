@@ -13,6 +13,7 @@ import {
   type ProjectAiInterceptor,
   type ProjectAiInterceptorInput,
 } from "iterate/node";
+import dedent from "dedent";
 import { doppler, localOsDevServer } from "../../apps/os/scripts/dev.ts";
 import { mintForgedAccessToken, mintForgedIdToken } from "../../scripts/auth/forge-token.ts";
 // Lazy circular import (function-call-time only): the helper dials its
@@ -97,7 +98,12 @@ export async function createMobileFixture(
   );
 
   return {
+    baseUrl: osBaseUrl,
     createAgent: agentHelper.createAgent,
+    /** Admin itx for the signup-born project. */
+    itx,
+    projectId,
+    projectSlug,
     [Symbol.asyncDispose]() {
       return resources.disposeAsync();
     },
@@ -119,16 +125,18 @@ export async function createMobileFixture(
     const popupPromise = page.waitForEvent("popup", { timeout: 15_000 });
     await page.getByRole("button", { name: "Sign in" }).click();
     const popup = await popupPromise;
-    await popup.getByTestId("email-login-button").click();
+    const emailLoginButton = popup.getByTestId("email-login-button");
+    await emailLoginButton.waitFor({ state: "visible", timeout: 15_000 }); // timeout: popup page has no spinner-waiter
+    await emailLoginButton.click();
     await signUpWithEmailOtp(popup, {
       // A constant prefix, NOT the slug: the signup display name embeds this,
       // and a slug-containing name makes getByText(projectSlug) ambiguous.
-      email: uniqueSignupEmail("mobile-live-status"),
+      email: uniqueSignupEmail(slugPrefix),
       projectSlug,
       testInfo,
     });
     // Project selection auto-continues for test identities — consent is next.
-    await popup.getByRole("button", { name: "Allow access" }).click();
+    await popup.getByRole("button", { name: "Allow access" }).click({ timeout: 15_000 }); // timeout: popup page has no spinner-waiter
     await page.getByText("New chat").waitFor();
     (page as any).videoMode?.setStartTime();
   }
@@ -354,6 +362,24 @@ export function createAgentHelper<
 
       /** fingerprint -> script, so retries get the same script as last time */
       previous: Map<string, (typeof this)["responders"][number]["fn"]> = new Map();
+
+      lastUserMessage(call: ProjectAiInterceptorInput) {
+        if (call.source !== "agent-turn") throw new Error(`unexpected source: ${call.source}`);
+        return call.body.messages.findLast((m) => m.role === "user")?.content;
+      }
+
+      codemodify(script: string) {
+        const code = dedent(script.toString()).trim();
+        // The codemode format (agent-response-format.ts) rejects anything not
+        // starting `async (`/`async function` — fail here, in the spec's own
+        // stack, instead of as a retried malformed turn.
+        if (!/^async\s*(?:function|\()/.test(code)) {
+          throw new Error(
+            `codemodify: script must start with \`async (\` or \`async function\` to pass the codemode response format (agent-response-format.ts). Got: ${code.slice(0, 60)}`,
+          );
+        }
+        return `\`\`\`ts\n${code}\n\`\`\``;
+      }
 
       set(script: Parameters<typeof this.setTimes>[1]) {
         this.setTimes(Infinity, script);

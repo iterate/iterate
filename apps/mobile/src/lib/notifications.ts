@@ -49,6 +49,9 @@ export type DeviceNotificationRow = {
   requestOffset: number;
   title: string;
   body: string;
+  /** The held requests (the body is host-only; rows derive path display from
+   * these), or undefined for non-approval notifications and pre-0.4.0 intents. */
+  requests: { method: string; url: string }[] | undefined;
   /** ISO createdAt of the requesting event. */
   requestedAt: string;
   status: DeviceNotificationStatus;
@@ -88,11 +91,13 @@ export function deriveDeviceNotifications(events: readonly StreamEvent[]): Devic
         title?: string;
         body?: string;
         destination?: PushNotificationData["destination"];
+        requests?: { method: string; url: string }[];
       };
       rows.set(event.offset, {
         requestOffset: event.offset,
         title: typeof payload.title === "string" ? payload.title : "Notification",
         body: typeof payload.body === "string" ? payload.body : "",
+        requests: payload.requests,
         requestedAt: event.createdAt,
         status: { kind: "pending", label: "Waiting to send…" },
         destination: payload.destination || null,
@@ -149,6 +154,8 @@ export type NotificationListRow =
       approvalRequestEventOffset: number;
       title: string;
       body: string;
+      /** The held requests, straight off the batch's own event. */
+      requests: { method: string; url: string }[];
       /** ISO createdAt of the batch's requested event. */
       requestedAt: string;
       status: { kind: "needs-approval" | "decided"; label: string };
@@ -201,6 +208,7 @@ export function deriveNotificationListRows(
       payload.requests.length === 1
         ? `${payload.requests[0]!.method} ${safeHost(payload.requests[0]!.url)} is waiting for approval.`
         : `Script run waiting: ${payload.requests.length} requests (${hostBreakdown(payload.requests)})`,
+    requests: payload.requests,
   });
   const open = deriveOpenBatches(rootApprovalEvents);
   const openOffsets = new Set(open.map((batch) => batch.offset));
@@ -267,5 +275,18 @@ function settledStatus(outcome: { kind?: string } | undefined): DeviceNotificati
       return { kind: "unknown", label: "Delivery uncertain" };
     default:
       return { kind: "unknown", label: "Delivery unknown" };
+  }
+}
+
+/** The request's path + query for display. The fallback is not paranoia:
+ * a held request's `url` is a plain string by contract (custom hold rules
+ * can park free text), so unparseable ones render verbatim — same deal as
+ * approvals.ts's safeHost. */
+export function safePath(url: string): string {
+  try {
+    const parsed = new URL(url);
+    return parsed.pathname + parsed.search;
+  } catch {
+    return url;
   }
 }
