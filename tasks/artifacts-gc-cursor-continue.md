@@ -9,8 +9,8 @@ size: small
 
 Follow-up to #2565, prompted by the first real backfill pass (2026-09-02).
 
-- Done: nothing yet — spec below.
-- Missing: both changes + tests.
+- Done: both fixes + tests, checks green.
+- Missing: live validation once the in-flight drain pass finishes.
 
 ## Problems observed on the first drain pass
 
@@ -44,11 +44,14 @@ Follow-up to #2565, prompted by the first real backfill pass (2026-09-02).
 
 ## Checklist
 
-- [ ] cursor-continue sweep (no restart-from-head; drop the now-dead branch)
-- [ ] triage: `proj__*__` ids
-- [ ] triage: `repo-<hex>` decode
-- [ ] tests for the new shapes; existing tests stay green
-- [ ] live read-only validation (dry-run walks each page once)
+- [x] cursor-continue sweep (no restart-from-head; drop the now-dead branch)
+      _— sweep loop in artifacts-gc.ts; cursor-safety argument in the comment_
+- [x] triage: `proj__*__` ids _— parseLegacyRepoName_
+- [x] triage: `repo-<hex>` decode _— parseLegacyRepoName, printable+separator
+      fence, garbage decodes stay foreign_
+- [x] tests for the new shapes; existing tests stay green _— 5 pass_
+- [ ] live validation on a real namespace after the running drain pass
+      completes (avoid contending with it)
 
 ## Implementation log
 
