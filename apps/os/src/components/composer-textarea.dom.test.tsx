@@ -123,6 +123,8 @@ async function settleSuggestionSearch() {
 test("typing a trigger keeps editor focus and Enter inserts an atomic reference", async () => {
   const onDocumentChange = vi.fn();
   const { content, root, view } = await mountHarness({ onDocumentChange });
+  expect(content.getAttribute("aria-placeholder")).toBe("Message this agent");
+  expect(content.getAttribute("placeholder")).toBe("Message this agent");
   await act(async () => view.focus());
   await enterText(view, "@ag");
   await settleSuggestionSearch();

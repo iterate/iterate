@@ -296,6 +296,8 @@ export function ComposerTextareaClient({
             "aria-autocomplete": "list",
             "aria-controls": listId,
             "aria-label": placeholder,
+            "aria-placeholder": placeholder,
+            placeholder,
             role: "combobox",
           }),
           EditorView.domEventHandlers({
