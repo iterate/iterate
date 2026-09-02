@@ -1814,3 +1814,53 @@ end-to-end 15267 ev/s | p50 36ms p95 42ms | batching 50×` (was ~5,400 ev/s, p50
   `ITX-KERNEL-SHAPE.md`, `docs/state-of-play.md`) each carry ONE short banner pointing at the
   walkthrough, the layer map, and the design of record; their long, drifting banners are gone.
 - One stray path comment in `wrangler.jsonc` (`core/worker-loader.ts`) followed the step 4 move.
+
+## 2026-09-02 — review round 1: six lenses, four commits
+
+Six parallel reviewers (conceptual clarity, idiomatic Cloudflare, adversarial correctness,
+docs-vs-source, test hygiene, commit-path performance) read the tree at 2128cffd2. What they found
+and what landed:
+
+- **Correctness (0a00827b7).** MAJOR: `read()`'s short-page proof was the in-memory head, which
+  counts ephemeral offsets; the processor engine and the stream-kept cursor persisted it, and a
+  later incarnation — which hands those offsets to durables — then skipped them. The proof is now
+  the DURABLE MARK (`Stream.durableMark()`); the inline reduces and the resume clamp use it too;
+  the ephemeral fast path no longer runs the inline reduces at all. Also: inline reduces write
+  their cursor every durable batch (a wake replayed the whole incarnation's log before — measured
+  0.4–1.2 s per million rows per slug); a facet is woken at configure time even under a consumes
+  filter; a facet load that races a delete refuses; the quiet-clock alarm never re-arms in the
+  past; a resume landing mid-delivery is applied, not buried under a halt; a replaced subscription
+  drops the old target's cursor; facet pushes carry the delivery watchdog; a pager reports its loss
+  once. And a leak the eviction pins exposed: a facet's Workers-RPC RESULT object holds a reference
+  on the facet until disposed — every `snapshot()` left an aborted facet pinning the DO until GC.
+  `#invokeFacet` copies the data out and disposes the result. Pinned in
+  `__workers-tests__/ephemeral-offset-reuse.test.ts` (real DO, quiesce + evict) and two new
+  `stream.test.ts` pins (durable-mark proof; zero SQL on a warm ephemeral append). Measured after:
+  perf-guard 52632 ev/s p50 9 ms, ephemeral flood 58824 ev/s p50 15 ms.
+- **Docs (4255a5340).** Eleven corrections against source (facet push is awaited; the processor
+  example names its consumes; types attributed to their real files; the tutorial's auth toy
+  follows the Session shape; design doc records wrap-not-split) plus the small print a reader
+  trips over (name grammar, cursor birth, the 60 s quiet clock, facet memo, idempotent expression
+  mounts).
+- **Clarity (58eacf406).** `InlineCore` → `InlineReduces` (it collided with the `core` reduce);
+  the engine's hook is `projectLiveState` like the SDK's; one `canonicalCapabilityPath`; the stub
+  registry's string is `key` on every layer; inline reduces expose `liveSnapshot`. Deleted: five
+  dead options/branches, the fetch lane's silent `itx.` prefix, two pre-emptive `touch()` calls,
+  `itxFor`, the DO's public facet doors, the entrypoint's futures; ~40 comment sites stopped
+  speaking the old model.
+- **Idiomatic Cloudflare (4cb0b450a).** Declarative `exports` for the DO (no migrations history),
+  `$schema` + observability, the solo test config built on wrangler's own reader (no JSONC
+  regex, no `as never`), the compat truth (nodejs_compat default-on for the platform worker; loaded
+  isolates pure-play via one `LOADED_WORKER_COMPATIBILITY`), `WorkerEntrypoint<Env, Props>`,
+  `setWebSocketAutoResponse` once in the constructor, `Symbol.dispose` direct (fourteen polyfills
+  gone, one of them a fake), `ItxBinding.waitForEvent`. Kept: `allow_irrevocable_stub_storage` —
+  it has a consumer (restore.e2e).
+- **Performance.** Verdict: ≥5000 ev/s met with 4× headroom durable (21.5k end-to-end) and 10×
+  ephemeral; DO commit CPU is 40 µs / 175 µs per 50-event batch, so transport and storage commit
+  are the bottleneck. Do not touch the SQLite schema or batch the INSERTs (measured no gain). Open:
+  `RpcStubDirectory.find()` is O(sockets) per push (30 µs at 100 sockets) — an index if it bites.
+- **Test hygiene.** ~2,500 deletable lines identified (bug-hunt pins with lying `failing-` names,
+  duplicated helpers, a harness lane that re-proves the e2e lane at 19 boots). Landing as its own
+  round.
+- GATES at 4cb0b450a: tsc×3 · unit 183 · harness 131p/1xf · workers 38 · e2e 34p/2xf ·
+  tutorial-proof 8 · oxlint 0/0 · knip clean.

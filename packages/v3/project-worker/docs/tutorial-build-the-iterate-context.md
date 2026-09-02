@@ -30,7 +30,7 @@ One file, grown eight times. Set up once — a fresh directory with
   "durable_objects": {
     "bindings": [{ "name": "CONTEXT", "class_name": "IterateContextDurableObject" }],
   },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["IterateContextDurableObject"] }],
+  "exports": { "IterateContextDurableObject": { "type": "durable-object", "storage": "sqlite" } },
   "vars": { "OPENAI_API_KEY": "sk-test-12345" },
 }
 ```
@@ -1091,13 +1091,13 @@ The tree is laid out by primitive, one folder per chapter of this tutorial:
 src/
   worker.ts                          the edge: `/api` (capnweb) and `/cap` (fetch-in)
   session.ts                         UnauthenticatedSession → Session → ProjectCollection.get(id)
-  iterate-context.ts                 IterateContext, the client-facing RpcTarget (axioms + sugar) + itxFor
+  iterate-context.ts                 IterateContext, the client-facing RpcTarget (axioms + sugar)
   iterate-context-durable-object.ts  IterateContextDurableObject — composes the stream, the mounts, the stubs
   itx-entrypoint.ts                  env.ITX for loaded code
   context/   built-ins, capability-table, expression, dispatch, invoke-handle, dotted-path-proxy,
              rpc-stub-directory, rpc-stub-relay, hibernatable-rpc-stub, worker-loader, durable-object-names
   fetch/     fetch-capabilities
-  stream/    stream, events, processor (the engine), reduce-checkpoint, inline-core, core-processor,
+  stream/    stream, events, processor (the engine), reduce-checkpoint, inline-reduces, core-processor,
              subscriptions, subscription-delivery, live-state
   sdk/       index (→ processor.js), stream-processor-durable-object
   lib/       errors, logs, hash, patch
@@ -1108,7 +1108,7 @@ src/
 | ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Ch 1 edge worker + `IterateContext` + `provide`               | `src/worker.ts` (`/api`), `src/iterate-context.ts`                                                                                                                                                                                               |
 | Ch 1 the context DO                                           | `IterateContextDurableObject`, `src/iterate-context-durable-object.ts`                                                                                                                                                                           |
-| Ch 1 load / facets / tail replay                              | `src/context/built-ins.ts`, `facetInvoke` in the DO                                                                                                                                                                                              |
+| Ch 1 load / facets / tail replay                              | `src/context/built-ins.ts`, the DO's private facet door                                                                                                                                                                                          |
 | Ch 1 pager pair (the `itx.rpcStubs` built-in's backing table) | `RpcStubDirectory` + `HibernatableRpcStubManager`, `src/context/rpc-stub-directory.ts`, `src/context/hibernatable-rpc-stub.ts`; the built-in itself in `src/context/built-ins.ts`, the edge half (`provide`/`close`) in `src/iterate-context.ts` |
 | Ch 2 secret sentinel                                          | `{{secret:project:NAME}}` — `../shared/src/egress.ts`, the DO's `#egress` terminal                                                                                                                                                               |
 | Ch 2 fetch-in / tunnel                                        | `/cap` in `src/worker.ts`, `src/fetch/fetch-capabilities.ts`, `upgradeWebSocketResponse` in the capnweb fork                                                                                                                                     |

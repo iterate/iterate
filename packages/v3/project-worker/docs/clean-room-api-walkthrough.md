@@ -87,7 +87,7 @@ packages/v3/project-worker/
     worker.ts                    THE EDGE. default fetch routes /api /cap /demo /version.
                                  Exports DummyControlPlane, ItxEntrypoint, IterateContextDurableObject.
     session.ts                   UnauthenticatedSession → Session → ProjectCollection (the gate + catalog)
-    iterate-context.ts           IterateContext, the client-facing RpcTarget: axioms + sugar; itxFor()
+    iterate-context.ts           IterateContext, the client-facing RpcTarget: axioms + sugar
     iterate-context-durable-object.ts  THE CONTEXT DO: stream + inline reduces + delivery + facets +
                                  transport + the fetch doors. One class, ~700 lines.
     itx-entrypoint.ts            ItxEntrypoint: what a loaded worker's env.ITX is
@@ -114,7 +114,7 @@ packages/v3/project-worker/
       events.ts                  StreamEventInput / StreamEvent (zod), defineProcessorContract
       processor.ts               StreamProcessor (the engine), ReduceOnlyProcessor, consumesEvent
       reduce-checkpoint.ts       the one persisted reduce-checkpoint shape
-      inline-core.ts             InlineCore: hosts reduce-only processors AT the commit point
+      inline-reduces.ts          InlineReduces: hosts reduce-only processors AT the commit point
       core-processor.ts          the core inline reduce: pause, breaker, incarnation
       subscriptions.ts           the subscriptions table: four events, one reduce, configure/remove
       subscription-delivery.ts   THE ONE DELIVERY LOOP: push to a facet or live stub, else a
@@ -238,7 +238,9 @@ class IterateContext extends RpcTarget {
 
   // the stream verbs, flattened onto itx
   append(...events: StreamEventInput[]): Promise<StreamEvent[]>;
-  /** afterOffset default 0, limit default 500. Non-minting: reading a virgin stream leaves it virgin. */
+  /** afterOffset default 0, limit default 500. Non-minting: reading a virgin stream leaves it
+   *  virgin. `scannedThroughOffset` is the contiguity cursor to chain: a full page's last row, a
+   *  short page's DURABLE mark (never the in-memory head — ephemeral offsets are not proven). */
   read(
     afterOffset?: number,
     limit?: number,
@@ -480,8 +482,10 @@ reachable the same way, and a terminal `.fetch(request)` rides the facet's own
 fetch channel (so a 101 works).
 
 Three reduce-only processors are always on and run **inline** in the commit
-transaction. They have no facet, but their snapshots are exposed through the
-same door, and their names are reserved (a subscription may not take them):
+transaction. They have no facet, but `snapshot()` and `liveSnapshot()` are
+exposed through the same door (they publish `live-state/changed` deltas like any
+processor, keyed by their slug), and their names are reserved (a subscription
+may not take them):
 
 ```ts
 // itx.facets.get('core').snapshot().state
@@ -832,7 +836,7 @@ the held rev triggers one single-flight re-read of the door.
   resumes from the last durable mark, and `stream/woken` (durable, first batch
   of each incarnation) marks the boundary. Every persisted checkpoint in the
   package advances only on a batch that carried a durable.
-- Stream control is ordinary events read by the inline core reduce:
+- Stream control is ordinary events read by the core reduce (inline):
 
 ```ts
 await itx.append({ type: "events.iterate.com/stream/paused", payload: { reason: "maintenance" } });
@@ -893,7 +897,7 @@ stream's post-commit hook. For every subscription it filters the batch by
 Nothing reads a "kind" off an event: the kind is the evaluated value's brand,
 minted by the built-in that produced it, so an alias classifies correctly
 because it evaluates to the same handle. `consumes` has one rule
-(`consumesEvent`, shared with the engine and the inline core): absent or `"*"`
+(`consumesEvent`, shared with the engine and the inline reduces): absent or `"*"`
 means every durable event; naming a type opts it in, ephemerals included.
 
 ```ts
@@ -964,15 +968,8 @@ class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
   }): Promise<{ name: string; configuredAtOffset: number }>;
   removeSubscription(name: string): Promise<void>;
 
-  // ── facets ──
-  /** The generic facet door: resolve the facet locally (a name, or load + class + name), walk
-   *  `path`, apply `args`. Facet stubs are non-transferable, so the walk happens here. */
-  facetInvoke(
-    ref: string | { source?: unknown; className?: string; name?: string },
-    path: string[],
-    args: unknown[],
-  ): Promise<unknown>;
-  deleteFacet(name: string): void;
+  // (facets have no public verb: they are reached through `invoke` → the `facets` built-in and
+  //  the load chain; the resolve-walk-apply door behind both is private)
 
   // ── doors the edge relay calls (the hibernatable stub dance) ──
   rpcStubAttach(input: { path: string }): { transportId: string };
@@ -1093,7 +1090,7 @@ sequenceDiagram
   participant E as edge relay (Parking)
   participant D as context DO
   C->>E: itx.provide("itx.robot", robotObject)
-  E->>D: rpcStubAttach({ path: "itx.robot" })
+  E->>D: rpcStubAttach({ key: "itx.robot" })
   D-->>E: { transportId }
   E->>D: open stub-pager WebSocket (x-itx-stub-pager, carries transportId)
   Note over D: rpc-stub/attached { key: "itx.robot" } (ephemeral)

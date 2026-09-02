@@ -39,7 +39,7 @@ it — its injected callbacks run the inline reduces in-transaction (pause/break
 there) and the post-commit fan-out. Identity is always log-derived: a mount's id IS the offset of
 its capability-provided fact; a subscription's, of its subscription-configured fact.
 
-Three reduce-only processors run INLINE at the commit point (`stream/inline-core.ts` — zero runner
+Three reduce-only processors run INLINE at the commit point (`stream/inline-reduces.ts` — zero runner
 apparatus): `core` (pause / breaker / incarnation), `capability-table` (layer 2), `subscriptions`
 (layer 3). Runtime state IS reduced state: `itx.facets.get('core' | 'capability-table' |
 'subscriptions').snapshot()`.

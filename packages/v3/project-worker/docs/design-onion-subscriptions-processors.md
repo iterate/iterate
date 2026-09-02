@@ -540,7 +540,7 @@ src/
   context/   built-ins.ts capability-table.ts expression.ts dispatch.ts invoke-handle.ts dotted-path-proxy.ts
              rpc-stub-directory.ts rpc-stub-relay.ts hibernatable-rpc-stub.ts worker-loader.ts durable-object-names.ts
   fetch/     fetch-capabilities.ts
-  stream/    stream.ts events.ts processor.ts reduce-checkpoint.ts inline-core.ts core-processor.ts
+  stream/    stream.ts events.ts processor.ts reduce-checkpoint.ts inline-reduces.ts core-processor.ts
              subscriptions.ts subscription-delivery.ts live-state.ts
   sdk/       index.ts (→ processor.js) stream-processor-durable-object.ts
   lib/       errors.ts logs.ts hash.ts patch.ts        client/     generated/
