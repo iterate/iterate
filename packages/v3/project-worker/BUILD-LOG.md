@@ -2451,3 +2451,34 @@ options?)` with `options.rewrite`; chapter 1 reads `itx.provide("laptop", fn)`, 
   walkthrough, onion design, loader/sdk comments). src 4 files +44/−46; tests 14 files +37/−35;
   code lines 3,851 → 3,846.
 - GATES: tsc×3 · oxlint 0/0 · knip clean · unit+workers 250 · e2e 140p/2xf (36 files).
+
+## 2026-09-02 — `cacheKey`: a producer source behind Cloudflare's `get(id, getCode)`, as designed
+
+- Jonas: "can the cache key be passed in? sometimes it is expensive to retrieve the source code (e.g.
+  if it has to be built) so its nice to pass in a cache key. read and learn how cloudflare/os handles
+  it … and recommend something", then "okay do it but first check what cloudflare/os does in case it
+  changes your mind".
+- CHECKED. Cloudflare (dynamic-workers/api-reference): `LOADER.get(id, getCode)` runs `getCode` only
+  when no isolate is warm under `id`; it "could be called any number of times (although it is unusual
+  for it to be called more than once)"; "if anything about the content changes, you must use a new ID";
+  `load()` is the uncached twin. apps/os (domains/workers): a source is a DESCRIPTION (`{ createWorker:
+{ files: inline | repo ref, …bundlerOptions } }`), never a caller-chosen key; the BUILD KEY is a
+  sha256 over the resolved content identity (repo head `contentHash`) + build options + bundler and
+  schema versions; the build ARTIFACT is cached in KV (30 d) behind one coordinator DO per key; the
+  LOADER key is `worker-loader:<self>:<deploy>:<project>:<scope>:<streamContext>:<buildKey>:<runnerNonce>`
+  and `LOADER.get` is called with the artifact already in hand. Neither changed the recommendation: the
+  primitive to mirror is Cloudflare's, and apps/os's tiers belong to a build capability.
+- **Built.** `WorkerSource = WorkerModules | ItxExpressionInput` (`WorkerModules = Record<string,
+string>`, `cap.js` main). `workers.get({ source, cacheKey?, className?, props? })` and
+  `facets.get(name, { source, cacheKey?, className })`. The loader key is `kind:deploy:owner:(cacheKey
+?? contentHash)`; a producer expression is evaluated INSIDE `getCode` (through the context's own
+  dispatch — `invoke` is back as a loader dep), so a warm key never re-runs it; a producer without a
+  key is refused at the door (hashing the expression would be the stale-code trap). A facet's memo
+  stores `{ source, cacheKey?, className }`; its version marker is the key's last component
+  (`sourceVersion`), so a new key restarts the facet, storage surviving. The billing note stays.
+- Reverses part of B on purpose: the producer is back, but only WITH the key that makes it safe.
+- Tests: worker-loader.test.ts pins refused-without-key, produced-once-per-cold-key, re-produced on a
+  new key, content-hash vs named key; load-sources.e2e proves it end to end with a LIVE code store
+  (counts evaluations) for a stateless worker and a facet (`facets.get(name)` re-materializes from the
+  memo, producer count still 1).
+- GATES: tsc×3 · oxlint 0/0 · knip clean · unit+workers 252 · e2e 141p/2xf (36 files).

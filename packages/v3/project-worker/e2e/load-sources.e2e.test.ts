@@ -5,6 +5,7 @@
 // SOURCE is the worker's MODULES (module name → code, `"cap.js"` is the main module), handed over
 // INLINE at the load site; `itx.runScript(lambda)` is the source-less sugar.
 
+import { RpcTarget } from "capnweb";
 import { expect, test } from "vitest";
 import { freshCtx, openItx } from "./support/client.ts";
 
@@ -90,4 +91,71 @@ test("the load door takes the modules INLINE, and runScript(lambda) sugar", asyn
   // 3. runScript(lambda) sugar: a bare lambda STRING is wrapped in a WorkerEntrypoint (injecting
   //    itx) and run — no source at all.
   expect(await itx.runScript("async (itx, x) => x * 2", 21)).toBe(42);
+});
+
+// ── a PRODUCER source behind a cacheKey: Cloudflare's `get(id, getCode)` contract, end to end ──
+
+test("a source EXPRESSION with a cacheKey is produced ONCE per cold isolate — a warm key never re-runs it, a new key does, and no key is refused", async () => {
+  const ctx = freshCtx("cachekey");
+  const itx = openItx(ctx);
+  // The producer: a LIVE code store the test holds, so every evaluation is countable. In a product it
+  // is a build (`itx.build('todo')`) — the expensive thing the key exists to skip.
+  class CodeStore extends RpcTarget {
+    produced: string[] = [];
+    get(name: string): Record<string, string> {
+      this.produced.push(name);
+      return { "cap.js": entrypoint(`async run(x) { return "${name}:" + x; }`) };
+    }
+  }
+  const codeStore = new CodeStore();
+  await itx.provide("itx.codeStore", codeStore);
+
+  // 1. no key → refused at the door; the producer never ran
+  await expect(
+    itx.invoke(["itx", "workers", ["get", { source: "itx.codeStore.get('greet')" }], ["run", 1]]),
+  ).rejects.toThrow(/needs a cacheKey/);
+  expect(codeStore.produced).toEqual([]);
+
+  // 2. with a key: the first call produces, the second rides the warm isolate
+  const spec = { source: "itx.codeStore.get('greet')", cacheKey: "greet@v1" };
+  expect(await itx.invoke(["itx", "workers", ["get", spec], ["run", 1]])).toBe("greet:1");
+  expect(await itx.invoke(["itx", "workers", ["get", spec], ["run", 2]])).toBe("greet:2");
+  expect(codeStore.produced).toEqual(["greet"]);
+
+  // 3. a new key is a new isolate: produced again (the caller changed the code, so the key)
+  expect(
+    await itx.invoke([
+      "itx",
+      "workers",
+      ["get", { source: "itx.codeStore.get('greet')", cacheKey: "greet@v2" }],
+      ["run", 3],
+    ]),
+  ).toBe("greet:3");
+  expect(codeStore.produced).toEqual(["greet", "greet"]);
+
+  // 4. the same for a FACET: hosted from a producer, the state persists across calls and the
+  //    producer ran once; the memo keeps the key so a bare `facets.get(name)` re-materializes it
+  class FacetCodeStore extends RpcTarget {
+    produced = 0;
+    get(): Record<string, string> {
+      this.produced++;
+      return {
+        "cap.js": `import { DurableObject } from "cloudflare:workers";
+export class CounterDurableObject extends DurableObject {
+  async bump() { const n = ((await this.ctx.storage.get('n')) ?? 0) + 1; await this.ctx.storage.put('n', n); return n; }
+}`,
+      };
+    }
+  }
+  const facetCodeStore = new FacetCodeStore();
+  await itx.provide("itx.facetCodeStore", facetCodeStore);
+  const facetSpec = {
+    source: "itx.facetCodeStore.get()",
+    cacheKey: "counter@v1",
+    className: "CounterDurableObject",
+  };
+  expect(await itx.invoke(["itx", "facets", ["get", "ck", facetSpec], ["bump"]])).toBe(1);
+  expect(await itx.invoke(["itx", "facets", ["get", "ck", facetSpec], ["bump"]])).toBe(2);
+  expect(await itx.invoke(["itx", "facets", ["get", "ck"], ["bump"]])).toBe(3);
+  expect(facetCodeStore.produced).toBe(1);
 });

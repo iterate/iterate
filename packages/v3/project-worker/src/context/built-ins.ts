@@ -20,7 +20,7 @@
 
 import type { ReachableContext, StreamPage, WaitForEventFilter } from "../stream/stream.ts";
 import type { StreamEvent, StreamEventInput } from "../stream/events.ts";
-import { loadConfinedWorker, type WorkerSource } from "./worker-loader.ts";
+import { loadConfinedWorker, type WorkerCacheKey, type WorkerSource } from "./worker-loader.ts";
 import { resolveContextPath } from "./durable-object-names.ts";
 import { print, type ItxExpression } from "./expression.ts";
 import { FacetHandle, InvokeHandle, RpcStubHandle } from "./invoke-handle.ts";
@@ -108,11 +108,16 @@ export interface BuiltInScope {
     get(match: string): { match: string; target: string } | null;
   };
   /** The facets of this context. `get(name)` ADDRESSES one that is already running (a processor, a
-   *  named instance) — no source; `get(name, { source, className })` LOADS the class and hosts it as
-   *  the durable facet `name` (own storage) — the mirror of Cloudflare's `ctx.facets.get(name,
-   *  startupCallback)`. `delete` removes it, storage included (the mirror of `ctx.facets.delete`). */
+   *  named instance) — no source; `get(name, { source, cacheKey?, className })` LOADS the class and
+   *  hosts it as the durable facet `name` (own storage) — the mirror of Cloudflare's
+   *  `ctx.facets.get(name, startupCallback)`; `source`/`cacheKey` as for `workers.get` (a new key
+   *  restarts the facet, its storage surviving). `delete` removes it, storage included (the mirror of
+   *  `ctx.facets.delete`). */
   facets: {
-    get(name: string, spec?: { source: WorkerSource; className: string }): FacetHandle;
+    get(
+      name: string,
+      spec?: { source: WorkerSource; cacheKey?: WorkerCacheKey; className: string },
+    ): FacetHandle;
     delete(name: string): void;
   };
   /** The subscriptions layer, read: the table (a slice of core) joined with the stream-kept
@@ -122,14 +127,21 @@ export interface BuiltInScope {
     list(): SubscriptionListEntry[];
     get(name: string): SubscriptionListEntry | null;
   };
-  /** The stateless host: `get({ source, className?, props? })` → a `WorkerEntrypoint` in its own
-   *  confined isolate (no DO, no storage) — ANY method it exports, reached by name (`run`, `fetch`,
-   *  `processEventBatch`, …). `className` names the exported class (default: the default export);
-   *  `props` is Cloudflare's own WorkerStubEntrypointOptions.props, read back as `this.ctx.props` (a
-   *  url, a key name, …). `source` is the worker's MODULES, literally: `{ "cap.js": code, … }`. No
-   *  name and no `list`: a stateless worker is its spec. */
+  /** The stateless host: `get({ source, cacheKey?, className?, props? })` → a `WorkerEntrypoint` in
+   *  its own confined isolate (no DO, no storage) — ANY method it exports, reached by name (`run`,
+   *  `fetch`, `processEventBatch`, …). `source` is the worker's MODULES, literally (`{ "cap.js": code,
+   *  … }`), OR an itx EXPRESSION that produces them — then `cacheKey` is REQUIRED and the producer runs
+   *  only when no isolate is warm under it (worker-loader.ts: Cloudflare's `get(id, getCode)`
+   *  contract; the caller owns "same key ⇒ same code"). `className` names the exported class (default:
+   *  the default export); `props` is Cloudflare's own WorkerStubEntrypointOptions.props, read back as
+   *  `this.ctx.props` (a url, a key name, …). No name and no `list`: a stateless worker is its spec. */
   workers: {
-    get(spec: { source: WorkerSource; className?: string; props?: unknown }): InvokeHandle;
+    get(spec: {
+      source: WorkerSource;
+      cacheKey?: WorkerCacheKey;
+      className?: string;
+      props?: unknown;
+    }): InvokeHandle;
   };
   /** Run a stateless lambda STRING — sugar: wrap into a `WorkerEntrypoint`, then
    *  `workers.get({ source }).run(...)`. The one bare-lambda ergonomic (same as apps/os). */
@@ -145,6 +157,9 @@ interface BuildBuiltInsDeps {
   /** The bindings the built-ins reach: the loader (+ the deploy id its cacheKey folds in) and the
    *  project kv (bound in both wrangler configs). */
   env: { LOADER: WorkerLoader; ITX_KV: KVNamespace; CF_VERSION_METADATA?: { id: string } };
+  /** Evaluate a producer source expression through THIS context's dispatch (inside the loader's
+   *  `getCode`, so only on a cold isolate). */
+  invoke: (call: ItxExpression) => Promise<unknown>;
   /** A context stream by CANONICAL path — the own-path parent adapter same-isolate, by-name DO
    *  stubs otherwise. Both satisfy ReachableContext (uniform-async, real-typed — see stream/stream.ts). */
   context: (path: string) => ReachableContext;
@@ -159,12 +174,16 @@ interface BuildBuiltInsDeps {
   rewriteRules: BuiltInScope["rewriteRules"];
   /** The stream's waitForEvent (the own context's — a wait never crosses a hop). */
   waitForEvent: BuiltInScope["waitForEvent"];
-  /** `facets.get(ref)` — address a facet by name, OR materialize `{ name, source, className }` (a
-   *  loaded durable object hosted as the facet `name` of this stream — the public
-   *  `itx.facets.get(name, { source, className })` routes here; accepted trade: a busy stateful facet
-   *  pins its stream). */
+  /** `facets.get(ref)` — address a facet by name, OR materialize `{ name, source, cacheKey?,
+   *  className }` (a loaded durable object hosted as the facet `name` of this stream — the public
+   *  `itx.facets.get(name, spec)` routes here; accepted trade: a busy stateful facet pins its
+   *  stream). */
   facets: {
-    get(ref: string | { name: string; source: WorkerSource; className: string }): FacetHandle;
+    get(
+      ref:
+        | string
+        | { name: string; source: WorkerSource; cacheKey?: WorkerCacheKey; className: string },
+    ): FacetHandle;
     delete(name: string): void;
   };
   /** The `env.ITX` / `globalOutbound` stub every worker this context loads receives — the
@@ -185,11 +204,10 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
    *  same call: `entrypoint.fetch(request)` IS the entrypoint's fetch channel, socket-bearing
    *  Responses included (fetch/rpc-stub-fetch.ts doctrine, points 1 & 4). The source EXPORTS the
    *  entrypoint (no host-injected wrapper — Cloudflare's `worker.getEntrypoint()` underneath).
-   *  Re-resolves per call, but the loader caches by contentHash so a warm isolate is reused. */
+   *  Re-resolves per call, but the loader caches by the key (cacheKey | content hash) so a warm
+   *  isolate is reused and a producer expression never re-runs. */
   const callEntrypoint = async (
-    source: WorkerSource,
-    className: string | undefined,
-    props: unknown,
+    spec: { source: WorkerSource; cacheKey?: WorkerCacheKey; className?: string; props?: unknown },
     method: string,
     args: unknown[],
   ) => {
@@ -198,12 +216,14 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
       host,
       kind: "code",
       owner: iterateContextName,
-      source,
+      source: spec.source,
+      cacheKey: spec.cacheKey,
+      invoke: deps.invoke,
       where: "workers.get",
     });
     const entrypoint = worker.getEntrypoint(
-      className,
-      props === undefined ? undefined : { props },
+      spec.className,
+      spec.props === undefined ? undefined : { props: spec.props },
     ) as Fetcher & Record<string, (...a: unknown[]) => Promise<unknown>>;
     const fn = entrypoint[method];
     if (typeof fn !== "function")
@@ -263,13 +283,23 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
     fetch: (request: Request) => deps.egress(request),
     rpcStubs: deps.rpcStubs,
     facets: {
-      get: (name: string, spec?: { source: WorkerSource; className: string }) => {
+      get: (
+        name: string,
+        spec?: { source: WorkerSource; cacheKey?: WorkerCacheKey; className: string },
+      ) => {
         if (typeof name !== "string")
           throw new Error(
             "itx.facets.get(name, spec?): name the facet; pass { source, className } to load and host it",
           );
         return deps.facets.get(
-          spec ? { name, source: spec.source, className: spec.className } : name,
+          spec
+            ? {
+                name,
+                source: spec.source,
+                ...(spec.cacheKey !== undefined && { cacheKey: spec.cacheKey }),
+                className: spec.className,
+              }
+            : name,
         );
       },
       delete: (name: string) => deps.facets.delete(name),
@@ -278,25 +308,24 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
     rewriteRules: deps.rewriteRules,
     // A genuine InvokeHandle, so `workers.get(spec).run()` pipelines on every lane (workerd#6873).
     workers: {
-      get: (spec: { source: WorkerSource; className?: string; props?: unknown }) =>
+      get: (spec: {
+        source: WorkerSource;
+        cacheKey?: WorkerCacheKey;
+        className?: string;
+        props?: unknown;
+      }) =>
         new InvokeHandle((methodSteps) => {
           const [call] = methodSteps;
           if (methodSteps.length !== 1 || !Array.isArray(call) || call[0] === "")
             throw new Error(
               `workers.get(spec).${print(methodSteps)}: a WorkerEntrypoint exposes flat methods`,
             );
-          return callEntrypoint(spec.source, spec.className, spec.props, call[0], call.slice(1));
+          return callEntrypoint(spec, call[0], call.slice(1));
         }),
     },
     // `RUN_SCRIPT_ENTRYPOINT` wraps the lambda string into a WorkerEntrypoint default export, so even
     // this bare-lambda door bottoms out at `workers.get({ source }).run(...)`.
     runScript: (script: string, ...args: unknown[]) =>
-      callEntrypoint(
-        { "cap.js": RUN_SCRIPT_ENTRYPOINT(script) },
-        undefined,
-        undefined,
-        "run",
-        args,
-      ),
+      callEntrypoint({ source: { "cap.js": RUN_SCRIPT_ENTRYPOINT(script) } }, "run", args),
   } satisfies BuiltInScope;
 }

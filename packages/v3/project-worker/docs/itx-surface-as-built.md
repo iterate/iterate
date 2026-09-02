@@ -153,25 +153,28 @@ How a client reaches one (`src/session.ts`):
 A plain record. A call `itx.<root>…` resolves DIRECTLY against these, no rule. A rule's target
 must be rooted at `itx`, so a bare root is unspellable and the built-ins are unshadowable.
 
-| Root                         | Signature                                                                                                               | Backed by                                                     |
-| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
-| `whoami()`                   | `→ { projectId, path }`                                                                                                 | the DO name                                                   |
-| `kv`                         | `.get(k)` `.put(k, v)` `.delete(k)` `.list(prefix?)`                                                                    | `ITX_KV`, `${projectId}:` prefixed                            |
-| `append(...events)`          | `→ StreamEvent[]`                                                                                                       | the stream                                                    |
-| `read(afterOffset?, limit?)` | `→ { events, scannedThroughOffset }`                                                                                    | the stream                                                    |
-| `waitForEvent(filter?)`      | `{ type?, afterOffset?, timeoutMs? } → StreamEvent`                                                                     | the stream                                                    |
-| `cd(path)`                   | `→ InvokeHandle` onto a sibling context (append/read skip its rules; else `invoke`)                                     | `ITERATE_CONTEXT.getByName`                                   |
-| `fetch(request)`             | egress: `{{secret:project:NAME}}` substituted → `FALLBACK`                                                              | the control plane                                             |
-| `rpcStubs`                   | `.get(rpcStubKey) → RpcStubHandle` · `.list() → string[]` (presence)                                                    | `RpcStubDirectory`                                            |
-| `rewriteRules`               | `.list() → { match, target }[]` · `.get(match)`                                                                         | a read of core state                                          |
-| `facets`                     | `.get(name) → FacetHandle` (a RUNNING facet) · `.get(name, { source, className })` (load and host it) · `.delete(name)` | `ctx.facets`; mirrors `ctx.facets.get(name, startupCallback)` |
-| `subscriptions`              | `.list() → SubscriptionListEntry[]` · `.get(name)`                                                                      | core state ⋈ the loop's cursors                               |
-| `workers`                    | `.get({ source, className?, props? }) → InvokeHandle`, a stateless WorkerEntrypoint; any exported method                | Worker Loader; the stateless twin of `facets.get`             |
-| `runScript(script, ...args)` | sugar: wrap the lambda string → `workers.get({ source }).run(...)`                                                      | same                                                          |
+| Root                         | Signature                                                                                                                          | Backed by                                                     |
+| ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
+| `whoami()`                   | `→ { projectId, path }`                                                                                                            | the DO name                                                   |
+| `kv`                         | `.get(k)` `.put(k, v)` `.delete(k)` `.list(prefix?)`                                                                               | `ITX_KV`, `${projectId}:` prefixed                            |
+| `append(...events)`          | `→ StreamEvent[]`                                                                                                                  | the stream                                                    |
+| `read(afterOffset?, limit?)` | `→ { events, scannedThroughOffset }`                                                                                               | the stream                                                    |
+| `waitForEvent(filter?)`      | `{ type?, afterOffset?, timeoutMs? } → StreamEvent`                                                                                | the stream                                                    |
+| `cd(path)`                   | `→ InvokeHandle` onto a sibling context (append/read skip its rules; else `invoke`)                                                | `ITERATE_CONTEXT.getByName`                                   |
+| `fetch(request)`             | egress: `{{secret:project:NAME}}` substituted → `FALLBACK`                                                                         | the control plane                                             |
+| `rpcStubs`                   | `.get(rpcStubKey) → RpcStubHandle` · `.list() → string[]` (presence)                                                               | `RpcStubDirectory`                                            |
+| `rewriteRules`               | `.list() → { match, target }[]` · `.get(match)`                                                                                    | a read of core state                                          |
+| `facets`                     | `.get(name) → FacetHandle` (a RUNNING facet) · `.get(name, { source, cacheKey?, className })` (load and host it) · `.delete(name)` | `ctx.facets`; mirrors `ctx.facets.get(name, startupCallback)` |
+| `subscriptions`              | `.list() → SubscriptionListEntry[]` · `.get(name)`                                                                                 | core state ⋈ the loop's cursors                               |
+| `workers`                    | `.get({ source, cacheKey?, className?, props? }) → InvokeHandle`, a stateless WorkerEntrypoint; any exported method                | Worker Loader; the stateless twin of `facets.get`             |
+| `runScript(script, ...args)` | sugar: wrap the lambda string → `workers.get({ source }).run(...)`                                                                 | same                                                          |
 
-`WorkerSource` is the worker's modules, literally: `Record<string, string>`, module name → code,
-`"cap.js"` the main module. It is stored where it is named (a facet's startup memo, a
-subscription's target).
+`WorkerSource` is the worker's modules, literally (`Record<string, string>`, module name → code,
+`"cap.js"` the main module) OR an itx expression that PRODUCES them. A producer needs a `cacheKey`
+(a build id, a commit): the loader is Cloudflare's `LOADER.get(id, getCode)`, and the producer runs
+inside `getCode`, so only when no isolate is warm under `kind:deploy:context:cacheKey`. Same key
+means same code, the caller's contract; a producer without a key is refused at the door, since
+hashing the expression would run stale code. Literal modules key by their content hash.
 
 Two brands the delivery loop reads (`src/context/invoke-handle.ts`): `FacetHandle` and
 `RpcStubHandle`, both `InvokeHandle` (a genuine RpcTarget whose unknown members reduce into
@@ -417,6 +420,11 @@ Error codes (`src/lib/errors.ts`): `NO_ITX_EXPRESSION_MATCH`, `RPC_STUB_OFFLINE`
 - **E, done (your follow-up):** `itx.workers.get({ source, className?, props? })` is the stateless twin of
   `facets.get`; `load` and the `getEntrypoint` step are deleted. One door per host kind, named for the
   host; a stateless worker has no name because it has no identity beyond its spec.
+- **F, done (your follow-up on cache keys):** `workers.get` and `facets.get` take `cacheKey?`, and
+  `source` may again be an itx expression that produces the modules, evaluated only on a cold isolate
+  under that key — Cloudflare's `get(id, getCode)` used as designed. Checked against apps/os first:
+  it derives its key from a repo content hash and caches the BUILD artifact in KV under it; that
+  tier belongs to a build capability, not to the loader door.
 - **B, done:** sources are INLINE ONLY — `WorkerSource = Record<string, string>` (module name → code,
   `"cap.js"` the main module). The producer-expression branch (`"itx.kv.get('src/x.js')"`), the old
   inline wrapper object, the loader's `invoke` and `resolved` options and the DO's resolved-source

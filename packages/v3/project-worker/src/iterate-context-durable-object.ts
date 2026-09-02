@@ -42,6 +42,7 @@ import { substituteHeaderSecrets } from "@v3/shared/egress";
 import {
   facetLoaderOwner,
   loadConfinedWorker,
+  type WorkerCacheKey,
   type WorkerSource,
 } from "./context/worker-loader.ts";
 import { CoreContract, type CoreState } from "./stream/core-processor.ts";
@@ -253,6 +254,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       path: this.#name.path,
       iterateContextName: this.#name.name,
       env: this.env,
+      invoke: (call) => this.invoke(call),
       // a sibling context by path; the own path is this DO as a uniform-async ReachableContext (stream.ts)
       context: (p) =>
         p === this.#name.path
@@ -396,7 +398,9 @@ export class IterateContextDurableObject extends DurableObject<Env> {
    *  to bottom: the startup memo → the load → the racing-delete check → the class + version marker →
    *  the call under the watchdog → copy + dispose the answer. */
   async #invokeFacet(
-    ref: string | { name: string; source: WorkerSource; className: string },
+    ref:
+      | string
+      | { name: string; source: WorkerSource; cacheKey?: WorkerCacheKey; className: string },
     itxExpressionSteps: ItxExpression,
   ): Promise<unknown> {
     if (itxExpressionSteps.length === 0) throw new Error(`facet: name a method`);
@@ -417,22 +421,22 @@ export class IterateContextDurableObject extends DurableObject<Env> {
           `facet "${CORE_SLUG}"`,
         )
       ).value;
-    // THE STARTUP MEMO `facet:<name>` = { source, className } in this DO's kv (the source IS its
-    // modules, stored literally): a hosting spec writes it (when it changed) BEFORE the load, so
-    // `itx.facets.get(name)` alone re-materializes the facet after an eviction; a bare name reads it —
-    // an unknown name is NO_FACET.
+    // THE STARTUP MEMO `facet:<name>` = { source, cacheKey?, className } in this DO's kv (the source
+    // is its modules, literally, or the producer expression — stored as given): a hosting spec writes
+    // it (when it changed) BEFORE the load, so `itx.facets.get(name)` alone re-materializes the facet
+    // after an eviction; a bare name reads it — an unknown name is NO_FACET.
     const name = typeof ref === "string" ? ref : ref.name;
     if (name === CORE_SLUG) throw new Error(`"${name}" is the core reduce — never a facet name`);
     let memo = this.ctx.storage.kv.get(`facet:${name}`) as
-      | { source: WorkerSource; className: string }
+      | { source: WorkerSource; cacheKey?: WorkerCacheKey; className: string }
       | undefined;
     if (typeof ref !== "string") {
-      const spec = { source: ref.source, className: ref.className };
-      if (
-        !memo ||
-        JSON.stringify(memo.source) !== JSON.stringify(spec.source) ||
-        memo.className !== spec.className
-      )
+      const spec = {
+        source: ref.source,
+        ...(ref.cacheKey !== undefined && { cacheKey: ref.cacheKey }),
+        className: ref.className,
+      };
+      if (!memo || JSON.stringify(memo) !== JSON.stringify(spec))
         this.ctx.storage.kv.put(`facet:${name}`, spec);
       memo = spec;
     }
@@ -440,13 +444,16 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     // Counted so a CONCURRENT alarm's quiesce never aborts the facet mid-call.
     this.#facetWorkInFlight++;
     try {
-      // THE LOAD — the loader caches by contentHash, so a warm facet's isolate is reused.
-      const { worker, contentHash } = await loadConfinedWorker({
+      // THE LOAD — the loader caches by the key (cacheKey | content hash), so a warm facet's isolate
+      // is reused and a producer expression runs only on a cold one.
+      const { worker, sourceVersion } = await loadConfinedWorker({
         env: this.env,
         host: this.#itxHost,
         kind: "facet",
         owner: facetLoaderOwner(this.#name.name, memo.className),
         source: memo.source,
+        cacheKey: memo.cacheKey,
+        invoke: (call) => this.invoke(call),
         where: `facet "${name}"`,
       });
       // The load awaited: a `facets.delete(name)` (disableProcessor) may have landed meanwhile — its
@@ -454,25 +461,25 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       // actor never quiesces. Refuse instead; the caller's row is gone too.
       if (!this.ctx.storage.kv.get(`facet:${name}`))
         throw codedError("NO_FACET", `no facet "${name}" — deleted while its source loaded`);
-      // THE CLASS, minted with its identity (`ctx.props`), and THE VERSION MARKER: a content change
-      // within a deploy restarts the facet in place, its storage surviving (the deploy id is already
-      // in the loader's cacheKey).
+      // THE CLASS, minted with its identity (`ctx.props`), and THE VERSION MARKER: a source change
+      // within a deploy (new content hash, or a new cacheKey) restarts the facet in place, its storage
+      // surviving (the deploy id is already in the loader's cacheKey).
       const klass = worker.getDurableObjectClass(memo.className, {
         props: { iterateContextName: this.#name.name, name },
       });
       if (!klass) throw new Error(`loaded worker does not export class "${memo.className}"`);
-      const previousContentHash = this.ctx.storage.kv.get(`facet:${name}:version`) as
+      const previousSourceVersion = this.ctx.storage.kv.get(`facet:${name}:version`) as
         | string
         | undefined;
-      if (previousContentHash !== undefined && previousContentHash !== contentHash) {
+      if (previousSourceVersion !== undefined && previousSourceVersion !== sourceVersion) {
         try {
           this.ctx.facets.abort(name, "source changed");
         } catch {
           /* facet not running */
         }
       }
-      if (previousContentHash !== contentHash)
-        this.ctx.storage.kv.put(`facet:${name}:version`, contentHash);
+      if (previousSourceVersion !== sourceVersion)
+        this.ctx.storage.kv.put(`facet:${name}:version`, sourceVersion);
       const facet = this.ctx.facets.get(name, () => ({ class: klass }));
       this.#liveFacetNames.add(name); // live from here
       // THE CALL. A top-level `.fetch` rides the facet's own fetch — the one channel that carries a

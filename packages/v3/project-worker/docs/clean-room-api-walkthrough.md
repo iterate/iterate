@@ -521,7 +521,12 @@ interface BuiltInScope {
    *  by name. No name: a stateless worker is its spec. `props` is Cloudflare's
    *  WorkerStubEntrypointOptions.props, read back as this.ctx.props. */
   workers: {
-    get(spec: { source: WorkerSource; className?: string; props?: unknown }): InvokeHandle;
+    get(spec: {
+      source: WorkerSource;
+      cacheKey?: string;
+      className?: string;
+      props?: unknown;
+    }): InvokeHandle;
   };
 
   /** Sugar for a bare lambda string: wraps it into a WorkerEntrypoint and runs
@@ -531,7 +536,8 @@ interface BuiltInScope {
 
 /** Where code comes from: the worker's MODULES, literally — module name → code, `"cap.js"` the
  *  main module. Stored where it is named (a facet's startup memo, a subscription's target). */
-type WorkerSource = Record<string, string>;
+type WorkerModules = Record<string, string>; // module name → code; "cap.js" is the main module
+type WorkerSource = WorkerModules | ItxExpressionInput; // literal, or a PRODUCER expression (then cacheKey is required)
 
 type SubscriptionListEntry = {
   name: string;
@@ -1293,9 +1299,10 @@ Bindings (`wrangler.jsonc`):
 | `CF_VERSION_METADATA` | version metadata                                    | reduced into loader cacheKeys so a deploy mints fresh isolates |
 | `FALLBACK`            | service → `iterate-control-plane#ControlPlaneShell` | the egress terminal                                            |
 
-The loader cacheKey is `${kind}:${deploy}:${owner}:${contentHash}`. Every
-distinct key is a billed dynamic worker, so nothing per request may ever enter
-it. Loaded isolates run under one compatibility block (inline in `loadConfinedWorker`): the same
+The loader cacheKey is `${kind}:${deploy}:${owner}:${cacheKey ?? contentHash}`: the caller's
+`cacheKey` when the source is a producer expression (required there — the producer runs only
+inside Cloudflare's `getCode`, on a cold isolate), else the modules' content hash. Every
+distinct key is a billed dynamic worker, so nothing per request may ever enter it. Loaded isolates run under one compatibility block (inline in `loadConfinedWorker`): the same
 compatibility date, `no_nodejs_compat` (userspace stays pure-play), and
 `allow_irrevocable_stub_storage` (loaded code may store its `env.ITX` stub and
 replay it; the parent config carries the same flag). The DO's lifecycle is the
