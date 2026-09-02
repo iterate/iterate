@@ -152,10 +152,10 @@ export async function evaluate(
  *  (it is a real RpcTarget so dotted access pipelines — context/invoke-handle.ts), so ROOT-calling it
  *  means dispatching those args at its EMPTY path: `handle(events,range)` ⇒ the bare callback the
  *  handle fronts. This is the one bridge between "callable capability" and "pipelinable RpcTarget". */
-async function callOn(value: unknown, receiver: unknown, args: unknown[]): Promise<unknown> {
+export async function callOn(value: unknown, receiver: unknown, args: unknown[]): Promise<unknown> {
   if (typeof value === "function") return Reflect.apply(value, receiver, args);
   if (value instanceof InvokeHandle) return value.applyRoot(args);
-  throw new Error(`mount target is not callable but ${args.length} arg(s) were passed`);
+  throw new Error(`target is not callable but ${args.length} arg(s) were passed`);
 }
 
 /**

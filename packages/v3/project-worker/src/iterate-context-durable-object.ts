@@ -42,7 +42,7 @@ import {
   type WorkerSource,
 } from "./context/worker-loader.ts";
 import { CoreContract } from "./stream/core-processor.ts";
-import { codedError, reportIssue } from "./lib/errors.ts";
+import { codedError } from "./lib/errors.ts";
 import type { StreamEvent, StreamEventInput } from "./stream/events.ts";
 import {
   parse,
@@ -165,8 +165,8 @@ export class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
     storage: this.ctx.storage,
     path: this.#name.path,
     projectId: this.#name.projectId,
-    onCommit: (freshEvents, scannedAfterOffset, nextOffset) =>
-      this.#delivery.onCommit(freshEvents, scannedAfterOffset, nextOffset),
+    onCommit: (freshEvents, afterOffset, nextOffset) =>
+      this.#delivery.onCommit(freshEvents, afterOffset, nextOffset),
   });
 
   /** Commit events: idempotency-checked, offsets assigned from ONE shared sequence (ephemeral
@@ -251,17 +251,12 @@ export class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
 
   readonly #delivery = new SubscriptionDelivery({
     kv: this.ctx.storage.kv,
-    subscriptions: () => this.#stream.coreReducedState.subscriptions,
-    read: (after, limit) => this.#stream.read(after, limit),
-    head: () => this.#stream.highestDurableOffset(), // a persisted cursor may never point past the mark
-    append: (event) => this.append(event),
+    stream: this.#stream,
     // A target is evaluated through the ONE dispatch door — mounts and aliases included — so what
     // comes back is exactly what a caller would get: a FacetHandle, an RpcStubHandle, an entrypoint
     // handle, a value.
     evaluate: (expression) => this.invoke(expression),
-    armNoLaterThan: (atMs) => this.#stream.armNoLaterThan(atMs),
-    onActivity: () => this.#recordActivityForQuietClock(),
-    now: () => Date.now(),
+    recordActivityForQuietClock: () => this.#recordActivityForQuietClock(),
   });
 
   /** Configure (or replace) a subscription — the layer's one door (edge `subscribe` is sugar over
@@ -334,15 +329,12 @@ export class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
 
   async alarm(): Promise<void> {
     this.#stream.noteAlarmFired();
-    // The stream-kept cursors' due retries (and anything an eviction left behind mid-delivery) pump here,
-    // AWAITED so the quiesce below never aborts a facet mid-delivery and a re-arm for a later retry
-    // lands before this actor hibernates.
-    await this.#delivery.pumpAll().catch((e) => reportIssue("stream-do.delivery-pump", e));
-    if (
-      Date.now() - this.#lastActivityMs >= 60_000 &&
-      this.#facetWorkInFlight === 0 &&
-      this.#delivery.inFlight === 0
-    ) {
+    // The stream-kept cursors' due retries (and anything an eviction left behind mid-delivery) run
+    // here, AWAITED so a re-arm for a later retry lands before this actor hibernates. A cursor delivery
+    // pins nothing local (a facet it calls into is counted by #facetWorkInFlight for the call), so the
+    // quiesce below needs no count of its own.
+    await this.#delivery.deliverEveryCursorSubscription();
+    if (Date.now() - this.#lastActivityMs >= 60_000 && this.#facetWorkInFlight === 0) {
       for (const facetName of this.#liveFacets) {
         try {
           this.ctx.facets.abort(facetName, "idle quiesce");

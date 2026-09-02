@@ -2062,3 +2062,31 @@ the verb is reduce, never fold.
   use it; absent → either a store with no commits (mark 0) or a contract-version bump, in which case
   the durable log is re-reduced from offset 0. `#reduceEventIntoCoreReducedState` keeps its two
   callers (that re-reduce, and the commit).
+
+## 2026-09-02 — the whole tree gets the treatment: five reviewers, one plan per area
+
+Five read-only reviewers reflected on the morning's doctrine (inline single-use helpers, breadcrumb
+names, spell out the handful, no one-consumer mechanism, constructor does the sync work, cite platform
+facts) and ranked opportunities across the engine + SDK host, the delivery loop, the context DO, the
+`context/` layer and the edge + leaves. Applied in waves; each wave below.
+
+- **The delivery loop (this commit, 425 → 367 lines).** Cursor rows are loaded ONCE in the
+  constructor, so memory is the one truth: `cursor()` no longer falls back to kv, the alarm's sweep
+  no longer unions kv keys, and the whole "generation" compare (`#sameGeneration`, `resumedAt`) is a
+  `#cursors.has(name)` — a removal or a replacement empties the map; nothing else can touch a row
+  mid-delivery in a single-threaded DO. Facet pushes lost the loop's 20 s watchdog (the DO's 60 s
+  facet watchdog already aborts a hung facet; two timers on one call was the doctrine's own example);
+  the cursor call keeps its 20 s through `lib/timeout.ts` (`withTimeout`, coded `TIMEOUT`, the one
+  race-with-a-cleared-timer — the DO's watchdog moves onto it next). The deps are the stream itself
+  plus `kv`, `evaluate`, `recordActivityForQuietClock` (nine closures → four; `now` and `head` gone).
+  A cursor target is evaluated once per delivery run, not twice. `callOn` is shared from
+  `context/dispatch.ts` instead of re-spelled. Names: `#pump` → `#deliverFromCursor`, `#dispatch` →
+  `#deliverEventBatch`, `#resolve` → `#evaluateTargetHead`, `forget` → `#forgetSubscription`
+  (private), `#save` → `#adoptCursor`, `#pushes` → `#deliveryChainBySubscription`, `pumpAll` →
+  `deliverEveryCursorSubscription`, `resumedAt` → `resumeAppliedAtOffset`; `inFlight` is gone (a
+  cursor delivery pins nothing local — a facet it calls is counted by `#facetWorkInFlight`).
+- **A regression caught on the way (592e3dc9e):** the earlier `\bwake\(\)` rename had also renamed
+  the processor engine's and SDK host's `wake()` — the facet's CATCH-UP door — while the loop still
+  invoked `["wake"]` by name, so every `enableProcessor` reported an issue and skipped its
+  configure-time catch-up. It is `catchUpFromLog()` now, at one call site. Lesson recorded: rename per
+  call site, never by regex over a verb.
