@@ -36,12 +36,13 @@ export type LiveStateStore<S> = {
 };
 
 export function createLiveStateStore<S>(): LiveStateStore<S> {
-  let held: { rev: number; state: S | undefined } = { rev: -1, state: undefined };
+  // `rev: null` until the first seed lands.
+  let held: { rev: number | null; state: S | undefined } = { rev: null, state: undefined };
   const listeners = new Set<() => void>();
   const notify = () => listeners.forEach((l) => l());
   return {
     get: () => held.state,
-    rev: () => (held.rev === -1 ? null : held.rev),
+    rev: () => held.rev,
     subscribe: (listener) => {
       listeners.add(listener);
       return () => void listeners.delete(listener);
@@ -50,7 +51,7 @@ export function createLiveStateStore<S>(): LiveStateStore<S> {
       // MONOTONIC: a late-resolving OLDER door read must never move the store backwards past state
       // deltas have already advanced (a delta-triggered resync can race the initial seed). Revisions
       // are time-seeded epochs plus increments, so "newer" is numeric.
-      if (held.rev !== -1 && seed.rev < held.rev) return;
+      if (held.rev !== null && seed.rev < held.rev) return;
       held = { rev: seed.rev, state: seed.state };
       notify();
     },
@@ -60,9 +61,9 @@ export function createLiveStateStore<S>(): LiveStateStore<S> {
       // every rev an old chain handed out; a frame wholly behind us is genuinely old. The one
       // exception is a clock that regressed across a producer rebirth — accepted: the next applied
       // or gapped frame resyncs through the door anyway.)
-      if (delta.to <= held.rev) return;
-      // A gap (its `from` is not the held rev) means a missed delta or a reborn epoch — re-read the
-      // door instead of applying onto a diverged base.
+      if (held.rev !== null && delta.to <= held.rev) return;
+      // A gap (its `from` is not the held rev — including "no seed yet") means a missed delta or a
+      // reborn epoch — re-read the door instead of applying onto a diverged base.
       if (delta.from !== held.rev) {
         resync();
         return;

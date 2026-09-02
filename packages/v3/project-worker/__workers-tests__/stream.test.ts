@@ -298,6 +298,48 @@ test("a stream/paused event pauses the stream through its own core reduce: every
   });
 });
 
+// ── A MALFORMED CONTROL EVENT IS CONTAINED AT THE REDUCE: the core reduce throws on a payload it
+// cannot parse (core-processor.test.ts pins the throw); the host — Stream.#reduceEventIntoCoreReducedState —
+// reports the issue and keeps the state, so one bad hand-appended event lands as a row and wedges
+// nothing. ──
+
+test("a malformed capability-provided (a path with a call step) lands as a row but mounts NOTHING — core state unchanged, the stream alive, the next well-formed mount reduces", async () => {
+  await runInDurableObject(stub("prj_core_malformed_mount"), async (_instance, state) => {
+    const stream = bareStream(await virgin(state));
+    const [bad] = stream.append({
+      type: "events.iterate.com/capability-table/capability-provided",
+      payload: { path: "itx.call()", target: "itx.kv" },
+    });
+    expect(stream.read(0).events.map((e) => e.offset)).toEqual([bad.offset]); // the log is the log
+    expect(stream.coreReducedState.mounts).toEqual([]); // …but nothing was mounted
+    const [good] = stream.append({
+      type: "events.iterate.com/capability-table/capability-provided",
+      payload: { path: "itx.fine", target: "itx.kv" },
+    });
+    expect(
+      stream.coreReducedState.mounts.map((m) => [m.path.join("."), m.providedAtOffset]),
+    ).toEqual([["itx.fine", good.offset]]);
+    expect(stream.append({ type: "work" })[0].offset).toBe(good.offset + 2); // good's core delta took +1
+  });
+});
+
+test("a malformed subscription-configured (a target that does not parse) lands as a row but adds NO subscription — the next well-formed one reduces", async () => {
+  await runInDurableObject(stub("prj_core_malformed_sub"), async (_instance, state) => {
+    const stream = bareStream(await virgin(state));
+    stream.append({
+      type: "events.iterate.com/stream/subscription-configured",
+      payload: { name: "broken", target: "itx.broken(" },
+    });
+    expect(stream.coreReducedState.subscriptions).toEqual({});
+    const [good] = stream.append({
+      type: "events.iterate.com/stream/subscription-configured",
+      payload: { name: "fine", target: "itx.whoami" },
+    });
+    expect(Object.keys(stream.coreReducedState.subscriptions)).toEqual(["fine"]);
+    expect(stream.coreReducedState.subscriptions.fine.configuredAtOffset).toBe(good.offset);
+  });
+});
+
 // ── EPHEMERALS COST ZERO WRITES (the header contract, pinned against real storage) ──
 
 test("an ephemeral-only append writes NOTHING — no row, no high-water mark — yet hands out offsets and reaches the fan-out", async () => {

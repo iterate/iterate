@@ -11,24 +11,22 @@
 // client's re-subscribe or a repeated remove appends NOTHING; the caller appends what comes back. The
 // halted fact is appended by the delivery loop; the resumed fact by an operator's plain `itx.append`.
 
-import { parse, print, toExpression, type ItxExpression } from "../context/expression.ts";
+import { print, toExpression, type ItxExpression } from "../context/expression.ts";
 import { CoreContract, SubscriptionName, type Subscription } from "./core-processor.ts";
 import type { StreamEventInput } from "./events.ts";
 
-/** Names a subscription may not take: a processor's subscription name IS its facet name, and the
- *  core reduce's address (`itx.facets.get('core')`) is taken. Refused at the door, never at delivery. */
-const RESERVED_NAMES: ReadonlySet<string> = new Set([CoreContract.slug]);
-
 /** The `subscription-configured` event for (or replacing) `input.name` — or `null` when the CURRENT
  *  row is already exactly this (same target, same filter, not halted): nothing to append, the
- *  existing identity stands. The target must be rooted at `itx` and round-trip the codec (what we
- *  store is what the reduce will parse). */
+ *  existing identity stands. The target must be rooted at `itx`; it is stored PRINTED (the codec
+ *  round-trips — expression.test.ts — so what is stored is what the reduce parses). */
 export function subscriptionConfiguredEvent(
   rows: Readonly<Record<string, Subscription>>,
   input: { name: string; target: ItxExpression; consumes?: string[] },
 ): StreamEventInput | null {
   const name = SubscriptionName.parse(input.name);
-  if (RESERVED_NAMES.has(name))
+  // A processor's subscription name IS its facet name, and the core reduce's address
+  // (`itx.facets.get('core')`) is taken. Refused at the door, never at delivery.
+  if (name === CoreContract.slug)
     throw new Error(`"${name}" is the core reduce's name — reserved; pick another`);
   const target = toExpression(input.target);
   if (target[0] !== "itx")
@@ -36,22 +34,17 @@ export function subscriptionConfiguredEvent(
       `a subscription target must be rooted at "itx" (got ${JSON.stringify(print(target))})`,
     );
   const targetString = print(target);
-  if (print(parse(targetString)) !== targetString)
-    throw new Error(
-      `subscription target ${JSON.stringify(targetString)} does not round-trip the codec`,
-    );
-  const consumes = input.consumes && [...input.consumes];
   const current = rows[name];
   if (
     current &&
     !current.halted &&
     print(current.target) === targetString &&
-    JSON.stringify(current.consumes ?? null) === JSON.stringify(consumes ?? null)
+    JSON.stringify(current.consumes ?? null) === JSON.stringify(input.consumes ?? null)
   )
     return null;
   return CoreContract.buildEvent({
     type: "events.iterate.com/stream/subscription-configured",
-    payload: { name, target: targetString, ...(consumes && { consumes }) },
+    payload: { name, target: targetString, ...(input.consumes && { consumes: input.consumes }) },
   });
 }
 

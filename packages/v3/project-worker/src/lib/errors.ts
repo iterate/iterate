@@ -47,23 +47,6 @@ export function errorCode(error: unknown): ErrorCode | undefined {
 const MAX = { message: 1024, stack: 16_384, string: 256, attributeKeys: 32 } as const;
 type Scalar = string | number | boolean | null; // attribute values stay queryable scalars
 
-/** Bounded shape of a thrown value — reads name/message/stack, never walks arbitrary objects. */
-function serializeCaught(caught: unknown): { type: string; message?: string; stack?: string } {
-  try {
-    if (caught instanceof Error) {
-      return {
-        type: (caught.name || "Error").slice(0, MAX.string),
-        message: caught.message.slice(0, MAX.message),
-        ...(caught.stack && { stack: caught.stack.slice(0, MAX.stack) }),
-      };
-    }
-    if (typeof caught === "object" && caught !== null) return { type: "ObjectThrown" };
-    return { type: `${typeof caught}Thrown`, message: String(caught).slice(0, MAX.message) };
-  } catch {
-    return { type: "UninspectableThrown" };
-  }
-}
-
 /** Print ONE bounded console.error line for an unexpected failure; never throws. */
 export function reportIssue(
   failureSite: string,
@@ -78,12 +61,24 @@ export function reportIssue(
         typeof value === "string" ? value.slice(0, MAX.string) : value;
     }
     const code = errorCode(caught);
+    // The thrown value, bounded — name/message/stack read off an Error; an arbitrary object is
+    // never walked.
+    const error =
+      caught instanceof Error
+        ? {
+            type: (caught.name || "Error").slice(0, MAX.string),
+            message: caught.message.slice(0, MAX.message),
+            ...(caught.stack && { stack: caught.stack.slice(0, MAX.stack) }),
+          }
+        : typeof caught === "object" && caught !== null
+          ? { type: "ObjectThrown" }
+          : { type: `${typeof caught}Thrown`, message: String(caught).slice(0, MAX.message) };
     console.error({
       ...bounded, // fixed keys spread last so an attribute can never shadow them
       event: "issue",
       failureSite: failureSite.slice(0, MAX.string),
       ...(code === undefined ? {} : { code }),
-      error: serializeCaught(caught),
+      error,
     });
   } catch {
     // Reporting must never disturb the caller — swallow and move on.

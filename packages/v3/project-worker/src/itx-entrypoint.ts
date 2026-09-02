@@ -10,28 +10,18 @@
 
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { IterateContext } from "./iterate-context.ts";
+import type { BuiltInsEnv } from "./context/built-ins.ts";
 import { Parking } from "./context/rpc-stub-relay.ts";
 import { DurableObjectNameCodec } from "./context/durable-object-names.ts";
 import type { StreamEvent, StreamEventInput } from "./stream/events.ts";
 import type { WaitForEventFilter } from "./stream/stream.ts";
 import type { IterateContextDurableObject } from "./iterate-context-durable-object.ts";
 
-interface Env {
-  CONTEXT: DurableObjectNamespace<IterateContextDurableObject>;
-}
-
-export class ItxEntrypoint extends WorkerEntrypoint<Env, { contextName: string }> {
-  /** The owning context's canonical name — the ONE prop this entrypoint is minted with. */
-  #contextName(): string {
-    const { contextName } = this.ctx.props;
-    if (!contextName)
-      throw new Error("ItxEntrypoint requires props.contextName (mint via ctx.exports)");
-    return contextName;
-  }
-
-  /** The owning context, re-resolved per call (never a retained stub — the back-channel rule). */
+export class ItxEntrypoint extends WorkerEntrypoint<BuiltInsEnv, { contextName: string }> {
+  /** The owning context, re-resolved per call (never a retained stub — the back-channel rule).
+   *  `ctx.props.contextName` is the ONE prop this entrypoint is minted with (`itxEntrypointFor`). */
   #context(): DurableObjectStub<IterateContextDurableObject> {
-    return this.env.CONTEXT.getByName(this.#contextName());
+    return this.env.CONTEXT.getByName(this.ctx.props.contextName);
   }
 
   /** THE handoff: the genuine itx scope — the SAME `IterateContext` RpcTarget a capnweb client gets
@@ -43,7 +33,7 @@ export class ItxEntrypoint extends WorkerEntrypoint<Env, { contextName: string }
   get(): IterateContext {
     return new IterateContext(
       this.env.CONTEXT,
-      DurableObjectNameCodec.parse(this.#contextName()),
+      DurableObjectNameCodec.parse(this.ctx.props.contextName),
       new Parking(),
       (p) => this.ctx.waitUntil(p),
     );
@@ -74,14 +64,13 @@ export class ItxEntrypoint extends WorkerEntrypoint<Env, { contextName: string }
   }
 }
 
-/** Mint the loopback stub for one context. `exportsCtx` is any ctx carrying `exports` (worker
- *  ExecutionContext, DO state, facet state — all expose the worker's export table). */
-export function itxEntrypointFor(exportsCtx: unknown, contextName: string): Fetcher {
-  const exports = (exportsCtx as { exports?: Record<string, unknown> }).exports;
-  const make = exports?.ItxEntrypoint as
-    | ((opts: { props: { contextName: string } }) => Fetcher)
-    | undefined;
-  if (typeof make !== "function")
-    throw new Error("ItxEntrypoint loopback unavailable on ctx.exports");
-  return make({ props: { contextName } });
+/** Mint the loopback stub for one context — `ctx.exports.ItxEntrypoint({ props })`. `ctx` is any
+ *  ctx carrying `exports` (a worker ExecutionContext, a DurableObjectState: workers-types puts the
+ *  worker's export table on both). Typed `unknown` only because built-ins.ts's dep record hands it
+ *  over that way; `Cloudflare.Exports` is `{}` without a generated `GlobalProps`, hence the cast. */
+export function itxEntrypointFor(ctx: unknown, contextName: string): Fetcher {
+  const { exports } = ctx as {
+    exports: { ItxEntrypoint(opts: { props: { contextName: string } }): Fetcher };
+  };
+  return exports.ItxEntrypoint({ props: { contextName } });
 }

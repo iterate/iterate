@@ -2,8 +2,8 @@
 // (src/context/rpc-stub-directory.ts + hibernatable-rpc-stub.ts + iterate-context.ts). A live
 // capability is `itx.provide(path, stub)` — SUGAR over two axioms with two lifetimes: the STUB is
 // PARKED in the `itx.rpcStubs` built-in (the physical registry, keyed by the canonical path; it lives
-// until its session ends, `rpcStubs.close`, or `itx.revoke(path)` / `unsubscribe` from the session
-// that parked it), and an ORDINARY mount event `path ⇒ itx.rpcStubs.get('<path>')` names it (pure
+// until its session ends or `itx.revoke(path)` / `unsubscribe` from the session that parked it),
+// and an ORDINARY mount event `path ⇒ itx.rpcStubs.get('<path>')` names it (pure
 // data; it lives until an explicit revoke). PRESENCE is physical: `itx.rpcStubs.list()` — the keys
 // with an open transport RIGHT NOW. The mount never claims liveness and NOTHING auto-revokes it: a
 // dead provider leaves its mount answering CONNECTION_OFFLINE until someone revokes it or the
@@ -124,7 +124,7 @@ test("disposing a client session drops its stubs promptly (presence) — its mou
     expect(codeOf(err)).toBe("CONNECTION_OFFLINE");
   }
   // The one exit is an EXPLICIT revoke — from ANY session (the observer never parked the stub, so
-  // its `rpcStubs.close` half is a local no-op; the mount pops) — after which the path is
+  // its close-the-parked-stub half is a local no-op; the mount pops) — after which the path is
   // default-deny again.
   await observer.revoke("itx.ghosttool");
   expect(await rpcStubMountPaths(observer)).not.toContain("itx.ghosttool");
@@ -336,7 +336,7 @@ test("storm of provide/mount/revoke/subscribe/unsubscribe/disconnect: presence r
     expect(codeOf(err)).toBe("CONNECTION_OFFLINE");
   }
   // Revoking by path from a session that never parked the stub pops the mount only (its
-  // `rpcStubs.close` half is a local no-op) — the explicit exit brings the table to baseline
+  // close-the-parked-stub half is a local no-op) — the explicit exit brings the table to baseline
   // too, and the paths fall back to default-deny.
   for (const path of leftover) await observer.revoke(path);
   expect(await rpcStubMountPaths(observer)).toEqual([]);

@@ -62,9 +62,9 @@ test("depth-2 dotted: itx.kv.put('k','v') then itx.kv.get('k') round trips", asy
   expect(await itx.kv.get("k")).toBe("v");
 });
 
-test("direct write, expression read: itx.append lands in the ONE log", async () => {
-  // `itx.append(...)` is the DECLARED IterateContext method (the direct lane); the read stays an
-  // EXPRESSION so the builtin `read` ROOT keeps resolver coverage. One log serves both.
+test("dotted write, expression read: itx.append lands in the ONE log", async () => {
+  // `itx.append(...)` is the dotted hop onto the built-in `append` ROOT (IterateContext declares no
+  // such method); the read is the same root reached as an EXPRESSION. One log serves both spellings.
   const itx = openItx(freshCtx("stream"));
   const [committed] = await itx.append({ type: "mark", payload: { n: 1 } });
   expect(committed.offset).toBeGreaterThanOrEqual(1);

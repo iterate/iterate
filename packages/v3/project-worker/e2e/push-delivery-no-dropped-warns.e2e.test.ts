@@ -220,7 +220,7 @@ test("MEASURED FINDING: a push subscriber that stops reading mid-flood is NOT cl
   await sleep(300);
   expect(droppedWarns() - droppedBefore).toBe(0);
   // The explicit exit — unsubscribe from ANY session (here A, which never parked the stub, so its
-  // `rpcStubs.close` half is a local no-op; the removal drops the row).
+  // close-the-parked-stub half is a local no-op; the removal drops the row).
   await itx.unsubscribe("victim");
   expect(await subscriptions(itx)).toEqual([]);
 }, 55_000);

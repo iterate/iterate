@@ -10,8 +10,8 @@
 //                             -delivery-halted|-delivery-resumed            → subscriptions (the delivery loop)
 //
 // ONE reduce, no effects, no verbs — the same `StreamProcessor` class every facet processor is,
-// owned by the Stream itself (stream.ts `core()`, reduced inside every commit) because its readers are the append door, the
-// dispatcher and the delivery loop, all synchronous. The COMMANDS that append these events live
+// owned by the Stream itself (stream.ts `#coreReducedState`, reduced inside every commit) because
+// its readers are the append door, the dispatcher and the delivery loop, all synchronous. The COMMANDS that append these events live
 // beside the code that reads each slice (context/capability-table.ts for mounts,
 // stream/subscriptions.ts for rows); the READERS are pure functions over the state. Control is
 // ORDINARY EVENTS: `itx.append({ type: 'events.iterate.com/stream/paused', payload: { reason } })`
@@ -25,12 +25,9 @@
 // from pause — a paused stream must always accept its own resume.
 
 import { z } from "zod";
-import { createLogger } from "../lib/logs.ts";
 import { parse, parseCapabilityPath, type Expression } from "../context/expression.ts";
 import { defineProcessorContract } from "./events.ts";
 import { StreamProcessor, type ReduceArgs } from "./processor.ts";
-
-const log = createLogger("core");
 
 /** One segment, [A-Za-z0-9_-]: the facet name for a processor, the registry key's tail for a live
  *  callback. */
@@ -166,63 +163,52 @@ export type Subscription = CoreState["subscriptions"][string];
 export class CoreStreamProcessor extends StreamProcessor<CoreState> {
   readonly contract = CoreContract;
 
-  // Ephemeral control events are IGNORED (they would vanish from any rebuild); a malformed payload
-  // is SKIPPED loudly — one bad hand-appended event must not wedge every later commit.
+  // Ephemeral control events are IGNORED (they would vanish from any rebuild). A malformed payload
+  // (a path with a call step, a target that does not parse) THROWS here like any reduce would; the
+  // host contains it (Stream.#reduceEventIntoCoreReducedState reports the issue and keeps the
+  // state), so one bad hand-appended event never wedges a later commit.
   override reduce({ event, state }: ReduceArgs<CoreState>): CoreState | undefined {
     if (event.ephemeral) return undefined;
-    const p = (event.payload ?? {}) as Record<string, unknown>;
+    const payload = (event.payload ?? {}) as Record<string, unknown>;
     switch (event.type) {
       case "events.iterate.com/stream/created":
         return {
           ...state,
-          projectId: p.projectId as string,
-          path: p.path as string,
+          projectId: payload.projectId as string,
+          path: payload.path as string,
           createdAt: event.createdAt,
         };
       case "events.iterate.com/stream/woken":
-        return { ...state, incarnation: p.incarnation as number };
+        return { ...state, incarnation: payload.incarnation as number };
       case "events.iterate.com/stream/paused":
-        return { ...state, paused: { reason: (p.reason as string | undefined) ?? "paused" } };
+        return { ...state, paused: { reason: (payload.reason as string | undefined) ?? "paused" } };
       case "events.iterate.com/stream/resumed":
         return { ...state, paused: null };
 
       case "events.iterate.com/capability-table/capability-provided": {
-        let mount: Mount;
-        try {
-          mount = {
-            path: parseCapabilityPath(p.path as string),
-            target: parse(p.target as string),
-            providedAtOffset: event.offset,
-          };
-        } catch (error) {
-          log.warn("skipping malformed capability-provided", { offset: event.offset, error });
-          return undefined;
-        }
+        const mount: Mount = {
+          path: parseCapabilityPath(payload.path as string),
+          target: parse(payload.target as string),
+          providedAtOffset: event.offset,
+        };
         return { ...state, mounts: [...state.mounts, mount] };
       }
       case "events.iterate.com/capability-table/capability-revoked": {
         // A revoke of an already-gone mount is a NO-OP (undefined), not a fresh object: the inline
         // host detects change by identity, and a benign double-revoke must not rewrite the
         // checkpoint or publish a live-state delta.
-        const mounts = state.mounts.filter((m) => m.providedAtOffset !== p.providedAtOffset);
+        const mounts = state.mounts.filter((m) => m.providedAtOffset !== payload.providedAtOffset);
         return mounts.length === state.mounts.length ? undefined : { ...state, mounts };
       }
 
       case "events.iterate.com/stream/subscription-configured": {
-        let target: Expression;
-        try {
-          target = parse(p.target as string);
-        } catch (error) {
-          log.warn("skipping malformed subscription-configured", { offset: event.offset, error });
-          return undefined;
-        }
-        const consumes = p.consumes as string[] | undefined;
+        const consumes = payload.consumes as string[] | undefined;
         return {
           ...state,
           subscriptions: {
             ...state.subscriptions,
-            [p.name as string]: {
-              target,
+            [payload.name as string]: {
+              target: parse(payload.target as string),
               ...(consumes && { consumes }),
               configuredAtOffset: event.offset,
             },
@@ -230,40 +216,42 @@ export class CoreStreamProcessor extends StreamProcessor<CoreState> {
         };
       }
       case "events.iterate.com/stream/subscription-removed": {
-        if (!((p.name as string) in state.subscriptions)) return undefined;
-        const { [p.name as string]: _gone, ...rest } = state.subscriptions;
+        if (!((payload.name as string) in state.subscriptions)) return undefined;
+        const { [payload.name as string]: _gone, ...rest } = state.subscriptions;
         return { ...state, subscriptions: rest };
       }
       case "events.iterate.com/stream/subscription-delivery-halted": {
-        const row = state.subscriptions[p.name as string];
+        const row = state.subscriptions[payload.name as string];
         if (!row) return undefined;
         return {
           ...state,
           subscriptions: {
             ...state.subscriptions,
-            [p.name as string]: {
+            [payload.name as string]: {
               ...row,
               halted: {
-                afterOffset: p.afterOffset as number,
-                attempts: p.attempts as number,
-                ...(p.error !== undefined && { error: p.error as string }),
+                afterOffset: payload.afterOffset as number,
+                attempts: payload.attempts as number,
+                ...(payload.error !== undefined && { error: payload.error as string }),
               },
             },
           },
         };
       }
       case "events.iterate.com/stream/subscription-delivery-resumed": {
-        const row = state.subscriptions[p.name as string];
+        const row = state.subscriptions[payload.name as string];
         if (!row) return undefined;
         const { halted: _cleared, ...kept } = row;
         return {
           ...state,
           subscriptions: {
             ...state.subscriptions,
-            [p.name as string]: {
+            [payload.name as string]: {
               ...kept,
               resumed: {
-                ...(p.afterOffset !== undefined && { afterOffset: p.afterOffset as number }),
+                ...(payload.afterOffset !== undefined && {
+                  afterOffset: payload.afterOffset as number,
+                }),
                 atOffset: event.offset,
               },
             },

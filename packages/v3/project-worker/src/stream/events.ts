@@ -1,7 +1,8 @@
 // stream/events.ts — the stream event envelope + idempotency rules + the zod contract helper.
 // API mirrors apps/os (`packages/iterate/src/processors/schemas.ts` / `idempotency.ts`) so
-// processors port both ways. This is the ZOD side of the processor world; the engine in
-// stream/processor.ts imports only lib/, live-state.ts and reduce-checkpoint.ts.
+// processors port both ways. The zod schemas live HERE: the engine in stream/processor.ts imports
+// only types from this module (plus lib/, live-state.ts and reduce-checkpoint.ts), so it runs
+// schema-free; the SDK bundle ships both.
 
 import { z } from "zod";
 import { jsonEqual } from "../lib/patch.ts";
@@ -101,12 +102,6 @@ export function defineProcessorContract<StateSchema extends z.ZodType>(contract:
   const initial = contract.stateSchema.safeParse({});
   if (!initial.success)
     throw new Error(`contract "${contract.slug}": stateSchema must parse {} (default every field)`);
-  const payloadOf = (type: string, payload: unknown, where: string): unknown => {
-    const def = contract.events[type];
-    if (!def)
-      throw new Error(`contract "${contract.slug}": ${where} event type "${type}" is not owned`);
-    return def.payloadSchema.parse(payload ?? {});
-  };
   return {
     slug: contract.slug,
     version: contract.version,
@@ -115,10 +110,17 @@ export function defineProcessorContract<StateSchema extends z.ZodType>(contract:
     emits: contract.emits,
     stateSchema: contract.stateSchema,
     initialState: () => contract.stateSchema.parse({}) as z.infer<StateSchema>,
-    buildEvent: (event) => ({
-      type: event.type,
-      payload: payloadOf(event.type, event.payload, "buildEvent") as Record<string, unknown>,
-      ...(event.idempotencyKey && { idempotencyKey: event.idempotencyKey }),
-    }),
+    buildEvent: (event) => {
+      const def = contract.events[event.type];
+      if (!def)
+        throw new Error(
+          `contract "${contract.slug}": buildEvent event type "${event.type}" is not owned`,
+        );
+      return {
+        type: event.type,
+        payload: def.payloadSchema.parse(event.payload ?? {}) as Record<string, unknown>,
+        ...(event.idempotencyKey && { idempotencyKey: event.idempotencyKey }),
+      };
+    },
   };
 }

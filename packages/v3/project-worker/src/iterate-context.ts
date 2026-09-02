@@ -6,30 +6,22 @@
 // none may be introduced — a client's whole dependency is the capnweb package. Anything that
 // would need client-side smarts belongs HERE, behind an RpcTarget method.
 //
-// THE EDGE DOCTRINE — what the `IterateContext` RpcTarget is FOR (two roles):
-//   (a) PROXY: the stream verbs (append / read / waitForEvent), egress (fetch) and capability
-//       dispatch (invokeCapability, provide / revoke, subscribe, enable-/disableProcessor) forward
-//       to the context DO over Workers RPC — the DO owns every contract, these methods just relay;
-//   (b) REDUCE + PARK: the two jobs only the edge can do, because only the edge holds the client's
-//       capnweb session — path invocation (the prototype fallback at the bottom reduces dotted
-//       sugar `itx.a.b(x)` into ONE invokeCapability expression) and the live-stub Parking (the
-//       DON'T-PIN relay — see below);
+// The DO owns every contract; the edge does the two jobs only the edge can do, because only the
+// edge holds the client's capnweb session:
+//   • REDUCE — the prototype hop at the bottom turns dotted access `itx.a.b(x)` into ONE
+//     `invokeCapability` expression, forwarded to the DO over Workers RPC. The built-in roots ride
+//     it too (`itx.append(...)`, `itx.read(...)`, `itx.fetch(request)`, `itx.rpcStubs.list()`,
+//     `itx.subscriptions.list()`, …): a name this class does not declare is a DO built-in or a mount.
+//   • PARK — a LIVE capnweb value (a function, an RpcTarget) handed to `provide` or `subscribe` is
+//     retained here and relayed (DON'T-PIN, below); the DO records only a mount or a subscription
+//     row naming it (`itx.rpcStubs.get('<key>')`).
+// The declared methods are the doors that need one of those two: `cd` (an EDGE context, so a
+// provide on it parks in this session), `invokeCapability`, `waitForEvent` (no built-in root),
+// `provide`/`revoke`, `subscribe`/`unsubscribe`, `enableProcessor`/`disableProcessor`.
+//
 // HOW A CLIENT REACHES ONE: `/api` → `UnauthenticatedSession.authenticate()` → `Session.projects.get(id)`
 // → that project's ROOT `IterateContext` (session.ts). Contexts within a project are reached from a
 // context with `cd(path)` (absolute by convention, relative resolves).
-//
-// AXIOMS AND SUGAR, kept apart on the class body below. The axioms are the doors that need the edge
-// (a session-held stub, a live Request, the reduce): `cd`, `invokeCapability`, `append`, `read`,
-// `waitForEvent`, `fetch`, `rpcStubs`. Everything else is SUGAR — one-line compositions of those
-// that append no event shape of their own:
-//   • `provide(path, target)` — an itx EXPRESSION mounts (`capability-provided { path, target }`); a
-//     LIVE capnweb value (function/RpcTarget) is parked in `itx.rpcStubs` under the path (retained
-//     HERE — the physical half), then the ordinary mount `path ⇒ itx.rpcStubs.get('<path>')` is
-//     appended (the pure-data half). Re-providing re-parks (reconnect) and appends nothing.
-//   • `subscribe({ name?, target, consumes? })` — the subscriptions layer's ONE event
-//     (`subscription-configured`); a live target parks under `itx.subscriptions.<name>` first.
-//   • `enableProcessor(name, { source, className })` — a subscription whose target is a facet's
-//     `processEventBatch`; `disableProcessor` removes it and deletes the facet.
 //
 // DON'T-PIN: the retained capnweb callback stub lives HERE, in this stateless worker (the relay). The relay
 // opens a STUB PAGER WebSocket to the DO (context/hibernatable-rpc-stub.ts); the DO records only the stub's
@@ -40,16 +32,12 @@
 
 import { RpcTarget } from "capnweb";
 import type { IterateContextDurableObject } from "./iterate-context-durable-object.ts";
-import {
-  CAPABILITY_FETCH_HEADER,
-  encodeCapabilityFetchHeader,
-} from "./fetch/fetch-capabilities.ts";
-import type { StreamEvent, StreamEventInput } from "./stream/events.ts";
+import { CAPABILITY_FETCH_HEADER } from "./fetch/fetch-capabilities.ts";
+import type { StreamEvent } from "./stream/events.ts";
 import type { WaitForEventFilter } from "./stream/stream.ts";
 import { canonicalCapabilityPath, toExpression, type ItxExpression } from "./context/expression.ts";
 import type { WorkerSource } from "./context/worker-loader.ts";
 import { installPrototypeInvokeCapabilityFallback } from "./context/dotted-path-proxy.ts";
-import { InvokeHandle } from "./context/invoke-handle.ts";
 import {
   DurableObjectNameCodec,
   resolveContextPath,
@@ -65,75 +53,6 @@ import {
 
 export type ContextNamespace = DurableObjectNamespace<IterateContextDurableObject>;
 export type WaitUntil = (p: Promise<unknown>) => void;
-
-/** The `itx.rpcStubs` REGISTRY, edge half — the physical axiom under a live provide. `provide` is
- *  the one member that must live HERE (only the edge holds the client's capnweb session, so only
- *  the edge can retain a stub — DON'T-PIN); `get`/`list` reduce onto the DO's built-in exactly as the
- *  dotted surface would. Parking is SEPARATE from mounting: nothing in this class appends an
- *  event. A declared getter on `IterateContext` (not the dotted fallback) because `provide` and
- *  `close` are edge verbs. */
-class RpcStubs extends RpcTarget {
-  readonly #context: IterateContextStub;
-  readonly #parking: Parking;
-  readonly #parkingKey: (key: string) => string;
-  readonly #waitUntil: WaitUntil;
-  constructor(
-    context: IterateContextStub,
-    parking: Parking,
-    parkingKey: (key: string) => string,
-    waitUntil: WaitUntil,
-  ) {
-    super();
-    this.#context = context;
-    this.#parking = parking;
-    this.#parkingKey = parkingKey;
-    this.#waitUntil = waitUntil;
-  }
-
-  /** Park a live capnweb value (a function or an RpcTarget) under `key` — a canonical capability
-   *  path string (the DO asserts the spelling; `itx.provide(path, fn)` passes the mount path).
-   *  Re-parking the same key REPLACES the transport (reconnect). Nothing is mounted: name the stub
-   *  from a mount with `itx.provide(path, "itx.rpcStubs.get('<key>')")`, or call it directly as
-   *  `itx.rpcStubs.get('<key>').method(x)`. */
-  async provide(target: ProviderStub, opts: { key: string }): Promise<{ key: string }> {
-    assertLiveValue(target, "rpcStubs.provide(target, { key })");
-    // Validate/normalize BEFORE attaching — an invalid key must never burn a transport reservation.
-    const key = canonicalCapabilityPath(opts.key);
-    const relay = await startRpcStubRelay(
-      this.#context,
-      target as RetainedProviderStub,
-      key,
-      this.#waitUntil,
-    );
-    this.#parking.add(this.#parkingKey(key), relay);
-    return { key };
-  }
-
-  /** A parked stub by key — a pipelinable handle (`itx.rpcStubs.get('k').method(x)` rides one round
-   *  trip on every lane; context/invoke-handle.ts). Offline ⇒ CONNECTION_OFFLINE at call time. */
-  get(key: string): InvokeHandle {
-    return new InvokeHandle((path, args) =>
-      this.#context.invoke([
-        "itx",
-        "rpcStubs",
-        ["get", key],
-        ...path.slice(0, -1),
-        [path.at(-1)!, ...args],
-      ]),
-    );
-  }
-
-  /** PRESENCE — the keys with an open transport right now (the DO's built-in). */
-  list(): Promise<string[]> {
-    return this.#context.invoke(["itx", "rpcStubs", ["list"]]) as Promise<string[]>;
-  }
-
-  /** Dispose THIS session's relay for `key`: the pager closes and the DO drops the stub. A no-op
-   *  for a key this session never parked. Mounts naming the key are untouched (`itx.revoke`). */
-  close(key: string): void {
-    this.#parking.dispose(this.#parkingKey(canonicalCapabilityPath(key)));
-  }
-}
 
 /** The iterate context (`itx`) at one `{ projectId, path }`. Dotted capability calls + the
  *  built-in collections forward to the DO over Workers RPC. capnweb terminates upstream in `/api`,
@@ -169,10 +88,30 @@ export class IterateContext extends RpcTarget {
     return `${this.#address.name} ${capabilityPath}`;
   }
 
+  /** Park a live capnweb value under `key` (a canonical capability path — the DO refuses any other
+   *  spelling at attach, so an invalid key never burns a transport): the DON'T-PIN relay. Re-parking
+   *  the same key REPLACES the transport (reconnect). Nothing is mounted — `provide` and `subscribe`
+   *  append the row that names the stub as `itx.rpcStubs.get('<key>')`. */
+  async #parkLiveStub(key: string, target: ProviderStub): Promise<void> {
+    const relay = await startRpcStubRelay(
+      this.#context,
+      target as RetainedProviderStub,
+      key,
+      this.#waitUntil,
+    );
+    this.#parking.add(this.#parkingKey(key), relay);
+  }
+
+  /** Dispose THIS session's relay for `key`: the pager closes and the DO drops the stub. A no-op
+   *  for a key this session never parked. Mounts naming the key are untouched. */
+  #closeParkedStub(key: string): void {
+    this.#parking.dispose(this.#parkingKey(key));
+  }
+
   /** Another context of THIS project. Absolute by convention (`cd("/agents/support")`); relative
    *  (`"agents/support"`, `"../inbox"`) resolves against this context's path — one resolver, shared
    *  with the built-in `itx.cd(...)` root. Returns an EDGE context, so `provide(path, fn)` on it
-   *  parks in this same session. Pure addressing: nothing is minted. */
+   *  parks in this same session. Pure addressing. */
   cd(path: string): IterateContext {
     const address = DurableObjectNameCodec.parse(
       DurableObjectNameCodec.stringify({
@@ -181,13 +120,6 @@ export class IterateContext extends RpcTarget {
       }),
     );
     return new IterateContext(this.#contexts, address, this.#parking, this.#waitUntil);
-  }
-
-  /** The live-stub registry (`itx.rpcStubs.provide/get/list/close`) — the physical axiom `provide`
-   *  composes with a mount. A declared getter so it wins over the dotted fallback (the fallback
-   *  would reduce `get`/`list` correctly but cannot park). */
-  get rpcStubs(): RpcStubs {
-    return new RpcStubs(this.#context, this.#parking, (k) => this.#parkingKey(k), this.#waitUntil);
   }
 
   /** THE dispatch door (built-ins + provided capabilities) — the ONE way to call the itx surface.
@@ -200,7 +132,8 @@ export class IterateContext extends RpcTarget {
    *  the DO's FETCH CHANNEL with the capability in the `x-itx-cap` header, not `invoke` — the fetch
    *  channel is the only hop kind that carries a socket-bearing Response back (a 101 from a tunnel
    *  or a WS-serving worker; fetch/fetch-capabilities.ts doctrine, points 1 & 4). So
-   *  `itx.todos.web.fetch(request)` just works, upgrades included, and there is no second door. */
+   *  `itx.todos.web.fetch(request)` just works, upgrades included, and so does the root
+   *  `itx.fetch(request)` (egress: the built-in `fetch` root) — there is no second door. */
   invokeCapability(call: ItxExpression): Promise<unknown> {
     const expr = toExpression(call);
     const last = expr.at(-1);
@@ -211,58 +144,30 @@ export class IterateContext extends RpcTarget {
       last[1] instanceof Request
     ) {
       const headers = new Headers(last[1].headers);
-      headers.set(CAPABILITY_FETCH_HEADER, encodeCapabilityFetchHeader(expr.slice(0, -1)));
+      headers.set(CAPABILITY_FETCH_HEADER, JSON.stringify(expr.slice(0, -1))); // the lane parses a JSON Expression
       return this.#context.fetch(new Request(last[1], { headers }));
     }
     return this.#context.invoke(expr);
   }
 
-  /** Append events to this context's log — the flattened stream verb, same commit pipeline as the
-   *  expression spelling `itx.append({...})` (built-ins.ts root). Validation, idempotency, the
-   *  core reduce, and the fan-out all live on the DO (Stream.append owns the contract); this
-   *  method just proxies. Returns the committed events with their assigned offsets. */
-  append(...events: StreamEventInput[]): Promise<StreamEvent[]> {
-    return this.#context.append(...events);
-  }
-
-  /** Read a page of the durable log after `afterOffset` (default 0; `limit` default 500).
-   *  `scannedThroughOffset` is the client's contiguity cursor — chain it for the next page: a full
-   *  page's last row, a short page's DURABLE mark (never the in-memory head — an ephemeral's offset
-   *  is not proven by a read). A non-minting probe: reading a virgin stream leaves it virgin. */
-  read(
-    afterOffset?: number,
-    limit?: number,
-  ): Promise<{ events: StreamEvent[]; scannedThroughOffset: number }> {
-    return this.#context.read(afterOffset, limit);
-  }
-
   /** Wait for the next event matching `filter` — or the first committed durable match after an
    *  explicit `afterOffset` (the default is the head at call time: "the next occurrence"). The
    *  parked wait lives on the DO (Stream.waitForEvent owns the whole contract — type filter,
-   *  30s/120s timeout → WAIT_TIMEOUT, non-minting); this method just proxies, and the client's
-   *  own open call is what keeps the wait alive. */
+   *  30s/120s timeout → WAIT_TIMEOUT); this method just proxies, and the client's own open call
+   *  is what keeps the wait alive. */
   waitForEvent(filter?: WaitForEventFilter): Promise<StreamEvent> {
     return this.#context.waitForEvent(filter);
-  }
-
-  /** EGRESS through the context (the tutorial's chapter 2): `{{secret:project:NAME}}` placeholders
-   *  are substituted in the DO, then the request leaves through FALLBACK. A Request with no itx
-   *  header is egress by definition — the DO's fetch walks its doors (stub pager, live-capability
-   *  upgrade leg, `x-itx-cap`) and egress is what remains. The same terminal a loaded worker's
-   *  `globalOutbound` and the built-in `itx.fetch` root land on. */
-  fetch(request: Request): Promise<Response> {
-    return this.#context.fetch(request);
   }
 
   /** THE ONE PROVIDE DOOR — mount a capability at `path`. `target` is EITHER:
    *    • an itx EXPRESSION (a dotted string or the parsed array — what the event stores; full
    *      shadow-stack semantics), OR
-   *    • a LIVE capnweb value (a function or an RpcTarget) — SUGAR over two axioms: park the value
-   *      in `itx.rpcStubs` under the path (retained HERE, relay-side — DON'T-PIN), then mount the
-   *      pure-data target `itx.rpcStubs.get('<path>')`. `itx.<path>.method(x)` resolves that mount
-   *      like any other. Re-providing the same path re-parks (reconnect — the transport is
-   *      replaced) and, the mount being identical, appends NOTHING (the door is idempotent). If
-   *      the provider vanishes the mount STAYS: calls answer CONNECTION_OFFLINE until `revoke`.
+   *    • a LIVE capnweb value (a function or an RpcTarget): park the value in `itx.rpcStubs` under
+   *      the path (retained HERE, relay-side — DON'T-PIN), then mount the pure-data target
+   *      `itx.rpcStubs.get('<path>')`. `itx.<path>.method(x)` resolves that mount like any other.
+   *      Re-providing the same path re-parks (reconnect — the transport is replaced) and, the mount
+   *      being identical, appends NOTHING (the door is idempotent). If the provider vanishes the
+   *      mount STAYS: calls answer CONNECTION_OFFLINE until `revoke`.
    *  Anything else is a loud TypeError. Returns the mount's identity for `revoke`. */
   async provide(
     path: string,
@@ -272,8 +177,9 @@ export class IterateContext extends RpcTarget {
       return this.#context.provideCapability({ path, target });
     assertLiveValue(target, "provide(path, target)");
     // Park FIRST, mount SECOND (the event records a capability that can already serve). The
-    // registry key IS the canonical mount path — one canonicalizer, done inside rpcStubs.provide.
-    const { key } = await this.rpcStubs.provide(target, { key: path });
+    // registry key IS the canonical mount path — one canonicalizer, one spelling everywhere.
+    const key = canonicalCapabilityPath(path);
+    await this.#parkLiveStub(key, target);
     try {
       return await this.#context.provideCapability({
         path: key,
@@ -283,7 +189,7 @@ export class IterateContext extends RpcTarget {
       // The DO refused the mount (STREAM_PAUSED / a validation throw): the
       // relay just parked would otherwise linger for the whole session — retained stub, pager
       // socket, and a DO transport that serves nothing. Tear it down and let the refusal propagate.
-      this.rpcStubs.close(key);
+      this.#closeParkedStub(key);
       throw e;
     }
   }
@@ -293,12 +199,12 @@ export class IterateContext extends RpcTarget {
    *  spelling is the inverse of `provide(path, fn)`: it also closes THIS session's parked stub
    *  under that path, if any (a local fact — no DO round trip, no other session's stub is touched).
    *  The by-offset spelling revokes the mount only; a stub this session parked stays addressable
-   *  as `itx.rpcStubs.get('…')` until `rpcStubs.close` or session end. */
+   *  as `itx.rpcStubs.get('…')` until the session ends. */
   async revoke(input: string | { providedAtOffset: number }): Promise<void> {
     if (typeof input === "string") {
       const path = canonicalCapabilityPath(input);
       await this.#context.revokeCapability({ path });
-      this.rpcStubs.close(path);
+      this.#closeParkedStub(path);
       return;
     }
     await this.#context.revokeCapability(input);
@@ -326,9 +232,8 @@ export class IterateContext extends RpcTarget {
     if (typeof input.target === "string" || Array.isArray(input.target)) target = input.target;
     else {
       assertLiveValue(input.target, "subscribe({ target })");
-      const { key } = await this.rpcStubs.provide(input.target, {
-        key: `itx.subscriptions.${name}`,
-      });
+      const key = `itx.subscriptions.${name}`;
+      await this.#parkLiveStub(key, input.target);
       target = ["itx", "rpcStubs", ["get", key]];
     }
     await this.#context.configureSubscription({
@@ -349,7 +254,7 @@ export class IterateContext extends RpcTarget {
    *  and close this session's parked callback under it, if any. */
   async unsubscribe(name: string): Promise<void> {
     await this.#context.removeSubscription(name);
-    this.rpcStubs.close(`itx.subscriptions.${name}`);
+    this.#closeParkedStub(`itx.subscriptions.${name}`);
     this.#parking.dispose(this.#parkingKey(`subscription:${name}`));
   }
 
@@ -400,8 +305,8 @@ function assertLiveValue(target: unknown, where: string): void {
 }
 
 // THE NATURAL DOTTED SURFACE. Insert the dynamic-capability fallback into `IterateContext.prototype`'s chain
-// so an unknown segment (`itx.slack`, `itx.kv`) becomes an accumulated invokeCapability dispatch,
-// while the declared methods/getters above (invokeCapability / provide / subscribe / …) always win.
+// so an unknown segment (`itx.slack`, `itx.kv`, `itx.append`) becomes an accumulated invokeCapability dispatch,
+// while the declared methods above (invokeCapability / provide / subscribe / …) always win.
 // The receiver IS the invoker — the accumulated access reduces into ONE `invokeCapability(expression)`
 // call (`[...root, ...prefix, [method, ...args]]`), and `IterateContext.invokeCapability` is exactly
 // the door the reduce dispatches onto. Runs once at module load, after the class body. See

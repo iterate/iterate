@@ -5,8 +5,9 @@
 // configured REPLACES, removed drops, delivery-halted marks, delivery-resumed clears the halt and
 // records the seek). No clock, no effects: the same log always reduces to the same state, an ephemeral
 // event never reduces (the checkpoint must rebuild from the durable log alone), and a malformed
-// hand-appended event is SKIPPED, never a wedge. The DOORS that build these events are pinned beside
-// their modules (context/capability-table.test.ts, stream/subscriptions.test.ts).
+// hand-appended event THROWS at the reduce — the host contains it (__workers-tests__/stream.test.ts
+// pins the skip). The DOORS that build these events are pinned beside their modules
+// (context/capability-table.test.ts, stream/subscriptions.test.ts).
 import { describe, expect, test } from "vitest";
 import { parse, print } from "../context/expression.ts";
 import { CoreContract, CoreStreamProcessor, type CoreState } from "./core-processor.ts";
@@ -133,20 +134,20 @@ describe("the capability table — a shadow stack", () => {
     expect(again).toEqual(popped);
   });
 
-  test("a malformed provided (a path with a call step, an unbalanced target) is SKIPPED — no mount — and later events still reduce", () => {
+  test("a malformed provided (a path with a call step, an unbalanced target) THROWS at the reduce — the host skips it (stream.test.ts); a well-formed one still reduces", () => {
+    const state = proc.contract.initialState();
+    for (const payload of [
+      { path: "itx.broken(", target: "itx.kv" },
+      { path: "itx.call()", target: "itx.kv" },
+      { path: "itx.dangling", target: "itx.kv.get(" },
+    ])
+      expect(() =>
+        proc.reduce({
+          event: at(1, "events.iterate.com/capability-table/capability-provided", payload),
+          state,
+        }),
+      ).toThrow();
     const s = reduceAll([
-      at(1, "events.iterate.com/capability-table/capability-provided", {
-        path: "itx.broken(",
-        target: "itx.kv",
-      }),
-      at(2, "events.iterate.com/capability-table/capability-provided", {
-        path: "itx.call()",
-        target: "itx.kv",
-      }),
-      at(3, "events.iterate.com/capability-table/capability-provided", {
-        path: "itx.dangling",
-        target: "itx.kv.get(",
-      }),
       at(4, "events.iterate.com/capability-table/capability-provided", {
         path: "itx.fine",
         target: "itx.kv",
@@ -303,12 +304,17 @@ describe("the subscriptions table — by name", () => {
     ).toBeUndefined();
   });
 
-  test("a malformed target is SKIPPED (no row), and later events still reduce — one bad hand-appended event never wedges the table", () => {
-    const s = reduceAll([
-      at(1, "events.iterate.com/stream/subscription-configured", {
-        name: "broken",
-        target: "itx.broken(", // does not parse
+  test("a malformed target THROWS at the reduce (no row) — the host skips it (stream.test.ts); a well-formed one still reduces", () => {
+    expect(() =>
+      proc.reduce({
+        event: at(1, "events.iterate.com/stream/subscription-configured", {
+          name: "broken",
+          target: "itx.broken(", // does not parse
+        }),
+        state: proc.contract.initialState(),
       }),
+    ).toThrow();
+    const s = reduceAll([
       at(2, "events.iterate.com/stream/subscription-configured", {
         name: "fine",
         target: "itx.whoami",

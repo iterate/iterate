@@ -141,7 +141,7 @@ export class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
   }
 
   /** THE STREAM — the commit point AND the core reduce (stream/stream.ts: `append` is the pipeline
-   *  top to bottom — may-this-land, offsets, reduce + commit, after — and `core()` is the stream's own
+   *  top to bottom — may-this-land, offsets, reduce + commit, after — and `coreReducedState` is the stream's own
    *  reduced state, reduced inside every commit). The name check already happened above (`#name`).
    *  Its one callback, `onCommit`, is the post-commit fan-out: the ONE delivery loop. */
   readonly #stream = new Stream({

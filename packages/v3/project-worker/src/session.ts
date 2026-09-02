@@ -12,7 +12,7 @@
 //
 // Every class here is a server-side capnweb RpcTarget (the client is JUST capnweb — see
 // iterate-context.ts). None of them touches a Durable Object: `projects.get(id)` is pure
-// addressing, and nothing is minted until a context is first written to.
+// addressing (as is a context's `cd`); the first door that reaches a context materializes it.
 
 import { RpcTarget } from "capnweb";
 import { DurableObjectNameCodec } from "./context/durable-object-names.ts";
@@ -76,8 +76,8 @@ export class ProjectCollection extends RpcTarget {
     this.#waitUntil = waitUntil;
   }
 
-  /** The project's root context ("/"). Side-effect free: nothing is minted until the context is
-   *  first written to. A project ID only — a context name belongs to `cd`. */
+  /** The project's root context ("/") — pure addressing, no DO is reached. A project ID only — a
+   *  context name belongs to `cd`. */
   get(projectId: string): IterateContext {
     const address = DurableObjectNameCodec.parse(projectId);
     if (address.path !== "/")

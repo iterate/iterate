@@ -205,8 +205,8 @@ test("pipelining: provide(path, fn) + revoke on its UNRESOLVED result = ONE roun
   });
   // Correctness under pipelining: the provide really parked the stub AND appended its mount; the
   // revoke-by-OFFSET popped THE row (default-deny restored) and touched nothing physical — the
-  // stub stays parked under 'itx.piptool' and listed by presence until this session ends or
-  // `rpcStubs.close` (`itx.revoke(path)` is the spelling that also closes it).
+  // stub stays parked under 'itx.piptool' and listed by presence until this session ends
+  // (`itx.revoke(path)` is the spelling that also closes it).
   await until("the mount revoked (default-deny restored)", async () => {
     const err = await rejection(itx.invokeCapability(["itx", ["piptool", 1]]));
     return codeOf(err) === "NO_CAPABILITY_MATCH";

@@ -1,7 +1,7 @@
 // stream/stream.ts — THE STREAM, a simple dependency-injected JS class:
 // SQLite rows + one kv high-water mark, idempotency at the door, one shared offset sequence,
 // chunked large bodies, the append validation + the pause check, the wake record, waitForEvent, and
-// the alarm armer — and THE CORE REDUCE (`core()`), the stream's own state reduced inside every
+// the alarm armer — and THE CORE REDUCE (`coreReducedState`), the stream's own state reduced inside every
 // commit. The DurableObject holds a `Stream` and drives it; the one thing the stream needs from its
 // host is `onCommit` (the post-commit fan-out), so nothing here reaches back into the DO.
 //
@@ -457,8 +457,8 @@ export class Stream {
    *
    *  CHECK-AND-PARK IS ONE SYNCHRONOUS SLICE: zero awaits between the log scan and waiter
    *  registration (read is sync; an await there would lose a racing commit → spurious
-   *  WAIT_TIMEOUT). The initial scan PAGES read() to the head; it rides the non-minting read path
-   *  and never touches — a waitForEvent on a virgin stream must leave it virgin. Parked waiters
+   *  WAIT_TIMEOUT). The initial scan PAGES read() to the head; it rides read()
+   *  and writes nothing of its own (the constructor already appended created/woken). Parked waiters
    *  are fed from `freshEvents` in append's tail, so EPHEMERAL events resolve waits too (they ride the
    *  fan-out — always-an-event — but are only catchable while parked, since they never hit the
    *  log). Multiple waiters settle FIFO per event; one event can resolve many waiters; a waiter

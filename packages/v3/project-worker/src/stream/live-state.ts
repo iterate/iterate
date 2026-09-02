@@ -18,7 +18,7 @@
 // The revision is seeded from a per-incarnation EPOCH (not 0): a reborn holder mints a fresh epoch,
 // so every stale client rev mismatches and re-reads the door instead of applying a patch onto a
 // diverged base. Lossy by contract — a dropped delta append is a chain gap the client heals, never
-// state loss (the durable truth is the reduced reduce; the runtime truth reseeds).
+// state loss (the durable truth is the reduced state; the runtime truth reseeds).
 
 import { diff } from "../lib/patch.ts";
 
@@ -40,12 +40,17 @@ export class LiveState<S> {
   readonly #sink: LiveStateSink;
   readonly #key: string;
   #state: S;
+  /** The DIFF BASE: the last value that serialized — what a client that applied every delta holds.
+   *  Kept apart from `#state` so a value the wire cannot carry, adopted without an emit, never
+   *  becomes the base every later diff would throw against. */
+  #lastSerializedState: S;
   #rev: number;
 
   constructor(sink: LiveStateSink, key: string, initial: S) {
     this.#sink = sink;
     this.#key = key;
     this.#state = initial;
+    this.#lastSerializedState = initial;
     this.#rev = Date.now() * 4096 + Math.floor(Math.random() * 4096);
   }
 
@@ -60,33 +65,28 @@ export class LiveState<S> {
     return { rev: this.#rev, state: this.#state };
   }
 
-  /** Replace the value: diff held→next; on a real change bump the revision and append the delta.
-   *  Build a NEW value (don't mutate `next` in place) — the diff is over JSON, held identity is the
-   *  baseline. A projection/diff/append failure degrades to a LOST notification (the client re-seeds
-   *  on the chain gap), never a throw the caller sees. */
+  /** Replace the value: diff the last serialized base → next; on a real change bump the revision
+   *  and append the delta. Build a NEW value (don't mutate `next` in place) — the diff is over JSON.
+   *  A diff/append failure degrades to a LOST notification (the client re-seeds on the chain gap),
+   *  never a throw the caller sees. */
   set(next: S): void {
-    // The value is adopted whatever happens; only the NOTIFICATION is best-effort. A projection the
-    // wire can't carry (a BigInt, a cycle) throws in `diff` — contain it here so a batch/set caller
-    // never sees it. Two containment rules keep the chain healable:
-    //   • If the PAIR won't diff but `next` itself rides the wire, emit a ROOT REPLACE instead —
-    //     otherwise a poisoned base wedges emission forever (every later diff against it throws).
-    //   • If even `next` won't serialize, adopt it and STILL advance the rev: the base moved without
-    //     an emit, and bumping is what mints the chain gap that forces a stale client's re-seed.
-    //     (Without the bump, a later emit's `from` matches the client's held rev and it applies a
-    //     patch computed against a base it never received: silent corruption, no heal signal.)
+    // The diff is JSON.stringify on both sides (lib/patch.ts), so a `next` the wire cannot carry (a
+    // BigInt, a cycle) throws HERE and nowhere later: adopt it anyway, and STILL advance the rev —
+    // the base moved without an emit, and the bump is what mints the chain gap that forces a stale
+    // client's re-seed (without it, a later emit's `from` would match the client's held rev and it
+    // would apply a patch computed against a base it never received: silent corruption). The
+    // serialized base stays put, so the next serializable value emits as a diff from what the client
+    // last saw.
     let patch;
     try {
-      patch = diff(this.#state, next);
+      patch = diff(this.#lastSerializedState, next);
     } catch {
-      try {
-        patch = [{ op: "replace" as const, path: "", value: JSON.parse(JSON.stringify(next)) }];
-      } catch {
-        this.#state = next;
-        this.#rev += 1;
-        return;
-      }
+      this.#state = next;
+      this.#rev += 1;
+      return;
     }
     this.#state = next;
+    this.#lastSerializedState = next;
     if (!patch) return;
     const from = this.#rev;
     this.#rev = from + 1;
