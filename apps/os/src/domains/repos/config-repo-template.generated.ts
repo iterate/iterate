@@ -922,6 +922,24 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "}\n",
   },
   {
+    path: "user-message-describer.ts",
+    content:
+      "// The user-message describer's facet entry point: the reusable derivation\n" +
+      "// processor lives in the published package (iterate/processors\n" +
+      "// user-message-describer.ts — parses the html attachment vocabulary out of\n" +
+      "// user chat messages into typed render facts); this file only gives the\n" +
+      "// facet loader a class to build in this config repo. Installed on each agent\n" +
+      "// stream by worker.ts.\n" +
+      "import { StreamProcessorFacet, type ProcessorHostDeps } from \"iterate/sdk\";\n" +
+      "import { UserMessageDescriberProcessor } from \"iterate/processors\";\n" +
+      "\n" +
+      "export class UserMessageDescriberFacet extends StreamProcessorFacet {\n" +
+      "  protected createProcessor(deps: ProcessorHostDeps) {\n" +
+      "    return new UserMessageDescriberProcessor(deps);\n" +
+      "  }\n" +
+      "}\n",
+  },
+  {
     path: "worker.ts",
     content:
       "import { DocsApp } from \"@iterate-com/docs\";\n" +
@@ -930,7 +948,11 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "import { MediaApp } from \"iterate/starter-apps/media\";\n" +
       "import { NotesApp } from \"iterate/starter-apps/notes\";\n" +
       "import { IterateWorkerEntrypoint, type StreamEvent } from \"iterate/sdk\";\n" +
-      "import { parsePromptSections } from \"iterate/processors\";\n" +
+      "import {\n" +
+      "  isIdempotencyConflict,\n" +
+      "  parsePromptSections,\n" +
+      "  userMessageDescriberSubscription,\n" +
+      "} from \"iterate/processors\";\n" +
       "import { TodoApp } from \"iterate/starter-apps/todo\";\n" +
       "\n" +
       "const githubAiLinterRulePaths = [\n" +
@@ -1041,6 +1063,32 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "    if (failed !== undefined && failed.status === \"rejected\") throw failed.reason;\n" +
       "  }\n" +
       "\n" +
+      "  /** Put the user-message describer facet on this agent's stream. The\n" +
+      "   * subscription filter derives from the package contract's consumes; the\n" +
+      "   * payload-hash idempotency key reinstalls on contract changes and dedupes\n" +
+      "   * otherwise. */\n" +
+      "  async #installUserMessageDescriber(agentPath: string): Promise<void> {\n" +
+      "    const payload = userMessageDescriberSubscription(agentPath, \"user-message-describer.ts\");\n" +
+      "    const digest = await crypto.subtle.digest(\n" +
+      "      \"SHA-256\",\n" +
+      "      new TextEncoder().encode(JSON.stringify(payload)),\n" +
+      "    );\n" +
+      "    const hash = [...new Uint8Array(digest).slice(0, 8)]\n" +
+      "      .map((byte) => byte.toString(16).padStart(2, \"0\"))\n" +
+      "      .join(\"\");\n" +
+      "    try {\n" +
+      "      await this.itx.streams.get(agentPath).append({\n" +
+      "        type: \"events.iterate.com/stream/subscription-configured\",\n" +
+      "        idempotencyKey: `iterate/config/user-message-describer:${hash}`,\n" +
+      "        payload,\n" +
+      "      });\n" +
+      "    } catch (error) {\n" +
+      "      // An idempotency conflict means an earlier delivery already installed\n" +
+      "      // this subscription — losing that race is success.\n" +
+      "      if (!isIdempotencyConflict(error)) throw error;\n" +
+      "    }\n" +
+      "  }\n" +
+      "\n" +
       "  /**\n" +
       "   * BIRTH CONFIGURATION — the pattern to copy to customize how agents in\n" +
       "   * this project are born. The platform births every agent with coherent\n" +
@@ -1066,6 +1114,11 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "    // the platform's prompt and personality — only the release below\n" +
       "    // applies to them.\n" +
       "    const channelAgent = /^\\/agents\\/(slack|telegram|email|mcp)\\//.test(agentPath);\n" +
+      "    // Rich attachment rendering: the reusable describer facet parses the\n" +
+      "    // mobile composer's html attachment parts into typed render facts.\n" +
+      "    // Installed for every agent (channel agents receive mobile-composed\n" +
+      "    // messages too); the payload-hash key makes re-installs no-ops.\n" +
+      "    await this.#installUserMessageDescriber(agentPath);\n" +
       "    const shaping = channelAgent ? [] : await this.#webAgentShaping();\n" +
       "    // ONE append call on purpose: the batch commits atomically, so a render\n" +
       "    // can never see a half-updated prompt.\n" +

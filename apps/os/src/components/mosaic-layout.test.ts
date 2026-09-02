@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { MOSAIC_GAP, mosaicLayout } from "./mosaic-layout.ts";
+import { MOSAIC_GAP, mosaicLayout } from "@iterate-com/ui/lib/mosaic-layout";
 
 test("two landscape photos share one row at equal height", () => {
   const layout = mosaicLayout({ aspectRatios: [1.5, 1.5], maxWidth: 300 });

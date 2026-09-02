@@ -2,14 +2,18 @@
 // hold-to-record button, and the document picker all produce one of these;
 // the chips row renders them; the send mutation turns them back into the two
 // wire shapes the platform has: `agent.addFiles` byte payloads for anything
-// with bytes, and an inline XML part appended to the message text for
-// location (which has none).
+// with bytes, and one html attachment part per attachment appended to the
+// message text (the vocabulary lives in iterate/processors
+// user-message-describer.ts next to its parser, so emitter and parser cannot
+// drift — a project's derivation processor turns the parts into typed
+// render facts).
 //
 // Bytes are deliberately NOT held here (except photos, whose picker already
 // hands back base64 — see lib/attachments.ts). A recorded video or picked
 // PDF stays a local file uri until send time, so attaching is instant and an
 // abandoned draft never held 30MB in JS memory.
 
+import { formatAttachmentPartLine, type DescribedAttachment } from "iterate/processors";
 import type { PickedImage } from "./attachments.ts";
 import { base64ToUint8Array } from "./encoding.ts";
 
@@ -224,153 +228,80 @@ export async function pendingNoteAttachments(
   return out;
 }
 
-/** Location goes into the message text itself as a self-describing XML part
- * — it has no bytes to upload, and any reader (agent, web, human) can parse
- * coordinates out of attributes. */
-export function locationXmlPart(attachment: {
-  latitude: number;
-  longitude: number;
-  accuracyMeters: number | null;
-  capturedAt: string;
-}): string {
-  const attributes = [
-    `latitude="${attachment.latitude}"`,
-    `longitude="${attachment.longitude}"`,
-    ...(attachment.accuracyMeters === null
-      ? []
-      : [`accuracy-meters="${Math.round(attachment.accuracyMeters)}"`]),
-    `captured-at="${escapeXmlAttribute(attachment.capturedAt)}"`,
-  ];
-  return `<user-location ${attributes.join(" ")} />`;
+/**
+ * One composer attachment as the vocabulary's typed shape. Null when the
+ * attachment adds no metadata beyond its uploaded bytes (a photo whose
+ * dimensions are unknown would, but the picker always knows them).
+ */
+export function describedAttachment(attachment: ComposerAttachment): DescribedAttachment | null {
+  switch (attachment.kind) {
+    case "photo": {
+      const { filename, width, height } = attachment.image;
+      if (width <= 0 || height <= 0) return null;
+      return { kind: "image", filename, width: Math.round(width), height: Math.round(height) };
+    }
+    case "video":
+      return {
+        kind: "video",
+        filename: attachment.filename,
+        ...(attachment.width !== null &&
+          attachment.height !== null &&
+          attachment.width > 0 && {
+            width: Math.round(attachment.width),
+            height: Math.round(attachment.height),
+          }),
+        ...(attachment.durationSeconds === null
+          ? {}
+          : { durationSeconds: attachment.durationSeconds }),
+      };
+    case "audio":
+      // Recorded clips carry a duration and announce themselves as voice
+      // notes; document-picked audio (durationSeconds null) is just a file.
+      if (attachment.durationSeconds === null) {
+        return {
+          kind: "file",
+          filename: attachment.filename,
+          contentType: attachment.contentType,
+        };
+      }
+      return {
+        kind: "audio",
+        filename: attachment.filename,
+        durationSeconds: attachment.durationSeconds,
+        ...(attachment.transcript === null || attachment.transcript === ""
+          ? {}
+          : { transcript: attachment.transcript }),
+      };
+    case "file":
+      return {
+        kind: "file",
+        filename: attachment.filename,
+        contentType: attachment.contentType,
+        ...(attachment.sizeBytes === null ? {} : { sizeBytes: attachment.sizeBytes }),
+      };
+    case "location":
+      return {
+        kind: "location",
+        latitude: attachment.latitude,
+        longitude: attachment.longitude,
+        ...(attachment.accuracyMeters === null
+          ? {}
+          : { accuracyMeters: attachment.accuracyMeters }),
+        capturedAt: attachment.capturedAt,
+      };
+  }
 }
 
-/** A photo/video's pixel dimensions as a self-describing XML part, so a
- * renderer can size its frame BEFORE the bytes load (the mosaic would
- * otherwise draw square guesses and reflow when Image.getSize reports in).
- * Null when the attachment's dimensions are unknown. */
-export function dimensionsXmlPart(attachment: ComposerAttachment): string | null {
-  const dimensions =
-    attachment.kind === "photo"
-      ? {
-          filename: attachment.image.filename,
-          width: attachment.image.width,
-          height: attachment.image.height,
-        }
-      : attachment.kind === "video" && attachment.width !== null && attachment.height !== null
-        ? { filename: attachment.filename, width: attachment.width, height: attachment.height }
-        : null;
-  if (dimensions === null || dimensions.width <= 0 || dimensions.height <= 0) return null;
-  return `<attachment filename="${escapeXmlAttribute(dimensions.filename)}" width="${Math.round(dimensions.width)}" height="${Math.round(dimensions.height)}" />`;
-}
-
-/** A recorded voice clip announces itself: the part is both the agent's cue
- * to transcribe (clearer than the server's default "[Files attached: …]"
- * note) and what lets a voice-only bubble render as JUST the player —
- * renderers strip it from the caption. Recorded clips are the ones carrying
- * a duration; document-picked audio files (durationSeconds null) are just
- * files. */
-export function voiceNoteXmlPart(attachment: ComposerAttachment): string | null {
-  if (attachment.kind !== "audio" || attachment.durationSeconds === null) return null;
-  const transcript =
-    attachment.transcript === null || attachment.transcript === ""
-      ? ""
-      : ` transcript="${escapeXmlAttribute(attachment.transcript)}"`;
-  return `<voice-note filename="${escapeXmlAttribute(attachment.filename)}" duration-seconds="${Math.round(attachment.durationSeconds)}"${transcript} />`;
-}
-
-/** The message text that actually sends: the typed text, then each XML part
- * on its own line (location + attachment dimensions + voice notes). */
-export function messageWithXmlParts(message: string, attachments: ComposerAttachment[]): string {
+/** The message text that actually sends: the typed text, then each html
+ * attachment part on its own line. */
+export function messageWithAttachmentParts(
+  message: string,
+  attachments: ComposerAttachment[],
+): string {
   const parts = attachments.flatMap((attachment) => {
-    if (attachment.kind === "location") return [locationXmlPart(attachment)];
-    const part = dimensionsXmlPart(attachment) || voiceNoteXmlPart(attachment);
-    return part === null ? [] : [part];
+    const described = describedAttachment(attachment);
+    return described === null ? [] : [formatAttachmentPartLine(described)];
   });
   if (parts.length === 0) return message;
   return [message, ...parts].filter((line) => line !== "").join("\n");
-}
-
-const ATTACHMENT_PART_PATTERN = /<attachment filename="([^"]*)" width="(\d+)" height="(\d+)" \/>/g;
-
-/** filename → pixel dimensions, parsed back out of a received message's
- * <attachment .../> parts. */
-export function parseAttachmentDimensions(
-  text: string,
-): Record<string, { width: number; height: number }> {
-  const dimensions: Record<string, { width: number; height: number }> = {};
-  for (const match of text.matchAll(ATTACHMENT_PART_PATTERN)) {
-    dimensions[unescapeXmlAttribute(match[1]!)] = {
-      width: Number(match[2]),
-      height: Number(match[3]),
-    };
-  }
-  return dimensions;
-}
-
-const VOICE_NOTE_PART_PATTERN =
-  /<voice-note filename="([^"]*)" duration-seconds="\d+"(?: transcript="([^"]*)")? \/>/g;
-
-/** filename → on-device transcript, parsed back out of a received message's
- * <voice-note .../> parts — the audio player shows it under the waveform. */
-export function parseVoiceNoteTranscripts(text: string): Record<string, string> {
-  const transcripts: Record<string, string> = {};
-  for (const match of text.matchAll(VOICE_NOTE_PART_PATTERN)) {
-    if (match[2] !== undefined && match[2] !== "") {
-      transcripts[unescapeXmlAttribute(match[1]!)] = unescapeXmlAttribute(match[2]);
-    }
-  }
-  return transcripts;
-}
-
-const LOCATION_PART_PATTERN =
-  /<user-location latitude="(-?[\d.]+)" longitude="(-?[\d.]+)"(?: accuracy-meters="(\d+)")? captured-at="([^"]*)" \/>/g;
-
-/** The shared locations in a received message's <user-location .../> parts —
- * each one renders as a map card instead of raw XML. */
-export function parseUserLocations(
-  text: string,
-): { latitude: number; longitude: number; accuracyMeters: number | null; capturedAt: string }[] {
-  return [...text.matchAll(LOCATION_PART_PATTERN)].map((match) => ({
-    latitude: Number(match[1]),
-    longitude: Number(match[2]),
-    accuracyMeters: match[3] === undefined ? null : Number(match[3]),
-    capturedAt: match[4]!,
-  }));
-}
-
-/** The caption a human should see: <attachment .../> parts are layout
- * metadata, <user-location .../> parts render as map cards,
- * <voice-note .../> parts render as players, and the server's default
- * "[Files attached: …]" note is redundant next to rich attachment renders —
- * none of them belong in the visible text. */
-export function stripAttachmentXmlParts(text: string): string {
-  return text
-    .split("\n")
-    .filter((line) => {
-      const trimmed = line.trim();
-      return (
-        !/^<attachment filename=.* \/>$/.test(trimmed) &&
-        !/^<user-location .* \/>$/.test(trimmed) &&
-        !/^<voice-note .* \/>$/.test(trimmed) &&
-        !/^\[Files attached: .*\]$/.test(trimmed)
-      );
-    })
-    .join("\n")
-    .trim();
-}
-
-function escapeXmlAttribute(value: string): string {
-  return value
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;");
-}
-
-function unescapeXmlAttribute(value: string): string {
-  return value
-    .replaceAll("&quot;", '"')
-    .replaceAll("&gt;", ">")
-    .replaceAll("&lt;", "<")
-    .replaceAll("&amp;", "&");
 }

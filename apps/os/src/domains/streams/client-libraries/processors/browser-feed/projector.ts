@@ -32,6 +32,10 @@ import {
 } from "@iterate-com/ui/components/events/agent-ui-reducer";
 import type { StreamEvent } from "iterate/processors";
 
+/** How many user-message row addresses stay replaceable (see
+ * BrowserFeedState.recentUserItemIndexes). */
+const RECENT_USER_ROW_WINDOW = 16;
+
 /** Kind prefix for pretty chat rows settled by the agent lens. */
 export const AGENT_KIND_PREFIX = "agent.";
 /** Kind prefix for raw rows (grouped runs and specific-renderer singletons). */
@@ -44,7 +48,7 @@ export const RAW_GROUP_KIND = "raw.group";
  * are disposable caches and must be rebuilt, never interpreted as current
  * state (in particular, they may contain historical ephemeral activity).
  */
-export const BROWSER_FEED_SCHEMA_VERSION = 8;
+export const BROWSER_FEED_SCHEMA_VERSION = 9;
 export { isAgentActivity } from "@iterate-com/ui/components/events/agent-ui-reducer";
 
 /** Maps an event type to its specific raw renderer kind, or null to fall into the group. */
@@ -109,6 +113,13 @@ export type BrowserFeedState = {
    * entire stream a second time.
    */
   provisionalAgentItemIndexes: Record<string, number>;
+  /**
+   * Row addresses of the last few user messages, so a derivation processor's
+   * render/user-message-described re-emission replaces the bubble in place.
+   * Bounded FIFO (unlike provisional activities, most user messages are never
+   * re-emitted, so retaining every index would grow with the stream).
+   */
+  recentUserItemIndexes: { id: string; localIndex: number }[];
 };
 
 export function initialBrowserFeedState(): BrowserFeedState {
@@ -119,6 +130,7 @@ export function initialBrowserFeedState(): BrowserFeedState {
     nextLocalIndex: 0,
     lastAgentWake: null,
     provisionalAgentItemIndexes: {},
+    recentUserItemIndexes: [],
   };
 }
 
@@ -169,6 +181,7 @@ export function planBrowserFeedOps(
   let nextLocalIndex = start.nextLocalIndex;
   let lastAgentWake = start.lastAgentWake;
   const provisionalAgentItemIndexes = { ...start.provisionalAgentItemIndexes };
+  let recentUserItemIndexes = [...start.recentUserItemIndexes];
   const ops: FeedOp[] = [];
   // The op for the row `open` points at, when that row is being mutated within
   // this batch — so we update it in place instead of pushing a fresh op per event.
@@ -183,7 +196,9 @@ export function planBrowserFeedOps(
     const settled = reduceAgentUi(agent, event as unknown as Parameters<typeof reduceAgentUi>[1]);
     agent = settled.endState;
     for (const item of settled.items) {
-      const existingIndex = provisionalAgentItemIndexes[item.id];
+      const existingIndex =
+        provisionalAgentItemIndexes[item.id] ??
+        recentUserItemIndexes.find((entry) => entry.id === item.id)?.localIndex;
       if (existingIndex !== undefined) {
         ops.push({
           kind: "replace",
@@ -218,6 +233,12 @@ export function planBrowserFeedOps(
       });
       if (hasInferredScriptOutcome(item)) {
         provisionalAgentItemIndexes[item.id] = nextLocalIndex;
+      }
+      if (item.kind === "user") {
+        recentUserItemIndexes = [
+          ...recentUserItemIndexes.filter((entry) => entry.id !== item.id),
+          { id: item.id, localIndex: nextLocalIndex },
+        ].slice(-RECENT_USER_ROW_WINDOW);
       }
       lastAgentWake =
         item.kind === "stream-woken" ? { localIndex: nextLocalIndex, count: 1 } : null;
@@ -311,6 +332,7 @@ export function planBrowserFeedOps(
         provisionalAgentItemIndexes,
         agent,
       ),
+      recentUserItemIndexes,
     },
   };
 }
@@ -333,6 +355,19 @@ export function isCurrentBrowserFeedState(value: unknown): value is BrowserFeedS
         isNonNegativeSafeInteger(index) &&
         index < nextLocalIndex &&
         Object.hasOwn(agent.provisionalActivities, id),
+    )
+  ) {
+    return false;
+  }
+  if (
+    !Array.isArray(candidate.recentUserItemIndexes) ||
+    !candidate.recentUserItemIndexes.every(
+      (entry) =>
+        isRecord(entry) &&
+        typeof entry.id === "string" &&
+        entry.id.length > 0 &&
+        isNonNegativeSafeInteger(entry.localIndex) &&
+        entry.localIndex < nextLocalIndex,
     )
   ) {
     return false;

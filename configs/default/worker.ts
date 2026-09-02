@@ -4,7 +4,11 @@ import { GuestbookApp } from "iterate/starter-apps/guestbook";
 import { MediaApp } from "iterate/starter-apps/media";
 import { NotesApp } from "iterate/starter-apps/notes";
 import { IterateWorkerEntrypoint, type StreamEvent } from "iterate/sdk";
-import { parsePromptSections } from "iterate/processors";
+import {
+  isIdempotencyConflict,
+  parsePromptSections,
+  userMessageDescriberSubscription,
+} from "iterate/processors";
 import { TodoApp } from "iterate/starter-apps/todo";
 
 const githubAiLinterRulePaths = [
@@ -115,6 +119,32 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
     if (failed !== undefined && failed.status === "rejected") throw failed.reason;
   }
 
+  /** Put the user-message describer facet on this agent's stream. The
+   * subscription filter derives from the package contract's consumes; the
+   * payload-hash idempotency key reinstalls on contract changes and dedupes
+   * otherwise. */
+  async #installUserMessageDescriber(agentPath: string): Promise<void> {
+    const payload = userMessageDescriberSubscription(agentPath, "user-message-describer.ts");
+    const digest = await crypto.subtle.digest(
+      "SHA-256",
+      new TextEncoder().encode(JSON.stringify(payload)),
+    );
+    const hash = [...new Uint8Array(digest).slice(0, 8)]
+      .map((byte) => byte.toString(16).padStart(2, "0"))
+      .join("");
+    try {
+      await this.itx.streams.get(agentPath).append({
+        type: "events.iterate.com/stream/subscription-configured",
+        idempotencyKey: `iterate/config/user-message-describer:${hash}`,
+        payload,
+      });
+    } catch (error) {
+      // An idempotency conflict means an earlier delivery already installed
+      // this subscription — losing that race is success.
+      if (!isIdempotencyConflict(error)) throw error;
+    }
+  }
+
   /**
    * BIRTH CONFIGURATION — the pattern to copy to customize how agents in
    * this project are born. The platform births every agent with coherent
@@ -140,6 +170,11 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
     // the platform's prompt and personality — only the release below
     // applies to them.
     const channelAgent = /^\/agents\/(slack|telegram|email|mcp)\//.test(agentPath);
+    // Rich attachment rendering: the reusable describer facet parses the
+    // mobile composer's html attachment parts into typed render facts.
+    // Installed for every agent (channel agents receive mobile-composed
+    // messages too); the payload-hash key makes re-installs no-ops.
+    await this.#installUserMessageDescriber(agentPath);
     const shaping = channelAgent ? [] : await this.#webAgentShaping();
     // ONE append call on purpose: the batch commits atomically, so a render
     // can never see a half-updated prompt.

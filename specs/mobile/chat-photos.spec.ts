@@ -54,14 +54,15 @@ test("multiple photos share a mosaic row; a lone tall one sits on its blurred ba
     })),
     // Long enough to wrap: a caption must not be able to stretch the bubble
     // wider than its photo, which would put bubble fill along the photo's
-    // edge — the exact gap this layout exists to remove. The <attachment>
-    // parts are what the composer sends (lib/composer-attachments.ts
-    // dimensionsXmlPart): exact pixel dimensions so the mosaic lays out
-    // right the first time, and metadata the caption must hide.
+    // edge — the exact gap this layout exists to remove. The <img> parts are
+    // what the composer sends (the html attachment vocabulary): the
+    // user-message-describer facet derives them into typed attachments, which
+    // is where the mosaic gets its exact dimensions and the caption its
+    // cleaned text.
     message: [
       "Here are their instructions, and a caption long enough that it has to wrap onto several lines inside the bubble",
-      '<attachment filename="phone-screenshot.png" width="390" height="844" />',
-      '<attachment filename="swim-email.png" width="720" height="480" />',
+      '<img alt="phone-screenshot.png" width="390" height="844">',
+      '<img alt="swim-email.png" width="720" height="480">',
     ].join("\n"),
   });
 
@@ -88,7 +89,12 @@ test("multiple photos share a mosaic row; a lone tall one sits on its blurred ba
   // spinner waiter holds on; the poll then only rides out the one reflow.
   const screenshot = page.getByLabel("phone-screenshot.png");
   const landscape = page.getByLabel("swim-email.png");
-  await expect.poll(async () => (await screenshot.boundingBox())?.width).toBeLessThan(100);
+  // The mosaic only lays out once the describer facet's derived dimensions
+  // land — its first build is server-side work with no loading UI for
+  // spinner-waiter, hence the manual timeout.
+  await expect
+    .poll(async () => (await screenshot.boundingBox())?.width, { timeout: 120_000 }) // timeout: describer facet cold build, invisible to spinner-waiter
+    .toBeLessThan(100);
   const screenshotBox = (await screenshot.boundingBox())!;
   const landscapeBox = (await landscape.boundingBox())!;
   expect(Math.round(screenshotBox.height)).toBe(Math.round(landscapeBox.height));
@@ -96,11 +102,12 @@ test("multiple photos share a mosaic row; a lone tall one sits on its blurred ba
   expect(landscapeBox.x).toBeGreaterThan(screenshotBox.x + screenshotBox.width - 1);
   expect(Math.round(screenshotBox.width + landscapeBox.width)).toBeGreaterThanOrEqual(276);
 
-  // The caption sits under the mosaic, never wider than it — and the
-  // <attachment .../> metadata lines are stripped from what a human sees.
+  // The caption sits under the mosaic, never wider than it — and the derived
+  // re-emission cleans the <img> part lines out of what a human sees (by the
+  // time the mosaic above laid out, the described fact has already landed).
   const caption = page.getByText("Here are their instructions,");
   await caption.waitFor();
-  expect(await caption.textContent()).not.toContain("<attachment");
+  expect(await caption.textContent()).not.toContain("<img");
   const captionBox = (await caption.boundingBox())!;
   expect(captionBox.y).toBeGreaterThan(landscapeBox.y);
   expect(captionBox.width).toBeLessThanOrEqual(281);
@@ -113,7 +120,7 @@ test("multiple photos share a mosaic row; a lone tall one sits on its blurred ba
   expect(await solo.boundingBox()).toMatchObject({ height: 340, width: 280 });
 
   // Audio + video attachments in one message: the video (dimensions known
-  // from its <attachment> part) draws as a playable tile — here with the
+  // from its derived <video> part) draws as a playable tile — here with the
   // placeholder face, since a browser build can't extract a thumbnail from
   // the deliberately-bogus bytes — and the audio draws the play/waveform
   // row. Real playback: the wav is genuine, so play flips to pause.
@@ -123,7 +130,7 @@ test("multiple photos share a mosaic row; a lone tall one sits on its blurred ba
       { contentType: "audio/wav", data: wav, filename: "voice-note.wav" },
       { contentType: "video/mp4", data: new Uint8Array([0, 0, 0, 0]), filename: "clip.mp4" },
     ],
-    message: '<attachment filename="clip.mp4" width="640" height="360" />',
+    message: '<video data-filename="clip.mp4" width="640" height="360"></video>',
   });
 
   // The file plane honors byte ranges — without this, iOS AVPlayer (expo-audio
@@ -152,14 +159,17 @@ test("multiple photos share a mosaic row; a lone tall one sits on its blurred ba
   await page.getByLabel("Close image").click();
 
   // A shared location renders as a tappable map card (OSM tiles + pin), not
-  // raw XML — the <user-location .../> part disappears from the caption.
+  // raw markup — the geo anchor part disappears from the caption once the
+  // described fact lands. The map card only exists in the DERIVED render, so
+  // waiting for it also proves the caption swap. Manual timeout: derivation
+  // is server-side work with no loading UI for spinner-waiter.
   await agent.message(
-    'Meet here\n<user-location latitude="51.5074" longitude="-0.1278" accuracy-meters="15" captured-at="2026-08-30T16:05:04.166Z" />',
+    'Meet here\n<a href="geo:51.5074,-0.1278" data-accuracy-m="15" data-captured-at="2026-08-30T16:05:04.166Z">Shared location</a>',
   );
-  await page.getByLabel(/Open location 51\.50740, -0\.12780 in maps/).waitFor();
+  await page.getByLabel(/Open location 51\.50740, -0\.12780 in maps/).waitFor({ timeout: 60_000 }); // timeout: describer derivation, invisible to spinner-waiter
   const locationCaption = page.getByText("Meet here");
   await locationCaption.waitFor();
-  expect(await locationCaption.textContent()).not.toContain("<user-location");
+  expect(await locationCaption.textContent()).not.toContain("geo:");
 });
 
 /** A real WAV: 8kHz mono 16-bit, 3s of a 440Hz tone — long enough that the

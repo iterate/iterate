@@ -47,6 +47,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import type { RpcStub } from "capnweb";
 import type { Agent, StreamEvent } from "iterate/sdk/itx/react";
+import { mosaicLayout } from "@iterate-com/ui/lib/mosaic-layout";
 import {
   ActivityCard,
   CodeBlock,
@@ -63,11 +64,8 @@ import {
   attachmentAssetId,
   attachmentKey,
   attachmentUploads,
-  messageWithXmlParts,
-  parseAttachmentDimensions,
-  parseUserLocations,
-  parseVoiceNoteTranscripts,
-  stripAttachmentXmlParts,
+  describedAttachment,
+  messageWithAttachmentParts,
   type ComposerAttachment,
 } from "../../../lib/composer-attachments.ts";
 import { LocationCard } from "../../../components/location-card.tsx";
@@ -86,7 +84,6 @@ import {
 } from "../../../lib/feed.ts";
 import { awaitingAgentActivity, latestAgentTitle } from "../../../lib/chat.ts";
 import { photoFrame, photoFrameMaxWidth, PHOTO_MAX_HEIGHT } from "../../../lib/photo-layout.ts";
-import { mosaicLayout } from "../../../lib/mosaic-layout.ts";
 import { getProjectItx } from "../../../lib/itx.ts";
 // APPROVAL_STREAM_EVENT_TYPES is module-level (identity-stable) on purpose:
 // useLiveEvents folds eventTypes into its connection-hook deps, so an inline
@@ -247,7 +244,7 @@ function ChatScreen() {
       // lazily from their local uris here, at send time); location becomes
       // an XML part appended to the text (lib/composer-attachments.ts).
       const uploads = await attachmentUploads(files, readFileBase64);
-      const message = messageWithXmlParts(input.message, files);
+      const message = messageWithAttachmentParts(input.message, files);
       const project = await getProjectItx(baseUrl!, projectId);
       const agent = project.agents.get(path) as RpcStub<Agent>;
       // create() is idempotent (its birth events carry deterministic
@@ -713,7 +710,13 @@ function PendingSendBubble({
   const message: AgentUiMessageItem = {
     kind: "user",
     id: `pending-${entry.clientId}`,
-    text: messageWithXmlParts(entry.message, displayFiles),
+    text: entry.message,
+    // Local derivation for the optimistic bubble: same mapping the wire
+    // parts come from, so the pending render matches the settled one.
+    attachments: displayFiles.flatMap((attachment) => {
+      const described = describedAttachment(attachment);
+      return described === null ? [] : [described];
+    }),
     timestampMs: entry.sentAtMs,
     files: entry.files.flatMap((attachment): AgentUiFileAttachment[] => {
       const key = attachmentKey(attachment);
@@ -830,19 +833,47 @@ function MessageBubble({ message }: { message: AgentUiMessageItem }) {
   const otherFiles = (message.files || []).filter(
     (file) => !isMedia(file) && !file.contentType.startsWith("audio/"),
   );
+  // Typed attachment metadata comes from the fold (a derivation processor
+  // parsed the composer's html parts into message.attachments — dims size
+  // frames before bytes load, transcripts sit under waveforms, locations
+  // become map cards). A message nothing described renders its raw text: no
+  // client-side format parsing, by design.
+  const knownDimensions: KnownDimensions = {};
+  const transcripts: Record<string, string> = {};
+  const locations: {
+    latitude: number;
+    longitude: number;
+    accuracyMeters: number | null;
+    capturedAt: string;
+  }[] = [];
+  for (const attachment of message.attachments || []) {
+    if (
+      (attachment.kind === "image" || attachment.kind === "video") &&
+      attachment.width !== undefined &&
+      attachment.height !== undefined
+    ) {
+      knownDimensions[attachment.filename] = {
+        width: attachment.width,
+        height: attachment.height,
+      };
+    }
+    if (attachment.kind === "audio" && attachment.transcript !== undefined) {
+      transcripts[attachment.filename] = attachment.transcript;
+    }
+    if (attachment.kind === "location") {
+      locations.push({
+        latitude: attachment.latitude,
+        longitude: attachment.longitude,
+        accuracyMeters: attachment.accuracyMeters === undefined ? null : attachment.accuracyMeters,
+        capturedAt: attachment.capturedAt || "",
+      });
+    }
+  }
   const photoWidth =
-    media.length > 0 || audios.length > 0 || message.text.includes("<user-location ")
+    media.length > 0 || audios.length > 0 || locations.length > 0
       ? photoFrameMaxWidth(window.width)
       : null;
-  // The composer sends each photo/video's pixel dimensions as an
-  // <attachment .../> part in the text, so frames can be sized before the
-  // media loads — no reflow. Shared locations arrive as <user-location .../>
-  // parts and render as map cards. Both are parsed here and hidden from the
-  // visible caption.
-  const knownDimensions = parseAttachmentDimensions(message.text);
-  const locations = parseUserLocations(message.text);
-  const transcripts = parseVoiceNoteTranscripts(message.text);
-  const caption = stripAttachmentXmlParts(message.text);
+  const caption = message.text;
   return (
     <View style={[styles.bubble, isUser ? styles.bubbleUser : styles.bubbleAssistant]}>
       {/* Media above the caption, the way every chat app puts it — and the
@@ -1138,7 +1169,7 @@ function MessagePhoto({
   );
 }
 
-type KnownDimensions = ReturnType<typeof parseAttachmentDimensions>;
+type KnownDimensions = Record<string, { width: number; height: number }>;
 
 /** One image-dimensions lookup per URL, cached for the thread's lifetime —
  * shared by the single-photo frame and the mosaic. */

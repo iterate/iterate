@@ -169,15 +169,67 @@ as a third member. Decisions 7/9/12 are satisfied in spirit; their letter
       deployment SHA, so previews test THIS branch's template) and asserts
       derived rendering with no raw tags. Preview-only until merge._
 
-### PR 2 — media cutover (stacked)
+### PR 2 — media cutover (stacked, branch `codemode-media-cutover`)
 
-- [ ] Mobile composer emits html vocabulary (decision 1) from
-      composer-attachments.ts; old xml part emission deleted.
-- [ ] Processor derives attachment facts (new vocabulary only).
-- [ ] Web attachment parity: mosaic, audio player + transcript, video
-      thumbnails/fullscreen, location cards, file rows.
-- [ ] Mobile presentation from facts; old client-side xml parsers deleted.
-- [ ] Export transform: mint fresh signed `src` at the edge (decision 2).
+**Vocabulary mapping** (old xml part → html part; each part sits alone on its
+own line after the message text, filenames key into the event's `files[]`,
+never a `src` — decision 2):
+
+| Old | New |
+| --- | --- |
+| `<attachment filename width height />` | `<img alt="IMG.png" width="1200" height="900">` |
+| `<voice-note filename duration-seconds transcript />` | `<audio data-filename="note.m4a" data-duration="7" data-transcript="…"></audio>` |
+| (video: attachment + client thumbnail) | `<video data-filename="clip.mov" width height poster="clip.thumb.jpg" data-duration="12"></video>` |
+| `[Files attached: …]` note | `<a type="application/pdf" data-size="9800000">report.pdf</a>` |
+| `<user-location latitude longitude accuracy-meters captured-at />` | `<a href="geo:51.5,-0.13" data-accuracy-m="15" data-captured-at="…">Shared location</a>` |
+
+**Derivation**: the codemode interpreter (already consuming
+`agents/context-added`) gains a user-role branch: parse the html parts →
+emit ONE durable `render/user-message-described { text, attachments: [...] }`
+fact, `source: {offset}` → the raw user event. `text` is the message with
+part lines stripped; `attachments` is the typed metadata (kind, filename,
+width/height, duration, transcript, poster, geo, size, contentType). This is
+the one NEW durable render type (the amendment's rule: platform vocabulary
+carries facts that already exist; nothing existed for user attachments).
+
+**Fold**: the reducer re-emits the user item (same `user-<sourceOffset>` id —
+the feed projector upserts by id, the same lane settled activities update
+through) with the derived text + attachments. No processor → the raw item
+stands, html parts showing as text (decision 4: hideous, accepted).
+
+**Web parity**: mosaic layout math (`apps/mobile/src/lib/mosaic-layout.ts`)
+and waveform helpers are pure TS — move to packages/ui for reuse; new web
+components render `item.attachments` (media mosaic, audio row + transcript,
+video poster + playback, location card, file rows) with urls from `files[]`.
+
+**Mobile**: presentation moves onto the fold's attachments;
+`parseAttachmentDimensions` / `parseVoiceNoteTranscripts` /
+`parseUserLocations` / `stripAttachmentXmlParts` and the xml emitters are
+deleted (decision 4: no dual-parse period).
+
+- [x] `render/user-message-described` durable definition — lives with its
+      parser/emitter in iterate/processors user-message-describer.ts.
+- [x] Mobile composer emits html vocabulary from composer-attachments.ts; old
+      xml part emission deleted; unit tests pin the emitter↔parser round trip.
+- [x] The DESCRIBER derives user-message-described (new vocabulary only) —
+      a separate reusable facet processor in the package, installed by BOTH
+      templates (the composer is the same mobile app on every project;
+      default-template chats need derivation too).
+- [x] Reducer folds it (bounded recent-user-messages window, queued-message
+      patching, item re-emission under the original id) and the feed
+      projector replaces the row in place (schema v9); tests.
+- [x] Web attachment parity: message-rich-attachments.tsx — media mosaic
+      (mosaic-layout moved to packages/ui, shared with mobile), native audio
+      + transcript, video, location cards, file rows; plain chips only for
+      underived files.
+- [x] Mobile presentation from the fold's message.attachments; legacy xml
+      parsers and strip helpers deleted; pending bubbles derive locally so
+      optimistic and settled renders match.
+- [ ] Export transform: mint fresh signed `src` at the edge (decision 2) —
+      split out as follow-up (nothing consumes an export yet).
+- [x] Spec: specs/agent-attachment-rendering.spec.ts — default-template
+      project, server-appended composer wire shape, asserts derived caption +
+      location card and no raw part syntax.
 
 ### Follow-ups
 
