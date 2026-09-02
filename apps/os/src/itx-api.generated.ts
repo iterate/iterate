@@ -3066,6 +3066,7 @@ export type StreamEvent = {
               whileProcessing?: { offset: number; type: string } | undefined;
             }
           | undefined;
+        offset?: number | undefined;
         copiedFrom?:
           | {
               name: string;
@@ -3900,6 +3901,7 @@ export type StreamEventInput = {
               whileProcessing?: { offset: number; type: string } | undefined;
             }
           | undefined;
+        offset?: number | undefined;
         copiedFrom?:
           | {
               name: string;
@@ -4057,6 +4059,7 @@ export type CommittedSubscriptionConfiguredEvent = Omit<
                 whileProcessing?: { offset: number; type: string } | undefined;
               }
             | undefined;
+          offset?: number | undefined;
           copiedFrom?:
             | {
                 name: string;
@@ -4095,6 +4098,7 @@ export type CommittedSubscriptionConfiguredEvent = Omit<
                   whileProcessing?: { offset: number; type: string } | undefined;
                 }
               | undefined;
+            offset?: number | undefined;
             copiedFrom?:
               | {
                   name: string;
@@ -4461,6 +4465,7 @@ export type CommittedSubscriptionRemovedEvent = Omit<
                 whileProcessing?: { offset: number; type: string } | undefined;
               }
             | undefined;
+          offset?: number | undefined;
           copiedFrom?:
             | {
                 name: string;
@@ -4499,6 +4504,7 @@ export type CommittedSubscriptionRemovedEvent = Omit<
                   whileProcessing?: { offset: number; type: string } | undefined;
                 }
               | undefined;
+            offset?: number | undefined;
             copiedFrom?:
               | {
                   name: string;
