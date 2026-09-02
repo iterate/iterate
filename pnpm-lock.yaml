@@ -65,7 +65,7 @@ patchedDependencies:
     hash: 628f45a8b65f5811216d637fb5cc4584db8f69a125d1ae417c4e49bc38ebca83
     path: patches/@journeyapps__wa-sqlite@1.7.0.patch
   '@mediapipe/tasks-vision@0.10.35':
-    hash: e5abf7f3b72315b78a29afcdd65eac4f6bdcf6a083b2c70a788b25fa795536f2
+    hash: 02a9460674b3f5052d1951b1aed6de3fe929c8f688675c191cd41462bcb63ed4
     path: patches/@mediapipe__tasks-vision@0.10.35.patch
 
 importers:
@@ -606,7 +606,7 @@ importers:
         version: link:../../packages/ui
       '@mediapipe/tasks-vision':
         specifier: 0.10.35
-        version: 0.10.35(patch_hash=e5abf7f3b72315b78a29afcdd65eac4f6bdcf6a083b2c70a788b25fa795536f2)
+        version: 0.10.35(patch_hash=02a9460674b3f5052d1951b1aed6de3fe929c8f688675c191cd41462bcb63ed4)
       '@noble/curves':
         specifier: ^2.2.0
         version: 2.2.0
@@ -16881,7 +16881,7 @@ snapshots:
       lit: 3.3.3
       tslib: 2.8.1
 
-  '@mediapipe/tasks-vision@0.10.35(patch_hash=e5abf7f3b72315b78a29afcdd65eac4f6bdcf6a083b2c70a788b25fa795536f2)': {}
+  '@mediapipe/tasks-vision@0.10.35(patch_hash=02a9460674b3f5052d1951b1aed6de3fe929c8f688675c191cd41462bcb63ed4)': {}
 
   '@mermaid-js/parser@1.0.0':
     dependencies:
