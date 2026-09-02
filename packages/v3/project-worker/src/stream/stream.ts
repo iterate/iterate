@@ -87,7 +87,7 @@ interface StreamDeps {
 /** THE STREAM — the commit point: SQLite rows + ONE kv high-water mark, idempotency at the door,
  *  offsets assigned from one shared sequence (ephemeral events consume offsets, never rows — after
  *  a reboot their offsets survive as valid gaps), and THE CORE REDUCE (core-processor.ts) reduced
- *  inside every commit: the stream's own state — who it is, its incarnation, pause, mounts,
+ *  inside every commit: the stream's own state — who it is, its incarnation, pause, rewrite rules,
  *  subscriptions — checkpointed with the rows it was reduced from. A body over EVENT_CHUNK_SIZE is
  *  chunked into `event_chunks` rows keyed (offset, chunk_index) — INVISIBLE to the events table, so a
  *  chunked event is still ONE row at ONE offset; reads and idempotency-dedupe reassemble it. */
@@ -217,7 +217,7 @@ export class Stream {
   }
 
   /** The core reduced state, current as of the last commit: who this context is, its incarnation,
-   *  pause, the capability mounts, the subscription rows. What the append door, the dispatcher and the
+   *  pause, the rewrite rules, the subscription rows. What the append door, the dispatcher and the
    *  delivery loop read — synchronously. */
   get coreReducedState(): CoreState {
     return this.#coreReducedState;

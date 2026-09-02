@@ -1,16 +1,22 @@
-# Design: the onion — rpcStubs → mounts → subscriptions → processors
+# Design: the onion — rpcStubs → rewrite rules → subscriptions → processors
 
 > Synthesis of six candidate designs (five subagents with opposed stances, plus my own baseline),
 > written against HEAD `69080fd9e` (C7), revised after the first annotation round. Section 1 is the
 > recommendation. Section 7 ends with the honest "what you actually lose" list. Section 8 shows where
-> the candidates disagreed and why each choice went the way it did. Nothing here is code yet.
+> the candidates disagreed and why each choice went the way it did. Nothing here was code when it was
+> written. Sections 0–6 are kept in line with the code AS BUILT — including the itx-surface rename
+> of 2026-09-02 (`docs/proposals/itx-surface-SYNTHESIS.md`, §9 "as built"): the noun is **rewrite
+> rule** (`{ match, target }`, ONE event `itx/rewrite-rule-configured { match, target | null }`, a MAP
+> by canonical match), a live value enters through `provide(rpcStubKey, { stub, rewrite? })` under an
+> OPAQUE key, the dispatch door is `invoke`, and every verb hands back a DISPOSABLE handle. Sections
+> 7–9 are the decision and sequence record and keep the names of their day.
 
 ## 0. Your constraints, restated as the rules this design obeys
 
 - **The interface is events, except the axiomatic built-ins.** Physical facts live in a built-in;
   events are pure data that name things by expression. No discriminator flags on events.
 - **Layering.** Low axioms (`rpcStubs` and its presence events, the stream, `facets`, `load`) at
-  the core; mounts, subscriptions, and processors are successive layers that only use what is
+  the core; rewrite rules, subscriptions, and processors are successive layers that only use what is
   below them. Sugar is kept visibly apart from axioms. `itx.connections` could one day be one more
   layer over `rpcStubs`. Not built here.
 - **Sessions like apps/os**: `authenticate().projects.get(id)` returns the root context; `cd` takes
@@ -38,15 +44,15 @@
 flowchart TB
   subgraph L0["Layer 0 — axioms (built-ins, physical or platform)"]
     stream["stream: append · read · waitForEvent"]
-    stubs["rpcStubs: provide · get · list<br/>+ ephemeral attached/detached events"]
+    stubs["rpcStubs: get(rpcStubKey) · list — lent by the edge's provide<br/>+ ephemeral attached/detached { rpcStubKey } events"]
     facets["facets · load (Worker Loader)"]
     misc["kv · whoami · cd · fetch (egress)"]
   end
-  subgraph L1["Layer 1 — mounts (capability table: own events, a slice of the core reduce)"]
-    mount["capability-provided { path, target }<br/>a live provide = lend to rpcStubs + mount itx.rpcStubs.get(path)"]
+  subgraph L1["Layer 1 — itx-expression rewrite rules (ONE event, a slice of the core reduce)"]
+    rule["itx/rewrite-rule-configured { match, target | null } — a MAP by canonical match<br/>provide(rpcStubKey, { stub, rewrite }) = lend to rpcStubs + rule rewrite ⇒ itx.rpcStubs.get(rpcStubKey)"]
   end
   subgraph L2["Layer 2 — subscriptions (own events, reduced by the core reduce + ONE delivery loop)"]
-    sub["subscription-configured { name, target, consumes? }<br/>push if the target owns progress (facet / rpc stub)<br/>else the stream keeps a kv cursor, at-least-once"]
+    sub["subscription-configured { name, target | null, consumes? }<br/>push if the target owns progress (facet / rpc stub)<br/>else the stream keeps a kv cursor, at-least-once"]
     view["itx.subscriptions.list() / get(name): rows ⋈ cursors"]
   end
   subgraph L3["Layer 3 — processors (sugar)"]
@@ -59,27 +65,32 @@ flowchart TB
 ```
 
 Client usage, the whole surface in one block. Lines marked SUGAR are compositions of the lines above
-them (section 6 keeps the two groups apart in the code too):
+them (section 6 keeps the two groups apart in the code too). Every verb that returns a handle
+returns a DISPOSABLE one (`using`); capnweb disposes it at session end, so a rule or subscription
+made through the verb is SESSION-SCOPED — the durable spelling is the raw event through
+`itx.append(...)`. Sources are handed over INLINE:
 
 ```ts
 using api = newWebSocketRpcSession("wss://<worker>/api");
 const itx = api.authenticate().projects.get("prj_123"); // the project ROOT context
 const agent = itx.cd("/agents/support"); // absolute by convention; relative and ".." also resolve
 
-await itx.provide("itx.greet", "itx.load(\"itx.kv.get('greet.js')\").getEntrypoint()"); // a mount
-await itx.provide("itx.robot", robotObject); // SUGAR: lends to rpcStubs + mounts itx.rpcStubs.get('itx.robot')
+const greetSource = { type: "inline", files: { "greet.js": GREET_SRC } };
+using greet = await itx.rewrite("itx.greet", ["itx", ["load", greetSource], ["getEntrypoint"]]); // a rewrite rule
+using robot = await itx.provide("robot", { stub: robotObject, rewrite: "itx.robot" }); // SUGAR: lends to rpcStubs under the opaque key + rule itx.robot ⇒ itx.rpcStubs.get('robot')
 await itx.rpcStubs.list(); // presence, physical
+await itx.expressionRewriteRules.list(); // the rules, printed
 
-await itx.subscribe({ name: "tab", target: (events, range) => render(events) }); // SUGAR; push (see "range" below)
-await itx.subscribe({
+using tab = await itx.subscribe({ name: "tab", target: (events, range) => render(events) }); // SUGAR; push (see "range" below)
+using worker = await itx.subscribe({
   name: "worker",
   target: "itx.greet.processEventBatch",
   consumes: ["task/created"],
 }); // cursor, at-least-once
 await itx.enableProcessor("presence", {
-  source: "itx.kv.get('presence.js')",
+  source: { type: "inline", files: { "presence.js": PRESENCE_SRC } },
   className: "PresenceDurableObject", // the host; `processor = new PresenceProcessor()` inside
-}); // SUGAR over subscribe
+}); // SUGAR over the subscription event; DURABLE (no handle) — disableProcessor is the inverse
 await itx.facets.get("presence").snapshot();
 await itx.subscriptions.list(); // config rows joined with cursors and halts
 ```
@@ -94,7 +105,9 @@ what the live-state client already does, and it is why a browser tab needs no se
 ## 2. Layer 0 — the axioms
 
 Unchanged from C7 except: `fetch` becomes a root, `rpcStubs` gains presence events,
-`getEntrypoint` takes Cloudflare's own `props`, and `connectToCapnweb` leaves.
+`getEntrypoint` takes Cloudflare's own `props`, and `connectToCapnweb` leaves. AS BUILT, three more
+roots: `waitForEvent` (so the edge declares nothing for it) and the two READ views of core's
+slices, `expressionRewriteRules` and `subscriptions`.
 
 ```ts
 interface BuiltInScope {
@@ -107,12 +120,18 @@ interface BuiltInScope {
   };
   append(...events: StreamEventInput[]): Promise<StreamEvent[]>;
   read(afterOffset?: number, limit?: number): Promise<StreamPage>;
+  waitForEvent(filter?: WaitForEventFilter): Promise<StreamEvent>;
   /** Absolute by convention ("/agents/x"); relative and ".." also resolve. Same resolver as the edge `cd`. */
-  cd(path: string): ContextHandle;
+  cd(path: string): InvokeHandle;
   /** Egress: {{secret:project:NAME}} substituted here, then FALLBACK. Loaded code's globalOutbound already lands here. */
   fetch(request: Request): Promise<Response>;
-  /** THE physical registry. Keys are canonical dotted paths. */
-  rpcStubs: { get(key: string): RpcStubHandle; list(): string[] };
+  /** THE physical registry. Keys are OPAQUE rpcStubKeys the lender picks; a rewrite rule names one as itx.rpcStubs.get('<rpcStubKey>'). */
+  rpcStubs: { get(rpcStubKey: string): RpcStubHandle; list(): string[] };
+  /** The rewrite-rule table, READ (a slice of core, printed). Written only by the ONE event. */
+  expressionRewriteRules: {
+    list(): { match: string; target: string }[];
+    get(match: string): { match: string; target: string } | null;
+  };
   /** A facet that is already running, by name. Re-materializes from the parent's startup memo after eviction. */
   facets: { get(name: string): FacetHandle; delete(name: string): void };
   load(source: WorkerSource): {
@@ -146,57 +165,72 @@ export default class extends WorkerEntrypoint {
 ```
 
 ```ts
-await itx.provide(
-  "itx.os",
-  "itx.load(\"itx.kv.get('remote.js')\").getEntrypoint(undefined, { props: { url: 'https://os.iterate.com/api' } })",
-);
+const remoteSource = { type: "inline", files: { "remote.js": REMOTE_SRC } };
+using os = await itx.rewrite("itx.os", [
+  "itx",
+  ["load", remoteSource],
+  ["getEntrypoint", undefined, { props: { url: "https://os.iterate.com/api" } }],
+]);
 ```
 
 **Presence events (new).** The rpcStub layer appends two **ephemeral** events on its own
 transitions, so the log never claims a socket is open but a live watcher can see it change:
 
 ```ts
-"events.iterate.com/rpc-stub/attached" (ephemeral): { key: string }   // pager opened for key
-"events.iterate.com/rpc-stub/detached" (ephemeral): { key: string }   // final close for key
+"events.iterate.com/rpc-stub/attached" (ephemeral): { rpcStubKey: string }   // first pager opened for the key
+"events.iterate.com/rpc-stub/detached" (ephemeral): { rpcStubKey: string }   // last pager closed for the key
 ```
 
 Nothing reduces them (ephemerals never reach an inline reduce). A UI subscribes with
 `consumes: ["events.iterate.com/rpc-stub/attached", ".../detached"]` and seeds from `rpcStubs.list()`.
 
-## 3. Layer 1 — mounts
+## 3. Layer 1 — itx-expression rewrite rules
 
-Exactly C7. `capability-provided { path, target }`, `capability-revoked { providedAtOffset }`,
-shadow stack, longest path wins, built-ins first, idempotent door. The `delivery`, `processor` and
-`lane` fields are deleted (contract 5.0.0). `itx.subscribers.*` stops being a convention; a mount is
-a name for a target and nothing else.
+AS BUILT (`context/itx-expression-rewriting.ts`): a rewrite rule is `{ match, target }` — a call
+that starts with `match` runs as the same call with `match` replaced by `target`; `match` is an
+`ItxExpressionPrefix` (dotted names, any step may pin literal args, which the match CONSUMES),
+`target` an `itx.…` expression. ONE event, `itx/rewrite-rule-configured { match, target | null }`
+(`rewriteRuleConfiguredEvent`, both halves canonicalized through the codec, string at rest), reduced
+by the core reduce into `state.itxExpressionRewriteRules`, a MAP by canonical match: a configured
+target REPLACES the entry, `null` DELETES it — no shadow stack, no removal by identity, no offset on
+a row. Built-ins first; then the most SPECIFIC matching rule (longest match, then most pinned args)
+rewrites the call, repeating until the root is a built-in (32-rewrite budget; no match ⇒
+`NO_ITX_EXPRESSION_MATCH`, default-deny). The `delivery`, `processor` and `lane` fields of the old
+row are gone; `itx.subscribers.*` stops being a convention; a rewrite rule is a name for a target
+and nothing else. The edge verb is `rewrite(match, target | null)` → a disposable
+`SessionScopedHandle`; a live value enters through `provide(rpcStubKey, { stub, rewrite? })`, which
+lends under the OPAQUE key and configures the rule `rewrite ⇒ itx.rpcStubs.get('<rpcStubKey>')`.
+The rule dies with the stub: the handle's dispose un-sets it from the edge, and when the key's LAST
+pager closes the DO un-sets every rule and subscription whose target is that stub (a reconnect
+replaces the pager and is not a close).
 
 ## 4. Layer 2 — subscriptions
 
 ### 4.1 Events and reduce
 
-Four events of the layer's own, reduced by the ONE core reduce (`stream/core-processor.ts`,
-`CoreStreamProcessor`, slug `core`, contract 3.0.0 — the `subscriptions` slice beside `mounts`).
-DECIDED 2026-09-02, reversing this doc's earlier "own inline reduce beside `core` and
-`capability-table`" (§8): the layering lives in the EVENTS, and one reduce serves every synchronous
-reader — the append door, the dispatcher, the delivery loop. Jonas: "a core stream processor that
-controls all the reduced state that is needed synchronously before append… the token bucket runs in
-a facet and appends stream/paused." `stream/subscriptions.ts` is the two COMMANDS that build the
-first two events (`subscriptionConfiguredEvent` / `subscriptionRemovedEvent`, `null` = idempotent
-no-op); the DO appends them. apps/os event names.
+Three events of the layer's own, reduced by the ONE core reduce (`stream/core-processor.ts`,
+`CoreStreamProcessor`, slug `core`, contract 4.0.0 — the `subscriptions` slice beside
+`itxExpressionRewriteRules`). DECIDED 2026-09-02, reversing this doc's earlier "own inline reduce
+beside `core` and a separate rule reduce" (§8): the layering lives in the EVENTS, and one reduce
+serves every synchronous reader — the append door, the dispatcher, the delivery loop. Jonas: "a core
+stream processor that controls all the reduced state that is needed synchronously before append… the
+token bucket runs in a facet and appends stream/paused." `stream/subscriptions.ts` is the ONE
+COMMAND that builds the first event (`subscriptionConfiguredEvent({ name, target | null, consumes? })`
+— `target: null` removes the row; removal is not a second event); the edge appends it through
+`invoke(["itx", ["append", event]])`. apps/os event names.
 
 ```ts
 "events.iterate.com/stream/subscription-configured": {
-  name: string;          // [A-Za-z0-9_-]+; same name REPLACES (no stack — an enablement wants replace, an alias wants shadow)
-  target: string;        // an itx expression whose terminal is callable with (events: StreamEvent[], range: ScannedRange)
+  name: string;          // [A-Za-z0-9_-]+; same name REPLACES (no stack — an enablement wants replace)
+  target: string | null; // an itx expression whose terminal is callable with (events: StreamEvent[], range: ScannedRange); null REMOVES the row (and a cursor target's cursor)
   consumes?: string[];   // consumesEvent rule: absent = every durable event; naming a type opts its ephemerals in
 }
-"events.iterate.com/stream/subscription-removed":          { name: string }
 "events.iterate.com/stream/subscription-delivery-halted":  { name: string; afterOffset: number; attempts: number; error?: string }  // appended by the loop
 "events.iterate.com/stream/subscription-delivery-resumed": { name: string; afterOffset?: number }   // operator: un-halt, optionally seek
 
 // reduced state
 subscriptions: Record<string, {
-  target: Expression; consumes?: string[]; configuredAtOffset: number;
+  target: ItxExpression; consumes?: string[]; configuredAtOffset: number;
   halted?: { afterOffset: number; attempts: number; error?: string };
   resumed?: { afterOffset?: number; atOffset: number };            // level-triggered onto the cursor row
 }>;
@@ -231,7 +265,7 @@ onCommit(fresh, scannedAfter, next):
     chain(name, async () => {
       { callee, method } = evaluateHead({ itx }, sub.target)      // everything but the final property step
       if callee is FacetHandle or RpcStubHandle:                 // IT OWNS ITS PROGRESS
-        callOn(callee, method, [events, { after, through: next }])   // fire-and-forget; swallow CONNECTION_OFFLINE, log the rest
+        callOn(callee, method, [events, { after, through: next }])   // fire-and-forget; swallow RPC_STUB_OFFLINE, log the rest
       else:                                                      // it cannot: THE STREAM KEEPS THE CURSOR
         cursorLane.push(name, sub, events, after, next)
     })
@@ -252,8 +286,9 @@ alarm(): pump every cursor row that is due; then the idle quiesce as today
 facet stub or a lent rpc stub owns its own progress (the facet's checkpoint and gap repair; the
 client's offset and `read`), so it gets a push. Anything else, a Worker Loader entrypoint, a sibling
 context, a remote capnweb API, cannot own progress, so the context keeps a cursor and awaits each
-call as the acknowledgement. Nothing is declared, stamped, or re-sniffed from a string; an alias
-classifies correctly because it evaluates to the same handle.
+call as the acknowledgement. Nothing is declared, stamped, or re-sniffed from a string; a rewrite
+rule whose target names another rule's prefix classifies correctly because it evaluates to the same
+handle.
 
 The cursor lane is kernel code in the DO over the DO's own kv and the DO's own alarm, which is what
 apps/os does (`StreamEventSender` in the stream DO) and what Cloudflare ships. It is not a facet
@@ -264,17 +299,22 @@ processor: that shape needed an alarm proxy facets do not have (workerd#6810, st
 
 ```ts
 /** A LIVE target is lent under key `itx.subscriptions.<name>` and configures target
- *  "itx.rpcStubs.get('itx.subscriptions.<name>')"; an expression is stored as written. Same name
- *  replaces; an identical config appends NOTHING, so a reconnect is zero events. */
-subscribe(input: { name?: string; target: ItxExpression | ProviderStub; consumes?: string[] }): Promise<{ name: string }>;
-/** Appends subscription-removed; recalls the stub this session lent under the key, if any. */
-unsubscribe(name: string): Promise<void>;
+ *  "itx.rpcStubs.get('itx.subscriptions.<name>')"; an expression is stored as written; `null`
+ *  removes the row. Same name replaces. Literally `append(subscriptionConfiguredEvent(…))` — the
+ *  returned handle removes the row (and recalls the lent callback) when disposed or when the
+ *  session ends. */
+subscribe(input: { name?: string; target: ItxExpressionInput | LiveValue | null; consumes?: string[] }): Promise<SubscriptionHandle>;
+class SubscriptionHandle extends SessionScopedHandle { get name(): string; [Symbol.dispose](): void }
 ```
 
-An unnamed subscription gets `sub-<8 hex>` and is session-scoped: the session's dispose
-unsubscribes it (best effort). A named one is durable by intent; when its tab dies the row stays,
-pushes hit `CONNECTION_OFFLINE` and are swallowed, and the next `subscribe` with the same name
-re-lends with zero events.
+AS BUILT there is no `unsubscribe`: `subscribe({ name, target: null })` is the removal, and every
+`subscribe` hands back a DISPOSABLE `SubscriptionHandle` (`name` is the generated `sub-<8 hex>` when
+none was given). capnweb disposes every exported handle when the session ends, so a subscription made
+through the verb — named or not — is SESSION-SCOPED; a row that must outlive its session is the raw
+event, `itx.append(subscriptionConfiguredEvent({ name, target, consumes }))`. When a lent callback's
+LAST pager closes, the DO itself un-sets the row (and every rewrite rule targeting that stub) — a
+reconnect replaces the pager and is not a close; a push that races the un-set hits
+`RPC_STUB_OFFLINE` and is swallowed. A `subscribe` with the same name re-lends and replaces the row.
 
 Live-state mode is not a mode: `subscribe({ target: fn, consumes: ["events.iterate.com/live-state/changed"] })`
 and the client filters `payload.key`. The rule that no processor may reduce a live-state delta moves
@@ -348,9 +388,9 @@ returns, for a different reason than there (unit-testability, not facet-vs-DO ho
 
 With the forwarder re-homed into the kernel, nothing the platform NEEDS runs as a facet processor.
 The one built-in `StreamProcessor` is the core reduce — slug `core`, reducing the context's own
-control events (`stream/created`, `stream/woken`, `stream/paused`, `stream/resumed`, the two
-capability-table events, the four subscription events) into
-`{ projectId, path, createdAt, incarnation, paused, mounts, subscriptions }`, hosted inline at the
+control events (`stream/created`, `stream/woken`, `stream/paused`, `stream/resumed`, the one
+rewrite-rule event, the three subscription events) into
+`{ projectId, path, createdAt, incarnation, paused, itxExpressionRewriteRules, subscriptions }`, hosted inline at the
 commit point because every reader is synchronous. Anything that is NOT needed synchronously before
 an append is not built in at all: the token-bucket breaker left core (2026-09-02) and is
 `BreakerProcessor` (`e2e/support/sources.ts`), an ordinary userspace facet processor that reduces
@@ -363,8 +403,8 @@ facet-spine demo, so it becomes what the demo's `PresenceProcessor` already is: 
 root an earlier draft proposed. `enableProcessor` always has a source:
 
 ```
-enableProcessor(name, { source, className }) ⇒ subscribe({ name, target: `itx.load(${src}).getDurableObjectClass('${className}').get('${name}').processEventBatch` })
-disableProcessor(name)                       ⇒ unsubscribe(name); itx.facets.delete(name)      // storage included
+enableProcessor(name, { source, className, consumes? }) ⇒ append(subscriptionConfiguredEvent({ name, target: `itx.load(${src}).getDurableObjectClass('${className}').get('${name}').processEventBatch`, consumes }))  // DURABLE: returns { name }, no handle
+disableProcessor(name)                                  ⇒ append(subscriptionConfiguredEvent({ name, target: null })); itx.facets.delete(name)      // storage included
 ```
 
 A userspace processor, plain JS, two classes — the pure processor and its one-line host:
@@ -417,8 +457,9 @@ export default class extends WorkerEntrypoint {
 ```
 
 ```ts
-await itx.provide("itx.worker", "itx.load(\"itx.kv.get('worker.js')\").getEntrypoint()");
-await itx.subscribe({ name: "project-worker", target: "itx.worker.processEventBatch" });
+const workerSource = { type: "inline", files: { "worker.js": WORKER_SRC } };
+using worker = await itx.rewrite("itx.worker", ["itx", ["load", workerSource], ["getEntrypoint"]]);
+using sub = await itx.subscribe({ name: "project-worker", target: "itx.worker.processEventBatch" });
 (await itx.subscriptions.get("project-worker")).cursor; // { confirmedOffset, attempt, nextAttemptAtMs? }
 await itx.append({
   type: "events.iterate.com/stream/subscription-delivery-resumed",
@@ -429,37 +470,64 @@ await itx.append({
 ## 6. The edge surface, complete — axioms apart from sugar
 
 ```ts
-class UnauthenticatedSession extends RpcTarget { authenticate(credentials?: unknown): Session; [Symbol.dispose](): void }  // what /api serves; no-op gate today; dispose: relays + anonymous subscriptions
-class Session extends RpcTarget { get projects(): ProjectCollection }                                // a GETTER: capnweb exposes prototype members only
-class ProjectCollection extends RpcTarget { get(projectId: string): IterateContext }               // the ROOT context; pure addressing
+class UnauthenticatedSession extends RpcTarget {
+  authenticate(credentials?: unknown): Session;
+  [Symbol.dispose](): void;
+} // what /api serves; no-op gate today; dispose: relays + anonymous subscriptions
+class Session extends RpcTarget {
+  get projects(): ProjectCollection;
+} // a GETTER: capnweb exposes prototype members only
+class ProjectCollection extends RpcTarget {
+  get(projectId: string): IterateContext;
+} // the ROOT context; pure addressing
 
-// iterate-context.ts — the declared doors are the ones that NEED the edge (a session-held stub to lend, an EDGE context, the dispatch door, a wait with no built-in root)
+// iterate-context.ts — A PROXY IN FRONT OF THE DO. Declares only what must be edge code, in the order the tutorial builds them;
+// every DO built-in root (append · read · waitForEvent · fetch · whoami · kv · rpcStubs.get/list · expressionRewriteRules · facets · subscriptions · load · runScript)
+// and every rewrite rule ride the prototype hop into ONE invoke(expression) with ZERO code here.
 class IterateContext extends RpcTarget {
-  cd(path: string): IterateContext;                                    // absolute by convention; returns an EDGE context
-  invokeCapability(call: ItxExpression): Promise<unknown>;             // THE dispatch door; a terminal .fetch(Request) rides the fetch lane (root egress included)
-  waitForEvent(filter?: WaitForEventFilter): Promise<StreamEvent>;    // an HTTP-batch client's only "next event"
-  [dotted: string]: unknown;   // the DO built-ins — append · read · fetch · whoami · kv · rpcStubs.get/list · facets · subscriptions · load · runScript — and every mount
+  cd(path: string): IterateContext; // pure addressing, zero DO hops; returns an EDGE context
+  invoke(call: ItxExpressionInput): Promise<unknown>; // THE dispatch door; a terminal .fetch(Request) rides the fetch lane (x-itx-expression; root egress included)
+  // (a) rpc stubs — THE ONE PHYSICAL ACT: the client's capnweb stub must live in this stateless worker, never in the DO
+  provide(
+    rpcStubKey: string,
+    provided: { stub: LiveValue; rewrite?: ItxExpressionInput },
+  ): Promise<SessionScopedHandle>; // lend under the OPAQUE key (+ the rule rewrite ⇒ itx.rpcStubs.get('<rpcStubKey>'))
+  // (b) rewrite rules · subscriptions · processors — each is visibly "build the event, append it" (the DO has append and no configuration verbs)
+  rewrite(
+    match: ItxExpressionInput,
+    target: ItxExpressionInput | null,
+  ): Promise<SessionScopedHandle>;
+  subscribe(input: {
+    name?: string;
+    target: ItxExpressionInput | LiveValue | null;
+    consumes?: string[];
+  }): Promise<SubscriptionHandle>;
+  enableProcessor(
+    name: string,
+    ref: { source: WorkerSource; className: string; consumes?: string[] },
+  ): Promise<{ name: string }>; // DURABLE, no handle
+  disableProcessor(name: string): Promise<void>;
+  [dotted: string]: unknown; // everything else
 }
-
-// SUGAR — the second banded section of the SAME class (no second file: a prototype-installed sugar.ts would need declaration merging to type).
-// Each is a one-line composition and appends no event shape of its own; a live value is lent by a private relay step (#lendStub), never a client-facing verb.
-provide(path: string, target: ItxExpression | ProviderStub): Promise<{ providedAtOffset: number }>;   // fn ⇒ lend the stub + mount itx.rpcStubs.get(path)
-revoke(input: string | { providedAtOffset: number }): Promise<void>;                                 // + close this session's stub at that path
-subscribe(input: { name?: string; target: ItxExpression | ProviderStub; consumes?: string[] }): Promise<{ name: string }>;
-unsubscribe(name: string): Promise<void>;
-enableProcessor(name: string, ref: { source: WorkerSource; className: string; consumes?: string[] }): Promise<{ name: string }>;
-disableProcessor(name: string): Promise<void>;
+class SessionScopedHandle extends RpcTarget {
+  [Symbol.dispose](): void;
+} // provide / rewrite: disposing (or session end) undoes the act
+class SubscriptionHandle extends SessionScopedHandle {
+  get name(): string;
+} // subscribe: the generated name when none was given
 ```
 
-Banding the class this way is the answer to "could we separate the sugar from the axiomatic base
-layer": the client still holds one `itx`, but the code reads as the tutorial does, axioms first and
-everything else composition. `provide(path, expression)` with a string target is itself an append
-(`capability-provided`) and could live in either half; it sits with the sugar so the axiom half
-contains nothing that appends a Layer 1 or Layer 2 event.
+The banding survives: the client still holds one `itx`, but the code reads as the tutorial does —
+the physical act first, then verbs that are nothing but `append` plus a handle. `rewrite` and
+`subscribe` are declared on the edge only because their target may be a live value (which only the
+edge can lend); `enableProcessor` / `disableProcessor` because they are two appends spelled for you.
+Every verb that returns a handle returns a DISPOSABLE one, and capnweb disposes it at session end,
+so a rule or subscription made through the verb is session-scoped — the durable spelling is the raw
+event. Processors are durable configuration on purpose (no handle).
 
-Gone: `ProjectSession.get`, `?ctx=` on `/api` (`/cap` takes `?context=`; sub-contexts via `cd` in
-the expression), `fetchCap`, `resumeSubscription`, `provide(opts)`, `unsubscribe({ name })`,
-`connectToCapnweb`.
+Gone: `ProjectSession.get`, `?ctx=` on `/api` (`/expression` takes `?context=` and `?itx=`;
+sub-contexts via `cd` in the expression), `fetchCap`, `resumeSubscription`, `provide(opts)`,
+`revoke`, `unsubscribe`, `connectToCapnweb`; the DO's configuration verbs.
 
 ## 7. What is deleted, what is added, what you actually lose
 
@@ -563,14 +631,17 @@ never a file here (egress lives in `../shared`). `core/` is gone — it was not 
 ```text
 src/
   worker.ts  session.ts  iterate-context.ts  iterate-context-durable-object.ts  itx-entrypoint.ts
-  context/   built-ins.ts capability-table.ts expression.ts dispatch.ts invoke-handle.ts dotted-path-proxy.ts
+  context/   built-ins.ts itx-expression-rewriting.ts expression.ts dispatch.ts invoke-handle.ts dotted-path-proxy.ts
              rpc-stub-directory.ts rpc-stub-relay.ts worker-loader.ts durable-object-names.ts
-  fetch/     fetch-capabilities.ts
+  fetch/     rpc-stub-fetch.ts
   stream/    stream.ts events.ts processor.ts reduce-checkpoint.ts core-processor.ts
              subscriptions.ts subscription-delivery.ts live-state.ts
   sdk/       index.ts (→ processor.js) stream-processor-durable-object.ts (the host)
-  lib/       errors.ts logs.ts patch.ts                client/     generated/
+  lib/       errors.ts logs.ts patch.ts timeout.ts     client/     generated/
 ```
+
+(After the itx-surface rename of 2026-09-02: `capability-table.ts` + `routing.ts` became
+`itx-expression-rewriting.ts`, `fetch-capabilities.ts` became `rpc-stub-fetch.ts`.)
 
 Steps 1 and 3 can run as parallel agents once 0 and 2 are in. Step 2 touches the DO's commit path
 and I would do it myself.

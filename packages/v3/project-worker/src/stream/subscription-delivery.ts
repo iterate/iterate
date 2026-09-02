@@ -13,7 +13,7 @@
 //     (facets have none, workerd#6810 — which is why this is kernel code and not a facet processor).
 //
 // Nothing here reads a "kind" off an event. The kind is the evaluated value's brand, minted by the
-// built-in that produced it; a mount whose target names another capability classifies correctly because it evaluates to the same handle.
+// built-in that produced it; a rule whose target names another rule classifies correctly because it evaluates to the same handle.
 //
 // Ranges: every delivery carries `{ after, through }` — the offset window it covers. Per subscription the
 // loop remembers the last `through` it handed over (in memory), so a batch the filter skipped still
@@ -201,7 +201,7 @@ export class SubscriptionDelivery {
       if (head instanceof RpcStubHandle) {
         // A LIVE CLIENT owns its offset: fire-and-forget — the pager socket is the queue, its order is
         // the order, and a stalled client blocks nothing but itself. RPC_STUB_OFFLINE is the benign
-        // heal-by-pull case (the stub is not there right now; the mount stays, the client re-lends);
+        // heal-by-pull case (the stub is not there right now; the row stays until its last pager closes, the client re-lends);
         // anything else is a real drop worth a line — the subscriber sees the range gap and heals.
         this.#pushedEventBatches.delete(name);
         void call([events, range]).catch((error) => {

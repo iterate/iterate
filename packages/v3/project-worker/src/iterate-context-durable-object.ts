@@ -276,7 +276,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   readonly #delivery = new SubscriptionDelivery({
     kv: this.ctx.storage.kv,
     stream: this.#stream,
-    // A target is evaluated through the ONE dispatch door — through every mount, a mount whose target names another capability included — so what
+    // A target is evaluated through the ONE dispatch door — through every rewrite rule, one naming another included — so what
     // comes back is exactly what a caller would get: a FacetHandle, an RpcStubHandle, an entrypoint
     // handle, a value.
     evaluate: (expression) => this.invoke(expression),
@@ -528,7 +528,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
 
   async fetch(request: Request): Promise<Response> {
     // The doors, in order — each answers or declines:
-    //   1. the stub pager and the live-capability upgrade leg (the rpc-stub machinery);
+    //   1. the rpc-stub pager and the rpc-stub fetch upgrade leg (the rpc-stub machinery);
     //   2. THE ITX-EXPRESSION FETCH LANE — `x-itx-expression` names an itx expression (JSON from a
     //      session's terminal `fetch(request)`, dotted text from the edge's `/expression?itx=`),
     //      resolved as a terminal-fetch call through the rules with the live Request as its one

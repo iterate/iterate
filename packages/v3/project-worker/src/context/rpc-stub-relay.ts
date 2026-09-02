@@ -1,5 +1,5 @@
 // context/rpc-stub-relay.ts — THE DON'T-PIN PLUMBING behind a lent rpc stub, EDGE side. When a client
-// hands the project a capnweb value (`itx.provide(path, fn)`), the client's stub must live in the
+// hands the project a capnweb value (`itx.provide(rpcStubKey, { stub })`), the client's stub must live in the
 // STATELESS relay worker (this side of `/api`), NEVER in the Durable Object — else the DO can't
 // hibernate while any client is connected. So the edge opens an RPC-STUB PAGER WebSocket to the DO
 // (a standing offer to lend the key back on demand); when the DO wants the client — a delivery, a
@@ -119,8 +119,9 @@ class LentRpcStub extends WorkersRpcTarget {
 /** Offer the DO a lend of `clientRpcStub` under `rpcStubKey`: dup the client's stub for the session,
  *  reserve a pager on the DO, open the pager WebSocket, and answer every page with a fresh
  *  `LentRpcStub`. The pager lives until disposed (explicitly, or at session end — `SessionTeardown`);
- *  its close makes the DO return the stub — and nothing else: a rewrite rule naming the key stays,
- *  answering RPC_STUB_OFFLINE. */
+ *  its close makes the DO return the stub; when it was the key's LAST pager, the DO also un-sets every
+ *  rule and subscription naming the key (iterate-context-durable-object.ts onPresence). Otherwise nothing: a
+ *  replaced pager is a reconnect, and the new session's rule stands. */
 export async function lendRpcStubOverPager(
   durableObject: IterateContextDurableObjectStub,
   clientRpcStub: ClientRpcStub,

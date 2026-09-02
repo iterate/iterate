@@ -17,7 +17,7 @@
 // for it? page it · else RPC_STUB_OFFLINE.
 //
 // WHAT A STUB IS HERE: its KEY — an opaque string the lender picks (the edge's `provide` sugar uses
-// the canonical rewrite match so a reconnect re-lends under the same key; the registry never parses
+// whatever key it likes — a reconnect re-lends under the same key; the registry never parses
 // it; connection metadata may attach to a pager record later). A TRANSPORT ID is per pager socket,
 // so a NEW pager under an existing key can attach before the old one drops (the reconnect swap;
 // the newest pager wins). PRESENCE (`listRpcStubKeys`) is the keys borrowed or pager-backed right now.
@@ -216,7 +216,7 @@ export class RpcStubDirectory {
 
   /** A pager WebSocket closed (wire this to webSocketClose/webSocketError, AFTER the DO's own
    *  rpc-stub-fetch close routing): the pager is gone, and the stub it lent goes back with it. A
-   *  rewrite rule naming the key is data and stays (calls answer RPC_STUB_OFFLINE). */
+   *  rewrite rule naming the key is un-set by the DO on the key's LAST pager close (onPresence). */
   rpcStubPagerClosed(ws: WebSocket): void {
     if (this.#closedRpcStubPagerSockets.has(ws)) return;
     this.#closedRpcStubPagerSockets.add(ws);

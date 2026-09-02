@@ -177,7 +177,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
    *  storage, `env.ITX` bound) over the loaded WorkerEntrypoint, and ONE method on it by name — `run`,
    *  `fetch`, `processEventBatch`, whatever the class declares. A terminal `fetch(request)` is this
    *  same call: `entrypoint.fetch(request)` IS the entrypoint's fetch channel, socket-bearing
-   *  Responses included (fetch/fetch-capabilities.ts doctrine, points 1 & 4). The source EXPORTS the
+   *  Responses included (fetch/rpc-stub-fetch.ts doctrine, points 1 & 4). The source EXPORTS the
    *  entrypoint (no host-injected wrapper — the mirror of Cloudflare's `worker.getEntrypoint()`).
    *  Re-resolves per call, but the loader caches by contentHash so a warm isolate is reused. */
   const callEntrypoint = async (
