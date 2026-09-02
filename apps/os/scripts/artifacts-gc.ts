@@ -169,13 +169,16 @@ export default async function artifactsGc(options: {
 
     if (triage.reachedCutoff || totals.deleted >= maxDeletes) {
       done = true;
-    } else if (!options.dryRun && deletable.length > 0) {
-      // Deletions shift the oldest-first window, so restart from the head
-      // rather than trusting a cursor into a mutated listing. The skipped
-      // repos re-listed at the head are bounded (a slot's live projects are
-      // few), and a pure-skip page advances by cursor below.
-      cursor = undefined;
     } else {
+      // Continue the cursor even after deleting: everything deleted sits at
+      // or before the cursor's position in the created_at-ascending order,
+      // so forward iteration is unaffected. (The first drain pass restarted
+      // from the head after every deleting page instead, re-walking — and
+      // re-counting — the ever-compacting skipped prefix: ~28% redundant
+      // list calls, and preview_3 reported 277k "foreign" skips that were
+      // really ~5-10k walked dozens of times.) Worst case a stale cursor
+      // skips entries; the next run's fresh listing self-heals, the same
+      // story as failed deletes.
       cursor = page.result_info?.cursor || undefined;
       if (!cursor) done = true;
     }
@@ -225,17 +228,15 @@ export function triageArtifactsRepoPage(input: {
     try {
       projectId = RepoArtifactNameCodec.parse(repo.name).projectId;
     } catch {
-      // Earlier app versions used other shapes (e.g. `prj_<id>--iterate-config`
-      // with a literal, non-base64url suffix). A leading project id is still
-      // authoritative — the repo belongs to that project, and the live-set
-      // check below decides its fate. Names with no project id at all
-      // (`iterate-config-base`, `repo-<hex>`) stay untouched.
-      const legacy = /^(prj_[0-9a-f]+)--./.exec(repo.name);
+      // Earlier app versions used other name schemes; a recognized owning id
+      // is still authoritative and gets the same live-set check below. Names
+      // no scheme recognizes stay untouched.
+      const legacy = parseLegacyRepoName(repo.name);
       if (!legacy) {
         result.skippedForeign.push(repo.name);
         continue;
       }
-      projectId = legacy[1]!;
+      projectId = legacy.projectId;
     }
     if (projectId === null) {
       if (input.protectGlobalRepos) {
@@ -249,6 +250,38 @@ export function triageArtifactsRepoPage(input: {
     result.deletable.push(repo.name);
   }
   return result;
+}
+
+/**
+ * Name schemes from before RepoArtifactNameCodec, still present in the old
+ * namespaces this script exists to drain. Returns the owning project id
+ * (null = deployment-wide/global scope), or null when the name isn't
+ * recognized at all.
+ *
+ * Observed in the wild (preview_1/preview_2, 2026-09-02):
+ *   prj_2acd3201...--iterate-config            literal suffix, current id format
+ *   proj__os__01kry9v2fx...--iterate-config    pre-prj_ ULID id format
+ *   repo-5f5f6e75...                           hex of "<id>:<path>"
+ */
+export function parseLegacyRepoName(name: string): { projectId: string | null } | null {
+  // Leading project id with a literal (pre-base64url) suffix.
+  const withId = /^(prj_[0-9a-f]+|proj__[a-z0-9]+__[a-z0-9]+)--./.exec(name);
+  if (withId) return { projectId: withId[1]! };
+
+  // `repo-<hex>`: hex of `<id>:<path>`, e.g. "__null__:/repos/iterate-config-base".
+  const hex = /^repo-((?:[0-9a-f]{2})+)$/.exec(name);
+  if (hex) {
+    const decoded = Buffer.from(hex[1]!, "hex").toString("utf8");
+    const separator = decoded.indexOf(":");
+    // Only trust a decode that matches the known shape — printable ASCII
+    // with an id:path separator. Anything else stays unrecognized.
+    if (separator > 0 && /^[\x20-\x7e]+$/.test(decoded)) {
+      const id = decoded.slice(0, separator);
+      return { projectId: id === "__null__" ? null : id };
+    }
+  }
+
+  return null;
 }
 
 void createCli({ ...import.meta, name: "artifacts-gc" }).run({

@@ -48,14 +48,50 @@ test("legacy-named repos (literal suffix, pre-codec) still follow their project 
     repos: [
       { name: "prj_2acd3201c01844e2--iterate-config", created_at: "2026-01-01T00:00:00Z" },
       { name: "prj_3d195e6120c14e18--iterate-config", created_at: "2026-01-01T00:00:00Z" },
+      {
+        name: "proj__os__01kry9v2fxend9egy4t4--iterate-config",
+        created_at: "2026-01-01T00:00:00Z",
+      },
+      { name: "proj__os__01ks16y7x3fvhsysnvsg--e2e-2c1f6a50", created_at: "2026-01-01T00:00:00Z" },
     ],
-    liveProjectIds: new Set(["prj_3d195e6120c14e18"]),
+    liveProjectIds: new Set(["prj_3d195e6120c14e18", "proj__os__01ks16y7x3fvhsysnvsg"]),
     cutoffIso: "2026-08-30T00:00:00Z",
     protectGlobalRepos: false,
   });
   expect(result).toMatchObject({
-    deletable: ["prj_2acd3201c01844e2--iterate-config"],
-    skippedLive: ["prj_3d195e6120c14e18--iterate-config"],
+    deletable: [
+      "prj_2acd3201c01844e2--iterate-config",
+      "proj__os__01kry9v2fxend9egy4t4--iterate-config",
+    ],
+    skippedLive: [
+      "prj_3d195e6120c14e18--iterate-config",
+      "proj__os__01ks16y7x3fvhsysnvsg--e2e-2c1f6a50",
+    ],
+  });
+});
+
+test("repo-<hex> names decode to <id>:<path> and follow the decoded id", () => {
+  const hexName = (decoded: string) => `repo-${Buffer.from(decoded).toString("hex")}`;
+  const result = triageArtifactsRepoPage({
+    repos: [
+      // "__null__:<path>" = global scope; deletable off prd like any global repo
+      { name: hexName("__null__:/repos/iterate-config-base"), created_at: "2026-01-01T00:00:00Z" },
+      { name: hexName("prj_dead12345678:/repos/config"), created_at: "2026-01-01T00:00:00Z" },
+      { name: hexName("prj_alive1234567:/repos/config"), created_at: "2026-01-01T00:00:00Z" },
+      // hex that decodes to garbage (no separator / non-printable) stays untouched
+      { name: "repo-00ff00ff", created_at: "2026-01-01T00:00:00Z" },
+    ],
+    liveProjectIds: new Set(["prj_alive1234567"]),
+    cutoffIso: "2026-08-30T00:00:00Z",
+    protectGlobalRepos: false,
+  });
+  expect(result).toMatchObject({
+    deletable: [
+      hexName("__null__:/repos/iterate-config-base"),
+      hexName("prj_dead12345678:/repos/config"),
+    ],
+    skippedLive: [hexName("prj_alive1234567:/repos/config")],
+    skippedForeign: ["repo-00ff00ff"],
   });
 });
 
