@@ -1,13 +1,13 @@
 // iterate-context-durable-object.ts — `IterateContextDurableObject`: THE CONTEXT, one DO per
 // `{projectId, path}` (codec-named `{projectId}.iterate{path}`). The DO is the parent —
-// STREAM + THE CORE_SLUG REDUCE + SUBSCRIPTION DELIVERY + FACETS + TRANSPORT + DOORS:
+// STREAM + THE CORE REDUCE + SUBSCRIPTION DELIVERY + FACETS + TRANSPORT + DOORS:
 //
 //   • the STREAM — a `Stream` (stream/stream.ts), DI'd with this DO's storage: the whole commit
 //     pipeline (validation + the pause check + idempotency + offsets + chunking + waitForEvent +
-//     the alarm armer), `appendCreatedAndWokenEvents()` — the constructor's created/woken records — and `core()`, the
-//     stream's own reduced state. The DO's append/read/waitForEvent are thin wrappers; the stream's
+//     the alarm armer), `appendCreatedAndWokenEvents()` — the constructor's created/woken records — and
+//     `coreReducedState`, the stream's own reduced state. The DO's append/read/waitForEvent are thin wrappers; the stream's
 //     one injected callback (onCommit) closes over this class — nothing in stream/stream.ts reaches back;
-//   • the CORE_SLUG REDUCE — ONE reduce-only processor (core-processor.ts) reduced INSIDE the commit
+//   • the CORE REDUCE — ONE reduce-only processor (core-processor.ts) reduced INSIDE the commit
 //     transaction, always on: who this context is, which incarnation runs, whether appends are
 //     paused, the CAPABILITY MOUNTS every call routes through (capability-table.ts reads them) and
 //     the SUBSCRIPTION rows every commit is sent to (subscriptions.ts builds their events). Runtime
@@ -38,11 +38,11 @@ import { substituteHeaderSecrets } from "@v3/shared/egress";
 import {
   facetLoaderOwner,
   loadConfinedWorker,
-  versionedFacet,
   type WorkerSource,
 } from "./context/worker-loader.ts";
 import { CoreContract } from "./stream/core-processor.ts";
-import { codedError } from "./lib/errors.ts";
+import { codedError, errorCode } from "./lib/errors.ts";
+import { withTimeout } from "./lib/timeout.ts";
 import type { StreamEvent, StreamEventInput } from "./stream/events.ts";
 import {
   parse,
@@ -88,22 +88,11 @@ function parseIterateContextDurableObjectName(name: string | undefined) {
   return DurableObjectNameCodec.parse(name);
 }
 
-/** How long one facet call may take before the facet is aborted (see #invokeFacet). Generous: a
- *  processor's cold catch-up over a long log is legitimate work; a call still silent after this is
- *  a hang, and a hung facet would pin this actor awake forever. */
-const FACET_CALL_TIMEOUT_MS = 60_000;
 /** The core reduce's facet-shaped address (`itx.facets.get('core')`) — always on, never deletable,
  *  and reserved as a subscription name. */
 const CORE_SLUG = CoreContract.slug;
 
-/** The startup memo of a hosted facet — `facet:<name>` in this DO's kv: which loaded class it is.
- *  A CACHE, not truth (the truth is the expression that first named it —
- *  `itx.load(src).getDurableObjectClass(C).get(name)`): `ctx.facets.get` wants a startup callback on
- *  every incarnation, and `itx.facets.get(name)` must re-materialize after an eviction without the
- *  expression in hand. */
-type FacetMemo = { source: string; className: string };
-
-// The parent reduces the CORE_SLUG REDUCE inline (identity, pause, the routing table, the subscriptions),
+// The parent reduces the CORE REDUCE inline (identity, pause, the routing table, the subscriptions),
 // so it needs the full roots env.
 export class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
   /** WHO THIS DO IS — the first line, the apps/os shape: the DO name parsed ONCE into `{ name,
@@ -117,16 +106,10 @@ export class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
   /** The live-capability fetch subsystem (fetch/fetch-capabilities.ts) — the DO wires its three
    *  halves directly: the upgrade-leg door (fetch), frame forwarding (webSocketMessage), and
    *  peer close (webSocketClose); the rpc-stub directory borrows it for serve(). */
-  readonly #liveCapabilityFetch = new LiveCapabilityFetchServer({
-    acceptWebSocket: (ws, tags) => this.ctx.acceptWebSocket(ws, tags),
-    getWebSockets: (tag) => this.ctx.getWebSockets(tag),
-  });
+  readonly #liveCapabilityFetch = new LiveCapabilityFetchServer(this.ctx);
   readonly #rpcStubs = new RpcStubDirectory({
     liveCapabilityFetch: this.#liveCapabilityFetch,
-    hooks: {
-      acceptWebSocket: (ws, tags) => this.ctx.acceptWebSocket(ws, tags),
-      getWebSockets: (tag) => this.ctx.getWebSockets(tag),
-    },
+    hooks: this.ctx,
     // PRESENCE, as it changes: an EPHEMERAL fact a live watcher can subscribe to (`consumes:
     // ["events.iterate.com/rpc-stub/attached", …]`), never a durable row — presence is physical
     // (`itx.rpcStubs.list()`), and the log must never claim a socket is open. A refusal (a paused
@@ -184,9 +167,8 @@ export class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
 
   /** Wait for the next event matching `filter` (or the first committed durable match already in
    *  the log after an explicit `afterOffset`) — see Stream.waitForEvent for the whole contract.
-   *  Deliberately NOT #recordActivityForQuietClock'd: like read(), a wait is a non-minting probe (the caller's
-   *  own open RPC keeps this DO awake for the wait's duration; a timed-out wait on a virgin
-   *  stream must leave it virgin — no alarm write either). */
+   *  Deliberately not counted as activity: the caller's own open RPC keeps this DO awake for the
+   *  wait's duration, and a wait quiesces nothing. */
   waitForEvent(filter?: WaitForEventFilter): Promise<StreamEvent> {
     return this.#stream.waitForEvent(filter);
   }
@@ -318,11 +300,15 @@ export class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
     this.#stream.armNoLaterThan(this.#lastActivityMs + 60_000);
   }
 
-  /** EVERY facet materialized this incarnation, by name. The quiesce alarm aborts the whole set in
-   *  one loop so no LIVE facet pins this actor awake. In memory on purpose: facets die with the
-   *  incarnation, and a fresh call re-materializes from the durable startup memo (the facet's own
-   *  storage having survived). */
-  readonly #liveFacets = new Set<string>();
+  /** EVERY facet materialized this incarnation, by name, with the source it was loaded from. The
+   *  quiesce alarm aborts the whole set in one loop so no LIVE facet pins this actor awake. In memory
+   *  on purpose: facets die with the incarnation, and a fresh call re-materializes from the durable
+   *  startup memo (the facet's own storage having survived). The resolved source rides along so a
+   *  commit re-fetches and re-hashes nothing (processor-facet-source-refetch.e2e). */
+  readonly #liveFacets = new Map<
+    string,
+    { source: string; contentHash: string; modules: Record<string, string> }
+  >();
   // The in-flight count the quiesce alarm respects (aborting a facet mid-REDUCE is exactly the
   // stall a reduce would have to repair from the log — never cause it).
   #facetWorkInFlight = 0;
@@ -335,15 +321,14 @@ export class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
     // quiesce below needs no count of its own.
     await this.#delivery.deliverEveryCursorSubscription();
     if (Date.now() - this.#lastActivityMs >= 60_000 && this.#facetWorkInFlight === 0) {
-      for (const facetName of this.#liveFacets) {
+      for (const facetName of this.#liveFacets.keys()) {
         try {
           this.ctx.facets.abort(facetName, "idle quiesce");
         } catch {
           /* facet not running — already quiesced */
         }
       }
-      this.#liveFacets.clear();
-      this.#resolvedFacetSource.clear(); // aborted facets re-materialize; their next load re-fetches
+      this.#liveFacets.clear(); // aborted facets re-materialize; their next load re-fetches
       // Same doctrine for the paged-in RetainedCallbackInvoker stubs: retaining one pins this
       // actor awake, and a page always gets it back — dispose them with the idle facets.
       this.#rpcStubs.disposeRetainedStubs();
@@ -357,57 +342,120 @@ export class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
   // ── FACETS: loaded DurableObject classes hosted here (a processor is one whose
   // processEventBatch is subscribed) ──
 
-  /** THE generic facet door: resolve the facet LOCALLY (facet stubs are non-transferable — the
-   *  walk happens where the stub lives), walk the dotted path with the exposure guard, apply
-   *  the terminal. `itx.facets.get(name)` and `load(...).getDurableObjectClass(C).get(name)` both
-   *  ride this to reach ANY method the facet's durable object exposes. */
+  /** THE facet door — `itx.facets.get(name).m()` and `itx.load(src).getDurableObjectClass(C).get(name).m()`
+   *  both land here. Facet stubs are non-transferable, so the walk happens where the stub lives. Top
+   *  to bottom: the startup memo → the load → the racing-delete check → the class + version marker →
+   *  the call under the watchdog → copy + dispose the answer. */
   async #invokeFacet(
     ref: string | { source: WorkerSource; className: string; name?: string },
     path: string[],
     args: unknown[],
   ): Promise<unknown> {
-    this.#recordActivityForQuietClock();
     if (path.length === 0) throw new Error(`facet: name a method`);
-    // Counted like a delivery: a CONCURRENT alarm's quiesce must never abort the facet mid-call
-    // (#recordActivityForQuietClock above only guards the first 60s; a long invoke outlives it).
+    // The core reduce answers at its facet-shaped address with a synthesized view — it is not a
+    // facet, pins nothing, and needs no watchdog.
+    if (ref === CORE_SLUG)
+      return invokePath(
+        {
+          snapshot: () => this.#stream.coreReducedStateSnapshot(),
+          liveSnapshot: () => this.#stream.coreLiveStateSnapshot(),
+          waitUntilProcessed: () => ({ ok: true }),
+        },
+        path,
+        args,
+        `facet "${CORE_SLUG}"`,
+      );
+    // THE STARTUP MEMO `facet:<name>` = { source, className } in this DO's kv: a load spec writes it
+    // (when it changed) BEFORE the load, so `itx.facets.get(name)` alone re-materializes the facet
+    // after an eviction; a bare name reads it — an unknown name is NO_FACET.
+    const name = typeof ref === "string" ? ref : (ref.name ?? ref.className);
+    if (name === CORE_SLUG) throw new Error(`"${name}" is the core reduce — never a facet name`);
+    let memo = this.ctx.storage.kv.get(`facet:${name}`) as
+      | { source: string; className: string }
+      | undefined;
+    if (typeof ref !== "string") {
+      const spec = {
+        source: print(toExpression(ref.source as ItxExpression)),
+        className: ref.className,
+      };
+      if (!memo || memo.source !== spec.source || memo.className !== spec.className)
+        this.ctx.storage.kv.put(`facet:${name}`, spec);
+      memo = spec;
+    }
+    if (!memo) throw codedError("NO_FACET", `no facet "${name}" — load a class into it first`);
+    // Counted so a CONCURRENT alarm's quiesce never aborts the facet mid-call.
     this.#facetWorkInFlight++;
-    const facetName = typeof ref === "string" ? ref : (ref.name ?? ref.className);
     try {
-      const facet = await this.#resolveFacet(ref);
-      // A top-level `.fetch` forwards to the facet's own fetch — the one channel that carries a
-      // 101 natively (fetch/fetch-capabilities.ts doctrine, points 1 & 4) — never through
-      // invokePath's await-walk. A method walks receiver-preservingly (invokePath).
+      // THE LOAD, its source resolved once per materialization: a live facet's modules + contentHash
+      // ride #liveFacets, so a commit re-fetches nothing.
+      const live = this.#liveFacets.get(name);
+      const {
+        worker,
+        version: contentHash,
+        modules,
+      } = await loadConfinedWorker({
+        env: this.env,
+        invoke: (call) => this.invoke(call),
+        host: this.#itxHost,
+        kind: "facet",
+        owner: facetLoaderOwner(this.#name.name, memo.className),
+        source: parse(memo.source) as WorkerSource,
+        mainModule: "cap.js",
+        what: `facet "${name}"`,
+        ...(live?.source === memo.source && {
+          resolved: { version: live.contentHash, modules: live.modules },
+        }),
+      });
+      // The load awaited: a `facets.delete(name)` (disableProcessor) may have landed meanwhile — its
+      // memo is gone, and materializing now would resurrect the deleted facet as an orphan this
+      // actor never quiesces. Refuse instead; the caller's row is gone too.
+      if (!this.ctx.storage.kv.get(`facet:${name}`))
+        throw codedError("NO_FACET", `no facet "${name}" — deleted while its source loaded`);
+      // THE CLASS, minted with its identity (`ctx.props`), and THE VERSION MARKER: a content change
+      // within a deploy restarts the facet in place, its storage surviving (the deploy id is already
+      // in the loader's cacheKey).
+      const klass = worker.getDurableObjectClass(memo.className, {
+        props: { contextName: this.#name.name, name },
+      });
+      if (!klass) throw new Error(`loaded worker does not export class "${memo.className}"`);
+      const previousContentHash = this.ctx.storage.kv.get(`facet:${name}:version`) as
+        | string
+        | undefined;
+      if (previousContentHash !== undefined && previousContentHash !== contentHash) {
+        try {
+          this.ctx.facets.abort(name, "source changed");
+        } catch {
+          /* facet not running */
+        }
+      }
+      if (previousContentHash !== contentHash)
+        this.ctx.storage.kv.put(`facet:${name}:version`, contentHash);
+      const facet = this.ctx.facets.get(name, () => ({ class: klass }));
+      this.#liveFacets.set(name, { source: memo.source, contentHash, modules }); // live from here
+      // THE CALL. A top-level `.fetch` rides the facet's own fetch — the one channel that carries a
+      // 101 natively (fetch/fetch-capabilities.ts doctrine, points 1 & 4); a method walks
+      // receiver-preservingly (invokePath). THE WATCHDOG: a call that never answers would hold
+      // `#facetWorkInFlight` — and with it the quiesce, and with THAT this actor — forever; past 60 s
+      // the facet is aborted (its pending call rejects, the counter drains, the next call
+      // re-materializes it from its memo).
       const call =
         path.length === 1 && path[0] === "fetch"
           ? (facet as { fetch(r: Request): Promise<Response> }).fetch(args[0] as Request)
-          : invokePath(facet, path, args, `facet "${facetName}"`);
-      // THE FACET WATCHDOG: a call that never answers would hold `#facetWorkInFlight` — and with it
-      // the quiesce, and with THAT this actor — forever. Past the deadline the facet is aborted (its
-      // pending call rejects, the counter drains, the next call re-materializes it from its memo).
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      const result = await Promise.race([
-        call,
-        new Promise<never>((_, reject) => {
-          timer = setTimeout(() => {
-            if (facetName !== CORE_SLUG) {
-              try {
-                this.ctx.facets.abort(facetName, "call timed out");
-              } catch {
-                /* not running */
-              }
-              this.#liveFacets.delete(facetName);
-              this.#resolvedFacetSource.delete(facetName);
-            }
-            reject(
-              new Error(
-                `facet "${facetName}".${path.join(".")}: no answer in ${FACET_CALL_TIMEOUT_MS / 1000}s — aborted`,
-              ),
-            );
-          }, FACET_CALL_TIMEOUT_MS);
-        }),
-      ]).finally(() => {
-        if (timer !== undefined) clearTimeout(timer);
-      });
+          : invokePath(facet, path, args, `facet "${name}"`);
+      let result: unknown;
+      try {
+        result = await withTimeout(call, 60_000, `facet "${name}".${path.join(".")}`);
+      } catch (error) {
+        if (errorCode(error) === "TIMEOUT") {
+          try {
+            this.ctx.facets.abort(name, "call timed out");
+          } catch {
+            /* not running */
+          }
+          this.#liveFacets.delete(name);
+        }
+        throw error;
+      }
       // A facet's answer arrives as a Workers-RPC RESULT: when it is an object, it carries a
       // disposer that holds the call's resources — a reference on the FACET — until disposed or
       // GC'd. GC is too late for the quiesce: every `snapshot()` left such a result behind, so an
@@ -428,93 +476,8 @@ export class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
       return result;
     } finally {
       this.#facetWorkInFlight--;
-      this.#recordActivityForQuietClock(); // a finished invoke earns a fresh quiet period
+      this.#recordActivityForQuietClock(); // a finished call earns a fresh quiet period
     }
-  }
-
-  /** THE one facet resolver: turn ANY ref into a live facet handle. A NAME (string) resolves an
-   *  inline reduce (always at head, a synthesized snapshot view) or a hosted facet (its startup memo
-   *  names the class). A LOAD SPEC (`{ source, className, name? }` — `itx.load(...)`) materializes
-   *  the class as the facet `name ?? className`, remembering the spec as its startup memo so a
-   *  later `itx.facets.get(name)` re-materializes it after an eviction. Throws NO_FACET for an
-   *  unknown name. */
-  async #resolveFacet(
-    ref: string | { source: WorkerSource; className: string; name?: string },
-  ): Promise<unknown> {
-    if (typeof ref !== "string") {
-      const memo: FacetMemo = {
-        source: print(toExpression(ref.source as ItxExpression)),
-        className: ref.className,
-      };
-      return this.#facet(ref.name ?? ref.className, memo);
-    }
-    if (ref === CORE_SLUG)
-      return {
-        snapshot: () => this.#stream.coreReducedStateSnapshot(),
-        liveSnapshot: () => this.#stream.coreLiveStateSnapshot(),
-        waitUntilProcessed: () => ({ ok: true }),
-      };
-    const memo = this.ctx.storage.kv.get(`facet:${ref}`) as FacetMemo | undefined;
-    if (memo) return this.#facet(ref, memo);
-    throw codedError("NO_FACET", `no facet "${ref}" — load a class into it first`);
-  }
-
-  /** Per-facet resolved-source memo (in memory, keyed by facet name): the printed source
-   *  expression it was resolved from, plus the fetched modules + their contentHash. Every commit
-   *  reaches a processor's facet through the same load chain — without this the source would be
-   *  re-fetched and re-hashed on EVERY commit (processor-facet-source-refetch.e2e). Kept ONLY while the facet is
-   *  live: dropped on delete and cleared at idle-quiesce, so a source edit is picked up at the
-   *  next materialization. */
-  readonly #resolvedFacetSource = new Map<
-    string,
-    { srcPrint: string; version: string; modules: Record<string, string> }
-  >();
-
-  /** Materialize (or reuse) the facet `name` hosting `memo.className` from `memo.source`: load the
-   *  class through the shared `loadConfinedWorker` (the SDK `processor.js` rides every load), mint
-   *  it with `props: { contextName, name }` — its identity, read back as `ctx.props` — and hand it
-   *  to `versionedFacet` (a source change restarts it in place; storage survives). The startup memo
-   *  is written once (when it changes), so a facet named by `itx.facets.get(name)` alone still
-   *  materializes after an eviction. NEVER retain the returned handle (#6800: re-`get` per burst;
-   *  the quiesce alarm aborts). */
-  async #facet(name: string, memo: FacetMemo): Promise<unknown> {
-    this.#recordActivityForQuietClock();
-    const stored = this.ctx.storage.kv.get(`facet:${name}`) as FacetMemo | undefined;
-    if (!stored || stored.source !== memo.source || stored.className !== memo.className)
-      this.ctx.storage.kv.put(`facet:${name}`, memo);
-    // Resolve the source ONCE per materialization, not once per commit (the memo above).
-    const cached = this.#resolvedFacetSource.get(name);
-    const resolved =
-      cached?.srcPrint === memo.source
-        ? { version: cached.version, modules: cached.modules }
-        : undefined;
-    const { worker, version, modules } = await loadConfinedWorker({
-      env: this.env,
-      invoke: (call) => this.invoke(call),
-      host: this.#itxHost,
-      kind: "facet",
-      owner: facetLoaderOwner(this.#name.name, memo.className),
-      source: parse(memo.source) as WorkerSource,
-      mainModule: "cap.js",
-      what: `facet "${name}"`,
-      ...(resolved && { resolved }),
-    });
-    // The load awaited: a `facets.delete(name)` (disableProcessor) may have landed meanwhile — its
-    // memo is gone, and materializing now would resurrect the deleted facet as an orphan this
-    // actor never quiesces. Refuse instead; the caller's row is gone too.
-    if (!this.ctx.storage.kv.get(`facet:${name}`))
-      throw codedError("NO_FACET", `no facet "${name}" — deleted while its source loaded`);
-    if (!resolved) this.#resolvedFacetSource.set(name, { srcPrint: memo.source, version, modules });
-    const facet = versionedFacet(this.ctx, {
-      worker,
-      className: memo.className,
-      facetName: name,
-      markerKey: `facet:${name}:version`,
-      version,
-      props: { contextName: this.#name.name, name },
-    });
-    this.#liveFacets.add(name); // live from here: the quiesce alarm aborts it when idle
-    return facet;
   }
 
   /** Delete a facet, storage included (`itx.facets.delete(name)`; `disableProcessor` ends here). A
@@ -522,13 +485,10 @@ export class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
   #deleteFacet(name: string): void {
     if (name === CORE_SLUG)
       throw new Error(`"${name}" is the core reduce — always on, never a facet`);
-    // facets.delete exists unconditionally on every runtime we run (production workerd,
-    // wrangler-local, the vitest-plugin lane).
     this.ctx.facets.delete(name);
     this.ctx.storage.kv.delete(`facet:${name}`);
     this.ctx.storage.kv.delete(`facet:${name}:version`);
     this.#liveFacets.delete(name);
-    this.#resolvedFacetSource.delete(name);
   }
 
   // ── dispatch (ONE path: the routing table — the core reduce's mounts, zero distance) ──
@@ -620,8 +580,8 @@ export class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
   // OBSERVABILITY has no dedicated verb: runtime state IS reduced state. Identity, incarnation,
   // pause, the mounts and the subscription rows are ONE snapshot — `itx.facets.get('core').snapshot()`;
   // subscriptions joined with their cursors are `itx.subscriptions.list()`. A snapshot reads the
-  // core reduce only: it never arms the quiet-clock alarm (#recordActivityForQuietClock arms only once a facet is
-  // live or the stream wrote beyond its own wake record).
+  // core reduce only, and arms no alarm (the quiet clock arms only while a facet is live or a stub is
+  // paged in).
   // PRESENCE — which stubs have a transport RIGHT NOW — is physical, never event-derivable:
   // `itx.rpcStubs.list()` on the itx surface, and the socket census below for the probes.
 
@@ -672,8 +632,7 @@ export class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
     this.#rpcStubs.closed(ws);
   }
   webSocketError(ws: WebSocket): void {
-    if (this.#liveCapabilityFetch.handleWebSocketClose(ws, 1006, "transport error")) return;
-    this.#rpcStubs.closed(ws);
+    this.webSocketClose(ws, 1006, "transport error");
   }
 
   // ── the rpc-stub RPC verbs (the directory owns the lifecycle — see rpc-stub-directory.ts;
