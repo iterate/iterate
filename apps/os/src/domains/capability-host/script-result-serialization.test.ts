@@ -205,6 +205,9 @@ describe("boundScriptSettlement", () => {
     const error = (bounded as { error: string }).error;
     expect(error).toContain("refused:");
     expect(error).toContain("[error truncated from 400009 chars]");
-    expect(error.length).toBeLessThan(MAX_SCRIPT_ERROR_EVENT_CHARS + 100);
+    /* The suffix counts against the cap, so the backstop pass sees an
+     * under-limit error and passes it through — no suffix stacking. */
+    expect(error.length).toBeLessThanOrEqual(MAX_SCRIPT_ERROR_EVENT_CHARS);
+    expect(boundScriptSettlement(bounded)).toBe(bounded);
   });
 });

@@ -128,11 +128,13 @@ export function boundScriptSettlement(
 ): ScriptExecutionSettlement {
   if (settlement.status === "failed") {
     if (settlement.error.length <= MAX_SCRIPT_ERROR_EVENT_CHARS) return settlement;
+    // The suffix counts against the cap: a truncated error must itself be
+    // under the limit, or the second bounding pass (the append-side backstop)
+    // would re-truncate and stack suffixes.
+    const suffix = `… [error truncated from ${settlement.error.length} chars]`;
     return {
       ...settlement,
-      error:
-        settlement.error.slice(0, MAX_SCRIPT_ERROR_EVENT_CHARS) +
-        `… [error truncated from ${settlement.error.length} chars]`,
+      error: settlement.error.slice(0, MAX_SCRIPT_ERROR_EVENT_CHARS - suffix.length) + suffix,
     };
   }
   if (settlement.result === undefined) return settlement;
