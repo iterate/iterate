@@ -13,7 +13,7 @@ import { parse, parseCapabilityPath, type Expression } from "./expression.ts";
 describe("match", () => {
   test.each([
     [
-      "plain alias: the steps after the mount replay",
+      "a mount targeting another capability: the steps after the mount replay",
       "itx.db",
       "itx.db.get('x')",
       { segments: 2, stepsAfterMount: [["get", "x"]] },
@@ -125,7 +125,7 @@ describe("walkSteps + resolve", () => {
     expect(value).toBe(42);
   });
 
-  test("alias mount end to end — the steps after the mount replay on the live stub", async () => {
+  test("a mount targeting another mount, end to end — the steps after the mount replay on the live stub", async () => {
     const s = scope();
     const resolver = resolverOver(s, mount("itx.robot", "itx.robots.get('robot-arm-1')"));
     expect(await resolver.resolve("itx.robot.arm.move(10)")).toBe("moved");

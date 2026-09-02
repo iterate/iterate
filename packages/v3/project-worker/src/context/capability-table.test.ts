@@ -228,11 +228,11 @@ describe("event mounts + the shadow stack", () => {
     await expect(invoke("itx.loop.go()")).rejects.toThrow(/depth 32/);
   });
 
-  test("alias mount: the target resolves one level deeper, the steps after the mount replay on it", async () => {
+  test("a mount targeting another mount: the target resolves one level deeper, the steps after the mount replay on it", async () => {
     const { provide, invoke } = setup();
     provide({ path: "itx.db", target: "itx.kv" });
     await invoke("itx.db.put('k', 'v')");
-    expect(await invoke("itx.kv.get('k')")).toBe("v"); // same underlying kv — alias composed
+    expect(await invoke("itx.kv.get('k')")).toBe("v"); // same underlying kv — the mounts composed
   });
 
   test("a LIVE provide is an ordinary mount whose target names the registry — pure data, nothing about the socket", () => {
@@ -391,14 +391,14 @@ describe("resolve depth budget", () => {
     provide({ path: `itx.a${n}`, target: "itx.kv" });
   };
 
-  test("a 32-deep alias chain resolves", async () => {
+  test("a 32-deep chain of mounts naming mounts resolves", async () => {
     const { provide, invoke } = setup();
     buildChain(provide, 32);
     await invoke("itx.a1.put('k', 'v')");
     expect(await invoke("itx.a1.get('k')")).toBe("v");
   });
 
-  test("a 33-deep alias chain trips the depth-32 guard (burns nothing)", async () => {
+  test("a 33-deep chain of mounts naming mounts trips the depth-32 guard (burns nothing)", async () => {
     const { provide, invoke } = setup();
     buildChain(provide, 33);
     await expect(invoke("itx.a1.get('k')")).rejects.toThrow(/depth 32/);

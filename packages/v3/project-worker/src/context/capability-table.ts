@@ -22,7 +22,7 @@
 //
 // Resolution of a call `itx.<root>…`: a BUILT-IN root resolves directly against the built-ins record.
 // Otherwise the winning userspace mount (longest path, then newest) names a target — itself an
-// `itx.…` expression — which resolves through THIS SAME method one level deeper (so alias mounts
+// `itx.…` expression — which resolves through THIS SAME method one level deeper (so a mount whose target names another mount
 // compose and a default route forwards whole calls), and the call's steps after the mount replay on
 // what came back. A target not rooted at `itx` matches nothing and default-denies.
 
@@ -142,7 +142,7 @@ export class CapabilityResolver {
           `no capability matches ${JSON.stringify(print(expr))} (default-deny; provide a capability first)`,
         );
       // The target is an `itx.…` expression: resolve it through THIS method one level deeper — a
-      // built-in, or another mount (alias mounts compose). Args at the mount fold into the target's
+      // built-in, or another mount (mounts compose by naming each other). Args at the mount fold into the target's
       // final step when that step is a property (`itx.grok ⇒ itx.openai.chat`, called
       // `itx.grok({...})`, resolves `itx.openai.chat({...})`); a target that already ends in a call is
       // resolved as written and the args apply to what came back. A live capability's mount targets

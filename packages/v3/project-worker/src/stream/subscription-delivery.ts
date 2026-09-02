@@ -13,7 +13,7 @@
 //     (facets have none, workerd#6810 — which is why this is kernel code and not a facet processor).
 //
 // Nothing here reads a "kind" off an event. The kind is the evaluated value's brand, minted by the
-// built-in that produced it; an alias classifies correctly because it evaluates to the same handle.
+// built-in that produced it; a mount whose target names another capability classifies correctly because it evaluates to the same handle.
 //
 // Ranges: every delivery carries `{ after, through }` — the offset window it covers. Per subscription the
 // loop remembers the last `through` it handed over (in memory), so a batch the filter skipped still

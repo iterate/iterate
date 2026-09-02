@@ -238,7 +238,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   readonly #delivery = new SubscriptionDelivery({
     kv: this.ctx.storage.kv,
     stream: this.#stream,
-    // A target is evaluated through the ONE dispatch door — mounts and aliases included — so what
+    // A target is evaluated through the ONE dispatch door — through every mount, a mount whose target names another capability included — so what
     // comes back is exactly what a caller would get: a FacetHandle, an RpcStubHandle, an entrypoint
     // handle, a value.
     evaluate: (expression) => this.invoke(expression),
