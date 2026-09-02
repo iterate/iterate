@@ -2195,3 +2195,21 @@ facts) and ranked opportunities across the engine + SDK host, the delivery loop,
   facet to arm the alarm, asserts the alarm fired, so `deliverEveryCursorSubscription` really ran over
   an ephemeral head and left the cursor on the durable mark.
 - Lines: relay 211 → 183 (`Parking` moved out), session 89 → 116, directory 373 → 367.
+
+## 2026-09-02 — the event envelope is two plain types; zod stays for contracts
+
+- **Jonas's delegation.** "I think you can decide Zod event envelope. You can decide whether ITX RPC
+  stubs keeps its name." (and no strong view on the `rpcStubAttach` assert.)
+- **Envelope → plain types.** `StreamEventInput` and `StreamEvent` were zod schemas nobody parsed:
+  the append door (stream.ts step 1) already checks the two rules by hand (`type` a non-empty
+  string; ephemeral ⇒ no idempotencyKey), no test pinned the schema values, and no userspace source
+  used them as values — they were 45 lines of zod spelling a TYPE. Now they are the two TypeScript
+  types the walkthrough already showed (`StreamEvent = Omit<StreamEventInput, "offset"> & { offset,
+createdAt, path }`); the SDK exports them as types. zod is unchanged where it earns its keep: the
+  CONTRACTS — `defineProcessorContract`, state schemas, owned-event payload schemas (the recorded
+  owner's call: isolates get zod and full contract schemas). events.ts 126 → 112; SDK bundle rebuilt.
+- **`rpcStubAttach`'s canonical-key assert stays.** Read as "no strong view"; the status quo is one
+  `if` at the one door that keys the registry and the mount identity. Delete it the day it annoys.
+- **`itx.rpcStubs` keeps its name for now.** The verbs carry the lend/borrow symmetry (edge lends and
+  recalls; the DO borrows on `get`, returns at idle). A symmetric API — `lend` as a first-class door
+  with the pager layered on top — is proposed in the reply to Jonas (2026-09-02) and waits on his call.

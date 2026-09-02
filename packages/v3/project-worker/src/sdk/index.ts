@@ -20,9 +20,9 @@ export {
 } from "../stream/processor.ts";
 export {
   defineProcessorContract,
-  StreamEvent,
-  StreamEventInput,
   jsonEqual,
+  type StreamEvent,
+  type StreamEventInput,
 } from "../stream/events.ts";
 export { z } from "zod";
 // capnweb's CLIENT constructors, so userspace can dial a remote capnweb API from inside its isolate

@@ -114,7 +114,7 @@ packages/v3/project-worker/
                                  (fenced WORKAROUND, delete-day checklist inside)
     stream/                      chapter 3 — the log and what reduces it
       stream.ts                  Stream (the commit pipeline), Context interface, localContext
-      events.ts                  StreamEventInput / StreamEvent (zod), defineProcessorContract
+      events.ts                  StreamEventInput / StreamEvent (plain types), defineProcessorContract (zod)
       processor.ts               StreamProcessor (the pure author class), ProcessorEngine, consumesEvent
       reduce-checkpoint.ts       the one persisted reduce-checkpoint shape
       core-processor.ts          CoreStreamProcessor (slug core, 3.0.0): created/woken/paused/resumed

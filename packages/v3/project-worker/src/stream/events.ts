@@ -1,8 +1,7 @@
-// stream/events.ts — the stream event envelope + idempotency rules + the zod contract helper.
-// API mirrors apps/os (`packages/iterate/src/processors/schemas.ts` / `idempotency.ts`) so
-// processors port both ways. The zod schemas live HERE: the engine in stream/processor.ts imports
-// only types from this module (plus lib/, live-state.ts and reduce-checkpoint.ts), so it runs
-// schema-free; the SDK bundle ships both.
+// stream/events.ts — the stream event envelope (plain types) + idempotency rules + the zod contract
+// helper. API mirrors apps/os (`packages/iterate/src/processors/schemas.ts` / `idempotency.ts`) so
+// processors port both ways. zod is for CONTRACTS (state + owned-event payload schemas — built-ins
+// and userspace alike); the envelope itself is two plain types the append door checks by hand.
 
 import { z } from "zod";
 import { jsonEqual } from "../lib/patch.ts";
@@ -11,53 +10,40 @@ import type { EventDefinition, ProcessorContract } from "./processor.ts";
 // idempotency-body compare below is the same test, re-exported here for the SDK bundle.
 export { jsonEqual };
 
-/** What `append` accepts: the event body, before the stream assigns its committed identity. */
-const EventInputShape = z.strictObject({
+/** What `append` accepts: the event body, before the stream assigns its committed identity. Plain
+ *  types — the door (stream.ts `append`, step 1) checks the two rules by hand: `type` is a non-empty
+ *  string, and an ephemeral event carries no idempotencyKey. */
+export type StreamEventInput = {
   /** Convention: `events.iterate.com/<domain>/<fact>`. */
-  type: z.string().trim().min(1),
-  payload: z.record(z.string(), z.unknown()).optional(),
-  metadata: z.record(z.string(), z.unknown()).optional(),
+  type: string;
+  payload?: Record<string, unknown>;
+  metadata?: Record<string, unknown>;
   /** Provenance: which processor (while processing what) appended this. Stamped by the engine's `append`. */
-  source: z
-    .strictObject({
-      processor: z
-        .strictObject({
-          slug: z.string(),
-          version: z.string(),
-          whileProcessing: z
-            .strictObject({
-              offset: z.number().int().nonnegative(),
-              type: z.string().trim().min(1),
-            })
-            .optional(),
-        })
-        .optional(),
-    })
-    .optional(),
+  source?: {
+    processor?: {
+      slug: string;
+      version: string;
+      whileProcessing?: { offset: number; type: string };
+    };
+  };
   /** Same key + same body = dedupe (the existing event is returned); different body = loud error. */
-  idempotencyKey: z.string().trim().min(1).optional(),
+  idempotencyKey?: string;
   /** OPTIONAL PRECONDITION (apps/os): land at exactly this offset or refuse the whole batch with
    *  OFFSET_CONFLICT — "nothing has happened since I last looked". Never stored in the body. */
-  offset: z.number().int().positive().optional(),
+  offset?: number;
   /** An EPHEMERAL event rides the stream to live subscribers but is NEVER persisted: it consumes
    *  an offset (which survives as a valid gap), triggers zero reduce/cursor writes, and its body is
    *  gone the moment the incarnation ends — it cannot be redelivered by anyone. `ephemeral: false`
    *  is a loud input error, not a synonym for durable. */
-  ephemeral: z.literal(true).optional(),
-});
-export const StreamEventInput = EventInputShape.refine(
-  (event) => !(event.ephemeral && event.idempotencyKey),
-  "ephemeral events cannot carry an idempotencyKey — nothing idempotent about the unreplayable",
-);
-export type StreamEventInput = z.infer<typeof StreamEventInput>;
+  ephemeral?: true;
+};
 
 /** A committed event: the input plus the identity the stream assigned at its commit point. */
-export const StreamEvent = EventInputShape.safeExtend({
-  offset: z.number().int().positive(),
-  createdAt: z.string(),
-  path: z.string().trim().min(1),
-});
-export type StreamEvent = z.infer<typeof StreamEvent>;
+export type StreamEvent = Omit<StreamEventInput, "offset"> & {
+  offset: number;
+  createdAt: string;
+  path: string;
+};
 
 // ── idempotency (apps/os semantics, message text kept greppable across RPC hops) ──
 
