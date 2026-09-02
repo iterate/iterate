@@ -28,18 +28,32 @@ const ISOLATE_BUDGET_MB = 96;
 const INCIDENT_CHARS = 7_260_000; // the prod settlement was 7,051KB
 const CONTROL_CHARS = 3_000;
 
-/** Run the replay child at the isolate budget; return its outcome. */
-function runReplay(resultChars: number): { crashed: boolean; output: string } {
+// V8's out-of-memory abort signature — the node spelling of the production
+// isolate reset. This is what distinguishes the pinned bug from ANY other
+// child failure (an import error, a fixture bug, a timeout): only these
+// messages count as the crash.
+const OOM_SIGNATURE = /Reached heap limit|JavaScript heap out of memory/;
+
+type ReplayOutcome =
+  | { kind: "survived"; output: string }
+  | { kind: "oom"; output: string }
+  | { kind: "other-failure"; output: string };
+
+/** Run the replay child at the isolate budget and classify its outcome:
+ * clean exit ("survived"), a genuine V8 OOM ("oom"), or any other abort
+ * ("other-failure" — which must NOT be mistaken for the pinned crash). */
+function runReplay(resultChars: number): ReplayOutcome {
   try {
     const output = execFileSync(
       process.execPath,
       [`--max-old-space-size=${ISOLATE_BUDGET_MB}`, "--import", "tsx", CHILD, String(resultChars)],
       { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 60_000 },
     );
-    return { crashed: false, output };
+    return { kind: "survived", output };
   } catch (error) {
     const err = error as { stdout?: string; stderr?: string };
-    return { crashed: true, output: `${err.stdout ?? ""}${err.stderr ?? ""}` };
+    const output = `${err.stdout ?? ""}${err.stderr ?? ""}`;
+    return { kind: OOM_SIGNATURE.test(output) ? "oom" : "other-failure", output };
   }
 }
 
@@ -50,7 +64,7 @@ describe("stream DO isolate under an oversized script settlement", () => {
   // this proves the fan-out itself is cheap when the settlement is bounded.
   it("survives comfortably when the settlement is small", () => {
     const control = runReplay(CONTROL_CHARS);
-    expect(control.crashed).toBe(false);
+    expect(control.kind).toBe("survived");
     expect(control.output).toContain("SURVIVED");
   });
 
@@ -68,7 +82,18 @@ describe("stream DO isolate under an oversized script settlement", () => {
   const isolateSurvives = failing(it, /stream DO isolate OOMed/);
   isolateSurvives("survives the readers re-materializing an oversized settlement", () => {
     const incident = runReplay(INCIDENT_CHARS);
-    if (incident.crashed) {
+    // A child abort that is NOT a V8 OOM (import error, fixture bug, timeout)
+    // proves nothing about the pinned bug. Throw a NON-matching error so the
+    // wrapper reports red instead of the pin falsely holding — the exact
+    // "conditions that prove nothing must not succeed" rule from failing()'s
+    // contract.
+    if (incident.kind === "other-failure") {
+      throw new Error(
+        `replay child aborted for a NON-OOM reason — the fixture is broken, not the bug: ` +
+          `${incident.output.slice(-500)}`,
+      );
+    }
+    if (incident.kind === "oom") {
       // The pinned failure: V8 aborted the replay exactly as the production
       // isolate reset. `failing` matches this message and stays green while
       // the bug lives; once #2572 bounds the settlement the child SURVIVES,
