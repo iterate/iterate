@@ -44,7 +44,7 @@ log-derived: a mount's id IS the offset of its capability-provided fact; a subsc
 subscription-configured fact.
 
 ONE reduce-only processor runs INLINE at the commit point: `CoreStreamProcessor`
-(`stream/core-processor.ts`, slug `core`, contract 3.0.0), hosted by `stream/inline-reduce.ts` with
+(`stream/core-processor.ts`, slug `core`, contract 3.0.0), owned by the `Stream` itself (`core()`) with
 zero runner apparatus. It folds the context's own control events into
 `{ projectId, path, createdAt, incarnation, paused, mounts, subscriptions }` — layer 2's mounts and
 layer 3's rows are slices of that one state, each layer keeping its OWN event family. Runtime state

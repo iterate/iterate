@@ -35,6 +35,9 @@ const EventInputShape = z.strictObject({
     .optional(),
   /** Same key + same body = dedupe (the existing event is returned); different body = loud error. */
   idempotencyKey: z.string().trim().min(1).optional(),
+  /** OPTIONAL PRECONDITION (apps/os): land at exactly this offset or refuse the whole batch with
+   *  OFFSET_CONFLICT — "nothing has happened since I last looked". Never stored in the body. */
+  offset: z.number().int().positive().optional(),
   /** An EPHEMERAL event rides the stream to live subscribers but is NEVER persisted: it consumes
    *  an offset (which survives as a valid gap), triggers zero reduce/cursor writes, and its body is
    *  gone the moment the incarnation ends — it cannot be redelivered by anyone. `ephemeral: false`

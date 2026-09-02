@@ -49,7 +49,7 @@ flowchart LR
   end
   subgraph do["IterateContextDurableObject, one per {projectId, path}"]
     stream["Stream: log, offsets, idempotency, waitForEvent"]
-    inline["InlineReduce: the core reduce (identity, wake, pause, mounts, subscriptions)"]
+    inline["core(): the core reduce, folded inside every commit<br/>(identity, wake, pause, mounts, subscriptions)"]
     delivery["SubscriptionDelivery: push or stream-kept cursor"]
     transport["RpcStubDirectory: pager sockets"]
     facets["Facets: loaded DurableObject classes,<br/>StreamProcessorDurableObject hosts"]
@@ -116,7 +116,6 @@ packages/v3/project-worker/
       events.ts                  StreamEventInput / StreamEvent (zod), defineProcessorContract
       processor.ts               StreamProcessor (the pure author class), ProcessorEngine, consumesEvent
       reduce-checkpoint.ts       the one persisted reduce-checkpoint shape
-      inline-reduce.ts           InlineReduce: hosts the ONE reduce-only processor AT the commit point
       core-processor.ts          CoreStreamProcessor (slug core, 3.0.0): created/woken/paused/resumed
                                  + the mounts + the subscriptions, one fold
       subscriptions.ts           the subscriptions' two commands: subscriptionConfiguredEvent /
@@ -499,7 +498,7 @@ fetch channel (so a 101 works).
 
 One reduce-only processor is always on and runs **inline** in the commit
 transaction: `CoreStreamProcessor` (`src/stream/core-processor.ts`, slug `core`,
-contract 3.0.0), hosted by `InlineReduce`. It folds the context's own control
+contract 3.0.0), owned by the `Stream` itself (`stream.core()`). It folds the context's own control
 events — and nothing else — into everything the DO needs synchronously at its
 doors: who it is, which incarnation runs, whether appends are paused, the mounts
 every call routes through, the subscriptions every commit is sent to. It has no
@@ -741,9 +740,9 @@ type ProcessEventArgs<State> = {
 
 The core reduce (`CoreStreamProcessor`, section 4.5) is the same
 `StreamProcessor` class, hosted INLINE at the commit point instead of in a facet:
-only its `reduce` is ever called, and `InlineReduce` refuses a processor that
-overrides `processEvent` (its effects would silently never run). A processor
-class is a contract plus a reduce — nothing else.
+only its `reduce` is ever called — the stream folds it inside every commit and
+never runs `processEvent`. A processor class is a contract plus a reduce — nothing
+else.
 
 A complete userspace processor (this is the one the `/demo` page loads):
 
@@ -1273,7 +1272,7 @@ sequenceDiagram
   participant A as caller (itx.append)
   participant D as context DO
   participant S as Stream
-  participant I as core reduce (InlineReduce over CoreStreamProcessor)
+  participant I as core reduce (Stream.core(), a CoreStreamProcessor)
   participant L as SubscriptionDelivery
   participant F as facet (processor)
   participant P as live stub (tab)

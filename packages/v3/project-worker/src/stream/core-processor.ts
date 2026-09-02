@@ -10,7 +10,7 @@
 //                             -delivery-halted|-delivery-resumed            → subscriptions (the delivery loop)
 //
 // ONE reduce, no effects, no verbs — the same `StreamProcessor` class every facet processor is,
-// hosted at zero distance (stream/inline-reduce.ts) because its readers are the append door, the
+// owned by the Stream itself (stream.ts `core()`, folded inside every commit) because its readers are the append door, the
 // dispatcher and the delivery loop, all synchronous. The COMMANDS that append these events live
 // beside the code that reads each slice (context/capability-table.ts for mounts,
 // stream/subscriptions.ts for rows); the READERS are pure functions over the state. Control is

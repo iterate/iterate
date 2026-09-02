@@ -339,7 +339,7 @@ processor is a PURE `StreamProcessor` subclass — constructible bare, `reduce` 
 test — and the DurableObject is a one-field HOST (`processor = new PresenceProcessor()`) that builds a
 `ProcessorEngine` over the pure instance with its facet kv and `env.ITX`. The engine calls the
 processor's public hooks directly (no forwarding adapter); the core reduce is a `StreamProcessor`
-subclass too (hosted at the commit point by `InlineReduce`, `reduce` only — `ReduceOnlyProcessor` is
+subclass too (folded by the `Stream` itself inside every commit, `reduce` only — `ReduceOnlyProcessor` is
 gone), and re-projects live state after every batch so a
 runtime field bumped inside `processEvent` needs no explicit publish. apps/os's two-class shape
 returns, for a different reason than there (unit-testability, not facet-vs-DO hosting).
@@ -570,7 +570,7 @@ src/
   context/   built-ins.ts capability-table.ts expression.ts dispatch.ts invoke-handle.ts dotted-path-proxy.ts
              rpc-stub-directory.ts rpc-stub-relay.ts hibernatable-rpc-stub.ts worker-loader.ts durable-object-names.ts
   fetch/     fetch-capabilities.ts
-  stream/    stream.ts events.ts processor.ts reduce-checkpoint.ts inline-reduce.ts core-processor.ts
+  stream/    stream.ts events.ts processor.ts reduce-checkpoint.ts core-processor.ts
              subscriptions.ts subscription-delivery.ts live-state.ts
   sdk/       index.ts (→ processor.js) stream-processor-durable-object.ts (the host)
   lib/       errors.ts logs.ts hash.ts patch.ts        client/     generated/

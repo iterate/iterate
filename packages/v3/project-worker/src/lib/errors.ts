@@ -13,6 +13,7 @@
 type ErrorCode =
   | "NO_CAPABILITY_MATCH"
   | "IDEMPOTENCY_CONFLICT"
+  | "OFFSET_CONFLICT" // an input's expected `offset` is not the offset it would land at
   | "STREAM_PAUSED"
   | "CONNECTION_OFFLINE" // a live capability's transport is gone right now (row present, stub unreachable)
   | "NOT_A_METHOD" // the dotted path's terminal segment is not callable on the target

@@ -22,22 +22,21 @@ async function virgin(state: DurableObjectState): Promise<DurableObjectStorage> 
   return state.storage;
 }
 
-/** A bare Stream over real storage. `paused` defaults to open (null); `onCommit` records each
- *  `fresh` batch so tests can assert what the fan-out was fed. `wake()` is NOT called — a bare
- *  stream starts virgin; the tests about the wake record call it themselves. */
-function bareStream(
-  storage: DurableObjectStorage,
-  opts?: { paused?: () => { reason: string } | null; batches?: StreamEvent[][] },
-): Stream {
+/** A bare Stream over real storage. `onCommit` records each `fresh` batch so tests can assert what
+ *  the fan-out was fed (core's own live-state delta rides it too: an ephemeral batch after every
+ *  commit that changed core state). `wake()` is NOT called — a bare stream starts virgin; the tests
+ *  about the wake record call it themselves. */
+function bareStream(storage: DurableObjectStorage, opts?: { batches?: StreamEvent[][] }): Stream {
   return new Stream({
     storage,
     path: "/",
     projectId: "prj_bare",
-    paused: opts?.paused ?? (() => null),
-    reduceAtCommit: () => {},
     onCommit: (fresh) => opts?.batches?.push(fresh),
   });
 }
+/** The fan-out minus core's live-state deltas — the batches a test's OWN appends produced. */
+const ownBatches = (batches: StreamEvent[][]): StreamEvent[][] =>
+  batches.filter((b) => !b.every((e) => e.type === "events.iterate.com/live-state/changed"));
 
 test("waitForEvent: a parked waiter resolves with the committed event, fed from the fresh batch", async () => {
   await runInDurableObject(stub("prj_wait_park"), async (_instance, state) => {
@@ -178,8 +177,6 @@ test("waitForEvent: a nested onCommit re-append cannot outrun the outer commit �
       storage: await virgin(state),
       path: "/",
       projectId: "prj_bare",
-      paused: () => null,
-      reduceAtCommit: () => {},
       onCommit: (fresh) => {
         if (!nestedReceipt && fresh.some((e) => e.type === "ping" && !e.ephemeral))
           [nestedReceipt] = stream.append({ type: "ping", ephemeral: true, payload: { n: 2 } });
@@ -222,7 +219,7 @@ test("append with ZERO inputs is a pure no-op — no rows, no offsets, no fan-ou
 
 // ── THE WAKE RECORD (`wake()`): created + woken on a fresh store, woken only on a store with rows ──
 
-test("wake(): a fresh store gets created@1 + woken@2 in ONE fanned-out batch; the first append lands at 3; a later incarnation over the same store gets woken only", async () => {
+test("wake(): a fresh store gets created@1 + woken@2 in ONE fanned-out batch (core's delta takes 3); the first append lands at 4; a later incarnation over the same store gets woken only", async () => {
   await runInDurableObject(stub("prj_wait_woken"), async (_instance, state) => {
     const batches: StreamEvent[][] = [];
     const first = bareStream(await virgin(state), { batches });
@@ -236,15 +233,19 @@ test("wake(): a fresh store gets created@1 + woken@2 in ONE fanned-out batch; th
     expect(page.events[0].payload).toEqual({ projectId: "prj_bare", path: "/" });
     expect(page.events[1].payload).toEqual({ incarnation: 1 });
     expect(first.currentIncarnation()).toBe(1);
-    expect(batches).toHaveLength(1);
-    expect(batches[0].map((e) => e.type)).toEqual([
-      "events.iterate.com/stream/created",
-      "events.iterate.com/stream/woken",
+    // the wake batch, then core's live-state delta (the fold changed identity + incarnation) at 3
+    expect(batches.map((b) => b.map((e) => [e.type, e.offset]))).toEqual([
+      [
+        ["events.iterate.com/stream/created", 1],
+        ["events.iterate.com/stream/woken", 2],
+      ],
+      [["events.iterate.com/live-state/changed", 3]],
     ]);
-    // the first user append lands at offset 3 — and prepends nothing (its batch is itself alone)
+    expect(first.core()).toMatchObject({ projectId: "prj_bare", path: "/", incarnation: 1 });
+    // the first user append lands at offset 4 — and prepends nothing (its batch is itself alone)
     const [hello] = first.append({ type: "hello" });
-    expect(hello.offset).toBe(3);
-    expect(batches[1].map((e) => e.type)).toEqual(["hello"]);
+    expect(hello.offset).toBe(4);
+    expect(batches[2].map((e) => e.type)).toEqual(["hello"]);
     // a LATER incarnation over the same store: born once, so woken ONLY — as its first event
     const second = bareStream(state.storage, { batches }); // the SAME store, NOT wiped
     second.wake();
@@ -256,19 +257,22 @@ test("wake(): a fresh store gets created@1 + woken@2 in ONE fanned-out batch; th
       "hello",
       "events.iterate.com/stream/woken",
     ]);
-    expect(all[3]).toMatchObject({ offset: 4, payload: { incarnation: 2 } });
-    expect(batches[2].map((e) => e.type)).toEqual(["events.iterate.com/stream/woken"]);
+    expect(all[3]).toMatchObject({ offset: 5, payload: { incarnation: 2 } });
+    expect(ownBatches(batches)[2].map((e) => e.type)).toEqual(["events.iterate.com/stream/woken"]);
+    expect(second.core().incarnation).toBe(2);
   });
 });
 
-test("wake() works while PAUSED (created/woken are control events); the pause check refuses every non-control append with STREAM_PAUSED, wholesale, and still lands the resume", async () => {
+test("a stream/paused event pauses the stream through its own core reduce: every non-control append refuses with STREAM_PAUSED, wholesale; the resume lands and reopens", async () => {
   await runInDurableObject(stub("prj_wait_paused"), async (_instance, state) => {
-    let paused: { reason: string } | null = { reason: "x" };
-    const stream = bareStream(await virgin(state), { paused: () => paused });
-    stream.wake(); // no throw — a paused stream still records its wake
+    const stream = bareStream(await virgin(state));
+    stream.wake(); // created@1, woken@2, core's delta@3
+    stream.append({ type: "events.iterate.com/stream/paused", payload: { reason: "x" } }); // @4
+    expect(stream.core().paused).toEqual({ reason: "x" });
     expect(stream.read(0).events.map((e) => e.type)).toEqual([
       "events.iterate.com/stream/created",
       "events.iterate.com/stream/woken",
+      "events.iterate.com/stream/paused",
     ]);
     // a non-control append is refused at the door, CODED, committing nothing and burning no offset
     let err: unknown;
@@ -279,17 +283,17 @@ test("wake() works while PAUSED (created/woken are control events); the pause ch
     }
     expect(errorCode(err)).toBe("STREAM_PAUSED");
     expect((err as Error).message).toContain("stream paused: x");
-    expect(stream.read(0).events).toHaveLength(2);
-    expect(stream.highestAssignedOffset()).toBe(2);
+    expect(stream.read(0).events).toHaveLength(3);
+    expect(stream.highestAssignedOffset()).toBe(4); // the pause's own delta was refused (paused) — no offset burnt
     // a batch MIXING the resume with a non-control event is refused WHOLESALE…
     expect(() =>
       stream.append({ type: "events.iterate.com/stream/resumed" }, { type: "work" }),
     ).toThrow(/stream paused/);
     // …while the bare resume lands: a paused stream must always accept its own resume
     const [resumed] = stream.append({ type: "events.iterate.com/stream/resumed" });
-    expect(resumed.offset).toBe(3);
-    paused = null; // what the host's core reduce does with that resume
-    expect(stream.append({ type: "work" })[0].offset).toBe(4);
+    expect(resumed.offset).toBe(5);
+    expect(stream.core().paused).toBeNull(); // the reduce reopened it — and its delta took 6
+    expect(stream.append({ type: "work" })[0].offset).toBe(7);
   });
 });
 
@@ -325,21 +329,21 @@ test("an ephemeral-only append writes NOTHING — no row, no high-water mark —
 test("across incarnations an ephemeral-only tail's offsets are REUSED by the next durable — the documented contract, and why every checkpoint advances only on a durable", async () => {
   await runInDurableObject(stub("prj_eph_reuse"), async (_instance, state) => {
     const first = bareStream(await virgin(state));
-    first.wake(); // created@1, woken@2 — the DO's shape
-    await first.append({ type: "durable" }); // 3
-    first.append({ type: "chunk", ephemeral: true }, { type: "chunk", ephemeral: true }); // 4, 5 — memory only
-    expect(first.highestAssignedOffset()).toBe(5);
+    first.wake(); // created@1, woken@2, core's delta@3 (ephemeral) — the DO's shape
+    await first.append({ type: "durable" }); // 4
+    first.append({ type: "chunk", ephemeral: true }, { type: "chunk", ephemeral: true }); // 5, 6 — memory only
+    expect(first.highestAssignedOffset()).toBe(6);
     // A NEW incarnation over the same storage resumes from the last DURABLE mark…
     const second = bareStream(state.storage); // the SAME store, NOT wiped
-    expect(second.highestAssignedOffset()).toBe(3);
-    // …so its wake record (durable) is handed 4 again, and its first durable 5.
+    expect(second.highestAssignedOffset()).toBe(4);
+    // …so its wake record (durable) is handed 5 again, its delta 6, and its first durable 7.
     second.wake();
     const [d] = await second.append({ type: "durable" });
-    expect(d.offset).toBe(5); // woken took 4, this durable took 5 — both numbers the dead ephemerals held
-    expect(state.storage.kv.get("maxAssignedOffset")).toBe(5);
-    // The log itself is exact: created, woken, durable (1..3) from the first life; woken, durable
-    // (4, 5) from the second.
-    expect((await second.read(0)).events.map((e) => e.offset)).toEqual([1, 2, 3, 4, 5]);
+    expect(d.offset).toBe(7); // woken took 5, the delta 6 — both numbers the dead ephemerals held
+    expect(state.storage.kv.get("maxAssignedOffset")).toBe(7);
+    // The log itself is exact: created, woken, durable (1, 2, 4) from the first life; woken, durable
+    // (5, 7) from the second — 3 and 6 were ephemeral deltas, valid gaps.
+    expect((await second.read(0)).events.map((e) => e.offset)).toEqual([1, 2, 4, 5, 7]);
     expect((await second.read(0)).events[3].type).toBe("events.iterate.com/stream/woken");
   });
 });
@@ -400,5 +404,68 @@ test("a warm ephemeral-only append runs NO SQL at all (no read, no write, no tra
     Object.assign(counts, { exec: 0, txn: 0, put: 0 });
     stream.append({ type: "blip", ephemeral: true }, { type: "blip", ephemeral: true });
     expect(counts).toEqual({ exec: 0, txn: 0, put: 0 });
+  });
+});
+
+// ── STEP 1 REFUSALS: idempotency and the expected-offset precondition, decided before any write ──
+
+test("idempotency: same key + same body echoes the EXISTING event (no row, no offset); a different body under the key refuses the WHOLE batch before any write; a duplicate inside one batch is one row, two receipts", async () => {
+  await runInDurableObject(stub("prj_idem"), async (_instance, state) => {
+    const stream = bareStream(await virgin(state));
+    const [a] = stream.append({ type: "order", payload: { n: 1 }, idempotencyKey: "k1" }); // @1
+    // the retry: the same event comes back, nothing new lands
+    const [again] = stream.append({ type: "order", payload: { n: 1 }, idempotencyKey: "k1" });
+    expect(again.offset).toBe(a.offset);
+    expect(stream.highestAssignedOffset()).toBe(1);
+    // a conflicting body under the key: refused, CODED — and the valid event beside it does NOT land
+    let err: unknown;
+    try {
+      stream.append({ type: "fine" }, { type: "order", payload: { n: 2 }, idempotencyKey: "k1" });
+    } catch (e) {
+      err = e;
+    }
+    expect(errorCode(err)).toBe("IDEMPOTENCY_CONFLICT");
+    expect(stream.read(0).events).toHaveLength(1);
+    expect(stream.highestAssignedOffset()).toBe(1);
+    // a retry riding beside its original in ONE batch: one row, and both receipts name it
+    const receipts = stream.append(
+      { type: "order", payload: { n: 3 }, idempotencyKey: "k3" },
+      { type: "order", payload: { n: 3 }, idempotencyKey: "k3" },
+    );
+    expect(receipts.map((e) => e.offset)).toEqual([2, 2]);
+    expect(stream.read(0).events.map((e) => e.offset)).toEqual([1, 2]);
+  });
+});
+
+test("expected offset: an input carrying `offset` lands exactly there or the whole batch refuses with OFFSET_CONFLICT, before any write; a dedupe hit must match it too", async () => {
+  await runInDurableObject(stub("prj_expected_offset"), async (_instance, state) => {
+    const stream = bareStream(await virgin(state));
+    stream.append({ type: "seed" }); // @1
+    // "nothing has happened since I looked": the head is 1, so 2 is what the next event gets
+    const [ok] = stream.append({ type: "next", offset: 2 });
+    expect(ok.offset).toBe(2);
+    expect("offset" in (stream.read(1).events[0] as object)).toBe(true); // the receipt's offset — not a stored precondition
+    // a stale expectation refuses the whole batch, coded, nothing written
+    let err: unknown;
+    try {
+      stream.append({ type: "fine" }, { type: "stale", offset: 2 });
+    } catch (e) {
+      err = e;
+    }
+    expect(errorCode(err)).toBe("OFFSET_CONFLICT");
+    expect((err as { data?: unknown }).data).toEqual({ expected: 2, actual: 4 });
+    expect(stream.highestAssignedOffset()).toBe(2);
+    expect(stream.read(0).events).toHaveLength(2);
+    // sequential expectations inside one batch hold together
+    const two = stream.append({ type: "a", offset: 3 }, { type: "b", offset: 4 });
+    expect(two.map((e) => e.offset)).toEqual([3, 4]);
+    // a dedupe hit carries the offset it already has — expecting another is a conflict
+    stream.append({ type: "keyed", idempotencyKey: "k", payload: {} }); // @5
+    expect(() =>
+      stream.append({ type: "keyed", idempotencyKey: "k", payload: {}, offset: 6 }),
+    ).toThrow(/already landed at 5/);
+    expect(
+      stream.append({ type: "keyed", idempotencyKey: "k", payload: {}, offset: 5 })[0].offset,
+    ).toBe(5);
   });
 });

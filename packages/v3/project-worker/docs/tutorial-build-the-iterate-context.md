@@ -476,10 +476,11 @@ The context still has no memory. The log gets its own class — **`Stream`** —
 in the toy it is deliberately _dumb_: storage in, committed events out.
 
 ```ts
-// The log and its one commit point. (The real Stream takes reduceAtCommit/onCommit
-// as injected hooks so the fold runs INSIDE the commit transaction — atomicity the
-// toy gets for free, each sql.exec being atomic. Its deps also add `path`, `projectId`
-// and `paused` — the one `if` that can refuse an append; facets ride the DO's ctx
+// The log and its one commit point. (The real Stream also OWNS the core reduce —
+// `core()`, folded INSIDE the commit transaction, atomicity the toy gets for free,
+// each sql.exec being atomic — and takes one injected hook, onCommit, the fan-out.
+// Its deps add `path` and `projectId`; the pause check is one `if` in append reading
+// its own core state; facets ride the DO's ctx
 // itself — the deep chapter.)
 class Stream {
   // storage is SQLite AND the alarm surface (the real Stream arms setAlarm through it)
@@ -1006,9 +1007,7 @@ new Stream({
   storage, // the DO's SQLite + alarms
   path, // the context's own address, stamped on every event
   projectId, // with `path`, the birth certificate's payload
-  paused, // the core reduce's pause slice — the one `if` that can refuse an append
-  reduceAtCommit, // the core reduce, run inside the commit transaction
-  onCommit, // the post-commit fan-out: facets + subscribers
+  onCommit, // the post-commit fan-out: facets + subscribers (the core reduce is the stream's own)
 });
 ```
 
@@ -1115,7 +1114,7 @@ src/
   context/   built-ins, capability-table, expression, dispatch, invoke-handle, dotted-path-proxy,
              rpc-stub-directory, rpc-stub-relay, hibernatable-rpc-stub, worker-loader, durable-object-names
   fetch/     fetch-capabilities
-  stream/    stream, events, processor (the engine), reduce-checkpoint, inline-reduce, core-processor,
+  stream/    stream (the commit pipeline + the core reduce), events, processor (the engine), reduce-checkpoint, core-processor,
              subscriptions, subscription-delivery, live-state
   sdk/       index (→ processor.js), stream-processor-durable-object (the host)
   lib/       errors, logs, hash, patch

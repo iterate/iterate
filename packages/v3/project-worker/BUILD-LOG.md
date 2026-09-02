@@ -1987,3 +1987,28 @@ appended synchronously in the constructor; the DO's first line is `#name = parse
   tutorial, the fetch plan's D3.
 - GATES: tsc×3 · unit+workers 235 (25 files) · e2e 136p/2xf (35 files) · tutorial-proof 8 ·
   Playwright 2 · oxlint 0/0 · knip clean.
+
+## 2026-09-02 — the flat `append`; the core reduce is the stream's own; two ~10-line features
+
+Jonas: "I kinda want the append method to just be simple, flat, self documenting … 1) check whether
+we can even append — the offset precondition, paused, a valid event — 2) offsets … 3) run the inline
+reducer … 4) commit … 5) the after-event stuff." And: "idempotency key check should also be in that
+'can I legally make this append' section"; both features "ca 10 LOC" with pins.
+
+- **`Stream.append` reads as the five steps** — may-this-land (well-formed · paused · idempotency ·
+  expected offsets, all decided before a single write) · offsets · reduce + commit (one transaction;
+  the ephemeral-only batch skips it) · after (waiters → the host's fan-out → core's live delta). The
+  dedupe and the conflict refusal moved out of the transaction into `#plan`, so the commit can no
+  longer fail on a conflict; a mixed batch with one conflicting input lands nothing.
+- **`InlineReduce` is gone; the stream owns its core reduce.** `Stream.core()` (rehydrate, catch up
+  to the durable mark), `coreSnapshot()`, `coreLiveSnapshot()`; `#foldCore` inside the transaction,
+  `#publishCoreDelta` after. The deps shrink to `{ storage, path, projectId, onCommit }` — `paused`
+  and `reduceAtCommit` no longer exist. The DO reads `stream.core()`.
+- **Two features, ~10 lines each, pinned in `__workers-tests__/stream.test.ts`:** idempotency (same
+  key + body echoes the existing event, no offset; a different body refuses the whole batch coded
+  `IDEMPOTENCY_CONFLICT`; a retry beside its original in one batch is one row, two receipts) and the
+  EXPECTED OFFSET — an optional `offset` on the input (apps/os's shape) that must equal the offset
+  the event would take, else `OFFSET_CONFLICT { expected, actual }` with nothing written; a dedupe
+  hit must match it too. The precondition is never stored in the body.
+- GATES: tsc×3 · unit+workers 235 (24 files) · e2e 136p/2xf (35 files) · tutorial-proof 8 ·
+  Playwright 2 · oxlint 0/0 · knip clean.

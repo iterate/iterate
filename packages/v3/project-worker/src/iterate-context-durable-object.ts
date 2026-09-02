@@ -4,9 +4,9 @@
 //
 //   • the STREAM — a `Stream` (stream/stream.ts), DI'd with this DO's storage: the whole commit
 //     pipeline (validation + the pause check + idempotency + offsets + chunking + waitForEvent +
-//     the alarm armer), plus `wake()` — the constructor's created/woken records. The DO's
-//     append/read/waitForEvent are thin wrappers; the stream's injected callbacks (paused /
-//     reduceAtCommit / onCommit) close over this class — nothing in stream/stream.ts reaches back;
+//     the alarm armer), `wake()` — the constructor's created/woken records — and `core()`, the
+//     stream's own reduced state. The DO's append/read/waitForEvent are thin wrappers; the stream's
+//     one injected callback (onCommit) closes over this class — nothing in stream/stream.ts reaches back;
 //   • the CORE REDUCE — ONE reduce-only processor (core-processor.ts) folded INSIDE the commit
 //     transaction, always on: who this context is, which incarnation runs, whether appends are
 //     paused, the CAPABILITY MOUNTS every call routes through (capability-table.ts reads them) and
@@ -41,7 +41,7 @@ import {
   versionedFacet,
   type WorkerSource,
 } from "./context/worker-loader.ts";
-import { CoreContract, CoreStreamProcessor, type CoreState } from "./stream/core-processor.ts";
+import { CoreContract, type CoreState } from "./stream/core-processor.ts";
 import { codedError, reportIssue } from "./lib/errors.ts";
 import type { StreamEvent, StreamEventInput } from "./stream/events.ts";
 import {
@@ -56,7 +56,6 @@ import {
   serveCapabilityFetchLane,
   type PartialFetch,
 } from "./fetch/fetch-capabilities.ts";
-import { InlineReduce } from "./stream/inline-reduce.ts";
 import { invokePath } from "./context/dispatch.ts";
 import { FacetHandle, RpcStubHandle } from "./context/invoke-handle.ts";
 import { localContext, Stream, type WaitForEventFilter } from "./stream/stream.ts";
@@ -158,26 +157,16 @@ export class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
     this.#stream.wake();
   }
 
-  /** THE STREAM — the commit point (see stream/stream.ts: validation + the pause check + idempotency
-   *  + offsets + the wake record + waitForEvent + the alarm armer, one DI'd class). The name check
-   *  already happened above (`#name`). Its deps close over this DO: `paused` reads the core reduce,
-   *  `reduceAtCommit` runs the core reduce inside the commit transaction (the routing table, the
-   *  subscriptions and the pause state are atomically exact as of the last committed event, always),
-   *  and `onCommit` is the post-commit fan-out: the ONE delivery loop, then core's live-state delta. */
+  /** THE STREAM — the commit point AND the core reduce (stream/stream.ts: `append` is the pipeline
+   *  top to bottom — may-this-land, offsets, reduce + commit, after — and `core()` is the stream's own
+   *  reduced state, folded inside every commit). The name check already happened above (`#name`).
+   *  Its one callback, `onCommit`, is the post-commit fan-out: the ONE delivery loop. */
   readonly #stream = new Stream({
     storage: this.ctx.storage,
     path: this.#name.path,
     projectId: this.#name.projectId,
-    paused: () => this.#core().paused,
-    reduceAtCommit: (justCommitted, after, next) =>
-      this.#coreReduce.reduceAtCommit(justCommitted, after, next),
-    onCommit: (fresh, scannedAfterOffset, nextOffset) => {
-      this.#delivery.onCommit(fresh, scannedAfterOffset, nextOffset);
-      // CORE LIVE STATE, post-commit: a commit that changed the core state `set`s it, appending the
-      // standard ephemeral live-state/changed delta back through this DO's own append door (a
-      // nested commit — terminating, because the delta changes no core state).
-      this.#coreReduce.publishLiveStateChange();
-    },
+    onCommit: (fresh, scannedAfterOffset, nextOffset) =>
+      this.#delivery.onCommit(fresh, scannedAfterOffset, nextOffset),
   });
 
   /** Commit events: idempotency-checked, offsets assigned from ONE shared sequence (ephemeral
@@ -206,22 +195,10 @@ export class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
     return this.#stream.read(afterOffset, limit);
   }
 
-  // ── THE CORE REDUCE, hosted inline at the stream's commit point (stream/inline-reduce.ts:
-  // rehydrate / catch up / reduce-at-commit / checkpoint / publish-live-state). Its state is
-  // everything this DO reads synchronously: pause (the append door), mounts (every invoke),
-  // subscriptions (the delivery loop), and who/which incarnation this is. ──
-  readonly #coreReduce = new InlineReduce(new CoreStreamProcessor(), {
-    kv: this.ctx.storage.kv,
-    read: (after, limit) => this.#stream.read(after, limit),
-    head: () => this.#stream.durableMark(), // the reduce folds durables: its head is the mark
-    // The live-state deltas ride this DO's OWN append door, so they are admitted, committed, and
-    // fanned out like any other ephemeral event (and a paused stream refuses them — the
-    // lossy-by-contract gap LiveState.set contains).
-    sink: { append: (event) => this.append(event) },
-  });
-  /** The core state, current as of the last commit. */
+  /** The core state, current as of the last commit — the stream's own reduce (identity, pause, the
+   *  routing table, the subscription rows), read synchronously. */
   #core(): CoreState {
-    return this.#coreReduce.entry().state;
+    return this.#stream.core();
   }
 
   #resolverInstance?: CapabilityResolver;
@@ -485,14 +462,12 @@ export class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
       };
       return this.#facet(ref.name ?? ref.className, memo);
     }
-    if (ref === CORE) {
-      const entry = this.#coreReduce.entry();
+    if (ref === CORE)
       return {
-        snapshot: () => ({ offset: entry.throughOffset, state: entry.state }),
-        liveSnapshot: () => this.#coreReduce.liveSnapshot(),
+        snapshot: () => this.#stream.coreSnapshot(),
+        liveSnapshot: () => this.#stream.coreLiveSnapshot(),
         waitUntilProcessed: () => ({ ok: true }),
       };
-    }
     const memo = this.ctx.storage.kv.get(`facet:${ref}`) as FacetMemo | undefined;
     if (memo) return this.#facet(ref, memo);
     throw codedError("NO_FACET", `no facet "${ref}" — load a class into it first`);
