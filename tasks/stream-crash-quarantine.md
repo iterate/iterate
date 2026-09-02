@@ -5,10 +5,10 @@ size: large
 
 # Stream crash-loop quarantine (park a DO that OOMs on every boot)
 
-**Status summary:** specced, implementation not started. Adds a mark-before-work
-boot-crash probe to the Stream DO; N crashed boots without a clean confirmation
-parks the stream (no alarms, no folds, reads still served) until an admin unpark
-or a deploy.
+**Status summary:** pure probe core implemented and tested (boot-spacing
+signature, quarantine survives slowed wakes, deploy/admin unpark); DO wiring,
+core event, RPC, and UI not started — held for Misha's look at the flagged
+assumptions.
 
 ## Why
 
@@ -37,17 +37,29 @@ boot itself.
 catch-up / alarms, read+write a KV record `bootCrashProbe`:
 
 ```ts
-{ crashedBoots: number, windowStartMs: number, version: string }
+{ rapidBoots: number, lastBootAtMs: number, version: string, quarantinedAtMs?: number }
 ```
+
+_Refined during implementation:_ a crashed boot can't be observed directly (an
+OOM leaves no record, and there's no eviction hook), but a crash **loop** has an
+unmistakable durable signature — rapid successive boots. So the probe keys on
+**boot spacing** rather than a time window:
 
 - increment + `storage.sync()` BEFORE the risky work (the crash that needs the
   record is the one that prevents writing it afterwards);
-- a clean confirmation — the incarnation surviving a short quiet period (e.g.
-  60s alarm) or the first successful fold ack — resets it to zero;
+- a boot ≥30s (`RAPID_REBOOT_MS`) after the previous one resets the count —
+  spaced wakes are real traffic, not a retry loop (the observed pathology
+  reboots every ~5s on the platform's alarm retry cadence);
+- a clean signal — a fold/alarm pass completing with nothing owed, or the
+  incarnation surviving its confirmation window — resets it to zero;
 - a different worker version resets it (a deploy is the antidote, matching the
-  keepalive's version-reset budget).
+  keepalive's version-reset budget);
+- an existing quarantine is NOT reset by spacing (dropping the alarms slows
+  the wakes; that slowdown must not read as recovery) — only a deploy or the
+  admin unpark clears it.
 
-**Trip:** `crashedBoots >= 5` within the window → quarantined:
+**Trip:** 5 rapid boots in a row (`BOOT_CRASH_QUARANTINE_THRESHOLD`) →
+quarantined:
 
 - append an idempotent `stream/quarantined` evidence event (per version), so
   the journal records why the stream went quiet;
@@ -73,8 +85,10 @@ memory limit" error the user currently sees.
 
 ## Checklist
 
-- [ ] boot-crash probe record + trip/reset logic (likely a small pure module
-      next to `stream-processor-keepalive.ts`, unit-tested in isolation)
+- [x] boot-crash probe record + trip/reset logic _pure module at
+      `apps/os/src/domains/streams/boot-crash-probe.ts` (next to its consumers
+      rather than in packages/iterate — nothing outside the stream DO needs
+      it), 8 scenario tests incl. an incident replay at 5s cadence_
 - [ ] wire into `StreamDurableObject` init: mark before facet/fold arming,
       confirm-clean alarm, skip arming when tripped
 - [ ] `stream/quarantined` core event + reducer handling
