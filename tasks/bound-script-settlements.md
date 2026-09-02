@@ -42,7 +42,7 @@ large outputs to workspace files instead of returning them.
 
 - [x] `packages/shared/src/script-execution.ts`: add optional `oversized` to
       the succeeded variant of `ScriptExecutionSettlement` _added as strictObject
-      {reason, serializedChars, preview, typeText}_
+      {kind: "omitted", serializedChars, preview, typeText}_
 - [x] bounding function (capability-host, near `serializeScriptResult`): if
       compact-JSON length of `result` > `MAX_SCRIPT_RESULT_EVENT_CHARS` (1 MiB),
       replace with `oversized: {kind: "omitted"}`; also cap failure `error` text; idempotent
