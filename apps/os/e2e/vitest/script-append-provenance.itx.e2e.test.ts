@@ -1,7 +1,7 @@
 /**
  * source.script is HOST TRUTH: every append a script makes journals the
- * script run's identity (executionId + home streamPath), stamped by the
- * trusted append door from the server-minted StreamContext — and any
+ * script run's identity (executionId + home streamPath), stamped by
+ * StreamRpcTarget.append from the server-minted StreamContext — and any
  * caller-supplied source.script is stripped, whether it comes from inside a
  * script (a forged/laundered stamp) or from an external session (no script
  * at all). Consumers like the agent UI's status attribution rely on this:

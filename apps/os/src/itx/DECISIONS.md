@@ -528,7 +528,7 @@ NOT adopted: auto-prefixing query keys with the slug (it broke the existing
 `invalidateQueries`/`setQueryData` sites and duplicated the project id the keys
 already carry — the ambient slug drives the connection, not the cache key).
 
-## D-post-v4: source.script is stamped by the append door, never accepted
+## D-post-v4: source.script is stamped by StreamRpcTarget.append, never accepted
 
 Script provenance on journal events (`event.source.script = { executionId,
 streamPath, scriptRunRequestedEventOffset }`) is HOST TRUTH, unlike the

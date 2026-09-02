@@ -39,11 +39,12 @@ export const StreamEventInput = z
               .optional(),
           })
           .optional(),
-        // Stamped by the trusted append door (StreamRpcTarget) when — and only
+        // Stamped by StreamRpcTarget.append (the trusted server-side append
+        // boundary) when — and only
         // when — the appending itx handle belongs to a script execution
         // (StreamContext kind "script-execution"). Unlike the processor
         // stamp's claim semantics, this slot is HOST TRUTH: caller-supplied
-        // values are stripped at the door, so an event carrying it really
+        // values are stripped before commit, so an event carrying it really
         // was written by that script run. Consumers (e.g. the agent UI's
         // status attribution) may rely on it for exact placement.
         script: z

@@ -11,8 +11,9 @@ export type StreamEventSource = {
     version: string;
   };
   /** Host-stamped script provenance: which script run wrote this event.
-   * Trusted (the append door strips caller-supplied values), so the agent-ui
-   * fold may attribute events to exact code steps by executionId. */
+   * Trusted — StreamRpcTarget.append strips caller-supplied values before
+   * commit — so the agent-ui fold may attribute events to exact code steps
+   * by executionId. */
   script?: {
     executionId: string;
     streamPath: string;
