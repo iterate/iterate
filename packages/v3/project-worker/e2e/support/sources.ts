@@ -18,7 +18,7 @@ export class CounterDurableObject extends DurableObject {
   "src/chatroom.js": `import { DurableObject } from "cloudflare:workers";
 import { LiveState } from "./processor.js";
 export class ChatroomDurableObject extends DurableObject {
-  #chat = new LiveState(this.env.ITX, "chat", { messages: [] });
+  #chat = new LiveState({ append: (e) => this.env.ITX.get().append(e) }, "chat", { messages: [] });
   post(from, text) {
     this.#chat.set({ messages: [...this.#chat.get().messages, { from, text }] });
     return { ok: true };

@@ -55,8 +55,9 @@ export default class RunScript extends WorkerEntrypoint {
  *  against DIRECTLY (itx-expression-rewriting.ts, built-in first; no rule).
  *  This is the clean-room's whole kernel surface. It is a PLAIN OBJECT, not an RpcTarget class, on
  *  purpose: the resolver gates on `Object.hasOwn`, so a prototype-method class would leave every
- *  root unreachable. */
-interface BuiltInScope {
+ *  root unreachable. Exported for ONE reader: the edge `IterateContext`'s TYPE merges it in
+ *  (iterate-context.ts), so what rides the dotted hop is typed where a client holds it. */
+export interface BuiltInScope {
   /** Identify this context. */
   whoami(): { projectId: string; path: string };
   /** Project-prefixed durable key/value (the `${projectId}:` prefix IS the isolation). */
@@ -133,7 +134,7 @@ interface BuildBuiltInsDeps {
   projectId: string;
   path: string;
   /** The codec name of the context these roots belong to (loader cache keys). */
-  contextName: string;
+  iterateContextName: string;
   /** The bindings the built-ins reach: the loader (+ the deploy id its cacheKey folds in) and the
    *  project kv (bound in both wrangler configs). */
   env: { LOADER: WorkerLoader; ITX_KV: KVNamespace; CF_VERSION_METADATA?: { id: string } };
@@ -170,7 +171,7 @@ interface BuildBuiltInsDeps {
 /** Assemble the built-in scope for one context. Every entry closes over the context's identity —
  *  PRE-SCOPED, not policed: cross-project access is unspellable by construction. */
 export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> {
-  const { projectId, path, contextName, env } = deps;
+  const { projectId, path, iterateContextName, env } = deps;
   const { host } = deps;
 
   /** THE stateless host — `worker.getEntrypoint(className?)`: a fresh confined isolate (no DO, no
@@ -192,7 +193,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
       invoke: deps.invoke,
       host,
       kind: "code",
-      owner: contextName,
+      owner: iterateContextName,
       source,
       where: "load.getEntrypoint",
     });

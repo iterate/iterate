@@ -1,7 +1,7 @@
 // __workers-tests__/facet-props.test.ts — THE platform probe the processor layer leans on: a facet
 // started from a Worker-Loader class minted with `getDurableObjectClass(name, { props })` sees those
 // props as `this.ctx.props`. That is how a processor's host (its `StreamProcessorDurableObject`
-// subclass) learns its identity (`{ contextName, name }`) with no configure() side channel — the
+// subclass) learns its identity (`{ iterateContextName, name }`) with no configure() side channel — the
 // parent passes props at mint, the only party that knows them. Pinned here in the workers lane
 // because it needs a real DurableObjectState (`state.facets`) and a real LOADER: runInDurableObject
 // hands us both.
@@ -33,7 +33,7 @@ test("a facet from getDurableObjectClass(name, { props }) sees ctx.props", async
       mainModule: "probe.js",
       modules: { "probe.js": PROBE_SRC },
     }));
-    const props = { contextName: state.id.name, name: "probe" };
+    const props = { iterateContextName: state.id.name, name: "probe" };
     const klass = worker.getDurableObjectClass("ProbeDurableObject", { props });
     const facet = state.facets.get("probe", () => ({ class: klass })) as unknown as {
       identity(): Promise<{ props: unknown; idName: string | null; exportsKind: string }>;
@@ -46,6 +46,6 @@ test("a facet from getDurableObjectClass(name, { props }) sees ctx.props", async
   // What else a facet can see about itself, pinned so a platform change shows up here (measured
   // 2026-09-01, workerd via wrangler 4.127.1): a facet's `ctx.id.name` is its PARENT's codec name,
   // and `ctx.exports` is populated. Props still carry the facet's own `name`, which the id cannot.
-  expect(seen.identity.idName).toBe(seen.props.contextName);
+  expect(seen.identity.idName).toBe(seen.props.iterateContextName);
   expect(seen.identity.exportsKind).toBe("object");
 });

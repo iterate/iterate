@@ -13,10 +13,11 @@
 // commit. `processor` is a FIELD so it can take what its effects need from this object
 // (`new Notifier(this.env.ITX)`), and so the same class is constructed bare in a test.
 //
-// IDENTITY is `ctx.props` — `{ contextName, name }` minted by the parent at `getDurableObjectClass(C,
+// IDENTITY is `ctx.props` — `{ iterateContextName, name }` minted by the parent at `getDurableObjectClass(C,
 // { props })`, the only party that knows it (pinned in __workers-tests__/facet-props.test.ts); nothing
-// else names a processor. THE STREAM is `env.ITX` — the loaded isolate's binding to its owning
-// context (itx-entrypoint.ts): `append`/`read` for the engine, `get()` for the scope.
+// else names a processor. THE STREAM is the itx scope behind `env.ITX.get()` — the loaded isolate's
+// binding to its owning context (itx-entrypoint.ts); the engine's `append`/`read` ride it like any
+// other dotted call (one pipelined round trip: `env.ITX.get().append(…)`).
 //
 // The engine — stream/processor.ts's `ProcessorEngine` — is built on first use with this object's kv
 // and `env.ITX`; this class is that wiring plus the doors, ~a screen. Bundled into `processor.js`
@@ -36,7 +37,7 @@ import {
 } from "../context/durable-object-names.ts";
 
 /** What the parent mints the class with — the whole identity. */
-export type StreamProcessorProps = { contextName: string; name: string };
+export type StreamProcessorProps = { iterateContextName: string; name: string };
 
 export abstract class StreamProcessorDurableObject<
   State = unknown,
@@ -48,9 +49,9 @@ export abstract class StreamProcessorDurableObject<
   // ── what an author reaches ──
 
   /** The owning context's parsed address — `{ projectId, path, name }`, `name` its canonical codec
-   *  string (the same object the context DO holds). From `ctx.props.contextName`. */
+   *  string (the same object the context DO holds). From `ctx.props.iterateContextName`. */
   protected readonly context: DurableObjectAddress = DurableObjectNameCodec.parse(
-    this.ctx.props.contextName,
+    this.ctx.props.iterateContextName,
   );
   /** This processor's own name: the facet name, the subscription name, the `.get(name)` name. */
   protected readonly name: string = this.ctx.props.name;
@@ -94,8 +95,8 @@ export abstract class StreamProcessorDurableObject<
   get #engine(): ProcessorEngine<State> {
     return (this.#engineBuiltOnFirstUse ??= new ProcessorEngine(this.processor, {
       stream: {
-        append: (...events) => this.env.ITX.append(...events),
-        read: (after, limit) => this.env.ITX.read(after, limit),
+        append: (...events) => this.env.ITX.get().append(...events),
+        read: (after, limit) => this.env.ITX.get().read(after, limit),
       },
       storage: this.ctx.storage.kv,
     }));

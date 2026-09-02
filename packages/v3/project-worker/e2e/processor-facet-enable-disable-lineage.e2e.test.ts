@@ -223,3 +223,29 @@ test("waitUntilProcessed(future offset) times out with its documented error and 
   expect(snap.offset).toBeGreaterThanOrEqual(m.offset);
   expect(snap.state.counts.mark).toBe(2);
 });
+
+// ── the row's removal IS the disablement ──
+
+test("the raw event agrees with disableProcessor — a hand-appended subscription-configured { target: null } deletes the facet the row HOSTED, storage included", async () => {
+  const itx = openItx(freshCtx("rawdisable"));
+  await enableFixtureProcessor(itx, "tally");
+  const [mark] = await append(itx, { type: "mark" });
+  await until("tally reduced the mark", async () => {
+    const s: any = await tallySnapshot(itx).catch(() => undefined);
+    return s && s.offset >= mark.offset && s;
+  });
+  // ONE event, no verb: the DO deletes the hosted facet before the append returns
+  await append(itx, {
+    type: "events.iterate.com/stream/subscription-configured",
+    payload: { name: "tally", target: null },
+  });
+  expect(await processorNames(itx)).toEqual([]);
+  await expect(tallySnapshot(itx)).rejects.toThrow(/no facet/);
+  // a re-enable is a clean rebuild from the log (the mark above is counted once, from offset 0)
+  await enableFixtureProcessor(itx, "tally");
+  const rebuilt: any = await until("tally rebuilt from the log", async () => {
+    const s: any = await tallySnapshot(itx).catch(() => undefined);
+    return s && s.offset >= mark.offset && s;
+  });
+  expect(rebuilt.state.counts.mark).toBe(1);
+});

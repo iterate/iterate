@@ -16,7 +16,7 @@
   "durable_objects": {
     "bindings": [
       {
-        "name": "CONTEXT",
+        "name": "ITERATE_CONTEXT",
         // Deploys in LOCKSTEP with (after) project-worker's rename-2 migration — the class_name
         // must match what the project-worker script currently exports.
         "class_name": "IterateContextDurableObject",

@@ -12,7 +12,7 @@
 // whose key nobody lent. PRESENCE is physical: `itx.rpcStubs.list()` — the keys with an open
 // transport RIGHT NOW. Re-providing the same key replaces the transport (the old pager closes
 // "replaced") and appends ONE more rule event (no dedupe; the map still holds one rule). A live
-// SUBSCRIBER is the same shape one layer up — a stub under `itx.subscriptions.<name>` plus a row of
+// SUBSCRIBER is the same shape one layer up — a stub under `subscription:<name>` plus a row of
 // the SUBSCRIPTIONS table, never a rewrite rule.
 
 import { expect, test } from "vitest";
@@ -219,16 +219,16 @@ test("fan-out via the rpc-stub rewrite rules + map: a dead member leaves the set
     .provide("itx.doomed", new Tools("doomed"), { rewrite: "itx.doomed" });
   // A rule to a key nobody lends: in the set, offline forever.
   await observer.rewrite("itx.ghost", "itx.rpcStubs.get('ghost')");
-  // A lent live SUBSCRIBER: physically present (its stub under itx.subscriptions.<name>) but a
+  // A lent live SUBSCRIBER: physically present (its stub under subscription:<name>) but a
   // row of the SUBSCRIPTIONS table, not a rewrite rule — the fan-out over rules never sees it, so
   // a callback with no hello() cannot pollute the census.
   const subscription = await observer.subscribe({ target: () => undefined });
   const subscriptionName: string = await subscription.name;
   await until("the subscriber is present", async () =>
-    (await presence(observer)).includes(`itx.subscriptions.${subscriptionName}`),
+    (await presence(observer)).includes(`subscription:${subscriptionName}`),
   );
   expect(await rpcStubRewriteRuleMatches(observer)).not.toContain(
-    `itx.subscriptions.${subscriptionName}`,
+    `subscription:${subscriptionName}`,
   );
 
   /** fan-out = rpc-stub rules → map itx.<match>.hello() → allSettled; answers + rejection codes by match. */
@@ -318,7 +318,7 @@ test("subscribe → subscribe({ name, target: null }) recalls the lent stub AND 
 
   const subscription = await observer.subscribe({ target: () => undefined });
   const subscriptionName: string = await subscription.name;
-  const rpcStubKey = `itx.subscriptions.${subscriptionName}`;
+  const rpcStubKey = `subscription:${subscriptionName}`;
   await until("the lent subscriber has a transport", async () =>
     (await presence(observer)).includes(rpcStubKey),
   );

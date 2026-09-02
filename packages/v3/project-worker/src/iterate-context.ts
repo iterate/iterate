@@ -45,6 +45,7 @@ import { toItxExpression, type ItxExpressionInput } from "./context/expression.t
 import { rewriteRuleConfiguredEvent } from "./context/itx-expression-rewriting.ts";
 import type { WorkerSource } from "./context/worker-loader.ts";
 import { installPrototypeInvokeFallback } from "./context/dotted-path-proxy.ts";
+import type { BuiltInScope } from "./context/built-ins.ts";
 import {
   DurableObjectNameCodec,
   resolveContextPath,
@@ -106,6 +107,13 @@ export class SubscriptionHandle extends RpcTarget {
     this.#undo();
   }
 }
+
+/** WHAT RIDES THE HOP, TYPED: every built-in root (`append`, `read`, `waitForEvent`, `kv`, `rpcStubs`,
+ *  `facets`, `load`, …) is a member of this class's TYPE by declaration merging — zero runtime; the
+ *  prototype fallback at the bottom of this file is the runtime. So a reader of this file sees the
+ *  whole surface, and `env.ITX.get().append(…)` typechecks in loaded code. `cd` is the edge's own
+ *  (below) — it returns an EDGE context, not the built-in's handle. */
+export interface IterateContext extends Omit<BuiltInScope, "cd"> {}
 
 /** The iterate context (`itx`) at one `{ projectId, path }`, as a client holds it. */
 export class IterateContext extends RpcTarget {
@@ -236,7 +244,7 @@ export class IterateContext extends RpcTarget {
   /** SUBSCRIBE: have each committed batch — filtered by `consumes` — delivered to `target` as
    *  `(events, range)`. `target` is EITHER an itx EXPRESSION whose terminal is callable that way (a
    *  facet's `.processEventBatch`, a loaded entrypoint's method, a sibling context's `.append`) OR a
-   *  LIVE callback, which is lent to `itx.rpcStubs` under `itx.subscriptions.<name>` and targeted as
+   *  LIVE callback, which is lent to `itx.rpcStubs` under the key `subscription:<name>` and targeted as
    *  `itx.rpcStubs.get('…')`; `null` removes the row. HOW it is served is not declared here: the
    *  context looks at what the target evaluates to — a facet or a lent stub owns its progress and gets
    *  a push (the client heals a gap with `read`); anything else gets an at-least-once cursor the
@@ -248,7 +256,7 @@ export class IterateContext extends RpcTarget {
     consumes?: string[];
   }): Promise<SubscriptionHandle> {
     const name = input.name ?? `sub-${crypto.randomUUID().slice(0, 8)}`;
-    const rpcStubKey = `itx.subscriptions.${name}`;
+    const rpcStubKey = `subscription:${name}`;
     const sessionTeardownKey = this.#sessionTeardownKey(rpcStubKey);
     let target = input.target as ItxExpressionInput | null;
     if (target !== null && typeof target !== "string" && !Array.isArray(target)) {
@@ -308,11 +316,12 @@ export class IterateContext extends RpcTarget {
     return { name };
   }
 
-  /** Disable a processor: remove its subscription and DELETE its facet, storage included — a
-   *  re-enable is a clean rebuild from the log, never a resume from orphaned state. */
+  /** Disable a processor: ONE event — `subscription-configured { name, target: null }`. The DO deletes
+   *  the facet the removed row HOSTED (its `itx.load(…).getDurableObjectClass(…).get(…)` target),
+   *  storage included, before the append returns — a re-enable is a clean rebuild from the log, never
+   *  a resume from orphaned state. The raw event is the same disablement. */
   async disableProcessor(name: string): Promise<void> {
     await this.#append(subscriptionConfiguredEvent({ name, target: null }));
-    await this.#durableObject.invoke(["itx", "facets", ["delete", name]]);
   }
 
   /** THE ONE WRITE: every verb above builds an event and appends it here — `itx.append(event)` through
@@ -328,7 +337,7 @@ export class IterateContext extends RpcTarget {
     this.#waitUntil(this.#append(event).catch(() => undefined));
   }
 
-  /** The SessionTeardown key for a lent stub: `"<contextName> <rpcStubKey>"`. The teardown is
+  /** The SessionTeardown key for a lent stub: `"<iterateContextName> <rpcStubKey>"`. The teardown is
    *  SESSION-lived and shared by every IterateContext the session hands out (across projects), while
    *  a stub key is only unique PER CONTEXT. A space separator is unambiguous: a context name has no
    *  spaces. */

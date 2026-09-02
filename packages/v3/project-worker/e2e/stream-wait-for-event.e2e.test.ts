@@ -3,7 +3,7 @@
 // promise resolves with the committed event. Plus the coded timeout. The wait/settle mechanics are
 // pinned deterministically in __workers-tests__/stream.test.ts; this file proves the doors end to
 // end — the capnweb edge (`itx.waitForEvent`, a built-in root riding `invoke` → DO → Stream) AND
-// the loaded-worker lane (`env.ITX.waitForEvent` → ItxEntrypoint → DO → Stream).
+// the loaded-worker lane (`env.ITX.get()` → the scope's `waitForEvent` → DO → Stream).
 
 import { expect, test } from "vitest";
 import { freshCtx, openItx, sleep } from "./support/client.ts";
@@ -26,14 +26,14 @@ test("waitForEvent round trip: awaited via session A, appended via session B, re
   expect(got.offset).toBeGreaterThan(head);
 });
 
-test("waitForEvent through a LOADED worker's env.ITX — the ItxEntrypoint door waits on the DO and returns the event", async () => {
+test("waitForEvent through a LOADED worker's env.ITX.get() — the scope's dotted door waits on the DO and returns the event", async () => {
   const ctx = freshCtx("waitload");
   const itxA = openItx(ctx);
   const itxB = openItx(ctx);
-  // The door under test is `env.ITX.waitForEvent` — the ItxEntrypoint's OWN stream verb (the
-  // Workers-RPC lane no other suite drives), not the itx scope behind `env.ITX.get()`. A runScript
-  // lambda only ever sees the scope, so a real entrypoint is loaded: its `run` opens the wait
-  // through env.ITX, a second session appends, and the loaded worker returns the committed event.
+  // The door under test is `waitForEvent` on the itx scope a loaded worker holds (`env.ITX.get()` —
+  // the ItxEntrypoint has no stream verbs of its own: `get` and `fetch` only). A real entrypoint is
+  // loaded: its `run` opens the wait through the scope, a second session appends, and the loaded
+  // worker returns the committed event — the Workers-RPC lane no other suite drives.
   await itxA.invoke([
     "itx",
     "kv",
@@ -43,7 +43,8 @@ test("waitForEvent through a LOADED worker's env.ITX — the ItxEntrypoint door 
       `import { WorkerEntrypoint } from "cloudflare:workers";
 export default class Waiter extends WorkerEntrypoint {
   async run(afterOffset) {
-    return await this.env.ITX.waitForEvent({ type: "ping", afterOffset, timeoutMs: 20000 });
+    const itx = await this.env.ITX.get();
+    return await itx.waitForEvent({ type: "ping", afterOffset, timeoutMs: 20000 });
   }
 }`,
     ],

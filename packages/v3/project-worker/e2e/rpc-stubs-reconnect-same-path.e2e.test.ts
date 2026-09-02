@@ -130,7 +130,7 @@ test("a provider drops and re-provides at the same key — default-deny in betwe
 });
 
 // The same property one layer up (was resub-zombie.e2e): a LIVE SUBSCRIBER is a stub lent under
-// `itx.subscriptions.<name>` plus one subscription row naming it. Re-subscribing the same name
+// `subscription:<name>` plus one subscription row naming it. Re-subscribing the same name
 // re-lends under the same key — the session disposes the first relay (its transport is REPLACED, the
 // first callback physically unreachable) — and appends ONE more subscription-configured (same name
 // REPLACES the row; there is no shadow stack and no dedupe). `subscribe({ name, target: null })`
@@ -181,7 +181,7 @@ test("a live subscriber re-subscribes under the same name — the transport is r
   const logAfter = await itx.read(0, 500);
   expect(logAfter.events.length).toBe(logBefore.events.length + 1);
   expect(await rowsNamed("s")).toHaveLength(1);
-  expect(await presence(itx)).toContain("itx.subscriptions.s");
+  expect(await presence(itx)).toContain("subscription:s");
 
   await itx.append({ type: "mark", payload: { n: 1 } });
   await until("cb2 delivered", () => cb2 === 1);
@@ -191,7 +191,7 @@ test("a live subscriber re-subscribes under the same name — the transport is r
   // ── null target once: the row and this session's stub are gone; nobody under s hears the next mark ──
   await itx.subscribe({ name: "s", target: null });
   expect(await rowsNamed("s")).toHaveLength(0);
-  await until("stub closed", async () => !(await presence(itx)).includes("itx.subscriptions.s"));
+  await until("stub closed", async () => !(await presence(itx)).includes("subscription:s"));
   await itx.append({ type: "mark", payload: { n: 2 } });
   await sleep(1500);
   expect(cb1).toBe(0);

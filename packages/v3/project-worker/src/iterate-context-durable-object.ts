@@ -34,7 +34,8 @@
 // replay, all against the inline core state; this class only delegates. Every OTHER change to this
 // context is an appended event: the edge's `rewrite`/`subscribe`/`enableProcessor` verbs build one
 // and call `append` — there are no configuration verbs here. The ONE event this class appends on its
-// own initiative is the un-set of whatever named an rpc stub whose last pager closed (onPresence).
+// own initiative is the un-set of whatever named an rpc stub whose last pager closed (onPresence);
+// the ONE effect it runs off a committed event is deleting the facet a removed subscription hosted.
 
 import { DurableObject } from "cloudflare:workers";
 import { substituteHeaderSecrets } from "@v3/shared/egress";
@@ -43,7 +44,7 @@ import {
   loadConfinedWorker,
   type WorkerSource,
 } from "./context/worker-loader.ts";
-import { CoreContract } from "./stream/core-processor.ts";
+import { CoreContract, type CoreState } from "./stream/core-processor.ts";
 import { codedError, errorCode } from "./lib/errors.ts";
 import { withTimeout } from "./lib/timeout.ts";
 import type { StreamEvent, StreamEventInput } from "./stream/events.ts";
@@ -93,7 +94,7 @@ const CORE_SLUG = CoreContract.slug;
 /** The context worker's bindings (wrangler.jsonc): the DO namespace, the Worker Loader, the two kv
  *  namespaces, the deploy id, and the egress terminal. */
 export interface Env {
-  CONTEXT: DurableObjectNamespace<IterateContextDurableObject>;
+  ITERATE_CONTEXT: DurableObjectNamespace<IterateContextDurableObject>;
   LOADER: WorkerLoader;
   ITX_KV: KVNamespace;
   SECRETS_KV?: KVNamespace;
@@ -193,9 +194,43 @@ export class IterateContextDurableObject extends DurableObject<Env> {
    *  (a REFUSED one doesn't: arming the quiet-clock alarm is a storage write a rejected probe must
    *  not pay). */
   async append(...events: StreamEventInput[]): Promise<StreamEvent[]> {
+    const subscriptionsBeforeCommit = this.#stream.coreReducedState.subscriptions;
     const committedEvents = this.#stream.append(...events);
     this.#recordActivityForQuietClock();
+    this.#deleteFacetsWhoseHostingSubscriptionWasRemoved(
+      committedEvents,
+      subscriptionsBeforeCommit,
+    );
     return committedEvents;
+  }
+
+  /** THE ONE EFFECT of a subscription removal: a row whose target HOSTED a facet —
+   *  `itx.load(src).getDurableObjectClass(C).get(name)…`, the shape `enableProcessor` writes — takes
+   *  the facet with it, storage included, so `subscription-configured { name, target: null }` IS the
+   *  disablement (raw event or verb alike) and a re-enable rebuilds from the log. A row that only
+   *  ADDRESSED a running facet (`itx.facets.get(name)…`) deletes nothing: it never owned it. Done
+   *  here, after the commit and before the append returns, because only the pre-commit state knows
+   *  what the removed row targeted. */
+  #deleteFacetsWhoseHostingSubscriptionWasRemoved(
+    committedEvents: StreamEvent[],
+    subscriptionsBeforeCommit: CoreState["subscriptions"],
+  ): void {
+    for (const event of committedEvents) {
+      if (event.type !== "events.iterate.com/stream/subscription-configured") continue;
+      const { name, target } = event.payload as { name: string; target: string | null };
+      const removedRow = target === null ? subscriptionsBeforeCommit[name] : undefined;
+      if (!removedRow) continue;
+      const [, loadStep, classStep, getStep] = removedRow.target;
+      if (
+        Array.isArray(loadStep) &&
+        loadStep[0] === "load" &&
+        Array.isArray(classStep) &&
+        classStep[0] === "getDurableObjectClass" &&
+        Array.isArray(getStep) &&
+        getStep[0] === "get"
+      )
+        this.#deleteFacet((getStep[1] as string | undefined) ?? (classStep[1] as string));
+    }
   }
 
   /** Wait for the next event matching `filter` (or the first committed durable match already in
@@ -217,14 +252,14 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     builtIns: buildBuiltIns({
       projectId: this.#name.projectId,
       path: this.#name.path,
-      contextName: this.#name.name,
+      iterateContextName: this.#name.name,
       env: this.env,
       invoke: (call) => this.invoke(call),
       // a sibling context by path; the own path is this DO as a uniform-async ReachableContext (stream.ts)
       context: (p) =>
         p === this.#name.path
           ? localReachableContext(this)
-          : this.env.CONTEXT.getByName(
+          : this.env.ITERATE_CONTEXT.getByName(
               DurableObjectNameCodec.stringify({ projectId: this.#name.projectId, path: p }),
             ),
       egress: (request) => this.#egress(request),
@@ -433,7 +468,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       // within a deploy restarts the facet in place, its storage surviving (the deploy id is already
       // in the loader's cacheKey).
       const klass = worker.getDurableObjectClass(memo.className, {
-        props: { contextName: this.#name.name, name },
+        props: { iterateContextName: this.#name.name, name },
       });
       if (!klass) throw new Error(`loaded worker does not export class "${memo.className}"`);
       const previousContentHash = this.ctx.storage.kv.get(`facet:${name}:version`) as

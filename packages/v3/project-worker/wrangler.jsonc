@@ -33,7 +33,7 @@
   // THE context DO: one per {projectId, path}, codec-named — the stream, the routing table, and
   // every hibernatable socket in one addressable parent.
   "durable_objects": {
-    "bindings": [{ "name": "CONTEXT", "class_name": "IterateContextDurableObject" }],
+    "bindings": [{ "name": "ITERATE_CONTEXT", "class_name": "IterateContextDurableObject" }],
   },
   // The DO's lifecycle, declaratively: one SQLite-backed class, no migration history to replay
   // (the legacy `migrations` array is gone; a deployed namespace keeps its data across this change).

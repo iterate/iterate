@@ -59,7 +59,7 @@ export default {
       // a CLI script or cron does one POST, no socket handshake. (Batch sessions cannot hold
       // live capabilities: a live provide needs the relay to outlive the response —
       // the relay's lend call simply fails there, which is the honest error.)
-      return newWorkersRpcResponse(request, new UnauthenticatedSession(env.CONTEXT, ctx));
+      return newWorkersRpcResponse(request, new UnauthenticatedSession(env.ITERATE_CONTEXT, ctx));
 
     // THE FETCH LANE — the plain-HTTP door onto fetch-shaped capabilities (WS upgrades and all), for
     // callers with no capnweb session (curl, a browser tab, a webhook): `?context=` names the
@@ -76,7 +76,7 @@ export default {
         );
       const headers = new Headers(request.headers);
       headers.set(ITX_EXPRESSION_FETCH_HEADER, itxExpression);
-      return env.CONTEXT.getByName(DurableObjectNameCodec.parse(context).name).fetch(
+      return env.ITERATE_CONTEXT.getByName(DurableObjectNameCodec.parse(context).name).fetch(
         new Request(request, { headers }),
       );
     }

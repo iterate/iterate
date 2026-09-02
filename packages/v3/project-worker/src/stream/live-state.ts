@@ -30,7 +30,7 @@ import { diff } from "../lib/patch.ts";
 // A SUBSCRIPTION may name the type to watch live state; that is delivery, not a reduce.
 
 /** The only thing a LiveState needs from its host: somewhere to append the delta. Both a
- *  `ProcessorStream` (`this.stream`) and the itx scope (`env.ITX`) satisfy it — the shape is the
+ *  `ProcessorStream` (`this.stream`) and the itx scope (`await env.ITX.get()`) satisfy it — the shape is the
  *  StreamEventInput subset a delta uses (ephemeral is always literal `true`). */
 export type LiveStateSink = {
   append(event: { type: string; ephemeral?: true; payload?: Record<string, unknown> }): unknown;

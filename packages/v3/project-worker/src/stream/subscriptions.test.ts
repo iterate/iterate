@@ -93,7 +93,7 @@ describe("configure — ONE event: set, replace, or remove", () => {
 
   test("a NULL target is the removal: the same event, target null (and no consumes); an unknown name is a no-op through the reduce", () => {
     const { configure, events, rows } = setup();
-    configure({ name: "tab", target: "itx.rpcStubs.get('itx.subscriptions.tab')" });
+    configure({ name: "tab", target: "itx.rpcStubs.get('subscription:tab')" });
     expect(configure({ name: "tab", target: null, consumes: ["ignored"] })).toEqual({
       type: "events.iterate.com/stream/subscription-configured",
       payload: { name: "tab", target: null },

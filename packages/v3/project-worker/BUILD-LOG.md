@@ -2319,3 +2319,5 @@ options?)` with `options.rewrite`; chapter 1 reads `itx.provide("laptop", fn)`, 
   `const lent` → `targetIsLentRpcStub`. Left as they are: `WaitUntil`, `Scalar`, `LogFields`,
   `InvokeTarget`, `WebSocketHooks` — each already says what it holds.
 - GATES: tsc×3 · oxlint 0/0 · knip · unit 205 · workers 45 · e2e 141p/2xf · tutorial-proof 8 · Playwright 2.
+- GATES: tsc×3 (+ the shell's) · oxlint 0/0 · knip clean · unit+workers 250 · e2e 141p/2xf (37 files; the
+  full lane, twice: the first run caught the chatroom sink and the entrypoint-fetch detour).

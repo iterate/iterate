@@ -37,6 +37,7 @@ export { applyPatch, diff, type PatchOp } from "../lib/patch.ts";
 
 // LIVE STATE — the one holder used two ways: a processor's base owns one internally (reduced state
 // is live by default, override `projectLiveState` to reduce in runtime fields), and a mini-app DO that
-// is NOT a processor (a chatroom, a lobby) owns one directly: `new LiveState(env.ITX, "chat", {…})`,
+// is NOT a processor (a chatroom, a lobby) owns one directly — the sink is one line over the scope,
+// `new LiveState({ append: (e) => env.ITX.get().append(e) }, "chat", {…})` (a field initializer cannot await) —
 // mutate with `set`, expose `snapshot()` as the client seed door. See stream/live-state.ts.
 export { LiveState, type LiveStateSink } from "../stream/live-state.ts";

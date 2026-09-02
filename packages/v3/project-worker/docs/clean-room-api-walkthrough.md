@@ -186,7 +186,7 @@ const cli = newHttpBatchRpcSession("https://<worker>/api").authenticate().projec
 `projects.get` takes a project id (the root context's full name is accepted too);
 a non-root context name is refused, reach those with `cd`. One
 session may hold contexts of many projects; the session's `SessionTeardown` is keyed
-`"<contextName> <rpcStubKey>"`, so two contexts lending under the same key never
+`"<iterateContextName> <rpcStubKey>"`, so two contexts lending under the same key never
 recall each other's stubs.
 
 Every call has two spellings, and both land on the same door:
@@ -280,7 +280,7 @@ class IterateContext extends RpcTarget {
   // ── subscriptions: ONE event, over (a) when the target is live ──
   /** Have each committed batch — filtered by `consumes` — delivered to `target` as
    *  `(events, range)`. `target` is an itx expression whose terminal is callable that way, OR a
-   *  live callback (lent under `itx.subscriptions.<name>`, targeted as `itx.rpcStubs.get('…')`),
+   *  live callback (lent under `subscription:<name>`, targeted as `itx.rpcStubs.get('…')`),
    *  OR `null` to remove the row. No name ⇒ `sub-<8hex>`. Same name REPLACES. Literally
    *  `append(subscriptionConfiguredEvent({ name, target, consumes }))`. */
   subscribe(input: {
@@ -724,7 +724,7 @@ await itx.counter.bump(); // 3
 ```
 
 A facet keeps its storage across restarts; a source change restarts it in
-place (the `facet:<name>:version` marker). The class is minted with `props: { contextName, name }`,
+place (the `facet:<name>:version` marker). The class is minted with `props: { iterateContextName, name }`,
 readable as `this.ctx.props`. A busy stateful facet pins its context DO awake,
 an accepted trade. Facets have no alarms (workerd#6810); a future "append at
 this time" primitive on the context is the planned replacement, not a proxy.
@@ -770,7 +770,7 @@ abstract class StreamProcessor<State> {
 The host, `src/sdk/stream-processor-durable-object.ts`:
 
 ```ts
-type StreamProcessorProps = { contextName: string; name: string };
+type StreamProcessorProps = { iterateContextName: string; name: string };
 
 abstract class StreamProcessorDurableObject<
   State = unknown,
@@ -905,7 +905,7 @@ await itx.disableProcessor("presence"); // removes the subscription, deletes the
 How it is hosted: `enableProcessor` is nothing but a subscription whose target
 is `itx.load(source).getDurableObjectClass(className).get(name).processEventBatch`.
 The DO loads your module plus `processor.js` into one isolate, takes the HOST
-class by name, and hosts it as a facet named `name` with `props: { contextName, name }`.
+class by name, and hosts it as a facet named `name` with `props: { iterateContextName, name }`.
 Every commit that carries an event the subscription consumes, the delivery loop
 evaluates the target, sees a `FacetHandle`, and pushes
 `processEventBatch(events, range)` to it (awaited, so the facet's batches stay
@@ -997,7 +997,7 @@ import { DurableObject } from "cloudflare:workers";
 import { LiveState } from "./processor.js";
 
 export class ChatroomDurableObject extends DurableObject {
-  #live = new LiveState(this.env.ITX, "chat", { messages: [] }); // sink, key, initial
+  #live = new LiveState({ append: (e) => this.env.ITX.get().append(e) }, "chat", { messages: [] }); // sink, key, initial
   state() {
     return this.#live.snapshot();
   } // the seed door: { rev, state }
@@ -1270,12 +1270,12 @@ interface Context {
 
 ## 8. Worker entrypoints, DO classes, bindings
 
-| Export (from `src/worker.ts`) | Kind                                                                                   | Surface                                                                                                                                                                                                |
-| ----------------------------- | -------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `default`                     | module worker `fetch`                                                                  | `/api` (capnweb: WS or one-shot HTTP batch → `UnauthenticatedSession`), `/expression?context=<id or name>&itx=<expr>` (fetch lane → DO with `x-itx-expression`; 400 without both), `/demo`, `/version` |
-| `IterateContextDurableObject` | Durable Object (binding `CONTEXT`)                                                     | section 7                                                                                                                                                                                              |
-| `ItxEntrypoint`               | `WorkerEntrypoint`, minted via `ctx.exports.ItxEntrypoint({ props: { contextName } })` | `get()` → the real `IterateContext` scope; `append`, `read`, `waitForEvent`; `fetch` (egress)                                                                                                          |
-| `DummyControlPlane`           | `WorkerEntrypoint`                                                                     | `fetch` = bare `fetch(request)`. Bound as `FALLBACK` only in solo/test config                                                                                                                          |
+| Export (from `src/worker.ts`) | Kind                                                                                          | Surface                                                                                                                                                                                                |
+| ----------------------------- | --------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `default`                     | module worker `fetch`                                                                         | `/api` (capnweb: WS or one-shot HTTP batch → `UnauthenticatedSession`), `/expression?context=<id or name>&itx=<expr>` (fetch lane → DO with `x-itx-expression`; 400 without both), `/demo`, `/version` |
+| `IterateContextDurableObject` | Durable Object (binding `CONTEXT`)                                                            | section 7                                                                                                                                                                                              |
+| `ItxEntrypoint`               | `WorkerEntrypoint`, minted via `ctx.exports.ItxEntrypoint({ props: { iterateContextName } })` | `get()` → the real `IterateContext` scope (every stream verb rides it: `env.ITX.get().append(…)`); `fetch` (egress). Nothing else.                                                                     |
+| `DummyControlPlane`           | `WorkerEntrypoint`                                                                            | `fetch` = bare `fetch(request)`. Bound as `FALLBACK` only in solo/test config                                                                                                                          |
 
 Injected into loaded isolates, never deployed as a class:
 

@@ -146,13 +146,13 @@ test("MEASURED FINDING: a push subscriber that stops reading mid-flood is NOT cl
   // one probe proves the lane end-to-end BEFORE the stall
   await append(itx, { type: "flood", ephemeral: true, payload: { probe: true } });
   await until("probe delivered over the victim socket", () => c.invocations.length >= 1);
-  // the victim's row is a PUSH row (pure data — target `itx.rpcStubs.get('itx.subscriptions.victim')`,
+  // the victim's row is a PUSH row (pure data — target `itx.rpcStubs.get('subscription:victim')`,
   // no cursor); whether that stub is ONLINE is the registry's fact, read separately
-  const victimRow = { name: "victim", target: "itx.rpcStubs.get('itx.subscriptions.victim')" };
+  const victimRow = { name: "victim", target: "itx.rpcStubs.get('subscription:victim')" };
   const before = await subscriptions(itx);
   expect(before).toContainEqual(expect.objectContaining(victimRow));
   expect(before.find((r) => r.name === "victim").cursor).toBeUndefined();
-  const victimOnline = async () => (await presence(itx)).includes("itx.subscriptions.victim");
+  const victimOnline = async () => (await presence(itx)).includes("subscription:victim");
   expect(await victimOnline()).toBe(true);
   const droppedWarns = () => countMatches(worker.logs(), /delivery\.push\.dropped/g);
   const droppedBefore = droppedWarns(); // logs are worker-global — assert the DELTA, not zero

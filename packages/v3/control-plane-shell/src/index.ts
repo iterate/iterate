@@ -10,7 +10,7 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { substituteHeaderSecrets } from "@v3/shared/egress";
 // Type-only: the class lives in (and stays deployed with) the project-worker script — see the
-// cross-script CONTEXT binding in wrangler.jsonc.
+// cross-script ITERATE_CONTEXT binding in wrangler.jsonc.
 import type { IterateContextDurableObject } from "project-worker";
 
 interface Env {
@@ -18,7 +18,7 @@ interface Env {
   // CROSS-SCRIPT binding to the project worker's IterateContextDurableObject namespace (D27): a context IS a stream,
   // so the control plane can name + write into a PROJECT's context. A project can only ever name its
   // OWN contexts (constructive isolation) — so this reach is outer→inner ONLY.
-  CONTEXT?: DurableObjectNamespace<IterateContextDurableObject>;
+  ITERATE_CONTEXT?: DurableObjectNamespace<IterateContextDurableObject>;
 }
 
 export class ControlPlaneShell extends WorkerEntrypoint<Env> {
@@ -48,11 +48,11 @@ export default {
       const projectId = url.searchParams.get("projectId") ?? "";
       const path = url.searchParams.get("path") ?? "/inbox";
       const type = url.searchParams.get("type") ?? "project-created";
-      if (!env.CONTEXT) return new Response("no CONTEXT bound\n", { status: 500 });
+      if (!env.ITERATE_CONTEXT) return new Response("no CONTEXT bound\n", { status: 500 });
       const name = `${projectId}.iterate${path.startsWith("/") ? path : `/${path}`}`;
       // workers-types' Rpc.Serializable rejects `unknown`, so a stub method returning StreamEvent
       // (payload: Record<string, unknown>) types as `never` — the value is a plain committed event.
-      const [event] = (await env.CONTEXT.getByName(name).append({
+      const [event] = (await env.ITERATE_CONTEXT.getByName(name).append({
         type,
         payload: { by: "control-plane", projectId },
       })) as unknown as { offset: number }[];

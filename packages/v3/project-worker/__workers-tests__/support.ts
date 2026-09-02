@@ -10,13 +10,13 @@ import { afterAll, vi } from "vitest";
 import { DurableObjectNameCodec } from "../src/context/durable-object-names.ts";
 import type { IterateContextDurableObject } from "../src/iterate-context-durable-object.ts";
 
-/** The context DO for a ctx name (a project id or a full codec name), through the CONTEXT
+/** The context DO for a ctx name (a project id or a full codec name), through the ITERATE_CONTEXT
  *  binding — the raw Workers-RPC stub, which is this lane's whole point: the DO's verbs with no
  *  edge reducing the returns away, plus runInDurableObject over the same instance. */
 export const stub = (ctx: string) =>
   (
-    env as unknown as { CONTEXT: DurableObjectNamespace<IterateContextDurableObject> }
-  ).CONTEXT.getByName(DurableObjectNameCodec.parse(ctx).name);
+    env as unknown as { ITERATE_CONTEXT: DurableObjectNamespace<IterateContextDurableObject> }
+  ).ITERATE_CONTEXT.getByName(DurableObjectNameCodec.parse(ctx).name);
 
 /** One client's rpc stub, lent under its key: the per-instance tag (`echo-<i>:<s>`) proves no
  *  crosstalk. Provided as `itx.provide(rpcStubKey, new Echo(i), { rewrite: rpcStubKey })`, so

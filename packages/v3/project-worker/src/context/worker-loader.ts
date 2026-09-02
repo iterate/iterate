@@ -27,8 +27,8 @@ import { toItxExpression, type ItxExpression } from "./expression.ts";
  *  "…/x:y:Door", a SHARED loader cacheKey = silent cross-context authority transfer (the isolate's
  *  whole world is the host stub baked in at first materialization). Length-prefixing the context
  *  makes the split unambiguous regardless of `:` in either half. (worker-loader.test.ts) */
-export function facetLoaderOwner(contextName: string, discriminator: string): string {
-  return `${contextName.length}#${contextName}#${discriminator}`;
+export function facetLoaderOwner(iterateContextName: string, discriminator: string): string {
+  return `${iterateContextName.length}#${iterateContextName}#${discriminator}`;
 }
 
 /** A worker/facet SOURCE is a PRODUCER of module code, resolved the SAME way at every load site

@@ -18,15 +18,15 @@ canonical match and written by ONE event.
 
 Every callable thing is a live object plus a small piece of durable data that gets the object back.
 
-| Built-in / kind                                                     | The durable data                                                            | Who restores it                                                                                         | Where                                                                  |
-| ------------------------------------------------------------------- | --------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
-| a context (`cd`, the DO)                                            | its codec name (`prj_x.iterate/path`)                                       | Cloudflare (`getByName`)                                                                                | `context/durable-object-names.ts`, `iterate-context-durable-object.ts` |
-| `env.ITX` (a loaded worker's world)                                 | the props `{ contextName }`                                                 | Cloudflare (`ctx.exports`, persistent stubs)                                                            | `itx-entrypoint.ts`                                                    |
-| `load(src).getEntrypoint()` / `.getDurableObjectClass(C).get(name)` | cacheKey + source; a facet's `props { contextName, name }` and startup memo | Cloudflare (Worker Loader, `ctx.facets`)                                                                | `context/worker-loader.ts`, the DO's `#invokeFacet`                    |
-| **`rpcStubs`** (a lent rpc stub)                                    | a pager WebSocket attachment `{ transportId, rpcStubKey }`                  | **us** — `{type:"page"}` pages the edge worker, which lends a fresh Workers-RPC stub over `lendRpcStub` | `context/rpc-stub-directory.ts`, `context/rpc-stub-relay.ts`           |
-| the stream (`append` / `read` / `waitForEvent`)                     | the log (SQLite)                                                            | —                                                                                                       | `stream/stream.ts`                                                     |
-| `kv`, `whoami`, `fetch`                                             | KV / the address / FALLBACK                                                 | —                                                                                                       | `context/built-ins.ts`                                                 |
-| `expressionRewriteRules`, `subscriptions` (read views)              | slices of the core reduce (layer 1)                                         | —                                                                                                       | `context/built-ins.ts`, the DO                                         |
+| Built-in / kind                                                     | The durable data                                                                   | Who restores it                                                                                         | Where                                                                  |
+| ------------------------------------------------------------------- | ---------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| a context (`cd`, the DO)                                            | its codec name (`prj_x.iterate/path`)                                              | Cloudflare (`getByName`)                                                                                | `context/durable-object-names.ts`, `iterate-context-durable-object.ts` |
+| `env.ITX` (a loaded worker's world)                                 | the props `{ iterateContextName }`                                                 | Cloudflare (`ctx.exports`, persistent stubs)                                                            | `itx-entrypoint.ts`                                                    |
+| `load(src).getEntrypoint()` / `.getDurableObjectClass(C).get(name)` | cacheKey + source; a facet's `props { iterateContextName, name }` and startup memo | Cloudflare (Worker Loader, `ctx.facets`)                                                                | `context/worker-loader.ts`, the DO's `#invokeFacet`                    |
+| **`rpcStubs`** (a lent rpc stub)                                    | a pager WebSocket attachment `{ transportId, rpcStubKey }`                         | **us** — `{type:"page"}` pages the edge worker, which lends a fresh Workers-RPC stub over `lendRpcStub` | `context/rpc-stub-directory.ts`, `context/rpc-stub-relay.ts`           |
+| the stream (`append` / `read` / `waitForEvent`)                     | the log (SQLite)                                                                   | —                                                                                                       | `stream/stream.ts`                                                     |
+| `kv`, `whoami`, `fetch`                                             | KV / the address / FALLBACK                                                        | —                                                                                                       | `context/built-ins.ts`                                                 |
+| `expressionRewriteRules`, `subscriptions` (read views)              | slices of the core reduce (layer 1)                                                | —                                                                                                       | `context/built-ins.ts`, the DO                                         |
 
 The first three rows are Cloudflare features. `rpcStubs` is ours — a poor-man's sturdy ref whose
 restore hook must route through whichever stateless worker holds the client's capnweb socket. Its
@@ -120,7 +120,7 @@ Nothing is declared or stamped; a rule whose target names another rule's prefix 
 correctly because it evaluates to the same handle. `itx.subscriptions.list()` is the read door
 (rows ⋈ cursors). Edge sugar: `subscribe({ name?, target | null, consumes? })` → a DISPOSABLE
 `SubscriptionHandle` (its `name` getter is the generated one when none was given); a live callback
-is lent under `itx.subscriptions.<name>` and targeted as `itx.rpcStubs.get('…')`. Disposing the
+is lent under `subscription:<name>` and targeted as `itx.rpcStubs.get('…')`. Disposing the
 handle, or the session ending, removes the row; the durable spelling is the raw event.
 
 ## Layer 4 — processors (sugar over layers 0 and 3)
@@ -158,5 +158,5 @@ ACT — the client's capnweb stub must live here, never in the DO, so the lend h
 the DON'T-PIN pager relay `context/rpc-stub-relay.ts`'s `lendRpcStubOverPager`), and `rewrite` /
 `subscribe` / `enableProcessor` / `disableProcessor` — each visibly "build the event, append it";
 the DO has `append` and no configuration verbs. Every lend is undone at session end by the
-session's `SessionTeardown` (`session.ts`), keyed `"<contextName> <rpcStubKey>"`. Everything a
+session's `SessionTeardown` (`session.ts`), keyed `"<iterateContextName> <rpcStubKey>"`. Everything a
 client ever does — Slack-bridge RpcTargets included — is these layers composed.

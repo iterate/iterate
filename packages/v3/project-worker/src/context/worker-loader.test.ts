@@ -25,13 +25,13 @@ test("two DIFFERENT facet identities never share one Worker Loader cacheKey", as
     CF_VERSION_METADATA: { id: "deploy-1" },
   } as unknown as Parameters<typeof loadConfinedWorker>[0]["env"];
   const modules = { "cap.js": "export default class Door {}" };
-  const load = (contextName: string, className: string) =>
+  const load = (iterateContextName: string, className: string) =>
     loadConfinedWorker({
       env,
       invoke: () => Promise.reject(new Error("pre-resolved — nothing to invoke")),
       host: {} as Fetcher,
       kind: "facet",
-      owner: facetLoaderOwner(contextName, className),
+      owner: facetLoaderOwner(iterateContextName, className),
       source: { type: "inline", files: modules },
       where: `facet "${className}"`,
       resolved: { contentHash: "1abc2d", modules },

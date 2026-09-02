@@ -168,12 +168,12 @@ describe("the subscriptions table — by name", () => {
   test("configured: a row is `{ target (parsed), consumes?, configuredAtOffset }` — the event's own offset is its identity", () => {
     const e = at(3, "events.iterate.com/stream/subscription-configured", {
       name: "tab",
-      target: "itx.rpcStubs.get('itx.subscriptions.tab')",
+      target: "itx.rpcStubs.get('subscription:tab')",
       consumes: ["mark"],
     });
     expect(reduceAll([e]).subscriptions).toEqual({
       tab: {
-        target: parse("itx.rpcStubs.get('itx.subscriptions.tab')"),
+        target: parse("itx.rpcStubs.get('subscription:tab')"),
         consumes: ["mark"],
         configuredAtOffset: 3,
       },

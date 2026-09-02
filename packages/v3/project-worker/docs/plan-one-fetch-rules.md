@@ -254,7 +254,7 @@ target, match? }` / `fetch-rule-removed`, two commands in the `stream/subscripti
   Since 2026-09-02 a processor host is an ordinary DO class with one `processor` field, so the gate
   can BE a processor host that also defines a `fetch(request)` door: the pure `ApprovalGateProcessor extends
 StreamProcessor` reduces `requested`/`decided` events (unit-tested bare), the host's `fetch` holds the
-  request and awaits the decision (`env.ITX.waitForEvent`). No runner, no verb allow-list.
+  request and awaits the decision (`(await env.ITX.get()).waitForEvent`). No runner, no verb allow-list.
 - Signatures: no crypto change. Same `approval.v2` canonical bytes with `projectId → context` (the DO
   name), `approvalRequestEventOffset → requestedAtOffset`, `secretPaths → secrets`. The pure half of
   `egress-approvals.ts` moves to a shared module both the gate bundle and `packages/iterate` import;
