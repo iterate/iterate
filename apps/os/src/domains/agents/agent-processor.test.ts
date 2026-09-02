@@ -1315,8 +1315,8 @@ describe("AgentProcessor script execution", () => {
           executionId,
           settlement: {
             status: "succeeded",
-            resultOmitted: {
-              reason: "oversized",
+            oversized: {
+              kind: "omitted",
               serializedChars: 7_219_834,
               preview: '{"stdout":"iVBORw0KGgo',
               typeText: "{ stdout: string }",

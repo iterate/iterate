@@ -113,7 +113,8 @@ const OMITTED_RESULT_TYPE_MAX_CHARS = 3_000;
  * Bound a settlement to a journal-safe size. Idempotent, and identity for
  * anything under the limits. An oversized success keeps its status — the
  * script DID run, external effects happened — but the value is replaced by
- * `resultOmitted` metadata: how big it was, a preview, and its inferred type,
+ * `oversized: {kind: "omitted"}` metadata: how big it was, a preview, and its
+ * inferred type,
  * so the model can tell what it lost and adapt (write large data to workspace
  * files instead of returning it).
  *
@@ -139,8 +140,8 @@ export function boundScriptSettlement(
   if (json.length <= MAX_SCRIPT_RESULT_EVENT_CHARS) return settlement;
   return {
     status: "succeeded",
-    resultOmitted: {
-      reason: "oversized",
+    oversized: {
+      kind: "omitted",
       serializedChars: json.length,
       preview: json.slice(0, OMITTED_RESULT_PREVIEW_CHARS),
       typeText: inferJsonType(settlement.result, { maxChars: OMITTED_RESULT_TYPE_MAX_CHARS }),

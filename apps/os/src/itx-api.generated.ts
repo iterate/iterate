@@ -3025,13 +3025,8 @@ export type AgentEventInput =
           | {
               status: "succeeded";
               result?: JsonValue | undefined;
-              resultOmitted?:
-                | {
-                    reason: "oversized";
-                    serializedChars: number;
-                    preview: string;
-                    typeText: string;
-                  }
+              oversized?:
+                | { kind: "omitted"; serializedChars: number; preview: string; typeText: string }
                 | undefined;
             }
           | {

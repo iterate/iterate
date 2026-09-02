@@ -63,8 +63,8 @@ describe("retainedScriptResult", () => {
         settledAtOffset: 2381,
         settlement: {
           status: "succeeded",
-          resultOmitted: {
-            reason: "oversized",
+          oversized: {
+            kind: "omitted",
             serializedChars: 7_219_834,
             preview: '{"stdout":"iVBORw0KGgo',
             typeText: "{ stdout: string }",
@@ -410,8 +410,8 @@ describe("CapabilityHostProcessor preamble verbs", () => {
         executionId: "exec-huge",
         settlement: {
           status: "succeeded",
-          resultOmitted: {
-            reason: "oversized",
+          oversized: {
+            kind: "omitted",
             serializedChars: 7_219_834,
             preview: '{"stdout":"iVBORw0KGgo',
             typeText: "{ stdout: string }",

@@ -225,7 +225,7 @@ async function renderScriptSettlement(input: {
   settlement: {
     status: "succeeded" | "failed";
     result?: unknown;
-    resultOmitted?: { serializedChars: number; preview: string; typeText: string };
+    oversized?: { kind: "omitted"; serializedChars: number; preview: string; typeText: string };
     error?: string;
     phase?: string;
     failureKind?: string;
@@ -260,8 +260,8 @@ async function renderScriptSettlement(input: {
     // render (not fall through to the returned-undefined turn-end below):
     // the script succeeded, its effects happened, and silence here would
     // leave the model believing its own script returned nothing.
-    if (settlement.resultOmitted !== undefined) {
-      const { serializedChars, preview, typeText } = settlement.resultOmitted;
+    if (settlement.oversized !== undefined) {
+      const { serializedChars, preview, typeText } = settlement.oversized;
       const mb = (bytes: number) => `${(bytes / 1024 / 1024).toFixed(1)}MB`;
       return [
         `Your script succeeded (in ${ranIn}), but its return value was dropped: ` +

@@ -169,15 +169,15 @@ describe("boundScriptSettlement", () => {
     });
     expect(bounded).toMatchObject({
       status: "succeeded",
-      resultOmitted: {
-        reason: "oversized",
+      oversized: {
+        kind: "omitted",
         /* inferJsonType annotates the long string with its rough size. */
         typeText: expect.stringContaining("stdout: string"),
       },
     });
     expect(bounded).not.toHaveProperty("result");
-    const omitted = (bounded as { resultOmitted: { serializedChars: number; preview: string } })
-      .resultOmitted;
+    const omitted = (bounded as { oversized: { serializedChars: number; preview: string } })
+      .oversized;
     expect(omitted.serializedChars).toBeGreaterThan(MAX_SCRIPT_RESULT_EVENT_CHARS);
     expect(omitted.preview).toContain('{"stdout":"__FILE_1__');
     /* The bounded settlement must itself be tiny — it becomes a durable event. */

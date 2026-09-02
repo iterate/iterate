@@ -95,12 +95,12 @@ export function retainedScriptResult(input: {
   if (settlement.result === undefined) {
     // The settlement boundary dropped an oversized value (boundScriptSettlement)
     // — the script succeeded, but there is no payload to embed or load.
-    if (settlement.resultOmitted !== undefined) {
+    if (settlement.oversized !== undefined) {
       return {
         kind: "omitted",
         ...base,
-        typeText: settlement.resultOmitted.typeText,
-        serializedChars: settlement.resultOmitted.serializedChars,
+        typeText: settlement.oversized.typeText,
+        serializedChars: settlement.oversized.serializedChars,
       };
     }
     return { kind: "done", ...base };
