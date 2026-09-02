@@ -21,8 +21,10 @@
 #     --input threshold-do-hours=1
 #
 # If dispatch is unavailable for an unmerged branch, push a commit whose
-# message contains `run_do_duration_probe` — that push trigger runs the same
-# forced-alert test (threshold 1).
+# message contains the magic word `run_do_duration_probe` — that push trigger
+# runs the same forced-alert test (threshold 1). Beware: MENTIONING the magic
+# word in an ordinary commit message triggers it too (found out the fun way —
+# the commit that added this feature described it verbatim and self-tested).
 #
 # Depot registers automatic triggers when this file is on the default branch —
 # branch-only changes to the `on:` block do not take effect until merged.

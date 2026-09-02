@@ -87,8 +87,12 @@ export async function run(options: {
       .filter(Boolean)
       .join("\n"),
   });
-  process.exitCode = 1;
-  return { breached: true };
+  // Throw (after the Slack post) so the workflow run goes red: trpc-cli exits
+  // 0 on a normal return even with process.exitCode set — verified on the
+  // 2026-09-02 dispatch test, where a breach concluded "success".
+  throw new Error(
+    `DO duration alarm breached (${failures.map((f) => f.label).join(", ")}); Slack alert posted`,
+  );
 }
 
 if (isMainModule(import.meta.url)) {
