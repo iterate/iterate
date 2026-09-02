@@ -2280,10 +2280,7 @@ describe("described user messages (render/user-message-described)", () => {
         },
       },
     ] as Parameters<typeof reduceAll>[0]);
-    const userItems = reduced.items.filter((item) => item.kind === "user") as Extract<
-      AgentUiItem,
-      { kind: "user" }
-    >[];
+    const userItems = reduced.items.filter((item) => item.kind === "user") as any[];
     // Two emissions, SAME id: the projector replaces the row in place.
     expect(userItems).toHaveLength(2);
     expect(userItems[0]!.id).toBe(userItems[1]!.id);
@@ -2316,10 +2313,7 @@ describe("described user messages (render/user-message-described)", () => {
       // Queued user messages flush at the next request boundary.
       { type: "events.iterate.com/agent/llm-request-requested", payload: { model: "m" } },
     ] as Parameters<typeof reduceAll>[0]);
-    const userItems = reduced.items.filter((item) => item.kind === "user") as Extract<
-      AgentUiItem,
-      { kind: "user" }
-    >[];
+    const userItems = reduced.items.filter((item) => item.kind === "user") as any[];
     expect(userItems).toHaveLength(1);
     expect(userItems[0]).toMatchObject({
       text: "hi",
