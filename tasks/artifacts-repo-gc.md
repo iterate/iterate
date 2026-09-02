@@ -90,9 +90,12 @@ herring for that incident but is a real hygiene problem.)
   any deletion.
 - Live-project detection: the project-directory KV holds `project:<id>` keys,
   so the live set is one prefix-listed key scan — no value fetches.
-- 2026-09-01 while implementing: found 13 files in this worktree (prompt
-  files + prompt-sections explainer) mangled by a stray oxfmt pass that
-  ignored `.oxfmtrc.json` ignorePatterns — not from this session's tools;
-  blobs exist nowhere in git history; pure reflow damage. Backed up to the
-  session scratchpad and restored to HEAD so the config-repo-template codegen
-  lint check could pass.
+- 2026-09-01/02 while implementing: found 13 files in this worktree (prompt
+  files + prompt-sections explainer) repeatedly mangled by oxfmt. Root cause
+  (confirmed by `oxfmt --check` from the root worktree): format runs in the
+  ROOT worktree recurse into `.claude/worktrees/`, where the root-relative
+  ignorePatterns don't match the nested copies. Fixed here by adding
+  `**/.claude/worktrees/` to `.oxfmtrc.json` — a rider on this PR since the
+  mangle broke this branch's codegen lint check twice.
+- Review threads from Iterate Review (2 accepted, 1 pushed back — the
+  "inferable annotation" suggestion broke typecheck) handled in 54d098919.
