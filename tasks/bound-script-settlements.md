@@ -36,16 +36,16 @@ Evidence: os-prd otel traceIds `2f4ac441f25d6160d83109e1a2f44013`,
 
 Bound every settlement at the two journaling choke points. Over the limit, the
 result is **omitted, not truncated-in-place**: the event carries structured
-metadata (`resultOmitted: {reason, serializedBytes, preview, typeText}`) so the
+metadata (`oversized: {kind: "omitted", serializedChars, preview, typeText}`) so the
 model learns what happened and what the data looked like, and is told to write
 large outputs to workspace files instead of returning them.
 
-- [x] `packages/shared/src/script-execution.ts`: add optional `resultOmitted` to
+- [x] `packages/shared/src/script-execution.ts`: add optional `oversized` to
       the succeeded variant of `ScriptExecutionSettlement` _added as strictObject
       {reason, serializedChars, preview, typeText}_
 - [x] bounding function (capability-host, near `serializeScriptResult`): if
       compact-JSON length of `result` > `MAX_SCRIPT_RESULT_EVENT_CHARS` (1 MiB),
-      replace with `resultOmitted`; also cap failure `error` text; idempotent
+      replace with `oversized: {kind: "omitted"}`; also cap failure `error` text; idempotent
       _`boundScriptSettlement` in script-result-serialization.ts; error cap 32k_
 - [x] apply in `ScriptExecutionEntrypoint.run` (so the blob never crosses RPC
       into the DO isolate) and in `scriptCompletionInput` (backstop for every
@@ -85,7 +85,7 @@ large outputs to workspace files instead of returning them.
   `load(itx)` / `workspace.getFile` keep working. Design notes from the
   discussion:
   - Keep `status: "succeeded"` and put the discrimination one level down
-    (`resultOversized: { serializedChars, preview, typeText, spilled?: {
+    (settled 2026-09-02: the shipped field is `oversized: {kind}` — the spill variant becomes `kind: "workspace-file"`, e.g. `oversized: { kind, serializedChars, preview, typeText, spilled?: {
     workspaceFile, format: "json" | "text" } }`) rather than a new top-level
     status arm — every consumer switching on `status === "succeeded"` stays a
     binary check, and the script genuinely did succeed.
