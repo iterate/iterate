@@ -11,6 +11,7 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { connectItx } from "../src/node.ts";
+import { isIdempotencyConflict } from "../src/processors/index.ts";
 import {
   flakeDashboardCreationEvents,
   flakesStreamPath,
@@ -78,7 +79,13 @@ async function main(): Promise<void> {
   const runId = `${process.env.GITHUB_RUN_ID || "local"}-${process.env.GITHUB_RUN_ATTEMPT || "1"}`;
   // iterate-lint-disable-next-line terminology/no-metaphorical-lane-door-seam -- reads the existing TEST_TELEMETRY_LANE env var; renaming that wire name is tracked in tasks/rename-lane-vocabulary.md
   const suite = process.env.TEST_TELEMETRY_LANE || "unknown";
-  const [owner = "iterate", repo = "iterate"] = (process.env.GITHUB_REPOSITORY || "").split("/");
+  // `|| "iterate"`, not destructuring defaults: "".split("/") yields [""],
+  // an empty STRING, and a default only fires on undefined — an unset
+  // GITHUB_REPOSITORY once produced an owner of "" that failed the contract
+  // and poisoned the birth idempotency key on prd.
+  const [ownerPart, repoPart] = (process.env.GITHUB_REPOSITORY || "").split("/");
+  const owner = ownerPart || "iterate";
+  const repo = repoPart || "iterate";
 
   using project = connectItx({
     baseUrl,
@@ -87,14 +94,23 @@ async function main(): Promise<void> {
   });
   const stream = project.streams.get(flakesStreamPath);
   // Every reporter may offer the idempotency-keyed birth certificate; only
-  // the first ever lands.
-  await stream.append(
-    ...flakeDashboardCreationEvents({
-      repository: { owner, repo },
-      issueTitle: process.env.FLAKE_REPORT_ISSUE_TITLE || "Flake dashboard",
-      defaultBranch: process.env.FLAKE_REPORT_DEFAULT_BRANCH || "main",
-    }),
-  );
+  // the first ever lands. A same-key/DIFFERENT-body conflict also means the
+  // stream is already born (with someone else's config, or a historical
+  // body) — it must not abort the run-recorded append below, which is the
+  // actual payload. This is not hypothetical: a poisoned birth key on prd
+  // silently dropped every CI run's records until this tolerance existed.
+  await stream
+    .append(
+      ...flakeDashboardCreationEvents({
+        repository: { owner, repo },
+        issueTitle: process.env.FLAKE_REPORT_ISSUE_TITLE || "Flake dashboard",
+        defaultBranch: process.env.FLAKE_REPORT_DEFAULT_BRANCH || "main",
+      }),
+    )
+    .catch((error) => {
+      if (!isIdempotencyConflict(error)) throw error;
+      console.log("[flake-report] birth already claimed — proceeding to records");
+    });
   await stream.append({
     type: "events.iterate.com/flakes/run-recorded",
     idempotencyKey: `flakes/run:${runId}:${suite}`,
