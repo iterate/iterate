@@ -47,7 +47,6 @@ const RESULT_TYPE_MAX_CHARS = 3_000;
 export type RetainedScriptResult =
   | (RetainedScriptResultBase & { kind: "data"; resultJson: string })
   | (RetainedScriptResultBase & { kind: "large"; typeText: string })
-  | (RetainedScriptResultBase & { kind: "omitted"; typeText: string; serializedChars: number })
   | (RetainedScriptResultBase & { kind: "error"; error: string })
   | (RetainedScriptResultBase & { kind: "done" });
 
@@ -92,19 +91,7 @@ export function retainedScriptResult(input: {
           : `${settlement.error.slice(0, RETAINED_ERROR_LIMIT)}…`,
     };
   }
-  if (settlement.result === undefined) {
-    // The settlement boundary dropped an oversized value (boundScriptSettlement)
-    // — the script succeeded, but there is no payload to embed or load.
-    if (settlement.oversized !== undefined) {
-      return {
-        kind: "omitted",
-        ...base,
-        typeText: settlement.oversized.typeText,
-        serializedChars: settlement.oversized.serializedChars,
-      };
-    }
-    return { kind: "done", ...base };
-  }
+  if (settlement.result === undefined) return { kind: "done", ...base };
   const resultJson = JSON.stringify(settlement.result);
   if (typeof resultJson !== "string") return { kind: "done", ...base };
   if (resultJson.length <= INLINE_RESULT_PREAMBLE_LIMIT) {
@@ -216,15 +203,6 @@ function renderResultsArray(rows: RetainedScriptResult[], tsOnly: (code: string)
         );
         break;
       }
-      case "omitted":
-        // The value was dropped at the settlement boundary; no `.data`, no
-        // `.load` — advertising a loader for data that does not exist would
-        // teach the model a lie.
-        elements.push(
-          `  // omitted result (${row.serializedChars} chars of JSON, too large to retain)`,
-          `  { offset: ${row.settledAtOffset}, ${scriptOffset}executionId: ${id}, omitted: true },`,
-        );
-        break;
       case "error":
         elements.push(
           `  { offset: ${row.settledAtOffset}, ${scriptOffset}executionId: ${id}, error: ${JSON.stringify(row.error)} },`,

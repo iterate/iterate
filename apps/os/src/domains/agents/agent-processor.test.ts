@@ -1293,49 +1293,6 @@ describe("AgentProcessor script execution", () => {
     expect(h.llm.calls).toHaveLength(0);
   });
 
-  it("renders a settlement whose result the boundary dropped — the model learns what it lost", async () => {
-    // boundScriptSettlement replaced a 7MB return value with omission
-    // metadata before the event was journaled (the prod image-crop brick,
-    // 2026-09-02). Silence here would look like the script returned nothing
-    // and quietly end the turn.
-    const h = makeAgentHarness();
-    await h.play(
-      ["append", ...NEW_AGENT_EVENTS, userMessage("crop the image")],
-      ["advanceTime", 10_000],
-      () => h.llm.respond("```ts\nasync (itx) => itx.cropImage()\n```"),
-    );
-    const executionId = h.events("events.iterate.com/capability-host/script-run-requested")[0]!
-      .payload.executionId;
-
-    await h.play([
-      "append",
-      {
-        type: "events.iterate.com/capability-host/script-run-settled",
-        payload: {
-          executionId,
-          settlement: {
-            status: "succeeded",
-            oversized: {
-              kind: "omitted",
-              serializedChars: 7_219_834,
-              preview: '{"stdout":"iVBORw0KGgo',
-              typeText: "{ stdout: string }",
-            },
-          },
-        },
-      },
-    ]);
-
-    const rendered = conversationMessages(h.state()).find((item) =>
-      item.payload.content.startsWith("Your script succeeded"),
-    );
-    expect(rendered!.payload.content).toContain("its return value was dropped");
-    expect(rendered!.payload.content).toContain("6.9MB of JSON exceeds the 1.0MB limit");
-    expect(rendered!.payload.content).toContain("{ stdout: string }");
-    expect(rendered!.payload.content).toContain('{"stdout":"iVBORw0KGgo');
-    expect(rendered!.payload.content).toContain("write it to a workspace file");
-  });
-
   it("spills an oversized script result to a workspace file and references it; small results stay inline", async () => {
     const written: { path: string; content: string }[] = [];
     const h = makeAgentHarness(undefined, {

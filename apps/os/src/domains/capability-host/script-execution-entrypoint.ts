@@ -6,7 +6,7 @@ import type { StatelessDynamicWorkerRef } from "../workers/schemas.ts";
 import { DynamicWorkerRunner } from "../workers/worker-runner.ts";
 import { settleByDeadline } from "./execution-deadline.ts";
 import { SCRIPT_EXTERNAL_CLEANUP_GRACE_MS } from "./script-execution-budgets.ts";
-import { boundScriptSettlement, serializeScriptResult } from "./script-result-serialization.ts";
+import { serializeScriptResult } from "./script-result-serialization.ts";
 import type { ScriptExecutionSettlement } from "./script-execution-settlement.ts";
 
 export { SCRIPT_EXTERNAL_CLEANUP_GRACE_MS } from "./script-execution-budgets.ts";
@@ -115,7 +115,7 @@ export class ScriptExecutionEntrypoint extends WorkerEntrypoint<
       };
     }
     if (outcome.status === "rejected") {
-      return boundScriptSettlement({
+      return {
         status: "failed",
         error: outcome.error instanceof Error ? outcome.error.message : String(outcome.error),
         failureKind: "runtime",
@@ -124,7 +124,7 @@ export class ScriptExecutionEntrypoint extends WorkerEntrypoint<
         // A rejected worker call proves this handler stopped waiting, not
         // that arbitrary fire-and-forget capability work has terminated.
         cancellation: "external-work-may-continue",
-      });
+      };
     }
     const result = outcome.value;
     // This is an RPC/event JSON boundary, not a deep-clone operation. Preserve
@@ -135,12 +135,10 @@ export class ScriptExecutionEntrypoint extends WorkerEntrypoint<
     // caller `{}` (or workerd's RPC bookkeeping) in place of the explanation.
     // See serializeScriptResult.
     const serializedResult = serializeScriptResult(result);
-    // Bound BEFORE the RPC return: an oversized blob must not materialize in
-    // the capability host's Durable Object isolate at all.
-    return boundScriptSettlement({
+    return {
       status: "succeeded",
       ...(serializedResult === undefined ? {} : { result: serializedResult }),
-    });
+    };
   }
 }
 

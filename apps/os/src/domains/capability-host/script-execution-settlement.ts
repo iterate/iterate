@@ -4,7 +4,6 @@ import {
 } from "@iterate-com/shared/script-execution";
 import type { DeadlineOutcome } from "./execution-deadline.ts";
 import { SCRIPT_EXECUTION_SETTLEMENT_GRACE_MS } from "./script-execution-budgets.ts";
-import { boundScriptSettlement } from "./script-result-serialization.ts";
 
 export {
   SCRIPT_COMPLETION_OBSERVATION_GRACE_MS,
@@ -103,14 +102,6 @@ export function scriptCompletionInput(input: {
     idempotencyKey: input.idempotencyKey,
     // The settlement parser already proves any successful result is JSON, so
     // constructing the completion cannot introduce a new failure boundary.
-    // Bounding is the append-side backstop: the execution entrypoint already
-    // bounds worker outcomes, but every settlement source funnels through
-    // here, and an oversized event body would brick the stream (every
-    // processor fold and subscriber delivery re-materializes it in the
-    // shared DO isolate).
-    payload: {
-      executionId: input.executionId,
-      settlement: boundScriptSettlement(input.settlement),
-    },
+    payload: { executionId: input.executionId, settlement: input.settlement },
   } as const;
 }
