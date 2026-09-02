@@ -630,6 +630,14 @@ export class CapabilityHostProcessor extends StreamProcessor<
     if (settlement.status === "failed") {
       throw new Error(`script execution "${executionId}" failed: ${settlement.error}`);
     }
+    if (settlement.result === undefined && settlement.resultOmitted !== undefined) {
+      throw new Error(
+        `script execution "${executionId}" succeeded but its result ` +
+          `(${settlement.resultOmitted.serializedChars} chars of JSON) was too large to retain ` +
+          `and was dropped at the settlement boundary. It cannot be loaded back — scripts ` +
+          `should write large data to workspace files (itx.workspace) or return a summary.`,
+      );
+    }
     return { executionId, data: settlement.result ?? null };
   }
 

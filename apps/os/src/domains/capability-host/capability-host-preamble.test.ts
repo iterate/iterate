@@ -52,6 +52,35 @@ describe("retainedScriptResult", () => {
     expect((row as { typeText: string }).typeText).toContain("id: string");
   });
 
+  it("retains only type and size for a result the settlement boundary dropped", () => {
+    // boundScriptSettlement replaced an oversized value with omission
+    // metadata before the event was journaled; the payload does not exist
+    // anywhere, so the row must not pretend it is loadable.
+    expect(
+      retainedScriptResult({
+        executionId: "agent-output:2373",
+        scriptOffset: 2373,
+        settledAtOffset: 2381,
+        settlement: {
+          status: "succeeded",
+          resultOmitted: {
+            reason: "oversized",
+            serializedChars: 7_219_834,
+            preview: '{"stdout":"iVBORw0KGgo',
+            typeText: "{ stdout: string }",
+          },
+        },
+      }),
+    ).toEqual({
+      kind: "omitted",
+      executionId: "agent-output:2373",
+      scriptOffset: 2373,
+      settledAtOffset: 2381,
+      typeText: "{ stdout: string }",
+      serializedChars: 7_219_834,
+    });
+  });
+
   it("keeps a failed script's error, truncated", () => {
     const row = retainedScriptResult({
       executionId: "agent-output:33",
@@ -189,6 +218,32 @@ describe("assemblePreamble", () => {
       scriptOffset: 7,
       executionId: "agent-output:9",
       done: true,
+    });
+  });
+
+  it("an omitted row renders without data or load — the payload does not exist", async () => {
+    const { ts, js } = assemblePreamble({
+      entries: [],
+      results: [
+        {
+          kind: "omitted",
+          executionId: "agent-output:2373",
+          scriptOffset: 2373,
+          settledAtOffset: 2381,
+          typeText: "{ stdout: string }",
+          serializedChars: 7_219_834,
+        },
+      ],
+    })!;
+    expect(ts).toContain("omitted: true");
+    expect(ts).toContain("// omitted result (7219834 chars of JSON, too large to retain)");
+    expect(ts).not.toContain("load");
+    const results = (await evaluatePreambleJs(js)) as { omitted: boolean }[];
+    expect(results[0]).toMatchObject({
+      offset: 2381,
+      scriptOffset: 2373,
+      executionId: "agent-output:2373",
+      omitted: true,
     });
   });
 
@@ -342,6 +397,31 @@ describe("CapabilityHostProcessor preamble verbs", () => {
     });
     await expect(harness.processor.getScriptResult("exec-nope")).rejects.toThrow(
       'no settled script execution "exec-nope"',
+    );
+  });
+
+  it("getScriptResult explains an omitted result instead of returning a silent null", async () => {
+    const stream = bornStream();
+    const harness = await makeProcessor({ stream });
+    await stream.append({
+      type: "events.iterate.com/capability-host/script-run-settled",
+      idempotencyKey: "capability-host/script-run-settled@exec-huge",
+      payload: {
+        executionId: "exec-huge",
+        settlement: {
+          status: "succeeded",
+          resultOmitted: {
+            reason: "oversized",
+            serializedChars: 7_219_834,
+            preview: '{"stdout":"iVBORw0KGgo',
+            typeText: "{ stdout: string }",
+          },
+        },
+      },
+    });
+    await harness.runner.catchUp();
+    await expect(harness.processor.getScriptResult("exec-huge")).rejects.toThrow(
+      "too large to retain",
     );
   });
 });

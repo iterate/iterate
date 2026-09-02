@@ -14,6 +14,7 @@ import { inferJsonType } from "../../lib/infer-json-type.ts";
 import { stringifyScriptResult, truncateScriptResult } from "../../lib/script-result-render.ts";
 import { previewJson } from "../../lib/truncate-json.ts";
 import { INLINE_RESULT_PREAMBLE_LIMIT } from "../capability-host/capability-host-preamble.ts";
+import { MAX_SCRIPT_RESULT_EVENT_CHARS } from "../capability-host/script-result-serialization.ts";
 import {
   appendUnlessLostIdempotencyRace,
   type AgentHost,
@@ -224,6 +225,7 @@ async function renderScriptSettlement(input: {
   settlement: {
     status: "succeeded" | "failed";
     result?: unknown;
+    resultOmitted?: { serializedChars: number; preview: string; typeText: string };
     error?: string;
     phase?: string;
     failureKind?: string;
@@ -253,7 +255,32 @@ async function renderScriptSettlement(input: {
       `\`await itx.docs.search({ q: "several related words" })\` finds working examples.`
     );
   }
-  if (settlement.result === undefined) return null;
+  if (settlement.result === undefined) {
+    // The settlement boundary dropped an oversized return value. This must
+    // render (not fall through to the returned-undefined turn-end below):
+    // the script succeeded, its effects happened, and silence here would
+    // leave the model believing its own script returned nothing.
+    if (settlement.resultOmitted !== undefined) {
+      const { serializedChars, preview, typeText } = settlement.resultOmitted;
+      const mb = (bytes: number) => `${(bytes / 1024 / 1024).toFixed(1)}MB`;
+      return [
+        `Your script succeeded (in ${ranIn}), but its return value was dropped: ` +
+          `${mb(serializedChars)} of JSON exceeds the ${mb(MAX_SCRIPT_RESULT_EVENT_CHARS)} ` +
+          `limit on retained results, so it was not stored and cannot be loaded back.`,
+        "Inferred type:",
+        "```ts",
+        typeText,
+        "```",
+        "Preview:",
+        "```",
+        preview,
+        "```",
+        `To work with large data, don't return it from a script — write it to a workspace ` +
+          `file (itx.workspace) and return the path, or return a small summary.`,
+      ].join("\n");
+    }
+    return null;
+  }
   const text = stringifyScriptResult(settlement.result);
   // The preamble binding this exact result got: the SAME compact-JSON split
   // the capability host applies when deriving the `results` array. NOT the

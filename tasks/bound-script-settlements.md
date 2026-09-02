@@ -5,9 +5,10 @@ size: medium
 
 # Bound script-result settlements (7MB settlement event bricked a prod stream)
 
-**Status summary:** diagnosed; implementation not started. Fix = cap the serialized
-script result at the settlement-journaling boundary; oversized results are omitted
-from the event with an honest preview + inferred type + guidance.
+**Status summary:** implemented, tests green (typecheck/lint/knip/format/targeted
+tests pass locally). Oversized script results are now omitted at the settlement
+boundary with preview + inferred type + guidance. Remaining: CI + review, and the
+already-poisoned prod stream still needs unbricking (follow-up section).
 
 ## What happened (prod, 2026-09-02)
 
@@ -39,22 +40,31 @@ metadata (`resultOmitted: {reason, serializedBytes, preview, typeText}`) so the
 model learns what happened and what the data looked like, and is told to write
 large outputs to workspace files instead of returning them.
 
-- [ ] `packages/shared/src/script-execution.ts`: add optional `resultOmitted` to
-      the succeeded variant of `ScriptExecutionSettlement`
-- [ ] bounding function (capability-host, near `serializeScriptResult`): if
-      compact-JSON length of `result` > `MAX_SCRIPT_RESULT_EVENT_BYTES` (1 MiB),
+- [x] `packages/shared/src/script-execution.ts`: add optional `resultOmitted` to
+      the succeeded variant of `ScriptExecutionSettlement` _added as strictObject
+      {reason, serializedChars, preview, typeText}_
+- [x] bounding function (capability-host, near `serializeScriptResult`): if
+      compact-JSON length of `result` > `MAX_SCRIPT_RESULT_EVENT_CHARS` (1 MiB),
       replace with `resultOmitted`; also cap failure `error` text; idempotent
-- [ ] apply in `ScriptExecutionEntrypoint.run` (so the blob never crosses RPC
+      _`boundScriptSettlement` in script-result-serialization.ts; error cap 32k_
+- [x] apply in `ScriptExecutionEntrypoint.run` (so the blob never crosses RPC
       into the DO isolate) and in `scriptCompletionInput` (backstop for every
-      other settlement source)
-- [ ] `retainedScriptResult` + preamble render: new `omitted` row kind — the
+      other settlement source) _both sites wrap; rejected-outcome errors too_
+- [x] `retainedScriptResult` + preamble render: new `omitted` row kind — the
       model sees size/type, no `.load` advertised (the data does not exist)
-- [ ] `renderScriptSettlement` (agent-codemode): render the omission honestly
+      _renders `{…, omitted: true}` with a size comment; contract schema variant
+      added_
+- [x] `renderScriptSettlement` (agent-codemode): render the omission honestly
       *before* the `result === undefined` turn-ends check, with preview +
-      "write large data to workspace files" guidance
-- [ ] `getScriptResult`: informative throw for omitted results (`load` path)
-- [ ] tests: oversized result → journaled event stays small, agent context gets
+      "write large data to workspace files" guidance _renders size vs limit,
+      inferred type, preview fence, guidance_
+- [x] `getScriptResult`: informative throw for omitted results (`load` path)
+      _also `runCapabilityHostScript` throws instead of returning a silent null_
+- [x] tests: oversized result → journaled event stays small, agent context gets
       the notice, preamble row is `omitted`, `getScriptResult` throws clearly
+      _script-result-serialization.test.ts (bound unit), capability-host-preamble
+      .test.ts (row + render + getScriptResult throw), agent-processor.test.ts
+      (end-to-end omission render)_
 
 ## Assumptions made (Misha AFK)
 
@@ -77,3 +87,13 @@ large outputs to workspace files instead of returning them.
 - Consider a durable-append size cap with a loud error as a platform backstop.
 
 ## Implementation log
+
+- 2026-09-02: diagnosed live in prod (see body above; itx probes + os-prd otel).
+  Reproduced the OOM deterministically via `agents.get(...).processor.getRuntimeState()`.
+- 2026-09-02: implemented. One deliberate extra beyond the spec:
+  `runCapabilityHostScript` now throws for an omitted result instead of
+  resolving `result: null` — a silent null would look like the script chose to
+  return nothing. Failure `error` text cap is 32k chars (errors are context,
+  not payload; state-side retention already truncates to 2k).
+- Threshold constants live in `script-result-serialization.ts`:
+  `MAX_SCRIPT_RESULT_EVENT_CHARS = 1 MiB`, `MAX_SCRIPT_ERROR_EVENT_CHARS = 32_000`.

@@ -15,7 +15,13 @@
 // uselessly, that no refusal text was included.
 import { describe, expect, it } from "vitest";
 
-import { serializeScriptResult } from "./script-result-serialization.ts";
+import type { ScriptExecutionSettlement } from "@iterate-com/shared/script-execution";
+import {
+  boundScriptSettlement,
+  MAX_SCRIPT_ERROR_EVENT_CHARS,
+  MAX_SCRIPT_RESULT_EVENT_CHARS,
+  serializeScriptResult,
+} from "./script-result-serialization.ts";
 
 /** An error as it arrives from a Durable Object across workerd's RPC boundary. */
 function remoteRpcError(message: string) {
@@ -128,5 +134,77 @@ describe("serializeScriptResult", () => {
     expect(serializeScriptResult(undefined)).toBeUndefined();
     /* And for a value JSON serializes away entirely. */
     expect(serializeScriptResult(() => 1)).toBeUndefined();
+  });
+});
+
+// Bounding exists because of a measured brick on production (2026-09-02): an
+// image-crop script's sandbox stdout came back as a 7MB base64 PNG, was
+// journaled verbatim as one script-run-settled event, and every fold/delivery
+// lane re-materializing it OOMed the stream DO's 128MiB isolate on every
+// keepalive retry, wedging the stream permanently.
+describe("boundScriptSettlement", () => {
+  it("passes ordinary settlements through untouched", () => {
+    const small: ScriptExecutionSettlement = {
+      status: "succeeded",
+      result: { users: ["amy", "bob"] },
+    };
+    expect(boundScriptSettlement(small)).toBe(small);
+    const done: ScriptExecutionSettlement = { status: "succeeded" };
+    expect(boundScriptSettlement(done)).toBe(done);
+    const failed: ScriptExecutionSettlement = {
+      status: "failed",
+      error: "TypeError: boom",
+      failureKind: "runtime",
+      phase: "execution",
+      executionMayHaveOccurred: true,
+      cancellation: "external-work-may-continue",
+    };
+    expect(boundScriptSettlement(failed)).toBe(failed);
+  });
+
+  it("replaces an oversized result with omission metadata (the prod 7MB stdout shape)", () => {
+    const bounded = boundScriptSettlement({
+      status: "succeeded",
+      result: { stdout: `__FILE_1__\n${"iVBORw0KGgo".repeat(200_000)}` },
+    });
+    expect(bounded).toMatchObject({
+      status: "succeeded",
+      resultOmitted: {
+        reason: "oversized",
+        /* inferJsonType annotates the long string with its rough size. */
+        typeText: expect.stringContaining("stdout: string"),
+      },
+    });
+    expect(bounded).not.toHaveProperty("result");
+    const omitted = (bounded as { resultOmitted: { serializedChars: number; preview: string } })
+      .resultOmitted;
+    expect(omitted.serializedChars).toBeGreaterThan(MAX_SCRIPT_RESULT_EVENT_CHARS);
+    expect(omitted.preview).toContain('{"stdout":"__FILE_1__');
+    /* The bounded settlement must itself be tiny — it becomes a durable event. */
+    expect(JSON.stringify(bounded).length).toBeLessThan(10_000);
+  });
+
+  it("is idempotent — the append-side backstop re-bounds what the entrypoint already bounded", () => {
+    const once = boundScriptSettlement({
+      status: "succeeded",
+      result: "x".repeat(MAX_SCRIPT_RESULT_EVENT_CHARS + 1),
+    });
+    expect(boundScriptSettlement(once)).toBe(once);
+  });
+
+  it("truncates an oversized failure message instead of dropping the failure", () => {
+    const bounded = boundScriptSettlement({
+      status: "failed",
+      error: `refused: ${"blob".repeat(100_000)}`,
+      failureKind: "runtime",
+      phase: "execution",
+      executionMayHaveOccurred: true,
+      cancellation: "external-work-may-continue",
+    });
+    expect(bounded).toMatchObject({ status: "failed", failureKind: "runtime" });
+    const error = (bounded as { error: string }).error;
+    expect(error).toContain("refused:");
+    expect(error).toContain("[error truncated from 400009 chars]");
+    expect(error.length).toBeLessThan(MAX_SCRIPT_ERROR_EVENT_CHARS + 100);
   });
 });

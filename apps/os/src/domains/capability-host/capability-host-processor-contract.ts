@@ -305,6 +305,32 @@ export const CapabilityHostProcessorContract = defineProcessorContract({
               }),
             }),
             z.strictObject({
+              kind: z.literal("omitted").meta({
+                description:
+                  "A successful script whose return value was dropped at the settlement " +
+                  "boundary for being oversized (boundScriptSettlement). Only its inferred " +
+                  "type and size survive; there is no payload to embed or load.",
+              }),
+              executionId: z.string(),
+              scriptOffset: z
+                .number()
+                .int()
+                .nonnegative()
+                .optional()
+                .meta({
+                  description:
+                    "The run's script-run-requested event offset — the reuse handle " +
+                    "previousScriptHelper demands. Absent when no request was reduced.",
+                }),
+              settledAtOffset: z.number().int().nonnegative(),
+              typeText: z.string().meta({
+                description: "The inferred TypeScript type of the dropped result (inferJsonType).",
+              }),
+              serializedChars: z.number().int().nonnegative().meta({
+                description: "How large the dropped result's compact JSON was.",
+              }),
+            }),
+            z.strictObject({
               kind: z.literal("error").meta({ description: "A failed script." }),
               executionId: z.string(),
               scriptOffset: z
