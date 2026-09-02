@@ -1,23 +1,16 @@
 // __workers-tests__/stream.test.ts — the `Stream` class (stream/stream.ts) against REAL
-// DurableObjectStorage, inside workerd (the pool lane): waitForEvent's park/settle/timeout
+// DurableObjectStorage, inside workerd (the workers lane): waitForEvent's park/settle/timeout
 // mechanics, the storage-lazy virgin guarantee, and the per-incarnation wake record. Each test
 // borrows a dedicated ctx's DO purely for its storage (runInDurableObject) and constructs a BARE
 // Stream over it with no-op host deps — the DO's own #stream is never exercised in these ctxs, so
 // the two instances never contend.
 
 import { runInDurableObject } from "cloudflare:test";
-import { env } from "cloudflare:workers";
 import { expect, test } from "vitest";
-import { canonicalName } from "../src/context/durable-object-names.ts";
 import { errorCode } from "../src/lib/errors.ts";
 import { Stream } from "../src/stream/stream.ts";
 import type { StreamEvent, StreamEventInput } from "../src/stream/events.ts";
-import type { IterateContextDurableObject } from "../src/iterate-context-durable-object.ts";
-
-const stub = (ctx: string) =>
-  (
-    env as unknown as { CONTEXT: DurableObjectNamespace<IterateContextDurableObject> }
-  ).CONTEXT.getByName(canonicalName(ctx));
+import { stub } from "./support.ts";
 
 /** A bare Stream over real storage. `admit` defaults to open; `onCommit` records each `fresh`
  *  batch so tests can assert what the fan-out was fed. */

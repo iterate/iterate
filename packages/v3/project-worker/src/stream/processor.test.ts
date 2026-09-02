@@ -1,103 +1,19 @@
 // Executable spec for the processor layer — each block names the concurrency rule it proves.
-// The in-memory stream mirrors the DO's commit semantics EXACTLY: one shared offset sequence
-// (ephemerals consume offsets but never land in the log), the scanned-offset-range proof on both pushes
-// and reads, and a fire-and-forget push to every registered processor after each append.
+// The in-memory stream (stream/test-support.ts) mirrors the DO's commit semantics: one shared
+// offset sequence (ephemerals consume offsets but never land in the log), the scanned-offset-range
+// proof on both pushes and reads, and a fire-and-forget push to every registered processor after
+// each append. The rule-by-rule spec under slow blockers, failing batches and version bumps is
+// processor-rules.test.ts.
 import { describe, expect, test } from "vitest";
 import { z } from "zod";
+import { defineProcessorContract, type StreamEvent } from "./events.ts";
 import {
-  defineProcessorContract,
-  idempotencyConflictMessage,
-  sameIdempotentEvent,
-  type StreamEvent,
-  type StreamEventInput,
-} from "./events.ts";
-import {
+  consumesEvent,
   StreamProcessor,
   type ProcessEventArgs,
-  type ProcessorStream,
   type ReduceArgs,
 } from "./processor.ts";
-
-// ── a tiny in-memory stream + storage, faithful to the DO's commit semantics ──
-
-function memoryStream(path = "/") {
-  const events: StreamEvent[] = [];
-  const pushed: StreamEvent[] = []; // every committed event, ephemerals included (the pump's view)
-  const byKey = new Map<string, StreamEvent>();
-  const procs: StreamProcessor<any>[] = [];
-  let maxAssigned = 0;
-  let reads = 0;
-  const stream: ProcessorStream = {
-    append: (...inputs: StreamEventInput[]) => {
-      const scannedAfterOffset = maxAssigned;
-      const committed = inputs.map((input) => {
-        if (input.idempotencyKey) {
-          const existing = byKey.get(input.idempotencyKey);
-          if (existing) {
-            if (sameIdempotentEvent(existing, input)) return existing;
-            throw new Error(idempotencyConflictMessage(input.idempotencyKey, existing.offset));
-          }
-        }
-        maxAssigned += 1;
-        const event: StreamEvent = {
-          ...input,
-          offset: maxAssigned,
-          createdAt: new Date(0).toISOString(),
-          path,
-        };
-        if (!input.ephemeral) {
-          events.push(event);
-          if (input.idempotencyKey) byKey.set(input.idempotencyKey, event);
-        }
-        return event;
-      });
-      pushed.push(...committed);
-      if (maxAssigned > scannedAfterOffset) {
-        const scannedOffsetRange = { after: scannedAfterOffset, through: maxAssigned };
-        // THE PUMP: fire-and-forget, exactly like the DO (an awaited push would deadlock a
-        // processor that appends during its own batch).
-        for (const p of procs)
-          void p.processEventBatch(committed, scannedOffsetRange).catch(() => {});
-      }
-      return committed;
-    },
-    read: (afterOffset = 0, limit = 500) => {
-      reads += 1;
-      const page = events.filter((e) => e.offset > afterOffset).slice(0, limit);
-      return Promise.resolve({
-        events: page,
-        scannedThroughOffset:
-          page.length === limit ? page[page.length - 1].offset : Math.max(afterOffset, maxAssigned),
-      });
-    },
-  };
-  return {
-    stream,
-    events,
-    pushed,
-    procs,
-    get reads() {
-      return reads;
-    },
-  };
-}
-
-const memoryStorage = () => {
-  const map = new Map<string, unknown>();
-  let writes = 0;
-  return {
-    get: <T>(k: string) => map.get(k) as T | undefined,
-    put: (k: string, v: unknown) => {
-      writes++;
-      map.set(k, structuredClone(v));
-    },
-    get writes() {
-      return writes;
-    },
-  };
-};
-
-const settle = () => new Promise((r) => setTimeout(r, 25)); // let fire-and-forget pushes land
+import { memoryStorage, memoryStream, settle } from "./test-support.ts";
 
 // ── a counter processor exercising every hook ──
 
@@ -192,6 +108,35 @@ describe("contract", () => {
     expect(() =>
       CounterContract.buildEvent({ type: "events.iterate.com/other", payload: {} }),
     ).toThrow(/not owned/);
+  });
+});
+
+describe("consumesEvent — THE ONE consumes rule (engine, delivery loop, inline reduces)", () => {
+  test('"*" delivers every durable event but NEVER sweeps ephemerals', () => {
+    expect(consumesEvent(["*"], { type: "a" })).toBe(true);
+    expect(consumesEvent(["*"], { type: "b" })).toBe(true);
+    expect(consumesEvent(["*"], { type: "eph", ephemeral: true })).toBe(false);
+  });
+
+  test("undefined consumes = every durable event, no ephemerals (a subscriber's default)", () => {
+    expect(consumesEvent(undefined, { type: "a" })).toBe(true);
+    expect(consumesEvent(undefined, { type: "eph", ephemeral: true })).toBe(false);
+  });
+
+  test("a NAMED type opts that type in, INCLUDING when ephemeral", () => {
+    expect(consumesEvent(["eph"], { type: "eph", ephemeral: true })).toBe(true);
+    expect(consumesEvent(["eph"], { type: "other", ephemeral: true })).toBe(false);
+    expect(consumesEvent(["a"], { type: "a" })).toBe(true);
+    expect(consumesEvent(["a"], { type: "b" })).toBe(false);
+  });
+
+  test("a live-state delta is an ephemeral like any other here: never swept by default or '*', delivered when NAMED", () => {
+    // (That no PROCESSOR may fold a delta is the engine's `foldsEvent`, not this rule: a
+    // SUBSCRIPTION names the type to watch live state.)
+    const t = "events.iterate.com/live-state/changed";
+    expect(consumesEvent(undefined, { type: t, ephemeral: true })).toBe(false);
+    expect(consumesEvent(["*"], { type: t, ephemeral: true })).toBe(false);
+    expect(consumesEvent([t], { type: t, ephemeral: true })).toBe(true);
   });
 });
 
@@ -344,6 +289,71 @@ describe("the push door (scan scannedOffsetRanges)", () => {
   });
 });
 
+// ── the at-head pass is tied to the SHOWN head ──
+
+function ev(offset: number, type = "t"): StreamEvent {
+  return {
+    type,
+    payload: { n: offset },
+    createdAt: new Date(offset).toISOString(),
+    offset,
+    path: "/",
+  };
+}
+
+const CaughtUpContract = defineProcessorContract({
+  slug: "caughtup-probe",
+  version: "1.0.0",
+  description: "counts delivery.caughtUp firings — the at-head-pass probe",
+  stateSchema: z.object({ n: z.number().default(0) }),
+  events: {},
+  consumes: ["*"],
+  emits: [],
+});
+class CaughtUpProbe extends StreamProcessor<{ n: number }> {
+  readonly contract = CaughtUpContract;
+  caughtUps = 0;
+  protected override reduce({ state }: ReduceArgs<{ n: number }>) {
+    return { n: state.n + 1 };
+  }
+  protected override processEvent(args: ProcessEventArgs<{ n: number }>): undefined {
+    if (args.delivery.caughtUp) this.caughtUps++;
+  }
+}
+/** A probe over a stream with nothing to read; `readFails` makes every self-pull reject. */
+const caughtUpProbe = (readFails?: Error) =>
+  new CaughtUpProbe({
+    stream: {
+      append: () => [],
+      read: () =>
+        readFails
+          ? Promise.reject(readFails)
+          : Promise.resolve({ events: [], scannedThroughOffset: 0 }),
+    },
+    storage: memoryStorage(),
+    path: "/",
+    projectId: "prj_t",
+  });
+
+describe("delivery.caughtUp is tied to the SHOWN head", () => {
+  test("two contiguous pushes enqueued back-to-back — only the one reaching the shown head fires caughtUp", async () => {
+    // Both pushes sit on the chain before either runs, so the processor has been SHOWN through=2
+    // when the through=1 batch runs: that batch is not at head. Contiguity alone never earns the
+    // at-head pass — the reconcile work it triggers must run against the head fold, not a stale one.
+    const p = caughtUpProbe();
+    const first = p.processEventBatch([ev(1)], { after: 0, through: 1 });
+    const second = p.processEventBatch([ev(2)], { after: 1, through: 2 });
+    await Promise.all([first, second]);
+    expect(p.caughtUps).toBe(1);
+  });
+
+  test("a single push that reaches the shown head fires caughtUp once", async () => {
+    const p = caughtUpProbe();
+    await p.processEventBatch([ev(1)], { after: 0, through: 1 });
+    expect(p.caughtUps).toBe(1);
+  });
+});
+
 describe("ephemeral events", () => {
   const EphContract = defineProcessorContract({
     slug: "eph",
@@ -429,6 +439,26 @@ describe("ephemeral events", () => {
     // (simulate: the last durable persist covered through offset 3; state includes chunk@2 only
     //  because that scannedOffsetRange ALSO contained a durable event — the documented divergence rule)
     expect((await b.snapshot()).state.seen).toContain("loud@3");
+  });
+
+  test("a barrier that reaches the head BEFORE the commit's own push still leaves the named ephemeral delivered", async () => {
+    // The wake behind a read-your-writes barrier catches up the durable log and, via the
+    // head-clamped proof, advances the cursor OVER the ephemeral's offset while consuming only the
+    // durable. The commit's fire-and-forget push then arrives wholly behind the cursor: it must fold
+    // nothing twice yet still deliver its named ephemeral (pushes are an ephemeral's ONLY delivery,
+    // and a live processor was handed it).
+    const mem = memoryStream();
+    const p = new Eph({ stream: mem.stream, storage: memoryStorage(), path: "/", projectId: "p" });
+    mem.stream.append({ type: "loud" }); // offset 1, durable
+    await p.wake();
+    // one commit: durable loud@2 + ephemeral chunk@3 → range (1,3]; hand-delivered below
+    const committed = mem.stream.append(
+      { type: "loud" },
+      { type: "chunk", ephemeral: true },
+    ) as StreamEvent[];
+    await p.waitUntilProcessed({ offset: 3, timeoutMs: 1000 }); // the barrier's wake wins the race…
+    await p.processEventBatch(committed, { after: 1, through: 3 }); // …then the push lands
+    expect((await p.snapshot()).state.seen).toEqual(["loud@1", "loud@2", "chunk@3"]);
   });
 });
 
@@ -744,5 +774,163 @@ describe("live state emission failure is contained", () => {
     expect(
       mem.pushed.filter((e) => e.type === "events.iterate.com/live-state/changed"),
     ).toHaveLength(0);
+  });
+});
+
+// ── the persisted cursor across evictions and version bumps; the barrier's failure modes ──
+
+/** Reduces ticks AND records an effect per consumed event — the two things a refold and an
+ *  eviction must treat differently (state is rebuilt from the log; effects never re-run). */
+const CountContract = (version: string) =>
+  defineProcessorContract({
+    slug: "count",
+    version,
+    description: "counts ticks, records an effect per consumed event",
+    stateSchema: z.object({ ticks: z.number().default(0) }),
+    events: {},
+    consumes: ["tick"],
+    emits: [],
+  });
+class CountProcessor extends StreamProcessor<{ ticks: number }> {
+  readonly contract: ReturnType<typeof CountContract>;
+  readonly effects: number[] = []; // offsets whose processEvent fired
+  constructor(args: ConstructorParameters<typeof StreamProcessor>[0], version = "1.0.0") {
+    super(args);
+    this.contract = CountContract(version);
+  }
+  protected override reduce({ event, state }: ReduceArgs<{ ticks: number }>) {
+    return event.type === "tick" ? { ticks: state.ticks + 1 } : undefined;
+  }
+  protected override processEvent(args: ProcessEventArgs<{ ticks: number }>): undefined {
+    if (args.event) this.effects.push(args.event.offset);
+  }
+  protected override projectLiveState() {
+    return null; // exact-offset suite: opt out of the default live-state emit
+  }
+}
+/** A reduce that NEVER changes state — so the state key is never written, only the cursor. */
+const EffectOnlyContract = defineProcessorContract({
+  slug: "eff",
+  version: "1.0.0",
+  description: "pure side-effect processor: reduce never changes state",
+  stateSchema: z.object({}),
+  events: {},
+  consumes: ["*"],
+  emits: [],
+});
+class EffectOnlyProcessor extends StreamProcessor<Record<string, never>> {
+  readonly contract = EffectOnlyContract;
+  readonly effects: number[] = [];
+  protected override reduce(): undefined {
+    return undefined;
+  }
+  protected override processEvent(args: ProcessEventArgs<Record<string, never>>): undefined {
+    if (args.event) this.effects.push(args.event.offset);
+  }
+}
+
+describe("eviction honors the persisted cursor", () => {
+  test("a caught-up EFFECT-ONLY processor does not replay effects across an eviction", async () => {
+    // #loadProgress accepts the persisted cursor whenever the version matches, materializing
+    // initialState() when the state key is absent — a processor that never changed state must not
+    // fall back to offset 0 and re-drive the whole log WITH effects on every idle quiesce.
+    const mem = memoryStream();
+    const storage = memoryStorage();
+    const p1 = new EffectOnlyProcessor({
+      stream: mem.stream,
+      storage,
+      path: "/",
+      projectId: "prj_t",
+    });
+    mem.procs.push(p1);
+    for (let i = 0; i < 4; i++) mem.stream.append({ type: "boop" });
+    await p1.wake();
+    expect(p1.effects).toEqual([1, 2, 3, 4]);
+    // The cursor IS persisted (rule 4), even though state never changed.
+    expect(storage.get("reduce:eff:progress")).toMatchObject({ reducedThroughOffset: 4 });
+
+    // Eviction: fresh instance, SAME storage + log, SAME version.
+    const p2 = new EffectOnlyProcessor({
+      stream: mem.stream,
+      storage,
+      path: "/",
+      projectId: "prj_t",
+    });
+    mem.procs.length = 0;
+    mem.procs.push(p2);
+    await p2.wake();
+    expect(p2.effects).toEqual([]); // the persisted cursor (4) means nothing to re-do
+  });
+
+  test("CONTROL: a state-changing processor does not replay effects across an eviction either", async () => {
+    const mem = memoryStream();
+    const storage = memoryStorage();
+    const p1 = new CountProcessor({ stream: mem.stream, storage, path: "/", projectId: "prj_t" });
+    mem.procs.push(p1);
+    for (let i = 0; i < 4; i++) mem.stream.append({ type: "tick" });
+    await p1.wake();
+    expect(p1.effects).toEqual([1, 2, 3, 4]);
+
+    const p2 = new CountProcessor({ stream: mem.stream, storage, path: "/", projectId: "prj_t" });
+    mem.procs.length = 0;
+    mem.procs.push(p2);
+    await p2.wake();
+    expect(p2.effects).toEqual([]); // cursor honored — no replay
+  });
+
+  test("a version bump over a stored cursor at offset 0 terminates and yields the initial state", async () => {
+    const mem = memoryStream();
+    const storage = memoryStorage();
+    // A v1 cursor at offset 0 (as if nothing was ever consumed), then a v2 incarnation.
+    storage.put("reduce:count:progress", { reducerVersion: "1.0.0", reducedThroughOffset: 0 });
+    const p2 = new CountProcessor(
+      { stream: mem.stream, storage, path: "/", projectId: "prj_t" },
+      "2.0.0",
+    );
+    mem.procs.push(p2);
+    expect(await p2.snapshot()).toEqual({ offset: 0, state: { ticks: 0 } });
+  });
+});
+
+describe("waitUntilProcessed — resolution and failure modes", () => {
+  test("resolves a waiter whose offset the version refold reached (no batch was ever pushed)", async () => {
+    const mem = memoryStream();
+    const storage = memoryStorage();
+    const p1 = new CountProcessor({ stream: mem.stream, storage, path: "/", projectId: "prj_t" });
+    mem.procs.push(p1);
+    for (let i = 0; i < 3; i++) mem.stream.append({ type: "tick" });
+    await p1.wake();
+
+    // A bumped incarnation waits for an offset the refold (ceiling = 3) covers. No new push, so
+    // the wake's catch-up reads an empty page and never runs a batch — only the refold advances
+    // progress; the post-wake re-check must still resolve the waiter.
+    const p2 = new CountProcessor(
+      { stream: mem.stream, storage, path: "/", projectId: "prj_t" },
+      "2.0.0",
+    );
+    mem.procs.length = 0;
+    mem.procs.push(p2);
+    await expect(p2.waitUntilProcessed({ offset: 3, timeoutMs: 2000 })).resolves.toBeUndefined();
+    expect(p2.effects).toEqual([]); // and the refold stayed reduce-only
+  });
+
+  test("does not spuriously resolve a waiter whose offset was NOT reached", async () => {
+    const mem = memoryStream();
+    const storage = memoryStorage();
+    const p = new CountProcessor({ stream: mem.stream, storage, path: "/", projectId: "prj_t" });
+    mem.procs.push(p);
+    mem.stream.append({ type: "tick" }); // only offset 1 exists
+    await p.wake();
+    await expect(p.waitUntilProcessed({ offset: 5, timeoutMs: 120 })).rejects.toThrow(
+      /did not reach offset 5/,
+    );
+  });
+
+  test("a self-pull that THROWS rejects the barrier with the read failure — promptly, not the generic timeout", async () => {
+    // wake enqueues the catch-up on the serial chain, whose failure the chain swallows (a failed
+    // batch must not wedge it); the waiter must still be told, so a transient read error is one
+    // fast rejection the caller can retry instead of a full-timeout park.
+    const p = caughtUpProbe(new Error("self-pull read failed: boom"));
+    await expect(p.waitUntilProcessed({ offset: 5, timeoutMs: 1500 })).rejects.toThrow(/boom/);
   });
 });

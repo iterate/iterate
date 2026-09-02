@@ -1,7 +1,15 @@
 {
   "$schema": "https://unpkg.com/knip@5/schema.json",
-  "entry": ["src/sdk/index.ts", "src/client/demo.tsx", "specs/*.spec.ts", "**/*.test.ts"],
-  "project": ["src/**/*.{ts,tsx}"],
+  "entry": [
+    "src/sdk/index.ts",
+    "src/client/demo.tsx",
+    "specs/*.spec.ts",
+    "src/**/*.test.ts",
+    "e2e/**/*.e2e.test.ts",
+    "__workers-tests__/**/*.test.ts",
+    "e2e/support/global-setup.ts"
+  ],
+  "project": ["src/**/*.{ts,tsx}", "e2e/**/*.ts", "__workers-tests__/**/*.ts"],
   "ignoreExportsUsedInFile": true,
   "ignoreDependencies": ["cloudflare", "@v3/shared", "@playwright/test"],
   "ignoreBinaries": ["playwright"],

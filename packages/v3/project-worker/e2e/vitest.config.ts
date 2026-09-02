@@ -5,9 +5,11 @@
 // parallel (each test takes a fresh ctx = its own Durable Object); tests within a file run
 // sequentially so the per-test session-dispose (support/setup.ts) can't race a sibling.
 //
-// Two sibling lanes live elsewhere: fast in-process unit tests (../vitest.config.ts) and the
-// hibernation cases that genuinely need workerd-internal controls (../__workers-tests__, pool-workers).
-// Browser E2E is Playwright (../playwright.config.ts).
+// The sibling lanes live in ../vitest.config.ts (`pnpm test`): fast in-process unit tests
+// (src/**/*.test.ts) and the hibernation cases that genuinely need workerd-internal controls
+// (../__workers-tests__, inside workerd). Browser E2E is Playwright (../playwright.config.ts).
+// The ONE exception to "one shared worker": push-delivery-no-dropped-warns.e2e boots its own
+// (support/log-harness.ts) because its assertions read that worker's console.
 
 import { defineConfig } from "vitest/config";
 

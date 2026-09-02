@@ -1102,6 +1102,10 @@ src/
   sdk/       index (→ processor.js), stream-processor-durable-object
   lib/       errors, logs, hash, patch
   client/    the browser LiveState client + demo page      generated/  build outputs
+e2e/         `pnpm e2e` — the real worker booted once, one <primitive>-<claim>.e2e.test.ts per claim,
+             every test a capnweb client at /api (support/client.ts is the whole client surface)
+__workers-tests__/  `pnpm test` (workers project) — inside workerd, the hibernation cases only
+specs/       `pnpm spec` — Playwright drives the hosted /demo page
 ```
 
 | Tutorial                                                      | Real code (`packages/v3/project-worker`)                                                                                                                                                                                                         |

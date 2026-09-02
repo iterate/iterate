@@ -130,21 +130,26 @@ packages/v3/project-worker/
       react.tsx                  useLiveState hook
       demo.tsx                   the hosted /demo page
     generated/                   build outputs (committed; rebuilt by build-sdk.mjs)
-  __tests__/                     node lane over wrangler createTestHarness (harness.ts boots
-                                 the real worker; tests speak capnweb at /api)
-  __workers-tests__/             @cloudflare/vitest-plugin lane (runs inside workerd)
-  e2e/                           vitest e2e against one shared dev worker
-                                 (e2e/support/client.ts IS the client)
-  specs/                         Playwright specs
+  e2e/                           `pnpm e2e` — the real worker, booted ONCE (support/global-setup.ts),
+                                 every <primitive>-<claim>.e2e.test.ts speaks capnweb at /api through
+                                 support/client.ts (the whole client surface a test uses)
+  __workers-tests__/             `pnpm test` workers project — @cloudflare/vitest-plugin, runs INSIDE
+                                 workerd for the hibernation cases that need its controls
+  specs/                         `pnpm spec` — Playwright drives the hosted /demo page
 ../control-plane-shell/src/index.ts   ControlPlaneShell: fetch (platform secrets → internet),
                                  invokeCapability (stub), default fetch /emit writes into a
                                  project's context
 ../shared/src/egress.ts          substituteHeaderSecrets({{secret:<scope>:NAME}})
 ```
 
-Unit-lane tests sit next to their subject (`context/dispatch.test.ts`); the
-`*.failing.test.ts` files are pinned defect hunts and live in the folder of the
-primitive they attack.
+Unit-lane tests (`pnpm test`, in-process node) sit next to their subject
+(`context/dispatch.test.ts`) and share one `stream/test-support.ts` (the
+in-memory stream and storage fakes); the workers lane shares
+`__workers-tests__/support.ts`. Everything that needs the real worker is in
+`e2e/`, one file per primitive-and-claim, on one shared worker; its client is
+`e2e/support/client.ts`. A file's name says what it proves — there are no
+"failing" files; an expected failure is a `test.fails` inside a plainly named
+file.
 
 ---
 

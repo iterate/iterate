@@ -1,55 +1,14 @@
 // The capability table's executable spec — shadow stack, built-ins-first, default-deny,
-// recursion, string-at-rest payloads (a mount is `{ path, target }` and nothing else), and
-// the live-capability shape: a mount is PURE DATA naming the `itx.rpcStubs` built-in (the
-// physical registry), so reconnect is zero events and a dead stub leaves its mount offline.
+// recursion (the depth-32 budget), string-at-rest payloads (a mount is `{ path, target }` and
+// nothing else; a target is PRINTED to a string at rest and re-parsed on reduce, so it must
+// round-trip the codec), and the live-capability shape: a mount is PURE DATA naming the
+// `itx.rpcStubs` built-in (the physical registry), so reconnect is zero events and a dead stub
+// leaves its mount offline.
 import { describe, expect, test } from "vitest";
-import { type ProcessorStream } from "../stream/processor.ts";
-import {
-  idempotencyConflictMessage,
-  sameIdempotentEvent,
-  type StreamEvent,
-  type StreamEventInput,
-} from "../stream/events.ts";
+import { memoryStream } from "../stream/test-support.ts";
 import { parse, type Expression } from "./expression.ts";
 import { CapabilityTableProcessor } from "./capability-table.ts";
 import { InvokeHandle } from "./invoke-handle.ts";
-
-function memoryStream(path = "/") {
-  const events: StreamEvent[] = [];
-  const byKey = new Map<string, StreamEvent>();
-  const stream: ProcessorStream = {
-    append: (...inputs: StreamEventInput[]) =>
-      inputs.map((input) => {
-        if (input.idempotencyKey) {
-          const existing = byKey.get(input.idempotencyKey);
-          if (existing) {
-            if (sameIdempotentEvent(existing, input)) return existing;
-            throw new Error(idempotencyConflictMessage(input.idempotencyKey, existing.offset));
-          }
-        }
-        const event: StreamEvent = {
-          ...input,
-          offset: events.length + 1,
-          createdAt: new Date(0).toISOString(),
-          path,
-        };
-        events.push(event);
-        if (input.idempotencyKey) byKey.set(input.idempotencyKey, event);
-        return event;
-      }),
-    read: (afterOffset = 0, limit = 500) => {
-      const page = events.filter((e) => e.offset > afterOffset).slice(0, limit);
-      return Promise.resolve({
-        events: page,
-        scannedThroughOffset:
-          page.length === limit
-            ? page[page.length - 1].offset
-            : Math.max(afterOffset, events.length),
-      });
-    },
-  };
-  return { stream, events };
-}
 
 /** A tiny fake built-ins record — enough physical layer to route into. */
 const fakeBuiltIns = () => {
@@ -293,5 +252,68 @@ describe("event mounts + the shadow stack", () => {
     expect(reduceAll().mounts.some((m) => m.path.join(".") === "itx.robot")).toBe(true);
     await host.revoke({ providedAtOffset: provision.providedAtOffset });
     await expect(invoke("itx.robot.move(10)")).rejects.toThrow(/no capability matches/);
+  });
+});
+
+describe("targets round-trip the codec: provide → print → reduce → parse", () => {
+  // A provide() that returned success while its stored string failed to re-parse would leave a
+  // silently unroutable table — the offset handed back a lie, revoke with nothing to pop.
+  test("a mount target with a large number literal routes (print renders 1e21 as 1e+21; the parser reads the exponent)", async () => {
+    const { host, invoke, provideLive } = setup();
+    await provideLive("itx.c", { echo: (n: unknown) => `echo:${n}` });
+    const { providedAtOffset } = await host.provide({
+      path: "itx.big",
+      target: ["itx", "c", ["echo", 1e21]] as Expression,
+    });
+    expect(providedAtOffset).toBeGreaterThan(0);
+    expect(await invoke("itx.big")).toBe(`echo:${1e21}`); // the target is a complete call
+  });
+
+  test("a mount target with a non-identifier object key routes (print QUOTES the key; the parser re-reads it)", async () => {
+    const { host, invoke } = setup();
+    const { providedAtOffset } = await host.provide({
+      path: "itx.alias",
+      target: ["itx", "openai", ["chat", { "a b": "grok-4" }]] as Expression,
+    });
+    expect(providedAtOffset).toBeGreaterThan(0);
+    // openai.chat reads o.model (absent here) → "chat:undefined"; the point is it ROUTES at all.
+    expect(await invoke("itx.alias")).toBe("chat:undefined");
+  });
+});
+
+describe("revoke against nothing", () => {
+  test("revoking an offset that was never provided is a silent no-op; the table still resolves", async () => {
+    const { host, invoke } = setup();
+    await expect(host.revoke({ providedAtOffset: 999 })).resolves.toBeUndefined();
+    expect(await invoke("itx.whoami()")).toEqual({ projectId: "prj_t", path: "/" });
+  });
+
+  test("built-ins are unrevocable — a revoke naming any offset leaves them intact", async () => {
+    const { host, invoke } = setup();
+    // built-ins carry no providedAtOffset (they are not mounts), so no revoke event can pop one.
+    await host.revoke({ providedAtOffset: 1 });
+    await host.revoke({ providedAtOffset: 2 });
+    expect(await invoke("itx.kv.put('a', '1')")).toEqual({ ok: true });
+    expect(await invoke("itx.kv.get('a')")).toBe("1");
+  });
+});
+
+describe("resolve depth budget", () => {
+  const buildChain = async (host: CapabilityTableProcessor, n: number) => {
+    for (let i = 1; i < n; i++) await host.provide({ path: `itx.a${i}`, target: `itx.a${i + 1}` });
+    await host.provide({ path: `itx.a${n}`, target: "itx.kv" });
+  };
+
+  test("a 32-deep alias chain resolves", async () => {
+    const { host, invoke } = setup();
+    await buildChain(host, 32);
+    await invoke("itx.a1.put('k', 'v')");
+    expect(await invoke("itx.a1.get('k')")).toBe("v");
+  });
+
+  test("a 33-deep alias chain trips the depth-32 guard (burns nothing)", async () => {
+    const { host, invoke } = setup();
+    await buildChain(host, 33);
+    await expect(invoke("itx.a1.get('k')")).rejects.toThrow(/depth 32/);
   });
 });

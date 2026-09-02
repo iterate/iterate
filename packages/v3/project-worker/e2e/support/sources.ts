@@ -3,13 +3,8 @@
 // seeds only what it uses:
 //   await seedSources(itx, ["site", "counter"]);
 //   ...source: "itx.kv.get('src/site.js')"...
-// (was proofs/proof_sources.mjs)
 
-export const SOURCES: Record<string, string> = {
-  "src/hello.js": `import { WorkerEntrypoint } from "cloudflare:workers";
-export default class Hello extends WorkerEntrypoint {
-  async run(name) { return "hello " + (name ?? "world"); }
-}`,
+const SOURCES: Record<string, string> = {
   "src/counter.js": `import { DurableObject } from "cloudflare:workers";
 export class Counter extends DurableObject {
   async increment(by) { const n = ((await this.ctx.storage.get("n")) ?? 0) + by; await this.ctx.storage.put("n", n); return n; }
@@ -90,7 +85,7 @@ export class Chunky extends StreamProcessorDurableObject {
   // with RUNTIME state (lastPokeMs — a plain field, NOT the reduce checkpoint, gone on eviction). A
   // 'poke' ephemeral event bumps the runtime field in processEvent and publishes its delta out of
   // band (the reduce never touches it). Proves reduced ⊕ runtime through ONE projection + ONE
-  // revision chain (live-state-runtime.test.ts).
+  // revision chain (live-state-chains-client-side.e2e).
   "src/presence.js": `import { StreamProcessorDurableObject, defineProcessorContract, z } from "./processor.js";
 const contract = defineProcessorContract({
   slug: "presence",

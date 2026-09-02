@@ -1,8 +1,8 @@
 // e2e/support/solo-config.ts — THE one place the SOLO test topology is built: read wrangler.jsonc
 // (wrangler's own reader, so the config is what wrangler sees) and patch it so the real
 // project-worker runs standalone under createTestHarness (local workerd, production build hook, no
-// external control-plane worker). Shared by the e2e lane's global-setup (one worker per run) and the
-// harness lane's per-file boot (__tests__/harness.ts).
+// external control-plane worker). Shared by the e2e lane's global-setup (the one worker every file
+// speaks to) and support/log-harness.ts (the second worker the console-reading file boots).
 
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";

@@ -29,8 +29,8 @@ describe("match", () => {
     ],
     [
       "deep path, call at the boundary",
-      "itx.subscribers.foo",
-      "itx.subscribers.foo('batch')",
+      "itx.robots.arm",
+      "itx.robots.arm('batch')",
       { segments: 3, boundaryArgs: ["batch"], remainder: [] },
     ],
   ])("%s", (_label, path, call, expected) => {

@@ -17,14 +17,13 @@ declare module "vitest" {
   interface ProvidedContext {
     /** Base URL of the one E2E worker, e.g. http://127.0.0.1:1234 — every test opens capnweb here. */
     workerBaseUrl: string;
-    /** URL of the dummy REMOTE capnweb API (Node-hosted) that connect.e2e.test.ts dials. */
+    /** URL of the dummy REMOTE capnweb API (Node-hosted) that load-remote-capnweb.e2e dials. */
     dummyCapnwebUrl: string;
   }
 }
 
-// ── the dummy REMOTE capnweb API (was proofs/dummy-capnweb, a separately-deployed worker; now a
-// tiny Node server the same globalSetup owns). connect.e2e's USERSPACE worker dials it over one
-// HTTP batch through the context's egress. `.math` is a NESTED RpcTarget passed by reference, so a
+// ── the dummy REMOTE capnweb API — a tiny Node server the same globalSetup owns.
+// load-remote-capnweb.e2e's USERSPACE worker dials it over one HTTP batch through the context's egress. `.math` is a NESTED RpcTarget passed by reference, so a
 // genuine MULTI-HOP chain exists (`api.math.add(2,3)`: a property hop THEN a call). ──
 class MathApi extends RpcTarget {
   add(a: number, b: number): number {

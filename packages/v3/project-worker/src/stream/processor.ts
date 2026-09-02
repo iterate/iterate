@@ -70,7 +70,7 @@ export type ProcessorContract<State = unknown> = {
 
 /** The stream a processor reduces. `read` answers durable rows plus the scanned-offset-range proof:
  *  `scannedThroughOffset` is how far the read is CONTIGUOUSLY known (the last row when a full
- *  page came back, the stream's highest assigned offset when the page ran short). */
+ *  page came back, the stream's DURABLE mark when the page ran short — never the in-memory head, whose ephemeral offsets a later incarnation may reuse). */
 export type ProcessorStream = {
   append(...events: StreamEventInputT[]): Promise<StreamEventT[]> | StreamEventT[];
   read(

@@ -7,16 +7,9 @@
 // the same hunt found that an undisposed facet RPC RESULT pinned the parent after a quiesce — the
 // read-verb cases below are also the pin for that fix: they evict at once after ONE quiesce.)
 import { evictDurableObject, runDurableObjectAlarm } from "cloudflare:test";
-import { env } from "cloudflare:workers";
-import { expect, test, vi } from "vitest";
-import { canonicalName } from "../src/context/durable-object-names.ts";
-import type { IterateContextDurableObject } from "../src/iterate-context-durable-object.ts";
+import { expect, test } from "vitest";
 import type { Expression } from "../src/context/expression.ts";
-
-const stub = (ctx: string) =>
-  (
-    env as unknown as { CONTEXT: DurableObjectNamespace<IterateContextDurableObject> }
-  ).CONTEXT.getByName(canonicalName(ctx));
+import { quiesce, stub } from "./support.ts";
 
 const COUNTER_SRC = /* js */ `
 import { StreamProcessorDurableObject, defineProcessorContract, z } from "./processor.js";
@@ -44,15 +37,6 @@ type Page = { events: { type: string; offset: number }[]; scannedThroughOffset: 
 const page = async (ctx: string): Promise<Page> =>
   (await stub(ctx).invoke(["itx", ["read", 0, 500]])) as Page;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-async function quiesce(ctx: string) {
-  vi.useFakeTimers({ now: Date.now(), toFake: ["Date"] });
-  try {
-    vi.setSystemTime(Date.now() + 61_000);
-    await runDurableObjectAlarm(stub(ctx));
-  } finally {
-    vi.useRealTimers();
-  }
-}
 
 const loadChain = (src: string, cls: string, name: string): Expression => [
   "itx",

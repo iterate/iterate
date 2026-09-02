@@ -1,13 +1,13 @@
 // __workers-tests__/hibernation-at-scale.test.ts — THE HIBERNATION PROPERTY AT SCALE, inside
-// workerd (the pool-workers lane; see vitest.workers.config.ts):
+// workerd (the workers lane — vitest.config.ts's `workers` project):
 //
 //   Hundreds of clients connect into ONE stream (each providing a live capnweb capability at its
 //   own mount path, with a hibernatable stub pager WebSocket), the stream DO EVICTS — losing every
 //   in-memory paged-in stub — and on wake it can STILL call every client's capability:
 //   page → paged-in stub → invoke (context/hibernatable-rpc-stub.ts).
 //
-// This is proofs/prove_hibernate.mjs's property made deterministic: the live proof waits ~4min
-// holds for Cloudflare's own eviction; here cloudflare:test's evictDurableObject() forces the
+// The property made deterministic: a live deployment waits minutes for Cloudflare's own
+// eviction; here cloudflare:test's evictDurableObject() forces the
 // same instance teardown on demand, with hibernatable WebSockets PRESERVED (webSockets:
 // "hibernate" is its default — the exact production semantic).
 //
@@ -34,31 +34,16 @@
 //       Date only — the alarm scheduler and sockets stay real), which is how (b)'s precondition
 //       is met above.
 
-import { evictDurableObject, runDurableObjectAlarm, SELF } from "cloudflare:test";
-import { env } from "cloudflare:workers";
-import { newWebSocketRpcSession, RpcTarget } from "capnweb";
-import { afterAll, beforeAll, expect, test, vi } from "vitest";
-import { canonicalName } from "../src/context/durable-object-names.ts";
-import type { IterateContextDurableObject } from "../src/iterate-context-durable-object.ts";
+import { evictDurableObject } from "cloudflare:test";
+import { beforeAll, expect, test } from "vitest";
+import { Echo, openSession, quiesce, stub } from "./support.ts";
 
 const CTX = "prj_hibscale";
 const CLIENTS = 200;
 
-/** One connected client's live capability — the per-client tag proves no crosstalk. */
-class EchoTarget extends RpcTarget {
-  readonly #i: number;
-  constructor(i: number) {
-    super();
-    this.#i = i;
-  }
-  echo(s: string): string {
-    return `echo-${this.#i}:${s}`;
-  }
-}
-
 /** The DO-only transport facts (transportState(): the whole in-memory socket census — physical
  *  truths, never event-derivable; `itx.rpcStubs.list()` is the edge half, PRESENCE = the
- *  keys with a transport right now. This pool-workers lane holds the raw DO stub, so it speaks
+ *  keys with a transport right now. This workers lane holds the raw DO stub, so it speaks
  *  the Workers-RPC verb directly). */
 type TransportState = {
   stubs: number;
@@ -67,55 +52,25 @@ type TransportState = {
   dormant: boolean;
 };
 async function state(): Promise<TransportState> {
-  return (await contextStub().transportState()) as unknown as TransportState;
+  return (await stub(CTX).transportState()) as unknown as TransportState;
 }
 /** Incarnation (the hibernation tell) — the core reduce's fold of the stream/woken wake record
  *  (`itx.facets.get('core').snapshot()`; absent until a first-ever commit reduces one). */
 async function incarnationNow(): Promise<number> {
-  const snap = (await contextStub().invoke("itx.facets.get('core').snapshot()")) as {
+  const snap = (await stub(CTX).invoke("itx.facets.get('core').snapshot()")) as {
     state: { incarnation?: number };
   };
   return snap.state.incarnation ?? 0;
 }
 
-const contextStub = () =>
-  (
-    env as unknown as { CONTEXT: DurableObjectNamespace<IterateContextDurableObject> }
-  ).CONTEXT.getByName(canonicalName(CTX));
-
-// capnweb sessions live for the whole file; dispose at teardown (the harness.ts lesson: sessions
-// left open turn into unhandled-rejection noise).
-const sessions: unknown[] = [];
-
-/** Open a capnweb session to the worker over a WebSocket upgrade on SELF.fetch —
- *  newWebSocketRpcSession accepts the existing (accepted) socket per its typings. */
-async function openSession(): Promise<any> {
-  const res = await SELF.fetch(`https://test.local/api`, {
-    headers: { Upgrade: "websocket" },
-  });
-  if (!res.webSocket) throw new Error(`expected a 101 with a WebSocket, got ${res.status}`);
-  res.webSocket.accept();
-  const session = newWebSocketRpcSession(res.webSocket as unknown as WebSocket);
-  sessions.push(session);
-  return session as any;
-}
-
 let callerItx: any; // a SEPARATE caller session (no capabilities of its own)
 
-/** Reproduce the production 60s idle quiesce ON DEMAND: fake Date ONLY (+61s — sockets, alarm
- *  scheduler and timers stay real), fire the armed alarm (runDurableObjectAlarm runs a scheduled
- *  alarm immediately), restore real time. The alarm's quiesce branch disposes every paged-in
- *  RetainedCallbackInvoker stub, making the DO dormant — which is also evictDurableObject's
- *  de-facto precondition (see mechanism note (b) in the header: evicting a warm DO times out on
- *  "active references", exactly the production #6800 pin). */
+/** The production 60s idle quiesce on demand (support.ts's `quiesce`), then the two facts this
+ *  file leans on: every paged-in stub disposed, the DO dormant — evictDurableObject's de-facto
+ *  precondition (see mechanism note (b) in the header: evicting a warm DO times out on "active
+ *  references", exactly the production #6800 pin). */
 async function quiesceLikeProduction(): Promise<void> {
-  vi.useFakeTimers({ now: Date.now(), toFake: ["Date"] });
-  try {
-    vi.setSystemTime(Date.now() + 61_000);
-    await runDurableObjectAlarm(contextStub());
-  } finally {
-    vi.useRealTimers();
-  }
+  await quiesce(CTX);
   const s = await state();
   expect(s.pagedIn).toBe(0); // the quiesce disposed every paged-in stub
   expect(s.dormant).toBe(true);
@@ -123,7 +78,7 @@ async function quiesceLikeProduction(): Promise<void> {
 
 beforeAll(async () => {
   // ONE client session carrying all 200 stubs (capnweb multiplexes; each itx.provide(path, stub)
-  // parks its own EchoTarget relay-side in the `itx.rpcStubs` registry, opens its own stub pager
+  // parks its own Echo relay-side in the `itx.rpcStubs` registry, opens its own stub pager
   // WebSocket into the DO, and mounts the pure-data target `itx.rpcStubs.get('itx.cN')` — the
   // registry is presence, the table is the mount; event volume is fine).
   const clientItx = await (await openSession()).authenticate().projects.get(CTX);
@@ -132,22 +87,12 @@ beforeAll(async () => {
     await Promise.all(
       Array.from({ length: Math.min(BATCH, CLIENTS - base) }, (_, k) => {
         const i = base + k;
-        return clientItx.provide(`itx.c${i}`, new EchoTarget(i));
+        return clientItx.provide(`itx.c${i}`, new Echo(i));
       }),
     );
   }
   callerItx = await (await openSession()).authenticate().projects.get(CTX);
 }, 120_000);
-
-afterAll(() => {
-  for (const s of sessions) {
-    try {
-      (s as Partial<Disposable>)[Symbol.dispose]?.();
-    } catch {
-      /* already broken */
-    }
-  }
-});
 
 test("SCALE ATTACH: 200 clients park 200 stubs, the DO stays dormant, spot invokes hit the right client", async () => {
   const s = await state();
@@ -177,7 +122,7 @@ test("EVICT THEN WAKE: eviction drops every in-memory stub; a call pages the rel
   // times out on "active references", the #6800 pin), THEN evict: instance torn down, storage
   // kept, hibernatable sockets hibernated.
   await quiesceLikeProduction();
-  await evictDurableObject(contextStub());
+  await evictDurableObject(stub(CTX));
 
   const evicted = await state(); // read-only probe — wakes a FRESH instance
   expect(evicted.pagedIn).toBe(0); // every paged-in stub died with the instance
@@ -203,7 +148,7 @@ test("EVICT THEN WAKE: eviction drops every in-memory stub; a call pages the rel
 
 test("SCALE WAKE: after another eviction, a fan-out reaches ALL 200 clients", async () => {
   await quiesceLikeProduction(); // the previous test left 3+ stubs paged in — same #6800 dance
-  await evictDurableObject(contextStub());
+  await evictDurableObject(stub(CTX));
   const evicted = await state();
   expect(evicted.pagedIn).toBe(0);
 

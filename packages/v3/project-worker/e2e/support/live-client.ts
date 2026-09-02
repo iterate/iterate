@@ -1,7 +1,7 @@
 // e2e/support/live-client.ts — the CLIENT half of live state, for E2E tests. Seed through the
 // producer's door {rev, state}, apply each delivered {from, to, patch} whose `from` matches the held
-// rev, re-read the door on any mismatch. Exposes the applied/dropped/reseeds counters the live-state
-// proof asserts. Uses the real RFC-6902-subset applyPatch (src/lib/patch.ts) — one patch impl.
+// rev, re-read the door on any mismatch. Exposes the applied/dropped/reseeds counters
+// live-state-chains-client-side.e2e asserts. Uses the real RFC-6902-subset applyPatch (src/lib/patch.ts) — one patch impl.
 
 import { applyPatch, type PatchOp } from "../../src/lib/patch.ts";
 
@@ -22,7 +22,7 @@ export const deltasFor =
     }
   };
 
-export type LiveClient = {
+type LiveClient = {
   doc: unknown;
   rev: number | null;
   applied: number;

@@ -1,6 +1,6 @@
-// core/dotted-path-proxy.test.ts — the pure mechanism, in-process (unit lane), driven over a real
+// context/dotted-path-proxy.test.ts — the pure mechanism, in-process (unit lane), driven over a real
 // capnweb RpcStub. PORTED (not verbatim) from apps/os/src/domains/itx/path-proxy.test.ts. The
-// end-to-end dotted surface over the real worker lives in __tests__/failing-dotted-surface.test.ts.
+// end-to-end dotted surface over the real worker is pinned in the e2e lane.
 
 import { RpcStub, RpcTarget } from "capnweb";
 import { describe, expect, it } from "vitest";
@@ -74,7 +74,7 @@ describe("prototype-chain dynamic fallback", () => {
   it("instances are genuine, unproxied RpcTargets (the whole point: workerd pipelining)", () => {
     // The fallback lives on the PROTOTYPE CHAIN, so the instance stays a plain, natively-branded
     // RpcTarget (no own dynamic props, no instance Proxy) — what workerd's pipeline classifier
-    // requires. The live guard for pipelining itself is the harness lane; this pins the structural
+    // requires. The live guard for pipelining itself is the e2e lane; this pins the structural
     // half the unit lane can see.
     const target = new HostTarget();
     expect(target).toBeInstanceOf(RpcTarget);

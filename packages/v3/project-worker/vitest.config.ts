@@ -1,15 +1,13 @@
-// THE vitest config for `pnpm test`. Three PROJECTS (vitest's own word), each a genuinely
-// different execution context:
+// THE vitest config for `pnpm test`. Two PROJECTS (vitest's own word), each a genuinely different
+// execution context:
 //   • unit    — in-process node, the fast lane (src/**/*.test.ts)
-//   • harness — a real worker booted PER FILE via wrangler createTestHarness, driven over capnweb
-//               (__tests__/**). Deep multi-step integration scenarios that want their own worker.
 //   • workers — tests run INSIDE workerd next to the worker, reaching cloudflare:test controls
 //               (evictDurableObject / runDurableObjectAlarm). Deliberately narrowed to the
 //               HIBERNATION cases that genuinely need those controls (__workers-tests__/**).
 //
-// Two sibling lanes live in their own configs:
-//   • `pnpm e2e`  — the vitest E2E lane (e2e/vitest.config.ts): ONE shared worker booted once by
-//                   globalSetup, files in parallel — the ported live-board proofs live there.
+// Everything that needs the REAL worker over its public door lives in the e2e lane, its own config:
+//   • `pnpm e2e`  — e2e/vitest.config.ts: ONE shared worker booted once by globalSetup, every
+//                   <primitive>-<claim>.e2e.test.ts a capnweb client at /api, files in parallel.
 //   • `pnpm spec` — Playwright (playwright.config.ts + specs/**): a real browser drives the hosted
 //                   /demo page against a real worker.
 
@@ -23,18 +21,6 @@ export default defineConfig({
         test: {
           name: "unit",
           include: ["src/**/*.test.ts"],
-        },
-      },
-      {
-        test: {
-          name: "harness",
-          include: ["__tests__/**/*.test.ts"],
-          testTimeout: 60_000,
-          hookTimeout: 120_000,
-          // sequential files: each file boots its own workerd via createTestHarness; parallel
-          // boots thrash the port.
-          pool: "forks",
-          fileParallelism: false,
         },
       },
       {

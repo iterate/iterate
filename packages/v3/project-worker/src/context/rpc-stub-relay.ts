@@ -37,8 +37,8 @@ class RetainedCallbackInvoker extends WorkersRpcTarget {
   #provider: RetainedProviderStub;
   /** SHARED across every page of one relay (a `{ value }` holder), flipped by the ONE `onRpcBroken`
    *  registration in `startRpcStubRelay`. capnweb has no `offRpcBroken`, so registering per paged-in
-   *  invoker would accumulate a listener per page for the session's life — the leak the failing test
-   *  pins. capnweb fires onRpcBroken BEFORE it rejects the in-flight import, so a call caught below
+   *  invoker would accumulate a listener per page for the session's life — the leak
+   *  rpc-stub-relay.test.ts pins. capnweb fires onRpcBroken BEFORE it rejects the in-flight import, so a call caught below
    *  sees this already true — no race. */
   #broken: { value: boolean };
   #context: IterateContextStub;

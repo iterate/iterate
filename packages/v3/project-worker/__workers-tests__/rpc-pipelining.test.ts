@@ -3,29 +3,24 @@
 // native Workers-RPC call returns an `instanceof` of it. workers-types lags this export (worker.ts
 // casts around it) — if workerd ever drops or renames it, this fails LOUDLY instead of the
 // registration silently never matching (which would quietly re-await every native chain step).
-// The behavioral contract itself is pinned in src/core/dispatch.test.ts ("pipelined RPC promise
+// The behavioral contract itself is pinned in src/context/dispatch.test.ts ("pipelined RPC promise
 // threading") and, for the capnweb one-shot batch where it is CORRECTNESS, by
-// e2e/connect.e2e.test.ts's call-then-call test.
+// the e2e lane's remote-capnweb call-then-call test.
 
 // Side-effect import FIRST: worker.ts's module scope is where the native RpcPromise brand is
 // REGISTERED with dispatch.ts. The regression test below fails if that registration disappears.
 import "../src/worker.ts";
 import * as cloudflareWorkers from "cloudflare:workers";
-import { env } from "cloudflare:workers";
 import { expect, test } from "vitest";
 import { evaluate } from "../src/context/dispatch.ts";
-import { canonicalName } from "../src/context/durable-object-names.ts";
-import type { IterateContextDurableObject } from "../src/iterate-context-durable-object.ts";
+import { stub } from "./support.ts";
 
 test("cloudflare:workers exports RpcPromise and native RPC calls are instanceof it", async () => {
   const RpcPromise = (cloudflareWorkers as unknown as { RpcPromise: abstract new () => unknown })
     .RpcPromise;
   expect(typeof RpcPromise).toBe("function");
 
-  const stub = (
-    env as unknown as { CONTEXT: DurableObjectNamespace<IterateContextDurableObject> }
-  ).CONTEXT.getByName(canonicalName("prj_rpc_pipelining"));
-  const p = stub.transportState();
+  const p = stub("prj_rpc_pipelining").transportState();
   expect(p).toBeInstanceOf(RpcPromise);
   const state = (await p) as Record<string, unknown>;
   expect(typeof state.stubs).toBe("number");
@@ -41,10 +36,7 @@ test("the step walk threads a NATIVE RpcPromise unawaited — regression = this 
     "RpcPromise" | "RpcProperty",
     abstract new () => unknown
   >;
-  const stub = (
-    env as unknown as { CONTEXT: DurableObjectNamespace<IterateContextDurableObject> }
-  ).CONTEXT.getByName(canonicalName("prj_rpc_pipelining"));
-  const scope = { itx: { transport: () => stub.transportState() } };
+  const scope = { itx: { transport: () => stub("prj_rpc_pipelining").transportState() } };
   const { value } = await evaluate(scope, ["itx", ["transport"], "stubs"]);
   // NOT the settled number — the chain is still open (a pipelined property off a pipelined call)
   expect(value instanceof RpcProperty || value instanceof RpcPromise).toBe(true);

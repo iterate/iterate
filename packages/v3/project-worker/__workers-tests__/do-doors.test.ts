@@ -1,11 +1,11 @@
 // __workers-tests__/do-doors.test.ts — the IterateContextDurableObject's Workers-RPC doors,
-// pinned at zero distance (the pool lane is the only one that can BOTH call the DO verbs raw —
+// pinned at zero distance (the workers lane is the only one that can BOTH call the DO verbs raw —
 // no capnweb edge folding the returns away — AND inspect the DO's own storage via
 // runInDurableObject). Three pins live here:
 //
 //   • the VIRGIN-PROBE alarm blind spot: a probe (`itx.facets.get('core').snapshot()`) must not
 //     arm the quiet clock on a never-touched ctx — the storage-lazy doctrine's one blind spot,
-//     which only storage.getAlarm() can see (the harness lane pins incarnation/tables but cannot
+//     which only storage.getAlarm() can see (the e2e lane pins incarnation/tables but cannot
 //     read the alarm);
 //   • the provide door's SHAPE: it canonicalizes the path on its own (a Workers-RPC caller
 //     bypasses the edge canonicalizer), and a mount is `{ path, target, providedAtOffset }` and
@@ -17,18 +17,11 @@
 //     touches a transport. The stub stays in `itx.rpcStubs` until the session that parked it
 //     closes it.
 
-import { runInDurableObject, SELF } from "cloudflare:test";
-import { env } from "cloudflare:workers";
-import { newWebSocketRpcSession, RpcTarget } from "capnweb";
-import { afterAll, expect, test } from "vitest";
-import { canonicalName } from "../src/context/durable-object-names.ts";
+import { runInDurableObject } from "cloudflare:test";
+import { RpcTarget } from "capnweb";
+import { expect, test } from "vitest";
 import { print, type Expression } from "../src/context/expression.ts";
-import type { IterateContextDurableObject } from "../src/iterate-context-durable-object.ts";
-
-const stub = (ctx: string) =>
-  (
-    env as unknown as { CONTEXT: DurableObjectNamespace<IterateContextDurableObject> }
-  ).CONTEXT.getByName(canonicalName(ctx));
+import { openSession, stub } from "./support.ts";
 
 /** One capability-table row as the snapshot serializes it (the reduced state's `target` is the
  *  parsed Expression — `print` it to compare against the string the door was given). */
@@ -40,19 +33,6 @@ const mountsOf = async (ctx: string): Promise<MountRow[]> =>
     }
   ).state.mounts;
 
-// ── a real capnweb session, for the one pin that needs a PHYSICAL stub in play (the
-// hibernation-at-scale openSession pattern) ──
-const sessions: unknown[] = [];
-async function openSession(): Promise<any> {
-  const res = await SELF.fetch(`https://test.local/api`, {
-    headers: { Upgrade: "websocket" },
-  });
-  if (!res.webSocket) throw new Error(`expected a 101 with a WebSocket, got ${res.status}`);
-  res.webSocket.accept();
-  const session = newWebSocketRpcSession(res.webSocket as unknown as WebSocket);
-  sessions.push(session);
-  return session as any;
-}
 /** The live value under test — a method receiver, so the registry reach is the documented
  *  pipelinable spelling `itx.rpcStubs.get('<key>').ping()`. */
 class Alive extends RpcTarget {
@@ -60,16 +40,6 @@ class Alive extends RpcTarget {
     return "alive";
   }
 }
-afterAll(async () => {
-  await new Promise((r) => setTimeout(r, 50));
-  for (const s of sessions) {
-    try {
-      (s as Partial<Disposable>)[Symbol.dispose]?.();
-    } catch {
-      /* already broken */
-    }
-  }
-});
 
 test("a core-snapshot probe on a VIRGIN ctx arms NO alarm and mints NO storage — the first real append arms it", async () => {
   await runInDurableObject(stub("prj_doors_virginprobe"), async (instance, state) => {

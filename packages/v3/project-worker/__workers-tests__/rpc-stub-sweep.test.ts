@@ -1,8 +1,7 @@
 // __workers-tests__/rpc-stub-sweep.test.ts — THE ATTACH-RESERVATION LAZY SWEEP, inside workerd
-// (the pool-workers lane — the only lane that can speak the DO's relay-facing Workers-RPC verbs
+// (the workers lane — the only lane that can speak the DO's relay-facing Workers-RPC verbs
 // directly: `rpcStubAttach` without ever opening the pager is exactly the shape a client-side rig
-// can never spell, which is why __tests__/failing-connections.test.ts carried it as a test.todo.
-// This file replaces that todo).
+// can never spell).
 //
 // Target surface: RpcStubDirectory #pending + #sweepPending (src/context/rpc-stub-directory.ts). An attach
 // reservation whose stub pager WebSocket never arrives — a relay that died mid-handshake — is
@@ -12,22 +11,13 @@
 // consequence, the 409 door: a pager upgrade carrying a swept transportId 409s ("attach first"),
 // telling a relay that outlived the reservation to re-attach.
 //
-// Clock rig: the failing-alarm-quiesce pattern — fake Date ONLY (+11s > the 10s TTL; sockets, the
-// alarm scheduler and real timers stay real), so the DO's Date.now() stamps and cutoffs move while
-// every RPC still completes.
+// Clock rig: support.ts's quiesce pattern with a shorter jump — fake Date ONLY (+11s > the 10s TTL;
+// sockets, the alarm scheduler and real timers stay real), so the DO's Date.now() stamps and
+// cutoffs move while every RPC still completes.
 
-import { SELF } from "cloudflare:test";
-import { env } from "cloudflare:workers";
-import { newWebSocketRpcSession, RpcTarget } from "capnweb";
-import { afterAll, expect, test, vi } from "vitest";
-import { canonicalName } from "../src/context/durable-object-names.ts";
+import { expect, test, vi } from "vitest";
 import { STUB_PAGER_WEBSOCKET_HEADER } from "../src/context/hibernatable-rpc-stub.ts";
-import type { IterateContextDurableObject } from "../src/iterate-context-durable-object.ts";
-
-const stub = (ctx: string) =>
-  (
-    env as unknown as { CONTEXT: DurableObjectNamespace<IterateContextDurableObject> }
-  ).CONTEXT.getByName(canonicalName(ctx));
+import { Echo, openSession, stub } from "./support.ts";
 
 /** Open a pager upgrade straight at the DO's fetch door (what openStubPagerWebSocket does
  *  relay-side) — the raw request lets us carry a SWEPT transportId, which no live relay would. */
@@ -35,42 +25,6 @@ const openPager = (ctx: string, transportId: string) =>
   stub(ctx).fetch("https://stub-pager.internal/", {
     headers: { Upgrade: "websocket", [STUB_PAGER_WEBSOCKET_HEADER]: transportId },
   });
-
-// ── the happy-path rig (hibernation-at-scale's, minimized): a capnweb session over SELF /api ──
-
-class Echo extends RpcTarget {
-  readonly #i: number;
-  constructor(i: number) {
-    super();
-    this.#i = i;
-  }
-  echo(s: string): string {
-    return `echo-${this.#i}:${s}`;
-  }
-}
-const sessions: unknown[] = [];
-async function openSession(): Promise<any> {
-  const res = await SELF.fetch(`https://test.local/api`, {
-    headers: { Upgrade: "websocket" },
-  });
-  if (!res.webSocket) throw new Error(`expected a 101 with a WebSocket, got ${res.status}`);
-  res.webSocket.accept();
-  const session = newWebSocketRpcSession(res.webSocket as unknown as WebSocket);
-  sessions.push(session);
-  return session as any;
-}
-afterAll(async () => {
-  // Let any fire-and-forget page/close cleanup drain before the pool worker's RPC is torn down —
-  // otherwise a still-pending resolve surfaces as a (harmless) EnvironmentTeardownError.
-  await new Promise((r) => setTimeout(r, 50));
-  for (const s of sessions) {
-    try {
-      (s as Partial<Disposable>)[Symbol.dispose]?.();
-    } catch {
-      /* already broken */
-    }
-  }
-});
 
 test("ABANDONED ATTACH IS LAZILY SWEPT: 11s later the next attach drops it — the swept pager 409s ('attach first'), a fresh one proceeds", async () => {
   const ctx = "prj_sweep";

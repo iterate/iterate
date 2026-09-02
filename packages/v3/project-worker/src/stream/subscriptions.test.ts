@@ -7,38 +7,9 @@
 // subscription-delivery.ts's job, decided by evaluating the target, never by a field on the row.
 import { describe, expect, test } from "vitest";
 import { parse, print } from "../context/expression.ts";
-import type { ProcessorStream } from "./processor.ts";
-import type { StreamEvent, StreamEventInput } from "./events.ts";
+import type { StreamEvent } from "./events.ts";
 import { SubscriptionsProcessor, type SubscriptionsState } from "./subscriptions.ts";
-
-/** A fake ProcessorStream faithful to the DO's commit semantics for what this reduce needs: one
- *  shared offset sequence (ephemerals consume offsets but never land in the durable log). */
-function memoryStream(path = "/") {
-  const events: StreamEvent[] = [];
-  let maxAssigned = 0;
-  const stream: ProcessorStream = {
-    append: (...inputs: StreamEventInput[]) =>
-      inputs.map((input) => {
-        const event: StreamEvent = {
-          ...input,
-          offset: ++maxAssigned,
-          createdAt: new Date(0).toISOString(),
-          path,
-        };
-        if (!input.ephemeral) events.push(event);
-        return event;
-      }),
-    read: (afterOffset = 0, limit = 500) => {
-      const page = events.filter((e) => e.offset > afterOffset).slice(0, limit);
-      return Promise.resolve({
-        events: page,
-        scannedThroughOffset:
-          page.length === limit ? page[page.length - 1].offset : Math.max(afterOffset, maxAssigned),
-      });
-    },
-  };
-  return { stream, events };
-}
+import { memoryStream } from "./test-support.ts";
 
 const setup = () => {
   const { stream, events } = memoryStream();

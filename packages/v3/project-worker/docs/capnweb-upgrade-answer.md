@@ -27,7 +27,7 @@ no serializer change, no receiver change, wire-compatible with every published f
 
 Two `test.fails` pin it (both layered so the failing hop is named by data, not guessed):
 
-- **`__tests__/failing-tunnel-proxy.test.ts`** — the tunnel CLI. The upgrade Request reaches the
+- **`e2e/fetch-door-tunnel-to-localhost.e2e.test.ts`** — the tunnel CLI. The upgrade Request reaches the
   Node provider through every hop (green), the provider opens a client WebSocket to
   localhost (green — Node ships a WS _client_), and only the _answer_ cannot be spelled:
 
@@ -36,7 +36,7 @@ Two `test.fails` pin it (both layered so the failing hop is named by data, not g
   blocker: RangeError: init["status"] must be in the range of 200 to 599, inclusive.
   ```
 
-- **`__tests__/failing-ws-fetch-capability.test.ts`** — the device/ESP32 shape. Same two
+- **`e2e/fetch-door-cap-http-and-websocket.e2e.test.ts`** — the device/ESP32 shape. Same two
   blockers, plus the positive pins that request forwarding and error propagation through the
   whole live lane are green, and that the _platform_ half (carrying a genuine live-capability
   101 relay → DO → eyeball) is proven green with a workerd provider

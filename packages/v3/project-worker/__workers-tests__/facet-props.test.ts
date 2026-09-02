@@ -8,8 +8,7 @@
 import { runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { expect, test } from "vitest";
-import { canonicalName } from "../src/context/durable-object-names.ts";
-import type { IterateContextDurableObject } from "../src/iterate-context-durable-object.ts";
+import { stub } from "./support.ts";
 
 const PROBE_SRC = /* js */ `
 import { DurableObject } from "cloudflare:workers";
@@ -25,11 +24,7 @@ export class Probe extends DurableObject {
 `;
 
 test("a facet from getDurableObjectClass(name, { props }) sees ctx.props", async () => {
-  const stub = (
-    env as unknown as { CONTEXT: DurableObjectNamespace<IterateContextDurableObject> }
-  ).CONTEXT.getByName(canonicalName("prj_facet_props_probe"));
-
-  const seen = await runInDurableObject(stub, async (_instance, state) => {
+  const seen = await runInDurableObject(stub("prj_facet_props_probe"), async (_instance, state) => {
     const loader = (env as unknown as { LOADER: WorkerLoader }).LOADER;
     // A fixed key: low-cardinality by construction (the loader cacheKey rule), test-lane only.
     const worker = loader.get("probe:facet-props:v1", () => ({

@@ -1,4 +1,4 @@
-// Executable spec for the stream's core processor — a REDUCE-ONLY processor (the inline lane):
+// Executable spec for the stream's core processor — a REDUCE-ONLY processor (inline reduce):
 // pause is a latch, the breaker is a token bucket refilled from EVENT time (never the clock),
 // and control events are exempt so a tripped stream can always accept its own resume.
 import { describe, expect, test } from "vitest";

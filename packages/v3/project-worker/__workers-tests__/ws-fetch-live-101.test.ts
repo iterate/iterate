@@ -1,7 +1,7 @@
 // __workers-tests__/ws-fetch-live-101.test.ts — THE PLATFORM QUESTION, answered by running: does
 // OUR lane forward a GENUINE 101 from a LIVE capability? YES — via the dedicated fetch-upgrade leg.
 //
-// The harness twin (__tests__/failing-ws-fetch-capability.test.ts) pinned that Node providers die
+// The harness-lane twin pinned that Node providers die
 // at FABRICATION (no WebSocketPair; undici rejects status 101) — so the platform half needed a
 // workerd-side provider, and THIS lane runs inside workerd. The provider lives here, parked over a
 // real capnweb session; a real eyeball dials the /cap fetch door. Every hop is production-shaped:
@@ -26,8 +26,9 @@
 //   pnpm exec vitest run --project workers __workers-tests__/ws-fetch-live-101.test.ts
 
 import { SELF } from "cloudflare:test";
-import { newWebSocketRpcSession, RpcTarget } from "capnweb";
-import { afterAll, expect, test } from "vitest";
+import { RpcTarget } from "capnweb";
+import { expect, test } from "vitest";
+import { openSession } from "./support.ts";
 
 /** The live provider: a fetch-shaped capability that CAN fabricate a 101 (we are in workerd).
  *  Plain requests get a 200 page; upgrade requests get a WebSocketPair whose server side echoes
@@ -47,30 +48,6 @@ class LiveSite extends RpcTarget {
     return response;
   }
 }
-
-// ── session plumbing — the failing-alarm-quiesce openSession pattern, verbatim ──
-const sessions: unknown[] = [];
-async function openSession(): Promise<any> {
-  const res = await SELF.fetch(`https://test.local/api`, {
-    headers: { Upgrade: "websocket" },
-  });
-  if (!res.webSocket) throw new Error(`expected a 101 with a WebSocket, got ${res.status}`);
-  res.webSocket.accept();
-  const session = newWebSocketRpcSession(res.webSocket as unknown as WebSocket);
-  sessions.push(session);
-  return session as any;
-}
-afterAll(async () => {
-  // Let any fire-and-forget cleanup drain before the pool worker's RPC is torn down.
-  await new Promise((r) => setTimeout(r, 50));
-  for (const s of sessions) {
-    try {
-      (s as Partial<Disposable>)[Symbol.dispose]?.();
-    } catch {
-      /* already broken */
-    }
-  }
-});
 
 /** Provide a fresh LiveSite over a live capnweb session at `itx.wsdev` — the ONE door. */
 async function mountLiveSite(ctx: string): Promise<LiveSite> {

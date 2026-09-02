@@ -1,12 +1,12 @@
 {
   // Typecheck for the TEST TREES the base config's `include: ["src"]` never sees: the vitest E2E
-  // lane (e2e/**), the Playwright specs (specs/**), and the harness/workers suites. Keeps
-  // workers-types (the tests import src, which needs them) and adds node types (the tests run in
-  // Node). `pnpm typecheck` runs all three configs.
+  // lane (e2e/**), the Playwright specs (specs/**), and the workers suite (__workers-tests__/**).
+  // Keeps workers-types (the tests import src, which needs them) and adds node types (the tests run
+  // in Node). `pnpm typecheck` runs all three configs.
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "types": ["@cloudflare/workers-types", "node", "@cloudflare/vitest-plugin/types"]
   },
-  "include": ["e2e", "specs", "__tests__", "__workers-tests__"],
+  "include": ["e2e", "specs", "__workers-tests__"],
   "exclude": []
 }
