@@ -110,7 +110,7 @@ test("facet address: the built-in door, a rewrite rule onto it, barrier verb, pr
 test("two userspace facet processors reduce side-by-side — user-tally and tally", async () => {
   const itx = openItx(freshCtx("ufacet"));
 
-  // both classes arrive via the loader from a seeded source expression — the one way to host a processor
+  // both classes arrive via the loader from their INLINE source — the one way to host a processor
   await enableFixtureProcessor(itx, "user-tally");
   await enableFixtureProcessor(itx, "tally");
 

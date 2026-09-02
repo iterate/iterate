@@ -1,6 +1,6 @@
 // fetch-door-expression-http-and-websocket.e2e.test.ts — the ONE fetch door (/expression): a GET and a
 // WebSocket upgrade reach whatever the named itx expression's fetch() is — a LOADED WORKER behind a
-// rewrite rule (the seeded site, workerd-native WebSocketPair + 101) and a LENT RPC STUB provided by a
+// rewrite rule (the site fixture, handed over inline — workerd-native WebSocketPair + 101) and a LENT RPC STUB provided by a
 // plain NODE capnweb client (the device/ESP32 shape: `new WebSocketPair()` +
 // `upgradeWebSocketResponse(pair[0])`, capnweb's universal pair + sender-side answer). Layered so a
 // regression names its hop: the loaded-worker door first, then the lent stub's plain HTTP fetch
@@ -17,15 +17,14 @@ import {
   workerUrl,
   wsRoundTrip,
 } from "./support/client.ts";
-import { seedSources } from "./support/sources.ts";
+import { SOURCES } from "./support/sources.ts";
 
 test("/expression serves a LOADED WORKER behind a rewrite rule: GET → 200 HTML, WebSocket upgrade → 101 echo, clean close", async () => {
   const ctx = freshCtx("capcode");
   // A rule whose target is a stateless dynamic worker (its .fetch serves /expression) — the target
   // is an itx EXPRESSION (load(src).getEntrypoint()), same as every other rule.
   const itx = openItx(ctx);
-  await seedSources(itx, ["site"]);
-  await itx.provide("itx.site", "itx.load(\"itx.kv.get('src/site.js')\").getEntrypoint()");
+  await itx.provide("itx.site", `itx.load(${JSON.stringify(SOURCES.site)}).getEntrypoint()`);
 
   const page = await fetch(expressionUrl(ctx, "itx.site", "http"));
   expect(page.status).toBe(200);

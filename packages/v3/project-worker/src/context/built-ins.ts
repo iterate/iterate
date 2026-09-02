@@ -123,7 +123,7 @@ export interface BuiltInScope {
    *  by name (`run`, `fetch`, `processEventBatch`, …); `props` is Cloudflare's own
    *  WorkerStubEntrypointOptions.props, read back as `this.ctx.props` (a url, a key name, …). A
    *  `DurableObject` class is hosted through `itx.facets.get(name, { source, className })`, not here.
-   *  `source` is a producer expression, a bare string, or `{ type:"inline" }`. */
+   *  `source` is the worker's MODULES, literally: `{ "cap.js": code, … }`. */
   load(source: WorkerSource): InvokeHandle;
   /** Run a stateless lambda STRING — sugar: wrap into a `WorkerEntrypoint`, then
    *  `load(...).getEntrypoint().run(...)`. The one bare-lambda ergonomic (same as apps/os). */
@@ -139,8 +139,6 @@ interface BuildBuiltInsDeps {
   /** The bindings the built-ins reach: the loader (+ the deploy id its cacheKey folds in) and the
    *  project kv (bound in both wrangler configs). */
   env: { LOADER: WorkerLoader; ITX_KV: KVNamespace; CF_VERSION_METADATA?: { id: string } };
-  /** Resolve one call through THIS context's dispatch (dynamic-worker module loading). */
-  invoke: (call: ItxExpression) => Promise<unknown>;
   /** A context stream by CANONICAL path — the own-path parent adapter same-isolate, by-name DO
    *  stubs otherwise. Both satisfy ReachableContext (uniform-async, real-typed — see stream/stream.ts). */
   context: (path: string) => ReachableContext;
@@ -191,7 +189,6 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
   ) => {
     const { worker } = await loadConfinedWorker({
       env,
-      invoke: deps.invoke,
       host,
       kind: "code",
       owner: iterateContextName,
@@ -297,7 +294,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
     // this bare-lambda door bottoms out at `load(...).getEntrypoint().run(...)`.
     runScript: (script: string, ...args: unknown[]) =>
       callEntrypoint(
-        { type: "inline", files: { "cap.js": RUN_SCRIPT_ENTRYPOINT(script) } },
+        { "cap.js": RUN_SCRIPT_ENTRYPOINT(script) },
         undefined,
         undefined,
         "run",

@@ -43,7 +43,8 @@ test("callLater(cb) fires back in the caller — capnweb client AND dynamic work
   expect(pinged).toBe(true);
 
   // ── lane 2: a DYNAMIC WORKER via env.ITX.get() — the callback appends to the stream (observable) ──
-  const CONSUMER = `
+  const SRC_CONSUMER = {
+    "cap.js": `
 import { WorkerEntrypoint } from "cloudflare:workers";
 export default class Consumer extends WorkerEntrypoint {
   async run() {
@@ -57,9 +58,9 @@ export default class Consumer extends WorkerEntrypoint {
     );
     return { ran: true };
   }
-}`;
-  await itx.invoke(["itx", "kv", ["put", "src/consumer.js", CONSUMER]]);
-  const ran = await itx.load("itx.kv.get('src/consumer.js')").getEntrypoint().run();
+}`,
+  };
+  const ran = await itx.load(SRC_CONSUMER).getEntrypoint().run();
   // dynamic worker cap ran to completion (its callback resolved it)
   expect(ran?.ran).toBe(true);
   const got = await until("worker callback appended to the stream", async () => {

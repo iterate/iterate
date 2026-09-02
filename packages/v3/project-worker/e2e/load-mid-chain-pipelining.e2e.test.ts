@@ -16,7 +16,8 @@ import { expect, test } from "vitest";
 import { freshCtx, openItx, until } from "./support/client.ts";
 
 // ── worker A: a stateful DO with a getter chain that bottoms out at callLater(ms, cb) ──
-const WORKER_A = `
+const SRC_WORKER_A = {
+  "cap.js": `
 import { DurableObject, RpcTarget } from "cloudflare:workers";
 class Timer extends RpcTarget {
   async callLater(ms, cb) {
@@ -32,10 +33,12 @@ class Demo extends RpcTarget {
 export class CounterDurableObject extends DurableObject {
   get demo() { return new Demo(); }
 }
-export default CounterDurableObject;`;
+export default CounterDurableObject;`,
+};
 
 // ── worker B: reaches A via env.ITX.get() and writes the natural mid-chain dotted call ──
-const WORKER_B = `
+const SRC_WORKER_B = {
+  "cap.js": `
 import { WorkerEntrypoint } from "cloudflare:workers";
 export default class ConsumerB extends WorkerEntrypoint {
   async run(aRef) {
@@ -49,17 +52,15 @@ export default class ConsumerB extends WorkerEntrypoint {
     if (pinged) await itx.append({ type: 'pinged-from-A-via-B' }); // observable at the client
     return { ran: true, pinged };
   }
-}`;
+}`,
+};
 
 test("dynamic worker → dynamic worker mid-chain pipelining, both consumer lanes", async () => {
   const itx = openItx(freshCtx("dw2dw"));
 
-  await itx.invoke(["itx", "kv", ["put", "src/counterA.js", WORKER_A]]);
-  await itx.invoke(["itx", "kv", ["put", "src/consumerB.js", WORKER_B]]);
-
-  // aRef names worker A's stateful class: a source EXPRESSION + the exported className.
-  // facets.get('counterA', aRef) loads the class and materializes it as the facet 'counterA'.
-  const aRef = { source: "itx.kv.get('src/counterA.js')", className: "CounterDurableObject" };
+  // aRef names worker A's stateful class: the source MODULES, handed over inline, + the exported
+  // className. facets.get('counterA', aRef) loads the class and materializes it as the facet 'counterA'.
+  const aRef = { source: SRC_WORKER_A, className: "CounterDurableObject" };
 
   // ── lane 1: a plain capnweb client walks the mid-chain and the callback fires back HERE ──
   let clientPinged = false;
@@ -73,7 +74,7 @@ test("dynamic worker → dynamic worker mid-chain pipelining, both consumer lane
   expect(clientPinged).toBe(true);
 
   // ── lane 2: worker B reaches worker A via env.ITX.get() — the dynamic-worker → dynamic-worker case ──
-  const ran = await itx.load("itx.kv.get('src/consumerB.js')").getEntrypoint().run(aRef);
+  const ran = await itx.load(SRC_WORKER_B).getEntrypoint().run(aRef);
   // dynamic worker B: env.ITX.get().facets.get('counterA', aRef).demo.timer.callLater(cb) ran and the callback fired inside B
   expect(ran?.ran).toBe(true);
   expect(ran?.pinged).toBe(true);

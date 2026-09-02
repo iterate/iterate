@@ -77,7 +77,7 @@ using api = newWebSocketRpcSession("wss://<worker>/api");
 const itx = api.authenticate().projects.get("prj_123"); // the project ROOT context
 const agent = itx.cd("/agents/support"); // absolute by convention; relative and ".." also resolve
 
-const greetSource = { type: "inline", files: { "greet.js": GREET_SRC } };
+const greetSource = { "cap.js": GREET_SRC };
 using greet = await itx.provide("itx.greet", ["itx", ["load", greetSource], ["getEntrypoint"]]); // a rewrite rule
 using robot = await itx.provide("itx.robot", robotObject); // SUGAR: lends to rpcStubs under the opaque key + rule itx.robot ⇒ itx.rpcStubs.get('robot')
 await itx.rpcStubs.list(); // presence, physical
@@ -90,7 +90,7 @@ using worker = await itx.subscribe({
   consumes: ["task/created"],
 }); // cursor, at-least-once
 await itx.enableProcessor("presence", {
-  source: { type: "inline", files: { "presence.js": PRESENCE_SRC } },
+  source: { "cap.js": PRESENCE_SRC },
   className: "PresenceDurableObject", // the host; `processor = new PresenceProcessor()` inside
 }); // SUGAR over the subscription event; DURABLE (no handle) — disableProcessor is the inverse
 await itx.facets.get("presence").snapshot();
@@ -166,7 +166,7 @@ export default class extends WorkerEntrypoint {
 ```
 
 ```ts
-const remoteSource = { type: "inline", files: { "remote.js": REMOTE_SRC } };
+const remoteSource = { "cap.js": REMOTE_SRC };
 using os = await itx.provide("itx.os", [
   "itx",
   ["load", remoteSource],
@@ -458,7 +458,7 @@ export default class extends WorkerEntrypoint {
 ```
 
 ```ts
-const workerSource = { type: "inline", files: { "worker.js": WORKER_SRC } };
+const workerSource = { "cap.js": WORKER_SRC };
 using worker = await itx.provide("itx.worker", ["itx", ["load", workerSource], ["getEntrypoint"]]);
 using sub = await itx.subscribe({ name: "project-worker", target: "itx.worker.processEventBatch" });
 (await itx.subscriptions.get("project-worker")).cursor; // { confirmedOffset, attempt, nextAttemptAtMs? }

@@ -1,5 +1,5 @@
 // processor-facet-breaker-pauses-the-stream.e2e.test.ts — POLICY IS A FACET PROCESSOR that speaks
-// core's control events. The token-bucket breaker (e2e/support/sources.ts `src/breaker.js`) is an
+// core's control events. The token-bucket breaker (e2e/support/sources.ts `SOURCES.breaker`) is an
 // ordinary two-class userspace source: a pure `BreakerProcessor` whose reduce spends one token per
 // durable non-control event (refilling from the EVENT's createdAt — pure, replayable) and whose
 // processEvent trips exactly on the crossing (tokens ≥ 0 → < 0) by appending
@@ -17,7 +17,7 @@ const PAUSED = "events.iterate.com/stream/paused";
 
 test("a burst past the breaker's capacity pauses the stream (the facet appends `paused` with its reason); appends refuse with STREAM_PAUSED; an operator's `resumed` restores flow", async () => {
   const itx = openItx(freshCtx("breaker"));
-  // enableProcessor("breaker", { source: "itx.kv.get('src/breaker.js')", className: "BreakerDurableObject" })
+  // enableProcessor("breaker", { source: SOURCES.breaker, className: "BreakerDurableObject" })
   await enableFixtureProcessor(itx, "breaker");
   // The breaker's own enablement (subscription-configured) is a durable non-control event: the bucket
   // (capacity 5) is at 4 once it has reduced its own row. Nothing paused yet.

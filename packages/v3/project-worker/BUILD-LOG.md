@@ -2408,3 +2408,23 @@ options?)` with `options.rewrite`; chapter 1 reads `itx.provide("laptop", fn)`, 
   Docs: as-built §5/§9/§10/§12 (C → decided), LAYERS, walkthrough, onion design (a dated note where
   the doc sketched the chain).
 - GATES: tsc×3 · oxlint 0/0 · knip clean · unit+workers 250 · e2e 141p/2xf (37 files).
+
+## 2026-09-02 — B: sources are INLINE ONLY — `WorkerSource = Record<string, string>`
+
+- Jonas: "I thought we said no more itx.kv.get. Like we should just rub that out. I don't think it's a
+  good pattern. I don't think it's helpful to understand. I think we should do inline source code."
+  → the PRODUCER-EXPRESSION branch (`"itx.kv.get('src/x.js')"` fetching the code) and the
+  `{ type: "inline", files }` wrapper are DELETED. A source IS the worker's modules, module name →
+  code, `"cap.js"` the main module (one loud check in the loader). Stored where it is named: a facet's
+  startup memo (`facet:<name>` = `{ source: modules, className }`), a subscription's target.
+- Gone with it: the loader's `invoke` and `resolved` options, `BuildBuiltInsDeps.invoke`, the DO's
+  resolved-source cache (`#liveFacets` Map → `#liveFacetNames` Set — the quiesce loop needs names only),
+  `processor-facet-source-refetch.e2e` (it pinned "a producer is evaluated once per materialization";
+  there is no producer). `runScript` wraps its lambda as `{ "cap.js": … }`.
+- Tests: `e2e/support/sources.ts` exports `SOURCES.<name>` as module records, `seedSources` is gone,
+  `enableFixtureProcessor` passes `SOURCES[name]`; 17 e2e files re-spelled (array half: the value;
+  string half: `${JSON.stringify(SOURCES.x)}`, valid JSON5) — swept by a subagent while the src side
+  landed; the two workers tests with kv-seeded sources (alarm-quiesce, ephemeral-offset-reuse) by hand.
+- Docs: as-built §2/§5/§11/§12 (B → decided; §11 recounted: code lines 3,851, raw 6,208), walkthrough,
+  onion design, synthesis §9 addendum (C and B together).
+- GATES: tsc×3 · oxlint 0/0 · knip clean · unit+workers 250 · e2e 140p/2xf (36 files).

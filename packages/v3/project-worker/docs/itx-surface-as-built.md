@@ -77,7 +77,7 @@ await itx.append({ type: "events.iterate.com/chat/message", payload: { text: "hi
 
 // ── 5. processors: a subscription whose target is a facet's processEventBatch ──
 await itx.enableProcessor("presence", {
-  source: { type: "inline", files: { "cap.js": PRESENCE_SOURCE } },
+  source: { "cap.js": PRESENCE_SOURCE },
   className: "PresenceDurableObject",
 });
 await itx.facets.get("presence").snapshot();
@@ -167,8 +167,9 @@ must be rooted at `itx`, so a bare root is unspellable and the built-ins are uns
 | `load(source)`               | `.getEntrypoint(name?, { props? }).<method>(…)`                                                                         | Worker Loader; mirrors Cloudflare's `worker.getEntrypoint()`  |
 | `runScript(script, ...args)` | sugar: wrap the lambda string → `load(...).getEntrypoint().run(...)`                                                    | same                                                          |
 
-`WorkerSource` is `string | ItxExpression | { type: "inline", files }`. A string or array is a
-PRODUCER expression whose result is the code (open item B, section 12: delete this branch).
+`WorkerSource` is the worker's modules, literally: `Record<string, string>`, module name → code,
+`"cap.js"` the main module. It is stored where it is named (a facet's startup memo, a
+subscription's target).
 
 Two brands the delivery loop reads (`src/context/invoke-handle.ts`): `FacetHandle` and
 `RpcStubHandle`, both `InvokeHandle` (a genuine RpcTarget whose unknown members reduce into
@@ -361,26 +362,27 @@ capnweb serialize sockets over plain RPC.
 ## 11. Code structure
 
 Two ways to count, both honest. **Code lines** (non-blank, non-comment) in non-test `src/`:
-4,481 on the morning of 2026-09-01 → 3,879 at `fe8168c13` → 3,886 now (this round added the
-facet-delete effect and the typed interface, removed three entrypoint verbs). **Raw lines**
-including comments and blanks: 6,256. About 38% of the source is comment. The earlier review
-figure of 6,234 was the raw count; it is not a thousand added lines of code.
+4,481 on the morning of 2026-09-01 → 3,879 at `fe8168c13` → 3,851 after this review's four
+commits (the entrypoint verbs, the `rewrite` verb, the `getDurableObjectClass` chain and the
+producer-source branch went; the facet-delete effect and the typed interface came). **Raw lines**
+including comments and blanks: 6,208 in 36 files. About 38 percent of the source is comment. The
+first review figure of 6,234 was the raw count; it was never a thousand added lines of code.
 
-Tests: unit + workers 250, e2e 141 passed + 2 expected fail (37 files).
+Tests: unit + workers 250; e2e 36 files after the source-refetch proof left with its premise.
 
-| Layer                       | Files (raw lines, comments included)                                                  | Lines |
-| --------------------------- | ------------------------------------------------------------------------------------- | ----: |
-| the edge                    | `worker.ts` · `session.ts` · `iterate-context.ts` · `itx-entrypoint.ts`               |   627 |
-| the DO                      | `iterate-context-durable-object.ts`                                                   |   674 |
-| expressions + dispatch      | `context/expression.ts` · `dispatch.ts` · `dotted-path-proxy.ts` · `invoke-handle.ts` |   442 |
-| built-ins + loader          | `context/built-ins.ts` · `worker-loader.ts` · `durable-object-names.ts`               |   525 |
-| (a) rpc stubs               | `context/rpc-stub-directory.ts` · `rpc-stub-relay.ts`                                 |   551 |
-| (b) rewrite rules           | `context/itx-expression-rewriting.ts`                                                 |   201 |
-| the stream + core           | `stream/stream.ts` · `core-processor.ts` · `events.ts` · `reduce-checkpoint.ts`       | 1,037 |
-| subscriptions + delivery    | `stream/subscriptions.ts` · `subscription-delivery.ts`                                |   421 |
-| processors + live state     | `stream/processor.ts` · `live-state.ts` · `sdk/*`                                     |   814 |
-| fetch (parked)              | `fetch/rpc-stub-fetch.ts`                                                             |   286 |
-| lib, client demo, generated | `lib/*` · `client/*` · `generated/*`                                                  |   678 |
+| Layer                    | Files (raw lines, comments included)                                                  | Lines |
+| ------------------------ | ------------------------------------------------------------------------------------- | ----: |
+| the edge                 | `worker.ts` · `session.ts` · `iterate-context.ts` · `itx-entrypoint.ts`               |   626 |
+| the DO                   | `iterate-context-durable-object.ts`                                                   |   667 |
+| expressions + dispatch   | `context/expression.ts` · `dispatch.ts` · `dotted-path-proxy.ts` · `invoke-handle.ts` |   442 |
+| built-ins + loader       | `context/built-ins.ts` · `worker-loader.ts` · `durable-object-names.ts`               |   479 |
+| (a) rpc stubs            | `context/rpc-stub-directory.ts` · `rpc-stub-relay.ts`                                 |   551 |
+| (b) rewrite rules        | `context/itx-expression-rewriting.ts`                                                 |   206 |
+| the stream + core        | `stream/stream.ts` · `core-processor.ts` · `events.ts` · `reduce-checkpoint.ts`       | 1,037 |
+| subscriptions + delivery | `stream/subscriptions.ts` · `subscription-delivery.ts`                                |   421 |
+| processors + live state  | `stream/processor.ts` · `live-state.ts` · `sdk/*`                                     |   814 |
+| fetch (parked)           | `fetch/rpc-stub-fetch.ts`                                                             |   286 |
+| lib, client demo         | `lib/*` · `client/*` (the generated bundles excluded)                                 |   675 |
 
 Error codes (`src/lib/errors.ts`): `NO_ITX_EXPRESSION_MATCH`, `RPC_STUB_OFFLINE`,
 `IDEMPOTENCY_CONFLICT`, `OFFSET_CONFLICT`, `STREAM_PAUSED`, `NOT_A_METHOD`, `NO_FACET`,
@@ -409,14 +411,13 @@ Error codes (`src/lib/errors.ts`): `NO_ITX_EXPRESSION_MATCH`, `RPC_STUB_OFFLINE`
 - **C, done:** ONE facet door `itx.facets.get(name, { source, className })` hosts; `itx.facets.get(name)`
   addresses; `load(src)` keeps `getEntrypoint` only. `enableProcessor`'s target is
   `itx.facets.get(name, spec).processEventBatch`; the hosting check in the DO is "a `facets.get` with a spec".
+- **B, done:** sources are INLINE ONLY — `WorkerSource = Record<string, string>` (module name → code,
+  `"cap.js"` the main module). The producer-expression branch (`"itx.kv.get('src/x.js')"`), the old
+  inline wrapper object, the loader's `invoke` and `resolved` options and the DO's resolved-source
+  cache are deleted; a facet's startup memo stores the modules. The e2e fixtures are inline; nothing
+  is seeded into kv.
 
-### Open, with a proposal each (B is in flight)
-
-**B. Inline-only sources.** Delete the producer-expression branch of `WorkerSource` (the
-`itx.kv.get('src/x.js')` pattern) and make a source `{ type: "inline", files }` only, or just
-the `files` record. Facet memos and subscription events then carry the code inline (events are
-fine at that size). Touches the loader (one branch), `e2e/support/sources.ts` and 16 e2e files,
-the tutorial. Recommendation: yes; it removes the one indirection a reader has to be taught.
+### Open
 
 **D. `cd` on the edge and in the built-ins.** Explained in section 5; both are needed as long as
 expressions evaluated inside the DO may name a sibling context. Recommendation: keep both.

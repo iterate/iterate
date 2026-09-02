@@ -21,7 +21,7 @@ import {
   subscriptions,
   until,
 } from "./support/client.ts";
-import { seedSources } from "./support/sources.ts";
+import { SOURCES } from "./support/sources.ts";
 
 const HALTED = "events.iterate.com/stream/subscription-delivery-halted";
 const RESUMED = "events.iterate.com/stream/subscription-delivery-resumed";
@@ -38,13 +38,15 @@ const haltFactsFor = async (itx: any, name: string): Promise<any[]> =>
  *  the test lent behind the rule `itx.<hook>`, so a collector sees exactly what the cursor lane delivered
  *  (offsets, ranges, attempts) and a hook that throws makes the awaited delivery FAIL — a plain
  *  throw, the ladder's case (the never-retryable case is the `digest` fixture's poison). */
-const HOOKED_SOURCE = (hook: string) => `import { WorkerEntrypoint } from "cloudflare:workers";
+const HOOKED_SOURCE = (hook: string) => ({
+  "cap.js": `import { WorkerEntrypoint } from "cloudflare:workers";
 export default class Hooked extends WorkerEntrypoint {
   async processEventBatch(events, range) {
     const itx = await this.env.ITX.get();
     return await itx.${hook}.deliver(events, range);
   }
-}`;
+}`,
+});
 class Hook extends RpcTarget {
   readonly #fn: (events: any[], range: Range) => unknown;
   constructor(fn: (events: any[], range: Range) => unknown) {
@@ -55,10 +57,10 @@ class Hook extends RpcTarget {
     return this.#fn(events, range);
   }
 }
-/** Subscribe `name` on the CURSOR lane: lend the live hook behind the rule `itx.<name>Hook`, seed
- *  the hooked worker and rewrite `itx.<name>Worker` onto its entrypoint, subscribe its
- *  `processEventBatch` BY EXPRESSION (an entrypoint handle ⇒ the stream keeps the cursor). Names are
- *  one JS identifier. */
+/** Subscribe `name` on the CURSOR lane: lend the live hook behind the rule `itx.<name>Hook`, hand the
+ *  hooked worker's source over INLINE and rewrite `itx.<name>Worker` onto its entrypoint, subscribe
+ *  its `processEventBatch` BY EXPRESSION (an entrypoint handle ⇒ the stream keeps the cursor). Names
+ *  are one JS identifier. */
 async function cursorSubscribe(
   itx: any,
   name: string,
@@ -67,10 +69,9 @@ async function cursorSubscribe(
 ): Promise<void> {
   const hook = `${name}Hook`;
   await itx.provide(`itx.${hook}`, new Hook(fn));
-  await itx.kv.put(`src/${hook}.js`, HOOKED_SOURCE(hook));
   await itx.provide(
     `itx.${name}Worker`,
-    `itx.load("itx.kv.get('src/${hook}.js')").getEntrypoint()`,
+    `itx.load(${JSON.stringify(HOOKED_SOURCE(hook))}).getEntrypoint()`,
   );
   await itx.subscribe({
     name,
@@ -81,8 +82,7 @@ async function cursorSubscribe(
 /** The `digest` fixture (e2e/support/sources.ts) on the cursor lane: counts delivered events into
  *  kv `digested`; a `payload.poison` mark makes it throw `retryable: false` — the halt-NOW case. */
 async function digestSubscribe(itx: any, name: string, consumes?: string[]): Promise<void> {
-  await seedSources(itx, ["digest"]);
-  await itx.provide("itx.digest", `itx.load("itx.kv.get('src/digest.js')").getEntrypoint()`);
+  await itx.provide("itx.digest", `itx.load(${JSON.stringify(SOURCES.digest)}).getEntrypoint()`);
   await itx.subscribe({
     name,
     target: "itx.digest.processEventBatch",
@@ -96,7 +96,8 @@ const digested = async (itx: any): Promise<number> => Number((await itx.kv.get("
 /** `ledger:calls` / `ledger:log` (= the delivered offsets per call), so the test observes the cursor
  *  lane from outside without a live callback in the loop. `ctx.props.firstCall` scripts delivery #1:
  *  "throw" (a plain, retryable Error — the ladder) or "hold" (2s in flight — a resume races it). */
-const LEDGER_SRC = `import { WorkerEntrypoint } from "cloudflare:workers";
+const SRC_LEDGER = {
+  "cap.js": `import { WorkerEntrypoint } from "cloudflare:workers";
 export class Ledger extends WorkerEntrypoint {
   async processEventBatch(events, range) {
     const itx = await this.env.ITX.get();
@@ -109,15 +110,15 @@ export class Ledger extends WorkerEntrypoint {
     log.push({ range, offsets: events.map((e) => e.offset) });
     await itx.kv.put("ledger:log", JSON.stringify(log));
   }
-}`;
+}`,
+};
 type LedgerEntry = { range: Range; offsets: number[] };
 const ledgerLog = async (itx: any): Promise<LedgerEntry[]> =>
   JSON.parse(((await itx.kv.get("ledger:log")) as string | null) ?? "[]") as LedgerEntry[];
 const ledgerSubscribe = async (itx: any, firstCall: "throw" | "hold"): Promise<void> => {
-  await itx.kv.put("src/ledger.js", LEDGER_SRC);
   await itx.provide(
     "itx.ledger",
-    `itx.load("itx.kv.get('src/ledger.js')").getEntrypoint('Ledger', { props: { firstCall: '${firstCall}' } })`,
+    `itx.load(${JSON.stringify(SRC_LEDGER)}).getEntrypoint('Ledger', { props: { firstCall: '${firstCall}' } })`,
   );
   await itx.subscribe({
     name: "ledger",
@@ -130,13 +131,12 @@ const ledgerSubscribe = async (itx: any, firstCall: "throw" | "hold"): Promise<v
 
 test("the digest worker is delivered from a stream-kept cursor; retryable:false halts with the fact; a resumed event un-halts and seeks past the poison", async () => {
   const itx = openItx(freshCtx("cursor"));
-  await seedSources(itx, ["digest"]);
 
   // 1. rewrite itx.digest onto the stateless digest worker and subscribe its processEventBatch BY
   //    EXPRESSION — an entrypoint cannot own its progress, so THE STREAM keeps the cursor. Beside
   //    it, a live tab: a lent stub owns its progress, so its row has NO cursor. Same verb, no
   //    declaration.
-  await itx.provide("itx.digest", `itx.load("itx.kv.get('src/digest.js')").getEntrypoint()`);
+  await itx.provide("itx.digest", `itx.load(${JSON.stringify(SOURCES.digest)}).getEntrypoint()`);
   const sub = await itx.subscribe({
     name: "digest",
     target: "itx.digest.processEventBatch",

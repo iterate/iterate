@@ -4,11 +4,10 @@
 
 import { expect, test } from "vitest";
 import { freshCtx, openItx, until } from "./support/client.ts";
-import { enableFixtureProcessor, seedSources } from "./support/sources.ts";
+import { enableFixtureProcessor, SOURCES } from "./support/sources.ts";
 
 test("ephemeral lane: a named-type subscription reduces ephemeral chunks, '*' never sweeps them", async () => {
   const itx = openItx(freshCtx("eph"));
-  await seedSources(itx, ["chunky"]);
 
   // 1. chunky consumes ephemeral 'chunk's, so its subscription NAMES them: `enableProcessor` is the
   //    no-filter spelling (every durable event, no ephemeral); a processor that wants ephemerals is
@@ -16,8 +15,7 @@ test("ephemeral lane: a named-type subscription reduces ephemeral chunks, '*' ne
   //    the "*" tally: every durable event, never an ephemeral.
   await itx.subscribe({
     name: "chunky",
-    target:
-      "itx.facets.get('chunky', { source: \"itx.kv.get('src/chunky.js')\", className: 'ChunkyDurableObject' }).processEventBatch",
+    target: `itx.facets.get('chunky', { source: ${JSON.stringify(SOURCES.chunky)}, className: 'ChunkyDurableObject' }).processEventBatch`,
     consumes: ["chunk", "mark"],
   });
   await enableFixtureProcessor(itx, "tally");

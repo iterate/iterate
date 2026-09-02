@@ -284,6 +284,14 @@ The code is the record; the differences from the sketches above, so this doc doe
   both, since the durable thing made is the rule. Read root `itx.rewriteRules` (was
   `expressionRewriteRules`). A rule's match must be rooted at `itx`. The rpcStubKey noun leaves the front
   door; it survives inside `RpcStubDirectory` and as `subscription:<name>` for a live subscriber.
+- **2026-09-02, same round — ONE facet door and INLINE sources.** `itx.facets.get(name, { source, className })`
+  hosts a loaded `DurableObject` class as the facet `name` (the mirror of `ctx.facets.get(name,
+startupCallback)`); `itx.facets.get(name)` addresses a running one; `load(src)` keeps `getEntrypoint` only
+  — the `getDurableObjectClass(C).get(name?)` chain is gone. `enableProcessor`'s target is
+  `itx.facets.get(name, spec).processEventBatch`. A `WorkerSource` is the worker's MODULES, literally
+  (`Record<string, string>`, `"cap.js"` the main module): the producer-expression branch
+  (`"itx.kv.get('src/x.js')"`) and the `{ type: "inline", files }` wrapper are deleted, and a facet's
+  startup memo stores the modules. Jonas: "I thought we said no more itx.kv.get… we should just rub that out."
 - **Wire**: `x-itx-expression`, `/expression?context=…&itx=…`, `x-itx-rpc-stub-pager`; codes
   `NO_ITX_EXPRESSION_MATCH`, `RPC_STUB_OFFLINE`; events `itx/rewrite-rule-configured { match, target|null }`,
   `stream/subscription-configured { name, target|null, consumes? }`; core contract 4.0.0.

@@ -28,13 +28,11 @@ test("two DIFFERENT facet identities never share one Worker Loader cacheKey", as
   const load = (iterateContextName: string, className: string) =>
     loadConfinedWorker({
       env,
-      invoke: () => Promise.reject(new Error("pre-resolved — nothing to invoke")),
       host: {} as Fetcher,
       kind: "facet",
       owner: facetLoaderOwner(iterateContextName, className),
-      source: { type: "inline", files: modules },
+      source: modules,
       where: `facet "${className}"`,
-      resolved: { contentHash: "1abc2d", modules },
     });
   await load(DurableObjectNameCodec.stringify({ projectId: "prj_u", path: "/x:y" }), "Door");
   await load(DurableObjectNameCodec.stringify({ projectId: "prj_u", path: "/x" }), "y:Door");

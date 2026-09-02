@@ -531,10 +531,9 @@ interface BuiltInScope {
   runScript(script: string, ...args: unknown[]): Promise<unknown>;
 }
 
-/** Where code comes from: an itx expression that evaluates to module source(s), a bare
- *  string, or inline files. `{ type: "inline", files }` is the shape every example here uses;
- *  "itx.kv.get('src/greet.js')" is a storage choice, not the shape of the API. */
-type WorkerSource = string | ItxExpression | { type: "inline"; files: Record<string, string> };
+/** Where code comes from: the worker's MODULES, literally — module name → code, `"cap.js"` the
+ *  main module. Stored where it is named (a facet's startup memo, a subscription's target). */
+type WorkerSource = Record<string, string>;
 
 type SubscriptionListEntry = {
   name: string;
@@ -638,9 +637,8 @@ A loaded isolate receives exactly two things: `env.ITX` (a stub of
 `ItxEntrypoint`, section 8) and a `globalOutbound` that routes every `fetch()`
 through the context's egress. The processor SDK is injected as `./processor.js`
 into every load, so `import { ... } from "./processor.js"` always works. Every
-example below hands the source over INLINE (`{ type: "inline", files }`);
-storing it in `itx.kv` first and loading with `"itx.kv.get('src/x.js')"` is a
-storage choice, not a different API.
+example below hands the source over as its modules (`{ "cap.js": CODE }`) —
+the only shape there is.
 
 ### 5.1 A stateless entrypoint
 
@@ -657,7 +655,7 @@ export default class Greeter extends WorkerEntrypoint {
     return new Response("hello");
   } // makes this fetch-shaped
 }`;
-const greetSource = { type: "inline", files: { "greet.js": GREET_SRC } };
+const greetSource = { "cap.js": GREET_SRC };
 ```
 
 ```ts
@@ -696,7 +694,7 @@ export class CounterDurableObject extends DurableObject {
     return n;
   }
 }`;
-const counterSource = { type: "inline", files: { "counter.js": COUNTER_SRC } };
+const counterSource = { "cap.js": COUNTER_SRC };
 ```
 
 ```ts
@@ -878,7 +876,7 @@ export class PresenceDurableObject extends StreamProcessorDurableObject {
 
 ```ts
 await itx.enableProcessor("presence", {
-  source: { type: "inline", files: { "presence.js": PRESENCE_SRC } },
+  source: { "cap.js": PRESENCE_SRC },
   className: "PresenceDurableObject",
   consumes: ["tick", "poke"], // what is SENT; the contract above says what is reduced
 });
@@ -967,7 +965,7 @@ export class BreakerDurableObject extends StreamProcessorDurableObject {
 
 ```ts
 await itx.enableProcessor("breaker", {
-  source: { type: "inline", files: { "breaker.js": BREAKER_SRC } },
+  source: { "cap.js": BREAKER_SRC },
   className: "BreakerDurableObject",
 });
 // ... a burst empties the bucket → the facet appends stream/paused ...

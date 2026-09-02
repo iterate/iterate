@@ -21,7 +21,7 @@ import {
   subscriptions,
   until,
 } from "./support/client.ts";
-import { enableFixtureProcessor, seedSources } from "./support/sources.ts";
+import { enableFixtureProcessor, SOURCES } from "./support/sources.ts";
 
 const tallySnapshot = async (itx: any): Promise<any> =>
   itx.invoke("itx.facets.get('tally').snapshot()");
@@ -39,11 +39,10 @@ test("enableProcessor rejects a name that is not ONE segment (a dotted name)", a
   // segment ([A-Za-z0-9_-]+). "a.b" is refused at the door instead of being re-segmented by a path
   // grammar into an orphan no delivery would ever reach.
   const itx = openItx(freshCtx("dotname"));
-  await seedSources(itx, ["tally"]);
   await expect(
     (async () => {
       await itx.enableProcessor("a.b", {
-        source: "itx.kv.get('src/tally.js')",
+        source: SOURCES.tally,
         className: "TallyDurableObject",
       });
     })(),
@@ -68,19 +67,18 @@ test("the core reduce's name is refused at BOTH doors — never a facet to enabl
   // have no facet address of their own, so `rewrite-rules` and `subscriptions` are plain names a
   // processor may take, address and drop like any other.
   const itx = openItx(freshCtx("inline"));
-  await seedSources(itx, ["tally"]);
   expect((await rejection(itx.disableProcessor("core"))).message).toMatch(/core reduce/);
   await expect(
     (async () => {
       await itx.enableProcessor("core", {
-        source: "itx.kv.get('src/tally.js')",
+        source: SOURCES.tally,
         className: "TallyDurableObject",
       });
     })(),
   ).rejects.toThrow(/core reduce/);
   for (const name of ["rewrite-rules", "subscriptions"]) {
     await itx.enableProcessor(name, {
-      source: "itx.kv.get('src/tally.js')",
+      source: SOURCES.tally,
       className: "TallyDurableObject",
     });
     const [mark] = await append(itx, { type: "mark", payload: { name } });
@@ -101,13 +99,11 @@ test("the core reduce's name is refused at BOTH doors — never a facet to enabl
 
 test("the raw event-sourced door agrees with the verb — a hand-appended subscription-configured naming the facet's processEventBatch IS the enablement", async () => {
   const itx = openItx(freshCtx("rawdoor"));
-  await seedSources(itx, ["tally"]);
   await append(itx, {
     type: "events.iterate.com/stream/subscription-configured",
     payload: {
       name: "tally",
-      target:
-        "itx.facets.get('tally', { source: \"itx.kv.get('src/tally.js')\", className: 'TallyDurableObject' }).processEventBatch",
+      target: `itx.facets.get('tally', { source: ${JSON.stringify(SOURCES.tally)}, className: 'TallyDurableObject' }).processEventBatch`,
     },
   });
   expect(await processorNames(itx)).toEqual(["tally"]); // listed as enabled — and it is

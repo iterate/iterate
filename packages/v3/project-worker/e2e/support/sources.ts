@@ -1,11 +1,15 @@
-// e2e/support/sources.ts — the demo module sources the E2E tests seed into plain kv (source is kv
-// like everything else; a future real repo is reached at itx.files through an ordinary rewrite
-// rule). Each test seeds only what it uses:
-//   await seedSources(itx, ["site", "counter"]);
-//   ...source: "itx.kv.get('src/site.js')"...
+// e2e/support/sources.ts — the demo module sources the E2E tests hand over INLINE. A source IS the
+// worker's modules (module name → code, `"cap.js"` is the main module); nothing is seeded anywhere,
+// there is no producer to fetch it. Each test names the fixture it uses:
+//   ...source: SOURCES.site...
 
-const SOURCES: Record<string, string> = {
-  "src/counter.js": `import { DurableObject } from "cloudflare:workers";
+import type { WorkerSource } from "../../src/context/worker-loader.ts";
+
+/** THE fixture sources, keyed by fixture NAME — each value is the worker's modules, handed over
+ *  literally at every load site (`itx.load(SOURCES.probe)`, `facets.get(name, { source: … })`). */
+export const SOURCES: Record<string, WorkerSource> = {
+  counter: {
+    "cap.js": `import { DurableObject } from "cloudflare:workers";
 export class CounterDurableObject extends DurableObject {
   async increment(by) { const n = ((await this.ctx.storage.get("n")) ?? 0) + by; await this.ctx.storage.put("n", n); return n; }
   async value() { return (await this.ctx.storage.get("n")) ?? 0; }
@@ -15,7 +19,9 @@ export class CounterDurableObject extends DurableObject {
     return { async add(by) { return self.increment(by); } };
   }
 }`,
-  "src/chatroom.js": `import { DurableObject } from "cloudflare:workers";
+  },
+  chatroom: {
+    "cap.js": `import { DurableObject } from "cloudflare:workers";
 import { LiveState } from "./processor.js";
 export class ChatroomDurableObject extends DurableObject {
   #chat = new LiveState({ append: (e) => this.env.ITX.get().append(e) }, "chat", { messages: [] });
@@ -25,7 +31,9 @@ export class ChatroomDurableObject extends DurableObject {
   }
   state() { return this.#chat.snapshot(); }
 }`,
-  "src/probe.js": `import { WorkerEntrypoint } from "cloudflare:workers";
+  },
+  probe: {
+    "cap.js": `import { WorkerEntrypoint } from "cloudflare:workers";
 export default class Probe extends WorkerEntrypoint {
   async run(v, cb) {
     return {
@@ -34,7 +42,9 @@ export default class Probe extends WorkerEntrypoint {
     };
   }
 }`,
-  "src/keeper.js": `import { DurableObject } from "cloudflare:workers";
+  },
+  keeper: {
+    "cap.js": `import { DurableObject } from "cloudflare:workers";
 export class KeeperDurableObject extends DurableObject {
   async stash() {
     await this.ctx.storage.put("itx-cap", this.env.ITX);
@@ -46,10 +56,12 @@ export class KeeperDurableObject extends DurableObject {
     return await (await cap.get()).whoami();
   }
 }`,
+  },
   // The stateless "project worker" shape: a WorkerEntrypoint whose processEventBatch(events, range) the
   // stream calls at-least-once from a cursor it keeps (resolving IS the ack; throwing ⇒ retry;
   // `retryable: false` ⇒ halt now).
-  "src/digest.js": `import { WorkerEntrypoint } from "cloudflare:workers";
+  digest: {
+    "cap.js": `import { WorkerEntrypoint } from "cloudflare:workers";
 export default class Digest extends WorkerEntrypoint {
   async processEventBatch(events, range) {
     const poison = events.find((e) => e.payload && e.payload.poison);
@@ -63,7 +75,9 @@ export default class Digest extends WorkerEntrypoint {
     return n;
   }
 }`,
-  "src/chunky.js": `import { StreamProcessor, StreamProcessorDurableObject, defineProcessorContract, z } from "./processor.js";
+  },
+  chunky: {
+    "cap.js": `import { StreamProcessor, StreamProcessorDurableObject, defineProcessorContract, z } from "./processor.js";
 const contract = defineProcessorContract({
   slug: "chunky",
   version: "1.0.0",
@@ -84,12 +98,14 @@ class ChunkyProcessor extends StreamProcessor {
 export class ChunkyDurableObject extends StreamProcessorDurableObject {
   processor = new ChunkyProcessor();
 }`,
+  },
   // A processor whose live state COMBINES reduced state (ticks, reduced from durable 'tick' events)
   // with RUNTIME state (lastPokeMs — a plain field on the pure class, NOT the reduce checkpoint, gone
   // on eviction). A 'poke' ephemeral event bumps the runtime field in processEvent; the engine
   // re-projects after the batch and emits the delta itself (the reduce never touches it). Proves
   // reduced ⊕ runtime through ONE projection + ONE revision chain (live-state-chains-client-side.e2e).
-  "src/presence.js": `import { StreamProcessor, StreamProcessorDurableObject, defineProcessorContract, z } from "./processor.js";
+  presence: {
+    "cap.js": `import { StreamProcessor, StreamProcessorDurableObject, defineProcessorContract, z } from "./processor.js";
 const contract = defineProcessorContract({
   slug: "presence",
   version: "1.0.0",
@@ -115,7 +131,9 @@ class PresenceProcessor extends StreamProcessor {
 export class PresenceDurableObject extends StreamProcessorDurableObject {
   processor = new PresenceProcessor();
 }`,
-  "src/user-tally.js": `import { StreamProcessor, StreamProcessorDurableObject, defineProcessorContract, z } from "./processor.js";
+  },
+  "user-tally": {
+    "cap.js": `import { StreamProcessor, StreamProcessorDurableObject, defineProcessorContract, z } from "./processor.js";
 const contract = defineProcessorContract({
   slug: "user-tally",
   version: "1.0.0",
@@ -134,9 +152,11 @@ class UserTallyProcessor extends StreamProcessor {
 export class UserTallyDurableObject extends StreamProcessorDurableObject {
   processor = new UserTallyProcessor();
 }`,
+  },
   // The facet-spine demo processor (was the platform's built-in `tally`): counts every durable event
   // by type. A userspace class like any other — there are no built-in processors.
-  "src/tally.js": `import { StreamProcessor, StreamProcessorDurableObject, defineProcessorContract, z } from "./processor.js";
+  tally: {
+    "cap.js": `import { StreamProcessor, StreamProcessorDurableObject, defineProcessorContract, z } from "./processor.js";
 const contract = defineProcessorContract({
   slug: "tally",
   version: "1.0.0",
@@ -155,12 +175,14 @@ class TallyProcessor extends StreamProcessor {
 export class TallyDurableObject extends StreamProcessorDurableObject {
   processor = new TallyProcessor();
 }`,
+  },
   // POLICY AS A FACET PROCESSOR: a token-bucket breaker that speaks core's control events. Every
   // durable non-control event spends one token, refilled from the EVENT's createdAt (pure,
   // replayable — a rebuild from the log lands on the same tokens); the crossing (tokens ≥ 0 → < 0)
   // trips the stream by appending stream/paused with the breaker's reason, keyed so a replay can never
   // double-pause. Core knows nothing about it — the pause check reads the reduced `paused` slice.
-  "src/breaker.js": `import { StreamProcessor, StreamProcessorDurableObject, defineProcessorContract, z } from "./processor.js";
+  breaker: {
+    "cap.js": `import { StreamProcessor, StreamProcessorDurableObject, defineProcessorContract, z } from "./processor.js";
 const CAPACITY = 5; // tokens the bucket holds
 const REFILL_PER_SECOND = 1; // tokens restored per second of EVENT time
 const CONTROL = new Set([
@@ -202,7 +224,9 @@ class BreakerProcessor extends StreamProcessor {
 export class BreakerDurableObject extends StreamProcessorDurableObject {
   processor = new BreakerProcessor();
 }`,
-  "src/site.js": `import { WorkerEntrypoint } from "cloudflare:workers";
+  },
+  site: {
+    "cap.js": `import { WorkerEntrypoint } from "cloudflare:workers";
 export default class Site extends WorkerEntrypoint {
   async fetch(request) {
     if ((request.headers.get("Upgrade") || "").toLowerCase() === "websocket") {
@@ -214,19 +238,11 @@ export default class Site extends WorkerEntrypoint {
     return new Response("<!doctype html><title>dynamic site</title><h1>hello from a dynamic web capability</h1>", { headers: { "content-type": "text/html" } });
   }
 }`,
+  },
 };
 
-/** Seed the named sources (short names: "site", "counter", …) into the project's kv. */
-export async function seedSources(itx: any, names: string[]): Promise<void> {
-  for (const n of names) {
-    const key = `src/${n}.js`;
-    if (!SOURCES[key]) throw new Error(`sources: no source ${key}`);
-    await itx.invoke(["itx", "kv", ["put", key, SOURCES[key]]]);
-  }
-}
-
-/** The one spelling of "enable the fixture processor `name` from its seeded source": seeds it, then
- *  `enableProcessor(name, { source, className })` — a processor is a named facet whose
+/** The one spelling of "enable the fixture processor `name`": `enableProcessor(name, { source,
+ *  className })` with the fixture's modules handed over inline — a processor is a named facet whose
  *  `processEventBatch` is subscribed. `className` names the HOST (`<Name>DurableObject`, the one-line
  *  `StreamProcessorDurableObject` subclass), never the pure `StreamProcessor` it hosts. `tally`,
  *  `chunky`, `presence`, `user-tally`, `breaker` are the fixtures. */
@@ -235,10 +251,8 @@ export async function enableFixtureProcessor(
   name: string,
   className?: string,
 ): Promise<void> {
-  const file = name === "user-tally" ? "user-tally" : name;
-  await seedSources(itx, [file]);
   await itx.enableProcessor(name, {
-    source: `itx.kv.get('src/${file}.js')`,
+    source: SOURCES[name],
     className: className ?? FIXTURE_CLASS[name],
   });
 }

@@ -47,22 +47,27 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const alarmAt = (ctx: string): Promise<number | null> =>
   runInDurableObject(stub(ctx), (_inst, state) => state.storage.getAlarm());
 
-/** The hosting door as an expression: `itx.facets.get(name, { source, className })`. */
-const hostedFacet = (src: string, cls: string, name: string): ItxExpression => [
+/** The hosting door as an expression: `itx.facets.get(name, { source, className })` — the source is
+ *  the worker's modules, literally. */
+const hostedFacet = (source: Record<string, string>, cls: string, name: string): ItxExpression => [
   "itx",
   "facets",
-  ["get", name, { source: `itx.kv.get('${src}')`, className: cls }],
+  ["get", name, { source, className: cls }],
 ];
+const COUNTER_MODULES = { "cap.js": COUNTER_SRC };
+const DIGEST_MODULES = { "cap.js": DIGEST_SRC };
 
 test("processor: a fresh facet's first snapshot (wake) with ephemerals at head checkpoints the durable mark; after quiesce + evict the tick re-minted at a dead ephemeral's offset is reduced exactly once", async () => {
   const ctx = "prj_rev_procskip";
   const s = stub(ctx);
-  await s.invoke(["itx", "kv", ["put", "procsrc", COUNTER_SRC]]);
   // enable with a consumes FILTER: the configured event is not pushed; the facet is materialized and woken at configure time
   await s.append(
     subscriptionConfiguredEvent({
       name: "counter",
-      target: [...hostedFacet("procsrc", "CounterDurableObject", "counter"), "processEventBatch"],
+      target: [
+        ...hostedFacet(COUNTER_MODULES, "CounterDurableObject", "counter"),
+        "processEventBatch",
+      ],
       consumes: ["tick"],
     }),
   );
@@ -74,7 +79,7 @@ test("processor: a fresh facet's first snapshot (wake) with ephemerals at head c
 
   // READ-DRIVEN catch-up through the load chain: snapshot → catchUpFromLog() → read → durables ≤ mark
   const before = (await s.invoke([
-    ...hostedFacet("procsrc", "CounterDurableObject", "counter"),
+    ...hostedFacet(COUNTER_MODULES, "CounterDurableObject", "counter"),
     ["snapshot"],
   ])) as { offset: number; state: { n: number } };
   expect(before.state.n).toBe(p0.events.length); // reduced every durable
@@ -110,11 +115,10 @@ test("processor: a fresh facet's first snapshot (wake) with ephemerals at head c
 test("stream-kept cursor: an alarm pump with ephemerals at head leaves the cursor on the durable mark; after quiesce + evict the durables re-minted at those offsets are delivered", async () => {
   const ctx = "prj_rev_cursorskip";
   const s = stub(ctx);
-  await s.invoke(["itx", "kv", ["put", "digsrc", DIGEST_SRC]]);
   await s.append(
     subscriptionConfiguredEvent({
       name: "dig",
-      target: ["itx", ["load", "itx.kv.get('digsrc')"], ["getEntrypoint"], "processEventBatch"],
+      target: ["itx", ["load", DIGEST_MODULES], ["getEntrypoint"], "processEventBatch"],
       consumes: ["mark"],
     }),
   );
@@ -136,8 +140,7 @@ test("stream-kept cursor: an alarm pump with ephemerals at head leaves the curso
   // stub and therefore no alarm at all. Materialize an unrelated facet to arm the quiet clock (it
   // consumes nothing of `dig`'s and writes no durable row — its live-state delta is ephemeral, so the
   // durable mark this pin is about does not move) and read the schedule back before firing.
-  await s.invoke(["itx", "kv", ["put", "procsrc", COUNTER_SRC]]);
-  await s.invoke([...hostedFacet("procsrc", "CounterDurableObject", "armer"), ["snapshot"]]);
+  await s.invoke([...hostedFacet(COUNTER_MODULES, "CounterDurableObject", "armer"), ["snapshot"]]);
   expect(await alarmAt(ctx)).not.toBeNull();
   // The alarm really runs: deliverEveryCursorSubscription → read(mark) proves only through the mark
   // → `dig` is caught up, nothing written.
@@ -169,11 +172,10 @@ test("stream-kept cursor: an alarm pump with ephemerals at head leaves the curso
 test("enable with a consumes filter: itx.facets.get(name) answers before the first consumed event (the facet is materialized at configure time)", async () => {
   const ctx = "prj_rev_nofacet";
   const s = stub(ctx);
-  await s.invoke(["itx", "kv", ["put", "procsrc", COUNTER_SRC]]);
   await s.append(
     subscriptionConfiguredEvent({
       name: "c2",
-      target: [...hostedFacet("procsrc", "CounterDurableObject", "c2"), "processEventBatch"],
+      target: [...hostedFacet(COUNTER_MODULES, "CounterDurableObject", "c2"), "processEventBatch"],
       consumes: ["tick"],
     }),
   );
@@ -187,11 +189,13 @@ test("enable with a consumes filter: itx.facets.get(name) answers before the fir
 test("processor: a read-driven catch-up (snapshot after quiesce) with ephemerals at head checkpoints the durable mark; after quiesce + evict the durable re-minted at an ephemeral's offset is reduced exactly once", async () => {
   const ctx = "prj_rev_procskip_b";
   const s = stub(ctx);
-  await s.invoke(["itx", "kv", ["put", "procsrc", COUNTER_SRC]]);
   await s.append(
     subscriptionConfiguredEvent({
       name: "counter",
-      target: [...hostedFacet("procsrc", "CounterDurableObject", "counter"), "processEventBatch"],
+      target: [
+        ...hostedFacet(COUNTER_MODULES, "CounterDurableObject", "counter"),
+        "processEventBatch",
+      ],
       consumes: ["tick", "events.iterate.com/stream/subscription-configured"],
     }),
   );

@@ -129,7 +129,8 @@ test("200 push subscribers — one append fans out to all 200 in under 2s, exact
 // `FanProbeDurableObject extends StreamProcessorDurableObject` (both from the SDK, `./processor.js`),
 // hosted as a facet through `itx.facets.get(name, { source, className: 'FanProbeDurableObject' })`
 // — what `enableProcessor(name, { source, className })` subscribes.
-const FAN_PROCESSOR_SOURCE = /* js */ `
+const FAN_PROCESSOR_SOURCE = {
+  "cap.js": /* js */ `
 import { StreamProcessor, StreamProcessorDurableObject } from "./processor.js";
 class FanProbeProcessor extends StreamProcessor {
   contract = {
@@ -147,16 +148,16 @@ class FanProbeProcessor extends StreamProcessor {
 export class FanProbeDurableObject extends StreamProcessorDurableObject {
   processor = new FanProbeProcessor();
 }
-`;
+`,
+};
 
 test("50 userspace processors: one append fans out to all 50 in <5s while the stream stays responsive", async () => {
   const itx = openItx(freshCtx("fan50"));
-  await itx.kv.put("procsrc", FAN_PROCESSOR_SOURCE);
 
   const enableT0 = performance.now();
   for (let i = 0; i < 50; i++) {
     await itx.enableProcessor(`fan${i}`, {
-      source: "itx.kv.get('procsrc')",
+      source: FAN_PROCESSOR_SOURCE,
       className: "FanProbeDurableObject",
     });
   }

@@ -14,18 +14,17 @@ import { expect, test } from "vitest";
 import { connectLiveState } from "../src/client/live-state-client.ts";
 import { append, freshCtx, openItx, until } from "./support/client.ts";
 import { deltasFor, LIVE_STATE_CHANGED, liveClient } from "./support/live-client.ts";
-import { seedSources } from "./support/sources.ts";
+import { SOURCES } from "./support/sources.ts";
 
 const clone = <T>(v: T): T => JSON.parse(JSON.stringify(v)) as T;
 
 test("live state chains client-side from the door — mini-app + processor flavors", async () => {
   const itx = openItx(freshCtx("live"));
-  await seedSources(itx, ["chatroom", "chunky"]);
 
   // ── mini-app flavor: the chatroom (SDK LiveState helper), behind the rewrite rule itx.chat ──
   await itx.provide(
     "itx.chat",
-    `itx.facets.get('chatroom', { source: "itx.kv.get('src/chatroom.js')", className: 'ChatroomDurableObject' })`,
+    `itx.facets.get('chatroom', { source: ${JSON.stringify(SOURCES.chatroom)}, className: 'ChatroomDurableObject' })`,
   );
 
   const chat = liveClient(async () => clone(await itx.invoke("itx.chat.state()")));
@@ -69,7 +68,7 @@ test("live state chains client-side from the door — mini-app + processor flavo
 
   // ── processor flavor: chunky's reduce, door = liveSnapshot() ──
   await itx.enableProcessor("chunky", {
-    source: "itx.kv.get('src/chunky.js')",
+    source: SOURCES.chunky,
     className: "ChunkyDurableObject",
   });
   const proc = liveClient(async () =>
@@ -108,14 +107,12 @@ test("a dynamic-worker processor's live state combines reduced (ticks) + runtime
   // touches, bumped when a 'poke' EPHEMERAL reaches its processEvent. The client seeds through
   // `liveSnapshot()` and reduces deltas with the SHIPPABLE store (the same one the browser hook uses).
   const itx = openItx(freshCtx("lsruntime"));
-  await seedSources(itx, ["presence"]);
   // PresenceProcessor's contract consumes the EPHEMERAL 'poke', so its subscription must NAME it: the ONE
   // consumes rule (absent = durable events only; naming a type opts its ephemerals in) sits in
   // front of the facet's own contract filter — hence `consumes` on the enable.
-  const presenceFacet =
-    "itx.facets.get('presence', { source: \"itx.kv.get('src/presence.js')\", className: 'PresenceDurableObject' })";
+  const presenceFacet = `itx.facets.get('presence', { source: ${JSON.stringify(SOURCES.presence)}, className: 'PresenceDurableObject' })`;
   await itx.enableProcessor("presence", {
-    source: "itx.kv.get('src/presence.js')",
+    source: SOURCES.presence,
     className: "PresenceDurableObject",
     consumes: ["tick", "poke"],
   });

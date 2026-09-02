@@ -34,24 +34,18 @@ test("waitForEvent through a LOADED worker's env.ITX.get() — the scope's dotte
   // the ItxEntrypoint has no stream verbs of its own: `get` and `fetch` only). A real entrypoint is
   // loaded: its `run` opens the wait through the scope, a second session appends, and the loaded
   // worker returns the committed event — the Workers-RPC lane no other suite drives.
-  await itxA.invoke([
-    "itx",
-    "kv",
-    [
-      "put",
-      "src/waiter.js",
-      `import { WorkerEntrypoint } from "cloudflare:workers";
+  const SRC_WAITER = {
+    "cap.js": `import { WorkerEntrypoint } from "cloudflare:workers";
 export default class Waiter extends WorkerEntrypoint {
   async run(afterOffset) {
     const itx = await this.env.ITX.get();
     return await itx.waitForEvent({ type: "ping", afterOffset, timeoutMs: 20000 });
   }
 }`,
-    ],
-  ]);
+  };
   const head = (await itxA.invoke("itx.read(0)")).scannedThroughOffset;
   const pending = itxA.invoke(
-    `itx.load("itx.kv.get('src/waiter.js')").getEntrypoint().run(${head})`,
+    `itx.load(${JSON.stringify(SRC_WAITER)}).getEntrypoint().run(${head})`,
   );
   await sleep(500); // let the loaded worker start waiting before the append (the anchored afterOffset makes either order correct)
   await itxB.invoke(`itx.append({ type: 'ping', payload: { via: 'entrypoint' } })`);

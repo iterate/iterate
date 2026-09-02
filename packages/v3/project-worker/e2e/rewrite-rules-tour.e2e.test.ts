@@ -17,7 +17,7 @@ import {
   session,
   workerUrl,
 } from "./support/client.ts";
-import { seedSources } from "./support/sources.ts";
+import { SOURCES } from "./support/sources.ts";
 
 test("itx tour: built-in roots, lent stubs, the rule map, dynamic-worker rules, the two views", async () => {
   const ctx = freshCtx("tour");
@@ -41,7 +41,6 @@ test("itx tour: built-in roots, lent stubs, the rule map, dynamic-worker rules, 
   await itxA.provide("itx.proverA", new ToolsA());
   const itxB = await session().authenticate().projects.get(ctx);
   await itxB.provide("itx.proverB", new ToolsB());
-  await seedSources(itxA, ["site", "counter"]);
 
   // 1. whoami — a built-in root, reached through the ONE dispatch door
   const who = await itxA.invoke(["itx", ["whoami"]]);
@@ -108,7 +107,7 @@ test("itx tour: built-in roots, lent stubs, the rule map, dynamic-worker rules, 
   expect(String(denied)).toMatch(/no rewrite rule matches/);
 
   // 5. EXPRESSION RULE running a stateless dynamic worker (the fetch lane end-to-end)
-  await itxA.provide("itx.site", "itx.load(['itx', 'kv', ['get', 'src/site.js']]).getEntrypoint()");
+  await itxA.provide("itx.site", `itx.load(${JSON.stringify(SOURCES.site)}).getEntrypoint()`);
   const page = await fetch(expressionUrl(ctx, "itx.site", "http"));
   const html = await page.text();
   // the loaded worker serves HTML via /expression
@@ -134,7 +133,7 @@ test("itx tour: built-in roots, lent stubs, the rule map, dynamic-worker rules, 
   // 6. EXPRESSION RULE running a STATEFUL worker — deep dotted call + callback into the host
   await itxA.provide(
     "itx.counter",
-    "itx.facets.get('counter', { source: ['itx', 'kv', ['get', 'src/counter.js']], className: 'CounterDurableObject' })",
+    `itx.facets.get('counter', { source: ${JSON.stringify(SOURCES.counter)}, className: 'CounterDurableObject' })`,
   );
   const inc = await itxA.invoke(["itx", "counter", ["increment", 2]]);
   // stateful worker: increment(2)

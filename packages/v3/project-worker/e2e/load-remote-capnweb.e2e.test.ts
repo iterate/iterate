@@ -10,9 +10,11 @@
 import { expect, test } from "vitest";
 import { freshCtx, openItx } from "./support/client.ts";
 
-// The whole remote-dialing worker. Each method builds ONE capnweb chain with no intervening awaits
-// (the one-shot batch flushes on the first await), so even a call-then-call chain rides one POST.
-const REMOTE_SRC = /* js */ `
+// The whole remote-dialing worker, handed over inline. Each method builds ONE capnweb chain with no
+// intervening awaits (the one-shot batch flushes on the first await), so even a call-then-call chain
+// rides one POST.
+const SRC_REMOTE = {
+  "cap.js": /* js */ `
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { newHttpBatchRpcSession } from "./processor.js";
 export class Remote extends WorkerEntrypoint {
@@ -22,13 +24,13 @@ export class Remote extends WorkerEntrypoint {
   mathAdd(a, b) { return this.#api().math.add(a, b); }          // property hop, then a call
   svcAdd(a, b) { return this.#api().svc("x").add(a, b); }       // call-then-call (the itx.os.projects.get(id).rename(…) shape)
 }
-`;
+`,
+};
 
 const rewriteRemoteApi = async (itx: any): Promise<void> => {
-  await itx.kv.put("src/remote.js", REMOTE_SRC);
   await itx.provide(
     "itx.remoteApi",
-    `itx.load("itx.kv.get('src/remote.js')").getEntrypoint('Remote', { props: { url: ${JSON.stringify(process.env.DUMMY_CAPNWEB_URL)} } })`,
+    `itx.load(${JSON.stringify(SRC_REMOTE)}).getEntrypoint('Remote', { props: { url: ${JSON.stringify(process.env.DUMMY_CAPNWEB_URL)} } })`,
   );
 };
 

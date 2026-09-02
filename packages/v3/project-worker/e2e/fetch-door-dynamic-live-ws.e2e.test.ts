@@ -8,7 +8,8 @@
 import { expect, test } from "vitest";
 import { openItx, freshCtx } from "./support/client.ts";
 
-const PROVIDER_SRC = `import { WorkerEntrypoint, RpcTarget } from "cloudflare:workers";
+const SRC_PROVIDER = {
+  "cap.js": `import { WorkerEntrypoint, RpcTarget } from "cloudflare:workers";
 class WsDevice extends RpcTarget {
   fetch(request) {
     if ((request.headers.get("Upgrade") || "").toLowerCase() === "websocket") {
@@ -57,9 +58,11 @@ export default class Provider extends WorkerEntrypoint {
     }
     return "provided";
   }
-}`;
+}`,
+};
 
-const CONSUMER_SRC = `import { WorkerEntrypoint } from "cloudflare:workers";
+const SRC_CONSUMER = {
+  "cap.js": `import { WorkerEntrypoint } from "cloudflare:workers";
 export default class Consumer extends WorkerEntrypoint {
   async run(kind) {
     if (kind === "plain") {
@@ -88,18 +91,14 @@ export default class Consumer extends WorkerEntrypoint {
     ws.close(1000, "done");
     return { status: 101, echo };
   }
-}`;
+}`,
+};
 
-async function seedBoth(itx: ReturnType<typeof openItx>): Promise<void> {
-  await itx.invoke(["itx", "kv", ["put", "src/provider.js", PROVIDER_SRC]]);
-  await itx.invoke(["itx", "kv", ["put", "src/consumer.js", CONSUMER_SRC]]);
-}
 const runProvider = (itx: ReturnType<typeof openItx>, mode: string): Promise<unknown> =>
-  itx.invoke(`itx.load("itx.kv.get('src/provider.js')").getEntrypoint().run('${mode}')`);
+  itx.invoke(`itx.load(${JSON.stringify(SRC_PROVIDER)}).getEntrypoint().run('${mode}')`);
 
 test("within the provider's invocation: a dyn-provided lent stub serves PLAIN fetch", async () => {
   const itx = openItx(freshCtx("dynliveself"));
-  await seedBoth(itx);
   const out = (await runProvider(itx, "self-plain")) as { status: number; body: string };
   // dyn-worker → env.ITX (Fetcher) → DO fetch lane → rewrite rule → lent stub's terminal fetch →
   // back into the SAME dyn-worker's device — a socketless Response crosses every native hop.
@@ -118,7 +117,6 @@ test("within the provider's invocation: a dyn-provided lent stub serves PLAIN fe
 // one) or an SDK-side provider shim; the plain-fetch half (test above) already works everywhere.
 test.fails("within the provider's invocation: WEBSOCKET fetch of the dyn-provided lent stub", async () => {
   const itx = openItx(freshCtx("dynlivewsself"));
-  await seedBoth(itx);
   const out = (await runProvider(itx, "self-ws")) as {
     status: number;
     echo?: string;
@@ -145,10 +143,9 @@ test.fails("within the provider's invocation: WEBSOCKET fetch of the dyn-provide
 // is an owner call — see the session notes.
 test.fails("ACROSS invocations: worker B fetches the stub A provided (the detached-provider question)", async () => {
   const itx = openItx(freshCtx("dynlivex"));
-  await seedBoth(itx);
   expect(await runProvider(itx, "provide")).toBe("provided");
   const out = (await itx.invoke(
-    `itx.load("itx.kv.get('src/consumer.js')").getEntrypoint().run('plain')`,
+    `itx.load(${JSON.stringify(SRC_CONSUMER)}).getEntrypoint().run('plain')`,
   )) as { status: number; body: string };
   expect(out.status).toBe(200);
   expect(out.body).toBe("dyn live site");

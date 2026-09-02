@@ -6,16 +6,15 @@
 
 import { expect, test } from "vitest";
 import { freshCtx, openItx } from "./support/client.ts";
-import { seedSources } from "./support/sources.ts";
+import { SOURCES } from "./support/sources.ts";
 
 test("persistent stub: stash a live itx handle in DO storage, use the restored handle", async () => {
   const ctx = freshCtx("rest");
   const itx = openItx(ctx);
-  await seedSources(itx, ["keeper"]);
 
   await itx.provide(
     "itx.keeper",
-    `itx.facets.get('keeper', { source: "itx.kv.get('src/keeper.js')", className: 'KeeperDurableObject' })`,
+    `itx.facets.get('keeper', { source: ${JSON.stringify(SOURCES.keeper)}, className: 'KeeperDurableObject' })`,
   );
 
   // 1. stash: storage.put(env.ITX) — throws unless the whole chain is restore-eligible

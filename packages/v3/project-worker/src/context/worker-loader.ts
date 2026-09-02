@@ -1,5 +1,5 @@
-// worker-loader.ts — THE loader: `loadConfinedWorker` turns a SOURCE into a loaded worker through
-// Cloudflare's `env.LOADER` (a `WorkerLoader`) — resolve the source to modules, hash them, mint the
+// worker-loader.ts — THE loader: `loadConfinedWorker` turns a SOURCE (its modules, literally) into a
+// loaded worker through Cloudflare's `env.LOADER` (a `WorkerLoader`) — hash the modules, mint the
 // confined isolate under the billed cacheKey — and stops at the `WorkerStub`. The CALLER then chooses
 // the host, exactly like Cloudflare's own two-step: `worker.getEntrypoint(name?)` for a stateless
 // `WorkerEntrypoint` (built-ins.ts), or `worker.getDurableObjectClass(name)` hosted as a durable
@@ -20,7 +20,6 @@
 // site (built-ins.ts `RUN_SCRIPT_ENTRYPOINT`), so even that bottoms out at an EXPORTED entrypoint.
 
 import { PROCESSOR_SDK_MODULE } from "../generated/processor-sdk.ts";
-import { toItxExpression, type ItxExpression } from "./expression.ts";
 
 /** Compose the loader cacheKey `owner` (context + a discriminator: a processor slug or a stateful
  *  className) COLLISION-FREE. The naive `${context}:${discriminator}` aliased across a different
@@ -32,26 +31,15 @@ export function facetLoaderOwner(iterateContextName: string, discriminator: stri
   return `${iterateContextName.length}#${iterateContextName}#${discriminator}`;
 }
 
-/** A worker/facet SOURCE is a PRODUCER of module code, resolved the SAME way at every load site
- *  (stateless workers, stateful facets, processor facets). Two shapes, both bottoming out here:
- *   • an itx-ItxExpression producer — the norm. `itx.kv.get('src/x.js')` IS a callback that fetches
- *     the code; a repo fetch is just `itx.repo.get(...)`; a provided capnweb/Workers-RPC callback
- *     is any expression that invokes it. Re-derivable across incarnations — the durable form,
- *     mirroring apps/os `env.LOADER.get(cacheKey, () => code)` with the producer on the wire.
- *   • `{ type: "inline", files }` — the code handed over literally (apps/os `WorkerFileSource`
- *     inline), the one shape with no producer to invoke.
- *  `type:"repo"` is deliberately NOT a third branch here — it is surface sugar that compiles to a
- *  producer expression, so there is ONE resolve path, not a per-variant fan-out. */
-export type WorkerSource =
-  | string
-  | ItxExpression
-  | { type: "inline"; files: Record<string, string> };
+/** A worker/facet SOURCE: its MODULES, module name → code, handed over literally and stored where
+ *  they are named (a facet's startup memo, a subscription's target). `"cap.js"` is the main module.
+ *  (The earlier "producer expression" shape — `itx.kv.get('src/x.js')` fetching the code — was deleted
+ *  2026-09-02: one indirection nobody needed to be taught.) */
+export type WorkerSource = Record<string, string>;
 
 /** What `loadConfinedWorker` needs. */
 type LoadConfinedWorkerOptions = {
   env: { LOADER: WorkerLoader; CF_VERSION_METADATA?: { id: string } };
-  /** Resolve one call through the owning context's dispatch — how a producer expression is run. */
-  invoke: (call: ItxExpression) => Promise<unknown>;
   /** The loaded isolate's whole world: its `env.ITX` and its `globalOutbound` (the ItxEntrypoint
    *  loopback minted for the owning context — itx-entrypoint.ts). */
   host: Fetcher;
@@ -63,12 +51,6 @@ type LoadConfinedWorkerOptions = {
   source: WorkerSource;
   /** Names the load site in errors (`facet "tally"`, `load.getEntrypoint`). */
   where: string;
-  /** PRE-RESOLVED `{ modules, contentHash }` from a caller-owned memo — skips the source fetch + hash.
-   *  The commit pump loads the SAME facet on EVERY commit; a per-facet memo (keyed by the printed
-   *  source expression, invalidated at disable/quiesce) turns that into one fetch+hash per
-   *  materialization instead of one per commit. The loader `cacheKey` is unchanged either way (a warm
-   *  isolate returns cheaply), so this is pure work avoided, not a cardinality change. */
-  resolved?: { contentHash: string; modules: Record<string, string> };
 };
 
 /**
@@ -90,31 +72,18 @@ type LoadConfinedWorkerOptions = {
  */
 export async function loadConfinedWorker(
   opts: LoadConfinedWorkerOptions,
-): Promise<{ worker: WorkerStub; contentHash: string; modules: Record<string, string> }> {
-  const { where, resolved } = opts;
-  let modules: Record<string, string>;
-  let contentHash: string;
-  if (resolved) ({ modules, contentHash } = resolved);
-  else {
-    // 1. the source → modules: inline files are the modules; a producer expression is invoked and
-    //    may yield a modules record ({ name: code }) or ONE module string (plain kv). Anything else is
-    //    a loud error, not an empty worker.
-    const { source } = opts;
-    const produced =
-      typeof source === "string" || Array.isArray(source)
-        ? await opts.invoke(toItxExpression(source))
-        : source.files;
-    if (typeof produced === "string") modules = { "cap.js": produced };
-    else if (produced && typeof produced === "object" && !Array.isArray(produced))
-      modules = produced as Record<string, string>;
-    else throw new Error(`${where}: source expression produced no module code`);
-    // 2. the content hash — djb2 over the modules' JSON: stable, so the cacheKey and the facet's
-    //    version marker change exactly when the source does.
-    const serialized = JSON.stringify(modules);
-    let h = 5381;
-    for (let i = 0; i < serialized.length; i++) h = ((h << 5) + h + serialized.charCodeAt(i)) | 0;
-    contentHash = (h >>> 0).toString(36);
-  }
+): Promise<{ worker: WorkerStub; contentHash: string }> {
+  const { where, source: modules } = opts;
+  // 1. the modules — handed over literally; `cap.js` is the main module (a loud check, not a silent
+  //    empty worker).
+  if (typeof modules?.["cap.js"] !== "string")
+    throw new Error(`${where}: a source is its modules, and needs a "cap.js" main module`);
+  // 2. the content hash — djb2 over the modules' JSON: stable, so the cacheKey and the facet's
+  //    version marker change exactly when the source does.
+  const serialized = JSON.stringify(modules);
+  let h = 5381;
+  for (let i = 0; i < serialized.length; i++) h = ((h << 5) + h + serialized.charCodeAt(i)) | 0;
+  const contentHash = (h >>> 0).toString(36);
   // 3. the confined worker under the billed cacheKey (see the header).
   const deploy = opts.env.CF_VERSION_METADATA?.id ?? "unversioned";
   const worker = opts.env.LOADER.get(`${opts.kind}:${deploy}:${opts.owner}:${contentHash}`, () => ({
@@ -140,5 +109,5 @@ export async function loadConfinedWorker(
     env: { ITX: opts.host },
     globalOutbound: opts.host,
   }));
-  return { worker, contentHash, modules };
+  return { worker, contentHash };
 }

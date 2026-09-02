@@ -73,14 +73,13 @@ const durableCount = async (ctx: string): Promise<number> =>
  *  subscription name = the `.get(name)` name). */
 async function enableCounter(ctx: string, name = "counter"): Promise<void> {
   const s = stub(ctx);
-  await s.invoke(["itx", "kv", ["put", "procsrc", COUNTER_SRC]]);
   await s.append(
     subscriptionConfiguredEvent({
       name,
       target: [
         "itx",
         "facets",
-        ["get", name, { source: "itx.kv.get('procsrc')", className: "CounterDurableObject" }],
+        ["get", name, { source: { "cap.js": COUNTER_SRC }, className: "CounterDurableObject" }],
         "processEventBatch",
       ],
     }),
@@ -333,12 +332,11 @@ test("ALARM PUMPS THE CURSOR LANE: a failed at-least-once delivery is retried fr
   // acks it, and the row reads attempt 0 with its confirmedOffset at the head.
   const ctx = "prj_q_cursorpump";
   const s = stub(ctx);
-  await s.invoke(["itx", "kv", ["put", "flakysrc", FLAKY_SRC]]);
   await s.invoke(["itx", "kv", ["put", "flaky-mode", "fail"]]);
   await s.append(
     subscriptionConfiguredEvent({
       name: "flaky",
-      target: ["itx", ["load", "itx.kv.get('flakysrc')"], ["getEntrypoint"], "processEventBatch"],
+      target: ["itx", ["load", { "cap.js": FLAKY_SRC }], ["getEntrypoint"], "processEventBatch"],
       consumes: ["mark"],
     }),
   );

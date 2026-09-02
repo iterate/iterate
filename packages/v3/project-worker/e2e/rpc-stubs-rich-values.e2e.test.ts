@@ -7,7 +7,7 @@
 import { RpcTarget } from "capnweb";
 import { expect, test } from "vitest";
 import { freshCtx, openItx } from "./support/client.ts";
-import { seedSources } from "./support/sources.ts";
+import { SOURCES } from "./support/sources.ts";
 
 class ToolsA extends RpcTarget {
   async transform(x: number, cb: (n: number) => Promise<number> | number) {
@@ -54,7 +54,6 @@ test("rich values through the longest path: Date, bytes, callbacks, RpcTarget ar
   const ctx = freshCtx("rich");
   const itxA = openItx(ctx);
   const itxB = openItx(ctx);
-  await seedSources(itxB, ["probe"]);
   await itxA.provide("itx.tools", new ToolsA());
 
   // 1. a Date through the whole path
@@ -76,7 +75,7 @@ test("rich values through the longest path: Date, bytes, callbacks, RpcTarget ar
   // 4. the STATELESS RUN LANE (was the one JSON boundary — now a real RPC method): a Date and a
   //    client callback ride into a confined loaded isolate; note the ref needs NO `type`.
   await itxB.invoke(`itx.append({ type: 'noop' })`); // ensure the stream exists
-  await itxB.provide("itx.probe", `itx.load("itx.kv.get('src/probe.js')").getEntrypoint()`);
+  await itxB.provide("itx.probe", `itx.load(${JSON.stringify(SOURCES.probe)}).getEntrypoint()`);
   const rich = await itxB.invoke([
     "itx",
     "probe",
