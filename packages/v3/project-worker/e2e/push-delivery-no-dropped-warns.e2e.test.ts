@@ -137,7 +137,7 @@ test("MEASURED FINDING: a push subscriber that stops reading mid-flood is NOT cl
   // the overflow-close instead.
   const ctx = freshCtx("overflow");
   const itx = await worker.itx(ctx); // connection A: setup, the flood, and observation
-  // Connection B — THE VICTIM: its own client socket, because the retained callback stub lives in
+  // Connection B — THE VICTIM: its own client socket, because the callback stub it lent lives in
   // that socket's relay session; the socket's death must become the stub's death.
   const wsB = stallableWebSocket(`ws://${worker.url.host}/api`);
   const sessionB: any = newWebSocketRpcSession(wsB as any);
@@ -219,8 +219,8 @@ test("MEASURED FINDING: a push subscriber that stops reading mid-flood is NOT cl
   await append(itx, { type: "flood", ephemeral: true, payload: { afterKill: true } });
   await sleep(300);
   expect(droppedWarns() - droppedBefore).toBe(0);
-  // The explicit exit — unsubscribe from ANY session (here A, which never parked the stub, so its
-  // close-the-parked-stub half is a local no-op; the removal drops the row).
+  // The explicit exit — unsubscribe from ANY session (here A, which never lent the stub, so its
+  // recall half is a local no-op; the removal drops the row).
   await itx.unsubscribe("victim");
   expect(await subscriptions(itx)).toEqual([]);
 }, 55_000);

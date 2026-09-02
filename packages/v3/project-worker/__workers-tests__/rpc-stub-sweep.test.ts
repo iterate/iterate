@@ -62,8 +62,8 @@ test("ABANDONED ATTACH IS LAZILY SWEPT: 11s later the next attach drops it — t
 
 test("HAPPY PATH UNTOUCHED: attach + prompt pager upgrade within the TTL — provide over /api, a caller's invoke answers", async () => {
   // The production sequence the sweep must never bite: itx.provide(path, stub) makes the relay
-  // attach and open its pager IMMEDIATELY (well inside the 10s TTL), so the stub parks and a
-  // separate caller reaches it through the mount path: page → paged-in stub → invoke.
+  // attach and open its pager IMMEDIATELY (well inside the 10s TTL), so the lend lands and a
+  // separate caller reaches the stub through the mount path: page → borrowed stub → invoke.
   const ctx = "prj_sweep_happy";
   const clientItx = await (await openSession()).authenticate().projects.get(ctx);
   await clientItx.provide("itx.live", new Echo(7));

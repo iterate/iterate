@@ -1,5 +1,5 @@
 // push-delivery-ranges-chain.e2e.test.ts — PUSH: a live callback (`subscribe({ target: fn })`, a stub
-// parked in `itx.rpcStubs` under `itx.subscriptions.<name>`) OWNS ITS PROGRESS, so the one delivery
+// lent to `itx.rpcStubs` under `itx.subscriptions.<name>`) OWNS ITS PROGRESS, so the one delivery
 // loop pushes it `(events, { after, through })` fire-and-forget — no cursor row, no retry, no ack.
 // Delivered ranges CHAIN across a consumes-filtered quiet gap (the client heals a real gap with
 // `read`); `consumes` is the ONE filter rule (naming a type opts its ephemerals in; absent or "*" =

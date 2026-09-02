@@ -1,7 +1,7 @@
 // push-delivery-throughput.e2e.test.ts — PUSH delivery under volume: a producer floods
 // voice-chunk-shaped ephemeral events (256B payloads, batched appends) while a live subscriber
-// receives them one-directionally (fire-and-forget event batches over the paged-in hibernatable RPC
-// stub — no acks, no server cursor); one append fans out to 200 live subscribers and to 50 userspace
+// receives them one-directionally (fire-and-forget event batches over the borrowed rpc stub — no
+// acks, no server cursor); one append fans out to 200 live subscribers and to 50 userspace
 // processor facets while an unrelated call is never head-of-line blocked; a 900-event commit arrives
 // as ONE callback invocation. Producer and subscribers run in THIS process, so sentAtMs/arrival share
 // one clock: the measured latency is the FULL path (test → worker append+commit → delivery → test).

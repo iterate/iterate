@@ -1002,7 +1002,7 @@ describe("waitUntilProcessed — resolution and failure modes", () => {
   test("a self-pull that THROWS rejects the barrier with the read failure — promptly, not the generic timeout", async () => {
     // wake enqueues the catch-up on the serial chain, whose failure the chain swallows (a failed
     // batch must not wedge it); the waiter must still be told, so a transient read error is one
-    // fast rejection the caller can retry instead of a full-timeout park.
+    // fast rejection the caller can retry instead of a full-timeout wait.
     const { engine } = caughtUpProbe(new Error("self-pull read failed: boom"));
     await expect(engine.waitUntilProcessed({ offset: 5, timeoutMs: 1500 })).rejects.toThrow(/boom/);
   });

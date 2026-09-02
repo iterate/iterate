@@ -43,7 +43,7 @@ flowchart TB
     misc["kv · whoami · cd · fetch (egress)"]
   end
   subgraph L1["Layer 1 — mounts (capability table: own events, a slice of the core reduce)"]
-    mount["capability-provided { path, target }<br/>a live provide = park in rpcStubs + mount itx.rpcStubs.get(path)"]
+    mount["capability-provided { path, target }<br/>a live provide = lend to rpcStubs + mount itx.rpcStubs.get(path)"]
   end
   subgraph L2["Layer 2 — subscriptions (own events, reduced by the core reduce + ONE delivery loop)"]
     sub["subscription-configured { name, target, consumes? }<br/>push if the target owns progress (facet / rpc stub)<br/>else the stream keeps a kv cursor, at-least-once"]
@@ -67,7 +67,7 @@ const itx = api.authenticate().projects.get("prj_123"); // the project ROOT cont
 const agent = itx.cd("/agents/support"); // absolute by convention; relative and ".." also resolve
 
 await itx.provide("itx.greet", "itx.load(\"itx.kv.get('greet.js')\").getEntrypoint()"); // a mount
-await itx.provide("itx.robot", robotObject); // SUGAR: parks in rpcStubs + mounts itx.rpcStubs.get('itx.robot')
+await itx.provide("itx.robot", robotObject); // SUGAR: lends to rpcStubs + mounts itx.rpcStubs.get('itx.robot')
 await itx.rpcStubs.list(); // presence, physical
 
 await itx.subscribe({ name: "tab", target: (events, range) => render(events) }); // SUGAR; push (see "range" below)
@@ -249,7 +249,7 @@ alarm(): pump every cursor row that is due; then the idle quiesce as today
 ```
 
 **The rule, in words:** the loop evaluates the target and looks at what Cloudflare handed back. A
-facet stub or a parked rpc stub owns its own progress (the facet's checkpoint and gap repair; the
+facet stub or a lent rpc stub owns its own progress (the facet's checkpoint and gap repair; the
 client's offset and `read`), so it gets a push. Anything else, a Worker Loader entrypoint, a sibling
 context, a remote capnweb API, cannot own progress, so the context keeps a cursor and awaits each
 call as the acknowledgement. Nothing is declared, stamped, or re-sniffed from a string; an alias
@@ -263,18 +263,18 @@ processor: that shape needed an alarm proxy facets do not have (workerd#6810, st
 ### 4.3 Edge sugar
 
 ```ts
-/** A LIVE target parks under key `itx.subscriptions.<name>` and configures target
+/** A LIVE target is lent under key `itx.subscriptions.<name>` and configures target
  *  "itx.rpcStubs.get('itx.subscriptions.<name>')"; an expression is stored as written. Same name
  *  replaces; an identical config appends NOTHING, so a reconnect is zero events. */
 subscribe(input: { name?: string; target: ItxExpression | ProviderStub; consumes?: string[] }): Promise<{ name: string }>;
-/** Appends subscription-removed; closes this session's parked stub under the key, if any. */
+/** Appends subscription-removed; recalls the stub this session lent under the key, if any. */
 unsubscribe(name: string): Promise<void>;
 ```
 
 An unnamed subscription gets `sub-<8 hex>` and is session-scoped: the session's dispose
 unsubscribes it (best effort). A named one is durable by intent; when its tab dies the row stays,
 pushes hit `CONNECTION_OFFLINE` and are swallowed, and the next `subscribe` with the same name
-re-parks with zero events.
+re-lends with zero events.
 
 Live-state mode is not a mode: `subscribe({ target: fn, consumes: ["events.iterate.com/live-state/changed"] })`
 and the client filters `payload.key`. The rule that no processor may reduce a live-state delta moves
@@ -433,7 +433,7 @@ class UnauthenticatedSession extends RpcTarget { authenticate(credentials?: unkn
 class Session extends RpcTarget { get projects(): ProjectCollection }                                // a GETTER: capnweb exposes prototype members only
 class ProjectCollection extends RpcTarget { get(projectId: string): IterateContext }               // the ROOT context; pure addressing
 
-// iterate-context.ts — the declared doors are the ones that NEED the edge (a session-held stub to park, an EDGE context, the dispatch door, a wait with no built-in root)
+// iterate-context.ts — the declared doors are the ones that NEED the edge (a session-held stub to lend, an EDGE context, the dispatch door, a wait with no built-in root)
 class IterateContext extends RpcTarget {
   cd(path: string): IterateContext;                                    // absolute by convention; returns an EDGE context
   invokeCapability(call: ItxExpression): Promise<unknown>;             // THE dispatch door; a terminal .fetch(Request) rides the fetch lane (root egress included)
@@ -442,8 +442,8 @@ class IterateContext extends RpcTarget {
 }
 
 // SUGAR — the second banded section of the SAME class (no second file: a prototype-installed sugar.ts would need declaration merging to type).
-// Each is a one-line composition and appends no event shape of its own; a live value is parked by a private relay step (#parkLiveStub), never a client-facing verb.
-provide(path: string, target: ItxExpression | ProviderStub): Promise<{ providedAtOffset: number }>;   // fn ⇒ park the stub + mount itx.rpcStubs.get(path)
+// Each is a one-line composition and appends no event shape of its own; a live value is lent by a private relay step (#lendStub), never a client-facing verb.
+provide(path: string, target: ItxExpression | ProviderStub): Promise<{ providedAtOffset: number }>;   // fn ⇒ lend the stub + mount itx.rpcStubs.get(path)
 revoke(input: string | { providedAtOffset: number }): Promise<void>;                                 // + close this session's stub at that path
 subscribe(input: { name?: string; target: ItxExpression | ProviderStub; consumes?: string[] }): Promise<{ name: string }>;
 unsubscribe(name: string): Promise<void>;
@@ -539,7 +539,7 @@ Nothing you can do today becomes impossible. Four things get coarser and two saf
 | Engine vs SDK base                              | C, D: merge the engine onto the DO base · E: split into a hook-parameterized runner + a thin base · B: keep apps/os two-class `createProcessor`                | **wrap** (landed; the row above chose split)                       | The engine stays dependency-free and Node-tested, unchanged; the DO base builds one instance with its hooks pointed at the author's methods; the core reduce keeps using it; the author writes one class.                                                                                                                                                                                             |
 | Built-in processors                             | D: ship as SDK-bundled source through the loader · B: `facets.get(name)` with a name→class map · E: `itx.exports.<Class>.get(name)` · this doc: none           | **none**                                                           | With the forwarder in the kernel, no platform processor runs as a facet. Tally is a demo and becomes a test fixture like `Presence`. `itx.exports` was a root serving one demo class.                                                                                                                                                                                                                 |
 | Recovery                                        | A/B/E: `-cursor-set` + `-delivery-resumed` (apps/os pair) · C/D: one `-delivery-resumed { afterOffset? }`                                                      | **one event**                                                      | Resume, optionally from a new offset, reads as one operator intent. apps/os's pair stays available if the two ever need to differ.                                                                                                                                                                                                                                                                    |
-| `subscribe`/`unsubscribe` verbs                 | B: delete, append events directly · D: a subscription IS a provide · A, C, E: keep as edge sugar                                                               | **keep as sugar, a banded section**                                | A live target needs the edge to park the stub, so sugar exists anyway; the same two lines serve expressions. Your annotation asked for sugar to be visibly apart from axioms: it is the second banded section of `IterateContext` (a second file would need declaration merging to type).                                                                                                             |
+| `subscribe`/`unsubscribe` verbs                 | B: delete, append events directly · D: a subscription IS a provide · A, C, E: keep as edge sugar                                                               | **keep as sugar, a banded section**                                | A live target needs the edge to lend the stub, so sugar exists anyway; the same two lines serve expressions. Your annotation asked for sugar to be visibly apart from axioms: it is the second banded section of `IterateContext` (a second file would need declaration merging to type).                                                                                                             |
 
 ## 9. Sequence
 

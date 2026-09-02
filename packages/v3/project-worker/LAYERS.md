@@ -62,7 +62,7 @@ longest-path-prefix match (the final segment may consume the args at the mount, 
 the target — itself an `itx.…` expression — resolves through the same method one level deeper →
 replay the steps after the mount. A target not rooted at `itx` matches nothing (default-deny), so a
 bare root is unspellable and the built-ins are unshadowable. A live capability is no exception: `itx.provide(path, fn)` is SUGAR that
-parks `fn` in `rpcStubs` under `path` and mounts `path ⇒ itx.rpcStubs.get('<path>')`. The door is
+lends `fn` to `rpcStubs` under `path` and mounts `path ⇒ itx.rpcStubs.get('<path>')`. The door is
 idempotent (a reconnect appends nothing).
 
 ## Layer 3 — subscriptions (own events, ONE delivery loop)
@@ -116,6 +116,6 @@ on exhaustion, appends `stream/paused { reason }`; an operator appends `stream/r
 (`session.ts`: `UnauthenticatedSession → authenticate() → Session → projects.get(id)`;
 `iterate-context.ts`: `IterateContext`, `cd(path)` for the rest). The edge
 is a PROXY for the DO's verbs, plus the two jobs only it can do: REDUCE dotted sugar into one
-`invokeCapability(expression)` (a terminal `.fetch(request)` rides the fetch channel), and PARK
-live stubs in the session's `Parking` (`context/rpc-stub-relay.ts`) — the DON'T-PIN relay the pager
-pages. Everything a client ever does — Slack-bridge RpcTargets included — is these layers composed.
+`invokeCapability(expression)` (a terminal `.fetch(request)` rides the fetch channel), and LEND
+live stubs to the DO, undone at session end by the session's `SessionTeardown` (`session.ts`) —
+the DON'T-PIN relay (`context/rpc-stub-relay.ts`) the pager pages. Everything a client ever does — Slack-bridge RpcTargets included — is these layers composed.

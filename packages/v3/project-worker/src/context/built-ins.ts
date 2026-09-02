@@ -80,12 +80,12 @@ interface BuiltInScope {
    *  same door a loaded worker's `globalOutbound` and the edge `itx.fetch(request)` land on. */
   fetch(request: Request): Promise<Response>;
   /** The live rpc-stub REGISTRY — physical, never event-sourced: a client's live capnweb value
-   *  parked under a key (the edge's `itx.rpcStubs.provide(value, { key? })` — relay-side, DON'T-PIN).
-   *  `get(key)` is how a MOUNT names one: `itx.provide(path, fn)` is sugar for parking under `path`
+   *  lent under a key by its session (relay-side, DON'T-PIN — the edge owns it, this side borrows).
+   *  `get(key)` is how a MOUNT names one: `itx.provide(path, fn)` is sugar for lending under `path`
    *  and mounting the pure-data target `itx.rpcStubs.get('<path>')`. */
   rpcStubs: {
-    /** One stub by key: a pipelinable handle over its transport (page → RetainedCallbackInvoker leg
-     *  → invoke). Deep dots walk; a root call reaches the bare parked callable; offline ⇒
+    /** One stub by key: a pipelinable handle over its transport (page → borrowed stub leg
+     *  → invoke). Deep dots walk; a root call reaches the bare lent callable; offline ⇒
      *  CONNECTION_OFFLINE at call time. Branded `RpcStubHandle`: the subscription delivery loop reads
      *  the brand to know the callee owns its own progress. */
     get(key: string): RpcStubHandle;

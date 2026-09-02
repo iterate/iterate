@@ -58,7 +58,7 @@ export default {
       // newWorkersRpcResponse serves BOTH a WebSocket upgrade AND a one-shot HTTP batch —
       // a CLI script or cron does one POST, no socket handshake. (Batch sessions cannot hold
       // live capabilities: a live provide needs the relay to outlive the response —
-      // the relay's park call simply fails there, which is the honest error.)
+      // the relay's lend call simply fails there, which is the honest error.)
       return newWorkersRpcResponse(request, new UnauthenticatedSession(env.CONTEXT, ctx));
 
     // THE FETCH LANE — the plain-HTTP door onto fetch-shaped capabilities (WS upgrades and all), for

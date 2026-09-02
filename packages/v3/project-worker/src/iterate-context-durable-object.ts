@@ -18,11 +18,11 @@
 //     own alarm;
 //   • the FACETS — every loaded `DurableObject` class hosted here through `ctx.facets` with its
 //     identity in `ctx.props` (a processor is a facet whose `processEventBatch` is subscribed);
-//   • the TRANSPORT — every hibernatable socket: each held rpc stub is a delivery WebSocket from
-//     the stateless relay (rpc-stub-directory.ts), so ANY number of connected clients leave this
-//     DO free to hibernate. OUT is one-directional fire-and-forget delivery; IN borrows a short
-//     RetainedCallbackInvoker leg per wake burst. A stub is addressed by the registry key it was
-//     parked under (`itx.rpcStubs`); PRESENCE is `itx.rpcStubs.list()` plus two EPHEMERAL events
+//   • the TRANSPORT — every hibernatable socket: each rpc stub reaches this DO as a pager WebSocket
+//     from the stateless relay (rpc-stub-directory.ts), so ANY number of connected clients leave
+//     this DO free to hibernate. OUT is one-directional fire-and-forget delivery; IN borrows a
+//     short stub leg from the edge per wake burst. A stub is addressed by the registry key it was
+//     lent under (`itx.rpcStubs`); PRESENCE is `itx.rpcStubs.list()` plus two EPHEMERAL events
 //     as it changes (`rpc-stub/attached` / `rpc-stub/detached`) — the log never claims a socket is
 //     open;
 //   • the FETCH DOOR — the one place a 101 can enter: `x-itx-stub-pager` accepts a stub pager
@@ -64,7 +64,7 @@ import {
   RpcStubDirectory,
   STUB_PAGER_KEEPALIVE_REQUEST,
   STUB_PAGER_KEEPALIVE_RESPONSE,
-  type RetainedCallbackInvoker,
+  type BorrowedStub,
 } from "./context/rpc-stub-directory.ts";
 import { DurableObjectNameCodec } from "./context/durable-object-names.ts";
 import { itxEntrypointFor } from "./itx-entrypoint.ts";
@@ -207,8 +207,8 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       // RpcTarget so `itx.rpcStubs.get('k').hello()` pipelines the mid-chain `.hello()` on every lane
       // — workerd's classifier rejects a Proxy, #6873), branded RpcStubHandle for the delivery loop.
       rpcStubs: {
-        // Re-note AFTER the call: this invoke may have paged the stub in, and a retained stub is
-        // exactly what the quiet clock exists to dispose — the arm must not wait for the next call.
+        // Re-note AFTER the call: this invoke may have borrowed the stub, and a borrowed stub is
+        // exactly what the quiet clock exists to return — the arm must not wait for the next call.
         get: (key) =>
           new RpcStubHandle(async (segments, args) => {
             try {
@@ -291,12 +291,12 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   #lastActivityMs = 0;
   #recordActivityForQuietClock(): void {
     this.#lastActivityMs = Date.now();
-    // NOTHING TO QUIESCE, NO ALARM: the quiet clock exists to abort idle facets and dispose paged-in
-    // stubs (alarm()). With neither, arming it is one storage write plus one billed wake for
+    // NOTHING TO QUIESCE, NO ALARM: the quiet clock exists to abort idle facets and give borrowed
+    // stubs back (alarm()). With neither, arming it is one storage write plus one billed wake for
     // nothing — a bare probe (`itx.facets.get('core').snapshot()` rides invoke → here) must not pay
     // that. `#lastActivityMs` still updates, so the first facet materialization (#invokeFacet's
-    // `finally` re-notes after `#liveFacets` grows) or page-in arms with an honest quiet-period start.
-    if (this.#liveFacets.size === 0 && !this.#rpcStubs.hasRetainedStubs()) return;
+    // `finally` re-notes after `#liveFacets` grows) or borrow arms with an honest quiet-period start.
+    if (this.#liveFacets.size === 0 && !this.#rpcStubs.hasBorrowedStubs()) return;
     this.#stream.armNoLaterThan(this.#lastActivityMs + 60_000);
   }
 
@@ -329,9 +329,9 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         }
       }
       this.#liveFacets.clear(); // aborted facets re-materialize; their next load re-fetches
-      // Same doctrine for the paged-in RetainedCallbackInvoker stubs: retaining one pins this
-      // actor awake, and a page always gets it back — dispose them with the idle facets.
-      this.#rpcStubs.disposeRetainedStubs();
+      // Same doctrine for the borrowed stubs: holding one pins this actor awake, and a page
+      // always borrows it back — return them with the idle facets.
+      this.#rpcStubs.returnBorrowedStubs();
     } else {
       // Not quiet yet — look again when the quiet period would end; but never in the PAST (work in
       // flight for over a minute would otherwise re-fire this alarm in a tight, billed loop).
@@ -518,11 +518,11 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   }
 
   /** Revoke by the mount's identity — or by its capability path (pops the newest winner at that
-   *  exact path; what it shadowed is restored). A mount and a parked stub are SEPARATE things:
-   *  revoking a live capability's mount leaves its stub in the registry (the edge that parked it
-   *  disposes its own relay on `itx.revoke(path)`), and a stub that dies leaves its mount in the
-   *  table (calls answer CONNECTION_OFFLINE until someone revokes it or the provider re-parks under
-   *  the same key — reconnect appends nothing). */
+   *  exact path; what it shadowed is restored). A mount and a lent stub are SEPARATE things:
+   *  revoking a live capability's mount leaves its stub in the registry (the edge that lent it
+   *  recalls it on `itx.revoke(path)`), and a stub that dies leaves its mount in the table (calls
+   *  answer CONNECTION_OFFLINE until someone revokes it or the provider re-lends under the same
+   *  key — reconnect appends nothing). */
   async revokeCapability(input: { providedAtOffset?: number; path?: string }): Promise<void> {
     if (input.providedAtOffset !== undefined) {
       // By identity: append the revoked event even for an already-gone row (idempotent through
@@ -540,7 +540,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   /** The mount answering at a canonical path right now — the newest of its shadow stack. */
   #newestMountAt(pathString: string) {
     return this.#stream.coreReducedState.mounts
-      .filter((m) => m.path.join(".") === pathString)
+      .filter((m) => print(m.path) === pathString)
       .sort((a, b) => b.providedAtOffset - a.providedAtOffset)[0];
   }
 
@@ -586,11 +586,11 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   // pause, the mounts and the subscription rows are ONE snapshot — `itx.facets.get('core').snapshot()`;
   // subscriptions joined with their cursors are `itx.subscriptions.list()`. A snapshot reads the
   // core reduce only, and arms no alarm (the quiet clock arms only while a facet is live or a stub is
-  // paged in).
+  // borrowed).
   // PRESENCE — which stubs have a transport RIGHT NOW — is physical, never event-derivable:
   // `itx.rpcStubs.list()` on the itx surface, and the socket census below for the probes.
 
-  /** IN-MEMORY TRANSPORT FACTS ({stubs, pagedIn, pagesPending, dormant}) — a DO-only Workers-RPC
+  /** IN-MEMORY TRANSPORT FACTS ({stubs, borrowed, pagesPending, dormant}) — a DO-only Workers-RPC
    *  verb for the hibernation/quiesce probes, deliberately OFF the itx surface: these are socket
    *  facts, not event-derivable state (`itx.rpcStubs.list()` is the edge half — the keys
    *  with a transport). */
@@ -643,7 +643,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   // ── the rpc-stub RPC verbs (the directory owns the lifecycle — see rpc-stub-directory.ts;
   // these are the relay-facing doors) ──
 
-  /** Reserve a transport for the stub parked under `key` in the `itx.rpcStubs` registry — the
+  /** Reserve a transport for the stub lent under `key` in the `itx.rpcStubs` registry — the
    *  relay calls this (with the CANONICAL key, asserted here so the registry key and the mount that
    *  names it can never drift), then opens the pager carrying the returned transportId. */
   rpcStubAttach(input: { key: string }): { transportId: string } {
@@ -655,17 +655,17 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     return this.#rpcStubs.attach(input);
   }
 
-  /** The page answer: the paged relay hands back a fresh RetainedCallbackInvoker stub, which
-   *  stays warm until the idle quiesce disposes it (a page gets it back). */
-  rpcStubActivate(input: {
+  /** The page answer: the paged relay LENDS a fresh stub, which this DO keeps borrowed until the
+   *  idle quiesce returns it (a page borrows it back). */
+  rpcStubLend(input: {
     transportId: string;
     /** A Workers-RPC stub — a callable Proxy on the wire; structural validation is impossible
      *  by design, so it rides permissively and the directory types it at the seam. */
     invoker: unknown;
   }) {
-    return this.#rpcStubs.activate({
+    return this.#rpcStubs.lend({
       transportId: input.transportId,
-      invoker: input.invoker as RetainedCallbackInvoker,
+      invoker: input.invoker as BorrowedStub,
     });
   }
 }

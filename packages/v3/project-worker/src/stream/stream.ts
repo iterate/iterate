@@ -58,7 +58,7 @@ const EVENT_CHUNK_SIZE = 512 * 1024;
  *  30s, capped at 120s, and expiry rejects with codedError("WAIT_TIMEOUT", …). */
 export type WaitForEventFilter = { type?: string; afterOffset?: number; timeoutMs?: number };
 
-/** One parked waitForEvent caller: its filter, the promise ends, and the timeout timer. In-memory
+/** One waiting waitForEvent caller: its filter, the promise ends, and the timeout timer. In-memory
  *  only — an eviction drops waiters, and that is FINE: the caller's own open RPC call keeps the DO
  *  awake for the wait's duration anyway, and a dropped waiter surfaces as the transport error the
  *  caller already handles. */
@@ -455,13 +455,13 @@ export class Stream {
    *  in the log after `filter.afterOffset` (explicitly passed; the default is the head at call
    *  time, so a bare wait means "the next occurrence" — reading history is what read() is for).
    *
-   *  CHECK-AND-PARK IS ONE SYNCHRONOUS SLICE: zero awaits between the log scan and waiter
+   *  CHECK-AND-WAIT IS ONE SYNCHRONOUS SLICE: zero awaits between the log scan and waiter
    *  registration (read is sync; an await there would lose a racing commit → spurious
    *  WAIT_TIMEOUT). The initial scan PAGES read() to the head; it rides read()
-   *  and writes nothing of its own (the constructor already appended created/woken). Parked waiters
+   *  and writes nothing of its own (the constructor already appended created/woken). Waiters
    *  are fed from `freshEvents` in append's tail, so EPHEMERAL events resolve waits too (they ride the
-   *  fan-out — always-an-event — but are only catchable while parked, since they never hit the
-   *  log). Multiple waiters settle FIFO per event; one event can resolve many waiters; a waiter
+   *  fan-out — always-an-event — but are only catchable while a waiter is registered, since they
+   *  never hit the log). Multiple waiters settle FIFO per event; one event can resolve many waiters; a waiter
    *  resolves once, with its first matching event in offset order. */
   waitForEvent(filter: WaitForEventFilter = {}): Promise<StreamEvent> {
     const type = filter.type;

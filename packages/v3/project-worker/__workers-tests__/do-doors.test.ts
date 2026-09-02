@@ -6,7 +6,7 @@
 //   • the QUIET CLOCK's reason to exist: a probe (`itx.facets.get('core').snapshot()`) on a
 //     never-touched ctx MATERIALIZES it (the constructor's `Stream.appendCreatedAndWokenEvents()` writes created + woken
 //     before any door opens) yet arms NO alarm — #recordActivityForQuietClock arms only when there is something
-//     to quiesce (a live facet, a paged-in rpc stub); only storage.getAlarm() can see that (the
+//     to quiesce (a live facet, a borrowed rpc stub); only storage.getAlarm() can see that (the
 //     e2e lane pins the records but cannot read the alarm);
 //   • the provide door's SHAPE: it canonicalizes the path on its own (a Workers-RPC caller
 //     bypasses the edge canonicalizer), and a mount is `{ path, target, providedAtOffset }` and
@@ -14,9 +14,9 @@
 //     target is served is never written on a mount; the subscriptions layer decides by
 //     evaluating its own target, subscription-delivery.ts);
 //   • revokeCapability's `void` return on both spellings (`{ providedAtOffset }` | `{ path }`) — a
-//     mount and a parked stub are SEPARATE things: revoking a live mount pops the row and never
-//     touches a transport. The stub stays in `itx.rpcStubs` until the session that parked it
-//     closes it.
+//     mount and a lent stub are SEPARATE things: revoking a live mount pops the row and never
+//     touches a transport. The stub stays in `itx.rpcStubs` until the session that lent it
+//     recalls it.
 
 import { runInDurableObject } from "cloudflare:test";
 import { RpcTarget } from "capnweb";
@@ -47,7 +47,7 @@ test("a core-snapshot probe on a NEVER-TOUCHED ctx materializes it (created@1 + 
     // ANY door materializes a context: the constructor's `Stream.appendCreatedAndWokenEvents()` wrote the birth certificate
     // and the wake record before this probe could run (the apps/os shape). What the probe must NOT
     // do is arm the quiet clock: #recordActivityForQuietClock arms only when there is something to quiesce — a
-    // live facet or a paged-in rpc stub — and this ctx has neither (a durable alarm write + a billed
+    // live facet or a borrowed rpc stub — and this ctx has neither (a durable alarm write + a billed
     // wake for nothing was the arc review's catch).
     const snap = (await instance.invoke("itx.facets.get('core').snapshot()")) as {
       offset: number;
@@ -74,17 +74,17 @@ test("a core-snapshot probe on a NEVER-TOUCHED ctx materializes it (created@1 + 
   });
 });
 
-// #recordActivityForQuietClock runs at the TOP of invoke(), BEFORE the call pages the stub in — so the rpcStubs
+// #recordActivityForQuietClock runs at the TOP of invoke(), BEFORE the call borrows the stub — so the rpcStubs
 // handle re-notes in a `finally` (like #invokeFacet does): a context whose only pinning resource is
-// a paged-in stub arms its quiet clock on THAT invoke, not one activity late.
-test("the quiet clock arms as soon as there IS something to quiesce: the invoke that pages an rpc stub in", async () => {
+// a borrowed stub arms its quiet clock on THAT invoke, not one activity late.
+test("the quiet clock arms as soon as there IS something to quiesce: the invoke that borrows an rpc stub", async () => {
   const ctx = "prj_doors_stubarms";
   await runInDurableObject(stub(ctx), async (_instance, state) => {
-    // Park a live capability (a hibernatable pager socket — a transport, not yet a paged-in stub)…
+    // Lend a live capability (a hibernatable pager socket — a transport, not yet a borrowed stub)…
     const itx = await (await openSession()).authenticate().projects.get(ctx);
     await itx.provide("itx.armcap", new Alive());
-    expect(await state.storage.getAlarm()).toBeNull(); // a parked stub alone quiesces nothing
-    // …then a call pages it in: a RETAINED stub pins this actor, so the clock must arm NOW.
+    expect(await state.storage.getAlarm()).toBeNull(); // a lent stub alone quiesces nothing
+    // …then a call borrows it: a BORROWED stub pins this actor, so the clock must arm NOW.
     expect(await itx.invokeCapability("itx.armcap.ping()")).toBe("alive");
     expect(await state.storage.getAlarm()).not.toBeNull();
   });
@@ -110,7 +110,7 @@ test("provideCapability canonicalizes the path itself — and a mount is `{ path
 test("revokeCapability resolves to void on both spellings and never touches a transport — the stub outlives its mount", async () => {
   const ctx = "prj_doors_revokedlive";
   const s = stub(ctx);
-  // A PHYSICAL stub: a capnweb session parks a live fn under `itx.livecap` (its pager socket is
+  // A PHYSICAL stub: a capnweb session lends a live fn under `itx.livecap` (its pager socket is
   // one transport in the DO's census) and mounts the pure-data target naming it.
   const itx = await (await openSession()).authenticate().projects.get(ctx);
   const live = (await itx.provide("itx.livecap", new Alive())) as { providedAtOffset: number };
@@ -136,7 +136,7 @@ test("revokeCapability resolves to void on both spellings and never touches a tr
   }
   expect(denied?.code).toBe("NO_CAPABILITY_MATCH");
   expect((await mountsOf(ctx)).some((m) => m.path.join(".") === "itx.livecap")).toBe(false);
-  // …and the parked stub is still reachable THROUGH THE REGISTRY, mount or no mount.
+  // …and the lent stub is still reachable THROUGH THE REGISTRY, mount or no mount.
   expect(await s.invoke("itx.rpcStubs.get('itx.livecap').ping()")).toBe("alive");
 
   // By PATH — an EXPRESSION mount: same void return, nothing physical to touch.

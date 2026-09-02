@@ -61,10 +61,13 @@ afterAll(async () => {
 /** Reproduce the production 60s idle quiesce ON DEMAND: fake Date ONLY (+61s — sockets, the alarm
  *  scheduler and real timers stay real), fire the armed alarm (runDurableObjectAlarm runs a
  *  scheduled alarm immediately), restore real time. The alarm's quiesce branch aborts every idle
- *  facet and disposes every paged-in stub, making the DO dormant — which is also
- *  evictDurableObject's de-facto precondition: a materialized facet or a retained stub PINS the DO
+ *  facet and returns every borrowed stub, making the DO dormant — which is also
+ *  evictDurableObject's de-facto precondition: a materialized facet or a borrowed stub PINS the DO
  *  non-hibernatable (workerd#6800), and evicting such a DO times out after 30s on "still has active
- *  references". You must quiesce BEFORE you can evict — the exact production sequence. */
+ *  references". You must quiesce BEFORE you can evict — the exact production sequence.
+ *
+ *  NOTE the precondition: the quiet clock ARMS only while a facet is live or a stub is borrowed, so
+ *  a context with neither has no alarm and this is a no-op. */
 export async function quiesce(ctx: string): Promise<void> {
   vi.useFakeTimers({ now: Date.now(), toFake: ["Date"] });
   try {

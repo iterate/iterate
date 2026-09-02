@@ -194,8 +194,8 @@ test("pipelining: provide(path, fn) + revoke on its UNRESOLVED result = ONE roun
   expect(t["in:resolve"]).toBe(1);
   await sleep(300);
   // Pinned EXACTLY (measured): the one extra is 1 outbound release (the provision import). There is
-  // NO inbound release: a revoke by OFFSET revokes the MOUNT only, the relay keeps its retained dup
-  // parked under 'itx.piptool' until this session ends, so the server has nothing to release. All
+  // NO inbound release: a revoke by OFFSET revokes the MOUNT only, the relay keeps the dup it lent
+  // under 'itx.piptool' until this session ends, so the server has nothing to release. All
   // cleanup, still one round trip.
   expect(tally(w.since(mark))).toEqual({
     "out:push": 2,
@@ -203,10 +203,10 @@ test("pipelining: provide(path, fn) + revoke on its UNRESOLVED result = ONE roun
     "in:resolve": 1,
     "out:release": 1,
   });
-  // Correctness under pipelining: the provide really parked the stub AND appended its mount; the
+  // Correctness under pipelining: the provide really lent the stub AND appended its mount; the
   // revoke-by-OFFSET popped THE row (default-deny restored) and touched nothing physical — the
-  // stub stays parked under 'itx.piptool' and listed by presence until this session ends
-  // (`itx.revoke(path)` is the spelling that also closes it).
+  // stub stays lent under 'itx.piptool' and listed by presence until this session ends
+  // (`itx.revoke(path)` is the spelling that also recalls it).
   await until("the mount revoked (default-deny restored)", async () => {
     const err = await rejection(itx.invokeCapability(["itx", ["piptool", 1]]));
     return codeOf(err) === "NO_CAPABILITY_MATCH";
@@ -254,7 +254,7 @@ test("one-directional delivery: 100 ephemeral chunks arrive as inbound frames; t
       for (const e of events) if (e.type === "chunk") received.push(e.payload.n);
     },
   });
-  await sleep(400); // let the park/row fully settle before the census window opens
+  await sleep(400); // let the lend/row fully settle before the census window opens
 
   const producer = openItx(ctx); // a SECOND session appends
   const mark = w.mark();
@@ -360,9 +360,9 @@ test("deep chaining: 3+ segment dotted paths through a live provider (getter →
 
 // ═══════════════════════════════ 5. THE DISPOSAL CONTRACT ═══════════════════════════════
 
-test("disposal: `using` on the /api session stub drops its parked stubs at scope exit — the mounts stay, answering CONNECTION_OFFLINE", async () => {
+test("disposal: `using` on the /api session stub recalls its lent stubs at scope exit — the mounts stay, answering CONNECTION_OFFLINE", async () => {
   // A live capability is two things with two lifetimes: the STUB is session-lived — `Symbol.dispose`
-  // on the session disposes every relay it parked, so `itx.rpcStubs.list()` stops listing them; the
+  // on the session recalls every stub it lent, so `itx.rpcStubs.list()` stops listing them; the
   // MOUNT is data and stays until an explicit `itx.revoke(path)` (the pipelined provide+revoke test
   // above pins that half). This test pins the session half.
   const ctx = freshCtx("using");

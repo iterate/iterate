@@ -108,7 +108,7 @@ test("within the provider's invocation: a dyn-provided live capability serves PL
 // BUG (VERIFIED, measured 2026-08-31): the fetch-upgrade dial assumes a hop that can carry
 // a webSocket-bearing Response. For a CAPNWEB provider (browser/Node/workerd client over /api)
 // that hop tunnels sockets (the fork's socket-as-streams) — ws-fetch-live-101 is green. For a
-// NATIVE provider (a dynamic worker providing over env.ITX.get(), where the retained stub is a
+// NATIVE provider (a dynamic worker providing over env.ITX.get(), where the lent stub is a
 // plain jsrpc stub), the dial's `provider.fetch(upgrade)` return leg IS Workers RPC — and the
 // provider's genuine 101 dies there:
 //   500 "DataCloneError: Could not serialize object of type WebSocket" (at dialLiveCapabilityFetch)
@@ -128,7 +128,7 @@ test.fails("within the provider's invocation: WEBSOCKET fetch of the dyn-provide
 
 // BUG-OR-CONTRACT (VERIFIED, re-measured 2026-09-01): a dyn-provided live STUB DIES WITH THE
 // PROVIDING INVOCATION. The IterateContext scope a dynamic worker gets from env.ITX.get() lives in the
-// ItxEntrypoint loopback's request context; the parking + pager socket holding the provider
+// ItxEntrypoint loopback's request context; the lend relay + pager socket holding the provider
 // transport die when that context ends (the run() call chain completing), so the DO drops the
 // stub from its `itx.rpcStubs` registry. The MOUNT at itx.wsdyn is pure data and STAYS (nothing
 // auto-revokes a mount because a socket dropped) — worker B resolves it and hits the offline
@@ -137,7 +137,7 @@ test.fails("within the provider's invocation: WEBSOCKET fetch of the dyn-provide
 // — mounted-but-offline, not default-deny; measured here as `expected 500 to be 200`.
 // (holding the itx stub on the provider's globalThis does NOT keep the remote context alive).
 // EXPECTED (the scenario this pins): provide in one invocation, fetch from another worker later.
-// Whether the fix is a detached-provider primitive (session-shaped parking for dyn workers) or a
+// Whether the fix is a detached-provider primitive (session-shaped lending for dyn workers) or a
 // doctrine ruling ("live caps are invocation-scoped; detached fetch-shaped things must be MOUNTED
 // code — itx.load(...).getEntrypoint() / a named durable facet, both of which already serve WS")
 // is an owner call — see the session notes.

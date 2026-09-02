@@ -181,7 +181,7 @@ export class ProcessorEngine<State> {
   #staleCheckpoint?: { reducedThroughOffset: number; state: State };
   /** The highest `range.through` ever SHOWN to this processor (see processEventBatch). */
   #pushedThroughOffset?: number;
-  /** waitUntilProcessed's parked callers, resolved as the cursor advances. */
+  /** waitUntilProcessed's waiting callers, resolved as the cursor advances. */
   readonly #waitUntilProcessedWaiters: { offset: number; resolve: () => void }[] = [];
   /** ONE LiveState holder (stream/live-state.ts) — the revision chain and the diff→emit dance. Born
    *  with the engine, so its epoch is minted once per incarnation, seeded in the constructor. */
@@ -375,7 +375,7 @@ export class ProcessorEngine<State> {
       this.#waitUntilProcessedWaiters.push(waiter);
       // The catch-up (and the version re-reduce it runs first) resolves the waiter as the cursor
       // moves. A rejecting self-pull (read threw) rejects THIS waiter promptly with the real error,
-      // not a park-until-timeout with a generic message.
+      // not a wait-until-timeout with a generic message.
       void this.catchUpFromLog().catch((error) => {
         const i = this.#waitUntilProcessedWaiters.indexOf(waiter);
         if (i === -1) return; // already resolved/timed-out

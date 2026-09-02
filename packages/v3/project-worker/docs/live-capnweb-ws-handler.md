@@ -51,7 +51,7 @@ socket cannot cross.
    `ProjectSession` — the one capnweb entrypoint, a hard rule
    (`packages/v3/project-worker/src/worker.ts:52-56`).
 2. The provider calls `itx.provide("itx.wsbackend", { fetch })`. The `{ fetch }` object is a
-   **retained capnweb stub held in the relay**, parked in the `itx.rpcStubs` built-in under
+   **capnweb stub the relay holds for the session**, lent to the `itx.rpcStubs` built-in under
    `itx.wsbackend`; the relay opens a stub pager WebSocket to the context DO, which records
    only a transport id — no stub, so the DO still hibernates (the don't-pin transport,
    `BUILD-LOG.md` Increment 18). The mount itself is the ordinary table row
@@ -198,7 +198,7 @@ stubs or lets a broken session escape is exactly what cancels the isolate.
 
 **Cost.** Every frame is a Workers-RPC round trip (DO ↔ relay) **plus** a capnweb
 hop (relay ↔ device) — two hops per frame, no native flow control, close/error
-plumbing by hand, `dup()` discipline on retained callbacks (RPC params are released
+plumbing by hand, `dup()` discipline on the callbacks a session holds (RPC params are released
 on return — `live-capability.ts:25-37`). Highest ongoing complexity and latency;
 closes the test but is the thing the quarantine explicitly fears.
 

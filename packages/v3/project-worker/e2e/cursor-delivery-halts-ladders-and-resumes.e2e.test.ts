@@ -55,7 +55,7 @@ class Hook extends RpcTarget {
     return this.#fn(events, range);
   }
 }
-/** Subscribe `name` on the CURSOR lane: park the live hook at `itx.<name>Hook`, seed + mount the
+/** Subscribe `name` on the CURSOR lane: lend the live hook at `itx.<name>Hook`, seed + mount the
  *  hooked worker at `itx.<name>Worker`, subscribe its `processEventBatch` BY EXPRESSION (an
  *  entrypoint handle ⇒ the stream keeps the cursor). Names are one JS identifier. */
 async function cursorSubscribe(
@@ -133,7 +133,7 @@ test("the digest worker is delivered from a stream-kept cursor; retryable:false 
 
   // 1. mount the stateless digest worker and subscribe its processEventBatch BY EXPRESSION — an
   //    entrypoint cannot own its progress, so THE STREAM keeps the cursor. Beside it, a live tab:
-  //    a parked stub owns its progress, so its row has NO cursor. Same verb, no declaration.
+  //    a lent stub owns its progress, so its row has NO cursor. Same verb, no declaration.
   await itx.provide("itx.digest", `itx.load("itx.kv.get('src/digest.js')").getEntrypoint()`);
   const sub = await itx.subscribe({
     name: "digest",

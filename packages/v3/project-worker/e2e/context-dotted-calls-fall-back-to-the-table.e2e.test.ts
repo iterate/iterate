@@ -103,7 +103,7 @@ test("a leaf miss through the EXPLICIT door also rejects", async () => {
 test("an unawaited dotted chain is await-safe: awaiting mid-chain yields a live handle", async () => {
   // The dotted fallback's path proxies keep `then` absent (RESERVED), so
   // awaiting a dangling chain node settles to a usable handle instead of dispatching — and the chain
-  // stays callable afterwards (real client code parks chain nodes in variables and awaits them).
+  // stays callable afterwards (real client code holds chain nodes in variables and awaits them).
   const itx = await liveRig(freshCtx("await"), "b9");
   const node = itx.b9; // unawaited dotted chain node — no call yet
   const handle: any = await node; // must settle (never treat `then` as a path segment)

@@ -6,7 +6,7 @@
 // are reduced / delivered exactly as at-least-once promises. (Found by the r1 correctness review;
 // the same hunt found that an undisposed facet RPC RESULT pinned the parent after a quiesce — the
 // read-verb cases below are also the pin for that fix: they evict at once after ONE quiesce.)
-import { evictDurableObject, runDurableObjectAlarm } from "cloudflare:test";
+import { evictDurableObject, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { expect, test } from "vitest";
 import type { Expression } from "../src/context/expression.ts";
 import { quiesce, stub } from "./support.ts";
@@ -40,6 +40,11 @@ type Page = { events: { type: string; offset: number }[]; scannedThroughOffset: 
 const page = async (ctx: string): Promise<Page> =>
   (await stub(ctx).invoke(["itx", ["read", 0, 500]])) as Page;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+/** The DO's scheduled alarm instant, or null. The quiet clock arms ONLY while a facet is live or an
+ *  rpc stub is borrowed, so a pin that fires the alarm must first create one of the two and read
+ *  this back — otherwise runDurableObjectAlarm fires into an empty schedule and proves nothing. */
+const alarmAt = (ctx: string): Promise<number | null> =>
+  runInDurableObject(stub(ctx), (_inst, state) => state.storage.getAlarm());
 
 const loadChain = (src: string, cls: string, name: string): Expression => [
   "itx",
@@ -121,12 +126,23 @@ test("stream-kept cursor: an alarm pump with ephemerals at head leaves the curso
   expect(row0.cursor!.confirmedOffset).toBe(highestDurableOffset); // acked on durable ground ✓
 
   await s.append({ type: "blip", ephemeral: true }, { type: "blip", ephemeral: true }); // head = mark+2, mark unchanged
-  await runDurableObjectAlarm(s); // pumpAll → read(mark) proves only through the mark → caught up, no write
+  // ARM THE ALARM FIRST. `dig` is a CURSOR subscription onto a stateless entrypoint: it schedules an
+  // alarm only for a RETRY, and nothing here failed — so this context has no live facet, no borrowed
+  // stub and therefore no alarm at all. Materialize an unrelated facet to arm the quiet clock (it
+  // consumes nothing of `dig`'s and writes no durable row — its live-state delta is ephemeral, so the
+  // durable mark this pin is about does not move) and read the schedule back before firing.
+  await s.invoke(["itx", "kv", ["put", "procsrc", COUNTER_SRC]]);
+  await s.invoke([...loadChain("procsrc", "CounterDurableObject", "armer"), ["snapshot"]]);
+  expect(await alarmAt(ctx)).not.toBeNull();
+  // The alarm really runs: deliverEveryCursorSubscription → read(mark) proves only through the mark
+  // → `dig` is caught up, nothing written.
+  expect(await runDurableObjectAlarm(s)).toBe(true);
   const row1 = (await s.invoke("itx.subscriptions.get('dig')")) as {
     cursor?: { confirmedOffset: number };
   };
   expect(row1.cursor!.confirmedOffset).toBe(highestDurableOffset); // the cursor never leaves durable ground
 
+  await sleep(400); // let the armer facet's fire-and-forget live-state delta land before the clock jumps
   await quiesce(ctx);
   await evictDurableObject(s);
   const rowKv = (await s.invoke("itx.subscriptions.get('dig')")) as {

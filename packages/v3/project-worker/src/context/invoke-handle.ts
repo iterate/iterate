@@ -19,7 +19,7 @@ import { installPrototypeInvokeCapabilityFallback } from "./dotted-path-proxy.ts
 import { toExpression, type ItxExpression } from "./expression.ts";
 
 /** A branded, pipelinable handle whose unknown dotted members reduce into ONE `dispatch(path, args)`.
- *  `dispatch` routes the reduced path into the underlying object — a connection's retained callback
+ *  `dispatch` routes the reduced path into the underlying object — a borrowed rpc stub
  *  (`RpcStubDirectory.invoke`), a facet's method walk (the DO's facet door), a sibling context, or a
  *  stateful loaded class. Declared members (`invokeCapability` / `applyRoot`) win over the fallback,
  *  so a capability cannot be named either — the two reserved words this wrapper adds. */
@@ -42,7 +42,7 @@ export class InvokeHandle extends RpcTarget {
   }
   /** Root-apply: call the bare capability this handle fronts (empty path). `callOn` (dispatch.ts)
    *  uses this when a matched mount's target IS an InvokeHandle and args are applied at the mount —
-   *  `handle(events, range)` ⇒ the parked callback the handle delivers to. */
+   *  `handle(events, range)` ⇒ the lent callback the handle delivers to. */
   applyRoot(args: unknown[]): unknown {
     return this.#dispatch([], args);
   }
@@ -59,5 +59,5 @@ installPrototypeInvokeCapabilityFallback(InvokeHandle, []);
 
 /** `itx.facets.get(name)` / `load(src).getDurableObjectClass(C).get(name)` — a facet of this context. */
 export class FacetHandle extends InvokeHandle {}
-/** `itx.rpcStubs.get(key)` — a live stub parked in the registry. */
+/** `itx.rpcStubs.get(key)` — a live stub lent to the registry. */
 export class RpcStubHandle extends InvokeHandle {}

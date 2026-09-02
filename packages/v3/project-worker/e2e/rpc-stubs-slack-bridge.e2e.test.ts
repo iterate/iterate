@@ -3,7 +3,7 @@
 // over capnweb and provides an RpcTarget that REPLAYS dotted calls onto a Slack WebClient-shaped SDK
 // instance (faked here with the exact call surface; swap in `new WebClient(token)` for real). Every
 // other client of the project then just speaks `itx.slack.chat.postMessage(...)` and the call rides:
-// capnweb → relay → context DO table → hibernatable RPC stub (page → invoke) → this script → the
+// capnweb → relay → context DO table → the borrowed rpc stub (page → invoke) → this script → the
 // SDK. Revoking the provision (or the bridge dying) takes the mount with it.
 
 import { RpcTarget } from "capnweb";
@@ -95,7 +95,7 @@ test("itx.slack — a live bridge replays the natural dotted spelling onto the S
 
   // 5. the PROVIDER revokes by path → the mount pops (default-deny answers: NO_CAPABILITY_MATCH,
   //    never "offline" — an explicit revoke removes the row) AND the bridge session closes its own
-  //    parked stub under the path.
+  //    recalls the stub it lent under the path.
   await bridgeItx.revoke("itx.slack");
   const denied = await until("revoke propagated", async () => {
     try {

@@ -244,10 +244,10 @@ provider's edge session serves the calls from where the stub legally lives:
 ```ts
 type IterateContextDurableObjectStub = DurableObjectStub<IterateContextDurableObject>;
 
-// Park a live capnweb stub behind the DO's pager: dup it (capnweb disposes params at
-// return), open the stub-pager WebSocket for its path, answer every call request.
+// Lend a live capnweb stub to the DO behind its pager: dup it (capnweb disposes params
+// at return), open the stub-pager WebSocket for its path, answer every call request.
 // (v0 carries calls ON the pager; the real relay's pager only says "send me a stub".)
-async function startRpcStubRelay(
+async function lendStubOverRelay(
   context: IterateContextDurableObjectStub, provider: RpcStub<object>, path: string) {
   const live = provider.dup();
   const upgrade = { headers: { Upgrade: "websocket" } };
@@ -264,9 +264,9 @@ async function startRpcStubRelay(
 
 // the edge provide swaps ONE body line:
   // A live stub can't be held by a hibernating DO — an active reference pins it
-  // awake — so its relay parks it HERE and serves it over the pager.
+  // awake — so its relay keeps it HERE and lends it over the pager.
   async provide(path: string, target: RpcStub<object>) {
-    await startRpcStubRelay(this.#context(), target, path);
+    await lendStubOverRelay(this.#context(), target, path);
   }
 ```
 
@@ -519,7 +519,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   #mounts = new Map<string, string>();
 
   // The physical table — untouched by brick 8. In the real platform it is a BUILT-IN,
-  // `itx.rpcStubs`: get(key) reaches a parked stub, list() is who's connected right now.
+  // `itx.rpcStubs`: get(key) reaches a lent stub, list() is who's connected right now.
   #rpcStubs = new RpcStubDirectory({ acceptWebSocket: (ws) => this.ctx.acceptWebSocket(ws) });
 
   #stream = new Stream(this.ctx.storage);
@@ -580,7 +580,7 @@ check at each prefix is that mount, reduced by hand. Third, the toy makes a
 subscription a mount at `itx.subscribers.*`. The real platform gives
 subscriptions their own event — `subscription-configured { name, target,
 consumes? }`, reduced by the one core reduce beside the mounts — because a subscription names a
-_delivery_, not a capability: the target is still an expression (a parked stub,
+_delivery_, not a capability: the target is still an expression (a lent stub,
 a facet, a loaded entrypoint's `processEventBatch`), and the context decides how
 to serve it by looking at what the expression evaluates to. Same fan-out, one
 layer up.
@@ -592,7 +592,7 @@ built is not _like_ the architecture — it IS the architecture, in miniature,
 with the production names —
 
 ```ts
-function startRpcStubRelay(context, provider, path)      // brick 4: park a live stub
+function lendStubOverRelay(context, provider, path)      // brick 4: lend a live stub
 class IterateContext extends RpcTarget { ... }           // bricks 1,2,7: the surface
 class ItxEntrypoint extends WorkerEntrypoint { ... }     // brick 5: env.ITX
 class RpcStubDirectory { fetch(): Response | null ... }  // bricks 3→4: held stubs → pager sockets (the itx.rpcStubs built-in)
@@ -679,14 +679,14 @@ the mounter, the caller, or (later) an expression. `provide` returns
 it. (An offset into _what_? Chapter 3 answers that.)
 
 Underneath, that one call is two axioms. The function itself is _physical_ — a
-socket and a retained capnweb reference — so it goes into a built-in registry,
+socket and a capnweb reference your session holds — so it goes into a built-in registry,
 `itx.rpcStubs`, under the path. The mount is _data_: the same
 `capability-provided` event any expression mount appends, with the target
 `itx.rpcStubs.get('itx.runOnMyComputer')`. Read the log and that is exactly what
-you'll see; the parking step has no client verb of its own (only `provide` and
+you'll see; the lend step has no client verb of its own (only `provide` and
 `subscribe` take a live value), but the mount step is spellable — `itx.provide(path,
-"itx.rpcStubs.get('<key>')")` points another name at an already-parked stub.
-The split buys three things you'll lean on: a reconnect re-parks the stub and
+"itx.rpcStubs.get('<key>')")` points another name at an already-lent stub.
+The split buys three things you'll lean on: a reconnect re-lends the stub and
 appends nothing (the door is idempotent); if your laptop vanishes the mount
 stays and calls answer `CONNECTION_OFFLINE` until you `revoke` it; and "who is
 connected right now" is a physical question with a physical answer —
@@ -780,7 +780,7 @@ await itx.todos.add("write the tutorial");
 await itx.todos.list();
 ```
 
-That is `provide`'s other face: a live value parks a stub and mounts the
+That is `provide`'s other face: a live value lends a stub and mounts the
 expression that names it; an expression string mounts durably. Either way the
 table holds an expression, and the one mechanic underneath is the same: dispatch
 splits the path at the mount point and replays the tail — `add("x")` — onto
@@ -788,7 +788,7 @@ whatever the target evaluates to, here the facet across the Workers-RPC hop.
 
 ### Make it hibernatable: the pager
 
-There's a cost hiding in the live half. A parked stub is held in edge memory,
+There's a cost hiding in the live half. A lent stub is held in edge memory,
 and the DO needs a live reference to reach it — so the DO can never hibernate
 while any provider is connected. A thousand devices each providing one
 capability is a thousand DOs pinned awake, billing around the clock.
@@ -824,7 +824,7 @@ export class IterateContextDurableObject extends DurableObject {
   }
 }
 
-// invoking a paged-in stub, path tail and all:
+// invoking a borrowed stub, path tail and all:
 await this.#rpcStubs.invoke(key, ["add"], ["x"]);
 ```
 
@@ -990,9 +990,9 @@ await itx.subscribe({
 - **`read`** — a page of history plus how far the scan reached, so a client can
   chain pages without gaps.
 - **`subscribe`** — appends one event, `subscription-configured { name, target,
-consumes? }`; a live callback is first parked in `itx.rpcStubs` (Chapter 1) and
+consumes? }`; a live callback is first lent to `itx.rpcStubs` (Chapter 1) and
   the target names it. HOW it is served is not declared: after each commit the
-  context evaluates the target and looks at the value. A parked stub or a facet
+  context evaluates the target and looks at the value. A lent stub or a facet
   _owns its progress_, so it gets a push of `(events, range)`: over the pager,
   fire-and-forget, for a stub; awaited, in-DO, for a facet. No server cursor for
   either; a client owns its offset and heals any gap with `read`. Anything else (a loaded entrypoint's `processEventBatch`, a
@@ -1113,7 +1113,7 @@ src/
   iterate-context-durable-object.ts  IterateContextDurableObject — composes the stream, the mounts, the stubs
   itx-entrypoint.ts                  env.ITX for loaded code
   context/   built-ins, capability-table, expression, dispatch, invoke-handle, dotted-path-proxy,
-             rpc-stub-directory, rpc-stub-relay, hibernatable-rpc-stub, worker-loader, durable-object-names
+             rpc-stub-directory, rpc-stub-relay, worker-loader, durable-object-names
   fetch/     fetch-capabilities
   stream/    stream (the commit pipeline + the core reduce), events, processor (the engine), reduce-checkpoint, core-processor,
              subscriptions, subscription-delivery, live-state
@@ -1126,16 +1126,16 @@ __workers-tests__/  `pnpm test` (workers project) — inside workerd, the hibern
 specs/       `pnpm spec` — Playwright drives the hosted /demo page
 ```
 
-| Tutorial                                                      | Real code (`packages/v3/project-worker`)                                                                                                                                                                                                         |
-| ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Ch 1 edge worker + `IterateContext` + `provide`               | `src/worker.ts` (`/api`), `src/iterate-context.ts`                                                                                                                                                                                               |
-| Ch 1 the context DO                                           | `IterateContextDurableObject`, `src/iterate-context-durable-object.ts`                                                                                                                                                                           |
-| Ch 1 load / facets / tail replay                              | `src/context/built-ins.ts`, the DO's private facet door                                                                                                                                                                                          |
-| Ch 1 pager pair (the `itx.rpcStubs` built-in's backing table) | `RpcStubDirectory` + `HibernatableRpcStubManager`, `src/context/rpc-stub-directory.ts`, `src/context/hibernatable-rpc-stub.ts`; the built-in itself in `src/context/built-ins.ts`, the edge half (`provide`/`close`) in `src/iterate-context.ts` |
-| Ch 2 secret sentinel                                          | `{{secret:project:NAME}}` — `../shared/src/egress.ts`, the DO's `#egress` terminal                                                                                                                                                               |
-| Ch 2 fetch-in / tunnel                                        | `/cap` in `src/worker.ts`, `src/fetch/fetch-capabilities.ts`, `upgradeWebSocketResponse` in the capnweb fork                                                                                                                                     |
-| Ch 2 auth gate                                                | `UnauthenticatedSession.authenticate()` → `Session` → `projects.get(id)` in `src/session.ts`                                                                                                                                                     |
-| Ch 3 stream                                                   | `Stream` in `src/stream/stream.ts`                                                                                                                                                                                                               |
-| Ch 3 subscribe / the one delivery loop                        | `src/stream/subscriptions.ts` (the two commands; the reduce is `src/stream/core-processor.ts`), `src/stream/subscription-delivery.ts` (push vs stream-kept cursor, decided by the evaluated target)                                              |
-| Ch 3 processors                                               | `StreamProcessor` (pure author class) + `ProcessorEngine` in `src/stream/processor.ts`; the host `src/sdk/stream-processor-durable-object.ts` (bundled into `processor.js`)                                                                      |
-| Ch 4 LiveState / control plane                                | `src/stream/live-state.ts`; `packages/v3/control-plane` (not yet wired)                                                                                                                                                                          |
+| Tutorial                                                      | Real code (`packages/v3/project-worker`)                                                                                                                                                                                                        |
+| ------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Ch 1 edge worker + `IterateContext` + `provide`               | `src/worker.ts` (`/api`), `src/iterate-context.ts`                                                                                                                                                                                              |
+| Ch 1 the context DO                                           | `IterateContextDurableObject`, `src/iterate-context-durable-object.ts`                                                                                                                                                                          |
+| Ch 1 load / facets / tail replay                              | `src/context/built-ins.ts`, the DO's private facet door                                                                                                                                                                                         |
+| Ch 1 pager pair (the `itx.rpcStubs` built-in's backing table) | `RpcStubDirectory`, `src/context/rpc-stub-directory.ts`, and the edge's `lendStubOverRelay`, `src/context/rpc-stub-relay.ts`; the built-in itself in `src/context/built-ins.ts`, the edge half (`provide`/`revoke`) in `src/iterate-context.ts` |
+| Ch 2 secret sentinel                                          | `{{secret:project:NAME}}` — `../shared/src/egress.ts`, the DO's `#egress` terminal                                                                                                                                                              |
+| Ch 2 fetch-in / tunnel                                        | `/cap` in `src/worker.ts`, `src/fetch/fetch-capabilities.ts`, `upgradeWebSocketResponse` in the capnweb fork                                                                                                                                    |
+| Ch 2 auth gate                                                | `UnauthenticatedSession.authenticate()` → `Session` → `projects.get(id)` in `src/session.ts`                                                                                                                                                    |
+| Ch 3 stream                                                   | `Stream` in `src/stream/stream.ts`                                                                                                                                                                                                              |
+| Ch 3 subscribe / the one delivery loop                        | `src/stream/subscriptions.ts` (the two commands; the reduce is `src/stream/core-processor.ts`), `src/stream/subscription-delivery.ts` (push vs stream-kept cursor, decided by the evaluated target)                                             |
+| Ch 3 processors                                               | `StreamProcessor` (pure author class) + `ProcessorEngine` in `src/stream/processor.ts`; the host `src/sdk/stream-processor-durable-object.ts` (bundled into `processor.js`)                                                                     |
+| Ch 4 LiveState / control plane                                | `src/stream/live-state.ts`; `packages/v3/control-plane` (not yet wired)                                                                                                                                                                         |

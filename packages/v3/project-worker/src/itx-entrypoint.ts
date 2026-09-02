@@ -10,14 +10,14 @@
 
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { IterateContext } from "./iterate-context.ts";
-import { Parking } from "./context/rpc-stub-relay.ts";
+import { SessionTeardown } from "./session.ts";
 import { DurableObjectNameCodec } from "./context/durable-object-names.ts";
 import type { StreamEvent, StreamEventInput } from "./stream/events.ts";
 import type { WaitForEventFilter } from "./stream/stream.ts";
 import type { Env, IterateContextDurableObject } from "./iterate-context-durable-object.ts";
 
 export class ItxEntrypoint extends WorkerEntrypoint<Env, { contextName: string }> {
-  /** The owning context, re-resolved per call (never a retained stub — the back-channel rule).
+  /** The owning context, re-resolved per call (never a stub held across calls — the back-channel rule).
    *  `ctx.props.contextName` is the ONE prop this entrypoint is minted with (`itxEntrypointFor`). */
   #context(): DurableObjectStub<IterateContextDurableObject> {
     return this.env.CONTEXT.getByName(this.ctx.props.contextName);
@@ -26,14 +26,14 @@ export class ItxEntrypoint extends WorkerEntrypoint<Env, { contextName: string }
   /** THE handoff: the genuine itx scope — the SAME `IterateContext` RpcTarget a capnweb client gets
    *  from `projects.get(id)` (capnweb's RpcTarget IS the native `cloudflare:workers` RpcTarget on
    *  workerd), so loaded code writes plain dotted access — `const itx = await env.ITX.get();
-   *  itx.demo.timer.x(…)` — and mid-chain handles pipeline natively. A fresh Parking per call: this
-   *  hop parks nothing session-long (a loaded worker's callbacks ride as Workers-RPC stubs through
-   *  the call args, never the pager). */
+   *  itx.demo.timer.x(…)` — and mid-chain handles pipeline natively. A fresh SessionTeardown per
+   *  call: this hop lends nothing session-long (a loaded worker's callbacks ride as Workers-RPC
+   *  stubs through the call args, never the pager). */
   get(): IterateContext {
     return new IterateContext(
       this.env.CONTEXT,
       DurableObjectNameCodec.parse(this.ctx.props.contextName),
-      new Parking(),
+      new SessionTeardown(),
       (p) => this.ctx.waitUntil(p),
     );
   }
@@ -51,7 +51,7 @@ export class ItxEntrypoint extends WorkerEntrypoint<Env, { contextName: string }
 
   /** Wait for the next matching event — loaded-worker parity with the edge `IterateContext` method (the
    *  contract lives in Stream.waitForEvent: type filter, afterOffset default = the head, 30s/120s
-   *  timeout → WAIT_TIMEOUT). The parked wait lives on the DO; this call just holds the leg open. */
+   *  timeout → WAIT_TIMEOUT). The wait lives on the DO; this call just holds the leg open. */
   waitForEvent(filter?: WaitForEventFilter): Promise<StreamEvent> {
     return this.#context().waitForEvent(filter);
   }

@@ -203,7 +203,7 @@ export class SubscriptionDelivery {
       if (head instanceof RpcStubHandle) {
         // A LIVE CLIENT owns its offset: fire-and-forget — the pager socket is the queue, its order is
         // the order, and a stalled client blocks nothing but itself. CONNECTION_OFFLINE is the benign
-        // heal-by-pull case (the stub is not there right now; the mount stays, the client re-parks);
+        // heal-by-pull case (the stub is not there right now; the mount stays, the client re-lends);
         // anything else is a real drop worth a line — the subscriber sees the range gap and heals.
         this.#pushedEventBatches.delete(name);
         void call([events, range]).catch((error) => {
@@ -233,7 +233,7 @@ export class SubscriptionDelivery {
   }
 
   /** Evaluate a target's HEAD (everything but a trailing method name) and return the value plus the
-   *  one call to make on it. A target ending in a call step names the callee itself (a bare parked
+   *  one call to make on it. A target ending in a call step names the callee itself (a bare lent
    *  callback: `itx.rpcStubs.get('k')`); a trailing property step names the method to call on it
    *  (`…get('presence').processEventBatch`). */
   async #evaluateTargetHead(

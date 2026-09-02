@@ -4,15 +4,15 @@
 // THE PROBLEM: a context DO wants to call back into a client (browser tab, device, another worker)
 // whose live capnweb callback stub exists ONLY inside the stateless edge worker's session (capnweb
 // terminates at /api, never in the DO). Workers RPC can pass a stub across the boundary — but a DO
-// that RETAINS one is pinned awake forever, which breaks the 1000-idle-devices property.
+// that KEEPS one is pinned awake forever, which breaks the 1000-idle-devices property.
 //
 // THE MECHANIC (the whole design in four sentences): the edge worker opens ONE WebSocket to the DO
 // per stub — THE STUB PAGER WEBSOCKET — accepted through the DO's hibernation API, carrying a small
 // durable record in its attachment and NOTHING else. When the DO needs the stub, it sends
-// `{type: "page"}` down that socket — it PAGES the stateless edge worker — and the edge answers over
-// Workers RPC with a fresh stub (`activate`). The DO uses the stub for as long as traffic flows —
-// event-batch delivery, state changes, request/response calls all ride this ONE stub via
-// `invoke(key, path, args)` — and DISPOSES it at its idle quiesce, knowing a page always gets it
+// `{type: "page"}` down that socket — it PAGES the stateless edge worker — and the edge LENDS it a
+// fresh stub over Workers RPC (`lend`). The DO uses the borrowed stub for as long as traffic flows
+// — event-batch delivery, state changes, request/response calls all ride this ONE stub via
+// `invoke(key, path, args)` — and RETURNS it at its idle quiesce, knowing a page always borrows it
 // back. Between pages the DO holds nothing but hibernatable sockets, so it hibernates while any
 // number of clients stay attached.
 //
@@ -22,19 +22,19 @@
 // holding that socket can re-mint the stub, so restore MUST route through it.
 //
 // WHAT A STUB IS HERE:
-//   • KEY: the capability-path-shaped string the stub is parked under — the REGISTRY KEY, and the
-//     stub's one identity. `itx.provide(path, stub)` parks under the mount path, so a mount reaches
+//   • KEY: the capability-path-shaped string the stub is lent under — the REGISTRY KEY, and the
+//     stub's one identity. `itx.provide(path, stub)` lends under the mount path, so a mount reaches
 //     the stub through the pure-data target `itx.rpcStubs.get('<key>')`; the registry itself knows
-//     nothing about mounts. Re-parking the same key replaces the transport (reconnect). Many
+//     nothing about mounts. Re-lending the same key replaces the transport (reconnect). Many
 //     transports can carry one key over time; the newest wins.
 //   • TRANSPORT ID: a fresh per-transport id (the stub pager socket carries it) so a NEW transport
 //     under an existing key can attach BEFORE the old one drops — the swap the reconnect property
 //     rides on. Internal; callers never see it.
 //
 // PRESENCE (which keys have an open pager right now) is `list()`; the whole in-memory socket census
-// (paged-in, pending pages, dormant) is `state()` for the hibernation probes. A stub that dies leaves
+// (borrowed, pending pages, dormant) is `state()` for the hibernation probes. A stub that dies leaves
 // nothing behind but its absence: the mount that named it stays in the capability table (calls
-// answer CONNECTION_OFFLINE) until someone revokes it or the provider re-parks.
+// answer CONNECTION_OFFLINE) until someone revokes it or the provider re-lends.
 //
 // Two-phase attach: `attach` mints the transportId FIRST, THEN the relay opens the stub pager
 // WebSocket carrying it; an unknown id 409s so a relay that outlived a DO restart re-attaches. The
@@ -63,21 +63,21 @@ export const STUB_PAGER_KEEPALIVE_RESPONSE = "itx-pager-keepalive-ack";
  *  dead relay, not a slow one. */
 const RELAY_TIMEOUT_MS = 10_000;
 
-/** The Workers-RPC stub the paged edge worker hands back — TWO doors: `invoke(path, args)`
- *  forwards onto the retained capnweb callback (a DIRECT dotted dispatch — never `.apply`), and
- *  `fetch(upgradeId, capPath, request)` is the live-capability fetch dial
+/** WHAT THIS SIDE BORROWS: the Workers-RPC stub the paged edge worker lends back — TWO doors:
+ *  `invoke(path, args)` forwards onto the client's capnweb callback (a DIRECT dotted dispatch —
+ *  never `.apply`), and `fetch(upgradeId, capPath, request)` is the live-capability fetch dial
  *  (fetch/fetch-capabilities.ts — dies with that module's WORKAROUND fence). */
-export type RetainedCallbackInvoker = LiveCapabilityFetchTransport & {
+export type BorrowedStub = LiveCapabilityFetchTransport & {
   invoke(path: string[], args: unknown[]): Promise<unknown>;
-  dup?(): RetainedCallbackInvoker;
+  dup?(): BorrowedStub;
 };
 
 /** One stub's durable record — the pager socket's attachment (survives hibernation): the
- *  per-transport identity and the registry key the stub is parked under. */
+ *  per-transport identity and the registry key the stub is lent under. */
 type RpcStubRecord = { transportId: string; key: string };
 
-/** THE one disposer for any RPC-ish stub (Workers-RPC legs here, retained capnweb callbacks in
- *  rpc-stub-relay.ts): a no-op for anything that is not disposable. */
+/** THE one disposer for any RPC-ish stub (borrowed Workers-RPC legs here, the session's own capnweb
+ *  stubs in rpc-stub-relay.ts): a no-op for anything that is not disposable. */
 export function disposeStub(x: unknown): void {
   (x as Partial<Disposable> | null)?.[Symbol.dispose]?.();
 }
@@ -101,10 +101,10 @@ export class RpcStubDirectory {
    *  an abandoned reservation (the relay died mid-handshake) and is dropped on the next
    *  attach/fetch — a swept-then-arriving upgrade hits the 409 door and the relay re-attaches. */
   readonly #pending = new Map<string, { key: string; atMs: number }>();
-  // The PAGED-IN stubs, in memory ONLY and kept WARM: steady traffic pays ONE page, then every
-  // delivery is a plain RPC call. Disposal is the DO's idle quiesce (disposeRetainedStubs()) —
+  // The BORROWED stubs, in memory ONLY and kept WARM: steady traffic pays ONE page, then every
+  // delivery is a plain RPC call. They go back at the DO's idle quiesce (returnBorrowedStubs()) —
   // never per-call, never a timer (a pending timer would itself pin the DO out of hibernation).
-  readonly #retained = new Map<string, { invoker: RetainedCallbackInvoker; inFlight: number }>();
+  readonly #borrowed = new Map<string, { invoker: BorrowedStub; inFlight: number }>();
   // One entry per stub awaiting its page answer; CONCURRENT cold invokes share it (`arrived`) —
   // a second caller must never replace the first's resolver (it would hang forever).
   readonly #pagesPending = new Map<
@@ -175,16 +175,13 @@ export class RpcStubDirectory {
     return new Response(null, { status: 101, webSocket: pair[0] });
   }
 
-  /** The edge's answer to a page: it hands back a fresh stub over Workers RPC, kept warm until the
-   *  quiesce. Returns undefined for a stale page (none pending). */
-  activate(input: {
-    transportId: string;
-    invoker: RetainedCallbackInvoker;
-  }): { ok: true } | undefined {
+  /** The edge's answer to a page: it LENDS a fresh stub over Workers RPC, kept warm until the
+   *  quiesce returns it. Returns undefined for a stale page (none pending). */
+  lend(input: { transportId: string; invoker: BorrowedStub }): { ok: true } | undefined {
     const pending = this.#pagesPending.get(input.transportId);
     if (pending === undefined) return undefined;
-    const prev = this.#retained.get(input.transportId);
-    this.#retained.set(input.transportId, {
+    const prev = this.#borrowed.get(input.transportId);
+    this.#borrowed.set(input.transportId, {
       invoker: input.invoker.dup?.() ?? input.invoker,
       inFlight: 0,
     });
@@ -239,59 +236,59 @@ export class RpcStubDirectory {
 
   /** THE one call door behind `itx.rpcStubs.get(key)` — resolved capability calls
    *  (`itx.<mount>.method()` through a mount targeting it) and the delivery loop's push (empty path =
-   *  the bare subscriber callback itself): page the stub in if absent, then call it. The stub stays
-   *  warm afterwards — steady traffic is pure RPC, no socket round-trips. Fire-and-forget callers
+   *  the bare subscriber callback itself): borrow the stub if it isn't held, then call it. It stays
+   *  borrowed afterwards — steady traffic is pure RPC, no socket round-trips. Fire-and-forget callers
    *  just don't await (a failed delivery is the client's heal-by-pull). */
   async invoke(key: string, path: string[], args: unknown[]): Promise<unknown> {
     const record = this.find(key);
     if (!record) throw codedError("CONNECTION_OFFLINE", `live capability "${key}" is offline`);
-    const retained = await this.#pageIn(record.transportId);
-    retained.inFlight += 1;
+    const borrowed = await this.#borrowStub(record.transportId);
+    borrowed.inFlight += 1;
     try {
       // THE TERMINAL-FETCH BRANCH (fetch/fetch-capabilities.ts, doctrine point 1 — dies with its
       // WORKAROUND fence): a terminal `fetch` carrying the one live Request rides the live-capability
-      // fetch path; the paged-in invoker is the transport. Everything else is a plain dotted
+      // fetch path; the borrowed stub is the transport. Everything else is a plain dotted
       // dispatch. Either way, a provider that dies mid-call is re-coded to CONNECTION_OFFLINE at the
       // relay, where the break is LOCAL — the CODE, never a message, crosses this hop (lib/errors.ts).
       if (path.at(-1) === "fetch" && args.length === 1 && args[0] instanceof Request)
-        return await this.#liveCapabilityFetch.serve(retained.invoker, path.slice(0, -1), args[0]);
-      return await retained.invoker.invoke(path, args);
+        return await this.#liveCapabilityFetch.serve(borrowed.invoker, path.slice(0, -1), args[0]);
+      return await borrowed.invoker.invoke(path, args);
     } finally {
-      retained.inFlight -= 1;
+      borrowed.inFlight -= 1;
     }
   }
 
-  // ── the idle quiesce (paged-in stubs pin the DO; a page gets them back) ──
+  // ── the idle quiesce (a borrowed stub pins the DO; a page borrows it back) ──
 
-  /** Any stub paged in right now (O(1)) — what makes the quiet clock worth arming. */
-  hasRetainedStubs(): boolean {
-    return this.#retained.size > 0;
+  /** Any stub borrowed right now (O(1)) — what makes the quiet clock worth arming. */
+  hasBorrowedStubs(): boolean {
+    return this.#borrowed.size > 0;
   }
 
-  /** THE IDLE DISPOSAL (call from the DO's quiesce alarm): drop every paged-in stub so the DO
+  /** THE IDLE RETURN (call from the DO's quiesce alarm): give every borrowed stub back so the DO
    *  can hibernate. Losing them costs exactly one page on the next call — that is the deal. */
-  disposeRetainedStubs(): void {
-    for (const [transportId, retained] of this.#retained) {
-      if (retained.inFlight > 0)
-        log.warn("disposing a stub with calls in flight (idle quiesce)", {
-          event: "stub.disposed-in-flight",
+  returnBorrowedStubs(): void {
+    for (const [transportId, borrowed] of this.#borrowed) {
+      if (borrowed.inFlight > 0)
+        log.warn("returning a stub with calls in flight (idle quiesce)", {
+          event: "stub.returned-in-flight",
           transportId,
-          inFlight: retained.inFlight,
+          inFlight: borrowed.inFlight,
         });
-      this.#retained.delete(transportId);
-      disposeStub(retained.invoker);
+      this.#borrowed.delete(transportId);
+      disposeStub(borrowed.invoker);
     }
   }
 
   /** In-memory transport facts — the DO's `transportState()` verb for the hibernation probes; not
-   *  event-derivable, deliberately off the itx surface. `dormant` ⇒ nothing paged in and no page in
+   *  event-derivable, deliberately off the itx surface. `dormant` ⇒ nothing borrowed and no page in
    *  flight (the DO can hibernate; stubs stay attached). */
-  state(): { stubs: number; pagedIn: number; pagesPending: number; dormant: boolean } {
+  state(): { stubs: number; borrowed: number; pagesPending: number; dormant: boolean } {
     return {
       stubs: this.all().length,
-      pagedIn: this.#retained.size,
+      borrowed: this.#borrowed.size,
       pagesPending: this.#pagesPending.size,
-      dormant: this.#retained.size === 0 && this.#pagesPending.size === 0,
+      dormant: this.#borrowed.size === 0 && this.#pagesPending.size === 0,
     };
   }
 
@@ -314,16 +311,15 @@ export class RpcStubDirectory {
     return ws.deserializeAttachment() as RpcStubRecord;
   }
 
-  async #pageIn(
-    transportId: string,
-  ): Promise<{ invoker: RetainedCallbackInvoker; inFlight: number }> {
-    let retained = this.#retained.get(transportId);
-    if (retained === undefined) {
+  /** Borrow the stub for `transportId`: already held, or page the relay and wait for the lend. */
+  async #borrowStub(transportId: string): Promise<{ invoker: BorrowedStub; inFlight: number }> {
+    let borrowed = this.#borrowed.get(transportId);
+    if (borrowed === undefined) {
       const ws = this.#socketFor(transportId);
       if (ws === undefined)
         throw codedError(
           "CONNECTION_OFFLINE",
-          `hibernatable rpc stub ${transportId} offline (no pager websocket)`,
+          `rpc stub ${transportId} offline (no pager websocket)`,
         );
       let pending = this.#pagesPending.get(transportId);
       if (pending === undefined) {
@@ -335,39 +331,37 @@ export class RpcStubDirectory {
         });
         const timer = setTimeout(() => {
           if (this.#pagesPending.delete(transportId))
-            reject(new Error(`hibernatable rpc stub ${transportId}: page timed out`));
+            reject(new Error(`rpc stub ${transportId}: page timed out`));
         }, RELAY_TIMEOUT_MS);
         pending = { resolve, reject, timer, arrived };
         this.#pagesPending.set(transportId, pending);
         try {
           // THE ONE message the pager ever carries (DO → edge): "I ought to have your RPC stub but
-          // I don't — send it." Everything else rides Workers RPC on the paged-in stub.
+          // I don't — send it." Everything else rides Workers RPC on the borrowed stub.
           ws.send(JSON.stringify({ type: "page" }));
         } catch {
           ws.close(1011, "page send failed");
         }
       }
       await pending.arrived;
-      retained = this.#retained.get(transportId);
-      if (retained === undefined)
-        throw new Error(`hibernatable rpc stub ${transportId}: page answered empty`);
+      borrowed = this.#borrowed.get(transportId);
+      if (borrowed === undefined) throw new Error(`rpc stub ${transportId}: page answered empty`);
     }
-    return retained;
+    return borrowed;
   }
 
   #forget(transportId: string): void {
-    const retained = this.#retained.get(transportId);
-    if (retained) {
-      this.#retained.delete(transportId);
-      disposeStub(retained.invoker);
+    const borrowed = this.#borrowed.get(transportId);
+    if (borrowed) {
+      this.#borrowed.delete(transportId);
+      disposeStub(borrowed.invoker);
     }
+
     const pending = this.#pagesPending.get(transportId);
     if (pending) {
       clearTimeout(pending.timer);
       this.#pagesPending.delete(transportId);
-      pending.reject(
-        codedError("CONNECTION_OFFLINE", `hibernatable rpc stub ${transportId} went offline`),
-      );
+      pending.reject(codedError("CONNECTION_OFFLINE", `rpc stub ${transportId} went offline`));
     }
   }
 }

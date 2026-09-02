@@ -2,13 +2,13 @@
 //
 // A capability PROVIDER is ephemeral: its capnweb WebSocket terminates at a STATELESS `/api` worker,
 // and Cloudflare documents that a plain worker cannot durably hold a WebSocket (the isolate can be
-// recycled, taking the socket + in-memory retained callback with it — capnweb-in-a-DO is the open
+// recycled, taking the socket + the in-memory callback it holds with it — capnweb-in-a-DO is the open
 // workerd#6087, whose own workaround IS a stateless proxy worker). So a provider dropping is EXPECTED;
 // the platform's answer is RECONNECT at the same capability path, not server durability.
 //
 // This proves it against the real deployment: a provider goes OFFLINE (its session is disposed → the
 // WS closes → the DO drops the stub from the `itx.rpcStubs` registry) and re-provides at the SAME
-// path — which re-parks under the same registry key (the transport is REPLACED) while the MOUNT,
+// path — which re-lends under the same registry key (the transport is REPLACED) while the MOUNT,
 // pure data naming that key, never moved: the door answers the existing mount's identity and
 // appends NOTHING. The capability is callable AGAIN through the same dotted path. In between, the
 // path answers CONNECTION_OFFLINE — mounted-but-offline, never default-deny: nothing auto-revokes
@@ -49,7 +49,7 @@ const providedAtP = (page: { events: { type: string; payload?: { path?: string }
 
 test("a provider drops and re-provides at the same path — offline in between (the mount stays), callable again, ZERO events", async () => {
   // the consumer stays connected throughout and addresses the provider BY PATH (the mount path IS
-  // the registry key the stub is parked under). Every session in this test shares ONE ctx (one
+  // the registry key the stub is lent under). Every session in this test shares ONE ctx (one
   // project DO).
   const ctx = freshCtx("recon");
   const itx = openItx(ctx);
@@ -85,7 +85,7 @@ test("a provider drops and re-provides at the same path — offline in between (
   expect(await mountsAtP()).toHaveLength(1); // the mount STAYED
   const logBefore = await itx.invokeCapability("itx.read(0, 500)");
 
-  // 3. provider RE-PROVIDES at the SAME path with a fresh capability instance — this re-parks
+  // 3. provider RE-PROVIDES at the SAME path with a fresh capability instance — this re-lends
   //    under the same registry key (REPLACING the transport) and re-provides the SAME mount, which
   //    the door answers with the existing mount's identity: ZERO events.
   providerSession = session();
@@ -112,11 +112,11 @@ test("a provider drops and re-provides at the same path — offline in between (
   expect(await mountsAtP()).toHaveLength(1);
 });
 
-// The same property one layer up (was resub-zombie.e2e): a LIVE SUBSCRIBER is a stub parked under
+// The same property one layer up (was resub-zombie.e2e): a LIVE SUBSCRIBER is a stub lent under
 // `itx.subscriptions.<name>` plus one subscription row naming it. Re-subscribing the same name
-// re-parks under the same key — the session disposes the first relay (its transport is REPLACED, the
+// re-lends under the same key — the session disposes the first relay (its transport is REPLACED, the
 // first callback physically unreachable) — and the identical row appends NOTHING (same name
-// replaces; there is no shadow stack). `unsubscribe(name)` drops the one row and closes this
+// replaces; there is no shadow stack). `unsubscribe(name)` drops the one row and recalls this
 // session's stub: no callback under that name receives anything afterwards.
 test("a live subscriber re-subscribes under the same name — the transport is replaced (one row, zero events); unsubscribe stops delivery for good", async () => {
   const itx = openItx(freshCtx("resub"));

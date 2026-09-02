@@ -1,5 +1,5 @@
 // __workers-tests__/stream.test.ts — the `Stream` class (stream/stream.ts) against REAL
-// DurableObjectStorage, inside workerd (the workers lane): waitForEvent's park/settle/timeout
+// DurableObjectStorage, inside workerd (the workers lane): waitForEvent's wait/settle/timeout
 // mechanics, what construction writes, the wake record (`appendCreatedAndWokenEvents()` — an explicit call here;
 // in production the DO constructor's first act) and the pause check at the append door. Each test
 // borrows a dedicated ctx's DO purely for its storage (runInDurableObject), WIPES it (the DO's
@@ -38,7 +38,7 @@ function bareStream(storage: DurableObjectStorage, opts?: { batches?: StreamEven
 const ownBatches = (batches: StreamEvent[][]): StreamEvent[][] =>
   batches.filter((b) => !b.every((e) => e.type === "events.iterate.com/live-state/changed"));
 
-test("waitForEvent: a parked waiter resolves with the committed event, fed from the fresh batch", async () => {
+test("waitForEvent: a registered waiter resolves with the committed event, fed from the fresh batch", async () => {
   await runInDurableObject(stub("prj_wait_park"), async (_instance, state) => {
     const batches: StreamEvent[][] = [];
     const stream = bareStream(await virgin(state), { batches });
@@ -62,9 +62,9 @@ test("waitForEvent: the type filter holds a waiter through non-matching commits"
     stream.append({ type: "other" });
     const raced = await Promise.race([
       pending.then(() => "resolved"),
-      new Promise((r) => setTimeout(() => r("parked"), 100)),
+      new Promise((r) => setTimeout(() => r("waiting"), 100)),
     ]);
-    expect(raced).toBe("parked"); // a non-matching commit left it parked
+    expect(raced).toBe("waiting"); // a non-matching commit left it waiting
     const [receipt] = stream.append({ type: "wanted" });
     expect((await pending).offset).toBe(receipt.offset);
   });
@@ -131,7 +131,7 @@ test("waitForEvent: a timed-out wait writes nothing — construction made the ta
   });
 });
 
-test("waitForEvent: an EPHEMERAL event resolves a parked waiter (and never hits the log)", async () => {
+test("waitForEvent: an EPHEMERAL event resolves a waiting caller (and never hits the log)", async () => {
   await runInDurableObject(stub("prj_wait_ephemeral"), async (_instance, state) => {
     const stream = bareStream(await virgin(state));
     stream.append({ type: "seed" });
@@ -140,17 +140,17 @@ test("waitForEvent: an EPHEMERAL event resolves a parked waiter (and never hits 
     const got = await pending;
     expect(got.offset).toBe(receipt.offset);
     expect(got.ephemeral).toBe(true);
-    // catchable only while parked: the body never reached a row
+    // catchable only while waiting: the body never reached a row
     expect(stream.read(0).events.some((e) => e.type === "blip")).toBe(false);
   });
 });
 
-test("waitForEvent: one event resolves MULTIPLE parked waiters, in park order", async () => {
+test("waitForEvent: one event resolves MULTIPLE waiters, in registration order", async () => {
   await runInDurableObject(stub("prj_wait_multi"), async (_instance, state) => {
     const stream = bareStream(await virgin(state));
     stream.append({ type: "seed" });
-    // Two waiters parked for the same type: one matching commit must resolve BOTH (a waiter is
-    // never consumed exclusively), and settlement order is park order (FIFO per event).
+    // Two waiters registered for the same type: one matching commit must resolve BOTH (a waiter is
+    // never consumed exclusively), and settlement order is registration order (FIFO per event).
     const order: string[] = [];
     const w1 = stream.waitForEvent({ type: "ping", timeoutMs: 5_000 }).then((e) => {
       order.push("first");
@@ -172,7 +172,7 @@ test("waitForEvent: a nested onCommit re-append cannot outrun the outer commit �
   await runInDurableObject(stub("prj_wait_nested"), async (_instance, state) => {
     // The pinned ordering property (Stream doc): waiters settle BEFORE onCommit. If a refactor
     // ran #onCommit first, this nested matching append (a live-state-delta stand-in — the real
-    // fan-out does exactly this) would resolve the parked waiter with the LATER (nested) event.
+    // fan-out does exactly this) would resolve the waiting caller with the LATER (nested) event.
     let nestedReceipt: StreamEvent | undefined;
     const stream: Stream = new Stream({
       storage: await virgin(state),

@@ -1,13 +1,13 @@
 // rpc-stubs-mounts-stay-offline-until-revoked.e2e.test.ts — the live-transport table
-// (src/context/rpc-stub-directory.ts + hibernatable-rpc-stub.ts + iterate-context.ts). A live
+// (src/context/rpc-stub-directory.ts + rpc-stub-relay.ts + iterate-context.ts). A live
 // capability is `itx.provide(path, stub)` — SUGAR over two axioms with two lifetimes: the STUB is
-// PARKED in the `itx.rpcStubs` built-in (the physical registry, keyed by the canonical path; it lives
-// until its session ends or `itx.revoke(path)` / `unsubscribe` from the session that parked it),
+// LENT to the `itx.rpcStubs` built-in (the physical registry, keyed by the canonical path; it lives
+// until its session ends or `itx.revoke(path)` / `unsubscribe` from the session that lent it),
 // and an ORDINARY mount event `path ⇒ itx.rpcStubs.get('<path>')` names it (pure
 // data; it lives until an explicit revoke). PRESENCE is physical: `itx.rpcStubs.list()` — the keys
 // with an open transport RIGHT NOW. The mount never claims liveness and NOTHING auto-revokes it: a
 // dead provider leaves its mount answering CONNECTION_OFFLINE until someone revokes it or the
-// provider re-parks under the same key. Re-providing the same path replaces the transport (the old
+// provider re-lends under the same key. Re-providing the same path replaces the transport (the old
 // pager closes "replaced") and appends NOTHING. A live SUBSCRIBER is the same shape one layer up —
 // a stub under `itx.subscriptions.<name>` plus a row of the SUBSCRIPTIONS table, never a mount.
 
@@ -30,7 +30,7 @@ import {
 import { HangTools, Tools } from "./support/targets.ts";
 
 /** How many `capability-provided` events the durable log holds at `path` — the "reconnect is
- *  ZERO events" instrument (the mount is data; re-parking the stub writes nothing). */
+ *  ZERO events" instrument (the mount is data; re-lending the stub writes nothing). */
 const providedEventsAt = async (itx: any, path: string): Promise<number> =>
   (await readAll(itx)).filter(
     (e) =>
@@ -98,14 +98,14 @@ test("disposing a client session drops its stubs promptly (presence) — its mou
   const ctx = freshCtx("dispose");
   const observer = openItx(ctx);
   const sA = session();
-  // ONE door: the provide parks the stub under the path AND mounts `itx.rpcStubs.get('itx.ghosttool')`.
+  // ONE door: the provide lends the stub under the path AND mounts `itx.rpcStubs.get('itx.ghosttool')`.
   await sA.authenticate().projects.get(ctx).provide("itx.ghosttool", new Tools("ghost"));
   expect(await observer.invokeCapability(["itx", "ghosttool", ["hello"]])).toBe("hello-from-ghost");
   await until("the transport present", async () =>
     (await presence(observer)).includes("itx.ghosttool"),
   );
 
-  (sA as any)[Symbol.dispose]?.(); // the client session ends — every relay it parked dies with it
+  (sA as any)[Symbol.dispose]?.(); // the client session ends — every stub it lent dies with it
 
   // PRESENCE is physical and shrinks at once: the relay's dispose closes the pager, the DO drops
   // the transport, and the registry stops listing the key.
@@ -123,8 +123,8 @@ test("disposing a client session drops its stubs promptly (presence) — its mou
     );
     expect(codeOf(err)).toBe("CONNECTION_OFFLINE");
   }
-  // The one exit is an EXPLICIT revoke — from ANY session (the observer never parked the stub, so
-  // its close-the-parked-stub half is a local no-op; the mount pops) — after which the path is
+  // The one exit is an EXPLICIT revoke — from ANY session (the observer never lent the stub, so
+  // its recall half is a local no-op; the mount pops) — after which the path is
   // default-deny again.
   await observer.revoke("itx.ghosttool");
   expect(await rpcStubMountPaths(observer)).not.toContain("itx.ghosttool");
@@ -185,7 +185,7 @@ test("fan-out via the table's live mounts + map drops dead members (CONNECTION_O
   await openItx(ctx).provide("itx.alive", new Tools("alive"));
   const { session: sDead, ws: wsDead } = rawSession();
   await sDead.authenticate().projects.get(ctx).provide("itx.doomed", new Tools("doomed"));
-  // A parked live SUBSCRIBER: physically present (its stub under itx.subscriptions.<name>) but a
+  // A lent live SUBSCRIBER: physically present (its stub under itx.subscriptions.<name>) but a
   // row of the SUBSCRIPTIONS table, not a capability mount — the fan-out over live mounts never
   // sees it, so a callback with no hello() cannot pollute the census.
   const sub = await observer.subscribe({ target: () => undefined });
@@ -268,15 +268,15 @@ test("concurrent provides at one path collapse to ONE live transport; the table 
 
 // ── the same shape one layer up: a live SUBSCRIBER's stub + row ──
 
-test("subscribe → unsubscribe disposes the parked stub AND removes its row — presence and the subscriptions table both return to baseline", async () => {
+test("subscribe → unsubscribe recalls the lent stub AND removes its row — presence and the subscriptions table both return to baseline", async () => {
   const observer = openItx(freshCtx("unsub-leak"));
-  expect(await presence(observer)).toEqual([]); // baseline: nothing parked
+  expect(await presence(observer)).toEqual([]); // baseline: nothing lent
   expect(await rpcStubMountPaths(observer)).toEqual([]); // and nothing mounted
   expect(await subscriptions(observer)).toEqual([]); // and no rows
 
   const sub = await observer.subscribe({ target: () => undefined });
   const key = `itx.subscriptions.${sub.name}`;
-  await until("the parked subscriber has a transport", async () =>
+  await until("the lent subscriber has a transport", async () =>
     (await presence(observer)).includes(key),
   );
   // the ROW landed (awaited configure); a subscription is NOT a capability mount
@@ -285,13 +285,13 @@ test("subscribe → unsubscribe disposes the parked stub AND removes its row —
 
   await observer.unsubscribe(sub.name);
 
-  // unsubscribe = remove the row (awaited — the table is clean on return) + close this session's
+  // unsubscribe = remove the row (awaited — the table is clean on return) + recall this session's
   // stub under it (the relay's dispose closes the pager; the DO drops the transport a beat later —
   // poll presence). Two lifetimes, one explicit exit.
   expect(await subscriptions(observer)).toEqual([]);
   expect(await rpcStubMountPaths(observer)).toEqual([]);
   await until(
-    "the parked stub gone from presence",
+    "the lent stub gone from presence",
     async () => (await presence(observer)).length === 0,
   );
 });
@@ -303,11 +303,11 @@ test("storm of provide/mount/revoke/subscribe/unsubscribe/disconnect: presence r
   expect(await rpcStubMountPaths(observer)).toEqual([]);
 
   for (let i = 0; i < 6; i++) {
-    // (a) subscribe then unsubscribe — the parked-stub disposal path (row + stub both go).
+    // (a) subscribe then unsubscribe — the recall path (row + stub both go).
     const sub = await observer.subscribe({ target: () => undefined });
     await observer.unsubscribe(sub.name);
     // (b) provide a live cap at a path, then revoke the path — ONE door in, one door out
-    //     (revoke-by-PATH pops the mount AND closes this session's stub under it).
+    //     (revoke-by-PATH pops the mount AND recalls this session's stub under it).
     await observer.provide(`itx.cap${i}`, new Tools(`s${i}`));
     await observer.revoke(`itx.cap${i}`);
     // (c) a live provide from a fresh session then a clean disconnect (dispose the client
@@ -320,7 +320,7 @@ test("storm of provide/mount/revoke/subscribe/unsubscribe/disconnect: presence r
     (s as any)[Symbol.dispose]?.();
   }
 
-  // PRESENCE (physical) is back to baseline: every relay the storm parked was disposed — by
+  // PRESENCE (physical) is back to baseline: every stub the storm lent was recalled — by
   // unsubscribe, by revoke-by-path, or by session end (the pager closes are async; poll).
   await until("presence back to baseline", async () => (await presence(observer)).length === 0);
   // THE TABLE (data) keeps exactly what nobody revoked: the six (c) mounts, each mounted-but-
@@ -335,8 +335,8 @@ test("storm of provide/mount/revoke/subscribe/unsubscribe/disconnect: presence r
     );
     expect(codeOf(err)).toBe("CONNECTION_OFFLINE");
   }
-  // Revoking by path from a session that never parked the stub pops the mount only (its
-  // close-the-parked-stub half is a local no-op) — the explicit exit brings the table to baseline
+  // Revoking by path from a session that never lent the stub pops the mount only (its
+  // recall half is a local no-op) — the explicit exit brings the table to baseline
   // too, and the paths fall back to default-deny.
   for (const path of leftover) await observer.revoke(path);
   expect(await rpcStubMountPaths(observer)).toEqual([]);
@@ -422,7 +422,7 @@ test("churn 20×: no ghost deliveries; presence AND the tables return to baselin
   expect((await rpcStubMountPaths(observer)).length).toBe(baselineMounts);
 
   // dispose the session: PRESENCE (the physical registry) must return to baseline — every relay
-  // the churn parked is gone (each unsubscribe closed its own; the pager closes are async, poll).
+  // the churn lent is gone (each unsubscribe recalled its own; the pager closes are async, poll).
   (s as Partial<Disposable>)[Symbol.dispose]?.();
   await until(
     "presence back to baseline",

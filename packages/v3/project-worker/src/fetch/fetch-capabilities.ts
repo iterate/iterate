@@ -66,7 +66,7 @@ export function expressionEndingInFetch(expr: Expression): Expression {
 // provider reached over an RPC leg (a capnweb client via the /api relay, or a dynamic worker via
 // env.ITX) rather than by loadable code. The mechanism:
 //
-//   DO side (LiveCapabilityFetchServer.serve): mint an upgradeId, call the paged-in invoker's
+//   DO side (LiveCapabilityFetchServer.serve): mint an upgradeId, call the borrowed stub's
 //   `fetch(upgradeId, capPath, request)` — that call EXECUTES in the provider transport's own
 //   request context, the one place the provider's answer is legally touchable.
 //
@@ -84,8 +84,8 @@ export function expressionEndingInFetch(expr: Expression): Expression {
 // then delete its call sites —
 //   • the terminal-fetch branch in RpcStubDirectory.invoke, the directory's `liveCapabilityFetch`
 //     dep + `#liveCapabilityFetch` field, and the `LiveCapabilityFetchTransport &` half of
-//     RetainedCallbackInvoker (rpc-stub-directory.ts);
-//   • RetainedCallbackInvoker's `fetch` method (rpc-stub-relay.ts);
+//     BorrowedStub (rpc-stub-directory.ts);
+//   • BorrowedStub's `fetch` method (rpc-stub-relay.ts);
 //   • the stream DO's `#liveCapabilityFetch` field, its acceptFetchUpgradeLeg door, and the
 //     handleWebSocketMessage/Close forwarding (iterate-context-durable-object.ts).
 // Terminal-fetch calls then ride the plain invoke() walk like any other call, their Responses —
@@ -105,7 +105,7 @@ const upgradeTag = (side: "eyeball" | "leg", upgradeId: string) =>
  *  leg, so only this marker crosses the RPC hop. */
 type FetchUpgradeMarker = { webSocketUpgrade: true };
 
-/** What `serve` needs from the paged-in transport stub: the live-capability fetch dial. */
+/** What `serve` needs from the borrowed transport stub: the live-capability fetch dial. */
 export type LiveCapabilityFetchTransport = {
   fetch(upgradeId: string, capPath: string[], request: Request): Promise<unknown>;
 };

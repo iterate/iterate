@@ -12,11 +12,12 @@
 //      is the ack, the ladder resets. AWAITED before step 2, so the quiesce never aborts a
 //      delivery in flight and a later retry's re-arm lands before the actor hibernates.
 //   2. the idle QUIESCE: 60s without activity (and nothing in flight) aborts every live facet and
-//      disposes every paged-in RetainedCallbackInvoker stub, so the actor can hibernate. A
-//      MEASURED PROPERTY, load-bearing below: a materialized facet or a retained stub PINS the DO
-//      non-hibernatable (workerd#6800) — evictDurableObject on such a DO times out after 30s
-//      ("still has active references"). You must quiesce BEFORE you can evict — the exact
-//      production sequence (support.ts's `quiesce`).
+//      RETURNS every borrowed stub, so the actor can hibernate. A MEASURED PROPERTY, load-bearing
+//      below: a materialized facet or a borrowed stub PINS the DO non-hibernatable (workerd#6800)
+//      — evictDurableObject on such a DO times out after 30s ("still has active references"). You
+//      must quiesce BEFORE you can evict — the exact production sequence (support.ts's `quiesce`).
+//      It is also what ARMS the alarm at all: a context with no live facet and no borrowed stub
+//      schedules nothing, so every pin below that fires the alarm creates one of the two FIRST.
 //
 // PROCESSORS here are what they are everywhere: userspace two-class sources — a pure
 // `StreamProcessor` (`CounterProcessor`) and its one-line `StreamProcessorDurableObject` host
@@ -25,7 +26,8 @@
 // loader accepts allow_irrevocable_stub_storage), so every facet-lifecycle pin rides the inline
 // `CounterProcessor` source below, enabled the way the edge's `enableProcessor` spells it — ONE
 // `subscription-configured` whose target is the facet's `processEventBatch` through the load chain.
-// Live stubs (hibernatable stub pagers) work fully here too — see hibernation-at-scale.test.ts.
+// Live stubs (over hibernatable stub pager sockets) work fully here too — see
+// hibernation-at-scale.test.ts.
 
 import { evictDurableObject, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { expect, test, vi } from "vitest";
@@ -88,12 +90,16 @@ async function disableCounter(ctx: string, name = "counter"): Promise<void> {
   await s.invoke(["itx", "facets", ["delete", name]]);
 }
 
-// The DO-only transport facts ({stubs, pagedIn, pagesPending, dormant}) — the quiesce probes are
+// The DO-only transport facts ({stubs, borrowed, pagesPending, dormant}) — the quiesce probes are
 // in-memory socket truths, so they speak transportState(), never the table.
 const stateOf = (ctx: string): Promise<Record<string, any>> =>
   runInDurableObject(stub(ctx), async (inst) =>
     (inst as unknown as { transportState(): Record<string, any> }).transportState(),
   );
+/** The DO's scheduled alarm instant, or null — only this lane can read it, and it is the ONE proof
+ *  that a quiesce pin below is exercising the alarm instead of firing into an empty schedule. */
+const alarmAt = (ctx: string): Promise<number | null> =>
+  runInDurableObject(stub(ctx), (_inst, state) => state.storage.getAlarm());
 /** Poll the census until `stubs` reaches `n` (bounded). A transport leaves the census when its
  *  pager socket's CLOSE lands at the DO — a physical fact that arrives a beat after the edge
  *  disposes its relay, never inside the RPC that triggered it. */
@@ -184,27 +190,37 @@ test("DISABLE deletes the facet's storage; RE-ENABLE rebuilds from the log (no s
   expect(after.state.n).toBe(await durableCount(ctx)); // rebuilt from the whole log — no stale-checkpoint skip
 });
 
-test("PAGE-IN RACES THE QUIESCE ALARM: a stub invoke fired concurrently with the alarm still answers", async () => {
-  // A quiesce disposes RETAINED stubs (#retained) but never touches a PENDING page (#pagesPending),
-  // and the invoke's own #recordActivityForQuietClock keeps the actor warm. PINS: an invoke that pages a stub in
-  // while the 60s alarm fires resolves with the right per-client answer (the wake's borrowed stub
-  // is not disposed out from under it).
+test("A BORROW RACES THE QUIESCE ALARM: a stub invoke fired concurrently with the alarm still answers", async () => {
+  // A quiesce RETURNS borrowed stubs (#borrowed) but never touches a PENDING page (#pagesPending),
+  // and the invoke's own #recordActivityForQuietClock keeps the actor warm. PINS: an invoke that
+  // borrows a stub while the 60s alarm fires resolves with the right per-client answer (the stub it
+  // is borrowing is not returned out from under it).
   const ctx = "prj_pagein";
   const clientItx = await (await openSession()).authenticate().projects.get(ctx);
   for (let i = 0; i < 4; i++) await clientItx.provide(`itx.p${i}`, new Echo(i));
   const caller = await (await openSession()).authenticate().projects.get(ctx);
 
+  // THERE MUST BE AN ALARM TO RACE. Lending four stubs arms nothing — the quiet clock arms only
+  // while a facet is live or a stub is BORROWED — so warm one stub first and read the schedule
+  // back. Without this the alarm below fires into an empty schedule and the race is vacuous.
+  expect(await caller.invokeCapability("itx.p0.echo('warm')")).toBe("echo-0:warm");
+  expect((await stateOf(ctx)).borrowed).toBeGreaterThanOrEqual(1);
+  expect(await alarmAt(ctx)).not.toBeNull();
+
   vi.useFakeTimers({ now: Date.now(), toFake: ["Date"] });
   let raced: unknown;
+  let alarmRan: boolean;
   try {
     vi.setSystemTime(Date.now() + 61_000);
     const alarmP = runDurableObjectAlarm(stub(ctx));
     const invokeP = caller.invokeCapability("itx.p2.echo('race')");
-    const [, inv] = await Promise.all([alarmP, invokeP]);
+    const [ran, inv] = await Promise.all([alarmP, invokeP]);
+    alarmRan = ran;
     raced = inv;
   } finally {
     vi.useRealTimers();
   }
+  expect(alarmRan).toBe(true); // the armed alarm really ran alongside the invoke
   expect(raced).toBe("echo-2:race");
 });
 
@@ -220,16 +236,20 @@ test("SCALE DROP + QUIESCE + EVICT + WAKE: a revoked live capability stays gone;
   const caller = await (await openSession()).authenticate().projects.get(ctx);
 
   // The drop must come from the PROVIDER'S OWN session: `itx.revoke(path)` pops the mount on the
-  // DO and closes THIS session's parked stub under the path. A revoke from `caller` would pop
-  // the mount only — the DO never touches a transport on revoke, and `caller` parked nothing
+  // DO and recalls the stub THIS session lent under the path. A revoke from `caller` would pop
+  // the mount only — the DO never touches a transport on revoke, and `caller` lent nothing
   // under `itx.k3`, so its stub would stay in the census (answering nothing, mount gone).
   await clientItx.revoke("itx.k3");
   const dropped = await untilStubs(ctx, K - 1); // the relay's close lands at the DO a beat later
   expect(dropped.stubs).toBe(K - 1);
 
+  // The K-1 surviving lends arm nothing on their own, so warm one stub: that borrow is what arms
+  // the quiet clock AND what the quiesce then has to return.
+  expect(await caller.invokeCapability("itx.k0.echo('warm')")).toBe("echo-0:warm");
+  expect(await alarmAt(ctx)).not.toBeNull();
   await quiesce(ctx);
   const q = await stateOf(ctx);
-  expect(q.pagedIn).toBe(0); // the quiesce disposed every paged-in stub (evict precondition)
+  expect(q.borrowed).toBe(0); // the quiesce returned every borrowed stub (evict precondition)
   await evictDurableObject(stub(ctx));
   const evicted = await stateOf(ctx);
   expect(evicted.stubs).toBe(K - 1); // survivors' hibernatable sockets rode the eviction; k3 stayed gone
