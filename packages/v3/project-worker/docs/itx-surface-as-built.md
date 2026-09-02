@@ -425,11 +425,12 @@ Error codes (`src/lib/errors.ts`): `NO_ITX_EXPRESSION_MATCH`, `RPC_STUB_OFFLINE`
   under that key — Cloudflare's `get(id, getCode)` used as designed. Checked against apps/os first:
   it derives its key from a repo content hash and caches the BUILD artifact in KV under it; that
   tier belongs to a build capability, not to the loader door.
-- **B, done:** sources are INLINE ONLY — `WorkerSource = Record<string, string>` (module name → code,
-  `"cap.js"` the main module). The producer-expression branch (`"itx.kv.get('src/x.js')"`), the old
-  inline wrapper object, the loader's `invoke` and `resolved` options and the DO's resolved-source
-  cache are deleted; a facet's startup memo stores the modules. The e2e fixtures are inline; nothing
-  is seeded into kv.
+- **B, done, then amended by F:** sources are the worker's modules, literally (`WorkerModules =
+Record<string, string>`, `"cap.js"` the main module), and the old inline wrapper object, the
+  loader's `resolved` option and the DO's resolved-source cache are deleted; a facet's startup memo
+  stores what it was given. The unkeyed producer-expression branch (`"itx.kv.get('src/x.js')"`) is
+  gone; F brought a producer back only behind a required `cacheKey`. The e2e fixtures are inline;
+  nothing is seeded into kv.
 
 ### Open
 

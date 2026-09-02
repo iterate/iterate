@@ -137,8 +137,9 @@ class in `DurableObject`. The host is hosted like ANY class:
 `itx.facets.get('presence', { source, className: 'PresenceDurableObject' })`, identity in
 `ctx.props`. `enableProcessor(name, { source, className, consumes? })` appends the
 `subscription-configured` event whose target is that chain + `.processEventBatch`;
-`disableProcessor(name)` appends `subscription-configured { name, target: null }` and then
-`itx.facets.delete(name)`. Processors are DURABLE configuration (no handle: `enableProcessor`
+`disableProcessor(name)` appends `subscription-configured { name, target: null }` — ONE event; the
+DO deletes the facet the removed row hosted, storage included, before the append returns. Processors
+are DURABLE configuration (no handle: `enableProcessor`
 returns `{ name }`) — `disableProcessor` is the explicit inverse. No built-in processor runs as a facet — `tally` is a
 fixture, and the one built-in `StreamProcessor` is the core reduce, hosted inline (layer 1). Policy
 that need not gate an append synchronously is a userspace facet processor speaking core's control
