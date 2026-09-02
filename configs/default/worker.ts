@@ -36,9 +36,7 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
       repoPath: "/repos/config",
     },
   });
-  // Folds createFlake test outcomes appended to /flakes by the repo's CI
-  // reporter into the GitHub "Flake dashboard" issue. Inert for projects
-  // whose /flakes stream never receives events.
+  /** /flakes -> GitHub "Flake dashboard" issue. Inert if /flakes stream never receives events. */
   #flakeDashboardApp = FlakeDashboardApp.create(this.env);
   #docsApp = DocsApp.create(this.env, {
     auth: { policy: "project-member" },

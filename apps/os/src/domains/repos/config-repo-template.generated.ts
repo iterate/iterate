@@ -962,9 +962,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "      repoPath: \"/repos/config\",\n" +
       "    },\n" +
       "  });\n" +
-      "  // Folds createFlake test outcomes appended to /flakes by the repo's CI\n" +
-      "  // reporter into the GitHub \"Flake dashboard\" issue. Inert for projects\n" +
-      "  // whose /flakes stream never receives events.\n" +
+      "  /** /flakes -> GitHub \"Flake dashboard\" issue. Inert if /flakes stream never receives events. */\n" +
       "  #flakeDashboardApp = FlakeDashboardApp.create(this.env);\n" +
       "  #docsApp = DocsApp.create(this.env, {\n" +
       "    auth: { policy: \"project-member\" },\n" +
