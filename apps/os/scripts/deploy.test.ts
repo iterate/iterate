@@ -15,9 +15,9 @@ import {
   detachRetiredWorkerQueueConsumers,
   isExactOsProjectMiss,
   posthogBuildEnv,
-  previewPackageSpecsToAwait,
+  pinnedPackageSpecsToAwait,
   resolveOsContainerDeployArgs,
-  waitForPreviewPackage,
+  waitForPinnedPackage,
 } from "./deploy.ts";
 
 const secretName = "APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN";
@@ -27,7 +27,7 @@ describe("preview package prerequisite", () => {
     const sha = "f".repeat(40);
     // Name-agnostic: every iterate/iterate package the template declares is
     // awaited at its pinned URL before preview deployment starts.
-    expect(previewPackageSpecsToAwait(sha)).toEqual([
+    expect(pinnedPackageSpecsToAwait(sha)).toEqual([
       `https://pkg.pr.new/iterate/iterate/@iterate-com/docs@${sha}`,
       `https://pkg.pr.new/iterate/iterate/iterate@${sha}`,
     ]);
@@ -43,7 +43,7 @@ describe("preview package prerequisite", () => {
       return responses.shift() ?? new Response(null, { status: 200 });
     };
 
-    await waitForPreviewPackage(packageSpec, {
+    await waitForPinnedPackage(packageSpec, {
       fetch: fetchPackage,
       now: () => now,
       sleep: async (ms) => {
@@ -63,7 +63,7 @@ describe("preview package prerequisite", () => {
     let now = 0;
 
     await expect(
-      waitForPreviewPackage(packageSpec, {
+      waitForPinnedPackage(packageSpec, {
         fetch: async () => new Response(null, { status: 404 }),
         now: () => now,
         sleep: async (ms) => {

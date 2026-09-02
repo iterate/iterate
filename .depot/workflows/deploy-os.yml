@@ -85,8 +85,14 @@ jobs:
           ALLOW_REMOTE_PRODUCTION_AUTH_RPC: "1"
         # Teed so the size-report step below can parse wrangler's
         # "Total Upload" line out of the deploy output.
+        # PLATFORM_DEPLOY_HEAD_SHA sha-pins the config template's
+        # iterate/iterate pkg.pr.new specs to this exact deploy (immutable
+        # URLs; live config repos build in lockstep with the platform instead
+        # of against a cached mutable @main). Rev-parsed from the workspace,
+        # not github.sha — checkout honors inputs.ref on dispatch.
         run: |-
           set -euo pipefail
+          export PLATFORM_DEPLOY_HEAD_SHA="$(git rev-parse HEAD)"
           doppler run -- pnpm run-script deploy 2>&1 | tee /tmp/deploy-os.log
       # apps/os deploy forces a real AUTH RPC cache miss, revokes and re-lists
       # the live Worker secret, repeats the probes against that new version,

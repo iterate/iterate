@@ -17,9 +17,9 @@ Effects: prod dynamic builds install `iterate@<deployed-sha>` (immutable URL —
 
 ## Checklist
 
-- [ ] deploy.ts: ref fallback + URL await for the prd sha
-- [ ] deploy-os.yml: pass the sha
-- [ ] Tests where deploy behavior is pinned (deploy.test.ts / depot-workflows.test.ts as applicable)
+- [x] deploy.ts: ref fallback + URL await for the prd sha _(PLATFORM_DEPLOY_HEAD_SHA fallback; the existing await block keys off the ref regardless of source; preview-named helpers renamed to pinned*)_
+- [x] deploy-os.yml: pass the sha _(rev-parsed from the workspace, not github.sha — dispatch honors inputs.ref)_
+- [x] Tests _(depot-workflows guard pins the workflow export; deploy.test.ts passes with the renames)_
 
 ## Post-merge
 

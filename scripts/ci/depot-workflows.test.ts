@@ -121,6 +121,18 @@ describe("Depot deployment safety", () => {
     expect(workflow.on?.push?.paths).toContain("packages/iterate/**");
   });
 
+  it("sha-pins prod config-repo package installs to the deployed commit", () => {
+    // Without this export, prod dynamic builds install the mutable (and
+    // host-cached) iterate@main — the 2026-09-02 iterate-config outage. The
+    // sha must be rev-parsed from the workspace, not github.sha: checkout
+    // honors inputs.ref on dispatch.
+    const workflow = loadWorkflow(".depot/workflows/deploy-os.yml");
+    const deployStep = (workflow.jobs.deploy?.steps ?? []).find(
+      (step) => step.name === "Deploy apps/os",
+    );
+    expect(deployStep?.run).toContain('PLATFORM_DEPLOY_HEAD_SHA="$(git rev-parse HEAD)"');
+  });
+
   it.each([
     ".depot/workflows/deploy-semaphore.yml",
     ".depot/workflows/deploy-streams-example-app.yml",
