@@ -1,7 +1,7 @@
-// capability-table-shadow-stack-and-alias-chains.e2e.test.ts — the mount table under stress: 10
+// capability-table-shadow-stack-and-mount-chains.e2e.test.ts — the mount table under stress: 10
 // concurrent provides on ONE path end deterministic (newest offset answers) and a concurrent revoke
 // sweep restores default-deny; a NON-CANONICAL path spelling is stored CANONICAL and routes; 300
-// event-sourced mounts keep both the newest mount and a built-in root under 150ms; an alias chain 30
+// event-sourced mounts keep both the newest mount and a built-in root under 150ms; a chain of mounts naming mounts 30
 // deep resolves under the depth-32 budget and 33 deep fails loudly; malformed mount events are
 // skipped without wedging later provides.
 
@@ -12,7 +12,7 @@ const PROVIDED = "events.iterate.com/capability-table/capability-provided";
 
 test("shadow stack: 10 concurrent provides on ONE path end deterministic (newest offset answers), a full concurrent revoke sweep restores default-deny, and the table is not wedged", async () => {
   const itx = openItx(freshCtx("race"));
-  // ten distinguishable live capabilities to alias at the contested path (path = identity)
+  // ten distinguishable live capabilities to mount at the contested path (path = identity)
   for (let i = 0; i < 10; i++) {
     await itx.provide(`itx.probe${i}`, () => i);
   }
@@ -91,7 +91,7 @@ test("300 mounts: invoking the NEWEST mount and a built-in root both stay under 
 
   // Warm both lanes once (table rehydration / DO wake are not what we are measuring).
   const viaNewest = await itx.invokeCapability(["itx", ["m299"]]);
-  expect(viaNewest).toMatchObject({ projectId: ctx, path: "/" }); // it really aliases whoami
+  expect(viaNewest).toMatchObject({ projectId: ctx, path: "/" }); // it really reaches whoami
   await itx.invokeCapability(["itx", ["whoami"]]);
 
   const newestMs = await time(() => itx.invokeCapability(["itx", ["m299"]]));
@@ -103,22 +103,22 @@ test("300 mounts: invoking the NEWEST mount and a built-in root both stay under 
   expect(rootMs, `built-in root (whoami) median ${rootMs.toFixed(1)}ms`).toBeLessThan(150);
 }, 90_000);
 
-test("an alias chain 30 deep resolves under the depth-32 budget; 33 deep fails loudly", async () => {
-  const ctx = freshCtx("alias");
+test("a chain of mounts naming mounts 30 deep resolves under the depth-32 budget; 33 deep fails loudly", async () => {
+  const ctx = freshCtx("chain");
   const itx = openItx(ctx);
-  // alias0 → itx.whoami; aliasK → itx.alias(K-1). One commit mounts all 33 rows.
-  const aliases = Array.from({ length: 33 }, (_, i) => ({
+  // chain0 → itx.whoami; chainK → itx.chain(K-1). One commit mounts all 33 rows.
+  const chain = Array.from({ length: 33 }, (_, i) => ({
     type: PROVIDED,
-    payload: { path: `itx.alias${i}`, target: i === 0 ? "itx.whoami" : `itx.alias${i - 1}` },
+    payload: { path: `itx.chain${i}`, target: i === 0 ? "itx.whoami" : `itx.chain${i - 1}` },
   }));
-  await append(itx, ...aliases);
+  await append(itx, ...chain);
 
-  // 30 hops (alias29 → … → alias0 → whoami) resolve within the budget…
-  const resolved = await itx.invokeCapability(["itx", ["alias29"]]);
+  // 30 hops (chain29 → … → chain0 → whoami) resolve within the budget…
+  const resolved = await itx.invokeCapability(["itx", ["chain29"]]);
   expect(resolved).toMatchObject({ projectId: ctx, path: "/" });
 
   // …33 hops trip the guard LOUDLY (never a spin, never a stack overflow).
-  await expect(itx.invokeCapability(["itx", ["alias32"]])).rejects.toThrow(/depth 32/);
+  await expect(itx.invokeCapability(["itx", ["chain32"]])).rejects.toThrow(/depth 32/);
 }, 60_000);
 
 test("bad mount events are skipped without wedging later provides", async () => {
@@ -137,4 +137,18 @@ test("bad mount events are skipped without wedging later provides", async () => 
   // and the malformed mount is dead weight, not a route (default-deny still answers there)
   const missErr = await rejection(itx.invokeCapability(["itx", ["broken"]]));
   expect(missErr.message).toContain("no capability matches");
+});
+
+test("a mount is a REWRITE rule: a longer mount under the target's path captures the deeper call", async () => {
+  const ctx = freshCtx("rewrite");
+  const itx = openItx(ctx);
+  await itx.provide("itx.store", "itx.kv");
+  await itx.provide("itx.store.deep", "itx.whoami"); // longer than `itx.store`: claims `.deep`
+  await itx.provide("itx.db", "itx.store");
+  // `itx.db.deep()` rewrites to `itx.store.deep()`, which the longer mount claims — the kv value's
+  // (non-existent) `deep` is never walked.
+  expect(await itx.invokeCapability("itx.db.deep()")).toMatchObject({ projectId: ctx, path: "/" });
+  // the shorter path still reaches kv through two rewrites
+  await itx.invokeCapability("itx.db.put('k', 'v')");
+  expect(await itx.invokeCapability("itx.store.get('k')")).toBe("v");
 });

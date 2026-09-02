@@ -251,13 +251,9 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     name: string;
     target: ItxExpression;
     consumes?: string[];
-  }): Promise<{ name: string; configuredAtOffset: number }> {
-    const rows = this.#stream.coreReducedState.subscriptions;
-    const event = subscriptionConfiguredEvent(rows, input);
-    if (!event)
-      return { name: input.name, configuredAtOffset: rows[input.name].configuredAtOffset };
-    const [committedEvent] = await this.append(event);
-    return { name: input.name, configuredAtOffset: committedEvent.offset };
+  }): Promise<void> {
+    const event = subscriptionConfiguredEvent(this.#stream.coreReducedState.subscriptions, input);
+    if (event) await this.append(event);
   }
 
   /** Remove a subscription. Idempotent. A cursor target's cursor goes with it — the delivery loop
