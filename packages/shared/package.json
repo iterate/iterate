@@ -6,6 +6,7 @@
   "exports": {
     "./agent-events": "./src/agent-events.ts",
     "./config": "./src/config.ts",
+    "./mobile-channel-status": "./src/mobile-channel-status.ts",
     "./dev/is-main-module": "./src/dev/is-main-module.ts",
     "./evlog": "./src/evlog/with-evlog.ts",
     "./evlog/types": "./src/evlog/types.ts",
@@ -16,6 +17,7 @@
     "./test-support/vitest-e2e": "./src/test-support/vitest-e2e/index.ts",
     "./test-support/e2e-policy": "./src/test-support/e2e-policy/index.ts",
     "./test-support/failing-test": "./src/test-support/failing-test.ts",
+    "./test-support/flake-test": "./src/test-support/flake-test.ts",
     "./test-support/ci-telemetry": "./src/test-support/ci-telemetry.ts",
     "./test-support/measure-e2e-phase": "./src/test-support/measure-e2e-phase.ts",
     "./test-support/cloudflare-worker-version-overrides": "./src/test-support/cloudflare-worker-version-overrides.ts",

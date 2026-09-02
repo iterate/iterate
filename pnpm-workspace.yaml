@@ -2,6 +2,8 @@ packages:
   - apps/os
   - apps/semaphore
   - apps/*
+  # Nested: the mobile app's own web surface (apps/* doesn't recurse).
+  - apps/mobile/website
   - packages/*
   - lint
   - scripts

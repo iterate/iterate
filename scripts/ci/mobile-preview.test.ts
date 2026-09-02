@@ -1,6 +1,11 @@
 import { expect, test } from "vitest";
 import { markdownAnnotator } from "../../packages/shared/src/dev/markdown-annotator.ts";
-import { channelForBranch, planPreview, renderPreviewSection } from "./mobile-preview.ts";
+import {
+  channelForBranch,
+  installInterstitialUrl,
+  planPreview,
+  renderPreviewSection,
+} from "./mobile-preview.ts";
 import { bundleStampForPr } from "./publish-mobile-pr-preview.ts";
 
 test("branch names become valid EAS channel names", () => {
@@ -12,17 +17,18 @@ test("branch names become valid EAS channel names", () => {
 
 test("links go through the https interstitial, never a raw iterate:// href", () => {
   const plan = planPreview({
-    baseUrl: "https://os.iterate.com",
+    baseUrl: "https://mobile.iterate.com",
     scheme: "iterate",
     channel: "my-feature",
     publishedRuntime: "37fb004ced1120b5d1fc8e57c7dd87e0aee98e8e",
     installedRuntime: "37fb004ced1120b5d1fc8e57c7dd87e0aee98e8e",
     installUrl: "https://expo.dev/accounts/o/projects/p/builds/build-1",
+    installReady: true,
   });
   expect(plan).toMatchObject({
     runtimeMatchesInstalled: true,
     // Tap path: https interstitial (GitHub strips custom-scheme hrefs).
-    deepLinkUrl: "https://os.iterate.com/m/preview-channel/my-feature",
+    deepLinkUrl: "https://mobile.iterate.com/preview-channel/my-feature",
     // Scan path: the camera opens the app scheme directly, no interstitial hop.
     otaQrContent: "iterate://preview-channel/my-feature",
   });
@@ -40,7 +46,7 @@ test("links go through the https interstitial, never a raw iterate:// href", () 
   expect(section).not.toContain("iterate://");
   // The tap path is a bold markdown link; the scan path is the (half-size) QR.
   expect(section).toContain(
-    "**[Switch this phone to the PR channel](https://os.iterate.com/m/preview-channel/my-feature)**",
+    "**[Switch this phone to the PR channel](https://mobile.iterate.com/preview-channel/my-feature)**",
   );
   expect(section).toContain('width="90"');
   expect(section).not.toContain('width="180"');
@@ -48,12 +54,13 @@ test("links go through the https interstitial, never a raw iterate:// href", () 
 
 test("a runtime-matching PR renders with the OTA details open and install collapsed", () => {
   const plan = planPreview({
-    baseUrl: "https://os.iterate.com",
+    baseUrl: "https://mobile.iterate.com",
     scheme: "iterate",
     channel: "my-feature",
     publishedRuntime: "37fb004ced1120b5d1fc8e57c7dd87e0aee98e8e",
     installedRuntime: "37fb004ced1120b5d1fc8e57c7dd87e0aee98e8e",
     installUrl: "https://expo.dev/accounts/o/projects/p/builds/build-1",
+    installReady: true,
   });
   const section = renderPreviewSection({
     variant: "pr",
@@ -74,12 +81,13 @@ test("a runtime-matching PR renders with the OTA details open and install collap
 
 test("a native-change PR flips the expanded details to the install QR", () => {
   const plan = planPreview({
-    baseUrl: "https://os.iterate.com",
+    baseUrl: "https://mobile.iterate.com",
     scheme: "iterate",
     channel: "add-native-module",
     publishedRuntime: "aaaa000000000000000000000000000000000000",
     installedRuntime: "37fb004ced1120b5d1fc8e57c7dd87e0aee98e8e",
     installUrl: "https://expo.dev/accounts/o/projects/p/builds/build-2",
+    installReady: true,
   });
   expect(plan).toMatchObject({ runtimeMatchesInstalled: false });
 
@@ -99,12 +107,13 @@ test("a native-change PR flips the expanded details to the install QR", () => {
 
 test("the main variant reads as a switch-back, not a PR switch", () => {
   const plan = planPreview({
-    baseUrl: "https://os.iterate.com",
+    baseUrl: "https://mobile.iterate.com",
     scheme: "iterate",
     channel: "preview",
     publishedRuntime: "37fb004ced1120b5d1fc8e57c7dd87e0aee98e8e",
     installedRuntime: "37fb004ced1120b5d1fc8e57c7dd87e0aee98e8e",
     installUrl: "https://expo.dev/accounts/o/projects/p/builds/build-1",
+    installReady: true,
   });
   const section = renderPreviewSection({
     variant: "main",
@@ -118,18 +127,19 @@ test("the main variant reads as a switch-back, not a PR switch", () => {
   expect(section).toContain("## 📱 Mobile preview — main");
   expect(section).toContain("default-channel phones pull this automatically (`abcdef1`)");
   expect(section).toContain(
-    "**[Switch this phone back to the default channel now](https://os.iterate.com/m/preview-channel/preview)**",
+    "**[Switch this phone back to the default channel now](https://mobile.iterate.com/preview-channel/preview)**",
   );
 });
 
 test("no finished preview build at all counts as a runtime mismatch", () => {
   const plan = planPreview({
-    baseUrl: "https://os.iterate.com",
+    baseUrl: "https://mobile.iterate.com",
     scheme: "iterate",
     channel: "first-ever",
     publishedRuntime: "aaaa000000000000000000000000000000000000",
     installedRuntime: undefined,
     installUrl: "https://expo.dev/accounts/o/projects/p/builds/build-3",
+    installReady: true,
   });
   expect(plan).toMatchObject({ runtimeMatchesInstalled: false });
 });
@@ -165,4 +175,80 @@ test("bundleStampForPr stamps nothing without a leased preview slot", () => {
     MOBILE_EXPECTED_BACKEND_ENV: "",
     MOBILE_TEST_LOGIN_EMAIL: "",
   });
+});
+
+test("a PR's install QR goes to the channel-stable interstitial and explains the channel hop", () => {
+  const plan = planPreview({
+    baseUrl: "https://mobile.iterate.com",
+    scheme: "iterate",
+    channel: "add-native-module",
+    publishedRuntime: "aaaa000000000000000000000000000000000000",
+    installedRuntime: "37fb004ced1120b5d1fc8e57c7dd87e0aee98e8e",
+    installUrl: installInterstitialUrl("https://mobile.iterate.com", "add-native-module"),
+    installReady: true,
+  });
+  const section = renderPreviewSection({
+    variant: "pr",
+    plan,
+    deepLinkQrUrl: "https://example.test/ota.png",
+    installQrUrl: "https://example.test/install.png",
+    headSha: "abcdef1234567890",
+    installBuildSha: "abcdef1234567890",
+    publishedRuntime: "aaaa000000000000000000000000000000000000",
+  });
+  // Builds are shared across channels (one per runtime fingerprint); the
+  // install link resolves the right build at scan time, and the page's
+  // "Open in app" tap does the channel hop after the install.
+  expect(section).toContain("https://mobile.iterate.com/install/add-native-module");
+  expect(section).toContain(
+    "After installing, tap <b>Open in app</b> on that page to land on <code>add-native-module</code>.",
+  );
+  expect(section).not.toContain("expo.dev");
+});
+
+test("a build that hasn't finished says so instead of offering a dead install link", () => {
+  const plan = planPreview({
+    baseUrl: "https://mobile.iterate.com",
+    scheme: "iterate",
+    channel: "brand-new-branch",
+    publishedRuntime: "aaaa000000000000000000000000000000000000",
+    installedRuntime: undefined,
+    installUrl: "https://expo.dev/accounts/o/projects/p/builds/build-9",
+    installReady: false,
+  });
+  const section = renderPreviewSection({
+    variant: "pr",
+    plan,
+    deepLinkQrUrl: "https://example.test/ota.png",
+    installQrUrl: "https://example.test/install.png",
+    headSha: "abcdef1234567890",
+    installBuildSha: undefined,
+    publishedRuntime: "aaaa000000000000000000000000000000000000",
+  });
+  expect(section).toContain("Build still running — the install page fills in when it finishes");
+});
+
+test("the PR footer routes back to main via the explicit switch, not reset-to-default", () => {
+  // A per-PR binary's default channel IS its PR — and cleanup deletes that
+  // channel on merge. "Reset to default channel" can no longer promise main.
+  const plan = planPreview({
+    baseUrl: "https://mobile.iterate.com",
+    scheme: "iterate",
+    channel: "my-feature",
+    publishedRuntime: "37fb004ced1120b5d1fc8e57c7dd87e0aee98e8e",
+    installedRuntime: "37fb004ced1120b5d1fc8e57c7dd87e0aee98e8e",
+    installUrl: "https://expo.dev/accounts/o/projects/p/builds/build-1",
+    installReady: true,
+  });
+  const section = renderPreviewSection({
+    variant: "pr",
+    plan,
+    deepLinkQrUrl: "https://example.test/ota.png",
+    installQrUrl: "https://example.test/install.png",
+    headSha: "abcdef1234567890",
+    installBuildSha: "0123456789abcdef",
+    publishedRuntime: "37fb004ced1120b5d1fc8e57c7dd87e0aee98e8e",
+  });
+  expect(section).toContain("Build info → Switch to main");
+  expect(section).not.toContain("Reset to default channel");
 });

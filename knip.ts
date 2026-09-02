@@ -188,7 +188,10 @@ function makeSharedWorkspace(): WorkspaceConfig {
     // This package exposes many subpath exports from package.json rather than a
     // single `src/index.ts`, so keep the workspace config minimal and let Knip
     // use the declared export map as the public entry surface.
-    entry: ["src/**/*.test.ts"],
+    // The flake-test fixture is only reached by a child vitest process
+    // spawned from flake-test.test.ts, so knip cannot see it in the import
+    // graph.
+    entry: ["src/**/*.test.ts", "src/test-support/flake-test-fixture/*.ts"],
     project: ["src/**/*.ts"],
     ignoreDependencies: ["cloudflare", "wrangler"],
   };
@@ -226,6 +229,8 @@ const config: KnipConfig = {
   // unrelated apps with heavyweight config loading.
   ignoreWorkspaces: [
     "apps/*",
+    // Nested under apps/mobile (itself ignored); "apps/*" doesn't reach it.
+    "apps/mobile/website",
     "!apps/os",
     "!apps/semaphore",
     "!apps/streams-example-app",

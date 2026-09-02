@@ -1,0 +1,746 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Mobile builds & OTA — how the phone decides what to run</title>
+    <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/npm/codemirror@5.65.18/lib/codemirror.min.css"
+    />
+    <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.18/lib/codemirror.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.18/mode/yaml/yaml.min.js"></script>
+    <style>
+      :root {
+        --fg: #1a1a1a;
+        --muted: #666;
+        --line: #e5e5e5;
+        --code: #fafafa;
+        --accent: #b45309;
+        --sel: #fef3c7;
+        --bad: #b91c1c;
+        --badbg: #fef2f2;
+        --good: #15803d;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --fg: #e5e5e5;
+          --muted: #999;
+          --line: #333;
+          --code: #191919;
+          --accent: #fbbf24;
+          --sel: #3b2f14;
+          --bad: #f87171;
+          --badbg: #2a1515;
+          --good: #4ade80;
+        }
+        body {
+          background: #111;
+        }
+        .CodeMirror {
+          background: var(--code);
+          color: var(--fg);
+        }
+        .CodeMirror .cm-comment {
+          color: #8a8a5c;
+        }
+        .CodeMirror .cm-atom,
+        .CodeMirror .cm-number {
+          color: #7fb4d8;
+        }
+        .CodeMirror .cm-meta {
+          color: #999;
+        }
+        .CodeMirror .cm-string {
+          color: #a8c98a;
+        }
+        .CodeMirror .cm-keyword {
+          color: #c586c0;
+        }
+        .CodeMirror-gutters {
+          background: var(--code);
+          border-color: var(--line);
+        }
+      }
+      body {
+        font:
+          14px/1.5 ui-sans-serif,
+          system-ui,
+          sans-serif;
+        color: var(--fg);
+        margin: 0;
+      }
+      header {
+        padding: 1rem 1.5rem 0.5rem;
+      }
+      header h1 {
+        margin: 0;
+        font-size: 1.3rem;
+      }
+      header p {
+        color: var(--muted);
+        margin: 0.3rem 0 0;
+        max-width: 62rem;
+      }
+      .opinion {
+        margin: 0 1.5rem;
+        border: 2px solid var(--accent);
+        border-radius: 8px;
+        padding: 0.7rem 1rem;
+        max-width: 60rem;
+      }
+      .layout {
+        display: grid;
+        grid-template-columns: minmax(26rem, 48rem) minmax(24rem, 1fr);
+        gap: 1.5rem;
+        padding: 1rem 1.5rem 4rem;
+        align-items: start;
+      }
+      @media (max-width: 980px) {
+        .layout {
+          grid-template-columns: 1fr;
+        }
+        .rendered {
+          position: static !important;
+          max-height: none !important;
+        }
+      }
+      h2 {
+        font-size: 1.05rem;
+        border-bottom: 1px solid var(--line);
+        padding-bottom: 0.3rem;
+        margin: 2rem 0 0.5rem;
+      }
+      .scenario > p {
+        max-width: 46rem;
+      }
+      .ev {
+        border: 1px solid var(--line);
+        border-left: 4px solid var(--line);
+        border-radius: 6px;
+        margin: 0.45rem 0;
+        cursor: pointer;
+      }
+      .ev:hover {
+        border-color: var(--accent);
+      }
+      .ev.selected {
+        background: var(--sel);
+        border-left-color: var(--accent);
+      }
+      .ev.bad {
+        border-left-color: var(--bad);
+      }
+      .ev.bad.selected {
+        background: var(--badbg);
+      }
+      .ev .row {
+        display: flex;
+        align-items: baseline;
+        gap: 0.5em;
+        padding: 0.45rem 0.7rem 0.1rem;
+        font:
+          12.5px/1.45 ui-monospace,
+          monospace;
+      }
+      .ev .off {
+        color: var(--accent);
+        font-weight: 700;
+        white-space: nowrap;
+      }
+      .ev.bad .off {
+        color: var(--bad);
+      }
+      .ev .type {
+        color: var(--fg);
+      }
+      .ev .t {
+        color: var(--muted);
+        font-size: 11px;
+        white-space: nowrap;
+        margin-left: auto;
+      }
+      .ev .badge {
+        color: var(--accent);
+        font-size: 11px;
+        background: var(--code);
+        border: 1px solid var(--line);
+        border-radius: 4px;
+        padding: 0 0.35em;
+        white-space: nowrap;
+      }
+      .ev.bad .badge {
+        color: var(--bad);
+      }
+      .ev .note {
+        font:
+          12px/1.45 ui-sans-serif,
+          system-ui,
+          sans-serif;
+        color: var(--muted);
+        padding: 0 0.7rem 0.45rem;
+        max-width: 44rem;
+      }
+      .ev details {
+        border-top: 1px solid var(--line);
+        padding: 0.2rem 0.7rem 0.4rem;
+      }
+      .ev details summary {
+        cursor: pointer;
+        color: var(--muted);
+        font-size: 11.5px;
+      }
+      .ev details pre {
+        font:
+          11.5px/1.5 ui-monospace,
+          monospace;
+        margin: 0.3rem 0 0;
+        white-space: pre-wrap;
+      }
+      .rendered {
+        position: sticky;
+        top: 0;
+        max-height: 100vh;
+        overflow: auto;
+        padding: 0.5rem 0;
+      }
+      .rendered h3 {
+        margin: 0.2rem 0 0.5rem;
+        font-size: 1rem;
+      }
+      .rendered h3 .off {
+        color: var(--accent);
+      }
+      .rendered .cmhost {
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        overflow: hidden;
+      }
+      .CodeMirror {
+        height: auto;
+        font-size: 12px;
+      }
+      code {
+        background: var(--code);
+        padding: 0.1em 0.35em;
+        border-radius: 4px;
+        font-size: 0.92em;
+      }
+      .vocab,
+      .appendix {
+        margin: 1rem 1.5rem 0;
+        max-width: 60rem;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 0.2rem 1rem 0.6rem;
+      }
+      .vocab summary,
+      .appendix summary {
+        cursor: pointer;
+        font-weight: 600;
+        padding: 0.5rem 0;
+      }
+      .vocab table,
+      .appendix table {
+        border-collapse: collapse;
+        font-size: 12.5px;
+        width: 100%;
+        margin: 0.3rem 0 0.8rem;
+      }
+      .vocab th,
+      .vocab td,
+      .appendix th,
+      .appendix td {
+        border: 1px solid var(--line);
+        padding: 0.35rem 0.55rem;
+        text-align: left;
+        vertical-align: top;
+      }
+      .vocab td:first-child,
+      .appendix td:first-child {
+        white-space: nowrap;
+        font-family: ui-monospace, monospace;
+        font-size: 12px;
+      }
+      .appendix pre {
+        font:
+          11.5px/1.5 ui-monospace,
+          monospace;
+        background: var(--code);
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        padding: 0.6rem 0.8rem;
+        overflow-x: auto;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <p style="border: 1px solid #b45309; border-radius: 8px; padding: 8px 12px; font-size: 13px">
+        <b>Partly superseded (PR #2555):</b> builds are no longer baked per PR channel — one build
+        per runtime fingerprint, shared with main; install QRs go through a live
+        <code>/m/install/&lt;channel&gt;</code> page; the app announces runtime mismatches with a
+        Download button. The channel/override/expo mechanics below still hold; the per-PR-build
+        scenario is pre-#2555 history. For "what happens in every phone × PR combination", see the
+        <a href="./mobile-install-state-matrix">install-state matrix</a>.
+      </p>
+      <h1>Mobile builds &amp; OTA — how the phone decides what to run</h1>
+      <p>
+        Click any event to see the state of the whole system (phone + update server) right after it,
+        as YAML on the right. Times are made up but realistic. Scenarios 1–2 are the happy paths, 3
+        is a real trap caught by field-testing on Misha's phone (red events), 4 is the same taps
+        after the fix.
+      </p>
+    </header>
+    <div class="opinion">
+      <strong>The whole system is three pointers, and every bug here is one of them lying.</strong>
+      The <em>binary</em> decides what CAN run (its runtime fingerprint must match the JS). The
+      <em>channel</em> decides what SHOULD run (which branch's JS to follow). The
+      <em>override</em> is a user-held pointer at a different channel — and it persists across
+      restarts and reinstalls, which is more than anyone expects. Rules that fall out: a PR's binary
+      is built FOR the PR's channel, so installing it is enough; the app learns its binary's own
+      channel rather than trusting <code>Updates.channel</code> (which reports the override, not the
+      baked value); and an explicit switch to a channel with nothing runnable is undone instead of
+      left dangling.
+    </div>
+
+    <details class="vocab" open>
+      <summary>Reference — the six words you need</summary>
+      <table>
+        <tr>
+          <th>word</th>
+          <th>meaning</th>
+        </tr>
+        <tr>
+          <td>binary / build</td>
+          <td>
+            The installed app itself, compiled by EAS in the cloud. Installing one replaces the
+            previous (keychain survives). Contains an <b>embedded</b> copy of the JS from the moment
+            the build was triggered.
+          </td>
+        </tr>
+        <tr>
+          <td>update</td>
+          <td>
+            A JS bundle published to the update server. The app can swap to a newer one without
+            reinstalling — that's OTA (over the air).
+          </td>
+        </tr>
+        <tr>
+          <td>channel</td>
+          <td>
+            A named stream of updates, like a git branch. <code>preview</code> follows main; each PR
+            gets a channel named after its branch. Every binary has one channel <b>baked in</b> at
+            build time — its default.
+          </td>
+        </tr>
+        <tr>
+          <td>runtime fingerprint</td>
+          <td>
+            A hash of everything native (modules, config). A binary only accepts updates with the
+            SAME fingerprint. The update server filters by it <em>before answering</em> — so "no
+            update" and "your binary is too old" are indistinguishable from the phone.
+          </td>
+        </tr>
+        <tr>
+          <td>override</td>
+          <td>
+            "Fetch updates from THIS channel instead of the baked one." Set by scanning a PR's OTA
+            QR. Persists in native storage across restarts <em>and reinstalls</em>; a fresh install
+            force-clears it on first boot.
+          </td>
+        </tr>
+        <tr>
+          <td>embedded fallback</td>
+          <td>
+            On launch, if nothing downloaded is runnable for the current channel, the app runs the
+            JS baked into the binary — which can be <em>older</em> than what you were just running.
+          </td>
+        </tr>
+      </table>
+    </details>
+
+    <div class="layout">
+      <main id="scenarios"></main>
+      <aside class="rendered">
+        <h3>System state <span class="off" id="rtitle"></span></h3>
+        <div class="cmhost" id="cmhost"></div>
+      </aside>
+    </div>
+
+    <details class="appendix">
+      <summary>Appendix — where the code lives</summary>
+      <table>
+        <tr>
+          <th>file</th>
+          <th>owns</th>
+        </tr>
+        <tr>
+          <td>apps/mobile/src/lib/build-state-core.ts</td>
+          <td>
+            Pure rules: what channel am I on, is this build watched, what does a check result mean.
+            Node-tested.
+          </td>
+        </tr>
+        <tr>
+          <td>apps/mobile/src/lib/build-state.ts</td>
+          <td>
+            Expo binding: override storage, baked-channel learning, install guard,
+            switch/check/update actions.
+          </td>
+        </tr>
+        <tr>
+          <td>apps/mobile/src/lib/session.ts</td>
+          <td>App-global "am I signed in, where, as whom".</td>
+        </tr>
+        <tr>
+          <td>apps/mobile/src/app/build-info.tsx</td>
+          <td>Dumb view: channel rows, running JS, update status, the switch/reset buttons.</td>
+        </tr>
+        <tr>
+          <td>apps/mobile/src/app/preview-channel/[channel].tsx</td>
+          <td>The QR confirm screen: switch + freshness pull + expected-backend offer.</td>
+        </tr>
+        <tr>
+          <td>apps/mobile/src/components/update-banner.tsx</td>
+          <td>"Newer JS on this channel" banner, watched builds only.</td>
+        </tr>
+        <tr>
+          <td>scripts/ci/mobile-preview.ts + publish-mobile-pr-preview.ts</td>
+          <td>
+            Publish the PR's update, ensure a build exists FOR the PR's channel, render the two QRs.
+          </td>
+        </tr>
+        <tr>
+          <td>apps/mobile/fingerprint.config.js</td>
+          <td>
+            Ignores eas.json so baking a channel per PR doesn't move the runtime (measured both
+            ways).
+          </td>
+        </tr>
+      </table>
+    </details>
+
+    <details class="appendix">
+      <summary>Appendix — why Updates.channel lies (the scenario-3 root cause)</summary>
+      <p>
+        In expo-updates, the JS-visible constant is built from the request headers as merged at
+        launch — and a persisted override wins that merge:
+      </p>
+      <pre>
+// AppController.swift
+"channel": requestHeaders["expo-channel-name"] ?? ""
+// UpdatesConfigOverride.swift — loaded from UserDefaults and merged into config at launch</pre
+      >
+      <p>
+        The plist's original (baked) headers never cross the bridge. So after a restart with an
+        override set, <code>Updates.channel</code> IS the override. The fix: on a boot that launched
+        override-free, <code>Updates.channel</code> is trustworthy — cache it per binary; on
+        polluted boots it's honestly "unknown", which counts as watched.
+      </p>
+    </details>
+
+    <script>
+      const S = [];
+      function sc(title, blurb, events) {
+        S.push({ title, blurb, events });
+      }
+      // Each event: [label, title, tags[], t, note, bad?, stateYaml]
+
+      sc(
+        "1 · JS-only PR — scan, switch, done",
+        "A PR that changes only JS. The phone's existing binary can run it, so the OTA QR is the whole story.",
+        [
+          [
+            "@1",
+            "scan the OTA QR",
+            ["qr=ota", "iterate://preview-channel/add-drawer-badge"],
+            "0.0s",
+            "The camera opens the app scheme directly. The link carries ONLY the channel name — backend and test identity travel inside the published JS itself.",
+            0,
+            `server:
+  channels:
+    preview:            [{commit: 91acc02, msg: "search: fix empty state", runtime: fdfdff89}]
+    add-drawer-badge:   [{commit: e41b2aa, msg: "drawer: unread badge", runtime: fdfdff89}] # same runtime as main
+phone:
+  binary:    {channel_baked: preview, runtime: fdfdff89}
+  override:  null
+  running:   {branch: main, commit: 91acc02, source: ota}`,
+          ],
+          [
+            "@2",
+            "confirm screen",
+            ["Current=preview", "Target=add-drawer-badge"],
+            "0.4s",
+            "Deliberately a confirm, not an auto-switch — a stray link tap must not silently repoint the app at another PR's JS.",
+            0,
+            `phone:
+  screen: "Point this app at another channel?"
+  running:  {branch: main, commit: 91acc02}   # unchanged — nothing happened yet`,
+          ],
+          [
+            "@3",
+            "tap Switch",
+            ["override←add-drawer-badge", "check→fetch→reload"],
+            "2.1s",
+            "Override persisted (native storage + mirror), the channel's latest compatible update is fetched, app restarts into it.",
+            0,
+            `phone:
+  override:   add-drawer-badge
+  downloaded: [{channel: add-drawer-badge, commit: e41b2aa, runtime: fdfdff89}]
+  running:    restarting…`,
+          ],
+          [
+            "@4",
+            "re-opened in the new bundle",
+            ["freshness=latest", "expected backend: preview 4"],
+            "4.0s",
+            "The deep link re-opens the confirm screen inside the NEW JS. Its baked stamp names the PR's leased backend + test identity; the Switch tap already consented, so it continues without a second tap.",
+            0,
+            `phone:
+  running: {branch: add-drawer-badge, commit: e41b2aa, source: ota}
+  screen:  "You're on this channel" → auto-continue → sign-in as pr2540+test@nustom.com on preview 4`,
+          ],
+          [
+            "@5",
+            "next morning: PR got two more pushes",
+            ["watched=true", "banner"],
+            "+1 day",
+            "Overridden channel ⇒ watched ⇒ a freshness check runs on every foreground. Result: a banner naming the newest commit, with Update now. Never an auto-reload under your thumbs.",
+            0,
+            `server:
+  channels:
+    add-drawer-badge: [{commit: 7c90d11, msg: "badge: cap at 99+", runtime: fdfdff89}] # newer
+phone:
+  running: {branch: add-drawer-badge, commit: e41b2aa}
+  banner:  'New update on this channel: "badge: cap at 99+" · [Update now]'`,
+          ],
+        ],
+      );
+
+      sc(
+        "2 · native-change PR — install, and that's it",
+        "A PR that adds a native module. Its runtime fingerprint differs from main's, so no existing binary can run its JS — CI builds a binary FOR the PR's channel.",
+        [
+          [
+            "@1",
+            "CI on PR push",
+            ["runtime≠main", "eas update + eas build"],
+            "0m",
+            "Publishes the JS (new runtime), finds no build matching (channel, runtime), triggers one with the PR's channel baked in — by rewriting the preview-pr profile in eas.json before uploading (eas build has no --channel flag). fingerprint.config.js ignores eas.json so this rewrite does NOT move the runtime.",
+            0,
+            `server:
+  channels:
+    add-voice-notes: [{commit: 3b8d1f0, msg: "voice notes v1", runtime: fca56340}]
+  builds: [{id: 4a94d33d, profile: preview-pr, channel_baked: add-voice-notes, runtime: fca56340, status: IN_PROGRESS}]
+pr_body: "native changes — needs a fresh install · install QR: build still running"`,
+          ],
+          [
+            "@2",
+            "build finishes",
+            ["~18 min", "reused for every later push"],
+            "18m",
+            "One build per PR branch. Later pushes ride OTA on top of it.",
+            0,
+            `server:
+  builds: [{id: 4a94d33d, channel_baked: add-voice-notes, runtime: fca56340, status: FINISHED}]`,
+          ],
+          [
+            "@3",
+            "scan the install QR → Install",
+            ["expo.dev page", "binary replaced"],
+            "25m",
+            "The binary boots on the PR's channel because that's what it was built for. No second scan, no order to get wrong.",
+            0,
+            `phone:
+  binary:   {channel_baked: add-voice-notes, runtime: fca56340}
+  override: mobile-voice-client   # ← stale, from a PR three weeks ago. still here!
+  running:  not launched yet`,
+          ],
+          [
+            "@4",
+            "first boot: install guard",
+            ["binary id changed", "override cleared", "Build info opens"],
+            "25m 10s",
+            "A new binary's first boot force-clears any pre-existing override — installing a build means wanting THAT build. Then Build info opens with a plain note, instead of the old jargon Alert. The baked channel is honestly 'unknown' this boot: Updates.channel was polluted by the override at launch.",
+            0,
+            `phone:
+  override: null                       # cleared, with a note in Build info
+  build_info:
+    note: 'New build installed. It was still pointed at "mobile-voice-client" — cleared; updates now come from this build's own branch.'
+    channel: {current: "—", default_for_build: "— (learned next clean boot)"}
+  running: {branch: add-voice-notes, commit: 3b8d1f0, source: embedded}`,
+          ],
+          [
+            "@5",
+            "banner right after installing",
+            ["watched (unknown default)", "embedded JS is old"],
+            "25m 20s",
+            "Looks weird, is correct: the binary embeds JS from build-trigger time, and the branch moved while it compiled. Unknown-default counts as watched precisely so THIS boot checks.",
+            0,
+            `server:
+  channels:
+    add-voice-notes: [{commit: a99e2c4, msg: "voice notes: waveform", runtime: fca56340}] # pushed during the build
+phone:
+  banner: 'New update on this channel: "voice notes: waveform" · [Update now]' → tap → reload
+  running_after: {commit: a99e2c4, source: ota}`,
+          ],
+          [
+            "@6",
+            "second boot",
+            ["override-free launch", "baked channel learned"],
+            "next open",
+            "Launched with no override ⇒ Updates.channel is trustworthy ⇒ cached per binary id. Build info now names the default.",
+            0,
+            `phone:
+  build_info:
+    channel: {current: add-voice-notes, default_for_build: add-voice-notes}`,
+          ],
+        ],
+      );
+
+      sc(
+        "3 · the trap (found on a real phone, now fixed)",
+        "Misha's actual trace, on the code as first shipped. Red events are where it went wrong. Every step is individually 'correct' — the sum is a stranded phone.",
+        [
+          [
+            "@1",
+            "tap 'Switch to main (preview)'",
+            ["PR binary", "runtime fca56340"],
+            "0.0s",
+            "Reasonable wish: go back to main's JS.",
+            0,
+            `phone:
+  binary:   {channel_baked: add-voice-notes, runtime: fca56340}
+  override: null
+  running:  {branch: add-voice-notes, commit: a99e2c4, source: ota}`,
+          ],
+          [
+            "@2",
+            "'nothing happened'",
+            ["override←preview", "server filters by runtime"],
+            "1.2s",
+            "preview serves only runtime fdfdff89 (main doesn't have this PR's native changes). The server filters by runtime BEFORE answering, so the phone just hears 'nothing newer'. The override stuck anyway.",
+            1,
+            `server:
+  channels:
+    preview: [{commit: 91acc02, runtime: fdfdff89}]  # this binary can't run it
+phone:
+  override: preview        # ← persisted, pointing at a channel with nothing runnable
+  running:  unchanged`,
+          ],
+          [
+            "@3",
+            "kill + relaunch",
+            ["embedded fallback"],
+            "1m",
+            "Launch config merges the override in. Nothing downloaded is runnable for 'preview' → the launcher falls back to the EMBEDDED bundle: JS from build-trigger time, OLDER than what was running a minute ago.",
+            1,
+            `phone:
+  running: {branch: add-voice-notes, commit: 3b8d1f0, source: embedded}  # went BACKWARDS`,
+          ],
+          [
+            "@4",
+            "Build info gaslights",
+            ["Updates.channel = override", "no way back"],
+            "1m 30s",
+            "Natively, Updates.channel is requestHeaders['expo-channel-name'] with the override merged at launch — so 'Default for this build' reads 'preview'. The app concludes: not overridden, main binary ⇒ unwatched, no reset button, and (older-JS bonus bug) a dead Check button.",
+            1,
+            `phone:
+  build_info:
+    channel: {current: preview, default_for_build: preview}   # both lies downstream of one lie
+    buttons: []                                               # nothing offers a way back
+  actual_truth: {baked: add-voice-notes, override: preview}`,
+          ],
+          [
+            "@5",
+            "recovery",
+            ["one QR scan"],
+            "—",
+            "Scan the PR's OTA QR: override goes back to the PR channel, latest JS pulls. (Reinstalling would NOT help: same binary id, guard stays quiet, override persists.)",
+            0,
+            `phone:
+  override: add-voice-notes → pull → running latest again`,
+          ],
+        ],
+      );
+
+      sc("4 · same taps, after the fix", "What each step does now.", [
+        [
+          "@1",
+          "tap 'Switch to main (preview)'",
+          ["revertOnNoUpdate", "honest note"],
+          "0.0s",
+          "The switch checks the target; nothing runnable ⇒ the override is UNDONE and the note says why. No dangling pointer, so no embedded fallback on restart.",
+          0,
+          `phone:
+  override: null   # reverted
+  note: "That channel has no update this build can run — its native code differs. Staying on add-voice-notes; for main that resolves itself once the PR merges."`,
+        ],
+        [
+          "@2",
+          "even the stranded state self-heals",
+          ["baked learned, not trusted"],
+          "—",
+          "On a polluted boot the default is 'unknown', and override≠unknown counts as overridden ⇒ 'Reset to this build's own channel' renders. One tap: override cleared, baked channel's latest pulled.",
+          0,
+          `phone:
+  build_info:
+    channel: {current: preview, default_for_build: "—"}
+    buttons: ["Reset to this build's own channel"]`,
+        ],
+        [
+          "@3",
+          "the PR merges",
+          ["main's runtime becomes fca56340", "channel deleted"],
+          "merge day",
+          "Cleanup deletes the PR channel. Main now HAS the PR's native changes, so main publishes for this binary's runtime — and 'Switch to main' works. CI also notices no preview build exists for the new fingerprint and triggers one for main-binary phones.",
+          0,
+          `server:
+  channels:
+    preview: [{commit: 5d02e19, msg: "voice notes v1 (#2544)", runtime: fca56340}]
+    add-voice-notes: deleted
+phone:
+  tap "Switch to main" → runnable → reload → following main`,
+        ],
+      ]);
+
+      // ---------- render ----------
+      const main = document.getElementById("scenarios");
+      const cm = CodeMirror(document.getElementById("cmhost"), {
+        mode: "yaml",
+        readOnly: true,
+        lineWrapping: true,
+        value: "← click an event",
+      });
+      let selected = null;
+      S.forEach((s, si) => {
+        const h = document.createElement("h2");
+        h.textContent = s.title;
+        main.appendChild(h);
+        const p = document.createElement("p");
+        p.textContent = s.blurb;
+        p.className = "scenario";
+        main.appendChild(p);
+        s.events.forEach((e) => {
+          const [label, title, tags, t, note, bad, yaml] = e;
+          const div = document.createElement("div");
+          div.className = "ev" + (bad ? " bad" : "");
+          div.innerHTML =
+            `<div class="row"><span class="off">${label}</span><span class="type">${title}</span>` +
+            tags.map((x) => `<span class="badge">${x}</span>`).join("") +
+            `<span class="t">${t}</span></div><div class="note">${note}</div>`;
+          div.onclick = () => {
+            if (selected) selected.classList.remove("selected");
+            selected = div;
+            div.classList.add("selected");
+            document.getElementById("rtitle").textContent =
+              `after ${s.title.split(" ·")[0]} ${label}`;
+            cm.setValue(yaml);
+          };
+          main.appendChild(div);
+        });
+      });
+      main.querySelector(".ev").click();
+    </script>
+  </body>
+</html>

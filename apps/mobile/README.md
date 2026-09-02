@@ -63,14 +63,20 @@ install pages ([EAS builds list](https://expo.dev/accounts/mishanustom/projects/
   channel (`.depot/workflows/mobile-eas-update.yml` →
   `scripts/ci/publish-mobile-update.ts`) and the installed app pulls it on
   next launch. The drawer's **Build info** screen shows what's running
-  (branch, commit, who built it, update channel/time) and has a
-  check-for-update-now button.
+  — the channel it pulls from vs the channel this build was made for, the
+  running branch/commit/message, and whether anything newer is published —
+  and has a check/update button.
 
 The runtime version uses the fingerprint policy: a merge that changes native
 code (new native module, Expo upgrade) produces updates old binaries ignore.
-CI notices there's no preview build for the new fingerprint and triggers one
-automatically — install that from its EAS page once, then OTA resumes. The
-same merges are the ones that need a manual dev-client rebuild
+Native builds are keyed on that fingerprint — **one build per unique
+fingerprint, ever** (`ensureBuildForRuntime`): a change that doesn't move it
+triggers no build, and a native-change PR's build is the one main reuses
+after merge. Old binaries can't hear about the new runtime through OTA (the
+update server filters by runtime before answering), so the app asks prd for
+the channel's CI-pushed snapshot and shows a "this channel's latest JS
+expects a different native build" banner with a Download button. The same
+merges are the ones that need a manual dev-client rebuild
 (`build:development:ios`), as above.
 
 `eas update` publishes stamp `src/build-info.json` via
@@ -94,22 +100,65 @@ The `preview` channel is main-only; publishing PR work to it would be
 last-write-wins chaos. PRs touching `apps/mobile/**` get their own channel
 named after the branch: CI (`.depot/workflows/mobile-pr-preview.yml` →
 `scripts/ci/publish-mobile-pr-preview.ts`) publishes on every push and
-maintains a PR-body section with two tappable QR codes — an
-`iterate://preview-channel/<channel>` deep link that switches the installed
-app to the PR's channel (confirm screen, then fetch + reload), and the
-matching build's install page for when the runtime differs or the app isn't
-installed. Whichever the fingerprint heuristic says you need is expanded.
-The switch persists across restarts; get back with **Build info → Reset to
-default channel**. Installing a native build overpowers that persistence:
-the first boot of a new binary force-clears any pre-existing channel
-override (with a notice), so the build you installed is the build you run
-(`src/lib/native-install-guard.ts`).
+maintains a PR-body section with two tappable QR codes. Either one lands you
+on the PR — pick by what your phone already has:
 
-Lifecycle: closing a PR deletes its channel, update branch, and QR assets
-(`.depot/workflows/mobile-pr-preview-cleanup.yml`). Channel discovery is the
-PR bodies' QR sections — deliberately no in-app channel list, because listing
-channels needs the EAS API and we don't ship `EXPO_TOKEN` to the deployment
-(a CI-pushed snapshot could enable it tokenlessly later).
+- **OTA** — an `iterate://preview-channel/<channel>` deep link that points the
+  installed app at the PR's channel (confirm screen, then fetch + reload).
+  Needs a binary whose runtime already matches. The QR encodes the raw scheme
+  URL so the camera opens the app directly, no browser hop.
+- **Full install** — the channel-stable interstitial
+  `mobile.iterate.com/install/<channel>`, which resolves the channel's expected
+  native build _at scan time_ from the CI-pushed snapshot (so a QR printed
+  three pushes ago still lands on the right build), installs it in place via
+  an OS-served itms-services manifest (the EAS build page stays linked for
+  details, and as the fallback while a build compiles), and keeps an
+  **Open in app** tap for the post-install channel switch.
+
+Builds are shared across channels — one per runtime fingerprint, all plain
+`preview` profile. A JS-only PR triggers **no build** (its install QR
+resolves to main's binary for the same runtime); a native-change PR triggers
+the one build its runtime needs, ~15–20 minutes, and the section says "build
+still running" until then. Installing a binary lands on the binary's own
+channel, which is why the interstitial sequences install-then-Open-in-app:
+the first boot of a new binary clears any channel override, so the switch
+must come after the install.
+
+The fingerprint heuristic still decides which QR is expanded, but getting it
+wrong costs a scan rather than leaving you on main.
+
+A channel switch persists across restarts; get back with **Build info → Reset
+to default channel**. Installing a native build overpowers that persistence:
+the first boot of a new binary force-clears any pre-existing channel override
+(with a notice), so the build you installed is the build you run
+(`resetChannelOverrideForNewInstall` in `src/lib/build-state.ts`).
+
+Lifecycle: closing a PR deletes its channel, update branch, QR assets, and
+channel-status snapshot, and swaps the PR body's QR section for an honest
+placeholder (`.depot/workflows/mobile-pr-preview-cleanup.yml`). On a MERGE,
+the main publish then writes main's QR section into that same body — and
+when the merge changed the fingerprint with no pre-built PR build to reuse,
+a follow-up job waits out the fresh main build and upgrades the install link
+once it's installable (`scripts/ci/refresh-mobile-main-qr.ts`). The merged
+PR is the on-ramp back onto main; no hunting commit comments.
+
+Channel discovery is the PR bodies' QR sections — deliberately no in-app
+channel list, because listing channels needs the EAS API and we don't ship
+`EXPO_TOKEN` to the deployment. What the platform DOES know is the
+CI-pushed per-channel snapshot (`packages/shared/src/mobile-channel-status.ts`
+→ `PUT mobile.iterate.com/channel-status/<channel>`, admin bearer): each
+publish records the channel's runtime and expected native build; the install
+interstitial (`/install/<channel>`) and the app's staleness banner read it
+back tokenlessly.
+
+The web surface is the app's own worker — `apps/mobile/website/`,
+mobile.iterate.com, zero-framework, prd-only (kernel vs userland: none of it
+lives in apps/os, which keeps 301s for `/m/*` QRs already printed). The
+domain also carries the `apple-app-site-association`, so
+`https://mobile.iterate.com/preview-channel/<channel>` is a **universal
+link**: binaries carrying the `applinks:mobile.iterate.com` entitlement
+(app.json `ios.associatedDomains`) open the app directly from the PR body's
+tap link; older binaries fall back to the web interstitial bounce.
 
 ## Run and test it in a browser
 
@@ -224,6 +273,9 @@ testable from the phone alone. The runner shipped in PR #2059.
 
 | Path                           | What                                                                                    |
 | ------------------------------ | --------------------------------------------------------------------------------------- |
+| `src/lib/build-state-core.ts`  | Pure: which channel am I on, is this build watched, what does an update check mean      |
+| `src/lib/build-state.ts`       | Expo/react-query binding for the above: channel override, install guard, update actions |
+| `src/lib/session.ts`           | The app-global "am I signed in, where, and as whom?"                                    |
 | `src/lib/itx.ts`               | Mobile deployment/OAuth binding for the shared `iterate/sdk/itx/react` keeper           |
 | `src/lib/auth.ts`              | Issuer discovery, dynamic registration, PKCE, rotation-safe token refresh               |
 | `src/lib/chat.ts`              | Pure: stream events → bubbles + working flag; agent path conventions                    |

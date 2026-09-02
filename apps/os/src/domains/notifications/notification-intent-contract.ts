@@ -16,7 +16,9 @@ export const NotificationIntentContract = defineProcessorContract({
   // handle for approval-batch intents on every destination kind).
   // 0.3.0: user-scoped audience ({kind:"user"}) and optional top-level
   // agentReplyEventOffset (the suppression handle for chat-reply intents).
-  version: "0.3.0",
+  // 0.4.0: optional requests (the held batch's method+url pairs, in-journal
+  // detail for in-app rows; push title/body stay host-only).
+  version: "0.4.0",
   description:
     "Channel-neutral project notification intent vocabulary, shared by producers (the " +
     "notification processor) and delivery channels (device push). A contract dependency, " +
@@ -136,6 +138,23 @@ export const NotificationIntentContract = defineProcessorContract({
               "Epoch-ms deadline stamped by the producer for the WHOLE intent: past it a " +
               "channel must not deliver — surfacing a lapsed approval prompt is worse than " +
               "staying silent.",
+          }),
+        requests: z
+          .array(
+            z.object({
+              method: z.string(),
+              // A plain string, matching the approval event's own shape:
+              // custom hold rules can park free-text "URLs".
+              url: z.string(),
+            }),
+          )
+          .optional()
+          .meta({
+            description:
+              "For approval-batch intents: the held requests, in batch order. In-journal " +
+              "detail so in-app rows can say WHICH operations are held — never part of the " +
+              "push title/body sent to vendors, which stay host-only because lock screens " +
+              "leak.",
           }),
         title: z.string().trim().min(1).max(200).meta({ description: "Notification title line." }),
       }),

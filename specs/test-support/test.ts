@@ -10,7 +10,10 @@ import {
   uiErrorReporter,
   videoMode,
 } from "middlewright";
-import { createProjectFixture as createForgedProjectFixture } from "./forged-session.ts";
+import {
+  createProjectFixture as createForgedProjectFixture,
+  createMobileFixture,
+} from "./forged-session.ts";
 import { watchMetroBundles } from "./metro-bundle-spinner.ts";
 import { screenshot } from "./screenshot.ts";
 
@@ -45,6 +48,9 @@ export const test = base.extend<{
       slugPrefix: string,
       options?: { projectCount?: number },
     ) => Promise<Awaited<ReturnType<typeof createForgedProjectFixture>>>;
+    createMobileFixture: (
+      slugPrefix: string,
+    ) => Promise<Awaited<ReturnType<typeof createMobileFixture>>>;
   };
   page: Awaited<ReturnType<typeof addPagePlugins>>;
 }>({
@@ -83,6 +89,10 @@ export const test = base.extend<{
       createFixture: (slugPrefix, options) =>
         base.step("create project fixture", () =>
           createForgedProjectFixture(slugPrefix, { baseURL, page, testInfo, ...options }),
+        ),
+      createMobileFixture: (slugPrefix) =>
+        base.step("create mobile fixture", () =>
+          createMobileFixture(slugPrefix, { baseURL, page, testInfo }),
         ),
     });
   },

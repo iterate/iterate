@@ -3111,6 +3111,32 @@ describe("prompt building", () => {
     expect(prepared[0]!.content).not.toContain("sig=old");
   });
 
+  it("a file whose bytes are gone drops from the prompt without failing the turn", async () => {
+    const file = (filename: string) => ({
+      contentType: "image/png",
+      filename,
+      path: `/agents/test/${filename}`,
+      size: 42,
+      url: `https://files.example/${filename}?sig=old`,
+    });
+    // Preview R2 lifecycle reaps objects 3h after write; a reaped file used
+    // to throw out of URL reminting and permanently kill every later turn
+    // of the conversation (observed on-device, 2026-08-31).
+    const prepared = await prepareAgentLlmMessages(
+      [{ role: "user", content: "look at these", files: [file("gone.png"), file("here.png")] }],
+      async (attachment) => {
+        if (attachment.filename === "gone.png") {
+          throw new Error(`Cannot mint a file URL: no file at ${attachment.path}.`);
+        }
+        return `${attachment.url.split("?")[0]}?sig=fresh`;
+      },
+    );
+    expect(prepared[0]!.content).toContain("[Attached file: here.png");
+    expect(prepared[0]!.content).not.toContain("[Attached file: gone.png");
+    expect(prepared[0]!.content).toContain("no longer available");
+    expect(prepared[0]!.content).toContain("gone.png");
+  });
+
   it("longest-prefix matches context windows, with a conservative default", () => {
     expect(contextWindowTokens("openai/gpt-5.6-sol")).toBe(272_000);
     expect(contextWindowTokens("openai/gpt-5.5-2026-01-01")).toBe(272_000);
