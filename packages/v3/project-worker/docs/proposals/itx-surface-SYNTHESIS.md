@@ -26,8 +26,10 @@ stack dies (override → unset → restore no longer restores). B and C keep the
 pushes, `null` pops the NEWEST row at that match, restore works, ranking unchanged. Both kill
 removal-by-identity (`providedAtOffset`), which is the union that made `revoke` messy.
 **Recommendation: keep the stack (B/C).** It costs one `filter` in the reduce, keeps "newest wins" as
-the one rule, and temporary interposition (override `itx.ai.run`, pop back) is a real pattern. A row
-keeps `setAtOffset` as a tie-break and audit fact, not as a handle.
+the one rule, and temporary interposition (override `itx.ai.run`, pop back) is a real pattern. A row is
+`{ match, target }` and nothing else: the reduce keeps rows in log order, so "newest" is array position, and
+ties between different matches are impossible (equal length + equal pinned args ⇒ the same match). No
+`setAtOffset` — see §7.
 
 **D2 — Is there a verb, or only `append`?** A: no verb; the client appends
 `rewrite-rule-updated` itself and a "normalizer" at the append door canonicalizes/validates/echoes. B C D: a
@@ -87,7 +89,7 @@ whoami · kv · cd · fetch · load · facets                                   
 /** A call starting with `match` runs as the same call with `match` replaced by `target`; `null` pops the
  *  newest rewrite rule at `match`. Both halves are itx expressions; `match` may pin literal args. Appends
  *  `itx-expressions/rewrite-rule-updated { match, target | null }` — or nothing, when the table already says so. */
-rewrite(match: ItxExpressionInput, target: ItxExpressionInput | null): Promise<{ setAtOffset: number } | null>;
+rewrite(match: ItxExpressionInput, target: ItxExpressionInput | null): Promise<StreamEvent | null>; // the committed event, or null when the table already said so
 expressionRewriteRules: { list(): ItxExpressionRewriteRule[]; get(match: ItxExpressionInput): ItxExpressionRewriteRule | null };
 // layer 3 · (a) rpc stubs — the axiom: physical, hibernatable, OPAQUE key. Presence is list().
 rpcStubs: { get(rpcStubKey: string): RpcStubHandle; list(): string[] };
@@ -137,7 +139,7 @@ at the idle quiesce; presence = borrowed ∪ pager-backed. Transport verbs off t
 | `provide(path, fn)`                                                                                                     | `rewrite(match, fn)` (sugar)                                                                                                                                 | `rpcStubs.lend(key, { stub })` · `rpcStubs.recall(key)` (raw, edge)                                                                                 |
 | `subscribe` / `unsubscribe` / `configureSubscription` / `removeSubscription`                                            | `subscribe({ name, target \| null, consumes? })` (root)                                                                                                      | —                                                                                                                                                   |
 | `invokeCapability`                                                                                                      | `invoke`                                                                                                                                                     | —                                                                                                                                                   |
-| `Mount { path, target, providedAtOffset }` · `state.mounts`                                                             | `ItxExpressionRewriteRule { match, target, setAtOffset }` · `state.itxExpressionRewriteRules`                                                                | —                                                                                                                                                   |
+| `Mount { path, target, providedAtOffset }` · `state.mounts`                                                             | `ItxExpressionRewriteRule { match, target }` · `state.itxExpressionRewriteRules`                                                                             | —                                                                                                                                                   |
 | `capability-table/capability-provided` + `-revoked`                                                                     | ONE `itx-expressions/rewrite-rule-updated { match, target \| null }`                                                                                         | —                                                                                                                                                   |
 | `stream/subscription-configured` + `-removed`                                                                           | ONE `stream/subscription-updated { name, target \| null, consumes? }`                                                                                        | —                                                                                                                                                   |
 | `CapabilityPath` · `parseCapabilityPath` · `canonicalCapabilityPath`                                                    | `ItxExpressionPrefix` · `parseItxExpressionPrefix` · `canonicalItxExpressionPrefix`                                                                          | `rpcStubKey` (opaque string)                                                                                                                        |
@@ -169,3 +171,22 @@ at the idle quiesce; presence = borrowed ∪ pager-backed. Transport verbs off t
 - The client's type is unenforced beyond the four declared edge members; a typo is `NO_ITX_EXPRESSION_MATCH`, not a missing method. (Already true for `itx.kv`, `itx.facets`, `itx.load`.)
 - Six new reserved dotted roots (`rewrite`, `expressionRewriteRules`, `subscribe`, `enableProcessor`, `disableProcessor`, `waitForEvent`).
 - "Capability" and "mount" prose churn across headers, docs and BUILD-LOG (history docs untouched).
+
+## 7. Why no offset on a rewrite-rule row (Jonas: "what is an actual case where this race matters?")
+
+Today's `providedAtOffset` does three jobs. **Identity for by-offset revoke** — gone in all four designs
+(a `null` pops the newest at the match). **The ranking tie-break** in `pickMount` — unnecessary: the reduce
+appends rows in log order, so "newest at this match" is the last matching array element, and two rows with
+DIFFERENT matches can never tie (equal length and equal pinned-arg count means the same prefix). **A
+receipt** — `provideCapability` returns `{ providedAtOffset }` so a caller can tell "appended" from
+"idempotent no-op"; returning the committed `StreamEvent` (or `null`) says the same without a bespoke field.
+
+The race by-identity removal defended against: A sets `itx.g ⇒ X`, B sets `itx.g ⇒ Y` a moment later, A then
+un-sets "its" rule and pops Y instead. Under trusted intra-project coordination there is no real instance
+of it: a reconnecting provider re-sets the SAME target (appends nothing), two providers at one match is a
+configuration mistake last-writer-wins makes visible, and the 16 e2e uses of `providedAtOffset` are
+by-identity revokes and appended-vs-no-op assertions, not a behaviour. Speculative machinery; deleted.
+
+`configuredAtOffset` on a SUBSCRIPTION row is different and stays: the delivery loop seeds a new
+subscription's cursor from it (`subscription-delivery.ts`: `confirmedOffset: row.configuredAtOffset`) — a
+subscription starts at the moment it was configured, not at offset 0. That is a behaviour, not a receipt.
