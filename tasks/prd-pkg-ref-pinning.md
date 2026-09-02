@@ -9,7 +9,7 @@ size: small
 
 ## Change
 
-- `deploy-os.yml` passes `PLATFORM_DEPLOY_HEAD_SHA: ${{ github.sha }}` on prd deploys.
+- `deploy-os.yml` exports `PLATFORM_DEPLOY_HEAD_SHA="$(git rev-parse HEAD)"` on prd deploys (workspace HEAD, not github.sha — dispatch honors inputs.ref).
 - `apps/os/scripts/deploy.ts` sets `APP_CONFIG_ITERATE_REPO_PKG_REF` from `PREVIEW_PULL_REQUEST_HEAD_SHA` (unchanged) or, failing that, `PLATFORM_DEPLOY_HEAD_SHA` — and awaits the sha-pinned pkg.pr.new URLs the same way preview deploys already do, closing the deploy-races-publish window.
 - Dev/local deploys stay unpinned (no sha build exists for uncommitted state).
 
