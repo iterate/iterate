@@ -17,7 +17,7 @@ type ErrorCode =
   | "STREAM_BREAKER_OPEN"
   | "CONNECTION_OFFLINE" // a live capability's transport is gone right now (row present, stub unreachable)
   | "NOT_A_METHOD" // the dotted path's terminal segment is not callable on the target
-  | "NO_FACET" // no facet-hosted processor is enabled under that slug
+  | "NO_FACET" // no facet of that name has been loaded into this context
   | "EPHEMERAL_IDEMPOTENCY_KEY" // ephemeral + idempotencyKey is a contradiction, always rejected
   | "WAIT_TIMEOUT"; // waitForEvent expired with no matching event committed
 // (There is no separate boundary-validation library: the append door's own runtime guards

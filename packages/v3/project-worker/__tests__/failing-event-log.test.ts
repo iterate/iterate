@@ -1,4 +1,4 @@
-// __tests__/failing-event-log.test.ts — BUG HUNT over the event log + inline core (the
+// __tests__/failing-event-log.test.ts — BUG HUNT over the event log + inline reduces (the
 // StreamEventLog commit point in iterate-context-durable-object.ts and the CoreStreamProcessor
 // pause/breaker reduce). Every test asserts the CORRECT behavior; a test marked `test.fails`
 // documents a genuine bug in the current code (its body opens with BUG/EXPECTED/ACTUAL/WHY).

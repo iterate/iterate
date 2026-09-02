@@ -206,7 +206,7 @@ export class SubscriptionsProcessor implements ReduceOnlyProcessor<Subscriptions
   ): Promise<{ name: string; configuredAtOffset: number }> {
     const name = SubscriptionName.parse(input.name);
     if (this.#reservedNames.has(name))
-      throw new Error(`"${name}" is an inline core reduce's name — reserved; pick another`);
+      throw new Error(`"${name}" is an inline reduce's name — reserved; pick another`);
     const target = toExpression(input.target);
     if (target[0] !== "itx")
       throw new Error(

@@ -4,7 +4,7 @@
 //
 //   • SEED through the producer's door — `{rev, state}` read via an RPC method (a processor's
 //     `liveSnapshot()`, a mini-app's `state()`). apps/os folds the first snapshot in-band on the
-//     subscription; here the stream is a pure forwarder, so the seed is a separate read.
+//     subscription; here the stream keeps no per-subscriber state, so the seed is a separate read.
 //   • APPLY each `{key, from, to, patch}` delta the subscription delivers: a patch lands only when
 //     its `from` matches the held rev; a mismatch means a missed delta (or a reborn producer's fresh
 //     epoch) — resync by re-reading the door, exactly like apps/os's revision-gap resync.

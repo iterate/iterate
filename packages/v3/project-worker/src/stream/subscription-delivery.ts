@@ -286,7 +286,7 @@ export class SubscriptionDelivery {
         if (current.resumed && current.resumed.atOffset !== row.resumedAt) {
           row = {
             // A seek is clamped to the head: past it, the row would sit beyond every event until the
-            // stream caught up (the old defect 13) — "resume from the end" is what such a seek means.
+            // stream caught up — "resume from the end" is what such a seek means.
             confirmedOffset: Math.min(
               current.resumed.afterOffset ?? row.confirmedOffset,
               this.#deps.head(),

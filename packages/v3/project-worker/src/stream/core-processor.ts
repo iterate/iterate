@@ -1,6 +1,4 @@
-// core-processor.ts — THE STREAM'S CORE PROCESSOR, ported from apps/os (its stream DO "runs it
-// inline during append instead of through the normal event-batch runner"; the same reducer
-// "also maintains the stream's token-bucket circuit-breaker state"). A REDUCE-ONLY processor:
+// core-processor.ts — THE STREAM'S CORE REDUCE, run inline at the commit point. A REDUCE-ONLY processor:
 // its state is the stream's own operational truth — whether appends are PAUSED, and the
 // token-bucket CIRCUIT BREAKER metering durable log growth. Control is ORDINARY EVENTS (pause/
 // resume/reconfigure are appends — auditable, replayable, revocable like everything else);

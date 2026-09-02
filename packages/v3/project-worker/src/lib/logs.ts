@@ -1,7 +1,7 @@
 // lib/logs.ts — ONE structured console line per call, distilled from cloudflare-os
 // (backend-utils/logger-core.ts). Every line is an object Workers Logs stores queryably:
 // console.<level>({ ...fields, namespace, message }). Conventions kept from the source:
-//   - `event` is the machine-readable name, dot.separated ("facet.drive.failed") — grep and
+//   - `event` is the machine-readable name, dot.separated ("delivery.push.dropped") — grep and
 //     alert on `event`, never on message prose.
 //   - `error` accepts any caught value: printed as a string, plus `errorStack` for real Errors.
 //   - spread order IS the override order: with()-fields < call fields < namespace/message.

@@ -35,8 +35,7 @@ export type Match = {
 
 /** Claim `call` with a capability `path`, segment by segment from the start: each segment matches a
  *  string step of the same name, or — FINAL segment only — a call step of the same method (its args
- *  become the boundary args). No placeholders or captures (that generality had zero users and
- *  shipped two codec bugs before it was deleted in increment 55). */
+ *  become the boundary args). No placeholders or captures. */
 export function match(path: readonly string[], call: Expression): Match | null {
   let boundaryArgs: unknown[] | undefined;
   for (let i = 0; i < path.length; i++) {
@@ -54,7 +53,7 @@ export function match(path: readonly string[], call: Expression): Match | null {
 // RPC-EXPOSURE DOCTRINE (Kenton, workerd #1028), enforced at THE dispatch point: what an object
 // merely INHERITS from Object/Function.prototype is not capability surface, and __proto__ /
 // constructor / prototype never resolve. Refusal is indistinguishable from absence, so callers
-// cannot probe. Identity-based on purpose — views may be Proxies (pathProxy, capnweb / Workers-RPC
+// cannot probe. Identity-based on purpose — views may be Proxies (capnweb / Workers-RPC
 // stubs) whose descriptor traps don't mirror `get` — never a descriptor walk; an own override with
 // the same name resolves to a DIFFERENT function and is allowed (the doctrine permits what the
 // object chose).
@@ -119,9 +118,7 @@ async function walkSteps(
 /**
  * Dotted-path invocation over a LOCAL object graph — a facet stub, a hosted class, any dotted
  * view: walk the intermediates receiver-preservingly, apply the terminal. ONE walk for every "call
- * path X with args on this object" door (the parent's facetInvoke, stateful facets); the
- * DataCloneError learning on `walkSteps` above is exactly why the hand-rolled copies it replaced
- * were the drift class.
+ * path X with args on this object" door (the parent's facet door, stateful facets).
  */
 export async function invokePath(
   target: unknown,
@@ -151,7 +148,7 @@ export async function evaluate(
 
 /** Apply `args` to a resolved value on its carried receiver, or a LOUD error if it is not callable
  *  (never the silent arg-drop apps/os shipped). An `InvokeHandle` (a mid-chain capability handle —
- *  a live row's transport bridge, a facet handle, a parked-callback the forwarder delivers to) is NOT a JS function
+ *  a live stub's transport bridge, a facet handle, a parked callback the delivery loop pushes to) is NOT a JS function
  *  (it is a real RpcTarget so dotted access pipelines — context/invoke-handle.ts), so ROOT-calling it
  *  means dispatching those args at its EMPTY path: `handle(events,range)` ⇒ the bare callback the
  *  handle fronts. This is the one bridge between "callable capability" and "pipelinable RpcTarget". */

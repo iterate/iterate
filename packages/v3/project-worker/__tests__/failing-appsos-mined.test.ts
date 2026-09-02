@@ -235,18 +235,18 @@ test("concurrent anonymous subscribes get unique names and never shadow each oth
   );
 });
 
-test("an inline core slug (core / capability-table / subscriptions) cannot be disabled as a facet", async () => {
+test("an inline reduce's slug (core / capability-table / subscriptions) cannot be disabled as a facet", async () => {
   // PARITY LOCK: the inline reduce-only cores are always-on, never facets — an authority
   //   boundary (contrast apps/os "hosted processor subscriptions cannot be removed",
   //   core-processor.test.ts:495).
   const itx = await harness.itx("prj_am_inline");
   for (const slug of ["core", "capability-table", "subscriptions"]) {
     const err = await rejection(itx.disableProcessor(slug));
-    expect(err.message).toMatch(/inline core/);
+    expect(err.message).toMatch(/inline reduce/);
   }
 });
 
-test("enableProcessor refuses an inline core slug (core / capability-table / subscriptions)", async () => {
+test("enableProcessor refuses an inline reduce's slug (core / capability-table / subscriptions)", async () => {
   // BUG: `enableProcessor("core", ref)` is ACCEPTED — a subscription row named "core" is appended
   //   whose target materializes a hosted facet also named "core", shadowed by the inline reduce of
   //   the same name (`itx.facets.get('core')` answers the inline snapshot; the hosted facet is
@@ -266,7 +266,7 @@ test("enableProcessor refuses an inline core slug (core / capability-table / sub
         className: "Tally",
       });
     })(),
-  ).rejects.toThrow(/inline core/);
+  ).rejects.toThrow(/inline reduce/);
 });
 
 // ─────────────────────────────── GUARANTEE DELIBERATELY NOT GIVEN (parity) ───────────────────────────────

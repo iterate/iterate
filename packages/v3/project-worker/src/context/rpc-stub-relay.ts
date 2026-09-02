@@ -11,7 +11,7 @@
 // target is `itx.rpcStubs.get('<path>')`. This module owns the whole dance behind a TWO-SYMBOL
 // API — `startRpcStubRelay` (park a stub, hand back a disposable relay) and `Parking` (the
 // session-lived registry that keeps relays alive; the caller keys it) — so iterate-context.ts reads as
-// its narrative (ProjectSession → IterateContext → the built-in collections), with the pager
+// its narrative (Session → ProjectCollection → IterateContext), with the pager
 // sockets and the shared broken-flag hidden here.
 
 import { RpcTarget as WorkersRpcTarget } from "cloudflare:workers";
@@ -94,14 +94,6 @@ class RetainedCallbackInvoker extends WorkersRpcTarget {
   }
 }
 
-/** One CAPNWEB CALLBACK RELAY: the retained capnweb callback stub + the stub pager WebSocket into
- *  one stream DO + a fresh RetainedCallbackInvoker per page. One relay per (rpc stub, stream) pair;
- *  a client's capnweb WebSocket carries many. */
-export interface CapnwebCallbackRelay {
-  transportId: string;
-  dispose(): void;
-}
-
 /** Session-lived registry of what dies with the session: live relays (retained callbacks + pager
  *  sockets, so they aren't GC'd) and anything else the session must undo at its end (an anonymous
  *  subscription's removal) — ONE entry per key. THE CALLER OWNS THE KEY: one session's Parking spans
@@ -138,10 +130,10 @@ export class Parking {
 export async function startRpcStubRelay(
   context: IterateContextStub,
   provider: RetainedProviderStub,
-  path: string,
+  key: string,
   waitUntil: (p: Promise<unknown>) => void,
-): Promise<CapnwebCallbackRelay> {
-  const { transportId } = await context.rpcStubAttach({ path });
+): Promise<{ dispose(): void }> {
+  const { transportId } = await context.rpcStubAttach({ key });
   const retained = provider.dup();
   // ONE shared broken flag for the whole relay — every paged-in invoker reads it; the single
   // onRpcBroken registration below flips it. (Registering per page would leak a listener per page:
@@ -174,7 +166,6 @@ export async function startRpcStubRelay(
   });
   pagerWebSocket.addEventListener("close", disposeRetained);
   return {
-    transportId,
     dispose: () => {
       try {
         pagerWebSocket.close(1000, "relay disposed");

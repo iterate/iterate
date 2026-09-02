@@ -7,7 +7,7 @@
 // A loaded worker's `env.ITX` is a Workers-RPC service binding to the `ItxEntrypoint`. It reaches
 // the genuine itx scope with `env.ITX.get()` — a real `IterateContext` RpcTarget — and then writes plain
 // dotted access (`itx.demo.timer.callLater(cb)`), identical to what a capnweb client writes after
-// `session.get()`. There is no client-side wrapper: the scope IS a real RpcTarget, so mid-chain
+// `projects.get(id)`. There is no client-side wrapper: the scope IS a real RpcTarget, so mid-chain
 // handles and callbacks pipeline natively over both lanes (no accumulating Proxy, no fold shim).
 
 // A loaded SOURCE now EXPORTS its own host object — a `WorkerEntrypoint` (reached with
@@ -66,9 +66,8 @@ export function confinedWorker(
     mainModule,
     // The processor SDK ("processor.js", ~330KB) is injected by `loadConfinedWorker` (THE one
     // caller), not here, so `confinedWorker` stays a pure loader-primitive: every load gets
-    // "processor.js" (any user code may `import "./processor.js"` uniformly), and only the
-    // "runner.js" adapter stays processor-role-only. The itx scope is reached via `env.ITX.get()`,
-    // not an injected module.
+    // "processor.js" (any user code may `import "./processor.js"` uniformly). The itx scope is
+    // reached via `env.ITX.get()`, not an injected module.
     modules,
     env: { ITX: host },
     globalOutbound: host,
@@ -79,7 +78,7 @@ export function confinedWorker(
  *  worker (SDK injected). It stops at the loaded `worker` handle — the CALLER then chooses the host,
  *  exactly like Cloudflare's own two-step: `worker.getEntrypoint(name?)` for a stateless
  *  `WorkerEntrypoint` (built-ins.ts `statelessHandle`), or `worker.getDurableObjectClass(name)` fed
- *  to `versionedFacet` for a durable `DurableObject` facet (iterate-context-durable-object.ts `#durableFacet`).
+ *  to `versionedFacet` for a durable `DurableObject` facet (iterate-context-durable-object.ts `#facet`).
  * "load the code" and "choose the host" are visibly separate. `version` (the contentHash) rides back for the facet marker dance. */
 export async function loadConfinedWorker(opts: {
   env: { LOADER: WorkerLoader; CF_VERSION_METADATA?: { id: string } };
@@ -89,9 +88,6 @@ export async function loadConfinedWorker(opts: {
   owner: string;
   source: WorkerSource;
   mainModule: string;
-  /** Role-specific modules layered over the user's source + the always-present SDK (e.g. the
-   *  processor `runner.js` adapter). */
-  extraModules?: Record<string, string>;
   what: string;
   /** PRE-RESOLVED `{ modules, version }` from a caller-owned memo — skips the source fetch + hash.
    *  The commit pump loads the SAME facet on EVERY commit; a per-facet memo (keyed by the printed
@@ -111,7 +107,7 @@ export async function loadConfinedWorker(opts: {
     opts.env,
     { kind: opts.kind, owner: opts.owner, contentHash: version },
     opts.mainModule,
-    { ...userModules, "processor.js": PROCESSOR_SDK_MODULE, ...opts.extraModules },
+    { ...userModules, "processor.js": PROCESSOR_SDK_MODULE },
     opts.host,
   );
   return { worker, version, modules: userModules };

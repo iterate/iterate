@@ -86,7 +86,7 @@ export function print(expr: Expression): string {
     .join("");
 }
 
-/** Parse a capability path ("itx.subscribers.foo") — dotted names only; a call step is a loud error. */
+/** Parse a capability path ("itx.greet") — dotted names only; a call step is a loud error. */
 export function parseCapabilityPath(source: string): CapabilityPath {
   const expr = parse(source);
   if (!expr.every((step): step is string => typeof step === "string"))
@@ -94,4 +94,10 @@ export function parseCapabilityPath(source: string): CapabilityPath {
       `a capability path is dotted names only — ${JSON.stringify(source)} contains a call`,
     );
   return expr;
+}
+
+/** THE ONE canonical spelling of a capability path — what the table stores, what a live stub is
+ *  parked under, what `revoke(path)` matches: parsed, then re-joined with dots. */
+export function canonicalCapabilityPath(source: string): string {
+  return parseCapabilityPath(source).join(".");
 }

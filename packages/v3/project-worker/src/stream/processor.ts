@@ -1,17 +1,12 @@
-// stream/processor.ts — the stream processor base class. The AUTHOR surface mirrors apps/os
-// (`reduce`/`processEvent`, `blockProcessorWhile`/`runInBackground`, `delivery.caughtUp`) so
-// processors port both ways; the RUNNER lives in the same class — a processor and the thing
-// that runs it are one object (the registry-of-N this replaced was bookkeeping for a
-// multi-tenancy that never occurred: every facet hosts exactly one processor).
+// stream/processor.ts — THE PROCESSOR ENGINE. The author surface mirrors apps/os
+// (`reduce`/`processEvent`/`projectLiveState`, `blockProcessorWhile`/`runInBackground`,
+// `delivery.caughtUp`) so processors port both ways. Authors never extend this class directly:
+// `StreamProcessorDurableObject` (sdk/) is the base class they write, and it wraps ONE instance of
+// this engine with its hooks pointed at the author's methods. Node-testable; bundled with zod into
+// every loaded isolate as `processor.js` via sdk/index.ts (build-sdk.mjs). Runtime imports: lib/,
+// stream/live-state.ts, stream/reduce-checkpoint.ts.
 //
-// THIS FILE IS THE HEART OF THE USERSPACE SDK: its only runtime imports are the dependency-free
-// diff in lib/patch.ts and the platform-neutral error channel in lib/errors.ts, and it
-// is bundled — together with the zod contract helper from stream/events.ts and zod itself, via
-// src/sdk/index.ts — into every loaded processor isolate as `processor.js` (build-sdk.mjs). Userspace
-// authors write exactly what built-ins write: `defineProcessorContract` with real schemas
-// (owner's call: the SDK absolutely ships zod), then `class X extends StreamProcessor`.
-//
-// THE CONCURRENCY CONTRACT (verbatim from apps/os's runner):
+// THE CONCURRENCY CONTRACT:
 //   1. ONE SERIAL CHAIN per processor — batches never interleave.
 //   2. ONE EVENT AT A TIME inside a batch: this event's `blockProcessorWhile` work completes
 //      before the next event's `processEvent` starts (a FIFO chain, awaited per event).
@@ -88,9 +83,6 @@ export type ProcessorStream = {
 export type ProcessorStorage = {
   get<T>(key: string): T | undefined;
   put(key: string, value: unknown): void;
-  /** Optional: GC a key outright. The userspace runner's storage adapter omits it; the built-in
-   *  facet host wires it (only the forwarder processor needs it). */
-  delete?(key: string): void;
 };
 
 /** The contiguity proof a delivery carries: the half-open offset window `(after, through]`. A chain
@@ -116,8 +108,8 @@ export type ProcessEventArgs<State> = {
 export type ProcessorSnapshot<State> = { offset: number; state: State };
 
 /** A REDUCE-ONLY processor: pure reduce, no effects — hostable at ZERO DISTANCE (inline at the
- *  parent's commit point) because it needs none of the async runner below. The entire runner
- *  apparatus — serial chain, cursors, scanned offset ranges, gap repair, resurrection — is the price of
+ *  parent's commit point) because it needs none of the async engine below. The entire engine
+ *  apparatus — serial chain, cursors, scanned offset ranges, gap repair — is the price of
  *  being AWAY from the commit point; a reduce that runs synchronously inside append pays none of
  *  it. Same `defineProcessorContract`, same `reduce({event, state})` signature; NOT having a
  *  `processEvent` is what qualifies a processor for inline hosting (the rule is the type).
@@ -127,12 +119,12 @@ export type ReduceOnlyProcessor<State> = {
   reduce(args: ReduceArgs<State>): State | null | undefined;
 };
 
-/** Returned by #liveStateOf when `liveState(state)` threw — distinct from a legitimate `undefined`
- *  projection, so a throw skips the emit while `undefined` is a real (patchable) value. */
+/** Returned by #projectionOf when `projectLiveState(state)` threw — distinct from a legitimate
+ *  `undefined` projection, so a throw skips the emit while `undefined` is a real (patchable) value. */
 const PROJECTION_FAILED = Symbol("live-state-projection-failed");
 
 /** THE ONE consumes rule — the processor engine, the subscription delivery loop, and the inline
- *  core all call this; there is no second copy to drift. `consumes` undefined = every durable event
+ *  reduces all call this; there is no second copy to drift. `consumes` undefined = every durable event
  *  (a subscriber's default). "*" = every durable event. A NAMED type opts that type in, INCLUDING
  *  ephemerals ("*" NEVER sweeps ephemerals) — so a live-state watcher spells
  *  `consumes: ["events.iterate.com/live-state/changed"]` and filters `payload.key` itself. */
@@ -191,7 +183,7 @@ export abstract class StreamProcessor<State> {
    *  Override to redact/trim, or to FOLD IN RUNTIME FIELDS the reduce doesn't own
    *  (`return { ...state, lastSeenMs: this.#lastSeenMs }`); after a runtime field changes out of
    *  band, call `publishLiveState()` to emit its delta. */
-  protected liveState(state: State): unknown {
+  protected projectLiveState(state: State): unknown {
     return state;
   }
 
@@ -203,7 +195,7 @@ export abstract class StreamProcessor<State> {
   #live?: LiveState<unknown>;
   #liveHolder(seedState?: State): LiveState<unknown> {
     if (this.#live) return this.#live;
-    const seed = this.#liveStateOf(seedState ?? this.#loadProgress().state);
+    const seed = this.#projectionOf(seedState ?? this.#loadProgress().state);
     return (this.#live = new LiveState(
       this.stream,
       this.contract.slug,
@@ -211,12 +203,12 @@ export abstract class StreamProcessor<State> {
     ));
   }
 
-  /** `this.liveState(state)`, CONTAINED: a throwing/unserializable projection loses only its
+  /** `this.projectLiveState(state)`, CONTAINED: a throwing/unserializable projection loses only its
    *  notification (the client re-seeds on the chain gap), never a batch or the holder. The sentinel
    *  distinguishes "threw" (skip the emit) from a legitimate `undefined` projection. */
-  #liveStateOf(state: State): unknown {
+  #projectionOf(state: State): unknown {
     try {
-      return this.liveState(state);
+      return this.projectLiveState(state);
     } catch (error) {
       reportIssue("processor.live-state", error, { slug: this.contract.slug });
       return PROJECTION_FAILED;
@@ -234,7 +226,7 @@ export abstract class StreamProcessor<State> {
   /** Emit a delta for the CURRENT projection (reduced + any runtime fields) if it changed. The base
    *  calls this after every batch; call it yourself after mutating a runtime field out of band. */
   protected publishLiveState(): void {
-    const projection = this.#liveStateOf(this.#loadProgress().state);
+    const projection = this.#projectionOf(this.#loadProgress().state);
     if (projection !== PROJECTION_FAILED) this.#liveHolder().set(projection);
   }
 
@@ -272,8 +264,7 @@ export abstract class StreamProcessor<State> {
       }
       // ALWAYS process the push — no push is ever discarded. Durables fold iff fresh (`offset >
       // cursor`); ephemerals ALWAYS deliver (one push, unredeliverable); the cursor never regresses.
-      // A wholly-behind (stale) push folds nothing and just delivers its ephemerals. This
-      // one path replaced the old contiguous / non-contiguous / stale-drop three-way branch.
+      // A wholly-behind (stale) push folds nothing and just delivers its ephemerals.
       const atHead = range.through >= (this.#pushedThroughOffset ?? 0);
       await this.#processBatch(events, range, atHead);
     });
@@ -345,7 +336,7 @@ export abstract class StreamProcessor<State> {
     });
   }
 
-  // ── the runner (private) ──
+  // ── the engine (private) ──
 
   /** Serialize on the chain. THE RULE: never await your own chain from inside a batch — a
    *  processor that appends during its batch would deadlock, which is why every append→drive
@@ -463,8 +454,7 @@ export abstract class StreamProcessor<State> {
    *  DURABLES fold at-most-once — `offset > cursor`. EPHEMERALS ALWAYS deliver — each rides exactly
    *  one push and can never be a redelivery, so a durable-only wake that clamped the cursor PAST an
    *  ephemeral offset must not suppress it. The cursor is a DURABLE-fold watermark and never
-   *  regresses. (This one method replaced the old contiguous / non-contiguous / stale-drop three-way
-   *  in `processEventBatch`; there is no separate ephemeral path.) */
+   *  regresses. There is no separate ephemeral path. */
   async #processBatch(events: StreamEventT[], range: ScannedRange, atHead: boolean): Promise<void> {
     const progress = this.#loadProgress();
     const prevState = progress.state;

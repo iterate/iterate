@@ -78,7 +78,7 @@ test("ABANDONED ATTACH IS LAZILY SWEPT: 11s later the next attach drops it — t
   const s = stub(ctx);
 
   // A relay that dies mid-handshake: reserve a transport for itx.k1, NEVER open its pager.
-  const { transportId: abandoned } = await s.rpcStubAttach({ path: "itx.k1" });
+  const { transportId: abandoned } = await s.rpcStubAttach({ key: "itx.k1" });
 
   // +11s of fake Date, then a second attach — its #sweepPending sees k1's reservation past the
   // 10s TTL and drops it. (k2's own atMs is stamped at the faked future instant, so it sits safely
@@ -87,7 +87,7 @@ test("ABANDONED ATTACH IS LAZILY SWEPT: 11s later the next attach drops it — t
   vi.useFakeTimers({ now: Date.now(), toFake: ["Date"] });
   try {
     vi.setSystemTime(Date.now() + 11_000);
-    fresh = (await s.rpcStubAttach({ path: "itx.k2" })).transportId;
+    fresh = (await s.rpcStubAttach({ key: "itx.k2" })).transportId;
   } finally {
     vi.useRealTimers();
   }

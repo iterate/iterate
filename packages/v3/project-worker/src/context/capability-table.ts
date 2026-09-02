@@ -149,10 +149,10 @@ export class CapabilityTableProcessor implements ReduceOnlyProcessor<State> {
   /** Provide = append the mount event (STRING at rest — programmatic inputs are canonicalized
    *  through print). The offset that comes back IS the mount's identity. */
   async provide(input: {
-    path: string | CapabilityPath;
+    path: string;
     target: ItxExpression;
   }): Promise<{ providedAtOffset: number }> {
-    const path = typeof input.path === "string" ? parseCapabilityPath(input.path) : input.path;
+    const path = parseCapabilityPath(input.path);
     const target = toExpression(input.target);
     if (target[0] !== "itx")
       throw new Error(
@@ -166,11 +166,7 @@ export class CapabilityTableProcessor implements ReduceOnlyProcessor<State> {
     const targetString = print(target);
     try {
       const reparsedPath = parseCapabilityPath(pathString);
-      if (
-        reparsedPath.length !== path.length || // a pre-split array like ["itx.kv"] re-splits — reject
-        reparsedPath.join(".") !== pathString ||
-        print(parse(targetString)) !== targetString
-      )
+      if (reparsedPath.join(".") !== pathString || print(parse(targetString)) !== targetString)
         throw new Error("re-parse diverged");
     } catch (cause) {
       throw new Error(
@@ -187,11 +183,8 @@ export class CapabilityTableProcessor implements ReduceOnlyProcessor<State> {
   }
 
   async revoke(input: { providedAtOffset: number }): Promise<void> {
-    // No idempotencyKey: a deterministic one (`capability-table/revoke:<offset>`) was a public
-    // squat vector — an outside append under that key made the real revoke IDEMPOTENCY_CONFLICT
-    // and left the capability unrevocable forever (defect 34/46). Revoke-by-offset is already
-    // idempotent through the reduce (a second revoked event filters a mount that's already gone),
-    // so the key bought nothing but the attack surface.
+    // No idempotencyKey: revoke-by-offset is already idempotent through the reduce (a second revoked
+    // event filters a mount that is already gone).
     await this.stream.append(
       this.contract.buildEvent({
         type: "events.iterate.com/capability-table/capability-revoked",
@@ -288,7 +281,7 @@ export class CapabilityTableProcessor implements ReduceOnlyProcessor<State> {
   /** The `itx` scope symbol at a given recursion depth: dotted/called access re-enters
    *  `resolve` with the CURRENT state, carrying the depth. This is what makes alias mounts
    *  compose and default routes forward whole calls. An `InvokeHandle` (the ONE dotted-fold
-   *  primitive) — the same fold a bare `pathProxy` did, now on a pipelinable brand. */
+   *  primitive). */
   #itxAtDepth(depth: number): unknown {
     return new InvokeHandle((segments, args) => {
       const last = segments[segments.length - 1] as string;

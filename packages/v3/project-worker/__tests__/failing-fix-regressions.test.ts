@@ -39,7 +39,7 @@ test("charset gate: a ':' in the ctx is rejected at the edge (no DO is addressed
   const probe: any = await good.invokeCapability("itx.facets.get('core').snapshot()");
   expect(typeof probe.offset).toBe("number");
   const bad = await fetch(
-    new URL(`/cap?context=${encodeURIComponent("prj_x:evil")}&cap=whoami`, harness.url),
+    new URL(`/cap?context=${encodeURIComponent("prj_x:evil")}&cap=itx.whoami`, harness.url),
   );
   expect(bad.status).toBeGreaterThanOrEqual(500);
 });

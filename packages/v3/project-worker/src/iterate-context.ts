@@ -6,7 +6,7 @@
 // none may be introduced — a client's whole dependency is the capnweb package. Anything that
 // would need client-side smarts belongs HERE, behind an RpcTarget method.
 //
-// THE EDGE DOCTRINE — what the `IterateContext` RpcTarget is FOR (three roles):
+// THE EDGE DOCTRINE — what the `IterateContext` RpcTarget is FOR (two roles):
 //   (a) PROXY: the stream verbs (append / read / waitForEvent), egress (fetch) and capability
 //       dispatch (invokeCapability, provide / revoke, subscribe, enable-/disableProcessor) forward
 //       to the context DO over Workers RPC — the DO owns every contract, these methods just relay;
@@ -14,10 +14,6 @@
 //       capnweb session — path invocation (the prototype fallback at the bottom folds dotted
 //       sugar `itx.a.b(x)` into ONE invokeCapability expression) and the live-stub Parking (the
 //       DON'T-PIN relay — see below);
-//   (c) FUTURE — DO-free serving: this is where KV-cached mounted capabilities would land
-//       (answering cached table rows / kv / whoami at the edge WITHOUT waking the DO).
-//       Documented on purpose, deliberately NOT built.
-//
 // HOW A CLIENT REACHES ONE: `/api` → `UnauthenticatedSession.authenticate()` → `Session.projects.get(id)`
 // → that project's ROOT `IterateContext` (session.ts). Contexts within a project are reached from a
 // context with `cd(path)` (absolute by convention, relative resolves).
@@ -50,7 +46,7 @@ import {
 } from "./fetch/fetch-capabilities.ts";
 import type { StreamEvent, StreamEventInput } from "./stream/events.ts";
 import type { WaitForEventFilter } from "./stream/stream.ts";
-import { parseCapabilityPath, toExpression, type ItxExpression } from "./context/expression.ts";
+import { canonicalCapabilityPath, toExpression, type ItxExpression } from "./context/expression.ts";
 import type { WorkerSource } from "./context/worker-loader.ts";
 import { installPrototypeInvokeCapabilityFallback } from "./context/dotted-path-proxy.ts";
 import { InvokeHandle } from "./context/invoke-handle.ts";
@@ -102,7 +98,7 @@ class RpcStubs extends RpcTarget {
   async provide(target: ProviderStub, opts: { key: string }): Promise<{ key: string }> {
     assertLiveValue(target, "rpcStubs.provide(target, { key })");
     // Validate/normalize BEFORE attaching — an invalid key must never burn a transport reservation.
-    const key = parseCapabilityPath(opts.key).join(".");
+    const key = canonicalCapabilityPath(opts.key);
     const relay = await startRpcStubRelay(
       this.#context,
       target as RetainedProviderStub,
@@ -115,7 +111,7 @@ class RpcStubs extends RpcTarget {
 
   /** A parked stub by key — a pipelinable handle (`itx.rpcStubs.get('k').method(x)` rides one round
    *  trip on every lane; context/invoke-handle.ts). Offline ⇒ CONNECTION_OFFLINE at call time. */
-  get(key: string): unknown {
+  get(key: string): InvokeHandle {
     return new InvokeHandle((path, args) =>
       this.#context.invoke([
         "itx",
@@ -128,14 +124,14 @@ class RpcStubs extends RpcTarget {
   }
 
   /** PRESENCE — the keys with an open transport right now (the DO's built-in). */
-  list(): Promise<unknown> {
-    return this.#context.invoke(["itx", "rpcStubs", ["list"]]);
+  list(): Promise<string[]> {
+    return this.#context.invoke(["itx", "rpcStubs", ["list"]]) as Promise<string[]>;
   }
 
   /** Dispose THIS session's relay for `key`: the pager closes and the DO drops the stub. A no-op
    *  for a key this session never parked. Mounts naming the key are untouched (`itx.revoke`). */
   close(key: string): void {
-    this.#parking.dispose(this.#parkingKey(parseCapabilityPath(key).join(".")));
+    this.#parking.dispose(this.#parkingKey(canonicalCapabilityPath(key)));
   }
 }
 
@@ -299,7 +295,7 @@ export class IterateContext extends RpcTarget {
    *  as `itx.rpcStubs.get('…')` until `rpcStubs.close` or session end. */
   async revoke(input: string | { providedAtOffset: number }): Promise<void> {
     if (typeof input === "string") {
-      const path = parseCapabilityPath(input).join(".");
+      const path = canonicalCapabilityPath(input);
       await this.#context.revokeCapability({ path });
       this.rpcStubs.close(path);
       return;
@@ -411,24 +407,3 @@ function assertLiveValue(target: unknown, where: string): void {
 // context/dotted-path-proxy.ts for the workerd brand-check reason this is a prototype hop and not a
 // Proxy AROUND the instance.
 installPrototypeInvokeCapabilityFallback(IterateContext, ["itx"]);
-
-/** Build the itx scope for a context reached over Workers-RPC — the `ItxEntrypoint` / loaded-worker
- *  lane. It is the SAME genuine `IterateContext` RpcTarget the capnweb client gets from
- *  `projects.get()` (`IterateContext extends RpcTarget from "capnweb"`, which IS the native
- *  `cloudflare:workers` RpcTarget on workerd), so a loaded worker holds a real, pipelinable scope and
- *  writes exactly what a capnweb client writes: `const itx = await env.ITX.get();
- *  itx.demo.timer.callLater(cb)`. No capnweb relays — a loaded worker's callbacks ride as
- *  Workers-RPC stubs through the call args, not the pager. */
-export function itxFor(
-  contexts: ContextNamespace,
-  contextName: string,
-  waitUntil: WaitUntil,
-): IterateContext {
-  // A FRESH Parking per call (this lane parks nothing session-long), so its keys can never collide.
-  return new IterateContext(
-    contexts,
-    DurableObjectNameCodec.parse(contextName),
-    new Parking(),
-    waitUntil,
-  );
-}

@@ -1,7 +1,7 @@
 // stream/events.ts — the stream event envelope + idempotency rules + the zod contract helper.
 // API mirrors apps/os (`packages/iterate/src/processors/schemas.ts` / `idempotency.ts`) so
-// processors port both ways. This is the ZOD side of the processor world; the base class in
-// stream/processor.ts is dependency-free on purpose (it doubles as the injected userspace SDK).
+// processors port both ways. This is the ZOD side of the processor world; the engine in
+// stream/processor.ts imports only lib/, live-state.ts and reduce-checkpoint.ts.
 
 import { z } from "zod";
 import { jsonEqual } from "../lib/patch.ts";
@@ -16,7 +16,7 @@ const EventInputShape = z.strictObject({
   type: z.string().trim().min(1),
   payload: z.record(z.string(), z.unknown()).optional(),
   metadata: z.record(z.string(), z.unknown()).optional(),
-  /** Provenance: which processor (while processing what) appended this. Stamped by the runner. */
+  /** Provenance: which processor (while processing what) appended this. Stamped by the engine's `append`. */
   source: z
     .strictObject({
       processor: z

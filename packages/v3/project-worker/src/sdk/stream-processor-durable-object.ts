@@ -5,8 +5,8 @@
 // class is hosted; a processor is a named facet that additionally gets pushed every commit.
 //
 // IDENTITY is `ctx.props` — `{ contextName, name }` minted by the parent at `getDurableObjectClass(C,
-// { props })`, the only party that knows it (pinned in __workers-tests__/facet-props.test.ts). No
-// configure() side channel, no identity kv. THE STREAM is `env.ITX` — the loaded isolate's binding to
+// { props })`, the only party that knows it (pinned in __workers-tests__/facet-props.test.ts); nothing
+// else names a processor. THE STREAM is `env.ITX` — the loaded isolate's binding to
 // its owning context (itx-entrypoint.ts): `append`/`read` for the engine, `get()` for the scope.
 //
 // The engine — serial chain, checkpoint, gap repair from the scanned-range proof, the at-head pass,
@@ -138,7 +138,6 @@ export abstract class StreamProcessorDurableObject<
         storage: {
           get: <T>(k: string) => this.ctx.storage.kv.get(k) as T | undefined,
           put: (k: string, v: unknown) => this.ctx.storage.kv.put(k, v),
-          delete: (k: string) => void this.ctx.storage.kv.delete(k),
         },
         path: this.context.path,
         projectId: this.context.projectId,
@@ -147,35 +146,33 @@ export abstract class StreamProcessorDurableObject<
   }
 }
 
+/** The three author hooks, as the engine receives them. */
+type Hooks<State> = {
+  reduce: (a: ReduceArgs<State>) => State | null | undefined;
+  processEvent: (a: ProcessEventArgs<State>) => undefined;
+  projectLiveState: (s: State) => unknown;
+};
+
 /** The engine with its hooks pointed at the hosting object. `publish`/`idempotency` re-export the
  *  two protected helpers the shell forwards. */
 class Engine<State> extends StreamProcessor<State> {
   readonly contract: ProcessorContract<State>;
-  readonly #hooks: {
-    reduce: (a: ReduceArgs<State>) => State | null | undefined;
-    processEvent: (a: ProcessEventArgs<State>) => undefined;
-    projectLiveState: (s: State) => unknown;
-  };
+  readonly #hooks: Hooks<State>;
   constructor(
-    hooks: { contract: ProcessorContract<State> } & Engine<State>["hooksType"],
+    hooks: { contract: ProcessorContract<State> } & Hooks<State>,
     args: ConstructorParameters<typeof StreamProcessor<State>>[0],
   ) {
     super(args);
     this.contract = hooks.contract;
     this.#hooks = hooks;
   }
-  declare readonly hooksType: {
-    reduce: (a: ReduceArgs<State>) => State | null | undefined;
-    processEvent: (a: ProcessEventArgs<State>) => undefined;
-    projectLiveState: (s: State) => unknown;
-  };
   protected override reduce(args: ReduceArgs<State>): State | null | undefined {
     return this.#hooks.reduce(args);
   }
   protected override processEvent(args: ProcessEventArgs<State>): undefined {
     return this.#hooks.processEvent(args);
   }
-  protected override liveState(state: State): unknown {
+  protected override projectLiveState(state: State): unknown {
     return this.#hooks.projectLiveState(state);
   }
   publish(): void {

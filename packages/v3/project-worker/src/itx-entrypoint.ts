@@ -1,27 +1,17 @@
-// itx-entrypoint.ts — THE INTERPOSITION POINT between loaded userspace code and
-// the platform. Every confined dynamic worker's whole world (`env.ITX` + `globalOutbound`) is
-// a stub of THIS entrypoint, minted via `ctx.exports.ItxEntrypoint({ props:
-// { contextName } })` — never a raw `env.CONTEXT.getByName` DO stub. Why (owner's call,
-// 2026-08-18, "get ahead of that"):
+// itx-entrypoint.ts — a loaded worker's WHOLE WORLD. Every confined dynamic worker's `env.ITX` and
+// `globalOutbound` are one stub of THIS entrypoint, minted via `ctx.exports.ItxEntrypoint({ props:
+// { contextName } })` — never a raw `env.CONTEXT.getByName` DO stub — so the context it forwards
+// to is a PROP of the stub, not a binding the loaded code could reach around.
 //
-//   • TODAY it forwards every call to the owning Stream DO by name — a swappable
-//     implementation detail, not the stub's identity.
-//   • TOMORROW it is where DO-free capabilities get served WITHOUT waking the DO (the
-//     KV-cached-table future: kv/whoami answered right here; only genuinely
-//     actor-shaped targets dial the stream).
-//   • It is Kenton-aligned persistence-ready: `ctx.exports`-minted stubs are exactly the kind
-//     the shipped persistent-stub machinery (`allow_irrevocable_stub_storage` + `[restore]`)
-//     can store and replay — a raw env-binding getByName stub can NEVER be stored. When we
-//     want stored itx capabilities, `[restore]` lands on this class and resolves through the
-//     ROUTED door, keeping deletion-is-revocation for stored stubs.
-//
-// The surface is exactly what loaded code speaks: `get()` (hand back the real `IterateContext` scope — the
-// dotted door, which owns its own dispatch), the SDK runner's stream verbs
+// The surface is exactly what loaded code speaks: `get()` (the real `IterateContext` scope — the
+// dotted door, which owns its own dispatch), the stream verbs the processor engine drives
 // (`append`/`read`/`waitForEvent`), and `fetch` (globalOutbound egress → the DO's
 // secret-substituting terminal).
 
 import { WorkerEntrypoint } from "cloudflare:workers";
-import { itxFor } from "./iterate-context.ts";
+import { IterateContext } from "./iterate-context.ts";
+import { Parking } from "./context/rpc-stub-relay.ts";
+import { DurableObjectNameCodec } from "./context/durable-object-names.ts";
 import type { StreamEvent, StreamEventInput } from "./stream/events.ts";
 import type { WaitForEventFilter } from "./stream/stream.ts";
 import type { IterateContextDurableObject } from "./iterate-context-durable-object.ts";
@@ -44,12 +34,19 @@ export class ItxEntrypoint extends WorkerEntrypoint<Env> {
     return this.env.CONTEXT.getByName(this.#contextName());
   }
 
-  /** THE handoff for the Workers-RPC lane: hand back the genuine itx scope (an `IterateContext` RpcTarget), so
-   *  loaded code writes plain dotted access — `const itx = await env.ITX.get(); itx.demo.timer.x(…)`
-   *  — identical to a capnweb client after `session.get()`, and mid-chain handles pipeline natively.
-   *  A service binding addresses THIS entrypoint class; `.get()` bridges it to the scope. */
-  get(): unknown {
-    return itxFor(this.env.CONTEXT, this.#contextName(), (p) => this.ctx.waitUntil(p));
+  /** THE handoff: the genuine itx scope — the SAME `IterateContext` RpcTarget a capnweb client gets
+   *  from `projects.get(id)` (capnweb's RpcTarget IS the native `cloudflare:workers` RpcTarget on
+   *  workerd), so loaded code writes plain dotted access — `const itx = await env.ITX.get();
+   *  itx.demo.timer.x(…)` — and mid-chain handles pipeline natively. A fresh Parking per call: this
+   *  hop parks nothing session-long (a loaded worker's callbacks ride as Workers-RPC stubs through
+   *  the call args, never the pager). */
+  get(): IterateContext {
+    return new IterateContext(
+      this.env.CONTEXT,
+      DurableObjectNameCodec.parse(this.#contextName()),
+      new Parking(),
+      (p) => this.ctx.waitUntil(p),
+    );
   }
 
   append(...inputs: StreamEventInput[]): Promise<StreamEvent[]> {

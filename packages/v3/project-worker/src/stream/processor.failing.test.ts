@@ -285,7 +285,7 @@ const deliveryRecorder = (slug: string, consumes: readonly string[]) => {
     }
     // Opt out of the default live-state emit — these suites assert exact offsets, and a constant
     // projection never diffs (so no ephemeral delta consumes an offset under test).
-    protected override liveState() {
+    protected override projectLiveState() {
       return null;
     }
   }
@@ -356,7 +356,7 @@ describe("waitUntilProcessed", () => {
       protected override processEvent(args: ProcessEventArgs<{ n: number }>): undefined {
         if (args.event?.offset === 1) args.blockProcessorWhile(() => sleep(60));
       }
-      protected override liveState() {
+      protected override projectLiveState() {
         return null; // exact-offset suite: opt out of the default live-state emit
       }
     }
@@ -398,7 +398,7 @@ const makeVersioned = (
     protected override processEvent(args: ProcessEventArgs<{ n: number }>): undefined {
       if (args.event) effects.push(`effect ${args.event.offset}`);
     }
-    protected override liveState() {
+    protected override projectLiveState() {
       return null; // exact-offset suite: opt out of the default live-state emit
     }
   })({ stream: mem.stream, storage, path: "/", projectId: "p" });
@@ -476,7 +476,7 @@ describe("live state with a projection that throws only sometimes", () => {
       protected override reduce({ state }: ReduceArgs<{ n: number }>) {
         return { n: state.n + 1 };
       }
-      liveState(state: { n: number }): unknown {
+      projectLiveState(state: { n: number }): unknown {
         if (state.n === 1) throw new Error("projection cannot render n=1"); // SOMETIMES
         return { n: state.n };
       }
@@ -526,7 +526,7 @@ describe("ephemeral windows and repair", () => {
       this.seen.push(`${event.type}@${event.offset}`);
       return { n: state.n + 1 };
     }
-    protected override liveState() {
+    protected override projectLiveState() {
       return null; // exact-offset suite: opt out of the default live-state emit
     }
   }
@@ -640,7 +640,7 @@ describe("ephemeral windows and repair", () => {
         this.seen.push(`${event.type}@${event.offset}`);
         return { n: state.n + 1 };
       }
-      liveState(state: { n: number }): unknown {
+      projectLiveState(state: { n: number }): unknown {
         return { n: state.n }; // emits live-state/changed — which the ENGINE never folds, even for "*"+named (foldsEvent, not consumesEvent, is the guard)
       }
     }

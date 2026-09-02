@@ -1,4 +1,4 @@
-// stream/inline-core.ts — THE INLINE CORE: reduce-only processors reduced SYNCHRONOUSLY at the
+// stream/inline-reduces.ts — THE INLINE REDUCES: reduce-only processors reduced SYNCHRONOUSLY at the
 // stream's commit point. The engine apparatus (serial chain, cursors, gap repair) is
 // the price a facet pays for being AWAY from the commit point; these reduces run AT it and pay none
 // of it — so a ReduceOnlyProcessor (contract + `reduce`, no `processEvent`) is hosted here for free.
@@ -28,7 +28,7 @@ type KvStore = { get<T>(key: string): T | undefined; put(key: string, value: unk
 type Def = { slug: string; proc: ReduceOnlyProcessor<unknown> };
 type Entry = { proc: ReduceOnlyProcessor<unknown>; state: unknown; throughOffset: number };
 
-export class InlineCore {
+export class InlineReduces {
   readonly #cache = new Map<string, Entry>();
   readonly #kv: KvStore;
   readonly #read: (
@@ -71,6 +71,15 @@ export class InlineCore {
    *  initial) and caught up to the durable head. Synchronous: no chain, no cursor to persist here. */
   entry(slug: string): { state: unknown; throughOffset: number } {
     return this.#rehydrated(slug);
+  }
+
+  /** The live-state SEED for an inline slug — `{ rev, state }` in step with the deltas its holder
+   *  emits (the same door a facet processor's `liveSnapshot()` is). Before the first commit of an
+   *  incarnation there is no holder yet: rev 0 over the caught-up state, which is exactly what the
+   *  first delta (`from: 0`) will chain onto. */
+  liveSnapshot(slug: string): { rev: number; state: unknown } {
+    const entry = this.#rehydrated(slug);
+    return this.#liveStates.get(slug)?.snapshot() ?? { rev: 0, state: entry.state };
   }
 
   #rehydrated(slug: string): Entry {

@@ -361,7 +361,7 @@ describe("ephemeral events", () => {
     }
     // This suite asserts exact offsets; opt out of the default live-state emit (a constant projection
     // never diffs) so its ephemeral deltas don't consume offsets under test.
-    protected override liveState() {
+    protected override projectLiveState() {
       return null;
     }
   }
@@ -379,7 +379,7 @@ describe("ephemeral events", () => {
     protected override reduce({ event, state }: ReduceArgs<{ seen: string[] }>) {
       return { seen: [...state.seen, `${event.type}@${event.offset}`] };
     }
-    protected override liveState() {
+    protected override projectLiveState() {
       return null;
     }
   }
@@ -570,7 +570,7 @@ describe("live state (the delta patches on the wire)", () => {
       if (event.type === "tick") return { ...state, count: state.count + 1 };
       return undefined;
     }
-    liveState(state: z.infer<typeof contract.stateSchema>) {
+    projectLiveState(state: z.infer<typeof contract.stateSchema>) {
       return { count: state.count }; // the projection REDACTS — diffs never see `secret`
     }
   }
@@ -651,7 +651,7 @@ describe("live state (the delta patches on the wire)", () => {
       reduce({ state }: ReduceArgs<z.infer<typeof contract2.stateSchema>>) {
         return { seen: state.seen + 1 };
       }
-      liveState() {
+      projectLiveState() {
         return { steady: true };
       }
     }
@@ -684,7 +684,7 @@ describe("live state (the delta patches on the wire)", () => {
       }
       // Opt out of its OWN live-state emit so the assertion counts only tally's change event — the
       // point here is that Sneaky never CONSUMES a change event (the loop guard), not what it emits.
-      protected override liveState() {
+      protected override projectLiveState() {
         return null;
       }
     }
@@ -725,7 +725,7 @@ describe("live state emission failure is contained", () => {
       reduce({ state }: ReduceArgs<z.infer<typeof contract.stateSchema>>) {
         return { n: state.n + 1 };
       }
-      liveState() {
+      projectLiveState() {
         return { big: 10n }; // JSON.stringify throws TypeError on BigInt
       }
     }

@@ -17,8 +17,7 @@
 //     is pushed; anything else gets a cursor the stream keeps, at-least-once, retries on this DO's
 //     own alarm;
 //   • the FACETS — every loaded `DurableObject` class hosted here through `ctx.facets` with its
-//     identity in `ctx.props` (a processor is a facet whose `processEventBatch` is subscribed;
-//     no separate processor machinery, no runner, no configure);
+//     identity in `ctx.props` (a processor is a facet whose `processEventBatch` is subscribed);
 //   • the TRANSPORT — every hibernatable socket: each held rpc stub is a delivery WebSocket from
 //     the stateless relay (rpc-stub-directory.ts), so ANY number of connected clients leave this
 //     DO free to hibernate. OUT is one-directional fire-and-forget delivery; IN borrows a short
@@ -47,7 +46,7 @@ import { codedError, reportIssue } from "./lib/errors.ts";
 import type { StreamEvent, StreamEventInput } from "./stream/events.ts";
 import {
   parse,
-  parseCapabilityPath,
+  canonicalCapabilityPath,
   print,
   toExpression,
   type ItxExpression,
@@ -57,7 +56,7 @@ import {
   serveCapabilityFetchLane,
   type PartialFetch,
 } from "./fetch/fetch-capabilities.ts";
-import { InlineCore } from "./stream/inline-core.ts";
+import { InlineReduces } from "./stream/inline-reduces.ts";
 import { invokePath } from "./context/dispatch.ts";
 import { FacetHandle, RpcStubHandle } from "./context/invoke-handle.ts";
 import { localContext, Stream, type WaitForEventFilter } from "./stream/stream.ts";
@@ -89,11 +88,11 @@ function parseIterateContextDurableObjectName(name: string | undefined) {
 
 /** The three INLINE reduce-only processors: reduced at the commit point, never real facets — always
  *  on, un-deletable, addressed by name like any facet. */
-const CORE_SLUG = "core";
-const CAPABILITY_TABLE_SLUG = "capability-table";
-const SUBSCRIPTIONS_SLUG = "subscriptions";
-const isInlineSlug = (slug: string): boolean =>
-  slug === CORE_SLUG || slug === CAPABILITY_TABLE_SLUG || slug === SUBSCRIPTIONS_SLUG;
+/** The three reduce-only processors this DO reduces inline at the commit point — their slugs are
+ *  facet-shaped addresses (`itx.facets.get('core')`) and reserved as subscription names. */
+const INLINE_REDUCE_SLUGS = ["core", "capability-table", "subscriptions"] as const;
+const isInlineReduce = (slug: string): boolean =>
+  (INLINE_REDUCE_SLUGS as readonly string[]).includes(slug);
 /** The core processor is stateless (pure reduce) — one module-level instance serves every DO. */
 const CORE_PROCESSOR = new CoreStreamProcessor();
 
@@ -104,7 +103,7 @@ const CORE_PROCESSOR = new CoreStreamProcessor();
  *  expression in hand. */
 type FacetMemo = { source: string; className: string };
 
-// The parent hosts the INLINE CORE (built-in scope + routing table + subscriptions + core reduce),
+// The parent hosts the INLINE REDUCES (the routing table, the subscriptions, the core reduce),
 // so it needs the full roots env.
 export class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
   /** WHO THIS DO IS — parsed ONCE from the unforgeable codec name; carries projectId, path
@@ -168,14 +167,14 @@ export class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
     admit: (inputs) =>
       admit(this.#coreState(), inputs, Date.now(), (k) => this.#stream.hasIdempotencyKey(k)),
     reduceAtCommit: (justCommitted, after, next) =>
-      this.#inlineCore.reduceAtCommit(justCommitted, after, next),
+      this.#inlineReduces.reduceAtCommit(justCommitted, after, next),
     onCommit: (fresh, scannedAfterOffset, nextOffset) => {
       this.#delivery.onCommit(fresh, scannedAfterOffset, nextOffset);
-      // INLINE LIVE STATE, post-commit (the InlineCore seam — the stream stays ignorant of which
+      // INLINE LIVE STATE, post-commit (the InlineReduces seam — the stream stays ignorant of which
       // reduces are inline): each commit-changed entry `set`s its state, appending the standard
       // ephemeral live-state/changed delta back through this DO's own append door (a nested
       // commit — terminating, because the delta changes no inline state).
-      this.#inlineCore.publishLiveStateChanges();
+      this.#inlineReduces.publishLiveStateChanges();
     },
   });
 
@@ -205,15 +204,15 @@ export class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
     return this.#stream.read(afterOffset, limit);
   }
 
-  // ── THE INLINE CORE: reduce-only processors reduced at the stream's commit point. The engine —
+  // ── THE INLINE REDUCES: reduce-only processors reduced at the stream's commit point. The engine —
   // rehydrate / catch up / reduce-at-commit / checkpoint / publish-live-state — lives in
-  // stream/inline-core.ts; this DO owns only the DEFS (which processors are inline), because
+  // stream/inline-reduces.ts; this DO owns only the DEFS (which processors are inline), because
   // BUILDING them is its wiring below. ──
-  readonly #inlineCore = new InlineCore({
+  readonly #inlineReduces = new InlineReduces({
     kv: this.ctx.storage.kv,
     read: (after, limit) => this.#stream.read(after, limit),
     head: () => this.#stream.durableMark(), // inline reduces fold durables: their head is the mark
-    defs: () => this.#inlineDefs(),
+    defs: () => this.#inlineReduceDefs(),
     // The live-state deltas ride this DO's OWN append door, so they are admitted, committed, and
     // fanned out like any other ephemeral event (and a paused stream refuses them — the
     // lossy-by-contract gap LiveState.set contains).
@@ -222,15 +221,15 @@ export class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
   #capabilityTableInstance?: CapabilityTableProcessor;
   #subscriptionsInstance?: SubscriptionsProcessor;
 
-  /** The three inline-core reduced states, typed in ONE place. */
+  /** The three inline reduced states, typed in ONE place. */
   #table(): CapabilityTable {
-    return this.#inlineCore.entry(CAPABILITY_TABLE_SLUG).state as CapabilityTable;
+    return this.#inlineReduces.entry("capability-table").state as CapabilityTable;
   }
   #coreState(): CoreState {
-    return this.#inlineCore.entry(CORE_SLUG).state as CoreState;
+    return this.#inlineReduces.entry("core").state as CoreState;
   }
   #subscriptions(): SubscriptionsState {
-    return this.#inlineCore.entry(SUBSCRIPTIONS_SLUG).state as SubscriptionsState;
+    return this.#inlineReduces.entry("subscriptions").state as SubscriptionsState;
   }
 
   /** THE capability host, parent-constructed: same class, same contract, zero distance. */
@@ -260,8 +259,8 @@ export class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
       // The facets view is PARENT-LOCAL — the facets live here and can never move (workerd#6702:
       // sockets never leave the parent). Branded FacetHandle for the delivery loop.
       facets: {
-        get: (ref) => new FacetHandle((path, args) => this.facetInvoke(ref, path, args)),
-        delete: (name) => this.deleteFacet(name),
+        get: (ref) => new FacetHandle((path, args) => this.#invokeFacet(ref, path, args)),
+        delete: (name) => this.#deleteFacet(name),
       },
       subscriptions: {
         list: () => this.#subscriptionList(),
@@ -288,19 +287,19 @@ export class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
         append: (...events) => this.append(...events),
         read: (after, limit) => Promise.resolve(this.read(after, limit)),
       },
-      [CORE_SLUG, CAPABILITY_TABLE_SLUG, SUBSCRIPTIONS_SLUG],
+      INLINE_REDUCE_SLUGS,
     ));
   }
 
-  #inlineDefs(): { slug: string; proc: ReduceOnlyProcessor<unknown> }[] {
+  #inlineReduceDefs(): { slug: string; proc: ReduceOnlyProcessor<unknown> }[] {
     return [
-      { slug: CORE_SLUG, proc: CORE_PROCESSOR as ReduceOnlyProcessor<unknown> },
+      { slug: "core", proc: CORE_PROCESSOR as ReduceOnlyProcessor<unknown> },
       {
-        slug: CAPABILITY_TABLE_SLUG,
+        slug: "capability-table",
         proc: this.#capabilityTableProcessor() as ReduceOnlyProcessor<unknown>,
       },
       {
-        slug: SUBSCRIPTIONS_SLUG,
+        slug: "subscriptions",
         proc: this.#subscriptionsProcessor() as ReduceOnlyProcessor<unknown>,
       },
     ];
@@ -330,7 +329,6 @@ export class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
     target: ItxExpression;
     consumes?: string[];
   }): Promise<{ name: string; configuredAtOffset: number }> {
-    this.#stream.touch();
     return this.#subscriptionsProcessor().configure(this.#subscriptions(), input);
   }
 
@@ -374,7 +372,7 @@ export class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
     // probe (`itx.facets.get('core').snapshot()` rides invoke → here) wrote a durable alarm on a
     // NEVER-TOUCHED context: one storage write + one billed wake, and workerd defers auto-deleting
     // the empty object until the pointless alarm fires. `#lastActivityMs` still updates, so the
-    // first real write (or facet materialization — facetInvoke's `finally` re-notes after
+    // first real write (or facet materialization — #invokeFacet's `finally` re-notes after
     // `#liveFacets` grows) arms with an honest quiet-period start.
     if (this.#liveFacets.size === 0 && this.#stream.currentIncarnation() === 0) return;
     this.#stream.armNoLaterThan(this.#lastActivityMs + 60_000);
@@ -391,7 +389,7 @@ export class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
 
   async alarm(): Promise<void> {
     this.#stream.markFired();
-    // The cursor lane's due retries (and anything an eviction left behind mid-delivery) pump here,
+    // The stream-kept cursors' due retries (and anything an eviction left behind mid-delivery) pump here,
     // AWAITED so the quiesce below never aborts a facet mid-delivery and a re-arm for a later retry
     // lands before this actor hibernates.
     await this.#delivery.pumpAll().catch((e) => reportIssue("stream-do.delivery-pump", e));
@@ -426,8 +424,8 @@ export class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
    *  walk happens where the stub lives), walk the dotted path with the exposure guard, apply
    *  the terminal. `itx.facets.get(name)` and `load(...).getDurableObjectClass(C).get(name)` both
    *  ride this to reach ANY method the facet's durable object exposes. */
-  async facetInvoke(
-    ref: string | { source?: unknown; className?: string; name?: string },
+  async #invokeFacet(
+    ref: string | { source: WorkerSource; className: string; name?: string },
     path: string[],
     args: unknown[],
   ): Promise<unknown> {
@@ -467,31 +465,26 @@ export class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
   }
 
   /** THE one facet resolver: turn ANY ref into a live facet handle. A NAME (string) resolves an
-   *  inline core (always at head, a synthesized snapshot view) or a hosted facet (its startup memo
+   *  inline reduce (always at head, a synthesized snapshot view) or a hosted facet (its startup memo
    *  names the class). A LOAD SPEC (`{ source, className, name? }` — `itx.load(...)`) materializes
    *  the class as the facet `name ?? className`, remembering the spec as its startup memo so a
    *  later `itx.facets.get(name)` re-materializes it after an eviction. Throws NO_FACET for an
    *  unknown name. */
   async #resolveFacet(
-    ref: string | { source?: unknown; className?: string; name?: string },
+    ref: string | { source: WorkerSource; className: string; name?: string },
   ): Promise<unknown> {
     if (typeof ref !== "string") {
-      if (ref.source !== undefined && ref.className) {
-        const memo: FacetMemo = {
-          source: print(toExpression(ref.source as ItxExpression)),
-          className: ref.className,
-        };
-        return this.#facet(ref.name ?? ref.className, memo);
-      }
-      if (ref.name) return this.#resolveFacet(ref.name); // { name } ⇒ address by name (below)
-      throw new Error(
-        `load: pass { source, className } to run a facet, or { name } to address one`,
-      );
+      const memo: FacetMemo = {
+        source: print(toExpression(ref.source as ItxExpression)),
+        className: ref.className,
+      };
+      return this.#facet(ref.name ?? ref.className, memo);
     }
-    if (isInlineSlug(ref)) {
-      const entry = this.#inlineCore.entry(ref);
+    if (isInlineReduce(ref)) {
+      const entry = this.#inlineReduces.entry(ref);
       return {
         snapshot: () => ({ offset: entry.throughOffset, state: entry.state }),
+        liveSnapshot: () => this.#inlineReduces.liveSnapshot(ref),
         waitUntilProcessed: () => ({ ok: true }),
       };
     }
@@ -560,11 +553,11 @@ export class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
 
   /** Delete a facet, storage included (`itx.facets.delete(name)`; `disableProcessor` ends here). A
    *  re-load into the same name is a clean rebuild, never a resume from orphaned state. */
-  deleteFacet(name: string): void {
-    if (isInlineSlug(name))
-      throw new Error(`"${name}" is an inline core reduce — it is always on, never a facet`);
+  #deleteFacet(name: string): void {
+    if (isInlineReduce(name))
+      throw new Error(`"${name}" is an inline reduce — always on, never a facet`);
     // facets.delete exists unconditionally on every runtime we run (production workerd,
-    // wrangler-local, the vitest-plugin pool lane).
+    // wrangler-local, the vitest-plugin lane).
     this.ctx.facets.delete(name);
     this.ctx.storage.kv.delete(`facet:${name}`);
     this.ctx.storage.kv.delete(`facet:${name}:version`);
@@ -593,14 +586,9 @@ export class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
     path: string;
     target: ItxExpression;
   }): Promise<{ providedAtOffset: number }> {
-    this.#stream.touch();
-    // CANONICALIZE ONCE, at the top (the one-canonicalizer rule, same spelling as rpcStubAttach):
-    // the reduce stores the CANONICAL path.
-    const pathString = parseCapabilityPath(input.path).join(".");
+    const pathString = canonicalCapabilityPath(input.path); // the reduce stores the canonical path
     const targetString = print(toExpression(input.target));
-    const winner = this.#table()
-      .mounts.filter((m) => m.path.join(".") === pathString)
-      .sort((a, b) => b.providedAtOffset - a.providedAtOffset)[0];
+    const winner = this.#newestMountAt(pathString);
     if (winner && print(winner.target) === targetString)
       return { providedAtOffset: winner.providedAtOffset };
     return this.#capabilityTableProcessor().provide({ path: pathString, target: input.target });
@@ -620,12 +608,17 @@ export class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
       return;
     }
     if (!input.path) throw new Error("revokeCapability: pass providedAtOffset or path");
-    const pathString = parseCapabilityPath(input.path).join(".");
-    const winner = this.#table()
-      .mounts.filter((m) => m.path.join(".") === pathString)
-      .sort((a, b) => b.providedAtOffset - a.providedAtOffset)[0];
+    const pathString = canonicalCapabilityPath(input.path);
+    const winner = this.#newestMountAt(pathString);
     if (!winner) throw new Error(`no mount at path ${JSON.stringify(pathString)}`);
     await this.#capabilityTableProcessor().revoke({ providedAtOffset: winner.providedAtOffset });
+  }
+
+  /** The mount answering at a canonical path right now — the newest of its shadow stack. */
+  #newestMountAt(pathString: string) {
+    return this.#table()
+      .mounts.filter((m) => m.path.join(".") === pathString)
+      .sort((a, b) => b.providedAtOffset - a.providedAtOffset)[0];
   }
 
   // ── native fetch: the stub pager door, the fetch lane, observability, egress ──
@@ -714,15 +707,14 @@ export class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
   // ── the rpc-stub RPC verbs (the directory owns the lifecycle — see rpc-stub-directory.ts;
   // these are the relay-facing doors) ──
 
-  /** Reserve a transport for the stub parked under `path` in the `itx.rpcStubs` registry — the
-   *  relay calls this (with the CANONICALIZED path string, asserted here: one canonicalizer, no
-   *  drift between the registry key and the mount that names it), then opens the pager carrying
-   *  the returned transportId. */
-  rpcStubAttach(input: { path: string }): { transportId: string } {
-    const canonical = parseCapabilityPath(input.path).join(".");
-    if (canonical !== input.path)
+  /** Reserve a transport for the stub parked under `key` in the `itx.rpcStubs` registry — the
+   *  relay calls this (with the CANONICAL key, asserted here so the registry key and the mount that
+   *  names it can never drift), then opens the pager carrying the returned transportId. */
+  rpcStubAttach(input: { key: string }): { transportId: string } {
+    const canonical = canonicalCapabilityPath(input.key);
+    if (canonical !== input.key)
       throw new Error(
-        `rpcStubAttach: path ${JSON.stringify(input.path)} is not canonical (expected ${JSON.stringify(canonical)}) — canonicalize at the edge with parseCapabilityPath(...).join(".")`,
+        `rpcStubAttach: key ${JSON.stringify(input.key)} is not canonical (expected ${JSON.stringify(canonical)}) — canonicalize at the edge with canonicalCapabilityPath`,
       );
     return this.#rpcStubs.attach(input);
   }

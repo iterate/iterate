@@ -7,11 +7,9 @@
 // (invokeCapability / provide / …). Every unknown segment accumulates into ONE `invokeCapability`
 // dispatch carrying an `ItxExpression`; declared methods always win.
 //
-// PORTED (not verbatim) from apps/os/src/domains/itx/utils.ts
-// (installPrototypeInvokeCapabilityFallback + createInvokeCapabilityPathProxy), proven by
-// apps/os/src/domains/itx/path-proxy.test.ts. `IterateContext.invokeCapability(ItxExpression)` is the exact
-// InvokeCapabilityTarget shape this expects (installed with scope root `["itx"]`), and the receiver
-// IS the invoker — so it wires with zero glue.
+// `IterateContext.invokeCapability(ItxExpression)` is the exact InvokeCapabilityTarget shape this
+// expects (installed with scope root `["itx"]`), and the receiver IS the invoker — so it wires with
+// zero glue.
 
 import type { Expression, ItxExpression } from "./expression.ts";
 

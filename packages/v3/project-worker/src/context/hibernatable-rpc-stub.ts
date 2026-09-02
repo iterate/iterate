@@ -22,9 +22,9 @@
 // holding that socket can re-mint the stub, so restore MUST route through it.
 //
 // The manager is the partial-fetch helper the DO composes in (`#rpcStubs.fetch(req)`
-// first, own doors after) — stub mechanics live here, domain meaning (RpcStubDirectory, session
-// facts) stays in the DO. Its one addressing fact is the directory's `path` (the capability path
-// the stub is mounted at), stamped by `attach` and carried through hibernation on the pager
+// first, own doors after) — stub mechanics live here, domain meaning stays in
+// rpc-stub-directory.ts. Its one addressing fact is the directory's registry `key` (the capability
+// path the stub is parked under), stamped by `attach` and carried through hibernation on the pager
 // socket.
 
 import { codedError } from "../lib/errors.ts";
@@ -62,19 +62,17 @@ export type RetainedCallbackInvoker = LiveCapabilityFetchTransport & {
 
 /** One stub's durable record — the socket attachment (survives hibernation). `transportId` is the
  *  per-transport identity (minted by the directory's attach reservation, carried by the pager
- *  socket); `path` is the capability path the stub is mounted at (its one addressing fact, stamped
+ *  socket); `key` is the registry key the stub is parked under (its one addressing fact, stamped
  *  by `attach`; absent on a socket that has been opened but not yet attached — `all()` filters
  *  those out). */
-export type HibernatableRpcStubRecord = { transportId: string; path?: string };
-/** An ATTACHED record — `path` present. `all()` returns only these. */
-type AttachedRpcStubRecord = HibernatableRpcStubRecord & { path: string };
+export type HibernatableRpcStubRecord = { transportId: string; key?: string };
+/** An ATTACHED record — `key` present. `all()` returns only these. */
+type AttachedRpcStubRecord = HibernatableRpcStubRecord & { key: string };
 
-// `Symbol.dispose` isn't in the current lib target; reference it defensively. THE one disposer
-// for any RPC-ish stub (Workers-RPC legs here, retained capnweb callbacks in iterate-context.ts).
-const DISPOSE: symbol | undefined = (Symbol as { dispose?: symbol }).dispose;
+/** THE one disposer for any RPC-ish stub (Workers-RPC legs here, retained capnweb callbacks in
+ *  rpc-stub-relay.ts): a no-op for anything that is not disposable. */
 export function disposeStub(x: unknown): void {
-  const f = DISPOSE ? (x as Record<symbol, unknown>)[DISPOSE] : undefined;
-  if (typeof f === "function") (f as () => void).call(x);
+  (x as Partial<Disposable> | null)?.[Symbol.dispose]?.();
 }
 
 const stubLog = createLogger("hibernatable-rpc-stub");
@@ -121,13 +119,13 @@ export class HibernatableRpcStubManager {
     return new Response(null, { status: 101, webSocket: pair[0] });
   }
 
-  /** Stamp a stub's mount `path` onto its (already-open) pager socket — carried through
+  /** Stamp a stub's registry `key` onto its (already-open) pager socket — carried through
    *  hibernation, and what `all()` filters on. */
-  attach(transportId: string, path: string): void {
+  attach(transportId: string, key: string): void {
     const ws = this.#socketFor(transportId);
     if (ws === undefined)
       throw new Error(`hibernatable rpc stub ${transportId} has no pager websocket`);
-    ws.serializeAttachment({ transportId, path } satisfies AttachedRpcStubRecord);
+    ws.serializeAttachment({ transportId, key } satisfies AttachedRpcStubRecord);
   }
 
   /** Every attached stub — DERIVED from the surviving pager sockets, so a fresh DO incarnation
@@ -135,7 +133,7 @@ export class HibernatableRpcStubManager {
   all(): AttachedRpcStubRecord[] {
     return this.#sockets()
       .map((ws) => this.#attachment(ws))
-      .filter((r): r is AttachedRpcStubRecord => r?.path !== undefined);
+      .filter((r): r is AttachedRpcStubRecord => r?.key !== undefined);
   }
 
   /** THE one call door: page the stub in if absent, then `invoke(path, args)` on it. The stub

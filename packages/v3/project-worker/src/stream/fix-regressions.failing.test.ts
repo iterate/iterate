@@ -77,7 +77,6 @@ function memoryStorage() {
     storage: {
       get: <T>(k: string) => map.get(k) as T | undefined,
       put: (k: string, v: unknown) => void map.set(k, structuredClone(v)),
-      delete: (k: string) => void map.delete(k),
     } satisfies ProcessorStorage,
   };
 }
@@ -167,7 +166,7 @@ class CountProcessor extends StreamProcessor<{ ticks: number }> {
     if (args.event) this.effects.push(args.event.offset);
   }
   // exact-offset suite: opt out of the default live-state emit (a constant projection never diffs)
-  protected override liveState() {
+  protected override projectLiveState() {
     return null;
   }
 }

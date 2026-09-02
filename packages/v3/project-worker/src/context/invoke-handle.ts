@@ -2,21 +2,17 @@
 // (a live row's transport bridge, `facets.get(name)`, `cd(path)`, `load(src).getEntrypoint()` /
 // `load(src).getDurableObjectClass(name).get(instance)`).
 //
-// These used to return a bare `pathProxy` (dispatch.ts) — a Proxy-over-function. It folds dotted
-// members fine, but it is NOT a native RpcTarget, and a mid-chain call returns it ACROSS an RPC
-// boundary: `itx.facets.get('b').hello()` is TWO dispatches — `get('b')` returns the handle,
-// then `.hello()` is called ON it. workerd's promise-pipeline classifier brand-checks the return
-// of a method and a JS Proxy can NEVER pass (NonPipelinable; cloudflare/workerd#6873), so over
-// Workers RPC (DO→/api, and loaded-worker→DO) the `.hello()` died with "The RPC receiver does not
-// implement the method hello". A real RpcTarget passes the classifier on BOTH lanes (capnweb's
-// RpcTarget IS the native `cloudflare:workers` RpcTarget on workerd), so the second call pipelines.
+// A mid-chain handle must be a GENUINE RpcTarget: a mid-chain call returns it ACROSS an RPC
+// boundary (`itx.facets.get('b').hello()` is two dispatches — `get('b')` returns the handle, then
+// `.hello()` is called ON it), and workerd's promise-pipeline classifier brand-checks a method's
+// return — a JS Proxy never passes (NonPipelinable; cloudflare/workerd#6873), a real RpcTarget does
+// on both hops (capnweb's RpcTarget IS the native `cloudflare:workers` RpcTarget on workerd), so the
+// second call pipelines.
 //
 // The prototype-hop fallback (dotted-path-proxy.ts) folds unknown dotted members (`.hello`,
 // `.demo.timer.callLater`) into ONE `invokeCapability(expression)` — `[...prefix, [method, ...args]]`,
-// relative to the handle (empty scope root); the SAME fold the pathProxy did, now carried on a
-// pipelinable brand. Providers are UNCHANGED (still a plain `RpcTarget`
-// subclass like `new Demo()` — which capnweb already requires to pass a capability by reference);
-// the client is UNCHANGED (still just capnweb). The whole cost is this one wrapper on OUR side.
+// relative to the handle (empty scope root). Providers stay plain `RpcTarget` subclasses (which
+// capnweb already requires to pass a capability by reference); the client stays just capnweb.
 
 import { RpcTarget } from "capnweb";
 import { installPrototypeInvokeCapabilityFallback } from "./dotted-path-proxy.ts";
@@ -24,7 +20,7 @@ import { toExpression, type ItxExpression } from "./expression.ts";
 
 /** A branded, pipelinable handle whose unknown dotted members fold into ONE `dispatch(path, args)`.
  *  `dispatch` routes the folded path into the underlying object — a connection's retained callback
- *  (`RpcStubDirectory.invoke`), a facet's method walk (`facetInvoke`), a sibling context, or a
+ *  (`RpcStubDirectory.invoke`), a facet's method walk (the DO's facet door), a sibling context, or a
  *  stateful loaded class. Declared members (`invokeCapability` / `applyRoot`) win over the fallback,
  *  so a capability cannot be named either — the two reserved words this wrapper adds. */
 export class InvokeHandle extends RpcTarget {

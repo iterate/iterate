@@ -11,7 +11,7 @@
 // MUTATION AND NOTIFICATION ARE INSEPARABLE: `set(next)` diffs the held value → next; on a real
 // change it bumps the revision and appends the (ephemeral, unconsumable) live-state/changed delta
 // carrying `{key, from, to, patch}` onto the stream. `snapshot()` is the SEED DOOR clients read
-// `{rev, state}` through. The stream is a pure forwarder — no per-subscriber server state — and the
+// `{rev, state}` through. The stream keeps no per-subscriber state for a push — and the
 // CLIENT owns its chain: seed through the door, apply a payload whose `from` matches its held rev,
 // re-read the door on any mismatch (prove_livestate.mjs is that whole loop).
 //

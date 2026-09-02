@@ -39,7 +39,7 @@ import {
 
 /** One page of the log: the events after an offset, plus how far the scan reached (the range a
  *  client chains for contiguity). Structurally identical to IterateContextDurableObject.read's return. */
-interface StreamPage {
+export interface StreamPage {
   events: StreamEvent[];
   scannedThroughOffset: number;
 }
@@ -82,7 +82,7 @@ interface StreamDeps {
   reduceAtCommit: (justCommitted: StreamEvent[], afterOffset: number, nextOffset: number) => void;
   /** The post-commit fan-out, called once per offset-advancing commit with `fresh` — the FULL
    *  in-range distinct batch, INCLUDING events.iterate.com/live-state/changed (the host derives
-   *  `drivable` itself; connected delivery and waitForEvent waiters feed from `fresh`). */
+   *  delivery loop and the waitForEvent waiters both feed from `fresh`). */
   onCommit: (fresh: StreamEvent[], afterOffset: number, nextOffset: number) => void;
 }
 
@@ -195,10 +195,8 @@ export class Stream {
    *  nextOffset in-txn; reading kv there would make an inline rehydrate replay the just-inserted
    *  rows = double-reduce = table corruption). */
   append(...inputs: StreamEventInput[]): StreamEvent[] {
-    // A ZERO-INPUT append is a PURE no-op — deliberately STRICTER than pre-arc, which touch()ed
-    // unconditionally (an empty append still minted the storage tables); that touch-on-empty
-    // behavior died here. Under the storage-lazy doctrine NOTHING is minted at all: no admit, no
-    // touch, no wake record. Without this, a defensive `itx.append(...maybeEmpty)` on a fresh
+    // A ZERO-INPUT append is a PURE no-op. Under the storage-lazy doctrine NOTHING is minted at
+    // all: no admit, no touch, no wake record. Without this, a defensive `itx.append(...maybeEmpty)` on a fresh
     // incarnation would MINT a woken-only durable batch (row + offset watermark + the whole
     // fan-out) — and on a PAUSED fresh stream would commit the wake record despite the pause
     // (admit([]) sees no non-control events to refuse). The wake record rides the first REAL
@@ -294,8 +292,8 @@ export class Stream {
       }
       // A dedupe hit echoes the OFFSET of the row it matched; when that row was inserted earlier
       // IN THIS batch (a retry beside its original), `committed` holds two entries for one offset.
-      // `distinct` keeps one per offset (first wins) so the inline reduce AND the facet-drive /
-      // connected delivery act on each durable event ONCE — while `committed` keeps the per-input
+      // `distinct` keeps one per offset (first wins) so the inline reduces AND the delivery loop see
+      // each durable event ONCE — while `committed` keeps the per-input
       // shape the RPC answer echoes back (each input still gets its own receipt).
       const seen = new Set<number>();
       const distinct = committed.filter((e) => !seen.has(e.offset) && (seen.add(e.offset), true));
@@ -483,7 +481,7 @@ export class Stream {
     );
   }
 
-  // ── the alarm armer (the apps/os StreamAlarmArmer, folded in) ──
+  // ── the alarm armer ──
 
   /** ONE alarm write per quiet-period start, never per append (an ephemeral flood arms once).
    *  Memo-only: a fresh incarnation writes one redundant setAlarm and a later target may overwrite

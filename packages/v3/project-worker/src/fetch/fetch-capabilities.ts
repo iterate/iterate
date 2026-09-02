@@ -87,7 +87,7 @@ export async function serveCapabilityFetchLane(
   try {
     const expr = capHeader.trimStart().startsWith("[")
       ? (JSON.parse(capHeader) as Expression)
-      : parse(capHeader === "itx" || capHeader.startsWith("itx.") ? capHeader : `itx.${capHeader}`);
+      : parse(capHeader);
     const result = await resolveFetch(expr, request);
     return result instanceof Response
       ? result

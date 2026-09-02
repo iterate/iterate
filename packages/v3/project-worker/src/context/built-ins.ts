@@ -18,8 +18,8 @@
 // bare-lambda case (wrap → `load(...).getEntrypoint().run`).
 
 import { itxEntrypointFor } from "../itx-entrypoint.ts";
-import type { Context } from "../stream/stream.ts";
-import type { StreamEventInput } from "../stream/events.ts";
+import type { Context, StreamPage } from "../stream/stream.ts";
+import type { StreamEvent, StreamEventInput } from "../stream/events.ts";
 import type { IterateContextDurableObject } from "../iterate-context-durable-object.ts";
 import { loadConfinedWorker, type WorkerSource } from "./worker-loader.ts";
 import { resolveContextPath } from "./durable-object-names.ts";
@@ -38,7 +38,7 @@ type RpcStubsView = {
    *  the brand to know the callee owns its own progress. */
   get(key: string): RpcStubHandle;
   /** PRESENCE — the keys with an open transport right now. */
-  list(): string[] | Promise<string[]>;
+  list(): string[];
 };
 
 /** The `subscriptions` view: the subscriptions table (an inline reduce) joined with each cursor
@@ -66,7 +66,7 @@ export type SubscriptionListEntry = {
  *  string-only; the object form is spelled through `itx.load`. `delete` removes a facet, storage
  *  included (the mirror of `ctx.facets.delete`). */
 type FacetsView = {
-  get(ref: string | { source?: unknown; className?: string; name?: string }): FacetHandle;
+  get(ref: string | { source: WorkerSource; className: string; name?: string }): FacetHandle;
   delete(name: string): void;
 };
 
@@ -86,8 +86,7 @@ export interface BuiltInsEnv {
  *  a `WorkerEntrypoint`'s default export, so `runScript` bottoms out at the SAME `load(...)
  *  .getEntrypoint()` path as any exported entrypoint (no separate loader branch). `run()` injects
  *  the itx scope via `env.ITX.get()` — mid-chain handles/callbacks pipeline natively, exactly like a
- *  capnweb client after `session.get()`. This used to be a host-injected wrapper on EVERY stateless
- *  load (`CODE_CAP_RUNNER`); it now rides only this one bare-lambda door. */
+ *  capnweb client after `projects.get(id)`. */
 const RUN_SCRIPT_ENTRYPOINT = (script: string) => /* js */ `
 import { WorkerEntrypoint } from "cloudflare:workers";
 const cap = ${script};
@@ -95,10 +94,6 @@ export default class RunScript extends WorkerEntrypoint {
   async run(...args) {
     if (typeof cap !== "function") throw new Error("runScript: expected a function");
     return await cap(await this.env.ITX.get(), ...args);
-  }
-  fetch(request) {
-    if (typeof cap?.fetch === "function") return cap.fetch(request, this.env, this.ctx);
-    return new Response("this script serves no fetch\\n", { status: 405 });
   }
 }
 `;
@@ -120,15 +115,15 @@ interface BuiltInScope {
   };
   /** Append to this context's append-only event log (the facets that REDUCE it are
    *  `itx.facets.get(name)`). A top-level root, so the expression surface mirrors the edge
-   *  RpcTarget exactly: `itx.append({...})` is one spelling on every lane. */
-  append(...events: StreamEventInput[]): Promise<unknown>;
+   *  RpcTarget exactly: `itx.append({...})` is one spelling on every hop. */
+  append(...events: StreamEventInput[]): Promise<StreamEvent[]>;
   /** Read a page of the durable log — `itx.read(afterOffset?, limit?)`, the flattened twin of
    *  `append` (non-minting: a probe never wakes storage). */
-  read(afterOffset?: number, limit?: number): Promise<unknown>;
+  read(afterOffset?: number, limit?: number): Promise<StreamPage>;
   /** Navigate to another context of THIS project, routed through its own table. Absolute by
    *  convention ("/agents/x"); relative ("agents/x", "../inbox") resolves against this context's
    *  path — the same resolver the edge `cd` uses (resolveContextPath). */
-  cd(path: string): unknown;
+  cd(path: string): InvokeHandle;
   /** Egress: `{{secret:project:NAME}}` placeholders substituted, then the FALLBACK terminal — the
    *  same door a loaded worker's `globalOutbound` and the edge `itx.fetch(request)` land on. */
   fetch(request: Request): Promise<Response>;
@@ -141,7 +136,7 @@ interface BuiltInScope {
   /** Address a facet that is ALREADY RUNNING by name (a processor, a named instance) — no source;
    *  to LOAD and host a class, use `itx.load(src).getDurableObjectClass(name).get(name?)`. `delete`
    *  removes it, storage included. */
-  facets: { get(name: string): unknown; delete(name: string): void };
+  facets: { get(name: string): FacetHandle; delete(name: string): void };
   /** The subscriptions layer, read: the table (an inline reduce) joined with the stream-kept
    *  cursors. `subscribe` lives on the edge as sugar over the `subscription-configured` event. */
   subscriptions: SubscriptionsView;
@@ -151,7 +146,7 @@ interface BuiltInScope {
    *  WorkerStubEntrypointOptions.props, read back as `this.ctx.props` (a url, a key name, …);
    *  `.getDurableObjectClass(name)` → a `DurableObject` class whose `.get(instance?)` is a durable
    *  facet of this stream. `source` is a producer expression, a bare string, or `{ type:"inline" }`. */
-  load(source: WorkerSource): unknown;
+  load(source: WorkerSource): InvokeHandle;
   /** Run a stateless lambda STRING — sugar: wrap into a `WorkerEntrypoint`, then
    *  `load(...).getEntrypoint().run(...)`. The one bare-lambda ergonomic (same as apps/os). */
   runScript(script: string, ...args: unknown[]): Promise<unknown>;
@@ -310,7 +305,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
       const classHandle = (className: string) =>
         new InvokeHandle((seg, args) => {
           if (seg.length === 1 && seg[0] === "get")
-            // .get(instance?) → the durable facet; deps.facets.get folds the rest into facetInvoke.
+            // .get(instance?) → the durable facet; deps.facets.get folds the rest into the DO's facet door.
             return deps.facets.get({ source, className, name: args[0] as string | undefined });
           throw new Error(
             `load(src).getDurableObjectClass('${className}').${seg.join(".")}: call .get(name?)`,

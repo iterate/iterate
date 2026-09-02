@@ -72,7 +72,7 @@ class Probe extends StreamProcessor<{ seen: string[] }> {
     return { seen: [...state.seen, `${event.type}@${event.offset}`] };
   }
   // exact-offset suite: opt out of the default live-state emit (a constant projection never diffs)
-  protected override liveState() {
+  protected override projectLiveState() {
     return null;
   }
 }
