@@ -83,6 +83,18 @@ const physicalWorkerBundles: BundleManifestEntry[] = [
   {
     allowedImports: [],
     allowedImportPrefixes: ["cloudflare:"],
+    entrypoint: new URL(
+      "../dist/starter-apps/flake-dashboard/configured-worker.mjs",
+      import.meta.url,
+    ),
+    followRelativeImports: true,
+    name: "configured flake dashboard worker",
+    requiredSource: ["flakes/created", "flake-dashboard"],
+    target: "physical-worker",
+  },
+  {
+    allowedImports: [],
+    allowedImportPrefixes: ["cloudflare:"],
     entrypoint: new URL("../dist/starter-apps/guestbook/configured-worker.mjs", import.meta.url),
     followRelativeImports: true,
     name: "configured Guestbook worker",

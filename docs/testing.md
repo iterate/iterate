@@ -520,19 +520,35 @@ protocol below instead of repeatedly making unrelated PRs pay for it.
 
 A flaky or pathologically slow test may be quarantined only after the current
 change is shown not to cause its failure. Failures on behavior changed by the
-PR remain ordinary blockers. For an unrelated test:
+PR remain ordinary blockers. For an unrelated test, the protocol is:
 
 1. Record the test name, first-attempt error, run link or artifact, and timing.
-2. Add the narrowest explicit skip (`test.skip`/`fixme`, or a clearly logged
-   no-op for an entire broken lane). Never hide it with a title filter, deleted
-   discovery entry, extra retry, or swallowed error. The skip names its task.
-3. Create `tasks/<name>.md` with the evidence, impact, investigation work, and
-   concrete exit criteria for removing the skip.
-4. State prominently in the PR description that an unrelated flake was found,
-   what was skipped, and which task owns restoration.
+2. Wrap it with `createFlake` (next section), passing the one error pattern the
+   flake produces. The test stays green, keeps running on every branch, and
+   keeps reporting its outcomes — the flake rate stays measured, and the
+   recorded data is what later proves the test deserves unwrapping.
+3. State in the PR description that an unrelated flake was found and wrapped.
 
-Once the remaining CI is green, the quarantine is explicit coverage debt, not
-a reason to keep the unrelated PR open indefinitely.
+Skipping is the exception, not the protocol. Fall back to an explicit skip
+only when the test cannot safely or affordably keep executing:
+
+- running it harms the rest of the suite (side effects — e.g. the
+  live-capability mesh e2e that cancelled the shared OS isolate and severed
+  19 unrelated sessions);
+- the flake manifests as a genuine hang, which has no error to pattern-match
+  (`createFlake` deliberately treats a hang as red);
+- the cost is the runtime itself (pathological tail latency), or the whole
+  lane is broken.
+
+The skip path carries extra obligations precisely because it produces no
+data: the narrowest explicit `test.skip`/`fixme` (or a clearly logged no-op
+for an entire broken lane) — never a title filter, deleted discovery entry,
+extra retry, or swallowed error — plus a `tasks/<name>.md` with the evidence,
+impact, investigation work, and concrete exit criteria, named by the skip and
+called out prominently in the PR description.
+
+Once the remaining CI is green, either form of quarantine is explicit
+coverage debt, not a reason to keep the unrelated PR open indefinitely.
 
 ### Pinned bugs: `failing(test, …)`, not bare `test.fails`
 
@@ -562,6 +578,38 @@ so conditions that prove nothing (a coincidental restart masking the bug
 for one observation) retry instead of succeeding —
 `apps/os/e2e/vitest/userspace-facet-source-version.e2e.test.ts` is the
 worked example; its `test.fails` predecessor false-alarmed 7+ times.
+
+### Known-flaky tests: `createFlake(test, …)`
+
+For a test that is genuinely flaky — sometimes passes, sometimes fails, and
+always with the SAME error — wrap it with `createFlake` from
+`@iterate-com/shared/test-support/flake-test` instead of skipping it:
+
+```ts
+const flake = createFlake(test, /CPU startup time exceeded \d+ms/);
+flake("Worker can be deployed", async () => {
+  const deployment = await system.deploy();
+  await expect.poll(() => fetch(deployment.url)).toMatchObject({ status: 200 });
+});
+```
+
+Like `failing`, it registers through the runner's expected-fail variant, but
+the contract differs: a pass and a failure matching the one allowed pattern
+are both green; anything else — a different error, or a body still running at
+the wrapper's deadline — is red. The test keeps running on every branch and,
+when `FLAKE_RECORD_DIR` is set (CI), appends each outcome as a JSON line for
+the flake dashboard, so the flake rate stays measured instead of hidden.
+
+The lifecycle is wrapper-switching, driven by that data: a test that seems
+flaky moves to `createFlake`; if it stops passing entirely, switch it to
+`failing`; once it passes consistently, unwrap it back to a plain test.
+`packages/shared/src/test-support/flake-sentinel.test.ts` is a deliberately
+~10%-flaky sentinel that proves the pipeline works — if its flake rate reads
+0%, distrust the dashboard, not the sentinel.
+
+This IS the quarantine protocol (previous section): a skipped test produces
+no data, so nothing can ever prove it deserves to come back. Skips remain
+only for tests that cannot keep executing at all.
 
 ### Parked tests expire
 

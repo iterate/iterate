@@ -929,6 +929,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
     path: "worker.ts",
     content:
       "import { DocsApp } from \"@iterate-com/docs\";\n" +
+      "import { FlakeDashboardApp } from \"iterate/starter-apps/flake-dashboard\";\n" +
       "import { GithubAiLinter } from \"iterate/starter-apps/github-ai-linter\";\n" +
       "import { GuestbookApp } from \"iterate/starter-apps/guestbook\";\n" +
       "import { MediaApp } from \"iterate/starter-apps/media\";\n" +
@@ -965,6 +966,8 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "      repoPath: \"/repos/config\",\n" +
       "    },\n" +
       "  });\n" +
+      "  /** /flakes -> GitHub \"Flake dashboard\" issue. Inert if /flakes stream never receives events. */\n" +
+      "  #flakeDashboardApp = FlakeDashboardApp.create(this.env);\n" +
       "  #docsApp = DocsApp.create(this.env, {\n" +
       "    auth: { policy: \"project-member\" },\n" +
       "    proxy: {\n" +
@@ -1274,6 +1277,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "    }\n" +
       "\n" +
       "    await this.#aiLintApp.processEvent(event);\n" +
+      "    await this.#flakeDashboardApp.processEvent(event);\n" +
       "    await this.#guestbookApp.processEvent(event);\n" +
       "    await this.#mediaApp.processEvent(event);\n" +
       "    await this.#notesApp.processEvent(event);\n" +
