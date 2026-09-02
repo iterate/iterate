@@ -21,15 +21,14 @@
 
 ## 2. Where they split — four decisions
 
-**D1 — Shadow stack or map?** A and D make `state.itxExpressionRewriteRules` a map: last writer wins, unset deletes, the
-stack dies (override → unset → restore no longer restores). B and C keep the array: a non-null target
-pushes, `null` pops the NEWEST row at that match, restore works, ranking unchanged. Both kill
-removal-by-identity (`providedAtOffset`), which is the union that made `revoke` messy.
-**Recommendation: keep the stack (B/C).** It costs one `filter` in the reduce, keeps "newest wins" as
-the one rule, and temporary interposition (override `itx.ai.run`, pop back) is a real pattern. A row is
-`{ match, target }` and nothing else: the reduce keeps rows in log order, so "newest" is array position, and
-ties between different matches are impossible (equal length + equal pinned args ⇒ the same match). No
-`setAtOffset` — see §7.
+**D1 — Shadow stack or map? → MAP (Jonas, round 2: "I don't like this stack stuff — way easier to just
+delete the rule from a map, easier to reason about").** `state.itxExpressionRewriteRules` is
+`Record<canonicalMatch, ItxExpressionRewriteRule>`: a non-null target REPLACES the entry at `match`, `null`
+DELETES it. No shadow stack, no restore-what-was-beneath, no removal by identity, no offset on a row —
+"newest wins" is trivially true because there is one entry per match, and the ranking is longest match
+then most pinned args, nothing else. Override-then-restore is "set it back yourself". The two e2e files
+that prove the stack (`capability-table-shadow-stack-and-mount-chains`, the by-offset half of the
+wire-frames pin) are deleted, not rewritten.
 
 **D2 — Is there a verb, or only `append`?** A: no verb; the client appends
 `rewrite-rule-updated` itself and a "normalizer" at the append door canonicalizes/validates/echoes. B C D: a
@@ -86,8 +85,8 @@ waitForEvent(filter?: WaitForEventFilter): Promise<StreamEvent>;          // bec
 invoke(call: ItxExpressionInput): Promise<unknown>;                            // was invokeCapability
 whoami · kv · cd · fetch · load · facets                                   // unchanged
 // layer 2 · (b) itx-expression rewrite rules — pure data, ONE event
-/** A call starting with `match` runs as the same call with `match` replaced by `target`; `null` pops the
- *  newest rewrite rule at `match`. Both halves are itx expressions; `match` may pin literal args. Appends
+/** A call starting with `match` runs as the same call with `match` replaced by `target`; `null` deletes the
+ *  rule at `match`. Both halves are itx expressions; `match` may pin literal args. Appends
  *  `itx-expressions/rewrite-rule-updated { match, target | null }` — or nothing, when the table already says so. */
 rewrite(match: ItxExpressionInput, target: ItxExpressionInput | null): Promise<StreamEvent | null>; // the committed event, or null when the table already said so
 expressionRewriteRules: { list(): ItxExpressionRewriteRule[]; get(match: ItxExpressionInput): ItxExpressionRewriteRule | null };
@@ -167,7 +166,7 @@ at the idle quiesce; presence = borrowed ∪ pager-backed. Transport verbs off t
 ## 6. Costs we accept (the honest list, from all four)
 
 - Wire and event-type changes: a flag day (prd is resettable; every e2e reading a code moves in the same commit).
-- Removal by identity is gone; a null pops the newest at that match. Two e2e files that prove the stack by offset are rewritten to pop by match.
+- The shadow stack and removal by identity are gone; a null deletes the entry at that match. The two e2e files that prove the stack are deleted.
 - The client's type is unenforced beyond the four declared edge members; a typo is `NO_ITX_EXPRESSION_MATCH`, not a missing method. (Already true for `itx.kv`, `itx.facets`, `itx.load`.)
 - Six new reserved dotted roots (`rewrite`, `expressionRewriteRules`, `subscribe`, `enableProcessor`, `disableProcessor`, `waitForEvent`).
 - "Capability" and "mount" prose churn across headers, docs and BUILD-LOG (history docs untouched).
@@ -175,9 +174,9 @@ at the idle quiesce; presence = borrowed ∪ pager-backed. Transport verbs off t
 ## 7. Why no offset on a rewrite-rule row (Jonas: "what is an actual case where this race matters?")
 
 Today's `providedAtOffset` does three jobs. **Identity for by-offset revoke** — gone in all four designs
-(a `null` pops the newest at the match). **The ranking tie-break** in `pickMount` — unnecessary: the reduce
-appends rows in log order, so "newest at this match" is the last matching array element, and two rows with
-DIFFERENT matches can never tie (equal length and equal pinned-arg count means the same prefix). **A
+(a `null` pops the newest at the match). **The ranking tie-break** in `pickMount` — unnecessary: the table is a map with one entry per
+match, and two rules with DIFFERENT matches can never tie (equal length and equal pinned-arg count means
+the same prefix). **A
 receipt** — `provideCapability` returns `{ providedAtOffset }` so a caller can tell "appended" from
 "idempotent no-op"; returning the committed `StreamEvent` (or `null`) says the same without a bespoke field.
 
@@ -238,8 +237,7 @@ created through the verb **session-scoped** — like a lent stub. A rule that mu
 appended as the raw event (`itx.append(rewriteRuleUpdatedEvent(match, target))`) — the verb IS just append
 plus a handle, so the two spellings differ in exactly one thing: lifetime. Recommended, and honest about
 today: mounts are durable data that outlive sessions; under this design the durable spelling is the event,
-the scoped spelling is the verb. (Stack + handle also answers annotation 3: disposing the handle pops the
-newest rule at that match — the one you added, in every real case; there is no removal by identity.)
+the scoped spelling is the verb. (Annotation 3 dissolves with the map: disposing the handle deletes the entry at that match.)
 
 **8.5 Examples use INLINE sources** (annotation 8). `WorkerSource` already accepts `{ type: "inline", files:
 { "tally.js": "export class TallyProcessor …" } }` (worker-loader.ts; `load-sources.e2e` proves it). Every
