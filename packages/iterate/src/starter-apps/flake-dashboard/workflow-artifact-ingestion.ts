@@ -66,6 +66,25 @@ export async function ingestWorkflowRunFlakeArtifacts(
   itx: Project,
   webhook: NonNullable<ReturnType<typeof parseWorkflowRunWebhook>>,
 ): Promise<void> {
+  // Telemetry must never wedge event delivery: a throw out of this function
+  // would fail the project worker's whole delivery batch and retry the same
+  // poisoned webhook forever, stalling every app behind it. Any failure —
+  // GitHub down, an unreadable zip — logs and drops this run's records; the
+  // data gaps, delivery moves on.
+  try {
+    await ingestOrThrow(itx, webhook);
+  } catch (error) {
+    console.error(
+      `[flake-ingest] ingestion failed for run ${webhook.run.id} (records dropped):`,
+      error,
+    );
+  }
+}
+
+async function ingestOrThrow(
+  itx: Project,
+  webhook: NonNullable<ReturnType<typeof parseWorkflowRunWebhook>>,
+): Promise<void> {
   const { connection, run, repository } = webhook;
   const params = { owner: repository.owner.login, repo: repository.name };
   const octokit = itx.integrations.github.get(connection).octokit;
@@ -100,6 +119,10 @@ export async function ingestWorkflowRunFlakeArtifacts(
       artifact_id: artifact.id,
       archive_format: "zip",
     });
+    // Octokit types downloadArtifact's redirect-following response data as
+    // `unknown`; for archive_format "zip" it is the archive bytes as an
+    // ArrayBuffer at runtime. unzipSync throws on anything else, and the
+    // catch above turns that into a logged drop rather than a stalled batch.
     const files = unzipSync(new Uint8Array(download.data as ArrayBuffer));
     const records = Object.entries(files)
       .filter(([name]) => name.endsWith(".jsonl"))

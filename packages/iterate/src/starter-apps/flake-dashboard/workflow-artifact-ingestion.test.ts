@@ -90,6 +90,28 @@ test("an idempotency conflict on run-recorded means already ingested and does no
   expect(appended.map((event: any) => event.type)).toEqual(["events.iterate.com/flakes/created"]);
 });
 
+test("an ingest failure logs and drops instead of propagating into event delivery", async () => {
+  const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+  try {
+    const { itx } = fakeItx({ artifacts: [], zips: {} });
+    // A poisoned webhook that throws mid-ingest must not reject: a throw out
+    // of the app's processEvent would fail the whole delivery batch and
+    // retry the same webhook forever.
+    itx.integrations.github.get = () => {
+      throw new Error("GitHub is down");
+    };
+    await expect(
+      ingestWorkflowRunFlakeArtifacts(itx, parseWorkflowRunWebhook(webhookEvent())!),
+    ).resolves.toBeUndefined();
+    expect(consoleError).toHaveBeenCalledWith(
+      expect.stringMatching(/ingestion failed for run 9001/),
+      expect.objectContaining({ message: "GitHub is down" }),
+    );
+  } finally {
+    consoleError.mockRestore();
+  }
+});
+
 test("oversized artifacts are skipped with a warning", async () => {
   const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => {});
   try {

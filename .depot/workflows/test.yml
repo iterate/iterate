@@ -66,6 +66,10 @@ jobs:
           name: flake-records-unit
           path: test-results/flake-records
           if-no-files-found: ignore
+          # A job retry re-uploads under the same name; without this the step
+          # fails on the collision. Ingestion keys on run+attempt, so the
+          # attempt that wins the overwrite is the one whose records land.
+          overwrite: true
       - name: Upload test telemetry artifacts
         if: always()
         uses: actions/upload-artifact@v4
