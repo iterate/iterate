@@ -328,12 +328,40 @@ export type AgentUiMessageVia = {
   sender?: string;
 };
 
+/** Structural mirror of the derivation vocabulary's DescribedAttachment
+ * (iterate/processors user-message-describer.ts) — typed attachment metadata
+ * a derivation processor parsed out of a message's html parts. Media bytes
+ * stay in `files`; this is layout/semantic metadata keyed by filename. */
+export type AgentUiAttachment =
+  | { kind: "image"; filename: string; width: number; height: number }
+  | {
+      kind: "video";
+      filename: string;
+      width?: number;
+      height?: number;
+      durationSeconds?: number;
+      poster?: string;
+    }
+  | { kind: "audio"; filename: string; durationSeconds?: number; transcript?: string }
+  | { kind: "file"; filename: string; contentType?: string; sizeBytes?: number }
+  | {
+      kind: "location";
+      latitude: number;
+      longitude: number;
+      accuracyMeters?: number;
+      capturedAt?: string;
+    };
+
 export type AgentUiMessageItem = {
   kind: "user" | "assistant";
   id: string;
   text: string;
   timestampMs: number;
   files?: AgentUiFileAttachment[];
+  /** Derived typed attachments (render/user-message-described) — present once
+   * a derivation processor has described the message; renderers prefer these
+   * over parsing anything out of `text`. */
+  attachments?: AgentUiAttachment[];
   via?: AgentUiMessageVia;
 };
 
@@ -457,6 +485,18 @@ export type AgentUiState = {
    * a resume). A paused loop owes no follow-up round, so the "processing"
    * inference must not claim one. */
   paused: boolean;
+  /** The last few emitted user messages (offset, item id, files, timestamp),
+   * kept so a later render/user-message-described fact can re-emit the item
+   * with derived text + attachments while preserving its files and position.
+   * Bounded: derivation normally lands within milliseconds; a description
+   * arriving after eviction from this window is dropped (the raw item
+   * stands). */
+  recentUserMessages: {
+    offset: number;
+    id: string;
+    files?: AgentUiFileAttachment[];
+    timestampMs: number;
+  }[];
 };
 
 const AgentUiLlmStepSchema = z
@@ -525,12 +565,49 @@ const AgentUiMessageViaSchema = z.strictObject({
   sender: z.string().optional(),
 }) satisfies z.ZodType<AgentUiMessageVia>;
 
+const AgentUiAttachmentSchema = z.discriminatedUnion("kind", [
+  z.strictObject({
+    kind: z.literal("image"),
+    filename: z.string(),
+    width: z.number().finite(),
+    height: z.number().finite(),
+  }),
+  z.strictObject({
+    kind: z.literal("video"),
+    filename: z.string(),
+    width: z.number().finite().optional(),
+    height: z.number().finite().optional(),
+    durationSeconds: z.number().finite().optional(),
+    poster: z.string().optional(),
+  }),
+  z.strictObject({
+    kind: z.literal("audio"),
+    filename: z.string(),
+    durationSeconds: z.number().finite().optional(),
+    transcript: z.string().optional(),
+  }),
+  z.strictObject({
+    kind: z.literal("file"),
+    filename: z.string(),
+    contentType: z.string().optional(),
+    sizeBytes: z.number().finite().optional(),
+  }),
+  z.strictObject({
+    kind: z.literal("location"),
+    latitude: z.number().finite(),
+    longitude: z.number().finite(),
+    accuracyMeters: z.number().finite().optional(),
+    capturedAt: z.string().optional(),
+  }),
+]) satisfies z.ZodType<AgentUiAttachment>;
+
 const AgentUiMessageItemSchema = z.strictObject({
   kind: z.enum(["user", "assistant"]),
   id: z.string(),
   text: z.string(),
   timestampMs: z.number().finite(),
   files: z.array(AgentUiFileAttachmentSchema).optional(),
+  attachments: z.array(AgentUiAttachmentSchema).optional(),
   via: AgentUiMessageViaSchema.optional(),
 }) satisfies z.ZodType<AgentUiMessageItem>;
 
@@ -586,6 +663,14 @@ export const AgentUiStateSchema = z
     summaryActivity: z.string().nullable(),
     summaryActivityUpdatedAtMs: z.number().finite().nullable(),
     paused: z.boolean(),
+    recentUserMessages: z.array(
+      z.strictObject({
+        offset: z.number().int().nonnegative(),
+        id: z.string(),
+        files: z.array(AgentUiFileAttachmentSchema).optional(),
+        timestampMs: z.number().finite(),
+      }),
+    ),
   })
   .superRefine((state, context) => {
     for (const [id, activity] of Object.entries(state.provisionalActivities)) {
@@ -627,6 +712,7 @@ export function initialAgentUiState(): AgentUiState {
     summaryActivity: null,
     summaryActivityUpdatedAtMs: null,
     paused: false,
+    recentUserMessages: [],
   };
 }
 
@@ -717,6 +803,7 @@ const AGENT_RESUMED = "events.iterate.com/agent/resumed";
 const AGENT_SUMMARY_UPDATED = "events.iterate.com/agent/summary-updated";
 const RENDER_MESSAGE_DELTA = "events.iterate.com/render/message-delta";
 const RENDER_SCRIPT_DELTA = "events.iterate.com/render/script-delta";
+const RENDER_USER_MESSAGE_DESCRIBED = "events.iterate.com/render/user-message-described";
 const STREAM_WAKE_LABEL = "Stream durable object woke";
 
 // ---------------------------------------------------------------------------
@@ -951,6 +1038,43 @@ function reduceAgentUiEvent(
           ? { ...step, liveScript: { code, ...(status === undefined ? {} : { status }) } }
           : step,
       );
+    }
+
+    // A derivation processor described a user message: derived display text
+    // plus typed attachments (render/user-message-described, source-linked to
+    // the raw user event). Re-emit the item under its original id — the feed
+    // projector replaces the row in place — or patch it while still queued.
+    case RENDER_USER_MESSAGE_DESCRIBED: {
+      const sourceOffset = event.source?.offset;
+      if (sourceOffset === undefined) return state;
+      const payload = readPayloadRecord(event);
+      const text = typeof payload?.text === "string" ? payload.text : null;
+      const parsedAttachments = z.array(AgentUiAttachmentSchema).safeParse(payload?.attachments);
+      if (text === null || !parsedAttachments.success || parsedAttachments.data.length === 0) {
+        return state;
+      }
+      const attachments = parsedAttachments.data;
+      const id = `user-${sourceOffset}`;
+      const queuedIndex = state.queuedUserMessages.findIndex((message) => message.id === id);
+      if (queuedIndex !== -1) {
+        const queuedUserMessages = [...state.queuedUserMessages];
+        queuedUserMessages[queuedIndex] = {
+          ...queuedUserMessages[queuedIndex]!,
+          text,
+          attachments,
+        };
+        return { ...state, queuedUserMessages };
+      }
+      const entry = state.recentUserMessages.find((candidate) => candidate.offset === sourceOffset);
+      if (entry === undefined) return state;
+      return emitItem(state, items, {
+        kind: "user",
+        id: entry.id,
+        text,
+        ...(entry.files === undefined ? {} : { files: entry.files }),
+        attachments,
+        timestampMs: entry.timestampMs,
+      });
     }
 
     case AGENT_LLM_REQUEST_SETTLED: {
@@ -1461,12 +1585,32 @@ function flushDeferredMessages(state: AgentUiState, items: AgentUiItem[]): Agent
 // as finished — the agent is still working. Queue it for the next flush;
 // otherwise emit directly. Shared by plain user messages and file-attachment
 // inputs.
+const RECENT_USER_MESSAGE_WINDOW = 16;
+
 function emitUserMessageItem(
   state: AgentUiState,
   items: AgentUiItem[],
   item: AgentUiMessageItem,
 ): AgentUiState {
-  const settled = settleActivityAtBoundary(state, item.timestampMs, items);
+  // Remember the message so a derivation processor's later
+  // render/user-message-described fact can re-emit it with derived text +
+  // attachments (the id encodes the raw offset: `user-<offset>`).
+  const offset = Number(item.id.replace(/^user-/, ""));
+  const remembered = Number.isFinite(offset)
+    ? {
+        ...state,
+        recentUserMessages: [
+          ...state.recentUserMessages.filter((entry) => entry.offset !== offset),
+          {
+            offset,
+            id: item.id,
+            ...(item.files === undefined ? {} : { files: item.files }),
+            timestampMs: item.timestampMs,
+          },
+        ].slice(-RECENT_USER_MESSAGE_WINDOW),
+      }
+    : state;
+  const settled = settleActivityAtBoundary(remembered, item.timestampMs, items);
   if (isAgentUiActivityWorking(settled.live, undefined)) {
     return { ...settled, queuedUserMessages: [...settled.queuedUserMessages, item] };
   }

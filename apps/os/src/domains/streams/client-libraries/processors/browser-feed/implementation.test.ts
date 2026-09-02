@@ -105,7 +105,7 @@ describe("BrowserFeedProcessor live ephemerals", () => {
   it("accepts only empty or current-schema reducer state", () => {
     const current = BrowserFeedContract.stateSchema.parse({});
     expect(current).toMatchObject({
-      schemaVersion: 8,
+      schemaVersion: 9,
       nextLocalIndex: 0,
     });
     expect(() =>

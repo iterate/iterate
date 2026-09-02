@@ -2251,3 +2251,93 @@ describe("derived render facts (project derivation processors)", () => {
     expect((llmStep as { liveProse?: string } | undefined)?.liveProse).toBeUndefined();
   });
 });
+
+describe("described user messages (render/user-message-described)", () => {
+  test("a described message re-emits the user item with derived text, attachments, and its original files", () => {
+    const reduced = reduceAll([
+      {
+        type: "events.iterate.com/agents/context-added",
+        payload: {
+          role: "user",
+          content: 'look\n<img alt="sunset.jpg" width="100" height="80">',
+          files: [
+            {
+              filename: "sunset.jpg",
+              contentType: "image/jpeg",
+              path: "/agents/test/sunset.jpg",
+              size: 1234,
+              url: "https://files.example/sunset.jpg",
+            },
+          ],
+        },
+      },
+      {
+        type: "events.iterate.com/render/user-message-described",
+        source: { offset: 1 },
+        payload: {
+          text: "look",
+          attachments: [{ kind: "image", filename: "sunset.jpg", width: 100, height: 80 }],
+        },
+      },
+    ] as Parameters<typeof reduceAll>[0]);
+    const userItems = reduced.items.filter((item) => item.kind === "user") as Extract<
+      AgentUiItem,
+      { kind: "user" }
+    >[];
+    // Two emissions, SAME id: the projector replaces the row in place.
+    expect(userItems).toHaveLength(2);
+    expect(userItems[0]!.id).toBe(userItems[1]!.id);
+    expect(userItems[1]).toMatchObject({
+      text: "look",
+      attachments: [{ kind: "image", filename: "sunset.jpg", width: 100, height: 80 }],
+      files: [{ filename: "sunset.jpg" }],
+    });
+  });
+
+  test("a description landing while the message is still queued patches it before emission", () => {
+    const reduced = reduceAll([
+      { type: "events.iterate.com/agent/llm-request-requested", payload: { model: "m" } },
+      {
+        type: "events.iterate.com/agents/context-added",
+        payload: { role: "user", content: 'hi\n<img alt="a.png" width="10" height="10">' },
+      },
+      {
+        type: "events.iterate.com/render/user-message-described",
+        source: { offset: 2 },
+        payload: {
+          text: "hi",
+          attachments: [{ kind: "image", filename: "a.png", width: 10, height: 10 }],
+        },
+      },
+      {
+        type: "events.iterate.com/agent/llm-request-settled",
+        payload: { requestOffset: 1, result: { status: "succeeded", text: "done" } },
+      },
+      // Queued user messages flush at the next request boundary.
+      { type: "events.iterate.com/agent/llm-request-requested", payload: { model: "m" } },
+    ] as Parameters<typeof reduceAll>[0]);
+    const userItems = reduced.items.filter((item) => item.kind === "user") as Extract<
+      AgentUiItem,
+      { kind: "user" }
+    >[];
+    expect(userItems).toHaveLength(1);
+    expect(userItems[0]).toMatchObject({
+      text: "hi",
+      attachments: [{ kind: "image", filename: "a.png" }],
+    });
+  });
+
+  test("a description for a message outside the recent window is dropped, not misplaced", () => {
+    const reduced = reduceAll([
+      {
+        type: "events.iterate.com/render/user-message-described",
+        source: { offset: 999 },
+        payload: {
+          text: "orphan",
+          attachments: [{ kind: "image", filename: "x.png", width: 1, height: 1 }],
+        },
+      },
+    ] as Parameters<typeof reduceAll>[0]);
+    expect(reduced.items).toHaveLength(0);
+  });
+});
