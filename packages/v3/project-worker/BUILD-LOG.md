@@ -2055,3 +2055,10 @@ the verb is reduce, never fold.
   checkpoint) — the clean room does the same in two lines of the DO constructor (`new Stream` opens
   storage, `appendCreatedAndWokenEvents` appends); the two appends cannot move INTO the Stream
   constructor because the fan-out closure reaches DO fields that do not exist yet mid-construction.
+- **The checkpoint can never be missing (same day).** Jonas asked how; the docs say SQLite storage
+  writes in one synchronous block are one atomic implicit transaction (ours is an explicit
+  `transactionSync`), so the rows, the mark and the core checkpoint never disagree. The
+  constructor's generic "catch up to the mark" loop is now an explicit branch: checkpoint present →
+  use it; absent → either a store with no commits (mark 0) or a contract-version bump, in which case
+  the durable log is re-reduced from offset 0. `#reduceEventIntoCoreReducedState` keeps its two
+  callers (that re-reduce, and the commit).

@@ -154,10 +154,12 @@ export class Stream {
     this.#highestDurableOffset =
       (this.#storage.kv.get("maxAssignedOffset") as number | undefined) ?? 0;
     this.#highestAssignedOffset = this.#highestDurableOffset;
-    // The core reduce: the checkpoint (schema-initial when there is none or its version changed),
-    // then the durable log replayed up to the mark — so the reduced state is current before any door
-    // opens. Every durable commit checkpoints in its own transaction, so the replay is normally
-    // empty; a version bump is what makes it a full re-reduce.
+    // The core reduced state. Its checkpoint is written in the SAME synchronous transaction as the
+    // rows it was reduced from (SQLite storage writes in one synchronous block are one atomic
+    // implicit transaction; ours is an explicit one), so after any commit the two cannot disagree.
+    // A checkpoint is therefore only ever ABSENT on a store with no commits (mark 0, nothing to
+    // reduce) or DISCARDED because the contract's version changed — then the durable log is
+    // re-reduced from offset 0, the one-time cost of a version bump.
     const { contract } = this.#coreProcessor;
     const checkpoint = readReduceCheckpoint<CoreState>(
       this.#storage.kv,
@@ -165,18 +167,18 @@ export class Stream {
       contract.version,
       () => contract.initialState(),
     );
-    this.#coreReducedState = checkpoint?.state ?? contract.initialState();
-    this.#coreReducedThroughOffset = checkpoint?.reducedThroughOffset ?? 0;
-    while (this.#coreReducedThroughOffset < this.#highestDurableOffset) {
-      const page = this.read(this.#coreReducedThroughOffset, 500);
-      for (const event of page.events)
-        if (event.offset <= this.#highestDurableOffset)
-          this.#reduceEventIntoCoreReducedState(event);
-      this.#coreReducedThroughOffset = Math.min(
-        page.scannedThroughOffset,
-        this.#highestDurableOffset,
-      );
-      if (page.events.length < 500) break;
+    if (checkpoint) {
+      this.#coreReducedState = checkpoint.state;
+      this.#coreReducedThroughOffset = checkpoint.reducedThroughOffset;
+    } else {
+      this.#coreReducedState = contract.initialState();
+      this.#coreReducedThroughOffset = 0;
+      while (this.#coreReducedThroughOffset < this.#highestDurableOffset) {
+        const page = this.read(this.#coreReducedThroughOffset, 500);
+        for (const event of page.events) this.#reduceEventIntoCoreReducedState(event);
+        this.#coreReducedThroughOffset = page.scannedThroughOffset;
+        if (page.events.length < 500) break;
+      }
     }
   }
 
@@ -402,8 +404,9 @@ export class Stream {
     return committedEvents;
   }
 
-  /** Reduce one durable event into the core reduced state — the constructor's catch-up and the commit
-   *  both come here. A malformed control event must not wedge the stream: record the skip, move on. */
+  /** Reduce one durable event into the core reduced state — the commit and the constructor's
+   *  version-bump re-reduce both come here. A malformed control event must not wedge the stream:
+   *  record the skip, move on. */
   #reduceEventIntoCoreReducedState(event: StreamEvent): void {
     if (event.ephemeral || !consumesEvent(this.#coreProcessor.contract.consumes, event)) return;
     try {
