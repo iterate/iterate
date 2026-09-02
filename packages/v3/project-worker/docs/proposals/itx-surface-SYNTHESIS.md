@@ -190,3 +190,77 @@ by-identity revokes and appended-vs-no-op assertions, not a behaviour. Speculati
 `configuredAtOffset` on a SUBSCRIPTION row is different and stays: the delivery loop seeds a new
 subscription's cursor from it (`subscription-delivery.ts`: `confirmedOffset: row.configuredAtOffset`) — a
 subscription starts at the moment it was configured, not at offset 0. That is a behaviour, not a receipt.
+
+## 8. Plannotator round 2 (2026-09-02) — the ten annotations, resolved
+
+**8.1 Fully qualified names everywhere** (annotation 2). Not just the stub machinery: every field, private
+method, type, event payload field and helper in both vocabularies. The ONLY bare names are the handful of
+verbs a client types on `itx` (`provide`, `invoke`, `rewrite`, `subscribe`, `cd`, `append`, `read`).
+
+**8.2 The layers, in the order the tutorial builds them** (annotation 5) — this replaces §3's surface:
+
+```ts
+// CHAPTER 1 · rpc stubs — the axiom. String keys, a stub, args. Nothing else exists yet.
+provide(rpcStubKey: string, provided: { stub: unknown }): Promise<ProvidedRpcStub>;   // ProvidedRpcStub is DISPOSABLE (8.4)
+invoke(rpcStubKey: string, ...args: unknown[]): Promise<unknown>;                       // borrow-or-page, then call
+// CHAPTER 2 · itx expressions — a call is data. `invoke` generalizes: its argument becomes an ItxExpressionInput
+//   (`invoke("itx.rpcStubs.get('k')('ls')")`), and the dotted surface reduces `itx.a.b(x)` onto it.
+invoke(call: ItxExpressionInput): Promise<unknown>;
+// CHAPTER 3 · rewrite rules — convenience over chapters 1–2: pure data, ONE event, the verb "just appends" (8.3)
+rewrite(match: ItxExpressionInput, target: ItxExpressionInput | null): Promise<RewriteRuleHandle>; // DISPOSABLE (8.4)
+// CHAPTER 3b · provide learns a rewrite: the rule is added with the stub and NULLED when the stub disappears
+provide(rpcStubKey, { stub, rewrite?: ItxExpressionInput }): Promise<ProvidedRpcStub>;
+// CHAPTER 4 · subscriptions · CHAPTER 5 · processors — as before; `subscribe` returns a DISPOSABLE handle too.
+```
+
+The chapter-1 `invoke(rpcStubKey, ...args)` and the chapter-2 `invoke(call)` are the SAME door at two
+points in the tutorial — the signature evolves when expressions arrive (a key becomes
+`itx.rpcStubs.get('<key>')`); it is not a permanent overload.
+
+**8.3 The verb lives on the RPC target, not the DO** (annotation 4). `rewrite`, `subscribe`,
+`enableProcessor`/`disableProcessor` are methods of `IterateContext` (the edge class — which is ALSO what
+`env.ITX.get()` hands loaded code, so one class serves both). Each is visibly "build the event, append it":
+`rewrite` = `canonicalItxExpressionPrefix(match)` → `rewriteRuleUpdatedEvent(match, target)` →
+`this.invoke(["itx", ["append", event]])` → wrap the committed event in a handle. The DO has `append` (and
+the reads). Reconnect-is-zero-events: the verb reads `itx.expressionRewriteRules.get(match)` first and
+appends nothing when the table already says so (a read + an append on the edge; a raced duplicate is a
+harmless no-op in the reduce — trusted clients). The DO's `provideCapability` / `revokeCapability` /
+`configureSubscription` / `removeSubscription` are deleted; nothing replaces them on the DO.
+
+**8.4 Every verb returns a DISPOSABLE RpcTarget** (annotations 3, 7) — the capnweb pattern: a function
+returns a stub that is at least disposable, so `using` works. `using provided = await itx.provide(key, {
+stub })` recalls the stub at scope end; `using rule = await itx.rewrite(match, target)` un-sets the rule;
+`using sub = await itx.subscribe({…})` removes the subscription. The handle may grow methods later
+(`rule.target`, `provided.rpcStubKey`). **The consequence to decide with eyes open:** capnweb calls an
+exported RpcTarget's `Symbol.dispose` BOTH when the client disposes the last stub AND when the session
+aborts (capnweb `src/rpc.ts` `abort()` disposes every export). So "dispose un-sets the rule" makes a rule
+created through the verb **session-scoped** — like a lent stub. A rule that must outlive its session is
+appended as the raw event (`itx.append(rewriteRuleUpdatedEvent(match, target))`) — the verb IS just append
+plus a handle, so the two spellings differ in exactly one thing: lifetime. Recommended, and honest about
+today: mounts are durable data that outlive sessions; under this design the durable spelling is the event,
+the scoped spelling is the verb. (Stack + handle also answers annotation 3: disposing the handle pops the
+newest rule at that match — the one you added, in every real case; there is no removal by identity.)
+
+**8.5 Examples use INLINE sources** (annotation 8). `WorkerSource` already accepts `{ type: "inline", files:
+{ "tally.js": "export class TallyProcessor …" } }` (worker-loader.ts; `load-sources.e2e` proves it). Every
+example and the tutorial write the processor inline; `itx.kv.get('src/tally.js')` is a storage choice, not
+the shape of the API. If an inline processor cannot be written in one string, that is a defect to fix.
+
+**8.6 No flag-day worry** (annotation 9): no backwards compatibility, no re-exports, wire and event names
+change freely. §6's first cost is struck.
+
+**8.7 Guards sweep** (annotation 10): a read-only audit of every guard in src against the trusted-client
+doctrine is running → `docs/proposals/guard-audit.md` (table: guard · what it defends against · real
+case? · DELETE/KEEP · lines saved · what a wrong deletion breaks).
+
+**8.8 The one event's name** (annotation 1) — options, one to pick:
+
+| option | event type                                                       | reads as                              | for / against                                                                     |
+| ------ | ---------------------------------------------------------------- | ------------------------------------- | --------------------------------------------------------------------------------- |
+| a      | `itx-expressions/rewrite-rule-updated { match, target \| null }` | "the rule at `match` is now T / gone" | setter shape, mirrors `subscription-updated`; "updated" is loose for a stack push |
+| b      | `itx-expressions/rewrite-rule-set { match, target \| null }`     | "set (or un-set) the rule at `match`" | matches B's setter verb; "set … null" is a known idiom (kv)                       |
+| c      | `itx-expressions/rewritten { match, target \| null }`            | "`match` is rewritten to T"           | shortest, a fact not a command; `null` reads oddly ("rewritten to nothing")       |
+| d      | two events, `rewrite-rule-added` / `rewrite-rule-removed`        | push / pop                            | most literal for a stack; but two events is exactly what round 1 rejected         |
+
+Recommendation: **(a)**, with the subscription twin `stream/subscription-updated { name, target \| null,
+consumes? }` — one shape for both tables, and the payload IS the verb's argument list.
