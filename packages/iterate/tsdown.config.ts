@@ -53,7 +53,7 @@ export default defineConfig([
     deps: {
       // yaml rides along for the notes app's frontmatter (the config repo
       // installs only what its own package.json declares).
-      alwaysBundle: ["@iterate-com/capnweb", "fflate", "sqlfu", "yaml", "zod"],
+      alwaysBundle: ["@iterate-com/capnweb", "sqlfu", "yaml", "zod"],
       neverBundle: ["cloudflare:workers"],
     },
     dts: false,
@@ -156,10 +156,6 @@ export default defineConfig([
     format: "esm",
     plugins: [appClientSourcePlugin],
     deps: {
-      // fflate rides inside the flake-dashboard entry: config-repo installs
-      // resolve only the packages the config's own manifest declares, so an
-      // external fflate import fails worker bootstrap ("No such module").
-      alwaysBundle: ["fflate"],
       neverBundle: ["cloudflare:workers"],
     },
     dts: false,

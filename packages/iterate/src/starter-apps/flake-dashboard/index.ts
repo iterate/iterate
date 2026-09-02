@@ -1,7 +1,7 @@
 import type { DynamicWorkerCapability, ItxBinding, StreamEvent } from "../../sdk.ts";
 import { flakeDashboardWorkerRef, flakesStreamPath } from "./app-ref.ts";
+import { WorkflowRunWebhookEvent } from "./contract.ts";
 import type { FlakeDashboardApp as FlakeDashboardWorker } from "./worker.ts";
-import { parseWorkflowRunWebhook } from "./workflow-artifact-ingestion.ts";
 
 export { flakeDashboardCreationEvents, flakesStreamPath } from "./app-ref.ts";
 
@@ -12,7 +12,9 @@ export const FlakeDashboardApp = {
         // Pure routing: /flakes events and completed workflow_run webhooks
         // (CI's credential-free reporting signal) both dispatch to the
         // worker's processEvent; everything else returns before itx opens.
-        if (event.path !== flakesStreamPath && parseWorkflowRunWebhook(event) === null) return;
+        if (event.path !== flakesStreamPath && !WorkflowRunWebhookEvent.safeParse(event).success) {
+          return;
+        }
         using project = await env.ITX.get();
         // workers.get returns an untyped RPC capability; the assertion is the
         // only place to say what answers. It is safe because the ref pins
