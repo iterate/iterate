@@ -63,11 +63,8 @@ import {
   attachmentAssetId,
   attachmentKey,
   attachmentUploads,
+  describedAttachment,
   messageWithAttachmentParts,
-  parseAttachmentDimensions,
-  parseUserLocations,
-  parseVoiceNoteTranscripts,
-  stripAttachmentXmlParts,
   type ComposerAttachment,
 } from "../../../lib/composer-attachments.ts";
 import { LocationCard } from "../../../components/location-card.tsx";
@@ -713,7 +710,13 @@ function PendingSendBubble({
   const message: AgentUiMessageItem = {
     kind: "user",
     id: `pending-${entry.clientId}`,
-    text: messageWithAttachmentParts(entry.message, displayFiles),
+    text: entry.message,
+    // Local derivation for the optimistic bubble: same mapping the wire
+    // parts come from, so the pending render matches the settled one.
+    attachments: displayFiles.flatMap((attachment) => {
+      const described = describedAttachment(attachment);
+      return described === null ? [] : [described];
+    }),
     timestampMs: entry.sentAtMs,
     files: entry.files.flatMap((attachment): AgentUiFileAttachment[] => {
       const key = attachmentKey(attachment);
@@ -830,19 +833,47 @@ function MessageBubble({ message }: { message: AgentUiMessageItem }) {
   const otherFiles = (message.files || []).filter(
     (file) => !isMedia(file) && !file.contentType.startsWith("audio/"),
   );
+  // Typed attachment metadata comes from the fold (a derivation processor
+  // parsed the composer's html parts into message.attachments — dims size
+  // frames before bytes load, transcripts sit under waveforms, locations
+  // become map cards). A message nothing described renders its raw text: no
+  // client-side format parsing, by design.
+  const knownDimensions: KnownDimensions = {};
+  const transcripts: Record<string, string> = {};
+  const locations: {
+    latitude: number;
+    longitude: number;
+    accuracyMeters: number | null;
+    capturedAt: string;
+  }[] = [];
+  for (const attachment of message.attachments || []) {
+    if (
+      (attachment.kind === "image" || attachment.kind === "video") &&
+      attachment.width !== undefined &&
+      attachment.height !== undefined
+    ) {
+      knownDimensions[attachment.filename] = {
+        width: attachment.width,
+        height: attachment.height,
+      };
+    }
+    if (attachment.kind === "audio" && attachment.transcript !== undefined) {
+      transcripts[attachment.filename] = attachment.transcript;
+    }
+    if (attachment.kind === "location") {
+      locations.push({
+        latitude: attachment.latitude,
+        longitude: attachment.longitude,
+        accuracyMeters: attachment.accuracyMeters === undefined ? null : attachment.accuracyMeters,
+        capturedAt: attachment.capturedAt || "",
+      });
+    }
+  }
   const photoWidth =
-    media.length > 0 || audios.length > 0 || message.text.includes("<user-location ")
+    media.length > 0 || audios.length > 0 || locations.length > 0
       ? photoFrameMaxWidth(window.width)
       : null;
-  // The composer sends each photo/video's pixel dimensions as an
-  // <attachment .../> part in the text, so frames can be sized before the
-  // media loads — no reflow. Shared locations arrive as <user-location .../>
-  // parts and render as map cards. Both are parsed here and hidden from the
-  // visible caption.
-  const knownDimensions = parseAttachmentDimensions(message.text);
-  const locations = parseUserLocations(message.text);
-  const transcripts = parseVoiceNoteTranscripts(message.text);
-  const caption = stripAttachmentXmlParts(message.text);
+  const caption = message.text;
   return (
     <View style={[styles.bubble, isUser ? styles.bubbleUser : styles.bubbleAssistant]}>
       {/* Media above the caption, the way every chat app puts it — and the
@@ -1138,7 +1169,7 @@ function MessagePhoto({
   );
 }
 
-type KnownDimensions = ReturnType<typeof parseAttachmentDimensions>;
+type KnownDimensions = Record<string, { width: number; height: number }>;
 
 /** One image-dimensions lookup per URL, cached for the thread's lifetime —
  * shared by the single-photo frame and the mosaic. */

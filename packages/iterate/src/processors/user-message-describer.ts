@@ -69,7 +69,10 @@ export const RenderUserMessageDescribed = z.strictObject({
   /** The human-visible message: the raw text with attachment part lines (and
    * the server's "[Files attached: …]" note) stripped. */
   text: z.string(),
-  attachments: z.array(DescribedAttachment).min(1),
+  /** May be empty: a message whose only derivable content was the server's
+   * files-attached note still gets its text cleaned (renderers show the
+   * files from the event's own files[] either way). */
+  attachments: z.array(DescribedAttachment),
 });
 
 export const UserMessageDescriberContract = defineProcessorContract({
@@ -136,17 +139,22 @@ export function describeUserMessage(
 ): { text: string; attachments: DescribedAttachment[] } | null {
   const attachments: DescribedAttachment[] = [];
   const keptLines: string[] = [];
+  let strippedNote = false;
   for (const line of content.split("\n")) {
     const attachment = parseAttachmentPartLine(line.trim());
     if (attachment !== null) {
       attachments.push(attachment);
       continue;
     }
-    // The server's default note is redundant next to rich attachment renders.
-    if (/^\[Files attached: .*\]$/.test(line.trim())) continue;
+    // The server's default note is redundant next to rich attachment renders
+    // (the event's files[] already carries everything a renderer shows).
+    if (/^\[Files attached: .*\]$/.test(line.trim())) {
+      strippedNote = true;
+      continue;
+    }
     keptLines.push(line);
   }
-  if (attachments.length === 0) return null;
+  if (attachments.length === 0 && !strippedNote) return null;
   return { text: keptLines.join("\n").trim(), attachments };
 }
 

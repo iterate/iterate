@@ -8,12 +8,8 @@ import {
   MAX_UPLOAD_BYTES,
   messageWithAttachmentParts,
   oversizeReason,
-  parseAttachmentDimensions,
-  parseUserLocations,
-  parseVoiceNoteTranscripts,
   pendingNoteAttachments,
   STREAM_UPLOAD_THRESHOLD_BYTES,
-  stripAttachmentXmlParts,
   UPLOAD_CHUNK_BYTES,
   type ComposerAttachment,
 } from "./composer-attachments.ts";
@@ -156,12 +152,6 @@ test("attachments become html vocabulary parts appended to the text", () => {
   );
 });
 
-test("captions hide metadata parts and the server's default attachment note", () => {
-  expect(stripAttachmentXmlParts('<voice-note filename="v.wav" duration-seconds="3" />')).toBe("");
-  expect(stripAttachmentXmlParts("[Files attached: voice-1788126369274.m4a]")).toBe("");
-  expect(stripAttachmentXmlParts("real words\n[Files attached: a.pdf, b.png]")).toBe("real words");
-});
-
 test("dimensions ride the parts for sized media so the mosaic never reflows", () => {
   const video: ComposerAttachment = {
     kind: "video",
@@ -201,23 +191,6 @@ test("note attachments: bytes inline (pending notes must survive offline), locat
     { filename: "doc.pdf", contentType: "application/pdf", width: 0, height: 0 },
   ]);
   expect(Buffer.from(converted[1]!.base64, "base64").toString()).toBe("pdf bytes");
-});
-
-test("legacy xml parts still parse (old threads render until the presentation cutover)", () => {
-  expect(
-    parseUserLocations('<user-location latitude="1.5" longitude="-2" captured-at="t" />'),
-  ).toEqual([{ latitude: 1.5, longitude: -2, accuracyMeters: null, capturedAt: "t" }]);
-  expect(
-    parseAttachmentDimensions('<attachment filename="a.png" width="10" height="8" />'),
-  ).toEqual({ "a.png": { width: 10, height: 8 } });
-  expect(
-    parseVoiceNoteTranscripts(
-      '<voice-note filename="v.m4a" duration-seconds="3" transcript="yo" />',
-    ),
-  ).toEqual({ "v.m4a": "yo" });
-  expect(
-    stripAttachmentXmlParts('hi\n<user-location latitude="1" longitude="2" captured-at="t" />'),
-  ).toBe("hi");
 });
 
 test("oversize guard and labels", () => {

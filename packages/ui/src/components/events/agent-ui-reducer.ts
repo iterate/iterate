@@ -1050,9 +1050,7 @@ function reduceAgentUiEvent(
       const payload = readPayloadRecord(event);
       const text = typeof payload?.text === "string" ? payload.text : null;
       const parsedAttachments = z.array(AgentUiAttachmentSchema).safeParse(payload?.attachments);
-      if (text === null || !parsedAttachments.success || parsedAttachments.data.length === 0) {
-        return state;
-      }
+      if (text === null || !parsedAttachments.success) return state;
       const attachments = parsedAttachments.data;
       const id = `user-${sourceOffset}`;
       const queuedIndex = state.queuedUserMessages.findIndex((message) => message.id === id);
