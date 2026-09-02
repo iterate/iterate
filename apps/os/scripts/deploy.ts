@@ -89,7 +89,7 @@ const RetiredQueueConsumer = z.object({
  * manifests — name-agnostic, so template packages come and go without deploy
  * changes), each with its `@<ref>` swapped for the pinned SHA.
  */
-export function pinnedPackageSpecsToAwait(ref: string): string[] {
+export function pinnedPackageSpecsToAwait(ref: string) {
   return templateIterateRepoPkgSpecs().map((spec) => pinIterateRepoPkgRef(spec, ref)!);
 }
 
