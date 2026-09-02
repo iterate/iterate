@@ -2319,5 +2319,49 @@ options?)` with `options.rewrite`; chapter 1 reads `itx.provide("laptop", fn)`, 
   `const lent` → `targetIsLentRpcStub`. Left as they are: `WaitUntil`, `Scalar`, `LogFields`,
   `InvokeTarget`, `WebSocketHooks` — each already says what it holds.
 - GATES: tsc×3 · oxlint 0/0 · knip · unit 205 · workers 45 · e2e 141p/2xf · tutorial-proof 8 · Playwright 2.
+
+## 2026-09-02 — Plannotator round on `docs/itx-surface-as-built.md`: 17 annotations, the decided ones applied
+
+- **The doc.** `docs/itx-surface-as-built.md` — the whole surface on one page (the tour in tutorial
+  order, the edge's declared methods, the built-in roots, the two vocabularies, core's events,
+  delivery, lifetimes, code structure) plus §12: what the review decided and what is still open, each
+  open item with a concrete proposal. Jonas annotated it in Plannotator; this entry is the fallout.
+- **`ItxEntrypoint` = `get()` + `fetch`, nothing else** ("yes - should just be get and fetch").
+  `append`/`read`/`waitForEvent` deleted; the SDK host's engine appends through the scope —
+  `this.env.ITX.get().append(…)`, one pipelined round trip — and a `LiveState` sink in a field
+  initializer is `{ append: (e) => this.env.ITX.get().append(e) }` (chatroom fixture; the first full
+  e2e run caught `new LiveState(this.env.ITX, …)` still expecting the deleted verb). `fetch` stays the
+  RAW-Request door to the DO: routing it through `get().invoke(["itx",["fetch",…]])` was tried and
+  broke fetch-door-dynamic-live-ws — the edge's terminal-fetch fork overwrites an `x-itx-expression`
+  header a loaded worker set itself; the DO's fetch door is where raw Requests are sorted.
+- **`env.CONTEXT` → `env.ITERATE_CONTEXT`; `contextName` → `iterateContextName`** (Jonas: "i don't
+  like the use of raw CONTEXT as a term because there are other kinds of context… then it should be
+  called env.ITERATE_CONTEXT"; singular, as Cloudflare and apps/os name DO bindings). Both wrangler
+  configs, the workers-tests support, the control-plane shell's cross-script binding (its tsconfig
+  also gains `ESNext.Disposable` — it typechecks project-worker's `Symbol.dispose` through the type
+  import and had been red).
+- **A subscription removal deletes the facet it HOSTED** ("ok" on making disable one event). The DO's
+  `append` captures the pre-commit rows; for each committed `subscription-configured { target: null }`
+  whose removed row targeted `itx.load(…).getDurableObjectClass(C).get(name)…`, `#deleteFacet(name)`
+  runs before the append returns. A row that only ADDRESSED a facet (`itx.facets.get(n)…`) deletes
+  nothing. `disableProcessor` is now ONE append; the raw event is the same disablement (new lineage
+  pin: hand-appended null ⇒ NO_FACET, re-enable rebuilds from the log, counts exact).
+- **The edge type shows the built-ins.** `export interface IterateContext extends Omit<BuiltInScope,
+"cd"> {}` — declaration merging, zero runtime; `BuiltInScope` exported for this one reader. Answers
+  "I would like for the RPC target class to sort of show very clearly the stuff that exists" without
+  moving execution to the edge (rules live in the DO; a KV cache of rewrites is a later option).
+- **A live subscriber's key is `subscription:<name>`** (was `itx.subscriptions.<name>` — a key that
+  looked like an expression). Examples use bare keys and the STRING half; the e2e sweep of
+  `"itx.tools"`-style keys is deferred until open item A decides whether keys survive the front door.
+- Kept on Jonas's word: `subscribe` takes one object; `enableProcessor`/`disableProcessor` stay;
+  `authenticate()` stays a no-op gate; the two one-member handle classes stay two.
+- **LOC honesty** ("did we just add over 1k LOC?!?!"): the doc's 6,234 was RAW lines (comments +
+  blanks; ~38% of the source is comment). Code lines (non-blank, non-comment), one filter across
+  commits: 4,481 (09-01 morning) → 3,879 (fe8168c13) → 3,886 now.
+- **Open, proposed in §12 (Jonas afk):** A — ONE front door `provide(match, stub | expression | null)`,
+  `rewrite` deleted, key = canonical match, handle `RewriteRuleHandle`, read root `itx.rewriteRules`;
+  B — inline-only `WorkerSource` (delete the producer-expression branch; "no more itx.kv.get… rub
+  that out"); C — ONE facet door `itx.facets.get(name, { source, className })`, `load` keeps
+  `getEntrypoint` only; D — edge `cd` vs built-in `cd` explained, keep both.
 - GATES: tsc×3 (+ the shell's) · oxlint 0/0 · knip clean · unit+workers 250 · e2e 141p/2xf (37 files; the
   full lane, twice: the first run caught the chatroom sink and the entrypoint-fetch detour).
