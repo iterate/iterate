@@ -20,10 +20,10 @@ test("cloudflare:workers exports RpcPromise and native RPC calls are instanceof 
     .RpcPromise;
   expect(typeof RpcPromise).toBe("function");
 
-  const p = stub("prj_rpc_pipelining").transportState();
+  const p = stub("prj_rpc_pipelining").rpcStubTransportState();
   expect(p).toBeInstanceOf(RpcPromise);
   const state = await p;
-  expect(typeof state.stubs).toBe("number");
+  expect(typeof state.rpcStubPagers).toBe("number");
 });
 
 test("the step walk threads a NATIVE RpcPromise unawaited — regression = this fails", async () => {
@@ -36,10 +36,10 @@ test("the step walk threads a NATIVE RpcPromise unawaited — regression = this 
     "RpcPromise" | "RpcProperty",
     abstract new () => unknown
   >;
-  const itx = { transport: () => stub("prj_rpc_pipelining").transportState() };
+  const itx = { transport: () => stub("prj_rpc_pipelining").rpcStubTransportState() };
   const { value } = await walkSteps(
     { value: itx, receiver: undefined },
-    [["transport"], "stubs"],
+    [["transport"], "rpcStubPagers"],
     "expression",
   );
   // NOT the settled number — the chain is still open (a pipelined property off a pipelined call)

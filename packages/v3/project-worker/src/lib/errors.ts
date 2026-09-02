@@ -15,7 +15,7 @@ type ErrorCode =
   | "IDEMPOTENCY_CONFLICT"
   | "OFFSET_CONFLICT" // an input's expected `offset` is not the offset it would land at
   | "STREAM_PAUSED"
-  | "CONNECTION_OFFLINE" // a live capability's transport is gone right now (row present, stub unreachable)
+  | "RPC_STUB_OFFLINE" // the rpc stub a row names is neither borrowed nor pager-backed right now
   | "NOT_A_METHOD" // the dotted path's terminal segment is not callable on the target
   | "NO_FACET" // no facet of that name has been loaded into this context
   | "EPHEMERAL_IDEMPOTENCY_KEY" // ephemeral + idempotencyKey is a contradiction, always rejected

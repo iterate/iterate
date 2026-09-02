@@ -41,18 +41,18 @@ import { Echo, openSession, quiesce, stub } from "./support.ts";
 const CTX = "prj_hibscale";
 const CLIENTS = 200;
 
-/** The DO-only transport facts (transportState(): the whole in-memory socket census — physical
+/** The DO-only transport facts (rpcStubTransportState(): the whole in-memory socket census — physical
  *  truths, never event-derivable; `itx.rpcStubs.list()` is the edge half, PRESENCE = the
  *  keys with a transport right now. This workers lane holds the raw DO stub, so it speaks
  *  the Workers-RPC verb directly). */
 type TransportState = {
-  stubs: number;
-  borrowed: number;
-  pagesPending: number;
+  rpcStubPagers: number;
+  borrowedRpcStubs: number;
+  rpcStubPagesInFlight: number;
   dormant: boolean;
 };
 async function state(): Promise<TransportState> {
-  return (await stub(CTX).transportState()) as unknown as TransportState;
+  return (await stub(CTX).rpcStubTransportState()) as unknown as TransportState;
 }
 /** Incarnation (the hibernation tell) — the core reduce's reduce of the stream/woken wake record
  *  (`itx.facets.get('core').snapshot()`; present from the constructor's wake on — every
@@ -73,7 +73,7 @@ let callerItx: any; // a SEPARATE caller session (no capabilities of its own)
 async function quiesceLikeProduction(): Promise<void> {
   await quiesce(CTX);
   const s = await state();
-  expect(s.borrowed).toBe(0); // the quiesce returned every borrowed stub
+  expect(s.borrowedRpcStubs).toBe(0); // the quiesce returned every borrowed stub
   expect(s.dormant).toBe(true);
 }
 
@@ -97,9 +97,9 @@ beforeAll(async () => {
 
 test("SCALE ATTACH: 200 clients lend 200 stubs, the DO stays dormant, spot invokes hit the right client", async () => {
   const s = await state();
-  expect(s.stubs).toBeGreaterThanOrEqual(CLIENTS);
+  expect(s.rpcStubPagers).toBeGreaterThanOrEqual(CLIENTS);
   // Dormant-ish: attaching NEVER pages — 200 connected clients leave zero stubs in memory.
-  expect(s.borrowed).toBe(0);
+  expect(s.borrowedRpcStubs).toBe(0);
   expect(s.dormant).toBe(true);
 
   // Spot-invoke 5 random clients through the SEPARATE caller — per-client answers, no crosstalk.
@@ -111,13 +111,13 @@ test("SCALE ATTACH: 200 clients lend 200 stubs, the DO stays dormant, spot invok
   }
 
   const after = await state();
-  expect(after.borrowed).toBeGreaterThanOrEqual(5); // the spot invokes each paid one page
+  expect(after.borrowedRpcStubs).toBeGreaterThanOrEqual(5); // the spot invokes each paid one page
 });
 
 test("EVICT THEN WAKE: eviction drops every in-memory stub; a call pages the relay back in and answers", async () => {
   const before = await state();
   const beforeIncarnation = await incarnationNow();
-  expect(before.borrowed).toBeGreaterThanOrEqual(5); // warm from the previous test
+  expect(before.borrowedRpcStubs).toBeGreaterThanOrEqual(5); // warm from the previous test
 
   // The production sequence: quiesce (return the borrowed stubs — without this the eviction
   // times out on "active references", the #6800 pin), THEN evict: instance torn down, storage
@@ -126,12 +126,12 @@ test("EVICT THEN WAKE: eviction drops every in-memory stub; a call pages the rel
   await evictDurableObject(stub(CTX));
 
   const evicted = await state(); // read-only probe — wakes a FRESH instance
-  expect(evicted.borrowed).toBe(0); // every borrowed stub died with the instance
-  expect(evicted.pagesPending).toBe(0);
+  expect(evicted.borrowedRpcStubs).toBe(0); // every borrowed stub died with the instance
+  expect(evicted.rpcStubPagesInFlight).toBe(0);
   expect(evicted.dormant).toBe(true);
   // THE property: the hibernatable pager sockets (and their attachments — the whole routing
   // identity) survived the eviction.
-  expect(evicted.stubs).toBeGreaterThanOrEqual(CLIENTS);
+  expect(evicted.rpcStubPagers).toBeGreaterThanOrEqual(CLIENTS);
 
   // The wake path, several clients: page → a freshly lent stub → invoke.
   for (const i of [3, 77, 141]) {
@@ -139,7 +139,7 @@ test("EVICT THEN WAKE: eviction drops every in-memory stub; a call pages the rel
     expect(out).toBe(`echo-${i}:wake${i}`);
   }
   const paged = await state();
-  expect(paged.borrowed).toBeGreaterThanOrEqual(3); // the pages grew the borrowed set back
+  expect(paged.borrowedRpcStubs).toBeGreaterThanOrEqual(3); // the pages grew the borrowed set back
 
   // A REAL eviction shows as incarnation growth on the next durable write (Stream.touch
   // bumps once per incarnation-that-writes; reads never bump).
@@ -151,7 +151,7 @@ test("SCALE WAKE: after another eviction, a fan-out reaches ALL 200 clients", as
   await quiesceLikeProduction(); // the previous test left 3+ stubs borrowed — same #6800 dance
   await evictDurableObject(stub(CTX));
   const evicted = await state();
-  expect(evicted.borrowed).toBe(0);
+  expect(evicted.borrowedRpcStubs).toBe(0);
 
   const t0 = Date.now();
   // fan-out = PRESENCE (`itx.rpcStubs.list()` — the registry keys with a transport; the mount
@@ -176,5 +176,5 @@ test("SCALE WAKE: after another eviction, a fan-out reaches ALL 200 clients", as
   expect(wallMs).toBeLessThan(60_000); // generous — the bound documents "it completes", not a perf SLO
 
   const after = await state();
-  expect(after.borrowed).toBeGreaterThanOrEqual(CLIENTS); // the whole fleet borrowed back in
+  expect(after.borrowedRpcStubs).toBeGreaterThanOrEqual(CLIENTS); // the whole fleet borrowed back in
 });

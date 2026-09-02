@@ -1,4 +1,4 @@
-// fetch/fetch-capabilities.ts — EVERYTHING about serving FETCH-SHAPED CAPABILITIES, in one place.
+// fetch/rpc-stub-fetch.ts — EVERYTHING about serving FETCH-SHAPED capabilities, in one place.
 //
 // THE DOCTRINE (read this and you can skip the rest of the file):
 //
@@ -13,9 +13,9 @@
 //
 //   3. Fetch-shaped calls enter through TWO doors, both landing here: over HTTP via the
 //      capability fetch lane (`x-itx-cap`, below), and over the dotted door — any terminal
-//      `.fetch(request)` on a LIVE capability (`itx.<path>.fetch(...)` — a live table row) is recognized by
-//      the terminal-fetch branch of `RpcStubDirectory.invoke` and routed into
-//      `LiveCapabilityFetchServer.serve`.
+//      `.fetch(request)` on a lent rpc stub (`itx.<match>.fetch(...)` through a rewrite rule) is
+//      recognized by the terminal-fetch branch of `RpcStubDirectory.invokeRpcStub` and routed into
+//      `RpcStubFetchServer.serve`.
 //
 //   4. Two platform facts force everything unusual in this file, and BOTH are workarounds we
 //      expect to delete one day:
@@ -27,7 +27,7 @@
 //          (@iterate-com/capnweb: webSocket-in-Response rides the session as a stream pair).
 //      THE DAY workerd + capnweb serialize WebSockets over plain RPC methods, everything fenced
 //      "WORKAROUND" below is DELETED — plus its (pure-deletion) call sites, enumerated at the
-//      fence — and a live capability's terminal fetch simply rides the plain invoke() walk like
+//      fence — and a lent rpc stub's terminal fetch simply rides the plain invoke() walk like
 //      every other call, its Response flowing back over the RPC legs.
 //
 import type { ItxExpression } from "../context/expression.ts";
@@ -62,15 +62,15 @@ export function expressionEndingInFetch(expr: ItxExpression): ItxExpression {
 
 // ═══════════════════════════════════ WORKAROUND ══════════════════════════════════════
 // Everything below exists ONLY because of doctrine point 4 (workerd RPC cannot carry sockets;
-// see the header). It serves fetch calls on LIVE capabilities — capabilities backed by a running
-// provider reached over an RPC leg (a capnweb client via the /api relay, or a dynamic worker via
+// see the header). It serves fetch calls on LENT RPC STUBS — capabilities backed by a running
+// client reached over an RPC leg (a capnweb client via the /api relay, or a dynamic worker via
 // env.ITX) rather than by loadable code. The mechanism:
 //
-//   DO side (LiveCapabilityFetchServer.serve): mint an upgradeId, call the borrowed stub's
-//   `fetch(upgradeId, capPath, request)` — that call EXECUTES in the provider transport's own
+//   DO side (RpcStubFetchServer.serve): mint an upgradeId, call the borrowed stub's
+//   `fetch(upgradeId, itxExpressionSteps, request)` — that call EXECUTES in the lender's own
 //   request context, the one place the provider's answer is legally touchable.
 //
-//   Transport side (dialLiveCapabilityFetch): dial the provider's real fetch. A socketless
+//   Transport side (dialRpcStubFetch): dial the provider's real fetch. A socketless
 //   Response returns over the RPC leg as-is (it serializes fine). A socket-bearing one CANNOT —
 //   so the socket is accepted right there, ONE dedicated "upgrade leg" WebSocket is opened back
 //   into the DO (a fetch upgrade carrying `x-itx-fetch-upgrade` → acceptFetchUpgradeLeg, gated on
@@ -82,11 +82,11 @@ export function expressionEndingInFetch(expr: ItxExpression): ItxExpression {
 //
 // DELETE-DAY CHECKLIST (all deletions, nothing rewritten): remove this whole fenced section,
 // then delete its call sites —
-//   • the terminal-fetch branch in RpcStubDirectory.invoke, the directory's `liveCapabilityFetch`
-//     dep + `#liveCapabilityFetch` field, and the `LiveCapabilityFetchTransport &` half of
-//     BorrowedStub (rpc-stub-directory.ts);
-//   • BorrowedStub's `fetch` method (rpc-stub-relay.ts);
-//   • the stream DO's `#liveCapabilityFetch` field, its acceptFetchUpgradeLeg door, and the
+//   • the terminal-fetch branch in RpcStubDirectory.invokeRpcStub, the directory's `rpcStubFetch`
+//     dep + `#rpcStubFetch` field, and the `RpcStubFetchTransport &` half of BorrowedRpcStub
+//     (rpc-stub-directory.ts);
+//   • LentRpcStub's `fetch` method (rpc-stub-relay.ts);
+//   • the context DO's `#rpcStubFetch` field, its acceptFetchUpgradeLeg door, and the
 //     handleWebSocketMessage/Close forwarding (iterate-context-durable-object.ts).
 // Terminal-fetch calls then ride the plain invoke() walk like any other call, their Responses —
 // sockets included — crossing the RPC legs.
@@ -105,9 +105,9 @@ const upgradeTag = (side: "eyeball" | "leg", upgradeId: string) =>
  *  leg, so only this marker crosses the RPC hop. */
 type FetchUpgradeMarker = { webSocketUpgrade: true };
 
-/** What `serve` needs from the borrowed transport stub: the live-capability fetch dial. */
-export type LiveCapabilityFetchTransport = {
-  fetch(upgradeId: string, capPath: string[], request: Request): Promise<unknown>;
+/** What `serve` needs from the borrowed rpc stub: the fetch dial. */
+export type RpcStubFetchTransport = {
+  fetch(upgradeId: string, itxExpressionSteps: ItxExpression, request: Request): Promise<unknown>;
 };
 
 /** workerd enforces the RFC's 123-BYTE (UTF-8) close-reason cap and THROWS over it — a UTF-16
@@ -140,7 +140,7 @@ type ProviderSocket = {
   ): void;
 };
 
-/** TRANSPORT SIDE of a live-capability fetch (runs where the provider is legally touchable —
+/** TRANSPORT SIDE of an rpc-stub fetch (runs where the client's stub is legally touchable —
  *  today that is the capnweb session's request context; a NATIVE provider's socket answer still
  *  dies on its own RPC leg, pinned in fetch-door-dynamic-live-ws.e2e.test.ts — a future dial-back fix must
  *  deliver the upgradeId to the provider WITHOUT riding the Request headers verbatim, because a
@@ -149,7 +149,7 @@ type ProviderSocket = {
  *    • socketless Response → returned as-is (crosses the RPC leg fine);
  *    • socket-bearing Response → accept the socket HERE, open the dedicated upgrade leg into the
  *      DO, wire the frames, and return the marker instead. */
-export async function dialLiveCapabilityFetch(
+export async function dialRpcStubFetch(
   providerFetch: (request: Request) => Promise<unknown>,
   request: Request,
   upgradeId: string,
@@ -193,40 +193,28 @@ export async function dialLiveCapabilityFetch(
   return { webSocketUpgrade: true };
 }
 
-/** DO SIDE of live-capability fetch: the pending-dial gate, the leg door, the eyeball pair, and
- *  the frame/close forwarding between them. One instance per DO, wired into its fetch /
- *  webSocketMessage / webSocketClose alongside the other doors. */
-export class LiveCapabilityFetchServer {
+/** DO SIDE of an rpc-stub fetch: the leg door, the eyeball pair, and the frame/close forwarding
+ *  between them. One instance per DO, wired into its fetch / webSocketMessage / webSocketClose
+ *  alongside the other doors. */
+export class RpcStubFetchServer {
   readonly #hooks: WebSocketHooks;
-  /** Dials in flight — the gate `acceptFetchUpgradeLeg` checks. serve()'s finally is the ONLY
-   *  cleanup needed (it always runs; no timer, no sweep — a sweep would 409 the leg of a merely
-   *  SLOW dial that is still legitimately in flight). */
-  #pendingDials = new Set<string>();
 
   constructor(hooks: WebSocketHooks) {
     this.#hooks = hooks;
   }
 
-  /** Serve one fetch-shaped call on a live capability: dial through the transport; pass a plain
-   *  Response straight through; on the upgrade marker, adopt the arrived leg and mint the
-   *  eyeball's pair — a real 101 only after the provider actually upgraded. Provider failures
-   *  throw through with their own words (the fetch lane answers non-101). */
+  /** Serve one fetch-shaped call on a lent rpc stub: dial through the transport; pass a plain
+   *  Response straight through; on the upgrade marker, mint the eyeball's pair (the leg arrived
+   *  during the dial — the dial awaits its 101) — a real 101 only after the provider actually
+   *  upgraded. Provider failures throw through with their own words (the fetch lane answers non-101). */
   async serve(
-    transport: LiveCapabilityFetchTransport,
-    capPath: string[],
+    transport: RpcStubFetchTransport,
+    itxExpressionSteps: ItxExpression,
     request: Request,
   ): Promise<unknown> {
     const upgradeId = crypto.randomUUID();
-    this.#pendingDials.add(upgradeId);
-    let result: unknown;
-    try {
-      result = await transport.fetch(upgradeId, capPath, request);
-    } finally {
-      this.#pendingDials.delete(upgradeId);
-    }
+    const result = await transport.fetch(upgradeId, itxExpressionSteps, request);
     if ((result as Partial<FetchUpgradeMarker> | null)?.webSocketUpgrade !== true) return result;
-    if (this.#hooks.getWebSockets(upgradeTag("leg", upgradeId)).length === 0)
-      throw new Error(`fetch upgrade ${upgradeId}: dial acked but no upgrade leg arrived`);
     return this.#acceptUpgradeSocket("eyeball", upgradeId);
   }
 
@@ -241,15 +229,11 @@ export class LiveCapabilityFetchServer {
     return new Response(null, { status: 101, webSocket: pair[0] });
   }
 
-  /** PARTIAL FETCH: accept the transport's dedicated upgrade leg, gated on a pending dial — an
-   *  unknown upgradeId 409s (a swept/crashed dial re-dials from scratch). */
+  /** PARTIAL FETCH: accept the transport's dedicated upgrade leg (opened mid-dial, carrying the
+   *  dial's upgradeId — the tag is the correlation). */
   acceptFetchUpgradeLeg(request: Request): Response | null {
     const upgradeId = request.headers.get(FETCH_UPGRADE_SOCKET_HEADER);
     if (upgradeId === null) return null;
-    if ((request.headers.get("Upgrade") ?? "").toLowerCase() !== "websocket")
-      return new Response(`fetch-upgrade leg: expected a websocket upgrade\n`, { status: 400 });
-    if (!this.#pendingDials.has(upgradeId))
-      return new Response(`unknown fetch upgrade ${upgradeId} (dial first)\n`, { status: 409 });
     return this.#acceptUpgradeSocket("leg", upgradeId);
   }
 
@@ -291,13 +275,8 @@ export class LiveCapabilityFetchServer {
 
   /** The OTHER side of an upgrade socket, or undefined (not ours) / null (peer gone). */
   #peerOf(ws: WebSocket): WebSocket | null | undefined {
-    let att: unknown;
-    try {
-      att = ws.deserializeAttachment() as unknown;
-    } catch {
-      return undefined;
-    }
-    const upgrade = (att as Partial<FetchUpgradeAttachment> | null)?.fetchUpgrade;
+    const upgrade = (ws.deserializeAttachment() as Partial<FetchUpgradeAttachment> | null)
+      ?.fetchUpgrade;
     if (!upgrade) return undefined;
     const peerSide = upgrade.side === "eyeball" ? "leg" : "eyeball";
     return this.#hooks.getWebSockets(upgradeTag(peerSide, upgrade.upgradeId))[0] ?? null;

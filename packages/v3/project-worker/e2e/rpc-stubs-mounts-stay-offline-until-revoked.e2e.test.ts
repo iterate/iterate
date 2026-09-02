@@ -6,7 +6,7 @@
 // and an ORDINARY mount event `path ⇒ itx.rpcStubs.get('<path>')` names it (pure
 // data; it lives until an explicit revoke). PRESENCE is physical: `itx.rpcStubs.list()` — the keys
 // with an open transport RIGHT NOW. The mount never claims liveness and NOTHING auto-revokes it: a
-// dead provider leaves its mount answering CONNECTION_OFFLINE until someone revokes it or the
+// dead provider leaves its mount answering RPC_STUB_OFFLINE until someone revokes it or the
 // provider re-lends under the same key. Re-providing the same path replaces the transport (the old
 // pager closes "replaced") and appends NOTHING. A live SUBSCRIBER is the same shape one layer up —
 // a stub under `itx.subscriptions.<name>` plus a row of the SUBSCRIPTIONS table, never a mount.
@@ -40,7 +40,7 @@ const providedEventsAt = async (itx: any, path: string): Promise<number> =>
 
 test("calling a path that was never provided rejects with code NO_CAPABILITY_MATCH (default-deny)", async () => {
   // A never-provided path is indistinguishable from any other unmounted capability — default-deny.
-  // CONNECTION_OFFLINE narrows to "mount exists, transport gone" (the dispose + mid-invoke tests).
+  // RPC_STUB_OFFLINE narrows to "mount exists, transport gone" (the dispose + mid-invoke tests).
   const itx = openItx(freshCtx("offline"));
   const err = await rejection(
     itx.invokeCapability("itx.neverExisted.hello()"),
@@ -56,7 +56,7 @@ test("stub pager upgrade with an unknown transportId is refused with 409 (attach
   // fetch, whose door walk checks the pager header FIRST — the `cap` the route insists on is never
   // consulted.
   const res = await fetch(capUrl(freshCtx("pager409"), "itx.whoami", "http"), {
-    headers: { "x-itx-stub-pager": "424242" },
+    headers: { "x-itx-rpc-stub-pager": "424242" },
   });
   expect(res.status).toBe(409);
   expect(await res.text()).toContain("attach first");
@@ -94,7 +94,7 @@ test("same-path re-provide replaces the transport while online and appends NOTHI
   expect(await observer.invokeCapability(["itx", "dupTool", ["hello"]])).toBe("hello-from-two");
 });
 
-test("disposing a client session drops its stubs promptly (presence) — its mounts STAY and answer CONNECTION_OFFLINE until revoked", async () => {
+test("disposing a client session drops its stubs promptly (presence) — its mounts STAY and answer RPC_STUB_OFFLINE until revoked", async () => {
   const ctx = freshCtx("dispose");
   const observer = openItx(ctx);
   const sA = session();
@@ -114,14 +114,14 @@ test("disposing a client session drops its stubs promptly (presence) — its mou
     async () => !(await presence(observer)).includes("itx.ghosttool"),
   );
   // THE MOUNT IS DATA and stays: nothing auto-revokes a row because a socket dropped. Calls at
-  // the path answer CONNECTION_OFFLINE (mounted-but-offline), not default-deny — and keep doing so.
+  // the path answer RPC_STUB_OFFLINE (mounted-but-offline), not default-deny — and keep doing so.
   expect(await rpcStubMountPaths(observer)).toContain("itx.ghosttool");
   for (const attempt of [1, 2]) {
     const err = await rejection(
       observer.invokeCapability(["itx", "ghosttool", ["hello"]]),
       `call #${attempt} on the orphaned mount`,
     );
-    expect(codeOf(err)).toBe("CONNECTION_OFFLINE");
+    expect(codeOf(err)).toBe("RPC_STUB_OFFLINE");
   }
   // The one exit is an EXPLICIT revoke — from ANY session (the observer never lent the stub, so
   // its recall half is a local no-op; the mount pops) — after which the path is
@@ -137,9 +137,9 @@ test("disposing a client session drops its stubs promptly (presence) — its mou
 
 // An in-flight invoke on a provider that dies mid-call must reject with the CODED offline error —
 // the same condition, same code, whether the stub died before or during the call. The relay
-// re-codes the provider's raw dying-transport error to CONNECTION_OFFLINE LOCALLY so the CODE (never
+// re-codes the provider's raw dying-transport error to RPC_STUB_OFFLINE LOCALLY so the CODE (never
 // a message) crosses the Workers-RPC hop back to the caller (lib/errors.ts: classify by code).
-test("killing the provider session mid-invoke rejects the in-flight call promptly with code CONNECTION_OFFLINE — and the mount stays offline", async () => {
+test("killing the provider session mid-invoke rejects the in-flight call promptly with code RPC_STUB_OFFLINE — and the mount stays offline", async () => {
   const ctx = freshCtx("midinvoke");
   const observer = openItx(ctx);
   const hangTools = new HangTools();
@@ -156,10 +156,10 @@ test("killing the provider session mid-invoke rejects the in-flight call promptl
 
   wsA.close(); // the provider dies with the call in flight
 
-  // CONNECTION_OFFLINE is the mounted-but-offline code: the mount existed when the call went out;
+  // RPC_STUB_OFFLINE is the mounted-but-offline code: the mount existed when the call went out;
   // the transport died under it. (A NEVER-provided path is NO_CAPABILITY_MATCH — first test.)
   const err = await rejection(inFlight, "in-flight invoke on a dying provider", 20_000);
-  expect(codeOf(err)).toBe("CONNECTION_OFFLINE");
+  expect(codeOf(err)).toBe("RPC_STUB_OFFLINE");
   // ...and it STAYS offline: the transport left presence, the mount is still in the table
   // (nothing auto-revokes it), and a fresh call answers the same code.
   await until(
@@ -171,15 +171,15 @@ test("killing the provider session mid-invoke rejects the in-flight call promptl
     observer.invokeCapability("itx.hanger.hello()"),
     "a fresh call on the orphaned mount",
   );
-  expect(codeOf(again)).toBe("CONNECTION_OFFLINE");
+  expect(codeOf(again)).toBe("RPC_STUB_OFFLINE");
 });
 
 // Fan-out is NOT a built-in: the caller reads the table's live mounts and maps over their paths,
 // owning the allSettled. A dead member is NOT removed from the table for the caller (nothing
-// auto-revokes a mount): it stays listed and its call REJECTS with CONNECTION_OFFLINE, which the
+// auto-revokes a mount): it stays listed and its call REJECTS with RPC_STUB_OFFLINE, which the
 // allSettled drops. (Fanning out over `itx.rpcStubs.list()` instead would skip it up front —
 // presence is the physical set.)
-test("fan-out via the table's live mounts + map drops dead members (CONNECTION_OFFLINE); a live subscriber is not a mount and never enters the fan-out", async () => {
+test("fan-out via the table's live mounts + map drops dead members (RPC_STUB_OFFLINE); a live subscriber is not a mount and never enters the fan-out", async () => {
   const ctx = freshCtx("each");
   const observer = openItx(ctx);
   await openItx(ctx).provide("itx.alive", new Tools("alive"));
@@ -228,7 +228,7 @@ test("fan-out via the table's live mounts + map drops dead members (CONNECTION_O
     return f.answers.length === 1 && f.answers[0] === "hello-from-alive" ? f : undefined;
   });
   expect(answers).toEqual(["hello-from-alive"]);
-  expect(dropped["itx.doomed"]).toBe("CONNECTION_OFFLINE"); // dropped BY the offline rejection
+  expect(dropped["itx.doomed"]).toBe("RPC_STUB_OFFLINE"); // dropped BY the offline rejection
 });
 
 // Concurrent provides at one path collapse to ONE live transport. attach() (before a pager opens)
@@ -325,7 +325,7 @@ test("storm of provide/mount/revoke/subscribe/unsubscribe/disconnect: presence r
   await until("presence back to baseline", async () => (await presence(observer)).length === 0);
   // THE TABLE (data) keeps exactly what nobody revoked: the six (c) mounts, each mounted-but-
   // offline — nothing auto-revoked them when their sessions died, and they answer
-  // CONNECTION_OFFLINE (not default-deny) for as long as they stand.
+  // RPC_STUB_OFFLINE (not default-deny) for as long as they stand.
   const leftover = [0, 1, 2, 3, 4, 5].map((i) => `itx.k${i}`);
   expect([...(await rpcStubMountPaths(observer))].sort()).toEqual(leftover);
   for (const path of leftover) {
@@ -333,7 +333,7 @@ test("storm of provide/mount/revoke/subscribe/unsubscribe/disconnect: presence r
       observer.invokeCapability(`${path}.hello()`),
       `call on the orphaned ${path}`,
     );
-    expect(codeOf(err)).toBe("CONNECTION_OFFLINE");
+    expect(codeOf(err)).toBe("RPC_STUB_OFFLINE");
   }
   // Revoking by path from a session that never lent the stub pops the mount only (its
   // recall half is a local no-op) — the explicit exit brings the table to baseline

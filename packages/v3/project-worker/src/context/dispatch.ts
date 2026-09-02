@@ -98,21 +98,6 @@ export async function walkSteps(
   return { value: pipelined(value) ? value : await value, receiver };
 }
 
-/**
- * Dotted-path invocation over a LOCAL object graph — a facet stub, a hosted class, any dotted
- * view: walk the intermediates receiver-preservingly, apply the terminal. ONE walk for every "call
- * path X with args on this object" door (the parent's facet door, stateful facets).
- */
-export async function invokePath(
-  target: unknown,
-  path: string[],
-  args: unknown[],
-  where: string,
-): Promise<unknown> {
-  const steps = [...path.slice(0, -1), [path.at(-1)!, ...args]] as ItxExpression;
-  return (await walkSteps({ value: target, receiver: undefined }, steps, where)).value;
-}
-
 /** Apply `args` to a resolved value on its carried receiver, or a LOUD error if it is not callable
  *  (never the silent arg-drop apps/os shipped). An `InvokeHandle` (a mid-chain capability handle —
  *  a live stub's transport bridge, a facet handle, a borrowed callback stub the delivery loop pushes to) is NOT a JS function

@@ -11,7 +11,7 @@
 // path — which re-lends under the same registry key (the transport is REPLACED) while the MOUNT,
 // pure data naming that key, never moved: the door answers the existing mount's identity and
 // appends NOTHING. The capability is callable AGAIN through the same dotted path. In between, the
-// path answers CONNECTION_OFFLINE — mounted-but-offline, never default-deny: nothing auto-revokes
+// path answers RPC_STUB_OFFLINE — mounted-but-offline, never default-deny: nothing auto-revokes
 // a mount because a socket dropped. This is the property the live hibernation proofs tried to
 // force by waiting on Cloudflare — proven here deterministically by controlling the disconnect.
 
@@ -70,7 +70,7 @@ test("a provider drops and re-provides at the same path — offline in between (
   expect(online).toBe(true); // 1. provider online: itx.p.echo() answers
 
   // 2. provider goes OFFLINE — dispose its session (WS closes → the DO drops the itx.p transport).
-  //    The path answers CONNECTION_OFFLINE — ONLY that code: the mount is still in the table (no
+  //    The path answers RPC_STUB_OFFLINE — ONLY that code: the mount is still in the table (no
   //    auto-revoke ever pops a mount because a socket dropped), so it is never default-deny.
   (providerSession as Partial<Disposable>)[Symbol.dispose]?.();
   const offline = await until("provider offline", async () => {
@@ -81,7 +81,7 @@ test("a provider drops and re-provides at the same path — offline in between (
       return e as { code?: string };
     }
   });
-  expect(offline?.code).toBe("CONNECTION_OFFLINE"); // 2. mounted-but-offline, not NO_CAPABILITY_MATCH
+  expect(offline?.code).toBe("RPC_STUB_OFFLINE"); // 2. mounted-but-offline, not NO_CAPABILITY_MATCH
   expect(await mountsAtP()).toHaveLength(1); // the mount STAYED
   const logBefore = await itx.invokeCapability("itx.read(0, 500)");
 

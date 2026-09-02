@@ -32,7 +32,7 @@ export default defineConfig({
     // deliberate move in the reconnect/unsubscribe tests) surfaces the peer close as an unhandled
     // rejection. Everything else stays fatal. (Same filter as the workers lane in ../vitest.config.ts.)
     onUnhandledError(error) {
-      if (/RPC session|WebSocket|CONNECTION_OFFLINE|disposed/i.test(error.message ?? ""))
+      if (/RPC session|WebSocket|RPC_STUB_OFFLINE|disposed/i.test(error.message ?? ""))
         return false;
     },
   },

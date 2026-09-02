@@ -90,11 +90,11 @@ async function disableCounter(ctx: string, name = "counter"): Promise<void> {
   await s.invoke(["itx", "facets", ["delete", name]]);
 }
 
-// The DO-only transport facts ({stubs, borrowed, pagesPending, dormant}) — the quiesce probes are
-// in-memory socket truths, so they speak transportState(), never the table.
+// The DO-only transport facts ({stubs, borrowed, rpcStubPagesInFlight, dormant}) — the quiesce probes are
+// in-memory socket truths, so they speak rpcStubTransportState(), never the table.
 const stateOf = (ctx: string): Promise<Record<string, any>> =>
   runInDurableObject(stub(ctx), async (inst) =>
-    (inst as unknown as { transportState(): Record<string, any> }).transportState(),
+    (inst as unknown as { rpcStubTransportState(): Record<string, any> }).rpcStubTransportState(),
   );
 /** The DO's scheduled alarm instant, or null — only this lane can read it, and it is the ONE proof
  *  that a quiesce pin below is exercising the alarm instead of firing into an empty schedule. */
@@ -107,9 +107,9 @@ async function untilStubs(ctx: string, n: number, timeoutMs = 5_000): Promise<Re
   const t0 = Date.now();
   for (;;) {
     const s = await stateOf(ctx);
-    if (s.stubs === n) return s;
+    if (s.rpcStubPagers === n) return s;
     if (Date.now() - t0 > timeoutMs)
-      throw new Error(`untilStubs(${ctx}, ${n}): still ${s.stubs} after ${timeoutMs}ms`);
+      throw new Error(`untilStubs(${ctx}, ${n}): still ${s.rpcStubPagers} after ${timeoutMs}ms`);
     await new Promise((r) => setTimeout(r, 25));
   }
 }
@@ -191,7 +191,7 @@ test("DISABLE deletes the facet's storage; RE-ENABLE rebuilds from the log (no s
 });
 
 test("A BORROW RACES THE QUIESCE ALARM: a stub invoke fired concurrently with the alarm still answers", async () => {
-  // A quiesce RETURNS borrowed stubs (#borrowed) but never touches a PENDING page (#pagesPending),
+  // A quiesce RETURNS borrowed stubs (#borrowed) but never touches a PENDING page (#rpcStubPagesInFlight),
   // and the invoke's own #recordActivityForQuietClock keeps the actor warm. PINS: an invoke that
   // borrows a stub while the 60s alarm fires resolves with the right per-client answer (the stub it
   // is borrowing is not returned out from under it).
@@ -204,7 +204,7 @@ test("A BORROW RACES THE QUIESCE ALARM: a stub invoke fired concurrently with th
   // while a facet is live or a stub is BORROWED — so warm one stub first and read the schedule
   // back. Without this the alarm below fires into an empty schedule and the race is vacuous.
   expect(await caller.invokeCapability("itx.p0.echo('warm')")).toBe("echo-0:warm");
-  expect((await stateOf(ctx)).borrowed).toBeGreaterThanOrEqual(1);
+  expect((await stateOf(ctx)).borrowedRpcStubs).toBeGreaterThanOrEqual(1);
   expect(await alarmAt(ctx)).not.toBeNull();
 
   vi.useFakeTimers({ now: Date.now(), toFake: ["Date"] });
@@ -241,7 +241,7 @@ test("SCALE DROP + QUIESCE + EVICT + WAKE: a revoked live capability stays gone;
   // under `itx.k3`, so its stub would stay in the census (answering nothing, mount gone).
   await clientItx.revoke("itx.k3");
   const dropped = await untilStubs(ctx, K - 1); // the relay's close lands at the DO a beat later
-  expect(dropped.stubs).toBe(K - 1);
+  expect(dropped.rpcStubPagers).toBe(K - 1);
 
   // The K-1 surviving lends arm nothing on their own, so warm one stub: that borrow is what arms
   // the quiet clock AND what the quiesce then has to return.
@@ -249,10 +249,10 @@ test("SCALE DROP + QUIESCE + EVICT + WAKE: a revoked live capability stays gone;
   expect(await alarmAt(ctx)).not.toBeNull();
   await quiesce(ctx);
   const q = await stateOf(ctx);
-  expect(q.borrowed).toBe(0); // the quiesce returned every borrowed stub (evict precondition)
+  expect(q.borrowedRpcStubs).toBe(0); // the quiesce returned every borrowed stub (evict precondition)
   await evictDurableObject(stub(ctx));
   const evicted = await stateOf(ctx);
-  expect(evicted.stubs).toBe(K - 1); // survivors' hibernatable sockets rode the eviction; k3 stayed gone
+  expect(evicted.rpcStubPagers).toBe(K - 1); // survivors' hibernatable sockets rode the eviction; k3 stayed gone
 
   // The mount at itx.k3 is gone from the table (revoke popped it), and the survivors' mounts
   // stayed — the table is data, untouched by the eviction.

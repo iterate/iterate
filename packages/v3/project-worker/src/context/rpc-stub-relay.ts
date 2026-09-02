@@ -1,183 +1,197 @@
-// context/rpc-stub-relay.ts — THE DON'T-PIN PLUMBING behind a live rpc stub, EDGE side. When a client
-// hands the project a capnweb callback (`itx.provide(path, fn)`), the client's stub must live in the
+// context/rpc-stub-relay.ts — THE DON'T-PIN PLUMBING behind a lent rpc stub, EDGE side. When a client
+// hands the project a capnweb value (`itx.provide(path, fn)`), the client's stub must live in the
 // STATELESS relay worker (this side of `/api`), NEVER in the Durable Object — else the DO can't
-// hibernate while any client is connected. So the context DO records only a transport id; when it
-// wants the client (a delivery, a request/response call), it PAGES the relay over a stub-pager
-// WebSocket, and the relay LENDS it a fresh Workers-RPC leg wrapping the client's capnweb stub. The
-// edge OWNS the stub for the session; the DO only borrows it. The DO half — the pager door, the
-// pages, the borrowed stubs — is context/rpc-stub-directory.ts.
+// hibernate while any client is connected. So the edge opens an RPC-STUB PAGER WebSocket to the DO
+// (a standing offer to lend the key back on demand); when the DO wants the client — a delivery, a
+// request/response call — it PAGES this worker, and this worker LENDS a fresh Workers-RPC leg
+// wrapping the client's capnweb stub (`lendRpcStub`). The edge OWNS the stub for the session; the DO
+// only borrows it. The DO half — the pager door, the pages, the borrowed table — is
+// context/rpc-stub-directory.ts.
 //
-// The stub's DO-side identity is the string it is lent under in the `itx.rpcStubs` built-in — the
-// canonicalized capability path, when it came through `itx.provide(path, fn)`. Lending is PHYSICAL
-// and separate from mounting: the mount is an ordinary capability-table event whose target is
-// `itx.rpcStubs.get('<path>')`. This module owns the whole dance behind ONE function —
-// `lendStubOverRelay` (lend a stub, hand back a disposable relay; the caller registers it with the
-// session's `SessionTeardown`, session.ts) — so session.ts + iterate-context.ts read as its
-// narrative (Session → ProjectCollection → IterateContext), with the pager sockets and the shared
+// This module owns the whole dance behind ONE function — `lendRpcStubOverPager` (open the pager, hand
+// back a disposable; the caller registers it with the session's `SessionTeardown`, session.ts) — so
+// session.ts + iterate-context.ts read as its narrative, with the pager socket and the shared
 // broken-flag hidden here.
 
 import { RpcTarget as WorkersRpcTarget } from "cloudflare:workers";
 import type { IterateContextDurableObject } from "../iterate-context-durable-object.ts";
+import { dialRpcStubFetch } from "../fetch/rpc-stub-fetch.ts";
 import { codedError } from "../lib/errors.ts";
-import { dialLiveCapabilityFetch } from "../fetch/fetch-capabilities.ts";
+import type { ItxExpression } from "./expression.ts";
 import {
-  disposeStub,
-  STUB_PAGER_KEEPALIVE_REQUEST,
-  STUB_PAGER_WEBSOCKET_HEADER,
+  disposeRpcStub,
+  RPC_STUB_PAGER_KEEPALIVE_REQUEST,
+  RPC_STUB_PAGER_WEBSOCKET_HEADER,
 } from "./rpc-stub-directory.ts";
 
 /** The context DO's Workers-RPC stub — what the edge proxies to and this relay pages against. */
-export type IterateContextStub = DurableObjectStub<IterateContextDurableObject>;
+export type IterateContextDurableObjectStub = DurableObjectStub<IterateContextDurableObject>;
 
-/** A provider stub (capnweb) from the client. ON THE WIRE it is a callable stub Proxy
- *  (`typeof === "function"` — capnweb pipelines property access through it), so a structural
- *  validator can never inspect it: validated permissively BY DESIGN, typed at the use sites
- *  (`.dup()` keeps it past the provide call; other keys are its remote methods). */
-export type ProviderStub = unknown;
-/** The session's own copy of a provider stub — `provider.dup()`, held here for the session's life.
- *  It is what every lend is backed by: each page wraps THIS in a fresh `BorrowedStub`. */
-export type LentProviderStub = { dup(): LentProviderStub; [k: string]: unknown };
+/** The client's live capnweb stub, as the session holds it (`.dup()` keeps it past the call that
+ *  handed it over; every other key is one of its remote members). ON THE WIRE it is a callable stub
+ *  Proxy (`typeof === "function"`), so nothing structural can inspect it — typed at the use sites. */
+export type ClientRpcStub = { dup(): ClientRpcStub; [k: string]: unknown };
 
-/** WHAT THE DO BORROWS: a per-burst Workers-RPC leg wrapping the session's capnweb stub, forwarding
- *  `invoke(capPath, args)` onto it (a DIRECT dotted dispatch — never `.apply`), so a call from the
- *  stream reaches the client's actual function over the capnweb WebSocket. Minted fresh per page and
- *  returned at the DO's idle quiesce. */
-class BorrowedStub extends WorkersRpcTarget {
-  #provider: LentProviderStub;
-  /** SHARED across every page of one relay (a `{ value }` holder), flipped by the ONE `onRpcBroken`
-   *  registration in `lendStubOverRelay`. capnweb has no `offRpcBroken`, so registering per borrowed
+/** WHAT THE EDGE LENDS (and the DO borrows as `BorrowedRpcStub`): a per-page Workers-RPC leg
+ *  wrapping the session's capnweb stub, walking itx-expression steps on it (a DIRECT dotted dispatch
+ *  — never `.apply`), so a call from the stream reaches the client's actual function over the capnweb
+ *  WebSocket. Minted fresh per page and returned at the DO's idle quiesce. */
+class LentRpcStub extends WorkersRpcTarget {
+  #clientRpcStub: ClientRpcStub;
+  /** SHARED across every page of one pager (a `{ value }` holder), flipped by the ONE `onRpcBroken`
+   *  registration in `lendRpcStubOverPager`. capnweb has no `offRpcBroken`, so registering per lent
    *  stub would accumulate a listener per page for the session's life — the leak
-   *  rpc-stub-relay.test.ts pins. capnweb fires onRpcBroken BEFORE it rejects the in-flight import, so a call caught below
-   *  sees this already true — no race. */
+   *  rpc-stub-relay.test.ts pins. capnweb fires onRpcBroken BEFORE it rejects the in-flight import,
+   *  so a call caught below sees this already true — no race. */
   #broken: { value: boolean };
-  #context: IterateContextStub;
-  constructor(provider: LentProviderStub, broken: { value: boolean }, context: IterateContextStub) {
+  #durableObject: IterateContextDurableObjectStub;
+  constructor(
+    clientRpcStub: ClientRpcStub,
+    broken: { value: boolean },
+    durableObject: IterateContextDurableObjectStub,
+  ) {
     super();
-    this.#provider = provider;
+    this.#clientRpcStub = clientRpcStub;
     this.#broken = broken;
-    this.#context = context;
+    this.#durableObject = durableObject;
   }
 
-  /** Walk dotted segments off the session's capnweb stub (property access pipelines through it). */
-  #receiver(capPath: string[]): Record<string, unknown> {
-    let recv = this.#provider as unknown as Record<string, unknown>;
-    for (const seg of capPath) recv = recv[seg] as Record<string, unknown>;
-    return recv;
+  /** Walk itx-expression steps off the session's capnweb stub: a property step pipelines through
+   *  the stub; a call step calls the method; the ANONYMOUS call step (`""`) calls the value itself
+   *  (a bare function lent as a capability). */
+  async #walk(itxExpressionSteps: ItxExpression): Promise<unknown> {
+    let value: unknown = this.#clientRpcStub;
+    for (const step of itxExpressionSteps) {
+      if (typeof step === "string") value = (value as Record<string, unknown>)[step];
+      else {
+        // A DIRECT call on the stub — never `.apply`: reading `.apply` off a capnweb stub's method
+        // is itself a pipelined remote path (dispatch.ts's DataCloneError learning).
+        const [method, ...args] = step;
+        value =
+          method === ""
+            ? await (value as (...a: unknown[]) => unknown)(...args)
+            : await (value as Record<string, (...a: unknown[]) => unknown>)[method](...args);
+      }
+    }
+    return value;
   }
 
-  /** The provider died mid-call: capnweb throws its raw, UNCODED close error. Re-code LOCALLY to
-   *  CONNECTION_OFFLINE so the CODE (never a message) crosses the Workers-RPC hop back to the
-   *  caller (lib/errors.ts: classify by code across a hop). A genuine app error from a live
-   *  client propagates untouched. */
+  /** The client died mid-call: capnweb throws its raw, UNCODED close error. Re-code LOCALLY to
+   *  RPC_STUB_OFFLINE so the CODE (never a message) crosses the Workers-RPC hop back to the caller
+   *  (lib/errors.ts: classify by code across a hop). A genuine app error propagates untouched. */
   #recodeIfBroken(e: unknown, what: string): never {
     if (this.#broken.value)
-      throw codedError("CONNECTION_OFFLINE", `itx rpc stub provider went offline ${what}`);
+      throw codedError("RPC_STUB_OFFLINE", `the lent rpc stub's client went offline ${what}`);
     throw e;
   }
 
-  /** The live-capability fetch dial, TRANSPORT side — the whole mechanism (why it exists, the
-   *  upgrade leg, the marker) lives in fetch/fetch-capabilities.ts. */
-  async fetch(upgradeId: string, capPath: string[], request: Request): Promise<unknown> {
+  /** The rpc-stub fetch dial, TRANSPORT side — the whole mechanism (why it exists, the upgrade leg,
+   *  the marker) lives in fetch/rpc-stub-fetch.ts. */
+  async fetch(
+    upgradeId: string,
+    itxExpressionSteps: ItxExpression,
+    request: Request,
+  ): Promise<unknown> {
     try {
-      const recv = this.#receiver(capPath) as { fetch(req: Request): Promise<unknown> };
-      return await dialLiveCapabilityFetch((r) => recv.fetch(r), request, upgradeId, this.#context);
+      const receiver = (await this.#walk(itxExpressionSteps)) as {
+        fetch(r: Request): Promise<unknown>;
+      };
+      return await dialRpcStubFetch(
+        (r) => receiver.fetch(r),
+        request,
+        upgradeId,
+        this.#durableObject,
+      );
     } catch (e) {
       this.#recodeIfBroken(e, "mid-fetch");
     }
   }
 
-  async invoke(capPath: string[], args: unknown[]): Promise<unknown> {
+  async invoke(itxExpressionSteps: ItxExpression): Promise<unknown> {
     try {
-      // Empty path = the provider IS the callable (a bare callback lent as a capability).
-      if (capPath.length === 0)
-        return await (this.#provider as unknown as (...a: unknown[]) => unknown)(...args);
-      const recv = this.#receiver(capPath.slice(0, -1));
-      return await (recv[capPath[capPath.length - 1]] as (...a: unknown[]) => unknown)(...args);
+      return await this.#walk(itxExpressionSteps);
     } catch (e) {
       this.#recodeIfBroken(e, "mid-invoke");
     }
   }
 }
 
-/** LEND a live capnweb stub to the DO's `itx.rpcStubs` registry under `key` (the canonical
- *  capability path — the stub's one identity there): reserve a transport on the DO, dup the provider
- *  stub, open the stub pager WebSocket, and answer every page with a fresh `BorrowedStub`. The relay
- *  lives until disposed (explicitly, or at session end — `SessionTeardown`); its close makes the DO
- *  drop the stub — and nothing else: whatever mounts named it stay, answering CONNECTION_OFFLINE. */
-export async function lendStubOverRelay(
-  context: IterateContextStub,
-  provider: LentProviderStub,
-  key: string,
+/** Offer the DO a lend of `clientRpcStub` under `rpcStubKey`: dup the client's stub for the session,
+ *  reserve a pager on the DO, open the pager WebSocket, and answer every page with a fresh
+ *  `LentRpcStub`. The pager lives until disposed (explicitly, or at session end — `SessionTeardown`);
+ *  its close makes the DO return the stub — and nothing else: a rewrite rule naming the key stays,
+ *  answering RPC_STUB_OFFLINE. */
+export async function lendRpcStubOverPager(
+  durableObject: IterateContextDurableObjectStub,
+  clientRpcStub: ClientRpcStub,
+  rpcStubKey: string,
   waitUntil: (p: Promise<unknown>) => void,
 ): Promise<{ dispose(): void }> {
-  const { transportId } = await context.rpcStubAttach({ key });
-  const lent = provider.dup();
-  // ONE shared broken flag for the whole relay — every borrowed stub reads it; the single
-  // onRpcBroken registration below flips it. (Registering per page would leak a listener per page:
-  // capnweb has no offRpcBroken. rpc-stub-relay.test.ts pins it.)
+  const sessionRpcStub = clientRpcStub.dup(); // dup FIRST: a value that is not a stub fails here, before any reservation
+  const { transportId } = await durableObject.attachRpcStubPager({ rpcStubKey });
+  // ONE shared broken flag for the whole pager — every lent stub reads it; the single onRpcBroken
+  // registration below flips it. (Registering per page would leak a listener per page: capnweb has
+  // no offRpcBroken. rpc-stub-relay.test.ts pins it.)
   const broken = { value: false };
-  // THE STUB PAGER WEBSOCKET, opened through the DO's fetch door carrying the transportId. Nothing
-  // but pages ever ride it — the pager is a pager (fetch-upgrade traffic has its own leg,
-  // fetch/fetch-capabilities.ts).
-  const response = await context.fetch("https://stub-pager.internal/", {
-    headers: { Upgrade: "websocket", [STUB_PAGER_WEBSOCKET_HEADER]: transportId },
+  // THE PAGER WEBSOCKET, opened through the DO's fetch door carrying the transportId. Nothing but
+  // pages ever ride it (fetch-upgrade traffic has its own leg, fetch/rpc-stub-fetch.ts).
+  const response = await durableObject.fetch("https://rpc-stub-pager.internal/", {
+    headers: { Upgrade: "websocket", [RPC_STUB_PAGER_WEBSOCKET_HEADER]: transportId },
   });
   const pagerWebSocket = response.webSocket;
   if (!pagerWebSocket)
-    throw new Error(`stub pager upgrade returned ${response.status} without a WebSocket`);
+    throw new Error(`rpc stub pager upgrade returned ${response.status} without a WebSocket`);
   pagerWebSocket.accept();
   // Keep this leg warm: a 30s keepalive the DO auto-answers via setWebSocketAutoResponse WITHOUT
   // waking it — defeats the ~100s idle-close and keeps the /api isolate warm. Dies with the isolate.
   const keepalive = setInterval(() => {
     try {
-      pagerWebSocket.send(STUB_PAGER_KEEPALIVE_REQUEST);
+      pagerWebSocket.send(RPC_STUB_PAGER_KEEPALIVE_REQUEST);
     } catch {
       clearInterval(keepalive);
     }
   }, 30_000);
   pagerWebSocket.addEventListener("close", () => clearInterval(keepalive));
   // The page answer: re-mint the Workers-RPC leg around the session's capnweb stub and lend it to
-  // the DO, which keeps it borrowed until its idle quiesce.
+  // the DO, which keeps it borrowed until its idle quiesce. The keepalive ack rides this same
+  // socket (a non-JSON string every 30 s), so anything that is not a page is ignored.
   pagerWebSocket.addEventListener("message", (event: MessageEvent) => {
     if (typeof event.data !== "string") return;
     let page: unknown;
     try {
       page = JSON.parse(event.data);
     } catch {
-      return; // not a page — ignore
+      return;
     }
     if ((page as { type?: string } | null)?.type !== "page") return;
     waitUntil(
-      context
-        .rpcStubLend({
-          transportId,
-          invoker: new BorrowedStub(lent, broken, context),
-        })
-        .catch(() => undefined), // a stale page (nobody waiting) returns undefined; offline throws — ignore
+      durableObject
+        .lendRpcStub({ rpcStubKey, stub: new LentRpcStub(sessionRpcStub, broken, durableObject) })
+        .catch(() => undefined), // offline throws — ignore; the DO's page times out on its own
     );
   });
-  const disposeLentStub = () => disposeStub(lent);
+  const disposeSessionRpcStub = () => disposeRpcStub(sessionRpcStub);
   // The library's own death signal, registered ONCE: the client's capnweb session broke → the
   // session's stub can never answer again. Flip the shared flag (so in-flight invokes re-code to
-  // CONNECTION_OFFLINE) AND close the pager WebSocket NOW so the DO drops the stub immediately —
-  // without this the presence list lies until a page times out (10s).
-  (lent as { onRpcBroken?: (cb: () => void) => void }).onRpcBroken?.(() => {
+  // RPC_STUB_OFFLINE) AND close the pager NOW so the DO returns the stub immediately — without this
+  // the presence list lies until a page times out (10s).
+  (sessionRpcStub as { onRpcBroken?: (cb: () => void) => void }).onRpcBroken?.(() => {
     broken.value = true;
     try {
-      pagerWebSocket.close(1000, "provider session broke");
+      pagerWebSocket.close(1000, "client session broke");
     } catch {
       /* already closing */
     }
   });
-  pagerWebSocket.addEventListener("close", disposeLentStub);
+  pagerWebSocket.addEventListener("close", disposeSessionRpcStub);
   return {
     dispose: () => {
       try {
-        pagerWebSocket.close(1000, "relay disposed");
+        pagerWebSocket.close(1000, "pager disposed");
       } catch {
         /* already closing */
       }
-      disposeLentStub();
+      disposeSessionRpcStub();
     },
   };
 }

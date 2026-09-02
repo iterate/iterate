@@ -18,14 +18,13 @@
 //     own alarm;
 //   • the FACETS — every loaded `DurableObject` class hosted here through `ctx.facets` with its
 //     identity in `ctx.props` (a processor is a facet whose `processEventBatch` is subscribed);
-//   • the TRANSPORT — every hibernatable socket: each rpc stub reaches this DO as a pager WebSocket
-//     from the stateless relay (rpc-stub-directory.ts), so ANY number of connected clients leave
-//     this DO free to hibernate. OUT is one-directional fire-and-forget delivery; IN borrows a
-//     short stub leg from the edge per wake burst. A stub is addressed by the registry key it was
-//     lent under (`itx.rpcStubs`); PRESENCE is `itx.rpcStubs.list()` plus two EPHEMERAL events
-//     as it changes (`rpc-stub/attached` / `rpc-stub/detached`) — the log never claims a socket is
-//     open;
-//   • the FETCH DOOR — the one place a 101 can enter: `x-itx-stub-pager` accepts a stub pager
+//   • the RPC STUBS — two layers (rpc-stub-directory.ts): a BORROWED table anyone can lend into
+//     under an opaque key, returned at the idle quiesce; and PAGERS — one hibernatable WebSocket per
+//     key from the stateless edge relay, a standing offer to lend the key back on demand — so ANY
+//     number of connected clients leave this DO free to hibernate. PRESENCE is `itx.rpcStubs.list()`
+//     plus two EPHEMERAL events as it changes (`rpc-stub/attached` / `rpc-stub/detached`) — the log
+//     never claims a socket is open;
+//   • the FETCH DOOR — the one place a 101 can enter: `x-itx-rpc-stub-pager` accepts a pager
 //     WebSocket, `x-itx-cap` resolves the fetch lane, anything else is EGRESS (secret
 //     placeholder substitution → the FALLBACK terminal).
 //
@@ -55,16 +54,16 @@ import {
 import {
   CAPABILITY_FETCH_HEADER,
   expressionEndingInFetch,
-  LiveCapabilityFetchServer,
-} from "./fetch/fetch-capabilities.ts";
-import { invokePath } from "./context/dispatch.ts";
+  RpcStubFetchServer,
+} from "./fetch/rpc-stub-fetch.ts";
+import { walkSteps } from "./context/dispatch.ts";
 import { FacetHandle, RpcStubHandle } from "./context/invoke-handle.ts";
 import { localContext, Stream, type WaitForEventFilter } from "./stream/stream.ts";
 import {
   RpcStubDirectory,
-  STUB_PAGER_KEEPALIVE_REQUEST,
-  STUB_PAGER_KEEPALIVE_RESPONSE,
-  type BorrowedStub,
+  RPC_STUB_PAGER_KEEPALIVE_REQUEST,
+  RPC_STUB_PAGER_KEEPALIVE_RESPONSE,
+  type BorrowedRpcStub,
 } from "./context/rpc-stub-directory.ts";
 import { DurableObjectNameCodec } from "./context/durable-object-names.ts";
 import { itxEntrypointFor } from "./itx-entrypoint.ts";
@@ -111,22 +110,22 @@ export class IterateContextDurableObject extends DurableObject<Env> {
    *  this worker's own ItxEntrypoint with this context's name as its one prop. Minted once: it names
    *  the context, not an incarnation, and a warm loader never re-reads it anyway. */
   readonly #itxHost = itxEntrypointFor(this.ctx, this.#name.name);
-  /** The live-capability fetch subsystem (fetch/fetch-capabilities.ts) — the DO wires its three
-   *  halves directly: the upgrade-leg door (fetch), frame forwarding (webSocketMessage), and
-   *  peer close (webSocketClose); the rpc-stub directory borrows it for serve(). */
-  readonly #liveCapabilityFetch = new LiveCapabilityFetchServer(this.ctx);
+  /** The rpc-stub fetch subsystem (fetch/rpc-stub-fetch.ts) — the DO wires its three halves
+   *  directly: the upgrade-leg door (fetch), frame forwarding (webSocketMessage), and peer close
+   *  (webSocketClose); the rpc-stub directory borrows it for serve(). */
+  readonly #rpcStubFetch = new RpcStubFetchServer(this.ctx);
   readonly #rpcStubs = new RpcStubDirectory({
-    liveCapabilityFetch: this.#liveCapabilityFetch,
+    rpcStubFetch: this.#rpcStubFetch,
     hooks: this.ctx,
     // PRESENCE, as it changes: an EPHEMERAL fact a live watcher can subscribe to (`consumes:
     // ["events.iterate.com/rpc-stub/attached", …]`), never a durable row — presence is physical
     // (`itx.rpcStubs.list()`), and the log must never claim a socket is open. A refusal (a paused
     // stream) is nothing to report: the watcher re-seeds from list().
-    onPresence: (kind, key) =>
+    onPresence: (kind, rpcStubKey) =>
       void this.append({
         type: `events.iterate.com/rpc-stub/${kind}`,
         ephemeral: true,
-        payload: { key },
+        payload: { rpcStubKey },
       }).catch(() => undefined),
   });
 
@@ -139,7 +138,10 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     // a plain "ping" would silently hijack any client frame that equals it; ws-fetch-live-101
     // caught exactly that).
     this.ctx.setWebSocketAutoResponse(
-      new WebSocketRequestResponsePair(STUB_PAGER_KEEPALIVE_REQUEST, STUB_PAGER_KEEPALIVE_RESPONSE),
+      new WebSocketRequestResponsePair(
+        RPC_STUB_PAGER_KEEPALIVE_REQUEST,
+        RPC_STUB_PAGER_KEEPALIVE_RESPONSE,
+      ),
     );
     // THE WAKE RECORD, synchronously, before any door opens (the apps/os shape): the first
     // incarnation appends `stream/created { projectId, path }`, every incarnation `stream/woken` —
@@ -209,20 +211,21 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       rpcStubs: {
         // Re-note AFTER the call: this invoke may have borrowed the stub, and a borrowed stub is
         // exactly what the quiet clock exists to return — the arm must not wait for the next call.
-        get: (key) =>
-          new RpcStubHandle(async (segments, args) => {
+        get: (rpcStubKey) =>
+          new RpcStubHandle(async (itxExpressionSteps) => {
             try {
-              return await this.#rpcStubs.invoke(key, segments, args);
+              return await this.#rpcStubs.invokeRpcStub(rpcStubKey, itxExpressionSteps);
             } finally {
               this.#recordActivityForQuietClock();
             }
           }),
-        list: () => this.#rpcStubs.list(),
+        list: () => this.#rpcStubs.listRpcStubKeys(),
       },
       // The facets view is PARENT-LOCAL — the facets live here and can never move (workerd#6702:
       // sockets never leave the parent). Branded FacetHandle for the delivery loop.
       facets: {
-        get: (ref) => new FacetHandle((path, args) => this.#invokeFacet(ref, path, args)),
+        get: (ref) =>
+          new FacetHandle((itxExpressionSteps) => this.#invokeFacet(ref, itxExpressionSteps)),
         delete: (name) => this.#deleteFacet(name),
       },
       subscriptions: {
@@ -296,7 +299,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     // nothing — a bare probe (`itx.facets.get('core').snapshot()` rides invoke → here) must not pay
     // that. `#lastActivityMs` still updates, so the first facet materialization (#invokeFacet's
     // `finally` re-notes after `#liveFacets` grows) or borrow arms with an honest quiet-period start.
-    if (this.#liveFacets.size === 0 && !this.#rpcStubs.hasBorrowedStubs()) return;
+    if (this.#liveFacets.size === 0 && !this.#rpcStubs.hasBorrowedRpcStubs()) return;
     this.#stream.armNoLaterThan(this.#lastActivityMs + 60_000);
   }
 
@@ -331,7 +334,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       this.#liveFacets.clear(); // aborted facets re-materialize; their next load re-fetches
       // Same doctrine for the borrowed stubs: holding one pins this actor awake, and a page
       // always borrows it back — return them with the idle facets.
-      this.#rpcStubs.returnBorrowedStubs();
+      this.#rpcStubs.returnBorrowedRpcStubs();
     } else {
       // Not quiet yet — look again when the quiet period would end; but never in the PAST (work in
       // flight for over a minute would otherwise re-fire this alarm in a tight, billed loop).
@@ -348,23 +351,26 @@ export class IterateContextDurableObject extends DurableObject<Env> {
    *  the call under the watchdog → copy + dispose the answer. */
   async #invokeFacet(
     ref: string | { source: WorkerSource; className: string; name?: string },
-    path: string[],
-    args: unknown[],
+    itxExpressionSteps: ItxExpression,
   ): Promise<unknown> {
-    if (path.length === 0) throw new Error(`facet: name a method`);
+    if (itxExpressionSteps.length === 0) throw new Error(`facet: name a method`);
     // The core reduce answers at its facet-shaped address with a synthesized view — it is not a
     // facet, pins nothing, and needs no watchdog.
     if (ref === CORE_SLUG)
-      return invokePath(
-        {
-          snapshot: () => this.#stream.coreReducedStateSnapshot(),
-          liveSnapshot: () => this.#stream.coreLiveStateSnapshot(),
-          waitUntilProcessed: () => ({ ok: true }),
-        },
-        path,
-        args,
-        `facet "${CORE_SLUG}"`,
-      );
+      return (
+        await walkSteps(
+          {
+            value: {
+              snapshot: () => this.#stream.coreReducedStateSnapshot(),
+              liveSnapshot: () => this.#stream.coreLiveStateSnapshot(),
+              waitUntilProcessed: () => ({ ok: true }),
+            },
+            receiver: undefined,
+          },
+          itxExpressionSteps,
+          `facet "${CORE_SLUG}"`,
+        )
+      ).value;
     // THE STARTUP MEMO `facet:<name>` = { source, className } in this DO's kv: a load spec writes it
     // (when it changed) BEFORE the load, so `itx.facets.get(name)` alone re-materializes the facet
     // after an eviction; a bare name reads it — an unknown name is NO_FACET.
@@ -428,18 +434,23 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       const facet = this.ctx.facets.get(name, () => ({ class: klass }));
       this.#liveFacets.set(name, { source: memo.source, contentHash, modules }); // live from here
       // THE CALL. A top-level `.fetch` rides the facet's own fetch — the one channel that carries a
-      // 101 natively (fetch/fetch-capabilities.ts doctrine, points 1 & 4); a method walks
-      // receiver-preservingly (invokePath). THE WATCHDOG: a call that never answers would hold
+      // 101 natively (fetch/rpc-stub-fetch.ts doctrine, points 1 & 4); a method walks
+      // receiver-preservingly (walkSteps). THE WATCHDOG: a call that never answers would hold
       // `#facetWorkInFlight` — and with it the quiesce, and with THAT this actor — forever; past 60 s
       // the facet is aborted (its pending call rejects, the counter drains, the next call
       // re-materializes it from its memo).
+      const [first] = itxExpressionSteps;
       const call =
-        path.length === 1 && path[0] === "fetch"
-          ? (facet as { fetch(r: Request): Promise<Response> }).fetch(args[0] as Request)
-          : invokePath(facet, path, args, `facet "${name}"`);
+        itxExpressionSteps.length === 1 && Array.isArray(first) && first[0] === "fetch"
+          ? (facet as { fetch(r: Request): Promise<Response> }).fetch(first[1] as Request)
+          : walkSteps(
+              { value: facet, receiver: undefined },
+              itxExpressionSteps,
+              `facet "${name}"`,
+            ).then((walked) => walked.value);
       let result: unknown;
       try {
-        result = await withTimeout(call, 60_000, `facet "${name}".${path.join(".")}`);
+        result = await withTimeout(call, 60_000, `facet "${name}" ${print(itxExpressionSteps)}`);
       } catch (error) {
         if (errorCode(error) === "TIMEOUT") {
           try {
@@ -521,7 +532,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
    *  exact path; what it shadowed is restored). A mount and a lent stub are SEPARATE things:
    *  revoking a live capability's mount leaves its stub in the registry (the edge that lent it
    *  recalls it on `itx.revoke(path)`), and a stub that dies leaves its mount in the table (calls
-   *  answer CONNECTION_OFFLINE until someone revokes it or the provider re-lends under the same
+   *  answer RPC_STUB_OFFLINE until someone revokes it or the provider re-lends under the same
    *  key — reconnect appends nothing). */
   async revokeCapability(input: { providedAtOffset?: number; path?: string }): Promise<void> {
     if (input.providedAtOffset !== undefined) {
@@ -555,9 +566,9 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     //      101 flows back untouched; errors map to statuses by CODE. The routing header itself is
     //      stripped so it never reaches the capability or, below, egress;
     //   3. everything else is EGRESS (secret substitution → the FALLBACK terminal).
-    const pager = await this.#rpcStubs.fetch(request);
+    const pager = this.#rpcStubs.acceptRpcStubPagerWebSocket(request);
     if (pager) return pager;
-    const upgradeLeg = await this.#liveCapabilityFetch.acceptFetchUpgradeLeg(request);
+    const upgradeLeg = this.#rpcStubFetch.acceptFetchUpgradeLeg(request);
     if (upgradeLeg) return upgradeLeg;
     const capHeader = request.headers.get(CAPABILITY_FETCH_HEADER);
     if (capHeader !== null) {
@@ -590,12 +601,11 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   // PRESENCE — which stubs have a transport RIGHT NOW — is physical, never event-derivable:
   // `itx.rpcStubs.list()` on the itx surface, and the socket census below for the probes.
 
-  /** IN-MEMORY TRANSPORT FACTS ({stubs, borrowed, pagesPending, dormant}) — a DO-only Workers-RPC
-   *  verb for the hibernation/quiesce probes, deliberately OFF the itx surface: these are socket
-   *  facts, not event-derivable state (`itx.rpcStubs.list()` is the edge half — the keys
-   *  with a transport). */
-  transportState(): ReturnType<RpcStubDirectory["state"]> {
-    return this.#rpcStubs.state();
+  /** IN-MEMORY TRANSPORT FACTS ({rpcStubPagers, borrowedRpcStubs, rpcStubPagesInFlight, dormant}) —
+   *  a DO-only Workers-RPC verb for the hibernation/quiesce probes, deliberately OFF the itx surface:
+   *  socket facts, not event-derivable state (`itx.rpcStubs.list()` is the presence half). */
+  rpcStubTransportState(): ReturnType<RpcStubDirectory["rpcStubTransportState"]> {
+    return this.#rpcStubs.rpcStubTransportState();
   }
 
   /** EGRESS: substitute `{{secret:project:NAME}}` placeholders, then the FALLBACK terminal. A
@@ -630,42 +640,32 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): void {
     // Fetch-upgrade frames forwarded between their two DO-side sockets (eyeball ⇄ upgrade leg);
     // a plain pager socket's inbound payloads carry nothing we act on.
-    this.#liveCapabilityFetch.handleWebSocketMessage(ws, message);
+    this.#rpcStubFetch.handleWebSocketMessage(ws, message);
   }
   webSocketClose(ws: WebSocket, code: number, reason: string): void {
-    if (this.#liveCapabilityFetch.handleWebSocketClose(ws, code, reason)) return;
-    this.#rpcStubs.closed(ws);
+    if (this.#rpcStubFetch.handleWebSocketClose(ws, code, reason)) return;
+    this.#rpcStubs.rpcStubPagerClosed(ws);
   }
   webSocketError(ws: WebSocket): void {
     this.webSocketClose(ws, 1006, "transport error");
   }
 
-  // ── the rpc-stub RPC verbs (the directory owns the lifecycle — see rpc-stub-directory.ts;
-  // these are the relay-facing doors) ──
+  // ── the rpc-stub Workers-RPC verbs — transport plumbing, OFF the itx surface (the directory owns
+  // the lifecycle — see rpc-stub-directory.ts) ──
 
-  /** Reserve a transport for the stub lent under `key` in the `itx.rpcStubs` registry — the
-   *  relay calls this (with the CANONICAL key, asserted here so the registry key and the mount that
-   *  names it can never drift), then opens the pager carrying the returned transportId. */
-  rpcStubAttach(input: { key: string }): { transportId: string } {
-    const canonical = canonicalItxExpressionPrefix(input.key);
-    if (canonical !== input.key)
-      throw new Error(
-        `rpcStubAttach: key ${JSON.stringify(input.key)} is not canonical (expected ${JSON.stringify(canonical)}) — canonicalize at the edge with canonicalItxExpressionPrefix`,
-      );
-    return this.#rpcStubs.attach(input);
+  /** LAYER 1: lend a stub under an opaque key — anyone with a route to this DO may (the edge's page
+   *  answer lands here too). `stub` is a Workers-RPC stub — a callable Proxy on the wire; structural
+   *  validation is impossible by design, so it rides permissively and the directory types it. */
+  lendRpcStub(input: { rpcStubKey: string; stub: unknown }): void {
+    this.#rpcStubs.lendRpcStub({
+      rpcStubKey: input.rpcStubKey,
+      stub: input.stub as BorrowedRpcStub,
+    });
   }
 
-  /** The page answer: the paged relay LENDS a fresh stub, which this DO keeps borrowed until the
-   *  idle quiesce returns it (a page borrows it back). */
-  rpcStubLend(input: {
-    transportId: string;
-    /** A Workers-RPC stub — a callable Proxy on the wire; structural validation is impossible
-     *  by design, so it rides permissively and the directory types it at the seam. */
-    invoker: unknown;
-  }) {
-    return this.#rpcStubs.lend({
-      transportId: input.transportId,
-      invoker: input.invoker as BorrowedStub,
-    });
+  /** LAYER 2: reserve a pager for `rpcStubKey` — the edge relay calls this, then opens the pager
+   *  WebSocket carrying the returned transportId. */
+  attachRpcStubPager(input: { rpcStubKey: string }): { transportId: string } {
+    return this.#rpcStubs.attachRpcStubPager(input);
   }
 }

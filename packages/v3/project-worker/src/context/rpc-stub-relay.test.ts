@@ -1,17 +1,17 @@
 // context/rpc-stub-relay.test.ts — a regression pin on the relay: it registers `onRpcBroken` on
 // the session's provider stub ONCE per session, never once per page. The DO borrows the stub on
 // every burst of traffic and returns it at each idle quiesce, so a long-lived device pages many
-// times, and each page lends a fresh `BorrowedStub` over the SAME session stub. capnweb has no
+// times, and each page lends a fresh `LentRpcStub` over the SAME session stub. capnweb has no
 // `offRpcBroken`, so a registration per lend would accumulate a listener per page for the session's
 // life — worst on the longest-lived, most active devices. The ONE registration lives in
-// `lendStubOverRelay`; the borrowed stubs share its `{ value }` broken flag.
+// `lendRpcStubOverPager`; the borrowed stubs share its `{ value }` broken flag.
 import { afterEach, expect, test, vi } from "vitest";
 
-// BorrowedStub extends RpcTarget from "cloudflare:workers", which node cannot resolve —
+// LentRpcStub extends RpcTarget from "cloudflare:workers", which node cannot resolve —
 // mock JUST the base class (a no-op shell); the relay's own logic runs unmodified.
 vi.mock("cloudflare:workers", () => ({ RpcTarget: class {} }));
 
-import { lendStubOverRelay } from "./rpc-stub-relay.ts";
+import { lendRpcStubOverPager } from "./rpc-stub-relay.ts";
 
 /** A fake stub-pager WebSocket: records listeners and lets the test fire the `{type:"page"}`
  *  message the DO sends down this socket to make the edge re-mint and lend the stub. */
@@ -55,16 +55,16 @@ test("a relay registers onRpcBroken on the session's stub ONCE per session, not 
 
   const pager = new FakePagerWebSocket();
   const context = {
-    rpcStubAttach: async (_opts: { key: string }) => ({ transportId: "t1" }),
+    attachRpcStubPager: async (_opts: { rpcStubKey: string }) => ({ transportId: "t1" }),
     fetch: async () => ({ status: 101, webSocket: pager }),
     // The stub is constructed EAGERLY as this call's argument, so anything its constructor
     // registered would land on every page regardless of what the lend door does.
-    rpcStubLend: async (_input: { transportId: string; invoker: unknown }) => ({ ok: true }),
+    lendRpcStub: async (_input: { rpcStubKey: string; stub: unknown }) => undefined,
   };
 
-  const relay = await lendStubOverRelay(
-    context as unknown as Parameters<typeof lendStubOverRelay>[0],
-    provider as unknown as Parameters<typeof lendStubOverRelay>[1],
+  const relay = await lendRpcStubOverPager(
+    context as unknown as Parameters<typeof lendRpcStubOverPager>[0],
+    provider as unknown as Parameters<typeof lendRpcStubOverPager>[1],
     "key-1",
     () => {}, // waitUntil
   );

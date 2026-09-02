@@ -16,35 +16,30 @@
 
 import { RpcTarget } from "capnweb";
 import { installPrototypeInvokeCapabilityFallback } from "./dotted-path-proxy.ts";
-import { toItxExpression, type ItxExpressionInput } from "./expression.ts";
+import { toItxExpression, type ItxExpression, type ItxExpressionInput } from "./expression.ts";
 
-/** A branded, pipelinable handle whose unknown dotted members reduce into ONE `dispatch(path, args)`.
- *  `dispatch` routes the reduced path into the underlying object — a borrowed rpc stub
- *  (`RpcStubDirectory.invoke`), a facet's method walk (the DO's facet door), a sibling context, or a
- *  stateful loaded class. Declared members (`invokeCapability` / `applyRoot`) win over the fallback,
- *  so a capability cannot be named either — the two reserved words this wrapper adds. */
+/** A branded, pipelinable handle whose unknown dotted members reduce into ONE dispatch of the
+ *  itx-expression STEPS relative to it. `dispatch` routes those steps into the underlying object — a
+ *  borrowed rpc stub (`RpcStubDirectory.invokeRpcStub`), a facet's method walk (the DO's facet door),
+ *  a sibling context, or a stateful loaded class. Declared members (`invokeCapability` / `applyRoot`)
+ *  win over the fallback, so a capability cannot be named either — the two reserved words this
+ *  wrapper adds. */
 export class InvokeHandle extends RpcTarget {
-  readonly #dispatch: (path: string[], args: unknown[]) => unknown;
-  constructor(dispatch: (path: string[], args: unknown[]) => unknown) {
+  readonly #dispatch: (itxExpressionSteps: ItxExpression) => unknown;
+  constructor(dispatch: (itxExpressionSteps: ItxExpression) => unknown) {
     super();
     this.#dispatch = dispatch;
   }
   /** THE reduce door the prototype hop dispatches onto (the receiver IS the invoker — this instance).
-   *  The `ItxExpressionInput` is RELATIVE to this handle (empty scope root — the hop is installed with
-   *  `[]`): property-read steps then a final call step, unpacked back into `(path, args)`. */
+   *  The expression is RELATIVE to this handle (empty scope root — the hop is installed with `[]`). */
   invokeCapability(call: ItxExpressionInput): unknown {
-    const expr = toItxExpression(call);
-    const tail = expr.at(-1);
-    if (tail === undefined) return this.#dispatch([], []);
-    const [method, args] =
-      typeof tail === "string" ? [tail, [] as unknown[]] : [tail[0], tail.slice(1)];
-    return this.#dispatch([...(expr.slice(0, -1) as string[]), method], args);
+    return this.#dispatch(toItxExpression(call));
   }
-  /** Root-apply: call the bare capability this handle fronts (empty path). `callOn` (dispatch.ts)
-   *  uses this when a matched mount's target IS an InvokeHandle and args are applied at the mount —
-   *  `handle(events, range)` ⇒ the lent callback the handle delivers to. */
+  /** Root-apply: call the bare capability this handle fronts — the ANONYMOUS call step. `callOn`
+   *  (dispatch.ts) uses this when a rewritten call's target IS an InvokeHandle and args are applied
+   *  to it — `handle(events, range)` ⇒ the lent callback the handle delivers to. */
   applyRoot(args: unknown[]): unknown {
-    return this.#dispatch([], args);
+    return this.#dispatch([["", ...args]]);
   }
 }
 installPrototypeInvokeCapabilityFallback(InvokeHandle, []);

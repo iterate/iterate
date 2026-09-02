@@ -20,7 +20,7 @@ import type { Context, StreamPage } from "../stream/stream.ts";
 import type { StreamEvent, StreamEventInput } from "../stream/events.ts";
 import { loadConfinedWorker, type WorkerSource } from "./worker-loader.ts";
 import { resolveContextPath } from "./durable-object-names.ts";
-import type { ItxExpression } from "./expression.ts";
+import { print, type ItxExpression } from "./expression.ts";
 import { FacetHandle, InvokeHandle, RpcStubHandle } from "./invoke-handle.ts";
 
 /** One row of `itx.subscriptions.list()`. */
@@ -86,7 +86,7 @@ interface BuiltInScope {
   rpcStubs: {
     /** One stub by key: a pipelinable handle over its transport (page → borrowed stub leg
      *  → invoke). Deep dots walk; a root call reaches the bare lent callable; offline ⇒
-     *  CONNECTION_OFFLINE at call time. Branded `RpcStubHandle`: the subscription delivery loop reads
+     *  RPC_STUB_OFFLINE at call time. Branded `RpcStubHandle`: the subscription delivery loop reads
      *  the brand to know the callee owns its own progress. */
     get(key: string): RpcStubHandle;
     /** PRESENCE — the keys with an open transport right now. */
@@ -228,14 +228,14 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
     // hop straight to the log door (the physical fast path). Codec-named, so only THIS project is
     // reachable; the path resolves against THIS context (absolute, or relative with `.`/`..`).
     cd: (target: string) =>
-      new InvokeHandle((segments, args) => {
+      new InvokeHandle((itxExpressionSteps) => {
         const sibling = deps.context(resolveContextPath(path, target)); // a Context — real-typed seam
-        if (segments.length === 1 && (segments[0] === "append" || segments[0] === "read"))
-          return segments[0] === "append"
-            ? sibling.append(...(args as StreamEventInput[]))
-            : sibling.read(...(args as [number?, number?]));
-        const last = segments[segments.length - 1] as string;
-        return sibling.invoke(["itx", ...segments.slice(0, -1), [last, ...args]]);
+        const [first] = itxExpressionSteps;
+        if (itxExpressionSteps.length === 1 && Array.isArray(first) && first[0] === "append")
+          return sibling.append(...(first.slice(1) as StreamEventInput[]));
+        if (itxExpressionSteps.length === 1 && Array.isArray(first) && first[0] === "read")
+          return sibling.read(...(first.slice(1) as [number?, number?]));
+        return sibling.invoke(["itx", ...itxExpressionSteps]);
       }),
     fetch: (request: Request) => deps.egress(request),
     rpcStubs: deps.rpcStubs,
@@ -253,39 +253,36 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
     // Each hop is its own InvokeHandle, so the whole `load(src).getEntrypoint().run()` /
     // `.getDurableObjectClass('C').get(name?)` chain pipelines on every lane (workerd#6873).
     load: (source: WorkerSource) =>
-      new InvokeHandle((segments, args) => {
-        if (segments.length === 1 && segments[0] === "getEntrypoint") {
-          const [className, options] = args as [
-            string | undefined,
-            { props?: unknown } | undefined,
-          ];
-          return new InvokeHandle((method, methodArgs) => {
-            if (method.length !== 1)
+      new InvokeHandle((itxExpressionSteps) => {
+        const [first] = itxExpressionSteps;
+        const oneCall = itxExpressionSteps.length === 1 && Array.isArray(first) ? first : undefined;
+        if (oneCall?.[0] === "getEntrypoint") {
+          const [, className, options] = oneCall as [string, string?, { props?: unknown }?];
+          return new InvokeHandle((methodSteps) => {
+            const [call] = methodSteps;
+            if (methodSteps.length !== 1 || !Array.isArray(call) || call[0] === "")
               throw new Error(
-                `load(src).getEntrypoint().${method.join(".")}: a WorkerEntrypoint exposes flat methods`,
+                `load(src).getEntrypoint().${print(methodSteps)}: a WorkerEntrypoint exposes flat methods`,
               );
-            return callEntrypoint(source, className, options?.props, method[0], methodArgs);
+            return callEntrypoint(source, className, options?.props, call[0], call.slice(1));
           });
         }
-        if (segments.length === 1 && segments[0] === "getDurableObjectClass") {
-          if (typeof args[0] !== "string")
+        if (oneCall?.[0] === "getDurableObjectClass") {
+          const className = oneCall[1];
+          if (typeof className !== "string")
             throw new Error("load(src).getDurableObjectClass(name): name the exported class");
-          const className = args[0];
-          return new InvokeHandle((method, methodArgs) => {
+          return new InvokeHandle((methodSteps) => {
+            const [call] = methodSteps;
             // .get(instance?) → the durable facet; deps.facets.get reduces the rest into the DO's facet door.
-            if (method.length === 1 && method[0] === "get")
-              return deps.facets.get({
-                source,
-                className,
-                name: methodArgs[0] as string | undefined,
-              });
+            if (methodSteps.length === 1 && Array.isArray(call) && call[0] === "get")
+              return deps.facets.get({ source, className, name: call[1] as string | undefined });
             throw new Error(
-              `load(src).getDurableObjectClass('${className}').${method.join(".")}: call .get(name?)`,
+              `load(src).getDurableObjectClass('${className}').${print(methodSteps)}: call .get(name?)`,
             );
           });
         }
         throw new Error(
-          `load(src).${segments.join(".")}: call .getEntrypoint(name?) or .getDurableObjectClass(name)`,
+          `load(src).${print(itxExpressionSteps)}: call .getEntrypoint(name?) or .getDurableObjectClass(name)`,
         );
       }),
     // `RUN_SCRIPT_ENTRYPOINT` wraps the lambda string into a WorkerEntrypoint default export, so even

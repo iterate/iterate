@@ -360,7 +360,7 @@ test("deep chaining: 3+ segment dotted paths through a live provider (getter →
 
 // ═══════════════════════════════ 5. THE DISPOSAL CONTRACT ═══════════════════════════════
 
-test("disposal: `using` on the /api session stub recalls its lent stubs at scope exit — the mounts stay, answering CONNECTION_OFFLINE", async () => {
+test("disposal: `using` on the /api session stub recalls its lent stubs at scope exit — the mounts stay, answering RPC_STUB_OFFLINE", async () => {
   // A live capability is two things with two lifetimes: the STUB is session-lived — `Symbol.dispose`
   // on the session recalls every stub it lent, so `itx.rpcStubs.list()` stops listing them; the
   // MOUNT is data and stays until an explicit `itx.revoke(path)` (the pipelined provide+revoke test
@@ -381,7 +381,7 @@ test("disposal: `using` on the /api session stub recalls its lent stubs at scope
   );
   expect(await rpcStubMountPaths(observer)).toContain("itx.scoped"); // the mount is data — it stays
   const err = await rejection(observer.invokeCapability("itx.scoped.hello()"));
-  expect(codeOf(err)).toBe("CONNECTION_OFFLINE"); // mounted-but-offline, seen from another session
+  expect(codeOf(err)).toBe("RPC_STUB_OFFLINE"); // mounted-but-offline, seen from another session
 });
 
 test("disposal: dup() survives disposal of the original; the LAST dispose kills the stub with the pinned error", async () => {

@@ -111,7 +111,7 @@ test("within the provider's invocation: a dyn-provided live capability serves PL
 // NATIVE provider (a dynamic worker providing over env.ITX.get(), where the lent stub is a
 // plain jsrpc stub), the dial's `provider.fetch(upgrade)` return leg IS Workers RPC — and the
 // provider's genuine 101 dies there:
-//   500 "DataCloneError: Could not serialize object of type WebSocket" (at dialLiveCapabilityFetch)
+//   500 "DataCloneError: Could not serialize object of type WebSocket" (at dialRpcStubFetch)
 // EXPECTED: parity with capnweb providers — 101 + echo. Fix directions in the session notes: the
 // symmetric dial-back (the provider opens its OWN upgrade leg via its env.ITX Fetcher — it HAS
 // one) or an SDK-side provider shim; the plain-fetch half (test above) already works everywhere.
@@ -133,7 +133,7 @@ test.fails("within the provider's invocation: WEBSOCKET fetch of the dyn-provide
 // stub from its `itx.rpcStubs` registry. The MOUNT at itx.wsdyn is pure data and STAYS (nothing
 // auto-revokes a mount because a socket dropped) — worker B resolves it and hits the offline
 // registry entry, which the fetch lane reports as
-//   500 "fetch lane error: Error: live capability \"itx.wsdyn\" is offline" (CONNECTION_OFFLINE)
+//   500 "fetch lane error: Error: live capability \"itx.wsdyn\" is offline" (RPC_STUB_OFFLINE)
 // — mounted-but-offline, not default-deny; measured here as `expected 500 to be 200`.
 // (holding the itx stub on the provider's globalThis does NOT keep the remote context alive).
 // EXPECTED (the scenario this pins): provide in one invocation, fetch from another worker later.

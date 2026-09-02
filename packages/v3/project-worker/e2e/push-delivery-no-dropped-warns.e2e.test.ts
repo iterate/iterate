@@ -1,6 +1,6 @@
 // push-delivery-no-dropped-warns.e2e.test.ts — the three pins that read the WORKER'S CONSOLE: the
 // delivery loop emits `delivery.push.dropped` for a push that fails with anything but
-// CONNECTION_OFFLINE and `subscription-delivery.dispatch` for a dispatch failure; these tests assert
+// RPC_STUB_OFFLINE and `subscription-delivery.dispatch` for a dispatch failure; these tests assert
 // those lines do NOT appear — a property no client-side observation can stand in for (a facet's
 // cold catch-up would heal a dropped push before a snapshot could tell). Logs are worker-global, so
 // this file boots its OWN worker (support/log-harness.ts) and runs its tests sequentially; every
@@ -127,11 +127,11 @@ test("MEASURED FINDING: a push subscriber that stops reading mid-flood is NOT cl
   // The loop's design comment (subscription-delivery.ts): a push is fire-and-forget; the socket
   // buffer is the only queue. This ran that claim to ground against local workerd: 60.0MiB of
   // payload flooded into a TCP-paused subscriber produced NO close, NO delivery.push.dropped warn,
-  // NO CONNECTION_OFFLINE — workerd buffers the outgoing WebSocket without any local limit we could
+  // NO RPC_STUB_OFFLINE — workerd buffers the outgoing WebSocket without any local limit we could
   // reach (the buffering policy is workerd's, not this codebase's). What IS ours (close →
   // onRpcBroken → pager close → the DO drops the transport → `itx.rpcStubs.list()` stops listing the
   // key, while the ROW stays in the subscriptions table and pushes to it are swallowed as
-  // CONNECTION_OFFLINE) is proven live below. RESIDUAL: real edge sockets have real buffer limits,
+  // RPC_STUB_OFFLINE) is proven live below. RESIDUAL: real edge sockets have real buffer limits,
   // so the overflow-close half may hold in production; this pins LOCAL workerd only. If the
   // still-present assertion ever fails, workerd grew a send-buffer limit — flip this pin to assert
   // the overflow-close instead.
@@ -213,7 +213,7 @@ test("MEASURED FINDING: a push subscriber that stops reading mid-flood is NOT cl
   console.log(`socket kill → stub dropped from presence in ${Date.now() - tKill}ms`);
   // THE ROW IS DATA: it is still in the table — nothing auto-removes it because a socket died.
   // The producer is unaffected: an append still commits, and the push to the dead stub is
-  // swallowed as CONNECTION_OFFLINE (no dropped-delivery warn — offline is the benign case the
+  // swallowed as RPC_STUB_OFFLINE (no dropped-delivery warn — offline is the benign case the
   // loop expects, not a drop worth a line).
   expect(await subscriptions(itx)).toContainEqual(expect.objectContaining(victimRow));
   await append(itx, { type: "flood", ephemeral: true, payload: { afterKill: true } });

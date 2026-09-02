@@ -7,7 +7,7 @@ import { WorkerEntrypoint } from "cloudflare:workers";
 import { newWorkersRpcResponse } from "capnweb";
 import { IterateContextDurableObject, type Env } from "./iterate-context-durable-object.ts";
 import { registerPipelinedRpcBrand } from "./context/dispatch.ts";
-import { CAPABILITY_FETCH_HEADER } from "./fetch/fetch-capabilities.ts";
+import { CAPABILITY_FETCH_HEADER } from "./fetch/rpc-stub-fetch.ts";
 import { DurableObjectNameCodec } from "./context/durable-object-names.ts";
 import { UnauthenticatedSession } from "./session.ts";
 import { DEMO_PAGE_HTML } from "./generated/demo-page.ts";

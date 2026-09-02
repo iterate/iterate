@@ -22,7 +22,7 @@
 // not in the log), never when it is behind.
 
 import type { ItxExpression } from "../context/expression.ts";
-import { callOn, invokePath } from "../context/dispatch.ts";
+import { callOn, walkSteps } from "../context/dispatch.ts";
 import { FacetHandle, RpcStubHandle } from "../context/invoke-handle.ts";
 import { errorCode, reportIssue } from "../lib/errors.ts";
 import { createLogger } from "../lib/logs.ts";
@@ -124,7 +124,7 @@ export class SubscriptionDelivery {
                   head instanceof FacetHandle &&
                   this.#stream.coreReducedState.subscriptions[name]
                 )
-                  await invokePath(head, ["catchUpFromLog"], [], `facet "${name}"`);
+                  await head.invokeCapability([["catchUpFromLog"]]);
               })().catch((error) => {
                 // NO_FACET here is a disable that landed during the load — nothing to report.
                 if (errorCode(error) !== "NO_FACET")
@@ -202,12 +202,12 @@ export class SubscriptionDelivery {
       if (!this.#stream.coreReducedState.subscriptions[name]) return;
       if (head instanceof RpcStubHandle) {
         // A LIVE CLIENT owns its offset: fire-and-forget — the pager socket is the queue, its order is
-        // the order, and a stalled client blocks nothing but itself. CONNECTION_OFFLINE is the benign
+        // the order, and a stalled client blocks nothing but itself. RPC_STUB_OFFLINE is the benign
         // heal-by-pull case (the stub is not there right now; the mount stays, the client re-lends);
         // anything else is a real drop worth a line — the subscriber sees the range gap and heals.
         this.#pushedEventBatches.delete(name);
         void call([events, range]).catch((error) => {
-          if (errorCode(error) !== "CONNECTION_OFFLINE")
+          if (errorCode(error) !== "RPC_STUB_OFFLINE")
             log.warn("push delivery dropped", { event: "delivery.push.dropped", name, error });
         });
         return;
@@ -242,9 +242,15 @@ export class SubscriptionDelivery {
     const last = target.at(-1);
     const method = typeof last === "string" && target.length > 1 ? last : undefined;
     const head = await this.#evaluate(method ? target.slice(0, -1) : target);
-    const call = (args: unknown[]): Promise<unknown> =>
+    const call = async (args: unknown[]): Promise<unknown> =>
       method
-        ? invokePath(head, [method], args, `subscription target ${JSON.stringify(method)}`)
+        ? (
+            await walkSteps(
+              { value: head, receiver: undefined },
+              [[method, ...args]],
+              `subscription target ${JSON.stringify(method)}`,
+            )
+          ).value
         : callOn(head, undefined, args);
     return { head, call };
   }

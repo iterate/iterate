@@ -1,113 +1,92 @@
-// context/rpc-stub-directory.ts — THE LIVE RPC STUBS, DO side: the `itx.rpcStubs` built-in's backing
-// table — physical, never event-sourced.
+// context/rpc-stub-directory.ts — THE RPC STUBS, DO side: the `itx.rpcStubs` built-in's backing
+// table — physical, never event-sourced. Two layers, in the order the tutorial builds them:
 //
-// THE PROBLEM: a context DO wants to call back into a client (browser tab, device, another worker)
-// whose live capnweb callback stub exists ONLY inside the stateless edge worker's session (capnweb
-// terminates at /api, never in the DO). Workers RPC can pass a stub across the boundary — but a DO
-// that KEEPS one is pinned awake forever, which breaks the 1000-idle-devices property.
+//   LAYER 1 — THE BORROWED RPC STUBS. Anyone with a Workers-RPC route to this DO can LEND a stub
+//   under an OPAQUE key (`lendRpcStub`); the DO keeps it BORROWED — every call on that key rides
+//   it — and RETURNS it at its idle quiesce (`returnBorrowedRpcStubs`), because a DO holding a stub
+//   is pinned awake and this DO must hibernate with any number of clients attached. A lender with no
+//   pager (below) is one-shot: after the return the key is offline until someone lends again.
 //
-// THE MECHANIC (the whole design in four sentences): the edge worker opens ONE WebSocket to the DO
-// per stub — THE STUB PAGER WEBSOCKET — accepted through the DO's hibernation API, carrying a small
-// durable record in its attachment and NOTHING else. When the DO needs the stub, it sends
-// `{type: "page"}` down that socket — it PAGES the stateless edge worker — and the edge LENDS it a
-// fresh stub over Workers RPC (`lend`). The DO uses the borrowed stub for as long as traffic flows
-// — event-batch delivery, state changes, request/response calls all ride this ONE stub via
-// `invoke(key, path, args)` — and RETURNS it at its idle quiesce, knowing a page always borrows it
-// back. Between pages the DO holds nothing but hibernatable sockets, so it hibernates while any
-// number of clients stay attached.
+//   LAYER 2 — THE RPC-STUB PAGERS. A hibernatable WebSocket per key, opened by the stateless edge
+//   relay (context/rpc-stub-relay.ts), carrying `{ transportId, rpcStubKey }` in its attachment and
+//   nothing else. It is a standing offer: "I can lend this key back on demand". When a call finds
+//   the key not borrowed, the DO sends `{type:"page"}` down the pager, the edge answers with
+//   `lendRpcStub`, and layer 1 takes over. Between pages the DO holds only hibernatable sockets.
 //
-// This is a poor-man's sturdy ref: the durable half is the socket attachment (survives
-// hibernation), the restore hook is the page. A native ctx.exports sturdy ref cannot express it
-// because the real capability lives inside a BROWSER's WebSocket session — only the edge worker
-// holding that socket can re-mint the stub, so restore MUST route through it.
+// `invokeRpcStub` IS the two layers as two `if`s: have we got it? call it · else is there a pager
+// for it? page it · else RPC_STUB_OFFLINE.
 //
-// WHAT A STUB IS HERE:
-//   • KEY: the capability-path-shaped string the stub is lent under — the REGISTRY KEY, and the
-//     stub's one identity. `itx.provide(path, stub)` lends under the mount path, so a mount reaches
-//     the stub through the pure-data target `itx.rpcStubs.get('<key>')`; the registry itself knows
-//     nothing about mounts. Re-lending the same key replaces the transport (reconnect). Many
-//     transports can carry one key over time; the newest wins.
-//   • TRANSPORT ID: a fresh per-transport id (the stub pager socket carries it) so a NEW transport
-//     under an existing key can attach BEFORE the old one drops — the swap the reconnect property
-//     rides on. Internal; callers never see it.
+// WHAT A STUB IS HERE: its KEY — an opaque string the lender picks (the edge's `provide` sugar uses
+// the canonical rewrite match so a reconnect re-lends under the same key; the registry never parses
+// it; connection metadata may attach to a pager record later). A TRANSPORT ID is per pager socket,
+// so a NEW pager under an existing key can attach before the old one drops (the reconnect swap;
+// the newest pager wins). PRESENCE (`listRpcStubKeys`) is the keys borrowed or pager-backed right now.
 //
-// PRESENCE (which keys have an open pager right now) is `list()`; the whole in-memory socket census
-// (borrowed, pending pages, dormant) is `state()` for the hibernation probes. A stub that dies leaves
-// nothing behind but its absence: the mount that named it stays in the capability table (calls
-// answer CONNECTION_OFFLINE) until someone revokes it or the provider re-lends.
-//
-// Two-phase attach: `attach` mints the transportId FIRST, THEN the relay opens the stub pager
-// WebSocket carrying it; an unknown id 409s so a relay that outlived a DO restart re-attaches. The
-// pager upgrade is a partial fetch the DO composes FIRST in its own fetch (`#rpcStubs.fetch(req)`).
+// Two-phase pager attach: `attachRpcStubPager` mints the transportId FIRST, then the relay opens the
+// pager WebSocket carrying it; an unknown id 409s so a relay that outlived a DO restart re-attaches.
 
-import { codedError } from "../lib/errors.ts";
 import type {
-  LiveCapabilityFetchServer,
-  LiveCapabilityFetchTransport,
+  RpcStubFetchServer,
+  RpcStubFetchTransport,
   WebSocketHooks,
-} from "../fetch/fetch-capabilities.ts";
-import { createLogger } from "../lib/logs.ts";
+} from "../fetch/rpc-stub-fetch.ts";
+import { codedError } from "../lib/errors.ts";
+import type { ItxExpression } from "./expression.ts";
 
 // ── the wire: what the relay (context/rpc-stub-relay.ts) speaks to this side ──
 
-export const STUB_PAGER_WEBSOCKET_HEADER = "x-itx-stub-pager";
-const STUB_PAGER_WEBSOCKET_TAG = "itx-stub-pager-websocket";
+export const RPC_STUB_PAGER_WEBSOCKET_HEADER = "x-itx-rpc-stub-pager";
+const RPC_STUB_PAGER_WEBSOCKET_TAG = "itx-rpc-stub-pager-websocket";
 /** The pager keepalive pair — one shared definition for the edge sender and the DO's
  *  setWebSocketAutoResponse. DELIBERATELY distinctive literals: the auto-response is DO-WIDE
  *  (it also covers fetch-upgrade eyeball sockets), so a plain "ping" would silently hijack any
  *  client frame equal to it. */
-export const STUB_PAGER_KEEPALIVE_REQUEST = "itx-pager-keepalive";
-export const STUB_PAGER_KEEPALIVE_RESPONSE = "itx-pager-keepalive-ack";
-/** How long the relay has to complete its half of a handshake — open the pager after `attach`,
- *  answer a page — before this side calls it dead. The relay does both immediately, so 10 s is a
- *  dead relay, not a slow one. */
-const RELAY_TIMEOUT_MS = 10_000;
+export const RPC_STUB_PAGER_KEEPALIVE_REQUEST = "itx-pager-keepalive";
+export const RPC_STUB_PAGER_KEEPALIVE_RESPONSE = "itx-pager-keepalive-ack";
+/** How long a paged relay has to lend before this side calls it dead. The relay answers a page
+ *  immediately, so 10 s is a dead relay, not a slow one. */
+const RPC_STUB_PAGE_TIMEOUT_MS = 10_000;
 
-/** WHAT THIS SIDE BORROWS: the Workers-RPC stub the paged edge worker lends back — TWO doors:
- *  `invoke(path, args)` forwards onto the client's capnweb callback (a DIRECT dotted dispatch —
- *  never `.apply`), and `fetch(upgradeId, capPath, request)` is the live-capability fetch dial
- *  (fetch/fetch-capabilities.ts — dies with that module's WORKAROUND fence). */
-export type BorrowedStub = LiveCapabilityFetchTransport & {
-  invoke(path: string[], args: unknown[]): Promise<unknown>;
-  dup?(): BorrowedStub;
+/** WHAT THIS SIDE BORROWS: the Workers-RPC stub a lender hands over — TWO doors: `invoke(steps)`
+ *  walks the itx-expression steps on the lender's live value (a DIRECT dotted dispatch — never
+ *  `.apply`), and `fetch(upgradeId, steps, request)` is the rpc-stub fetch dial
+ *  (fetch/rpc-stub-fetch.ts — dies with that module's WORKAROUND fence). */
+export type BorrowedRpcStub = RpcStubFetchTransport & {
+  invoke(itxExpressionSteps: ItxExpression): Promise<unknown>;
+  dup?(): BorrowedRpcStub;
 };
 
-/** One stub's durable record — the pager socket's attachment (survives hibernation): the
- *  per-transport identity and the registry key the stub is lent under. */
-type RpcStubRecord = { transportId: string; key: string };
+/** One pager socket's durable record — its attachment (survives hibernation). */
+type RpcStubPagerRecord = { transportId: string; rpcStubKey: string };
 
 /** THE one disposer for any RPC-ish stub (borrowed Workers-RPC legs here, the session's own capnweb
  *  stubs in rpc-stub-relay.ts): a no-op for anything that is not disposable. */
-export function disposeStub(x: unknown): void {
+export function disposeRpcStub(x: unknown): void {
   (x as Partial<Disposable> | null)?.[Symbol.dispose]?.();
 }
 
-const log = createLogger("rpc-stub-directory");
-
 export class RpcStubDirectory {
   readonly #hooks: WebSocketHooks;
-  /** PRESENCE as it changes: a key gained its (only) transport, or lost its last one. The DO turns
-   *  these into the two ephemeral `rpc-stub/attached` / `rpc-stub/detached` events — live watchers
-   *  see presence move; the log never claims a socket is open. A REPLACED transport (same key, new
-   *  pager) is neither: the key never lost presence. */
-  readonly #onPresence: (kind: "attached" | "detached", key: string) => void;
-  /** The DO's live-capability fetch subsystem (fetch/fetch-capabilities.ts) — `invoke` routes a
+  /** PRESENCE as it changes: a key gained its (only) pager, or lost its last one. The DO turns these
+   *  into the two ephemeral `rpc-stub/attached` / `rpc-stub/detached` events — live watchers see
+   *  presence move; the log never claims a socket is open. A REPLACED pager (same key, new socket)
+   *  is neither: the key never lost presence. */
+  readonly #onPresence: (kind: "attached" | "detached", rpcStubKey: string) => void;
+  /** The DO's rpc-stub fetch subsystem (fetch/rpc-stub-fetch.ts) — `invokeRpcStub` routes a
    *  terminal-fetch call into its serve(). */
-  readonly #liveCapabilityFetch: LiveCapabilityFetchServer;
-  /** transportId → the reservation, for transports whose stub pager WebSocket hasn't arrived yet.
-   *  In memory on purpose: if the DO dies in between, the upgrade 409s and the relay re-attaches.
-   *  Lazily SWEPT (never a timer — a pending timer would pin the DO out of hibernation): the relay
-   *  opens the pager immediately after attach, so a record still pending after RELAY_TIMEOUT_MS is
-   *  an abandoned reservation (the relay died mid-handshake) and is dropped on the next
-   *  attach/fetch — a swept-then-arriving upgrade hits the 409 door and the relay re-attaches. */
-  readonly #pending = new Map<string, { key: string; atMs: number }>();
-  // The BORROWED stubs, in memory ONLY and kept WARM: steady traffic pays ONE page, then every
-  // delivery is a plain RPC call. They go back at the DO's idle quiesce (returnBorrowedStubs()) —
-  // never per-call, never a timer (a pending timer would itself pin the DO out of hibernation).
-  readonly #borrowed = new Map<string, { invoker: BorrowedStub; inFlight: number }>();
-  // One entry per stub awaiting its page answer; CONCURRENT cold invokes share it (`arrived`) —
-  // a second caller must never replace the first's resolver (it would hang forever).
-  readonly #pagesPending = new Map<
+  readonly #rpcStubFetch: RpcStubFetchServer;
+
+  // LAYER 1 — the borrowed rpc stubs, by key, in memory ONLY and kept WARM: steady traffic pays ONE
+  // page, then every delivery is a plain RPC call. Returned at the DO's idle quiesce — never per
+  // call, never on a timer (a pending timer would itself pin the DO out of hibernation).
+  readonly #borrowedRpcStubs = new Map<string, { stub: BorrowedRpcStub; inFlight: number }>();
+
+  // LAYER 2 — the pagers. transportId → the reservation whose pager WebSocket hasn't arrived yet
+  // (in memory on purpose: if the DO dies in between, the upgrade 409s and the relay re-attaches);
+  // and, per key, the page awaiting its lend — CONCURRENT cold invokes share it (`arrived`), a
+  // second caller must never replace the first's resolver (it would hang forever).
+  readonly #pendingRpcStubPagerAttachments = new Map<string, { rpcStubKey: string }>();
+  readonly #rpcStubPagesInFlight = new Map<
     string,
     {
       resolve(): void;
@@ -117,251 +96,255 @@ export class RpcStubDirectory {
     }
   >();
   // Once per socket: workerd may deliver BOTH webSocketError and webSocketClose for one drop, and
-  // the second must not report the transport (and its presence) as lost twice.
-  readonly #closedSockets = new WeakSet<WebSocket>();
+  // the second must not report the pager (and its presence) as lost twice.
+  readonly #closedRpcStubPagerSockets = new WeakSet<WebSocket>();
 
   constructor(deps: {
     hooks: WebSocketHooks;
-    onPresence: (kind: "attached" | "detached", key: string) => void;
-    liveCapabilityFetch: LiveCapabilityFetchServer;
+    onPresence: (kind: "attached" | "detached", rpcStubKey: string) => void;
+    rpcStubFetch: RpcStubFetchServer;
   }) {
     this.#hooks = deps.hooks;
     this.#onPresence = deps.onPresence;
-    this.#liveCapabilityFetch = deps.liveCapabilityFetch;
+    this.#rpcStubFetch = deps.rpcStubFetch;
   }
 
-  // ── the lifecycle: attach → the pager upgrade → pages → close ──
+  // ── LAYER 1: lend · call · return ──
 
-  /** Reserve a transport for the registry `key` (the relay calls this BEFORE opening the stub pager
-   *  WebSocket). Mints a fresh transportId the pager carries. */
-  attach(input: { key: string }): { transportId: string } {
-    this.#sweepPending();
-    const transportId = crypto.randomUUID();
-    this.#pending.set(transportId, { key: input.key, atMs: Date.now() });
-    return { transportId };
-  }
-
-  /** PARTIAL FETCH (compose first in the DO's fetch): the stub pager upgrade, gated on a pending
-   *  attach record. `null` = not this door's request (the partial-fetch convention —
-   *  fetch/fetch-capabilities.ts). */
-  fetch(request: Request): Response | null {
-    const transportId = request.headers.get(STUB_PAGER_WEBSOCKET_HEADER);
-    if (transportId === null) return null;
-    this.#sweepPending();
-    const key = this.#pending.get(transportId)?.key;
-    if (key === undefined)
-      return new Response(`unknown rpc stub transport ${transportId} (attach first)\n`, {
-        status: 409,
-      });
-    if ((request.headers.get("Upgrade") ?? "").toLowerCase() !== "websocket")
-      return new Response(
-        `stub pager: expected a websocket upgrade with ${STUB_PAGER_WEBSOCKET_HEADER}\n`,
-        { status: 400 },
-      );
-    this.#pending.delete(transportId);
-    const hadTransport = this.find(key) !== undefined;
-    // Accepted and stamped in ONE synchronous turn, so every pager socket this side ever sees
-    // carries its record — through hibernation too (the attachment is what survives).
-    const pair = new WebSocketPair();
-    this.#hooks.acceptWebSocket(pair[1], [STUB_PAGER_WEBSOCKET_TAG]);
-    pair[1].serializeAttachment({ transportId, key } satisfies RpcStubRecord);
-    // ONE transport per key, enforced when a transport becomes VISIBLE: a CONCURRENT provide at the
-    // same key may still be opening its own pager, invisible to any earlier scan — so when THIS
-    // pager opens, drop every OTHER same-key transport now (the newest transport wins). "replaced" ⇒
-    // a transport swap, not a real close.
-    for (const r of this.all())
-      if (r.key === key && r.transportId !== transportId) this.drop(r.transportId, "replaced");
-    if (!hadTransport) this.#onPresence("attached", key);
-    return new Response(null, { status: 101, webSocket: pair[0] });
-  }
-
-  /** The edge's answer to a page: it LENDS a fresh stub over Workers RPC, kept warm until the
-   *  quiesce returns it. Returns undefined for a stale page (none pending). */
-  lend(input: { transportId: string; invoker: BorrowedStub }): { ok: true } | undefined {
-    const pending = this.#pagesPending.get(input.transportId);
-    if (pending === undefined) return undefined;
-    const prev = this.#borrowed.get(input.transportId);
-    this.#borrowed.set(input.transportId, {
-      invoker: input.invoker.dup?.() ?? input.invoker,
+  /** LEND a stub under `rpcStubKey` — the borrowed table takes it from here (a page answer lands
+   *  here too, and resolves the waiting call). Re-lending a key REPLACES its stub. */
+  lendRpcStub(input: { rpcStubKey: string; stub: BorrowedRpcStub }): void {
+    const previous = this.#borrowedRpcStubs.get(input.rpcStubKey);
+    this.#borrowedRpcStubs.set(input.rpcStubKey, {
+      stub: input.stub.dup?.() ?? input.stub,
       inFlight: 0,
     });
-    if (prev) disposeStub(prev.invoker);
-    clearTimeout(pending.timer);
-    this.#pagesPending.delete(input.transportId);
-    pending.resolve();
-    return { ok: true };
+    if (previous) disposeRpcStub(previous.stub);
+    const page = this.#rpcStubPagesInFlight.get(input.rpcStubKey);
+    if (page) {
+      clearTimeout(page.timer);
+      this.#rpcStubPagesInFlight.delete(input.rpcStubKey);
+      page.resolve();
+    }
   }
 
-  /** A pager WebSocket closed (wire this to webSocketClose/webSocketError, AFTER the DO's own
-   *  live-capability close routing): the transport is simply gone. Nothing else happens — the
-   *  mount that named the stub is data, not a session fact, and stays (calls answer
-   *  CONNECTION_OFFLINE — the mount is the user's intent; the socket was weather). */
-  closed(ws: WebSocket): void {
-    if (this.#closedSockets.has(ws)) return;
-    this.#closedSockets.add(ws);
-    const { transportId, key } = this.#attachment(ws);
-    this.#forget(transportId);
-    if (!this.find(key)) this.#onPresence("detached", key);
-  }
-
-  /** Close a stub's pager WebSocket (revoke / kick / replace) and forget it. */
-  drop(transportId: string, reason: string): void {
-    const ws = this.#socketFor(transportId);
-    if (ws)
-      try {
-        ws.close(1000, reason);
-      } catch {
-        /* already closing */
-      }
-    this.#forget(transportId);
-  }
-
-  // ── the views + the delivery leg ──
-
-  /** Every attached stub — DERIVED from the surviving pager sockets, so a fresh DO incarnation
-   *  reads them straight back with nothing to reconcile. */
-  all(): RpcStubRecord[] {
-    return this.#sockets().map((ws) => this.#attachment(ws));
-  }
-
-  find(key: string): RpcStubRecord | undefined {
-    return this.all().find((r) => r.key === key);
-  }
-
-  /** PRESENCE — the keys with an open pager transport right now (`itx.rpcStubs.list()`). The
-   *  attachments rehydrate free from the hibernated sockets, so this is exact after a wake. */
-  list(): string[] {
-    return this.all().map((r) => r.key);
-  }
-
-  /** THE one call door behind `itx.rpcStubs.get(key)` — resolved capability calls
-   *  (`itx.<mount>.method()` through a mount targeting it) and the delivery loop's push (empty path =
-   *  the bare subscriber callback itself): borrow the stub if it isn't held, then call it. It stays
-   *  borrowed afterwards — steady traffic is pure RPC, no socket round-trips. Fire-and-forget callers
-   *  just don't await (a failed delivery is the client's heal-by-pull). */
-  async invoke(key: string, path: string[], args: unknown[]): Promise<unknown> {
-    const record = this.find(key);
-    if (!record) throw codedError("CONNECTION_OFFLINE", `live capability "${key}" is offline`);
-    const borrowed = await this.#borrowStub(record.transportId);
+  /** THE one call door behind `itx.rpcStubs.get(rpcStubKey)` — resolved calls (`itx.<match>.m()`
+   *  through a rewrite rule naming it) and the delivery loop's push (an anonymous call step = the
+   *  bare lent callable itself). The stub stays borrowed afterwards — steady traffic is pure RPC, no
+   *  socket round-trips. Fire-and-forget callers just don't await. */
+  async invokeRpcStub(rpcStubKey: string, itxExpressionSteps: ItxExpression): Promise<unknown> {
+    let borrowed = this.#borrowedRpcStubs.get(rpcStubKey); // 1. have we got it? call it
+    if (!borrowed && this.#rpcStubPagerFor(rpcStubKey))
+      borrowed = await this.#pageRpcStub(rpcStubKey); // 2. can a pager lend it back?
+    if (!borrowed)
+      throw codedError("RPC_STUB_OFFLINE", `rpc stub ${JSON.stringify(rpcStubKey)} is offline`);
     borrowed.inFlight += 1;
     try {
-      // THE TERMINAL-FETCH BRANCH (fetch/fetch-capabilities.ts, doctrine point 1 — dies with its
-      // WORKAROUND fence): a terminal `fetch` carrying the one live Request rides the live-capability
-      // fetch path; the borrowed stub is the transport. Everything else is a plain dotted
-      // dispatch. Either way, a provider that dies mid-call is re-coded to CONNECTION_OFFLINE at the
-      // relay, where the break is LOCAL — the CODE, never a message, crosses this hop (lib/errors.ts).
-      if (path.at(-1) === "fetch" && args.length === 1 && args[0] instanceof Request)
-        return await this.#liveCapabilityFetch.serve(borrowed.invoker, path.slice(0, -1), args[0]);
-      return await borrowed.invoker.invoke(path, args);
+      // THE TERMINAL-FETCH BRANCH (fetch/rpc-stub-fetch.ts, doctrine point 1 — dies with its
+      // WORKAROUND fence): a terminal `fetch` carrying the one live Request rides the rpc-stub fetch
+      // path; the borrowed stub is the transport. Everything else is a plain dotted dispatch. Either
+      // way, a lender that dies mid-call is re-coded to RPC_STUB_OFFLINE at the relay, where the
+      // break is LOCAL — the CODE, never a message, crosses this hop (lib/errors.ts).
+      const last = itxExpressionSteps.at(-1);
+      if (
+        Array.isArray(last) &&
+        last[0] === "fetch" &&
+        last.length === 2 &&
+        last[1] instanceof Request
+      )
+        return await this.#rpcStubFetch.serve(
+          borrowed.stub,
+          itxExpressionSteps.slice(0, -1),
+          last[1],
+        );
+      return await borrowed.stub.invoke(itxExpressionSteps);
     } finally {
       borrowed.inFlight -= 1;
     }
   }
 
-  // ── the idle quiesce (a borrowed stub pins the DO; a page borrows it back) ──
-
   /** Any stub borrowed right now (O(1)) — what makes the quiet clock worth arming. */
-  hasBorrowedStubs(): boolean {
-    return this.#borrowed.size > 0;
+  hasBorrowedRpcStubs(): boolean {
+    return this.#borrowedRpcStubs.size > 0;
   }
 
   /** THE IDLE RETURN (call from the DO's quiesce alarm): give every borrowed stub back so the DO
    *  can hibernate. Losing them costs exactly one page on the next call — that is the deal. */
-  returnBorrowedStubs(): void {
-    for (const [transportId, borrowed] of this.#borrowed) {
-      if (borrowed.inFlight > 0)
-        log.warn("returning a stub with calls in flight (idle quiesce)", {
-          event: "stub.returned-in-flight",
-          transportId,
-          inFlight: borrowed.inFlight,
-        });
-      this.#borrowed.delete(transportId);
-      disposeStub(borrowed.invoker);
+  returnBorrowedRpcStubs(): void {
+    for (const [rpcStubKey, borrowed] of this.#borrowedRpcStubs) {
+      this.#borrowedRpcStubs.delete(rpcStubKey);
+      disposeRpcStub(borrowed.stub);
     }
   }
 
-  /** In-memory transport facts — the DO's `transportState()` verb for the hibernation probes; not
-   *  event-derivable, deliberately off the itx surface. `dormant` ⇒ nothing borrowed and no page in
-   *  flight (the DO can hibernate; stubs stay attached). */
-  state(): { stubs: number; borrowed: number; pagesPending: number; dormant: boolean } {
+  // ── LAYER 2: attach → the pager upgrade → pages → close ──
+
+  /** Reserve a pager for `rpcStubKey` (the relay calls this BEFORE opening the pager WebSocket).
+   *  Mints the fresh transportId the pager carries. */
+  attachRpcStubPager(input: { rpcStubKey: string }): { transportId: string } {
+    const transportId = crypto.randomUUID();
+    this.#pendingRpcStubPagerAttachments.set(transportId, { rpcStubKey: input.rpcStubKey });
+    return { transportId };
+  }
+
+  /** PARTIAL FETCH (compose first in the DO's fetch): the pager upgrade, gated on a pending attach.
+   *  `null` = not this door's request. */
+  acceptRpcStubPagerWebSocket(request: Request): Response | null {
+    const transportId = request.headers.get(RPC_STUB_PAGER_WEBSOCKET_HEADER);
+    if (transportId === null) return null;
+    const rpcStubKey = this.#pendingRpcStubPagerAttachments.get(transportId)?.rpcStubKey;
+    if (rpcStubKey === undefined)
+      return new Response(`unknown rpc stub pager ${transportId} (attach first)\n`, {
+        status: 409,
+      });
+    this.#pendingRpcStubPagerAttachments.delete(transportId);
+    const hadPager = this.#rpcStubPagerFor(rpcStubKey) !== undefined;
+    // Accepted and stamped in ONE synchronous turn, so every pager socket this side ever sees
+    // carries its record — through hibernation too (the attachment is what survives).
+    const pair = new WebSocketPair();
+    this.#hooks.acceptWebSocket(pair[1], [RPC_STUB_PAGER_WEBSOCKET_TAG]);
+    pair[1].serializeAttachment({ transportId, rpcStubKey } satisfies RpcStubPagerRecord);
+    // ONE pager per key, enforced when a pager becomes VISIBLE: a CONCURRENT provide at the same key
+    // may still be opening its own pager, invisible to any earlier scan — so when THIS pager opens,
+    // drop every OTHER same-key pager now (the newest wins). "replaced" ⇒ a swap, not a real close.
+    for (const record of this.#rpcStubPagerRecords())
+      if (record.rpcStubKey === rpcStubKey && record.transportId !== transportId)
+        this.dropRpcStubPager(record.transportId, "replaced");
+    if (!hadPager) this.#onPresence("attached", rpcStubKey);
+    return new Response(null, { status: 101, webSocket: pair[0] });
+  }
+
+  /** A pager WebSocket closed (wire this to webSocketClose/webSocketError, AFTER the DO's own
+   *  rpc-stub-fetch close routing): the pager is gone, and the stub it lent goes back with it. A
+   *  rewrite rule naming the key is data and stays (calls answer RPC_STUB_OFFLINE). */
+  rpcStubPagerClosed(ws: WebSocket): void {
+    if (this.#closedRpcStubPagerSockets.has(ws)) return;
+    this.#closedRpcStubPagerSockets.add(ws);
+    const { rpcStubKey } = this.#rpcStubPagerRecord(ws);
+    // Another pager for this key is open (a reconnect that attached before this socket dropped):
+    // the "replaced" swap already returned the old stub; the borrowed one now is the new session's.
+    if (this.#rpcStubPagerFor(rpcStubKey)) return;
+    this.#returnRpcStubAndFailItsPage(rpcStubKey);
+    this.#onPresence("detached", rpcStubKey);
+  }
+
+  /** Close a pager WebSocket (kick / replace) and forget it. */
+  dropRpcStubPager(transportId: string, reason: string): void {
+    const ws = this.#rpcStubPagerSocketFor(transportId);
+    if (!ws) return;
+    this.#closedRpcStubPagerSockets.add(ws); // its late close event must not touch the key again
+    try {
+      ws.close(1000, reason);
+    } catch {
+      /* already closing */
+    }
+    this.#returnRpcStubAndFailItsPage(this.#rpcStubPagerRecord(ws).rpcStubKey);
+  }
+
+  // ── the views ──
+
+  /** PRESENCE — the keys with a borrowed stub or an open pager right now (`itx.rpcStubs.list()`).
+   *  The pager attachments rehydrate free from the hibernated sockets, so this is exact after a wake. */
+  listRpcStubKeys(): string[] {
+    return [
+      ...new Set([
+        ...this.#borrowedRpcStubs.keys(),
+        ...this.#rpcStubPagerRecords().map((record) => record.rpcStubKey),
+      ]),
+    ];
+  }
+
+  /** In-memory transport facts — the DO's `rpcStubTransportState()` verb for the hibernation probes;
+   *  not event-derivable, deliberately off the itx surface. `dormant` ⇒ nothing borrowed and no page
+   *  in flight (the DO can hibernate; pagers stay attached). */
+  rpcStubTransportState(): {
+    rpcStubPagers: number;
+    borrowedRpcStubs: number;
+    rpcStubPagesInFlight: number;
+    dormant: boolean;
+  } {
     return {
-      stubs: this.all().length,
-      borrowed: this.#borrowed.size,
-      pagesPending: this.#pagesPending.size,
-      dormant: this.#borrowed.size === 0 && this.#pagesPending.size === 0,
+      rpcStubPagers: this.#rpcStubPagerRecords().length,
+      borrowedRpcStubs: this.#borrowedRpcStubs.size,
+      rpcStubPagesInFlight: this.#rpcStubPagesInFlight.size,
+      dormant: this.#borrowedRpcStubs.size === 0 && this.#rpcStubPagesInFlight.size === 0,
     };
   }
 
-  #sweepPending(): void {
-    const cutoff = Date.now() - RELAY_TIMEOUT_MS;
-    for (const [transportId, entry] of this.#pending)
-      if (entry.atMs < cutoff) this.#pending.delete(transportId);
-  }
-  #sockets(): WebSocket[] {
+  // ── the pager sockets ──
+
+  #rpcStubPagerSockets(): WebSocket[] {
     return this.#hooks
-      .getWebSockets(STUB_PAGER_WEBSOCKET_TAG)
+      .getWebSockets(RPC_STUB_PAGER_WEBSOCKET_TAG)
       .filter((ws) => ws.readyState === WebSocket.OPEN);
   }
-  #socketFor(transportId: string): WebSocket | undefined {
-    return this.#sockets().find((ws) => this.#attachment(ws).transportId === transportId);
+  /** Every attached pager — DERIVED from the surviving sockets, so a fresh DO incarnation reads them
+   *  straight back with nothing to reconcile. */
+  #rpcStubPagerRecords(): RpcStubPagerRecord[] {
+    return this.#rpcStubPagerSockets().map((ws) => this.#rpcStubPagerRecord(ws));
   }
-  /** The record a pager socket carries (stamped in `fetch` in the same synchronous turn the socket
-   *  was accepted, so it is never missing). */
-  #attachment(ws: WebSocket): RpcStubRecord {
-    return ws.deserializeAttachment() as RpcStubRecord;
+  #rpcStubPagerFor(rpcStubKey: string): WebSocket | undefined {
+    return this.#rpcStubPagerSockets().find(
+      (ws) => this.#rpcStubPagerRecord(ws).rpcStubKey === rpcStubKey,
+    );
+  }
+  #rpcStubPagerSocketFor(transportId: string): WebSocket | undefined {
+    return this.#rpcStubPagerSockets().find(
+      (ws) => this.#rpcStubPagerRecord(ws).transportId === transportId,
+    );
+  }
+  /** The record a pager socket carries (stamped in the same synchronous turn the socket was
+   *  accepted, so it is never missing). */
+  #rpcStubPagerRecord(ws: WebSocket): RpcStubPagerRecord {
+    return ws.deserializeAttachment() as RpcStubPagerRecord;
   }
 
-  /** Borrow the stub for `transportId`: already held, or page the relay and wait for the lend. */
-  async #borrowStub(transportId: string): Promise<{ invoker: BorrowedStub; inFlight: number }> {
-    let borrowed = this.#borrowed.get(transportId);
-    if (borrowed === undefined) {
-      const ws = this.#socketFor(transportId);
-      if (ws === undefined)
-        throw codedError(
-          "CONNECTION_OFFLINE",
-          `rpc stub ${transportId} offline (no pager websocket)`,
-        );
-      let pending = this.#pagesPending.get(transportId);
-      if (pending === undefined) {
-        let resolve!: () => void;
-        let reject!: (e: Error) => void;
-        const arrived = new Promise<void>((res, rej) => {
-          resolve = res;
-          reject = rej;
-        });
-        const timer = setTimeout(() => {
-          if (this.#pagesPending.delete(transportId))
-            reject(new Error(`rpc stub ${transportId}: page timed out`));
-        }, RELAY_TIMEOUT_MS);
-        pending = { resolve, reject, timer, arrived };
-        this.#pagesPending.set(transportId, pending);
-        try {
-          // THE ONE message the pager ever carries (DO → edge): "I ought to have your RPC stub but
-          // I don't — send it." Everything else rides Workers RPC on the borrowed stub.
-          ws.send(JSON.stringify({ type: "page" }));
-        } catch {
-          ws.close(1011, "page send failed");
-        }
+  /** PAGE the edge for `rpcStubKey`: send `{type:"page"}` down its pager and wait for the lend. */
+  async #pageRpcStub(rpcStubKey: string): Promise<{ stub: BorrowedRpcStub; inFlight: number }> {
+    let page = this.#rpcStubPagesInFlight.get(rpcStubKey);
+    if (page === undefined) {
+      let resolve!: () => void;
+      let reject!: (e: Error) => void;
+      const arrived = new Promise<void>((res, rej) => {
+        resolve = res;
+        reject = rej;
+      });
+      const timer = setTimeout(() => {
+        if (this.#rpcStubPagesInFlight.delete(rpcStubKey))
+          reject(new Error(`rpc stub ${JSON.stringify(rpcStubKey)}: page timed out`));
+      }, RPC_STUB_PAGE_TIMEOUT_MS);
+      page = { resolve, reject, timer, arrived };
+      this.#rpcStubPagesInFlight.set(rpcStubKey, page);
+      const ws = this.#rpcStubPagerFor(rpcStubKey)!;
+      try {
+        // THE ONE message a pager ever carries (DO → edge): "I ought to have your rpc stub but I
+        // don't — lend it." Everything else rides Workers RPC on the borrowed stub.
+        ws.send(JSON.stringify({ type: "page" }));
+      } catch {
+        ws.close(1011, "page send failed");
       }
-      await pending.arrived;
-      borrowed = this.#borrowed.get(transportId);
-      if (borrowed === undefined) throw new Error(`rpc stub ${transportId}: page answered empty`);
     }
+    await page.arrived;
+    const borrowed = this.#borrowedRpcStubs.get(rpcStubKey);
+    if (borrowed === undefined)
+      throw new Error(`rpc stub ${JSON.stringify(rpcStubKey)}: page answered empty`);
     return borrowed;
   }
 
-  #forget(transportId: string): void {
-    const borrowed = this.#borrowed.get(transportId);
+  /** A key's pager is gone: return the stub it lent (its session died with it) and fail its page. */
+  #returnRpcStubAndFailItsPage(rpcStubKey: string): void {
+    const borrowed = this.#borrowedRpcStubs.get(rpcStubKey);
     if (borrowed) {
-      this.#borrowed.delete(transportId);
-      disposeStub(borrowed.invoker);
+      this.#borrowedRpcStubs.delete(rpcStubKey);
+      disposeRpcStub(borrowed.stub);
     }
-
-    const pending = this.#pagesPending.get(transportId);
-    if (pending) {
-      clearTimeout(pending.timer);
-      this.#pagesPending.delete(transportId);
-      pending.reject(codedError("CONNECTION_OFFLINE", `rpc stub ${transportId} went offline`));
+    const page = this.#rpcStubPagesInFlight.get(rpcStubKey);
+    if (page) {
+      clearTimeout(page.timer);
+      this.#rpcStubPagesInFlight.delete(rpcStubKey);
+      page.reject(
+        codedError("RPC_STUB_OFFLINE", `rpc stub ${JSON.stringify(rpcStubKey)} went offline`),
+      );
     }
   }
 }

@@ -27,13 +27,13 @@
 // OWNS it for the session. The relay opens a STUB PAGER WebSocket to the DO (context/rpc-stub-relay.ts +
 // context/rpc-stub-directory.ts); the DO records only the stub's transport id on it. When the DO wants the
 // client — event-batch delivery, state changes, request/response calls, all the same lane — it PAGES this
-// worker, which LENDS it a fresh Workers-RPC stub over `rpcStubLend`. The DO keeps that stub borrowed while
+// worker, which LENDS it a fresh Workers-RPC stub over `lendRpcStub`. The DO keeps that stub borrowed while
 // traffic flows and returns it at its idle quiesce (a page borrows it again). So the DO holds no stub while
 // idle and hibernates with any number of clients.
 
 import { RpcTarget } from "capnweb";
 import type { IterateContextDurableObject } from "./iterate-context-durable-object.ts";
-import { CAPABILITY_FETCH_HEADER } from "./fetch/fetch-capabilities.ts";
+import { CAPABILITY_FETCH_HEADER } from "./fetch/rpc-stub-fetch.ts";
 import type { StreamEvent } from "./stream/events.ts";
 import type { WaitForEventFilter } from "./stream/stream.ts";
 import {
@@ -49,10 +49,9 @@ import {
   type DurableObjectAddress,
 } from "./context/durable-object-names.ts";
 import {
-  lendStubOverRelay,
-  type IterateContextStub,
-  type LentProviderStub,
-  type ProviderStub,
+  lendRpcStubOverPager,
+  type ClientRpcStub,
+  type IterateContextDurableObjectStub,
 } from "./context/rpc-stub-relay.ts";
 import type { SessionTeardown } from "./session.ts";
 
@@ -66,7 +65,7 @@ export type WaitUntil = (p: Promise<unknown>) => void;
 export class IterateContext extends RpcTarget {
   readonly #contexts: ContextNamespace;
   readonly #address: DurableObjectAddress;
-  readonly #context: IterateContextStub;
+  readonly #context: IterateContextDurableObjectStub;
   readonly #teardown: SessionTeardown;
   readonly #waitUntil: WaitUntil;
 
@@ -84,33 +83,33 @@ export class IterateContext extends RpcTarget {
     this.#waitUntil = waitUntil;
   }
 
-  /** The SessionTeardown key for a live relay: `"<contextName> <capabilityPath>"`. The teardown is
+  /** The SessionTeardown key for a lent stub: `"<contextName> <rpcStubKey>"`. The teardown is
    *  SESSION-lived and shared by every IterateContext the session hands out (across projects),
-   *  while a capability path is only unique PER CONTEXT — keying by capability path alone let two
-   *  contexts providing at the same path recall each other's stub. A space separator is
-   *  unambiguous: a context name has no spaces and a capability path is dotted IDENT segments. */
-  #teardownKey(capabilityPath: string): string {
-    return `${this.#address.name} ${capabilityPath}`;
+   *  while a stub key is only unique PER CONTEXT — keying by the stub key alone let two contexts
+   *  lending under the same key recall each other's stub. A space separator is unambiguous: a
+   *  context name has no spaces. */
+  #sessionTeardownKey(rpcStubKey: string): string {
+    return `${this.#address.name} ${rpcStubKey}`;
   }
 
-  /** LEND a live capnweb value to the DO under `key` (a canonical capability path — the DO refuses
-   *  any other spelling at attach, so an invalid key never burns a transport): the DON'T-PIN relay.
-   *  Re-lending the same key REPLACES the transport (reconnect). Nothing is mounted — `provide` and
-   *  `subscribe` append the row that names the stub as `itx.rpcStubs.get('<key>')`. */
-  async #lendStub(key: string, target: ProviderStub): Promise<void> {
-    const relay = await lendStubOverRelay(
+  /** LEND a live capnweb value to the DO under `rpcStubKey` through a pager (DON'T-PIN — the edge
+   *  owns the stub, the DO borrows it on demand). Re-lending the same key REPLACES the pager
+   *  (reconnect). Nothing is mounted — `provide` and `subscribe` append the row that names the
+   *  stub as `itx.rpcStubs.get('<rpcStubKey>')`. */
+  async #lendRpcStub(rpcStubKey: string, clientRpcStub: unknown): Promise<void> {
+    const pager = await lendRpcStubOverPager(
       this.#context,
-      target as LentProviderStub,
-      key,
+      clientRpcStub as ClientRpcStub,
+      rpcStubKey,
       this.#waitUntil,
     );
-    this.#teardown.add(this.#teardownKey(key), relay);
+    this.#teardown.add(this.#sessionTeardownKey(rpcStubKey), pager);
   }
 
-  /** RECALL what this session lent under `key`: the relay is disposed, the pager closes and the DO
-   *  drops the stub. A no-op for a key this session never lent. Mounts naming it are untouched. */
-  #recallStub(key: string): void {
-    this.#teardown.dispose(this.#teardownKey(key));
+  /** RECALL what this session lent under `rpcStubKey`: the pager closes and the DO returns the
+   *  stub. A no-op for a key this session never lent. Rows naming it are untouched. */
+  #recallRpcStub(rpcStubKey: string): void {
+    this.#teardown.dispose(this.#sessionTeardownKey(rpcStubKey));
   }
 
   /** Another context of THIS project. Absolute by convention (`cd("/agents/support")`); relative
@@ -172,19 +171,18 @@ export class IterateContext extends RpcTarget {
    *      `itx.rpcStubs.get('<path>')`. `itx.<path>.method(x)` resolves that mount like any other.
    *      Re-providing the same path re-lends (reconnect — the transport is replaced) and, the mount
    *      being identical, appends NOTHING (the door is idempotent). If the provider vanishes the
-   *      mount STAYS: calls answer CONNECTION_OFFLINE until `revoke`.
+   *      mount STAYS: calls answer RPC_STUB_OFFLINE until `revoke`.
    *  Anything else is a loud TypeError. Returns the mount's identity for `revoke`. */
   async provide(
     path: string,
-    target: ItxExpressionInput | ProviderStub,
+    target: ItxExpressionInput | unknown,
   ): Promise<{ providedAtOffset: number }> {
     if (typeof target === "string" || Array.isArray(target))
-      return this.#context.provideCapability({ path, target });
-    assertLiveValue(target, "provide(path, target)");
+      return this.#context.provideCapability({ path, target: target as ItxExpressionInput });
     // Lend FIRST, mount SECOND (the event records a capability that can already serve). The
     // registry key IS the canonical mount path — one canonicalizer, one spelling everywhere.
     const key = canonicalItxExpressionPrefix(path);
-    await this.#lendStub(key, target);
+    await this.#lendRpcStub(key, target);
     try {
       return await this.#context.provideCapability({
         path: key,
@@ -194,7 +192,7 @@ export class IterateContext extends RpcTarget {
       // The DO refused the mount (STREAM_PAUSED / a validation throw): the relay just opened would
       // otherwise linger for the whole session — the session's stub, its pager socket, and a DO
       // transport that serves nothing. Recall it and let the refusal propagate.
-      this.#recallStub(key);
+      this.#recallRpcStub(key);
       throw e;
     }
   }
@@ -209,7 +207,7 @@ export class IterateContext extends RpcTarget {
     if (typeof input === "string") {
       const path = canonicalItxExpressionPrefix(input);
       await this.#context.revokeCapability({ path });
-      this.#recallStub(path);
+      this.#recallRpcStub(path);
       return;
     }
     await this.#context.revokeCapability(input);
@@ -228,17 +226,17 @@ export class IterateContext extends RpcTarget {
    *  unnamed subscription is SESSION-scoped: it is removed when this session ends. */
   async subscribe(input: {
     name?: string;
-    target: ItxExpressionInput | ProviderStub;
+    target: ItxExpressionInput | unknown;
     consumes?: string[];
   }): Promise<{ name: string }> {
     const anonymous = input.name === undefined;
     const name = input.name ?? `sub-${crypto.randomUUID().slice(0, 8)}`;
     let target: ItxExpressionInput;
-    if (typeof input.target === "string" || Array.isArray(input.target)) target = input.target;
+    if (typeof input.target === "string" || Array.isArray(input.target))
+      target = input.target as ItxExpressionInput;
     else {
-      assertLiveValue(input.target, "subscribe({ target })");
       const key = `itx.subscriptions.${name}`;
-      await this.#lendStub(key, input.target);
+      await this.#lendRpcStub(key, input.target);
       target = ["itx", "rpcStubs", ["get", key]];
     }
     await this.#context.configureSubscription({
@@ -248,7 +246,7 @@ export class IterateContext extends RpcTarget {
     });
     if (anonymous)
       // Dies with the session: the removal rides waitUntil so the socket's close can complete.
-      this.#teardown.add(this.#teardownKey(`subscription:${name}`), {
+      this.#teardown.add(this.#sessionTeardownKey(`subscription:${name}`), {
         dispose: () =>
           this.#waitUntil(this.#context.removeSubscription(name).catch(() => undefined)),
       });
@@ -259,8 +257,8 @@ export class IterateContext extends RpcTarget {
    *  and recall the callback this session lent under it, if any. */
   async unsubscribe(name: string): Promise<void> {
     await this.#context.removeSubscription(name);
-    this.#recallStub(`itx.subscriptions.${name}`);
-    this.#teardown.dispose(this.#teardownKey(`subscription:${name}`));
+    this.#recallRpcStub(`itx.subscriptions.${name}`);
+    this.#teardown.dispose(this.#sessionTeardownKey(`subscription:${name}`));
   }
 
   // ── PROCESSORS: sugar over subscribe + the facet built-ins ──
@@ -295,18 +293,6 @@ export class IterateContext extends RpcTarget {
     await this.unsubscribe(name);
     await this.#context.invoke(["itx", "facets", ["delete", name]]);
   }
-}
-
-/** The one shape check for a live capnweb value: a function, an RpcTarget, or a stub (has dup). */
-function assertLiveValue(target: unknown, where: string): void {
-  if (
-    typeof target !== "function" &&
-    !(target instanceof RpcTarget) &&
-    typeof (target as { dup?: unknown } | null)?.dup !== "function"
-  )
-    throw new TypeError(
-      `${where}: target must be an itx expression (string | array) or a LIVE capnweb value (function | RpcTarget)`,
-    );
 }
 
 // THE NATURAL DOTTED SURFACE. Insert the dynamic-capability fallback into `IterateContext.prototype`'s chain

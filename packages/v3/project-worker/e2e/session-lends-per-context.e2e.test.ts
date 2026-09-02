@@ -4,7 +4,7 @@
 // the teardown must key by (context, capability) — the round-2 regression keyed by capability path
 // alone, and the SECOND context's provide at the same path recalled the FIRST context's stub:
 // its pager closed, the first context's DO dropped the stub from its `itx.rpcStubs` registry, and
-// a perfectly healthy live mount went CONNECTION_OFFLINE (the mount is data and stays; the stub
+// a perfectly healthy live mount went RPC_STUB_OFFLINE (the mount is data and stays; the stub
 // is physical and was gone).
 //
 // The pin is the reviewer's exact probe: root provides a live fn at `itx.clash`, '/sub' provides a
@@ -30,7 +30,7 @@ test("TWO CONTEXTS of one session provide live fns at the SAME capability path �
 
   // … and STILL callable after the settle: with the bug, b's provide had already recalled a's
   // stub, and the resulting pager close drops a's stub from its DO's registry asynchronously —
-  // a's mount would still be there, answering CONNECTION_OFFLINE.
+  // a's mount would still be there, answering RPC_STUB_OFFLINE.
   await sleep(2000);
   expect(await a.invokeCapability("itx.clash(1)")).toBe(2); // root's provider survived '/sub''s provide
   expect(await b.invokeCapability("itx.clash(1)")).toBe(101); // and vice versa

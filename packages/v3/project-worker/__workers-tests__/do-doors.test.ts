@@ -116,14 +116,16 @@ test("revokeCapability resolves to void on both spellings and never touches a tr
   const live = (await itx.provide("itx.livecap", new Alive())) as { providedAtOffset: number };
   const alias = await s.provideCapability({ path: "itx.aliascap", target: "itx.whoami" });
   expect(await s.invoke("itx.livecap.ping()")).toBe("alive");
-  const before = (await s.transportState()) as { stubs: number };
-  expect(before.stubs).toBe(1);
+  const before = (await s.rpcStubTransportState()) as { rpcStubPagers: number };
+  expect(before.rpcStubPagers).toBe(1);
 
   // By OFFSET — the pipelined provide+revoke spelling. The mount pops; the transport is NOT
   // touched: the census is unchanged, the registry still lists the key, and only the MOUNT is
   // gone (default-deny at the path — NO_CAPABILITY_MATCH, not offline).
   expect(await s.revokeCapability({ providedAtOffset: live.providedAtOffset })).toBeUndefined();
-  expect(((await s.transportState()) as { stubs: number }).stubs).toBe(before.stubs);
+  expect(((await s.rpcStubTransportState()) as { rpcStubPagers: number }).rpcStubPagers).toBe(
+    before.rpcStubPagers,
+  );
   expect(await s.invoke("itx.rpcStubs.list()")).toEqual(["itx.livecap"]);
   // (The denied call rides the capnweb session, not the raw DO stub: a rejecting DO call through
   // the vitest-plugin's RPC bridge is echoed by workerd as an "Uncaught (in promise)" line even
@@ -144,5 +146,7 @@ test("revokeCapability resolves to void on both spellings and never touches a tr
   expect((await mountsOf(ctx)).some((m) => m.path.join(".") === "itx.aliascap")).toBe(false);
   // Idempotent re-revoke of an already-gone row: still void, still silent.
   expect(await s.revokeCapability({ providedAtOffset: alias.providedAtOffset })).toBeUndefined();
-  expect(((await s.transportState()) as { stubs: number }).stubs).toBe(before.stubs);
+  expect(((await s.rpcStubTransportState()) as { rpcStubPagers: number }).rpcStubPagers).toBe(
+    before.rpcStubPagers,
+  );
 });

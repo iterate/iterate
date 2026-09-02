@@ -66,13 +66,25 @@ const setup = () => {
   const liveStubs = new Map<string, unknown>();
   const rpcStubs = {
     get: (key: string) =>
-      new InvokeHandle((segments, args) => {
-        const cap = liveStubs.get(key);
-        if (cap === undefined) throw new Error(`live capability "${key}" is offline`);
-        if (segments.length === 0) return (cap as (...a: unknown[]) => unknown)(...args);
-        let recv = cap as Record<string, unknown>;
-        for (const seg of segments.slice(0, -1)) recv = recv[seg] as Record<string, unknown>;
-        return (recv[segments.at(-1)!] as (...a: unknown[]) => unknown)(...args);
+      new InvokeHandle((itxExpressionSteps) => {
+        let value = liveStubs.get(key) as Record<string, unknown> | ((...a: unknown[]) => unknown);
+        if (value === undefined) throw new Error(`rpc stub "${key}" is offline`);
+        let receiver: unknown = undefined;
+        for (const step of itxExpressionSteps) {
+          if (typeof step === "string") {
+            receiver = value;
+            value = (value as Record<string, unknown>)[step] as typeof value;
+          } else {
+            const [method, ...args] = step;
+            const fn = method === "" ? value : (value as Record<string, unknown>)[method];
+            value = (fn as (...a: unknown[]) => unknown).apply(
+              method === "" ? receiver : value,
+              args,
+            ) as typeof value;
+            receiver = undefined;
+          }
+        }
+        return value;
       }),
     list: () => [...liveStubs.keys()],
   };
