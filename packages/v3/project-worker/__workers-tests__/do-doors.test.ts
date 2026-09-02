@@ -21,12 +21,12 @@
 import { runInDurableObject } from "cloudflare:test";
 import { RpcTarget } from "capnweb";
 import { expect, test } from "vitest";
-import { print, type Expression } from "../src/context/expression.ts";
+import { print, type ItxExpression } from "../src/context/expression.ts";
 import { openSession, stub } from "./support.ts";
 
 /** One mount row as the core snapshot serializes it (the mounts are `core` state; the reduced
- *  `target` is the parsed Expression — `print` it to compare against the string the door was given). */
-type MountRow = { path: string[]; target: Expression; providedAtOffset: number };
+ *  `target` is the parsed ItxExpression — `print` it to compare against the string the door was given). */
+type MountRow = { path: string[]; target: ItxExpression; providedAtOffset: number };
 const mountsOf = async (ctx: string): Promise<MountRow[]> =>
   (
     (await stub(ctx).invoke("itx.facets.get('core').snapshot()")) as {

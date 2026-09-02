@@ -4,14 +4,14 @@
 // table: kv, whoami, rpcStubs, load.
 import { describe, expect, test } from "vitest";
 import type { Mount } from "../stream/core-processor.ts";
-import { parse, parseCapabilityPath, print } from "./expression.ts";
+import { parse, parseItxExpressionPrefix, print } from "./expression.ts";
 import { matchMount, routeCall } from "./routing.ts";
 
 const BUILT_IN_ROOTS = new Set(["kv", "whoami", "rpcStubs", "load"]);
 const table = (rows: string[]): Mount[] =>
   rows.map((row, i) => {
     const [path, target] = row.split(" ⇒ ");
-    return { path: parseCapabilityPath(path), target: parse(target), providedAtOffset: i + 1 };
+    return { path: parseItxExpressionPrefix(path), target: parse(target), providedAtOffset: i + 1 };
   });
 /** The call that runs, printed — or the refusal. */
 const runs = (mounts: string[], call: string): string => {
@@ -191,7 +191,7 @@ describe("matchMount — one mount against one call", () => {
   ];
   for (const { path, call, match } of rows)
     test(`${path}  against  ${call}  →  ${match ? `${print(match.stepsAfterMount) || "(nothing after)"}${match.unpinnedArgs ? `, unpinned ${JSON.stringify(match.unpinnedArgs)}` : ""}` : "no match"}`, () => {
-      expect(matchMount(parseCapabilityPath(path), parse(call))).toEqual(match);
+      expect(matchMount(parseItxExpressionPrefix(path), parse(call))).toEqual(match);
     });
 });
 
@@ -206,6 +206,6 @@ describe("the anonymous call step round-trips the codec", () => {
     expect(print(["itx", "rpcStubs", ["get", "cam"], ["", 1, 2]])).toBe(
       "itx.rpcStubs.get('cam')(1,2)",
     );
-    expect(() => parseCapabilityPath("itx.a.b('x')(1)")).toThrow(/cannot call a result/);
+    expect(() => parseItxExpressionPrefix("itx.a.b('x')(1)")).toThrow(/cannot call a result/);
   });
 });

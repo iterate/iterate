@@ -30,7 +30,7 @@
 //      fence — and a live capability's terminal fetch simply rides the plain invoke() walk like
 //      every other call, its Response flowing back over the RPC legs.
 //
-import type { Expression } from "../context/expression.ts";
+import type { ItxExpression } from "../context/expression.ts";
 
 /** The two hibernation-API hooks the DO-side machinery needs (`ctx.acceptWebSocket` /
  *  `ctx.getWebSockets`). Timeless — the stub pager uses it too. */
@@ -50,7 +50,7 @@ export const CAPABILITY_FETCH_HEADER = "x-itx-cap";
  *  trailing `fetch` step (property or call) and append the one `fetch` PROPERTY step — the live
  *  Request always rides as the runtime arg, never as expression data. A `fetch(...)` call
  *  carrying expression args is a LOUD error: the author meant something the lane cannot do. */
-export function expressionEndingInFetch(expr: Expression): Expression {
+export function expressionEndingInFetch(expr: ItxExpression): ItxExpression {
   const last = expr.at(-1);
   if (Array.isArray(last) && last[0] === "fetch" && last.length > 1)
     throw new Error(

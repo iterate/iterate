@@ -8,20 +8,21 @@ import JSON5 from "json5";
  *  method `""` is the ANONYMOUS call — call the value itself: `itx.rpcStubs.get('cam')(1, 2)` is
  *  `["itx","rpcStubs",["get","cam"],["",1,2]]` — what a mount rewrite spells when a live value is
  *  called with args. */
-type Step = string | [method: string, ...args: unknown[]];
-/** A call written as data: a scope-root name then get/call steps. */
-export type Expression = Step[];
+type ItxExpressionStep = string | [method: string, ...args: unknown[]];
+/** An itx expression as data: the scope root (`itx`) then get/call steps. THE parsed form every door
+ *  works on. */
+export type ItxExpression = ItxExpressionStep[];
 /** THE dispatch target, in EITHER codec half — a dotted string that starts with the scope root
  *  (`"itx.facets.get('core')"`) OR the parsed structured form (`["itx","facets",["get","core"]]`).
- *  Both carry call args (the string via `.method(args)`), and `toExpression` normalizes either to the
+ *  Both carry call args (the string via `.method(args)`), and `toItxExpression` normalizes either to the
  *  structured form — so either works wherever one works, at every door that dispatches. */
-export type ItxExpression = string | Expression;
+export type ItxExpressionInput = string | ItxExpression;
 /** A capability path: dotted names, any of which may be a call step PINNING literal args —
  *  `itx.ai.run` or `itx.ai.run('gpt-5')` or `itx.repo.get('main').files`. A pinned arg must equal the
  *  call's arg at that position for the mount to match, and is CONSUMED by the match (partial
  *  application): `itx.ai.run('gpt-5') ⇒ itx.openai.chat` makes `itx.ai.run('gpt-5', inputs)` into
  *  `itx.openai.chat(inputs)`. */
-export type CapabilityPath = Expression;
+export type ItxExpressionPrefix = ItxExpression;
 const IDENT = /^[A-Za-z_$][A-Za-z0-9_$-]*/;
 const RESERVED = new Set(["__proto__", "constructor", "prototype"]);
 
@@ -39,9 +40,9 @@ function matchingParen(s: string, open: number): number {
 }
 
 /** Parse the STRING half: dotted names + `.method(args)` calls (args JSON5-parsed); rejects reserved names + bare scope calls. */
-export function parse(source: string): Expression {
+export function parse(source: string): ItxExpression {
   const s = source.trim();
-  const steps: Expression = [];
+  const steps: ItxExpression = [];
   let i = 0;
   function fail(m: string): never {
     throw new Error(`expression: ${m} in ${JSON.stringify(source)}`); // decl, not arrow: TS never-narrows
@@ -82,13 +83,13 @@ export function parse(source: string): Expression {
   return steps;
 }
 
-/** Accept either half of an `ItxExpression`; normalize to the structured form. */
-export function toExpression(input: ItxExpression): Expression {
+/** Accept either half of an `ItxExpressionInput`; normalize to the structured form. */
+export function toItxExpression(input: ItxExpressionInput): ItxExpression {
   return typeof input === "string" ? parse(input) : input;
 }
 
 /** Canonical stored form: dotted path + `.method(args)` calls (args `JSON5.stringify`d); `parse(print(e))` round-trips. */
-export function print(expr: Expression): string {
+export function print(expr: ItxExpression): string {
   return expr
     .map((step, i) => {
       const dot = i ? "." : "";
@@ -102,7 +103,7 @@ export function print(expr: Expression): string {
 /** Parse a capability path — dotted names, optionally pinning literal args on call steps
  *  (`itx.ai.run('gpt-5')`). A call step with NO args pins nothing and is the same path as the plain
  *  name, so it is refused: spell `itx.ai.run`. */
-export function parseCapabilityPath(source: string): CapabilityPath {
+export function parseItxExpressionPrefix(source: string): ItxExpressionPrefix {
   const expr = parse(source);
   for (const step of expr) {
     if (Array.isArray(step) && step[0] === "")
@@ -118,6 +119,6 @@ export function parseCapabilityPath(source: string): CapabilityPath {
 /** THE ONE canonical spelling of a capability path — what the table stores, what a live stub is
  *  lent under, what `revoke(path)` matches: parsed, then printed (dotted names; pinned args as
  *  JSON5 literals). */
-export function canonicalCapabilityPath(source: string): string {
-  return print(parseCapabilityPath(source));
+export function canonicalItxExpressionPrefix(source: string): string {
+  return print(parseItxExpressionPrefix(source));
 }

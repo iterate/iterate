@@ -1,10 +1,10 @@
 // Executable spec for the expression codec — two directions over one table.
 import { describe, expect, test } from "vitest";
-import { parse, print, type Expression } from "./expression.ts";
+import { parse, print, type ItxExpression } from "./expression.ts";
 
 // Plausible itx expressions in CANONICAL form — exactly what `print` emits (single-quoted strings,
 // unquoted identifier keys, no spaces). Each row is checked BOTH directions.
-const TABLE: [string, Expression][] = [
+const TABLE: [string, ItxExpression][] = [
   ["itx.kv", ["itx", "kv"]], // a getter path (no call)
   ["itx.whoami()", ["itx", ["whoami"]]], // a call with no args
   ["itx.kv.get('src/app.js')", ["itx", "kv", ["get", "src/app.js"]]],

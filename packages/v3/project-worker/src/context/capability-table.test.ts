@@ -16,7 +16,7 @@ import {
   capabilityProvidedEvent,
   capabilityRevokedEvent,
 } from "./capability-table.ts";
-import type { Expression, ItxExpression } from "./expression.ts";
+import type { ItxExpression, ItxExpressionInput } from "./expression.ts";
 import { InvokeHandle } from "./invoke-handle.ts";
 
 /** A tiny fake built-ins record — enough physical layer to route into. */
@@ -79,7 +79,7 @@ const setup = () => {
   const resolver = new CapabilityResolver({ builtIns: { ...builtIns, rpcStubs }, mounts });
   /** The DO's `provideCapability`, minus its idempotency policy: build the event, append it, hand
    *  back the mount's identity. A refusal throws at the door — nothing is appended. */
-  const provide = (input: { path: string; target: ItxExpression }) => {
+  const provide = (input: { path: string; target: ItxExpressionInput }) => {
     const [committed] = stream.append(capabilityProvidedEvent(input)) as StreamEvent[];
     return { providedAtOffset: committed.offset };
   };
@@ -94,7 +94,7 @@ const setup = () => {
     events,
     builtIns,
     mounts,
-    invoke: (call: ItxExpression) => resolver.resolve(call),
+    invoke: (call: ItxExpressionInput) => resolver.resolve(call),
     provide,
     /** The DO's `revokeCapability` by identity: append the revoked event (idempotent through the reduce). */
     revoke: (providedAtOffset: number) => {
@@ -302,9 +302,9 @@ describe("event mounts + the shadow stack", () => {
     await expect(invoke("itx.kv.toString()")).rejects.toThrow(/is not a method/);
   });
 
-  test("bare CALL on the scope symbol is a loud error even as a hand-crafted Expression", async () => {
+  test("bare CALL on the scope symbol is a loud error even as a hand-crafted ItxExpression", async () => {
     const { invoke } = setup();
-    await expect(invoke([["itx", 1]] as unknown as Expression)).rejects.toThrow(
+    await expect(invoke([["itx", 1]] as unknown as ItxExpression)).rejects.toThrow(
       /cannot call the scope symbol itself/,
     );
   });
@@ -333,7 +333,7 @@ describe("targets round-trip the codec: provide → print → reduce → parse",
     provideLive("itx.c", { echo: (n: unknown) => `echo:${n}` });
     const { providedAtOffset } = provide({
       path: "itx.big",
-      target: ["itx", "c", ["echo", 1e21]] as Expression,
+      target: ["itx", "c", ["echo", 1e21]] as ItxExpression,
     });
     expect(providedAtOffset).toBeGreaterThan(0);
     expect(await invoke("itx.big")).toBe(`echo:${1e21}`); // the target is a complete call
@@ -343,7 +343,7 @@ describe("targets round-trip the codec: provide → print → reduce → parse",
     const { provide, invoke } = setup();
     const { providedAtOffset } = provide({
       path: "itx.chat",
-      target: ["itx", "openai", ["chat", { "a b": "grok-4" }]] as Expression,
+      target: ["itx", "openai", ["chat", { "a b": "grok-4" }]] as ItxExpression,
     });
     expect(providedAtOffset).toBeGreaterThan(0);
     // openai.chat reads o.model (absent here) → "chat:undefined"; the point is it ROUTES at all.

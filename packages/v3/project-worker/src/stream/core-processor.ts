@@ -27,9 +27,9 @@
 import { z } from "zod";
 import {
   parse,
-  parseCapabilityPath,
-  type CapabilityPath,
-  type Expression,
+  parseItxExpressionPrefix,
+  type ItxExpressionPrefix,
+  type ItxExpression,
 } from "../context/expression.ts";
 import { defineProcessorContract } from "./events.ts";
 import { StreamProcessor, type ReduceArgs } from "./processor.ts";
@@ -58,9 +58,9 @@ export const CoreContract = defineProcessorContract({
     mounts: z
       .array(
         z.object({
-          /** Dotted names; a call step pins literal args (`itx.ai.run('gpt-5')`) — expression.ts CapabilityPath. */
-          path: z.custom<CapabilityPath>(() => true),
-          target: z.custom<Expression>(() => true),
+          /** Dotted names; a call step pins literal args (`itx.ai.run('gpt-5')`) — expression.ts ItxExpressionPrefix. */
+          path: z.custom<ItxExpressionPrefix>(() => true),
+          target: z.custom<ItxExpression>(() => true),
           /** The mount's identity — the offset of its capability-provided event. */
           providedAtOffset: z.number().int().positive(),
         }),
@@ -72,7 +72,7 @@ export const CoreContract = defineProcessorContract({
         z.string(),
         z.object({
           /** The target, parsed; its terminal is callable with (events, range). */
-          target: z.custom<Expression>(() => true),
+          target: z.custom<ItxExpression>(() => true),
           /** Event types delivered; absent = every durable event; naming a type opts its ephemerals in. */
           consumes: z.array(z.string()).optional(),
           /** The row's identity — the offset of its subscription-configured event. */
@@ -193,7 +193,7 @@ export class CoreStreamProcessor extends StreamProcessor<CoreState> {
 
       case "events.iterate.com/capability-table/capability-provided": {
         const mount: Mount = {
-          path: parseCapabilityPath(payload.path as string),
+          path: parseItxExpressionPrefix(payload.path as string),
           target: parse(payload.target as string),
           providedAtOffset: event.offset,
         };

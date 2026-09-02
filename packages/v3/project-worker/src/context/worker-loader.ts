@@ -19,7 +19,7 @@
 // site (built-ins.ts `RUN_SCRIPT_ENTRYPOINT`), so even that bottoms out at an EXPORTED entrypoint.
 
 import { PROCESSOR_SDK_MODULE } from "../generated/processor-sdk.ts";
-import { toExpression, type Expression } from "./expression.ts";
+import { toItxExpression, type ItxExpression } from "./expression.ts";
 
 /** Compose the loader cacheKey `owner` (context + a discriminator: a processor slug or a stateful
  *  className) COLLISION-FREE. The naive `${context}:${discriminator}` aliased across a different
@@ -33,7 +33,7 @@ export function facetLoaderOwner(contextName: string, discriminator: string): st
 
 /** A worker/facet SOURCE is a PRODUCER of module code, resolved the SAME way at every load site
  *  (stateless workers, stateful facets, processor facets). Two shapes, both bottoming out here:
- *   • an itx-Expression producer — the norm. `itx.kv.get('src/x.js')` IS a callback that fetches
+ *   • an itx-ItxExpression producer — the norm. `itx.kv.get('src/x.js')` IS a callback that fetches
  *     the code; a repo fetch is just `itx.repo.get(...)`; a provided capnweb/Workers-RPC callback
  *     is any expression that invokes it. Re-derivable across incarnations — the durable form,
  *     mirroring apps/os `env.LOADER.get(cacheKey, () => code)` with the producer on the wire.
@@ -41,13 +41,16 @@ export function facetLoaderOwner(contextName: string, discriminator: string): st
  *     inline), the one shape with no producer to invoke.
  *  `type:"repo"` is deliberately NOT a third branch here — it is surface sugar that compiles to a
  *  producer expression, so there is ONE resolve path, not a per-variant fan-out. */
-export type WorkerSource = string | Expression | { type: "inline"; files: Record<string, string> };
+export type WorkerSource =
+  | string
+  | ItxExpression
+  | { type: "inline"; files: Record<string, string> };
 
 /** What `loadConfinedWorker` needs. */
 type LoadConfinedWorkerOptions = {
   env: { LOADER: WorkerLoader; CF_VERSION_METADATA?: { id: string } };
   /** Resolve one call through the owning context's dispatch — how a producer expression is run. */
-  invoke: (call: Expression) => Promise<unknown>;
+  invoke: (call: ItxExpression) => Promise<unknown>;
   /** The loaded isolate's whole world: its `env.ITX` and its `globalOutbound` (the ItxEntrypoint
    *  loopback minted for the owning context — itx-entrypoint.ts). */
   host: Fetcher;
@@ -98,7 +101,7 @@ export async function loadConfinedWorker(
     const { source } = opts;
     const produced =
       typeof source === "string" || Array.isArray(source)
-        ? await opts.invoke(toExpression(source))
+        ? await opts.invoke(toItxExpression(source))
         : source.files;
     if (typeof produced === "string") modules = { "cap.js": produced };
     else if (produced && typeof produced === "object" && !Array.isArray(produced))

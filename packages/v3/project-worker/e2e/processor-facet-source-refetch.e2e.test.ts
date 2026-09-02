@@ -4,7 +4,7 @@
 // THE FIX (agent-C): every commit reaches a processor through its subscription's target —
 // `itx.load(src).getDurableObjectClass(C).get(name).processEventBatch` — so the delivery loop calls
 // iterate-context-durable-object.ts `#facet(name, memo)` per commit → worker-loader.ts `loadConfinedWorker`.
-// That used to `resolveSource(...)` (`await invoke(toExpression(source))` — a code fetch) +
+// That used to `resolveSource(...)` (`await invoke(toItxExpression(source))` — a code fetch) +
 // the loader's content hash on EVERY commit, to compute the contentHash. Now `#facet` keeps a per-facet
 // `#resolvedFacetSource` memo keyed by the PRINTED source expression: on a warm facet it passes the
 // cached `{ modules, version }` straight through, skipping the fetch+hash. The memo is dropped on

@@ -21,7 +21,7 @@
 // target additionally receives ephemerals when it is caught up (they ride the pushed batch; they are
 // not in the log), never when it is behind.
 
-import type { Expression } from "../context/expression.ts";
+import type { ItxExpression } from "../context/expression.ts";
 import { callOn, invokePath } from "../context/dispatch.ts";
 import { FacetHandle, RpcStubHandle } from "../context/invoke-handle.ts";
 import { errorCode, reportIssue } from "../lib/errors.ts";
@@ -52,7 +52,7 @@ type Deps = {
   /** The stream: its rows (`coreReducedState.subscriptions`), its log, its durable mark, its alarm. */
   stream: Stream;
   /** Evaluate an itx expression through the context's own dispatch — a handle, a function, a value. */
-  evaluate: (expression: Expression) => Promise<unknown>;
+  evaluate: (expression: ItxExpression) => Promise<unknown>;
   /** A delivery finished — the quiet clock restarts (the quiesce must not fire mid-traffic). */
   recordActivityForQuietClock: () => void;
 };
@@ -237,7 +237,7 @@ export class SubscriptionDelivery {
    *  callback: `itx.rpcStubs.get('k')`); a trailing property step names the method to call on it
    *  (`…get('presence').processEventBatch`). */
   async #evaluateTargetHead(
-    target: Expression,
+    target: ItxExpression,
   ): Promise<{ head: unknown; call: (args: unknown[]) => Promise<unknown> }> {
     const last = target.at(-1);
     const method = typeof last === "string" && target.length > 1 ? last : undefined;

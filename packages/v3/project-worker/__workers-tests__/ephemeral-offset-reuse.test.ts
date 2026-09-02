@@ -8,7 +8,7 @@
 // read-verb cases below are also the pin for that fix: they evict at once after ONE quiesce.)
 import { evictDurableObject, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { expect, test } from "vitest";
-import type { Expression } from "../src/context/expression.ts";
+import type { ItxExpression } from "../src/context/expression.ts";
 import { quiesce, stub } from "./support.ts";
 
 const COUNTER_SRC = /* js */ `
@@ -46,7 +46,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const alarmAt = (ctx: string): Promise<number | null> =>
   runInDurableObject(stub(ctx), (_inst, state) => state.storage.getAlarm());
 
-const loadChain = (src: string, cls: string, name: string): Expression => [
+const loadChain = (src: string, cls: string, name: string): ItxExpression => [
   "itx",
   ["load", `itx.kv.get('${src}')`],
   ["getDurableObjectClass", cls],

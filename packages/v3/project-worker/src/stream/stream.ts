@@ -28,7 +28,7 @@
 // reaches another THROUGH, uniform-async and REAL-typed.
 
 import { codedError, reportIssue } from "../lib/errors.ts";
-import type { ItxExpression } from "../context/expression.ts";
+import type { ItxExpressionInput } from "../context/expression.ts";
 import { CoreStreamProcessor, type CoreState } from "./core-processor.ts";
 import {
   idempotencyConflictMessage,
@@ -600,7 +600,7 @@ export class Stream {
 export interface Context {
   append(...events: StreamEventInput[]): Promise<StreamEvent[]>;
   read(afterOffset?: number, limit?: number): Promise<StreamPage>;
-  invoke(call: ItxExpression): Promise<unknown>;
+  invoke(call: ItxExpressionInput): Promise<unknown>;
 }
 
 /** The own IterateContextDurableObject (same isolate) as a uniform-async Context. The ONLY wrap is `read`
@@ -609,7 +609,7 @@ export interface Context {
 export function localContext(self: {
   append(...events: StreamEventInput[]): Promise<StreamEvent[]>;
   read(afterOffset?: number, limit?: number): StreamPage;
-  invoke(call: ItxExpression): Promise<unknown>;
+  invoke(call: ItxExpressionInput): Promise<unknown>;
 }): Context {
   return {
     append: (...events) => self.append(...events),

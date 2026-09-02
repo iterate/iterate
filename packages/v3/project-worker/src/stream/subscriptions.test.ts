@@ -8,7 +8,7 @@
 // `core` state, reduced here through `CoreStreamProcessor` exactly as the DO does; the reduce's own
 // pins (replace / drop / halted / resumed) live in core-processor.test.ts.
 import { describe, expect, test } from "vitest";
-import { print, type ItxExpression } from "../context/expression.ts";
+import { print, type ItxExpressionInput } from "../context/expression.ts";
 import { CoreStreamProcessor, type Subscription } from "./core-processor.ts";
 import type { StreamEvent } from "./events.ts";
 import { subscriptionConfiguredEvent, subscriptionRemovedEvent } from "./subscriptions.ts";
@@ -26,7 +26,7 @@ const setup = () => {
     ).subscriptions;
   /** The DO's `configureSubscription` / `removeSubscription`: ask the door, append what comes back
    *  (if anything), hand back what the door said so a pin can see null vs event. */
-  const configure = (input: { name: string; target: ItxExpression; consumes?: string[] }) => {
+  const configure = (input: { name: string; target: ItxExpressionInput; consumes?: string[] }) => {
     const event = subscriptionConfiguredEvent(rows(), input);
     if (event) stream.append(event);
     return event;

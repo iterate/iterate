@@ -20,7 +20,7 @@ import type { Context, StreamPage } from "../stream/stream.ts";
 import type { StreamEvent, StreamEventInput } from "../stream/events.ts";
 import { loadConfinedWorker, type WorkerSource } from "./worker-loader.ts";
 import { resolveContextPath } from "./durable-object-names.ts";
-import type { Expression } from "./expression.ts";
+import type { ItxExpression } from "./expression.ts";
 import { FacetHandle, InvokeHandle, RpcStubHandle } from "./invoke-handle.ts";
 
 /** One row of `itx.subscriptions.list()`. */
@@ -125,7 +125,7 @@ interface BuildBuiltInsDeps {
    *  project kv (bound in both wrangler configs). */
   env: { LOADER: WorkerLoader; ITX_KV: KVNamespace; CF_VERSION_METADATA?: { id: string } };
   /** Resolve one call through THIS context's dispatch (dynamic-worker module loading). */
-  invoke: (call: Expression) => Promise<unknown>;
+  invoke: (call: ItxExpression) => Promise<unknown>;
   /** A context stream by CANONICAL path — the own-path parent adapter same-isolate, by-name DO
    *  stubs otherwise. Both satisfy Context (uniform-async, real-typed — see stream/stream.ts). */
   context: (path: string) => Context;

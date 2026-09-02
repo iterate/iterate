@@ -30,10 +30,10 @@ import { CoreContract, type Mount } from "../stream/core-processor.ts";
 import type { StreamEventInput } from "../stream/events.ts";
 import {
   parse,
-  parseCapabilityPath,
+  parseItxExpressionPrefix,
   print,
-  toExpression,
-  type ItxExpression,
+  toItxExpression,
+  type ItxExpressionInput,
 } from "./expression.ts";
 import { callOn, walkSteps } from "./dispatch.ts";
 import { routeCall } from "./routing.ts";
@@ -44,13 +44,13 @@ import { routeCall } from "./routing.ts";
  *  target ROUND-TRIPS THE CODEC NOW (print, then parse the printed string): the reduce re-parses the
  *  stored string and SKIPS one that will not parse — a mount that silently never exists — so a target
  *  the parser refuses fails loud here, in the parser's own words. (A parsed path re-joined with dots
- *  is dotted names, which is exactly what `parseCapabilityPath` accepts — no round-trip to check.) */
+ *  is dotted names, which is exactly what `parseItxExpressionPrefix` accepts — no round-trip to check.) */
 export function capabilityProvidedEvent(input: {
   path: string;
-  target: ItxExpression;
+  target: ItxExpressionInput;
 }): StreamEventInput {
-  const path = print(parseCapabilityPath(input.path)); // canonical: dotted names, pinned args as JSON5 literals
-  const target = parse(print(toExpression(input.target)));
+  const path = print(parseItxExpressionPrefix(input.path)); // canonical: dotted names, pinned args as JSON5 literals
+  const target = parse(print(toItxExpression(input.target)));
   if (target[0] !== "itx")
     throw new Error(
       `a provided capability's target must be rooted at "itx" (a bare built-in root is unspellable — targets resolve through the table)`,
@@ -96,8 +96,8 @@ export class CapabilityResolver {
    *  scope: the root, its args if the root step is a call, the remaining steps (dispatch.ts walkSteps),
    *  and finally any runtime `extraArgs` (the fetch lane hands the live Request in here — a Request
    *  is not expression data). */
-  async resolve(call: ItxExpression, extraArgs?: unknown[]): Promise<unknown> {
-    const routed = routeCall(this.#mounts(), toExpression(call), (root) =>
+  async resolve(call: ItxExpressionInput, extraArgs?: unknown[]): Promise<unknown> {
+    const routed = routeCall(this.#mounts(), toItxExpression(call), (root) =>
       Object.hasOwn(this.#builtIns, root),
     );
     const rootStep = routed[1] as string | [string, ...unknown[]];

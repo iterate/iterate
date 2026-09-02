@@ -4,7 +4,7 @@ import { describe, expect, test } from "vitest";
 import type { Mount } from "../stream/core-processor.ts";
 import { CapabilityResolver } from "./capability-table.ts";
 import { registerPipelinedRpcBrand, walkSteps } from "./dispatch.ts";
-import { parse, parseCapabilityPath, type Expression } from "./expression.ts";
+import { parse, parseItxExpressionPrefix, type ItxExpression } from "./expression.ts";
 
 // ───────────────────────────── the step walk + a mount, end to end ─────────────────────────────
 
@@ -51,7 +51,7 @@ const scope = () => {
   };
 };
 const mount = (path: string, target: string, providedAtOffset = 1): Mount => ({
-  path: parseCapabilityPath(path),
+  path: parseItxExpressionPrefix(path),
   target: parse(target),
   providedAtOffset,
 });
@@ -99,7 +99,7 @@ describe("walkSteps + resolve", () => {
 
   test("inherited built-ins are not capability surface (the RPC exposure doctrine)", async () => {
     const kv = { get: (k: string) => `v:${k}` };
-    const walk = (steps: Expression) =>
+    const walk = (steps: ItxExpression) =>
       walkSteps({ value: kv, receiver: undefined }, steps, "expression");
     // an inherited method errs EXACTLY like a missing one — callers cannot probe
     await expect(walk([["toString"]])).rejects.toThrow(/is not a method/);

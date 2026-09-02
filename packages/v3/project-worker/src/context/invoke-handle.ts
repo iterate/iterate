@@ -16,7 +16,7 @@
 
 import { RpcTarget } from "capnweb";
 import { installPrototypeInvokeCapabilityFallback } from "./dotted-path-proxy.ts";
-import { toExpression, type ItxExpression } from "./expression.ts";
+import { toItxExpression, type ItxExpressionInput } from "./expression.ts";
 
 /** A branded, pipelinable handle whose unknown dotted members reduce into ONE `dispatch(path, args)`.
  *  `dispatch` routes the reduced path into the underlying object — a borrowed rpc stub
@@ -30,10 +30,10 @@ export class InvokeHandle extends RpcTarget {
     this.#dispatch = dispatch;
   }
   /** THE reduce door the prototype hop dispatches onto (the receiver IS the invoker — this instance).
-   *  The `ItxExpression` is RELATIVE to this handle (empty scope root — the hop is installed with
+   *  The `ItxExpressionInput` is RELATIVE to this handle (empty scope root — the hop is installed with
    *  `[]`): property-read steps then a final call step, unpacked back into `(path, args)`. */
-  invokeCapability(call: ItxExpression): unknown {
-    const expr = toExpression(call);
+  invokeCapability(call: ItxExpressionInput): unknown {
+    const expr = toItxExpression(call);
     const tail = expr.at(-1);
     if (tail === undefined) return this.#dispatch([], []);
     const [method, args] =

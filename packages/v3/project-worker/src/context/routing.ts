@@ -22,14 +22,14 @@
 import { jsonEqual } from "../lib/patch.ts";
 import { codedError } from "../lib/errors.ts";
 import type { Mount } from "../stream/core-processor.ts";
-import { print, type CapabilityPath, type Expression } from "./expression.ts";
+import { print, type ItxExpressionPrefix, type ItxExpression } from "./expression.ts";
 
 /** What `matchMount` claims: the final step's unpinned args (present when the final path step
  *  matched a call step) and the call's steps after the mount. */
-export type MountMatch = { unpinnedArgs?: unknown[]; stepsAfterMount: Expression };
+export type MountMatch = { unpinnedArgs?: unknown[]; stepsAfterMount: ItxExpression };
 
 /** Rule 2: claim `call` with `path`, step by step from the start — or null. */
-export function matchMount(path: CapabilityPath, call: Expression): MountMatch | null {
+export function matchMount(path: ItxExpressionPrefix, call: ItxExpression): MountMatch | null {
   let unpinnedArgs: unknown[] | undefined;
   for (let i = 0; i < path.length; i++) {
     const pathStep = path[i];
@@ -55,13 +55,13 @@ export function matchMount(path: CapabilityPath, call: Expression): MountMatch |
   return { unpinnedArgs, stepsAfterMount: call.slice(path.length) };
 }
 
-const pinnedArgCount = (path: CapabilityPath): number =>
+const pinnedArgCount = (path: ItxExpressionPrefix): number =>
   path.reduce<number>((n, step) => n + (Array.isArray(step) ? step.length - 1 : 0), 0);
 
 /** Rule 3: the most specific matching mount — or null. */
 export function pickMount(
   mounts: readonly Mount[],
-  call: Expression,
+  call: ItxExpression,
 ): { mount: Mount; match: MountMatch } | null {
   let best: { mount: Mount; match: MountMatch } | null = null;
   const moreSpecific = (a: Mount, b: Mount): boolean =>
@@ -78,7 +78,7 @@ export function pickMount(
 }
 
 /** Rule 4: the call with the matched prefix replaced by the target. */
-export function rewriteCall(target: Expression, match: MountMatch): Expression {
+export function rewriteCall(target: ItxExpression, match: MountMatch): ItxExpression {
   const { unpinnedArgs, stepsAfterMount } = match;
   if (!unpinnedArgs) return [...target, ...stepsAfterMount];
   const last = target.at(-1);
@@ -92,9 +92,9 @@ export function rewriteCall(target: Expression, match: MountMatch): Expression {
  *  depth error after 32 rewrites. */
 export function routeCall(
   mounts: readonly Mount[],
-  call: Expression,
+  call: ItxExpression,
   isBuiltInRoot: (root: string) => boolean,
-): Expression {
+): ItxExpression {
   let current = call;
   for (let rewrites = 0; ; rewrites++) {
     if (typeof current[0] !== "string")

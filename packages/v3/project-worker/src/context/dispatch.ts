@@ -8,7 +8,7 @@
 // `InvokeHandle` (context/invoke-handle.ts) — the ONE such primitive, pipelinable over Workers RPC.
 
 import { codedError } from "../lib/errors.ts";
-import type { Expression } from "./expression.ts";
+import type { ItxExpression } from "./expression.ts";
 import { InvokeHandle } from "./invoke-handle.ts";
 
 // Promise brands the step walk threads UNAWAITED (see walkSteps): property access and calls
@@ -63,7 +63,7 @@ function stepGet(value: object, key: string): unknown {
  */
 export async function walkSteps(
   start: { value: unknown; receiver: unknown },
-  steps: Expression,
+  steps: ItxExpression,
   where: string,
 ): Promise<{ value: unknown; receiver: unknown }> {
   let { value, receiver } = start;
@@ -109,7 +109,7 @@ export async function invokePath(
   args: unknown[],
   where: string,
 ): Promise<unknown> {
-  const steps = [...path.slice(0, -1), [path.at(-1)!, ...args]] as Expression;
+  const steps = [...path.slice(0, -1), [path.at(-1)!, ...args]] as ItxExpression;
   return (await walkSteps({ value: target, receiver: undefined }, steps, where)).value;
 }
 

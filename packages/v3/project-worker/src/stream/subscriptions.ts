@@ -11,7 +11,7 @@
 // client's re-subscribe or a repeated remove appends NOTHING; the caller appends what comes back. The
 // halted fact is appended by the delivery loop; the resumed fact by an operator's plain `itx.append`.
 
-import { print, toExpression, type ItxExpression } from "../context/expression.ts";
+import { print, toItxExpression, type ItxExpressionInput } from "../context/expression.ts";
 import { CoreContract, SubscriptionName, type Subscription } from "./core-processor.ts";
 import type { StreamEventInput } from "./events.ts";
 
@@ -21,14 +21,14 @@ import type { StreamEventInput } from "./events.ts";
  *  round-trips — expression.test.ts — so what is stored is what the reduce parses). */
 export function subscriptionConfiguredEvent(
   rows: Readonly<Record<string, Subscription>>,
-  input: { name: string; target: ItxExpression; consumes?: string[] },
+  input: { name: string; target: ItxExpressionInput; consumes?: string[] },
 ): StreamEventInput | null {
   const name = SubscriptionName.parse(input.name);
   // A processor's subscription name IS its facet name, and the core reduce's address
   // (`itx.facets.get('core')`) is taken. Refused at the door, never at delivery.
   if (name === CoreContract.slug)
     throw new Error(`"${name}" is the core reduce's name — reserved; pick another`);
-  const target = toExpression(input.target);
+  const target = toItxExpression(input.target);
   if (target[0] !== "itx")
     throw new Error(
       `a subscription target must be rooted at "itx" (got ${JSON.stringify(print(target))})`,

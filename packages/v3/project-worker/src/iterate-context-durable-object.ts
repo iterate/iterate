@@ -46,11 +46,11 @@ import { withTimeout } from "./lib/timeout.ts";
 import type { StreamEvent, StreamEventInput } from "./stream/events.ts";
 import {
   parse,
-  canonicalCapabilityPath,
+  canonicalItxExpressionPrefix,
   print,
-  toExpression,
-  type Expression,
+  toItxExpression,
   type ItxExpression,
+  type ItxExpressionInput,
 } from "./context/expression.ts";
 import {
   CAPABILITY_FETCH_HEADER,
@@ -249,7 +249,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
    *  it). Idempotent against the current table: an identical subscribe appends nothing. */
   async configureSubscription(input: {
     name: string;
-    target: ItxExpression;
+    target: ItxExpressionInput;
     consumes?: string[];
   }): Promise<void> {
     const event = subscriptionConfiguredEvent(this.#stream.coreReducedState.subscriptions, input);
@@ -375,7 +375,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       | undefined;
     if (typeof ref !== "string") {
       const spec = {
-        source: print(toExpression(ref.source as ItxExpression)),
+        source: print(toItxExpression(ref.source as ItxExpressionInput)),
         className: ref.className,
       };
       if (!memo || memo.source !== spec.source || memo.className !== spec.className)
@@ -489,9 +489,9 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   // ── dispatch (ONE path: the routing table — the core reduce's mounts, zero distance) ──
 
   /** Resolve + run one call against the current table. The ONE dispatch door — `IterateContext` builds the
-   *  call Expression client-side and hands it here (the ARRAY half can carry call args a dotted
+   *  call ItxExpression client-side and hands it here (the ARRAY half can carry call args a dotted
    *  STRING never could — callbacks, Dates, bytes: `["itx","tools",["transform",21,cb]]`). */
-  async invoke(call: ItxExpression): Promise<unknown> {
+  async invoke(call: ItxExpressionInput): Promise<unknown> {
     this.#recordActivityForQuietClock();
     return this.#capabilityResolver.resolve(call);
   }
@@ -504,10 +504,10 @@ export class IterateContextDurableObject extends DurableObject<Env> {
    *  identical provides may both land, which is a harmless shadow. */
   async provideCapability(input: {
     path: string;
-    target: ItxExpression;
+    target: ItxExpressionInput;
   }): Promise<{ providedAtOffset: number }> {
-    const pathString = canonicalCapabilityPath(input.path); // the reduce stores the canonical path
-    const targetString = print(toExpression(input.target));
+    const pathString = canonicalItxExpressionPrefix(input.path); // the reduce stores the canonical path
+    const targetString = print(toItxExpression(input.target));
     const winner = this.#newestMountAt(pathString);
     if (winner && print(winner.target) === targetString)
       return { providedAtOffset: winner.providedAtOffset };
@@ -531,7 +531,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       return;
     }
     if (!input.path) throw new Error("revokeCapability: pass providedAtOffset or path");
-    const pathString = canonicalCapabilityPath(input.path);
+    const pathString = canonicalItxExpressionPrefix(input.path);
     const winner = this.#newestMountAt(pathString);
     if (!winner) throw new Error(`no mount at path ${JSON.stringify(pathString)}`);
     await this.append(capabilityRevokedEvent(winner.providedAtOffset));
@@ -563,7 +563,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     if (capHeader !== null) {
       try {
         const expr = capHeader.trimStart().startsWith("[")
-          ? (JSON.parse(capHeader) as Expression)
+          ? (JSON.parse(capHeader) as ItxExpression)
           : parse(capHeader);
         const headers = new Headers(request.headers);
         headers.delete(CAPABILITY_FETCH_HEADER);
@@ -647,10 +647,10 @@ export class IterateContextDurableObject extends DurableObject<Env> {
    *  relay calls this (with the CANONICAL key, asserted here so the registry key and the mount that
    *  names it can never drift), then opens the pager carrying the returned transportId. */
   rpcStubAttach(input: { key: string }): { transportId: string } {
-    const canonical = canonicalCapabilityPath(input.key);
+    const canonical = canonicalItxExpressionPrefix(input.key);
     if (canonical !== input.key)
       throw new Error(
-        `rpcStubAttach: key ${JSON.stringify(input.key)} is not canonical (expected ${JSON.stringify(canonical)}) — canonicalize at the edge with canonicalCapabilityPath`,
+        `rpcStubAttach: key ${JSON.stringify(input.key)} is not canonical (expected ${JSON.stringify(canonical)}) — canonicalize at the edge with canonicalItxExpressionPrefix`,
       );
     return this.#rpcStubs.attach(input);
   }

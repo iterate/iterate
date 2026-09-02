@@ -5,19 +5,19 @@
 // dotted property access — `itx.slack.chat.postMessage({...})`, `itx.kv.put('k','v')`,
 // `itx.myLiveCap.hello()` — even though `IterateContext` declares only fixed methods
 // (invokeCapability / provide / …). Every unknown segment accumulates into ONE `invokeCapability`
-// dispatch carrying an `ItxExpression`; declared methods always win.
+// dispatch carrying an `ItxExpressionInput`; declared methods always win.
 //
-// `IterateContext.invokeCapability(ItxExpression)` is the exact InvokeCapabilityTarget shape this
+// `IterateContext.invokeCapability(ItxExpressionInput)` is the exact InvokeCapabilityTarget shape this
 // expects (installed with scope root `["itx"]`), and the receiver IS the invoker — so it wires with
 // zero glue.
 
-import type { Expression, ItxExpression } from "./expression.ts";
+import type { ItxExpression, ItxExpressionInput } from "./expression.ts";
 
 /** The dispatch door every dotted miss collapses onto. `IterateContext` implements it directly (root `itx`); a
  *  mid-chain `InvokeHandle` implements it relative to itself (empty root). The accumulated dotted
- *  access reduces into ONE `ItxExpression` — `[...root, ...prefix, [method, ...args]]`. */
+ *  access reduces into ONE `ItxExpressionInput` — `[...root, ...prefix, [method, ...args]]`. */
 type InvokeCapabilityTarget = {
-  invokeCapability(call: ItxExpression): unknown;
+  invokeCapability(call: ItxExpressionInput): unknown;
 };
 
 /** Names that must NEVER become dynamic capability segments — a dispatcher answering them would turn
@@ -73,10 +73,10 @@ export function createInvokeCapabilityPathProxy(
   const valueFor = (key: string) => createInvokeCapabilityPathProxy(invoker, root, [...path, key]);
   return new Proxy(function () {}, {
     apply(_target, _thisArg, args) {
-      // Reduce the accumulated dotted access into ONE ItxExpression (structured half): the scope root,
+      // Reduce the accumulated dotted access into ONE ItxExpressionInput (structured half): the scope root,
       // the property-read prefix, then the final call step carrying the args.
       const method = path[path.length - 1];
-      const expr: Expression = [...root, ...path.slice(0, -1), [method, ...(args as unknown[])]];
+      const expr: ItxExpression = [...root, ...path.slice(0, -1), [method, ...(args as unknown[])]];
       return invoker.invokeCapability(expr);
     },
     get(target, key, receiver) {

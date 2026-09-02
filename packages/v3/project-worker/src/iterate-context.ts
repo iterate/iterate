@@ -36,7 +36,11 @@ import type { IterateContextDurableObject } from "./iterate-context-durable-obje
 import { CAPABILITY_FETCH_HEADER } from "./fetch/fetch-capabilities.ts";
 import type { StreamEvent } from "./stream/events.ts";
 import type { WaitForEventFilter } from "./stream/stream.ts";
-import { canonicalCapabilityPath, toExpression, type ItxExpression } from "./context/expression.ts";
+import {
+  canonicalItxExpressionPrefix,
+  toItxExpression,
+  type ItxExpressionInput,
+} from "./context/expression.ts";
 import type { WorkerSource } from "./context/worker-loader.ts";
 import { installPrototypeInvokeCapabilityFallback } from "./context/dotted-path-proxy.ts";
 import {
@@ -58,7 +62,7 @@ export type WaitUntil = (p: Promise<unknown>) => void;
 /** The iterate context (`itx`) at one `{ projectId, path }`. Dotted capability calls + the
  *  built-in collections forward to the DO over Workers RPC. capnweb terminates upstream in `/api`,
  *  so a client stub `itx.a.b(x)` never touches the DO's transport — it lands here and becomes a
- *  `DO.invoke(["itx", "a", ["b", x]])` call Expression. */
+ *  `DO.invoke(["itx", "a", ["b", x]])` call ItxExpression. */
 export class IterateContext extends RpcTarget {
   readonly #contexts: ContextNamespace;
   readonly #address: DurableObjectAddress;
@@ -124,7 +128,7 @@ export class IterateContext extends RpcTarget {
   }
 
   /** THE dispatch door (built-ins + provided capabilities) — the ONE way to call the itx surface.
-   *  Takes an `ItxExpression`: a dotted string (`"itx.append({...})"`) OR the parsed array
+   *  Takes an `ItxExpressionInput`: a dotted string (`"itx.append({...})"`) OR the parsed array
    *  (`["itx",["append",{...}]]`); both carry mid-path call args, and both work here. The dotted
    *  sugar `itx.a.b(x)` reduces into `["itx","a",["b",x]]` (see the prototype fallback at the bottom
    *  of this file) and lands right here.
@@ -135,8 +139,8 @@ export class IterateContext extends RpcTarget {
    *  or a WS-serving worker; fetch/fetch-capabilities.ts doctrine, points 1 & 4). So
    *  `itx.todos.web.fetch(request)` just works, upgrades included, and so does the root
    *  `itx.fetch(request)` (egress: the built-in `fetch` root) — there is no second door. */
-  invokeCapability(call: ItxExpression): Promise<unknown> {
-    const expr = toExpression(call);
+  invokeCapability(call: ItxExpressionInput): Promise<unknown> {
+    const expr = toItxExpression(call);
     const last = expr.at(-1);
     if (
       Array.isArray(last) &&
@@ -145,7 +149,7 @@ export class IterateContext extends RpcTarget {
       last[1] instanceof Request
     ) {
       const headers = new Headers(last[1].headers);
-      headers.set(CAPABILITY_FETCH_HEADER, JSON.stringify(expr.slice(0, -1))); // the lane parses a JSON Expression
+      headers.set(CAPABILITY_FETCH_HEADER, JSON.stringify(expr.slice(0, -1))); // the lane parses a JSON ItxExpression
       return this.#context.fetch(new Request(last[1], { headers }));
     }
     return this.#context.invoke(expr);
@@ -172,14 +176,14 @@ export class IterateContext extends RpcTarget {
    *  Anything else is a loud TypeError. Returns the mount's identity for `revoke`. */
   async provide(
     path: string,
-    target: ItxExpression | ProviderStub,
+    target: ItxExpressionInput | ProviderStub,
   ): Promise<{ providedAtOffset: number }> {
     if (typeof target === "string" || Array.isArray(target))
       return this.#context.provideCapability({ path, target });
     assertLiveValue(target, "provide(path, target)");
     // Lend FIRST, mount SECOND (the event records a capability that can already serve). The
     // registry key IS the canonical mount path — one canonicalizer, one spelling everywhere.
-    const key = canonicalCapabilityPath(path);
+    const key = canonicalItxExpressionPrefix(path);
     await this.#lendStub(key, target);
     try {
       return await this.#context.provideCapability({
@@ -203,7 +207,7 @@ export class IterateContext extends RpcTarget {
    *  as `itx.rpcStubs.get('…')` until the session ends. */
   async revoke(input: string | { providedAtOffset: number }): Promise<void> {
     if (typeof input === "string") {
-      const path = canonicalCapabilityPath(input);
+      const path = canonicalItxExpressionPrefix(input);
       await this.#context.revokeCapability({ path });
       this.#recallStub(path);
       return;
@@ -224,12 +228,12 @@ export class IterateContext extends RpcTarget {
    *  unnamed subscription is SESSION-scoped: it is removed when this session ends. */
   async subscribe(input: {
     name?: string;
-    target: ItxExpression | ProviderStub;
+    target: ItxExpressionInput | ProviderStub;
     consumes?: string[];
   }): Promise<{ name: string }> {
     const anonymous = input.name === undefined;
     const name = input.name ?? `sub-${crypto.randomUUID().slice(0, 8)}`;
-    let target: ItxExpression;
+    let target: ItxExpressionInput;
     if (typeof input.target === "string" || Array.isArray(input.target)) target = input.target;
     else {
       assertLiveValue(input.target, "subscribe({ target })");

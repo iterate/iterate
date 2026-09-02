@@ -8,15 +8,15 @@ import {
   createInvokeCapabilityPathProxy,
   installPrototypeInvokeCapabilityFallback,
 } from "./dotted-path-proxy.ts";
-import { toExpression, type ItxExpression } from "./expression.ts";
+import { toItxExpression, type ItxExpressionInput } from "./expression.ts";
 
 type DynamicCall = { args: unknown[]; path: string[] };
 
-// The fallback now reduces dotted access into ONE relative `ItxExpression` (root `[]`): property-read
+// The fallback now reduces dotted access into ONE relative `ItxExpressionInput` (root `[]`): property-read
 // steps then a final call step. Unpack it back to `{ path, args }` so these tests can keep asserting
 // on the accumulated path — the mechanism under test is the accumulation, not the wire shape.
-function unpackRelative(call: ItxExpression): DynamicCall {
-  const expr = toExpression(call);
+function unpackRelative(call: ItxExpressionInput): DynamicCall {
+  const expr = toItxExpression(call);
   const tail = expr.at(-1);
   if (tail === undefined) return { path: [], args: [] };
   const [method, args] =
@@ -42,7 +42,7 @@ class HostTarget extends RpcTarget {
     return `known:${value}`;
   }
 
-  invokeCapability(call: ItxExpression) {
+  invokeCapability(call: ItxExpressionInput) {
     const c = unpackRelative(call);
     this.calls.push(c);
     return `dynamic:${c.path.join(".")}:${c.args.join(",")}`;
@@ -115,7 +115,7 @@ describe("prototype-chain dynamic fallback", () => {
   it("throws on a second install — silent no-op would discard the new options", () => {
     class Once extends RpcTarget {
       calls: DynamicCall[] = [];
-      invokeCapability(call: ItxExpression) {
+      invokeCapability(call: ItxExpressionInput) {
         this.calls.push(unpackRelative(call));
         return "ok";
       }
@@ -178,7 +178,7 @@ describe("prototype-chain dynamic fallback", () => {
         void (this as unknown as { probedDuringConstruction: unknown }).probedDuringConstruction;
         this.ready = true;
       }
-      invokeCapability(call: ItxExpression) {
+      invokeCapability(call: ItxExpressionInput) {
         if (!this.ready) throw new Error("invoker resolved before construction finished");
         recorded.push(unpackRelative(call));
         return "late";
