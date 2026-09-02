@@ -3,8 +3,9 @@
 // loop pushes it `(events, { after, through })` fire-and-forget — no cursor row, no retry, no ack.
 // Delivered ranges CHAIN across a consumes-filtered quiet gap (the client heals a real gap with
 // `read`); `consumes` is the ONE filter rule (naming a type opts its ephemerals in; absent or "*" =
-// every durable event); unsubscribe stops deliveries at the removal offset; a throwing callback
-// never hurts the producer and is never retried; anonymous subscribes never shadow each other.
+// every durable event); `subscribe({ name, target: null })` stops deliveries at the removal offset;
+// a throwing callback never hurts the producer and is never retried; anonymous subscribes never
+// shadow each other.
 
 import { expect, test } from "vitest";
 import { append, collector, freshCtx, openItx, sleep, until } from "./support/client.ts";
@@ -63,14 +64,14 @@ test("consumes ['*'] delivers every durable event to a push target", async () =>
   expect(star.offsets()).toContain(note.offset);
 });
 
-test("unsubscribe stops deliveries at the removal offset", async () => {
+test("subscribe({ name, target: null }) stops deliveries at the removal offset", async () => {
   const itx = openItx(freshCtx("bye"));
   const c = collector();
   await itx.subscribe({ name: "bye", consumes: ["mark"], target: c.fn });
   const [m1] = await append(itx, { type: "mark" });
   const [m2] = await append(itx, { type: "mark" });
   await until("both pre-removal marks", () => c.offsets().length >= 2);
-  await itx.unsubscribe("bye");
+  await itx.subscribe({ name: "bye", target: null });
   await append(itx, { type: "mark" });
   await append(itx, { type: "mark" });
   await sleep(600);
@@ -109,7 +110,7 @@ test("concurrent anonymous subscribes get unique names and never shadow each oth
   const b = collector();
   const s1 = await itx.subscribe({ consumes: ["ping"], target: a.fn });
   const s2 = await itx.subscribe({ consumes: ["ping"], target: b.fn });
-  expect(s1.name).not.toBe(s2.name);
+  expect(await s1.name).not.toBe(await s2.name); // `name` is a getter on the handle — one hop each
   const [ping] = await append(itx, { type: "ping" });
   await until(
     "both anonymous subscribers received the event",

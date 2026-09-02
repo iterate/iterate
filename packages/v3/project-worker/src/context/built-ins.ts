@@ -1,8 +1,9 @@
 // built-ins.ts — THE BUILT-INS: a plain record whose KEYS are the physical-layer roots (`whoami`,
-// `kv`, `append`, `read`, `cd`, `fetch`, `rpcStubs`, `facets`, `subscriptions`, `load`, `runScript`). A call
-// `itx.<root>…` resolves DIRECTLY against these (capability-table.ts `resolve`, built-in
-// first) — no config, no mount. Userspace `provide` mounts name `itx.…` targets that resolve through
-// the same table to reach a root; a bare root is unspellable, so the built-ins are unshadowable.
+// `kv`, `append`, `read`, `waitForEvent`, `cd`, `fetch`, `rpcStubs`, `expressionRewriteRules`,
+// `facets`, `subscriptions`, `load`, `runScript`). A call `itx.<root>…` resolves DIRECTLY against
+// these (itx-expression-rewriting.ts `ItxExpressionResolver`, built-in first) — no rule. Rewrite
+// rules name `itx.…` targets that rewrite through the same rules to reach a root; a bare root is
+// unspellable, so the built-ins are unshadowable.
 //
 // LOADING DYNAMIC CODE — `itx.load(source)` mirrors Cloudflare's Worker Loader: it loads the code
 // and hands back a WORKER, then you pick the host EXPLICITLY, the same two accessors Cloudflare
@@ -16,7 +17,7 @@
 // named instances) — address by name, no source. `itx.runScript(lambda)` is sugar for the one
 // bare-lambda case (wrap → `load(...).getEntrypoint().run`).
 
-import type { Context, StreamPage } from "../stream/stream.ts";
+import type { Context, StreamPage, WaitForEventFilter } from "../stream/stream.ts";
 import type { StreamEvent, StreamEventInput } from "../stream/events.ts";
 import { loadConfinedWorker, type WorkerSource } from "./worker-loader.ts";
 import { resolveContextPath } from "./durable-object-names.ts";
@@ -51,7 +52,7 @@ export default class RunScript extends WorkerEntrypoint {
 `;
 
 /** THE built-in scope, as ONE interface — the physical-layer roots a context resolves `itx.<root>…`
- *  against DIRECTLY (capability-table.ts `resolve`, built-in first; no config, no mount).
+ *  against DIRECTLY (itx-expression-rewriting.ts, built-in first; no rule).
  *  This is the clean-room's whole kernel surface. It is a PLAIN OBJECT, not an RpcTarget class, on
  *  purpose: the resolver gates on `Object.hasOwn`, so a prototype-method class would leave every
  *  root unreachable. */
@@ -72,6 +73,10 @@ interface BuiltInScope {
   /** Read a page of the durable log — `itx.read(afterOffset?, limit?)`, the flattened twin of
    *  `append` (non-minting: a probe never wakes storage). */
   read(afterOffset?: number, limit?: number): Promise<StreamPage>;
+  /** Wait for the next event matching `filter` (Stream.waitForEvent owns the contract: type filter,
+   *  afterOffset default = the head, 30s/120s timeout → WAIT_TIMEOUT). A root, so the edge declares
+   *  nothing for it. */
+  waitForEvent(filter?: WaitForEventFilter): Promise<StreamEvent>;
   /** Navigate to another context of THIS project, routed through its own table. Absolute by
    *  convention ("/agents/x"); relative ("agents/x", "../inbox") resolves against this context's
    *  path — the same resolver the edge `cd` uses (resolveContextPath). */
@@ -79,26 +84,34 @@ interface BuiltInScope {
   /** Egress: `{{secret:project:NAME}}` placeholders substituted, then the FALLBACK terminal — the
    *  same door a loaded worker's `globalOutbound` and the edge `itx.fetch(request)` land on. */
   fetch(request: Request): Promise<Response>;
-  /** The live rpc-stub REGISTRY — physical, never event-sourced: a client's live capnweb value
-   *  lent under a key by its session (relay-side, DON'T-PIN — the edge owns it, this side borrows).
-   *  `get(key)` is how a MOUNT names one: `itx.provide(path, fn)` is sugar for lending under `path`
-   *  and mounting the pure-data target `itx.rpcStubs.get('<path>')`. */
+  /** The rpc-stub REGISTRY — physical, never event-sourced: a client's live capnweb value lent under
+   *  an OPAQUE key by its session (relay-side, DON'T-PIN — the edge owns it, this side borrows).
+   *  `get(rpcStubKey)` is how a REWRITE RULE names one: `itx.provide(key, { stub, rewrite })` is
+   *  sugar for lending under `key` and configuring the pure-data rule `rewrite ⇒
+   *  itx.rpcStubs.get('<key>')`. */
   rpcStubs: {
-    /** One stub by key: a pipelinable handle over its transport (page → borrowed stub leg
-     *  → invoke). Deep dots walk; a root call reaches the bare lent callable; offline ⇒
-     *  RPC_STUB_OFFLINE at call time. Branded `RpcStubHandle`: the subscription delivery loop reads
-     *  the brand to know the callee owns its own progress. */
-    get(key: string): RpcStubHandle;
-    /** PRESENCE — the keys with an open transport right now. */
+    /** One stub by key: a pipelinable handle over its transport (borrowed, or paged then borrowed).
+     *  Deep dots walk; a root call reaches the bare lent callable; offline ⇒ RPC_STUB_OFFLINE at call
+     *  time. Branded `RpcStubHandle`: the subscription delivery loop reads the brand to know the
+     *  callee owns its own progress. */
+    get(rpcStubKey: string): RpcStubHandle;
+    /** PRESENCE — the keys borrowed or pager-backed right now. */
     list(): string[];
+  };
+  /** The itx-expression rewrite-rule table, read (a slice of core) — the rules every call goes
+   *  through. Written by `itx.rewrite(match, target | null)` on the edge (sugar over the ONE
+   *  `itx/rewrite-rule-configured` event), never a verb here. */
+  expressionRewriteRules: {
+    list(): { match: string; target: string }[];
+    get(match: string): { match: string; target: string } | null;
   };
   /** Address a facet that is ALREADY RUNNING by name (a processor, a named instance) — no source;
    *  to LOAD and host a class, use `itx.load(src).getDurableObjectClass(name).get(name?)`. `delete`
    *  removes it, storage included (the mirror of `ctx.facets.delete`). */
   facets: { get(name: string): FacetHandle; delete(name: string): void };
   /** The subscriptions layer, read: the table (a slice of core) joined with the stream-kept
-   *  cursors. Small and read-only — `subscribe` lives on the edge as sugar over the
-   *  `subscription-configured` event, never a verb here. */
+   *  cursors. Read-only — `subscribe` lives on the edge as sugar over the `subscription-configured`
+   *  event, never a verb here. */
   subscriptions: {
     list(): SubscriptionListEntry[];
     get(name: string): SubscriptionListEntry | null;
@@ -136,6 +149,10 @@ interface BuildBuiltInsDeps {
   rpcStubs: BuiltInScope["rpcStubs"];
   /** The subscriptions view — the core slice ⋈ the delivery loop's cursors. */
   subscriptions: BuiltInScope["subscriptions"];
+  /** The rewrite-rule view — the core slice, printed. */
+  expressionRewriteRules: BuiltInScope["expressionRewriteRules"];
+  /** The stream's waitForEvent (the own context's — a wait never crosses a hop). */
+  waitForEvent: BuiltInScope["waitForEvent"];
   /** `facets.get(ref)` — address a facet by name, OR materialize `{ source, className, name? }` (a
    *  loaded durable object hosted as a facet of this stream — the form `itx.load(...)
    *  .getDurableObjectClass(...).get(...)` routes here; accepted trade: a busy stateful facet pins
@@ -224,6 +241,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
     // Own-enumerable closures (NOT prototype methods) — the resolver's `Object.hasOwn` gate is why.
     append: (...e: StreamEventInput[]) => own().append(...e),
     read: (after?: number, limit?: number) => own().read(after, limit),
+    waitForEvent: deps.waitForEvent,
     // `cd` routes through the target context's own table, EXCEPT append/read, which skip the facet
     // hop straight to the log door (the physical fast path). Codec-named, so only THIS project is
     // reachable; the path resolves against THIS context (absolute, or relative with `.`/`..`).
@@ -250,6 +268,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
       delete: (name: string) => deps.facets.delete(name),
     },
     subscriptions: deps.subscriptions,
+    expressionRewriteRules: deps.expressionRewriteRules,
     // Each hop is its own InvokeHandle, so the whole `load(src).getEntrypoint().run()` /
     // `.getDurableObjectClass('C').get(name?)` chain pipelines on every lane (workerd#6873).
     load: (source: WorkerSource) =>

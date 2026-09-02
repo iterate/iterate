@@ -1,10 +1,10 @@
 // __workers-tests__/hibernation-at-scale.test.ts — THE HIBERNATION PROPERTY AT SCALE, inside
 // workerd (the workers lane — vitest.config.ts's `workers` project):
 //
-//   Hundreds of clients connect into ONE stream (each providing a live capnweb capability at its
-//   own mount path, with a hibernatable stub pager WebSocket), the stream DO EVICTS — losing every
-//   borrowed stub it held in memory — and on wake it can STILL call every client's capability:
-//   page → borrowed stub → invoke (context/rpc-stub-directory.ts).
+//   Hundreds of clients connect into ONE stream (each providing a live capnweb value under its own
+//   rpcStubKey — a rewrite rule at the same spelling, a hibernatable stub pager WebSocket), the
+//   stream DO EVICTS — losing every borrowed stub it held in memory — and on wake it can STILL call
+//   every client's value: page → borrowed stub → invoke (context/rpc-stub-directory.ts).
 //
 // The property made deterministic: a live deployment waits minutes for Cloudflare's own
 // eviction; here cloudflare:test's evictDurableObject() forces the
@@ -64,7 +64,7 @@ async function incarnationNow(): Promise<number> {
   return snap.state.incarnation ?? 0;
 }
 
-let callerItx: any; // a SEPARATE caller session (no capabilities of its own)
+let callerItx: any; // a SEPARATE caller session (it lends nothing of its own)
 
 /** The production 60s idle quiesce on demand (support.ts's `quiesce`), then the two facts this
  *  file leans on: every borrowed stub returned, the DO dormant — evictDurableObject's de-facto
@@ -78,17 +78,18 @@ async function quiesceLikeProduction(): Promise<void> {
 }
 
 beforeAll(async () => {
-  // ONE client session carrying all 200 stubs (capnweb multiplexes; each itx.provide(path, stub)
-  // lends its own Echo to the `itx.rpcStubs` registry, opens its own stub pager
-  // WebSocket into the DO, and mounts the pure-data target `itx.rpcStubs.get('itx.cN')` — the
-  // registry is presence, the table is the mount; event volume is fine).
+  // ONE client session carrying all 200 stubs (capnweb multiplexes; each
+  // `itx.provide('itx.cN', { stub, rewrite: 'itx.cN' })` lends its own Echo to the `itx.rpcStubs`
+  // registry, opens its own stub pager WebSocket into the DO, and configures the pure-data rule
+  // `itx.cN ⇒ itx.rpcStubs.get('itx.cN')` — the registry is presence, the table is the rule; event
+  // volume is fine).
   const clientItx = await (await openSession()).authenticate().projects.get(CTX);
   const BATCH = 25; // concurrent provides per wave — enough parallelism without a thundering herd
   for (let base = 0; base < CLIENTS; base += BATCH) {
     await Promise.all(
       Array.from({ length: Math.min(BATCH, CLIENTS - base) }, (_, k) => {
         const i = base + k;
-        return clientItx.provide(`itx.c${i}`, new Echo(i));
+        return clientItx.provide(`itx.c${i}`, { stub: new Echo(i), rewrite: `itx.c${i}` });
       }),
     );
   }
@@ -106,7 +107,7 @@ test("SCALE ATTACH: 200 clients lend 200 stubs, the DO stays dormant, spot invok
   const picks = new Set<number>();
   while (picks.size < 5) picks.add(Math.floor(Math.random() * CLIENTS));
   for (const i of picks) {
-    const out = await callerItx.invokeCapability(`itx.c${i}.echo('x${i}')`);
+    const out = await callerItx.invoke(`itx.c${i}.echo('x${i}')`);
     expect(out).toBe(`echo-${i}:x${i}`);
   }
 
@@ -135,15 +136,16 @@ test("EVICT THEN WAKE: eviction drops every in-memory stub; a call pages the rel
 
   // The wake path, several clients: page → a freshly lent stub → invoke.
   for (const i of [3, 77, 141]) {
-    const out = await callerItx.invokeCapability(`itx.c${i}.echo('wake${i}')`);
+    const out = await callerItx.invoke(`itx.c${i}.echo('wake${i}')`);
     expect(out).toBe(`echo-${i}:wake${i}`);
   }
   const paged = await state();
   expect(paged.borrowedRpcStubs).toBeGreaterThanOrEqual(3); // the pages grew the borrowed set back
 
-  // A REAL eviction shows as incarnation growth on the next durable write (Stream.touch
-  // bumps once per incarnation-that-writes; reads never bump).
-  await callerItx.provide("itx.hello", "itx.kv");
+  // A REAL eviction shows as incarnation growth: the fresh incarnation's constructor appended its
+  // wake record before the first probe above could run. A durable write from the caller (a pure
+  // rewrite rule — ONE `itx/rewrite-rule-configured` event) rides the woken context fine.
+  await callerItx.rewrite("itx.hello", "itx.kv");
   expect(await incarnationNow()).toBeGreaterThan(beforeIncarnation);
 });
 
@@ -154,15 +156,17 @@ test("SCALE WAKE: after another eviction, a fan-out reaches ALL 200 clients", as
   expect(evicted.borrowedRpcStubs).toBe(0);
 
   const t0 = Date.now();
-  // fan-out = PRESENCE (`itx.rpcStubs.list()` — the registry keys with a transport; the mount
-  // path IS each key, so every key is callable dotted) + map over the paths (no built-in
-  // `each`); the caller owns the allSettled. The list itself is a pin: the attachments
-  // rehydrated from the hibernated pager sockets — exactly the fleet, nothing dropped.
-  const paths = (await callerItx.invokeCapability("itx.rpcStubs.list()")) as string[];
-  expect(paths.length).toBe(CLIENTS);
+  // fan-out = PRESENCE (`itx.rpcStubs.list()` — the registry keys with a transport; each was
+  // provided with a rewrite at the same spelling, so every key is callable dotted) + map over the
+  // keys (no built-in `each`); the caller owns the allSettled. The list itself is a pin: the
+  // attachments rehydrated from the hibernated pager sockets — exactly the fleet, nothing dropped.
+  const rpcStubKeys = (await callerItx.invoke("itx.rpcStubs.list()")) as string[];
+  expect(rpcStubKeys.length).toBe(CLIENTS);
   const answers = (
     await Promise.all(
-      paths.map((path) => callerItx.invokeCapability(`${path}.echo('hi')`).catch(() => undefined)),
+      rpcStubKeys.map((rpcStubKey) =>
+        callerItx.invoke(`${rpcStubKey}.echo('hi')`).catch(() => undefined),
+      ),
     )
   ).filter((v): v is string => v !== undefined);
   const wallMs = Date.now() - t0;

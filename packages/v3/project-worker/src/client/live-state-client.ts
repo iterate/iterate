@@ -12,19 +12,18 @@ import {
   type LiveStateStore,
 } from "./live-state-store.ts";
 
-/** The slice of an itx session this needs — a capnweb `IterateContext` proxy satisfies it structurally. */
+/** The slice of an itx session this needs — a capnweb `IterateContext` proxy satisfies it structurally:
+ *  `subscribe` hands back a DISPOSABLE handle (disposing it removes the subscription server-side). */
 export type LiveItx = {
   subscribe(input: {
     name?: string;
     consumes?: string[];
     target: (events: unknown[], range: unknown) => void;
-  }): Promise<unknown>;
-  unsubscribe(name: string): Promise<unknown>;
+  }): Promise<{ [Symbol.dispose](): void }>;
 };
 
-/** A connected live-state subscription: the store rendering it, and the dispose that tears the
- *  server-side subscription mount down (a mount outlives its socket by design — an undisposed
- *  connection leaks a durable mount per mount() call). */
+/** A connected live-state subscription: the store rendering it, and the dispose that removes the
+ *  server-side subscription (the handle's disposer; the session's end does the same). */
 export type LiveStateConnection<S> = {
   store: LiveStateStore<S>;
   /** Unsubscribe on the server and stop reducing deltas. Safe to call more than once. */
@@ -32,7 +31,7 @@ export type LiveStateConnection<S> = {
 };
 
 /** Subscribe to a producer's live state and reduce it into a store. `door` reads the seed
- *  (`itx.invokeCapability("itx.facets.get('slug').liveSnapshot()")` for a processor, or a mini-app's
+ *  (`itx.invoke("itx.facets.get('slug').liveSnapshot()")` for a processor, or a mini-app's
  *  own `state()` method). Subscribe happens BEFORE the first seed, so a delta racing the seed just
  *  triggers one door re-read — never a lost update. Gap heals are SINGLE-FLIGHT (a burst of gapped
  *  frames triggers one door read, not one per frame); a failed heal is reported through `onResync`
@@ -68,7 +67,7 @@ export async function connectLiveState<S>(
       },
     );
   };
-  const sub = (await itx.subscribe({
+  const subscription = await itx.subscribe({
     name: opts.name,
     consumes: ["events.iterate.com/live-state/changed"],
     // A batch of live-state deltas (every key's); keep the watched key's. capnweb hands each event
@@ -82,16 +81,18 @@ export async function connectLiveState<S>(
         if (delta.key === opts.key) store.apply(delta, reseed);
       }
     },
-  })) as { name: string };
+  });
   store.seed(await opts.door());
   return {
     store,
     async dispose() {
       if (disposed) return;
       disposed = true;
-      await itx.unsubscribe(sub.name).catch(() => {
-        // a dead session can't unsubscribe — the socket close already dropped the relay stub
-      });
+      try {
+        subscription[Symbol.dispose](); // the server removes the row and recalls the lent callback
+      } catch {
+        // a dead session has already removed it — the socket close disposed every handle
+      }
     },
   };
 }

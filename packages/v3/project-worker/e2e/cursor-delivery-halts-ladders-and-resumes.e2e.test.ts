@@ -35,7 +35,7 @@ const haltFactsFor = async (itx: any, name: string): Promise<any[]> =>
 
 /** The stateless "project worker" shape whose progress THE STREAM must keep (a Worker-Loader
  *  entrypoint cannot own it): its `processEventBatch(events, range)` hands the batch to a LIVE hook
- *  the test mounted at `itx.<hook>`, so a collector sees exactly what the cursor lane delivered
+ *  the test lent behind the rule `itx.<hook>`, so a collector sees exactly what the cursor lane delivered
  *  (offsets, ranges, attempts) and a hook that throws makes the awaited delivery FAIL — a plain
  *  throw, the ladder's case (the never-retryable case is the `digest` fixture's poison). */
 const HOOKED_SOURCE = (hook: string) => `import { WorkerEntrypoint } from "cloudflare:workers";
@@ -55,9 +55,10 @@ class Hook extends RpcTarget {
     return this.#fn(events, range);
   }
 }
-/** Subscribe `name` on the CURSOR lane: lend the live hook at `itx.<name>Hook`, seed + mount the
- *  hooked worker at `itx.<name>Worker`, subscribe its `processEventBatch` BY EXPRESSION (an
- *  entrypoint handle ⇒ the stream keeps the cursor). Names are one JS identifier. */
+/** Subscribe `name` on the CURSOR lane: lend the live hook behind the rule `itx.<name>Hook`, seed
+ *  the hooked worker and rewrite `itx.<name>Worker` onto its entrypoint, subscribe its
+ *  `processEventBatch` BY EXPRESSION (an entrypoint handle ⇒ the stream keeps the cursor). Names are
+ *  one JS identifier. */
 async function cursorSubscribe(
   itx: any,
   name: string,
@@ -65,9 +66,9 @@ async function cursorSubscribe(
   consumes?: string[],
 ): Promise<void> {
   const hook = `${name}Hook`;
-  await itx.provide(`itx.${hook}`, new Hook(fn));
+  await itx.provide(`itx.${hook}`, { stub: new Hook(fn), rewrite: `itx.${hook}` });
   await itx.kv.put(`src/${hook}.js`, HOOKED_SOURCE(hook));
-  await itx.provide(
+  await itx.rewrite(
     `itx.${name}Worker`,
     `itx.load("itx.kv.get('src/${hook}.js')").getEntrypoint()`,
   );
@@ -81,7 +82,7 @@ async function cursorSubscribe(
  *  kv `digested`; a `payload.poison` mark makes it throw `retryable: false` — the halt-NOW case. */
 async function digestSubscribe(itx: any, name: string, consumes?: string[]): Promise<void> {
   await seedSources(itx, ["digest"]);
-  await itx.provide("itx.digest", `itx.load("itx.kv.get('src/digest.js')").getEntrypoint()`);
+  await itx.rewrite("itx.digest", `itx.load("itx.kv.get('src/digest.js')").getEntrypoint()`);
   await itx.subscribe({
     name,
     target: "itx.digest.processEventBatch",
@@ -112,9 +113,9 @@ export class Ledger extends WorkerEntrypoint {
 type LedgerEntry = { range: Range; offsets: number[] };
 const ledgerLog = async (itx: any): Promise<LedgerEntry[]> =>
   JSON.parse(((await itx.kv.get("ledger:log")) as string | null) ?? "[]") as LedgerEntry[];
-const mountLedger = async (itx: any, firstCall: "throw" | "hold"): Promise<void> => {
+const ledgerSubscribe = async (itx: any, firstCall: "throw" | "hold"): Promise<void> => {
   await itx.kv.put("src/ledger.js", LEDGER_SRC);
-  await itx.provide(
+  await itx.rewrite(
     "itx.ledger",
     `itx.load("itx.kv.get('src/ledger.js')").getEntrypoint('Ledger', { props: { firstCall: '${firstCall}' } })`,
   );
@@ -131,16 +132,17 @@ test("the digest worker is delivered from a stream-kept cursor; retryable:false 
   const itx = openItx(freshCtx("cursor"));
   await seedSources(itx, ["digest"]);
 
-  // 1. mount the stateless digest worker and subscribe its processEventBatch BY EXPRESSION — an
-  //    entrypoint cannot own its progress, so THE STREAM keeps the cursor. Beside it, a live tab:
-  //    a lent stub owns its progress, so its row has NO cursor. Same verb, no declaration.
-  await itx.provide("itx.digest", `itx.load("itx.kv.get('src/digest.js')").getEntrypoint()`);
+  // 1. rewrite itx.digest onto the stateless digest worker and subscribe its processEventBatch BY
+  //    EXPRESSION — an entrypoint cannot own its progress, so THE STREAM keeps the cursor. Beside
+  //    it, a live tab: a lent stub owns its progress, so its row has NO cursor. Same verb, no
+  //    declaration.
+  await itx.rewrite("itx.digest", `itx.load("itx.kv.get('src/digest.js')").getEntrypoint()`);
   const sub = await itx.subscribe({
     name: "digest",
     target: "itx.digest.processEventBatch",
     consumes: ["mark"],
   });
-  expect(sub.name).toBe("digest"); // subscribe returns the row name
+  expect(await sub.name).toBe("digest"); // subscribe returns a handle naming the row (a getter over capnweb)
   await itx.subscribe({ name: "tab", target: () => undefined, consumes: ["mark"] });
 
   // 2. three good marks → the worker's own kv shows 3 (the awaited call IS the ack); the digest row
@@ -154,7 +156,7 @@ test("the digest worker is delivered from a stream-kept cursor; retryable:false 
   });
   expect(row3.cursor.attempt).toBe(0);
   expect(row3.halted).toBeUndefined();
-  expect(row3.target).toBe("itx.digest.processEventBatch"); // stored as written — an alias classifies by its value
+  expect(row3.target).toBe("itx.digest.processEventBatch"); // stored as written — the loop classifies the target by what it EVALUATES to
   expect((await row(itx, "tab")).cursor).toBeUndefined(); // push target: the client owns its offset
   expect((await subscriptions(itx)).map((r: { name: string }) => r.name).sort()).toEqual([
     "digest",
@@ -209,7 +211,7 @@ test("the digest worker is delivered from a stream-kept cursor; retryable:false 
 
 test("a plain throw climbs the retry ladder on the DO's alarm — redelivered within seconds, attempt back to 0", async () => {
   const itx = openItx(freshCtx("ladder"));
-  await mountLedger(itx, "throw");
+  await ledgerSubscribe(itx, "throw");
 
   const [m1] = await itx.append({ type: "mark", payload: { n: 1 } });
   // delivery #1 throws (a plain Error — retryable) → attempt 1, the next try armed on the alarm
@@ -244,7 +246,7 @@ test("a plain throw climbs the retry ladder on the DO's alarm — redelivered wi
 
 test("a resumed event appended MID-DELIVERY wins — m1 redelivers from the seek, liveness holds", async () => {
   const itx = openItx(freshCtx("racewin"));
-  await mountLedger(itx, "hold");
+  await ledgerSubscribe(itx, "hold");
 
   const [m1] = await itx.append({ type: "mark", payload: { n: 1 } });
   await until("delivery #1 in flight", async () => (await itx.kv.get("ledger:calls")) === "1");
@@ -383,7 +385,7 @@ test("ephemerals DO reach a caught-up cursor target (they ride the pushed batch,
   expect((await row(itx, "ephcur")).cursor.confirmedOffset).toBe(durable.offset);
 });
 
-test("unsubscribe during an in-flight delivery leaves no ghost halt and no resurrected cursor", async () => {
+test("removing a row (subscribe { target: null }) during an in-flight delivery leaves no ghost halt and no resurrected cursor", async () => {
   // The removal is reduced inline and `forget(name)` drops the cursor; the in-flight delivery's
   // generation check sees the row is gone and yields — nothing is written, nothing is appended.
   const itx = openItx(freshCtx("ghost"));
@@ -401,7 +403,7 @@ test("unsubscribe during an in-flight delivery leaves no ghost halt and no resur
   );
   await append(itx, { type: "mark" });
   await until("delivery in flight", () => invocations >= 1, 8_000);
-  await itx.unsubscribe("ghost"); // reduced inline: on return the row is gone and its cursor forgotten
+  await itx.subscribe({ name: "ghost", target: null }); // reduced inline: on return the row is gone and its cursor forgotten
   expect(await row(itx, "ghost")).toBeNull();
   release();
   // the removed row goes quiet — poll generously for a spurious fact
@@ -456,7 +458,7 @@ test("cursor subscriptions enable no processor and mint no facet; a row appears 
     expect(r.halted).toBeUndefined();
   }
   // and the core snapshot's subscription rows are the same truth, as reduced state
-  const snap: any = await itx.invokeCapability("itx.facets.get('core').snapshot()");
+  const snap: any = await itx.invoke("itx.facets.get('core').snapshot()");
   expect(Object.keys(snap.state.subscriptions).sort()).toEqual(["auto-1", "auto-2", "auto-3"]);
 });
 
@@ -464,7 +466,7 @@ test("subscribe resolves without probing the receiver; an unusable target fails 
   // A deliberate non-guarantee, kept on purpose (apps/os documents the same one): configure appends
   // the row and returns — "the receiver learns about the subscription when its first copy arrives".
   // A fat-fingered target therefore fails LATE: the loop fails to evaluate `itx.does-not-exist` on
-  // the first consumed commit (NO_CAPABILITY_MATCH, a reported issue), and — the head never
+  // the first consumed commit (NO_ITX_EXPRESSION_MATCH, a reported issue), and — the head never
   // evaluating — the row never grows a cursor and never halts.
   const itx = openItx(freshCtx("noverify"));
   const sub = await itx.subscribe({
@@ -472,7 +474,7 @@ test("subscribe resolves without probing the receiver; an unusable target fails 
     consumes: ["mark"],
     target: "itx.does-not-exist.processEventBatch",
   });
-  expect(sub.name).toBe("unusable"); // configure resolved — the receiver was not probed
+  expect(await sub.name).toBe("unusable"); // configure resolved — the receiver was not probed
   await append(itx, { type: "mark" }); // the first delivery fails inside the loop, never here
   await sleep(800);
   const r = await row(itx, "unusable");
@@ -547,6 +549,6 @@ test("reentrancy: a cursor delivery targeting this stream's own append neither d
   // the stream stays serviceable for later work, and removing the row ends the ladder
   const [post] = await append(itx, { type: "afterparty" });
   expect(post.offset).toBeGreaterThan(seed.offset);
-  await itx.unsubscribe("reenter");
+  await itx.subscribe({ name: "reenter", target: null });
   expect(await row(itx, "reenter")).toBeNull();
 });

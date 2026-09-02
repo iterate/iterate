@@ -38,7 +38,7 @@ const countMatches = (text: string, re: RegExp) => (text.match(re) ?? []).length
 const DELIVERY_ERRORS = /delivery\.push\.dropped|subscription-delivery\.dispatch|NO_FACET/g;
 const deliveryErrors = () => countMatches(worker.logs(), DELIVERY_ERRORS);
 const tallySnapshot = async (itx: any): Promise<any> =>
-  itx.invokeCapability("itx.facets.get('tally').snapshot()");
+  itx.invoke("itx.facets.get('tally').snapshot()");
 /** Expected tally counts = groupBy(type) over the DURABLE log (tally consumes "*", durable only). */
 const durableCountsByType = (events: any[]): Record<string, number> => {
   const counts: Record<string, number> = {};
@@ -123,18 +123,17 @@ function stallableWebSocket(url: string): StallableWebSocket {
   return new WsWebSocket(url) as StallableWebSocket;
 }
 
-test("MEASURED FINDING: a push subscriber that stops reading mid-flood is NOT closed by local workerd (≥60MiB buffers silently) — but a real socket close drops its stub instantly; the ROW stays until unsubscribe", async () => {
+test("MEASURED FINDING: a push subscriber that stops reading mid-flood is NOT closed by local workerd (≥60MiB buffers silently) — but a real socket close drops its stub instantly and removes its ROW (a live subscription is session-scoped)", async () => {
   // The loop's design comment (subscription-delivery.ts): a push is fire-and-forget; the socket
   // buffer is the only queue. This ran that claim to ground against local workerd: 60.0MiB of
   // payload flooded into a TCP-paused subscriber produced NO close, NO delivery.push.dropped warn,
   // NO RPC_STUB_OFFLINE — workerd buffers the outgoing WebSocket without any local limit we could
   // reach (the buffering policy is workerd's, not this codebase's). What IS ours (close →
   // onRpcBroken → pager close → the DO drops the transport → `itx.rpcStubs.list()` stops listing the
-  // key, while the ROW stays in the subscriptions table and pushes to it are swallowed as
-  // RPC_STUB_OFFLINE) is proven live below. RESIDUAL: real edge sockets have real buffer limits,
-  // so the overflow-close half may hold in production; this pins LOCAL workerd only. If the
-  // still-present assertion ever fails, workerd grew a send-buffer limit — flip this pin to assert
-  // the overflow-close instead.
+  // key; and capnweb disposes the session's SubscriptionHandle → the ROW is removed) is proven live
+  // below. RESIDUAL: real edge sockets have real buffer limits, so the overflow-close half may hold
+  // in production; this pins LOCAL workerd only. If the still-present assertion ever fails, workerd
+  // grew a send-buffer limit — flip this pin to assert the overflow-close instead.
   const ctx = freshCtx("overflow");
   const itx = await worker.itx(ctx); // connection A: setup, the flood, and observation
   // Connection B — THE VICTIM: its own client socket, because the callback stub it lent lives in
@@ -211,16 +210,15 @@ test("MEASURED FINDING: a push subscriber that stops reading mid-flood is NOT cl
     15_000,
   );
   console.log(`socket kill → stub dropped from presence in ${Date.now() - tKill}ms`);
-  // THE ROW IS DATA: it is still in the table — nothing auto-removes it because a socket died.
-  // The producer is unaffected: an append still commits, and the push to the dead stub is
-  // swallowed as RPC_STUB_OFFLINE (no dropped-delivery warn — offline is the benign case the
-  // loop expects, not a drop worth a line).
-  expect(await subscriptions(itx)).toContainEqual(expect.objectContaining(victimRow));
+  // THE ROW IS SESSION-SCOPED: the dead session's SubscriptionHandle is disposed by capnweb, and its
+  // dispose appends `subscription-configured { name, target: null }` — the row leaves the table
+  // without anyone calling anything. The producer is unaffected: an append still commits, nothing
+  // is pushed to a dead stub, and no dropped-delivery warn is logged.
+  await until("the victim's row removed with its session", async () =>
+    (await subscriptions(itx)).every((r) => r.name !== "victim"),
+  );
   await append(itx, { type: "flood", ephemeral: true, payload: { afterKill: true } });
   await sleep(300);
   expect(droppedWarns() - droppedBefore).toBe(0);
-  // The explicit exit — unsubscribe from ANY session (here A, which never lent the stub, so its
-  // recall half is a local no-op; the removal drops the row).
-  await itx.unsubscribe("victim");
   expect(await subscriptions(itx)).toEqual([]);
 }, 55_000);

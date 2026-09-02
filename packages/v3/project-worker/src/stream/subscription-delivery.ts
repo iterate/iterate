@@ -91,9 +91,6 @@ export class SubscriptionDelivery {
     const rows = this.#stream.coreReducedState.subscriptions;
     for (const event of freshEvents) {
       switch (event.type) {
-        case "events.iterate.com/stream/subscription-removed":
-          this.#forgetSubscription((event.payload as { name: string }).name);
-          break;
         case "events.iterate.com/stream/subscription-delivery-resumed": {
           // An operator's resume is itself the wake: deliver that name NOW, whatever its `consumes`
           // says (the resumed fact is rarely a type the subscriber asked for, and a halted row has no
@@ -106,8 +103,9 @@ export class SubscriptionDelivery {
           break;
         }
         case "events.iterate.com/stream/subscription-configured": {
-          // A configured row REPLACES: everything remembered about the old row under this name belonged
-          // to the old target. The new target is evaluated ONCE right away, whatever its `consumes`
+          // A configured row REPLACES (a `null` target REMOVES — the row is gone by now, so only the
+          // forget below runs): everything remembered about the old row under this name belonged to
+          // the old target. The new target is evaluated ONCE right away, whatever its `consumes`
           // says — a processor's facet is materialized at enable time and catches up from the log, so
           // `itx.facets.get(name)` answers before its first consumed event, and a target whose head
           // cannot be evaluated is reported here once instead of once per commit. That catch-up is the
@@ -124,7 +122,7 @@ export class SubscriptionDelivery {
                   head instanceof FacetHandle &&
                   this.#stream.coreReducedState.subscriptions[name]
                 )
-                  await head.invokeCapability([["catchUpFromLog"]]);
+                  await head.invoke([["catchUpFromLog"]]);
               })().catch((error) => {
                 // NO_FACET here is a disable that landed during the load — nothing to report.
                 if (errorCode(error) !== "NO_FACET")

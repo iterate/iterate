@@ -2213,3 +2213,64 @@ createdAt, path }`); the SDK exports them as types. zod is unchanged where it ea
 - **`itx.rpcStubs` keeps its name for now.** The verbs carry the lend/borrow symmetry (edge lends and
   recalls; the DO borrows on `get`, returns at idle). A symmetric API — `lend` as a first-class door
   with the pager layered on top — is proposed in the reply to Jonas (2026-09-02) and waits on his call.
+
+## 2026-09-02 — THE ITX SURFACE: two things named apart, the edge is a proxy, ONE event per table
+
+- **Why.** Jonas's Plannotator rounds on `docs/plan-itx-surface-mirror-and-route-rename.md` ("still
+  feels quite messy") → four sub-agent designs under incompatible constraints →
+  `docs/proposals/itx-surface-SYNTHESIS.md` (§1 the ten convergences, §2 the four splits, §8 his
+  rulings, §9 as built). His rulings: **(a) rpc stubs** and **(b) itx-expression rewrite rules** are
+  two different things and are named as such ("this concept is not really about capabilities, it's
+  about itx expressions"); the table is a **MAP** ("way easier to just delete the rule from a map");
+  the event is `events.iterate.com/itx/rewrite-rule-configured { match, target | null }` (the
+  namespace is the domain word; there is no ItxExpressionProcessor — the rules are a slice of the one
+  core reduce); "rewrite rule" is the noun, `rewrite` the verb; no offset on a rule row ("what is an
+  actual case where this race matters?" — none); fully qualified names everywhere (`ItxExpression`,
+  `ItxExpressionPrefix`, `itxExpressionSteps`, `rpcStubKey`, `#borrowedRpcStubs`); provide/invoke are
+  chapter 1, expressions chapter 2, rewrite rules chapter 3; every verb returns a DISPOSABLE handle
+  (`using`); examples use inline sources; "don't worry about that at all" on the wire flag day.
+- **(b) itx-expression rewriting — ONE file** (`context/itx-expression-rewriting.ts`, replaces
+  capability-table.ts + routing.ts): THE RULES 1–5 in the header, `matchItxExpressionPrefix` /
+  `pickItxExpressionRewriteRule` / `applyItxExpressionRewriteRule` / `rewriteItxExpressionToBuiltIn`,
+  the ONE event builder `rewriteRuleConfiguredEvent(match, target | null)`, and `ItxExpressionResolver`.
+  Ranking is longest match, then most pinned args — no "newest": one rule per match. Core state
+  `itxExpressionRewriteRules` is a record by canonical match (set replaces, null deletes); contract
+  4.0.0; `subscription-configured { name, target | null }` absorbs `subscription-removed` the same way.
+  `NO_ITX_EXPRESSION_MATCH`; the fetch lane is `/expression?context=&itx=` + `x-itx-expression`.
+  `ItxExpressionRewriteRule { match, target }` — nothing else; the shadow stack, revoke-by-identity,
+  `providedAtOffset` and the door's idempotency policy are GONE (a re-set appends one event, the table
+  still holds one rule). The table test is the table (`itx-expression-rewriting.test.ts`, rows
+  `{ rules, call, becomes }`).
+- **The edge is a PROXY** (`iterate-context.ts`): declares `cd`, `invoke` (was invokeCapability),
+  `provide(rpcStubKey, { stub, rewrite? })`, `rewrite(match, target | null)`, `subscribe({ name?,
+target | null, consumes? })`, `enableProcessor`, `disableProcessor`. Every built-in root — `append`,
+  `read`, the NEW roots `waitForEvent` and `expressionRewriteRules.list/get`, `kv`, `rpcStubs`,
+  `facets`, `load`, … — rides the prototype-hop fallback with ZERO edge code (`dotted-path-proxy.ts`:
+  `installPrototypeInvokeFallback`, `createItxExpressionPathProxy`; the double-install throw is gone —
+  guard audit #4). Each verb is visibly "build the event, `invoke(["itx",["append",event]])`": the DO's
+  `provideCapability` / `revokeCapability` / `configureSubscription` / `removeSubscription` are DELETED
+  — the DO has `append`, `read`, `waitForEvent`, `invoke`, `fetch` and the rpc-stub plumbing, nothing
+  else. Handles: `SessionScopedHandle` (dispose = undo) and `SubscriptionHandle` (+ `name` getter);
+  capnweb disposes every exported handle at session end, so a rule or subscription made through the
+  verb is SESSION-SCOPED — the durable spelling is the raw event through `itx.append`; processors stay
+  durable. `InvokeHandle` dispatches `itxExpressionSteps` (`invokePath` deleted); `assertLiveValue` is
+  gone (a non-stub fails at `dup()` before anything is reserved).
+- **"The rule dies with the stub" is decided DO-side.** The M–Z e2e agent found the clobber: session A
+  provides `itx.p`, session B re-provides the same key, A's session dies later — A's teardown would
+  un-set the rule B is serving. So the un-set moved to the one place that knows presence truth:
+  `IterateContextDurableObject.#unsetWhatNamesRpcStub` on the key's LAST pager close (a reconnect
+  REPLACES the pager — never a detach). The edge's provide undo is just the pager. Accepted
+  consequence, spelled out: a PURE `rewrite` handle disposed after another session re-set the same
+  match deletes that rule — trusted clients, last writer wins.
+- **Tests** re-pointed by four agents + this session: unit 206 (24 files), workers 45 (do-doors now
+  pins the MAP and the absence of the four verbs), e2e 141p/2xf (37 files; `capability-table-*` →
+  `rewrite-rules-*`, `rpc-stubs-mounts-stay-offline-until-revoked` → `rpc-stubs-lend-recall-and-offline`
+  with the flipped pins: dispose ⇒ rule + presence gone ⇒ NO_ITX_EXPRESSION_MATCH; mid-invoke death ⇒
+  RPC_STUB_OFFLINE in flight; a hand-configured rule to an un-lent key ⇒ RPC_STUB_OFFLINE), tutorial-proof
+  platform 8 + part0 48 PASS, Playwright 2. `e2e/support/client.ts`: `expressionUrl`,
+  `rpcStubRewriteRuleMatches`. Client: `live-state-client.ts` disposes the `SubscriptionHandle`.
+- **LOC**: production `src/` 3,785 → 3,764 code lines with the surface (the rpc-stub layer commit was
+  flat: two `if`s and fully qualified names cost what the deleted guards saved). Next: the stream door
+  trim and `INHERITED_BUILTINS` from the guard audit.
+- GATES: tsc×3 · oxlint 0/0 · knip clean · unit+workers 251 · e2e 141p/2xf · tutorial-proof 8 + part0 48 ·
+  Playwright 2.

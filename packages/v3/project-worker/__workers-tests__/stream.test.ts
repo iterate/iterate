@@ -303,22 +303,23 @@ test("a stream/paused event pauses the stream through its own core reduce: every
 // reports the issue and keeps the state, so one bad hand-appended event lands as a row and wedges
 // nothing. ──
 
-test("a malformed capability-provided (a path with a call step) lands as a row but mounts NOTHING — core state unchanged, the stream alive, the next well-formed mount reduces", async () => {
-  await runInDurableObject(stub("prj_core_malformed_mount"), async (_instance, state) => {
+test("a malformed itx/rewrite-rule-configured (a match with an argless call step) lands as a row but configures NOTHING — core state unchanged, the stream alive, the next well-formed rule reduces", async () => {
+  await runInDurableObject(stub("prj_core_malformed_rule"), async (_instance, state) => {
     const stream = bareStream(await virgin(state));
     const [bad] = stream.append({
-      type: "events.iterate.com/capability-table/capability-provided",
-      payload: { path: "itx.call()", target: "itx.kv" },
+      type: "events.iterate.com/itx/rewrite-rule-configured",
+      payload: { match: "itx.call()", target: "itx.kv" },
     });
     expect(stream.read(0).events.map((e) => e.offset)).toEqual([bad.offset]); // the log is the log
-    expect(stream.coreReducedState.mounts).toEqual([]); // …but nothing was mounted
+    expect(stream.coreReducedState.itxExpressionRewriteRules).toEqual({}); // …but no rule was configured
     const [good] = stream.append({
-      type: "events.iterate.com/capability-table/capability-provided",
-      payload: { path: "itx.fine", target: "itx.kv" },
+      type: "events.iterate.com/itx/rewrite-rule-configured",
+      payload: { match: "itx.fine", target: "itx.kv" },
     });
-    expect(
-      stream.coreReducedState.mounts.map((m) => [m.path.join("."), m.providedAtOffset]),
-    ).toEqual([["itx.fine", good.offset]]);
+    // the table is a RECORD by canonical match; both halves parsed once, at the reduce
+    expect(stream.coreReducedState.itxExpressionRewriteRules).toEqual({
+      "itx.fine": { match: ["itx", "fine"], target: ["itx", "kv"] },
+    });
     expect(stream.append({ type: "work" })[0].offset).toBe(good.offset + 2); // good's core delta took +1
   });
 });

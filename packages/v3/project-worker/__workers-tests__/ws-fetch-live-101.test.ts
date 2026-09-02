@@ -1,14 +1,15 @@
 // __workers-tests__/ws-fetch-live-101.test.ts — THE PLATFORM QUESTION, answered by running: does
-// OUR lane forward a GENUINE 101 from a LIVE capability? YES — via the dedicated fetch-upgrade leg.
+// OUR lane forward a GENUINE 101 from a LENT RPC STUB? YES — via the dedicated fetch-upgrade leg.
 //
 // The harness-lane twin pinned that Node providers die
 // at FABRICATION (no WebSocketPair; undici rejects status 101) — so the platform half needed a
 // workerd-side provider, and THIS lane runs inside workerd. The provider lives here, lent over a
-// real capnweb session; a real eyeball dials the /cap fetch door. Every hop is production-shaped:
+// real capnweb session; a real eyeball dials the /expression fetch door. Every hop is
+// production-shaped:
 //
-//   eyeball SELF.fetch /cap → worker sets x-itx-cap → the DO's capability fetch lane →
-//   the mount at `itx.wsdev` (pure data: target `itx.rpcStubs.get('itx.wsdev')`, the registry
-//   naming the lent provider) → fetch/fetch-capabilities.ts: the DO asks the borrowed
+//   eyeball SELF.fetch /expression → worker sets x-itx-expression → the DO's itx-expression fetch
+//   lane → the rewrite rule at `itx.wsdev` (pure data: target `itx.rpcStubs.get('itx.wsdev')`, the
+//   registry naming the lent provider) → fetch/rpc-stub-fetch.ts: the DO asks the borrowed
 //   stub to dial (an RPC call that EXECUTES in the relay's session context; its return is the
 //   honest ack), the relay dials the provider's fetch() over capnweb and opens ONE dedicated
 //   fetch-upgrade leg back into the DO, the DO mints the eyeball's WebSocketPair natively, and
@@ -30,7 +31,7 @@ import { RpcTarget } from "capnweb";
 import { expect, test } from "vitest";
 import { openSession } from "./support.ts";
 
-/** The live provider: a fetch-shaped capability that CAN fabricate a 101 (we are in workerd).
+/** The live provider: a fetch-shaped value that CAN fabricate a 101 (we are in workerd).
  *  Plain requests get a 200 page; upgrade requests get a WebSocketPair whose server side echoes
  *  every message back prefixed `live-echo:`. Observations recorded so a failure names its hop. */
 class LiveSite extends RpcTarget {
@@ -49,22 +50,24 @@ class LiveSite extends RpcTarget {
   }
 }
 
-/** Provide a fresh LiveSite over a live capnweb session at `itx.wsdev` — the ONE door. */
-async function mountLiveSite(ctx: string): Promise<LiveSite> {
+/** Provide a fresh LiveSite over a live capnweb session under `itx.wsdev`, with the rewrite rule
+ *  at the same spelling — the ONE door. */
+async function provideLiveSite(ctx: string): Promise<LiveSite> {
   const itx = await (await openSession()).authenticate().projects.get(ctx);
   const site = new LiveSite();
-  await itx.provide("itx.wsdev", site);
+  await itx.provide("itx.wsdev", { stub: site, rewrite: "itx.wsdev" });
   return site;
 }
 
-const capUrl = (ctx: string) => `https://test.local/cap?context=${ctx}&cap=itx.wsdev`;
+/** The edge's plain-HTTP fetch door: `?context=` names the context, `?itx=` the itx expression. */
+const expressionUrl = (ctx: string) => `https://test.local/expression?context=${ctx}&itx=itx.wsdev`;
 
 // ─────────────── the passing halves: plain fetch works; the failing hop is NAMED ───────────────
 
-test("plain fetch through a LIVE capability: the eyeball's GET reaches the workerd provider and its 200 rides back out", async () => {
+test("plain fetch through a LENT RPC STUB: the eyeball's GET reaches the workerd provider and its 200 rides back out", async () => {
   const ctx = "prj_ws101_plain";
-  const site = await mountLiveSite(ctx);
-  const page = await SELF.fetch(capUrl(ctx));
+  const site = await provideLiveSite(ctx);
+  const page = await SELF.fetch(expressionUrl(ctx));
   const body = await page.text();
   console.log("[ws101] plain GET:", page.status, JSON.stringify(body).slice(0, 400));
   expect(page.status).toBe(200);
@@ -79,11 +82,11 @@ test("plain fetch through a LIVE capability: the eyeball's GET reaches the worke
 // hop (eyeball ⇄ DO pair ⇄ upgrade leg ⇄ relay ⇄ capnweb ⇄ provider pair), clean close. Also caught on
 // the way: the pager keepalive literal must be DISTINCTIVE — setWebSocketAutoResponse is DO-wide,
 // so a plain "ping"/"pong" pair hijacked any eyeball frame equal to "ping".
-test("live capability WebSocket fetch: the eyeball's upgrade gets the provider's GENUINE 101, echoes, and closes cleanly", async () => {
+test("lent-stub WebSocket fetch: the eyeball's upgrade gets the provider's GENUINE 101, echoes, and closes cleanly", async () => {
   const ctx = "prj_ws101_correct";
-  const site = await mountLiveSite(ctx);
+  const site = await provideLiveSite(ctx);
   // THE CORRECT BEHAVIOR: a genuine 101 bearing a usable WebSocket…
-  const res = await SELF.fetch(capUrl(ctx), { headers: { Upgrade: "websocket" } });
+  const res = await SELF.fetch(expressionUrl(ctx), { headers: { Upgrade: "websocket" } });
   expect(res.status).toBe(101);
   expect(site.observations).toContain('fetch invoked: GET upgrade="websocket"');
   expect(site.observations).toContain("fabricated a genuine 101 with a webSocket");

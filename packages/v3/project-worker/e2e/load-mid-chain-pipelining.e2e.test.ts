@@ -2,7 +2,7 @@
 //
 // Worker A is a STATEFUL dynamic-worker DO whose getter chain returns nested RpcTargets:
 //   get demo → Demo, get timer → Timer, timer.callLater(ms, cb).
-// Worker B is a SECOND dynamic worker (a stateless code cap) that reaches A THROUGH ITS OWN
+// Worker B is a SECOND dynamic worker (a stateless loaded entrypoint) that reaches A THROUGH ITS OWN
 // `env.ITX.get()` and writes the natural dotted chain:
 //   itx.load(src).getDurableObjectClass('CounterDurableObject').get().demo.timer.callLater(ms, cb)
 // The mid-path load→class→instance returns HANDLES that B then walks `.demo.timer.callLater`
@@ -54,8 +54,8 @@ export default class ConsumerB extends WorkerEntrypoint {
 test("dynamic worker → dynamic worker mid-chain pipelining, both consumer lanes", async () => {
   const itx = openItx(freshCtx("dw2dw"));
 
-  await itx.invokeCapability(["itx", "kv", ["put", "src/counterA.js", WORKER_A]]);
-  await itx.invokeCapability(["itx", "kv", ["put", "src/consumerB.js", WORKER_B]]);
+  await itx.invoke(["itx", "kv", ["put", "src/counterA.js", WORKER_A]]);
+  await itx.invoke(["itx", "kv", ["put", "src/consumerB.js", WORKER_B]]);
 
   // aRef names worker A's stateful class: a source EXPRESSION + the exported className. load(source)
   // .getDurableObjectClass(className).get() loads the class and materializes it as a facet.
@@ -83,7 +83,7 @@ test("dynamic worker → dynamic worker mid-chain pipelining, both consumer lane
   const got = await until(
     "worker B's callback appended to the stream",
     async () => {
-      const page = await itx.invokeCapability(["itx", ["read", 0, 500]]);
+      const page = await itx.invoke(["itx", ["read", 0, 500]]);
       return page.events.find((e: { type: string }) => e.type === "pinged-from-A-via-B");
     },
     30_000,

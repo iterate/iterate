@@ -22,13 +22,13 @@ test("live state chains client-side from the door — mini-app + processor flavo
   const itx = openItx(freshCtx("live"));
   await seedSources(itx, ["chatroom", "chunky"]);
 
-  // ── mini-app flavor: the chatroom (SDK LiveState helper) ──
-  await itx.provide(
+  // ── mini-app flavor: the chatroom (SDK LiveState helper), behind the rewrite rule itx.chat ──
+  await itx.rewrite(
     "itx.chat",
     `itx.load("itx.kv.get('src/chatroom.js')").getDurableObjectClass('ChatroomDurableObject').get()`,
   );
 
-  const chat = liveClient(async () => clone(await itx.invokeCapability("itx.chat.state()")));
+  const chat = liveClient(async () => clone(await itx.invoke("itx.chat.state()")));
   await itx.subscribe({
     name: "chatwatch",
     target: deltasFor(chat, "chat"),
@@ -39,8 +39,8 @@ test("live state chains client-side from the door — mini-app + processor flavo
   expect(typeof chatSeedRev).toBe("number");
   expect((chat.doc as { messages: unknown[] }).messages.length).toBe(0);
 
-  await itx.invokeCapability(["itx", "chat", ["post", "jonas", "hi"]]);
-  await itx.invokeCapability(["itx", "chat", ["post", "jonas", "again"]]);
+  await itx.invoke(["itx", "chat", ["post", "jonas", "hi"]]);
+  await itx.invoke(["itx", "chat", ["post", "jonas", "again"]]);
   await until("two messages", () => (chat.doc as { messages?: unknown[] })?.messages?.length === 2);
   // steady path: two patches applied, ZERO re-reads; client rev chained epoch→+1→+2
   expect(chat.applied).toBe(2);
@@ -48,7 +48,7 @@ test("live state chains client-side from the door — mini-app + processor flavo
   expect(chat.rev).toBe(chatSeedRev + 2);
   expect((chat.doc as { messages: { text: string }[] }).messages[1].text).toBe("again");
 
-  const door = clone(await itx.invokeCapability("itx.chat.state()")) as {
+  const door = clone(await itx.invoke("itx.chat.state()")) as {
     rev: number;
     state: unknown;
   };
@@ -73,7 +73,7 @@ test("live state chains client-side from the door — mini-app + processor flavo
     className: "ChunkyDurableObject",
   });
   const proc = liveClient(async () =>
-    clone(await itx.invokeCapability("itx.facets.get('chunky').liveSnapshot()")),
+    clone(await itx.invoke("itx.facets.get('chunky').liveSnapshot()")),
   );
   await itx.subscribe({
     name: "chunkywatch",
@@ -85,9 +85,9 @@ test("live state chains client-side from the door — mini-app + processor flavo
   expect(typeof seedRev).toBe("number");
   expect((proc.doc as { marks: number }).marks).toBe(0);
 
-  await itx.invokeCapability(`itx.append({ type: 'mark' })`);
+  await itx.invoke(`itx.append({ type: 'mark' })`);
   await until("mark reduced", () => ((proc.doc as { marks?: number })?.marks ?? 0) >= 1);
-  await itx.invokeCapability(`itx.append({ type: 'mark' })`);
+  await itx.invoke(`itx.append({ type: 'mark' })`);
   await until("second mark", () => ((proc.doc as { marks?: number })?.marks ?? 0) >= 2);
   // processor patches chained from the seed rev, zero re-reads; the doc matches the projection
   expect(proc.applied).toBe(2);
@@ -96,7 +96,7 @@ test("live state chains client-side from the door — mini-app + processor flavo
   expect((proc.doc as { marks: number; chunks: number }).chunks).toBe(0);
 
   // ── the loop guard: nothing consumed the change events ──
-  const snap = await itx.invokeCapability("itx.facets.get('chunky').snapshot()");
+  const snap = await itx.invoke("itx.facets.get('chunky').snapshot()");
   expect(JSON.stringify(snap).includes("live-state")).toBe(false);
 });
 
@@ -122,10 +122,10 @@ test("a dynamic-worker processor's live state combines reduced (ticks) + runtime
   // A FILTERED processor's facet only materializes on its first consumed push (the enablement
   // commit itself is filtered out), so `itx.facets.get('presence')` would be NO_FACET until the
   // first tick — materialize it once through the load chain before the first door read.
-  await itx.invokeCapability(`${presenceClass}.get('presence').catchUpFromLog()`);
+  await itx.invoke(`${presenceClass}.get('presence').catchUpFromLog()`);
 
   const door = async (): Promise<{ rev: number; state: PresenceLive }> =>
-    clone(await itx.invokeCapability("itx.facets.get('presence').liveSnapshot()"));
+    clone(await itx.invoke("itx.facets.get('presence').liveSnapshot()"));
 
   const { store } = await connectLiveState<PresenceLive>(itx, {
     key: "presence",
@@ -137,13 +137,13 @@ test("a dynamic-worker processor's live state combines reduced (ticks) + runtime
   expect(store.get()).toEqual({ ticks: 0, lastPokeMs: 0 });
 
   // REDUCED change: a durable 'tick' advances the reduce → one delta syncs `ticks`; runtime untouched.
-  await itx.invokeCapability("itx.append({ type: 'tick' })");
+  await itx.invoke("itx.append({ type: 'tick' })");
   await until("ticks synced", () => store.get()?.ticks === 1);
   expect(store.get()!.lastPokeMs).toBe(0);
 
   // RUNTIME change: a 'poke' EPHEMERAL event bumps the runtime field in processEvent (no reduce) →
   // one out-of-band delta syncs `lastPokeMs`; the reduced field is preserved.
-  await itx.invokeCapability("itx.append({ type: 'poke', ephemeral: true })");
+  await itx.invoke("itx.append({ type: 'poke', ephemeral: true })");
   await until("poke synced", () => (store.get()?.lastPokeMs ?? 0) > 0);
   expect(store.get()!.ticks).toBe(1);
 
@@ -154,7 +154,7 @@ test("a dynamic-worker processor's live state combines reduced (ticks) + runtime
 
   // A second reduced change still chains from here (no re-seed needed after the runtime delta).
   const pokedAt = store.get()!.lastPokeMs;
-  await itx.invokeCapability("itx.append({ type: 'tick' })");
+  await itx.invoke("itx.append({ type: 'tick' })");
   await until("second tick synced", () => store.get()?.ticks === 2);
   expect(store.get()).toEqual({ ticks: 2, lastPokeMs: pokedAt });
 });

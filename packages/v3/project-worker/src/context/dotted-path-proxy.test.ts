@@ -5,8 +5,8 @@
 import { RpcStub, RpcTarget } from "capnweb";
 import { describe, expect, it } from "vitest";
 import {
-  createInvokeCapabilityPathProxy,
-  installPrototypeInvokeCapabilityFallback,
+  createItxExpressionPathProxy,
+  installPrototypeInvokeFallback,
 } from "./dotted-path-proxy.ts";
 import { toItxExpression, type ItxExpressionInput } from "./expression.ts";
 
@@ -42,13 +42,13 @@ class HostTarget extends RpcTarget {
     return `known:${value}`;
   }
 
-  invokeCapability(call: ItxExpressionInput) {
+  invoke(call: ItxExpressionInput) {
     const c = unpackRelative(call);
     this.calls.push(c);
     return `dynamic:${c.path.join(".")}:${c.args.join(",")}`;
   }
 }
-installPrototypeInvokeCapabilityFallback(HostTarget, []);
+installPrototypeInvokeFallback(HostTarget, []);
 
 type HostStub = {
   known(value: string): Promise<string>;
@@ -112,27 +112,7 @@ describe("prototype-chain dynamic fallback", () => {
     expect(target.calls).toEqual([{ args: [], path: ["someMount", "sub", "__describe"] }]);
   });
 
-  it("throws on a second install — silent no-op would discard the new options", () => {
-    class Once extends RpcTarget {
-      calls: DynamicCall[] = [];
-      invokeCapability(call: ItxExpressionInput) {
-        this.calls.push(unpackRelative(call));
-        return "ok";
-      }
-    }
-    installPrototypeInvokeCapabilityFallback(Once, []);
-    const hopAfterFirst = Object.getPrototypeOf(Once.prototype) as object;
-    expect(() => installPrototypeInvokeCapabilityFallback(Once, [])).toThrow(
-      /already has a fallback hop/,
-    );
-    expect(Object.getPrototypeOf(Once.prototype)).toBe(hopAfterFirst);
-
-    const target = new Once();
-    (target as unknown as { tool(): unknown }).tool();
-    expect(target.calls).toEqual([{ args: [], path: ["tool"] }]);
-  });
-
-  it("JSON.stringify and test-framework probes must not fire capability dispatches", () => {
+  it("JSON.stringify and test-framework probes must not fire dispatches", () => {
     const target = new HostTarget();
     expect(JSON.stringify(target)).toBe(JSON.stringify({ calls: [], ownField: "private" }));
     expect((target as unknown as { toJSON: unknown }).toJSON).toBeUndefined();
@@ -173,18 +153,18 @@ describe("prototype-chain dynamic fallback", () => {
       constructor() {
         super();
         // Probe a dynamic member DURING construction (before `ready` is set): the trap must not
-        // bake a dispatcher over half-initialized state — the receiver's invokeCapability resolves
+        // bake a dispatcher over half-initialized state — the receiver's invoke resolves
         // only when the path proxy is CALLED, by which point construction has finished.
         void (this as unknown as { probedDuringConstruction: unknown }).probedDuringConstruction;
         this.ready = true;
       }
-      invokeCapability(call: ItxExpressionInput) {
+      invoke(call: ItxExpressionInput) {
         if (!this.ready) throw new Error("invoker resolved before construction finished");
         recorded.push(unpackRelative(call));
         return "late";
       }
     }
-    installPrototypeInvokeCapabilityFallback(LateHost, []);
+    installPrototypeInvokeFallback(LateHost, []);
 
     const instance = new LateHost();
     const early = (instance as unknown as { earlyTool(): unknown }).earlyTool;
@@ -211,10 +191,7 @@ describe("prototype-chain dynamic fallback", () => {
   });
 
   it("hides reserved path segments from function-backed path proxies", () => {
-    const proxy = createInvokeCapabilityPathProxy(
-      { invokeCapability: () => "unreachable" },
-      [],
-    ) as {
+    const proxy = createItxExpressionPathProxy({ invoke: () => "unreachable" }, []) as {
       alpha: { then: unknown };
       then: unknown;
     };

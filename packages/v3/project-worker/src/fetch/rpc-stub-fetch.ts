@@ -4,7 +4,7 @@
 //
 //   1. Some capabilities are FETCH-SHAPED: `(request: Request) => Promise<Response>`. They are
 //      ALWAYS called through a terminal `fetch` — `itx.site.fetch(request)`, never a method of
-//      any other name. `expressionEndingInFetch` (below) is the one normalizer that enforces the
+//      any other name. `itxExpressionEndingInFetch` (below) is the one normalizer that enforces the
 //      spelling at the fetch lane.
 //
 //   2. Some fetch-shaped capabilities answer with a WEBSOCKET UPGRADE (a 101 Response carrying
@@ -12,7 +12,7 @@
 //      answer — nothing here ever inspects the request to guess.
 //
 //   3. Fetch-shaped calls enter through TWO doors, both landing here: over HTTP via the
-//      capability fetch lane (`x-itx-cap`, below), and over the dotted door — any terminal
+//      itx-expression fetch lane (`x-itx-expression`, below), and over the dotted door — any terminal
 //      `.fetch(request)` on a lent rpc stub (`itx.<match>.fetch(...)` through a rewrite rule) is
 //      recognized by the terminal-fetch branch of `RpcStubDirectory.invokeRpcStub` and routed into
 //      `RpcStubFetchServer.serve`.
@@ -39,18 +39,18 @@ export type WebSocketHooks = {
   getWebSockets(tag: string): WebSocket[];
 };
 
-// ── THE CAPABILITY FETCH LANE (the `x-itx-cap` door) ──
+// ── THE ITX-EXPRESSION FETCH LANE (the `x-itx-expression` door) ──
 // A fetch-shaped capability is reached over HTTP by naming an itx expression in this header (the
-// edge worker copies `?cap=` into it). The DO resolves the expression against its capability
-// table and the provider's Response — 101s included — flows back out natively.
+// edge worker copies `/expression?itx=` into it). The DO rewrites the expression through its rules
+// and the provider's Response — 101s included — flows back out natively.
 
-export const CAPABILITY_FETCH_HEADER = "x-itx-cap";
+export const ITX_EXPRESSION_FETCH_HEADER = "x-itx-expression";
 
 /** Normalize any spelling to the canonical terminal-fetch call (doctrine point 1): strip a
  *  trailing `fetch` step (property or call) and append the one `fetch` PROPERTY step — the live
  *  Request always rides as the runtime arg, never as expression data. A `fetch(...)` call
  *  carrying expression args is a LOUD error: the author meant something the lane cannot do. */
-export function expressionEndingInFetch(expr: ItxExpression): ItxExpression {
+export function itxExpressionEndingInFetch(expr: ItxExpression): ItxExpression {
   const last = expr.at(-1);
   if (Array.isArray(last) && last[0] === "fetch" && last.length > 1)
     throw new Error(

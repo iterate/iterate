@@ -10,18 +10,18 @@
 // second call pipelines.
 //
 // The prototype-hop fallback (dotted-path-proxy.ts) reduces unknown dotted members (`.hello`,
-// `.demo.timer.callLater`) into ONE `invokeCapability(expression)` — `[...prefix, [method, ...args]]`,
+// `.demo.timer.callLater`) into ONE `invoke(expression)` — `[...prefix, [method, ...args]]`,
 // relative to the handle (empty scope root). Providers stay plain `RpcTarget` subclasses (which
 // capnweb already requires to pass a capability by reference); the client stays just capnweb.
 
 import { RpcTarget } from "capnweb";
-import { installPrototypeInvokeCapabilityFallback } from "./dotted-path-proxy.ts";
+import { installPrototypeInvokeFallback } from "./dotted-path-proxy.ts";
 import { toItxExpression, type ItxExpression, type ItxExpressionInput } from "./expression.ts";
 
 /** A branded, pipelinable handle whose unknown dotted members reduce into ONE dispatch of the
  *  itx-expression STEPS relative to it. `dispatch` routes those steps into the underlying object — a
  *  borrowed rpc stub (`RpcStubDirectory.invokeRpcStub`), a facet's method walk (the DO's facet door),
- *  a sibling context, or a stateful loaded class. Declared members (`invokeCapability` / `applyRoot`)
+ *  a sibling context, or a stateful loaded class. Declared members (`invoke` / `applyRoot`)
  *  win over the fallback, so a capability cannot be named either — the two reserved words this
  *  wrapper adds. */
 export class InvokeHandle extends RpcTarget {
@@ -32,7 +32,7 @@ export class InvokeHandle extends RpcTarget {
   }
   /** THE reduce door the prototype hop dispatches onto (the receiver IS the invoker — this instance).
    *  The expression is RELATIVE to this handle (empty scope root — the hop is installed with `[]`). */
-  invokeCapability(call: ItxExpressionInput): unknown {
+  invoke(call: ItxExpressionInput): unknown {
     return this.#dispatch(toItxExpression(call));
   }
   /** Root-apply: call the bare capability this handle fronts — the ANONYMOUS call step. `callOn`
@@ -42,7 +42,7 @@ export class InvokeHandle extends RpcTarget {
     return this.#dispatch([["", ...args]]);
   }
 }
-installPrototypeInvokeCapabilityFallback(InvokeHandle, []);
+installPrototypeInvokeFallback(InvokeHandle, []);
 
 // ── the two BRANDS the subscription delivery loop reads ──
 // A subscription's target evaluates to SOMETHING; the loop asks the value what it is. These two

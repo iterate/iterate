@@ -35,8 +35,8 @@ test("an UNKNOWN transportId 409s at the pager door ('attach first'); a reserved
 test("HAPPY PATH: provide over /api attaches + opens the pager; a separate caller's invoke pages, borrows and answers", async () => {
   const ctx = "prj_pager_happy";
   const clientItx = await (await openSession()).authenticate().projects.get(ctx);
-  await clientItx.provide("itx.live", new Echo(7));
+  await clientItx.provide("itx.live", { stub: new Echo(7), rewrite: "itx.live" });
   const caller = await (await openSession()).authenticate().projects.get(ctx);
-  const out = await caller.invokeCapability("itx.live.echo('hi')");
+  const out = await caller.invoke("itx.live.echo('hi')");
   expect(out).toBe("echo-7:hi");
 });

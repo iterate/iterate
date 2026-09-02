@@ -5,7 +5,6 @@
 
 // eslint-disable-next-line iterate/no-capnweb-http-batch -- httpBatch() below exists to PROVE the /api one-shot batch door (session-doors.e2e); everything else is WS
 import { newHttpBatchRpcSession, newWebSocketRpcSession } from "capnweb";
-import { print, type ItxExpression } from "../../src/context/expression.ts";
 
 const baseUrl = (): string => {
   const u = process.env.WORKER_BASE_URL;
@@ -17,11 +16,17 @@ const baseUrl = (): string => {
 export const workerUrl = (path: string): string => new URL(path, baseUrl()).toString();
 
 /** The /cap door for `cap` in `ctx`, as http or ws. */
-export const capUrl = (ctx: string, cap: string, scheme: "http" | "ws"): string => {
-  const u = new URL("/cap", baseUrl());
+/** The plain-HTTP fetch lane: `/expression?context=<ctx>&itx=<itx expression>` (the worker copies the
+ *  expression into `x-itx-expression` for the DO). */
+export const expressionUrl = (
+  ctx: string,
+  itxExpression: string,
+  scheme: "http" | "ws" = "http",
+): string => {
+  const u = new URL("/expression", baseUrl());
   u.protocol = `${scheme}:`;
   u.searchParams.set("context", ctx);
-  u.searchParams.set("cap", cap);
+  u.searchParams.set("itx", itxExpression);
   return u.toString();
 };
 
@@ -97,11 +102,11 @@ export const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeou
 
 /** `itx.append(...events)` spelled as an expression — one commit, one receipt per input. */
 export const append = (itx: any, ...events: unknown[]): Promise<any[]> =>
-  itx.invokeCapability(["itx", ["append", ...events]]);
+  itx.invoke(["itx", ["append", ...events]]);
 
 /** The first 500 durable rows of the log. */
 export const readAll = async (itx: any): Promise<any[]> =>
-  (await itx.invokeCapability(["itx", ["read", 0, 500]])).events;
+  (await itx.invoke(["itx", ["read", 0, 500]])).events;
 
 /** The DURABLE head — the last durable row's offset, NOT scannedThroughOffset (ephemerals such as
  *  live-state deltas consume offsets past it; a facet only ever needs to catch up to the durable
@@ -127,13 +132,12 @@ export async function presence(itx: any): Promise<string[]> {
   return (await itx.rpcStubs.list()) as string[];
 }
 
-/** The paths of the table's LIVE MOUNTS — rows whose target names the `itx.rpcStubs` registry.
- *  Pure data: this set does NOT shrink when a provider dies; it shrinks on revoke. */
-export async function rpcStubMountPaths(itx: any): Promise<string[]> {
-  const snap: any = await itx.invokeCapability("itx.facets.get('core').snapshot()");
-  return (snap.state.mounts as { path: ItxExpression; target: unknown }[])
-    .filter((m) => Array.isArray(m.target) && m.target[0] === "itx" && m.target[1] === "rpcStubs")
-    .map((m) => print(m.path));
+/** The matches of the LIVE rewrite rules — rules whose target names the `itx.rpcStubs` registry.
+ *  Pure data: this set does NOT shrink when a provider dies; it shrinks when the rule is un-set. */
+export async function rpcStubRewriteRuleMatches(itx: any): Promise<string[]> {
+  return ((await itx.expressionRewriteRules.list()) as { match: string; target: string }[])
+    .filter((rule) => rule.target.startsWith("itx.rpcStubs.get("))
+    .map((rule) => rule.match);
 }
 
 /** Enabled processors = subscriptions whose target is a facet's processEventBatch (the load chain). */

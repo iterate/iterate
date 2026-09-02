@@ -1,13 +1,13 @@
 // The core reduce's executable spec (src/stream/core-processor.ts): ONE pure reduce of the context's
-// ten control events into the state the DO reads SYNCHRONOUSLY at its doors — identity (created),
-// incarnation (woken), the pause latch (paused/resumed), the capability table (a SHADOW STACK:
-// provided pushes, revoked-by-offset pops exactly one) and the subscriptions table (by name:
-// configured REPLACES, removed drops, delivery-halted marks, delivery-resumed clears the halt and
-// records the seek). No clock, no effects: the same log always reduces to the same state, an ephemeral
+// eight control events into the state the DO reads SYNCHRONOUSLY at its doors — identity (created),
+// incarnation (woken), the pause latch (paused/resumed), the itx-expression rewrite rules (a MAP by
+// match: configured sets or, with a null target, deletes) and the subscriptions table (by name:
+// configured REPLACES or, with a null target, drops; delivery-halted marks, delivery-resumed clears
+// the halt and records the seek). No clock, no effects: the same log always reduces to the same state, an ephemeral
 // event never reduces (the checkpoint must rebuild from the durable log alone), and a malformed
 // hand-appended event THROWS at the reduce — the host contains it (__workers-tests__/stream.test.ts
 // pins the skip). The DOORS that build these events are pinned beside their modules
-// (context/capability-table.test.ts, stream/subscriptions.test.ts).
+// (context/itx-expression-rewriting.test.ts, stream/subscriptions.test.ts).
 import { describe, expect, test } from "vitest";
 import { parse, print } from "../context/expression.ts";
 import { CoreContract, CoreStreamProcessor, type CoreState } from "./core-processor.ts";
@@ -26,19 +26,21 @@ const reduceAll = (events: StreamEvent[], initial = proc.contract.initialState()
   events.reduce((s, e) => proc.reduce({ event: e, state: s }) ?? s, initial);
 
 describe("the contract", () => {
-  test("slug `core` v3.0.0; the schema-initial state; consumes EXACTLY its ten control events (an inline reduce reduces only what it consumes)", () => {
+  test("slug `core` v4.0.0; the schema-initial state; consumes EXACTLY its eight control events (an inline reduce reduces only what it consumes)", () => {
     expect(proc.contract.slug).toBe("core");
-    expect(proc.contract.version).toBe("3.0.0");
-    expect(proc.contract.initialState()).toEqual({ paused: null, mounts: [], subscriptions: {} });
+    expect(proc.contract.version).toBe("4.0.0");
+    expect(proc.contract.initialState()).toEqual({
+      paused: null,
+      itxExpressionRewriteRules: {},
+      subscriptions: {},
+    });
     expect(proc.contract.consumes).toEqual([
       "events.iterate.com/stream/created",
       "events.iterate.com/stream/woken",
       "events.iterate.com/stream/paused",
       "events.iterate.com/stream/resumed",
-      "events.iterate.com/capability-table/capability-provided",
-      "events.iterate.com/capability-table/capability-revoked",
+      "events.iterate.com/itx/rewrite-rule-configured",
       "events.iterate.com/stream/subscription-configured",
-      "events.iterate.com/stream/subscription-removed",
       "events.iterate.com/stream/subscription-delivery-halted",
       "events.iterate.com/stream/subscription-delivery-resumed",
     ]);
@@ -86,74 +88,79 @@ describe("identity, incarnation, the pause latch", () => {
   });
 });
 
-describe("the capability table — a shadow stack", () => {
-  test("provided pushes a PARSED mount (string at rest, structured in state) whose providedAtOffset is the event's own offset", () => {
+describe("the rewrite-rule table — a MAP by match", () => {
+  test("configured sets a PARSED rule (string at rest, structured in state) under its canonical match", () => {
     const s = reduceAll([
-      at(7, "events.iterate.com/capability-table/capability-provided", {
-        path: "itx.db",
+      at(7, "events.iterate.com/itx/rewrite-rule-configured", {
+        match: "itx.db",
         target: "itx.facets.get('tab-1')",
       }),
     ]);
-    expect(s.mounts).toEqual([
-      { path: ["itx", "db"], target: parse("itx.facets.get('tab-1')"), providedAtOffset: 7 },
-    ]);
+    expect(s.itxExpressionRewriteRules).toEqual({
+      "itx.db": { match: ["itx", "db"], target: parse("itx.facets.get('tab-1')") },
+    });
   });
 
-  test("same-path mounts COEXIST in log order (a stack, never a replace); revoked pops EXACTLY the named offset — what's beneath stands", () => {
-    const stacked = reduceAll([
-      at(1, "events.iterate.com/capability-table/capability-provided", {
-        path: "itx.greeter",
+  test("the SAME match REPLACES (a map, never a stack); a null target DELETES exactly that match; null on nothing → undefined (keep the state)", () => {
+    const set = reduceAll([
+      at(1, "events.iterate.com/itx/rewrite-rule-configured", {
+        match: "itx.greeter",
         target: "itx.tab1",
       }),
-      at(2, "events.iterate.com/capability-table/capability-provided", {
-        path: "itx.greeter",
+      at(2, "events.iterate.com/itx/rewrite-rule-configured", {
+        match: "itx.greeter",
         target: "itx.tab2",
       }),
-      at(3, "events.iterate.com/capability-table/capability-provided", {
-        path: "itx.other",
+      at(3, "events.iterate.com/itx/rewrite-rule-configured", {
+        match: "itx.other",
         target: "itx.kv",
       }),
     ]);
-    expect(stacked.mounts.map((m) => m.providedAtOffset)).toEqual([1, 2, 3]);
-    const popped = reduceAll(
-      [at(4, "events.iterate.com/capability-table/capability-revoked", { providedAtOffset: 2 })],
-      stacked,
-    );
-    expect(popped.mounts.map((m) => [m.path.join("."), m.providedAtOffset])).toEqual([
-      ["itx.greeter", 1],
-      ["itx.other", 3],
-    ]);
-    // revoking an offset that is not mounted (already popped, or never provided) changes nothing
-    const again = reduceAll(
+    expect(Object.keys(set.itxExpressionRewriteRules)).toEqual(["itx.greeter", "itx.other"]);
+    expect(print(set.itxExpressionRewriteRules["itx.greeter"].target)).toBe("itx.tab2");
+    const deleted = reduceAll(
       [
-        at(5, "events.iterate.com/capability-table/capability-revoked", { providedAtOffset: 2 }),
-        at(6, "events.iterate.com/capability-table/capability-revoked", { providedAtOffset: 999 }),
+        at(4, "events.iterate.com/itx/rewrite-rule-configured", {
+          match: "itx.greeter",
+          target: null,
+        }),
       ],
-      popped,
+      set,
     );
-    expect(again).toEqual(popped);
+    expect(Object.keys(deleted.itxExpressionRewriteRules)).toEqual(["itx.other"]);
+    // deleting a match that has no rule (already gone, or never set) changes nothing — a benign
+    // double-delete must not rewrite the checkpoint or publish a live-state delta
+    expect(
+      proc.reduce({
+        event: at(5, "events.iterate.com/itx/rewrite-rule-configured", {
+          match: "itx.greeter",
+          target: null,
+        }),
+        state: deleted,
+      }),
+    ).toBeUndefined();
   });
 
-  test("a malformed provided (a path with a call step, an unbalanced target) THROWS at the reduce — the host skips it (stream.test.ts); a well-formed one still reduces", () => {
+  test("a malformed configured (a match with an argless call step, an unbalanced target) THROWS at the reduce — the host skips it (stream.test.ts); a well-formed one still reduces", () => {
     const state = proc.contract.initialState();
     for (const payload of [
-      { path: "itx.broken(", target: "itx.kv" },
-      { path: "itx.call()", target: "itx.kv" },
-      { path: "itx.dangling", target: "itx.kv.get(" },
+      { match: "itx.broken(", target: "itx.kv" },
+      { match: "itx.call()", target: "itx.kv" },
+      { match: "itx.dangling", target: "itx.kv.get(" },
     ])
       expect(() =>
         proc.reduce({
-          event: at(1, "events.iterate.com/capability-table/capability-provided", payload),
+          event: at(1, "events.iterate.com/itx/rewrite-rule-configured", payload),
           state,
         }),
       ).toThrow();
     const s = reduceAll([
-      at(4, "events.iterate.com/capability-table/capability-provided", {
-        path: "itx.fine",
+      at(4, "events.iterate.com/itx/rewrite-rule-configured", {
+        match: "itx.fine",
         target: "itx.kv",
       }),
     ]);
-    expect(s.mounts.map((m) => [m.path.join("."), m.providedAtOffset])).toEqual([["itx.fine", 4]]);
+    expect(Object.keys(s.itxExpressionRewriteRules)).toEqual(["itx.fine"]);
   });
 });
 
@@ -201,16 +208,19 @@ describe("the subscriptions table — by name", () => {
     expect(s.subscriptions.digest).not.toHaveProperty("consumes"); // the replacement's filter, not the old one's
   });
 
-  test("removed drops the row; removing an unknown name → undefined (keep the state), never a throw or a phantom row", () => {
+  test("configured with a NULL target drops the row; dropping an unknown name → undefined (keep the state), never a throw or a phantom row", () => {
     const s = reduceAll([
       at(1, "events.iterate.com/stream/subscription-configured", { name: "a", target: "itx.x.f" }),
       at(2, "events.iterate.com/stream/subscription-configured", { name: "b", target: "itx.y.f" }),
-      at(3, "events.iterate.com/stream/subscription-removed", { name: "a" }),
+      at(3, "events.iterate.com/stream/subscription-configured", { name: "a", target: null }),
     ]);
     expect(Object.keys(s.subscriptions)).toEqual(["b"]);
     expect(
       proc.reduce({
-        event: at(4, "events.iterate.com/stream/subscription-removed", { name: "ghost" }),
+        event: at(4, "events.iterate.com/stream/subscription-configured", {
+          name: "ghost",
+          target: null,
+        }),
         state: s,
       }),
     ).toBeUndefined();
@@ -335,8 +345,8 @@ describe("purity", () => {
       ephemeral("events.iterate.com/stream/created", { projectId: "p", path: "/" }),
       ephemeral("events.iterate.com/stream/woken", { incarnation: 9 }),
       ephemeral("events.iterate.com/stream/paused", { reason: "x" }),
-      ephemeral("events.iterate.com/capability-table/capability-provided", {
-        path: "itx.blip",
+      ephemeral("events.iterate.com/itx/rewrite-rule-configured", {
+        match: "itx.blip",
         target: "itx.kv",
       }),
       ephemeral("events.iterate.com/stream/subscription-configured", {
@@ -357,8 +367,8 @@ describe("purity", () => {
     const log = [
       at(1, "events.iterate.com/stream/created", { projectId: "prj_t", path: "/" }),
       at(2, "events.iterate.com/stream/woken", { incarnation: 1 }),
-      at(3, "events.iterate.com/capability-table/capability-provided", {
-        path: "itx.db",
+      at(3, "events.iterate.com/itx/rewrite-rule-configured", {
+        match: "itx.db",
         target: "itx.kv",
       }),
       at(4, "events.iterate.com/stream/subscription-configured", {

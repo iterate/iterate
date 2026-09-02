@@ -10,14 +10,23 @@
 // processor-facet-breaker-pauses-the-stream.e2e.
 
 import { expect, test } from "vitest";
-import { append, freshCtx, openItx, readAll, rejection } from "./support/client.ts";
+import {
+  append,
+  freshCtx,
+  openItx,
+  readAll,
+  readHead,
+  rejection,
+  until,
+} from "./support/client.ts";
+import { enableFixtureProcessor } from "./support/sources.ts";
 
 const read = (
   itx: any,
   afterOffset?: number,
   limit?: number,
 ): Promise<{ events: any[]; scannedThroughOffset: number }> =>
-  itx.invokeCapability([
+  itx.invoke([
     "itx",
     [
       "read",
@@ -74,31 +83,28 @@ test("ephemeral + idempotencyKey is refused loudly and atomically mid-batch", as
 
 // ── idempotency at the commit point ──
 
-test("an in-batch idempotency dedupe hit is reduced ONCE, not twice", async () => {
+test("an in-batch idempotency dedupe hit is processed ONCE, not twice", async () => {
   // append derives a per-offset `distinct` view (first-wins) that feeds the inline core reduce AND
   // the delivery, so each durable event is processed ONCE — while the returned `committed` keeps one
-  // receipt per input. The zero-distance witness is core's own mounts table: a capability-provided
-  // event duplicated in one batch under one idempotencyKey must produce exactly ONE mount (a double
-  // reduce would push a second row with the same providedAtOffset).
+  // receipt per input. Core's own slices are maps (a double reduce of a rewrite-rule set is
+  // invisible), so the zero-distance witness is a counting facet processor fed by the same distinct
+  // view: an event duplicated in one batch under one idempotencyKey must be counted exactly ONCE.
   const itx = openItx(freshCtx("dupbatch"));
-  const provided = {
-    type: "events.iterate.com/capability-table/capability-provided",
-    payload: { path: "itx.dup", target: "itx.whoami" },
-    idempotencyKey: "dup-in-batch",
-  };
-  const pair = await append(itx, provided, provided);
+  await enableFixtureProcessor(itx, "tally");
+  const duplicated = { type: "dup", payload: { n: 1 }, idempotencyKey: "dup-in-batch" };
+  const pair = await append(itx, duplicated, duplicated);
   // The dedupe itself is right: both entries answer with the ONE committed offset…
   expect(pair).toHaveLength(2);
   expect(pair[1].offset).toBe(pair[0].offset);
   const page = await read(itx);
   expect(page.events.filter((e) => e.idempotencyKey === "dup-in-batch")).toHaveLength(1);
-  // …and the commit-point reduce reduced it exactly ONCE: one mount, at that offset.
-  const core = await itx.invokeCapability("itx.facets.get('core').snapshot()");
-  const mounts = (core.state.mounts as { path: string[]; providedAtOffset: number }[]).filter(
-    (m) => m.path.join(".") === "itx.dup",
-  );
-  expect(mounts).toHaveLength(1);
-  expect(mounts[0].providedAtOffset).toBe(pair[0].offset);
+  // …and the distinct view reached the facet exactly ONCE: one `dup` counted, at the head.
+  const head = await readHead(itx);
+  const snap: any = await until("tally at head", async () => {
+    const s: any = await itx.invoke("itx.facets.get('tally').snapshot()");
+    return s.offset >= head && s;
+  });
+  expect(snap.state.counts.dup).toBe(1);
 });
 
 test("a mid-batch idempotency conflict rolls the whole batch back atomically", async () => {
@@ -195,7 +201,7 @@ test("string-half expressions: deeply nested payloads parse and round-trip (JSON
   const itx = openItx(freshCtx("depthstr"));
   // JSON5 is iterative — there is no artificial parse budget; a deep arg parses and round-trips.
   for (const depth of [58, 70]) {
-    const [committed] = await itx.invokeCapability(
+    const [committed] = await itx.invoke(
       `itx.append({type:'deepstr',payload:{d:${nestedLiteral(depth)}}})`,
     );
     const page = await read(itx, committed.offset - 1, 1);

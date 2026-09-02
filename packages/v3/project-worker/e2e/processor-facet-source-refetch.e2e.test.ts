@@ -73,9 +73,8 @@ test("userspace processor source is evaluated exactly ONCE (at materialization, 
     let stableFor = 0;
     for (let i = 0; i < 60; i++) {
       await sleep(500);
-      const n = (
-        (await itx.invokeCapability(["itx", "kv", ["list", "srcEval:"]])) as { keys: string[] }
-      ).keys.length;
+      const n = ((await itx.invoke(["itx", "kv", ["list", "srcEval:"]])) as { keys: string[] }).keys
+        .length;
       if (n === last) {
         if (++stableFor >= 3) return n;
       } else {
@@ -87,7 +86,7 @@ test("userspace processor source is evaluated exactly ONCE (at materialization, 
   }
 
   // 1) seed the module code into kv (the lambda reads it back on each evaluation)
-  await itx.invokeCapability(["itx", "kv", ["put", "src/mark-refetch.js", MARK_MODULE]]);
+  await itx.invoke(["itx", "kv", ["put", "src/mark-refetch.js", MARK_MODULE]]);
 
   // 2) enable the USERSPACE processor (source = the counting expression)
   await itx.enableProcessor(SLUG, { source: SOURCE, className: "MarkDurableObject" });
@@ -98,7 +97,7 @@ test("userspace processor source is evaluated exactly ONCE (at materialization, 
 
   // 4) append M durable 'mark' events — M separate commits, each a push through the load chain
   for (let i = 0; i < M; i++) {
-    await itx.invokeCapability(["itx", ["append", { type: "mark", payload: { i } }]]);
+    await itx.invoke(["itx", ["append", { type: "mark", payload: { i } }]]);
   }
 
   // 5) wait for the M fire-and-forget pushes to settle (counter-stability, NOT snapshot polling)

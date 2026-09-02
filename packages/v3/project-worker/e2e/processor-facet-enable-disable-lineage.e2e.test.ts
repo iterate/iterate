@@ -3,10 +3,11 @@
 // event; identity rides `ctx.props` at materialization — rebuild-from-log is true). Proves the
 // door's refusals (a dotted name, no source, the core reduce's name on either door), that the raw
 // event-sourced door agrees with the verb, one effective lineage under a two-session enable race,
-// re-enable while WARM as a log no-op that never corrupts the reduce, double-enable + ONE disable
-// (same name REPLACES — no enablement stack), and the waitUntilProcessed barrier against a future
-// offset. (The two pins that read the worker's console — a quiet enable is clean, disable
-// mid-drive raises no error storm — live in push-delivery-no-dropped-warns.e2e.)
+// re-enable while WARM as ONE more configured event (the row is a MAP entry — same name REPLACES,
+// no dedupe) that never corrupts the reduce, double-enable + ONE disable (no enablement stack), and
+// the waitUntilProcessed barrier against a future offset. (The two pins that read the worker's
+// console — a quiet enable is clean, disable mid-drive raises no error storm — live in
+// push-delivery-no-dropped-warns.e2e.)
 
 import { expect, test } from "vitest";
 import {
@@ -23,7 +24,7 @@ import {
 import { enableFixtureProcessor, seedSources } from "./support/sources.ts";
 
 const tallySnapshot = async (itx: any): Promise<any> =>
-  itx.invokeCapability("itx.facets.get('tally').snapshot()");
+  itx.invoke("itx.facets.get('tally').snapshot()");
 /** Expected tally counts = groupBy(type) over the DURABLE log (tally consumes "*", durable only). */
 const durableCountsByType = (events: any[]): Record<string, number> => {
   const counts: Record<string, number> = {};
@@ -60,11 +61,11 @@ test("enableProcessor REQUIRES a source ref — there are no built-in processors
   expect(await subscriptions(itx)).toEqual([]);
 });
 
-test("the core reduce's name is refused at BOTH doors — never a facet to enable or disable; the former inline names (capability-table, subscriptions) are ordinary names now", async () => {
+test("the core reduce's name is refused at BOTH doors — never a facet to enable or disable; the names of core's slices (rewrite-rules, subscriptions) are ordinary facet names", async () => {
   // `core` is THE inline reduce — always on, never a facet — and its address
   // (`itx.facets.get('core')`) is taken, so its name is refused at both doors: a processor that ran
-  // under it could never be addressed or disabled by name. Nothing else is reserved: the three
-  // inline reduces collapsed into core, so `capability-table` and `subscriptions` are plain names a
+  // under it could never be addressed or disabled by name. Nothing else is reserved: core's slices
+  // have no facet address of their own, so `rewrite-rules` and `subscriptions` are plain names a
   // processor may take, address and drop like any other.
   const itx = openItx(freshCtx("inline"));
   await seedSources(itx, ["tally"]);
@@ -77,7 +78,7 @@ test("the core reduce's name is refused at BOTH doors — never a facet to enabl
       });
     })(),
   ).rejects.toThrow(/core reduce/);
-  for (const name of ["capability-table", "subscriptions"]) {
+  for (const name of ["rewrite-rules", "subscriptions"]) {
     await itx.enableProcessor(name, {
       source: "itx.kv.get('src/tally.js')",
       className: "TallyDurableObject",
@@ -85,15 +86,13 @@ test("the core reduce's name is refused at BOTH doors — never a facet to enabl
     const [mark] = await append(itx, { type: "mark", payload: { name } });
     const snap: any = await until(`${name} reduced the mark`, async () => {
       const s: any = await itx
-        .invokeCapability(`itx.facets.get('${name}').snapshot()`)
+        .invoke(`itx.facets.get('${name}').snapshot()`)
         .catch(() => undefined); // NO_FACET while it materializes
       return s && s.offset >= mark.offset && s;
     });
-    expect(snap.state.counts.mark).toBeGreaterThanOrEqual(1); // a tally, addressed under the former inline name
+    expect(snap.state.counts.mark).toBeGreaterThanOrEqual(1); // a tally, addressed under a core slice's name
     await itx.disableProcessor(name);
-    await expect(itx.invokeCapability(`itx.facets.get('${name}').snapshot()`)).rejects.toThrow(
-      /no facet/,
-    );
+    await expect(itx.invoke(`itx.facets.get('${name}').snapshot()`)).rejects.toThrow(/no facet/);
   }
   expect(await subscriptions(itx)).toEqual([]);
 });
@@ -126,15 +125,14 @@ test("enableProcessor('tally') from two sessions concurrently: one effective lin
   const itxB = openItx(ctx);
   await Promise.all([enableFixtureProcessor(itxA, "tally"), enableFixtureProcessor(itxB, "tally")]);
 
-  // same name REPLACES (no stack): whether the racing enables landed one or two configured
-  // events, the table holds ONE row named tally
+  // same name REPLACES (no stack, no dedupe): the racing enables landed TWO configured events, and
+  // the table holds ONE row named tally
   expect((await processorNames(itxA)).filter((s) => s === "tally")).toHaveLength(1);
 
   for (let i = 0; i < 3; i++) await append(itxA, { type: "seen", payload: { i } });
   const head = await readHead(itxA);
   const expected = durableCountsByType(await readAll(itxA));
-  const configured = expected["events.iterate.com/stream/subscription-configured"];
-  expect(configured === 1 || configured === 2).toBe(true); // the door is idempotent, best-effort under a race
+  expect(expected["events.iterate.com/stream/subscription-configured"]).toBe(2); // one per enable — the verb is literally "append the event"
   const snap = await until("tally reduced the whole log exactly once", async () => {
     const s: any = await tallySnapshot(itxA);
     return s.offset >= head && s;
@@ -145,7 +143,7 @@ test("enableProcessor('tally') from two sessions concurrently: one effective lin
   expect(snap.state.counts.seen).toBe(3);
 });
 
-test("re-enable while WARM is a no-op for the log and never corrupts the reduce (no reset, no double-count)", async () => {
+test("re-enable while WARM appends ONE more configured event (same name REPLACES the row) and never corrupts the reduce (no reset, no double-count)", async () => {
   const itx = openItx(freshCtx("reenable"));
   await enableFixtureProcessor(itx, "tally");
   await append(itx, { type: "mark" });
@@ -162,8 +160,9 @@ test("re-enable while WARM is a no-op for the log and never corrupts the reduce 
       (e) => e.type === "events.iterate.com/stream/subscription-configured",
     ).length;
   const configuredBefore = await configuredEvents();
-  await enableFixtureProcessor(itx, "tally"); // identical row ⇒ appends NOTHING (the idempotent door)
-  expect(await configuredEvents()).toBe(configuredBefore);
+  await enableFixtureProcessor(itx, "tally"); // the same row again ⇒ ONE more configured event (no dedupe); the map entry is replaced
+  expect(await configuredEvents()).toBe(configuredBefore + 1);
+  expect((await processorNames(itx)).filter((s) => s === "tally")).toHaveLength(1);
   await append(itx, { type: "mark" });
   const head2 = await readHead(itx);
   const expected = durableCountsByType(await readAll(itx));
@@ -178,7 +177,7 @@ test("re-enable while WARM is a no-op for the log and never corrupts the reduce 
 test("double-enable then ONE disableProcessor disables it (same name REPLACES — there is no enablement stack to clear)", async () => {
   const itx = openItx(freshCtx("disshadow"));
   await enableFixtureProcessor(itx, "tally");
-  await enableFixtureProcessor(itx, "tally"); // re-enable while WARM (supported, appends nothing)
+  await enableFixtureProcessor(itx, "tally"); // re-enable while WARM (supported: one more configured event replaces the row)
   await append(itx, { type: "mark" });
   const head = await readHead(itx);
   await until("tally at head", async () => ((await tallySnapshot(itx)) as any).offset >= head);
@@ -201,7 +200,7 @@ test("waitUntilProcessed(future offset) times out with its documented error and 
 
   const t0 = Date.now();
   await expect(
-    itx.invokeCapability([
+    itx.invoke([
       "itx",
       "facets",
       ["get", "tally"],
@@ -214,7 +213,7 @@ test("waitUntilProcessed(future offset) times out with its documented error and 
 
   // a LATER append releases nothing stale: the barrier still works exactly
   const [m] = await append(itx, { type: "mark" });
-  await itx.invokeCapability([
+  await itx.invoke([
     "itx",
     "facets",
     ["get", "tally"],

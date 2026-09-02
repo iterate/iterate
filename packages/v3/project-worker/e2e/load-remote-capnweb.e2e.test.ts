@@ -2,7 +2,7 @@
 // capnweb's client from the SDK (`./processor.js`), reads the remote's url from Cloudflare's own
 // `ctx.props` (minted at `getEntrypoint(name, { props })`), and dials it over ONE one-shot HTTP
 // batch through the context's egress. No built-in, no persistent socket, so the remote never pins
-// the context DO. Mounted at a name, it is exactly how an `itx.os` would be sugar. The remote is
+// the context DO. Behind a rewrite rule at a name, it is exactly how an `itx.os` would be sugar. The remote is
 // the dummy capnweb API the globalSetup hosts in-process.
 // (was the `itx.connectToCapnweb(url)` built-in's proof — connectToCapnweb is gone, this is its
 // userspace spelling)
@@ -24,25 +24,25 @@ export class Remote extends WorkerEntrypoint {
 }
 `;
 
-const mountRemote = async (itx: any): Promise<void> => {
+const rewriteRemoteApi = async (itx: any): Promise<void> => {
   await itx.kv.put("src/remote.js", REMOTE_SRC);
-  await itx.provide(
+  await itx.rewrite(
     "itx.remoteApi",
     `itx.load("itx.kv.get('src/remote.js')").getEntrypoint('Remote', { props: { url: ${JSON.stringify(process.env.DUMMY_CAPNWEB_URL)} } })`,
   );
 };
 
-test("a userspace worker dials a remote capnweb API with the url in ctx.props, mounted by name", async () => {
+test("a userspace worker dials a remote capnweb API with the url in ctx.props, behind a rewrite rule by name", async () => {
   const itx = openItx(freshCtx("conn"));
-  await mountRemote(itx);
+  await rewriteRemoteApi(itx);
 
-  // 1. one method, one HTTP batch, through the mount
+  // 1. one method, one HTTP batch, through the rule
   expect(await itx.remoteApi.hello("world")).toBe("hi world from dummy-capnweb");
   // 2. numeric args
   expect(await itx.remoteApi.add(2, 40)).toBe(42);
-  // 3. the same mount by expression string — a mount is a mount
-  expect(await itx.invokeCapability("itx.remoteApi.hello('mounted')")).toBe(
-    "hi mounted from dummy-capnweb",
+  // 3. the same rule by expression string — a rule is a rule
+  expect(await itx.invoke("itx.remoteApi.hello('by-expression')")).toBe(
+    "hi by-expression from dummy-capnweb",
   );
 });
 
@@ -51,7 +51,7 @@ test("a userspace worker dials a remote capnweb API with the url in ctx.props, m
 // these pin that the SDK's capnweb client and the egress path carry both shapes end to end.
 test("multi-hop (.math.add) and call-then-call (.svc('x').add) chains ride one batch each", async () => {
   const itx = openItx(freshCtx("connmh"));
-  await mountRemote(itx);
+  await rewriteRemoteApi(itx);
   expect(await itx.remoteApi.mathAdd(2, 3)).toBe(5);
   expect(await itx.remoteApi.svcAdd(2, 3)).toBe(5);
 });

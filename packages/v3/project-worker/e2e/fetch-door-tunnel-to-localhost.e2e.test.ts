@@ -1,7 +1,7 @@
 // fetch-door-tunnel-to-localhost.e2e.test.ts — the TUNNEL use case (`iterate tunnel bla 3000`): a
-// CLI — a plain NODE capnweb client on /api — provides the fetch-shaped live capability `itx.bla` and
-// PROXIES every request to a server on localhost. `itx.bla.fetch(req)` anywhere in the project
-// reaches the CLI and comes back carrying localhost's answer — WEBSOCKET UPGRADES INCLUDED: the CLI
+// CLI — a plain NODE capnweb client on /api — lends a fetch-shaped rpc stub behind the rewrite rule
+// `itx.bla` and PROXIES every request to a server on localhost. `itx.bla.fetch(req)` anywhere in the
+// project reaches the CLI and comes back carrying localhost's answer — WEBSOCKET UPGRADES INCLUDED: the CLI
 // dials its localhost WS client and answers with the one-call `upgradeWebSocketResponse(localSocket)`
 // (capnweb ≥0.12.2, the sender-side upgrade answer; docs/capnweb-upgrade-answer.md). The frames
 // tunnel over the session's existing stream pipes.
@@ -10,7 +10,7 @@ import { createServer, type Server } from "node:http";
 import { createHash } from "node:crypto";
 import { afterAll, beforeAll, expect, test } from "vitest";
 import { RpcTarget, upgradeWebSocketResponse } from "capnweb";
-import { capUrl, freshCtx, openItx, wsRoundTrip } from "./support/client.ts";
+import { expressionUrl, freshCtx, openItx, wsRoundTrip } from "./support/client.ts";
 
 // ── the localhost side: what `iterate tunnel bla 3000` points at ──
 
@@ -122,9 +122,9 @@ class TunnelProvider extends RpcTarget {
 
 test("HTTP tunnel: an eyeball POST to itx.bla rides through the Node CLI provider to localhost and back, bodies intact both ways", async () => {
   const ctx = freshCtx("tunnelhttp");
-  await openItx(ctx).provide("itx.bla", new TunnelProvider()); // the CLI's exact posture
+  await openItx(ctx).provide("itx.bla", { stub: new TunnelProvider(), rewrite: "itx.bla" }); // the CLI's exact posture
 
-  const res = await fetch(capUrl(ctx, "itx.bla", "http"), {
+  const res = await fetch(expressionUrl(ctx, "itx.bla", "http"), {
     method: "POST",
     body: "ping-through-tunnel",
   });
@@ -132,15 +132,17 @@ test("HTTP tunnel: an eyeball POST to itx.bla rides through the Node CLI provide
   expect(res.status).toBe(200);
   // localhost's own words prove the REQUEST crossed the tunnel (path+query intact), not just
   // that a response came back:
-  expect(body).toBe(`upstream-saw:POST /cap?context=${ctx}&cap=itx.bla body=ping-through-tunnel`);
+  expect(body).toBe(
+    `upstream-saw:POST /expression?context=${ctx}&itx=itx.bla body=ping-through-tunnel`,
+  );
   expect(res.headers.get("x-upstream")).toBe("localhost-http");
 });
 
 test("WS tunnel: an eyeball WebSocket on itx.bla opens (101), echoes off the LOCALHOST server, and closes clean", async () => {
   const ctx = freshCtx("tunnelws");
-  await openItx(ctx).provide("itx.bla", new TunnelProvider());
+  await openItx(ctx).provide("itx.bla", { stub: new TunnelProvider(), rewrite: "itx.bla" });
 
-  const ws = await wsRoundTrip(capUrl(ctx, "itx.bla", "ws"), "hello-through-tunnel");
+  const ws = await wsRoundTrip(expressionUrl(ctx, "itx.bla", "ws"), "hello-through-tunnel");
   expect(ws.error).toBeUndefined();
   expect(ws.opened).toBe(true);
   expect(ws.echo).toBe("local-echo:hello-through-tunnel");

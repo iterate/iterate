@@ -7,7 +7,7 @@ import { WorkerEntrypoint } from "cloudflare:workers";
 import { newWorkersRpcResponse } from "capnweb";
 import { IterateContextDurableObject, type Env } from "./iterate-context-durable-object.ts";
 import { registerPipelinedRpcBrand } from "./context/dispatch.ts";
-import { CAPABILITY_FETCH_HEADER } from "./fetch/rpc-stub-fetch.ts";
+import { ITX_EXPRESSION_FETCH_HEADER } from "./fetch/rpc-stub-fetch.ts";
 import { DurableObjectNameCodec } from "./context/durable-object-names.ts";
 import { UnauthenticatedSession } from "./session.ts";
 import { DEMO_PAGE_HTML } from "./generated/demo-page.ts";
@@ -63,27 +63,25 @@ export default {
 
     // THE FETCH LANE — the plain-HTTP door onto fetch-shaped capabilities (WS upgrades and all), for
     // callers with no capnweb session (curl, a browser tab, a webhook): `?context=` names the
-    // context (a project id = its root, or a full context name), `?cap=` the itx expression. The
-    // expression rides to the context DO in `x-itx-cap`. capnweb clients need no door: a terminal
-    // `itx.x.fetch(request)` takes the same lane from inside the session.
-    if (url.pathname === "/cap") {
+    // context (a project id = its root, or a full context name), `?itx=` the itx expression. The
+    // expression rides to the context DO in `x-itx-expression`. capnweb clients need no door: a
+    // terminal `itx.x.fetch(request)` takes the same lane from inside the session.
+    if (url.pathname === "/expression") {
       const context = url.searchParams.get("context");
-      const cap = url.searchParams.get("cap");
-      if (!context || !cap)
+      const itxExpression = url.searchParams.get("itx");
+      if (!context || !itxExpression)
         return new Response(
-          "/cap needs ?context=<project id | context name>&cap=<itx expression>\n",
-          {
-            status: 400,
-          },
+          "/expression needs ?context=<project id | context name>&itx=<itx expression>\n",
+          { status: 400 },
         );
       const headers = new Headers(request.headers);
-      headers.set(CAPABILITY_FETCH_HEADER, cap);
+      headers.set(ITX_EXPRESSION_FETCH_HEADER, itxExpression);
       return env.CONTEXT.getByName(DurableObjectNameCodec.parse(context).name).fetch(
         new Request(request, { headers }),
       );
     }
 
-    return new Response("project-worker — /api (capnweb), /cap, /demo, /version\n", {
+    return new Response("project-worker — /api (capnweb), /expression, /demo, /version\n", {
       headers: { "content-type": "text/plain" },
     });
   },

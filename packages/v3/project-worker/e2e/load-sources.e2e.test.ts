@@ -30,28 +30,26 @@ export class CounterDurableObject extends DurableObject {
   const SRC_COUNTER = `"itx.kv.get('src/counter.js')"`;
 
   // 1. STATELESS: load → getEntrypoint() → a WorkerEntrypoint isolate, run it.
-  expect(await itx.invokeCapability(`itx.load(${SRC_GREET}).getEntrypoint().run('jonas')`)).toBe(
-    "hi jonas",
-  );
+  expect(await itx.invoke(`itx.load(${SRC_GREET}).getEntrypoint().run('jonas')`)).toBe("hi jonas");
 
   // 2. DURABLE NAMED: load → getDurableObjectClass('CounterDurableObject').get('c1') → a facet named 'c1' whose
   //    state persists across calls.
-  await itx.invokeCapability(
+  await itx.invoke(
     `itx.load(${SRC_COUNTER}).getDurableObjectClass('CounterDurableObject').get('c1').bump()`,
   );
   expect(
-    await itx.invokeCapability(
+    await itx.invoke(
       `itx.load(${SRC_COUNTER}).getDurableObjectClass('CounterDurableObject').get('c1').bump()`,
     ),
   ).toBe(2);
 
   // 3. ADDRESS BY NAME: itx.facets.get('c1') reaches the SAME running instance with NO source (via
   //    the durable registration the .get('c1') materialization wrote).
-  expect(await itx.invokeCapability(`itx.facets.get('c1').value()`)).toBe(2);
+  expect(await itx.invoke(`itx.facets.get('c1').value()`)).toBe(2);
 
   // 4. a DIFFERENT instance name is INDEPENDENT state.
   expect(
-    await itx.invokeCapability(
+    await itx.invoke(
       `itx.load(${SRC_COUNTER}).getDurableObjectClass('CounterDurableObject').get('c2').bump()`,
     ),
   ).toBe(1);
@@ -62,7 +60,7 @@ test("resolveSource handles inline + producer-expression sources, and runScript(
   const itx = openItx(ctx);
 
   // 1. INLINE source: hand the code over literally — no kv.put, no producer to invoke.
-  const inline = await itx.invokeCapability([
+  const inline = await itx.invoke([
     "itx",
     ["load", { type: "inline", files: { "cap.js": entrypoint("async run(x) { return x * 2; }") } }],
     ["getEntrypoint"],
@@ -73,7 +71,7 @@ test("resolveSource handles inline + producer-expression sources, and runScript(
   // 2. PRODUCER-EXPRESSION source through the same resolveSource path: itx.kv.get is a callback that
   //    produces the code.
   await itx.kv.put("src/triple.js", entrypoint("async run(x) { return x * 3; }"));
-  const viaExpr = await itx.invokeCapability([
+  const viaExpr = await itx.invoke([
     "itx",
     ["load", "itx.kv.get('src/triple.js')"],
     ["getEntrypoint"],
@@ -82,7 +80,7 @@ test("resolveSource handles inline + producer-expression sources, and runScript(
   expect(viaExpr).toBe(42);
 
   // 3. inline code can call back into itx (env.ITX is bound in the confined isolate).
-  const withItx = await itx.invokeCapability([
+  const withItx = await itx.invoke([
     "itx",
     [
       "load",

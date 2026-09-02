@@ -1,8 +1,9 @@
-// fetch-door-dynamic-live-ws.e2e.test.ts — DYNAMIC WORKER ⇄ DYNAMIC WORKER over a LIVE fetch capability,
-// WebSocket included. Provider worker A (loaded via itx.load) PROVIDES a live RpcTarget whose
-// fetch() upgrades WebSockets; consumer worker B fetches it through its own env.ITX binding — a
-// real Fetcher (the ItxEntrypoint loopback) — with the x-itx-cap header, riding the DO's fetch
-// lane. Every hop is native Workers RPC / native fetch; no capnweb client anywhere.
+// fetch-door-dynamic-live-ws.e2e.test.ts — DYNAMIC WORKER ⇄ DYNAMIC WORKER over a LENT fetch-shaped
+// rpc stub, WebSocket included. Provider worker A (loaded via itx.load) PROVIDES a live RpcTarget
+// whose fetch() upgrades WebSockets, behind the rewrite rule `itx.wsdyn`; consumer worker B fetches
+// it through its own env.ITX binding — a real Fetcher (the ItxEntrypoint loopback) — with the
+// x-itx-expression header, riding the DO's fetch lane. Every hop is native Workers RPC / native
+// fetch; no capnweb client anywhere.
 
 import { expect, test } from "vitest";
 import { openItx, freshCtx } from "./support/client.ts";
@@ -23,20 +24,20 @@ export default class Provider extends WorkerEntrypoint {
   async run(mode) {
     const itx = await this.env.ITX.get();
     const device = new WsDevice();
-    const provided = await itx.provide("itx.wsdyn", device);
-    // Held on globalThis so nothing GC-revokes DURING this invocation; note it does NOT keep the
-    // capability alive past the invocation (see the lifetime test below).
+    const provided = await itx.provide("itx.wsdyn", { stub: device, rewrite: "itx.wsdyn" });
+    // Held on globalThis so nothing GC-recalls DURING this invocation; note it does NOT keep the
+    // lent stub alive past the invocation (see the lifetime test below).
     globalThis.__keep = { itx, provided, device };
     if (mode === "self-plain") {
       const res = await this.env.ITX.fetch(
-        new Request("https://cap.internal/", { headers: { "x-itx-cap": "itx.wsdyn" } }),
+        new Request("https://cap.internal/", { headers: { "x-itx-expression": "itx.wsdyn" } }),
       );
       return { status: res.status, body: (await res.text()).slice(0, 300) };
     }
     if (mode === "self-ws") {
       const res = await this.env.ITX.fetch(
         new Request("https://cap.internal/", {
-          headers: { "x-itx-cap": "itx.wsdyn", Upgrade: "websocket" },
+          headers: { "x-itx-expression": "itx.wsdyn", Upgrade: "websocket" },
         }),
       );
       if (res.status !== 101 || !res.webSocket)
@@ -63,13 +64,13 @@ export default class Consumer extends WorkerEntrypoint {
   async run(kind) {
     if (kind === "plain") {
       const res = await this.env.ITX.fetch(
-        new Request("https://cap.internal/", { headers: { "x-itx-cap": "itx.wsdyn" } }),
+        new Request("https://cap.internal/", { headers: { "x-itx-expression": "itx.wsdyn" } }),
       );
       return { status: res.status, body: (await res.text()).slice(0, 300) };
     }
     const res = await this.env.ITX.fetch(
       new Request("https://cap.internal/", {
-        headers: { "x-itx-cap": "itx.wsdyn", Upgrade: "websocket" },
+        headers: { "x-itx-expression": "itx.wsdyn", Upgrade: "websocket" },
       }),
     );
     if (res.status !== 101 || !res.webSocket)
@@ -90,18 +91,18 @@ export default class Consumer extends WorkerEntrypoint {
 }`;
 
 async function seedBoth(itx: ReturnType<typeof openItx>): Promise<void> {
-  await itx.invokeCapability(["itx", "kv", ["put", "src/provider.js", PROVIDER_SRC]]);
-  await itx.invokeCapability(["itx", "kv", ["put", "src/consumer.js", CONSUMER_SRC]]);
+  await itx.invoke(["itx", "kv", ["put", "src/provider.js", PROVIDER_SRC]]);
+  await itx.invoke(["itx", "kv", ["put", "src/consumer.js", CONSUMER_SRC]]);
 }
 const runProvider = (itx: ReturnType<typeof openItx>, mode: string): Promise<unknown> =>
-  itx.invokeCapability(`itx.load("itx.kv.get('src/provider.js')").getEntrypoint().run('${mode}')`);
+  itx.invoke(`itx.load("itx.kv.get('src/provider.js')").getEntrypoint().run('${mode}')`);
 
-test("within the provider's invocation: a dyn-provided live capability serves PLAIN fetch", async () => {
+test("within the provider's invocation: a dyn-provided lent stub serves PLAIN fetch", async () => {
   const itx = openItx(freshCtx("dynliveself"));
   await seedBoth(itx);
   const out = (await runProvider(itx, "self-plain")) as { status: number; body: string };
-  // dyn-worker → env.ITX (Fetcher) → DO fetch lane → live stub invoke(['fetch']) → back into the
-  // SAME dyn-worker's device — a socketless Response crosses every native hop.
+  // dyn-worker → env.ITX (Fetcher) → DO fetch lane → rewrite rule → lent stub's terminal fetch →
+  // back into the SAME dyn-worker's device — a socketless Response crosses every native hop.
   expect(out).toEqual({ status: 200, body: "dyn live site" });
 });
 
@@ -115,7 +116,7 @@ test("within the provider's invocation: a dyn-provided live capability serves PL
 // EXPECTED: parity with capnweb providers — 101 + echo. Fix directions in the session notes: the
 // symmetric dial-back (the provider opens its OWN upgrade leg via its env.ITX Fetcher — it HAS
 // one) or an SDK-side provider shim; the plain-fetch half (test above) already works everywhere.
-test.fails("within the provider's invocation: WEBSOCKET fetch of the dyn-provided live capability", async () => {
+test.fails("within the provider's invocation: WEBSOCKET fetch of the dyn-provided lent stub", async () => {
   const itx = openItx(freshCtx("dynlivewsself"));
   await seedBoth(itx);
   const out = (await runProvider(itx, "self-ws")) as {
@@ -126,26 +127,27 @@ test.fails("within the provider's invocation: WEBSOCKET fetch of the dyn-provide
   expect(out).toEqual({ status: 101, echo: "dyn-echo:hi-self" });
 });
 
-// BUG-OR-CONTRACT (VERIFIED, re-measured 2026-09-01): a dyn-provided live STUB DIES WITH THE
+// BUG-OR-CONTRACT (VERIFIED, re-measured 2026-09-01): a dyn-provided lent STUB DIES WITH THE
 // PROVIDING INVOCATION. The IterateContext scope a dynamic worker gets from env.ITX.get() lives in the
 // ItxEntrypoint loopback's request context; the lend relay + pager socket holding the provider
 // transport die when that context ends (the run() call chain completing), so the DO drops the
-// stub from its `itx.rpcStubs` registry. The MOUNT at itx.wsdyn is pure data and STAYS (nothing
-// auto-revokes a mount because a socket dropped) — worker B resolves it and hits the offline
+// stub from its `itx.rpcStubs` registry. The REWRITE RULE at itx.wsdyn is pure data and STAYS
+// (only a disposed handle or a dying capnweb SESSION un-sets a provided stub's rule, and a dyn
+// worker's env.ITX.get() scope has neither) — worker B rewrites through it and hits the offline
 // registry entry, which the fetch lane reports as
-//   500 "fetch lane error: Error: live capability \"itx.wsdyn\" is offline" (RPC_STUB_OFFLINE)
-// — mounted-but-offline, not default-deny; measured here as `expected 500 to be 200`.
+//   500 "fetch lane error: … rpc stub \"itx.wsdyn\" is offline" (RPC_STUB_OFFLINE)
+// — a rule with no stub lent, not default-deny; measured here as `expected 500 to be 200`.
 // (holding the itx stub on the provider's globalThis does NOT keep the remote context alive).
 // EXPECTED (the scenario this pins): provide in one invocation, fetch from another worker later.
 // Whether the fix is a detached-provider primitive (session-shaped lending for dyn workers) or a
-// doctrine ruling ("live caps are invocation-scoped; detached fetch-shaped things must be MOUNTED
+// doctrine ruling ("lent stubs are invocation-scoped; detached fetch-shaped things must be LOADED
 // code — itx.load(...).getEntrypoint() / a named durable facet, both of which already serve WS")
 // is an owner call — see the session notes.
-test.fails("ACROSS invocations: worker B fetches the capability A provided (the detached-provider question)", async () => {
+test.fails("ACROSS invocations: worker B fetches the stub A provided (the detached-provider question)", async () => {
   const itx = openItx(freshCtx("dynlivex"));
   await seedBoth(itx);
   expect(await runProvider(itx, "provide")).toBe("provided");
-  const out = (await itx.invokeCapability(
+  const out = (await itx.invoke(
     `itx.load("itx.kv.get('src/consumer.js')").getEntrypoint().run('plain')`,
   )) as { status: number; body: string };
   expect(out.status).toBe(200);

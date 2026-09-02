@@ -1,9 +1,10 @@
-// e2e/support/targets.ts — the live-capability fixtures: RpcTargets a test PROVIDES at a path
-// (`itx.provide("itx.x", new Tools("x"))`) and then calls through the table from another session.
+// e2e/support/targets.ts — the live rpc-stub fixtures: RpcTargets a test PROVIDES under an rpc-stub
+// key with a rewrite rule at the same spelling (`itx.provide("itx.x", { stub: new Tools("x"),
+// rewrite: "itx.x" })`) and then calls through the rules from another session.
 
 import { RpcTarget } from "capnweb";
 
-/** The plainest live capability: one method, tagged so a call proves WHICH provider answered. */
+/** The plainest live rpc stub: one method, tagged so a call proves WHICH provider answered. */
 export class Tools extends RpcTarget {
   #tag: string;
   constructor(tag: string) {

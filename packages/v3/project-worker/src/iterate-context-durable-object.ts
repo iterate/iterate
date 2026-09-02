@@ -9,8 +9,9 @@
 //     one injected callback (onCommit) closes over this class — nothing in stream/stream.ts reaches back;
 //   • the CORE REDUCE — ONE reduce-only processor (core-processor.ts) reduced INSIDE the commit
 //     transaction, always on: who this context is, which incarnation runs, whether appends are
-//     paused, the CAPABILITY MOUNTS every call routes through (capability-table.ts reads them) and
-//     the SUBSCRIPTION rows every commit is sent to (subscriptions.ts builds their events). Runtime
+//     paused, the ITX-EXPRESSION REWRITE RULES every call goes through (itx-expression-rewriting.ts
+//     reads them) and the SUBSCRIPTION rows every commit is sent to (subscriptions.ts builds their
+//     events). Runtime
 //     state IS reduced state — observability is its snapshot (`itx.facets.get('core')`);
 //   • SUBSCRIPTION DELIVERY — ONE loop (subscription-delivery.ts) run from onCommit: evaluate each
 //     subscription's target and look at the value — a facet or a live stub owns its progress and
@@ -25,12 +26,15 @@
 //     plus two EPHEMERAL events as it changes (`rpc-stub/attached` / `rpc-stub/detached`) — the log
 //     never claims a socket is open;
 //   • the FETCH DOOR — the one place a 101 can enter: `x-itx-rpc-stub-pager` accepts a pager
-//     WebSocket, `x-itx-cap` resolves the fetch lane, anything else is EGRESS (secret
+//     WebSocket, `x-itx-expression` resolves the fetch lane, anything else is EGRESS (secret
 //     placeholder substitution → the FALLBACK terminal).
 //
 // PURE WORKERS-RPC: capnweb never terminates here (hard rule) — the stateless `/api` worker
-// relays. Dispatch is ONE door: `invoke(call)` — parse → route the table → substitute → evaluate
-// → replay, all against the inline capability table; this class only delegates.
+// relays. Dispatch is ONE door: `invoke(call)` — parse → rewrite through the rules → evaluate →
+// replay, all against the inline core state; this class only delegates. Every OTHER change to this
+// context is an appended event: the edge's `rewrite`/`subscribe`/`enableProcessor` verbs build one
+// and call `append` — there are no configuration verbs here. The ONE event this class appends on its
+// own initiative is the un-set of whatever named an rpc stub whose last pager closed (onPresence).
 
 import { DurableObject } from "cloudflare:workers";
 import { substituteHeaderSecrets } from "@v3/shared/egress";
@@ -45,15 +49,14 @@ import { withTimeout } from "./lib/timeout.ts";
 import type { StreamEvent, StreamEventInput } from "./stream/events.ts";
 import {
   parse,
-  canonicalItxExpressionPrefix,
   print,
   toItxExpression,
   type ItxExpression,
   type ItxExpressionInput,
 } from "./context/expression.ts";
 import {
-  CAPABILITY_FETCH_HEADER,
-  expressionEndingInFetch,
+  ITX_EXPRESSION_FETCH_HEADER,
+  itxExpressionEndingInFetch,
   RpcStubFetchServer,
 } from "./fetch/rpc-stub-fetch.ts";
 import { walkSteps } from "./context/dispatch.ts";
@@ -68,12 +71,11 @@ import {
 import { DurableObjectNameCodec } from "./context/durable-object-names.ts";
 import { itxEntrypointFor } from "./itx-entrypoint.ts";
 import {
-  CapabilityResolver,
-  capabilityProvidedEvent,
-  capabilityRevokedEvent,
-} from "./context/capability-table.ts";
+  ItxExpressionResolver,
+  rewriteRuleConfiguredEvent,
+} from "./context/itx-expression-rewriting.ts";
+import { subscriptionConfiguredEvent } from "./stream/subscriptions.ts";
 import { buildBuiltIns, type SubscriptionListEntry } from "./context/built-ins.ts";
-import { subscriptionConfiguredEvent, subscriptionRemovedEvent } from "./stream/subscriptions.ts";
 import { SubscriptionDelivery } from "./stream/subscription-delivery.ts";
 
 function parseIterateContextDurableObjectName(name: string | undefined) {
@@ -121,13 +123,34 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     // ["events.iterate.com/rpc-stub/attached", …]`), never a durable row — presence is physical
     // (`itx.rpcStubs.list()`), and the log must never claim a socket is open. A refusal (a paused
     // stream) is nothing to report: the watcher re-seeds from list().
-    onPresence: (kind, rpcStubKey) =>
+    onPresence: (kind, rpcStubKey) => {
       void this.append({
         type: `events.iterate.com/rpc-stub/${kind}`,
         ephemeral: true,
         payload: { rpcStubKey },
-      }).catch(() => undefined),
+      }).catch(() => undefined);
+      // THE STUB IS GONE, SO IS WHAT NAMED IT: when a key's LAST pager closes, every rewrite rule and
+      // every subscription whose target is `itx.rpcStubs.get('<key>')` is un-set — the durable half
+      // of "a provided stub's rule dies with the stub". Decided HERE and not in the lender's session
+      // teardown because only this side knows the truth: a reconnect REPLACES the pager (never a
+      // detach), so the reconnected session's rule survives a late-dying old session, while a
+      // genuine last close un-sets it exactly once.
+      if (kind === "detached") this.#unsetWhatNamesRpcStub(rpcStubKey);
+    },
   });
+
+  #unsetWhatNamesRpcStub(rpcStubKey: string): void {
+    const target = print(["itx", "rpcStubs", ["get", rpcStubKey]]);
+    const { itxExpressionRewriteRules, subscriptions } = this.#stream.coreReducedState;
+    for (const rule of Object.values(itxExpressionRewriteRules))
+      if (print(rule.target) === target)
+        void this.append(rewriteRuleConfiguredEvent(rule.match, null)).catch(() => undefined);
+    for (const [name, subscription] of Object.entries(subscriptions))
+      if (print(subscription.target) === target)
+        void this.append(subscriptionConfiguredEvent({ name, target: null })).catch(
+          () => undefined,
+        );
+  }
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -187,10 +210,10 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     return this.#stream.read(afterOffset, limit);
   }
 
-  /** THE DISPATCHER (context/capability-table.ts), built once over the physical built-ins — every
-   *  entry below closes over this context's identity, so cross-project access is unspellable. */
-  readonly #capabilityResolver = new CapabilityResolver({
-    mounts: () => this.#stream.coreReducedState.mounts,
+  /** THE DISPATCHER (context/itx-expression-rewriting.ts), built once over the physical built-ins —
+   *  every entry below closes over this context's identity, so cross-project access is unspellable. */
+  readonly #itxExpressionResolver = new ItxExpressionResolver({
+    rewriteRules: () => Object.values(this.#stream.coreReducedState.itxExpressionRewriteRules),
     builtIns: buildBuiltIns({
       projectId: this.#name.projectId,
       path: this.#name.path,
@@ -232,6 +255,18 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         list: () => this.#subscriptionList(),
         get: (name) => this.#subscriptionList().find((s) => s.name === name) ?? null,
       },
+      expressionRewriteRules: {
+        list: () =>
+          Object.values(this.#stream.coreReducedState.itxExpressionRewriteRules).map((rule) => ({
+            match: print(rule.match),
+            target: print(rule.target),
+          })),
+        get: (match) => {
+          const rule = this.#stream.coreReducedState.itxExpressionRewriteRules[match];
+          return rule ? { match: print(rule.match), target: print(rule.target) } : null;
+        },
+      },
+      waitForEvent: (filter) => this.#stream.waitForEvent(filter),
       host: this.#itxHost,
     }),
   });
@@ -247,24 +282,6 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     evaluate: (expression) => this.invoke(expression),
     recordActivityForQuietClock: () => this.#recordActivityForQuietClock(),
   });
-
-  /** Configure (or replace) a subscription — the layer's one door (edge `subscribe` is sugar over
-   *  it). Idempotent against the current table: an identical subscribe appends nothing. */
-  async configureSubscription(input: {
-    name: string;
-    target: ItxExpressionInput;
-    consumes?: string[];
-  }): Promise<void> {
-    const event = subscriptionConfiguredEvent(this.#stream.coreReducedState.subscriptions, input);
-    if (event) await this.append(event);
-  }
-
-  /** Remove a subscription. Idempotent. A cursor target's cursor goes with it — the delivery loop
-   *  drops it when the removed event commits (so a hand-appended removal is honoured the same way). */
-  async removeSubscription(name: string): Promise<void> {
-    const event = subscriptionRemovedEvent(this.#stream.coreReducedState.subscriptions, name);
-    if (event) await this.append(event);
-  }
 
   /** The `itx.subscriptions` view: the reduced table joined with the delivery loop's cursors. */
   #subscriptionList(): SubscriptionListEntry[] {
@@ -497,72 +514,25 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     this.#liveFacets.delete(name);
   }
 
-  // ── dispatch (ONE path: the routing table — the core reduce's mounts, zero distance) ──
+  // ── dispatch (ONE path: the rewrite rules — the core reduce's own state, zero distance) ──
 
-  /** Resolve + run one call against the current table. The ONE dispatch door — `IterateContext` builds the
-   *  call ItxExpression client-side and hands it here (the ARRAY half can carry call args a dotted
-   *  STRING never could — callbacks, Dates, bytes: `["itx","tools",["transform",21,cb]]`). */
+  /** Resolve + run one call through the current rewrite rules. The ONE dispatch door — `IterateContext`
+   *  builds the call client-side and hands it here (the ARRAY half can carry call args a dotted STRING
+   *  never could — callbacks, Dates, bytes: `["itx","tools",["transform",21,cb]]`). */
   async invoke(call: ItxExpressionInput): Promise<unknown> {
     this.#recordActivityForQuietClock();
-    return this.#capabilityResolver.resolve(call);
+    return this.#itxExpressionResolver.resolve(call);
   }
 
-  /** Mount a capability: `path ⇒ target` (an expression rooted at itx). That is the whole event.
-   *  PROVIDING WHAT IS ALREADY PROVIDED IS IDEMPOTENT: if the current winner at this exact path is
-   *  this same target (compared as canonical strings), answer with ITS identity and append nothing
-   *  — what keeps a reconnect's re-provide at ZERO events and the table bounded under churn, with
-   *  the reduce left a pure shadow stack. A door policy, best-effort by design: two CONCURRENT
-   *  identical provides may both land, which is a harmless shadow. */
-  async provideCapability(input: {
-    path: string;
-    target: ItxExpressionInput;
-  }): Promise<{ providedAtOffset: number }> {
-    const pathString = canonicalItxExpressionPrefix(input.path); // the reduce stores the canonical path
-    const targetString = print(toItxExpression(input.target));
-    const winner = this.#newestMountAt(pathString);
-    if (winner && print(winner.target) === targetString)
-      return { providedAtOffset: winner.providedAtOffset };
-    const [committedEvent] = await this.append(
-      capabilityProvidedEvent({ path: pathString, target: input.target }),
-    );
-    return { providedAtOffset: committedEvent.offset };
-  }
-
-  /** Revoke by the mount's identity — or by its capability path (pops the newest winner at that
-   *  exact path; what it shadowed is restored). A mount and a lent stub are SEPARATE things:
-   *  revoking a live capability's mount leaves its stub in the registry (the edge that lent it
-   *  recalls it on `itx.revoke(path)`), and a stub that dies leaves its mount in the table (calls
-   *  answer RPC_STUB_OFFLINE until someone revokes it or the provider re-lends under the same
-   *  key — reconnect appends nothing). */
-  async revokeCapability(input: { providedAtOffset?: number; path?: string }): Promise<void> {
-    if (input.providedAtOffset !== undefined) {
-      // By identity: append the revoked event even for an already-gone row (idempotent through
-      // the reduce — a benign double-revoke must stay silent).
-      await this.append(capabilityRevokedEvent(input.providedAtOffset));
-      return;
-    }
-    if (!input.path) throw new Error("revokeCapability: pass providedAtOffset or path");
-    const pathString = canonicalItxExpressionPrefix(input.path);
-    const winner = this.#newestMountAt(pathString);
-    if (!winner) throw new Error(`no mount at path ${JSON.stringify(pathString)}`);
-    await this.append(capabilityRevokedEvent(winner.providedAtOffset));
-  }
-
-  /** The mount answering at a canonical path right now — the newest of its shadow stack. */
-  #newestMountAt(pathString: string) {
-    return this.#stream.coreReducedState.mounts
-      .filter((m) => print(m.path) === pathString)
-      .sort((a, b) => b.providedAtOffset - a.providedAtOffset)[0];
-  }
-
-  // ── native fetch: the stub pager door, the fetch lane, observability, egress ──
+  // ── native fetch: the rpc-stub pager door, the fetch lane, egress ──
 
   async fetch(request: Request): Promise<Response> {
     // The doors, in order — each answers or declines:
     //   1. the stub pager and the live-capability upgrade leg (the rpc-stub machinery);
-    //   2. THE CAPABILITY FETCH LANE — `x-itx-cap` names an itx expression (JSON from a session's
-    //      terminal `fetch(request)`, dotted text from the edge's `/cap?cap=`), resolved as a
-    //      terminal-fetch call against the table with the live Request as its one runtime arg; a
+    //   2. THE ITX-EXPRESSION FETCH LANE — `x-itx-expression` names an itx expression (JSON from a
+    //      session's terminal `fetch(request)`, dotted text from the edge's `/expression?itx=`),
+    //      resolved as a terminal-fetch call through the rules with the live Request as its one
+    //      runtime arg; a
     //      101 flows back untouched; errors map to statuses by CODE. The routing header itself is
     //      stripped so it never reaches the capability or, below, egress;
     //   3. everything else is EGRESS (secret substitution → the FALLBACK terminal).
@@ -570,23 +540,24 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     if (pager) return pager;
     const upgradeLeg = this.#rpcStubFetch.acceptFetchUpgradeLeg(request);
     if (upgradeLeg) return upgradeLeg;
-    const capHeader = request.headers.get(CAPABILITY_FETCH_HEADER);
-    if (capHeader !== null) {
+    const itxExpressionHeader = request.headers.get(ITX_EXPRESSION_FETCH_HEADER);
+    if (itxExpressionHeader !== null) {
       try {
-        const expr = capHeader.trimStart().startsWith("[")
-          ? (JSON.parse(capHeader) as ItxExpression)
-          : parse(capHeader);
+        const itxExpression = itxExpressionHeader.trimStart().startsWith("[")
+          ? (JSON.parse(itxExpressionHeader) as ItxExpression)
+          : parse(itxExpressionHeader);
         const headers = new Headers(request.headers);
-        headers.delete(CAPABILITY_FETCH_HEADER);
-        const result = await this.#capabilityResolver.resolve(expressionEndingInFetch(expr), [
-          new Request(request, { headers }),
-        ]);
+        headers.delete(ITX_EXPRESSION_FETCH_HEADER);
+        const result = await this.#itxExpressionResolver.resolve(
+          itxExpressionEndingInFetch(itxExpression),
+          [new Request(request, { headers })],
+        );
         return result instanceof Response
           ? result
           : new Response(`fetch lane: ${JSON.stringify(result)}\n`);
       } catch (error) {
         const message = error instanceof Error ? (error.stack ?? error.message) : String(error);
-        const status = errorCode(error) === "NO_CAPABILITY_MATCH" ? 404 : 500;
+        const status = errorCode(error) === "NO_ITX_EXPRESSION_MATCH" ? 404 : 500;
         return new Response(`fetch lane error: ${message}\n`, { status });
       }
     }
@@ -594,7 +565,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   }
 
   // OBSERVABILITY has no dedicated verb: runtime state IS reduced state. Identity, incarnation,
-  // pause, the mounts and the subscription rows are ONE snapshot — `itx.facets.get('core').snapshot()`;
+  // pause, the rewrite rules and the subscription rows are ONE snapshot — `itx.facets.get('core').snapshot()`;
   // subscriptions joined with their cursors are `itx.subscriptions.list()`. A snapshot reads the
   // core reduce only, and arms no alarm (the quiet clock arms only while a facet is live or a stub is
   // borrowed).

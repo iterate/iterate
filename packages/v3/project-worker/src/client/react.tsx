@@ -16,9 +16,9 @@ export type LiveStateStatus = "connecting" | "live" | "error";
 
 /** Subscribe to a producer's live state and render its latest value. Pass a ready `itx` (a capnweb
  *  `api.authenticate().projects.get(id)`), the producer's `key`, and a `door` thunk that reads `{rev, state}`
- *  (`() => itx.invokeCapability("itx.facets.get('slug').liveSnapshot()")`). Re-subscribes when the
- *  session, `key`, or `name` changes; unmount (and every re-subscribe) unsubscribes the previous
- *  server-side mount. */
+ *  (`() => itx.invoke("itx.facets.get('slug').liveSnapshot()")`). Re-subscribes when the
+ *  session, `key`, or `name` changes; unmount (and every re-subscribe) disposes the previous
+ *  server-side subscription. */
 export function useLiveState<S>(
   itx: LiveItx | undefined,
   opts: { key: string; name?: string; door: () => Promise<LiveStateSeed<S>> },

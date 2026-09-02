@@ -43,7 +43,7 @@ test("a burst past the breaker's capacity pauses the stream (the facet appends `
   expect(codeOf(err)).toBe("STREAM_PAUSED");
   expect(err.message).toContain("stream paused: breaker: durable events exceeded the bucket");
   // the core snapshot shows the same truth
-  const core = await itx.invokeCapability("itx.facets.get('core').snapshot()");
+  const core = await itx.invoke("itx.facets.get('core').snapshot()");
   expect(core.state.paused).toEqual({ reason: "breaker: durable events exceeded the bucket" });
 
   // the operator's recovery is a plain control append — resume always lands on a paused stream
@@ -53,7 +53,7 @@ test("a burst past the breaker's capacity pauses the stream (the facet appends `
   // the bucket is in debt (no second crossing) — the ONE trip is the only `paused` in the log
   expect((await readAll(itx)).filter((e) => e.type === PAUSED)).toHaveLength(1);
   // and the breaker's reduced state is the pure reduce of the log: tokens below zero, replayable
-  const snap = await itx.invokeCapability("itx.facets.get('breaker').snapshot()");
+  const snap = await itx.invoke("itx.facets.get('breaker').snapshot()");
   expect(snap.state.tokens).toBeLessThan(0);
   expect(snap.state.lastAtMs).toBeGreaterThan(0);
 });

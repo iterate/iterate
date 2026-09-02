@@ -40,7 +40,7 @@ async function connectAndEnable(): Promise<any> {
   const itx = await (newWebSocketRpcSession(url.toString()) as any)
     .authenticate()
     .projects.get(CTX);
-  await itx.invokeCapability(["itx", "kv", ["put", "src/presence.js", PRESENCE_SRC]]);
+  await itx.invoke(["itx", "kv", ["put", "src/presence.js", PRESENCE_SRC]]);
   await itx.enableProcessor("presence", {
     source: "itx.kv.get('src/presence.js')",
     className: "PresenceDurableObject",
@@ -69,13 +69,13 @@ function Demo() {
 
   const { value, rev, status, error } = useLiveState<{ ticks: number; lastPokeMs: number }>(itx, {
     key: "presence",
-    door: () => itx.invokeCapability("itx.facets.get('presence').liveSnapshot()"),
+    door: () => itx.invoke("itx.facets.get('presence').liveSnapshot()"),
   });
 
   // A failed append (a dropped socket, a paused stream) must surface on the page, not vanish as an
   // unhandled rejection while the status still says "live".
   const append = (event: Record<string, unknown>) =>
-    void itx?.invokeCapability(["itx", ["append", event]]).catch((e: unknown) => {
+    void itx?.invoke(["itx", ["append", event]]).catch((e: unknown) => {
       setConnectError(`append failed: ${e instanceof Error ? e.message : String(e)}`);
     });
 

@@ -2,8 +2,8 @@
 // call is what keeps it alive), a SECOND session appends the matching event, and the waiting
 // promise resolves with the committed event. Plus the coded timeout. The wait/settle mechanics are
 // pinned deterministically in __workers-tests__/stream.test.ts; this file proves the doors end to
-// end — the capnweb edge (`IterateContext.waitForEvent` → DO → Stream) AND the loaded-worker lane
-// (`env.ITX.waitForEvent` → ItxEntrypoint → DO → Stream).
+// end — the capnweb edge (`itx.waitForEvent`, a built-in root riding `invoke` → DO → Stream) AND
+// the loaded-worker lane (`env.ITX.waitForEvent` → ItxEntrypoint → DO → Stream).
 
 import { expect, test } from "vitest";
 import { freshCtx, openItx, sleep } from "./support/client.ts";
@@ -12,14 +12,14 @@ test("waitForEvent round trip: awaited via session A, appended via session B, re
   const ctx = freshCtx("wait");
   const itxA = openItx(ctx);
   const itxB = openItx(ctx);
-  await itxB.invokeCapability(`itx.append({ type: 'seed' })`);
+  await itxB.invoke(`itx.append({ type: 'seed' })`);
   // Anchor at the CURRENT head explicitly: the wait then resolves whether it registers first or the
   // append lands first (no ordering flake) — while the sleep below makes the waiting path the one
   // actually exercised.
-  const head = (await itxA.invokeCapability("itx.read(0)")).scannedThroughOffset;
+  const head = (await itxA.invoke("itx.read(0)")).scannedThroughOffset;
   const pending = itxA.waitForEvent({ type: "ping", afterOffset: head, timeoutMs: 20_000 });
   await sleep(300);
-  await itxB.invokeCapability(`itx.append({ type: 'ping', payload: { n: 1 } })`);
+  await itxB.invoke(`itx.append({ type: 'ping', payload: { n: 1 } })`);
   const got = await pending;
   expect(got.type).toBe("ping");
   expect(got.payload).toEqual({ n: 1 });
@@ -34,7 +34,7 @@ test("waitForEvent through a LOADED worker's env.ITX — the ItxEntrypoint door 
   // Workers-RPC lane no other suite drives), not the itx scope behind `env.ITX.get()`. A runScript
   // lambda only ever sees the scope, so a real entrypoint is loaded: its `run` opens the wait
   // through env.ITX, a second session appends, and the loaded worker returns the committed event.
-  await itxA.invokeCapability([
+  await itxA.invoke([
     "itx",
     "kv",
     [
@@ -48,12 +48,12 @@ export default class Waiter extends WorkerEntrypoint {
 }`,
     ],
   ]);
-  const head = (await itxA.invokeCapability("itx.read(0)")).scannedThroughOffset;
-  const pending = itxA.invokeCapability(
+  const head = (await itxA.invoke("itx.read(0)")).scannedThroughOffset;
+  const pending = itxA.invoke(
     `itx.load("itx.kv.get('src/waiter.js')").getEntrypoint().run(${head})`,
   );
   await sleep(500); // let the loaded worker start waiting before the append (the anchored afterOffset makes either order correct)
-  await itxB.invokeCapability(`itx.append({ type: 'ping', payload: { via: 'entrypoint' } })`);
+  await itxB.invoke(`itx.append({ type: 'ping', payload: { via: 'entrypoint' } })`);
   const got = await pending;
   expect(got.type).toBe("ping");
   expect(got.payload).toEqual({ via: "entrypoint" });

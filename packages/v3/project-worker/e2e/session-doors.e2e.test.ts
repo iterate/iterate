@@ -1,6 +1,6 @@
 // session-doors.e2e.test.ts — the session's doors: one-shot HTTP batch at /api (no WebSocket),
-// a fetch-shaped capability through the session as a dotted `.fetch(request)` (the commissioned fork
-// feature carries the Response back), disableProcessor, the repo.
+// a fetch-shaped target through the session as a dotted `.fetch(request)` behind a rewrite rule (the
+// commissioned fork feature carries the Response back), disableProcessor, the repo.
 
 import { expect, test } from "vitest";
 import { freshCtx, httpBatch, openItx, processorNames } from "./support/client.ts";
@@ -14,7 +14,7 @@ test("edge adoption: one-shot HTTP batch whoami, kv-source worker, dotted .fetch
   const who = await httpBatch()
     .authenticate()
     .projects.get(ctx)
-    .invokeCapability(["itx", ["whoami"]]);
+    .invoke(["itx", ["whoami"]]);
   // one-shot HTTP batch: whoami without a socket
   expect(who?.projectId).toBe(ctx);
 
@@ -23,7 +23,7 @@ test("edge adoption: one-shot HTTP batch whoami, kv-source worker, dotted .fetch
   await seedSources(itx, ["site"]);
 
   // 2. SOURCE IS PLAIN KV (the files/repo roots died in increment 57): put source, run it
-  await itx.invokeCapability([
+  await itx.invoke([
     "itx",
     "kv",
     [
@@ -38,15 +38,14 @@ export default class Mine extends WorkerEntrypoint {
 }`,
     ],
   ]);
-  const out = await itx.invokeCapability(
-    `itx.load("itx.kv.get('src/mine.js')").getEntrypoint().run()`,
-  );
+  const out = await itx.invoke(`itx.load("itx.kv.get('src/mine.js')").getEntrypoint().run()`);
   // kv-stored source runs as a worker (itx round-trip inside)
   expect(out).toBe(`from-kv:${ctx}`);
 
-  // 3. a fetch-shaped capability through the SESSION (no /cap door): the terminal `.fetch(request)`
-  //    rides the DO's fetch channel with the capability in x-itx-cap — one routing rule, no verb
-  await itx.provide("itx.site", `itx.load("itx.kv.get('src/site.js')").getEntrypoint()`);
+  // 3. a fetch-shaped target through the SESSION (no /expression door): the terminal
+  //    `.fetch(request)` rides the DO's fetch channel with the expression in x-itx-expression — one
+  //    routing fork, no verb; `itx.site` is an ordinary rewrite rule onto the loaded entrypoint
+  await itx.rewrite("itx.site", `itx.load("itx.kv.get('src/site.js')").getEntrypoint()`);
   const resp = await itx.site.fetch(new Request("https://itx.site/"));
   const html = await resp.text();
   // the Response rides back over capnweb
@@ -55,13 +54,13 @@ export default class Mine extends WorkerEntrypoint {
 
   // 4. disableProcessor: enable (from the fixture source), disable, snapshot now refuses
   await enableFixtureProcessor(itx, "tally");
-  await itx.invokeCapability(`itx.append({ type: 'mark' })`);
+  await itx.invoke(`itx.append({ type: 'mark' })`);
   expect(await processorNames(itx)).toEqual(["tally"]);
   await itx.disableProcessor("tally");
   expect(await processorNames(itx)).toEqual([]); // the subscription row is gone…
   let denied = "";
   try {
-    await itx.invokeCapability("itx.facets.get('tally').snapshot()");
+    await itx.invoke("itx.facets.get('tally').snapshot()");
   } catch (e) {
     denied = String(e);
   }

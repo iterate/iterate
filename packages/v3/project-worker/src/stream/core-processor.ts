@@ -5,14 +5,14 @@
 //   who this context is       stream/created { projectId, path }            → projectId · path · createdAt
 //   which incarnation runs    stream/woken { incarnation }                  → incarnation
 //   may appends land          stream/paused { reason } · stream/resumed     → paused        (one `if` in Stream.append)
-//   how calls route           capability-table/capability-provided|-revoked → mounts        (route(), every invoke)
-//   who is sent each commit   stream/subscription-configured|-removed|
+//   how calls rewrite         itx/rewrite-rule-configured { match, target|null } → itxExpressionRewriteRules (every invoke)
+//   who is sent each commit   stream/subscription-configured { name, target|null }|
 //                             -delivery-halted|-delivery-resumed            → subscriptions (the delivery loop)
 //
 // ONE reduce, no effects, no verbs — the same `StreamProcessor` class every facet processor is,
 // owned by the Stream itself (stream.ts `#coreReducedState`, reduced inside every commit) because
 // its readers are the append door, the dispatcher and the delivery loop, all synchronous. The COMMANDS that append these events live
-// beside the code that reads each slice (context/capability-table.ts for mounts,
+// beside the code that reads each slice (context/itx-expression-rewriting.ts for the rules,
 // stream/subscriptions.ts for rows); the READERS are pure functions over the state. Control is
 // ORDINARY EVENTS: `itx.append({ type: 'events.iterate.com/stream/paused', payload: { reason } })`
 // pauses, `stream/resumed` resumes — so a POLICY processor (a token-bucket breaker, a quota) runs as
@@ -28,8 +28,8 @@ import { z } from "zod";
 import {
   parse,
   parseItxExpressionPrefix,
-  type ItxExpressionPrefix,
   type ItxExpression,
+  type ItxExpressionPrefix,
 } from "../context/expression.ts";
 import { defineProcessorContract } from "./events.ts";
 import { StreamProcessor, type ReduceArgs } from "./processor.ts";
@@ -42,9 +42,9 @@ export const SubscriptionName = z
 
 export const CoreContract = defineProcessorContract({
   slug: "core",
-  version: "3.0.0", // 3.0.0: ONE core reduce — identity, wake, pause, mounts, subscriptions (the breaker left for a facet)
+  version: "4.0.0", // 4.0.0: rewrite rules are a MAP under itx/rewrite-rule-configured; subscription-configured absorbs removal
   description:
-    "The context's own state, reduced inline at the commit point: who it is, which incarnation runs, whether appends are paused, the capability mounts every call routes through, and the subscriptions every commit is sent to.",
+    "The context's own state, reduced inline at the commit point: who it is, which incarnation runs, whether appends are paused, the itx-expression rewrite rules every call goes through, and the subscriptions every commit is sent to.",
   stateSchema: z.object({
     /** From the birth certificate (stream/created, offset 1). */
     projectId: z.string().optional(),
@@ -53,19 +53,19 @@ export const CoreContract = defineProcessorContract({
     /** From the wake record (stream/woken) — growth across idle is the hibernation tell. */
     incarnation: z.number().optional(),
     paused: z.object({ reason: z.string() }).nullable().default(null),
-    /** THE CAPABILITY TABLE: a shadow stack — same-path mounts coexist, newest wins, revoke-by-offset
-     *  pops exactly one. The EVENT stores both halves as strings; they are parsed here, once. */
-    mounts: z
-      .array(
+    /** THE REWRITE-RULE TABLE, by canonical match: a configured target REPLACES, `null` DELETES (a
+     *  map — no stack, no identity beyond the match). The EVENT stores both halves as strings; they
+     *  are parsed here, once. */
+    itxExpressionRewriteRules: z
+      .record(
+        z.string(),
         z.object({
           /** Dotted names; a call step pins literal args (`itx.ai.run('gpt-5')`) — expression.ts ItxExpressionPrefix. */
-          path: z.custom<ItxExpressionPrefix>(() => true),
+          match: z.custom<ItxExpressionPrefix>(() => true),
           target: z.custom<ItxExpression>(() => true),
-          /** The mount's identity — the offset of its capability-provided event. */
-          providedAtOffset: z.number().int().positive(),
         }),
       )
-      .default([]),
+      .default({}),
     /** THE SUBSCRIPTIONS TABLE: by name; a same-named configure REPLACES (no stack). */
     subscriptions: z
       .record(
@@ -105,28 +105,19 @@ export const CoreContract = defineProcessorContract({
       payloadSchema: z.object({ reason: z.string().default("paused") }),
     },
     "events.iterate.com/stream/resumed": { payloadSchema: z.object({}) },
-    "events.iterate.com/capability-table/capability-provided": {
+    "events.iterate.com/itx/rewrite-rule-configured": {
       description:
-        "Mount a capability at `path` → a `target` expression (string half of the codec — the log stays human-readable; same-path mounts SHADOW, newest wins). That is the whole event. A live stub's mount targets `itx.rpcStubs.get('<path>')`.",
-      payloadSchema: z.object({ path: z.string(), target: z.string() }),
-    },
-    "events.iterate.com/capability-table/capability-revoked": {
-      description:
-        "Pop exactly the mount created at `providedAtOffset` (what's beneath is restored).",
-      payloadSchema: z.object({ providedAtOffset: z.number().int().positive() }),
+        "The rewrite rule at `match` is now `target` (string half of the codec — the log stays human-readable) — or, with `target: null`, gone. A call starting with `match` runs as the same call with `match` replaced by `target`. A lent stub's rule targets `itx.rpcStubs.get('<rpcStubKey>')`.",
+      payloadSchema: z.object({ match: z.string(), target: z.string().nullable() }),
     },
     "events.iterate.com/stream/subscription-configured": {
       description:
-        "Send each committed batch (filtered by `consumes`) to `target`, an itx expression whose terminal is callable with (events, range). Same name REPLACES.",
+        "Send each committed batch (filtered by `consumes`) to `target`, an itx expression whose terminal is callable with (events, range). Same name REPLACES; `target: null` removes the row (and, for a cursor target, its cursor).",
       payloadSchema: z.object({
         name: SubscriptionName,
-        target: z.string(),
+        target: z.string().nullable(),
         consumes: z.array(z.string()).optional(),
       }),
-    },
-    "events.iterate.com/stream/subscription-removed": {
-      description: "Stop: drop the named subscription (and, for a cursor target, its cursor).",
-      payloadSchema: z.object({ name: SubscriptionName }),
     },
     "events.iterate.com/stream/subscription-delivery-halted": {
       description:
@@ -152,10 +143,8 @@ export const CoreContract = defineProcessorContract({
     "events.iterate.com/stream/woken",
     "events.iterate.com/stream/paused",
     "events.iterate.com/stream/resumed",
-    "events.iterate.com/capability-table/capability-provided",
-    "events.iterate.com/capability-table/capability-revoked",
+    "events.iterate.com/itx/rewrite-rule-configured",
     "events.iterate.com/stream/subscription-configured",
-    "events.iterate.com/stream/subscription-removed",
     "events.iterate.com/stream/subscription-delivery-halted",
     "events.iterate.com/stream/subscription-delivery-resumed",
   ],
@@ -163,14 +152,14 @@ export const CoreContract = defineProcessorContract({
 });
 
 export type CoreState = z.infer<typeof CoreContract.stateSchema>;
-export type Mount = CoreState["mounts"][number];
+export type ItxExpressionRewriteRule = CoreState["itxExpressionRewriteRules"][string];
 export type Subscription = CoreState["subscriptions"][string];
 
 export class CoreStreamProcessor extends StreamProcessor<CoreState> {
   readonly contract = CoreContract;
 
   // Ephemeral control events are IGNORED (they would vanish from any rebuild). A malformed payload
-  // (a path with a call step, a target that does not parse) THROWS here like any reduce would; the
+  // (a match with an argless call step, a target that does not parse) THROWS here like any reduce would; the
   // host contains it (Stream.#reduceEventIntoCoreReducedState reports the issue and keeps the
   // state), so one bad hand-appended event never wedges a later commit.
   override reduce({ event, state }: ReduceArgs<CoreState>): CoreState | undefined {
@@ -191,40 +180,47 @@ export class CoreStreamProcessor extends StreamProcessor<CoreState> {
       case "events.iterate.com/stream/resumed":
         return { ...state, paused: null };
 
-      case "events.iterate.com/capability-table/capability-provided": {
-        const mount: Mount = {
-          path: parseItxExpressionPrefix(payload.path as string),
-          target: parse(payload.target as string),
-          providedAtOffset: event.offset,
+      case "events.iterate.com/itx/rewrite-rule-configured": {
+        // A `null` on a match that has no rule is a NO-OP (undefined), not a fresh object: the inline
+        // host detects change by identity, and a benign double-delete must not rewrite the checkpoint
+        // or publish a live-state delta.
+        const matchString = payload.match as string;
+        if (payload.target === null) {
+          if (!(matchString in state.itxExpressionRewriteRules)) return undefined;
+          const { [matchString]: _gone, ...rest } = state.itxExpressionRewriteRules;
+          return { ...state, itxExpressionRewriteRules: rest };
+        }
+        return {
+          ...state,
+          itxExpressionRewriteRules: {
+            ...state.itxExpressionRewriteRules,
+            [matchString]: {
+              match: parseItxExpressionPrefix(matchString),
+              target: parse(payload.target as string),
+            },
+          },
         };
-        return { ...state, mounts: [...state.mounts, mount] };
-      }
-      case "events.iterate.com/capability-table/capability-revoked": {
-        // A revoke of an already-gone mount is a NO-OP (undefined), not a fresh object: the inline
-        // host detects change by identity, and a benign double-revoke must not rewrite the
-        // checkpoint or publish a live-state delta.
-        const mounts = state.mounts.filter((m) => m.providedAtOffset !== payload.providedAtOffset);
-        return mounts.length === state.mounts.length ? undefined : { ...state, mounts };
       }
 
       case "events.iterate.com/stream/subscription-configured": {
+        const name = payload.name as string;
+        if (payload.target === null) {
+          if (!(name in state.subscriptions)) return undefined;
+          const { [name]: _gone, ...rest } = state.subscriptions;
+          return { ...state, subscriptions: rest };
+        }
         const consumes = payload.consumes as string[] | undefined;
         return {
           ...state,
           subscriptions: {
             ...state.subscriptions,
-            [payload.name as string]: {
+            [name]: {
               target: parse(payload.target as string),
               ...(consumes && { consumes }),
               configuredAtOffset: event.offset,
             },
           },
         };
-      }
-      case "events.iterate.com/stream/subscription-removed": {
-        if (!((payload.name as string) in state.subscriptions)) return undefined;
-        const { [payload.name as string]: _gone, ...rest } = state.subscriptions;
-        return { ...state, subscriptions: rest };
       }
       case "events.iterate.com/stream/subscription-delivery-halted": {
         const row = state.subscriptions[payload.name as string];

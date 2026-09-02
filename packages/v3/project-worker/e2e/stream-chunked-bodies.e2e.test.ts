@@ -8,7 +8,7 @@ import { expect, test } from "vitest";
 import { append, freshCtx, openItx, readAll } from "./support/client.ts";
 
 const readOne = async (itx: any, offset: number) =>
-  (await itx.invokeCapability(["itx", ["read", offset - 1, 1]])).events[0];
+  (await itx.invoke(["itx", ["read", offset - 1, 1]])).events[0];
 
 test("a ~256KB payload round-trips byte-identically (the in-bounds control)", async () => {
   const itx = openItx(freshCtx("chunkctl"));
@@ -36,7 +36,7 @@ test("5MB chunked body: single dense event, byte-identical round-trip, idempoten
 
   // Read it back through a FRESH session (same ctx) — a real storage reassembly, not an echo.
   const itx2 = openItx(ctx);
-  const page = await itx2.invokeCapability(["itx", ["read", before.offset, 500]]);
+  const page = await itx2.invoke(["itx", ["read", before.offset, 500]]);
   const back = page.events.find((e: { offset: number }) => e.offset === big[0].offset);
   expect(back?.type).toBe("big");
   expect(back?.payload?.blob === blob).toBe(true); // byte-identical (identity check — never a 5MB diff)
@@ -94,12 +94,12 @@ test("read paging across a chunked event keeps the scanned-offset-range proof ho
   const [big] = await append(itx, { type: "big", payload: { blob } });
   const [e4, e5] = await append(itx, { type: "e4" }, { type: "e5" });
   // Page 1: a FULL page (limit 2 from just before e2) lands exactly ON the chunked event.
-  const page1 = await itx.invokeCapability(["itx", ["read", e2.offset - 1, 2]]);
+  const page1 = await itx.invoke(["itx", ["read", e2.offset - 1, 2]]);
   expect(page1.events.map((e: { offset: number }) => e.offset)).toEqual([e2.offset, big.offset]);
   expect(page1.scannedThroughOffset).toBe(big.offset); // the EVENT offset — never a chunk row's
   expect(page1.events[1].payload.blob === blob).toBe(true); // the body rode the page whole
   // Page 2 chains contiguously from the proof.
-  const page2 = await itx.invokeCapability(["itx", ["read", page1.scannedThroughOffset, 500]]);
+  const page2 = await itx.invoke(["itx", ["read", page1.scannedThroughOffset, 500]]);
   expect(page2.events.map((e: { offset: number }) => e.offset)).toEqual([e4.offset, e5.offset]);
   expect(page2.scannedThroughOffset).toBe(e5.offset);
 }, 60_000);

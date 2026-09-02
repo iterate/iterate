@@ -9,6 +9,7 @@
 import { evictDurableObject, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { expect, test } from "vitest";
 import type { ItxExpression } from "../src/context/expression.ts";
+import { subscriptionConfiguredEvent } from "../src/stream/subscriptions.ts";
 import { quiesce, stub } from "./support.ts";
 
 const COUNTER_SRC = /* js */ `
@@ -58,11 +59,13 @@ test("processor: a fresh facet's first snapshot (wake) with ephemerals at head c
   const s = stub(ctx);
   await s.invoke(["itx", "kv", ["put", "procsrc", COUNTER_SRC]]);
   // enable with a consumes FILTER: the configured event is not pushed; the facet is materialized and woken at configure time
-  await s.configureSubscription({
-    name: "counter",
-    target: [...loadChain("procsrc", "CounterDurableObject", "counter"), "processEventBatch"],
-    consumes: ["tick"],
-  });
+  await s.append(
+    subscriptionConfiguredEvent({
+      name: "counter",
+      target: [...loadChain("procsrc", "CounterDurableObject", "counter"), "processEventBatch"],
+      consumes: ["tick"],
+    }),
+  );
   // core's live-state delta (the configured row changed core) already sits at head (ephemeral); add one more so the tail is ≥ 2
   await s.append({ type: "blip", ephemeral: true });
   const p0 = await page(ctx);
@@ -108,11 +111,13 @@ test("stream-kept cursor: an alarm pump with ephemerals at head leaves the curso
   const ctx = "prj_rev_cursorskip";
   const s = stub(ctx);
   await s.invoke(["itx", "kv", ["put", "digsrc", DIGEST_SRC]]);
-  await s.configureSubscription({
-    name: "dig",
-    target: ["itx", ["load", "itx.kv.get('digsrc')"], ["getEntrypoint"], "processEventBatch"],
-    consumes: ["mark"],
-  });
+  await s.append(
+    subscriptionConfiguredEvent({
+      name: "dig",
+      target: ["itx", ["load", "itx.kv.get('digsrc')"], ["getEntrypoint"], "processEventBatch"],
+      consumes: ["mark"],
+    }),
+  );
   await s.append({ type: "mark" });
   await sleep(400);
   expect(
@@ -165,11 +170,13 @@ test("enable with a consumes filter: itx.facets.get(name) answers before the fir
   const ctx = "prj_rev_nofacet";
   const s = stub(ctx);
   await s.invoke(["itx", "kv", ["put", "procsrc", COUNTER_SRC]]);
-  await s.configureSubscription({
-    name: "c2",
-    target: [...loadChain("procsrc", "CounterDurableObject", "c2"), "processEventBatch"],
-    consumes: ["tick"],
-  });
+  await s.append(
+    subscriptionConfiguredEvent({
+      name: "c2",
+      target: [...loadChain("procsrc", "CounterDurableObject", "c2"), "processEventBatch"],
+      consumes: ["tick"],
+    }),
+  );
   await sleep(300); // onCommit's void #resolve(sub.target) has long finished
   const snap = (await s.invoke(["itx", "facets", ["get", "c2"], ["snapshot"]])) as {
     state: { n: number };
@@ -181,11 +188,13 @@ test("processor: a read-driven catch-up (snapshot after quiesce) with ephemerals
   const ctx = "prj_rev_procskip_b";
   const s = stub(ctx);
   await s.invoke(["itx", "kv", ["put", "procsrc", COUNTER_SRC]]);
-  await s.configureSubscription({
-    name: "counter",
-    target: [...loadChain("procsrc", "CounterDurableObject", "counter"), "processEventBatch"],
-    consumes: ["tick", "events.iterate.com/stream/subscription-configured"],
-  });
+  await s.append(
+    subscriptionConfiguredEvent({
+      name: "counter",
+      target: [...loadChain("procsrc", "CounterDurableObject", "counter"), "processEventBatch"],
+      consumes: ["tick", "events.iterate.com/stream/subscription-configured"],
+    }),
+  );
   await sleep(300); // the configured event is consumed → push → facet materialized, cursor = its offset (durable ground)
   await s.append({ type: "tick" }); // pushed → reduced, cursor = tick offset (durable)
   await sleep(300);

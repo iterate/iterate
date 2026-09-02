@@ -1,8 +1,9 @@
 // rpc-stubs-callback-fires-back.e2e.test.ts — the "get demo → rpc target → callLater(timeoutMs, cb)"
 // shape, live.
-// A Demo/Timer capability is provided at itx.demo; a callback passed to callLater fires back
-// later in the CALLER's isolate. Proven on BOTH lanes: a plain capnweb client, AND a dynamic
-// worker that reaches the scope via `env.ITX.get()` (the WorkerEntrypoint → IterateContext handoff).
+// A Demo/Timer RpcTarget is provided under itx.demo (rewrite rule at the same spelling); a callback
+// passed to callLater fires back later in the CALLER's isolate. Proven on BOTH lanes: a plain capnweb
+// client, AND a dynamic worker that reaches the scope via `env.ITX.get()` (the WorkerEntrypoint →
+// IterateContext handoff).
 
 import { RpcTarget } from "capnweb";
 import { expect, test } from "vitest";
@@ -27,9 +28,9 @@ class Demo extends RpcTarget {
 test("callLater(cb) fires back in the caller — capnweb client AND dynamic worker lanes", async () => {
   const ctx = freshCtx("calllater");
 
-  // bridge session provides itx.demo as a LIVE Demo capability (one door; the path is its identity).
+  // bridge session provides a LIVE Demo under itx.demo, rule itx.demo ⇒ itx.rpcStubs.get('itx.demo').
   const bridgeItx = openItx(ctx);
-  await bridgeItx.provide("itx.demo", new Demo());
+  const demo = await bridgeItx.provide("itx.demo", { stub: new Demo(), rewrite: "itx.demo" });
 
   // ── lane 1: a plain capnweb client ──
   const itx = openItx(ctx);
@@ -57,16 +58,16 @@ export default class Consumer extends WorkerEntrypoint {
     return { ran: true };
   }
 }`;
-  await itx.invokeCapability(["itx", "kv", ["put", "src/consumer.js", CONSUMER]]);
+  await itx.invoke(["itx", "kv", ["put", "src/consumer.js", CONSUMER]]);
   const ran = await itx.load("itx.kv.get('src/consumer.js')").getEntrypoint().run();
   // dynamic worker cap ran to completion (its callback resolved it)
   expect(ran?.ran).toBe(true);
   const got = await until("worker callback appended to the stream", async () => {
-    const page = await itx.invokeCapability(["itx", ["read", 0, 500]]);
+    const page = await itx.invoke(["itx", ["read", 0, 500]]);
     return page.events.find((e: { type: string }) => e.type === "pinged-from-worker");
   });
   // dynamic worker: env.ITX.get().demo.timer.callLater(cb) — the callback ran back inside the worker
   expect(got).toBeTruthy();
 
-  await bridgeItx.revoke("itx.demo");
+  demo[Symbol.dispose](); // recall the stub and un-set its rule
 });

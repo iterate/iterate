@@ -259,3 +259,23 @@ case? · DELETE/KEEP · lines saved · what a wrong deletion breaks).
 removal: `stream/subscription-configured { name, target | null, consumes? }`;
 `subscription-removed` is deleted. The event builders are `rewriteRuleConfiguredEvent(match, target)` and
 `subscriptionConfiguredEvent(name, target, consumes)`.
+
+## 9. As built (2026-09-02, the itx-surface commits)
+
+The code is the record; the differences from the sketches above, so this doc does not lie:
+
+- **Handles**: `provide` and `rewrite` return ONE class, `SessionScopedHandle` (just `[Symbol.dispose]` —
+  the caller already holds the key/match it passed); `subscribe` returns `SubscriptionHandle extends
+SessionScopedHandle` with a `name` getter (the generated name when none was given). No
+  `ProvidedRpcStub` / `ItxExpressionRewriteRuleHandle`.
+- **`provide(rpcStubKey, { stub, rewrite? })`** is the chapter-1 door and the chapter-3b sugar in one
+  signature; `invoke` takes an `ItxExpressionInput` from the start (the chapter-1 `invoke(key, ...args)`
+  spelling is `itx.rpcStubs.get('<key>')(...args)`).
+- **The edge writes through `invoke(["itx", ["append", event]])`** — the same door a client's dotted
+  `itx.append(...)` takes; the DO has no `append` verb the edge calls directly.
+- **Reads on the surface**: `itx.expressionRewriteRules.list()/get(match)` (strings), `itx.rpcStubs.list()`
+  (presence = borrowed ∪ pager-backed), `itx.subscriptions.list()/get(name)`, `itx.waitForEvent(...)` — all
+  built-in roots, zero edge code.
+- **Wire**: `x-itx-expression`, `/expression?context=…&itx=…`, `x-itx-rpc-stub-pager`; codes
+  `NO_ITX_EXPRESSION_MATCH`, `RPC_STUB_OFFLINE`; events `itx/rewrite-rule-configured { match, target|null }`,
+  `stream/subscription-configured { name, target|null, consumes? }`; core contract 4.0.0.

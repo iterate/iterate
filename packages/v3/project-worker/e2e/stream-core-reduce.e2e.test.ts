@@ -2,19 +2,19 @@
 // INLINE at the commit point (the apps/os shape). Control is ordinary events; enforcement is the
 // parent reading the reduce. Proves: pause refuses appends (control passes), resume heals, ephemerals
 // flow when unpaused, and the ONE core snapshot exposes the whole core truth — identity (created),
-// incarnation (woken), pause, the mounts and the subscription rows (runtime state IS reduced state
-// — hostState() died in C5; the breaker left core for a facet processor, see
+// incarnation (woken), pause, the rewrite rules and the subscription rows (runtime state IS reduced
+// state — hostState() died in C5; the breaker left core for a facet processor, see
 // processor-facet-breaker-pauses-the-stream.e2e).
 
 import { expect, test } from "vitest";
 import { freshCtx, openItx } from "./support/client.ts";
 
-test("core reduce: pause/resume, ephemerals flow when unpaused, ONE core snapshot carries identity + incarnation + pause + mounts + subscriptions", async () => {
+test("core reduce: pause/resume, ephemerals flow when unpaused, ONE core snapshot carries identity + incarnation + pause + rewrite rules + subscriptions", async () => {
   const ctx = freshCtx("core");
   const itx = openItx(ctx);
 
   const append = (type: string, payload?: Record<string, unknown>): Promise<unknown> =>
-    itx.invokeCapability(`itx.append(${JSON.stringify({ type, ...(payload && { payload }) })})`);
+    itx.invoke(`itx.append(${JSON.stringify({ type, ...(payload && { payload }) })})`);
   // Runs `fn`; returns "ok" if it rejects with a message matching `re`, null if it resolves, else
   // the (truncated) mismatched error message.
   const rejects = async (fn: () => Promise<unknown>, re: RegExp): Promise<string | null> => {
@@ -44,29 +44,33 @@ test("core reduce: pause/resume, ephemerals flow when unpaused, ONE core snapsho
   await append("work"); // resumed: plain appends flow again (a throw here fails the test)
 
   // ephemerals flow too (they cost no storage; nothing in core meters them)
-  const ephOk = await itx.invokeCapability(`itx.append({ type: 'chunk', ephemeral: true })`).then(
+  const ephOk = await itx.invoke(`itx.append({ type: 'chunk', ephemeral: true })`).then(
     () => true,
     (e: unknown) => String(e).slice(0, 80),
   );
   expect(ephOk).toBe(true);
 
   // ── observability: the ONE inline address ──
-  await itx.provide("itx.probe", "itx.whoami"); // a mount → core.mounts
+  await itx.rewrite("itx.probe", "itx.whoami"); // a rewrite rule → core.itxExpressionRewriteRules
   await itx.subscribe({ name: "watch", target: "itx.probe", consumes: ["never"] }); // a row → core.subscriptions
-  const snap = await itx.invokeCapability("itx.facets.get('core').snapshot()");
+  const snap = await itx.invoke("itx.facets.get('core').snapshot()");
   // identity from the birth certificate, incarnation from the wake record, pause from the pair
   expect(snap.state).toMatchObject({ projectId: ctx, path: "/", paused: null });
   expect(typeof snap.state.createdAt).toBe("string");
   expect(snap.state.incarnation).toBeGreaterThanOrEqual(1);
-  // the mounts and the subscription rows live in the SAME state — there is no second inline facet
-  expect(snap.state.mounts.map((m: { path: string[] }) => m.path.join("."))).toContain("itx.probe");
+  // the rewrite rules (a MAP by canonical match, both halves parsed) and the subscription rows live
+  // in the SAME state — there is no second inline facet
+  expect(snap.state.itxExpressionRewriteRules["itx.probe"]).toEqual({
+    match: ["itx", "probe"],
+    target: ["itx", "whoami"],
+  });
   expect(Object.keys(snap.state.subscriptions)).toContain("watch");
   expect(snap.state).not.toHaveProperty("breaker"); // policy left core — it is a facet processor now
-  for (const gone of ["capability-table", "subscriptions"]) {
-    const err = await itx.invokeCapability(`itx.facets.get('${gone}').snapshot()`).then(
+  for (const gone of ["rewrite-rules", "subscriptions"]) {
+    const err = await itx.invoke(`itx.facets.get('${gone}').snapshot()`).then(
       () => null,
       (e: unknown) => e as { code?: string },
     );
-    expect(err?.code).toBe("NO_FACET"); // the former inline addresses are plain (absent) facet names
+    expect(err?.code).toBe("NO_FACET"); // the core slices have no facet address of their own — plain (absent) names
   }
 });

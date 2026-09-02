@@ -19,9 +19,10 @@ import {
   presence,
   rawSession,
   rejection,
-  rpcStubMountPaths,
+  rpcStubRewriteRuleMatches,
   session,
   sleep,
+  subscriptions,
   until,
 } from "./support/client.ts";
 import { SlackReplayTarget, Tools } from "./support/targets.ts";
@@ -126,19 +127,19 @@ function expectOneRoundTrip(frames: WireFrame[], label: string): void {
 
 // ═══════════════════════════════ 1. PIPELINING of itx expressions on stubs ═══════════════════════════════
 
-test("pipelining: authenticate().projects.get(ctx).invokeCapability(whoami) with zero awaits = ONE round trip", async () => {
+test("pipelining: authenticate().projects.get(ctx).invoke(whoami) with zero awaits = ONE round trip", async () => {
   const ctx = freshCtx("pipe1");
   const w = wireSession();
   // The whole chain, no intermediate awaits — three pipelined calls, one pull, one answer.
   const who: any = await w.session
     .authenticate()
     .projects.get(ctx)
-    .invokeCapability(["itx", ["whoami"]]);
+    .invoke(["itx", ["whoami"]]);
   expect(who).toMatchObject({ projectId: ctx, path: "/" });
   const frames = w.frames.slice();
-  expectOneRoundTrip(frames, "auth().projects.get(ctx).invokeCapability()");
+  expectOneRoundTrip(frames, "auth().projects.get(ctx).invoke()");
   const t = tally(frames);
-  expect(t["out:push"]).toBe(3); // authenticate, get, invokeCapability — one push each
+  expect(t["out:push"]).toBe(3); // authenticate, get, invoke — one push each
   expect(t["out:pull"]).toBe(1); // only the awaited tail is pulled
   expect(t["in:resolve"]).toBe(1); // one answer for the one pull
   // The quiescent census, pinned EXACTLY (measured): the only extra frame is ONE outbound
@@ -157,12 +158,12 @@ test("pipelining: invokes on the NOT-YET-RESOLVED itx from cd() = ONE round trip
   const w = wireSession();
   // NOT awaited — pure addressing: root context, then cd to a sub-context of the same project.
   const itxPromise = w.session.authenticate().projects.get(ctx).cd("/pipelined");
-  const who: any = await itxPromise.invokeCapability(["itx", ["whoami"]]);
+  const who: any = await itxPromise.invoke(["itx", ["whoami"]]);
   expect(who).toMatchObject({ projectId: ctx, path: "/pipelined" });
   const frames = w.frames.slice();
-  expectOneRoundTrip(frames, "auth().projects.get(ctx).cd().invokeCapability()");
+  expectOneRoundTrip(frames, "auth().projects.get(ctx).cd().invoke()");
   const t = tally(frames);
-  expect(t["out:push"]).toBe(4); // authenticate, projects.get, cd, invokeCapability — one push each
+  expect(t["out:push"]).toBe(4); // authenticate, projects.get, cd, invoke — one push each
   expect(t["out:pull"]).toBe(1);
   expect(t["in:resolve"]).toBe(1);
   await sleep(300);
@@ -174,56 +175,51 @@ test("pipelining: invokes on the NOT-YET-RESOLVED itx from cd() = ONE round trip
   });
 });
 
-test("pipelining: provide(path, fn) + revoke on its UNRESOLVED result = ONE round trip; the mount dies, the stub outlives it until the session ends", async () => {
+test("pipelining: subscribe({ target: fn }) + subscribe({ name: <its UNRESOLVED name>, target: null }) = ONE round trip; the row is gone and the callback recalled", async () => {
   const ctx = freshCtx("pipe3");
   const w = wireSession();
   const itx = await w.session.authenticate().projects.get(ctx);
   const mark = w.mark();
   {
-    // ONE door, one burst: the provide is NOT awaited; the revoke names the mount by pipelining
-    // the unresolved result's providedAtOffset as its argument (capnweb serializes it as a
-    // pipeline reference, so the server delivers the revoke only after the provide resolved).
-    const provision = itx.provide("itx.piptool", (x: number) => x + 1);
-    await itx.revoke({ providedAtOffset: provision.providedAtOffset });
+    // ONE door, one burst: the subscribe is NOT awaited; the removal names the row by pipelining
+    // the unresolved handle's `name` getter as its argument (capnweb serializes it as a pipeline
+    // reference, so the server delivers the removal only after the subscribe resolved).
+    const subscription = itx.subscribe({ consumes: ["never"], target: () => undefined });
+    await itx.subscribe({ name: subscription.name, target: null });
   }
   const frames = w.since(mark);
-  expectOneRoundTrip(frames, "provide(path, fn) + revoke(result)");
+  expectOneRoundTrip(frames, "subscribe(fn) + subscribe({ name: result.name, target: null })");
   const t = tally(frames);
-  expect(t["out:push"]).toBe(2); // provide, revoke
-  expect(t["out:pull"]).toBe(1); // only revoke's result is awaited
+  expect(t["out:push"]).toBe(2); // subscribe, subscribe(null)
+  expect(t["out:pull"]).toBe(1); // only the removal's result is awaited
   expect(t["in:resolve"]).toBe(1);
   await sleep(300);
-  // Pinned EXACTLY (measured): the one extra is 1 outbound release (the provision import). There is
-  // NO inbound release: a revoke by OFFSET revokes the MOUNT only, the relay keeps the dup it lent
-  // under 'itx.piptool' until this session ends, so the server has nothing to release. All
-  // cleanup, still one round trip.
+  // Pinned EXACTLY (measured): after the round trip the cleanup is 1 outbound release (the client
+  // dropping the never-pulled subscription import — which disposes the server-side handle) and 1
+  // inbound release (the relay releasing the dup of the callback it lent, recalled by the removal).
+  // All cleanup, still one round trip.
   expect(tally(w.since(mark))).toEqual({
     "out:push": 2,
     "out:pull": 1,
     "in:resolve": 1,
     "out:release": 1,
+    "in:release": 1,
   });
-  // Correctness under pipelining: the provide really lent the stub AND appended its mount; the
-  // revoke-by-OFFSET popped THE row (default-deny restored) and touched nothing physical — the
-  // stub stays lent under 'itx.piptool' and listed by presence until this session ends
-  // (`itx.revoke(path)` is the spelling that also recalls it).
-  await until("the mount revoked (default-deny restored)", async () => {
-    const err = await rejection(itx.invokeCapability(["itx", ["piptool", 1]]));
-    return codeOf(err) === "NO_CAPABILITY_MATCH";
-  });
-  expect(await rpcStubMountPaths(itx)).toEqual([]); // the table has no row at the path
-  expect(await presence(itx)).toEqual(["itx.piptool"]); // the stub outlives its mount
+  // Correctness under pipelining: the subscribe really lent the callback AND appended its row; the
+  // removal (delivered after it) dropped THE row and recalled the stub — nothing left in either table.
+  expect(await subscriptions(itx)).toEqual([]);
+  await until("the callback recalled", async () => (await presence(itx)).length === 0);
 });
 
 // ═══════════════════════════════ 2. FRAMES PER CALL (regression pins) ═══════════════════════════════
 
-test("frames per call: ONE settled invokeCapability = exactly 2 outbound (push+pull) + 1 inbound (resolve)", async () => {
+test("frames per call: ONE settled invoke = exactly 2 outbound (push+pull) + 1 inbound (resolve)", async () => {
   const ctx = freshCtx("percall");
   const w = wireSession();
   const itx = await w.session.authenticate().projects.get(ctx); // settle the stub first
   await sleep(200);
   const mark = w.mark();
-  const who: any = await itx.invokeCapability(["itx", ["whoami"]]);
+  const who: any = await itx.invoke(["itx", ["whoami"]]);
   expect(who.path).toBe("/");
   const t = tally(w.since(mark));
   expect(t["out:push"]).toBe(1);
@@ -259,7 +255,7 @@ test("one-directional delivery: 100 ephemeral chunks arrive as inbound frames; t
   const producer = openItx(ctx); // a SECOND session appends
   const mark = w.mark();
   for (let i = 0; i < 100; i++)
-    await producer.invokeCapability([
+    await producer.invoke([
       "itx",
       ["append", { type: "chunk", ephemeral: true, payload: { n: i } }],
     ]);
@@ -300,10 +296,7 @@ test("one-directional delivery: batches keep flowing with the subscriber's outbo
   });
   const producer = openItx(ctx);
   const chunk = (n: number) =>
-    producer.invokeCapability([
-      "itx",
-      ["append", { type: "chunk", ephemeral: true, payload: { n } }],
-    ]);
+    producer.invoke(["itx", ["append", { type: "chunk", ephemeral: true, payload: { n } }]]);
   await chunk(0); // one probe proves the lane before the stall
   await until("the probe delivered", () => received.length >= 1, 10_000);
   await sleep(300); // its answer flushes before the stall
@@ -319,12 +312,12 @@ test("one-directional delivery: batches keep flowing with the subscriber's outbo
   expect(received).toEqual([...Array(21).keys()]); // in order, no loss, no dups
 }, 60_000);
 
-// ═══════════════════════════════ 4. DEEP CHAINING through live capabilities ═══════════════════════════════
+// ═══════════════════════════════ 4. DEEP CHAINING through live rpc stubs ═══════════════════════════════
 
 test("deep chaining: 3+ segment dotted paths through a live provider (getter → object of fns) resolve correctly, costing the client ONE round trip", async () => {
   const ctx = freshCtx("deep");
   const slack = new SlackReplayTarget();
-  await openItx(ctx).provide("itx.slack", slack);
+  await openItx(ctx).provide("itx.slack", { stub: slack, rewrite: "itx.slack" });
 
   const w = wireSession();
   const itx = await w.session.authenticate().projects.get(ctx);
@@ -332,9 +325,9 @@ test("deep chaining: 3+ segment dotted paths through a live provider (getter →
     (await presence(itx)).includes("itx.slack"),
   );
 
-  // String half: deep dots + a trailing call, straight through the mount path.
+  // String half: deep dots + a trailing call, straight through the rewrite rule.
   const mark1 = w.mark();
-  const posted: any = await itx.invokeCapability(
+  const posted: any = await itx.invoke(
     "itx.slack.chat.postMessage({ channel: '#wire', text: 'deep' })",
   );
   expect(posted).toMatchObject({ ok: true, ts: "1755.000100", channel: "#wire" });
@@ -345,12 +338,7 @@ test("deep chaining: 3+ segment dotted paths through a live provider (getter →
   expect(t1["in:resolve"]).toBe(1);
 
   // Array half: structured args through the same path.
-  const listed: any = await itx.invokeCapability([
-    "itx",
-    "slack",
-    "conversations",
-    ["list", { limit: 1 }],
-  ]);
+  const listed: any = await itx.invoke(["itx", "slack", "conversations", ["list", { limit: 1 }]]);
   expect(listed).toMatchObject({ ok: true });
   expect(listed.channels).toEqual([{ id: "C1", name: "general" }]);
 
@@ -360,28 +348,35 @@ test("deep chaining: 3+ segment dotted paths through a live provider (getter →
 
 // ═══════════════════════════════ 5. THE DISPOSAL CONTRACT ═══════════════════════════════
 
-test("disposal: `using` on the /api session stub recalls its lent stubs at scope exit — the mounts stay, answering RPC_STUB_OFFLINE", async () => {
-  // A live capability is two things with two lifetimes: the STUB is session-lived — `Symbol.dispose`
+test("disposal: `using` on the /api session stub recalls its lent stubs at scope exit — and un-sets their rules (default-deny afterwards)", async () => {
+  // A provided stub is two things, session-scoped as a pair: the STUB is physical — `Symbol.dispose`
   // on the session recalls every stub it lent, so `itx.rpcStubs.list()` stops listing them; the
-  // MOUNT is data and stays until an explicit `itx.revoke(path)` (the pipelined provide+revoke test
-  // above pins that half). This test pins the session half.
+  // REWRITE RULE is data, and capnweb disposes the provided handle with the session, which un-sets
+  // it. Nothing lingers: seen from another session the match is default-deny again.
   const ctx = freshCtx("using");
   const observer = openItx(ctx);
   {
     using scoped = session();
-    await scoped.authenticate().projects.get(ctx).provide("itx.scoped", new Tools("scoped"));
+    await scoped
+      .authenticate()
+      .projects.get(ctx)
+      .provide("itx.scoped", { stub: new Tools("scoped"), rewrite: "itx.scoped" });
     await until("the stub present while the scope lives", async () =>
       (await presence(observer)).includes("itx.scoped"),
     );
-    expect(await observer.invokeCapability("itx.scoped.hello()")).toBe("hello-from-scoped");
+    expect(await observer.invoke("itx.scoped.hello()")).toBe("hello-from-scoped");
+    expect(await rpcStubRewriteRuleMatches(observer)).toContain("itx.scoped");
   } // ← Symbol.dispose fires here: capnweb says goodbye, the session tears every relay down
   await until(
     "the stub gone from presence after scope exit",
     async () => !(await presence(observer)).includes("itx.scoped"),
   );
-  expect(await rpcStubMountPaths(observer)).toContain("itx.scoped"); // the mount is data — it stays
-  const err = await rejection(observer.invokeCapability("itx.scoped.hello()"));
-  expect(codeOf(err)).toBe("RPC_STUB_OFFLINE"); // mounted-but-offline, seen from another session
+  await until(
+    "the rule un-set after scope exit",
+    async () => !(await rpcStubRewriteRuleMatches(observer)).includes("itx.scoped"),
+  );
+  const err = await rejection(observer.invoke("itx.scoped.hello()"));
+  expect(codeOf(err)).toBe("NO_ITX_EXPRESSION_MATCH"); // default-deny, seen from another session
 });
 
 test("disposal: dup() survives disposal of the original; the LAST dispose kills the stub with the pinned error", async () => {
@@ -390,12 +385,12 @@ test("disposal: dup() survives disposal of the original; the LAST dispose kills 
   const dup = itx.dup();
   itx[Symbol.dispose]();
   // The duplicate still works — refcounted, not killed by the sibling's disposal.
-  const who: any = await dup.invokeCapability(["itx", ["whoami"]]);
+  const who: any = await dup.invoke(["itx", ["whoami"]]);
   expect(who.path).toBe("/");
   dup[Symbol.dispose]();
   // The LAST duplicate is gone — calls reject with the library's documented disposal error
   // (a prompt classifiable rejection, never a hang).
-  const err = await rejection(dup.invokeCapability(["itx", ["whoami"]]));
+  const err = await rejection(dup.invoke(["itx", ["whoami"]]));
   expect(String(err)).toContain("Attempted to use RPC stub after it has been disposed.");
 });
 

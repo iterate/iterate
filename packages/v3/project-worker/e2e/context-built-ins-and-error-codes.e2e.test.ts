@@ -6,7 +6,7 @@
 // never by message — own props survive DO → relay → client).
 
 import { expect, test } from "vitest";
-import { append, capUrl, codeOf, freshCtx, openItx, rejection } from "./support/client.ts";
+import { append, codeOf, expressionUrl, freshCtx, openItx, rejection } from "./support/client.ts";
 
 test("a legitimate ctx (hyphen, underscore, uppercase, digits) is served; a ':' in the ctx is REJECTED (the kv/secret isolation wall holds)", async () => {
   // DurableObjectNameCodec.parse gates the projectId to [A-Za-z0-9_-] — the ONE place every DO name
@@ -14,8 +14,8 @@ test("a legitimate ctx (hyphen, underscore, uppercase, digits) is served; a ':' 
   // never be materialized at all; the prefix IS the whole isolation wall.
   const legit = freshCtx("FixReg-1_A"); // hyphen, underscore, uppercase, digits
   const good = openItx(legit);
-  await good.provide("itx.probe", "itx.whoami"); // a probe → whoami round trip proves the ctx addressed the right project
-  expect(await good.invokeCapability(["itx", ["probe"]])).toMatchObject({ projectId: legit });
+  await good.rewrite("itx.probe", "itx.whoami"); // a probe → whoami round trip proves the ctx addressed the right project
+  expect(await good.invoke(["itx", ["probe"]])).toMatchObject({ projectId: legit });
 
   const a = openItx(freshCtx("w2kv"));
   expect(await a.kv.put("x:leak", "A-private")).toMatchObject({ ok: true });
@@ -27,10 +27,10 @@ test("a legitimate ctx (hyphen, underscore, uppercase, digits) is served; a ':' 
       await openItx(`${freshCtx("w2kv")}:x`).kv.get("leak"); // never reached
     })(),
   ).rejects.toThrow();
-  // The same wall at the /cap HTTP door: the edge canonicalizes the context name before it names a
-  // DO, so a ':' fails there (a 5xx) and no object is ever addressed.
-  const viaCap = await fetch(capUrl("prj_x:evil", "itx.whoami", "http"));
-  expect(viaCap.status).toBeGreaterThanOrEqual(500);
+  // The same wall at the /expression HTTP door: the edge canonicalizes the context name before it
+  // names a DO, so a ':' fails there (a 5xx) and no object is ever addressed.
+  const viaDoor = await fetch(expressionUrl("prj_x:evil", "itx.whoami"));
+  expect(viaDoor.status).toBeGreaterThanOrEqual(500);
 });
 
 test("kv list returns EVERY key, not silently the first 1000", async () => {
@@ -42,7 +42,7 @@ test("kv list returns EVERY key, not silently the first 1000", async () => {
   for (let i = 0; i < names.length; i += 100) {
     await Promise.all(names.slice(i, i + 100).map((n) => itx.kv.put(n, "1")));
   }
-  const listed = await itx.invokeCapability(["itx", "kv", ["list"]]);
+  const listed = await itx.invoke(["itx", "kv", ["list"]]);
   expect(listed.keys).toHaveLength(total);
 }, 60_000);
 
@@ -50,8 +50,8 @@ test("cd('x') and cd('/x') are the SAME sibling stream", async () => {
   // Pins the one-DO-per-logical-context rule: the codec's normalizePath runs on every sibling
   // resolution, so the slash-less spelling cannot mint a shadow twin of the same context.
   const itx = openItx(freshCtx("cd"));
-  await itx.invokeCapability("itx.cd('x').append({type:'ping-x'})");
-  const page = await itx.invokeCapability("itx.cd('/x').read(0, 50)");
+  await itx.invoke("itx.cd('x').append({type:'ping-x'})");
+  const page = await itx.invoke("itx.cd('/x').read(0, 50)");
   expect(page.events.map((e: any) => e.type)).toContain("ping-x");
 });
 
@@ -63,7 +63,7 @@ test("cd('') resolves to THIS context (self) and answers rather than wedging", a
   // BEFORE comparing.
   const itx = openItx(freshCtx("self"));
   const raced = await Promise.race([
-    itx.invokeCapability("itx.cd('').append({type:'self-ping'})"),
+    itx.invoke("itx.cd('').append({type:'self-ping'})"),
     new Promise((_, reject) =>
       setTimeout(
         () => reject(new Error("self-context call wedged >10s (self-RPC deadlock)")),
@@ -72,15 +72,15 @@ test("cd('') resolves to THIS context (self) and answers rather than wedging", a
     ),
   ]);
   expect((raced as any[])[0].type).toBe("self-ping");
-  const page = await itx.invokeCapability(["itx", ["read", 0, 50]]);
+  const page = await itx.invoke(["itx", ["read", 0, 50]]);
   expect(page.events.map((e: any) => e.type)).toContain("self-ping");
 });
 
-test("a default-deny miss carries code NO_CAPABILITY_MATCH across the /api hop", async () => {
+test("a default-deny miss carries code NO_ITX_EXPRESSION_MATCH across the /api hop", async () => {
   const itx = openItx(freshCtx("codemiss"));
-  const err = await rejection(itx.invokeCapability(["itx", "nope", ["thing"]]));
-  expect(codeOf(err)).toBe("NO_CAPABILITY_MATCH");
-  expect(err.message).toMatch(/no capability matches/);
+  const err = await rejection(itx.invoke(["itx", "nope", ["thing"]]));
+  expect(codeOf(err)).toBe("NO_ITX_EXPRESSION_MATCH");
+  expect(err.message).toMatch(/no rewrite rule matches/);
 });
 
 test("a paused-stream refusal carries code STREAM_PAUSED across the /api hop", async () => {

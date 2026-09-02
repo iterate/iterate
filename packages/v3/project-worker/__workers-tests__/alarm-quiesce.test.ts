@@ -25,12 +25,13 @@
 // hosted as facets (there are no built-in processors). The workers lane materializes them fine (the
 // loader accepts allow_irrevocable_stub_storage), so every facet-lifecycle pin rides the inline
 // `CounterProcessor` source below, enabled the way the edge's `enableProcessor` spells it — ONE
-// `subscription-configured` whose target is the facet's `processEventBatch` through the load chain.
-// Live stubs (over hibernatable stub pager sockets) work fully here too — see
-// hibernation-at-scale.test.ts.
+// `subscription-configured` whose target is the facet's `processEventBatch` through the load chain,
+// appended at the DO's one write door (`append`; the DO has no configuration verbs). Live stubs
+// (over hibernatable stub pager sockets) work fully here too — see hibernation-at-scale.test.ts.
 
 import { evictDurableObject, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { expect, test, vi } from "vitest";
+import { subscriptionConfiguredEvent } from "../src/stream/subscriptions.ts";
 import { Echo, openSession, quiesce, stub } from "./support.ts";
 
 /** A tiny userspace processor: counts every durable event. The tally fixture's shape
@@ -67,26 +68,30 @@ const durableCount = async (ctx: string): Promise<number> =>
   ((await stub(ctx).invoke(["itx", ["read", 0, 500]])) as { events: unknown[] }).events.length;
 
 /** The edge's `enableProcessor(name, { source, className })`, spelled at the DO door: ONE
- *  subscription-configured whose target is the facet's `processEventBatch` through the load chain
- *  (the facet name = the subscription name = the `.get(name)` name). */
+ *  subscription-configured event — built by `subscriptionConfiguredEvent`, appended through `append`
+ *  — whose target is the facet's `processEventBatch` through the load chain (the facet name = the
+ *  subscription name = the `.get(name)` name). */
 async function enableCounter(ctx: string, name = "counter"): Promise<void> {
   const s = stub(ctx);
   await s.invoke(["itx", "kv", ["put", "procsrc", COUNTER_SRC]]);
-  await s.configureSubscription({
-    name,
-    target: [
-      "itx",
-      ["load", "itx.kv.get('procsrc')"],
-      ["getDurableObjectClass", "CounterDurableObject"],
-      ["get", name],
-      "processEventBatch",
-    ],
-  });
+  await s.append(
+    subscriptionConfiguredEvent({
+      name,
+      target: [
+        "itx",
+        ["load", "itx.kv.get('procsrc')"],
+        ["getDurableObjectClass", "CounterDurableObject"],
+        ["get", name],
+        "processEventBatch",
+      ],
+    }),
+  );
 }
-/** The edge's `disableProcessor(name)`: unsubscribe, then delete the facet — storage included. */
+/** The edge's `disableProcessor(name)`: remove the row (`target: null` — the same event), then
+ *  delete the facet — storage included. */
 async function disableCounter(ctx: string, name = "counter"): Promise<void> {
   const s = stub(ctx);
-  await s.removeSubscription(name);
+  await s.append(subscriptionConfiguredEvent({ name, target: null }));
   await s.invoke(["itx", "facets", ["delete", name]]);
 }
 
@@ -197,13 +202,14 @@ test("A BORROW RACES THE QUIESCE ALARM: a stub invoke fired concurrently with th
   // is borrowing is not returned out from under it).
   const ctx = "prj_pagein";
   const clientItx = await (await openSession()).authenticate().projects.get(ctx);
-  for (let i = 0; i < 4; i++) await clientItx.provide(`itx.p${i}`, new Echo(i));
+  for (let i = 0; i < 4; i++)
+    await clientItx.provide(`itx.p${i}`, { stub: new Echo(i), rewrite: `itx.p${i}` });
   const caller = await (await openSession()).authenticate().projects.get(ctx);
 
   // THERE MUST BE AN ALARM TO RACE. Lending four stubs arms nothing — the quiet clock arms only
   // while a facet is live or a stub is BORROWED — so warm one stub first and read the schedule
   // back. Without this the alarm below fires into an empty schedule and the race is vacuous.
-  expect(await caller.invokeCapability("itx.p0.echo('warm')")).toBe("echo-0:warm");
+  expect(await caller.invoke("itx.p0.echo('warm')")).toBe("echo-0:warm");
   expect((await stateOf(ctx)).borrowedRpcStubs).toBeGreaterThanOrEqual(1);
   expect(await alarmAt(ctx)).not.toBeNull();
 
@@ -213,7 +219,7 @@ test("A BORROW RACES THE QUIESCE ALARM: a stub invoke fired concurrently with th
   try {
     vi.setSystemTime(Date.now() + 61_000);
     const alarmP = runDurableObjectAlarm(stub(ctx));
-    const invokeP = caller.invokeCapability("itx.p2.echo('race')");
+    const invokeP = caller.invoke("itx.p2.echo('race')");
     const [ran, inv] = await Promise.all([alarmP, invokeP]);
     alarmRan = ran;
     raced = inv;
@@ -224,28 +230,33 @@ test("A BORROW RACES THE QUIESCE ALARM: a stub invoke fired concurrently with th
   expect(raced).toBe("echo-2:race");
 });
 
-test("SCALE DROP + QUIESCE + EVICT + WAKE: a revoked live capability stays gone; the fan-out reaches EXACTLY the survivors", async () => {
-  // Extends hibernation-at-scale's "eviction preserves the fleet" with a provider dropping one of
-  // its own capabilities before the wake. PINS: the drop is honored across the eviction (the
-  // dropped client's hibernatable pager socket is gone, not resurrected) and the post-wake fan-out
-  // reaches every survivor and only the survivors.
+test("SCALE DROP + QUIESCE + EVICT + WAKE: a DISPOSED live provide stays gone; the fan-out reaches EXACTLY the survivors", async () => {
+  // Extends hibernation-at-scale's "eviction preserves the fleet" with a provider disposing one of
+  // its own provides before the wake. PINS: the drop is honored across the eviction (the dropped
+  // stub's hibernatable pager socket is gone, not resurrected; its rewrite rule is un-set) and the
+  // post-wake fan-out reaches every survivor and only the survivors.
   const ctx = "prj_scale_drop";
   const K = 6;
   const clientItx = await (await openSession()).authenticate().projects.get(ctx);
-  for (let i = 0; i < K; i++) await clientItx.provide(`itx.k${i}`, new Echo(i));
+  const providedRpcStubs: any[] = [];
+  for (let i = 0; i < K; i++)
+    providedRpcStubs.push(
+      await clientItx.provide(`itx.k${i}`, { stub: new Echo(i), rewrite: `itx.k${i}` }),
+    );
   const caller = await (await openSession()).authenticate().projects.get(ctx);
 
-  // The drop must come from the PROVIDER'S OWN session: `itx.revoke(path)` pops the mount on the
-  // DO and recalls the stub THIS session lent under the path. A revoke from `caller` would pop
-  // the mount only — the DO never touches a transport on revoke, and `caller` lent nothing
-  // under `itx.k3`, so its stub would stay in the census (answering nothing, mount gone).
-  await clientItx.revoke("itx.k3");
+  // The drop must come from the PROVIDER'S OWN handle: disposing it recalls the stub THIS session
+  // lent under `itx.k3` (its pager socket closes) AND un-sets the rule at `itx.k3`. A
+  // `caller.rewrite("itx.k3", null)` would un-set the rule only — pure data never touches a
+  // transport, and `caller` lent nothing under `itx.k3`, so the stub would stay in the census
+  // (unreachable dotted, rule gone).
+  providedRpcStubs[3][Symbol.dispose]();
   const dropped = await untilStubs(ctx, K - 1); // the relay's close lands at the DO a beat later
   expect(dropped.rpcStubPagers).toBe(K - 1);
 
   // The K-1 surviving lends arm nothing on their own, so warm one stub: that borrow is what arms
   // the quiet clock AND what the quiesce then has to return.
-  expect(await caller.invokeCapability("itx.k0.echo('warm')")).toBe("echo-0:warm");
+  expect(await caller.invoke("itx.k0.echo('warm')")).toBe("echo-0:warm");
   expect(await alarmAt(ctx)).not.toBeNull();
   await quiesce(ctx);
   const q = await stateOf(ctx);
@@ -254,23 +265,25 @@ test("SCALE DROP + QUIESCE + EVICT + WAKE: a revoked live capability stays gone;
   const evicted = await stateOf(ctx);
   expect(evicted.rpcStubPagers).toBe(K - 1); // survivors' hibernatable sockets rode the eviction; k3 stayed gone
 
-  // The mount at itx.k3 is gone from the table (revoke popped it), and the survivors' mounts
+  // The rule at itx.k3 is gone from the table (the dispose un-set it), and the survivors' rules
   // stayed — the table is data, untouched by the eviction.
-  const snap = (await caller.invokeCapability("itx.facets.get('core').snapshot()")) as {
-    state: { mounts: { path: string[] }[] };
+  const snap = (await caller.invoke("itx.facets.get('core').snapshot()")) as {
+    state: { itxExpressionRewriteRules: Record<string, unknown> };
   };
-  const mounted = snap.state.mounts.map((m) => m.path.join("."));
-  expect(mounted).not.toContain("itx.k3");
-  for (let i = 0; i < K; i++) if (i !== 3) expect(mounted).toContain(`itx.k${i}`);
+  const rewriteRuleMatches = Object.keys(snap.state.itxExpressionRewriteRules);
+  expect(rewriteRuleMatches).not.toContain("itx.k3");
+  for (let i = 0; i < K; i++) if (i !== 3) expect(rewriteRuleMatches).toContain(`itx.k${i}`);
   // fan-out = PRESENCE (`itx.rpcStubs.list()` — the keys whose hibernated pager sockets rode
-  // the eviction; k3's did not) + map over the paths (no built-in `each`); the caller owns the
-  // allSettled.
-  const paths = (await caller.invokeCapability("itx.rpcStubs.list()")) as string[];
-  expect(paths).toHaveLength(K - 1);
-  expect(paths).not.toContain("itx.k3");
+  // the eviction; k3's did not) + map over the keys (each was provided with a rewrite at the same
+  // spelling, so every key is callable dotted; no built-in `each`); the caller owns the allSettled.
+  const rpcStubKeys = (await caller.invoke("itx.rpcStubs.list()")) as string[];
+  expect(rpcStubKeys).toHaveLength(K - 1);
+  expect(rpcStubKeys).not.toContain("itx.k3");
   const answers = (
     await Promise.all(
-      paths.map((path) => caller.invokeCapability(`${path}.echo('hi')`).catch(() => undefined)),
+      rpcStubKeys.map((rpcStubKey) =>
+        caller.invoke(`${rpcStubKey}.echo('hi')`).catch(() => undefined),
+      ),
     )
   ).filter((v): v is string => v !== undefined);
   const got = new Set(answers);
@@ -328,11 +341,13 @@ test("ALARM PUMPS THE CURSOR LANE: a failed at-least-once delivery is retried fr
   const s = stub(ctx);
   await s.invoke(["itx", "kv", ["put", "flakysrc", FLAKY_SRC]]);
   await s.invoke(["itx", "kv", ["put", "flaky-mode", "fail"]]);
-  await s.configureSubscription({
-    name: "flaky",
-    target: ["itx", ["load", "itx.kv.get('flakysrc')"], ["getEntrypoint"], "processEventBatch"],
-    consumes: ["mark"],
-  });
+  await s.append(
+    subscriptionConfiguredEvent({
+      name: "flaky",
+      target: ["itx", ["load", "itx.kv.get('flakysrc')"], ["getEntrypoint"], "processEventBatch"],
+      consumes: ["mark"],
+    }),
+  );
   // (cast: workers-types' Rpc.Serializable types a StreamEvent-returning stub method as `never`)
   const [mark] = (await s.append({ type: "mark" })) as unknown as { offset: number }[];
 

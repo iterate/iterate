@@ -1,8 +1,8 @@
-// rpc-stubs-rich-values.e2e.test.ts — the owner's rich-value requirement, tested honestly: "anything workers RPC
-// and capnweb can serialise obviously should be able to be passed through these capabilities
-// and through invoke" — callbacks, Dates, bytes. Path under test (the LONGEST one): client B's
-// callback → capnweb → edge → Workers RPC → Stream DO → ictx facet resolve → stub facade →
-// pager wake → Invoker leg → relay → client A's capnweb → A calls B's callback BACK.
+// rpc-stubs-rich-values.e2e.test.ts — the owner's rich-value requirement, tested honestly: anything
+// workers RPC and capnweb can serialise obviously should be able to be passed through a lent rpc stub
+// and through invoke — callbacks, Dates, bytes. Path under test (the LONGEST one): client B's
+// callback → capnweb → edge → Workers RPC → context DO → the rewrite rules → `itx.rpcStubs.get` →
+// pager page → the lent Workers-RPC leg → relay → client A's capnweb → A calls B's callback BACK.
 
 import { RpcTarget } from "capnweb";
 import { expect, test } from "vitest";
@@ -49,32 +49,24 @@ class ToolsRich extends RpcTarget {
   }
 }
 
-// A throw in any invokeCapability below fails the test.
+// A throw in any invoke below fails the test.
 test("rich values through the longest path: Date, bytes, callbacks, RpcTarget args, Request/Response", async () => {
   const ctx = freshCtx("rich");
   const itxA = openItx(ctx);
   const itxB = openItx(ctx);
   await seedSources(itxB, ["probe"]);
-  await itxA.provide("itx.tools", new ToolsA());
+  await itxA.provide("itx.tools", { stub: new ToolsA(), rewrite: "itx.tools" });
 
   // 1. a Date through the whole path
-  const probed = await itxB.invokeCapability([
-    "itx",
-    "tools",
-    ["probe", new Date("2026-08-18T12:00:00Z")],
-  ]);
+  const probed = await itxB.invoke(["itx", "tools", ["probe", new Date("2026-08-18T12:00:00Z")]]);
   expect(probed?.isoIfDate).toBe("2026-08-18T12:00:00.000Z"); // Date survives as a Date (not a string)
 
   // 2. bytes through the whole path
-  const bytes = await itxB.invokeCapability([
-    "itx",
-    "tools",
-    ["probe", new Uint8Array([1, 2, 3, 4])],
-  ]);
+  const bytes = await itxB.invoke(["itx", "tools", ["probe", new Uint8Array([1, 2, 3, 4])]]);
   expect(bytes?.byteLen).toBe(4); // Uint8Array survives with its bytes
 
   // 3. THE callback: B hands a function, A calls it back across every hop
-  const cbResult = await itxB.invokeCapability([
+  const cbResult = await itxB.invoke([
     "itx",
     "tools",
     ["transform", 21, async (n: number) => n + 1],
@@ -83,9 +75,9 @@ test("rich values through the longest path: Date, bytes, callbacks, RpcTarget ar
 
   // 4. the STATELESS RUN LANE (was the one JSON boundary — now a real RPC method): a Date and a
   //    client callback ride into a confined loaded isolate; note the ref needs NO `type`.
-  await itxB.invokeCapability(`itx.append({ type: 'noop' })`); // ensure the stream exists
-  await itxB.provide("itx.probe", `itx.load("itx.kv.get('src/probe.js')").getEntrypoint()`);
-  const rich = await itxB.invokeCapability([
+  await itxB.invoke(`itx.append({ type: 'noop' })`); // ensure the stream exists
+  await itxB.rewrite("itx.probe", `itx.load("itx.kv.get('src/probe.js')").getEntrypoint()`);
+  const rich = await itxB.invoke([
     "itx",
     "probe",
     ["run", new Date("2026-01-01T00:00:00Z"), async (n: number) => n * 6],
@@ -95,12 +87,12 @@ test("rich values through the longest path: Date, bytes, callbacks, RpcTarget ar
   expect(rich?.cbResult).toBe(42);
 
   // 5. RpcTarget WITH METHODS as an arg (not just a bare function): A calls TWO methods on it
-  await itxA.provide("itx.rich", new ToolsRich());
-  const nbResult = await itxB.invokeCapability(["itx", "rich", ["useNotebook", new Notebook()]]);
+  await itxA.provide("itx.rich", { stub: new ToolsRich(), rewrite: "itx.rich" });
+  const nbResult = await itxB.invoke(["itx", "rich", ["useNotebook", new Notebook()]]);
   expect(nbResult).toBe("one|two"); // provider called TWO methods on B's RpcTarget
 
-  // 6. HTTP Request as an arg, Response as the return — through a live capability
-  const r = await itxB.invokeCapability([
+  // 6. HTTP Request as an arg, Response as the return — through a lent rpc stub
+  const r = await itxB.invoke([
     "itx",
     "rich",
     ["handleRequest", new Request("https://x.local/hello", { method: "POST", body: "ping" })],

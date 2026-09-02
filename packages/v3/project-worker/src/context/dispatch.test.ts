@@ -1,12 +1,13 @@
 // Executable spec for the step walk (and the resolver over a fake built-ins scope, where a walk is
-// only observable through a mount). Mount MATCHING is routing.test.ts — the table.
+// only observable through a rewrite rule). Rule MATCHING is itx-expression-rewriting.test.ts — the
+// table.
 import { describe, expect, test } from "vitest";
-import type { Mount } from "../stream/core-processor.ts";
-import { CapabilityResolver } from "./capability-table.ts";
+import type { ItxExpressionRewriteRule } from "../stream/core-processor.ts";
 import { registerPipelinedRpcBrand, walkSteps } from "./dispatch.ts";
 import { parse, parseItxExpressionPrefix, type ItxExpression } from "./expression.ts";
+import { ItxExpressionResolver } from "./itx-expression-rewriting.ts";
 
-// ───────────────────────────── the step walk + a mount, end to end ─────────────────────────────
+// ───────────────────────────── the step walk + a rewrite rule, end to end ─────────────────────────────
 
 /** A fake built-ins scope: enough physical layer to walk into. `kv` is `this`-dependent on purpose
  *  (a method detached from its receiver would lose its store). */
@@ -50,13 +51,12 @@ const scope = () => {
     },
   };
 };
-const mount = (path: string, target: string, providedAtOffset = 1): Mount => ({
-  path: parseItxExpressionPrefix(path),
+const rewriteRule = (match: string, target: string): ItxExpressionRewriteRule => ({
+  match: parseItxExpressionPrefix(match),
   target: parse(target),
-  providedAtOffset,
 });
-const resolverOver = (s: ReturnType<typeof scope>, ...mounts: Mount[]) =>
-  new CapabilityResolver({ builtIns: s.builtIns, mounts: () => mounts });
+const resolverOver = (s: ReturnType<typeof scope>, ...rewriteRules: ItxExpressionRewriteRule[]) =>
+  new ItxExpressionResolver({ builtIns: s.builtIns, rewriteRules: () => rewriteRules });
 
 describe("walkSteps + resolve", () => {
   test("pipelined chain: call → await stub → call again", async () => {
@@ -69,32 +69,32 @@ describe("walkSteps + resolve", () => {
     expect(value).toBe(42);
   });
 
-  test("a mount targeting another mount, end to end — the steps after the mount replay on the live stub", async () => {
+  test("a rule targeting a call, end to end — the steps after the match replay on the value", async () => {
     const s = scope();
-    const resolver = resolverOver(s, mount("itx.robot", "itx.robots.get('robot-arm-1')"));
+    const resolver = resolverOver(s, rewriteRule("itx.robot", "itx.robots.get('robot-arm-1')"));
     expect(await resolver.resolve("itx.robot.arm.move(10)")).toBe("moved");
     expect(s.log).toEqual(["move 10 @robot-arm-1"]);
   });
 
-  test("args at the mount apply the resolved target as a call", async () => {
+  test("args at the match apply the rewritten target as a call", async () => {
     const s = scope();
-    const resolver = resolverOver(s, mount("itx.grok", "itx.openai.chat"));
+    const resolver = resolverOver(s, rewriteRule("itx.grok", "itx.openai.chat"));
     expect(await resolver.resolve("itx.grok({ model: 'grok-4', messages: ['hi'] })")).toBe(
       "chat(grok-4)",
     );
   });
 
-  test("args at the mount on a non-callable target error LOUDLY (no silent drop)", async () => {
+  test("args at the match on a non-callable target error LOUDLY (no silent drop)", async () => {
     const s = scope();
-    const resolver = resolverOver(s, mount("itx.db", "itx.kv"));
+    const resolver = resolverOver(s, rewriteRule("itx.db", "itx.kv"));
     await expect(resolver.resolve("itx.db('oops')")).rejects.toThrow(/not callable/);
   });
 
-  test("args at the mount on a method-valued target apply on the carried receiver", async () => {
+  test("args at the match on a method-valued target apply on the carried receiver", async () => {
     const s = scope();
-    const resolver = resolverOver(s, mount("itx.remember", "itx.kv.put"));
+    const resolver = resolverOver(s, rewriteRule("itx.remember", "itx.kv.put"));
     expect(await resolver.resolve("itx.remember('k', 'v')")).toEqual({ ok: true });
-    expect(await resolver.resolve("itx.kv.get('k')")).toBe("v"); // `this` was kv, not the mount
+    expect(await resolver.resolve("itx.kv.get('k')")).toBe("v"); // `this` was kv, not the rule
   });
 
   test("inherited built-ins are not capability surface (the RPC exposure doctrine)", async () => {

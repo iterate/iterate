@@ -1,7 +1,8 @@
 // __workers-tests__/support.ts — what every file in the workers lane (the vitest project that runs
 // INSIDE workerd, next to the worker) shares: the context DO stub by ctx name, a capnweb session
 // over SELF's /api (disposed at teardown — importing this module registers the afterAll), a live
-// capability with a per-instance tag, and the production 60s idle quiesce reproduced on demand.
+// value to lend (`Echo`, tagged per instance), and the production 60s idle quiesce reproduced on
+// demand.
 import { runDurableObjectAlarm, SELF } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { newWebSocketRpcSession, RpcTarget } from "capnweb";
@@ -17,7 +18,9 @@ export const stub = (ctx: string) =>
     env as unknown as { CONTEXT: DurableObjectNamespace<IterateContextDurableObject> }
   ).CONTEXT.getByName(DurableObjectNameCodec.parse(ctx).name);
 
-/** One client's live capability: the per-instance tag (`echo-<i>:<s>`) proves no crosstalk. */
+/** One client's live value, lent as an rpc stub: the per-instance tag (`echo-<i>:<s>`) proves no
+ *  crosstalk. Provided as `itx.provide(rpcStubKey, { stub: new Echo(i), rewrite: rpcStubKey })`, so
+ *  the key is also the dotted match a caller spells. */
 export class Echo extends RpcTarget {
   readonly #i: number;
   constructor(i: number) {

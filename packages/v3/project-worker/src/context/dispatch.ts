@@ -1,11 +1,10 @@
-// context/dispatch.ts — match a capability call to a mount, then EXECUTE steps against a LIVE object
-// graph (the codec that turns strings ⇄ these structures is ./expression.ts). `match` claims a call
-// for a capability path (segment by segment; the final segment may consume the call's args as the
-// args at the mount; the unclaimed tail is the steps after the mount). `walkSteps` is THE step walk
-// — `CapabilityResolver.resolve` (capability-table.ts) replays the steps after a mount with it, and
-// `invokePath` walks a dotted path on a local object (a facet stub). `callOn` applies args to a
-// resolved value. The dotted write-half (a handle whose dotted access reduces into one dispatch) is
-// `InvokeHandle` (context/invoke-handle.ts) — the ONE such primitive, pipelinable over Workers RPC.
+// context/dispatch.ts — EXECUTE a rewritten call's steps against a LIVE object graph (the codec that
+// turns strings ⇄ these structures is ./expression.ts; the rules that rewrite a call to a built-in
+// root are ./itx-expression-rewriting.ts). `walkSteps` is THE step walk — `ItxExpressionResolver`
+// replays the steps after the root with it; the facet door and the delivery loop walk steps on a
+// local object with it. `callOn` applies args to a resolved value. The dotted write-half (a handle
+// whose dotted access reduces into one dispatch) is `InvokeHandle` (context/invoke-handle.ts) — the
+// ONE such primitive, pipelinable over Workers RPC.
 
 import { codedError } from "../lib/errors.ts";
 import type { ItxExpression } from "./expression.ts";
@@ -22,10 +21,6 @@ export function registerPipelinedRpcBrand(brand: abstract new (...args: never[])
   PIPELINED_RPC_BRANDS.push(brand);
 }
 const pipelined = (v: unknown): boolean => PIPELINED_RPC_BRANDS.some((b) => v instanceof b);
-
-/** A successful claim of a call by a capability path. (Ranking uses the mount's own `path.length`,
- *  held by the caller; `match` is all-or-nothing, so a "how many segments matched" count could only
- *  ever equal that length.) */
 
 // RPC-EXPOSURE DOCTRINE (Kenton, workerd #1028), enforced at THE dispatch point: what an object
 // merely INHERITS from Object/Function.prototype is not capability surface, and __proto__ /

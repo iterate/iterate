@@ -170,13 +170,13 @@ test("50 userspace processors: one append fans out to all 50 in <5s while the st
 
   // Responsiveness DURING the fan-out: an unrelated call must not be head-of-line blocked.
   const whoT0 = performance.now();
-  await itx.invokeCapability(["itx", ["whoami"]]);
+  await itx.invoke(["itx", ["whoami"]]);
   const whoMs = performance.now() - whoT0;
 
   // The barrier: every one of the 50 processors reaches the marker offset.
   await Promise.all(
     Array.from({ length: 50 }, (_, i) =>
-      itx.invokeCapability(
+      itx.invoke(
         `itx.facets.get('fan${i}').waitUntilProcessed({offset: ${marker.offset}, timeoutMs: 30000})`,
       ),
     ),
@@ -187,7 +187,7 @@ test("50 userspace processors: one append fans out to all 50 in <5s while the st
   );
 
   // Sanity: a mid-pack processor really reduced the log (each enable event + the marker).
-  const snap = await itx.invokeCapability(`itx.facets.get('fan7').snapshot()`);
+  const snap = await itx.invoke(`itx.facets.get('fan7').snapshot()`);
   expect(snap.offset).toBeGreaterThanOrEqual(marker.offset);
   expect((snap.state as { n: number }).n).toBeGreaterThan(0);
 

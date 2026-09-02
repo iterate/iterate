@@ -1,48 +1,50 @@
-// iterate-context.ts — the client-facing capnweb surface + the stateless RELAY. This is the ONE place capnweb
-// terminates (the `/api` worker); it reaches the IterateContextDurableObject only over Workers RPC (the hard rule).
+// iterate-context.ts — the client-facing capnweb surface: A PROXY IN FRONT OF THE DURABLE OBJECT. This
+// is the ONE place capnweb terminates (the `/api` worker); it reaches the IterateContextDurableObject
+// only over Workers RPC (the hard rule).
 //
-// INVARIANT (owner): THE CLIENT IS JUST CAPNWEB. Every class in this file is a SERVER-side
-// RpcTarget; what a client holds is a plain capnweb proxy of it. There is no client SDK and
-// none may be introduced — a client's whole dependency is the capnweb package. Anything that
-// would need client-side smarts belongs HERE, behind an RpcTarget method.
+// INVARIANT (owner): THE CLIENT IS JUST CAPNWEB. Every class in this file is a SERVER-side RpcTarget;
+// what a client holds is a plain capnweb proxy of it. There is no client SDK and none may be introduced
+// — a client's whole dependency is the capnweb package. Anything that would need client-side smarts
+// belongs HERE, behind an RpcTarget method.
 //
-// The DO owns every contract; the edge does the two jobs only the edge can do, because only the
-// edge holds the client's capnweb session:
-//   • REDUCE — the prototype hop at the bottom turns dotted access `itx.a.b(x)` into ONE
-//     `invokeCapability` expression, forwarded to the DO over Workers RPC. The built-in roots ride
-//     it too (`itx.append(...)`, `itx.read(...)`, `itx.fetch(request)`, `itx.rpcStubs.list()`,
-//     `itx.subscriptions.list()`, …): a name this class does not declare is a DO built-in or a mount.
-//   • LEND — a LIVE capnweb value (a function, an RpcTarget) handed to `provide` or `subscribe` is
-//     held here for the session and lent to the DO over a relay (DON'T-PIN, below); the DO records
-//     only a mount or a subscription row naming it (`itx.rpcStubs.get('<key>')`).
-// The declared methods are the doors that need one of those two: `cd` (an EDGE context, so a
-// provide on it lends in this session), `invokeCapability`, `waitForEvent` (no built-in root),
-// `provide`/`revoke`, `subscribe`/`unsubscribe`, `enableProcessor`/`disableProcessor`.
+// The DO owns every contract. This class declares only what the edge must do itself, in the order
+// the tutorial builds them:
+//   • `cd`      — pure addressing, zero DO hops; returns an EDGE context so a later lend lands in
+//                 THIS session;
+//   • `invoke`  — the landing door of the prototype hop at the bottom (`itx.a.b(x)` reduces to ONE
+//                 expression) plus the one fetch-lane fork; every built-in root (`itx.append(…)`,
+//                 `itx.read(…)`, `itx.waitForEvent(…)`, `itx.kv.get(…)`, `itx.rpcStubs.list()`,
+//                 `itx.expressionRewriteRules.list()`, …) rides it with ZERO code here;
+//   • `provide` — THE ONE PHYSICAL ACT: a client's live capnweb value must live in this stateless
+//                 worker, never in the DO (DON'T-PIN, below), so the lend happens here. A rule or
+//                 subscription naming the lent key is un-set by the DO when the key's last pager
+//                 closes — the physical fact decides, not this session's teardown;
+//   • `rewrite` / `subscribe` / `enableProcessor` / `disableProcessor` — each is visibly "build the
+//                 event, append it": the DO has `append` and no configuration verbs. `rewrite` and
+//                 `subscribe` are declared here only because their target may be a live value.
+// `provide`, `rewrite` and `subscribe` hand back a DISPOSABLE handle (`using`): disposing un-does the act.
+// capnweb also disposes every exported handle when the session ends, so a rule or subscription made
+// through the verb is SESSION-SCOPED; one that must outlive the session is the raw event —
+// `itx.append(rewriteRuleConfiguredEvent(match, target))` — the verb minus the handle.
 //
 // HOW A CLIENT REACHES ONE: `/api` → `UnauthenticatedSession.authenticate()` → `Session.projects.get(id)`
 // → that project's ROOT `IterateContext` (session.ts). Contexts within a project are reached from a
 // context with `cd(path)` (absolute by convention, relative resolves).
 //
-// DON'T-PIN: the client's capnweb callback stub lives HERE, in this stateless worker (the relay), which
-// OWNS it for the session. The relay opens a STUB PAGER WebSocket to the DO (context/rpc-stub-relay.ts +
-// context/rpc-stub-directory.ts); the DO records only the stub's transport id on it. When the DO wants the
-// client — event-batch delivery, state changes, request/response calls, all the same lane — it PAGES this
-// worker, which LENDS it a fresh Workers-RPC stub over `lendRpcStub`. The DO keeps that stub borrowed while
-// traffic flows and returns it at its idle quiesce (a page borrows it again). So the DO holds no stub while
-// idle and hibernates with any number of clients.
+// DON'T-PIN: the client's capnweb stub lives HERE, in this stateless worker, which OWNS it for the
+// session. `provide` opens an RPC-STUB PAGER WebSocket to the DO (context/rpc-stub-relay.ts +
+// context/rpc-stub-directory.ts): a standing offer to lend the key back on demand. When the DO wants
+// the client — a delivery, a request/response call — it PAGES this worker, which LENDS it a fresh
+// Workers-RPC stub over `lendRpcStub`. The DO keeps that stub borrowed while traffic flows and returns
+// it at its idle quiesce. So the DO holds no stub while idle and hibernates with any number of clients.
 
 import { RpcTarget } from "capnweb";
 import type { IterateContextDurableObject } from "./iterate-context-durable-object.ts";
-import { CAPABILITY_FETCH_HEADER } from "./fetch/rpc-stub-fetch.ts";
-import type { StreamEvent } from "./stream/events.ts";
-import type { WaitForEventFilter } from "./stream/stream.ts";
-import {
-  canonicalItxExpressionPrefix,
-  toItxExpression,
-  type ItxExpressionInput,
-} from "./context/expression.ts";
+import { ITX_EXPRESSION_FETCH_HEADER } from "./fetch/rpc-stub-fetch.ts";
+import { toItxExpression, type ItxExpressionInput } from "./context/expression.ts";
+import { rewriteRuleConfiguredEvent } from "./context/itx-expression-rewriting.ts";
 import type { WorkerSource } from "./context/worker-loader.ts";
-import { installPrototypeInvokeCapabilityFallback } from "./context/dotted-path-proxy.ts";
+import { installPrototypeInvokeFallback } from "./context/dotted-path-proxy.ts";
 import {
   DurableObjectNameCodec,
   resolveContextPath,
@@ -54,68 +56,69 @@ import {
   type IterateContextDurableObjectStub,
 } from "./context/rpc-stub-relay.ts";
 import type { SessionTeardown } from "./session.ts";
+import type { StreamEventInput } from "./stream/events.ts";
+import { subscriptionConfiguredEvent } from "./stream/subscriptions.ts";
 
 export type ContextNamespace = DurableObjectNamespace<IterateContextDurableObject>;
 export type WaitUntil = (p: Promise<unknown>) => void;
 
-/** The iterate context (`itx`) at one `{ projectId, path }`. Dotted capability calls + the
- *  built-in collections forward to the DO over Workers RPC. capnweb terminates upstream in `/api`,
- *  so a client stub `itx.a.b(x)` never touches the DO's transport — it lands here and becomes a
- *  `DO.invoke(["itx", "a", ["b", x]])` call ItxExpression. */
+/** A live value a client hands over: a function or an RpcTarget — on the wire, a capnweb stub. */
+type LiveValue = unknown;
+
+/** What a verb hands back: dispose it — or let the session end; capnweb disposes every exported
+ *  handle then — and the act is UNDONE: a provided stub is recalled (and its rewrite rule un-set), a
+ *  rewrite rule is un-set. The caller already holds the key or match it passed, so the handle carries
+ *  nothing else. */
+export class SessionScopedHandle extends RpcTarget {
+  readonly #undo: () => void;
+  constructor(undo: () => void) {
+    super();
+    this.#undo = undo;
+  }
+  [Symbol.dispose](): void {
+    this.#undo();
+  }
+}
+
+/** `subscribe`'s handle: disposing removes the subscription (and recalls the callback lent for it).
+ *  `name` is a GETTER (capnweb exposes prototype members only) — the generated one when none was given. */
+export class SubscriptionHandle extends SessionScopedHandle {
+  readonly #name: string;
+  constructor(name: string, undo: () => void) {
+    super(undo);
+    this.#name = name;
+  }
+  get name(): string {
+    return this.#name;
+  }
+}
+
+/** The iterate context (`itx`) at one `{ projectId, path }`, as a client holds it. */
 export class IterateContext extends RpcTarget {
   readonly #contexts: ContextNamespace;
   readonly #address: DurableObjectAddress;
-  readonly #context: IterateContextDurableObjectStub;
-  readonly #teardown: SessionTeardown;
+  readonly #durableObject: IterateContextDurableObjectStub;
+  readonly #sessionTeardown: SessionTeardown;
   readonly #waitUntil: WaitUntil;
 
   constructor(
     contexts: ContextNamespace,
     address: DurableObjectAddress,
-    teardown: SessionTeardown,
+    sessionTeardown: SessionTeardown,
     waitUntil: WaitUntil,
   ) {
     super();
     this.#contexts = contexts;
     this.#address = address;
-    this.#context = contexts.getByName(address.name);
-    this.#teardown = teardown;
+    this.#durableObject = contexts.getByName(address.name);
+    this.#sessionTeardown = sessionTeardown;
     this.#waitUntil = waitUntil;
-  }
-
-  /** The SessionTeardown key for a lent stub: `"<contextName> <rpcStubKey>"`. The teardown is
-   *  SESSION-lived and shared by every IterateContext the session hands out (across projects),
-   *  while a stub key is only unique PER CONTEXT — keying by the stub key alone let two contexts
-   *  lending under the same key recall each other's stub. A space separator is unambiguous: a
-   *  context name has no spaces. */
-  #sessionTeardownKey(rpcStubKey: string): string {
-    return `${this.#address.name} ${rpcStubKey}`;
-  }
-
-  /** LEND a live capnweb value to the DO under `rpcStubKey` through a pager (DON'T-PIN — the edge
-   *  owns the stub, the DO borrows it on demand). Re-lending the same key REPLACES the pager
-   *  (reconnect). Nothing is mounted — `provide` and `subscribe` append the row that names the
-   *  stub as `itx.rpcStubs.get('<rpcStubKey>')`. */
-  async #lendRpcStub(rpcStubKey: string, clientRpcStub: unknown): Promise<void> {
-    const pager = await lendRpcStubOverPager(
-      this.#context,
-      clientRpcStub as ClientRpcStub,
-      rpcStubKey,
-      this.#waitUntil,
-    );
-    this.#teardown.add(this.#sessionTeardownKey(rpcStubKey), pager);
-  }
-
-  /** RECALL what this session lent under `rpcStubKey`: the pager closes and the DO returns the
-   *  stub. A no-op for a key this session never lent. Rows naming it are untouched. */
-  #recallRpcStub(rpcStubKey: string): void {
-    this.#teardown.dispose(this.#sessionTeardownKey(rpcStubKey));
   }
 
   /** Another context of THIS project. Absolute by convention (`cd("/agents/support")`); relative
    *  (`"agents/support"`, `"../inbox"`) resolves against this context's path — one resolver, shared
-   *  with the built-in `itx.cd(...)` root. Returns an EDGE context, so `provide(path, fn)` on it
-   *  lends in this same session. Pure addressing. */
+   *  with the built-in `itx.cd(...)` root. Returns an EDGE context, so `provide` on it lends in this
+   *  same session. Pure addressing. */
   cd(path: string): IterateContext {
     const address = DurableObjectNameCodec.parse(
       DurableObjectNameCodec.stringify({
@@ -123,24 +126,21 @@ export class IterateContext extends RpcTarget {
         path: resolveContextPath(this.#address.path, path),
       }),
     );
-    return new IterateContext(this.#contexts, address, this.#teardown, this.#waitUntil);
+    return new IterateContext(this.#contexts, address, this.#sessionTeardown, this.#waitUntil);
   }
 
-  /** THE dispatch door (built-ins + provided capabilities) — the ONE way to call the itx surface.
-   *  Takes an `ItxExpressionInput`: a dotted string (`"itx.append({...})"`) OR the parsed array
-   *  (`["itx",["append",{...}]]`); both carry mid-path call args, and both work here. The dotted
-   *  sugar `itx.a.b(x)` reduces into `["itx","a",["b",x]]` (see the prototype fallback at the bottom
-   *  of this file) and lands right here.
+  /** THE dispatch door (built-ins + every rewrite rule) — the ONE way to call the itx surface. Takes an
+   *  `ItxExpressionInput`: a dotted string (`"itx.append({...})"`) OR the parsed array
+   *  (`["itx",["append",{...}]]`); both carry mid-path call args. The dotted sugar `itx.a.b(x)` reduces
+   *  into `["itx","a",["b",x]]` (the prototype fallback at the bottom of this file) and lands here.
    *
-   *  ONE routing rule: a call whose TERMINAL step is `fetch(request)` carrying a live Request rides
-   *  the DO's FETCH CHANNEL with the capability in the `x-itx-cap` header, not `invoke` — the fetch
-   *  channel is the only hop kind that carries a socket-bearing Response back (a 101 from a tunnel
-   *  or a WS-serving worker; fetch/fetch-capabilities.ts doctrine, points 1 & 4). So
-   *  `itx.todos.web.fetch(request)` just works, upgrades included, and so does the root
-   *  `itx.fetch(request)` (egress: the built-in `fetch` root) — there is no second door. */
-  invokeCapability(call: ItxExpressionInput): Promise<unknown> {
-    const expr = toItxExpression(call);
-    const last = expr.at(-1);
+   *  ONE routing fork: a call whose TERMINAL step is `fetch(request)` carrying a live Request rides
+   *  the DO's FETCH CHANNEL with the expression in the `x-itx-expression` header, not `invoke` — the
+   *  fetch channel is the only hop kind that carries a socket-bearing Response back (a 101 from a
+   *  tunnel or a WS-serving worker; fetch/rpc-stub-fetch.ts doctrine, points 1 & 4). */
+  invoke(call: ItxExpressionInput): Promise<unknown> {
+    const itxExpression = toItxExpression(call);
+    const last = itxExpression.at(-1);
     if (
       Array.isArray(last) &&
       last[0] === "fetch" &&
@@ -148,159 +148,179 @@ export class IterateContext extends RpcTarget {
       last[1] instanceof Request
     ) {
       const headers = new Headers(last[1].headers);
-      headers.set(CAPABILITY_FETCH_HEADER, JSON.stringify(expr.slice(0, -1))); // the lane parses a JSON ItxExpression
-      return this.#context.fetch(new Request(last[1], { headers }));
+      headers.set(ITX_EXPRESSION_FETCH_HEADER, JSON.stringify(itxExpression.slice(0, -1))); // the lane parses a JSON ItxExpression
+      return this.#durableObject.fetch(new Request(last[1], { headers }));
     }
-    return this.#context.invoke(expr);
+    return this.#durableObject.invoke(itxExpression);
   }
 
-  /** Wait for the next event matching `filter` — or the first committed durable match after an
-   *  explicit `afterOffset` (the default is the head at call time: "the next occurrence"). The
-   *  wait lives on the DO (Stream.waitForEvent owns the whole contract — type filter,
-   *  30s/120s timeout → WAIT_TIMEOUT); this method just proxies, and the client's own open call
-   *  is what keeps the wait alive. */
-  waitForEvent(filter?: WaitForEventFilter): Promise<StreamEvent> {
-    return this.#context.waitForEvent(filter);
-  }
+  // ── (a) rpc stubs: the one physical act ──
 
-  /** THE ONE PROVIDE DOOR — mount a capability at `path`. `target` is EITHER:
-   *    • an itx EXPRESSION (a dotted string or the parsed array — what the event stores; full
-   *      shadow-stack semantics), OR
-   *    • a LIVE capnweb value (a function or an RpcTarget): lend the value to `itx.rpcStubs` under
-   *      the path (owned HERE, relay-side — DON'T-PIN), then mount the pure-data target
-   *      `itx.rpcStubs.get('<path>')`. `itx.<path>.method(x)` resolves that mount like any other.
-   *      Re-providing the same path re-lends (reconnect — the transport is replaced) and, the mount
-   *      being identical, appends NOTHING (the door is idempotent). If the provider vanishes the
-   *      mount STAYS: calls answer RPC_STUB_OFFLINE until `revoke`.
-   *  Anything else is a loud TypeError. Returns the mount's identity for `revoke`. */
+  /** PROVIDE a live value (a function, an RpcTarget) under an OPAQUE `rpcStubKey`: lend it to the DO's
+   *  `itx.rpcStubs` registry through a pager (owned HERE — DON'T-PIN). It is then callable as
+   *  `itx.rpcStubs.get('<rpcStubKey>')(…)`. With `rewrite`, the rule `rewrite ⇒
+   *  itx.rpcStubs.get('<rpcStubKey>')` is configured with it — `itx.<rewrite>.method(x)` reaches the
+   *  value like any other rewrite — and un-set when the stub disappears. Re-providing the same key
+   *  re-lends (reconnect — the pager is replaced). Disposing the handle, or the session ending, recalls
+   *  the stub. */
   async provide(
-    path: string,
-    target: ItxExpressionInput | unknown,
-  ): Promise<{ providedAtOffset: number }> {
-    if (typeof target === "string" || Array.isArray(target))
-      return this.#context.provideCapability({ path, target: target as ItxExpressionInput });
-    // Lend FIRST, mount SECOND (the event records a capability that can already serve). The
-    // registry key IS the canonical mount path — one canonicalizer, one spelling everywhere.
-    const key = canonicalItxExpressionPrefix(path);
-    await this.#lendRpcStub(key, target);
-    try {
-      return await this.#context.provideCapability({
-        path: key,
-        target: ["itx", "rpcStubs", ["get", key]],
-      });
-    } catch (e) {
-      // The DO refused the mount (STREAM_PAUSED / a validation throw): the relay just opened would
-      // otherwise linger for the whole session — the session's stub, its pager socket, and a DO
-      // transport that serves nothing. Recall it and let the refusal propagate.
-      this.#recallRpcStub(key);
-      throw e;
-    }
+    rpcStubKey: string,
+    provided: { stub: LiveValue; rewrite?: ItxExpressionInput },
+  ): Promise<SessionScopedHandle> {
+    const pager = await lendRpcStubOverPager(
+      this.#durableObject,
+      provided.stub as ClientRpcStub,
+      rpcStubKey,
+      this.#waitUntil,
+    );
+    const teardownKey = this.#sessionTeardownKey(rpcStubKey);
+    // Registered with the session so a dying session recalls it even when the handle was never
+    // disposed; re-providing the same key replaces the entry (the old pager was "replaced" anyway).
+    // The rule is NOT un-set here: the DO un-sets whatever names the key when its LAST pager closes
+    // (a reconnect replaces the pager, so a late-dying old session cannot clobber the new one's rule).
+    this.#sessionTeardown.add(teardownKey, pager);
+    if (provided.rewrite !== undefined)
+      try {
+        await this.#append(
+          rewriteRuleConfiguredEvent(provided.rewrite, ["itx", "rpcStubs", ["get", rpcStubKey]]),
+        );
+      } catch (e) {
+        // The DO refused the rule (STREAM_PAUSED / a validation throw): recall the lend, or a stub
+        // nothing names would linger for the session. Let the refusal propagate.
+        this.#sessionTeardown.dispose(teardownKey);
+        throw e;
+      }
+    return new SessionScopedHandle(() => this.#sessionTeardown.dispose(teardownKey));
   }
 
-  /** Pop a mount off the shadow stack (what it shadowed is restored) — by capability path (the
-   *  newest winner at that exact path) or by identity (`{ providedAtOffset }`). The by-PATH
-   *  spelling is the inverse of `provide(path, fn)`: it also RECALLS the stub THIS session lent
-   *  under that path, if any (a local fact — no DO round trip, no other session's stub is touched).
-   *  The by-offset spelling revokes the mount only; a stub this session lent stays addressable
-   *  as `itx.rpcStubs.get('…')` until the session ends. */
-  async revoke(input: string | { providedAtOffset: number }): Promise<void> {
-    if (typeof input === "string") {
-      const path = canonicalItxExpressionPrefix(input);
-      await this.#context.revokeCapability({ path });
-      this.#recallRpcStub(path);
-      return;
-    }
-    await this.#context.revokeCapability(input);
+  // ── (b) itx-expression rewrite rules: pure data, ONE event ──
+
+  /** REWRITE: a call starting with `match` runs as the same call with `match` replaced by `target`
+   *  (context/itx-expression-rewriting.ts — `match` may pin literal args: `itx.ai.run('gpt-5')`).
+   *  `null` un-sets the rule at `match`. Literally `append(rewriteRuleConfiguredEvent(match,
+   *  target))` — the returned handle un-sets the rule when disposed or when the session ends. */
+  async rewrite(
+    match: ItxExpressionInput,
+    target: ItxExpressionInput | null,
+  ): Promise<SessionScopedHandle> {
+    const event = rewriteRuleConfiguredEvent(match, target);
+    await this.#append(event);
+    const matchString = (event.payload as { match: string }).match;
+    return new SessionScopedHandle(() => {
+      if (target !== null) this.#appendInBackground(rewriteRuleConfiguredEvent(matchString, null));
+    });
   }
 
-  // ── SUBSCRIPTIONS: sugar over the subscriptions layer's one event (subscriptions.ts) ──
+  // ── subscriptions: ONE event, over (a) when the target is live ──
 
-  /** Subscribe: have each committed batch — filtered by `consumes` — delivered to `target` as
+  /** SUBSCRIBE: have each committed batch — filtered by `consumes` — delivered to `target` as
    *  `(events, range)`. `target` is EITHER an itx EXPRESSION whose terminal is callable that way (a
    *  facet's `.processEventBatch`, a loaded entrypoint's method, a sibling context's `.append`) OR a
-   *  LIVE capnweb callback, which is lent to `itx.rpcStubs` under `itx.subscriptions.<name>` and
-   *  targeted as `itx.rpcStubs.get('…')`. HOW it is served is not declared here: the context looks
-   *  at what the target evaluates to — a facet or a live stub owns its progress and gets a push (the
-   *  client heals a gap with `read`); anything else gets an at-least-once cursor the stream keeps.
-   *  Same name REPLACES; an identical subscribe appends NOTHING (a reconnect is zero events). An
-   *  unnamed subscription is SESSION-scoped: it is removed when this session ends. */
+   *  LIVE callback, which is lent to `itx.rpcStubs` under `itx.subscriptions.<name>` and targeted as
+   *  `itx.rpcStubs.get('…')`; `null` removes the row. HOW it is served is not declared here: the
+   *  context looks at what the target evaluates to — a facet or a lent stub owns its progress and gets
+   *  a push (the client heals a gap with `read`); anything else gets an at-least-once cursor the
+   *  stream keeps. Same name REPLACES. Literally `append(subscriptionConfiguredEvent(…))` — the handle
+   *  removes the row (and recalls the lent callback) when disposed or when the session ends. */
   async subscribe(input: {
     name?: string;
-    target: ItxExpressionInput | unknown;
+    target: ItxExpressionInput | LiveValue | null;
     consumes?: string[];
-  }): Promise<{ name: string }> {
-    const anonymous = input.name === undefined;
+  }): Promise<SubscriptionHandle> {
     const name = input.name ?? `sub-${crypto.randomUUID().slice(0, 8)}`;
-    let target: ItxExpressionInput;
-    if (typeof input.target === "string" || Array.isArray(input.target))
-      target = input.target as ItxExpressionInput;
-    else {
-      const key = `itx.subscriptions.${name}`;
-      await this.#lendRpcStub(key, input.target);
-      target = ["itx", "rpcStubs", ["get", key]];
+    const rpcStubKey = `itx.subscriptions.${name}`;
+    const teardownKey = this.#sessionTeardownKey(rpcStubKey);
+    let target = input.target as ItxExpressionInput | null;
+    if (target !== null && typeof target !== "string" && !Array.isArray(target)) {
+      const pager = await lendRpcStubOverPager(
+        this.#durableObject,
+        input.target as ClientRpcStub,
+        rpcStubKey,
+        this.#waitUntil,
+      );
+      this.#sessionTeardown.add(teardownKey, pager);
+      target = ["itx", "rpcStubs", ["get", rpcStubKey]];
     }
-    await this.#context.configureSubscription({
-      name,
-      target,
-      ...(input.consumes && { consumes: input.consumes }),
+    await this.#append(
+      subscriptionConfiguredEvent({
+        name,
+        target,
+        ...(input.consumes && { consumes: input.consumes }),
+      }),
+    );
+    if (target === null) this.#sessionTeardown.dispose(teardownKey);
+    const lent = Array.isArray(target) && target[1] === "rpcStubs";
+    return new SubscriptionHandle(name, () => {
+      // A lent callback's row is un-set by the DO when its last pager closes (see provide); an
+      // expression target has no pager, so the handle un-sets the row itself.
+      if (lent) this.#sessionTeardown.dispose(teardownKey);
+      else if (target !== null)
+        this.#appendInBackground(subscriptionConfiguredEvent({ name, target: null }));
     });
-    if (anonymous)
-      // Dies with the session: the removal rides waitUntil so the socket's close can complete.
-      this.#teardown.add(this.#sessionTeardownKey(`subscription:${name}`), {
-        dispose: () =>
-          this.#waitUntil(this.#context.removeSubscription(name).catch(() => undefined)),
-      });
-    return { name };
   }
 
-  /** Remove a subscription (appends `subscription-removed`; a cursor target's cursor goes with it)
-   *  and recall the callback this session lent under it, if any. */
-  async unsubscribe(name: string): Promise<void> {
-    await this.#context.removeSubscription(name);
-    this.#recallRpcStub(`itx.subscriptions.${name}`);
-    this.#teardown.dispose(this.#sessionTeardownKey(`subscription:${name}`));
-  }
-
-  // ── PROCESSORS: sugar over subscribe + the facet built-ins ──
+  // ── processors: durable configuration, two lines each over the subscription event ──
 
   /** Enable a processor: host `className` (the `StreamProcessorDurableObject` subclass exported by
    *  the loaded `source` — the host whose `processor` field holds the pure `StreamProcessor`) as the
-   *  facet named `name`, and subscribe its `processEventBatch` to every commit. Literally `subscribe({ name, target: itx.load(source).getDurableObjectClass(className)
-   *  .get(name).processEventBatch, consumes })` — a processor is a named facet that is pushed the
-   *  log. `consumes` is the SUBSCRIPTION's filter (what is sent; absent = every durable event); the
-   *  processor's contract is the REDUCE's (what it reduces) — so a processor that reduces ephemerals
-   *  names them here too, exactly as a live subscriber would. */
-  enableProcessor(
+   *  facet named `name`, and subscribe its `processEventBatch` to every commit. Literally the
+   *  subscription event with the target `itx.load(source).getDurableObjectClass(className).get(name)
+   *  .processEventBatch` — a processor is a named facet that is pushed the log. DURABLE (no handle):
+   *  a processor outlives the session that enabled it; `disableProcessor` is the explicit inverse.
+   *  `consumes` is the SUBSCRIPTION's filter (what is sent; absent = every durable event). */
+  async enableProcessor(
     name: string,
     ref: { source: WorkerSource; className: string; consumes?: string[] },
   ): Promise<{ name: string }> {
-    return this.subscribe({
-      name,
-      target: [
-        "itx",
-        ["load", ref.source],
-        ["getDurableObjectClass", ref.className],
-        ["get", name],
-        "processEventBatch",
-      ],
-      ...(ref.consumes && { consumes: ref.consumes }),
-    });
+    await this.#append(
+      subscriptionConfiguredEvent({
+        name,
+        target: [
+          "itx",
+          ["load", ref.source],
+          ["getDurableObjectClass", ref.className],
+          ["get", name],
+          "processEventBatch",
+        ],
+        ...(ref.consumes && { consumes: ref.consumes }),
+      }),
+    );
+    return { name };
   }
 
-  /** Disable a processor: unsubscribe it and DELETE its facet, storage included — a re-enable is a
-   *  clean rebuild from the log, never a resume from orphaned state. */
+  /** Disable a processor: remove its subscription and DELETE its facet, storage included — a
+   *  re-enable is a clean rebuild from the log, never a resume from orphaned state. */
   async disableProcessor(name: string): Promise<void> {
-    await this.unsubscribe(name);
-    await this.#context.invoke(["itx", "facets", ["delete", name]]);
+    await this.#append(subscriptionConfiguredEvent({ name, target: null }));
+    await this.#durableObject.invoke(["itx", "facets", ["delete", name]]);
+  }
+
+  /** THE ONE WRITE: every verb above builds an event and appends it here — `itx.append(event)` through
+   *  the same door a client's dotted `itx.append(...)` takes. (The cast: workers-types collapses a stub
+   *  method's `unknown` result to `never`.) */
+  #append(event: StreamEventInput): Promise<unknown> {
+    return this.#durableObject.invoke(["itx", ["append", event]]) as Promise<unknown>;
+  }
+
+  /** An undo's append: fire-and-forget under waitUntil (a disposer cannot await), a refusal ignored
+   *  (a paused stream keeps the row; the next explicit call will say so). */
+  #appendInBackground(event: StreamEventInput): void {
+    this.#waitUntil(this.#append(event).catch(() => undefined));
+  }
+
+  /** The SessionTeardown key for a lent stub: `"<contextName> <rpcStubKey>"`. The teardown is
+   *  SESSION-lived and shared by every IterateContext the session hands out (across projects), while
+   *  a stub key is only unique PER CONTEXT. A space separator is unambiguous: a context name has no
+   *  spaces. */
+  #sessionTeardownKey(rpcStubKey: string): string {
+    return `${this.#address.name} ${rpcStubKey}`;
   }
 }
 
-// THE NATURAL DOTTED SURFACE. Insert the dynamic-capability fallback into `IterateContext.prototype`'s chain
-// so an unknown segment (`itx.slack`, `itx.kv`, `itx.append`) becomes an accumulated invokeCapability dispatch,
-// while the declared methods above (invokeCapability / provide / subscribe / …) always win.
-// The receiver IS the invoker — the accumulated access reduces into ONE `invokeCapability(expression)`
-// call (`[...root, ...prefix, [method, ...args]]`), and `IterateContext.invokeCapability` is exactly
-// the door the reduce dispatches onto. Runs once at module load, after the class body. See
-// context/dotted-path-proxy.ts for the workerd brand-check reason this is a prototype hop and not a
-// Proxy AROUND the instance.
-installPrototypeInvokeCapabilityFallback(IterateContext, ["itx"]);
+// THE NATURAL DOTTED SURFACE. Insert the dynamic fallback into `IterateContext.prototype`'s chain so
+// an unknown segment (`itx.slack`, `itx.kv`, `itx.append`) becomes an accumulated `invoke` dispatch,
+// while the declared methods above always win. The receiver IS the invoker — the accumulated access
+// reduces into ONE `invoke(expression)` call (`[...root, ...prefix, [method, ...args]]`). Runs once at
+// module load, after the class body. See context/dotted-path-proxy.ts for the workerd brand-check
+// reason this is a prototype hop and not a Proxy AROUND the instance.
+installPrototypeInvokeFallback(IterateContext, ["itx"]);

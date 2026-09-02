@@ -1,6 +1,6 @@
 // e2e/support/sources.ts — the demo module sources the E2E tests seed into plain kv (source is kv
-// like everything else; a future real repo mounts at itx.files as an ordinary capability). Each test
-// seeds only what it uses:
+// like everything else; a future real repo is reached at itx.files through an ordinary rewrite
+// rule). Each test seeds only what it uses:
 //   await seedSources(itx, ["site", "counter"]);
 //   ...source: "itx.kv.get('src/site.js')"...
 
@@ -221,7 +221,7 @@ export async function seedSources(itx: any, names: string[]): Promise<void> {
   for (const n of names) {
     const key = `src/${n}.js`;
     if (!SOURCES[key]) throw new Error(`sources: no source ${key}`);
-    await itx.invokeCapability(["itx", "kv", ["put", key, SOURCES[key]]]);
+    await itx.invoke(["itx", "kv", ["put", key, SOURCES[key]]]);
   }
 }
 
