@@ -25,7 +25,7 @@ import type { ScriptExecutionSettlement } from "@iterate-com/shared/script-execu
 import { stringifyScriptResult, truncateScriptResult } from "../../lib/script-result-render.ts";
 import { retainedScriptResult } from "../capability-host/capability-host-preamble.ts";
 import { scriptCompletionInput } from "../capability-host/script-execution-settlement.ts";
-import { StreamEventLog, type SizedStreamEvent } from "./stream-storage.ts";
+import { StreamEventLog } from "./stream-storage.ts";
 
 // Same SqlStorage wrapper as stream-storage.test.ts — node:sqlite standing in
 // for the DO's SQLite, feeding the real StreamEventLog.
@@ -109,8 +109,8 @@ for (let cursor = 0; cursor < 6; cursor++) {
 }
 // The two processor facets (agent + capability-host) page the same window
 // through their own runner reads.
-const agentFoldPage: SizedStreamEvent[] = readWholeWindow();
-const hostFoldPage: SizedStreamEvent[] = readWholeWindow();
+const agentFoldPage = readWholeWindow();
+const hostFoldPage = readWholeWindow();
 retained.push(agentFoldPage, hostFoldPage);
 
 // Capability-host fold: classify the settlement into its retained row.
