@@ -367,21 +367,21 @@ capnweb serialize sockets over plain RPC.
 ## 11. Code structure
 
 Two ways to count, both honest. **Code lines** (non-blank, non-comment) in non-test `src/`:
-4,481 on the morning of 2026-09-01 → 3,879 at `fe8168c13` → 3,846 after this review's five
-commits (the entrypoint verbs, the `rewrite` verb, the `getDurableObjectClass` chain, the
-producer-source branch and the `load`/`getEntrypoint` two-step went; the facet-delete effect and the
-typed interface came). **Raw lines** including comments and blanks: 6,206 in 36 files. About 38
-percent of the source is comment. The first review figure of 6,234 was the raw count; it was never
-a thousand added lines of code.
+4,481 on the morning of 2026-09-01 → 3,879 at `fe8168c13` → 3,903 after this review's six
+commits (the entrypoint verbs, the `rewrite` verb, the `getDurableObjectClass` chain and the
+`load`/`getEntrypoint` two-step went; the facet-delete effect, the typed interface and the
+cacheKey-gated producer source came). **Raw lines** including comments and blanks: 6,293 in 36
+files. About 38 percent of the source is comment. The first review figure of 6,234 was the raw
+count; it was never a thousand added lines of code.
 
-Tests: unit + workers 250; e2e 36 files after the source-refetch proof left with its premise.
+Tests: unit + workers 252; e2e 141 passed and 2 expected fails on 36 files.
 
 | Layer                    | Files (raw lines, comments included)                                                  | Lines |
 | ------------------------ | ------------------------------------------------------------------------------------- | ----: |
 | the edge                 | `worker.ts` · `session.ts` · `iterate-context.ts` · `itx-entrypoint.ts`               |   626 |
 | the DO                   | `iterate-context-durable-object.ts`                                                   |   667 |
 | expressions + dispatch   | `context/expression.ts` · `dispatch.ts` · `dotted-path-proxy.ts` · `invoke-handle.ts` |   442 |
-| built-ins + loader       | `context/built-ins.ts` · `worker-loader.ts` · `durable-object-names.ts`               |   479 |
+| built-ins + loader       | `context/built-ins.ts` · `worker-loader.ts` · `durable-object-names.ts`               |   555 |
 | (a) rpc stubs            | `context/rpc-stub-directory.ts` · `rpc-stub-relay.ts`                                 |   551 |
 | (b) rewrite rules        | `context/itx-expression-rewriting.ts`                                                 |   206 |
 | the stream + core        | `stream/stream.ts` · `core-processor.ts` · `events.ts` · `reduce-checkpoint.ts`       | 1,037 |
