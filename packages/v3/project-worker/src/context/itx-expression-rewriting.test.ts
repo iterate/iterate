@@ -503,11 +503,6 @@ describe("the rule table — a MAP by match: set replaces, null deletes", () => 
     expect(await invoke("itx.whoami()")).toEqual({ projectId: "prj_t", path: "/" });
   });
 
-  test("inherited built-ins are unreachable through the table (probe-resistance end to end)", async () => {
-    const { invoke } = setup();
-    await expect(invoke("itx.kv.toString()")).rejects.toThrow(/is not a method/);
-  });
-
   test("a rule to a key nothing is lent under answers offline until the rule is un-set — the table never auto-unsets", async () => {
     const { rewrite, invoke, rewriteRules, provide, _recall } = setup();
     provide("itx.robot", { move: (n: unknown) => `moved ${n}` });

@@ -97,21 +97,12 @@ describe("walkSteps + resolve", () => {
     expect(await resolver.resolve("itx.kv.get('k')")).toBe("v"); // `this` was kv, not the rule
   });
 
-  test("inherited built-ins are not capability surface (the RPC exposure doctrine)", async () => {
+  test("`__proto__` / `constructor` / `prototype` never resolve as steps (hand-built — the codec refuses to parse them)", async () => {
     const kv = { get: (k: string) => `v:${k}` };
     const walk = (steps: ItxExpression) =>
       walkSteps({ value: kv, receiver: undefined }, steps, "expression");
-    // an inherited method errs EXACTLY like a missing one — callers cannot probe
-    await expect(walk([["toString"]])).rejects.toThrow(/is not a method/);
-    await expect(walk([["hasOwnProperty", "get"]])).rejects.toThrow(/is not a method/);
-    // the magic names never resolve (the codec refuses to even parse them — these are hand-built
-    // steps) — a property step yields undefined → the null guard
     await expect(walk(["constructor", "name"])).rejects.toThrow(/hit undefined/);
-    // an OWN override with the same name passes — the doctrine allows what the object chose
-    const own = { toString: () => "mine" };
-    await expect(
-      walkSteps({ value: own, receiver: undefined }, [["toString"]], "expression"),
-    ).resolves.toMatchObject({ value: "mine" });
+    await expect(walk(["__proto__", "x"])).rejects.toThrow(/hit undefined/);
   });
 
   test("calling the bare scope symbol is a loud error (the parser guards it)", () => {

@@ -2274,3 +2274,25 @@ target | null, consumes? })`, `enableProcessor`, `disableProcessor`. Every built
   trim and `INHERITED_BUILTINS` from the guard audit.
 - GATES: tsc×3 · oxlint 0/0 · knip clean · unit+workers 251 · e2e 141p/2xf · tutorial-proof 8 + part0 48 ·
   Playwright 2.
+
+## 2026-09-02 — guard-audit trims: the append door, the inherited-builtins set, dead armor
+
+- **Why.** Jonas, on deleting `providedAtOffset`: "see if there are other unnecessary guards like that
+  that we can just delete to reduce complexity" → `docs/proposals/guard-audit.md` (20 DELETE/SIMPLIFY
+  rows, 30 KEEP rows that encode platform facts). Landed in the surface commit: `assertLiveValue` + the
+  pending-attach sweep (one guard twice), `rpcStubAttach`'s canonical assert, the fetch/pager door's
+  Upgrade-header 400s + `#pendingDials` interlock + attachment try/catch, the prototype double-install
+  throw. Landed here:
+- **`Stream.append` step 1 is one `if`**: a non-empty `type`. Gone: the `ephemeral` must-be-literal-true
+  refusal (the `ephemeral?: true` type already says it; every consumer tests truthiness), the
+  `EPHEMERAL_IDEMPOTENCY_KEY` code and refusal (an ephemeral's key is simply never stored — ephemerals
+  never reach the idempotency column), and OFFSET_CONFLICT on a dedupe HIT (a retry answers with the
+  event it already has, whatever `offset` it hoped for — the semantics people want). The `try/catch`
+  around a waiter's `resolve` was dead armor (a Promise's own resolve cannot throw).
+- **`dispatch.ts`'s `INHERITED_BUILTINS` set is gone** — anti-probe defense for untrusted callers; with
+  trusted clients `itx.kv.toString()` answering `"[object Object]"` is a weird answer, not a breach.
+  The three-name line stays (`constructor` would hand out the class). On a facet stub the platform
+  rejects an unexposed name in its own words (the e2e pin now says so).
+- Tests: three pins deleted with their guards (ephemeral:false, ephemeral+idempotencyKey ×2), two
+  flipped (dedupe hit + offset ⇒ the existing event; facet `toString()` ⇒ rejects). src 3,764 → 3,735.
+- GATES: tsc×3 · oxlint 0/0 · knip · unit+workers 250 · e2e 141p/2xf.

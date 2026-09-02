@@ -40,48 +40,15 @@ const read = (
 
 // ── the append door's runtime guards ──
 
-test("the runtime guards reject a non-string or blank type AND a non-literal-true ephemeral, committing nothing", async () => {
-  // There is no TS-type allow-list on the RPC boundary; what remains are the explicit runtime
-  // guards in IterateContextDurableObject.append — the SOLE enforcement.
+test("the runtime guard rejects a non-string or blank type, committing nothing", async () => {
+  // There is no TS-type allow-list on the RPC boundary; the ONE explicit runtime guard in
+  // Stream.append is the sole enforcement.
   const itx = openItx(freshCtx("guards"));
   expect((await rejection(append(itx, { type: 12345 }))).message).toMatch(/non-empty type/i);
   expect((await rejection(append(itx, { type: "" }))).message).toMatch(/non-empty type/i);
   expect((await rejection(append(itx, { type: "   " }))).message).toMatch(/non-empty type/i);
-  // `ephemeral: false` is a loud input error, not a silent synonym for omitting the flag
-  expect((await rejection(append(itx, { type: "sneaky", ephemeral: false }))).message).toMatch(
-    /ephemeral must be literal true or absent/i,
-  );
   expect((await readAll(itx)).map((e) => e.type)).not.toContain("sneaky"); // nothing committed
 });
-
-test("ephemeral + idempotencyKey is refused loudly and atomically mid-batch", async () => {
-  const itx = openItx(freshCtx("ephkey"));
-  const [seed] = await append(itx, { type: "seed", payload: {} });
-  const err = await rejection(
-    append(
-      itx,
-      { type: "fresh", payload: { n: 1 } },
-      { type: "blip", payload: {}, ephemeral: true, idempotencyKey: "contradiction" },
-    ),
-  );
-  expect(err.message).toContain("ephemeral events cannot carry an idempotencyKey");
-  // the fresh insert before the contradiction rolled back with it (assert presence/absence —
-  // platform events like woken share the log)
-  const types = (await readAll(itx)).map((e) => e.type);
-  expect(types).toContain("seed");
-  expect(types).not.toContain("fresh");
-  expect(seed.offset).toBeGreaterThan(0);
-  // dense continuation — a refused batch burns no offsets: a marker before a second refusal and a
-  // probe after it land adjacent (a plain event changes no inline state; nothing ephemeral lands between)
-  const [marker] = await append(itx, { type: "marker", payload: {} });
-  await rejection(
-    append(itx, { type: "blip", payload: {}, ephemeral: true, idempotencyKey: "contradiction" }),
-  );
-  const [probe] = await append(itx, { type: "probe", payload: {} });
-  expect(probe.offset).toBe(marker.offset + 1);
-});
-
-// ── idempotency at the commit point ──
 
 test("an in-batch idempotency dedupe hit is processed ONCE, not twice", async () => {
   // append derives a per-offset `distinct` view (first-wins) that feeds the inline core reduce AND

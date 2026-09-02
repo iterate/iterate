@@ -1,12 +1,12 @@
 // subscriptions-ephemeral-opt-in.e2e.test.ts — the ephemeral lane: shared offsets, named-type opt-in (a subscription's
 // `consumes` NAMING a type opts its ephemerals in — the ONE rule; absent or "*" = every durable event
-// and never an ephemeral), appends through the one dispatch door (itx.append), misuse is loud.
+// and never an ephemeral), appends through the one dispatch door (itx.append).
 
 import { expect, test } from "vitest";
 import { freshCtx, openItx, until } from "./support/client.ts";
 import { enableFixtureProcessor, seedSources } from "./support/sources.ts";
 
-test("ephemeral lane: a named-type subscription reduces ephemeral chunks, '*' never sweeps them, misuse is loud", async () => {
+test("ephemeral lane: a named-type subscription reduces ephemeral chunks, '*' never sweeps them", async () => {
   const itx = openItx(freshCtx("eph"));
   await seedSources(itx, ["chunky"]);
 
@@ -61,14 +61,4 @@ test("ephemeral lane: a named-type subscription reduces ephemeral chunks, '*' ne
   // past the last durable mark
   expect(tally.offset).toBeGreaterThanOrEqual(chunky.offset);
   expect(chunky.offset).toBeGreaterThanOrEqual(mark2.offset);
-
-  // 4. ephemeral misuse is a loud error
-  let bad = "";
-  try {
-    await itx.invoke(`itx.append({ type: 'x', ephemeral: true, idempotencyKey: 'k' })`);
-  } catch (e) {
-    bad = String(e);
-  }
-  // ephemeral+idempotencyKey rejected
-  expect(bad).toMatch(/idempotencyKey/);
 });

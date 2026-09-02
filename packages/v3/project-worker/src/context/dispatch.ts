@@ -22,26 +22,11 @@ export function registerPipelinedRpcBrand(brand: abstract new (...args: never[])
 }
 const pipelined = (v: unknown): boolean => PIPELINED_RPC_BRANDS.some((b) => v instanceof b);
 
-// RPC-EXPOSURE DOCTRINE (Kenton, workerd #1028), enforced at THE dispatch point: what an object
-// merely INHERITS from Object/Function.prototype is not capability surface, and __proto__ /
-// constructor / prototype never resolve. Refusal is indistinguishable from absence, so callers
-// cannot probe. Identity-based on purpose — views may be Proxies (capnweb / Workers-RPC
-// stubs) whose descriptor traps don't mirror `get` — never a descriptor walk; an own override with
-// the same name resolves to a DIFFERENT function and is allowed (the doctrine permits what the
-// object chose).
-const INHERITED_BUILTINS = new Set<unknown>(
-  [Object.prototype, Function.prototype].flatMap((proto) =>
-    Object.getOwnPropertyNames(proto)
-      .map((k) => Object.getOwnPropertyDescriptor(proto, k)?.value)
-      .filter((v) => typeof v === "function"),
-  ),
-);
-
-/** Resolve one step's property as capability surface — `undefined` for anything only inherited. */
+/** Resolve one step's property. `__proto__` / `constructor` / `prototype` never resolve — `constructor`
+ *  would hand out the class itself (trusted clients or not, that is not a step anyone means). */
 function stepGet(value: object, key: string): unknown {
   if (key === "__proto__" || key === "constructor" || key === "prototype") return undefined;
-  const resolved = Reflect.get(value, key);
-  return INHERITED_BUILTINS.has(resolved) ? undefined : resolved;
+  return Reflect.get(value, key);
 }
 
 /**

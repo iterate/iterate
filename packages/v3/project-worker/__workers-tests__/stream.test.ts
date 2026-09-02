@@ -481,7 +481,7 @@ test("idempotency: same key + same body echoes the EXISTING event (no row, no of
   });
 });
 
-test("expected offset: an input carrying `offset` lands exactly there or the whole batch refuses with OFFSET_CONFLICT, before any write; a dedupe hit must match it too", async () => {
+test("expected offset: an input carrying `offset` lands exactly there or the whole batch refuses with OFFSET_CONFLICT, before any write; a dedupe hit answers with the event it already has", async () => {
   await runInDurableObject(stub("prj_expected_offset"), async (_instance, state) => {
     const stream = bareStream(await virgin(state));
     stream.append({ type: "seed" }); // @1
@@ -503,13 +503,10 @@ test("expected offset: an input carrying `offset` lands exactly there or the who
     // sequential expectations inside one batch hold together
     const two = stream.append({ type: "a", offset: 3 }, { type: "b", offset: 4 });
     expect(two.map((e) => e.offset)).toEqual([3, 4]);
-    // a dedupe hit carries the offset it already has — expecting another is a conflict
+    // a dedupe hit answers with the event it already has, whatever `offset` the retry hoped for
     stream.append({ type: "keyed", idempotencyKey: "k", payload: {} }); // @5
-    expect(() =>
-      stream.append({ type: "keyed", idempotencyKey: "k", payload: {}, offset: 6 }),
-    ).toThrow(/already landed at 5/);
     expect(
-      stream.append({ type: "keyed", idempotencyKey: "k", payload: {}, offset: 5 })[0].offset,
+      stream.append({ type: "keyed", idempotencyKey: "k", payload: {}, offset: 6 })[0].offset,
     ).toBe(5);
   });
 });

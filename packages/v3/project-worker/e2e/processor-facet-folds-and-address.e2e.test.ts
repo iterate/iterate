@@ -102,8 +102,9 @@ test("facet address: the built-in door, a rewrite rule onto it, barrier verb, pr
   const sugar = await itx.invoke("itx.facets.get('tally').snapshot()");
   expect(sugar?.state?.counts?.mark).toBe(1);
 
-  // 5. probe-resistance carries over: inherited built-ins unreachable on the facet
-  await expect(itx.invoke(`itx.facets.get('tally').toString()`)).rejects.toThrow(/is not a method/);
+  // 5. a name the facet does not expose rejects — in the RPC receiver's own words (no probe-defense
+  //    layer in between: trusted clients, dispatch.ts)
+  await expect(itx.invoke(`itx.facets.get('tally').toString()`)).rejects.toThrow();
 });
 
 test("two userspace facet processors reduce side-by-side — user-tally and tally", async () => {

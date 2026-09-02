@@ -18,7 +18,6 @@ type ErrorCode =
   | "RPC_STUB_OFFLINE" // the rpc stub a row names is neither borrowed nor pager-backed right now
   | "NOT_A_METHOD" // the dotted path's terminal segment is not callable on the target
   | "NO_FACET" // no facet of that name has been loaded into this context
-  | "EPHEMERAL_IDEMPOTENCY_KEY" // ephemeral + idempotencyKey is a contradiction, always rejected
   | "WAIT_TIMEOUT" // waitForEvent expired with no matching event committed
   | "TIMEOUT"; // lib/timeout.ts: the call did not answer within its deadline
 // (There is no separate boundary-validation library: the append door's own runtime guards

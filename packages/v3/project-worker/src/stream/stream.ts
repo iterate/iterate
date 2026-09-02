@@ -251,22 +251,11 @@ export class Stream {
   append(...events: StreamEventInput[]): StreamEvent[] {
     if (events.length === 0) return []; // a pure no-op: nothing checked, minted, or fanned out
     // 1. may this land? — the shape first (this runtime check is the SOLE enforcement; there is no
-    //    boundary validator): a non-blank type; `ephemeral` literal true or absent (a `false` is a
-    //    LOUD error, never a silent synonym for durable — every consumer tests truthiness); no
-    //    idempotencyKey on an ephemeral (nothing idempotent about the unreplayable)
-    for (const event of events) {
+    //    boundary validator): a non-blank type. (An ephemeral's idempotencyKey is simply never
+    //    stored — ephemerals never reach the idempotency column.)
+    for (const event of events)
       if (typeof event.type !== "string" || event.type.trim() === "")
         throw new Error("append: every event needs a non-empty type");
-      if ("ephemeral" in event && event.ephemeral !== undefined && event.ephemeral !== true)
-        throw new Error(
-          `append: ephemeral must be literal true or absent — got ${JSON.stringify(event.ephemeral)} on "${event.type}"`,
-        );
-      if (event.ephemeral && event.idempotencyKey)
-        throw codedError(
-          "EPHEMERAL_IDEMPOTENCY_KEY",
-          "ephemeral events cannot carry an idempotencyKey — nothing idempotent about the unreplayable",
-        );
-    }
     //    then the pause: a paused stream refuses everything except the platform's own records and
     //    the pause/resume pair itself (it must always accept its own resume)
     const paused = this.#coreReducedState.paused;
@@ -317,13 +306,7 @@ export class Stream {
             idempotencyConflictMessage(eventInput.idempotencyKey!, existingEvent.offset),
             { existingOffset: existingEvent.offset },
           );
-        if (expectedOffset !== undefined && expectedOffset !== existingEvent.offset)
-          throw codedError(
-            "OFFSET_CONFLICT",
-            `expected offset ${expectedOffset}, but "${eventInput.idempotencyKey}" already landed at ${existingEvent.offset}`,
-            { expected: expectedOffset, actual: existingEvent.offset },
-          );
-        committedEvents.push(existingEvent);
+        committedEvents.push(existingEvent); // a retry answers with the event it already has, whatever `offset` it hoped for
         continue;
       }
       // EXPECTED OFFSET: an event carrying `offset` lands exactly there or the batch is refused —
@@ -496,7 +479,7 @@ export class Stream {
     });
   }
 
-  /** Each resolution is armored: a waiter can never delay or fail a commit. */
+  /** Settle every waiter the fresh events match (a Promise's own `resolve` cannot throw). */
   #resolveWaitForEventWaiters(freshEvents: StreamEvent[]): void {
     for (const event of freshEvents) {
       if (this.#waitForEventWaiters.length === 0) return;
@@ -505,11 +488,7 @@ export class Stream {
           continue;
         this.#waitForEventWaiters.splice(this.#waitForEventWaiters.indexOf(w), 1);
         clearTimeout(w.timer);
-        try {
-          w.resolve(event);
-        } catch (err) {
-          reportIssue("stream.wait-for-event", err, { type: event.type, offset: event.offset });
-        }
+        w.resolve(event);
       }
     }
   }
