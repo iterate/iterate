@@ -51,6 +51,11 @@ const ALLOWED_UNDATED: AllowedUndated[] = [
     note: "env-gated: the authenticated seeded app proof requires a real signup",
   },
   {
+    file: "specs/notes-view.spec.ts",
+    match: "Email OTP sign-in is disabled for this deployment",
+    note: "env-gated: the notes view proof rides the same real-member auth lane as seeded-apps",
+  },
+  {
     file: "specs/mobile/expected-backend-signin.spec.ts",
     match: "needs APP_CONFIG_BASE_URL pointing at a deployed preview slot",
     note: "env-gated: the bundle stamp must name an envs.ts preview preset and prd keeps the fixed test OTP off",
