@@ -67,17 +67,26 @@ One flag per environment: **iced**.
 
 ## Checklist
 
-- [ ] `ice.ts` module: flag read/write helpers + per-incarnation cache
-- [ ] Enforcement in StreamDurableObject alarm turn + StreamAlarmArmer
-- [ ] Enforcement in keepalive/scheduler arming hooks
-- [ ] Skip boot woken-append while iced
-- [ ] Node-harness test: wedged-loop scenario drains on ice, resumes on
-      un-ice (real recovery machinery, no mocks)
-- [ ] CLI: `pnpm cli ice` on/off/status
+- [x] `do-ice.ts` module: flag read + per-incarnation cache _(src/domains/streams/do-ice.ts; 30s refresh floor, 500ms read cap, fail-open)_
+- [x] Enforcement in StreamDurableObject alarm turn + StreamAlarmArmer _(armer takes an `isIced` hook — the single choke point every alarm write funnels through; alarm() consumes fires from the cached flag so the turn stays synchronous)_
+- [x] ~~Enforcement in keepalive/scheduler arming hooks~~ _(unnecessary for streams: keepalive/facet desires all arm through the parent armer. SchedulerDurableObject arms via the shared registry and is deferred — it burned ~66 DO-hrs/3h vs the stream DO's 50k in the incident; noted as follow-up)_
+- [x] Skip boot woken-append while iced _(both boot paths now refresh the flag under blockConcurrencyWhile before finishInitialization — the checkpoint-ready fast path previously initialized synchronously; cost is one capped KV point read per boot)_
+- [x] Node-harness test: iced boot appends no woken/arms nothing, iced alarm consumed without facet replays, un-iced boot unchanged, flag-clear resumes next incarnation _(stream-do-ice.test.ts, real StreamDurableObject over the in-memory ctx fake)_
+- [x] CLI: `pnpm cli ice` on/off/status _(scripts/ice.ts via the KV REST control plane; live round-trip drilled on preview_3)_
 - [ ] Wire the runbook line into do-duration-probe alert text (PR #2576
       follow-up if that merges first)
+- [ ] Follow-up: same gate for SchedulerDurableObject (shared registry —
+      needs an OS-injectable hook, not KV logic in packages/iterate)
+- [ ] Follow-up: a live drain drill on a deliberately-wedged preview slot
+      (nothing was burning when this landed)
 
 ## Implementation log
 
 - 2026-09-02 evening: worktree created, spec committed first per AFK
   protocol.
+- Implementation + tests landed the same evening. Notable discovery: fresh
+  streams boot through the checkpoint-ready SYNCHRONOUS path (empty log ⇒
+  `kind: "ready"`), so the flag read had to gate both constructor lanes.
+  alarm() reads the cached flag (not awaited) to keep the pacing test's
+  synchronous-turn contract; residents converge one alarm cycle after a
+  flip, fresh boots immediately.

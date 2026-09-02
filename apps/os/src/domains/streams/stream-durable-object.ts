@@ -61,6 +61,7 @@ import { isWorkerBuildFailedError, WorkerBuildFailedError } from "../workers/art
 import { RepoNotSeededError } from "../repos/utils.ts";
 import type { StatefulDynamicWorkerRef } from "../workers/schemas.ts";
 import { buildCopyAppends } from "./copy-appends.ts";
+import { DoIceSwitch } from "./do-ice.ts";
 import {
   assertCoreProcessorCheckpointGrowthFits,
   STREAM_PAUSED_ERROR_PREFIX,
@@ -194,13 +195,20 @@ type StreamAlarmStorage = {
  */
 export class StreamAlarmArmer {
   readonly #storage: StreamAlarmStorage;
+  readonly #isIced: () => boolean;
   #armedForMs: number | null = null;
 
-  constructor(storage: StreamAlarmStorage) {
+  constructor(storage: StreamAlarmStorage, isIced: () => boolean = () => false) {
     this.#storage = storage;
+    this.#isIced = isIced;
   }
 
   armNoLaterThan(atMs: number): void {
+    // Iced environment (do-ice.ts): consume desires without planting the
+    // platform alarm, so no turn can perpetuate a wake loop. The desires'
+    // durable representations (cursor lag, facet slot, keepalive record)
+    // survive and are re-derived after un-icing.
+    if (this.#isIced()) return;
     const previous = this.#armedForMs;
     if (previous !== null && previous <= atMs) return;
     this.#armedForMs = atMs;
@@ -934,7 +942,13 @@ export class StreamDurableObject extends DurableObject<Env> {
   });
   /** In-memory throughput accounting (events/s, bytes in/out); resets with the incarnation. */
   readonly #metrics = new StreamRuntimeMetrics(Date.now());
-  readonly #alarmArmer = new StreamAlarmArmer(this.ctx.storage);
+  /** Environment-wide alarm circuit breaker (do-ice.ts); refreshed at boot
+   * and per alarm turn. `PROJECT_DIRECTORY` is absent in the standalone
+   * streams playground, which the switch treats as permanently un-iced. */
+  readonly #ice = new DoIceSwitch(
+    "PROJECT_DIRECTORY" in this.env ? this.env.PROJECT_DIRECTORY : undefined,
+  );
+  readonly #alarmArmer = new StreamAlarmArmer(this.ctx.storage, () => this.#ice.iced);
   readonly #deliveryAlarmBoundary = new StreamDeliveryAlarmBoundary({
     armAlarm: (atMs) => this.#alarmArmer.armNoLaterThan(atMs),
     now: () => Date.now(),
@@ -1132,7 +1146,14 @@ export class StreamDurableObject extends DurableObject<Env> {
     const loaded = this.#readCoreProcessorState();
     if (loaded.kind === "ready") {
       this.#coreProcessorState = loaded.state;
-      this.#finishInitialization();
+      // The ice refresh must precede the first turn's woken append/arm even
+      // on this fast path, so it rides a blockConcurrencyWhile too. Cost: one
+      // KV point read per boot, capped at READ_TIMEOUT_MS and fail-open
+      // (do-ice.ts) — a KV incident degrades to slower boots, never a wedge.
+      void this.ctx.blockConcurrencyWhile(async () => {
+        await this.#ice.refresh();
+        this.#finishInitialization();
+      });
       return;
     }
 
@@ -1144,6 +1165,10 @@ export class StreamDurableObject extends DurableObject<Env> {
     // initialization reset.
     this.#coreProcessorState = CoreProcessorContract.stateSchema.parse({});
     void this.ctx.blockConcurrencyWhile(async () => {
+      // Refresh the ice switch before the first turn: a hot (rebooting) fleet
+      // reads the flag on every boot, which is exactly when containment needs
+      // it. Bounded and fail-open inside refresh — see do-ice.ts.
+      await this.#ice.refresh();
       this.#coreProcessorState = await this.#recoverCoreProcessorStateFromEventLog();
       this.#finishInitialization();
     });
@@ -1242,6 +1267,11 @@ export class StreamDurableObject extends DurableObject<Env> {
         },
       ]);
     }
+    // Iced environment (do-ice.ts): no `woken` append. The append would be
+    // fresh delivery work — the very fuel the switch exists to cut off. After
+    // un-icing, the next boot appends `woken` normally and deliveries catch
+    // up from durable cursors.
+    if (this.#ice.iced) return;
     this.#append({ authority: "core-event" }, [
       {
         type: "events.iterate.com/stream/woken",
@@ -1260,6 +1290,20 @@ export class StreamDurableObject extends DurableObject<Env> {
    */
   async alarm(alarmInfo?: AlarmInvocationInfo) {
     this.#alarmArmer.markFired();
+    // Iced environment (do-ice.ts): consume the fire and do nothing — no
+    // facet replays, no reconcile, no re-arm. Resolving (not throwing) is
+    // what retires the platform alarm; the drained work is all re-derivable
+    // from durable state after un-icing. The check reads the cached flag so
+    // the alarm turn stays synchronous; the background refresh means a
+    // long-resident incarnation converges within one alarm cycle (fresh
+    // incarnations — the hot case in a runaway — read the flag at boot).
+    void this.#ice.refresh();
+    if (this.#ice.iced) {
+      console.warn("stream alarm consumed without work: environment is iced (do-ice)", {
+        path: this.name.path,
+      });
+      return undefined;
+    }
     let facetReplays: Promise<FacetAlarmReplayFailure[]> | undefined;
     this.#deliveryAlarmBoundary.runAlarmTurn(() => {
       facetReplays = this.#fireDueFacetAlarms(alarmInfo);
