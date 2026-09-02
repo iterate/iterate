@@ -4,7 +4,11 @@
 // a pinned multi-hour invocation, or account-wide active time above the
 // per-account ceiling. Exists because the 2026-09-01 preview stream-DO wake
 // loop burned ~$300/hour for 28 hours before a human noticed it on the bill.
+//
+//   pnpm tsx scripts/ci/do-duration-alert.ts run
+//   pnpm tsx scripts/ci/do-duration-alert.ts run --threshold-do-hours 1   # force an alert (Slack hookup test)
 import { execFileSync } from "node:child_process";
+import { createBuiltInPrompts, createCli, isAgent, yamlTableConsoleLogger } from "trpc-cli";
 import { isMainModule } from "../../packages/shared/src/dev/is-main-module.ts";
 import { getRunUrl } from "./github.ts";
 import { getSlackClient, slackChannelIds } from "./slack.ts";
@@ -26,9 +30,15 @@ const ACCOUNTS = [
   },
 ];
 
-export async function runDoDurationAlert() {
+export async function run(options: {
+  /** Override BOTH accounts' active-time ceiling (DO-hours/hour). Set very low
+   * (e.g. 1) to force an alert and prove the Slack hookup end to end. */
+  thresholdDoHours?: number;
+}) {
+  const override = options.thresholdDoHours;
   const failures: { label: string; output: string }[] = [];
   for (const account of ACCOUNTS) {
+    const ceiling = override === undefined ? account.maxAccountDoHours : override;
     let output: string;
     let failed = false;
     try {
@@ -47,7 +57,7 @@ export async function runDoDurationAlert() {
           "--hours",
           "3",
           "--max-account-do-hours",
-          String(account.maxAccountDoHours),
+          String(ceiling),
         ],
         { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
       );
@@ -59,25 +69,35 @@ export async function runDoDurationAlert() {
     if (failed) failures.push({ label: account.label, output });
   }
 
-  if (failures.length === 0) return;
+  if (failures.length === 0) return { breached: false };
 
   const slack = getSlackClient();
   // Absent outside GitHub Actions (local runs of this script).
   const runUrl = process.env.GITHUB_RUN_ID ? getRunUrl() : null;
+  const testPrefix =
+    override === undefined ? "" : `🧪 TEST RUN (threshold override ${override} DO-hours) — `;
   await slack.chat.postMessage({
     channel: slackChannelIds["#error-pulse"],
     text: [
-      `🚨 Durable Objects duration alarm: ${failures.map((f) => f.label).join(", ")}`,
+      `${testPrefix}🚨 Durable Objects duration alarm: ${failures.map((f) => f.label).join(", ")}`,
       ...failures.map((f) => "```" + f.output.trim().slice(0, 2500) + "```"),
       runUrl ? `<${runUrl}|workflow run>` : null,
-      "Runbook: apps/os/tasks/do-duration-leak/ — contain with `pnpm erase-data --env preview_N` for runaway preview slots.",
+      "Runbook: apps/os/tasks/do-duration-leak/ — contain with `pnpm cli ice on --env <name>` (reversible freeze, PR #2579) or `pnpm erase-data --env preview_N` (previews only).",
     ]
       .filter(Boolean)
       .join("\n"),
   });
   process.exitCode = 1;
+  return { breached: true };
 }
 
 if (isMainModule(import.meta.url)) {
-  await runDoDurationAlert();
+  void createCli({
+    ...import.meta,
+    name: "do-duration-alert",
+    jsonInput: "auto",
+  }).run({
+    logger: yamlTableConsoleLogger,
+    prompts: isAgent() ? undefined : createBuiltInPrompts(),
+  });
 }
