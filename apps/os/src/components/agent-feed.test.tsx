@@ -5,6 +5,7 @@ import { ZERO_AGENT_RUNTIME, type AgentRuntime } from "@iterate-com/shared/agent
 import type {
   AgentUiActivity,
   AgentUiLlmStep,
+  AgentUiMessageItem,
 } from "@iterate-com/ui/components/events/agent-ui-reducer";
 import { AgentFeedItemRow, AgentLiveActivity } from "./agent-feed.tsx";
 import { buildRoundMetaYaml } from "~/lib/agent-round-meta-yaml.ts";
@@ -67,6 +68,42 @@ function renderLiveActivity(
   );
   return container;
 }
+
+function renderMessage(item: AgentUiMessageItem): HTMLDivElement {
+  const container = document.createElement("div");
+  container.innerHTML = renderToStaticMarkup(
+    <AgentFeedItemRow item={item} toggledIds={new Set()} onToggle={() => {}} />,
+  );
+  return container;
+}
+
+test("a failed reference resolution marks the exact sent pill", () => {
+  const container = renderMessage({
+    kind: "user",
+    id: "user-1",
+    text: "Use @AGENTS.md",
+    timestampMs: 0,
+    richContent: {
+      version: 1,
+      nodes: [
+        { type: "text", text: "Use " },
+        {
+          type: "reference",
+          occurrenceId: "ref-one",
+          display: "@AGENTS.md",
+          target: { kind: "config-repo-file", repoPath: "/repos/config", path: "AGENTS.md" },
+        },
+      ],
+    },
+    referenceResolutions: { "ref-one": { status: "missing" } },
+  });
+  const pill = container.querySelector('[data-reference-kind="config-repo-file"]');
+
+  expect(pill?.getAttribute("data-reference-resolution")).toBe("missing");
+  expect(pill?.getAttribute("aria-label")).toBe(
+    "@AGENTS.md: File was not found when this message was processed",
+  );
+});
 
 test("the live tail shows accumulated work above a timer for the current LLM phase", () => {
   vi.useFakeTimers();

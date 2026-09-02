@@ -548,6 +548,22 @@ export interface Agent {
       | {
           message: string;
           files?: Array<{ contentType: string; data: FileData; filename: string }>;
+          richContent?: {
+            version: 1;
+            nodes: Array<
+              | { type: "text"; text: string }
+              | {
+                  type: "reference";
+                  occurrenceId: string;
+                  display: string;
+                  target: {
+                    kind: "config-repo-file";
+                    repoPath: "/repos/config";
+                    path: string;
+                  };
+                }
+            >;
+          };
         },
   ): Promise<StreamEvent>;
   /**
@@ -2705,6 +2721,8 @@ export type AgentProcessorState = {
         payload: {
           role: "assistant" | "developer" | "system" | "user";
           content: string;
+          richContent?: unknown;
+          referenceResolution?: unknown;
           key?: string | undefined;
           files?:
             | { contentType: string; filename: string; path: string; size: number; url: string }[]
@@ -2720,6 +2738,7 @@ export type AgentProcessorState = {
                 | { type: "user"; userId: string }
                 | { type: "file"; path: string }
                 | { type: "git-commit"; repoPath: string; commitOid: string }
+                | { type: "repo-file"; repoPath: string; path: string }
               )[]
             | undefined;
           actor?:
@@ -2758,6 +2777,8 @@ export type AgentProcessorState = {
         payload: {
           role: "assistant" | "developer" | "system" | "user";
           content: string;
+          richContent?: unknown;
+          referenceResolution?: unknown;
           key?: string | undefined;
           files?:
             | { contentType: string; filename: string; path: string; size: number; url: string }[]
@@ -2773,6 +2794,7 @@ export type AgentProcessorState = {
                 | { type: "user"; userId: string }
                 | { type: "file"; path: string }
                 | { type: "git-commit"; repoPath: string; commitOid: string }
+                | { type: "repo-file"; repoPath: string; path: string }
               )[]
             | undefined;
           actor?:
@@ -2948,6 +2970,8 @@ export type AgentEventInput =
       {
         role: "assistant" | "developer" | "system" | "user";
         content: string;
+        richContent?: unknown;
+        referenceResolution?: unknown;
         key?: string | undefined;
         files?:
           | { contentType: string; filename: string; path: string; size: number; url: string }[]
@@ -2963,6 +2987,7 @@ export type AgentEventInput =
               | { type: "user"; userId: string }
               | { type: "file"; path: string }
               | { type: "git-commit"; repoPath: string; commitOid: string }
+              | { type: "repo-file"; repoPath: string; path: string }
             )[]
           | undefined;
         actor?:
@@ -4618,6 +4643,8 @@ export type JsonValue =
 export type AgentContextAddedPayload = {
   role: "assistant" | "developer" | "system" | "user";
   content: string;
+  richContent?: unknown;
+  referenceResolution?: unknown;
   key?: string | undefined;
   files?:
     | { contentType: string; filename: string; path: string; size: number; url: string }[]
@@ -4628,6 +4655,7 @@ export type AgentContextAddedPayload = {
         | { type: "user"; userId: string }
         | { type: "file"; path: string }
         | { type: "git-commit"; repoPath: string; commitOid: string }
+        | { type: "repo-file"; repoPath: string; path: string }
       )[]
     | undefined;
   actor?:

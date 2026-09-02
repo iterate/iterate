@@ -33,13 +33,20 @@ function ProjectStreamDetailContent() {
   const { project } = Route.useLoaderData();
   const { _splat: streamPath } = Route.useParams();
 
-  async function submitMessage(message: string) {
+  async function submitMessage({
+    message,
+    richContent,
+  }: {
+    message: string;
+    richContent: import("@iterate-com/shared/agent-rich-content").AgentRichContentV1;
+  }) {
     const itx = await connectItx(project.id);
     const [event] = await itx.streams.get(streamPath).append({
       type: "events.iterate.com/agents/context-added",
       payload: {
         role: "user",
         content: message,
+        richContent,
         actor: { type: "user", origin: "web" },
       },
     });

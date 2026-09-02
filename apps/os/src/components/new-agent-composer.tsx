@@ -1,4 +1,9 @@
 import { useState } from "react";
+import {
+  flattenAgentRichContent,
+  plainAgentRichContent,
+  type AgentRichContentV1,
+} from "@iterate-com/shared/agent-rich-content";
 import { useMutation } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { toast } from "@iterate-com/ui/components/sonner";
@@ -24,10 +29,14 @@ export function NewAgentComposer({
   const navigate = useNavigate();
   const attachments = useComposerAttachments();
   const fileMentions = configRepoFileMentionProvider(projectId);
-  const [message, setMessage] = useState("");
+  const [message, setMessage] = useState(() => plainAgentRichContent());
 
   const createAgent = useMutation({
-    mutationFn: async (input: { content: string; files: File[] }) => {
+    mutationFn: async (input: {
+      content: string;
+      files: File[];
+      richContent: AgentRichContentV1;
+    }) => {
       const agentPath = newWebAgentPath(new Date());
       // connectItx (imperative, not the suspending hook) narrows the one
       // session socket to this project.
@@ -35,6 +44,7 @@ export function NewAgentComposer({
       await sendAgentFirstTurn(itx.agents.get(agentPath), {
         message: input.content,
         files: input.files,
+        richContent: input.richContent,
       });
       return agentPath;
     },
@@ -54,8 +64,9 @@ export function NewAgentComposer({
   const busy = createAgent.isPending || createAgent.isSuccess;
 
   function submit() {
-    if (busy || (message.trim() === "" && attachments.files.length === 0)) return;
-    createAgent.mutate({ content: message.trim(), files: attachments.files });
+    const content = flattenAgentRichContent(message);
+    if (busy || (content.trim() === "" && attachments.files.length === 0)) return;
+    createAgent.mutate({ content, files: attachments.files, richContent: message });
   }
 
   return (
@@ -71,7 +82,7 @@ export function NewAgentComposer({
           value: message,
           onValueChange: setMessage,
           onSubmit: submit,
-          canSubmit: message.trim() !== "" || attachments.files.length > 0,
+          canSubmit: flattenAgentRichContent(message).trim() !== "" || attachments.files.length > 0,
           placeholder: "Message a new agent",
           suggestionProviders: [fileMentions],
           onAttach: attachments.openFilePicker,

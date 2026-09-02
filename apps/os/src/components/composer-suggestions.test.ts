@@ -6,13 +6,25 @@ import {
 } from "./composer-suggestions.ts";
 
 const suggestions = [
-  { id: "agents", label: "AGENTS.md", text: "@AGENTS.md" },
+  {
+    id: "agents",
+    label: "AGENTS.md",
+    completion: {
+      type: "reference" as const,
+      display: "@AGENTS.md",
+      target: {
+        kind: "config-repo-file" as const,
+        repoPath: "/repos/config" as const,
+        path: "AGENTS.md",
+      },
+    },
+  },
   {
     id: "composer",
     label: "src/components/agent-pill-composer.tsx",
-    text: "@src/components/agent-pill-composer.tsx",
+    completion: { type: "text" as const, text: "@src/components/agent-pill-composer.tsx" },
   },
-  { id: "worker", label: "worker.ts", text: "@worker.ts" },
+  { id: "worker", label: "worker.ts", completion: { type: "text" as const, text: "@worker.ts" } },
 ];
 
 const provider: ComposerSuggestionProvider = {
@@ -54,5 +66,11 @@ test("applyComposerSuggestion replaces the whole token and restores a useful car
   expect(applyComposerSuggestion(value, active, suggestions[0]!)).toEqual({
     value: "read @AGENTS.md next",
     caret: 16,
+    reference: {
+      display: "@AGENTS.md",
+      from: 5,
+      target: { kind: "config-repo-file", repoPath: "/repos/config", path: "AGENTS.md" },
+      to: 15,
+    },
   });
 });

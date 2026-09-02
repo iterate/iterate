@@ -835,6 +835,18 @@ function agentContextItemSchema() {
         .enum(["system", "developer", "user", "assistant"])
         .meta({ description: "The LLM message role this item renders as." }),
       content: z.string().meta({ description: "The model-visible text." }),
+      richContent: z
+        .unknown()
+        .optional()
+        .meta({
+          description:
+            "Optional versioned semantic document whose required plain projection is content. " +
+            "Unknown versions remain stored so older readers can fall back to content.",
+        }),
+      referenceResolution: z.unknown().optional().meta({
+        description:
+          "Processor-authored, bounded resolution metadata for a prior semantic document.",
+      }),
       key: z
         .string()
         .min(1)
@@ -880,6 +892,11 @@ function agentContextItemSchema() {
                 type: z.literal("git-commit"),
                 repoPath: z.string().meta({ description: "The repo's mount path." }),
                 commitOid: z.string().meta({ description: "The commit id." }),
+              }),
+              z.object({
+                type: z.literal("repo-file"),
+                repoPath: z.string().meta({ description: "The repo's mount path." }),
+                path: z.string().meta({ description: "The committed file path at latest HEAD." }),
               }),
             ])
             .meta({ description: "One coordinate for richer source material." }),

@@ -62,6 +62,100 @@ function projectRuntime(
 }
 
 describe("agent-ui reducer", () => {
+  test("preserves a valid rich document and falls back to plain text on mismatch", () => {
+    const richContent = {
+      version: 1,
+      nodes: [
+        { type: "text", text: "Read " },
+        {
+          type: "reference",
+          occurrenceId: "one",
+          display: "@AGENTS.md",
+          target: {
+            kind: "config-repo-file",
+            repoPath: "/repos/config",
+            path: "AGENTS.md",
+          },
+        },
+      ],
+    };
+    const state = reduceAll([
+      {
+        type: "events.iterate.com/agents/context-added",
+        payload: {
+          role: "user",
+          actor: { type: "user", origin: "web" },
+          content: "Read @AGENTS.md",
+          richContent,
+        },
+      },
+      {
+        type: "events.iterate.com/agents/context-added",
+        payload: {
+          role: "user",
+          actor: { type: "user", origin: "web" },
+          content: "plain fallback",
+          richContent,
+        },
+      },
+    ]);
+
+    expect(state.items[0]).toMatchObject({ kind: "user", richContent });
+    expect(state.items[1]).toMatchObject({ kind: "user", text: "plain fallback" });
+    expect(state.items[1]).not.toHaveProperty("richContent");
+  });
+
+  test("projects durable reference outcomes onto their original occurrences", () => {
+    const richContent = {
+      version: 1,
+      nodes: [
+        {
+          type: "reference",
+          occurrenceId: "one",
+          display: "@AGENTS.md",
+          target: {
+            kind: "config-repo-file",
+            repoPath: "/repos/config",
+            path: "AGENTS.md",
+          },
+        },
+      ],
+    };
+    const state = reduceAll([
+      {
+        type: "events.iterate.com/agents/context-added",
+        payload: {
+          role: "user",
+          actor: { type: "user", origin: "web" },
+          content: "@AGENTS.md",
+          richContent,
+        },
+      },
+      {
+        type: "events.iterate.com/agents/context-added",
+        payload: {
+          role: "developer",
+          actor: { type: "integration", name: "agent-reference-resolver" },
+          content: "resolution details",
+          referenceResolution: {
+            sourceOffset: 1,
+            outcomes: [{ status: "missing", occurrenceIds: ["one"] }],
+          },
+        },
+      },
+    ]);
+
+    expect(state.items).toMatchObject([
+      { id: "user-1", richContent },
+      {
+        id: "user-1",
+        richContent,
+        referenceResolutions: { one: { status: "missing" } },
+      },
+    ]);
+    expect(state.pendingReferenceMessages).toEqual({});
+  });
+
   test("streams thinking and response deltas into the live llm step", () => {
     const state = reduceAll([
       {
@@ -1293,6 +1387,72 @@ describe("agent-ui reducer", () => {
       text: "also, one more thing",
     });
     expect(state.live?.steps[0]).toMatchObject({ kind: "llm", status: "running" });
+  });
+
+  test("updates a queued file mention when its resolution arrives mid-turn", () => {
+    const richContent = {
+      version: 1,
+      nodes: [
+        {
+          type: "reference",
+          occurrenceId: "queued-reference",
+          display: "@AGENTS.md",
+          target: {
+            kind: "config-repo-file",
+            repoPath: "/repos/config",
+            path: "AGENTS.md",
+          },
+        },
+      ],
+    };
+    const state = reduceAll([
+      {
+        type: "events.iterate.com/agent/llm-request-requested",
+        offset: 7,
+        payload: { model: "gpt-test" },
+      },
+      {
+        type: "events.iterate.com/agents/context-added",
+        offset: 8,
+        payload: {
+          role: "user",
+          actor: { type: "user", origin: "web" },
+          content: "@AGENTS.md",
+          richContent,
+        },
+      },
+      {
+        type: "events.iterate.com/agents/context-added",
+        offset: 9,
+        payload: {
+          role: "developer",
+          actor: { type: "integration", name: "agent-reference-resolver" },
+          content: "resolution details",
+          referenceResolution: {
+            sourceOffset: 8,
+            outcomes: [
+              {
+                status: "resolved",
+                truncated: true,
+                occurrenceIds: ["queued-reference"],
+              },
+            ],
+          },
+        },
+      },
+    ]);
+
+    expect(state.items).toHaveLength(0);
+    expect(state.queuedUserMessages).toMatchObject([
+      {
+        id: "user-8",
+        richContent,
+        referenceResolutions: {
+          "queued-reference": { status: "resolved", truncated: true },
+        },
+      },
+    ]);
+    expect(state.pendingReferenceMessages).toEqual({});
   });
 
   test("settles queued user messages before the next LLM request starts", () => {

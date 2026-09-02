@@ -1,4 +1,8 @@
-import { useEffect, useRef, useState, type DragEvent, type ReactNode } from "react";
+import { useState, type DragEvent, type ReactNode } from "react";
+import {
+  flattenAgentRichContent,
+  type AgentRichContentV1,
+} from "@iterate-com/shared/agent-rich-content";
 import {
   ArrowUpIcon,
   FileCode2Icon,
@@ -27,8 +31,8 @@ import type { ComposerSuggestionProvider } from "~/components/composer-suggestio
 export type AgentComposerMode = "message" | "raw" | "examples";
 
 type AgentComposerMessageConfig = {
-  value: string;
-  onValueChange: (value: string) => void;
+  value: AgentRichContentV1;
+  onValueChange: (value: AgentRichContentV1) => void;
   onSubmit: () => Promise<void> | void;
   attachments?: ReactNode;
   canSubmit?: boolean;
@@ -81,7 +85,6 @@ export function AgentPillComposer({
   isInterrupting?: boolean;
   onInterrupt?: () => Promise<void> | void;
 }) {
-  const messageRef = useRef<HTMLTextAreaElement>(null);
   const [isDragging, setIsDragging] = useState(false);
   // Clamp to a mode the supplied configs can actually render.
   const activeMode: AgentComposerMode =
@@ -96,14 +99,11 @@ export function AgentPillComposer({
     !isSubmitting &&
     !isExamples &&
     (activeMode === "message"
-      ? (message?.canSubmit ?? (message?.value.trim() ?? "") !== "")
+      ? (message?.canSubmit ??
+        (message === undefined ? false : flattenAgentRichContent(message.value).trim() !== ""))
       : (raw?.value.trim() ?? "") !== "");
   const showInterrupt = activeMode === "message" && onInterrupt != null;
   const acceptsFileDrop = message?.onAddFiles != null && !isSubmitting;
-
-  useEffect(() => {
-    if (autoFocusMessage && activeMode === "message") messageRef.current?.focus();
-  }, [activeMode, autoFocusMessage]);
 
   function submit() {
     if (!canSubmit) return;
@@ -264,10 +264,10 @@ export function AgentPillComposer({
               <div className="px-1 pb-1">{message.attachments}</div>
             )}
             <ComposerTextarea
-              value={message?.value ?? ""}
+              value={message?.value ?? { version: 1, nodes: [] }}
               onValueChange={(value) => message?.onValueChange(value)}
               onSubmit={submit}
-              textareaRef={messageRef}
+              focusOnMount={autoFocusMessage}
               placeholder={message?.placeholder ?? "Message this stream"}
               providers={message?.suggestionProviders}
             />

@@ -1,11 +1,14 @@
 import type { ReactNode } from "react";
+import type { AgentReferenceTarget } from "@iterate-com/shared/agent-rich-content";
 
 export type ComposerSuggestion = {
   id: string;
   /** Text shown in the result row. */
   label: string;
-  /** Text inserted in place of the active trigger and query. */
-  text: string;
+  /** Semantic completion inserted in place of the active trigger and query. */
+  completion:
+    | { type: "text"; text: string }
+    | { type: "reference"; display: string; target: AgentReferenceTarget };
   description?: string;
   icon?: ReactNode;
 };
@@ -65,14 +68,30 @@ export function applyComposerSuggestion(
   value: string,
   active: ActiveComposerSuggestion,
   suggestion: ComposerSuggestion,
-): { value: string; caret: number } {
+): {
+  value: string;
+  caret: number;
+  reference?: { display: string; from: number; target: AgentReferenceTarget; to: number };
+} {
+  const inserted =
+    suggestion.completion.type === "text"
+      ? suggestion.completion.text
+      : suggestion.completion.display;
   const after = value.slice(active.to);
   const separator = after === "" || !/^\s/.test(after) ? " " : "";
   const existingSeparatorLength = separator === "" && /^\s/.test(after) ? 1 : 0;
   const before = value.slice(0, active.from);
-  const nextValue = `${before}${suggestion.text}${separator}${after}`;
+  const nextValue = `${before}${inserted}${separator}${after}`;
   return {
     value: nextValue,
-    caret: before.length + suggestion.text.length + separator.length + existingSeparatorLength,
+    caret: before.length + inserted.length + separator.length + existingSeparatorLength,
+    ...(suggestion.completion.type === "reference" && {
+      reference: {
+        display: suggestion.completion.display,
+        from: before.length,
+        target: suggestion.completion.target,
+        to: before.length + suggestion.completion.display.length,
+      },
+    }),
   };
 }

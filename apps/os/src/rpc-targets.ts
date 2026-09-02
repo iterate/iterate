@@ -60,6 +60,10 @@ import type {
   ValidateProjectAppSessionInput,
   ValidatedProjectAppSession,
 } from "@iterate-com/auth-contract/worker";
+import {
+  decodeAgentRichContent,
+  deriveAgentContextRepoFileRefs,
+} from "@iterate-com/shared/agent-rich-content";
 import type { AppConfig } from "./config.ts";
 import { parseConfig } from "./config.ts";
 import { closeItxSessionTransport } from "./session-transport.ts";
@@ -5233,13 +5237,42 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
       | {
           message: string;
           files?: Array<{ contentType: string; data: FileData; filename: string }>;
+          richContent?: {
+            version: 1;
+            nodes: Array<
+              | { type: "text"; text: string }
+              | {
+                  type: "reference";
+                  occurrenceId: string;
+                  display: string;
+                  target: {
+                    kind: "config-repo-file";
+                    repoPath: "/repos/config";
+                    path: string;
+                  };
+                }
+            >;
+          };
         },
   ): Promise<StreamEvent> {
     await this.#assertCreated();
-    const { message, files: fileInputs } =
-      typeof input === "string"
-        ? { message: input, files: undefined }
-        : { message: input.message, files: input.files };
+    const {
+      message,
+      files: fileInputs,
+      richContent: richContentInput,
+    } = typeof input === "string"
+      ? { message: input, files: undefined, richContent: undefined }
+      : { message: input.message, files: input.files, richContent: input.richContent };
+    const richContent =
+      richContentInput === undefined
+        ? undefined
+        : decodeAgentRichContent(message, richContentInput);
+    if (richContent === null) {
+      throw new Error(
+        "agent.message richContent must be a known document whose plain projection equals message.",
+      );
+    }
+    const refs = richContent === undefined ? [] : deriveAgentContextRepoFileRefs(richContent);
     const actor = this.#contextActor();
     const files =
       fileInputs === undefined || fileInputs.length === 0
@@ -5257,6 +5290,11 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
         content: message,
         actor,
         ...(files === undefined ? {} : { files }),
+        ...(richContent === undefined ? {} : { richContent }),
+        ...(refs.length === 0 ? {} : { refs }),
+        ...(refs.length === 0
+          ? {}
+          : { llmRequestPolicy: { behaviour: "dont-trigger-request" as const } }),
       },
     });
     return event;

@@ -13,6 +13,10 @@ import {
   type AgentRuntime,
 } from "@iterate-com/shared/agent-events";
 import {
+  decodeAgentRichContent,
+  hasAgentConfigRepoFileReferences,
+} from "@iterate-com/shared/agent-rich-content";
+import {
   cachedEventSchema,
   getConsumedEventDefinition,
   mergeProcessorConfig,
@@ -384,6 +388,7 @@ export function reduceAgentEvents(events: readonly StreamEvent[]): AgentProcesso
 function contextTriggerSource(payload: AgentContextAddedPayload): "external" | "agent-loop" | null {
   if (payload.role === "system" || payload.role === "assistant") return null;
   if (payload.llmRequestPolicy.behaviour === "dont-trigger-request") return null;
+  if (contextNeedsReferenceMaterialization(payload)) return null;
   if (payload.role === "user") {
     // A resolving slash command runs deterministically (the processor's
     // event handler appends the script request from the SAME pure resolver)
@@ -403,11 +408,17 @@ function contextTriggerSource(payload: AgentContextAddedPayload): "external" | "
 export function contextClearsWaitingFor(payload: AgentContextAddedPayload): boolean {
   if (payload.role !== "user" && payload.role !== "developer") return false;
   if (payload.llmRequestPolicy.behaviour === "dont-trigger-request") return false;
+  if (contextNeedsReferenceMaterialization(payload)) return false;
   // A resolving slash command is a side-band action, not an answer — the
   // agent is still waiting for the human's actual reply (same pure resolver
   // as contextTriggerSource, so the two derivations can never disagree).
   if (payload.role === "user") return resolveSlashCommand(payload.content) === null;
   return payload.actor !== undefined && payload.actor.type !== "script";
+}
+
+function contextNeedsReferenceMaterialization(payload: AgentContextAddedPayload): boolean {
+  const document = decodeAgentRichContent(payload.content, payload.richContent);
+  return document !== null && hasAgentConfigRepoFileReferences(document);
 }
 
 type AgentContextItems = AgentProcessorState["contextItems"];
@@ -710,6 +721,8 @@ function renderContextRef(ref: NonNullable<AgentContextAddedPayload["refs"]>[num
       return JSON.stringify(`file:${ref.path}`);
     case "git-commit":
       return JSON.stringify(`${ref.repoPath}@${ref.commitOid}`);
+    case "repo-file":
+      return JSON.stringify(`${ref.repoPath}/${ref.path}@latest`);
   }
 }
 

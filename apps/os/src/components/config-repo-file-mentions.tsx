@@ -14,7 +14,15 @@ export function configRepoFileMentionProvider(projectId: string): ComposerSugges
       return files.paths.map((path) => ({
         id: path,
         label: path,
-        text: `@${path}`,
+        completion: {
+          type: "reference" as const,
+          display: `@${path}`,
+          target: {
+            kind: "config-repo-file" as const,
+            repoPath: "/repos/config" as const,
+            path,
+          },
+        },
         icon: <FileIcon aria-hidden />,
       }));
     },

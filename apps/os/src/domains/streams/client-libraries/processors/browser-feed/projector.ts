@@ -44,7 +44,7 @@ export const RAW_GROUP_KIND = "raw.group";
  * are disposable caches and must be rebuilt, never interpreted as current
  * state (in particular, they may contain historical ephemeral activity).
  */
-export const BROWSER_FEED_SCHEMA_VERSION = 7;
+export const BROWSER_FEED_SCHEMA_VERSION = 8;
 export { isAgentActivity } from "@iterate-com/ui/components/events/agent-ui-reducer";
 
 /** Maps an event type to its specific raw renderer kind, or null to fall into the group. */
@@ -103,12 +103,11 @@ export type BrowserFeedState = {
   /** The final visible pretty row when it is a stream wake, for adjacent-run compaction. */
   lastAgentWake: { localIndex: number; count: number } | null;
   /**
-   * Stable row addresses only for activities still awaiting a durable script
-   * correction. Ordinary feed items never need replacement, so retaining an
-   * index for every message would make the processor snapshot grow with the
-   * entire stream a second time.
+   * Stable row addresses for the bounded set of items awaiting a durable
+   * correction: inferred activities and rich messages whose references are
+   * still resolving. Ordinary settled items are never indexed here.
    */
-  provisionalAgentItemIndexes: Record<string, number>;
+  replaceableAgentItemIndexes: Record<string, number>;
 };
 
 export function initialBrowserFeedState(): BrowserFeedState {
@@ -118,7 +117,7 @@ export function initialBrowserFeedState(): BrowserFeedState {
     open: null,
     nextLocalIndex: 0,
     lastAgentWake: null,
-    provisionalAgentItemIndexes: {},
+    replaceableAgentItemIndexes: {},
   };
 }
 
@@ -168,7 +167,7 @@ export function planBrowserFeedOps(
   let open = start.open;
   let nextLocalIndex = start.nextLocalIndex;
   let lastAgentWake = start.lastAgentWake;
-  const provisionalAgentItemIndexes = { ...start.provisionalAgentItemIndexes };
+  const replaceableAgentItemIndexes = { ...start.replaceableAgentItemIndexes };
   const ops: FeedOp[] = [];
   // The op for the row `open` points at, when that row is being mutated within
   // this batch — so we update it in place instead of pushing a fresh op per event.
@@ -183,7 +182,7 @@ export function planBrowserFeedOps(
     const settled = reduceAgentUi(agent, event as unknown as Parameters<typeof reduceAgentUi>[1]);
     agent = settled.endState;
     for (const item of settled.items) {
-      const existingIndex = provisionalAgentItemIndexes[item.id];
+      const existingIndex = replaceableAgentItemIndexes[item.id];
       if (existingIndex !== undefined) {
         ops.push({
           kind: "replace",
@@ -192,7 +191,7 @@ export function planBrowserFeedOps(
           lastOffset: event.offset,
           data: item,
         });
-        if (!hasInferredScriptOutcome(item)) delete provisionalAgentItemIndexes[item.id];
+        if (!needsDurableCorrection(item)) delete replaceableAgentItemIndexes[item.id];
         continue;
       }
       if (item.kind === "stream-woken" && lastAgentWake !== null) {
@@ -216,8 +215,8 @@ export function planBrowserFeedOps(
         eventCount: 1,
         data: item,
       });
-      if (hasInferredScriptOutcome(item)) {
-        provisionalAgentItemIndexes[item.id] = nextLocalIndex;
+      if (needsDurableCorrection(item)) {
+        replaceableAgentItemIndexes[item.id] = nextLocalIndex;
       }
       lastAgentWake =
         item.kind === "stream-woken" ? { localIndex: nextLocalIndex, count: 1 } : null;
@@ -307,8 +306,8 @@ export function planBrowserFeedOps(
       open,
       nextLocalIndex,
       lastAgentWake,
-      provisionalAgentItemIndexes: retainCurrentProvisionalIndexes(
-        provisionalAgentItemIndexes,
+      replaceableAgentItemIndexes: retainCurrentReplacementIndexes(
+        replaceableAgentItemIndexes,
         agent,
       ),
     },
@@ -323,16 +322,19 @@ export function isCurrentBrowserFeedState(value: unknown): value is BrowserFeedS
   if (!isOpenGroup(candidate.open)) return false;
   if (!isNonNegativeSafeInteger(candidate.nextLocalIndex)) return false;
   if (!isLastAgentWake(candidate.lastAgentWake)) return false;
-  if (!isRecord(candidate.provisionalAgentItemIndexes)) return false;
+  if (!isRecord(candidate.replaceableAgentItemIndexes)) return false;
   const agent = candidate.agent;
   const nextLocalIndex = candidate.nextLocalIndex;
+  const pendingReferenceMessageIds = new Set(
+    Object.values(agent.pendingReferenceMessages).map((message) => message.id),
+  );
   if (
-    !Object.entries(candidate.provisionalAgentItemIndexes).every(
+    !Object.entries(candidate.replaceableAgentItemIndexes).every(
       ([id, index]) =>
         id.length > 0 &&
         isNonNegativeSafeInteger(index) &&
         index < nextLocalIndex &&
-        Object.hasOwn(agent.provisionalActivities, id),
+        (Object.hasOwn(agent.provisionalActivities, id) || pendingReferenceMessageIds.has(id)),
     )
   ) {
     return false;
@@ -393,7 +395,7 @@ function isNonNegativeSafeInteger(value: unknown): value is number {
   return Number.isSafeInteger(value) && (value as number) >= 0;
 }
 
-function retainCurrentProvisionalIndexes(
+function retainCurrentReplacementIndexes(
   indexes: Record<string, number>,
   agent: AgentUiState,
 ): Record<string, number> {
@@ -402,13 +404,31 @@ function retainCurrentProvisionalIndexes(
     const index = indexes[id];
     if (index !== undefined) retained[id] = index;
   }
+  for (const message of Object.values(agent.pendingReferenceMessages)) {
+    const index = indexes[message.id];
+    if (index !== undefined) retained[message.id] = index;
+  }
   return retained;
+}
+
+function needsDurableCorrection(item: AgentUiItem): boolean {
+  return hasInferredScriptOutcome(item) || hasPendingReferenceResolution(item);
 }
 
 function hasInferredScriptOutcome(item: AgentUiItem): boolean {
   return (
     item.kind === "activity" &&
     item.steps.some((step) => step.kind === "code" && step.outcomeSource === "inferred")
+  );
+}
+
+function hasPendingReferenceResolution(item: AgentUiItem): boolean {
+  return (
+    item.kind === "user" &&
+    item.referenceResolutions === undefined &&
+    item.richContent?.nodes.some(
+      (node) => node.type === "reference" && node.target.kind === "config-repo-file",
+    ) === true
   );
 }
 

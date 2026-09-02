@@ -4,6 +4,7 @@ import { AgentCodemode } from "./agent-codemode.ts";
 import type { AgentHost, AgentProcessorDeps } from "./agent-host.ts";
 import { AgentLlmRequest } from "./agent-llm-request.ts";
 import { AgentProcessorContract } from "./agent-processor-contract.ts";
+import { AgentReferenceMaterializer } from "./agent-reference-materialization.ts";
 import { reduceAgentEvent } from "./agent-prompt-fold.ts";
 import { AgentTurnLoop } from "./agent-turn-loop.ts";
 
@@ -47,10 +48,12 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
   readonly contract = AgentProcessorContract;
   readonly #host = this.#makeHost();
   readonly #llm = new AgentLlmRequest(this.#host);
+  readonly #referenceMaterializer = new AgentReferenceMaterializer(this.#host);
   readonly #turnLoop = new AgentTurnLoop(this.#host, this.#llm);
   readonly #codemode = new AgentCodemode(this.#host);
 
   protected override processEvent(args: ProcessEventArgs<AgentProcessorContract>): undefined {
+    if (this.#referenceMaterializer.processEvent(args)) return;
     this.#turnLoop.processEvent(args);
     this.#llm.processEvent(args);
     // The interpretation switch: off, assistant output stays raw on the

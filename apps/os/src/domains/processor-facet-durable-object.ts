@@ -82,7 +82,7 @@ import { ChatReplyNotifyProcessor } from "./notifications/chat-reply-notify-impl
 import { ProjectProcessor } from "./projects/project-processor-implementation.ts";
 import { createCloudflareProjectCustomDomainDeps } from "./projects/custom-domains.ts";
 import { RepoProcessor } from "./repos/repo-processor-implementation.ts";
-import { defaultProjectWorkerRef } from "./repos/utils.ts";
+import { base64ToBytes, defaultProjectWorkerRef } from "./repos/utils.ts";
 import { SecretProcessor } from "./secrets/secret-processor-implementation.ts";
 import { describeSecretState } from "./secrets/secret-durable-object.ts";
 import { describeDeviceState } from "./devices/device-durable-object.ts";
@@ -569,6 +569,18 @@ export class ProcessorFacet extends ProcessorFacetBase<Env> {
           path: file.path,
           projectId,
         }),
+      readRepoFile: async (target: {
+        kind: "config-repo-file";
+        repoPath: "/repos/config";
+        path: string;
+      }) => {
+        const result = await this.env.REPO.getByName(
+          DurableObjectNameCodec.stringify({ projectId, path: target.repoPath }),
+        ).readFile({ path: target.path, encoding: "base64" });
+        return result === null
+          ? null
+          : { bytes: base64ToBytes(result.content), commitOid: result.commitOid };
+      },
       // Oversized script results spill into the agent's OWN workspace
       // directory (private scratch under its stream path — never
       // committable), so the model can page through the file instead of

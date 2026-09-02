@@ -105,7 +105,7 @@ describe("BrowserFeedProcessor live ephemerals", () => {
   it("accepts only empty or current-schema reducer state", () => {
     const current = BrowserFeedContract.stateSchema.parse({});
     expect(current).toMatchObject({
-      schemaVersion: 7,
+      schemaVersion: 8,
       nextLocalIndex: 0,
     });
     expect(() =>
@@ -114,7 +114,7 @@ describe("BrowserFeedProcessor live ephemerals", () => {
         open: null,
         nextLocalIndex: 0,
         lastAgentWake: null,
-        provisionalAgentItemIndexes: {},
+        replaceableAgentItemIndexes: {},
       }),
     ).toThrow(/current schema/);
     expect(() => BrowserFeedContract.stateSchema.parse({ ...current, agent: {} })).toThrow(
@@ -126,7 +126,7 @@ describe("BrowserFeedProcessor live ephemerals", () => {
     expect(() =>
       BrowserFeedContract.stateSchema.parse({
         ...current,
-        provisionalAgentItemIndexes: { impossible: -1 },
+        replaceableAgentItemIndexes: { impossible: -1 },
       }),
     ).toThrow(/current schema/);
   });
