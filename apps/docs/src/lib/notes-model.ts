@@ -57,6 +57,11 @@ export function notesCommitMessage(date: string): string {
  */
 export function noteChangesFrom(status: unknown, repoPath: string): Set<string> {
   const changed = new Set<string>();
+  // status() is typed unknown on purpose (tasks-api.ts: workspace-wide,
+  // each consumer reads what it needs). The platform's WorkspaceStatus is
+  // `{ mounts: [{ path, changes: [{ change, path }] }], unmounted }`
+  // (apps/os workspaces/types.ts); only those fields are read here, every
+  // level tolerates absence, and a path is always a string there.
   const mounts = (status as { mounts?: { changes?: { path: string }[]; path?: string }[] }).mounts;
   for (const mount of mounts ?? []) {
     if (mount.path !== repoPath) continue;

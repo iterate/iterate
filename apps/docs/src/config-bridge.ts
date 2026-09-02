@@ -77,6 +77,10 @@ export class DocsAppRpcTarget extends RpcTarget {
   async link(input: DocsLinkInput): Promise<string> {
     // Discriminate by VALUE, not key presence: capnweb callers are loose
     // JSON, and a key that exists holding undefined must not pick a lens.
+    // Widening the union to one bag of optional strings is sound: every
+    // DocsLinkInput member is an object whose properties are all strings,
+    // so under any of these keys a member holds a string or nothing, and
+    // the typeof checks below are what tell the members apart.
     const loose = input as {
       path?: string;
       repo?: string;
