@@ -12,16 +12,16 @@ import { Stream } from "../src/stream/stream.ts";
 import type { StreamEvent, StreamEventInput } from "../src/stream/events.ts";
 import { stub } from "./support.ts";
 
-/** A bare Stream over real storage. `admit` defaults to open; `onCommit` records each `fresh`
+/** A bare Stream over real storage. `assertCanAppend` defaults to open; `onCommit` records each `fresh`
  *  batch so tests can assert what the fan-out was fed. */
 function bareStream(
   storage: DurableObjectStorage,
-  opts?: { admit?: (inputs: StreamEventInput[]) => void; batches?: StreamEvent[][] },
+  opts?: { assertCanAppend?: (inputs: StreamEventInput[]) => void; batches?: StreamEvent[][] },
 ): Stream {
   return new Stream({
     storage,
     path: "/",
-    admit: opts?.admit ?? (() => {}),
+    assertCanAppend: opts?.assertCanAppend ?? (() => {}),
     reduceAtCommit: () => {},
     onCommit: (fresh) => opts?.batches?.push(fresh),
   });
@@ -165,7 +165,7 @@ test("waitForEvent: a nested onCommit re-append cannot outrun the outer commit â
     const stream: Stream = new Stream({
       storage: state.storage,
       path: "/",
-      admit: () => {},
+      assertCanAppend: () => {},
       reduceAtCommit: () => {},
       onCommit: (fresh) => {
         if (!nestedReceipt && fresh.some((e) => e.type === "ping" && !e.ephemeral))
@@ -234,7 +234,7 @@ test("woken: a refused or rolled-back first batch does NOT burn the wake record"
   await runInDurableObject(stub("prj_wait_wokenroll"), async (_instance, state) => {
     // (a) admission refusal: no commit, no woken â€” the stream stays virgin.
     const refusing = bareStream(state.storage, {
-      admit: (inputs) => {
+      assertCanAppend: (inputs) => {
         if (inputs.some((i) => i.type === "nope")) throw new Error("refused at the door");
       },
     });

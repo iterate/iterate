@@ -1190,7 +1190,7 @@ sequenceDiagram
   participant W as stateless worker (cursor)
   A->>D: append(events)
   D->>S: append(events)
-  S->>I: admit: core state (paused? breaker tokens?)
+  S->>I: assertCanAppend: core state (paused? breaker tokens?)
   alt every event ephemeral
     S->>S: offsets from memory — no transaction, no mark write
   else

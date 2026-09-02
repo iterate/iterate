@@ -479,7 +479,7 @@ in the toy it is deliberately _dumb_: storage in, committed events out.
 // The log and its one commit point. (The real Stream takes reduceAtCommit/onCommit
 // as injected hooks so the fold runs INSIDE the commit transaction — atomicity the
 // toy gets for free, each sql.exec being atomic. Its deps also add `path` and
-// `admit`; facets ride the DO's ctx itself — the deep chapter.)
+// `assertCanAppend`; facets ride the DO's ctx itself — the deep chapter.)
 class Stream {
   // storage is SQLite AND the alarm surface (the real Stream arms setAlarm through it)
   constructor(private storage: DurableObjectStorage) {
@@ -1004,7 +1004,7 @@ The commit machinery is one dependency-injected class, no framework:
 new Stream({
   storage, // the DO's SQLite + alarms
   path, // the context's own address, stamped on every event
-  admit, // the gate that can refuse an append (pause / breaker)
+  assertCanAppend, // the gate that can refuse an append (pause / breaker)
   reduceAtCommit, // hooks that run inside the commit transaction
   onCommit, // the post-commit fan-out: facets + subscribers
 });

@@ -127,13 +127,13 @@ export function isCoreControl(type: string): boolean {
   return CONTROL_TYPES.has(type);
 }
 
-/** THE admission decision — the parent's enforcement, reading this reduce at the commit point: a
+/** MAY these events be appended right now? The parent's enforcement, reading this reduce at the commit point: a
  *  paused stream refuses every non-control append; the token-bucket breaker meters DURABLE growth.
  *  Throws STREAM_PAUSED / STREAM_BREAKER_OPEN; a clean return admits the batch. Control events always
  *  pass. `hasIdempotencyKey` lets a reconciling retry through a tight bucket — a retry of an
  *  already-committed key dedupes to zero durable growth, and the breaker meters GROWTH, so it isn't
  *  taxed. The dedupe probe runs ONLY on the about-to-trip path, so the common case pays no SELECT. */
-export function admit(
+export function assertCanAppend(
   state: CoreState,
   inputs: StreamEventInput[],
   nowMs: number,

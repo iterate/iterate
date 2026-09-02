@@ -5,7 +5,7 @@
 //   • the STREAM — a `Stream` (stream/stream.ts), DI'd with this DO's storage: the whole commit
 //     pipeline (validation + admission + idempotency + offsets + chunking + the stream/woken
 //     wake record + waitForEvent + the alarm armer). The DO's append/read/waitForEvent are thin
-//     wrappers; the stream's three injected callbacks (admit / reduceAtCommit / onCommit) close
+//     wrappers; the stream's three injected callbacks (assertCanAppend / reduceAtCommit / onCommit) close
 //     over this class — nothing in stream/stream.ts reaches back;
 //   • the INLINE REDUCES — three reduce-only processors reduced INSIDE the commit transaction,
 //     always on, one per layer: the CORE reduce (pause/breaker/incarnation), the CAPABILITY TABLE
@@ -41,7 +41,7 @@ import {
   versionedFacet,
   type WorkerSource,
 } from "./context/worker-loader.ts";
-import { admit, CoreStreamProcessor, type CoreState } from "./stream/core-processor.ts";
+import { assertCanAppend, CoreStreamProcessor, type CoreState } from "./stream/core-processor.ts";
 import { codedError, reportIssue } from "./lib/errors.ts";
 import type { StreamEvent, StreamEventInput } from "./stream/events.ts";
 import {
@@ -158,7 +158,7 @@ export class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
   /** THE STREAM — the commit point (see stream/stream.ts: validation + admission + idempotency +
    *  offsets + the wake record + waitForEvent + the alarm armer, one DI'd class). The name check
    *  already happened in the constructor (`#address`); the stream itself is storage-lazy. Its
-   *  three deps close over this DO: `admit` reads the core reduce (all pause/breaker
+   *  three deps close over this DO: `assertCanAppend` reads the core reduce (all pause/breaker
    *  reasoning lives in core-processor.ts), `reduceAtCommit` runs the INLINE REDUCES inside the
    *  commit transaction (the routing table, the subscriptions and the core state are atomically
    *  exact as of the last committed event, always), and `onCommit` is the post-commit fan-out:
@@ -166,8 +166,10 @@ export class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
   readonly #stream = new Stream({
     storage: this.ctx.storage,
     path: this.#address.path,
-    admit: (inputs) =>
-      admit(this.#coreState(), inputs, Date.now(), (k) => this.#stream.hasIdempotencyKey(k)),
+    assertCanAppend: (inputs) =>
+      assertCanAppend(this.#coreState(), inputs, Date.now(), (k) =>
+        this.#stream.hasIdempotencyKey(k),
+      ),
     reduceAtCommit: (justCommitted, after, next) =>
       this.#inlineReduces.reduceAtCommit(justCommitted, after, next),
     onCommit: (fresh, scannedAfterOffset, nextOffset) => {

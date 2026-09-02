@@ -2,7 +2,7 @@
 // SQLite rows + one kv high-water mark, idempotency at the door, one shared offset sequence,
 // chunked large bodies, the append validation + admission gate, the wake record, waitForEvent, and
 // the alarm armer. The DurableObject holds a `Stream` and drives it; everything the stream needs
-// from its host arrives through the enumerated constructor deps — `admit` (the core-processor
+// from its host arrives through the enumerated constructor deps — `assertCanAppend` (the core-processor
 // gate), `reduceAtCommit` (the inline reduces, IN-txn), `onCommit` (the post-commit fan-out) —
 // so nothing here reaches back into the DO.
 //
@@ -75,7 +75,7 @@ interface StreamDeps {
   path: string;
   /** The admission gate, consulted BEFORE the wake record and the commit (throws to refuse —
    *  STREAM_PAUSED / STREAM_BREAKER_OPEN live in the host's core processor, not here). */
-  admit: (inputs: StreamEventInput[]) => void;
+  assertCanAppend: (inputs: StreamEventInput[]) => void;
   /** The inline reduces, run INSIDE the commit transaction (the routing table and core state are
    *  atomically exact as of the last committed event — the pump-races-the-provide class is
    *  unspellable, not carefully avoided). */
@@ -96,7 +96,7 @@ interface StreamDeps {
 export class Stream {
   readonly #storage: DurableObjectStorage;
   readonly #path: string;
-  readonly #admit: StreamDeps["admit"];
+  readonly #assertCanAppend: StreamDeps["assertCanAppend"];
   readonly #reduceAtCommit: StreamDeps["reduceAtCommit"];
   readonly #onCommit: StreamDeps["onCommit"];
   #incarnation = 0; // durable, bumped once per incarnation that WRITES — growth across idle ⇒ it hibernated
@@ -121,7 +121,7 @@ export class Stream {
   constructor(deps: StreamDeps) {
     this.#storage = deps.storage;
     this.#path = deps.path;
-    this.#admit = deps.admit;
+    this.#assertCanAppend = deps.assertCanAppend;
     this.#reduceAtCommit = deps.reduceAtCommit;
     this.#onCommit = deps.onCommit;
   }
@@ -183,7 +183,7 @@ export class Stream {
     );
   }
 
-  /** Commit a batch: validate → admit → wake record → transactionSync → post-commit fan-out.
+  /** Commit a batch: validate → assertCanAppend → wake record → transactionSync → post-commit fan-out.
    *
    *  The transaction is ATOMIC (transactionSync rolls back sql AND kv together): a mid-batch
    *  throw — an idempotency conflict after earlier inserts — must never leave rows above the
@@ -197,10 +197,10 @@ export class Stream {
    *  replay the just-inserted rows = double-reduce = table corruption). */
   append(...inputs: StreamEventInput[]): StreamEvent[] {
     // A ZERO-INPUT append is a PURE no-op. Under the storage-lazy doctrine NOTHING is minted at
-    // all: no admit, no touch, no wake record. Without this, a defensive `itx.append(...maybeEmpty)` on a fresh
+    // all: no assertCanAppend, no touch, no wake record. Without this, a defensive `itx.append(...maybeEmpty)` on a fresh
     // incarnation would MINT a woken-only durable batch (row + offset watermark + the whole
     // fan-out) — and on a PAUSED fresh stream would commit the wake record despite the pause
-    // (admit([]) sees no non-control events to refuse). The wake record rides the first REAL
+    // (assertCanAppend([]) sees no non-control events to refuse). The wake record rides the first REAL
     // append instead.
     if (inputs.length === 0) return [];
     // THE commit door every path funnels through (public stream/contexts/env.ITX + internal):
@@ -220,11 +220,11 @@ export class Stream {
     // THE CORE PROCESSOR SPEAKS FIRST (the apps/os shape): the host's gate reads its own reduced
     // state and refuses a paused/tripped batch. All pause/breaker reasoning lives in the host's
     // core-processor.ts — this class only asks.
-    this.#admit(inputs);
+    this.#assertCanAppend(inputs);
     this.touch();
     // THE WAKE RECORD: `events.iterate.com/stream/woken` `{incarnation}`, DURABLE, prepended into
     // the FIRST committed batch of each incarnation (wake history is honest history — the apps/os
-    // shape; the core reduce folds it into its state). Injected AFTER admit on purpose — the
+    // shape; the core reduce folds it into its state). Injected AFTER assertCanAppend on purpose — the
     // platform's own wake record is never subject to pause or the breaker — and never on a virgin
     // stream that only probes (no append ⇒ no woken; storage-lazy doctrine holds). Its receipt is
     // sliced off the return below: callers get one receipt per INPUT, exactly as before.
