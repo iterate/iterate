@@ -264,10 +264,10 @@ removal: `stream/subscription-configured { name, target | null, consumes? }`;
 
 The code is the record; the differences from the sketches above, so this doc does not lie:
 
-- **Handles**: `provide` and `rewrite` return ONE class, `SessionScopedHandle` (just `[Symbol.dispose]` —
-  the caller already holds the key/match it passed); `subscribe` returns `SubscriptionHandle extends
-SessionScopedHandle` with a `name` getter (the generated name when none was given). No
-  `ProvidedRpcStub` / `ItxExpressionRewriteRuleHandle`.
+- **Handles**: one class per thing — `ProvidedRpcStubHandle` (`provide`), `RewriteRuleHandle` (`rewrite`),
+  `SubscriptionHandle` (`subscribe`, plus a `name` getter: the generated name when none was given). Each
+  is just `[Symbol.dispose]`; the caller already holds the key/match it passed. (fe8168c13 replaced the
+  earlier single `SessionScopedHandle` — a lifetime is not a name for a thing.)
 - **`provide(rpcStubKey, stub, options?)`** (positional stub; `options.rewrite` is the chapter-3b sugar) is the chapter-1
   door and the sugar in one signature; `invoke` takes an `ItxExpressionInput` from the start (the chapter-1 `invoke(key, ...args)`
   spelling is `itx.rpcStubs.get('<key>')(...args)`).
