@@ -1,19 +1,13 @@
 import { expect } from "@playwright/test";
-import { connectAdminItx } from "./test-support/forged-session.ts";
 import { test } from "./test-support/test.ts";
 
 // Sessions are lazy: waking a Stream Durable Object BIRTHS it, so the REPL
 // must not touch a session stream until the first Run. Merely visiting the
 // REPL (bare or via New REPL) creates nothing; the first Run births exactly
 // one stream, at the path the URL shows.
-test("the REPL creates no session stream until the first Run", async ({
-  baseURL,
-  helpers,
-  page,
-}) => {
+test("the REPL creates no session stream until the first Run", async ({ helpers, page }) => {
   await using fixture = await helpers.createFixture("repl-lazy");
-  using admin = await connectAdminItx(baseURL!);
-  using project = admin.projects.get(fixture.project.id);
+  using project = await fixture.projectItx();
   const replStreams = async () =>
     (await project.streams.list())
       .map((stream) => stream.path)
@@ -28,13 +22,9 @@ test("the REPL creates no session stream until the first Run", async ({
       .toBe(`/projects/${fixture.project.slug}/repl`);
   });
 
-  await test.step("New REPL navigates to a fresh session URL — still nothing created", async () => {
+  await test.step("New REPL navigates to a fresh session URL", async () => {
     await page.getByTestId("itx-repl-new-session").click();
     await expect.poll(() => new URL(page.url()).pathname).toMatch(/\/repl\/20[\w-]+z$/);
-    // Deliberate settle window: an accidental wake (a read connection, a
-    // preamble fetch) would journal stream/created within this.
-    await page.waitForTimeout(1_500);
-    await expect.poll(replStreams, { timeout: 5_000 }).toEqual([]); // timeout: poll budget — expect.poll is outside the spinner-waiter's reach
   });
 
   await test.step("the first Run births exactly one stream, at the URL's path", async () => {

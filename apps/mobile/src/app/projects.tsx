@@ -4,21 +4,21 @@
 // OS-side bootstrap first (see lib/open-project.ts). Shared subscription hooks
 // own their teardown when sign-out replaces this route.
 
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { router, Stack, useLocalSearchParams } from "expo-router";
 import { ActivityIndicator, FlatList, Pressable, StyleSheet, Text, View } from "react-native";
 import type { ProjectListEntry } from "iterate/sdk/itx/react";
 import { AppDrawerButton } from "../components/project-drawer.tsx";
-import { SignInRequiredError, signOut } from "../lib/auth.ts";
-import { disconnectItxSession, getItxSession } from "../lib/itx.ts";
+import { getItxSession } from "../lib/itx.ts";
 import { backfillProjectIfMissing } from "../lib/open-project.ts";
 import { revokeEnrolledPushDevices } from "../lib/push-device.ts";
+import { useSignOut } from "../lib/session.ts";
 import { DEFAULT_SERVER } from "../lib/servers.ts";
 import { getServerBaseUrl, setLastProject } from "../lib/storage.ts";
 import { colors, radius, spacing } from "../lib/theme.ts";
 
 export default function ProjectsScreen() {
-  const queryClient = useQueryClient();
+  const signOut = useSignOut();
   // Set by the sign-in screen's post-login navigation: an account with
   // exactly one project skips the picker — a single-item list is a pointless
   // tap. Only fresh sign-ins carry it, so Back from a project (plain
@@ -28,28 +28,23 @@ export default function ProjectsScreen() {
     queryKey: ["projects", { autoOpen: Boolean(autoOpen) }],
     queryFn: async () => {
       const baseUrl = (await getServerBaseUrl()) || DEFAULT_SERVER;
-      try {
-        const itx = await getItxSession(baseUrl);
-        const list = await itx.projects.list({ scope: "mine" });
-        // Navigate from the query, not render (same rationale as the
-        // sign-in redirect below) — and from HERE rather than the sign-in
-        // mutation so the cold-itx first list gets this query's retries.
-        if (autoOpen && list.length === 1) {
-          const project = list[0];
-          await backfillProjectIfMissing(itx, project);
-          await setLastProject(baseUrl, { id: project.id, slug: project.slug });
-          router.replace({
-            pathname: "/project/[projectId]",
-            params: { projectId: project.id, slug: project.slug },
-          });
-        }
-        return { baseUrl, list };
-      } catch (error) {
-        // Redirect from the async failure, not render: render-time
-        // navigation re-fires on every re-render while the error persists.
-        if (error instanceof SignInRequiredError) router.replace("/");
-        throw error;
+      const itx = await getItxSession(baseUrl);
+      const list = await itx.projects.list({ scope: "mine" });
+      // Navigate from the query, not render — and from HERE rather than the
+      // sign-in mutation so the cold-itx first list gets this query's
+      // retries. A dead sign-in drops back to the sign-in screen from the
+      // query cache's error handler (lib/query.ts): app-global, not per
+      // screen.
+      if (autoOpen && list.length === 1) {
+        const project = list[0];
+        await backfillProjectIfMissing(itx, project);
+        await setLastProject(baseUrl, { id: project.id, slug: project.slug });
+        router.replace({
+          pathname: "/project/[projectId]",
+          params: { projectId: project.id, slug: project.slug },
+        });
       }
+      return { baseUrl, list };
     },
   });
 
@@ -85,9 +80,9 @@ export default function ProjectsScreen() {
                 await revokeEnrolledPushDevices(baseUrl).catch((error) => {
                   console.log(`[auth] push revocation skipped on sign-out: ${String(error)}`);
                 });
-                await signOut(baseUrl);
-                disconnectItxSession();
-                queryClient.clear();
+                // Session teardown (keychain, itx disconnect, cache drop)
+                // belongs to lib/session.ts — one owner for signed-in state.
+                await signOut.mutateAsync(baseUrl);
                 router.replace("/");
               }}
             >

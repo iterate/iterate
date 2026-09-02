@@ -1,4 +1,5 @@
 import { DocsApp } from "@iterate-com/docs";
+import { FlakeDashboardApp } from "iterate/starter-apps/flake-dashboard";
 import { GithubAiLinter } from "iterate/starter-apps/github-ai-linter";
 import { GuestbookApp } from "iterate/starter-apps/guestbook";
 import { MediaApp } from "iterate/starter-apps/media";
@@ -6,6 +7,16 @@ import { NotesApp } from "iterate/starter-apps/notes";
 import { IterateWorkerEntrypoint, type StreamEvent } from "iterate/sdk";
 import { parsePromptSections } from "iterate/processors";
 import { TodoApp } from "iterate/starter-apps/todo";
+
+const githubAiLinterRulePaths = [
+  "rules/structure/no-lame-helpers.md",
+  "rules/structure/prefer-clear-conditionals.md",
+  "rules/structure/simplify-truthiness-checks.md",
+  "rules/structure/validate-unknown-shapes.md",
+  "rules/terminology/no-metaphorical-lane-door-seam.md",
+  "rules/typescript/explain-type-cast.md",
+  "rules/typescript/no-inferable-type-annotation.md",
+];
 
 // An iterate project is, in the abstract, just a fetch function.
 // HTTP clients on the internet can send us Requests, and we will send responses and
@@ -19,16 +30,14 @@ import { TodoApp } from "iterate/starter-apps/todo";
 
 export default class ProjectWorker extends IterateWorkerEntrypoint {
   #aiLintApp = GithubAiLinter.create(this.env, {
-    policyVersion: "2",
+    policyVersion: "5",
     rules: {
-      paths: [
-        "rules/structure/no-small-single-use-helper.md",
-        "rules/typescript/explain-type-cast.md",
-        "rules/typescript/no-inferable-type-annotation.md",
-      ],
+      paths: githubAiLinterRulePaths,
       repoPath: "/repos/config",
     },
   });
+  /** /flakes -> GitHub "Flake dashboard" issue. Inert if /flakes stream never receives events. */
+  #flakeDashboardApp = FlakeDashboardApp.create(this.env);
   #docsApp = DocsApp.create(this.env, {
     auth: { policy: "project-member" },
     proxy: {
@@ -338,6 +347,7 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
     }
 
     await this.#aiLintApp.processEvent(event);
+    await this.#flakeDashboardApp.processEvent(event);
     await this.#guestbookApp.processEvent(event);
     await this.#mediaApp.processEvent(event);
     await this.#notesApp.processEvent(event);

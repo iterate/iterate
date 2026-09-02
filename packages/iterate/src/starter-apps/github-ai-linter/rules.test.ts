@@ -21,6 +21,7 @@ test("the linter reads only configured rule files", async () => {
           '    "!**/*.test.ts",',
           "  ]",
           "severity: error",
+          ...(id === "structure/no-lame-helpers" ? ["suggestions: forbidden"] : []),
           "---",
           `# ${id}`,
           "",
@@ -56,12 +57,14 @@ test("the linter reads only configured rule files", async () => {
         files: ["**/*.{ts,tsx,mts,cts}", "!**/*.test.ts"],
         invariant: "# structure/no-lame-helpers\n\nApply structure/no-lame-helpers.",
         severity: "error",
+        suggestions: "forbidden",
       },
       "typescript/no-inferable-type-annotation": {
         files: ["**/*.{ts,tsx,mts,cts}", "!**/*.test.ts"],
         invariant:
           "# typescript/no-inferable-type-annotation\n\nApply typescript/no-inferable-type-annotation.",
         severity: "error",
+        suggestions: "allowed",
       },
     },
   });

@@ -429,6 +429,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "- Multi-step work is one script per response: each result comes back to you, and you write the next step having seen it. A response with more than one code block — or a block that does not start with `async` — is rejected with feedback and NOTHING runs; never queue future steps as extra blocks.\n" +
       "- To finish: send your final message(s), then `return;` with no value (or fall off the end). `return null` counts as a value and buys a pointless extra turn. A response with no code block at all also ends your turn.\n" +
       "- Scripts run fresh, but every script sees `results` (recent script outcomes, newest first, typed): `results[0].data`, `await results[0].load(itx)` if large, `.error` if failed — use it instead of re-pasting JSON. `itx.capabilityHost.setPreamble({ key, code })` pins constants/helpers above all later scripts.\n" +
+      "- When a request repeats an earlier one with different inputs, reuse the journaled script: `const h = await itx.capabilityHost.previousScriptHelper({ ...results[N], parameterize: { x: <the exact value that script used inline, appearing once> }, edits: [[/stale prose/g, \"new\"]] })`; then `return await h.run({ x: newValue })`. Optional `edits` rewrites non-parameter text.\n" +
       "</section>\n" +
       "\n" +
       "<section key=\"summary-instruction\">\n" +
@@ -665,10 +666,10 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "Use project capabilities on itx when they are relevant. await itx.docs.search({ q: \"several related words\" }) finds e2e-tested example scripts, type declarations, and mounted capabilities (word-overlap matching — synonyms buy recall; await itx.docs.get({ name }) fetches one). await itx.__describe() works on every node, including provided capabilities.\n",
   },
   {
-    path: "rules/structure/no-small-single-use-helper.md",
+    path: "rules/structure/no-lame-helpers.md",
     content:
       "---\n" +
-      "id: structure/no-small-single-use-helper\n" +
+      "id: structure/no-lame-helpers\n" +
       "severity: error\n" +
       "files:\n" +
       "  [\n" +
@@ -678,9 +679,192 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  ]\n" +
       "---\n" +
       "\n" +
-      "# Avoid small single-use helpers\n" +
+      "# Avoid over-abstracting with lame helpers\n" +
       "\n" +
-      "Do not introduce a small helper used only once when keeping the logic at its call site would be clearer.\n",
+      "Avoid tiny helpers that only serve to hide what's really happening. The worst offenders are single-use, non-exported, single-line helpers, but there are several cases where it'd be far simpler and clearer to just inline the functionality.\n" +
+      "\n" +
+      "Bad - forces the reader to basically read four+ synonyms for \"worker build failure\" for the sake of zero new information:\n" +
+      "\n" +
+      "```ts\n" +
+      "export function workerBuildFailedError(failure: WorkerBuildFailure): WorkerBuildFailedError {\n" +
+      "  return new WorkerBuildFailedError(failure.message);\n" +
+      "}\n" +
+      "\n" +
+      "// later...\n" +
+      "if (!loaded.ok) throw workerBuildFailedError(loaded.failure);\n" +
+      "```\n" +
+      "\n" +
+      "Instead just do:\n" +
+      "\n" +
+      "```ts\n" +
+      "if (!loaded.ok) throw new WorkerBuildFailedError(loaded.failure.message);\n" +
+      "```\n",
+  },
+  {
+    path: "rules/structure/prefer-clear-conditionals.md",
+    content:
+      "---\n" +
+      "id: structure/prefer-clear-conditionals\n" +
+      "severity: error\n" +
+      "files:\n" +
+      "  [\n" +
+      "    \"**/*.{js,jsx,mjs,cjs,ts,tsx,mts,cts}\",\n" +
+      "    \"!**/*.{test,spec}.{js,jsx,mjs,cjs,ts,tsx,mts,cts}\",\n" +
+      "    \"!**/{__tests__,test,tests,spec,specs}/**\",\n" +
+      "  ]\n" +
+      "---\n" +
+      "\n" +
+      "# Prefer clear conditional shapes\n" +
+      "\n" +
+      "Use an early return or `if` when one branch is exceptional or when it removes nesting. Use a\n" +
+      "ternary when choosing between two values, handlers, argument bundles, or JSX alternatives that\n" +
+      "feed the same work.\n" +
+      "\n" +
+      "Don't replace a ternary if doing so duplicates shared work, introduces mutation, increases vertical\n" +
+      "space, or turns a clear condition into a negative `&&`. Formatter wrapping alone is not a reason to\n" +
+      "rewrite a ternary. If Oxfmt insists on wrapping an otherwise clear ternary, don't over-stress about\n" +
+      "the extra lines or add a suppression comment just to force it onto one line. Prefer positive\n" +
+      "predicates; if neither branch reads clearly, name the condition.\n" +
+      "\n" +
+      "Bad — the failure branch is exceptional, so the ternary wastes vertical space:\n" +
+      "\n" +
+      "```ts\n" +
+      "return built.ok\n" +
+      "  ? {\n" +
+      "      ok: true,\n" +
+      "      output: { assetManifest: {}, assets: {}, ...built.output },\n" +
+      "    }\n" +
+      "  : built;\n" +
+      "```\n" +
+      "\n" +
+      "Better:\n" +
+      "\n" +
+      "```ts\n" +
+      "if (!built.ok) return built;\n" +
+      "return { ok: true, output: { assetManifest: {}, assets: {}, ...built.output } };\n" +
+      "```\n" +
+      "\n" +
+      "Keep the ternary when both branches only select inputs for shared work:\n" +
+      "\n" +
+      "```ts\n" +
+      "const { handler, prefix } =\n" +
+      "  mode === \"rpc\"\n" +
+      "    ? { handler: rpcHandler, prefix: \"/rpc\" }\n" +
+      "    : { handler: openapiHandler, prefix: \"/api/v2\" };\n" +
+      "return handler.handle(request, { context, prefix });\n" +
+      "```\n" +
+      "\n" +
+      "Expanding that into two branches which each call `handler.handle` usually makes it worse. In JSX,\n" +
+      "`isGlobal ? null : <Button />` can likewise be clearer than `!isGlobal && <Button />`.\n",
+  },
+  {
+    path: "rules/structure/simplify-truthiness-checks.md",
+    content:
+      "---\n" +
+      "id: structure/simplify-truthiness-checks\n" +
+      "severity: error\n" +
+      "files:\n" +
+      "  [\n" +
+      "    \"**/*.{js,jsx,mjs,cjs,ts,tsx,mts,cts}\",\n" +
+      "    \"!**/*.{test,spec}.{js,jsx,mjs,cjs,ts,tsx,mts,cts}\",\n" +
+      "    \"!**/{__tests__,test,tests,spec,specs}/**\",\n" +
+      "  ]\n" +
+      "---\n" +
+      "\n" +
+      "Try as hard as you can to avoid needing to care about the difference between falsy values.\n" +
+      "\n" +
+      "Bad:\n" +
+      "\n" +
+      "```ts\n" +
+      "const built =\n" +
+      "  memoized === undefined\n" +
+      "    ? await resolveArtifact(buildKey)\n" +
+      "    : { ok: true as const, source: memoized };\n" +
+      "```\n" +
+      "\n" +
+      "Better:\n" +
+      "\n" +
+      "```ts\n" +
+      "const built = memoized ? { ok: true, source: memoized } : await resolveArtifact(buildKey);\n" +
+      "```\n" +
+      "\n" +
+      "In general, something is badly wrong if there's a meaningful semantic difference in the above case when `memoized` is null vs undefined vs false vs `\"\"` vs 0.\n" +
+      "\n" +
+      "This can't be a deterministic rule, partly because there are of course exceptions (especially with `0` which is obviously a legitimate number value). But often things like `memoized` will be plain old js objects, and should _never_ be empty string or `0`. So in most cases we just need to ensure that we're not trying to encode important information in the distinction between `null` and `undefined`, unless we've got a really great reason for doing that.\n",
+  },
+  {
+    path: "rules/structure/validate-unknown-shapes.md",
+    content:
+      "---\n" +
+      "id: structure/validate-unknown-shapes\n" +
+      "severity: error\n" +
+      "files:\n" +
+      "  [\n" +
+      "    \"**/*.{js,jsx,mjs,cjs,ts,tsx,mts,cts}\",\n" +
+      "    \"!**/*.{test,spec}.{js,jsx,mjs,cjs,ts,tsx,mts,cts}\",\n" +
+      "    \"!**/{__tests__,test,tests,spec,specs}/**\",\n" +
+      "  ]\n" +
+      "---\n" +
+      "\n" +
+      "# Validate unknown shapes at the boundary\n" +
+      "\n" +
+      "When a value is `unknown`, do not manually prove its shape with a long anonymous chain of\n" +
+      "`typeof`, null, array, property, and key checks. Parse it once with a schema or use a domain-named\n" +
+      "type guard that owns the invariant.\n" +
+      "\n" +
+      "Bad:\n" +
+      "\n" +
+      "```ts\n" +
+      "const empty =\n" +
+      "  value !== null &&\n" +
+      "  typeof value === \"object\" &&\n" +
+      "  !Array.isArray(value) &&\n" +
+      "  Object.keys(value).length === 0;\n" +
+      "```\n" +
+      "\n" +
+      "Better:\n" +
+      "\n" +
+      "```ts\n" +
+      "const EmptyBrowserFeedState = z.strictObject({});\n" +
+      "const empty = EmptyBrowserFeedState.safeParse(value).success;\n" +
+      "```\n" +
+      "\n" +
+      "Do not extract the anonymous check chain into a single-use helper merely to hide it. A named guard\n" +
+      "is useful when it represents a real domain concept, centralizes the invariant, and narrows values\n" +
+      "for its callers.\n",
+  },
+  {
+    path: "rules/terminology/no-metaphorical-lane-door-seam.md",
+    content:
+      "---\n" +
+      "id: terminology/no-metaphorical-lane-door-seam\n" +
+      "severity: error\n" +
+      "files: [\"**/*.{js,jsx,mjs,cjs,ts,tsx,mts,cts}\"]\n" +
+      "suggestions: forbidden\n" +
+      "---\n" +
+      "\n" +
+      "# Ban lane, door, and seam as code metaphors\n" +
+      "\n" +
+      "Do not use `lane`, `door`, or `seam` as a metaphor in identifiers, comments,\n" +
+      "log or error text, or other source strings. Compound and inflected forms such\n" +
+      "as `fastLane`, `creationDoor`, `testSeam`, and `lanes` count too.\n" +
+      "\n" +
+      "Allow a use only when the source literally models a traffic lane, physical\n" +
+      "door, or joined/material seam, or when an immediately preceding lint directive\n" +
+      "gives a specific reason that the external or domain terminology must be kept:\n" +
+      "\n" +
+      "```ts\n" +
+      "// iterate-lint-disable-next-line terminology/no-metaphorical-lane-door-seam -- mirrors the upstream API's `lane` field\n" +
+      "const lane = vendor.lane;\n" +
+      "```\n" +
+      "\n" +
+      "A generic comment that merely restates the metaphor is not an excuse.\n" +
+      "\n" +
+      "Do not attach a suggested-change patch or propose a replacement identifier.\n" +
+      "The metaphor often means the surrounding model or explanation is unclear, and\n" +
+      "the right fix may rename several related concepts or rewrite a whole paragraph.\n" +
+      "State what is unclear without telling the author what to change. Leave the\n" +
+      "scope and wording of the fix to the author.\n",
   },
   {
     path: "rules/typescript/explain-type-cast.md",
@@ -691,14 +875,18 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "files:\n" +
       "  [\n" +
       "    \"**/*.{ts,tsx,mts,cts}\",\n" +
-      "    \"!**/*.{test,spec}.{js,jsx,mjs,cjs,ts,tsx,mts,cts}\",\n" +
-      "    \"!**/{__tests__,test,tests,spec,specs}/**\",\n" +
+      "    \"!**/*.{test,spec,test-worker,fixtures}.{js,jsx,mjs,cjs,ts,tsx,mts,cts}\",\n" +
+      "    \"!**/{__tests__,test,tests,spec,specs,e2e,test-support,fixtures}/**\",\n" +
+      "    \"!**/*{test-helper,test-support,test-harness,fixture}*.{ts,tsx,mts,cts}\",\n" +
+      "    \"!**/vitest*.config.*\",\n" +
       "  ]\n" +
       "---\n" +
       "\n" +
       "# Explain type casts\n" +
       "\n" +
-      "Every type cast must have a nearby explanation of why it is safe and cannot reasonably be avoided.\n",
+      "Every type cast must have a nearby explanation of why it is safe and cannot reasonably be avoided.\n" +
+      "\n" +
+      "Test code is exempt. The negated globs cover the common layouts, but any file that exists only to support tests (helpers, fixtures, harnesses, fake services) is also out of scope even if its name doesn't match one of them.\n",
   },
   {
     path: "rules/typescript/no-inferable-type-annotation.md",
@@ -741,6 +929,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
     path: "worker.ts",
     content:
       "import { DocsApp } from \"@iterate-com/docs\";\n" +
+      "import { FlakeDashboardApp } from \"iterate/starter-apps/flake-dashboard\";\n" +
       "import { GithubAiLinter } from \"iterate/starter-apps/github-ai-linter\";\n" +
       "import { GuestbookApp } from \"iterate/starter-apps/guestbook\";\n" +
       "import { MediaApp } from \"iterate/starter-apps/media\";\n" +
@@ -748,6 +937,16 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "import { IterateWorkerEntrypoint, type StreamEvent } from \"iterate/sdk\";\n" +
       "import { parsePromptSections } from \"iterate/processors\";\n" +
       "import { TodoApp } from \"iterate/starter-apps/todo\";\n" +
+      "\n" +
+      "const githubAiLinterRulePaths = [\n" +
+      "  \"rules/structure/no-lame-helpers.md\",\n" +
+      "  \"rules/structure/prefer-clear-conditionals.md\",\n" +
+      "  \"rules/structure/simplify-truthiness-checks.md\",\n" +
+      "  \"rules/structure/validate-unknown-shapes.md\",\n" +
+      "  \"rules/terminology/no-metaphorical-lane-door-seam.md\",\n" +
+      "  \"rules/typescript/explain-type-cast.md\",\n" +
+      "  \"rules/typescript/no-inferable-type-annotation.md\",\n" +
+      "];\n" +
       "\n" +
       "// An iterate project is, in the abstract, just a fetch function.\n" +
       "// HTTP clients on the internet can send us Requests, and we will send responses and\n" +
@@ -761,16 +960,14 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "\n" +
       "export default class ProjectWorker extends IterateWorkerEntrypoint {\n" +
       "  #aiLintApp = GithubAiLinter.create(this.env, {\n" +
-      "    policyVersion: \"2\",\n" +
+      "    policyVersion: \"5\",\n" +
       "    rules: {\n" +
-      "      paths: [\n" +
-      "        \"rules/structure/no-small-single-use-helper.md\",\n" +
-      "        \"rules/typescript/explain-type-cast.md\",\n" +
-      "        \"rules/typescript/no-inferable-type-annotation.md\",\n" +
-      "      ],\n" +
+      "      paths: githubAiLinterRulePaths,\n" +
       "      repoPath: \"/repos/config\",\n" +
       "    },\n" +
       "  });\n" +
+      "  /** /flakes -> GitHub \"Flake dashboard\" issue. Inert if /flakes stream never receives events. */\n" +
+      "  #flakeDashboardApp = FlakeDashboardApp.create(this.env);\n" +
       "  #docsApp = DocsApp.create(this.env, {\n" +
       "    auth: { policy: \"project-member\" },\n" +
       "    proxy: {\n" +
@@ -1080,6 +1277,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "    }\n" +
       "\n" +
       "    await this.#aiLintApp.processEvent(event);\n" +
+      "    await this.#flakeDashboardApp.processEvent(event);\n" +
       "    await this.#guestbookApp.processEvent(event);\n" +
       "    await this.#mediaApp.processEvent(event);\n" +
       "    await this.#notesApp.processEvent(event);\n" +

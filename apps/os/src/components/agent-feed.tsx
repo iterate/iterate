@@ -833,12 +833,39 @@ function LiveStepStream({ step }: { step: AgentUiStep }) {
         <StreamingCodeBlock code={step.responseText} />
       ) : (
         <div className="max-w-2xl whitespace-pre-wrap px-1.5 text-sm leading-relaxed">
-          {step.responseText}
+          <TokenRevealText windows={step.responseWindows} />
           <StreamingCursor />
         </div>
       )}
     </div>
   );
+}
+
+/** The streamed response, one span per token with a CSS stagger: chunk events
+ * arrive as ~150ms coalescing windows (~8 tokens each), and rendering a window
+ * in one jump reads as chugging. Each window fans its tokens' animation-delay
+ * across the gap to the next window instead — CSS is the clock, so there are
+ * no timers and no extra re-renders. Keys are stable and windows are
+ * append-only, so finished windows keep their DOM nodes and never re-animate. */
+function TokenRevealText({ windows }: { windows: string[] }) {
+  return windows.map((window, windowIndex) => {
+    const tokens = window.split(/(?<=\s)/);
+    return (
+      <span key={windowIndex}>
+        {tokens.map((token, tokenIndex) => (
+          <span
+            key={tokenIndex}
+            className="animate-token-in"
+            // Fan across ~140ms regardless of token count, so a large window
+            // always finishes revealing before the next window's tokens land.
+            style={{ animationDelay: `${Math.round((tokenIndex / tokens.length) * 140)}ms` }}
+          >
+            {token}
+          </span>
+        ))}
+      </span>
+    );
+  });
 }
 
 /** Amber-tinted block the response/code streams into, character by character.

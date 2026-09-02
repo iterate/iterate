@@ -47,13 +47,13 @@ test("streaming response text lands on the live activity while working", () => {
   const feed = reduceFeed(PATH, [
     event(1, "events.iterate.com/agents/context-added", { content: "go", role: "user" }),
     event(2, "events.iterate.com/agent/llm-request-requested", {}),
-    event(3, "events.iterate.com/agent/llm-response-chunk", {
+    event(3, "events.iterate.com/agent/llm-response-chunks", {
       llmRequestOffset: 2,
-      chunk: { choices: [{ delta: { content: "const x" } }] },
+      chunks: [{ choices: [{ delta: { content: "const x" } }] }],
     }),
-    event(4, "events.iterate.com/agent/llm-response-chunk", {
+    event(4, "events.iterate.com/agent/llm-response-chunks", {
       llmRequestOffset: 2,
-      chunk: { choices: [{ delta: { content: " = 1" } }] },
+      chunks: [{ choices: [{ delta: { content: " = 1" } }] }],
     }),
   ]);
   expect(feed).toMatchObject({
@@ -163,6 +163,66 @@ test("a reply that lands before a durable script's settlement still ends not-wor
   expect(feed.items.map((item) => item.id)).toEqual(["user-1", "activity-2", "assistant-5"]);
   expect(feed).toMatchObject({ working: false, live: null });
   expect(feed.items[1]).toMatchObject({ kind: "activity", status: "done" });
+});
+
+test("a triggering user message keeps the feed working through the request debounce", () => {
+  // The window between a user message and its debounced llm-request event has
+  // no live activity, but the agent owes one — the working row must not flash
+  // idle across it.
+  const sent = [
+    event(1, "events.iterate.com/agents/context-added", { content: "go", role: "user" }),
+  ];
+  expect(reduceFeed(PATH, sent)).toMatchObject({ working: true, live: null });
+
+  // A non-triggering message owes nothing.
+  const noTrigger = [
+    event(1, "events.iterate.com/agents/context-added", {
+      content: "note",
+      role: "user",
+      llmRequestPolicy: { behaviour: "dont-trigger-request" },
+    }),
+  ];
+  expect(reduceFeed(PATH, noTrigger)).toMatchObject({ working: false });
+
+  // A paused agent owes nothing until resumed.
+  const whilePaused = [
+    event(1, "events.iterate.com/agent/paused", { reason: "operator hold" }),
+    event(2, "events.iterate.com/agents/context-added", { content: "go", role: "user" }),
+  ];
+  expect(reduceFeed(PATH, whilePaused)).toMatchObject({ working: false });
+
+  // A stream error after the message means the turn machinery crashed; the
+  // owed-turn claim ends with it rather than spinning forever.
+  const crashed = [
+    event(1, "events.iterate.com/agents/context-added", { content: "go", role: "user" }),
+    event(2, "events.iterate.com/stream/error-occurred", { message: "boom" }),
+  ];
+  expect(reduceFeed(PATH, crashed)).toMatchObject({ working: false });
+
+  // A message QUEUED mid-turn still owes its own request after the turn ends.
+  // The running script's reply answers the PREVIOUS message — it must not
+  // clear the queued one's pending claim (the debounce window between the
+  // turn settling and the next request opening would lose its working row).
+  const queuedMidTurn = [
+    event(1, "events.iterate.com/agents/context-added", { content: "first", role: "user" }),
+    event(2, "events.iterate.com/agent/llm-request-requested", {}),
+    event(3, "events.iterate.com/agent/llm-request-settled", {
+      requestOffset: 2,
+      result: { status: "succeeded", text: "ok" },
+    }),
+    event(4, "events.iterate.com/capability-host/script-run-requested", {
+      executionId: "s1",
+      code: "1",
+      expiresAt: Date.UTC(2026, 0, 1, 0, 2),
+    }),
+    event(5, "events.iterate.com/agents/context-added", { content: "second", role: "user" }),
+    event(6, "events.iterate.com/agents/web-message-sent", { message: "answer to first" }),
+    event(7, "events.iterate.com/capability-host/script-run-settled", {
+      executionId: "s1",
+      settlement: { status: "succeeded" },
+    }),
+  ];
+  expect(reduceFeed(PATH, queuedMidTurn)).toMatchObject({ working: true, live: null });
 });
 
 function event(offset: number, type: string, payload: Record<string, unknown>): StreamEvent {

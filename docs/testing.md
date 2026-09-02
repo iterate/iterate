@@ -203,6 +203,19 @@ Draft proposal for the two gaps, keeping vanilla CLIs:
   specs side if a spec ever needs a dimension; don't build it until one
   does.
 
+The free-and-deterministic alternative to paying for turns is the `intercepted/*`
+model lane: `itx.ai.intercept(handler)` installs a live handler (an in-memory
+function in the test process, session-bound over capnweb) that serves every
+model under `intercepted/` — both `itx.ai.run("intercepted/…")` calls and full agent
+conversation turns for agents configured with `model: "intercepted/<x>"`. The whole
+loop runs for real — debounce, journaled llm-request events, chunk streaming,
+codemode, chat reply — with the test scripting each response. Non-fake models
+are never interceptable, so a journaled `openai/*` turn is always the real
+provider. Reach for a paid `.llm.` test only when the point IS real-model
+integration. Usage guide (handler contract, the session-bound lifetime and
+4901 recovery contract, spec/node recipes):
+[Intercepted models](intercepted-models.md).
+
 Open questions for the next grilling round: is the filename the right home
 for cost (vs a lint-enforced import rule alone)? Should third-party reach
 be visible in filenames too, or is env-gating enough? Does "slow" deserve
@@ -507,19 +520,96 @@ protocol below instead of repeatedly making unrelated PRs pay for it.
 
 A flaky or pathologically slow test may be quarantined only after the current
 change is shown not to cause its failure. Failures on behavior changed by the
-PR remain ordinary blockers. For an unrelated test:
+PR remain ordinary blockers. For an unrelated test, the protocol is:
 
 1. Record the test name, first-attempt error, run link or artifact, and timing.
-2. Add the narrowest explicit skip (`test.skip`/`fixme`, or a clearly logged
-   no-op for an entire broken lane). Never hide it with a title filter, deleted
-   discovery entry, extra retry, or swallowed error. The skip names its task.
-3. Create `tasks/<name>.md` with the evidence, impact, investigation work, and
-   concrete exit criteria for removing the skip.
-4. State prominently in the PR description that an unrelated flake was found,
-   what was skipped, and which task owns restoration.
+2. Wrap it with `createFlake` (next section), passing the one error pattern the
+   flake produces. The test stays green, keeps running on every branch, and
+   keeps reporting its outcomes — the flake rate stays measured, and the
+   recorded data is what later proves the test deserves unwrapping.
+3. State in the PR description that an unrelated flake was found and wrapped.
 
-Once the remaining CI is green, the quarantine is explicit coverage debt, not
-a reason to keep the unrelated PR open indefinitely.
+Skipping is the exception, not the protocol. Fall back to an explicit skip
+only when the test cannot safely or affordably keep executing:
+
+- running it harms the rest of the suite (side effects — e.g. the
+  live-capability mesh e2e that cancelled the shared OS isolate and severed
+  19 unrelated sessions);
+- the flake manifests as a genuine hang, which has no error to pattern-match
+  (`createFlake` deliberately treats a hang as red);
+- the cost is the runtime itself (pathological tail latency), or the whole
+  lane is broken.
+
+The skip path carries extra obligations precisely because it produces no
+data: the narrowest explicit `test.skip`/`fixme` (or a clearly logged no-op
+for an entire broken lane) — never a title filter, deleted discovery entry,
+extra retry, or swallowed error — plus a `tasks/<name>.md` with the evidence,
+impact, investigation work, and concrete exit criteria, named by the skip and
+called out prominently in the PR description.
+
+Once the remaining CI is green, either form of quarantine is explicit
+coverage debt, not a reason to keep the unrelated PR open indefinitely.
+
+### Pinned bugs: `failing(test, …)`, not bare `test.fails`
+
+For a KNOWN bug held open on purpose, wrap the runner's own test function
+with `failing` from `@iterate-com/shared/test-support/failing-test` — it
+works for vitest and playwright alike, passing fixtures and options through:
+
+```ts
+const fail = failing(test, /SAME-BOOT STALENESS/);
+fail("a userspace facet rebuilds on a source commit", { timeout: 240_000 }, async () => {
+  // asserts the DESIRED behavior; today it throws the matched error
+});
+```
+
+`failing` registers through the runner's own expected-fail variant
+(vitest `test.fails`, playwright `test.fail`), so pins report natively —
+the "expected fail" summary count and telemetry's expected state need no
+extra plumbing. The wrapper filters WHICH failure satisfies that machinery:
+the body must fail matching the pattern. A different failure, a success, or
+a body still running after the wrapper's 30s deadline all come back as
+"success", which the expected-fail machinery rejects — red, with the actual
+reason in the adjacent `[failing-test]` log line. (A bare `test.fails`
+stays silently green in all three cases.) A pin that legitimately runs
+longer raises the deadline via `options.timeoutMs`, kept below the runner's
+test timeout. Write the body so the bug throws a distinctive message, and
+so conditions that prove nothing (a coincidental restart masking the bug
+for one observation) retry instead of succeeding —
+`apps/os/e2e/vitest/userspace-facet-source-version.e2e.test.ts` is the
+worked example; its `test.fails` predecessor false-alarmed 7+ times.
+
+### Known-flaky tests: `createFlake(test, …)`
+
+For a test that is genuinely flaky — sometimes passes, sometimes fails, and
+always with the SAME error — wrap it with `createFlake` from
+`@iterate-com/shared/test-support/flake-test` instead of skipping it:
+
+```ts
+const flake = createFlake(test, /CPU startup time exceeded \d+ms/);
+flake("Worker can be deployed", async () => {
+  const deployment = await system.deploy();
+  await expect.poll(() => fetch(deployment.url)).toMatchObject({ status: 200 });
+});
+```
+
+Like `failing`, it registers through the runner's expected-fail variant, but
+the contract differs: a pass and a failure matching the one allowed pattern
+are both green; anything else — a different error, or a body still running at
+the wrapper's deadline — is red. The test keeps running on every branch and,
+when `FLAKE_RECORD_DIR` is set (CI), appends each outcome as a JSON line for
+the flake dashboard, so the flake rate stays measured instead of hidden.
+
+The lifecycle is wrapper-switching, driven by that data: a test that seems
+flaky moves to `createFlake`; if it stops passing entirely, switch it to
+`failing`; once it passes consistently, unwrap it back to a plain test.
+`packages/shared/src/test-support/flake-sentinel.test.ts` is a deliberately
+~10%-flaky sentinel that proves the pipeline works — if its flake rate reads
+0%, distrust the dashboard, not the sentinel.
+
+This IS the quarantine protocol (previous section): a skipped test produces
+no data, so nothing can ever prove it deserves to come back. Skips remain
+only for tests that cannot keep executing at all.
 
 ### Parked tests expire
 

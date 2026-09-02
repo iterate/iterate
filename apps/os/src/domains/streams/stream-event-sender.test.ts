@@ -103,6 +103,14 @@ function harness(args: {
   /** Share durable cursor rows with an earlier sender: the post-eviction rebuild. */
   store?: SqliteSubscriptionCursorStore;
   facetWorkArmedAtMs?: () => number | null;
+  /** Reduced halt record, as folded from a committed subscription-delivery-halted event. */
+  deliveryHalted?: NonNullable<
+    CoreProcessorState["subscriptions"]["outbound"]["byName"][string]["deliveryHalted"]
+  >;
+  /** This incarnation's deploy version (the halt antidote comparison side). */
+  workerVersion?: string;
+  /** Reduced pause flag — a paused stream rejects ordinary appends. */
+  paused?: boolean;
 }) {
   let now = 10_000;
   const configuration = args.configuration ?? hostedConfig(args.filter);
@@ -110,6 +118,7 @@ function harness(args: {
     projectId: "project",
     path: "/source",
     streamId: SOURCE_STREAM_ID,
+    ...(args.paused === undefined ? {} : { paused: args.paused }),
     createdAt: "2026-07-21T10:00:00.000Z",
     maxOffset: Math.max(1, ...args.events.map((entry) => entry.offset)),
     subscriptions: {
@@ -119,6 +128,7 @@ function harness(args: {
             configuration: { ...configuration, name: PROCESSOR_KEY },
             configuredAtOffset: 1,
             configuredAt: new Date(1).toISOString(),
+            deliveryHalted: args.deliveryHalted,
           },
         },
       },
@@ -130,6 +140,7 @@ function harness(args: {
   const alarms: number[] = [];
   const alarmClears: number[] = [];
   const kept: Promise<unknown>[] = [];
+  const appendedDeliveryEvents: StreamEventInput[] = [];
   const wakeCalls: Parameters<SubscriptionReceiverCalls["wakeStreamProcessor"]>[] = [];
   const receiverCalls: SubscriptionReceiverCalls = {
     wakeStreamProcessor: (...wakeArgs) => {
@@ -151,7 +162,13 @@ function harness(args: {
       coreState: () => state,
       store,
       receiverCalls,
-      appendDeliveryEvent: args.appendDeliveryEvent ?? (() => true),
+      appendDeliveryEvent:
+        args.appendDeliveryEvent ??
+        ((entry) => {
+          appendedDeliveryEvents.push(entry);
+          return true;
+        }),
+      workerVersion: () => args.workerVersion ?? "test-version",
       recordEgress: () => undefined,
       runtimeChanged: () => undefined,
       now: () => now,
@@ -180,6 +197,7 @@ function harness(args: {
     wakeCalls,
     alarms,
     alarmClears,
+    appendedDeliveryEvents,
     state,
     store,
     eventSender,
@@ -1278,6 +1296,7 @@ describe("StreamEventSender stream delivery", () => {
         afterOffset: 0,
         attempts: 15,
         error: "receiving stream is paused",
+        workerVersion: "test-version",
       },
     });
     expect(h.store.get(PROCESSOR_KEY)).toMatchObject({
@@ -1528,6 +1547,261 @@ describe("StreamEventSender stream delivery", () => {
   });
 });
 
+// The 2026-08-12 preview_8 media incident: a redeploy broke deliveries to the
+// project worker long enough for the skip fuse to append
+// `subscription-delivery-halted`, and a halted subscription had NO retry story
+// — silent forever (runtime state even looks clean: the halt clears the
+// backoff ladder). The keepalive breaker's doctrine already names the cure:
+// a version change is the antidote deploy and retries immediately. These
+// tests pin that same contract for halted subscriptions.
+describe("StreamEventSender halted-subscription antidote resume", () => {
+  const itxConfig: SubscriptionConfiguredPayload = {
+    name: PROCESSOR_KEY,
+    receiver: {
+      action: "itx-call",
+      expression: ["processEventBatch"],
+      delivery: { start: "beginning", onFailingEvent: "skip" },
+    },
+  };
+  const rejectWake = async () => {
+    throw new Error("an ITX receiver must not wake a hosted processor");
+  };
+
+  it("auto-resumes a halted subscription exactly once after the worker version changes", async () => {
+    const deliverToItx = vi.fn<SubscriptionReceiverCalls["deliverToItx"]>(async () => undefined);
+    const h = harness({
+      events: [event(2, "example.com/issue-created", { issue: 1 })],
+      configuration: itxConfig,
+      deliverToItx,
+      workerVersion: "v2",
+      deliveryHalted: {
+        reason: "delivery-failed",
+        afterOffset: 1,
+        attempts: 3,
+        error: "receiver was down",
+        workerVersion: "v1",
+      },
+      wakeProcessor: rejectWake,
+    });
+
+    h.eventSender.sendDue();
+    await h.settle();
+
+    expect(h.appendedDeliveryEvents).toMatchObject([
+      {
+        type: "events.iterate.com/stream/subscription-delivery-resumed",
+        payload: { name: PROCESSOR_KEY },
+      },
+    ]);
+    // Deterministic per (halt instance, version): a redelivered reconcile in a
+    // fresh incarnation converges on the stream's idempotency dedupe.
+    expect(h.appendedDeliveryEvents[0]!.idempotencyKey).toContain("halt-antidote-resume");
+    expect(h.appendedDeliveryEvents[0]!.idempotencyKey).toContain("v2");
+
+    // Level-triggered but not spammy: later send checks in this incarnation
+    // do not re-append while the fold still shows the halt.
+    h.eventSender.sendDue();
+    await h.settle();
+    expect(h.appendedDeliveryEvents).toHaveLength(1);
+
+    // The halt itself stays authoritative until the resumed event reduces.
+    expect(deliverToItx).not.toHaveBeenCalled();
+  });
+
+  it("leaves a halt recorded under the current version alone", async () => {
+    const deliverToItx = vi.fn<SubscriptionReceiverCalls["deliverToItx"]>(async () => undefined);
+    const h = harness({
+      events: [event(2, "example.com/issue-created", { issue: 1 })],
+      configuration: itxConfig,
+      deliverToItx,
+      workerVersion: "v1",
+      deliveryHalted: {
+        reason: "delivery-failed",
+        afterOffset: 1,
+        attempts: 3,
+        workerVersion: "v1",
+      },
+      wakeProcessor: rejectWake,
+    });
+
+    h.eventSender.sendDue();
+    await h.settle();
+
+    expect(h.appendedDeliveryEvents).toEqual([]);
+    expect(deliverToItx).not.toHaveBeenCalled();
+  });
+
+  it("retries the resume on a later send check when the append throws (paused at boot)", async () => {
+    // sendDue runs on a paused stream (woken is allowed while paused), but a
+    // paused stream REJECTS the subscription-delivery-resumed append. That
+    // rejection must not poison this incarnation's antidote retry: after the
+    // operator unpauses, the next send check — same incarnation, no eviction
+    // — must still deliver the resume.
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    let paused = true;
+    const appended: StreamEventInput[] = [];
+    const h = harness({
+      events: [event(2, "example.com/issue-created", { issue: 1 })],
+      configuration: itxConfig,
+      workerVersion: "v2",
+      deliveryHalted: {
+        reason: "delivery-failed",
+        afterOffset: 1,
+        attempts: 3,
+        workerVersion: "v1",
+      },
+      appendDeliveryEvent: (entry) => {
+        if (paused) throw new Error("stream paused: operator maintenance");
+        appended.push(entry);
+        return true;
+      },
+      wakeProcessor: rejectWake,
+    });
+
+    // The rejected resume is contained: the send check itself still succeeds
+    // (a paused stream must not turn every reconcile into a counted failure).
+    expect(h.eventSender.sendDue()).toBe(true);
+    await h.settle();
+    expect(appended).toEqual([]);
+
+    paused = false;
+    h.eventSender.sendDue();
+    await h.settle();
+    expect(appended).toMatchObject([
+      {
+        type: "events.iterate.com/stream/subscription-delivery-resumed",
+        payload: { name: PROCESSOR_KEY },
+      },
+    ]);
+  });
+
+  it("derives the retry wake from the stale-version halt itself after an interrupted resume append", async () => {
+    // The parked-wake edge found on #2530: an interrupted resume append used
+    // to arm a bare in-memory alarm, which the very next alarm recomputation
+    // (halted rows skipped, quiet state → clearAlarm) wiped — leaving the
+    // owed retry waiting for an unrelated wake. The wake is now DERIVED: a
+    // halt whose recorded version differs from the current one is durable
+    // evidence of an owed resume, so every recomputation re-arms it.
+    let interrupt = true;
+    const appended: StreamEventInput[] = [];
+    const h = harness({
+      events: [event(2, "example.com/issue-created", { issue: 1 })],
+      configuration: itxConfig,
+      workerVersion: "v2",
+      deliveryHalted: {
+        reason: "delivery-failed",
+        afterOffset: 1,
+        attempts: 3,
+        workerVersion: "v1",
+      },
+      appendDeliveryEvent: (entry) => {
+        if (interrupt) return false; // lifecycle teardown interrupted the commit
+        appended.push(entry);
+        return true;
+      },
+      wakeProcessor: rejectWake,
+    });
+
+    h.eventSender.sendDue();
+    await h.settle();
+    expect(appended).toEqual([]);
+
+    // The recomputation that used to clear the wake now derives it.
+    h.eventSender.reconcileAlarmAfterSettlement();
+    expect(h.alarms.length).toBeGreaterThan(0);
+    expect(Math.min(...h.alarms)).toBe(11_000); // now (10s) + the 1s lifecycle retry pace
+
+    // The armed wake's send check lands the resume.
+    interrupt = false;
+    h.eventSender.sendDue();
+    await h.settle();
+    expect(appended).toMatchObject([
+      {
+        type: "events.iterate.com/stream/subscription-delivery-resumed",
+        payload: { name: PROCESSOR_KEY },
+      },
+    ]);
+  });
+
+  it("a paused stream's stale-version halt derives no wake", async () => {
+    // The resume append rejects while paused; the unpause event's own send
+    // check owns the retry. Arming from the halt here would loop the alarm
+    // against the pause.
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const h = harness({
+      events: [event(2, "example.com/issue-created", { issue: 1 })],
+      configuration: itxConfig,
+      workerVersion: "v2",
+      paused: true,
+      deliveryHalted: {
+        reason: "delivery-failed",
+        afterOffset: 1,
+        attempts: 3,
+        workerVersion: "v1",
+      },
+      appendDeliveryEvent: () => {
+        throw new Error("stream paused: operator maintenance");
+      },
+      wakeProcessor: rejectWake,
+    });
+
+    h.eventSender.sendDue();
+    await h.settle();
+    h.eventSender.reconcileAlarmAfterSettlement();
+    expect(h.alarms).toEqual([]);
+  });
+
+  it("grandfathers a legacy halt with no recorded version — operator doors only", async () => {
+    // Without a recorded version, "same deploy that just gave up" and
+    // "antidote deploy" are indistinguishable; guessing would loop a
+    // same-version halt forever.
+    const h = harness({
+      events: [event(2, "example.com/issue-created", { issue: 1 })],
+      configuration: itxConfig,
+      workerVersion: "v3",
+      deliveryHalted: { reason: "delivery-failed", afterOffset: 1, attempts: 15 },
+      wakeProcessor: rejectWake,
+    });
+
+    h.eventSender.sendDue();
+    await h.settle();
+
+    expect(h.appendedDeliveryEvents).toEqual([]);
+  });
+
+  it("stamps its deploy version on the halt it records", async () => {
+    const deliverToItx = vi.fn<SubscriptionReceiverCalls["deliverToItx"]>(async () => {
+      throw Object.assign(new Error("worker source build failed"), { retryable: false });
+    });
+    const h = harness({
+      events: [event(2, "example.com/issue-created", { issue: 1 })],
+      configuration: {
+        name: PROCESSOR_KEY,
+        receiver: {
+          action: "itx-call",
+          expression: ["processEventBatch"],
+          // halt policy: a deterministic (retryable: false) failure halts on
+          // the first attempt, so the stamped version is observable directly.
+          delivery: { start: "beginning", onFailingEvent: "halt" },
+        },
+      },
+      deliverToItx,
+      workerVersion: "v7",
+      wakeProcessor: rejectWake,
+    });
+
+    h.eventSender.sendDue();
+    await h.settle();
+
+    expect(h.appendedDeliveryEvents).toMatchObject([
+      {
+        type: "events.iterate.com/stream/subscription-delivery-halted",
+        payload: { name: PROCESSOR_KEY, reason: "delivery-failed", workerVersion: "v7" },
+      },
+    ]);
+  });
+});
+
 describe("StreamEventSender webhook delivery", () => {
   function webhookConfig(
     receiverOverrides: Partial<
@@ -1685,6 +1959,7 @@ describe("StreamEventSender webhook delivery", () => {
           afterOffset: 0,
           attempts: 15,
           error: "webhook responded 503 Service Unavailable",
+          workerVersion: "test-version",
         },
       },
     ]);

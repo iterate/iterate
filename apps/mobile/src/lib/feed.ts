@@ -6,6 +6,7 @@
 // are small enough to just reduce everything from offset 0 on each update.
 
 import {
+  deriveAgentUiLiveStatus,
   formatAgentUiActivitySummary,
   formatAgentUiDuration,
   summarizeAgentUiActivity,
@@ -14,6 +15,7 @@ import {
   reduceAgentUi,
   type AgentUiActivity,
   type AgentUiItem,
+  type AgentUiLiveStatus,
   type AgentUiState,
 } from "@iterate-com/ui/components/events/agent-ui-reducer";
 import type { StreamEvent } from "iterate/sdk/itx/react";
@@ -23,6 +25,8 @@ export type {
   AgentUiCodeStep,
   AgentUiFileAttachment,
   AgentUiItem,
+  AgentUiLivePhase,
+  AgentUiLiveStatus,
   AgentUiLlmStep,
   AgentUiMessageItem,
   AgentUiStep,
@@ -37,6 +41,8 @@ export type AgentFeed = {
   items: AgentUiItem[];
   /** The in-flight activity (streaming thinking/code), also last in `items`. */
   live: AgentUiActivity | null;
+  /** The live activity's phase + this turn's agent-set status text. */
+  liveStatus: AgentUiLiveStatus | null;
   /** True while the agent owes visible progress — drives the working row. */
   working: boolean;
   state: AgentUiState;
@@ -63,7 +69,18 @@ export function reduceFeed(agentPath: string, events: StreamEvent[]): AgentFeed 
       else settled[correctionIndex] = item;
     }
   }
-  const working = isAgentUiActivityWorking(state.live);
+  const liveStatus = deriveAgentUiLiveStatus(state);
+  // "processing" counts as working: the script settled with a returned value,
+  // so another LLM round is owed but not yet journaled. Without it the card
+  // would flicker to "done" for the request debounce window mid-turn. A pause
+  // fact (the autonomous breaker, an operator) settles the live activity in
+  // the reducer, so this cannot wedge a spinner past the turn's real end.
+  // turnPending covers the other owed-but-not-journaled window: a triggering
+  // user message whose debounced llm request hasn't opened yet.
+  const working =
+    isAgentUiActivityWorking(state.live) ||
+    liveStatus?.phase === "processing" ||
+    turnPending(events);
   if (state.live !== null && !working) {
     const completed: AgentUiActivity = { ...state.live, status: "done" };
     const correctionIndex = settled.findIndex((item) => item.id === completed.id);
@@ -72,6 +89,7 @@ export function reduceFeed(agentPath: string, events: StreamEvent[]): AgentFeed 
     return {
       items: [...settled, ...state.deferredAssistantMessages, ...state.queuedUserMessages],
       live: null,
+      liveStatus: null,
       working: false,
       state: {
         ...state,
@@ -85,9 +103,64 @@ export function reduceFeed(agentPath: string, events: StreamEvent[]): AgentFeed 
   return {
     items,
     live: state.live,
+    liveStatus,
     working,
     state,
   };
+}
+
+/**
+ * True when the journal's newest turn-relevant fact is a triggering user
+ * message: the agent owes an llm request that hasn't been journaled yet (the
+ * request debounce window). The working row reads this so it stays visible
+ * through that window instead of flashing idle between the send and the
+ * request opening. Pause facts suppress it — a paused agent owes nothing
+ * until resumed. Web-chat messages only (`agents/context-added`, role user):
+ * that is the one ingress this screen sends through.
+ */
+function turnPending(events: StreamEvent[]): boolean {
+  let pending = false;
+  let paused = false;
+  for (const event of events) {
+    const payload = event.payload || {};
+    switch (event.type) {
+      case "events.iterate.com/agents/context-added": {
+        if (payload.role !== "user") break;
+        // Journal payloads are producer-validated at append time; this fold
+        // only sniffs one optional discriminator, so the cast narrows no
+        // further than the single field read (a schema boundary here would
+        // re-parse every event on every reduction for that one read, and a
+        // malformed value still lands harmlessly on `undefined`).
+        const policy = payload.llmRequestPolicy as { behaviour?: string } | undefined;
+        if (policy?.behaviour === "dont-trigger-request") break;
+        pending = true;
+        break;
+      }
+      // A stream error also ends the wait: the turn machinery crashed, and
+      // whether it recovers is ambiguous — err toward not spinning (a retry's
+      // own request event re-covers the row). Deliberately NOT in this list:
+      // agents/web-message-sent. Replies come from scripts, scripts only run
+      // inside turns, so a reply can never be the first turn-fact after a
+      // triggering message — the only message a mid-turn reply could clear is
+      // a NEWER queued one that still owes its own request.
+      case "events.iterate.com/agent/llm-request-requested":
+      case "events.iterate.com/capability-host/script-run-requested":
+      case "events.iterate.com/stream/error-occurred":
+        pending = false;
+        break;
+      case "events.iterate.com/agent/paused":
+      case "events.iterate.com/stream/paused":
+        paused = true;
+        break;
+      case "events.iterate.com/agent/resumed":
+      case "events.iterate.com/stream/resumed":
+        paused = false;
+        break;
+      default:
+        break;
+    }
+  }
+  return pending && !paused;
 }
 
 /** Replace each adjacent run of stream wakes with its final event and the run length. */

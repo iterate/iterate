@@ -388,7 +388,15 @@ int main(int argc, char **argv)
   const bool audio_healthy =
       audio.playback_platform_error == 0 &&
       audio.capture_platform_error == 0;
-  if (runtime->options.converse_minutes > 0.0 &&
+  /*
+   * WHENEVER A REPORT WAS ASKED FOR, not only unattended. The summary block
+   * (speaker sequence continuity, restarts, room audio accounting) is
+   * measured in every mode; only the per-turn rows are converse-only, and an
+   * attended run simply writes zero of them. Gated on converse_minutes, an
+   * attended `talk` asked for a report on every run and was told ENOENT on
+   * every quit.
+   */
+  if (runtime->options.report_json != NULL &&
       cli_conversation_write_report(runtime) != CLI_CONVERSATION_OK) {
     cli_runtime_log(
         "error", "failed to write report: %s", runtime->options.report_json);

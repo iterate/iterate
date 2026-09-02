@@ -10,7 +10,7 @@
 // deletion). Capture happens in the global composer, not here.
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Stack, useLocalSearchParams } from "expo-router";
+import { router, Stack, useLocalSearchParams } from "expo-router";
 import * as WebBrowser from "expo-web-browser";
 import { useState } from "react";
 import {
@@ -25,6 +25,7 @@ import {
   View,
 } from "react-native";
 import { MediaViewer } from "../../../components/media-viewer.tsx";
+import { ASSISTANT_MESSAGE_TYPE, USER_MESSAGE_TYPE } from "../../../lib/chat.ts";
 import { getProjectItx } from "../../../lib/itx.ts";
 import {
   buildDeletedEvent,
@@ -35,6 +36,9 @@ import {
   filterNotes,
   isNoteFilePath,
   latestNoteFactOffset,
+  noteChatPath,
+  noteChatSeed,
+  parseNoteListItem,
   NOTE_EVENT_TYPES,
   NOTES_REPO_PATH,
   NOTES_WORKSPACE_PATH,
@@ -155,6 +159,7 @@ export default function NotesScreen() {
                 setViewer({ uri, title: item.displayTitle, markdown: item.text })
               }
               projectId={projectId}
+              slug={slug || ""}
             />
           )}
         />
@@ -185,11 +190,13 @@ function NoteRow({
   item,
   onViewImage,
   projectId,
+  slug,
 }: {
   baseUrl: string;
   item: NoteListItem;
   onViewImage: (uri: string) => void;
   projectId: string;
+  slug: string;
 }) {
   const [expanded, setExpanded] = useState(false);
   // Inline two-step confirm (the media wipe-link shape), not Alert.alert —
@@ -236,6 +243,41 @@ function NoteRow({
       await project.streams
         .get(NOTES_WORKSPACE_PATH)
         .append(buildReanalyzeEvent(item.path, Date.now().toString(36)));
+    },
+  });
+  // Open (or continue) the conversation about THIS note. The pointer is only
+  // pre-typed into the composer when nobody has said anything yet: a
+  // conversation already in progress is its own context, and re-pasting the
+  // note on top of it is noise. The check asks for MESSAGES specifically —
+  // merely reading a stream lazily initializes it, so an untouched note-chat
+  // still comes back holding infrastructure events. That read is the one
+  // round trip this button makes, hence its pending state.
+  const chatAboutNote = useMutation({
+    mutationFn: async () => {
+      const project = await getProjectItx(baseUrl, projectId);
+      const path = noteChatPath(item.path);
+      // Quote the note as it is ON THE SERVER, not as this row last saw it.
+      // The row renders a file-derived list query, so straight after an edit
+      // it can still be holding the previous text — and the seed is what the
+      // agent will read, so it has to be the saved note. Falls back to the
+      // row for a note that has since gone.
+      const [said, file] = await Promise.all([
+        project.streams.get(path).getEvents({
+          afterOffset: 0,
+          eventTypes: [USER_MESSAGE_TYPE, ASSISTANT_MESSAGE_TYPE],
+        }),
+        project.workspaces.get(NOTES_WORKSPACE_PATH).readFile(item.path),
+      ]);
+      const note = file === null ? item : parseNoteListItem(item.path, file);
+      router.push({
+        pathname: "/project/[projectId]/chat",
+        params: {
+          projectId,
+          slug,
+          path,
+          ...(said.length === 0 && { seed: noteChatSeed(note) }),
+        },
+      });
     },
   });
   const openInDocs = useMutation({
@@ -328,6 +370,17 @@ function NoteRow({
         ) : expanded ? (
           <View style={styles.actions}>
             <Pressable
+              accessibilityLabel="Chat about this note"
+              accessibilityRole="button"
+              disabled={chatAboutNote.isPending}
+              onPress={() => chatAboutNote.mutate()}
+              style={styles.actionButton}
+            >
+              <Text style={styles.actionText}>
+                {chatAboutNote.isPending ? "Opening chat…" : "💬 Chat"}
+              </Text>
+            </Pressable>
+            <Pressable
               accessibilityRole="button"
               onPress={() => setEditDraft(item.text)}
               style={styles.actionButton}
@@ -405,17 +458,22 @@ function NoteThumb({
     },
     staleTime: Infinity,
   });
+  const uri = imageUrl.data;
+  if (uri === undefined) {
+    // No pressable (and no label) until the tap works — a labelled-but-
+    // disabled pressable swallowed taps while the URL loaded (see MediaRow
+    // in media.tsx, where preview CI caught the same pattern).
+    return (
+      <View style={[styles.thumb, styles.thumbPlaceholder]}>
+        {imageUrl.isPending ? (
+          <ActivityIndicator accessibilityLabel="Loading" color={colors.textMuted} size="small" />
+        ) : null}
+      </View>
+    );
+  }
   return (
-    <Pressable
-      accessibilityLabel={`View ${attachment.filename}`}
-      disabled={imageUrl.data === undefined}
-      onPress={() => imageUrl.data && onViewImage(imageUrl.data)}
-    >
-      {imageUrl.data ? (
-        <Image source={{ uri: imageUrl.data }} style={styles.thumb} />
-      ) : (
-        <View style={[styles.thumb, styles.thumbPlaceholder]} />
-      )}
+    <Pressable accessibilityLabel={`View ${attachment.filename}`} onPress={() => onViewImage(uri)}>
+      <Image source={{ uri }} style={styles.thumb} />
     </Pressable>
   );
 }
@@ -481,7 +539,11 @@ const styles = StyleSheet.create({
   },
   thumbRow: { flexDirection: "row", flexWrap: "wrap", gap: spacing.xs },
   thumb: { borderRadius: radius.sm, height: 72, width: 72 },
-  thumbPlaceholder: { backgroundColor: colors.border },
+  thumbPlaceholder: {
+    alignItems: "center",
+    backgroundColor: colors.border,
+    justifyContent: "center",
+  },
   rowTags: { alignItems: "center", flexDirection: "row", flexWrap: "wrap", gap: spacing.xs },
   rowTag: {
     backgroundColor: colors.background,

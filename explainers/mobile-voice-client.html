@@ -1,0 +1,629 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>A phone call to your project — how mobile voice works</title>
+    <style>
+      :root {
+        --fg: #1a1a1a;
+        --muted: #666;
+        --line: #e5e5e5;
+        --code: #fafafa;
+        --accent: #b45309;
+        --ok: #15803d;
+        --warn: #b91c1c;
+        --phone: #1d4ed8;
+        --server: #7c3aed;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --fg: #e5e5e5;
+          --muted: #999;
+          --line: #333;
+          --code: #191919;
+          --accent: #fbbf24;
+          --ok: #4ade80;
+          --warn: #f87171;
+          --phone: #93c5fd;
+          --server: #c4b5fd;
+        }
+        body {
+          background: #111;
+        }
+      }
+      body {
+        font:
+          14px/1.55 ui-sans-serif,
+          system-ui,
+          sans-serif;
+        color: var(--fg);
+        margin: 0;
+      }
+      header {
+        padding: 1.2rem 1.5rem 0.4rem;
+        max-width: 64rem;
+      }
+      header h1 {
+        margin: 0;
+        font-size: 1.35rem;
+      }
+      header p {
+        color: var(--muted);
+        margin: 0.35rem 0 0;
+      }
+      .tldr {
+        margin: 1rem 1.5rem;
+        border: 2px solid var(--accent);
+        border-radius: 8px;
+        padding: 0.7rem 1rem;
+        max-width: 60rem;
+      }
+      .tldr b {
+        color: var(--accent);
+      }
+      main {
+        padding: 0 1.5rem 4rem;
+        max-width: 64rem;
+      }
+      h2 {
+        font-size: 1.08rem;
+        border-bottom: 1px solid var(--line);
+        padding-bottom: 0.3rem;
+        margin: 2.2rem 0 0.6rem;
+      }
+      p {
+        max-width: 52rem;
+      }
+      .vocab {
+        margin: 1rem 0;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 0.2rem 1rem 0.6rem;
+      }
+      .vocab summary {
+        cursor: pointer;
+        font-weight: 600;
+        padding: 0.5rem 0;
+      }
+      .vocab table {
+        border-collapse: collapse;
+        font-size: 12.5px;
+        width: 100%;
+        margin: 0.3rem 0 0.8rem;
+      }
+      .vocab td {
+        border-top: 1px solid var(--line);
+        padding: 0.35rem 0.5rem;
+        vertical-align: top;
+      }
+      .vocab td:first-child {
+        white-space: nowrap;
+        font-family: ui-monospace, monospace;
+        color: var(--accent);
+      }
+      .ev {
+        border: 1px solid var(--line);
+        border-left: 4px solid var(--line);
+        border-radius: 6px;
+        margin: 0.45rem 0;
+      }
+      .ev.phone {
+        border-left-color: var(--phone);
+      }
+      .ev.server {
+        border-left-color: var(--server);
+      }
+      .ev.bad {
+        border-left-color: var(--warn);
+      }
+      .ev summary {
+        display: flex;
+        align-items: baseline;
+        gap: 0.55em;
+        padding: 0.45rem 0.7rem;
+        font:
+          12.5px/1.45 ui-monospace,
+          monospace;
+        cursor: pointer;
+        list-style: none;
+        flex-wrap: wrap;
+      }
+      .ev summary::-webkit-details-marker {
+        display: none;
+      }
+      .ev .off {
+        color: var(--accent);
+        font-weight: 700;
+        white-space: nowrap;
+      }
+      .ev .who {
+        font-size: 11px;
+        border: 1px solid var(--line);
+        border-radius: 4px;
+        padding: 0 0.35em;
+        color: var(--muted);
+      }
+      .ev .t {
+        color: var(--muted);
+        font-size: 11px;
+        white-space: nowrap;
+        margin-left: auto;
+      }
+      .ev .badge {
+        color: var(--accent);
+        font-size: 11px;
+        background: var(--code);
+        border: 1px solid var(--line);
+        border-radius: 4px;
+        padding: 0 0.35em;
+      }
+      .ev .note {
+        font:
+          12.5px/1.45 ui-sans-serif,
+          system-ui,
+          sans-serif;
+        color: var(--muted);
+        padding: 0 0.7rem 0.5rem;
+        max-width: 50rem;
+      }
+      .ev pre {
+        margin: 0;
+        border-top: 1px solid var(--line);
+        background: var(--code);
+        padding: 0.6rem 0.8rem;
+        font:
+          12px/1.5 ui-monospace,
+          monospace;
+        overflow-x: auto;
+      }
+      .split {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 1rem;
+        margin: 0.8rem 0;
+      }
+      @media (max-width: 900px) {
+        .split {
+          grid-template-columns: 1fr;
+        }
+      }
+      .state {
+        border: 1px dashed var(--line);
+        border-radius: 8px;
+        padding: 0.5rem 0.9rem;
+        font-size: 12.5px;
+      }
+      .state h4 {
+        margin: 0.3rem 0;
+        font-size: 12.5px;
+        color: var(--muted);
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+      }
+      code {
+        background: var(--code);
+        padding: 0.1em 0.35em;
+        border-radius: 4px;
+        font-size: 0.92em;
+      }
+      details.deep {
+        border: 1px dashed var(--line);
+        border-radius: 6px;
+        padding: 0.2rem 0.8rem;
+        margin: 0.6rem 0;
+        max-width: 52rem;
+      }
+      details.deep summary {
+        cursor: pointer;
+        color: var(--muted);
+        font-size: 12.5px;
+        padding: 0.3rem 0;
+      }
+      .legend {
+        font-size: 12px;
+        color: var(--muted);
+        margin: 0.4rem 0 0;
+      }
+      .legend span {
+        display: inline-block;
+        margin-right: 1em;
+      }
+      .dotp,
+      .dots {
+        display: inline-block;
+        width: 0.7em;
+        height: 0.7em;
+        border-radius: 2px;
+        vertical-align: baseline;
+        margin-right: 0.3em;
+      }
+      .dotp {
+        background: var(--phone);
+      }
+      .dots {
+        background: var(--server);
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>A phone call to your project</h1>
+      <p>
+        How the Iterate iOS app's voice button works, from first principles. Read top to bottom;
+        click any timeline row to see the real event underneath. Times are from live runs against
+        production on 2026-08-28.
+      </p>
+    </header>
+
+    <div class="tldr">
+      <b>The gist:</b> the phone is deliberately dumb. It records tiny slices of microphone audio
+      and posts them to the server; the server holds the connection to the speech model, decides
+      everything, and sends slices of answer audio back. The phone's entire playback policy is three
+      rules: <i>if told to clear, throw away queued audio; play what arrives; nothing else</i>. All
+      of the intelligence — turn-taking, interruption, the "thinking backend" that can browse and
+      run code, memory across calls — lives server-side, which is why the same server works
+      identically for a terminal, an ESP32 dev board with a microphone, and now a phone.
+    </div>
+
+    <main>
+      <details class="vocab">
+        <summary>Words you need (skip if you know the platform)</summary>
+        <table>
+          <tr>
+            <td>stream</td>
+            <td>
+              An append-only log of events living in one Cloudflare Durable Object. Everything on
+              Iterate — chats, repos, this voice call — is a stream. This phone's calls all live on
+              ONE stream named for the device, e.g.
+              <code>/agents/voice/mobile-&lt;device-uuid&gt;</code>.
+            </td>
+          </tr>
+          <tr>
+            <td>durable event</td>
+            <td>
+              Appended to the log forever; anyone can read it later. Call lifecycle, transcripts,
+              and backend statuses are durable.
+            </td>
+          </tr>
+          <tr>
+            <td>ephemeral event</td>
+            <td>
+              Delivered only to connections that are live at that moment, never stored. Audio frames
+              are ephemeral — nobody wants last Tuesday's microphone replayed.
+            </td>
+          </tr>
+          <tr>
+            <td>voice-agent facet</td>
+            <td>
+              The server-side program hosted inside the stream's own Durable Object. It holds the
+              WebSocket to the speech provider (OpenAI Realtime), paces answer audio out, and runs
+              the call's rules. The phone never talks to the provider.
+            </td>
+          </tr>
+          <tr>
+            <td>frontend / backend</td>
+            <td>
+              Two halves of one assistant. The frontend is the realtime voice model — fast, no
+              tools. The backend ("colleague") is a full agent on a sibling stream with tools,
+              files, and time; the frontend sends it notes and relays its replies. Both are
+              server-side; the phone just hears the result.
+            </td>
+          </tr>
+          <tr>
+            <td>server VAD</td>
+            <td>
+              Voice Activity Detection, done by the provider: it decides when you started and
+              stopped talking. The phone's mic just streams continuously ("open mic") — same posture
+              as the boards.
+            </td>
+          </tr>
+          <tr>
+            <td>AEC</td>
+            <td>
+              Echo cancellation. With mic and speaker open together on one handset, the phone would
+              hear the assistant and interrupt it with its own voice. iOS's
+              <code>voiceChat</code> audio mode subtracts what the speaker is playing from what the
+              mic hears.
+            </td>
+          </tr>
+        </table>
+      </details>
+
+      <h2>Scenario 1 — tap the button, have a conversation</h2>
+      <p class="legend">
+        <span><i class="dotp"></i>phone did this</span
+        ><span><i class="dots"></i>server did this</span>
+      </p>
+
+      <details class="ev phone">
+        <summary>
+          <span class="off">@1</span> tap <span class="who">phone</span>
+          <span class="badge">mic permission</span> <span class="t">0ms</span>
+        </summary>
+        <div class="note">
+          The mic button lives on the floating note pill. First ever tap asks for microphone
+          permission (denied → the caption says so and tapping opens Settings). The pulse you see
+          later is computed on the phone from raw mic loudness — pure visual feedback, zero network
+          involved.
+        </div>
+      </details>
+      <details class="ev phone">
+        <summary>
+          <span class="off">@2</span> setup (first call on this device only)
+          <span class="who">phone</span> <span class="badge">setupVoiceAgent</span>
+          <span class="t">0–2s once, then 0ms</span>
+        </summary>
+        <div class="note">
+          The app asserts the stream's "birth certificate": open mic, backend enabled, a hang_up
+          tool for the model. A local hash marker means this round trip happens once per device, not
+          per call — later taps skip straight to connecting.
+        </div>
+        <pre>
+setupVoiceAgent:
+  streamPath: /agents/voice/mobile-&lt;device-uuid&gt;
+  clientTakesTurns: false        # open mic: server VAD owns the turns
+  colleague: true                # the thinking backend
+  tools: [hang_up]
+  instructions: "You are Iterate, a voice assistant on a phone…"</pre
+        >
+      </details>
+      <details class="ev phone">
+        <summary>
+          <span class="off">@3</span> open live connection from the head
+          <span class="who">phone</span> <span class="badge">replayAfterOffset=head</span>
+          <span class="t">~150ms</span>
+        </summary>
+        <div class="note">
+          One WebSocket connection to the stream, subscribed to answer audio, call lifecycle, and
+          backend status/note events. It starts at the CURRENT end of the log on purpose: this
+          stream holds every previous call, and replaying last week's "call ended" would kill this
+          call before it starts.
+        </div>
+      </details>
+      <details class="ev phone">
+        <summary>
+          <span class="off">@4</span> the one durable press <span class="who">phone</span>
+          <span class="badge">ptt-start</span> <span class="t">~300ms</span>
+        </summary>
+        <div class="note">
+          A single durable event mints the call. Durable because losing the opening press strands a
+          human; everything that follows rides ephemeral lanes.
+        </div>
+        <pre>
+type: voice-agent/ptt-start
+payload: { t: 1787873080238 }</pre
+        >
+      </details>
+      <details class="ev server">
+        <summary>
+          <span class="off">@5</span> call minted, provider dialled <span class="who">server</span>
+          <span class="badge">call-started → conversation-accepted</span>
+          <span class="t">0.7–1.8s</span>
+        </summary>
+        <div class="note">
+          The facet mints a conversation id, dials OpenAI Realtime, and configures the session
+          (voice, VAD, the assistant's instructions, the recap of previous calls — see scenario 4).
+          Mic frames that arrived during the handshake were held, then released in order: nothing
+          you said is lost to connection setup.
+        </div>
+        <pre>
+type: voice-agent/conversation-accepted
+payload: { conversationId: conv_44c5…, handshakeTookMs: 1807, heldMicFrames: 27 }</pre
+        >
+      </details>
+      <details class="ev phone">
+        <summary>
+          <span class="off">@6</span> microphone streams <span class="who">phone</span>
+          <span class="badge">~16 frames/s, ephemeral</span> <span class="t">continuous</span>
+        </summary>
+        <div class="note">
+          iOS hands the app ~64ms buffers (1024 samples at 16kHz). Each becomes one ephemeral event
+          — base64 PCM16, a device sequence number — and one pulse update. If the network stalls,
+          frames are DROPPED rather than queued: a moment of lost audio beats the model answering
+          the past. The same buffer feeds the button's pulse before any network is involved.
+        </div>
+        <pre>
+type: voice-agent/mic-frame   (ephemeral)
+payload: { pcm: "base64…", deviceMicFrameSeq: 141, capturedAtDeviceMs: 9024 }</pre
+        >
+      </details>
+      <details class="ev server">
+        <summary>
+          <span class="off">@7</span> the provider hears you stop <span class="who">server</span>
+          <span class="badge">server VAD</span> <span class="t">~0.5s after you stop</span>
+        </summary>
+        <div class="note">
+          You never press anything to end a turn. The provider's VAD hears the trailing silence (the
+          phone keeps streaming silent frames — that IS the signal) and starts answering. Your words
+          also land as a durable transcript event, so the conversation leaves a readable record.
+        </div>
+        <pre>
+type: voice-agent/utterance-transcript
+payload: { conversationId: conv_44c5…, text: "Hello, please say the words purple lantern back to me…" }</pre
+        >
+      </details>
+      <details class="ev server">
+        <summary>
+          <span class="off">@8</span> answer audio flows back <span class="who">server</span>
+          <span class="badge">spk-frame, paced</span> <span class="t">~1–3s later</span>
+        </summary>
+        <div class="note">
+          The provider generates a 90-second answer in seconds; the SERVER buffers it and releases
+          it at playback rate, never running more than ~3s ahead of your ears. The phone appends
+          each frame to a playback queue and does nothing else — measured live from Node: first
+          answer audio ~13s after call start including setup, ~3s turn-to-answer once warm.
+        </div>
+        <pre>
+type: voice-agent/spk-frame   (ephemeral)
+payload: { conversationId: conv_44c5…, deviceSpeakerFrameSeq: 12, pcm: "base64…" }</pre
+        >
+      </details>
+      <details class="ev server">
+        <summary>
+          <span class="off">@9</span> the answer's words, durably <span class="who">server</span>
+          <span class="badge">answer-transcript</span>
+          <span class="t">as each answer finishes</span>
+        </summary>
+        <div class="note">
+          Every finished answer lands as text on the stream. Three things read it: the reconnect
+          memory (scenario 4), the `voicelab transcript` CLI, and any test that wants to assert what
+          was actually said without ears.
+        </div>
+      </details>
+
+      <h2>Scenario 2 — you ask for something hard</h2>
+      <p>
+        “Find me recent YouTube debates about that” is not something a 200ms voice model can do. It
+        sends a note to its backend — a full agent on a sibling stream
+        (<code>/agents/voice-notes/…</code>) with web search, code execution, and no clock on it —
+        says “I've sent that to my backend”, and keeps talking. Everything the backend does comes
+        back to the call stream as durable events:
+      </p>
+
+      <details class="ev server">
+        <summary>
+          <span class="off">@10</span> note dispatched <span class="who">server</span>
+          <span class="badge">colleague-status</span> <span class="t">+0s</span>
+        </summary>
+        <pre>payload: { activity: "picking up a note from the frontend", waitingFor: null }</pre>
+      </details>
+      <details class="ev server">
+        <summary>
+          <span class="off">@11</span> the backend narrates itself <span class="who">server</span>
+          <span class="badge">writing code → running code</span> <span class="t">+5–20s</span>
+        </summary>
+        <div class="note">
+          The same status feed the web dashboard shows ("writing code", "running code", failed
+          scripts WITH their error) is forwarded onto the call stream. The voice model receives each
+          change as a quiet context note — so "what's it doing?" gets "it's running the code now"
+          instead of a guess — and the phone shows the latest one as the caption under the pulse.
+        </div>
+        <pre>payload: { phase: "running code" }</pre>
+      </details>
+      <details class="ev server">
+        <summary>
+          <span class="off">@12</span> the backend replies <span class="who">server</span>
+          <span class="badge">colleague-note</span> <span class="t">+20–120s</span>
+        </summary>
+        <div class="note">
+          Every chat message the backend sends becomes a durable note on the call stream — no
+          deadline, no request/response matching, nothing lost if it arrives between calls. The
+          voice reads it out; the phone also shows it briefly in the caption.
+        </div>
+        <pre>
+payload: { text: "Here's the short list. First, 'A philosopher and a child debate god…'" }</pre
+        >
+      </details>
+
+      <h2>Scenario 3 — you interrupt mid-answer</h2>
+      <details class="ev phone">
+        <summary>
+          <span class="off">@13</span> you talk over it <span class="who">phone</span>
+          <span class="badge">just… talk</span> <span class="t">0ms</span>
+        </summary>
+        <div class="note">
+          Open mic + echo cancellation means the provider hears you even while the phone's speaker
+          is playing (iOS's voiceChat mode subtracts the speaker signal from the mic). No button.
+        </div>
+      </details>
+      <details class="ev server">
+        <summary>
+          <span class="off">@14</span> the barge <span class="who">server</span>
+          <span class="badge">clearSpeakerBufferBeforeFrame</span> <span class="t">~0.5s</span>
+        </summary>
+        <div class="note">
+          The provider cancels its answer server-side; the facet sends one frame flagged "clear your
+          buffer first". The phone throws away its queued audio — one native call — and the
+          assistant is also TOLD how much you actually heard, so "how far did you get?" gets an
+          honest answer rather than the model's memory of what it generated.
+        </div>
+        <pre>
+type: voice-agent/spk-frame   (ephemeral)
+payload: { deviceSpeakerFrameSeq: 40, pcm: "", clearSpeakerBufferBeforeFrame: true }</pre
+        >
+      </details>
+
+      <h2>Scenario 4 — hang up, call back, it remembers</h2>
+      <details class="ev phone">
+        <summary>
+          <span class="off">@15</span> tap hang up <span class="who">phone</span>
+          <span class="badge">conversation-ended</span> <span class="t">0ms</span>
+        </summary>
+        <div class="note">
+          The phone appends the call's obituary (same as a board's hang-up button). The model saying
+          goodbye (its hang_up tool) and 60 seconds of mutual silence are the other two ways a call
+          ends.
+        </div>
+        <pre>
+type: voice-agent/conversation-ended
+payload: { conversationId: conv_44c5…, reason: "hang-up button" }</pre
+        >
+      </details>
+      <details class="ev server">
+        <summary>
+          <span class="off">@16</span> the next call resumes the thread
+          <span class="who">server</span> <span class="badge">transcript recap</span>
+          <span class="t">next tap</span>
+        </summary>
+        <div class="note">
+          Because the device always calls on the same stream, the server briefs each fresh provider
+          session with a bounded recap of recent turns, any note still being worked, and recent
+          backend notes. Hanging up mid-task and calling back later, the assistant picks up
+          mid-thread — including relaying an answer that arrived while no call was live.
+        </div>
+      </details>
+
+      <div class="split">
+        <div class="state">
+          <h4>State on the phone (all of it)</h4>
+          audio session (mic + queue-player, AEC on)<br />
+          playback queue of received frames<br />
+          ≤8 in-flight frame uploads (drop past that)<br />
+          a pulse value, a caption string, a call handle
+        </div>
+        <div class="state">
+          <h4>State on the server (the interesting half)</h4>
+          provider WebSocket + pacing schedule<br />
+          call fold: conversation id, idle deadline, recap<br />
+          transcript + backend status/note history (durable)<br />
+          the backend agent, with its own memory
+        </div>
+      </div>
+
+      <h2>Why it's built this way</h2>
+      <details class="deep">
+        <summary>The dumb-client doctrine, and the WebRTC road not taken</summary>
+        <p>
+          An earlier prototype (PR #1605) had the phone speak WebRTC directly to OpenAI, holding an
+          ephemeral API secret. That makes every client — phone, board, terminal — reimplement
+          turn-taking, interruption, memory, and multiplexing, and gives the server no record of the
+          conversation. The current design inverts it: the server holds the provider socket and
+          every rule; a client is "microphone in, speaker out, three-line buffer policy". The proof
+          of the doctrine is this PR's test story: the exact TypeScript that ships in the app was
+          driven from a laptop Node process against production — synthesized speech in, real answer
+          audio and durable transcripts out, in 15 seconds — before any phone build existed, because
+          nothing about a phone is load-bearing.
+        </p>
+      </details>
+      <details class="deep">
+        <summary>Why frames, not a WebRTC audio track?</summary>
+        <p>
+          Events on a stream compose with everything else on the platform: the same connection that
+          carries audio carries the backend's statuses; transcripts land beside the audio they
+          transcribe; any tool (or test) can read the whole conversation later. The cost is doing
+          our own pacing and buffering — which the server does once, for every client, instead of
+          each client doing it badly.
+        </p>
+      </details>
+      <details class="deep">
+        <summary>What the phone deliberately does not do</summary>
+        <p>
+          No transcript UI (glance at the caption, or open the dashboard), no background/lock-screen
+          audio yet, no Android yet, no local VAD or wake word. Each is possible later; none is
+          needed to prove the lane.
+        </p>
+      </details>
+    </main>
+  </body>
+</html>

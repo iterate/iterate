@@ -301,6 +301,15 @@ import {
 import { DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS } from "./domains/capability-host/capability-host-processor-contract.ts";
 import { runCapabilityHostScript } from "./domains/capability-host/capability-host-script-run.ts";
 import {
+  applyScriptEdits,
+  findStaleValueLeftovers,
+  renderScriptReuseEnvelope,
+  reparameterizeScript,
+  type ReuseParameterBinding,
+  type ScriptReuseEdit,
+  type ScriptReuseValue,
+} from "./domains/capability-host/script-reuse.ts";
+import {
   settleByDeadline,
   type DeadlineOutcome,
 } from "./domains/capability-host/execution-deadline.ts";
@@ -440,6 +449,12 @@ import { describeSecretState } from "./domains/secrets/secret-durable-object.ts"
 import { SlackProcessorContract } from "./domains/integrations/slack-processor-contract.ts";
 import { WorkspaceProcessorContract } from "./domains/workspaces/workspace-processor-contract.ts";
 import { normalizeConfigRepoTemplateReference } from "./lib/config-repo-template-reference.ts";
+import {
+  AI_INTERCEPTOR_CAPABILITY_NAME,
+  isInterceptedModel,
+  type ProjectAiIntercept,
+  type ProjectAiInterceptor,
+} from "./lib/model-interception.ts";
 import { resolveSlugConventionTemplate } from "./lib/slug-config-template.ts";
 
 /**
@@ -3325,10 +3340,12 @@ class AiRpcTarget extends IterateRpcTarget<"Ai"> {
   async __describe(): Promise<Description> {
     return describeNode({
       instructions:
-        "Cloudflare Workers AI: run(model, body) executes a model, models() lists the catalog, toMarkdown({ name, blob }) converts documents to Markdown — blob accepts bytes or base64 (a Blob made in a script cannot cross the RPC boundary); an in-hand HTML string converts via new TextEncoder().encode(html) with a .html name. run() is for what YOU cannot do: image/audio/video generation, transcription, embeddings, classification at volume. Don't run() a text model to summarize, draft, or answer over content you are about to read or relay — you are usually a more intelligent model; return the data and write it yourself. Text models take { messages: [{ role, content }, …] } and answer in result.response. First-party docs: Workers AI binding https://developers.cloudflare.com/workers-ai/configuration/bindings/ ; Markdown Conversion https://developers.cloudflare.com/workers-ai/features/markdown-conversion/ ; conversion options https://developers.cloudflare.com/workers-ai/features/markdown-conversion/conversion-options/ ; image model example https://developers.cloudflare.com/ai/models/%40cf/black-forest-labs/flux-2-klein-9b/ ; speech model example https://developers.cloudflare.com/ai/models/xai/grok-tts/ ; transcription example https://developers.cloudflare.com/ai/models/xai/grok-stt/ ; video model example https://developers.cloudflare.com/ai/models/xai/grok-imagine-video/ .",
+        "Cloudflare Workers AI: run(model, body) executes a model, models() lists the catalog, toMarkdown({ name, blob }) converts documents to Markdown — blob accepts bytes or base64 (a Blob made in a script cannot cross the RPC boundary); an in-hand HTML string converts via new TextEncoder().encode(html) with a .html name. run() is for what YOU cannot do: image/audio/video generation, transcription, embeddings, classification at volume. Don't run() a text model to summarize, draft, or answer over content you are about to read or relay — you are usually a more intelligent model; return the data and write it yourself. Text models take { messages: [{ role, content }, …] } and answer in result.response. Models under 'intercepted/' are never dialed: they are served by the live interceptor installed with intercept(handler) — deterministic testing that behaves identically in every environment. First-party docs: Workers AI binding https://developers.cloudflare.com/workers-ai/configuration/bindings/ ; Markdown Conversion https://developers.cloudflare.com/workers-ai/features/markdown-conversion/ ; conversion options https://developers.cloudflare.com/workers-ai/features/markdown-conversion/conversion-options/ ; image model example https://developers.cloudflare.com/ai/models/%40cf/black-forest-labs/flux-2-klein-9b/ ; speech model example https://developers.cloudflare.com/ai/models/xai/grok-tts/ ; transcription example https://developers.cloudflare.com/ai/models/xai/grok-stt/ ; video model example https://developers.cloudflare.com/ai/models/xai/grok-imagine-video/ .",
       children: {
         models: "List available models.",
         run: "Run one model invocation — for outputs the caller cannot produce itself (images, audio, transcription, bulk classification), not for text the caller will read or relay.",
+        intercept:
+          "Install a live handler for intercepted/* models (last writer wins); returns a release handle. For deterministic testing: agents on an intercepted/* model and ai.run('intercepted/…') calls are served by your handler instead of a real provider.",
         toMarkdown:
           "Convert one document or an array of { name, blob } to Markdown — blob accepts bytes or base64 (a Blob made in a script cannot cross the RPC boundary); an in-hand HTML string converts via new TextEncoder().encode(html) with a .html name. Call with no args for supported formats. For emails and newsletters (mostly tracking links and giant base64 images), pass { conversionOptions: { output: { format: 'text' } } } to strip link targets and image URLs — often 10x smaller.",
       },
@@ -3336,7 +3353,14 @@ class AiRpcTarget extends IterateRpcTarget<"Ai"> {
     });
   }
 
-  constructor(readonly props: { gateway?: AiRunOptions["gateway"] } = {}) {
+  constructor(
+    readonly props: {
+      auth: ItxAuth;
+      ctx: CfExecutionContext;
+      projectId: string;
+      gateway?: AiRunOptions["gateway"];
+    },
+  ) {
     super();
   }
 
@@ -3354,8 +3378,23 @@ class AiRpcTarget extends IterateRpcTarget<"Ai"> {
    * read (`run<{ response?: string }>(…)`); uninstantiated it stays the honest
    * `unknown`. The optional third argument is the binding's own options object
    * — e.g. `{ gateway: { id: "default", skipCache: true } }` — passed through
-   * to `env.AI.run`; its `gateway` wins over any constructor-provided one. */
+   * to `env.AI.run`; its `gateway` wins over any constructor-provided one.
+   * An `intercepted/*` model never reaches Cloudflare: the live interceptor installed
+   * with `intercept(handler)` serves it, and its return value comes back
+   * verbatim (no handler installed → a loud error). */
   run<T = unknown>(model: string, body: unknown, options?: CfAiRunOptions): Promise<T> {
+    if (isInterceptedModel(model)) {
+      // Same contract as the env.AI.run cast below: `run<T>` is
+      // caller-instantiated by design — the caller names the shape it will
+      // read, uninstantiated stays the honest `unknown` — and on this branch
+      // the caller also authored the handler producing the value, so no
+      // runtime schema exists to check it against.
+      return projectStub(env.PROJECT, this.props.projectId).consultAiInterceptor({
+        source: "ai-run",
+        model,
+        body,
+      }) as Promise<T>;
+    }
     const gateway = options?.gateway ?? this.props.gateway;
     const merged = gateway === undefined ? options : { ...options, gateway };
     return env.AI.run(
@@ -3363,6 +3402,46 @@ class AiRpcTarget extends IterateRpcTarget<"Ai"> {
       body as Record<string, unknown>,
       merged as AiRunOptions | undefined,
     ) as Promise<T>;
+  }
+
+  /** Install a live handler for `intercepted/*` models (last writer wins); returns a
+   * release handle. For deterministic testing: an agent configured with
+   * `model: "intercepted/<x>"` and every `run("intercepted/<x>", …)` call are served by your
+   * handler — an in-memory function on YOUR side of the connection — instead
+   * of a real provider. The handler receives
+   * `{ source: "agent-turn" | "ai-run", model, body }`; for agent turns it
+   * returns assistant text (a string, or `{ text, usage? }`), for ai-run its
+   * return value is handed back verbatim. Live means session-bound, with the
+   * mount invariant: the interception lives exactly as long as your session
+   * connection, and if the platform's half dies while your socket is open,
+   * the socket closes (4901) — reconnect and intercept() again.
+   *
+   * Under the hood this is sugar over the capability machinery: the handler
+   * mounts as a LIVE capability at the root scope's `aiInterceptor` path,
+   * behind the shipped hibernating Provider Pager — which is where all of the
+   * above lifecycle comes from. Provide-at-same-path replaces (the last
+   * writer wins), and the returned handle revokes exactly its own mount,
+   * never a newer one. Non-fake models are never interceptable — a journaled
+   * `openai/*` turn is always the real provider. */
+  async intercept(handler: ProjectAiInterceptor): Promise<ProjectAiIntercept> {
+    if (typeof handler !== "function") throw new Error("project AI interceptor must be a function");
+    const host = new CapabilityHostRpcTarget({
+      auth: this.props.auth,
+      ctx: this.props.ctx,
+      path: "/",
+      projectId: this.props.projectId,
+    });
+    const provision = await host.provideCapability({
+      type: "live",
+      path: [AI_INTERCEPTOR_CAPABILITY_NAME],
+      instructions:
+        "Live intercepted/* model handler (itx.ai.intercept); last writer wins. Platform-consulted — not for direct invocation.",
+      capability: handler,
+    });
+    return new ProjectAiInterceptRpcTarget({
+      ctx: this.props.ctx,
+      release: () => provision.revoke(),
+    });
   }
 
   /** Calling with no arguments lists the file formats the converter accepts. */
@@ -3550,6 +3629,10 @@ class CfVideosCapabilityRpcTarget extends IterateRpcTarget<"CfVideosCapability">
 
 /** Grouped first-party Cloudflare platform bindings under integrations.cf. */
 class CloudflareIntegrationsRpcTarget extends IterateRpcTarget<"CloudflareIntegrations"> {
+  constructor(readonly props: { auth: ItxAuth; ctx: CfExecutionContext; projectId: string }) {
+    super();
+  }
+
   async __describe(): Promise<Description> {
     return describeNode({
       instructions:
@@ -3566,7 +3649,11 @@ class CloudflareIntegrationsRpcTarget extends IterateRpcTarget<"CloudflareIntegr
 
   /** Workers AI: run(), models(), toMarkdown(). */
   get ai(): AiRpcTarget {
-    return new AiRpcTarget();
+    return new AiRpcTarget({
+      auth: this.props.auth,
+      ctx: this.props.ctx,
+      projectId: this.props.projectId,
+    });
   }
 
   /** Browser Run: quickAction() and raw fetch(). */
@@ -3810,7 +3897,11 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
    * Transformations. Like `parallel`, these ride the deployment's own
    * Cloudflare account — not a per-project connection. */
   get cf(): CloudflareIntegrationsRpcTarget {
-    return new CloudflareIntegrationsRpcTarget();
+    return new CloudflareIntegrationsRpcTarget({
+      auth: this.props.auth,
+      ctx: this.props.ctx,
+      projectId: this.props.projectId,
+    });
   }
 
   /** Dynamic provided-integration dispatch. The only selector is
@@ -6039,6 +6130,152 @@ class CapabilityHostRpcTarget extends IterateRpcTarget<"CapabilityHost"> {
     return await (await this.#facade()).getScriptResult(executionId);
   }
 
+  /**
+   * Reuse a previously journaled script as a parameterized helper:
+   * `previousScriptHelper({ ...results[0], parameterize: { n: 123n } })`.
+   * Spread a results row in — `scriptOffset` (the run's script-run-requested
+   * event offset) addresses the script, and spreading copies only enumerable
+   * props, so a large row's loader plumbing stays behind. `parameterize`
+   * names the VALUES the original script used inline (primitives only:
+   * string/number/boolean/bigint) that should become parameters — each
+   * literal must appear exactly once in that script and is swapped OUT for a
+   * generated identifier. Optional `edits` ([pattern, replacement] pairs;
+   * every pattern must match) then rewrite what remains — prose hardcoding
+   * an old input, a stale label; they run AFTER parameterization, so an edit
+   * can never clobber a value literal parameterize needs. The returned handle's `run(vars)` re-executes the
+   * script with new values as a journaled child script run; `vars` is typed
+   * from the parameterize object (`{ n: 123n }` → `run({ n: bigint })`), and
+   * the result type is best-effort inferred from the row's `data`/`load`
+   * when present (the SHAPE of the old result, not its values).
+   */
+  async previousScriptHelper<Result, P extends Record<string, ScriptReuseValue>>(input: {
+    scriptOffset: number;
+    parameterize: P;
+    edits?: ScriptReuseEdit[];
+    load: (itx: never) => Promise<Result>;
+  }): Promise<Omit<ReusableScriptRpcTarget, "run"> & { run(vars: P): Promise<Result> }>;
+  async previousScriptHelper<Result, P extends Record<string, ScriptReuseValue>>(input: {
+    scriptOffset: number;
+    parameterize: P;
+    edits?: ScriptReuseEdit[];
+    data: Result;
+  }): Promise<Omit<ReusableScriptRpcTarget, "run"> & { run(vars: P): Promise<Result> }>;
+  async previousScriptHelper<P extends Record<string, ScriptReuseValue>>(input: {
+    scriptOffset: number;
+    parameterize: P;
+    edits?: ScriptReuseEdit[];
+  }): Promise<Omit<ReusableScriptRpcTarget, "run"> & { run(vars: P): Promise<unknown> }>;
+  async previousScriptHelper(input: {
+    scriptOffset: number;
+    parameterize: Record<string, ScriptReuseValue>;
+    edits?: ScriptReuseEdit[];
+  }): Promise<ReusableScriptRpcTarget> {
+    const eventOffset = input.scriptOffset;
+    const parameters = input.parameterize;
+    if (typeof eventOffset !== "number") {
+      throw new Error(
+        `previousScriptHelper needs a spread results row carrying scriptOffset (the run's script-run-requested event offset); got ${JSON.stringify(eventOffset)}.`,
+      );
+    }
+    const requested = await this.#stream.getEvent({ offset: eventOffset });
+    if (requested === undefined) {
+      throw new Error(`No event at offset ${eventOffset} on scope ${this.#props.path}.`);
+    }
+    // Strict by design: the request event holds the script, and the results
+    // array hands every script its request offset as `scriptOffset` — no
+    // guessing between settle/assistant offsets, no lenient resolution.
+    if (requested.type !== "events.iterate.com/capability-host/script-run-requested") {
+      throw new Error(
+        `Event at offset ${eventOffset} is ${JSON.stringify(requested.type)}, not a script-run-requested event. Pass a results row — every retained script result carries scriptOffset, the reuse handle.`,
+      );
+    }
+    // The casts below are pinned by the event-type guard above: a
+    // script-run-requested event's payload is RunScriptCommand
+    // ({ code, executionId, expiresAt } — capability-host contract), appended
+    // through the contract's own buildEvent. StreamEvent.payload is untyped
+    // at this read boundary (getEvent returns any journaled event), and
+    // re-parsing with the contract schema here would duplicate the append-side
+    // validation for no new guarantee.
+    const sourceExecutionId = (requested.payload as { executionId: string }).executionId;
+    // A failed run is (almost) never the intended source — observed live: a
+    // rejected reuse attempt becomes results[0], the model points the next
+    // attempt at it, and the reuse chain eats its own tail. Fail loudly with
+    // the right fix instead. (A not-yet-settled run stays reusable.)
+    const settledEvent = await this.#stream.getEvent({
+      idempotencyKey: `capability-host/script-run-settled@${sourceExecutionId}`,
+    });
+    const settlement = (
+      settledEvent?.payload as { settlement?: { status: string; error?: string } }
+    )?.settlement;
+    if (settlement?.status === "failed") {
+      throw new Error(
+        `The script run at offset ${eventOffset} (${sourceExecutionId}) FAILED (${(settlement.error || "unknown error").slice(0, 200)}). Reuse a run that succeeded — in the results array, pick the row of the original successful run, not a failed reuse attempt.`,
+      );
+    }
+    const { code } = requested.payload as { code: string };
+    // Parameterize FIRST: the value literals become identifiers before any
+    // edit runs, so a broad edit (a /oldDigits/g rewrite of message prose)
+    // cannot clobber the literal parameterize needs to locate — observed
+    // live when the orders were reversed. When parameterization itself fails
+    // and edits were given, fall back to edits-first: that order cures the
+    // opposite trap, a DUPLICATE of the value literal that an edit removes.
+    // Both orders are deterministic; whichever succeeds wins.
+    const parameterizeFirst = () => {
+      const transformed = reparameterizeScript({ code, parameters });
+      return {
+        transformed,
+        finalCode:
+          input.edits === undefined
+            ? transformed.code
+            : applyScriptEdits(transformed.code, input.edits),
+      };
+    };
+    // An edit written against the ORIGINAL script may target text that
+    // aliasing consumed, and a duplicate value literal blocks exactly-once
+    // until an edit removes it — both cured by applying edits first.
+    const editsFirst = () => {
+      const transformed = reparameterizeScript({
+        code: applyScriptEdits(code, input.edits!),
+        parameters,
+      });
+      return { transformed, finalCode: transformed.code };
+    };
+    let outcome: ReturnType<typeof parameterizeFirst>;
+    try {
+      outcome = parameterizeFirst();
+    } catch (primaryError) {
+      if (input.edits === undefined) throw primaryError;
+      try {
+        outcome = editsFirst();
+      } catch {
+        // Both orders failed: the parameterize-first error names the primary
+        // problem (a genuinely absent literal or a never-matching edit).
+        throw primaryError;
+      }
+    }
+    const { transformed, finalCode } = outcome;
+    // A reused script that still mentions an old value outside the swapped
+    // expression (message prose, a label) will state stale facts when run.
+    // Observed live: the model reused correctly but sent the old number in
+    // the message. Omitting `edits` entirely means the caller has not
+    // considered this; an explicit `edits` (even []) is the opt-out.
+    if (input.edits === undefined) {
+      const leftovers = findStaleValueLeftovers(finalCode, parameters);
+      if (leftovers.length > 0) {
+        const detail = leftovers.map(([name, bare]) => `${name} (${bare})`).join(", ");
+        throw new Error(
+          `The old value(s) of ${detail} still appear in the script outside the swapped expression — likely message prose that would state the OLD input. Pass edits: [[<pattern>, <replacement>], …] to rewrite that text (or edits: [] to keep it deliberately).`,
+        );
+      }
+    }
+    return new ReusableScriptRpcTarget({
+      code: finalCode,
+      parameters: transformed.parameters,
+      runScript: (envelope) => this.runScript(envelope),
+      sourceExecutionId,
+    });
+  }
+
   /** Explicit dynamic dispatch; the dotted-path fallback (`itx.foo.bar(...)`) compiles to exactly this call. */
   async invokeCapability(call: { args?: unknown[]; path: string[] }): Promise<unknown> {
     const { args = [], path } = call;
@@ -6069,6 +6306,8 @@ class CapabilityHostRpcTarget extends IterateRpcTarget<"CapabilityHost"> {
         getPreamble: "The assembled preamble text the next script will see, plus the entry table.",
         getScriptResult:
           "Read one settled script result back by executionId (what results[N].load(itx) calls).",
+        previousScriptHelper:
+          "Reuse a journaled script by stream offset: parameters are the original inline values ({ n: 123n }); returns a handle whose typed run(vars) re-executes it with new values.",
       },
       parent: `project ${this.#props.projectId}; sibling scopes via capabilityHosts.get(path)`,
       capabilities,
@@ -6076,11 +6315,15 @@ class CapabilityHostRpcTarget extends IterateRpcTarget<"CapabilityHost"> {
     });
   }
 
-  /** Run an `async (itx) => { … }` script in this scope; the execution is journaled on the scope stream. */
+  /** Run an `async (itx) => { … }` script in this scope; the execution is
+   * journaled on the scope stream. `scriptEvent` is the journaled
+   * script-run-requested event — its offset is the reuse handle
+   * (previousScriptHelper's scriptOffset). */
   async runScript(code: string): Promise<{
     completedEvent: StreamEvent;
     executionId: string;
     result: unknown;
+    scriptEvent: StreamEvent;
   }> {
     const command = {
       code,
@@ -6107,6 +6350,70 @@ class CapabilityHostRpcTarget extends IterateRpcTarget<"CapabilityHost"> {
    * facets die together); the next request boots them fresh. */
   kill(): Promise<void> {
     return Promise.resolve(this.#stream[STREAM_DURABLE_OBJECT_STUB].kill());
+  }
+}
+
+/**
+ * A previously journaled script, re-parameterized into a reusable helper —
+ * returned by `itx.previousScriptHelper`. `run(vars)` executes it with new
+ * values as a journaled child script run in the same scope.
+ */
+class ReusableScriptRpcTarget extends IterateRpcTarget<"ReusableScript"> {
+  async __describe(): Promise<Description> {
+    return describeNode({
+      instructions: `A reusable script (from run ${this.#props.sourceExecutionId}), parameterized over [${this.#props.parameters.map((binding) => binding.name).join(", ")}]: run(vars) re-executes it with new values as a journaled child script run.`,
+      children: {
+        run: "Execute the reused script with new values for the declared parameters.",
+        code: "The re-parameterized script text (inspection only).",
+      },
+      parent: "returned by previousScriptHelper",
+    });
+  }
+
+  readonly #props: {
+    code: string;
+    parameters: ReuseParameterBinding[];
+    runScript: (
+      envelope: string,
+    ) => Promise<{ completedEvent: StreamEvent; executionId: string; result: unknown }>;
+    sourceExecutionId: string;
+  };
+
+  constructor(props: {
+    code: string;
+    parameters: ReuseParameterBinding[];
+    runScript: (
+      envelope: string,
+    ) => Promise<{ completedEvent: StreamEvent; executionId: string; result: unknown }>;
+    sourceExecutionId: string;
+  }) {
+    super();
+    this.#props = props;
+  }
+
+  /** The re-parameterized script text (for inspection; `run` executes it). */
+  get code(): string {
+    return this.#props.code;
+  }
+
+  /** The executionId of the journaled run this helper was derived from. */
+  get sourceExecutionId(): string {
+    return this.#props.sourceExecutionId;
+  }
+
+  /**
+   * Execute the reused script with new values for the declared parameters —
+   * real values, not code text (`123n` not `"123n"`). Runs as a journaled
+   * child script run and resolves to its result.
+   */
+  async run(vars: Record<string, unknown>): Promise<unknown> {
+    const envelope = renderScriptReuseEnvelope({
+      code: this.#props.code,
+      parameters: this.#props.parameters,
+      vars,
+    });
+    const execution = await this.#props.runScript(envelope);
+    return execution.result;
   }
 }
 
@@ -6964,7 +7271,11 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
 
   /** Workers AI: run(model, body), models(). */
   get ai(): AiRpcTarget {
-    return new AiRpcTarget();
+    return new AiRpcTarget({
+      auth: this.#props.auth,
+      ctx: this.#props.ctx,
+      projectId: this.#projectId,
+    });
   }
 
   /** Browser auth for project-host web apps. */
@@ -7752,7 +8063,7 @@ class ProjectEgressRpcTarget extends IterateRpcTarget<"ProjectEgress"> {
   async __describe(): Promise<Description> {
     return describeNode({
       instructions:
-        "Project-attributed outbound fetch: fetch(input, init?) — the standard fetch signature — egresses with the project's identity and secret substitution. Headers and URL paths interpolate getSecret(...); an application/json body substitutes exact string values when x-iterate-secret-template: json is set. intercept(handler) installs a live egress interceptor (last writer wins).",
+        "Project-attributed outbound fetch: fetch(input, init?) — the standard fetch signature — egresses with the project's identity and secret substitution. Headers, URL paths and URL query values interpolate getSecret(...); an application/json body substitutes exact string values when x-iterate-secret-template: json is set. intercept(handler) installs a live egress interceptor (last writer wins).",
       children: {
         fetch: "Outbound fetch through project egress.",
         intercept: "Install an egress interceptor; returns a release handle.",
@@ -7787,7 +8098,9 @@ class ProjectEgressRpcTarget extends IterateRpcTarget<"ProjectEgress"> {
  * The Project Durable Object owns the retained live callback. This handle only
  * releases that exact retained callback if it is still the current interceptor.
  */
-export class ProjectEgressInterceptRpcTarget extends IterateRpcRelay<"ProjectEgressIntercept"> {
+export class ProjectEgressInterceptRpcTarget<
+  Name extends string = "ProjectEgressIntercept",
+> extends IterateRpcRelay<Name> {
   readonly #ctx: Pick<CfExecutionContext, "waitUntil"> | undefined;
   readonly #release: () => void | Promise<void>;
   #releasePromise: Promise<void> | undefined;
@@ -7818,6 +8131,12 @@ export class ProjectEgressInterceptRpcTarget extends IterateRpcRelay<"ProjectEgr
     return this.#releasePromise;
   }
 }
+
+/**
+ * Disposable ownership handle returned by `project.ai.intercept(...)` — the
+ * egress handle's release semantics, pointed at the AI interceptor slot.
+ */
+class ProjectAiInterceptRpcTarget extends ProjectEgressInterceptRpcTarget<"ProjectAiIntercept"> {}
 
 /**
  * The read-only capability a hosting Durable Object hands out for one of its

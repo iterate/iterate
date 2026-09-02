@@ -1,122 +1,182 @@
-// What am I running? Branch/commit/author of the JS bundle (stamped into
-// build-info.json at publish time), the EAS Update state (channel, runtime
-// fingerprint, embedded vs OTA), and native install facts — plus a button to
-// pull the latest update immediately instead of waiting for next launch.
-// Exists because dev and preview builds overwrite each other on the phone by
-// design, so "which one is this?" needs a first-class answer.
+// What am I running? Which channel the JS comes from, which channel this
+// binary was built for, the branch/commit/message of the running bundle, and
+// whether the channel has anything newer. Exists because dev and preview
+// builds overwrite each other on the phone by design, so "which one is this?"
+// needs a first-class answer.
+//
+// A dumb view: every fact and every action comes from lib/build-state.ts.
 
-import { useMutation, useQuery } from "@tanstack/react-query";
-import * as Application from "expo-application";
-import Constants from "expo-constants";
-import { Stack, useRouter } from "expo-router";
-import * as Updates from "expo-updates";
-import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
-import { buildInfo } from "../lib/build-info.ts";
+import { Stack, useLocalSearchParams, useRouter } from "expo-router";
+import { Linking, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import {
-  fetchLatestUpdateAndReload,
-  getPreviewChannelOverride,
-  switchChannelAndReload,
-} from "../lib/preview-channel.ts";
+  buildStamp,
+  installPageUrl,
+  isOverridden,
+  MAIN_CHANNEL,
+  updateHeadline,
+  useBuildActions,
+  useBuildState,
+} from "../lib/build-state.ts";
 import { colors, radius, spacing } from "../lib/theme.ts";
 
 export default function BuildInfoScreen() {
   const router = useRouter();
-  const installedAt = useQuery({
-    queryKey: ["app-install-time"],
-    // Unavailable on web; the row shows "—" there.
-    queryFn: () => Application.getInstallationTimeAsync().catch(() => null),
-    staleTime: Infinity,
-  });
-  const channelOverride = useQuery({
-    queryKey: ["preview-channel-override"],
-    queryFn: getPreviewChannelOverride,
-  });
-  const resetChannel = useMutation({
-    mutationFn: async () => {
-      const result = await switchChannelAndReload(null);
-      await channelOverride.refetch();
-      return result === "no-update"
-        ? "Override cleared — no newer update on the default channel"
-        : "Restarting…";
-    },
-  });
-  const check = useMutation({
-    mutationFn: async () => {
-      const result = await fetchLatestUpdateAndReload();
-      return result === "up-to-date" ? "Already up to date" : "Restarting…";
-    },
-  });
-
-  const bundleSource = !Updates.isEnabled
-    ? "Metro dev server"
-    : Updates.isEmbeddedLaunch
-      ? "embedded in the binary"
-      : "OTA update";
+  // Set by the root layout when it opens this screen on the first boot of a
+  // freshly installed binary that had a channel override left over.
+  const { clearedOverride } = useLocalSearchParams<{ clearedOverride?: string }>();
+  const state = useBuildState();
+  const actions = useBuildActions();
+  const overridden = isOverridden(state);
+  // Captured as a const so the closure below keeps the narrowing.
+  const incompatibleChannel = state.update.kind === "incompatible" ? state.channel : null;
 
   return (
     <ScrollView contentContainerStyle={styles.container}>
       <Stack.Screen options={{ title: "Build info" }} />
-      <Section title="Bundle">
-        <Row label="Branch" value={buildInfo.branch} />
-        <Row label="Commit" value={buildInfo.commit.slice(0, 7)} />
-        <Row label="Message" value={buildInfo.message} />
+      {clearedOverride ? (
+        <View style={styles.calloutCard}>
+          <Text style={styles.calloutTitle}>New build installed</Text>
+          <Text style={styles.calloutBody}>
+            This phone had been fetching its JS from "{clearedOverride}". That's from before the
+            install, so it's been un-set. From now on JS comes from this build's own branch — see
+            Channel below.
+          </Text>
+        </View>
+      ) : null}
+      {/* Channel first: it is the answer to "am I on the right thing?", and
+          the two rows together say whether you got here by scanning a QR or
+          by installing this build. */}
+      <Section title="Channel">
+        <Row
+          label="Current"
+          value={state.channel}
+          note={overridden ? "switched by a QR scan" : undefined}
+        />
+        <Row
+          label="Default for this build"
+          value={state.binary.defaultChannel}
+          note={overridden ? undefined : "this build's own channel"}
+        />
+      </Section>
+      <Section title="Running JS">
+        <Row label="Branch" value={state.running.branch} />
+        <Row label="Commit" value={state.running.commit.slice(0, 7)} />
+        <Row label="Message" value={state.running.message} />
         <Row
           label="Built by"
-          value={buildInfo.builtBy && `${buildInfo.builtBy}@${buildInfo.machine}`}
+          value={state.running.builtBy && `${state.running.builtBy}@${state.running.machine}`}
         />
-        <Row label="Bundled at" value={formatTime(buildInfo.builtAt)} />
-        <Row label="Source" value={bundleSource} />
+        <Row label="Published" value={formatTime(state.running.publishedAt)} />
+        <Row label="Source" value={sourceLabel[state.running.source]} />
+        <Row label="Update id" value={state.updateId} />
         {/* What this bundle was published to talk to (empty on main/local
             bundles) — the first thing to check when a preview looks wrong. */}
-        <Row label="Expected backend" value={buildInfo.expectedBackendEnv} />
-        <Row label="Test login" value={buildInfo.testLoginEmail} />
+        <Row label="Expected backend" value={buildStamp.expectedBackendEnv} />
+        <Row label="Test login" value={buildStamp.testLoginEmail} />
+        {/* The runtime fingerprint the publisher computed for this bundle —
+            its own record of which native build it expects (matches the
+            binary's runtime whenever this bundle is actually running). */}
+        <Row label="Expected runtime" value={buildStamp.runtimeFingerprint.slice(0, 9)} />
       </Section>
-      <Section title="Updates">
-        <Row label="Channel" value={Updates.channel} />
-        <Row label="Channel override" value={channelOverride.data} />
-        <Row label="Runtime version" value={Updates.runtimeVersion} />
-        <Row label="Update id" value={Updates.updateId} />
-        <Row label="Update published" value={formatTime(Updates.createdAt?.toISOString())} />
+      <Section title="Update">
+        <Row label="Status" value={updateHeadline(state.update)} />
+        {state.update.kind === "behind" ? (
+          <>
+            <Row label="Latest commit" value={state.update.commit.slice(0, 7)} />
+            <Row label="Published" value={formatTime(state.update.publishedAt)} />
+          </>
+        ) : state.update.kind === "incompatible" ? (
+          <>
+            <Row label="Latest commit" value={state.update.commit.slice(0, 7)} />
+            <Row label="Message" value={state.update.message} />
+          </>
+        ) : null}
       </Section>
-      {/* Both update actions live together, right under the Updates card. */}
-      {Updates.isEnabled ? (
-        <Pressable
-          accessibilityRole="button"
-          disabled={check.isPending}
-          onPress={() => check.mutate()}
-          style={[styles.button, check.isPending && styles.buttonDisabled]}
-        >
-          <Text style={styles.buttonLabel}>
-            {check.isPending ? "Checking…" : "Check for update"}
-          </Text>
-        </Pressable>
-      ) : (
-        <Text style={styles.note}>
-          OTA updates are off in this bundle — it came from a Metro dev server.
-        </Text>
+      {incompatibleChannel !== null ? (
+        // OTA can't cross a runtime change — the fix is a download. The
+        // interstitial (not the raw build page) so the post-install
+        // "Open in app" tap lands back on this channel.
+        <Button
+          label="Download the native build"
+          pending={false}
+          pendingLabel=""
+          onPress={() => void Linking.openURL(installPageUrl(incompatibleChannel))}
+        />
+      ) : state.update.kind === "unsupported" ? null : (
+        <Button
+          label={state.update.kind === "behind" ? "Update now" : "Check for update"}
+          pending={actions.updateNowPending || state.update.kind === "checking"}
+          pendingLabel={state.update.kind === "behind" ? "Updating…" : "Checking…"}
+          onPress={() =>
+            state.update.kind === "behind"
+              ? void actions.updateNow().catch(() => {})
+              : void actions.checkNow().catch(() => {})
+          }
+        />
       )}
-      {check.data ? <Text style={styles.note}>{check.data}</Text> : null}
-      {check.error ? <Text style={styles.errorNote}>{String(check.error)}</Text> : null}
-      {channelOverride.data ? (
-        <Pressable
-          accessibilityRole="button"
-          disabled={resetChannel.isPending}
-          onPress={() => resetChannel.mutate()}
-          style={[styles.button, resetChannel.isPending && styles.buttonDisabled]}
-        >
-          <Text style={styles.buttonLabel}>
-            {resetChannel.isPending ? "Resetting…" : "Reset to default channel"}
-          </Text>
-        </Pressable>
+      {overridden ? (
+        <Button
+          label={`Reset to ${state.binary.defaultChannel || "this build's own channel"}`}
+          pending={actions.switchChannelPending}
+          pendingLabel="Resetting…"
+          onPress={() =>
+            actions.switchChannel({ channel: null, revertOnNoUpdate: false }).catch(() => {})
+          }
+        />
       ) : null}
-      {resetChannel.data ? <Text style={styles.note}>{resetChannel.data}</Text> : null}
-      {resetChannel.error ? (
-        <Text style={styles.errorNote}>{String(resetChannel.error)}</Text>
+      {/* A per-PR binary's OWN channel is its PR — and once that PR merges,
+          cleanup deletes the channel. "Reset to default" can't get such a
+          phone back to main; this explicit override to the main channel can.
+          Hidden on main binaries, where reset-to-default IS main. Reverts on
+          no-update: before its PR merges, a PR binary's native code is newer
+          than main's, main serves nothing it can run, and a stuck override
+          would make the next restart fall back to the embedded (older) JS. */}
+      {state.update.kind !== "unsupported" &&
+      state.binary.defaultChannel !== MAIN_CHANNEL &&
+      state.channel !== MAIN_CHANNEL ? (
+        <Button
+          label={`Switch to main (${MAIN_CHANNEL})`}
+          pending={actions.switchChannelPending}
+          pendingLabel="Switching…"
+          onPress={() =>
+            actions.switchChannel({ channel: MAIN_CHANNEL, revertOnNoUpdate: true }).catch(() => {})
+          }
+        />
+      ) : null}
+      {/* Outcomes are cards, not fine print: a tap whose only feedback is
+          small grey text reads as "nothing happened" (it did, in the field). */}
+      {actions.switchChannelResult === "no-update" ? (
+        actions.switchChannelInput?.channel === MAIN_CHANNEL ? (
+          <View style={styles.calloutCard}>
+            <Text style={styles.calloutTitle}>Can't switch to main from this build</Text>
+            <Text style={styles.calloutBody}>
+              This build contains native code main doesn't have yet, so main has no JS it can run.
+              Nothing was changed — still on {state.channel || "this build's branch"}. Once the PR
+              merges, main catches up and this switch works. To run main today, install a main
+              build.
+            </Text>
+          </View>
+        ) : (
+          <View style={styles.calloutCard}>
+            <Text style={styles.calloutTitle}>Switched — nothing new to download</Text>
+            <Text style={styles.calloutBody}>
+              Now following {state.channel || "this build's own branch"}, and already running the
+              freshest JS it has for this build. No restart needed.
+            </Text>
+          </View>
+        )
+      ) : null}
+      {actions.switchChannelError ? (
+        <Text style={styles.errorNote}>{actions.switchChannelError}</Text>
+      ) : null}
+      {actions.updateNowError ? (
+        <Text style={styles.errorNote}>{actions.updateNowError}</Text>
       ) : null}
       <Section title="App">
-        <Row label="Version" value={Constants.expoConfig?.version} />
-        <Row label="Native build" value={Application.nativeBuildVersion} />
-        <Row label="Installed" value={formatTime(installedAt.data?.toISOString())} />
+        <Row label="Version" value={state.binary.version} />
+        <Row label="Native build" value={state.binary.buildNumber} />
+        <Row label="Runtime" value={state.binary.runtimeVersion} />
+        <Row label="Installed" value={formatTime(state.binary.installedAt)} />
       </Section>
       {!router.canGoBack() ? (
         // Deep-link flows (preview-channel switch) replace into this screen
@@ -133,8 +193,32 @@ export default function BuildInfoScreen() {
   );
 }
 
+const sourceLabel = {
+  metro: "Metro dev server",
+  embedded: "embedded in the binary",
+  ota: "OTA update",
+} as const;
+
 function formatTime(iso: string | null | undefined) {
   return iso ? new Date(iso).toLocaleString() : "";
+}
+
+function Button(props: {
+  label: string;
+  pendingLabel: string;
+  pending: boolean;
+  onPress: () => void;
+}) {
+  return (
+    <Pressable
+      accessibilityRole="button"
+      disabled={props.pending}
+      onPress={props.onPress}
+      style={[styles.button, props.pending && styles.buttonDisabled]}
+    >
+      <Text style={styles.buttonLabel}>{props.pending ? props.pendingLabel : props.label}</Text>
+    </Pressable>
+  );
 }
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
@@ -146,10 +230,21 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   );
 }
 
-function Row({ label, value }: { label: string; value: string | null | undefined }) {
+function Row({
+  label,
+  value,
+  note,
+}: {
+  label: string;
+  value: string | null | undefined;
+  note?: string;
+}) {
   return (
     <View style={styles.row}>
-      <Text style={styles.rowLabel}>{label}</Text>
+      <View style={styles.rowLabelColumn}>
+        <Text style={styles.rowLabel}>{label}</Text>
+        {note ? <Text style={styles.rowNote}>{note}</Text> : null}
+      </View>
       <Text selectable style={styles.rowValue}>
         {value || "—"}
       </Text>
@@ -183,7 +278,9 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     paddingVertical: 12,
   },
+  rowLabelColumn: { flexShrink: 0 },
   rowLabel: { color: colors.textMuted, fontSize: 14 },
+  rowNote: { color: colors.textFaint, fontSize: 11, marginTop: 1 },
   rowValue: {
     color: colors.text,
     flexShrink: 1,
@@ -205,4 +302,14 @@ const styles = StyleSheet.create({
   linkLabel: { color: colors.textMuted, fontSize: 14 },
   note: { color: colors.textMuted, fontSize: 13, textAlign: "center" },
   errorNote: { color: colors.danger, fontSize: 13, textAlign: "center" },
+  calloutCard: {
+    backgroundColor: colors.surface,
+    borderColor: colors.textFaint,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    gap: 4,
+    padding: spacing.md,
+  },
+  calloutTitle: { color: colors.text, fontSize: 14, fontWeight: "600" },
+  calloutBody: { color: colors.textMuted, fontSize: 13, lineHeight: 19 },
 });

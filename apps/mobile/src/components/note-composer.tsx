@@ -11,6 +11,11 @@
 // store pending notes whenever a project is opened. Photo attachments upload
 // to itx.files and double-append onto /media with source "note" so the media
 // pipeline analyzes them for free.
+//
+// Photos arrive two ways: the camera-roll strip above the text field
+// (components/recent-photos-strip.tsx — one tap on a recent photo) and the +
+// button's full-screen system picker, for anything older. Both produce the
+// same PickedImage, and the strip checks a tile whichever way it got there.
 
 import { useRef, useState } from "react";
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -21,7 +26,6 @@ import {
   ActivityIndicator,
   Alert,
   AppState,
-  Image,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -31,7 +35,18 @@ import {
   View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { base64ToUint8Array, pickImages, type PickedImage } from "../lib/attachments.ts";
+import Feather from "@expo/vector-icons/Feather";
+import { base64ToUint8Array } from "../lib/attachments.ts";
+import {
+  attachmentAssetId,
+  attachmentKey,
+  locationXmlPart,
+  pendingNoteAttachments,
+  voiceNoteXmlPart,
+  type ComposerAttachment,
+} from "../lib/composer-attachments.ts";
+import { readFileBase64 } from "../lib/file-bytes.ts";
+import { transcriptFor } from "../lib/voice-transcription.ts";
 import { getProjectItx } from "../lib/itx.ts";
 import {
   buildUploadedEvent,
@@ -58,6 +73,15 @@ import { queryClient } from "../lib/query.ts";
 import { DEFAULT_SERVER } from "../lib/servers.ts";
 import { getServerBaseUrl } from "../lib/storage.ts";
 import { colors, radius, spacing } from "../lib/theme.ts";
+import { useVoiceCallOverlayVisible, useVoiceCallTarget } from "../lib/voice-call-state.ts";
+import { AttachmentChips } from "./attachment-chips.tsx";
+import { AttachmentSheet } from "./attachment-sheet.tsx";
+import { RecordControls } from "./record-controls.tsx";
+import { VoiceCallButton } from "./voice-call-button.tsx";
+
+/** How far the sheet's background hangs below its content — enough to sit
+ * behind the virtual keyboard's rounded top corners. */
+const KEYBOARD_CORNER_SKIRT = 24;
 
 /** Backgrounded longer than this → the composer re-expands on return: you
  * probably came back to capture something. */
@@ -133,7 +157,9 @@ async function appendNoteToProject(
     // D7 double-append: the same bytes enter /media so its server-side
     // analysis obligation describes them and they show in the gallery.
     // Best-effort — a failure here only costs the gallery entry (the note
-    // keeps its direct file reference).
+    // keeps its direct file reference). Images only: the analysis pipeline
+    // is vision-shaped, and the gallery shows photos.
+    if (!picked.contentType.startsWith("image/")) continue;
     void project.streams
       .get(MEDIA_STREAM_PATH)
       .append(
@@ -167,9 +193,11 @@ async function appendNoteToProject(
 
 export function NoteCaptureOverlay() {
   const segments = useSegments();
-  const params = useGlobalSearchParams<{ projectId?: string; slug?: string }>();
+  const params = useGlobalSearchParams<{ path?: string; projectId?: string; slug?: string }>();
   const insets = useSafeAreaInsets();
   const cache = useQueryClient();
+  const callOverlayVisible = useVoiceCallOverlayVisible();
+  const callTarget = useVoiceCallTarget();
   const projectId = typeof params.projectId === "string" ? params.projectId : "";
   // Widened: expo-router's typed segments omit the index route, but at
   // runtime the sign-in screen yields [].
@@ -216,7 +244,14 @@ export function NoteCaptureOverlay() {
   const pendingCount = (pending.data || []).length;
 
   const [draft, setDraft] = useState("");
-  const [attachments, setAttachments] = useState<PickedImage[]>([]);
+  const [attachments, setAttachments] = useState<ComposerAttachment[]>([]);
+  const [sheetOpen, setSheetOpen] = useState(false);
+  const appendAttachments = (added: ComposerAttachment[]) => {
+    setAttachments((prev) => {
+      const seen = new Set(prev.map(attachmentKey));
+      return [...prev, ...added.filter((attachment) => !seen.has(attachmentKey(attachment)))];
+    });
+  };
   // Guards the delayed feedback reset: a send started within the previous
   // send's 6s feedback window bumps the generation, so the stale timer
   // no-ops instead of resetting the newer mutation's state mid-flight.
@@ -225,21 +260,36 @@ export function NoteCaptureOverlay() {
   const capture = useMutation({
     mutationFn: async (input: {
       text: string;
-      files: PickedImage[];
+      files: ComposerAttachment[];
     }): Promise<"sent" | "pending" | "saved-locally"> => {
+      // Recorded clips pick up their on-device transcript first (started at
+      // attach time; brief wait for a straggler) — for a note, the words ARE
+      // the point.
+      const files = await Promise.all(
+        input.files.map(async (attachment) =>
+          attachment.kind === "audio" &&
+          attachment.durationSeconds !== null &&
+          attachment.transcript === null
+            ? { ...attachment, transcript: await transcriptFor(attachment.uri, 4_000) }
+            : attachment,
+        ),
+      );
+      // Locations and voice-note transcripts ride the note text as xml lines
+      // (the chat composer's convention). Everything else becomes inline
+      // base64 — a pending note must survive offline in AsyncStorage, so
+      // bytes are read eagerly (capture never loses data, D5).
+      const locationLines = files.flatMap((attachment) => {
+        if (attachment.kind === "location") return [locationXmlPart(attachment)];
+        const voiceNote = voiceNoteXmlPart(attachment);
+        return voiceNote === null ? [] : [voiceNote];
+      });
       const note: PendingNote = {
         // Pure entropy: the file path (capturedOnDeviceAt stamp + this)
         // is the note's identity now.
         noteKey: Math.random().toString(36).slice(2, 8),
-        text: input.text,
+        text: [input.text, ...locationLines].filter((line) => line !== "").join("\n"),
         capturedOnDeviceAt: new Date().toISOString(),
-        attachments: input.files.map((file) => ({
-          filename: file.filename,
-          contentType: file.contentType,
-          base64: file.base64,
-          width: file.width,
-          height: file.height,
-        })),
+        attachments: await pendingNoteAttachments(files, readFileBase64),
       };
       if (!inProject || baseUrl === undefined) {
         await addPendingNote(AsyncStorage, note);
@@ -337,7 +387,23 @@ export function NoteCaptureOverlay() {
     },
   });
 
-  if (onChatScreen) return null;
+  if (onChatScreen) {
+    /* Chat has its own composer — never stack two inputs. The one thing
+     * that floats here is a call's own controls, and ONLY on the call's
+     * own chat (a call started from a chat's header was otherwise
+     * untalkable until you left the chat — Misha, on-device, 2026-08-29).
+     * Every other screen shows the root layout's banner instead. */
+    const onCallsOwnChat =
+      callOverlayVisible && callTarget !== null && params.path === callTarget.colleaguePath;
+    return inProject && baseUrl && onCallsOwnChat ? (
+      <View
+        pointerEvents="box-none"
+        style={[styles.overlay, { paddingBottom: insets.bottom + spacing.md }]}
+      >
+        <VoiceCallButton baseUrl={baseUrl} projectId={projectId} />
+      </View>
+    ) : null;
+  }
 
   if (!expanded) {
     return (
@@ -376,47 +442,66 @@ export function NoteCaptureOverlay() {
       pointerEvents="box-none"
       style={styles.overlay}
     >
-      <View style={[styles.sheet, { paddingBottom: Math.max(insets.bottom, spacing.sm) }]}>
-        {attachments.length > 0 ? (
-          <View style={styles.attachmentStrip}>
-            {attachments.map((image) => (
-              <Pressable
-                key={image.previewUri}
-                onPress={() =>
-                  setAttachments(attachments.filter((a) => a.previewUri !== image.previewUri))
-                }
-              >
-                <Image source={{ uri: image.previewUri }} style={styles.attachmentThumb} />
-                <Text style={styles.attachmentRemove}>✕</Text>
-              </Pressable>
-            ))}
-          </View>
-        ) : null}
+      {/* The collapse control perches ABOVE the sheet as a drawer-style tab
+          of double chevrons — an ✕ here clashed with the attachment chips'
+          remove badges. */}
+      <Pressable
+        accessibilityLabel="Collapse note composer"
+        accessibilityRole="button"
+        hitSlop={8}
+        onPress={() => cache.setQueryData(composerOpenKey, "closed")}
+        style={styles.collapseTab}
+      >
+        <Feather color={colors.textMuted} name="chevrons-down" size={18} />
+      </Pressable>
+      <View
+        style={[
+          styles.sheet,
+          { paddingBottom: Math.max(insets.bottom, spacing.sm) + KEYBOARD_CORNER_SKIRT },
+        ]}
+      >
+        {/* Chips above everything else in the sheet: attaching grows the
+            panel upward, so the drawer and input never shift. */}
+        <AttachmentChips
+          attachments={attachments}
+          onRemove={(key) =>
+            setAttachments((prev) => prev.filter((attachment) => attachmentKey(attachment) !== key))
+          }
+        />
         <View style={styles.headerRow}>
           <Text numberOfLines={1} style={styles.target}>
             {inProject
               ? `→ /notes in ${params.slug || projectId}`
               : `→ saved on this phone until you open a project${pendingCount > 0 ? ` (${pendingCount} pending)` : ""}`}
           </Text>
-          <Pressable
-            accessibilityLabel="Close note composer"
-            accessibilityRole="button"
-            hitSlop={10}
-            onPress={() => cache.setQueryData(composerOpenKey, "closed")}
-          >
-            <Text style={styles.close}>✕</Text>
-          </Pressable>
         </View>
+        {sheetOpen ? (
+          // The chat composer's attachment surface, verbatim — carousel with
+          // the live camera tile, All photos, Files, Audio, Location. Only
+          // the destination differs: saving goes to /notes.
+          <AttachmentSheet
+            attachedAssetIds={attachments.flatMap((attachment) => {
+              const assetId = attachmentAssetId(attachment);
+              return assetId === null ? [] : [assetId];
+            })}
+            onAttach={appendAttachments}
+            onDetachAsset={(assetId) =>
+              setAttachments((prev) =>
+                prev.filter((attachment) => attachmentAssetId(attachment) !== assetId),
+              )
+            }
+            onClose={() => setSheetOpen(false)}
+          />
+        ) : null}
         <View style={styles.composerRow}>
           <Pressable
-            accessibilityLabel="Attach photos"
+            accessibilityLabel={sheetOpen ? "Close attachment options" : "Attach something"}
+            accessibilityRole="button"
             disabled={capture.isPending}
-            onPress={async () =>
-              setAttachments([...attachments, ...(await pickImages({ selectionLimit: 4 }))])
-            }
+            onPress={() => setSheetOpen(!sheetOpen)}
             style={styles.attach}
           >
-            <Text style={styles.attachText}>+</Text>
+            <Text style={[styles.attachText, sheetOpen && styles.attachTextOpen]}>+</Text>
           </Pressable>
           <TextInput
             value={draft}
@@ -426,29 +511,36 @@ export function NoteCaptureOverlay() {
             placeholderTextColor={colors.textFaint}
             style={styles.input}
           />
-          <Pressable
-            accessibilityLabel="Save note"
-            accessibilityRole="button"
-            disabled={!canSend || capture.isPending}
-            onPress={() => {
-              if (canSend && !capture.isPending) {
-                capture.mutate({ text: draft.trim(), files: attachments });
-              }
-            }}
-            style={[styles.send, (!canSend || capture.isPending) && { opacity: 0.4 }]}
-          >
-            {capture.isPending ? (
-              // The first capture provisions the notes repo + workspace and
-              // can take seconds — show it working, don't look dead.
-              <ActivityIndicator
-                accessibilityLabel="Loading"
-                color={colors.background}
-                size="small"
-              />
-            ) : (
-              <Text style={styles.sendText}>↑</Text>
-            )}
-          </Pressable>
+          {canSend || capture.isPending || Platform.OS === "web" ? (
+            <Pressable
+              accessibilityLabel="Save note"
+              accessibilityRole="button"
+              disabled={!canSend || capture.isPending}
+              onPress={() => {
+                if (canSend && !capture.isPending) {
+                  capture.mutate({ text: draft.trim(), files: attachments });
+                }
+              }}
+              style={[styles.send, (!canSend || capture.isPending) && { opacity: 0.4 }]}
+            >
+              {capture.isPending ? (
+                // The first capture provisions the notes repo + workspace and
+                // can take seconds — show it working, don't look dead.
+                <ActivityIndicator
+                  accessibilityLabel="Loading"
+                  color={colors.background}
+                  size="small"
+                />
+              ) : (
+                <Text style={styles.sendText}>↑</Text>
+              )}
+            </Pressable>
+          ) : (
+            // Empty composer on native: the same hold-to-record mic/video
+            // button chat has — a spoken note attaches like any clip (and
+            // its on-device transcript rides into the note text).
+            <RecordControls onAttach={(attachment) => appendAttachments([attachment])} />
+          )}
         </View>
         {capture.data === "sent" ? (
           // The confirmation doubles as the shortcut to what you just made.
@@ -511,6 +603,14 @@ const styles = StyleSheet.create({
   },
   pillBadgeText: { color: colors.background, fontSize: 11, fontWeight: "700" },
   sheet: {
+    // Pulls the sheet's bottom edge below where its content ends; the extra
+    // paddingBottom at the call site puts the content back where it was. The
+    // point is purely the background: with the keyboard up, the sheet ends
+    // exactly at the keyboard's top edge, and the keyboard's rounded corners
+    // then reveal the page behind it in a visibly different colour. The skirt
+    // fills those corners with the sheet's own colour, and hangs harmlessly
+    // off the bottom of the screen when the keyboard is down.
+    marginBottom: -KEYBOARD_CORNER_SKIRT,
     backgroundColor: colors.surfaceRaised,
     borderTopColor: colors.border,
     borderTopWidth: 1,
@@ -528,7 +628,21 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.md,
   },
   target: { color: colors.textFaint, flex: 1, fontSize: 11 },
-  close: { color: colors.textMuted, fontSize: 16, fontWeight: "600" },
+  collapseTab: {
+    // Right-hand side, about half the tab's own width off the screen edge.
+    alignSelf: "flex-end",
+    marginRight: spacing.xl,
+    backgroundColor: colors.surfaceRaised,
+    borderColor: colors.border,
+    borderWidth: 1,
+    borderBottomWidth: 0,
+    borderTopLeftRadius: radius.md,
+    borderTopRightRadius: radius.md,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: 3,
+    // Sits on the sheet's top border, reading as one piece with it.
+    marginBottom: -1,
+  },
   composerRow: {
     flexDirection: "row",
     alignItems: "flex-end",
@@ -545,6 +659,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   attachText: { color: colors.textMuted, fontSize: 20, lineHeight: 22 },
+  attachTextOpen: { color: colors.text, transform: [{ rotate: "45deg" }] },
   input: {
     flex: 1,
     backgroundColor: colors.surface,
@@ -566,32 +681,6 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   sendText: { color: colors.background, fontSize: 18, fontWeight: "700" },
-  attachmentStrip: {
-    flexDirection: "row",
-    gap: spacing.sm,
-    paddingHorizontal: spacing.md,
-  },
-  attachmentThumb: {
-    width: 52,
-    height: 52,
-    borderRadius: radius.sm,
-    borderColor: colors.border,
-    borderWidth: 1,
-  },
-  attachmentRemove: {
-    position: "absolute",
-    top: -6,
-    right: -6,
-    color: colors.text,
-    backgroundColor: colors.background,
-    borderRadius: radius.full,
-    width: 18,
-    height: 18,
-    textAlign: "center",
-    fontSize: 11,
-    lineHeight: 17,
-    overflow: "hidden",
-  },
   feedback: {
     color: colors.textMuted,
     fontSize: 12,

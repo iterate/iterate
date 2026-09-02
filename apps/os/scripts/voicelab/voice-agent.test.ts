@@ -213,8 +213,29 @@ function makeHarness() {
   });
 
   /* What a tool expression walks: a stand-in for the project root that a
-   * test replaces with whatever capabilities its tool needs. */
-  const projectRoot: { current: unknown } = { current: {} };
+   * test replaces with whatever capabilities its tool needs. The DEFAULT
+   * quietly accepts the colleague link's calls (create, subscribe, brief,
+   * message, recap reads) — a working desk is every unrelated test's
+   * reality, and a failing one now leaves a durable "backend link error"
+   * status that would shift every event count. */
+  const projectRoot: { current: unknown } = {
+    current: {
+      agents: {
+        get: () => ({
+          create: async () => {},
+          append: async () => {},
+          message: async () => {},
+        }),
+      },
+      streams: {
+        get: () => ({
+          append: async () => {},
+          getEventPage: async () => ({ streamMaxOffset: 0 }),
+          getEvents: async () => [],
+        }),
+      },
+    },
+  };
 
   const harness = makeProcessorHarness<VoiceAgentContract, VoiceAgentProcessor>({
     path: "/agents/voice/test",
@@ -222,6 +243,7 @@ function makeHarness() {
       new VoiceAgentProcessor({
         ...deps,
         nowAtFacetMs: deps.now,
+        buildCacheKey: "test-build",
         /* The REAL dial, so the mocked `fetch` above is what stands in for the
          * provider — including the `response.webSocket ?? null` line that has
          * broken in production. */
@@ -977,13 +999,13 @@ describe("tools on the birth certificate", () => {
     expect(h.provider.sentOfType("response.create")).toHaveLength(0);
   });
 
-  it("note_to_self mints the conversation's colleague and reads its reply back", async () => {
+  it("note_to_self mints the stream's colleague and reads its reply back", async () => {
     const h = makeHarness();
     const gotten: string[] = [];
     const created: string[] = [];
     const briefs: { type: string; payload: { role?: string; content?: string } }[] = [];
-    const asked: string[] = [];
-    let resolveReply!: (reply: { payload: { message: string } }) => void;
+    const subscriptions: { path: string; type: string; payload: any }[] = [];
+    const messaged: string[] = [];
     h.projectRoot.current = {
       agents: {
         get(path: string) {
@@ -995,11 +1017,17 @@ describe("tools on the birth certificate", () => {
             append: async (event: (typeof briefs)[number]) => {
               briefs.push(event);
             },
-            ask: async ({ message }: { message: string }) => {
-              asked.push(message);
-              return new Promise((resolve) => {
-                resolveReply = resolve;
-              });
+            message: async (input: string) => {
+              messaged.push(input);
+            },
+          };
+        },
+      },
+      streams: {
+        get(path: string) {
+          return {
+            append: async (event: any) => {
+              subscriptions.push({ path, ...event });
             },
           };
         },
@@ -1018,9 +1046,6 @@ describe("tools on the birth certificate", () => {
     await h.settle();
     h.provider.completeHandshake();
     await h.settle();
-    const conversationId = (
-      eventsOfType(h, "call-started")[0]!.payload as { conversationId: string }
-    ).conversationId;
 
     /* The certificate had no tools; the colleague flag alone arms the one
      * injected tool and the fast-half framing. */
@@ -1028,7 +1053,7 @@ describe("tools on the birth certificate", () => {
       session: { instructions?: string; tools?: { name: string }[] };
     };
     expect(update.session.tools!.map((tool) => tool.name)).toEqual(["note_to_self"]);
-    expect(update.session.instructions).toContain("fast half");
+    expect(update.session.instructions).toContain("backend");
 
     h.provider.push({
       type: "response.function_call_arguments.done",
@@ -1039,28 +1064,858 @@ describe("tools on the birth certificate", () => {
     await h.settle();
     /* The debt settles NOW; the model keeps the floor. */
     expect(toolOutputs(h)[0]!.output).toContain("noted");
-    /* One colleague, on ITS OWN fresh agent stream named for the call. */
-    expect(gotten[0]).toBe(`/agents/voice-notes/${conversationId}`);
-    expect(created).toEqual([`/agents/voice-notes/${conversationId}`]);
+    /* One colleague, on ITS OWN agent stream named for THIS stream — the
+     * same desk for every conversation the stream ever holds. */
+    expect(gotten[0]).toBe("/agents/voice-notes/voice/test");
+    expect(created).toEqual(["/agents/voice-notes/voice/test"]);
+    /* And the link wires the status forwarding: the colleague's own narration is
+     * forwarded to this stream as colleague-status events, under a name
+     * OWNED BY THIS LINE (two lines sharing a desk must not fight over one
+     * name), with the legacy shared name removed. (The transcript subscription
+     * rides SETUP's batch — the facet cannot append a subscription to its
+     * own stream.) */
+    expect(subscriptions).toHaveLength(2);
+    expect(subscriptions[1]).toMatchObject({
+      type: "events.iterate.com/stream/subscription-removed",
+      payload: { name: "voice-colleague-status" },
+    });
+    expect(subscriptions[0]).toMatchObject({
+      path: "/agents/voice-notes/voice/test",
+      type: "events.iterate.com/stream/subscription-configured",
+      payload: {
+        name: "voice-colleague-status:/agents/voice/test",
+        filter: {
+          eventTypes: [
+            "events.iterate.com/agent/summary-updated",
+            "events.iterate.com/agent/llm-request-requested",
+            "events.iterate.com/capability-host/script-run-started",
+            "events.iterate.com/capability-host/script-run-settled",
+            "events.iterate.com/agents/web-message-sent",
+          ],
+        },
+        receiver: { action: "copy-to-stream", receivingStreamPath: "/agents/voice/test" },
+      },
+    });
+    expect(subscriptions[0]!.payload.receiver.jsonataTransform).toContain(
+      "voice-agent/colleague-status",
+    );
     /* Born briefed, as a system context item that triggers no turn. */
     expect(briefs[0]!.type).toBe("events.iterate.com/agents/context-added");
     expect(briefs[0]!.payload.role).toBe("system");
-    expect(briefs[0]!.payload.content).toContain("careful, thinking half");
-    expect(asked).toEqual(["look up the March invoice"]);
+    expect(briefs[0]!.payload.content).toContain("the backend of ONE assistant");
+    /* The note carries its own reply-channel coda, because the platform
+     * stamps a reply-routing label on the same message that points at a
+     * path which is not an agent. */
+    expect(messaged).toHaveLength(1);
+    expect(messaged[0]).toMatch(/^<voice-note>\nlook up the March invoice\n<\/voice-note>\n/);
+    expect(messaged[0]).toContain("itx.chat.sendMessage");
 
-    /* The reply lands mid-call: injected as a bracketed note, and the
-     * model is nudged to speak because the floor is free. */
-    resolveReply({ payload: { message: "The March invoice was never sent." } });
+    /* The reply arrives as a durable colleague-note (the copy-to-stream
+     * lane, not ask()): injected as a bracketed note, and the model is
+     * nudged to speak because the floor is free. */
+    await h.append({
+      type: "events.iterate.com/voice-agent/colleague-note",
+      payload: { text: "The March invoice was never sent." },
+    });
     await h.settle();
     const items = h.provider.sentOfType("conversation.item.create") as {
       item: { type: string; content?: { text: string }[] };
     }[];
-    const note = items.find((entry) => entry.item.type === "message");
+    const note = items.find((entry) => entry.item.content?.[0]?.text.startsWith("[note from"));
     expect(note).toBeDefined();
     expect(note!.item.content![0]!.text).toBe(
-      "[note from your thinking half] The March invoice was never sent.",
+      "[note from your backend] The March invoice was never sent.",
     );
+    /* Dispatching the note was itself a status: the dead-air before the
+     * colleague's first narration has something honest in it. */
+    const opening = eventsOfType(h, "colleague-status");
+    expect(opening).toHaveLength(1);
+    expect(opening[0]!.payload).toMatchObject({
+      activity: "picking up a note from the frontend",
+    });
     expect(h.provider.sentOfType("response.create")).toHaveLength(1);
+  });
+
+  /*
+   * THE REPLY THAT OUTLIVES ITS CALL, which is every hard question's shape:
+   * the idle deadline (60s) is shorter than the note deadline (180s), so a
+   * person who asks something slow and then waits quietly gets hung up on
+   * before the answer exists. Measured live (prd, 2026-08-26): four calls,
+   * four amnesiac per-conversation colleagues, a correct answer computed
+   * twice and spoken zero times. The colleague is per STREAM now, and its
+   * late reply is spoken into whichever call is live when it arrives.
+   */
+  it("a note that outlives its call reaches the next one — or its briefing", async () => {
+    const h = makeHarness();
+    const gotten: string[] = [];
+    const created: string[] = [];
+    const messaged: string[] = [];
+    h.projectRoot.current = {
+      agents: {
+        get(path: string) {
+          gotten.push(path);
+          return {
+            create: async () => {
+              created.push(path);
+            },
+            append: async () => {},
+            message: async (input: string) => {
+              messaged.push(input);
+            },
+          };
+        },
+      },
+      streams: { get: () => ({ append: async () => {} }) },
+    };
+    await callIsLive(h, CLIENT_TAKES_TURNS);
+    h.provider.push({
+      type: "response.function_call_arguments.done",
+      call_id: "call_10",
+      name: "note_to_self",
+      arguments: JSON.stringify({ note: "factorize the first 23 digits of pi" }),
+    });
+    await h.settle();
+    expect(messaged).toHaveLength(1);
+    expect(messaged[0]).toMatch(/^<voice-note>\nfactorize the first 23 digits of pi\n/);
+    const firstSocket = h.provider;
+
+    /* The person waits quietly for the answer, so the idle deadline kills
+     * the call while the colleague is still thinking. */
+    await h.advanceTime(IDLE_TIMEOUT_MS + 10_000);
+    await h.settle();
+    expect(eventsOfType(h, "conversation-ended")).toHaveLength(1);
+
+    /* The colleague's first reply lands BETWEEN calls — spoken to nobody,
+     * but durable: the fold keeps it for the next session's briefing. */
+    await h.append({
+      type: "events.iterate.com/voice-agent/colleague-note",
+      payload: { text: "Early lead: the number is even, so 2 divides it." },
+    });
+    await h.settle();
+    await h.advanceTime(2_000);
+    await h.settle();
+
+    /* They press again: a fresh call, a fresh socket, the SAME stream. */
+    await h.append({ type: "events.iterate.com/voice-agent/ptt-start", payload: {} });
+    await h.settle();
+    h.provider.completeHandshake();
+    await h.settle();
+    expect(eventsOfType(h, "call-started")).toHaveLength(2);
+    expect(h.provider).not.toBe(firstSocket);
+    const update = h.provider.sentOfType("session.update")[0] as {
+      session: { instructions?: string };
+    };
+    expect(update.session.instructions).toContain("Recent notes from your backend");
+    expect(update.session.instructions).toContain("the number is even, so 2 divides it");
+
+    /* A note arriving DURING the new call lands in it, never the dead one. */
+    await h.append({
+      type: "events.iterate.com/voice-agent/colleague-note",
+      payload: { text: "The factorization is done." },
+    });
+    await h.settle();
+    const items = h.provider.sentOfType("conversation.item.create") as {
+      item: { type: string; content?: { text: string }[] };
+    }[];
+    const note = items.find((entry) =>
+      entry.item.content?.[0]?.text.startsWith("[note from your backend] The factorization"),
+    );
+    expect(note).toBeDefined();
+    const staleItems = firstSocket.sentOfType("conversation.item.create") as {
+      item: { type: string; content?: { text: string }[] };
+    }[];
+    expect(
+      staleItems.filter((entry) => entry.item.content?.[0]?.text.startsWith("[note from")),
+    ).toHaveLength(0);
+
+    /* A follow-up in the new call reaches the same desk: one colleague,
+     * created and briefed once, remembering across the reconnect. */
+    h.provider.push({
+      type: "response.function_call_arguments.done",
+      call_id: "call_11",
+      name: "note_to_self",
+      arguments: JSON.stringify({ note: "now double-check it" }),
+    });
+    await h.settle();
+    expect(new Set(gotten)).toEqual(new Set(["/agents/voice-notes/voice/test"]));
+    expect(created).toEqual(["/agents/voice-notes/voice/test"]);
+    expect(messaged).toHaveLength(2);
+    expect(messaged[1]).toMatch(/^<voice-note>\nnow double-check it\n/);
+  });
+
+  /*
+   * THE RECONNECT IS INVISIBLE, OR IT IS AMNESIA. A fresh provider session
+   * starts from instructions alone, and the idle deadline manufactures fresh
+   * sessions mid-conversation — so without a durable transcript folded back
+   * into the next dial's briefing, every reconnect greeted the listener as a
+   * stranger (measured on prd, 2026-08-26: "what's going on?" after a
+   * reconnect drew a blank). The transcript events are also the stream's only
+   * readable record of what was actually said, which is what an eval asserts
+   * on.
+   */
+  it("finished turns land durably and brief the next dial's session", async () => {
+    const h = makeHarness();
+    await callIsLive(h, CLIENT_TAKES_TURNS);
+
+    /* The listener's side, transcribed by the provider. */
+    h.provider.push({
+      type: "conversation.item.input_audio_transcription.completed",
+      item_id: "item_user_1",
+      transcript: "what is the capital of France?",
+    });
+    /* The model's side: transcript rides its own done event. */
+    h.provider.responseCreated();
+    h.provider.answerAudio(400);
+    h.provider.push({
+      type: "response.output_audio_transcript.done",
+      item_id: "item_fake",
+      transcript: "The capital of France is Paris.",
+    });
+    h.provider.answerComplete();
+    await playOutEverything(h, 600);
+
+    const utterances = eventsOfType(h, "utterance-transcript");
+    expect(utterances).toHaveLength(1);
+    expect(utterances[0]!.payload).toMatchObject({ text: "what is the capital of France?" });
+    const answers = eventsOfType(h, "answer-transcript");
+    expect(answers).toHaveLength(1);
+    expect(answers[0]!.payload).toMatchObject({ text: "The capital of France is Paris." });
+    /* And the fold carries both turns — the recap below hangs off this. */
+    expect(h.state().transcript).toEqual([
+      { role: "listener", text: "what is the capital of France?" },
+      { role: "assistant", text: "The capital of France is Paris." },
+    ]);
+
+    /* The call dies of silence; the next press dials a FRESH session. The
+     * extra beat before the press clears the 1.5s dying-breath mint
+     * cooldown — a press in the same instant as the obituary is treated as
+     * the dead call's own drained input, by design. */
+    await h.advanceTime(IDLE_TIMEOUT_MS + 10_000);
+    await h.settle();
+    expect(eventsOfType(h, "conversation-ended")).toHaveLength(1);
+    await h.advanceTime(2_000);
+    await h.settle();
+    await h.append({ type: "events.iterate.com/voice-agent/ptt-start", payload: {} });
+    await h.settle();
+    h.provider.completeHandshake();
+    await h.settle();
+
+    /* And that session is briefed with what was said before it existed. */
+    const update = h.provider.sentOfType("session.update")[0] as {
+      session: { instructions?: string };
+    };
+    expect(update.session.instructions).toContain("RESUMES an earlier conversation");
+    expect(update.session.instructions).toContain("Listener: what is the capital of France?");
+    expect(update.session.instructions).toContain("You: The capital of France is Paris.");
+  });
+
+  /*
+   * THE STATUS WHISPER. The colleague's own narration (forwarded onto this
+   * stream as colleague-status events) reaches the live session as a quiet
+   * context item — the model KNOWS what stage the work is at without ever
+   * announcing it unprompted — and the folded latest status survives into
+   * the next session's briefing, which is what tells a reconnect that its
+   * note is still being worked rather than lost.
+   */
+  it("colleague status whispers into the live session and briefs the reconnect", async () => {
+    const h = makeHarness();
+    await callIsLive(h);
+
+    await h.append({
+      type: "events.iterate.com/voice-agent/colleague-status",
+      payload: { activity: "running the factorization script" },
+    });
+    await h.settle();
+    const whispers = () =>
+      (
+        h.provider.sentOfType("conversation.item.create") as {
+          item: { type: string; content?: { text: string }[] };
+        }[]
+      ).filter((entry) => entry.item.content?.[0]?.text.startsWith("[backend status"));
+    expect(whispers()).toHaveLength(1);
+    expect(whispers()[0]!.item.content![0]!.text).toBe(
+      "[backend status: running the factorization script]",
+    );
+    /* Quiet on purpose: knowing is not announcing. */
+    expect(h.provider.sentOfType("response.create")).toHaveLength(0);
+
+    /* A redelivered or waitingFor-only patch is not whispered twice… */
+    await h.append({
+      type: "events.iterate.com/voice-agent/colleague-status",
+      payload: { activity: "running the factorization script" },
+    });
+    await h.settle();
+    expect(whispers()).toHaveLength(1);
+    /* Lifecycle phases whisper too — the OS UI's "writing code" / "running
+     * code" vocabulary, straight from the transform — and a failed script
+     * carries its error, which is what "say so, don't invent" runs on. */
+    await h.append({
+      type: "events.iterate.com/voice-agent/colleague-status",
+      payload: { phase: "running code" },
+    });
+    await h.settle();
+    expect(whispers()).toHaveLength(2);
+    /* BOTH halves ride the whisper now: the lifecycle phase and the
+     * colleague's own words, from the fold — the frontend always knows the
+     * general stage AND the specific status. */
+    expect(whispers()[1]!.item.content![0]!.text).toBe(
+      "[backend status: running code — running the factorization script]",
+    );
+    await h.append({
+      type: "events.iterate.com/voice-agent/colleague-status",
+      payload: { phase: "a script failed", failure: "TypeError: cannot read digits of pi" },
+    });
+    await h.settle();
+    expect(whispers()).toHaveLength(3);
+    expect(whispers()[2]!.item.content![0]!.text).toBe(
+      "[backend status: a script failed — running the factorization script " +
+        "(TypeError: cannot read digits of pi)]",
+    );
+    /* …and a CHANGED activity is whispered as well. */
+    await h.append({
+      type: "events.iterate.com/voice-agent/colleague-status",
+      payload: { activity: "writing up the answer" },
+    });
+    await h.settle();
+    expect(whispers()).toHaveLength(4);
+
+    /* The reconnect's briefing carries the folded status, mid-task framing
+     * and all — the line that stops a fresh session re-sending the note. */
+    await h.advanceTime(IDLE_TIMEOUT_MS + 10_000);
+    await h.settle();
+    await h.advanceTime(2_000);
+    await h.settle();
+    await h.append({ type: "events.iterate.com/voice-agent/ptt-start", payload: {} });
+    await h.settle();
+    h.provider.completeHandshake();
+    await h.settle();
+    const update = h.provider.sentOfType("session.update")[0] as {
+      session: { instructions?: string };
+    };
+    expect(update.session.instructions).toContain("mid-task right now");
+    expect(update.session.instructions).toContain('"a script failed — writing up the answer"');
+    expect(update.session.instructions).toContain("do not send another note");
+
+    /* Once the colleague reports itself idle, the framing retires. */
+    await h.append({
+      type: "events.iterate.com/voice-agent/colleague-status",
+      payload: { activity: "done — answer delivered", waitingFor: "user_input" },
+    });
+    await h.settle();
+    expect(h.state().colleagueStatus).toEqual({
+      activity: "done — answer delivered",
+      phase: "a script failed",
+      /* The failure travels with its phase: an activity-only patch keeps
+       * both until a new phase supersedes them. */
+      failure: "TypeError: cannot read digits of pi",
+      waitingFor: "user_input",
+    });
+  });
+
+  /*
+   * THE SPOKEN STATUS. Whispering keeps the model informed; SPEAKING keeps
+   * the person informed — but only for news (the colleague's own words, or
+   * a failure), only when the floor is free, and never more than once per
+   * gap. Bare phase churn (writing → running → finished, every few seconds)
+   * whispers and stays quiet, or the call becomes a ticker.
+   */
+  it("a newsworthy status draws one spoken line — throttled, and never for phase churn", async () => {
+    const h = makeHarness();
+    await h.append({
+      type: "events.iterate.com/voice-agent/configured",
+      payload: {
+        providerBaseUrl: "https://fake.provider.test/v1/realtime",
+        provider: "grok",
+        clientTakesTurns: CLIENT_TAKES_TURNS,
+      },
+    });
+    /* Mint with the press alone — no mic frames, so nothing is mid-turn
+     * and the floor is genuinely free once the handshake completes. */
+    await h.append({ type: "events.iterate.com/voice-agent/ptt-start", payload: {} });
+    await h.settle();
+    h.provider.completeHandshake();
+    await h.settle();
+    expect(h.provider.sentOfType("response.create")).toHaveLength(0);
+
+    /* The colleague's own words: spoken. */
+    await h.append({
+      type: "events.iterate.com/voice-agent/colleague-status",
+      payload: { activity: "reading the March ledger" },
+    });
+    await h.settle();
+    expect(h.provider.sentOfType("response.create")).toHaveLength(1);
+    /* The provider answers the drawn line (created clears the follow-up
+     * flag; done settles the answer) — the floor is free again. */
+    h.provider.responseCreated();
+    h.provider.answerComplete();
+    await h.settle();
+
+    /* New words straight after: whispered, but inside the gap — throttled. */
+    await h.append({
+      type: "events.iterate.com/voice-agent/colleague-status",
+      payload: { activity: "summing the refunds" },
+    });
+    await h.settle();
+    expect(h.provider.sentOfType("response.create")).toHaveLength(1);
+
+    /* Past the gap, a bare lifecycle phase is still not news. */
+    await h.advanceTime(16_000);
+    await h.settle();
+    await h.append({
+      type: "events.iterate.com/voice-agent/colleague-status",
+      payload: { phase: "running code" },
+    });
+    await h.settle();
+    expect(h.provider.sentOfType("response.create")).toHaveLength(1);
+
+    /* A failure is always news (and the whisper carries the error). */
+    await h.append({
+      type: "events.iterate.com/voice-agent/colleague-status",
+      payload: { phase: "a script failed", failure: "TypeError: no ledger" },
+    });
+    await h.settle();
+    expect(h.provider.sentOfType("response.create")).toHaveLength(2);
+    h.provider.responseCreated();
+    h.provider.answerComplete();
+    await h.settle();
+
+    /* The facet's own note-dispatch echo wears `quiet`: never spoken. */
+    await h.advanceTime(16_000);
+    await h.settle();
+    await h.append({
+      type: "events.iterate.com/voice-agent/colleague-status",
+      payload: { activity: "picking up a note from the frontend", quiet: true },
+    });
+    await h.settle();
+    expect(h.provider.sentOfType("response.create")).toHaveLength(2);
+  });
+
+  /*
+   * THE ANSWER RIGHT AFTER THE STATUS. A note that lands while an answer
+   * holds the floor ("it's running the code now") used to wait for the
+   * person's NEXT press — the promised answer sat in context, unspoken.
+   * The pending flag drains at response.done: status line finishes, answer
+   * follows.
+   */
+  it("a note landing mid-answer is spoken at response.done, not at the next press", async () => {
+    const h = makeHarness();
+    await h.append({
+      type: "events.iterate.com/voice-agent/configured",
+      payload: {
+        providerBaseUrl: "https://fake.provider.test/v1/realtime",
+        provider: "grok",
+        clientTakesTurns: CLIENT_TAKES_TURNS,
+      },
+    });
+    await h.append({ type: "events.iterate.com/voice-agent/ptt-start", payload: {} });
+    await h.settle();
+    h.provider.completeHandshake();
+    await h.settle();
+
+    /* An answer is streaming when the note arrives. */
+    h.provider.responseCreated();
+    h.provider.answerAudio(200);
+    await h.settle();
+    await h.append({
+      type: "events.iterate.com/voice-agent/colleague-note",
+      payload: { text: "The answer is 42." },
+    });
+    await h.settle();
+    /* Injected, not yet drawn: the floor is busy. */
+    const notes = () =>
+      (
+        h.provider.sentOfType("conversation.item.create") as {
+          item: { content?: { text: string }[] };
+        }[]
+      ).filter((entry) => entry.item.content?.[0]?.text.startsWith("[note from"));
+    expect(notes()).toHaveLength(1);
+    expect(h.provider.sentOfType("response.create")).toHaveLength(0);
+
+    /* The moment the streaming answer settles, the note gets its turn. */
+    h.provider.answerComplete();
+    await h.settle();
+    expect(h.provider.sentOfType("response.create")).toHaveLength(1);
+  });
+
+  /*
+   * CALL ANY CHAT (contract 18.0.0): a certificate `colleaguePath` points
+   * the whole arrangement at an EXISTING agent — the link is established at
+   * call start (the transcript must flow even if no note is ever sent), the
+   * chat keeps its own configuration, and notes go to ITS desk.
+   */
+  it("colleaguePath makes an existing chat the desk: linked at call start, config untouched", async () => {
+    const h = makeHarness();
+    const created: string[] = [];
+    const agentAppends: { path: string; type: string; payload: any }[] = [];
+    const subscriptions: { path: string; type: string; payload: any }[] = [];
+    const messaged: string[] = [];
+    h.projectRoot.current = {
+      agents: {
+        get(path: string) {
+          return {
+            create: async () => {
+              created.push(path);
+            },
+            append: async (event: any) => {
+              agentAppends.push({ path, ...event });
+            },
+            message: async (input: string) => {
+              messaged.push(input);
+            },
+          };
+        },
+      },
+      streams: {
+        get(path: string) {
+          return {
+            append: async (event: any) => {
+              subscriptions.push({ path, ...event });
+            },
+            /* The chat's history, for the recap fetch the dial runs. */
+            getEventPage: async () => ({ streamMaxOffset: 42 }),
+            getEvents: async () => [
+              {
+                type: "events.iterate.com/agents/context-added",
+                payload: { role: "user", content: "what's the March invoice total?" },
+              },
+              {
+                type: "events.iterate.com/agents/web-message-sent",
+                payload: { message: "£4,120 — want the breakdown?" },
+              },
+              /* The call's own residue must not recap itself. */
+              {
+                type: "events.iterate.com/agents/context-added",
+                payload: { role: "user", content: '<voice-turn speaker="person">hi</voice-turn>' },
+              },
+            ],
+          };
+        },
+      },
+    };
+    await h.append({
+      type: "events.iterate.com/voice-agent/configured",
+      payload: {
+        providerBaseUrl: "https://fake.provider.test/v1/realtime",
+        provider: "grok",
+        clientTakesTurns: CLIENT_TAKES_TURNS,
+        colleaguePath: "/agents/mobile/1234",
+      },
+    });
+    await h.append({ type: "events.iterate.com/voice-agent/ptt-start", payload: {} });
+    await h.settle();
+    h.provider.completeHandshake();
+    await h.settle();
+
+    /* Linked at CALL START — before any note exists. */
+    expect(created).toEqual(["/agents/mobile/1234"]);
+
+    /* THE CHAT'S RECAP briefs the session: a call to an existing chat picks
+     * up the thread, never greets a stranger — and the fetch lands durably
+     * for the next incarnation's fold. */
+    const update = h.provider.sentOfType("session.update")[0] as {
+      session: { instructions?: string };
+    };
+    expect(update.session.instructions).toContain("continues an ongoing TEXT conversation");
+    expect(update.session.instructions).toContain("the person: what's the March invoice total?");
+    expect(update.session.instructions).toContain("you: £4,120 — want the breakdown?");
+    expect(update.session.instructions).not.toContain("<voice-turn");
+    const recaps = eventsOfType(h, "colleague-recap");
+    expect(recaps).toHaveLength(1);
+    expect(recaps[0]!.payload).toMatchObject({
+      text: "the person: what's the March invoice total?\nyou: £4,120 — want the breakdown?",
+    });
+
+    /* AND THE BRIEFING IS ON THE RECORD: one durable event says what this
+     * session was told and armed with — the stream shows how the frontend
+     * was initialized instead of that being invisible provider state. */
+    const configuredSessions = eventsOfType(h, "session-configured");
+    expect(configuredSessions).toHaveLength(1);
+    expect(configuredSessions[0]!.payload).toMatchObject({
+      provider: "grok",
+      greeting: false,
+      recapIncluded: true,
+      tools: ["note_to_self"],
+    });
+    expect((configuredSessions[0]!.payload as { instructions: string }).instructions).toContain(
+      "continues an ongoing TEXT conversation",
+    );
+    /* Status forwarding: the chat's narration and replies flow HERE, under this
+     * line's own name. (The transcript subscription the other way rides SETUP's
+     * batch, not the link.) */
+    expect(subscriptions.filter((s) => s.type.endsWith("subscription-configured"))).toHaveLength(1);
+    expect(subscriptions[0]).toMatchObject({
+      path: "/agents/mobile/1234",
+      payload: {
+        name: "voice-colleague-status:/agents/voice/test",
+        receiver: { receivingStreamPath: "/agents/voice/test" },
+      },
+    });
+    /* The brief lands; the chat's own configuration is NOT rewritten — no
+     * debounce append for a desk this facet does not own. */
+    expect(agentAppends.map((entry) => entry.type)).toEqual([
+      "events.iterate.com/agents/context-added",
+    ]);
+    expect(agentAppends[0]!.payload.key).toBe("voice-agent/colleague-brief");
+
+    /* And a note goes to the chat's desk. */
+    h.provider.push({
+      type: "response.function_call_arguments.done",
+      call_id: "call_20",
+      name: "note_to_self",
+      arguments: JSON.stringify({ note: "check the calendar" }),
+    });
+    await h.settle();
+    expect(messaged).toHaveLength(1);
+    expect(messaged[0]).toMatch(/^<voice-note>\ncheck the calendar\n/);
+  });
+
+  /*
+   * ONE NOTE, HOWEVER MANY FORWARDERS. A stale duplicate subscription (the
+   * legacy shared name beside a per-line one) delivers the same reply as
+   * two different offsets, and the caller heard every answer twice
+   * (misha, on-device, 2026-08-29). Identical text inside the window is
+   * one note: injected once, spoken once.
+   */
+  it("a duplicated colleague note is injected and spoken once", async () => {
+    const h = makeHarness();
+    await h.append({
+      type: "events.iterate.com/voice-agent/configured",
+      payload: {
+        providerBaseUrl: "https://fake.provider.test/v1/realtime",
+        provider: "grok",
+        clientTakesTurns: CLIENT_TAKES_TURNS,
+      },
+    });
+    await h.append({ type: "events.iterate.com/voice-agent/ptt-start", payload: {} });
+    await h.settle();
+    h.provider.completeHandshake();
+    await h.settle();
+    await h.append(
+      {
+        type: "events.iterate.com/voice-agent/colleague-note",
+        payload: { text: "The answer is 42." },
+      },
+      {
+        type: "events.iterate.com/voice-agent/colleague-note",
+        payload: { text: "The answer is 42." },
+      },
+    );
+    await h.settle();
+    const notes = (
+      h.provider.sentOfType("conversation.item.create") as {
+        item: { content?: { text: string }[] };
+      }[]
+    ).filter((entry) => entry.item.content?.[0]?.text.startsWith("[note from"));
+    expect(notes).toHaveLength(1);
+    expect(h.provider.sentOfType("response.create")).toHaveLength(1);
+    /* The pending drain must not resurrect the duplicate either. */
+    h.provider.responseCreated();
+    h.provider.answerComplete();
+    await h.settle();
+    expect(h.provider.sentOfType("response.create")).toHaveLength(1);
+  });
+
+  /*
+   * THE HEARTBEAT HOLDS THE LINE. The idle reaper counts device input, and
+   * a caller waiting quietly for a slow answer — or away from the app with
+   * the call up — sends none. The client's keepalive stamps the same clock;
+   * when it stops (hang-up, dead app), the reaper re-arms.
+   */
+  it("keepalives defer the idle reaper; their absence re-arms it", async () => {
+    const h = makeHarness();
+    await callIsLive(h, CLIENT_TAKES_TURNS);
+    /* Two 40s stretches of silence, each bridged by a keepalive: 80s of
+     * no mic input and the call lives. */
+    for (let i = 0; i < 2; i++) {
+      await h.advanceTime(40_000);
+      await h.append({ type: "events.iterate.com/voice-agent/keepalive", payload: { t: i } });
+      await h.settle();
+    }
+    expect(eventsOfType(h, "conversation-ended")).toHaveLength(0);
+    /* The heartbeat stops; the reaper takes it from there. */
+    await h.advanceTime(IDLE_TIMEOUT_MS + 10_000);
+    await h.settle();
+    expect(eventsOfType(h, "conversation-ended")).toHaveLength(1);
+  });
+
+  /*
+   * THE ANSWER OUTRANKS THE COMMENTARY. A status line the facet drew is
+   * progress ping, not conversation — when the real note lands mid-status,
+   * the status is cancelled (device silenced) and the note speaks the
+   * moment the provider settles the cancelled response. A PERSON's answer
+   * is never cut this way.
+   */
+  it("a note barges status lines AND turn answers (hold music); note answers stay whole", async () => {
+    const h = makeHarness();
+    await h.append({
+      type: "events.iterate.com/voice-agent/configured",
+      payload: {
+        providerBaseUrl: "https://fake.provider.test/v1/realtime",
+        provider: "grok",
+        clientTakesTurns: CLIENT_TAKES_TURNS,
+      },
+    });
+    await h.append({ type: "events.iterate.com/voice-agent/ptt-start", payload: {} });
+    await h.settle();
+    h.provider.completeHandshake();
+    await h.settle();
+
+    /* A newsworthy status draws a spoken line; the provider starts it. */
+    await h.append({
+      type: "events.iterate.com/voice-agent/colleague-status",
+      payload: { activity: "reading the ledger" },
+    });
+    await h.settle();
+    expect(h.provider.sentOfType("response.create")).toHaveLength(1);
+    h.provider.responseCreated();
+    h.provider.answerAudio(200);
+    await h.settle();
+
+    /* Mid-status, the actual answer lands: the status is cancelled... */
+    await h.append({
+      type: "events.iterate.com/voice-agent/colleague-note",
+      payload: { text: "The ledger totals £4,120." },
+    });
+    await h.settle();
+    expect(h.provider.sentOfType("response.cancel")).toHaveLength(1);
+    expect(h.provider.sentOfType("response.create")).toHaveLength(1);
+    /* ...and the note speaks as soon as the cancelled response settles. */
+    h.provider.push({ type: "response.done" });
+    await h.settle();
+    expect(h.provider.sentOfType("response.create")).toHaveLength(2);
+
+    /* The NOTE answer now streaming is never cut by the next note — the
+     * previous answer's delivery stays whole; the newcomer pends. */
+    h.provider.responseCreated();
+    h.provider.answerAudio(200);
+    await h.settle();
+    await h.append({
+      type: "events.iterate.com/voice-agent/colleague-note",
+      payload: { text: "One more thing — the March total was higher." },
+    });
+    await h.settle();
+    expect(h.provider.sentOfType("response.cancel")).toHaveLength(1);
+    h.provider.answerComplete();
+    await h.settle();
+    /* Spoken after the answer finishes, not through it. */
+    expect(h.provider.sentOfType("response.create")).toHaveLength(3);
+
+    /* Consume the drained note answer whole, so the follow-up flag is
+     * spent and the NEXT response reads as the person's own turn. */
+    h.provider.responseCreated();
+    h.provider.answerComplete();
+    await h.settle();
+
+    /* HOLD MUSIC LOSES TO THE THING BEING WAITED FOR: a PERSON-drawn
+     * answer ("count to 100 while it works") is cut the moment the real
+     * answer lands, exactly like status commentary. */
+    h.provider.responseCreated();
+    h.provider.answerAudio(200);
+    await h.settle();
+    await h.append({
+      type: "events.iterate.com/voice-agent/colleague-note",
+      payload: { text: "Done: the factors are 5, 1499 and two big primes." },
+    });
+    await h.settle();
+    expect(h.provider.sentOfType("response.cancel")).toHaveLength(2);
+    h.provider.push({ type: "response.done" });
+    await h.settle();
+    expect(h.provider.sentOfType("response.create")).toHaveLength(4);
+  });
+
+  /*
+   * A BROKEN DESK IS NEWS, NOT SILENCE. The link and the note dispatch
+   * used to swallow their failures whole; a caller then heard "it's
+   * picking up the note" forever while four notes in a row went nowhere,
+   * and the mid-task briefing turned the stale status into a wall of
+   * refusals (observed live, 2026-08-29). Now both failures land as
+   * durable "backend link error" statuses — whispered, newsworthy, and
+   * carried into the next session's briefing like any other status.
+   */
+  it("a failed colleague link or note lands as a backend link error status", async () => {
+    const h = makeHarness();
+    h.projectRoot.current = {}; /* no agents, no streams — everything throws */
+    await h.append({
+      type: "events.iterate.com/voice-agent/configured",
+      payload: {
+        providerBaseUrl: "https://fake.provider.test/v1/realtime",
+        provider: "grok",
+        clientTakesTurns: CLIENT_TAKES_TURNS,
+      },
+    });
+    await h.append({ type: "events.iterate.com/voice-agent/ptt-start", payload: {} });
+    await h.settle();
+    h.provider.completeHandshake();
+    await h.settle();
+    /* The call-start link failure is on the record. */
+    const linkFailures = eventsOfType(h, "colleague-status").filter(
+      (event) => (event.payload as { phase?: string }).phase === "backend link error",
+    );
+    expect(linkFailures.length).toBeGreaterThanOrEqual(1);
+    expect(linkFailures[0]!.payload).toMatchObject({
+      activity: "connecting to the backend failed",
+    });
+
+    /* And a note that cannot be delivered says so too. */
+    h.provider.push({
+      type: "response.function_call_arguments.done",
+      call_id: "call_30",
+      name: "note_to_self",
+      arguments: JSON.stringify({ note: "look this up" }),
+    });
+    await h.settle();
+    const noteFailures = eventsOfType(h, "colleague-status").filter(
+      (event) =>
+        (event.payload as { activity?: string }).activity ===
+        "the last note FAILED to reach the backend",
+    );
+    expect(noteFailures).toHaveLength(1);
+    expect((noteFailures[0]!.payload as { failure: string }).failure).not.toBe("");
+  });
+
+  it("greeting on the certificate makes the model speak first at pickup — unless the caller already did", async () => {
+    const h = makeHarness();
+    await h.append({
+      type: "events.iterate.com/voice-agent/configured",
+      payload: { clientTakesTurns: CLIENT_TAKES_TURNS, greeting: true },
+    });
+    await h.append({ type: "events.iterate.com/voice-agent/ptt-start", payload: {} });
+    await h.settle();
+    h.provider.completeHandshake();
+    await h.settle();
+    const items = h.provider.sentOfType("conversation.item.create") as {
+      item: { content?: { text: string }[] };
+    }[];
+    expect(items.some((i) => i.item.content?.[0]?.text.includes("call just connected"))).toBe(true);
+    expect(h.provider.sentOfType("response.create")).toHaveLength(1);
+
+    /* A caller mid-sentence is not welcomed over: held frames suppress it. */
+    const busy = makeHarness();
+    await busy.append({
+      type: "events.iterate.com/voice-agent/configured",
+      payload: { clientTakesTurns: CLIENT_TAKES_TURNS, greeting: true },
+    });
+    await busy.append({ type: "events.iterate.com/voice-agent/ptt-start", payload: {} });
+    await busy.append(micFrame(1));
+    await busy.settle();
+    busy.provider.completeHandshake();
+    await busy.settle();
+    const busyItems = busy.provider.sentOfType("conversation.item.create") as {
+      item: { content?: { text: string }[] };
+    }[];
+    expect(busyItems.some((i) => i.item.content?.[0]?.text.includes("call just connected"))).toBe(
+      false,
+    );
+
+    /* And absent from the certificate, nobody speaks first. */
+    const plain = makeHarness();
+    await callIsLive(plain, CLIENT_TAKES_TURNS);
+    const plainItems = plain.provider.sentOfType("conversation.item.create") as {
+      item: { content?: { text: string }[] };
+    }[];
+    expect(plainItems.some((i) => i.item.content?.[0]?.text.includes("call just connected"))).toBe(
+      false,
+    );
   });
 
   it("a press during the goodbye un-decides the hang-up", async () => {

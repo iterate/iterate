@@ -196,22 +196,30 @@ describe("replayLlmRequest", () => {
   it("returns the committed output as the response, with thinking from chunks", () => {
     const chunkRows = [
       row(
-        "events.iterate.com/agent/llm-response-chunk",
+        "events.iterate.com/agent/llm-response-chunks",
         {
-          chunk: { choices: [{ delta: { reasoning_content: "let me think" } }] },
+          chunks: [{ choices: [{ delta: { reasoning_content: "let me think" } }] }],
           llmRequestOffset: 3,
           sequence: 0,
         },
         50,
       ),
       row(
-        "events.iterate.com/agent/llm-response-chunk",
-        { chunk: { choices: [{ delta: { content: "hi " } }] }, llmRequestOffset: 3, sequence: 1 },
+        "events.iterate.com/agent/llm-response-chunks",
+        {
+          chunks: [{ choices: [{ delta: { content: "hi " } }] }],
+          llmRequestOffset: 3,
+          sequence: 1,
+        },
         51,
       ),
       row(
-        "events.iterate.com/agent/llm-response-chunk",
-        { chunk: { choices: [{ delta: { content: "there" } }] }, llmRequestOffset: 3, sequence: 2 },
+        "events.iterate.com/agent/llm-response-chunks",
+        {
+          chunks: [{ choices: [{ delta: { content: "there" } }] }],
+          llmRequestOffset: 3,
+          sequence: 2,
+        },
         52,
       ),
     ];
@@ -234,14 +242,18 @@ describe("replayLlmRequest", () => {
     // order wins even when rows arrive shuffled.
     const chunkRows = [
       row(
-        "events.iterate.com/agent/llm-response-chunk",
-        { chunk: { choices: [{ delta: { content: "world" } }] }, llmRequestOffset: 7, sequence: 1 },
+        "events.iterate.com/agent/llm-response-chunks",
+        {
+          chunks: [{ choices: [{ delta: { content: "world" } }] }],
+          llmRequestOffset: 7,
+          sequence: 1,
+        },
         60,
       ),
       row(
-        "events.iterate.com/agent/llm-response-chunk",
+        "events.iterate.com/agent/llm-response-chunks",
         {
-          chunk: { choices: [{ delta: { content: "hello " } }] },
+          chunks: [{ choices: [{ delta: { content: "hello " } }] }],
           llmRequestOffset: 7,
           sequence: 0,
         },
@@ -249,8 +261,12 @@ describe("replayLlmRequest", () => {
       ),
       // Another request's chunk must not bleed in.
       row(
-        "events.iterate.com/agent/llm-response-chunk",
-        { chunk: { choices: [{ delta: { content: "NOPE" } }] }, llmRequestOffset: 3, sequence: 0 },
+        "events.iterate.com/agent/llm-response-chunks",
+        {
+          chunks: [{ choices: [{ delta: { content: "NOPE" } }] }],
+          llmRequestOffset: 3,
+          sequence: 0,
+        },
         62,
       ),
     ];
@@ -262,14 +278,52 @@ describe("replayLlmRequest", () => {
     expect(replay?.response).toEqual({ text: "hello world", thinkingText: "", source: "chunks" });
   });
 
+  it("re-assembles a partial response from coalesced llm-response-chunks windows", () => {
+    // Windows carry many chunks in provider order; flush sequence order wins
+    // even when rows arrive shuffled.
+    const chunkRows = [
+      row(
+        "events.iterate.com/agent/llm-response-chunks",
+        {
+          chunks: [{ choices: [{ delta: { content: "world" } }] }],
+          llmRequestOffset: 7,
+          sequence: 1,
+        },
+        60,
+      ),
+      row(
+        "events.iterate.com/agent/llm-response-chunks",
+        {
+          chunks: [
+            { choices: [{ delta: { reasoning_content: "hmm" } }] },
+            { choices: [{ delta: { content: "hello " } }] },
+          ],
+          llmRequestOffset: 7,
+          sequence: 0,
+        },
+        61,
+      ),
+    ];
+    const replay = replayLlmRequest({
+      rawEventJsons: conversationRows(),
+      chunkEventJsons: chunkRows,
+      llmRequestOffset: 7,
+    });
+    expect(replay?.response).toEqual({
+      text: "hello world",
+      thinkingText: "hmm",
+      source: "chunks",
+    });
+  });
+
   it("dedupes chunk rows by sequence (evicted-then-restreamed attempts leave two rows per sequence)", () => {
     // Chunk rows are ephemeral and evictable: a sweep mid-turn followed by a
     // retry re-appends the same sequences at new offsets, and the browser
     // mirror (which never deletes) keeps both copies. First occurrence wins.
     const chunk = (content: string, sequence: number, offset: number) =>
       row(
-        "events.iterate.com/agent/llm-response-chunk",
-        { chunk: { choices: [{ delta: { content } }] }, llmRequestOffset: 7, sequence },
+        "events.iterate.com/agent/llm-response-chunks",
+        { chunks: [{ choices: [{ delta: { content } }] }], llmRequestOffset: 7, sequence },
         offset,
       );
     const replay = replayLlmRequest({
@@ -324,13 +378,13 @@ describe("replayLlmRequest", () => {
     ];
     const chunkRows = [
       row(
-        "events.iterate.com/agent/llm-response-chunk",
-        { chunk: { choices: [{ delta: { content: "a" } }] }, llmRequestOffset: 7, sequence: 0 },
+        "events.iterate.com/agent/llm-response-chunks",
+        { chunks: [{ choices: [{ delta: { content: "a" } }] }], llmRequestOffset: 7, sequence: 0 },
         10,
       ),
       row(
-        "events.iterate.com/agent/llm-response-chunk",
-        { chunk: { choices: [{ delta: { content: "b" } }] }, llmRequestOffset: 7, sequence: 1 },
+        "events.iterate.com/agent/llm-response-chunks",
+        { chunks: [{ choices: [{ delta: { content: "b" } }] }], llmRequestOffset: 7, sequence: 1 },
         14,
       ),
     ];
@@ -361,13 +415,13 @@ describe("replayLlmRequest", () => {
     // settled event. The window can only be measured to the last chunk.
     const chunkRows = [
       row(
-        "events.iterate.com/agent/llm-response-chunk",
-        { chunk: { choices: [{ delta: { content: "a" } }] }, llmRequestOffset: 7, sequence: 0 },
+        "events.iterate.com/agent/llm-response-chunks",
+        { chunks: [{ choices: [{ delta: { content: "a" } }] }], llmRequestOffset: 7, sequence: 0 },
         10,
       ),
       row(
-        "events.iterate.com/agent/llm-response-chunk",
-        { chunk: { choices: [{ delta: { content: "b" } }] }, llmRequestOffset: 7, sequence: 1 },
+        "events.iterate.com/agent/llm-response-chunks",
+        { chunks: [{ choices: [{ delta: { content: "b" } }] }], llmRequestOffset: 7, sequence: 1 },
         14,
       ),
     ];

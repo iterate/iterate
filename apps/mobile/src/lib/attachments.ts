@@ -9,6 +9,12 @@ import { sniffImageContentType } from "./image-format.ts";
 import { normalizedImageFilename } from "./media.ts";
 
 export type PickedImage = {
+  /** The photo library's own id for this image, when it has one. The
+   * composer's camera-roll strip uses it to know which tiles are already
+   * going into this note — including photos picked through the + button,
+   * which iOS also identifies by asset id. Null for anything the library
+   * cannot name (web fallbacks, future non-library sources). */
+  assetId: string | null;
   filename: string;
   contentType: string;
   /** Base64 payload from the picker; decoded to bytes at send time. */
@@ -39,31 +45,40 @@ export async function pickImages(options: { selectionLimit: number }): Promise<P
     base64: true,
   });
   if (result.canceled) return [];
-  return result.assets.flatMap((asset, index) => {
-    if (!asset.base64) return [];
-    // The payload's magic bytes beat asset.mimeType: iOS has labeled
-    // re-encoded-to-JPEG bytes image/heic, and the label decides the uploaded
-    // filename's extension — which server-side toMarkdown picks its
-    // converter by. The label is only the fallback for unrecognized heads.
-    const contentType = sniffImageContentType(asset.base64) || asset.mimeType || "image/jpeg";
-    // The extension must match the recompressed payload, not the library's
-    // original fileName (often .HEIC) — see normalizedImageFilename.
-    const filename = normalizedImageFilename(
-      asset.fileName,
+  return result.assets.flatMap((asset, index) => pickedImageFromAsset(asset, index));
+}
+
+/** One picker asset → PickedImage; [] when the picker gave no bytes. Shared
+ * with the chat attachment sheet's mixed photo+video picker
+ * (lib/pick-media.ts), which routes only image assets here. */
+export function pickedImageFromAsset(
+  asset: ImagePicker.ImagePickerAsset,
+  index: number,
+): PickedImage[] {
+  if (!asset.base64) return [];
+  // The payload's magic bytes beat asset.mimeType: iOS has labeled
+  // re-encoded-to-JPEG bytes image/heic, and the label decides the uploaded
+  // filename's extension — which server-side toMarkdown picks its
+  // converter by. The label is only the fallback for unrecognized heads.
+  const contentType = sniffImageContentType(asset.base64) || asset.mimeType || "image/jpeg";
+  // The extension must match the recompressed payload, not the library's
+  // original fileName (often .HEIC) — see normalizedImageFilename.
+  const filename = normalizedImageFilename(
+    asset.fileName,
+    contentType,
+    `photo-${Date.now()}-${index}`,
+  );
+  return [
+    {
+      assetId: asset.assetId || null,
+      filename,
       contentType,
-      `photo-${Date.now()}-${index}`,
-    );
-    return [
-      {
-        filename,
-        contentType,
-        base64: asset.base64,
-        previewUri: asset.uri,
-        width: asset.width || 0,
-        height: asset.height || 0,
-      },
-    ];
-  });
+      base64: asset.base64,
+      previewUri: asset.uri,
+      width: asset.width || 0,
+      height: asset.height || 0,
+    },
+  ];
 }
 
 export { base64ToUint8Array } from "./encoding.ts";

@@ -21,12 +21,7 @@ import {
 } from "./agent-host.ts";
 import type { AgentProcessorContract } from "./agent-processor-contract.ts";
 import { fencedTsResponseFormat } from "./agent-response-format.ts";
-import {
-  buildSlashCommandCode,
-  resolveSlashCommand,
-  SCRIPT_SLASH_COMMAND_EXECUTION_PREFIX,
-  SLASH_COMMAND_EXECUTION_PREFIX,
-} from "./slash-commands.ts";
+import { resolveSlashCommand, SLASH_COMMAND_EXECUTION_PREFIX } from "./slash-commands.ts";
 
 export class AgentCodemode {
   readonly #host: AgentHost;
@@ -63,7 +58,7 @@ export class AgentCodemode {
                 {
                   type: "events.iterate.com/capability-host/script-run-requested",
                   payload: {
-                    code: buildSlashCommandCode(slashCommand, executionId),
+                    code: slashCommand.code,
                     executionId,
                     expiresAt: Date.parse(event.createdAt) + state.config.llmRequestExpiryMs,
                   },
@@ -170,15 +165,6 @@ export class AgentCodemode {
           (candidate) => candidate.executionId === executionId,
         );
         if (execution === undefined) break;
-        // `/script` publishes its successful result directly as interruptive
-        // context, then returns the same value so the capability host keeps it
-        // in the script-results preamble. Only its failures render here.
-        if (
-          executionId.startsWith(SCRIPT_SLASH_COMMAND_EXECUTION_PREFIX) &&
-          settlement.status === "succeeded"
-        ) {
-          break;
-        }
         // Per-event render (blocked): the settlement is delivered once, and a
         // lost render would silently drop the script's result from the
         // conversation. Rendering may first spill an oversized result into

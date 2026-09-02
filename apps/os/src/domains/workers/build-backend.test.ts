@@ -242,7 +242,12 @@ describe("executeWorkerBuild", () => {
   ])(
     "returns a source failure for unusable output after a dependency-install warning: %s",
     async (warning) => {
-      createWorker.mockResolvedValueOnce({
+      // A PERSISTENT warning: every attempt answers the same. The two
+      // version-resolution shapes earn RESOLUTION_RETRY_ATTEMPTS re-runs
+      // (transient registry-propagation cover — see
+      // build-backend-transient-resolution.test.ts); a warning that survives
+      // them all still fails loudly, and the other shapes stay one-shot.
+      createWorker.mockResolvedValue({
         result: {
           mainModule: "bundle.js",
           modules: { "bundle.js": 'export * from "iterate/sdk";' },

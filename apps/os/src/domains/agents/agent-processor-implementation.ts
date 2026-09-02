@@ -77,6 +77,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
    * reads, the out-of-frame append, and the injectable clock. */
   #makeHost(): AgentHost {
     return {
+      path: this.path,
       deps: this.deps,
       idempotencyKey: (suffix) => `agent/${suffix}`,
       readEvents: (input) => this.stream.readEvents(input),

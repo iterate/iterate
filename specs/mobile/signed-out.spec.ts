@@ -1,7 +1,7 @@
 import { test } from "../test-support/test.ts";
 
 test("the mobile app can be reviewed without an iOS build", async ({ page }) => {
-  // Stamp the bundle (dev-only override, apps/mobile/src/lib/build-info.ts)
+  // Stamp the bundle (dev-only override, apps/mobile/src/lib/build-state-core.ts)
   // so the expected backend contributes its quick-select chip.
   await page.addInitScript(() => {
     localStorage.setItem(

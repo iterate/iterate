@@ -125,5 +125,6 @@ export async function runCapabilityHostScript(input: {
     completedEvent,
     executionId: command.executionId,
     result: parsed.data.result ?? null,
+    scriptEvent: requested,
   };
 }

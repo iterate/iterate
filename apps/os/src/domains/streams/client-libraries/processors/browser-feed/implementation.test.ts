@@ -139,8 +139,8 @@ describe("BrowserFeedProcessor live ephemerals", () => {
     });
     const chunk = event(
       2,
-      "events.iterate.com/agent/llm-response-chunk",
-      { llmRequestOffset: 1, chunk: { response: "hello" } },
+      "events.iterate.com/agent/llm-response-chunks",
+      { llmRequestOffset: 1, chunks: [{ response: "hello" }] },
       true,
     );
 

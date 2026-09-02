@@ -30,6 +30,7 @@ const GithubAiLinterRule = z.object({
   files: z.array(z.string().min(1)).min(1),
   invariant: z.string().min(1),
   severity: z.enum(["error", "warning"]),
+  suggestions: z.enum(["allowed", "forbidden"]).default("allowed"),
 });
 
 export const GithubAiLinterAnalysisRequested = z.object({

@@ -35,6 +35,7 @@ jobs:
       - name: Run Tests
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          FLAKE_RECORD_DIR: test-results/flake-records
           TEST_TELEMETRY_ARTIFACT_DIR: test-results/ci-telemetry/raw
           TEST_TELEMETRY_BRANCH: ${{ github.head_ref || github.ref_name }}
           TEST_TELEMETRY_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
@@ -46,13 +47,26 @@ jobs:
         if: always()
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-          TEST_TELEMETRY_EXPECTED_WORKSPACES: "@iterate-com/auth,@iterate-com/docs,@iterate-com/dummy-petshop,@iterate-com/kit,@iterate-com/mobile,@iterate-com/os,@iterate-com/semaphore,@iterate/lint,iterate,@iterate-com/shared,@iterate-com/typm,@iterate-com/scripts,@iterate-com/workspace-documents"
+          TEST_TELEMETRY_EXPECTED_WORKSPACES: "@iterate-com/auth,@iterate-com/docs,@iterate-com/dummy-petshop,@iterate-com/kit,@iterate-com/mobile,@iterate-com/mobile-website,@iterate-com/os,@iterate-com/semaphore,@iterate/lint,iterate,@iterate-com/shared,@iterate-com/typm,@iterate-com/scripts,@iterate-com/workspace-documents"
         # A superseded run still normalizes and uploads its raw evidence, but
         # GitHub's job telemetry owns the cancelled outcome; do not turn killed
         # runner sentinels into test failures.
         # Test execution uses test/dev, but analytics always belongs to the
         # canonical production PostHog project shared with preview telemetry.
         run: doppler run --project _shared --config prd -- pnpm tsx scripts/ci/upload-test-telemetry.ts ${{ cancelled() && '--cancelled' || '' }}
+      - name: Report flake records
+        if: always()
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          FLAKE_RECORD_DIR: test-results/flake-records
+          TEST_TELEMETRY_BRANCH: ${{ github.head_ref || github.ref_name }}
+          TEST_TELEMETRY_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          TEST_TELEMETRY_LANE: unit
+        # Telemetry, not control: the script races a hard deadline and exits 0
+        # on every failure path, and it no-ops until the FLAKE_REPORT_* secrets
+        # exist in _shared/prd — a broken or unprovisioned target only gaps the
+        # flake data.
+        run: doppler run --project _shared --config prd -- pnpm tsx packages/iterate/scripts/report-flake-records.ts
       - name: Upload test telemetry artifacts
         if: always()
         uses: actions/upload-artifact@v4

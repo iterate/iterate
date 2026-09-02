@@ -26,12 +26,14 @@ describe("retainedScriptResult", () => {
     expect(
       retainedScriptResult({
         executionId: "agent-output:57",
+        scriptOffset: 55,
         settledAtOffset: 57,
         settlement: { status: "succeeded", result: { users: ["amy", "bob"] } },
       }),
     ).toEqual({
       kind: "data",
       executionId: "agent-output:57",
+      scriptOffset: 55,
       settledAtOffset: 57,
       resultJson: '{"users":["amy","bob"]}',
     });
@@ -42,6 +44,7 @@ describe("retainedScriptResult", () => {
     expect(JSON.stringify(big).length).toBeGreaterThan(INLINE_RESULT_PREAMBLE_LIMIT);
     const row = retainedScriptResult({
       executionId: "agent-output:42",
+      scriptOffset: 40,
       settledAtOffset: 42,
       settlement: { status: "succeeded", result: big },
     });
@@ -52,6 +55,7 @@ describe("retainedScriptResult", () => {
   it("keeps a failed script's error, truncated", () => {
     const row = retainedScriptResult({
       executionId: "agent-output:33",
+      scriptOffset: 31,
       settledAtOffset: 33,
       settlement: {
         status: "failed",
@@ -68,14 +72,26 @@ describe("retainedScriptResult", () => {
     expect(error.length).toBeLessThan(2_100);
   });
 
-  it("retains nothing for a script that returned undefined (that is how turns end)", () => {
+  it("retains a payload-free done row for a script that returned undefined (its offset is the reuse handle)", () => {
     expect(
       retainedScriptResult({
         executionId: "agent-output:9",
+        scriptOffset: 7,
         settledAtOffset: 9,
         settlement: { status: "succeeded" },
       }),
-    ).toBeNull();
+    ).toEqual({ kind: "done", executionId: "agent-output:9", scriptOffset: 7, settledAtOffset: 9 });
+  });
+
+  it("omits scriptOffset when no request was reduced (external settlement)", () => {
+    expect(
+      retainedScriptResult({
+        executionId: "agent-output:9",
+        scriptOffset: undefined,
+        settledAtOffset: 9,
+        settlement: { status: "succeeded" },
+      }),
+    ).toEqual({ kind: "done", executionId: "agent-output:9", settledAtOffset: 9 });
   });
 });
 
@@ -121,7 +137,10 @@ describe("assemblePreamble", () => {
     expect(loadIndex).toBeGreaterThan(dataIndex);
     expect(errorIndex).toBeGreaterThan(loadIndex);
     expect(ts).toContain('data: {"users":["amy","bob"]}');
-    expect(ts).toContain("get data(): never");
+    // Large rows keep the teaching throw, but data/load are NON-ENUMERABLE:
+    // rows travel over RPC and structured clone invokes enumerable getters.
+    expect(ts).toContain("readonly data: never");
+    expect(ts).toContain("enumerable: false");
     expect(ts).toContain("await results[1].load(itx)");
     expect(ts).toContain('getScriptResult("agent-output:42")');
     expect(ts).toContain('error: "TypeError: boom"');
@@ -145,6 +164,32 @@ describe("assemblePreamble", () => {
     expect(results.byOffset(33)).toMatchObject({ executionId: "agent-output:33", offset: 33 });
     // outside the retained window: loud, not undefined
     expect(() => results.byOffset(999)).toThrow("no retained script result settled at offset 999");
+  });
+
+  it("a large row structured-clones without firing the data throw — rows travel over RPC", async () => {
+    const { js } = assemblePreamble({ entries: [], results: ROWS })!;
+    const results = (await evaluatePreambleJs(js)) as unknown[];
+    // previousScriptHelper(results[N], …) and scripts returning rows both
+    // serialize the row; the teaching getter must not detonate there.
+    expect(structuredClone(results[1])).toEqual({ offset: 42, executionId: "agent-output:42" });
+  });
+
+  it("a done row renders offset + scriptOffset + executionId — the reuse handle for void scripts", async () => {
+    const { ts, js } = assemblePreamble({
+      entries: [],
+      results: [
+        { kind: "done", executionId: "agent-output:9", scriptOffset: 7, settledAtOffset: 9 },
+      ],
+    })!;
+    expect(ts).toContain("done: true");
+    expect(ts).toContain("scriptOffset: 7,");
+    const results = (await evaluatePreambleJs(js)) as { offset: number }[];
+    expect(results[0]).toMatchObject({
+      offset: 9,
+      scriptOffset: 7,
+      executionId: "agent-output:9",
+      done: true,
+    });
   });
 
   it("the js variant is runnable JavaScript with the same bindings (no TS syntax)", async () => {
