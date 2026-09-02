@@ -111,6 +111,10 @@ export class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
    *  AND its canonical string form (`.name`). A stream is only ever reached `getByName`; an
    *  id-addressed instance fails right here in the constructor, before it can touch anything. */
   readonly #address = parseIterateContextDurableObjectName(this.ctx.id.name);
+  /** The `env.ITX` / `globalOutbound` stub every worker this context loads receives — a loopback onto
+   *  this worker's own ItxEntrypoint with this context's name as its one prop. Minted once: it names
+   *  the context, not an incarnation, and a warm loader never re-reads it anyway. */
+  readonly #itxHost = itxEntrypointFor(this.ctx, this.#address.name);
   /** The live-capability fetch subsystem (fetch/fetch-capabilities.ts) — the DO wires its three
    *  halves directly: the upgrade-leg door (fetch), frame forwarding (webSocketMessage), and
    *  peer close (webSocketClose); the rpc-stub directory borrows it for serve(). */
@@ -207,8 +211,8 @@ export class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
   // BUILDING them is its wiring below. ──
   readonly #inlineCore = new InlineCore({
     kv: this.ctx.storage.kv,
-    read: (after, limit) => this.read(after, limit),
-    head: () => this.#stream.highestAssignedOffset(),
+    read: (after, limit) => this.#stream.read(after, limit),
+    head: () => this.#stream.durableMark(), // inline reduces fold durables: their head is the mark
     defs: () => this.#inlineDefs(),
     // The live-state deltas ride this DO's OWN append door, so they are admitted, committed, and
     // fanned out like any other ephemeral event (and a paused stream refuses them — the
@@ -307,8 +311,8 @@ export class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
   readonly #delivery = new SubscriptionDelivery({
     kv: this.ctx.storage.kv,
     subscriptions: () => this.#subscriptions(),
-    read: (after, limit) => this.read(after, limit),
-    head: () => this.#stream.highestAssignedOffset(),
+    read: (after, limit) => this.#stream.read(after, limit),
+    head: () => this.#stream.durableMark(), // a persisted cursor may never point past the mark
     append: (event) => this.append(event),
     // A target is evaluated through the ONE dispatch door — mounts and aliases included — so what
     // comes back is exactly what a caller would get: a FacetHandle, an RpcStubHandle, an entrypoint
@@ -330,10 +334,10 @@ export class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
     return this.#subscriptionsProcessor().configure(this.#subscriptions(), input);
   }
 
-  /** Remove a subscription; a cursor target's cursor goes with it. Idempotent. */
+  /** Remove a subscription. Idempotent. A cursor target's cursor goes with it — the delivery loop
+   *  drops it when the removed event commits (so a hand-appended removal is honoured the same way). */
   async removeSubscription(name: string): Promise<void> {
     await this.#subscriptionsProcessor().remove(this.#subscriptions(), name);
-    this.#delivery.forget(name);
   }
 
   /** The `itx.subscriptions` view: the reduced table joined with the delivery loop's cursors. */
@@ -409,7 +413,9 @@ export class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
       // actor awake, and a page always gets it back — dispose them with the idle facets.
       this.#rpcStubs.disposeRetainedStubs();
     } else {
-      this.#stream.armNoLaterThan(this.#lastActivityMs + 60_000);
+      // Not quiet yet — look again when the quiet period would end; but never in the PAST (work in
+      // flight for over a minute would otherwise re-fire this alarm in a tight, billed loop).
+      this.#stream.armNoLaterThan(Math.max(this.#lastActivityMs + 60_000, Date.now() + 10_000));
     }
   }
 
@@ -439,7 +445,21 @@ export class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
         return await (facet as { fetch(r: Request): Promise<Response> }).fetch(args[0] as Request);
       const what =
         typeof ref === "string" ? `facet "${ref}"` : `facet "${ref.name ?? ref.className}"`;
-      return await invokePath(facet, path, args, what);
+      const result = await invokePath(facet, path, args, what);
+      // A facet's answer arrives as a Workers-RPC RESULT: when it is an object, it carries a
+      // disposer that holds the call's resources — a reference on the FACET — until disposed or
+      // GC'd. GC is too late for the quiesce: every `snapshot()` left such a result behind, so an
+      // aborted facet stayed referenced and this actor could not be evicted (pinned, billed) until
+      // the garbage collector happened by. Facet answers are DATA by design (facet stubs are
+      // non-transferable), so copy the data out and release the result at once.
+      if (typeof result === "object" && result !== null && Symbol.dispose in result) {
+        try {
+          return structuredClone(result);
+        } finally {
+          (result as Disposable)[Symbol.dispose]();
+        }
+      }
+      return result;
     } finally {
       this.#facetWorkInFlight--;
       this.#noteActivity(); // a finished invoke earns a fresh quiet period
@@ -503,7 +523,6 @@ export class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
     const stored = this.ctx.storage.kv.get(`facet:${name}`) as FacetMemo | undefined;
     if (!stored || stored.source !== memo.source || stored.className !== memo.className)
       this.ctx.storage.kv.put(`facet:${name}`, memo);
-    this.#liveFacets.add(name);
     // Resolve the source ONCE per materialization, not once per commit (the memo above).
     const cached = this.#resolvedFacetSource.get(name);
     const resolved =
@@ -513,7 +532,7 @@ export class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
     const { worker, version, modules } = await loadConfinedWorker({
       env: this.env,
       invoke: (e) => this.invoke(e),
-      host: itxEntrypointFor(this.ctx, this.#address.name),
+      host: this.#itxHost,
       kind: "facet",
       owner: facetLoaderOwner(this.#address.name, memo.className),
       source: parse(memo.source) as WorkerSource,
@@ -521,8 +540,13 @@ export class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
       what: `facet "${name}"`,
       ...(resolved && { resolved }),
     });
+    // The load awaited: a `facets.delete(name)` (disableProcessor) may have landed meanwhile — its
+    // memo is gone, and materializing now would resurrect the deleted facet as an orphan this
+    // actor never quiesces. Refuse instead; the caller's row is gone too.
+    if (!this.ctx.storage.kv.get(`facet:${name}`))
+      throw codedError("NO_FACET", `no facet "${name}" — deleted while its source loaded`);
     if (!resolved) this.#resolvedFacetSource.set(name, { srcPrint: memo.source, version, modules });
-    return versionedFacet(this.ctx, {
+    const facet = versionedFacet(this.ctx, {
       worker,
       className: memo.className,
       facetName: name,
@@ -530,6 +554,8 @@ export class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
       version,
       props: { contextName: this.#address.name, name },
     });
+    this.#liveFacets.add(name); // live from here: the quiesce alarm aborts it when idle
+    return facet;
   }
 
   /** Delete a facet, storage included (`itx.facets.delete(name)`; `disableProcessor` ends here). A

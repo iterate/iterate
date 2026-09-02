@@ -200,10 +200,15 @@ test("a mid-batch idempotency conflict rolls the whole batch back atomically", a
   expect(types).not.toContain("fresh-before");
   expect(types).not.toContain("fresh-after");
   expect(seed.offset).toBeGreaterThan(0);
-  // …and no orphaned OFFSETS either: the next append lands exactly one past the pre-rollback
-  // head (a leaked max-offset would open a gap; a leaked row would collide on the primary key).
+  // …and no orphaned OFFSETS either: a marker right before a second refused batch and a probe
+  // right after land adjacent (a leaked max-offset would open a gap; a leaked row would collide on
+  // the primary key). A plain event changes no inline state, so nothing ephemeral lands between.
+  const [marker] = await append(itx, { type: "marker", payload: {} });
+  await rejection(
+    append(itx, { type: "fresh-again" }, { type: "seed", payload: { v: 3 }, idempotencyKey: "kc" }),
+  );
   const [probe] = await append(itx, { type: "probe", payload: {} });
-  expect(probe.offset).toBe(page.scannedThroughOffset + 1);
+  expect(probe.offset).toBe(marker.offset + 1);
 });
 
 test("a dedupe hit interleaved with fresh events assigns no double offsets", async () => {
@@ -326,7 +331,7 @@ test("breaker refills across a paused period and clamps at capacity", async () =
   expect(err2.message).toContain("circuit breaker open");
 });
 
-test("read paging: a full page stops at its last row; a short page proves the head through ephemeral holes", async () => {
+test("read paging: a full page stops at its last row; a short page proves the durable log through its mark, never the ephemeral tail", async () => {
   const itx = await harness.itx("prj_log_paging");
   const durables = await append(
     itx,
@@ -345,10 +350,13 @@ test("read paging: a full page stops at its last row; a short page proves the he
   const full = await read(itx, base, 3);
   expect(full.events).toHaveLength(3);
   expect(full.scannedThroughOffset).toBe(durables[2].offset);
-  // SHORT page from there: proves the scan reached the head, ephemeral offsets included
+  // SHORT page from there: proves the scan reached the DURABLE mark — never the in-memory head,
+  // whose ephemeral offsets a later incarnation may hand to durables (a reader that persisted one
+  // would skip them). The ephemerals took offsets (eph[1] > durables[2]) but are not proven.
   const short = await read(itx, durables[2].offset, 3);
   expect(short.events).toHaveLength(0);
-  expect(short.scannedThroughOffset).toBe(eph[1].offset);
+  expect(eph[1].offset).toBeGreaterThan(durables[2].offset);
+  expect(short.scannedThroughOffset).toBe(durables[2].offset);
   // one more durable AFTER the holes: a full page whose last row IS the head lands exactly on it
   const [d4] = await append(itx, { type: "d", payload: { n: 4 } });
   const exact = await read(itx, base, 4);
@@ -402,9 +410,14 @@ test("ephemeral + idempotencyKey is refused loudly and atomically mid-batch", as
   expect(types).toContain("seed");
   expect(types).not.toContain("fresh");
   expect(seed.offset).toBeGreaterThan(0);
-  // dense continuation from the pre-rollback head — the refused batch burned no offsets
+  // dense continuation — a refused batch burns no offsets: a marker before a second refusal and a
+  // probe after it land adjacent (a plain event changes no inline state; nothing ephemeral lands between)
+  const [marker] = await append(itx, { type: "marker", payload: {} });
+  await rejection(
+    append(itx, { type: "blip", payload: {}, ephemeral: true, idempotencyKey: "contradiction" }),
+  );
   const [probe] = await append(itx, { type: "probe", payload: {} });
-  expect(probe.offset).toBe(page.scannedThroughOffset + 1);
+  expect(probe.offset).toBe(marker.offset + 1);
 });
 
 test("breaker overdraft: an admitted batch drives tokens NEGATIVE, and the debt is CARRIED, not clamped", async () => {

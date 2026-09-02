@@ -234,14 +234,15 @@ describe("arbitrary-size payloads (row chunking — the apps/os contract)", () =
     //      would burn extra offsets between the neighbors and return >1 event for the body.
     const itx = await harness.itx("prj_chunk_dense");
     const blob = "d".repeat(3 * 1024 * 1024);
+    // The FIRST commit also mints the woken record and the core reduce's ephemeral live-state
+    // delta at the head, so `small-before` goes in twice: the second receipt is adjacent to `big`
+    // (a plain event changes no inline state — nothing ephemeral lands between them).
+    await append(itx, [{ type: "small-before" }]);
     const [before] = await append(itx, [{ type: "small-before" }]);
-    // The TRUE head (platform events — woken, live-state deltas — may sit past the receipt).
-    const headBeforeBig = (await itx.invokeCapability(["itx", ["read", before.offset]]))
-      .scannedThroughOffset;
     const committedBig = await append(itx, [{ type: "big", payload: { blob } }]);
     expect(committedBig).toHaveLength(1); // ONE event committed for one input — not split
     const [after] = await append(itx, [{ type: "small-after" }]);
-    expect(committedBig[0].offset).toBe(headBeforeBig + 1); // dense…
+    expect(committedBig[0].offset).toBe(before.offset + 1); // dense…
     expect(after.offset).toBe(committedBig[0].offset + 1); // …on both sides
     // The big offset alone carries the WHOLE body (chunk rows are invisible to reads):
     const page = await itx.invokeCapability(["itx", ["read", before.offset, 500]]);
@@ -298,10 +299,17 @@ describe("arbitrary-size payloads (row chunking — the apps/os contract)", () =
     expect(types.filter((t: string) => t === "pin")).toHaveLength(1);
     expect(types).not.toContain("big-victim");
     expect(pin.offset).toBeGreaterThan(0);
-    // …and the allocator did not burn offsets for the rolled-back batch: dense continuation
-    // from the pre-rollback head.
+    // …and the allocator did not burn offsets for a rolled-back batch: a marker before a second
+    // refused chunked batch and a probe after it land adjacent.
+    const [marker] = await append(itx, [{ type: "marker" }]);
+    await expect(
+      append(itx, [
+        { type: "big-victim", payload: { blob } },
+        { type: "pin", payload: { v: 3 }, idempotencyKey: "pin" },
+      ]),
+    ).rejects.toThrow(/idempotency key "pin" already names a different event/);
     const [next] = await append(itx, [{ type: "after-rollback" }]);
-    expect(next.offset).toBe(page.scannedThroughOffset + 1);
+    expect(next.offset).toBe(marker.offset + 1);
   }, 60_000);
 
   test("read paging across a chunked event keeps the scanned-offset-range proof honest", async () => {

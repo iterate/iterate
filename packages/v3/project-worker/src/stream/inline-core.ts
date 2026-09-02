@@ -1,13 +1,16 @@
 // stream/inline-core.ts — THE INLINE CORE: reduce-only processors reduced SYNCHRONOUSLY at the
-// stream's commit point. The runner apparatus (serial chain, cursors, gap repair, resurrection) is
+// stream's commit point. The engine apparatus (serial chain, cursors, gap repair) is
 // the price a facet pays for being AWAY from the commit point; these reduces run AT it and pay none
 // of it — so a ReduceOnlyProcessor (contract + `reduce`, no `processEvent`) is hosted here for free.
 //
 // The whole engine is four moves: REHYDRATE from a versioned checkpoint (else the schema-initial
 // state), CATCH UP to the durable head by replaying the log, REDUCE fresh durables at commit, and
-// CHECKPOINT on change. A checkpoint is one versioned kv value per slug; rebuild replays the durable
-// log — so version skew, eviction, and first contact are all the same path, and the checkpoint
-// always rebuilds bit-identically (inline reduces see DURABLE events only). This module owns the
+// CHECKPOINT — the cursor every durable batch (a ~1 µs kv put inside the transaction already open),
+// the state only when it changed. A checkpoint is one versioned kv value per slug; rebuild replays
+// the durable log — so version skew, eviction, and first contact are all the same path, and the
+// checkpoint always rebuilds bit-identically (inline reduces see DURABLE events only). The cursor
+// write is what bounds a wake: without it a long incarnation's whole log replayed on the first call
+// after eviction (measured 0.4–1.2 s per million rows, per slug). This module owns the
 // cache + the four moves; the host (the stream DO) owns only the DEFS — which processors are inline
 // — because building them (the capability table's whole built-in scope) is the host's wiring.
 //
@@ -38,8 +41,8 @@ export class InlineCore {
   /** ONE LiveState holder per inline entry (key = the slug), lazily born at the entry's first
    *  commit-time reduce SEEDED WITH THE PRE-BATCH STATE — so the first post-commit publish diffs
    *  exactly what the batch changed. The inline reduced states thereby produce the same ephemeral
-   *  live-state/changed deltas facet processors already do (stream/live-state.ts), and are
-   *  subscribable via the existing `liveState:{key}` mode. */
+   *  live-state/changed deltas facet processors already do (stream/live-state.ts); a subscription
+   *  names `events.iterate.com/live-state/changed` to watch them. */
   readonly #liveStates = new Map<string, LiveState<unknown>>();
   /** Slugs whose reduce changed state at the last commit — drained by publishLiveStateChanges. */
   readonly #changedAtCommit = new Set<string>();
@@ -47,6 +50,9 @@ export class InlineCore {
   constructor(deps: {
     kv: KvStore;
     read: (after: number, limit: number) => { events: StreamEvent[]; scannedThroughOffset: number };
+    /** The DURABLE high-water mark: inline reduces fold durables only, so this is their head. Never
+     *  the in-memory head — that counts ephemeral offsets, and an entry that chased it would issue a
+     *  log read on every call after an ephemeral commit. */
     head: () => number;
     /** Which processors are inline, built lazily (the capability table needs the host's scope). */
     defs: () => Def[];
@@ -103,18 +109,17 @@ export class InlineCore {
         this.#reduce(entry, e);
       }
       entry.throughOffset = nextOffset;
-      // Inline writes ONLY on change (rebuild re-catches-up cheaply from the log, so an unadvanced
-      // cursor is harmless) — unlike a facet, which advances its cursor every batch.
-      if (entry.state !== before) {
-        this.#changedAtCommit.add(def.slug); // published POST-commit — never inside the txn
-        writeReduceCheckpoint(
-          this.#kv,
-          def.slug,
-          { reducerVersion: def.proc.contract.version, reducedThroughOffset: nextOffset },
-          entry.state,
-          true,
-        );
-      }
+      // The cursor every batch, the state on change (see the header): this runs inside append's
+      // transaction, which this batch's durable rows already opened, so the cursor put is free.
+      const changed = entry.state !== before;
+      if (changed) this.#changedAtCommit.add(def.slug); // published POST-commit — never inside the txn
+      writeReduceCheckpoint(
+        this.#kv,
+        def.slug,
+        { reducerVersion: def.proc.contract.version, reducedThroughOffset: nextOffset },
+        entry.state,
+        changed,
+      );
     }
   }
 

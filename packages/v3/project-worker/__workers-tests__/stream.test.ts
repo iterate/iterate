@@ -308,3 +308,61 @@ test("across incarnations an ephemeral-only tail's offsets are REUSED by the nex
     expect((await second.read(0)).events.map((e) => e.offset)).toEqual([1, 2, 3, 4]);
   });
 });
+
+test("read()'s short-page proof is the DURABLE mark, never the in-memory head (an ephemeral tail is not proven)", async () => {
+  await runInDurableObject(stub("prj_eph_proof"), async (_instance, state) => {
+    const stream = bareStream(state.storage);
+    stream.append({ type: "tick" }); // woken@1, tick@2 — durable, mark 2
+    stream.append({ type: "blip", ephemeral: true }, { type: "blip", ephemeral: true }); // @3 @4 in memory
+    expect(stream.highestAssignedOffset()).toBe(4);
+    expect(stream.durableMark()).toBe(2);
+    // A reader must never learn an offset a later incarnation could hand to a durable: the proof
+    // stops at the mark. (A persisted checkpoint or cursor built from this read is therefore safe.)
+    expect(stream.read(0).scannedThroughOffset).toBe(2);
+    expect(stream.read(2).scannedThroughOffset).toBe(2);
+    // The next durable batch moves both.
+    stream.append({ type: "tick" }); // @5
+    expect(stream.durableMark()).toBe(5);
+    expect(stream.read(0).scannedThroughOffset).toBe(5);
+  });
+});
+
+test("a warm ephemeral-only append runs NO SQL at all (no read, no write, no transaction)", async () => {
+  await runInDurableObject(stub("prj_eph_nosql"), async (_instance, state) => {
+    const counts = { exec: 0, txn: 0, put: 0 };
+    const wrap = <T extends object>(target: T, hooks: Record<string, () => void>): T =>
+      new Proxy(target, {
+        get(t, k) {
+          const v = Reflect.get(t, k) as unknown;
+          if (typeof k === "string" && k in hooks) {
+            return (...args: unknown[]) => {
+              hooks[k]!();
+              return (v as (...a: unknown[]) => unknown).apply(t, args);
+            };
+          }
+          return typeof v === "function" ? (v as (...a: unknown[]) => unknown).bind(t) : v;
+        },
+      });
+    const sql = wrap(state.storage.sql, { exec: () => counts.exec++ });
+    const kv = wrap(state.storage.kv, { put: () => counts.put++ });
+    const storage = new Proxy(state.storage, {
+      get(t, k) {
+        if (k === "sql") return sql;
+        if (k === "kv") return kv;
+        if (k === "transactionSync")
+          return (fn: () => unknown) => {
+            counts.txn++;
+            return t.transactionSync(fn);
+          };
+        const v = Reflect.get(t, k) as unknown;
+        return typeof v === "function" ? (v as (...a: unknown[]) => unknown).bind(t) : v;
+      },
+    });
+    const stream = bareStream(storage as DurableObjectStorage);
+    stream.append({ type: "tick" }); // the incarnation's first commit is durable (woken) — warms every cache
+    stream.append({ type: "blip", ephemeral: true }); // one ephemeral through the fast path, caches warm
+    Object.assign(counts, { exec: 0, txn: 0, put: 0 });
+    stream.append({ type: "blip", ephemeral: true }, { type: "blip", ephemeral: true });
+    expect(counts).toEqual({ exec: 0, txn: 0, put: 0 });
+  });
+});

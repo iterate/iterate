@@ -64,10 +64,11 @@ type Deps = {
     afterOffset: number,
     limit: number,
   ) => { events: StreamEvent[]; scannedThroughOffset: number };
-  /** Append a fact onto the stream (the halted event). */
-  /** The highest offset assigned so far — a resume's seek is clamped to it (a seek past the head
-   *  would park the cursor beyond every event until the stream caught up to it: a dead row). */
+  /** The DURABLE high-water mark — a resume's seek is clamped to it (a seek past it would park the
+   *  cursor beyond every event until the stream caught up: a dead row; and a cursor is PERSISTED, so
+   *  it may never name an offset a later incarnation could hand to a durable). */
   head: () => number;
+  /** Append a fact onto the stream (the halted event). */
   append: (event: StreamEventInput) => Promise<unknown>;
   /** Evaluate an itx expression through the context's own dispatch — a handle, a function, a value. */
   evaluate: (expression: Expression) => Promise<unknown>;
@@ -118,17 +119,24 @@ export class SubscriptionDelivery {
             reportIssue("subscription-delivery.resume-pump", error, { name }),
           );
       }
-      // A new subscription's target is evaluated ONCE right away, whatever its `consumes` says: a
-      // processor's facet materializes at enable time (so `itx.facets.get(name)` answers before its
-      // first consumed event), and a target whose head cannot be evaluated is reported here, once,
-      // instead of once per commit.
+      // A configured row REPLACES: whatever the loop remembered about the old row under this name
+      // (a stream-kept cursor, a pushed batch, a watermark) belonged to the old target, so it goes.
+      // Then the new target is evaluated ONCE right away, whatever its `consumes` says: a processor's
+      // facet is MATERIALIZED at enable time (`wake` on the handle — so `itx.facets.get(name)`
+      // answers before its first consumed event), and a target whose head cannot be evaluated is
+      // reported here, once, instead of once per commit.
       if (e.type === "events.iterate.com/stream/subscription-configured") {
         const name = (e.payload as { name: string }).name;
+        this.forget(name);
         const sub = table.subscriptions[name];
         if (sub)
-          void this.#resolve(sub.target).catch((error) =>
-            reportIssue("subscription-delivery.configured", error, { name }),
-          );
+          void this.#resolve(sub.target)
+            .then(({ head }) =>
+              head instanceof FacetHandle
+                ? invokePath(head, ["wake"], [], `facet "${name}"`)
+                : undefined,
+            )
+            .catch((error) => reportIssue("subscription-delivery.configured", error, { name }));
       }
     }
     for (const [name, sub] of Object.entries(table.subscriptions)) {
@@ -206,6 +214,7 @@ export class SubscriptionDelivery {
         // the order, and a stalled client blocks nothing but itself. CONNECTION_OFFLINE is the benign
         // heal-by-pull case (the stub is not there right now; the mount stays, the client re-parks);
         // anything else is a real drop worth a line — the subscriber sees the range gap and heals.
+        this.#pushed.delete(name); // only a stream-kept cursor ever reads it
         void call([events, range]).catch((error) => {
           if (errorCode(error) !== "CONNECTION_OFFLINE")
             log.warn("push delivery dropped", { event: "delivery.push.dropped", name, error });
@@ -215,8 +224,10 @@ export class SubscriptionDelivery {
       if (head instanceof FacetHandle) {
         // A FACET owns its checkpoint: push, AWAITED — so this facet's batches stay in order (a slow
         // materialization must not let a later batch overtake an earlier one) and the quiesce never
-        // aborts it mid-reduce. Its own gap repair covers anything a failed push left behind.
-        await call([events, range]);
+        // aborts it mid-reduce — under the same watchdog as a cursor delivery (a hung facet must not
+        // hold this chain, and this actor, forever). Its own gap repair covers a dropped push.
+        this.#pushed.delete(name);
+        await withTimeout(call([events, range]), DELIVERY_TIMEOUT_MS, name);
         return;
       }
       // CANNOT own progress: the stream keeps the cursor. The pushed batch is remembered (onCommit);
@@ -252,7 +263,7 @@ export class SubscriptionDelivery {
     return { head, call };
   }
 
-  // ── the cursor lane: at-least-once, from the kv row, the awaited call is the ack ──
+  // ── the stream-kept cursor: at-least-once, from the kv row, the awaited call is the ack ──
 
   async #pump(name: string): Promise<void> {
     if (this.#pumping.has(name)) return; // one in flight per subscription; the loop below drains
@@ -334,6 +345,11 @@ export class SubscriptionDelivery {
           this.#deps.onActivity();
         } catch (error) {
           if (!this.#sameGeneration(name, row)) continue;
+          // A delivery-resumed that landed DURING this attempt is not yet applied (the row's
+          // generation is unchanged — nobody else pumps this name): loop back and apply it instead of
+          // arming the old ladder or, worse, appending a halt on top of the operator's resume.
+          const latest = this.#deps.subscriptions().subscriptions[name];
+          if (latest?.resumed && latest.resumed.atOffset !== row.resumedAt) continue;
           const attempt = row.attempt + 1;
           const message = error instanceof Error ? error.message : String(error);
           // Honor stamped flags over an invented taxonomy: `retryable: false` (workerd stamps these;

@@ -6,7 +6,7 @@
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "jsx": "react-jsx",
-    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "lib": ["ES2022", "ESNext.Disposable", "DOM", "DOM.Iterable"],
     "types": ["react", "react-dom"]
   },
   "include": ["src/client/react.tsx", "src/client/demo.tsx"],

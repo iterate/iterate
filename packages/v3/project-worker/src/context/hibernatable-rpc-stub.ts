@@ -209,10 +209,15 @@ export class HibernatableRpcStubManager {
    *  can note it (the directory simply forgets the transport; a mount naming the stub stays and
    *  answers CONNECTION_OFFLINE — the mount is data, the socket was weather). */
   closed(ws: WebSocket): HibernatableRpcStubRecord | undefined {
+    // Once per socket: workerd may deliver BOTH webSocketError and webSocketClose for one drop, and
+    // the second must not report the transport (and its presence) as lost twice.
+    if (this.#closedSockets.has(ws)) return undefined;
+    this.#closedSockets.add(ws);
     const record = this.#attachment(ws);
     if (record) this.#forget(record.transportId);
     return record;
   }
+  readonly #closedSockets = new WeakSet<WebSocket>();
 
   /** Observability: `dormant` ⇒ nothing paged in (the DO can hibernate; stubs stay attached). */
   state(): Record<string, unknown> {

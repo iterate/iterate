@@ -1,5 +1,4 @@
-// stream/stream.ts — THE STREAM, a simple dependency-injected JS class (the apps/os StreamEventLog +
-// StreamAlarmArmer, folded into the one commit pipeline that used to straddle them and the DO):
+// stream/stream.ts — THE STREAM, a simple dependency-injected JS class:
 // SQLite rows + one kv high-water mark, idempotency at the door, one shared offset sequence,
 // chunked large bodies, the append validation + admission gate, the wake record, waitForEvent, and
 // the alarm armer. The DurableObject holds a `Stream` and drives it; everything the stream needs
@@ -16,7 +15,11 @@
 // that carried a durable (the processor engine, the inline reduces, the subscription cursors), and
 // such a batch's high-water mark is committed with it, so no durable is ever skipped; the
 // `stream/woken` record, durable in the first batch of each incarnation, marks the boundary for
-// anyone chaining ranges across it.
+// anyone chaining ranges across it. And `read()` never PROVES a scan beyond the durable mark: a
+// short page's `scannedThroughOffset` is the mark, not the in-memory head — so nothing a reader
+// persists (a facet's checkpoint, a subscription cursor) can name an offset a later incarnation
+// could hand to a durable. Pushes still carry the full head in their ranges; only the log's own
+// proof is capped.
 //
 // Deliberately storage-lazy: a stream that never writes must never mint backing storage (workerd
 // auto-deletes empty objects; a probed snapshot, a read, or a timed-out waitForEvent on a
@@ -107,6 +110,10 @@ export class Stream {
    *  durable row, atomically with those rows; an ephemeral-only batch advances this cache alone
    *  (see the header: an ephemeral's offset is unique within an incarnation). */
   #highestAssignedOffsetCache?: number;
+  /** The kv high-water mark (`maxAssignedOffset`) as of the last COMMITTED durable batch: the
+   *  DURABLE head. What `read()` proves a scan through, what the inline reduces fold up to, and
+   *  what a resume's seek is clamped to — never the in-memory head above. */
+  #durableMarkCache?: number;
   /** Parked waitForEvent callers, FIFO. Fed from `fresh` in append's post-commit tail. */
   readonly #waiters: EventWaiter[] = [];
   #armedForMs: number | null = null;
@@ -154,8 +161,15 @@ export class Stream {
   }
 
   highestAssignedOffset(): number {
-    this.#highestAssignedOffsetCache ??= (this.#storage.kv.get("maxAssignedOffset") as number) ?? 0;
+    this.#highestAssignedOffsetCache ??= this.durableMark();
     return this.#highestAssignedOffsetCache;
+  }
+
+  /** The durable high-water mark — the highest offset any durable row holds (a non-minting kv read
+   *  on a virgin stream). Ephemeral offsets above it exist only in this incarnation's memory. */
+  durableMark(): number {
+    this.#durableMarkCache ??= (this.#storage.kv.get("maxAssignedOffset") as number) ?? 0;
+    return this.#durableMarkCache;
   }
 
   /** Has the events table been created yet? A virgin stream has none, and READING must never mint
@@ -238,12 +252,12 @@ export class Stream {
       const fresh = inputs.map(
         (input) => ({ ...input, createdAt, offset: ++nextOffset, path: this.#path }) as StreamEvent,
       );
-      this.#highestAssignedOffsetCache = nextOffset;
-      this.#reduceAtCommit(fresh, scannedAfterOffset, nextOffset); // a no-op fold (ephemerals never reduce) that keeps the inline cursors current
+      this.#highestAssignedOffsetCache = nextOffset; // the durable mark is untouched
       this.#settleWaiters(fresh);
       this.#onCommit(fresh, scannedAfterOffset, nextOffset);
       return fresh;
     }
+    const createdAt = new Date().toISOString();
     const { committed, distinct, nextOffset } = this.#storage.transactionSync(() => {
       const committed: StreamEvent[] = [];
       let nextOffset = scannedAfterOffset;
@@ -273,7 +287,7 @@ export class Stream {
           }
         }
         nextOffset += 1;
-        const body = { ...input, createdAt: new Date().toISOString() };
+        const body = { ...input, createdAt };
         if (!input.ephemeral)
           this.#storeEvent(nextOffset, JSON.stringify(body), input.idempotencyKey ?? null);
         committed.push({ ...body, offset: nextOffset, path: this.#path } as StreamEvent);
@@ -297,6 +311,7 @@ export class Stream {
     if (injectWoken) this.#wokenRecorded = true; // only a LANDED commit carries the wake record
     if (nextOffset > scannedAfterOffset) {
       this.#highestAssignedOffsetCache = nextOffset;
+      this.#durableMarkCache = nextOffset; // the mark this transaction just committed
       // A prior-batch idempotency dedupe echoes an ALREADY-DELIVERED below-range offset into
       // `distinct` (see the dedupe note above). Drop it before the fan-out — the range is
       // (after, nextOffset]; a durable at/below the floor was delivered on its own commit.
@@ -315,8 +330,7 @@ export class Stream {
   read(afterOffset = 0, limit = 500): StreamPage {
     limit = Math.max(1, limit); // limit 0 crashed the full-page check (userspace-reachable)
     // A virgin stream has no events table (and reading must not create one — see touch()).
-    if (!this.#eventsTableExists())
-      return { events: [], scannedThroughOffset: this.highestAssignedOffset() };
+    if (!this.#eventsTableExists()) return { events: [], scannedThroughOffset: this.durableMark() };
     const events = this.#storage.sql
       .exec(
         "SELECT offset, body FROM events WHERE offset > ? ORDER BY offset LIMIT ?",
@@ -337,11 +351,12 @@ export class Stream {
         };
       });
     // The scanned-offset-range proof: a FULL page is only contiguously known through its last
-    // row; a short page proves the read scanned to the HEAD (ephemeral holes and all). Never
-    // beyond the head — a beyond-head afterOffset must not fabricate a scan of unassigned
-    // offsets (which would let a bad cursor skip everything later assigned there).
+    // row; a short page proves the read scanned the whole DURABLE log — through the durable mark,
+    // never the in-memory head. The head counts ephemeral offsets, which die with the incarnation
+    // and may be handed to durables by the next one; a proof that named one would let a persisted
+    // checkpoint skip those durables (the zero-write contract in the header).
     const scannedThroughOffset =
-      events.length === limit ? events[events.length - 1].offset : this.highestAssignedOffset();
+      events.length === limit ? events[events.length - 1].offset : this.durableMark();
     return { events, scannedThroughOffset };
   }
 
