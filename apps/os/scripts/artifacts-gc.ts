@@ -71,13 +71,23 @@ export default async function artifactsGc(options: {
         headers: { authorization: `Bearer ${ctx.secrets.CLOUDFLARE_API_TOKEN}` },
       }),
     );
-    const body: any = await response.json().catch(() => null);
-    if (!response.ok || body?.success === false) {
+    // Trusted-shape cast, same contract as ctx.cf/cfV4 (env-context.ts) which
+    // returns `body.result as T` unvalidated: the v4 envelope is Cloudflare's
+    // documented response shape, and a surprise mismatch surfaces immediately
+    // at the call site (undefined .result / .cursor), not as silent deletion
+    // of the wrong thing — repo names always come from the listing itself.
+    const body = (await response.json().catch(() => null)) as null | {
+      success?: boolean;
+      errors?: unknown;
+      result: T;
+      result_info?: { cursor?: string; count?: number };
+    };
+    if (!response.ok || !body || body.success === false) {
       throw new Error(
         `Cloudflare API ${init?.method || "GET"} ${path} failed (${response.status}): ${JSON.stringify(body?.errors || body).slice(0, 300)}`,
       );
     }
-    return body as { result: T; result_info?: { cursor?: string; count?: number } };
+    return body;
   };
 
   // ---- live projects: `project:<id>` keys in the project-directory KV --------
@@ -189,11 +199,17 @@ export function triageArtifactsRepoPage(input: {
   /** prd: deployment-wide "global--*" repos have no owning project to check, so leave them. */
   protectGlobalRepos: boolean;
 }) {
-  const result = {
-    deletable: [] as string[],
-    skippedLive: [] as string[],
-    skippedForeign: [] as string[],
-    skippedGlobal: [] as string[],
+  const result: {
+    deletable: string[];
+    skippedLive: string[];
+    skippedForeign: string[];
+    skippedGlobal: string[];
+    reachedCutoff: boolean;
+  } = {
+    deletable: [],
+    skippedLive: [],
+    skippedForeign: [],
+    skippedGlobal: [],
     reachedCutoff: false,
   };
   for (const repo of input.repos) {
