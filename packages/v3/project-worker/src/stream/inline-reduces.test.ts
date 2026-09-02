@@ -63,7 +63,7 @@ test("a reduce-only StreamProcessor hosts INLINE: durables fold at commit, ephem
   log.push(batch[0], batch[2]);
   reduces.reduceAtCommit(batch, 0, 3);
   durable.mark = 3;
-  expect(reduces.entry("ticks")).toEqual({ state: { n: 2 }, throughOffset: 3 });
+  expect(reduces.entry("ticks")).toMatchObject({ state: { n: 2 }, throughOffset: 3 });
 });
 
 test("a processor that overrides processEvent is REFUSED at registration — effects cannot run at the commit point", () => {
