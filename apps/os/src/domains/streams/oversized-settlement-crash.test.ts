@@ -62,7 +62,7 @@ describe("stream DO isolate under an oversized script settlement", () => {
   // Desired behavior: the same fan-out fits the isolate budget, because the
   // settlement was bounded before it was journaled. Today it OOMs instead.
   // The replay child OOMs in a few seconds, so the wrapper's default 30s
-  // deadline (below the unit lane's 45s runner timeout, per its contract) is
+  // deadline (below the apps/os unit tests' 45s runner timeout, per its contract) is
   // ample — a hang fails as NOT-the-pinned-failure rather than masquerading
   // as the crash.
   const isolateSurvives = failing(it, /stream DO isolate OOMed/);

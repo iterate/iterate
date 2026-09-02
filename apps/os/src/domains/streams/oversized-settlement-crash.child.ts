@@ -100,9 +100,9 @@ const readWholeWindow = () =>
   log.getRangeSized({ afterOffset: 0, beforeOffset: Number.MAX_SAFE_INTEGER, limit: 500 });
 
 // Six durable-delivery subscription cursors (the dead DO's subscription_cursors
-// table held six rows). A delivery is read + serialize + send: each lane holds
-// both its materialized batch AND the serialized send body until the receiver
-// acknowledges, so all six pairs coexist during the catch-up burst.
+// table held six rows). A delivery is read + serialize + send: each cursor
+// holds both its materialized batch AND the serialized send body until the
+// receiver acknowledges, so all six pairs coexist during the catch-up burst.
 for (let cursor = 0; cursor < 6; cursor++) {
   const batch = readWholeWindow();
   retained.push({ batch, sendBody: JSON.stringify(batch.map((sized) => sized.event)) });
