@@ -79,6 +79,34 @@ large outputs to workspace files instead of returning them.
 
 ## Follow-ups (not this PR)
 
+- **Spill-at-settlement** (discussed 2026-09-02, parked deliberately — "valid
+  snags", revisit before building): instead of dropping an oversized result,
+  write it to the workspace at the settlement boundary and journal a pointer, so
+  `load(itx)` / `workspace.getFile` keep working. Design notes from the
+  discussion:
+  - Keep `status: "succeeded"` and put the discrimination one level down
+    (`resultOversized: { serializedChars, preview, typeText, spilled?: {
+    workspaceFile, format: "json" | "text" } }`) rather than a new top-level
+    status arm — every consumer switching on `status === "succeeded"` stays a
+    binary check, and the script genuinely did succeed.
+  - Snag 1: settlements are journaled by the capability host, which serves
+    scopes with no agent workspace (project REPL, Slack bang commands). Spill
+    where a workspace exists (`/agents/**` scopes via
+    `agentWorkspacePath` + `WORKSPACE_V2.writeFile`, same lane as the
+    render-side spill), fall back to omission elsewhere.
+  - Snag 2: the settlement append runs under a 15s grace window and a workspace
+    write can wait on a first-use clone — so write-first-then-settle with a
+    bounded wait, omission as the fallback when the write fails/times out
+    (which is exactly what this PR's behavior already is).
+  - `ScriptExecutionEntrypoint` can do the write itself (it has env +
+    `{projectId, scopePath}` props, and `streamContext` carries the
+    executionId), keeping the blob out of the DO isolate entirely; reuse the
+    render-side `script-results/<sanitized executionId>.<ext>` naming so
+    replays overwrite idempotently and the model sees one consistent place.
+  - `getScriptResult` reads the pointer back (needs a `readWorkspaceFile` dep
+    wired where `CapabilityHostProcessor` is constructed in
+    processor-facet-durable-object.ts); the preamble row can then stay kind
+    `large` (loadable) instead of `omitted`.
 - Byte-budgeted `StreamEventLog.getRangeSized` (count-only paging is the read-side
   hazard; delivery's 1MiB cap applies only after materialization).
 - Admin redaction for poison events already in logs — the bricked prod stream
