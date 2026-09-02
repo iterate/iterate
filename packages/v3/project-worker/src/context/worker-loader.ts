@@ -29,10 +29,25 @@ import { toExpression, type Expression } from "./expression.ts";
  *  split — context "/x:y"+class "Door" and context "/x"+class "y:Door" both became
  *  "…/x:y:Door", a SHARED loader cacheKey = silent cross-context authority transfer (the isolate's
  *  whole world is the host stub baked in at first materialization). Length-prefixing the context
- *  makes the split unambiguous regardless of `:` in either half. (wave2-sweep.test.ts) */
+ *  makes the split unambiguous regardless of `:` in either half. (worker-loader.test.ts) */
 export function facetLoaderOwner(contextName: string, discriminator: string): string {
   return `${contextName.length}#${contextName}#${discriminator}`;
 }
+
+/** What every loaded isolate runs under. PURE-PLAY: no node:* — userspace code stays portable
+ *  across workerd builds (nodejs_compat is on by default at this date for the platform worker
+ *  itself; the loaded half opts out). `allow_irrevocable_stub_storage` (experimental) lets loaded
+ *  code store its `env.ITX` stub and replay it (load-persistent-stub.e2e pins it) — every worker in the chain
+ *  needs it, so the parent config carries it too. No `limits` (cpuMs / subRequests): trusted clients. Note the
+ *  platform bound of 10 distinct dynamic workers with in-flight requests per DO — the idle quiesce
+ *  is what keeps a context's facet isolates under it. */
+export const LOADED_WORKER_COMPATIBILITY: {
+  compatibilityDate: string;
+  compatibilityFlags: string[];
+} = {
+  compatibilityDate: "2026-09-01",
+  compatibilityFlags: ["no_nodejs_compat", "no_nodejs_compat_v2", "allow_irrevocable_stub_storage"],
+};
 
 /** MINTS the loader cacheKey — the one audit point for the system's most cost-sensitive lever. The
  *  confinement contract, stated once: a loaded worker's WHOLE world — `env.ITX` (a service binding to
@@ -49,20 +64,6 @@ export function facetLoaderOwner(contextName: string, discriminator: string): st
  *  DEPLOY, not per use.) `kind` is a CLOSED union (`code` = stateless isolate; `facet` = durable
  *  class hosted as a facet) so a new key family is a deliberate type change; `owner` is composed
  *  collision-free by `facetLoaderOwner`; `contentHash` versions the source. */
-/** What every loaded isolate runs under. PURE-PLAY: no node:* — userspace code stays portable
- *  across workerd builds (nodejs_compat is on by default at this date for the platform worker
- *  itself; the loaded half opts out). `allow_irrevocable_stub_storage` (experimental) lets loaded
- *  code store its `env.ITX` stub and replay it (restore.e2e pins it) — every worker in the chain
- *  needs it, so the parent config carries it too. No `limits` (cpuMs / subRequests): trusted clients. Note the
- *  platform bound of 10 distinct dynamic workers with in-flight requests per DO — the idle quiesce
- *  is what keeps a context's facet isolates under it. */
-export const LOADED_WORKER_COMPATIBILITY: {
-  compatibilityDate: string;
-  compatibilityFlags: string[];
-} = {
-  compatibilityDate: "2026-09-01",
-  compatibilityFlags: ["no_nodejs_compat", "no_nodejs_compat_v2", "allow_irrevocable_stub_storage"],
-};
 
 export function confinedWorker(
   env: { LOADER: WorkerLoader; CF_VERSION_METADATA?: { id: string } },

@@ -179,28 +179,32 @@ test("the digest worker is delivered from a stream-kept cursor; retryable:false 
     afterOffset: halted.afterOffset,
   });
   expect(await digested(itx)).toBe(3); // halted: nothing more was delivered
-  await sleep(1_200); // fresh traffic must not resurrect a halted row
+  // fresh traffic must not resurrect a halted row: a new mark commits, nothing is delivered, no
+  // second halt fact is appended (the loop skips a halted row outright)
+  const [fresh] = await itx.append({ type: "mark" });
+  await sleep(1_200);
   expect(await digested(itx)).toBe(3);
   expect(await haltFactsFor(itx, "digest")).toHaveLength(1);
 
   // 4. recovery is ONE operator event, a plain append: resumed { afterOffset: poisoned.offset }
   //    un-halts and seeks the cursor past the poison — and the resumed fact IS the wake: the loop
-  //    pumps that name on its commit, whatever the row's `consumes` says. The stuck mark lands on
-  //    its own (3 → 4): the seek skipped exactly the poison, and at-least-once delivery resumed.
+  //    pumps that name on its commit, whatever the row's `consumes` says. The stuck mark and the
+  //    fresh one land on their own (3 → 5): the seek skipped exactly the poison, and at-least-once
+  //    delivery resumed.
   await itx.append({ type: RESUMED, payload: { name: "digest", afterOffset: poisoned.offset } });
   await until(
-    "digest=4 (resume alone, past the poison)",
-    async () => (await digested(itx)) === 4,
+    "digest=5 (resume alone, past the poison)",
+    async () => (await digested(itx)) === 5,
     30_000,
   );
   const rowAfter = await row(itx, "digest");
   expect(rowAfter.halted).toBeUndefined();
   expect(rowAfter.cursor.attempt).toBe(0);
-  expect(rowAfter.cursor.confirmedOffset).toBeGreaterThanOrEqual(stuck.offset);
+  expect(rowAfter.cursor.confirmedOffset).toBeGreaterThanOrEqual(fresh.offset);
   expect(stuck.offset).toBeGreaterThan(poisoned.offset); // the seek landed between the two
   // …and the lane keeps flowing afterwards.
   await itx.append({ type: "mark" });
-  await until("digest=5", async () => (await digested(itx)) === 5, 30_000);
+  await until("digest=6", async () => (await digested(itx)) === 6, 30_000);
 });
 
 test("a plain throw climbs the retry ladder on the DO's alarm — redelivered within seconds, attempt back to 0", async () => {

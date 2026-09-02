@@ -5,8 +5,9 @@
 //     alert on `event`, never on message prose.
 //   - `error` accepts any caught value: printed as a string, plus `errorStack` for real Errors.
 //   - spread order IS the override order: with()-fields < call fields < namespace/message.
-// Deliberately dropped from the source: the AsyncLocalStorage ambient context (this worker has
-// NO nodejs_compat — wrangler.jsonc), the reserved-field type gymnastics, and sampling (the
+// Deliberately dropped from the source: the AsyncLocalStorage ambient context (nothing here
+// imports node:*, and the loaded isolates are pure-play — context/worker-loader.ts), the
+// reserved-field type gymnastics, and sampling (the
 // source has none either: filtering belongs in the Workers Logs query, not in code).
 // UNEXPECTED failures don't come here — they go through reportIssue in lib/errors.ts.
 

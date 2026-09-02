@@ -86,10 +86,13 @@ function parseIterateContextDurableObjectName(name: string | undefined) {
   return DurableObjectNameCodec.parse(name);
 }
 
-/** The three INLINE reduce-only processors: reduced at the commit point, never real facets — always
- *  on, un-deletable, addressed by name like any facet. */
-/** The three reduce-only processors this DO reduces inline at the commit point — their slugs are
- *  facet-shaped addresses (`itx.facets.get('core')`) and reserved as subscription names. */
+/** The three reduce-only processors this DO reduces inline at the commit point — always on, never
+ *  deletable; their slugs are facet-shaped addresses (`itx.facets.get('core')`) and reserved as
+ *  subscription names. */
+/** How long one facet call may take before the facet is aborted (see #invokeFacet). Generous: a
+ *  processor's cold catch-up over a long log is legitimate work; a call still silent after this is
+ *  a hang, and a hung facet would pin this actor awake forever. */
+const FACET_CALL_TIMEOUT_MS = 60_000;
 const INLINE_REDUCE_SLUGS = ["core", "capability-table", "subscriptions"] as const;
 const isInlineReduce = (slug: string): boolean =>
   (INLINE_REDUCE_SLUGS as readonly string[]).includes(slug);
@@ -433,28 +436,59 @@ export class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
     // Counted like a delivery: a CONCURRENT alarm's quiesce must never abort the facet mid-call
     // (#noteActivity above only guards the first 60s; a long invoke outlives it).
     this.#facetWorkInFlight++;
+    const facetName = typeof ref === "string" ? ref : (ref.name ?? ref.className);
     try {
       const facet = await this.#resolveFacet(ref);
       // A top-level `.fetch` forwards to the facet's own fetch — the one channel that carries a
       // 101 natively (fetch/fetch-capabilities.ts doctrine, points 1 & 4) — never through
       // invokePath's await-walk. A method walks receiver-preservingly (invokePath).
-      if (path.length === 1 && path[0] === "fetch")
-        return await (facet as { fetch(r: Request): Promise<Response> }).fetch(args[0] as Request);
-      const what =
-        typeof ref === "string" ? `facet "${ref}"` : `facet "${ref.name ?? ref.className}"`;
-      const result = await invokePath(facet, path, args, what);
+      const call =
+        path.length === 1 && path[0] === "fetch"
+          ? (facet as { fetch(r: Request): Promise<Response> }).fetch(args[0] as Request)
+          : invokePath(facet, path, args, `facet "${facetName}"`);
+      // THE FACET WATCHDOG: a call that never answers would hold `#facetWorkInFlight` — and with it
+      // the quiesce, and with THAT this actor — forever. Past the deadline the facet is aborted (its
+      // pending call rejects, the counter drains, the next call re-materializes it from its memo).
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const result = await Promise.race([
+        call,
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => {
+            if (!isInlineReduce(facetName)) {
+              try {
+                this.ctx.facets.abort(facetName, "call timed out");
+              } catch {
+                /* not running */
+              }
+              this.#liveFacets.delete(facetName);
+              this.#resolvedFacetSource.delete(facetName);
+            }
+            reject(
+              new Error(
+                `facet "${facetName}".${path.join(".")}: no answer in ${FACET_CALL_TIMEOUT_MS / 1000}s — aborted`,
+              ),
+            );
+          }, FACET_CALL_TIMEOUT_MS);
+        }),
+      ]).finally(() => {
+        if (timer !== undefined) clearTimeout(timer);
+      });
       // A facet's answer arrives as a Workers-RPC RESULT: when it is an object, it carries a
       // disposer that holds the call's resources — a reference on the FACET — until disposed or
       // GC'd. GC is too late for the quiesce: every `snapshot()` left such a result behind, so an
       // aborted facet stayed referenced and this actor could not be evicted (pinned, billed) until
-      // the garbage collector happened by. Facet answers are DATA by design (facet stubs are
-      // non-transferable), so copy the data out and release the result at once.
+      // the garbage collector happened by. So copy the DATA out and release the result at once. An
+      // answer that is not data (a stub, a stream, a Response from some other method) cannot be
+      // cloned — it is handed through as is and is the caller's to dispose.
       if (typeof result === "object" && result !== null && Symbol.dispose in result) {
+        let copy: unknown;
         try {
-          return structuredClone(result);
-        } finally {
-          (result as Disposable)[Symbol.dispose]();
+          copy = structuredClone(result);
+        } catch {
+          return result;
         }
+        (result as Disposable)[Symbol.dispose]();
+        return copy;
       }
       return result;
     } finally {
@@ -495,7 +529,7 @@ export class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
   /** Per-facet resolved-source memo (in memory, keyed by facet name): the printed source
    *  expression it was resolved from, plus the fetched modules + their contentHash. Every commit
    *  reaches a processor's facet through the same load chain — without this the source would be
-   *  re-fetched and re-hashed on EVERY commit (prove_source_refetch). Kept ONLY while the facet is
+   *  re-fetched and re-hashed on EVERY commit (processor-facet-source-refetch.e2e). Kept ONLY while the facet is
    *  live: dropped on delete and cleared at idle-quiesce, so a source edit is picked up at the
    *  next materialization. */
   readonly #resolvedFacetSource = new Map<
@@ -564,7 +598,7 @@ export class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
     this.#resolvedFacetSource.delete(name);
   }
 
-  // ── dispatch (ONE path: the routing table — the INLINE core reduce, zero distance) ──
+  // ── dispatch (ONE path: the routing table — the inline capability-table reduce, zero distance) ──
 
   /** Resolve + run one call against the current table. The ONE dispatch door — `IterateContext` builds the
    *  call Expression client-side and hands it here (the ARRAY half can carry call args a dotted

@@ -365,6 +365,11 @@ type StreamEvent = StreamEventInput & { offset: number; createdAt: string; path:
 
 ```ts
 type WaitForEventFilter = { type?: string; afterOffset?: number; timeoutMs?: number };
+/** What read() returns on every hop. */
+interface StreamPage {
+  events: StreamEvent[];
+  scannedThroughOffset: number;
+}
 ```
 
 `src/stream/processor.ts`
@@ -487,8 +492,8 @@ reachable the same way, and a terminal `.fetch(request)` rides the facet's own
 fetch channel (so a 101 works).
 
 Three reduce-only processors are always on and run **inline** in the commit
-transaction. They have no facet, but `snapshot()` and `liveSnapshot()` are
-exposed through the same door (they publish `live-state/changed` deltas like any
+transaction. They have no facet, but `snapshot()`, `liveSnapshot()` and
+`waitUntilProcessed()` (always `{ ok: true }`) are exposed through the same door (they publish `live-state/changed` deltas like any
 processor, keyed by their slug), and their names are reserved (a subscription
 may not take them):
 
@@ -650,6 +655,8 @@ abstract class StreamProcessorDurableObject<
   wake(): Promise<void>;
   snapshot(): Promise<{ offset: number; state: State }>;
   liveSnapshot(): Promise<{ rev: number; state: unknown }>;
+  /** The barrier: processed at least through `offset` (default timeout 10s). An offset above the
+   *  durable mark (an ephemeral's) is reached only if this processor was pushed it. */
   waitUntilProcessed(input: { offset: number; timeoutMs?: number }): Promise<void>;
   // NEVER define alarm(): facets have none.
 }
@@ -930,10 +937,18 @@ behind.
 Small print: a subscription name is one segment, `[A-Za-z0-9_-]+` (it doubles
 as a facet name and a registry key tail). A resume's seek is clamped to the
 stream head. An unnamed `subscribe` is removed when the session ends. The DO's
-quiet clock is 60 s: an alarm that finds no delivery in flight and no activity
-for a minute aborts every live facet and disposes paged-in stubs; the next call
-re-materializes them, and a context that was never written to arms no alarm at
-all.
+quiet clock is 60 s: an alarm that finds no delivery or facet call in flight
+and no activity for a minute aborts every live facet and disposes paged-in
+stubs; the next call re-materializes them (a `facets.delete` that lands while a
+facet's source is loading wins: the load refuses with `NO_FACET` instead of
+resurrecting an orphan), and a never-written context with no live facet arms no
+alarm at all. Configuring a subscription drops whatever the loop remembered under
+that name (the old target's cursor included) and wakes a facet target at once,
+as the head of that name's push chain. Re-subscribing a HALTED row with the same
+target un-halts it and restarts from now; to replay from the halt point, append
+`subscription-delivery-resumed` instead.
+A delivery-resumed that lands while an attempt is in flight is applied before
+any halt or backoff.
 
 ---
 
@@ -977,7 +992,7 @@ class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
   //  the load chain; the resolve-walk-apply door behind both is private)
 
   // ── doors the edge relay calls (the hibernatable stub dance) ──
-  rpcStubAttach(input: { path: string }): { transportId: string };
+  rpcStubAttach(input: { key: string }): { transportId: string }; // refused unless already canonical
   rpcStubActivate(input: { transportId: string; invoker: unknown }): unknown;
   /** In-memory socket facts { stubs, pagedIn, pagesPending, dormant }. Not on the itx surface. */
   transportState(): Record<string, unknown>;
@@ -994,6 +1009,11 @@ class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
   webSocketError(ws: WebSocket): void;
 }
 ```
+
+A facet's answer arrives as a Workers-RPC result object, which holds a reference
+on the facet until disposed; the private facet door copies the data out and
+disposes it at once (an undisposed `snapshot()` result once kept an aborted facet,
+and with it the whole DO, pinned until garbage collection).
 
 What one context reaches another through, `src/stream/stream.ts`:
 
@@ -1052,7 +1072,11 @@ Bindings (`wrangler.jsonc`):
 
 The loader cacheKey is `${kind}:${deploy}:${owner}:${contentHash}`. Every
 distinct key is a billed dynamic worker, so nothing per request may ever enter
-it.
+it. Loaded isolates run under one `LOADED_WORKER_COMPATIBILITY`: the same
+compatibility date, `no_nodejs_compat` (userspace stays pure-play), and
+`allow_irrevocable_stub_storage` (loaded code may store its `env.ITX` stub and
+replay it; the parent config carries the same flag). The DO's lifecycle is the
+declarative `exports` entry, not a migrations history; observability is on.
 
 ---
 
@@ -1113,7 +1137,11 @@ sequenceDiagram
 ```
 
 The DO never retains a client stub across idle, so any number of connected
-clients leave it free to hibernate. Presence is `itx.rpcStubs.list()`; a key
+clients leave it free to hibernate. The relay sends a keepalive frame down the
+pager every 30 s; the DO answers it with a WebSocket auto-response set once in
+its constructor, without waking. `rpcStubAttach` refuses a key that is not
+already canonical (the edge canonicalizes before parking), so the registry key
+and the mount path that names it can never drift. Presence is `itx.rpcStubs.list()`; a key
 gaining its first transport appends `rpc-stub/attached`, losing its last
 appends `rpc-stub/detached` (both ephemeral; a replaced transport emits
 neither). The mount stays in the table when the socket closes; a call then
@@ -1139,7 +1167,7 @@ sequenceDiagram
     S->>S: offsets from memory — no transaction, no mark write
   else
     S->>S: idempotency, offsets, chunk large bodies, high-water mark — one transaction
-    S->>I: reduce fresh DURABLE events in the same transaction, checkpoint on change
+    S->>I: reduce fresh DURABLE events in the same transaction; cursor every batch, state on change
   end
   S-->>D: committed StreamEvent[]
   D->>L: onCommit(events, after, through)

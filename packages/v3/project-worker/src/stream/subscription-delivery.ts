@@ -124,19 +124,28 @@ export class SubscriptionDelivery {
       // Then the new target is evaluated ONCE right away, whatever its `consumes` says: a processor's
       // facet is MATERIALIZED at enable time (`wake` on the handle — so `itx.facets.get(name)`
       // answers before its first consumed event), and a target whose head cannot be evaluated is
-      // reported here, once, instead of once per commit.
+      // reported here, once, instead of once per commit. The wake is the HEAD of this name's push
+      // chain, so the first push (often this very event) queues behind it: one materialization,
+      // one source evaluation — never two loads racing each other.
       if (e.type === "events.iterate.com/stream/subscription-configured") {
         const name = (e.payload as { name: string }).name;
         this.forget(name);
         const sub = table.subscriptions[name];
         if (sub)
-          void this.#resolve(sub.target)
-            .then(({ head }) =>
-              head instanceof FacetHandle
-                ? invokePath(head, ["wake"], [], `facet "${name}"`)
-                : undefined,
-            )
-            .catch((error) => reportIssue("subscription-delivery.configured", error, { name }));
+          this.#pushes.set(
+            name,
+            this.#resolve(sub.target)
+              .then(({ head }) =>
+                head instanceof FacetHandle && this.#deps.subscriptions().subscriptions[name]
+                  ? invokePath(head, ["wake"], [], `facet "${name}"`)
+                  : undefined,
+              )
+              .catch((error) => {
+                // NO_FACET here is a disable that landed during the load — nothing to report.
+                if (errorCode(error) !== "NO_FACET")
+                  reportIssue("subscription-delivery.configured", error, { name });
+              }),
+          );
       }
     }
     for (const [name, sub] of Object.entries(table.subscriptions)) {
@@ -234,7 +243,9 @@ export class SubscriptionDelivery {
       // the pump delivers from the cursor, taking the pushed batch when contiguous.
       await this.#pump(name);
     } catch (error) {
-      reportIssue("subscription-delivery.dispatch", error, { name });
+      // NO_FACET is a disable that landed under an in-flight push — the row is gone too.
+      if (errorCode(error) !== "NO_FACET")
+        reportIssue("subscription-delivery.dispatch", error, { name });
     } finally {
       this.#inFlight--;
       this.#deps.onActivity();

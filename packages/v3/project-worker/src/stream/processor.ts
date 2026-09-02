@@ -292,7 +292,9 @@ export abstract class StreamProcessor<State> {
     );
   }
 
-  /** THE barrier verb (read-your-writes): resolves once processed AT LEAST through `offset`. */
+  /** THE barrier verb (read-your-writes): resolves once processed AT LEAST through `offset`. An
+   *  offset ABOVE the durable mark (an ephemeral's) is reached only if this processor was pushed it —
+   *  the log cannot prove past the mark, so a wake alone never advances there. */
   waitUntilProcessed(input: { offset: number; timeoutMs?: number }): Promise<void> {
     const { offset, timeoutMs = 10_000 } = input;
     return new Promise<void>((resolve, reject) => {

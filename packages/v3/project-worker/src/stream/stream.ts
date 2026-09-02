@@ -189,11 +189,12 @@ export class Stream {
    *  throw — an idempotency conflict after earlier inserts — must never leave rows above the
    *  recorded max offset, which the next append would re-assign (one offset, two identities).
    *  `reduceAtCommit` runs INSIDE the transaction (the inline processors' checkpoint commits
-   *  with the batch). THE PRE-BATCH HEAD FENCE: the offset cache is warmed at the top and
-   *  assigned only AFTER the transaction returns; a throw leaves it untouched and true — inside
-   *  reduceAtCommit, highestAssignedOffset() must return the PRE-batch value (kv already holds
-   *  nextOffset in-txn; reading kv there would make an inline rehydrate replay the just-inserted
-   *  rows = double-reduce = table corruption). */
+   *  with the batch). THE PRE-BATCH FENCE: both caches (the assigned head AND the durable mark)
+   *  are warmed at the top (`highestAssignedOffset()` warms the mark on the way) and assigned only
+   *  AFTER the transaction returns; a throw leaves them untouched and true. Inside reduceAtCommit
+   *  the inline reduces catch up to `durableMark()`, which must therefore still be the PRE-batch
+   *  value (kv already holds nextOffset in-txn; reading kv there would make an inline rehydrate
+   *  replay the just-inserted rows = double-reduce = table corruption). */
   append(...inputs: StreamEventInput[]): StreamEvent[] {
     // A ZERO-INPUT append is a PURE no-op. Under the storage-lazy doctrine NOTHING is minted at
     // all: no admit, no touch, no wake record. Without this, a defensive `itx.append(...maybeEmpty)` on a fresh

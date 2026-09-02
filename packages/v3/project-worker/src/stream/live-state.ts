@@ -13,7 +13,7 @@
 // carrying `{key, from, to, patch}` onto the stream. `snapshot()` is the SEED DOOR clients read
 // `{rev, state}` through. The stream keeps no per-subscriber state for a push — and the
 // CLIENT owns its chain: seed through the door, apply a payload whose `from` matches its held rev,
-// re-read the door on any mismatch (prove_livestate.mjs is that whole loop).
+// re-read the door on any mismatch (live-state-chains-client-side.e2e is that whole loop).
 //
 // The revision is seeded from a per-incarnation EPOCH (not 0): a reborn holder mints a fresh epoch,
 // so every stale client rev mismatches and re-reads the door instead of applying a patch onto a

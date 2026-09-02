@@ -167,8 +167,8 @@ test("capability table tour: built-in roots, live caps, shadow stack, dynamic-wo
   expect(fans).toContain("from B");
   expect(fans).toContain("from A");
 
-  // 8. /version
-  const version = (await (await fetch(workerUrl("/version"))).text()).trim();
-  // /version
-  expect(version.length).toBeGreaterThan(0);
+  // 8. /version — the deploy stamp a smoke test waits for (CODE_VERSION in worker.ts)
+  const versionRes = await fetch(workerUrl("/version"));
+  expect(versionRes.status).toBe(200);
+  expect((await versionRes.text()).trim()).toMatch(/^live-\d+$/);
 });

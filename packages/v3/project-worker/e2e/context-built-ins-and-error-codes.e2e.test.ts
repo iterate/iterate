@@ -6,7 +6,7 @@
 // never by message — own props survive DO → relay → client).
 
 import { expect, test } from "vitest";
-import { append, codeOf, freshCtx, openItx, rejection } from "./support/client.ts";
+import { append, capUrl, codeOf, freshCtx, openItx, rejection } from "./support/client.ts";
 
 test("a legitimate ctx (hyphen, underscore, uppercase, digits) is served; a ':' in the ctx is REJECTED (the kv/secret isolation wall holds)", async () => {
   // DurableObjectNameCodec.parse gates the projectId to [A-Za-z0-9_-] — the ONE place every DO name
@@ -27,6 +27,10 @@ test("a legitimate ctx (hyphen, underscore, uppercase, digits) is served; a ':' 
       await openItx(`${freshCtx("w2kv")}:x`).kv.get("leak"); // never reached
     })(),
   ).rejects.toThrow();
+  // The same wall at the /cap HTTP door: the edge canonicalizes the context name before it names a
+  // DO, so a ':' fails there (a 5xx) and no object is ever addressed.
+  const viaCap = await fetch(capUrl("prj_x:evil", "itx.whoami", "http"));
+  expect(viaCap.status).toBeGreaterThanOrEqual(500);
 });
 
 test("kv list returns EVERY key, not silently the first 1000", async () => {

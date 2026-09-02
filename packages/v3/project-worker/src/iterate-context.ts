@@ -226,8 +226,9 @@ export class IterateContext extends RpcTarget {
   }
 
   /** Read a page of the durable log after `afterOffset` (default 0; `limit` default 500).
-   *  `scannedThroughOffset` is the client's contiguity cursor — chain it for the next page. A
-   *  non-minting probe: reading a virgin stream leaves it virgin. */
+   *  `scannedThroughOffset` is the client's contiguity cursor — chain it for the next page: a full
+   *  page's last row, a short page's DURABLE mark (never the in-memory head — an ephemeral's offset
+   *  is not proven by a read). A non-minting probe: reading a virgin stream leaves it virgin. */
   read(
     afterOffset?: number,
     limit?: number,

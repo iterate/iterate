@@ -8,7 +8,7 @@
 
 import { RpcTarget, upgradeWebSocketResponse, WebSocketPair } from "capnweb";
 import { expect, test } from "vitest";
-import { capUrl, freshCtx, openItx, session, wsRoundTrip } from "./support/client.ts";
+import { capUrl, freshCtx, openItx, session, workerUrl, wsRoundTrip } from "./support/client.ts";
 import { seedSources } from "./support/sources.ts";
 
 test("/cap serves a LOADED-WORKER capability: GET → 200 HTML, WebSocket upgrade → 101 echo, clean close", async () => {
@@ -93,3 +93,34 @@ test("live capability WebSocket fetch: a plain eyeball WebSocket opens (101), ec
 // The workerd-provider half of the same lane is pinned in __workers-tests__/ws-fetch-live-101
 // .test.ts (the dedicated fetch-upgrade leg; the DO mints the eyeball pair natively). The tunnel
 // (proxy-to-localhost) shape of this capability is fetch-door-tunnel-to-localhost.e2e.test.ts.
+
+test("deleted routes fall through to the help text — /call and /ws answer text, a WebSocket upgrade to /ws gets no 101", async () => {
+  // The fetch door is /cap and nothing else: the old /call and /ws routes are gone and land on the
+  // worker's one-line help, and an upgrade attempt at /ws is refused (no 101).
+  for (const path of ["/call?path=itx.whoami", "/ws"]) {
+    const res = await fetch(workerUrl(path));
+    expect(res.status).toBe(200);
+    expect(await res.text()).toContain("project-worker —");
+  }
+  const outcome = await new Promise<string>((resolve) => {
+    const ws = new WebSocket(workerUrl("/ws").replace(/^http/, "ws"));
+    const timer = setTimeout(() => {
+      try {
+        ws.close();
+      } catch {
+        /* never opened */
+      }
+      resolve("no-101 (timeout)");
+    }, 3_000);
+    ws.addEventListener("open", () => {
+      clearTimeout(timer);
+      ws.close();
+      resolve("101");
+    });
+    ws.addEventListener("error", () => {
+      clearTimeout(timer);
+      resolve("no-101 (error)");
+    });
+  });
+  expect(outcome).not.toBe("101");
+});

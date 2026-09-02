@@ -345,7 +345,8 @@ describe("version bump re-reduce", () => {
     // The in-flight push lands on the bumped incarnation's chain (contiguous with the durable cursor).
     await p2.processEventBatch(committed, { after: 2, through: 3 });
     expect((await p2.snapshot()).state.n).toBe(3); // the reduce saw it…
-    expect(effects).toContain("effect 3"); // …but its side effects must have run too
+    // …its side effects ran exactly once, and the refold replayed NONE of the old ones
+    expect(effects).toEqual(["effect 1", "effect 2", "effect 3"]);
   });
 
   test("waitUntilProcessed before the first chain slot keeps the refold reduce-only", async () => {

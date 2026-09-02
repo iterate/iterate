@@ -1,5 +1,5 @@
 // stream-idempotency-breaker-pause-paging.e2e.test.ts — the event log's COMMIT POINT and the inline
-// reduces that sit at it (the StreamEventLog append in iterate-context-durable-object.ts, the core
+// reduces that sit at it (`Stream.append` in stream/stream.ts, the core
 // reduce's pause/breaker), end to end through `itx.append`/`itx.read`. Proves: the append door's
 // runtime guards (a non-string type, a non-literal-true `ephemeral`, ephemeral + idempotencyKey);
 // idempotency dedupe at the commit point (an in-batch hit reduced ONCE, a retry deduping through an

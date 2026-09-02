@@ -10,7 +10,7 @@
 // PHYSICAL and separate from mounting: the mount is an ordinary capability-table event whose
 // target is `itx.rpcStubs.get('<path>')`. This module owns the whole dance behind a TWO-SYMBOL
 // API — `startRpcStubRelay` (park a stub, hand back a disposable relay) and `Parking` (the
-// session-lived registry that keeps relays alive; the caller keys it) — so iterate-context.ts reads as
+// session-lived registry that keeps relays alive; the caller keys it) — so session.ts + iterate-context.ts read as
 // its narrative (Session → ProjectCollection → IterateContext), with the pager
 // sockets and the shared broken-flag hidden here.
 
@@ -122,8 +122,8 @@ export class Parking {
   }
 }
 
-/** Park a live capnweb stub in the DO's `itx.rpcStubs` registry under `path` (the canonicalized
- *  string — the stub's one identity there): reserve a transport on the DO, dup the provider stub,
+/** Park a live capnweb stub in the DO's `itx.rpcStubs` registry under `key` (the canonical
+ *  capability path — the stub's one identity there): reserve a transport on the DO, dup the provider stub,
  *  open the stub pager WebSocket, and answer every page with a fresh stub. The relay lives until
  *  disposed (explicitly, or at session end); its close makes the DO drop the stub — and nothing
  *  else: whatever mounts named it stay, answering CONNECTION_OFFLINE. */
@@ -137,7 +137,7 @@ export async function startRpcStubRelay(
   const retained = provider.dup();
   // ONE shared broken flag for the whole relay — every paged-in invoker reads it; the single
   // onRpcBroken registration below flips it. (Registering per page would leak a listener per page:
-  // capnweb has no offRpcBroken. See rpc-stub-broken-leak.failing.test.ts.)
+  // capnweb has no offRpcBroken. rpc-stub-relay.test.ts pins it.)
   const broken = { value: false };
   const pagerWebSocket = await openStubPagerWebSocket(context, transportId, () => {
     // The page answer: re-mint the Workers-RPC stub around the retained capnweb callback and

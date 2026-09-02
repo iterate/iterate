@@ -9,10 +9,9 @@
 // matching cursor means the reduce never changed state = `initialState()` (a pure side-effect
 // processor; reusing the cursor stops it re-firing its whole effect history on every rebuild).
 //
-// The two hosts differ ONLY in WRITE CADENCE, and that difference is legitimate (it lives at the
-// call sites, not here): the facet advances the cursor on EVERY durable batch (it is distant and
-// re-running effects on rebuild is expensive/wrong); the inline host writes only ON CHANGE (it
-// rebuilds cheaply from the log at the commit point, so an unadvanced cursor just re-catches-up).
+// Both hosts write the cursor on every durable batch and the state only when it changed; the
+// facet additionally never advances on an ephemeral-only range (its `sawDurable`). The cadence
+// lives at the call sites, not here.
 
 /** A reduce processor's persisted position: the contract version it was reduced under, the offset
  *  it has reduced through, and the reduced state. The in-memory shape both hosts hold. */

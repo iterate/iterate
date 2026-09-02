@@ -2,7 +2,7 @@
   "name": "project-worker",
   "private": true,
   "type": "module",
-  "description": "The clean-room capability host — ONE worker, one package (D40): worker.ts (the stateless capnweb edge) + the DO classes (IterateContextDurableObject in stream-durable-object.ts, ProcessorFacet) + core/*. The control-plane shell it falls back to is its own package (packages/v3/control-plane-shell). See BUILD-LOG.md.",
+  "description": "The clean-room capability host — ONE worker, one package: worker.ts (the stateless capnweb edge) + IterateContextDurableObject (iterate-context-durable-object.ts) + context/ fetch/ stream/ sdk/ lib/",
   "scripts": {
     "dev": "node build-sdk.mjs && wrangler dev",
     "deploy": "node build-sdk.mjs && wrangler deploy",

@@ -1854,13 +1854,50 @@ and what landed:
   isolates pure-play via one `LOADED_WORKER_COMPATIBILITY`), `WorkerEntrypoint<Env, Props>`,
   `setWebSocketAutoResponse` once in the constructor, `Symbol.dispose` direct (fourteen polyfills
   gone, one of them a fake), `ItxBinding.waitForEvent`. Kept: `allow_irrevocable_stub_storage` —
-  it has a consumer (restore.e2e).
+  it has a consumer (e2e/load-persistent-stub.e2e.test.ts).
 - **Performance.** Verdict: ≥5000 ev/s met with 4× headroom durable (21.5k end-to-end) and 10×
   ephemeral; DO commit CPU is 40 µs / 175 µs per 50-event batch, so transport and storage commit
   are the bottleneck. Do not touch the SQLite schema or batch the INSERTs (measured no gain). Open:
   `RpcStubDirectory.find()` is O(sockets) per push (30 µs at 100 sockets) — an index if it bites.
-- **Test hygiene.** ~2,500 deletable lines identified (bug-hunt pins with lying `failing-` names,
-  duplicated helpers, a harness lane that re-proves the e2e lane at 19 boots). Landing as its own
-  round.
-- GATES at 4cb0b450a: tsc×3 · unit 183 · harness 131p/1xf · workers 38 · e2e 34p/2xf ·
-  tutorial-proof 8 · oxlint 0/0 · knip clean.
+- **Test hygiene (4ece66812).** The harness lane is gone: its twenty files folded into e2e (one
+  shared worker instead of nineteen boots — 53 s to 18 s; `e2e/support/log-harness.ts` for the one
+  console-reading file); every e2e file is `<primitive>-<claim>.e2e.test.ts` (`push` had come to
+  mean the opposite kind of delivery and is `cursor-delivery`); the eight `*.failing` unit files
+  merged into their subjects with one `stream/test-support.ts`; the workers lane shares one
+  `support.ts`. No "failing" file remains; about 3,100 lines fewer. A lost-pin audit (round 2) found four
+  properties the fold had left unpinned (deleted routes fall through to help text, the /version
+  contract, a ':' at the /cap door, no head-of-line blocking during a fan-out) and two weakened
+  assertions — all re-pinned.
+- GATES at 4ece66812: tsc×3 · unit 176 · workers 38 · e2e 139p/2xf (34 files, ~18 s) ·
+  tutorial-proof 8 · Playwright 2 · oxlint 0/0 · knip clean.
+
+## 2026-09-02 — review round 2: three lenses on the round-1 tree
+
+A smaller wave after round 1 landed: a fresh adversarial read of the files round 1 touched, docs
+against source again, and a lost-pin audit of the folded test suite.
+
+- **Fresh read.** MAJOR: with a default `consumes`, `enableProcessor` materialized the facet TWICE —
+  the configure-time wake and the first push (the configured event itself) both reached `#facet`
+  before either load resolved, so the source was evaluated twice (the refetch e2e passed only on a
+  lost update in its read-modify-write counter). The wake is now the HEAD of that name's push chain;
+  the counter is atomic (one unique key per evaluation). Also: a facet call that never answers no
+  longer pins the actor — `#invokeFacet` carries a 60 s watchdog that aborts the facet so the
+  in-flight counter drains and the quiesce can run; a facet answer that is not data (a stub, a
+  stream) is handed through instead of failing `structuredClone`; a disable landing under a
+  configure-time wake or an in-flight push is benign (`NO_FACET` not reported). Documented: a
+  `waitUntilProcessed` on an offset above the durable mark resolves only if the processor was pushed
+  it; re-subscribing a halted row with the same target restarts from now. The read proof, the inline
+  cursor cadence, the pre-batch fence, the alarm, the `key` rename, and the config were all checked
+  and found clean.
+- **Docs.** 24 mismatches (the biggest: two `{ transportId, path }` spellings, a checkpoint-cadence
+  comment saying the opposite of the code, dead test-file names) corrected, and the walkthrough
+  gained the facts it still lacked (canonical-key refusal, RPC-result disposal, configure-time
+  wake, the watchdog on facet pushes, the racing-delete refusal, the config truths, the pager
+  keepalive, `StreamPage`).
+- **Lost-pin audit.** 368 → 332 titles; every deliberate drop's survivor asserts the same property
+  except four pins the fold had left behind (deleted routes still fall through to help text, the
+  `/version` contract, a `:` at the `/cap` door, no head-of-line blocking during a 200-way fan-out)
+  and two weakened assertions (a refold's effect list, fresh traffic after a halt) — all re-pinned.
+  `pnpm e2e` twice: byte-identical pass sets, no flakes.
+- GATES: tsc×3 · unit 176 · workers 38 · e2e 141 (139p/2xf) · tutorial-proof 8 · Playwright 2 ·
+  oxlint 0/0 · knip clean.

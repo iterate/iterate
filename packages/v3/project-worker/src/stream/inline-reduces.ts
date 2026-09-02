@@ -158,7 +158,10 @@ export class InlineReduces {
     try {
       entry.state = entry.proc.reduce({ event: e, state: entry.state }) ?? entry.state;
     } catch (err) {
-      reportIssue("inline-core.reduce", err, { slug: entry.proc.contract.slug, offset: e.offset });
+      reportIssue("inline-reduces.reduce", err, {
+        slug: entry.proc.contract.slug,
+        offset: e.offset,
+      });
     }
   }
 }

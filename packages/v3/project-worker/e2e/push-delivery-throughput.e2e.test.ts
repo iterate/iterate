@@ -110,10 +110,17 @@ test("200 push subscribers — one append fans out to all 200 in under 2s, exact
   // the measured round: steady-state fan-out of ONE append across 200 subscribers
   const t0 = Date.now();
   await append(itx, { type: "ping", payload: { round: 2 } });
+  // An UNRELATED call during the fan-out: 200 pushes never head-of-line-block the stream.
+  const whoT0 = Date.now();
+  await itx.whoami();
+  const whoMs = Date.now() - whoT0;
   await until("all 200 received round 2", () => received >= 400, 10_000);
   const wallMs = Date.now() - t0;
-  console.log(`fan-out: cold(first-page) ${coldWallMs}ms, warm ${wallMs}ms for 200 subscribers`);
+  console.log(
+    `fan-out: cold(first-page) ${coldWallMs}ms, warm ${wallMs}ms for 200 subscribers, whoami mid-fan-out ${whoMs}ms`,
+  );
   expect(wallMs).toBeLessThan(2_000);
+  expect(whoMs).toBeLessThan(1_500);
   await sleep(300);
   expect(counts.every((c) => c === 2)).toBe(true); // exactly once per round, no dup fan-out
 }, 120_000);

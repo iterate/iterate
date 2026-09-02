@@ -791,7 +791,7 @@ capability is a thousand DOs pinned awake, billing around the clock.
 
 The fix is a **pager**. The DO holds no stub at all. Instead, the edge opens one
 _hibernatable_ WebSocket to the DO per provided capability, carrying
-`{ transportId, path }` in its durable socket attachment. The DO hibernates freely. When a
+`{ transportId, key }` in its durable socket attachment. The DO hibernates freely. When a
 call arrives for a stub it doesn't hold, it sends the one message the pager ever
 carries:
 
@@ -821,7 +821,7 @@ export class IterateContextDurableObject extends DurableObject {
 }
 
 // invoking a paged-in stub, path tail and all:
-await this.#rpcStubs.invoke(path, ["add"], ["x"]);
+await this.#rpcStubs.invoke(key, ["add"], ["x"]);
 ```
 
 The economics: steady traffic pays exactly one page, then every call is a plain

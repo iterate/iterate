@@ -13,13 +13,13 @@
 // M commits add ZERO source re-evaluations.
 //
 // HOW WE COUNT: the processor's SOURCE is an itx-expression that, when evaluated, bumps a KV
-// counter `srcEvals` and returns the (kv-seeded) processor module code. A KV bump — NOT a stream
+// count of `srcEval:*` keys and returns the (kv-seeded) processor module code. A KV bump — NOT a stream
 // append — so evaluating the source has an observable, NON-re-entrant side effect (an append here
-// would re-trigger the pump → infinite loop). `srcEvals` == number of source evaluations.
+// would re-trigger the pump → infinite loop). the number of `srcEval:*` keys == number of source evaluations.
 //
 // THE READ-PATH CAVEAT (kept honest): reading `itx.facets.get(slug).snapshot()` ALSO routes
 // through `#resolveFacet` → `#facet(slug, memo)` → `resolveSource`, so a snapshot read would ALSO bump
-// the counter. We therefore never poll the snapshot while measuring; we poll `itx.kv.get('srcEvals')`
+// the counter. We therefore never poll the snapshot while measuring; we poll `itx.kv.list('srcEval:')`
 // (which does NOT touch the facet) until it settles, isolating the count to the COMMIT path.
 //
 // NOTE: this proof was authored RED (the fix landed after); the `#resolvedFacetSource` memo is now in
@@ -51,11 +51,12 @@ export class Mark extends StreamProcessorDurableObject {
   }
 }`;
 
-// The SOURCE expression: evaluating it bumps srcEvals (observable, non-re-entrant) and returns the
+// The SOURCE expression: evaluating it writes ONE unique kv key (an atomic count — a read-modify-
+// write counter let two concurrent evaluations both read 0 and write 1) and returns the
 // module code. Simple single-quoted body → JSON.stringify handles all escaping; the expression
 // parser JSON5-parses the arg and its matchingParen skips the quoted string (see context/expression.ts).
 const LAMBDA =
-  "async (itx) => { const n = Number((await itx.kv.get('srcEvals')) ?? 0) + 1; await itx.kv.put('srcEvals', String(n)); return await itx.kv.get('src/mark-refetch.js'); }";
+  "async (itx) => { await itx.kv.put('srcEval:' + crypto.randomUUID(), '1'); return await itx.kv.get('src/mark-refetch.js'); }";
 const SOURCE = `itx.runScript(${JSON.stringify(LAMBDA)})`;
 
 test("userspace processor source is evaluated exactly ONCE (at materialization, not per commit)", async () => {
@@ -68,7 +69,9 @@ test("userspace processor source is evaluated exactly ONCE (at materialization, 
     let stableFor = 0;
     for (let i = 0; i < 60; i++) {
       await sleep(500);
-      const n = Number((await itx.invokeCapability(["itx", "kv", ["get", "srcEvals"]])) ?? 0);
+      const n = (
+        (await itx.invokeCapability(["itx", "kv", ["list", "srcEval:"]])) as { keys: string[] }
+      ).keys.length;
       if (n === last) {
         if (++stableFor >= 3) return n;
       } else {
