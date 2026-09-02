@@ -41,6 +41,42 @@ const CONTROL_CHARS = 3_000;
 const OOM_SIGNATURE =
   /Reached heap limit|JavaScript heap out of memory|Ineffective mark-compacts|Allocation failed/;
 
+describe("stream DO isolate under an oversized settlement (real processors)", () => {
+  // Guard rail: the real folds + deliveries over a small settlement fit the
+  // budget comfortably. If this fails, the fixture is what OOMs, not the bug.
+  it("survives comfortably when the settlement is small", () => {
+    const control = runReplay(CONTROL_CHARS);
+    expect(control.kind).toBe("survived");
+    expect(control.output).toContain("SURVIVED");
+  });
+
+  // Pinned prod incident: StreamDurableObject 50703abf…d9e01 (os-prd). The
+  // real AgentProcessor + CapabilityHostProcessor folds re-materialize the 7MB
+  // settlement (reduceAgentEvent render + retainedScriptResult classification)
+  // and OOM the isolate — "Durable Object's isolate exceeded its memory limit
+  // and was reset" (traces 2f4ac441… / 78d9c657…), then wake-looped for hours.
+  //
+  // Desired behavior: the fold fan-out fits the budget because the settlement
+  // was bounded before it was journaled. Today it OOMs.
+  //
+  // One assertion carries all three outcomes; the `Incident kind: <kind>` label
+  // in its failure message is what the pin keys on:
+  // - oom (bug present)    → no SURVIVED, assertion fails, message says
+  //                          "Incident kind: oom" → matches → pin green.
+  // - survived (bug fixed) → SURVIVED present, assertion passes, body succeeds
+  //                          → failing() flips red: delete the wrapper.
+  // - other-failure        → no SURVIVED, but the message says "Incident kind:
+  //   (import error, etc.)   other-failure" → does NOT match → failing() reports
+  //                          red. A child abort that is not a real OOM proves
+  //                          nothing and must not hold the pin.
+  const failOOM = failing(it, /Incident kind: oom/);
+  failOOM("survives the real folds re-materializing an oversized settlement", () => {
+    const incident = runReplay(INCIDENT_CHARS);
+    const message = `Incident kind: ${incident.kind}. Budget: ${ISOLATE_BUDGET_MB}MB. Output:\n${incident.output.slice(-500)}`;
+    expect(incident.output, message).toContain("SURVIVED");
+  });
+});
+
 // The reproduction body. `@isolated` (enforced by unicorn-js/isolated-functions)
 // guarantees it references nothing from this module's scope — every dependency
 // is imported inside via `await import`, so `.toString()` yields a runnable,
@@ -317,39 +353,3 @@ function runReplay(resultChars: number): ReplayOutcome {
     rmSync(modulePath, { force: true });
   }
 }
-
-describe("stream DO isolate under an oversized settlement (real processors)", () => {
-  // Guard rail: the real folds + deliveries over a small settlement fit the
-  // budget comfortably. If this fails, the fixture is what OOMs, not the bug.
-  it("survives comfortably when the settlement is small", () => {
-    const control = runReplay(CONTROL_CHARS);
-    expect(control.kind).toBe("survived");
-    expect(control.output).toContain("SURVIVED");
-  });
-
-  // Pinned prod incident: StreamDurableObject 50703abf…d9e01 (os-prd). The
-  // real AgentProcessor + CapabilityHostProcessor folds re-materialize the 7MB
-  // settlement (reduceAgentEvent render + retainedScriptResult classification)
-  // and OOM the isolate — "Durable Object's isolate exceeded its memory limit
-  // and was reset" (traces 2f4ac441… / 78d9c657…), then wake-looped for hours.
-  //
-  // Desired behavior: the fold fan-out fits the budget because the settlement
-  // was bounded before it was journaled. Today it OOMs.
-  //
-  // One assertion carries all three outcomes; the `Incident kind: <kind>` label
-  // in its failure message is what the pin keys on:
-  // - oom (bug present)    → no SURVIVED, assertion fails, message says
-  //                          "Incident kind: oom" → matches → pin green.
-  // - survived (bug fixed) → SURVIVED present, assertion passes, body succeeds
-  //                          → failing() flips red: delete the wrapper.
-  // - other-failure        → no SURVIVED, but the message says "Incident kind:
-  //   (import error, etc.)   other-failure" → does NOT match → failing() reports
-  //                          red. A child abort that is not a real OOM proves
-  //                          nothing and must not hold the pin.
-  const failOOM = failing(it, /Incident kind: oom/);
-  failOOM("survives the real folds re-materializing an oversized settlement", () => {
-    const incident = runReplay(INCIDENT_CHARS);
-    const message = `Incident kind: ${incident.kind}. Budget: ${ISOLATE_BUDGET_MB}MB. Output:\n${incident.output.slice(-500)}`;
-    expect(incident.output, message).toContain("SURVIVED");
-  });
-});
