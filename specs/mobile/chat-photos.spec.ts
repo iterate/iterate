@@ -9,39 +9,25 @@
 //   too tall to show whole is capped and fitted onto a blurred copy of
 //   itself rather than letterboxed in black.
 //
-// ZERO model turns: the files are attached over admin itx, the same
-// addFiles call the composer makes, so nothing here waits on an LLM.
+// The files are attached over admin itx — the same addFiles call the
+// composer makes — and every turn they open is answered by the fixture's
+// scripted model, so nothing here waits on a real LLM.
 
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { expect } from "@playwright/test";
-import { connectItxReady } from "iterate/node";
-import { localOsDevServer } from "../../apps/os/scripts/dev.ts";
-import { signUpWithEmailOtp, uniqueSignupEmail } from "../test-support/email-otp-signup.ts";
-import { resolveAdminSecret } from "../test-support/forged-session.ts";
 import { test } from "../test-support/test.ts";
 
 test("multiple photos share a mosaic row; a lone tall one sits on its blurred backdrop", async ({
   page,
-}, testInfo) => {
-  const osBaseUrl = await resolveOsBaseUrl();
-  const projectSlug = `mobile-chat-photos-${Date.now().toString(36)}`;
+  helpers,
+}) => {
+  await using fixture = await helpers.createMobileFixture("mobile-chat-photos");
 
-  await signUpToProject(page, testInfo, osBaseUrl, projectSlug);
-  const projectId = new URL(page.url()).pathname.split("/")[2]!;
+  const agent = await fixture.createAgent();
+  agent.responses.set(async () => "ok");
+  await page.goto(agent.mobileUrl);
 
-  await page.getByText("New chat").click();
-  const pathHeading = page.getByRole("heading", { name: /^mobile\// });
-  await pathHeading.waitFor();
-  const agentPath = `/agents/${await pathHeading.textContent()}`;
-
-  using itx = await connectItxReady({
-    auth: { type: "admin-secret", secret: await resolveAdminSecret() },
-    baseUrl: osBaseUrl,
-    projectId,
-  });
-  using agent = itx.agents.get(agentPath);
-  await agent.create();
   // One addFiles call carrying both attachments plus a caption — exactly what
   // the composer sends when you pick photos and type something.
   await agent.addFiles({
@@ -52,12 +38,10 @@ test("multiple photos share a mosaic row; a lone tall one sits on its blurred ba
       ),
       filename,
     })),
-    // Long enough to wrap: a caption must not be able to stretch the bubble
-    // wider than its photo, which would put bubble fill along the photo's
-    // edge — the exact gap this layout exists to remove. The <attachment>
-    // parts are what the composer sends (lib/composer-attachments.ts
-    // dimensionsXmlPart): exact pixel dimensions so the mosaic lays out
-    // right the first time, and metadata the caption must hide.
+    // Long enough to wrap: a caption must not stretch the bubble wider than
+    // its photo. The <attachment> parts are what the composer sends
+    // (lib/composer-attachments.ts): dimensions the mosaic needs, metadata
+    // the caption must hide.
     message: [
       "Here are their instructions, and a caption long enough that it has to wrap onto several lines inside the bubble",
       '<attachment filename="phone-screenshot.png" width="390" height="844" />',
@@ -65,8 +49,7 @@ test("multiple photos share a mosaic row; a lone tall one sits on its blurred ba
     ].join("\n"),
   });
 
-  // A second message with the tall screenshot ALONE — the mosaic only kicks
-  // in at two photos, so this one exercises the single-photo frame rules.
+  // The mosaic only kicks in at two photos — this one is alone.
   await agent.addFiles({
     files: [
       {
@@ -81,11 +64,9 @@ test("multiple photos share a mosaic row; a lone tall one sits on its blurred ba
     ],
   });
 
-  // The two-photo message: one justified row, both photos at the SAME height
-  // (390×844 next to 720×480 → aspects 0.46 and 1.5 share ~142pt), together
-  // filling the 280pt bubble width — not stacked. Until the images report
-  // their dimensions each mosaic tile shows its Loading state, which the
-  // spinner waiter holds on; the poll then only rides out the one reflow.
+  // One justified row at the SAME height (390×844 next to 720×480 share
+  // ~142pt), together filling the 280pt bubble — not stacked. The poll rides
+  // out the reflow after the images report their dimensions.
   const screenshot = page.getByLabel("phone-screenshot.png");
   const landscape = page.getByLabel("swim-email.png");
   await expect.poll(async () => (await screenshot.boundingBox())?.width).toBeLessThan(100);
@@ -112,11 +93,9 @@ test("multiple photos share a mosaic row; a lone tall one sits on its blurred ba
   await solo.getByTestId("photo-backdrop").waitFor();
   expect(await solo.boundingBox()).toMatchObject({ height: 340, width: 280 });
 
-  // Audio + video attachments in one message: the video (dimensions known
-  // from its <attachment> part) draws as a playable tile — here with the
-  // placeholder face, since a browser build can't extract a thumbnail from
-  // the deliberately-bogus bytes — and the audio draws the play/waveform
-  // row. Real playback: the wav is genuine, so play flips to pause.
+  // The video draws as a playable tile with the placeholder face (a browser
+  // can't thumbnail the deliberately-bogus bytes); the wav is genuine, so
+  // play really flips to pause.
   const wav = tinyWav();
   const mediaMessage = await agent.addFiles({
     files: [
@@ -188,37 +167,4 @@ function tinyWav(): Uint8Array {
     );
   }
   return new Uint8Array(buffer);
-}
-
-async function signUpToProject(
-  page: test.Page,
-  testInfo: test.TestInfo,
-  osBaseUrl: string,
-  projectSlug: string,
-): Promise<void> {
-  await page.goto("/");
-  await page.getByPlaceholder("https://os.iterate.com").fill(osBaseUrl);
-  // timeout: OIDC discovery + client registration have no loading UI for the spinner waiter
-  const popupPromise = page.waitForEvent("popup", { timeout: 15_000 });
-  await page.getByRole("button", { name: "Sign in" }).click();
-  const popup = await popupPromise;
-  await popup.getByTestId("email-login-button").click();
-  await signUpWithEmailOtp(popup, {
-    email: uniqueSignupEmail("mobile-chat-photos"),
-    projectSlug,
-    testInfo,
-  });
-  // Project selection auto-continues for test identities (project-access.tsx)
-  // — consent is the next interactive page.
-  await popup.getByRole("button", { name: "Allow access" }).click();
-  await page.getByText("New chat").waitFor();
-  // Video-mode demos start at the interesting part, not the OAuth ceremony.
-  page.videoMode?.setStartTime();
-}
-
-async function resolveOsBaseUrl(): Promise<string> {
-  const configured = process.env.APP_CONFIG_BASE_URL?.replace(/\/+$/, "");
-  if (configured) return configured;
-  const target = await localOsDevServer.resolveTarget();
-  return target.baseUrl;
 }

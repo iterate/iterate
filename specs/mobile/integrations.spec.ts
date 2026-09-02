@@ -6,36 +6,14 @@
 // faked into a misleading green test.
 
 import { expect } from "@playwright/test";
-import { localOsDevServer } from "../../apps/os/scripts/dev.ts";
-import { signUpWithEmailOtp, uniqueSignupEmail } from "../test-support/email-otp-signup.ts";
 import { test } from "../test-support/test.ts";
 
 test("opens the project integration catalogue from the mobile drawer", async ({
   page,
-}, testInfo) => {
-  const osBaseUrl = await resolveOsBaseUrl();
-  const projectSlug = `mobile-integrations-${Date.now().toString(36)}`;
+  helpers,
+}) => {
+  await using _fixture = await helpers.createMobileFixture("mobile-integrations");
 
-  await page.goto("/");
-  await page.getByPlaceholder("https://os.iterate.com").fill(osBaseUrl);
-  // timeout: OIDC discovery + client registration have no loading UI for the spinner waiter
-  const popupPromise = page.waitForEvent("popup", { timeout: 15_000 });
-  await page.getByRole("button", { name: "Sign in" }).click();
-  const popup = await popupPromise;
-  // timeout: the popup is outside the wrapped page, so no spinner waiter covers it
-  await popup.getByTestId("email-login-button").click({ timeout: 15_000 });
-  await signUpWithEmailOtp(popup, {
-    email: uniqueSignupEmail("mobile-integrations"),
-    projectSlug,
-    testInfo,
-  });
-  // Project selection auto-continues for test identities (project-access.tsx)
-  // — consent is the next interactive page.
-  // timeout: same unwrapped popup — the spinner waiter cannot see it.
-  await popup.getByRole("button", { name: "Allow access" }).click({ timeout: 15_000 });
-
-  // The app auto-opens the account's only project — no picker tap.
-  await page.getByText("New chat").waitFor();
   await page.getByLabel("Open project menu").filter({ visible: true }).click();
   await page.getByRole("button", { name: "/agents" }).waitFor();
   await page.getByRole("button", { name: "/repos" }).waitFor();
@@ -57,10 +35,3 @@ test("opens the project integration catalogue from the mobile drawer", async ({
   await page.getByText("itx.mcp.exa", { exact: true }).waitFor();
   await page.getByText("itx.ai", { exact: true }).waitFor();
 });
-
-async function resolveOsBaseUrl(): Promise<string> {
-  const configured = process.env.APP_CONFIG_BASE_URL?.replace(/\/+$/, "");
-  if (configured) return configured;
-  const target = await localOsDevServer.resolveTarget();
-  return target.baseUrl;
-}

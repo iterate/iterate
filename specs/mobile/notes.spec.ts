@@ -8,37 +8,27 @@
 // derived title has landed yet.
 
 import { expect } from "@playwright/test";
-import { localOsDevServer } from "../../apps/os/scripts/dev.ts";
-import { signUpWithEmailOtp, uniqueSignupEmail } from "../test-support/email-otp-signup.ts";
 import { test } from "../test-support/test.ts";
 
 test("captures a note from the global composer and manages it on /notes", async ({
   page,
-}, testInfo) => {
-  const osBaseUrl = await resolveOsBaseUrl();
-  const projectSlug = `mobile-notes-${Date.now().toString(36)}`;
-
-  await signUpToProject(page, testInfo, osBaseUrl, projectSlug);
-  // Video-mode demos start at the interesting part: the project screen with
-  // the composer already docked, not the OAuth signup ceremony.
-  page.videoMode?.setStartTime();
+  helpers,
+}) => {
+  await using fixture = await helpers.createMobileFixture("mobile-notes");
 
   // The composer is already there on the chat-list screen — no navigation
   // between "I opened the app" and "I captured the thought".
-  await page.getByText(`→ /notes in ${projectSlug}`).waitFor();
+  await page.getByText(`→ /notes in ${fixture.projectSlug}`).waitFor();
   await page.getByPlaceholder("Capture a note").fill("Standing desk height: 76cm felt right");
   await page.getByLabel("Save note").click();
 
-  // ✕ collapses to the floating pill; the pill brings it back.
   await page.getByLabel("Collapse note composer").click();
   await page.getByPlaceholder("Capture a note").waitFor({ state: "hidden" });
   await page.getByLabel("Capture a note").click();
   await page.getByPlaceholder("Capture a note").waitFor();
 
-  // The saved-confirmation is the shortcut to what you just made: tapping it
-  // lands on the /notes screen, where the captured note renders (first-line
-  // title until the analysis settlement overlays it — either way the text is
-  // on screen).
+  // First-line title until the analysis settlement overlays it — either way
+  // the note's own text is on screen.
   await page.getByText("view in /notes").click();
   await page.getByPlaceholder("Search notes…").waitFor();
   await page
@@ -46,7 +36,6 @@ test("captures a note from the global composer and manages it on /notes", async 
     .first()
     .waitFor();
 
-  // Client-side search over text.
   await page.getByPlaceholder("Search notes…").fill("standing desk");
   await page
     .getByText(/76cm felt right/)
@@ -56,8 +45,6 @@ test("captures a note from the global composer and manages it on /notes", async 
   await page.getByText("No results").waitFor();
   await page.getByPlaceholder("Search notes…").fill("");
 
-  // Tap to expand → edit the text inline; the updated event overlays it and
-  // resets the derived title to the new first line.
   await page
     .getByText(/76cm felt right/)
     .first()
@@ -70,9 +57,8 @@ test("captures a note from the global composer and manages it on /notes", async 
     .first()
     .waitFor();
 
-  // 💬 opens the conversation ABOUT this note: its own thread, with a pointer
-  // to the note already typed into the composer — the question under it is
-  // the human's to write, so nothing is sent on the way in.
+  // 💬 pre-types a pointer to the note; the question under it is the human's
+  // to write, so nothing is sent on the way in.
   await page.getByLabel("Chat about this note").click();
   // inputValue() does the waiting; expect only checks the string it returned.
   expect(await page.getByPlaceholder("Message").inputValue()).toMatch(
@@ -90,49 +76,12 @@ test("captures a note from the global composer and manages it on /notes", async 
     .first()
     .waitFor();
 
-  // Back on /notes the note is untouched, and its row is still open — the
-  // notes screen stayed mounted underneath the pushed chat.
+  // The notes screen stayed mounted underneath the pushed chat — its row is
+  // still open.
   await page.goBack();
 
-  // Inline two-step delete confirm → tombstone empties the list over the
-  // live stream.
+  // The delete tombstone empties the list over the live stream.
   await page.getByRole("button", { name: "Delete…" }).click();
   await page.getByRole("button", { name: "Yes, delete this note" }).click();
   await page.getByText("Nothing here yet").waitFor();
 });
-
-async function signUpToProject(
-  page: any,
-  testInfo: any,
-  osBaseUrl: string,
-  projectSlug: string,
-): Promise<void> {
-  await page.goto("/");
-  await page.getByPlaceholder("https://os.iterate.com").fill(osBaseUrl);
-  // timeout: OIDC discovery + client registration have no loading UI for the spinner waiter
-  const popupPromise = page.waitForEvent("popup", { timeout: 15_000 });
-  await page.getByRole("button", { name: "Sign in" }).click();
-  const popup = await popupPromise;
-  // timeout: the popup is outside the wrapped page, so no spinner waiter covers it
-  await popup.getByTestId("email-login-button").click({ timeout: 15_000 });
-  await signUpWithEmailOtp(popup, {
-    // A constant prefix, NOT the slug: the signup display name embeds this,
-    // and a slug-containing name makes getByText(projectSlug) ambiguous.
-    email: uniqueSignupEmail("mobile-notes"),
-    projectSlug,
-    testInfo,
-  });
-  // Project selection auto-continues for test identities (project-access.tsx)
-  // — consent is the next interactive page.
-  // timeout: same unwrapped popup — the spinner waiter cannot see it.
-  await popup.getByRole("button", { name: "Allow access" }).click({ timeout: 15_000 });
-  // The app auto-opens the account's only project — no picker tap.
-  await page.getByText("New chat").waitFor();
-}
-
-async function resolveOsBaseUrl(): Promise<string> {
-  const configured = process.env.APP_CONFIG_BASE_URL?.replace(/\/+$/, "");
-  if (configured) return configured;
-  const target = await localOsDevServer.resolveTarget();
-  return target.baseUrl;
-}
