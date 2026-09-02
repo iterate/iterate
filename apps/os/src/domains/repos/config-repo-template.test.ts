@@ -298,6 +298,7 @@ test("the birth reaction shapes each newborn and lowers the debounce as its last
     // deliberately does NOT (a snapshot this early may predate the fold
     // reducing the birth batch).
     const snapshot = vi.fn(async () => ({ state: { contextItems: [] } }));
+    const streamAppend = vi.fn(async () => []);
     const project = {
       repo: {
         readFile: vi.fn(async (input: { path: string }) => {
@@ -308,6 +309,10 @@ test("the birth reaction shapes each newborn and lowers the debounce as its last
         }),
       },
       agents: { get: vi.fn(() => ({ append, processor: { snapshot } })) },
+      // The user-message-describer subscription installs through the raw
+      // streams door; recorded separately so the agents-door batch
+      // assertions below stay exact.
+      streams: { get: vi.fn(() => ({ append: streamAppend })) },
       [Symbol.dispose]: vi.fn(),
     };
     const worker = new ProjectWorker(
@@ -317,7 +322,7 @@ test("the birth reaction shapes each newborn and lowers the debounce as its last
         ITX: { get: vi.fn(() => pipelinedProject(project)) },
       } as never,
     );
-    return { worker, append, project };
+    return { worker, append, streamAppend, project };
   };
 
   // A web agent: AGENTS.md (the everyday keyed add on the hot section), then
@@ -335,6 +340,13 @@ test("the birth reaction shapes each newborn and lowers the debounce as its last
     payload: {},
   });
   expect(web.project.agents.get).toHaveBeenCalledWith("/agents/demo");
+  // The describer facet subscription rides the streams door at birth.
+  expect(web.streamAppend.mock.calls.flat()).toMatchObject([
+    {
+      type: "events.iterate.com/stream/subscription-configured",
+      payload: { name: "user-message-describer" },
+    },
+  ]);
   const webEvents = web.append.mock.calls.flat() as {
     type: string;
     payload: Record<string, unknown>;
