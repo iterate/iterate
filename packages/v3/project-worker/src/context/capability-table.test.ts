@@ -1,8 +1,8 @@
 // The capability table's executable spec (src/context/capability-table.ts): the two COMMANDS
 // (`capabilityProvidedEvent` / `capabilityRevokedEvent` BUILD the events — validation and the codec
-// round-trip fail LOUD at the door, the caller appends), the pure `route`, and `CapabilityResolver`
-// (built-ins first + unshadowable, longest path then newest, default-deny, targets resolved through
-// the same resolver one level deeper, the depth-32 budget). The mounts THEMSELVES are `core` state: this file reduces
+// round-trip fail LOUD at the door, the caller appends) and `CapabilityResolver` (built-ins first +
+// unshadowable, default-deny, the routed call evaluated against the physical scope; the routing
+// RULES themselves are routing.test.ts). The mounts THEMSELVES are `core` state: this file reduces
 // the durable log through `CoreStreamProcessor` per call, exactly as the DO does (the reduce's own
 // pins live in stream/core-processor.test.ts). The live-capability shape rides along: a live provide
 // is PURE DATA naming the `itx.rpcStubs` built-in (the physical registry), so reconnect is zero
@@ -15,9 +15,8 @@ import {
   CapabilityResolver,
   capabilityProvidedEvent,
   capabilityRevokedEvent,
-  route,
 } from "./capability-table.ts";
-import { parse, type Expression, type ItxExpression } from "./expression.ts";
+import type { Expression, ItxExpression } from "./expression.ts";
 import { InvokeHandle } from "./invoke-handle.ts";
 
 /** A tiny fake built-ins record — enough physical layer to route into. */
@@ -61,7 +60,7 @@ const setup = () => {
       }
     }, core.contract.initialState()).mounts;
   // The fake `itx.rpcStubs` BUILT-IN — the physical registry behind a live provide, keyed by the
-  // string the stub was parked under, exactly like the DO's RpcStubDirectory. _connect/_disconnect
+  // string the stub was lent under, exactly like the DO's RpcStubDirectory. _connect/_disconnect
   // simulate a pager attach / final close. A mount names an entry through the pure-data target
   // `itx.rpcStubs.get('<key>')`; nothing about the registry is in the log.
   const liveStubs = new Map<string, unknown>();
@@ -84,7 +83,7 @@ const setup = () => {
     const [committed] = stream.append(capabilityProvidedEvent(input)) as StreamEvent[];
     return { providedAtOffset: committed.offset };
   };
-  /** The edge sugar `itx.provide(path, fn)`, spelled out: park under the path, mount the
+  /** The edge sugar `itx.provide(path, fn)`, spelled out: lend under the path, mount the
    *  pure-data target. */
   const provideLive = (path: string, cap: unknown) => {
     liveStubs.set(path, cap);
@@ -130,9 +129,16 @@ describe("the door — capabilityProvidedEvent / capabilityRevokedEvent build th
     );
   });
 
-  test("a capability path is dotted names only — a call step or an unbalanced paren is refused at the door", () => {
+  test("a capability path may PIN literal args on a call step (stored canonical); an argless call step and an unbalanced paren are refused", () => {
+    expect(
+      (
+        capabilityProvidedEvent({ path: "itx.ai.run('gpt-5')", target: "itx.kv" }).payload as {
+          path: string;
+        }
+      ).path,
+    ).toBe("itx.ai.run('gpt-5')");
     expect(() => capabilityProvidedEvent({ path: "itx.a()", target: "itx.kv" })).toThrow(
-      /dotted names only/,
+      /pins literal args.*spell "a"/,
     );
     expect(() => capabilityProvidedEvent({ path: "itx.broken(", target: "itx.kv" })).toThrow(
       /unbalanced/,
@@ -145,42 +151,6 @@ describe("the door — capabilityProvidedEvent / capabilityRevokedEvent build th
       payload: { providedAtOffset: 7 },
     });
     expect(() => capabilityRevokedEvent(0)).toThrow();
-  });
-});
-
-describe("route — pure: longest matching path, then newest; null when nothing matches", () => {
-  const mount = (path: string, target: string, providedAtOffset: number): Mount => ({
-    path: path.split("."),
-    target: parse(target),
-    providedAtOffset,
-  });
-
-  test("the LONGEST matching path wins, even over a newer shorter one; the steps after the mount are what the path did not consume", () => {
-    const table = [mount("itx.a.b", "itx.long", 1), mount("itx.a", "itx.short", 2)];
-    const deep = route(table, parse("itx.a.b.f(1)"))!;
-    expect(deep.mount.providedAtOffset).toBe(1);
-    expect(deep).toMatchObject({ argsAtMount: undefined, stepsAfterMount: [["f", 1]] });
-    const shallow = route(table, parse("itx.a.c.f()"))!;
-    expect(shallow.mount.providedAtOffset).toBe(2);
-    expect(shallow.stepsAfterMount).toEqual(["c", ["f"]]);
-  });
-
-  test("same length → the NEWEST mount (highest providedAtOffset), whatever its position in the table", () => {
-    const table = [mount("itx.g", "itx.tab2", 5), mount("itx.g", "itx.tab1", 3)];
-    expect(route(table, parse("itx.g.hello()"))!.mount.providedAtOffset).toBe(5);
-  });
-
-  test("a call AT the mount consumes its args as the args at the mount", () => {
-    const hit = route(
-      [mount("itx.grok", "itx.openai.chat", 1)],
-      parse("itx.grok({ model: 'm' })"),
-    )!;
-    expect(hit).toMatchObject({ argsAtMount: [{ model: "m" }], stepsAfterMount: [] });
-  });
-
-  test("nothing matches → null (the resolver turns this into default-deny)", () => {
-    expect(route([mount("itx.a", "itx.kv", 1)], parse("itx.b.f()"))).toBeNull();
-    expect(route([], parse("itx.a"))).toBeNull();
   });
 });
 
@@ -278,7 +248,7 @@ describe("event mounts + the shadow stack", () => {
     await expect(invoke("itx.greeter.hello()")).rejects.toThrow(/no capability matches/);
   });
 
-  test("RECONNECT IS ZERO EVENTS: the mount is data, the stub is physical — re-parking serves the same mount", async () => {
+  test("RECONNECT IS ZERO EVENTS: the mount is data, the stub is physical — re-lending serves the same mount", async () => {
     const { revoke, invoke, events, mounts, provideLive, _connect, _disconnect } = setup();
     const mount = provideLive("itx.cam", { shot: () => "frame 1" });
     const logLength = events.length;
@@ -290,7 +260,7 @@ describe("event mounts + the shadow stack", () => {
     expect(events).toHaveLength(logLength);
     const rows = mounts().filter((m) => m.path.join(".") === "itx.cam");
     expect(rows.map((r) => r.providedAtOffset)).toEqual([mount.providedAtOffset]);
-    // Revoking the one mount → default-deny, even though the stub is still parked.
+    // Revoking the one mount → default-deny, even though the stub is still lent.
     revoke(mount.providedAtOffset);
     await expect(invoke("itx.cam.shot()")).rejects.toThrow(/no capability matches/);
     expect(await invoke("itx.rpcStubs.list()")).toEqual(["itx.cam"]); // presence is physical
@@ -299,9 +269,9 @@ describe("event mounts + the shadow stack", () => {
   test("a revoked EXPRESSION mount above a live mount restores the live mount beneath", async () => {
     const { provide, revoke, invoke, provideLive } = setup();
     provideLive("itx.mixed", { who: () => "the live stub" });
-    const alias = provide({ path: "itx.mixed", target: "itx.whoami" });
+    const mixed = provide({ path: "itx.mixed", target: "itx.whoami" });
     expect(await invoke("itx.mixed()")).toEqual({ projectId: "prj_t", path: "/" }); // expr shadows
-    revoke(alias.providedAtOffset);
+    revoke(mixed.providedAtOffset);
     expect(await invoke("itx.mixed.who()")).toBe("the live stub"); // live row restored
   });
 
@@ -372,12 +342,12 @@ describe("targets round-trip the codec: provide → print → reduce → parse",
   test("a mount target with a non-identifier object key routes (print QUOTES the key; the parser re-reads it)", async () => {
     const { provide, invoke } = setup();
     const { providedAtOffset } = provide({
-      path: "itx.alias",
+      path: "itx.chat",
       target: ["itx", "openai", ["chat", { "a b": "grok-4" }]] as Expression,
     });
     expect(providedAtOffset).toBeGreaterThan(0);
     // openai.chat reads o.model (absent here) → "chat:undefined"; the point is it ROUTES at all.
-    expect(await invoke("itx.alias")).toBe("chat:undefined");
+    expect(await invoke("itx.chat")).toBe("chat:undefined");
   });
 });
 

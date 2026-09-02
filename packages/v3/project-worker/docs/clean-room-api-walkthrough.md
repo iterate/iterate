@@ -44,7 +44,7 @@ flowchart LR
   end
   subgraph edge["project-worker, stateless edge (src/worker.ts)"]
     api["/api → UnauthenticatedSession → Session → ProjectCollection → IterateContext<br/>src/session.ts, src/iterate-context.ts"]
-    relay["Parking + stub relay<br/>retained client callbacks"]
+    relay["stub relay + SessionTeardown<br/>the session's client callbacks"]
     capdoor["/cap?context=…&cap=… fetch lane"]
   end
   subgraph do["IterateContextDurableObject, one per {projectId, path}"]
@@ -99,13 +99,14 @@ packages/v3/project-worker/
       capability-table.ts        the mounts' two commands (capabilityProvidedEvent / capabilityRevokedEvent)
                                  + the reader: route(mounts, call), CapabilityResolver (resolve)
       expression.ts              the codec: "itx.a.b(1)" ⇄ ["itx","a",["b",1]]
+      routing.ts                 routeCall: a mount is a rewrite rule — matchMount / pickMount / rewriteCall
       dispatch.ts                match(path, call), walkSteps / callOn / invokePath
       dotted-path-proxy.ts       the prototype hop: unknown dotted members reduce into ONE
                                  invokeCapability(expression)
       invoke-handle.ts           InvokeHandle + the two brands FacetHandle / RpcStubHandle
-      rpc-stub-directory.ts      the live rpc stubs, DO side: the pager door, pages, paged-in
+      rpc-stub-directory.ts      the live rpc stubs, DO side: the pager door, pages, borrowed
                                  stubs; key → transport; presence events
-      rpc-stub-relay.ts          edge side: Parking, startRpcStubRelay
+      rpc-stub-relay.ts          edge side: lendStubOverRelay (SessionTeardown lives in session.ts)
       worker-loader.ts           loadConfinedWorker, facetLoaderOwner, WorkerSource
       durable-object-names.ts    DurableObjectNameCodec, resolveContextPath
     fetch/                       chapter 2 — fetch, in both directions
@@ -176,9 +177,9 @@ const cli = newHttpBatchRpcSession("https://<worker>/api").authenticate().projec
 
 `projects.get` takes a project id (the root context's full name is accepted too);
 a non-root context name is refused, reach those with `cd`. One
-session may hold contexts of many projects; the session's `Parking` is keyed by
-canonical context name plus capability path, so they never touch each other's
-relays.
+session may hold contexts of many projects; the session's `SessionTeardown` is keyed
+by canonical context name plus capability path, so they never recall each other's
+stubs.
 
 Every call has two spellings, and both land on the same door:
 
@@ -207,8 +208,8 @@ class UnauthenticatedSession extends RpcTarget {
   /** THE introduction door. A no-op today; the one place a real credential check lands
    *  without changing any caller (clients already spell `api.authenticate(creds)`). */
   authenticate(credentials?: unknown): Session;
-  /** capnweb calls this when the session ends: every relay parked by this session is torn
-   *  down, and every unnamed subscription it made is removed. */
+  /** capnweb calls this when the session ends: every stub this session lent is recalled,
+   *  and every unnamed subscription it made is removed. */
   [Symbol.dispose](): void;
 }
 
@@ -228,7 +229,7 @@ class ProjectCollection extends RpcTarget {
 ### 4.2 `IterateContext` (the `itx` you hold)
 
 `src/iterate-context.ts`. The DO owns every contract; the edge declares only
-the doors that need it — a session-held stub to park, an EDGE context to hand
+the doors that need it — a session-held stub to lend, an EDGE context to hand
 back, the one dispatch door, a wait with no built-in root — and everything else
 you call on `itx` is the dotted hop onto a DO built-in or a mount:
 `itx.append(...)`, `itx.read(...)`, `itx.fetch(request)`, `itx.rpcStubs.list()`,
@@ -238,7 +239,7 @@ you call on `itx` is the dotted hop onto a DO built-in or a mount:
 class IterateContext extends RpcTarget {
   /** Another context of the SAME project. Absolute by convention ("/agents/x"); relative
    *  ("agents/x", "../inbox") resolves against this context's path. Pure addressing; an EDGE
-   *  context, so a live provide on it parks in this session. */
+   *  context, so a live provide on it lends in this session. */
   cd(path: string): IterateContext;
 
   /** THE ONE dispatch door. A dotted string or the parsed array. ONE routing rule: a call whose
@@ -250,31 +251,31 @@ class IterateContext extends RpcTarget {
    *  rejects with code WAIT_TIMEOUT. The one stream verb with no built-in root. */
   waitForEvent(filter?: WaitForEventFilter): Promise<StreamEvent>;
 
-  // ── SUGAR over the events (each parks a live value when handed one) ──
+  // ── SUGAR over the events (each lends a live value when handed one) ──
   /** THE ONE provide door. `target` is EITHER an itx expression (a durable mount:
    *  `capability-provided { path, target }`, string at rest, same-path mounts shadow, newest wins)
-   *  OR a live capnweb value (function | RpcTarget): parked under `path` in rpcStubs, then the
+   *  OR a live capnweb value (function | RpcTarget): lent under `path` in rpcStubs, then the
    *  ordinary mount `path ⇒ itx.rpcStubs.get('<path>')` is appended. Re-providing a live value
-   *  re-parks (reconnect) and appends nothing. */
+   *  re-lends (reconnect) and appends nothing. */
   provide(
     path: string,
     target: ItxExpression | ProviderStub,
   ): Promise<{ providedAtOffset: number }>;
   /** Pop a mount: by path (the newest winner at that exact path; what it shadowed is restored) —
-   *  this also closes THIS session's parked stub under that path — or by identity. */
+   *  this also recalls the stub THIS session lent under that path — or by identity. */
   revoke(input: string | { providedAtOffset: number }): Promise<void>;
 
   /** Subscribe a target to the log (the subscriptions layer's ONE event,
    *  `subscription-configured`). `target` is an itx expression whose terminal is callable with
-   *  `(events, range)`, or a live callback (parked under `itx.subscriptions.<name>`). No name ⇒
+   *  `(events, range)`, or a live callback (lent under `itx.subscriptions.<name>`). No name ⇒
    *  `sub-<8hex>`, removed when the session ends. Identical re-subscribe appends nothing. */
   subscribe(input: {
     name?: string;
     target: ItxExpression | ProviderStub;
     consumes?: string[];
   }): Promise<{ name: string }>;
-  /** Appends `subscription-removed`; a stream-kept cursor goes with it; this session's parked
-   *  callback under the name is closed. */
+  /** Appends `subscription-removed`; a stream-kept cursor goes with it; the callback this
+   *  session lent under the name is recalled. */
   unsubscribe(name: string): Promise<void>;
 
   /** Host `className` (the StreamProcessorDurableObject host exported by `source`) as the facet
@@ -303,7 +304,7 @@ DURABLE mark — never the in-memory head).
 
 Semantics worth knowing:
 
-- `provide` with a live value parks the stub **first**, then appends the mount,
+- `provide` with a live value lends the stub **first**, then appends the mount,
   so the event records a capability that can already serve. If the DO refuses
   the mount, the relay is disposed again.
 - `provide` with an expression target is idempotent too: the same target at the
@@ -418,7 +419,7 @@ interface BuiltInScope {
   fetch(request: Request): Promise<Response>;
 
   /** The live rpc-stub REGISTRY — physical, never event-sourced. `get(key)` is how a mount names a
-   *  parked value; offline ⇒ CONNECTION_OFFLINE at call time. `list()` is presence. */
+   *  lent value; offline ⇒ CONNECTION_OFFLINE at call time. `list()` is presence. */
   rpcStubs: {
     get(key: string): RpcStubHandle;
     list(): string[];
@@ -953,7 +954,7 @@ the held rev triggers one single-flight re-read of the door.
   user append lands at offset 4 (core's live-state delta, an ephemeral, took 3), and any door —
   a read, a snapshot, a facet call —
   materializes a never-touched context. The quiet-clock alarm arms only once a
-  facet is live or a stub is paged in.
+  facet is live or a stub is borrowed.
 - Stream control is ordinary events read by the core reduce (inline). A paused
   stream refuses every non-control append with `STREAM_PAUSED`; the control
   events (`created`, `woken`, `paused`, `resumed`) are exempt, so a paused stream
@@ -1046,10 +1047,10 @@ Small print: a subscription name is one segment, `[A-Za-z0-9_-]+` (it doubles
 as a facet name and a registry key tail). A resume's seek is clamped to the
 stream head. An unnamed `subscribe` is removed when the session ends. The DO's
 quiet clock is 60 s: an alarm that finds no delivery or facet call in flight
-and no activity for a minute aborts every live facet and disposes paged-in
-stubs; the next call re-materializes them (a `facets.delete` that lands while a
+and no activity for a minute aborts every live facet and returns every borrowed
+stub; the next call re-materializes them (a `facets.delete` that lands while a
 facet's source is loading wins: the load refuses with `NO_FACET` instead of
-resurrecting an orphan), and a context with no live facet and no paged-in stub
+resurrecting an orphan), and a context with no live facet and no borrowed stub
 arms no alarm at all. Configuring a subscription drops whatever the loop remembered under
 that name (the old target's cursor included) and wakes a facet target at once,
 as the head of that name's push chain. Re-subscribing a HALTED row with the same
@@ -1100,10 +1101,10 @@ class IterateContextDurableObject extends DurableObject<Env> {
   // (facets have no public verb: they are reached through `invoke` → the `facets` built-in and
   //  the load chain; the resolve-walk-apply door behind both is private)
 
-  // ── doors the edge relay calls (the hibernatable stub dance) ──
+  // ── doors the edge relay calls (the lend/borrow dance) ──
   rpcStubAttach(input: { key: string }): { transportId: string }; // refused unless already canonical
-  rpcStubActivate(input: { transportId: string; invoker: unknown }): unknown;
-  /** In-memory socket facts { stubs, pagedIn, pagesPending, dormant }. Not on the itx surface. */
+  rpcStubLend(input: { transportId: string; invoker: unknown }): unknown;
+  /** In-memory socket facts { stubs, borrowed, pagesPending, dormant }. Not on the itx surface. */
   transportState(): Record<string, unknown>;
 
   // ── native platform entry points ──
@@ -1111,7 +1112,7 @@ class IterateContextDurableObject extends DurableObject<Env> {
    *  leg) → x-itx-cap (the fetch lane) → else EGRESS: {{secret:project:NAME}} substitution then
    *  FALLBACK.fetch. */
   fetch(request: Request): Promise<Response>;
-  /** The cursor retry pump, then idle quiesce (aborts idle facets, disposes paged-in stubs). */
+  /** The cursor retry pump, then idle quiesce (aborts idle facets, returns borrowed stubs). */
   alarm(): Promise<void>;
   webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): void;
   webSocketClose(ws: WebSocket, code: number, reason: string): void;
@@ -1225,7 +1226,7 @@ the terminal-fetch call (`expressionEndingInFetch`) against the same rows.
 ```mermaid
 sequenceDiagram
   participant C as client (capnweb)
-  participant E as edge relay (Parking)
+  participant E as edge relay (owns the stub)
   participant D as context DO
   C->>E: itx.provide("itx.robot", robotObject)
   E->>D: rpcStubAttach({ key: "itx.robot" })
@@ -1238,23 +1239,23 @@ sequenceDiagram
   Note over D: ... idle: DO hibernates, socket survives ...
   C->>D: itx.robot.move(10)   (via edge, invoke)
   D->>E: { type: "page" } down the pager socket
-  E->>D: rpcStubActivate({ transportId, invoker })   fresh Workers-RPC stub
+  E->>D: rpcStubLend({ transportId, invoker })   a fresh Workers-RPC stub
   D->>E: invoker.invoke(["move"], [10])
   E->>C: robotObject.move(10)   (capnweb, same session)
   C-->>D: result
-  Note over D: stub kept warm while traffic flows,<br/>disposed at idle quiesce; a page gets it back
+  Note over D: stub kept borrowed while traffic flows,<br/>returned at idle quiesce; a page borrows it back
 ```
 
-The DO never retains a client stub across idle, so any number of connected
+The DO never holds a client stub across idle, so any number of connected
 clients leave it free to hibernate. The relay sends a keepalive frame down the
 pager every 30 s; the DO answers it with a WebSocket auto-response set once in
 its constructor, without waking. `rpcStubAttach` refuses a key that is not
-already canonical (the edge canonicalizes before parking), so the registry key
+already canonical (the edge canonicalizes before lending), so the registry key
 and the mount path that names it can never drift. Presence is `itx.rpcStubs.list()`; a key
 gaining its first transport appends `rpc-stub/attached`, losing its last
 appends `rpc-stub/detached` (both ephemeral; a replaced transport emits
 neither). The mount stays in the table when the socket closes; a call then
-fails with `CONNECTION_OFFLINE` until the client re-provides, which re-parks and
+fails with `CONNECTION_OFFLINE` until the client re-provides, which re-lends and
 appends nothing.
 
 ### 9.3 A commit
@@ -1335,7 +1336,7 @@ itself.
 | built-in           | a root of `BuiltInScope`; resolved before the table; unshadowable                                                                                                                                                  |
 | expression         | `["itx", ...steps]` or its string form; the persisted currency of every target                                                                                                                                     |
 | InvokeHandle       | a pipelinable `RpcTarget` returned mid-chain (`cd`, `load(...)`); `FacetHandle` and `RpcStubHandle` are its two brands                                                                                             |
-| rpc stub           | a live capnweb value parked for a session under a key; `itx.rpcStubs.get(key)` is how a mount or a subscription names it; presence is `list()`                                                                     |
+| rpc stub           | a live capnweb value a session lends under a key; the edge owns it, the DO borrows it per page; `itx.rpcStubs.get(key)` is how a mount or a subscription names it; presence is `list()`                            |
 | subscription       | a named row `{ target, consumes? }` in the subscriptions table; delivered every commit by the one loop                                                                                                             |
 | push               | delivery to a target that owns its progress: `(events, range)`, fire-and-forget to a live stub, awaited to a facet                                                                                                 |
 | stream-kept cursor | delivery to a target that cannot own progress: at-least-once from a kv cursor, retry ladder, halt fact                                                                                                             |

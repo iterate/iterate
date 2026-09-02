@@ -1,6 +1,6 @@
 // capability-table-tour.e2e.test.ts — the capability table, toured end to end against the local
 // project-worker. Covers: the built-in roots through the ONE dispatch door, live caps through the ONE provide door (the mount path IS the registry
-// key the stub is parked under), THE SHADOW STACK (override → revoke → restore, on expression
+// key the stub is lent under), THE SHADOW STACK (override → revoke → restore, on expression
 // mounts), expression mounts running dynamic workers (stateless fetch+WS, stateful deep call),
 // the two views of a live capability — PRESENCE (`itx.rpcStubs.list()`, physical) and the
 // table's live MOUNTS (rows targeting the registry, pure data) — default-deny, and the warm
@@ -80,7 +80,7 @@ test("capability table tour: built-in roots, live caps, shadow stack, dynamic-wo
   // 4. THE SHADOW STACK: same path mounted twice — newest wins; revoking the mount restores.
   //    A live mount shadows like any other mount, but the door dedupes an IDENTICAL re-provide
   //    (a reconnect is zero events), so the stack is proven on DISTINCT EXPRESSION mounts: each
-  //    provider parks its live stub at its own path, then alias-mounts itx.greeter onto it.
+  //    provider lends its live stub at its own path, then mounts itx.greeter onto that path.
   await itxA.provide("itx.greeterA", new ToolsA());
   await itxA.provide("itx.greeter", "itx.greeterA");
   await itxB.provide("itx.greeterB", new ToolsB());

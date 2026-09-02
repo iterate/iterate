@@ -12,7 +12,7 @@
 //
 // A MOUNT binds a CAPABILITY PATH ("itx.chat") to a TARGET EXPRESSION — and nothing else. That is
 // the whole event: `{ path, target }`. A LIVE capability (`itx.provide(path, stub)`) is no exception:
-// the stub is parked in the `itx.rpcStubs` BUILT-IN (physical, keyed by the path string) and the
+// the stub is lent to the `itx.rpcStubs` BUILT-IN (physical, keyed by the path string) and the
 // mount's target is the ordinary expression `itx.rpcStubs.get('<path>')` — the log records the
 // mount, never the socket. Subscriptions are NOT mounts: their own events, their own slice of core
 // (stream/subscriptions.ts). STRING AT REST: the event stores both halves in the string half of the
@@ -26,7 +26,6 @@
 // compose and a default route forwards whole calls), and the call's steps after the mount replay on
 // what came back. A target not rooted at `itx` matches nothing and default-denies.
 
-import { codedError } from "../lib/errors.ts";
 import { CoreContract, type Mount } from "../stream/core-processor.ts";
 import type { StreamEventInput } from "../stream/events.ts";
 import {
@@ -34,10 +33,10 @@ import {
   parseCapabilityPath,
   print,
   toExpression,
-  type Expression,
   type ItxExpression,
 } from "./expression.ts";
-import { callOn, match, walkSteps } from "./dispatch.ts";
+import { callOn, walkSteps } from "./dispatch.ts";
+import { routeCall } from "./routing.ts";
 
 // ── the two COMMANDS: build the event, the caller appends it ──
 
@@ -50,7 +49,7 @@ export function capabilityProvidedEvent(input: {
   path: string;
   target: ItxExpression;
 }): StreamEventInput {
-  const path = parseCapabilityPath(input.path).join(".");
+  const path = print(parseCapabilityPath(input.path)); // canonical: dotted names, pinned args as JSON5 literals
   const target = parse(print(toExpression(input.target)));
   if (target[0] !== "itx")
     throw new Error(
@@ -73,29 +72,6 @@ export function capabilityRevokedEvent(providedAtOffset: number): StreamEventInp
 
 // ── the READER ──
 
-/** Pure routing: the winning userspace mount for a call — with the call's args at the mount and its
- *  steps after the mount — or null (built-ins are resolved before this — see
- *  CapabilityResolver.resolve). Longest matching path wins; ties → newest mount (`providedAtOffset`). */
-export function route(
-  mounts: readonly Mount[],
-  call: Expression,
-): { mount: Mount; argsAtMount?: unknown[]; stepsAfterMount: Expression } | null {
-  let best: { mount: Mount; argsAtMount?: unknown[]; stepsAfterMount: Expression } | null = null;
-  for (const mount of mounts) {
-    const m = match(mount.path, call);
-    if (!m) continue;
-    // match is all-or-nothing, so path.length IS "how much matched".
-    if (
-      best === null ||
-      mount.path.length > best.mount.path.length ||
-      (mount.path.length === best.mount.path.length &&
-        mount.providedAtOffset > best.mount.providedAtOffset)
-    )
-      best = { mount, ...m };
-  }
-  return best;
-}
-
 /** THE DISPATCHER, parent-constructed over the physical built-ins and a reader of the CURRENT mounts. */
 export class CapabilityResolver {
   /** The built-ins: a plain record whose keys (kv, append, read, cd, …) are the physical-layer
@@ -115,61 +91,20 @@ export class CapabilityResolver {
    *  deeper, then the call's steps after the mount, then any runtime `extraArgs` (the fetch lane hands
    *  the live Request in here — a Request is not expression data). Nothing matches → default-deny
    *  with a readable error naming the call. */
-  async resolve(call: ItxExpression, extraArgs?: unknown[], depth = 0): Promise<unknown> {
-    // Guard against self-referential mounts (itx.x ⇒ itx.x, or a default route whose target
-    // re-misses): unbounded async recursion never overflows a stack, it just burns the DO.
-    if (depth > 32)
-      throw new Error(`capability resolution exceeded depth 32 — self-referential mount?`);
-    const expr = toExpression(call);
-    if (typeof expr[0] !== "string")
-      throw new Error("cannot call the scope symbol itself — name a capability first");
-    const root = Array.isArray(expr[1]) ? expr[1][0] : expr[1];
-    let value: unknown;
-    let receiver: unknown;
-    let stepsAfterMount: Expression;
-    if (expr[0] === "itx" && typeof root === "string" && Object.hasOwn(this.#builtIns, root)) {
-      // BUILT-IN FIRST: `itx.<root>…` where `<root>` is a physical-layer built-in — as if by an
-      // implicit mount `itx.<root> ⇒ <root>`: a call step at the root applies its args to the root.
-      value = this.#builtIns[root];
-      receiver = undefined;
-      if (Array.isArray(expr[1])) value = await callOn(value, receiver, expr[1].slice(1));
-      stepsAfterMount = expr.slice(2);
-    } else {
-      const winner = route(this.#mounts(), expr);
-      if (!winner)
-        throw codedError(
-          "NO_CAPABILITY_MATCH",
-          `no capability matches ${JSON.stringify(print(expr))} (default-deny; provide a capability first)`,
-        );
-      // REWRITE, THEN RESOLVE AGAIN: the mount's target REPLACES the matched prefix and the call's
-      // remaining steps follow it, so the rewritten call goes through the table like any other — a
-      // longer mount under the target's path captures the deeper call (`itx.db ⇒ itx.kv` beside
-      // `itx.kv.deep ⇒ narrow`: `itx.db.deep.f()` IS `itx.kv.deep.f()` IS narrow's `f()`), and mounts
-      // compose by naming each other. Args at the mount fold into the target's final step when that
-      // step is a property (`itx.grok ⇒ itx.openai.chat`, called `itx.grok({…})`, resolves
-      // `itx.openai.chat({…})`). The ONE shape the grammar cannot spell — args at the mount on a target
-      // that already ends in a call (`itx.grok ⇒ itx.load(src).getEntrypoint()`) — resolves the target
-      // to a value and applies the args to what came back. A live capability's mount targets
-      // `itx.rpcStubs.get('<path>')`: the built-in hands back the transport's pipelinable handle;
-      // no transport ⇒ CONNECTION_OFFLINE at call time.
-      const { target } = winner.mount;
-      const { argsAtMount, stepsAfterMount: rest } = winner;
-      const last = target.at(-1);
-      if (!argsAtMount || typeof last === "string") {
-        const rewritten = argsAtMount
-          ? [...target.slice(0, -1), [last as string, ...argsAtMount], ...rest]
-          : [...target, ...rest];
-        return this.resolve(rewritten as Expression, extraArgs, depth + 1);
-      }
-      value = await callOn(
-        await this.resolve(target, undefined, depth + 1),
-        undefined,
-        argsAtMount,
-      );
-      receiver = undefined;
-      stepsAfterMount = rest;
-    }
-    ({ value, receiver } = await walkSteps({ value, receiver }, stepsAfterMount, "remainder"));
+  /** Resolve + run one call: rewrite it through the mounts to a built-in-rooted call (routing.ts —
+   *  default-deny and the depth budget live there), then evaluate that call against the physical
+   *  scope: the root, its args if the root step is a call, the remaining steps (dispatch.ts walkSteps),
+   *  and finally any runtime `extraArgs` (the fetch lane hands the live Request in here — a Request
+   *  is not expression data). */
+  async resolve(call: ItxExpression, extraArgs?: unknown[]): Promise<unknown> {
+    const routed = routeCall(this.#mounts(), toExpression(call), (root) =>
+      Object.hasOwn(this.#builtIns, root),
+    );
+    const rootStep = routed[1] as string | [string, ...unknown[]];
+    let value: unknown = this.#builtIns[Array.isArray(rootStep) ? rootStep[0] : rootStep];
+    let receiver: unknown = undefined;
+    if (Array.isArray(rootStep)) value = await callOn(value, receiver, rootStep.slice(1));
+    ({ value, receiver } = await walkSteps({ value, receiver }, routed.slice(2), "remainder"));
     if (extraArgs) value = await callOn(value, receiver, extraArgs);
     return await value;
   }

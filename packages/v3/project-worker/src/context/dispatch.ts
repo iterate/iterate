@@ -26,30 +26,6 @@ const pipelined = (v: unknown): boolean => PIPELINED_RPC_BRANDS.some((b) => v in
 /** A successful claim of a call by a capability path. (Ranking uses the mount's own `path.length`,
  *  held by the caller; `match` is all-or-nothing, so a "how many segments matched" count could only
  *  ever equal that length.) */
-export type Match = {
-  /** The call's args AT the mount — present when the FINAL path segment matched a call step
-   *  (`itx.grok({...})` against the path `itx.grok`); applied to the resolved target. */
-  argsAtMount?: unknown[];
-  /** The call's steps AFTER the mount, replayed on the resolved target. */
-  stepsAfterMount: Expression;
-};
-
-/** Claim `call` with a capability `path`, segment by segment from the start: each segment matches a
- *  string step of the same name, or — FINAL segment only — a call step of the same method (its args
- *  become the args at the mount). No placeholders or captures. */
-export function match(path: readonly string[], call: Expression): Match | null {
-  let argsAtMount: unknown[] | undefined;
-  for (let i = 0; i < path.length; i++) {
-    const c = call[i];
-    if (c === undefined) return null; // path longer than the call
-    if (typeof c === "string") {
-      if (c !== path[i]) return null;
-    } else if (c[0] !== path[i] || i !== path.length - 1)
-      return null; // call consume: final only
-    else argsAtMount = c.slice(1);
-  }
-  return { argsAtMount, stepsAfterMount: call.slice(path.length) };
-}
 
 // RPC-EXPOSURE DOCTRINE (Kenton, workerd #1028), enforced at THE dispatch point: what an object
 // merely INHERITS from Object/Function.prototype is not capability surface, and __proto__ /
@@ -104,6 +80,13 @@ export async function walkSteps(
       value = stepGet(value as object, step);
     } else {
       const [method, ...args] = step;
+      if (method === "") {
+        // the ANONYMOUS call step (expression.ts): call the value itself — a live stub's root call
+        value = callOn(value, receiver, args);
+        receiver = undefined;
+        if (!pipelined(value)) value = await value;
+        continue;
+      }
       const fn = stepGet(value as object, method);
       if (typeof fn !== "function")
         throw codedError("NOT_A_METHOD", `${where}: ${JSON.stringify(method)} is not a method`);
@@ -132,7 +115,7 @@ export async function invokePath(
 
 /** Apply `args` to a resolved value on its carried receiver, or a LOUD error if it is not callable
  *  (never the silent arg-drop apps/os shipped). An `InvokeHandle` (a mid-chain capability handle —
- *  a live stub's transport bridge, a facet handle, a parked callback the delivery loop pushes to) is NOT a JS function
+ *  a live stub's transport bridge, a facet handle, a borrowed callback stub the delivery loop pushes to) is NOT a JS function
  *  (it is a real RpcTarget so dotted access pipelines — context/invoke-handle.ts), so ROOT-calling it
  *  means dispatching those args at its EMPTY path: `handle(events,range)` ⇒ the bare callback the
  *  handle fronts. This is the one bridge between "callable capability" and "pipelinable RpcTarget". */

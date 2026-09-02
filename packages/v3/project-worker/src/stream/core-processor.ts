@@ -25,7 +25,12 @@
 // from pause — a paused stream must always accept its own resume.
 
 import { z } from "zod";
-import { parse, parseCapabilityPath, type Expression } from "../context/expression.ts";
+import {
+  parse,
+  parseCapabilityPath,
+  type CapabilityPath,
+  type Expression,
+} from "../context/expression.ts";
 import { defineProcessorContract } from "./events.ts";
 import { StreamProcessor, type ReduceArgs } from "./processor.ts";
 
@@ -53,7 +58,8 @@ export const CoreContract = defineProcessorContract({
     mounts: z
       .array(
         z.object({
-          path: z.array(z.string()),
+          /** Dotted names; a call step pins literal args (`itx.ai.run('gpt-5')`) — expression.ts CapabilityPath. */
+          path: z.custom<CapabilityPath>(() => true),
           target: z.custom<Expression>(() => true),
           /** The mount's identity — the offset of its capability-provided event. */
           providedAtOffset: z.number().int().positive(),

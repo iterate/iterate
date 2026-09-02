@@ -1,66 +1,10 @@
-// Executable spec for the capability-path matcher + the step walk (and the resolver over a fake
-// built-ins scope, where a walk is only observable through a mount).
+// Executable spec for the step walk (and the resolver over a fake built-ins scope, where a walk is
+// only observable through a mount). Mount MATCHING is routing.test.ts — the table.
 import { describe, expect, test } from "vitest";
 import type { Mount } from "../stream/core-processor.ts";
 import { CapabilityResolver } from "./capability-table.ts";
-import { match, registerPipelinedRpcBrand, walkSteps } from "./dispatch.ts";
+import { registerPipelinedRpcBrand, walkSteps } from "./dispatch.ts";
 import { parse, parseCapabilityPath, type Expression } from "./expression.ts";
-
-// ───────────────────────────── capability-path matching ─────────────────────────────
-// THE RULE, whole: segment by segment from the start; the longest matching path wins; ties go
-// to the newest mount. The FINAL segment may consume a call step's args (the args at the mount).
-
-describe("match", () => {
-  test.each([
-    [
-      "a mount targeting another capability: the steps after the mount replay",
-      "itx.db",
-      "itx.db.get('x')",
-      { segments: 2, stepsAfterMount: [["get", "x"]] },
-    ],
-    [
-      "args at the mount: path name, call invokes",
-      "itx.grok",
-      "itx.grok({ messages: [] })",
-      { segments: 2, argsAtMount: [{ messages: [] }], stepsAfterMount: [] },
-    ],
-    [
-      "bare default route claims everything",
-      "itx",
-      "itx.some.thing.deep('x')",
-      { segments: 1, stepsAfterMount: ["some", "thing", ["deep", "x"]] },
-    ],
-    [
-      "deep path, call at the mount",
-      "itx.robots.arm",
-      "itx.robots.arm('batch')",
-      { segments: 3, argsAtMount: ["batch"], stepsAfterMount: [] },
-    ],
-  ])("%s", (_label, path, call, expected) => {
-    const m = match(parseCapabilityPath(path as string), parse(call as string))!;
-    expect(m).not.toBeNull();
-    const e = expected as { segments: number; argsAtMount?: unknown[]; stepsAfterMount: unknown[] };
-    if (e.argsAtMount) expect(m.argsAtMount).toEqual(e.argsAtMount);
-    expect(m.stepsAfterMount).toEqual(e.stepsAfterMount);
-  });
-
-  test.each([
-    ["name mismatch", "itx.f", "itx.g()"],
-    ["call consume is FINAL-segment only", "itx.a.b", "itx.a('x').b"],
-    ["path longer than call", "itx.a.b.c", "itx.a.b"],
-  ])("rejects: %s", (_label, path, call) => {
-    expect(match(parseCapabilityPath(path as string), parse(call as string))).toBeNull();
-  });
-
-  test("ranking basis: the longer path consumes more of the call (fewer steps left to replay)", () => {
-    // route ranks by the winning mount's own `path.length`; a longer matching path claims more
-    // segments, so it leaves FEWER steps after the mount — the observable proof that it matched more.
-    const call = parse("itx.robots.abc.ping()");
-    const long = match(parseCapabilityPath("itx.robots.abc"), call)!;
-    const short = match(parseCapabilityPath("itx.robots"), call)!;
-    expect(long.stepsAfterMount.length).toBeLessThan(short.stepsAfterMount.length);
-  });
-});
 
 // ───────────────────────────── the step walk + a mount, end to end ─────────────────────────────
 

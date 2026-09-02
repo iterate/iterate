@@ -1,5 +1,13 @@
 # Plan: argument-matched mounts (`itx.ai.run('some-model')` as a capability path)
 
+> **LANDED 2026-09-02** — with two differences from the recommendation below, both Jonas's calls:
+> the pinned args are CONSUMED by the match (partial application: `itx.ai.run('gpt-5') ⇒
+itx.openai.chat` makes `itx.ai.run('gpt-5', inputs)` into `itx.openai.chat(inputs)`), consistent
+> with every other matched step being replaced by the target; and mid-path pinned steps are allowed
+> under the same rule (a residual arg on a non-final step is a non-match). Routing is ONE pure module,
+> `src/context/routing.ts`, whose every rule is a row in `routing.test.ts` (mounts + call ⇒ the call that
+> runs). Ranking: longest path, then most pinned args, then newest.
+
 Jonas: "I would expect to be able to match `itx.ai.run("some-model")` specifically … I just want to
 know if we can do it with less than 80 lines." Answer up front: **yes — ~20 net source lines, ~35
 touched, five files**, with ONE rule ("the mount's literal args must equal the call's leading args"),
@@ -26,7 +34,7 @@ is ever consulted, pinned or not: capability-table.ts:130-136.)
   (capability-table.ts:53); `canonicalCapabilityPath` is the same join (expression.ts:101-103).
 - **Provide idempotency** (DO:509-521): `#newestMountAt(pathString)` filters `m.path.join(".") ===
 pathString` (DO:545-549) and compares `print(target)` strings. **Revoke-by-path** (DO:530-542) uses
-  the same `#newestMountAt`. **rpc-stub key**: `IterateContext.provide(path, liveValue)` parks under
+  the same `#newestMountAt`. **rpc-stub key**: `IterateContext.provide(path, liveValue)` lends under
   `canonicalCapabilityPath(path)` and mounts `itx.rpcStubs.get('<key>')` (iterate-context.ts:172-194);
   `rpcStubAttach` asserts the key IS canonical (DO:649-658). One pin says the door refuses a call step:
   capability-table.test.ts:133-140.
@@ -151,7 +159,7 @@ later is deleting one `if` plus deciding the consume question.
 
 ## 3. What gets gross
 
-- **rpc-stub registry key.** `itx.provide("itx.ai.run('some-model')", fn)` parks under the key
+- **rpc-stub registry key.** `itx.provide("itx.ai.run('some-model')", fn)` lends under the key
   `itx.ai.run('some-model')`; the mount's target prints as
   `itx.rpcStubs.get("itx.ai.run('some-model')")` (JSON5 flips to double quotes to embed the
   single-quoted key). It round-trips (`matchingParen` skips both quote styles, expression.ts:26-27;

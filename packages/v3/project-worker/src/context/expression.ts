@@ -1,10 +1,13 @@
 // context/expression.ts — THE expression codec: the STRING half (itx.facets.get("core")) ⇄ the
 // STRUCTURED half (["itx", "facets", ["get", "core"]]). Args are ONE JSON5 grammar (no hand-rolled
 // number/object parser; __proto__-safe); expressions are persisted NAMES, so deleting one IS
-// revocation. The capability-path matcher + evaluator/dispatcher are ./dispatch.ts.
+// revocation. The mount matcher + rewriter is ./routing.ts; the evaluator is ./dispatch.ts.
 import JSON5 from "json5";
 
-/** One step: a property read (string) or a call (`[method, ...args]`). Args are plain JSON. */
+/** One step: a property read (string) or a call (`[method, ...args]`). Args are plain JSON. The
+ *  method `""` is the ANONYMOUS call — call the value itself: `itx.rpcStubs.get('cam')(1, 2)` is
+ *  `["itx","rpcStubs",["get","cam"],["",1,2]]` — what a mount rewrite spells when a live value is
+ *  called with args. */
 type Step = string | [method: string, ...args: unknown[]];
 /** A call written as data: a scope-root name then get/call steps. */
 export type Expression = Step[];
@@ -13,8 +16,12 @@ export type Expression = Step[];
  *  Both carry call args (the string via `.method(args)`), and `toExpression` normalizes either to the
  *  structured form — so either works wherever one works, at every door that dispatches. */
 export type ItxExpression = string | Expression;
-/** A capability path — a mount's left side: plain dotted segments, no calls, no args. */
-export type CapabilityPath = string[];
+/** A capability path: dotted names, any of which may be a call step PINNING literal args —
+ *  `itx.ai.run` or `itx.ai.run('gpt-5')` or `itx.repo.get('main').files`. A pinned arg must equal the
+ *  call's arg at that position for the mount to match, and is CONSUMED by the match (partial
+ *  application): `itx.ai.run('gpt-5') ⇒ itx.openai.chat` makes `itx.ai.run('gpt-5', inputs)` into
+ *  `itx.openai.chat(inputs)`. */
+export type CapabilityPath = Expression;
 const IDENT = /^[A-Za-z_$][A-Za-z0-9_$-]*/;
 const RESERVED = new Set(["__proto__", "constructor", "prototype"]);
 
@@ -60,10 +67,15 @@ export function parse(source: string): Expression {
       } catch (e) {
         fail(`call args are not JSON5 (${(e as Error).message})`);
       }
-      const name = steps.pop();
-      if (typeof name !== "string") fail("a call must follow a name");
-      if (steps.length === 0) fail("cannot call the scope symbol itself");
-      steps.push([name, ...args]);
+      const previous = steps.at(-1);
+      if (Array.isArray(previous))
+        steps.push(["", ...args]); // `f(x)(y)`: call the result itself
+      else {
+        const name = steps.pop();
+        if (typeof name !== "string") fail("a call must follow a name");
+        if (steps.length === 0) fail("cannot call the scope symbol itself");
+        steps.push([name, ...args]);
+      }
       i = end + 1;
     } else fail(`unexpected ${JSON.stringify(c)} at ${i}`);
   }
@@ -81,23 +93,31 @@ export function print(expr: Expression): string {
     .map((step, i) => {
       const dot = i ? "." : "";
       if (typeof step === "string") return dot + step;
-      return `${dot}${step[0]}(${JSON5.stringify(step.slice(1)).slice(1, -1)})`;
+      const args = JSON5.stringify(step.slice(1)).slice(1, -1);
+      return step[0] === "" ? `(${args})` : `${dot}${step[0]}(${args})`;
     })
     .join("");
 }
 
-/** Parse a capability path ("itx.greet") — dotted names only; a call step is a loud error. */
+/** Parse a capability path — dotted names, optionally pinning literal args on call steps
+ *  (`itx.ai.run('gpt-5')`). A call step with NO args pins nothing and is the same path as the plain
+ *  name, so it is refused: spell `itx.ai.run`. */
 export function parseCapabilityPath(source: string): CapabilityPath {
   const expr = parse(source);
-  if (!expr.every((step): step is string => typeof step === "string"))
-    throw new Error(
-      `a capability path is dotted names only — ${JSON.stringify(source)} contains a call`,
-    );
+  for (const step of expr) {
+    if (Array.isArray(step) && step[0] === "")
+      throw new Error(`a capability path cannot call a result — ${JSON.stringify(source)}`);
+    if (Array.isArray(step) && step.length === 1)
+      throw new Error(
+        `a capability path pins literal args with a call step — ${JSON.stringify(source)} has "${step[0]}()" with none; spell "${step[0]}"`,
+      );
+  }
   return expr;
 }
 
 /** THE ONE canonical spelling of a capability path — what the table stores, what a live stub is
- *  parked under, what `revoke(path)` matches: parsed, then re-joined with dots. */
+ *  lent under, what `revoke(path)` matches: parsed, then printed (dotted names; pinned args as
+ *  JSON5 literals). */
 export function canonicalCapabilityPath(source: string): string {
-  return parseCapabilityPath(source).join(".");
+  return print(parseCapabilityPath(source));
 }

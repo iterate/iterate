@@ -5,6 +5,7 @@
 
 // eslint-disable-next-line iterate/no-capnweb-http-batch -- httpBatch() below exists to PROVE the /api one-shot batch door (session-doors.e2e); everything else is WS
 import { newHttpBatchRpcSession, newWebSocketRpcSession } from "capnweb";
+import { print, type Expression } from "../../src/context/expression.ts";
 
 const baseUrl = (): string => {
   const u = process.env.WORKER_BASE_URL;
@@ -130,9 +131,9 @@ export async function presence(itx: any): Promise<string[]> {
  *  Pure data: this set does NOT shrink when a provider dies; it shrinks on revoke. */
 export async function rpcStubMountPaths(itx: any): Promise<string[]> {
   const snap: any = await itx.invokeCapability("itx.facets.get('core').snapshot()");
-  return (snap.state.mounts as { path: string[]; target: unknown }[])
+  return (snap.state.mounts as { path: Expression; target: unknown }[])
     .filter((m) => Array.isArray(m.target) && m.target[0] === "itx" && m.target[1] === "rpcStubs")
-    .map((m) => m.path.join("."));
+    .map((m) => print(m.path));
 }
 
 /** Enabled processors = subscriptions whose target is a facet's processEventBatch (the load chain). */

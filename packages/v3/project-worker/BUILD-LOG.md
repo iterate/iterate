@@ -2128,3 +2128,70 @@ facts) and ranked opportunities across the engine + SDK host, the delivery loop,
   facet or stub.
 - GATES: tsc×3 · unit+workers 234 (24 files) · e2e 136p/2xf (35 files) · tutorial-proof 8 ·
   Playwright 2 · oxlint 0/0 · knip clean.
+
+## 2026-09-02 — a mount is a REWRITE RULE; a path may pin call args; routing is ONE module + ONE table
+
+- **Why.** The context-layer flatten (7a0afa273) resolved an alias's target as a VALUE and walked the
+  steps after the mount on it — so a longer mount under the target's path was never consulted. Jonas:
+  "what is an 'alias'?!?! sounds like a leaky abstraction", "i think you SHOULD be able to capture the
+  deeper call with the deeper mount", "i would even expect to be able to match `itx.ai.run('some-model')`",
+  "can you also match on `itx.something.get('bla').someOtherThing('something', inputs)`?", and: make the
+  matching "really easy to understand and encapsulated in a single Module … table-based tests …
+  if the call is such and such and the existing mounts table is such and such, then here's what I
+  would expect the actual invocation to look like."
+- **The word "alias" is gone (3c8c0b61c, 0dc486e9e).** A mount is `{ path, target }` and means ONE
+  thing: a call that starts with `path` is the same call with `path` replaced by `target`. Rewriting
+  repeats until the root is a built-in, so `itx.db ⇒ itx.store` + `itx.store.deep ⇒ itx.whoami` makes
+  `itx.db.deep()` run `itx.whoami()` — the deeper mount captures. Pinned in unit + e2e.
+- **Pinned args (this commit).** A capability path is dotted names where ANY step may be a call step
+  pinning literal args — `itx.ai.run('gpt-5')`, `itx.repo.get('main').files`. It matches a call whose
+  leading args are structurally equal to the pins; the pins are CONSUMED (partial application, the
+  target replaces every matched step — Jonas: "Isn't this like basically currying … yes, I think I do
+  want it"): `itx.ai.run('gpt-5') ⇒ itx.openai.chat` turns `itx.ai.run('gpt-5', inputs)` into
+  `itx.openai.chat(inputs)`. A residual arg on a NON-final pinned step is a non-match (nowhere to go).
+  Ranking: longest path, then most pinned args, then newest. Stored canonical (`print`), revoked by
+  the same spelling; the door refuses `itx.a()` (an argless call step: spell `itx.a`) and any `""` step.
+- **ONE module.** `src/context/routing.ts` (115 lines, pure, total): `matchMount` (rule 2), `pickMount`
+  (rule 3), `rewriteCall` (rule 4), `routeCall` (rules 3–5, the depth-32 budget, default-deny). Its
+  header is THE RULES 1–5. `dispatch.ts` lost `match` and only EXECUTES a routed call (`walkSteps`
+  learned the anonymous `""` step: `f(x)(y)` → `["", ...args]`, what a rewrite spells when the unpinned
+  args land on a target that already ends in a call — a live value). `CapabilityResolver.resolve` is
+  `routeCall` + the root + `walkSteps` + `extraArgs`; `route`, `pinnedArgCount` and the recursive
+  `depth` argument are gone. `Mount.path` is a `CapabilityPath` (= `Expression`, doc'd), not `string[]`.
+- **ONE table.** `routing.test.ts`: rows `{ mounts: ["path ⇒ target", …], call, becomes }` and
+  `{ …, throws }`, later rows newer; every rule above is a row; the anonymous step round-trips the
+  codec. `matchMount` rows `{ path, call, match }`. `dispatch.test.ts` keeps only the walk;
+  `capability-table.test.ts` keeps the door + the resolver. e2e:
+  `capability-table-argument-pinned-mounts` — provide plain + pinned, route both, a live value under a
+  pinned key sees only the unpinned args, revoke by the pinned spelling.
+- Doc: `docs/plan-argument-matched-mounts.md` LANDED note (two differences from its recommendation:
+  consume, mid-path pins); the walkthrough tree names `routing.ts`.
+
+## 2026-09-02 — the stub vocabulary: a session LENDS, the DO BORROWS and RETURNS; "parking" is gone
+
+- **Why.** Jonas: "what is 'parked stub'? is it 'hibernatable rpc stub'?" … "Wouldn't it be more fair
+  to say that the stub is borrowed by the durable object from the edge worker? … parking does need
+  to be changed." One relationship, two verbs, spelled from each side.
+- **Edge (owner).** `Parking` → `SessionTeardown` (`add` / `dispose` / `disposeAll`), MOVED out of
+  `rpc-stub-relay.ts` into `session.ts` — it is what a session must undo at its end, keyed
+  `"<contextName> <capabilityPath>"`. `#parkLiveStub` → `#lendStub`, `#closeParkedStub` →
+  `#recallStub`, `startRpcStubRelay` → `lendStubOverRelay`, `RetainedProviderStub` →
+  `LentProviderStub`.
+- **DO (borrower).** `RetainedCallbackInvoker` → `BorrowedStub`; `RpcStubDirectory.activate` →
+  `lend`, `DO.rpcStubActivate` → `rpcStubLend`; `#retained` → `#borrowed`, `#pageIn` → `#borrowStub`,
+  `hasRetainedStubs` → `hasBorrowedStubs`, `disposeRetainedStubs` → `returnBorrowedStubs`;
+  `transportState().pagedIn` → `.borrowed`; the four "hibernatable rpc stub …" errors say "rpc stub …".
+  Wire constants and `rpcStubAttach` unchanged; "pager"/"page" stay for the socket and the request;
+  "hibernatable" survives only where it names the SOCKET. `waitForEvent`'s "parked waiter" is a
+  waiting waiter. `e2e/session-parking-per-context` → `session-lends-per-context`.
+- **Two vacuous pins re-pinned.** A context with no live facet and no borrowed stub arms NO alarm, so
+  `runDurableObjectAlarm` fired into an empty schedule and both pins passed for nothing (proved: with
+  the arming removed, `alarmAt === null` passed and the new `runDurableObjectAlarm === true` failed).
+  `alarm-quiesce` "A BORROW RACES THE QUIESCE ALARM" now warms one stub, asserts `borrowed ≥ 1` and an
+  alarm, then races — the alarm really runs concurrently with an invoke that borrows another stub, and
+  that invoke still returns its own client's answer. Its "SCALE DROP + QUIESCE + EVICT + WAKE" warms a
+  stub so `borrowed === 0` after the quiesce proves a real return (and the evict is a real #6800
+  sequence). `ephemeral-offset-reuse` "alarm pump with ephemerals at head" materializes an unrelated
+  facet to arm the alarm, asserts the alarm fired, so `deliverEveryCursorSubscription` really ran over
+  an ephemeral head and left the cursor on the durable mark.
+- Lines: relay 211 → 183 (`Parking` moved out), session 89 → 116, directory 373 → 367.
