@@ -79,31 +79,22 @@ describe("stream DO isolate under an oversized script settlement", () => {
   // deadline (below the apps/os unit tests' 45s runner timeout, per its contract) is
   // ample — a hang fails as NOT-the-pinned-failure rather than masquerading
   // as the crash.
-  const failOOM = failing(it, /stream DO isolate OOMed/);
+  //
+  // One assertion carries all three outcomes, and the `Incident kind: <kind>`
+  // label in its failure message is what the pin keys on:
+  // - oom (bug present)     → no SURVIVED, assertion fails, message says
+  //                           "Incident kind: oom" → matches → pin green.
+  // - survived (bug fixed)  → SURVIVED present, assertion passes, body
+  //                           succeeds → failing() flips red: delete the wrapper.
+  // - other-failure         → no SURVIVED, assertion fails, but the message
+  //   (import error, fixture   says "Incident kind: other-failure" → does NOT
+  //   bug, timeout)           match → failing() reports red. A child abort that
+  //                           is not a real OOM proves nothing and must not hold
+  //                           the pin, per failing()'s contract.
+  const failOOM = failing(it, /Incident kind: oom/);
   failOOM("survives the readers re-materializing an oversized settlement", () => {
     const incident = runReplay(INCIDENT_CHARS);
-    // A child abort that is NOT a V8 OOM (import error, fixture bug, timeout)
-    // proves nothing about the pinned bug. Throw a NON-matching error so the
-    // wrapper reports red instead of the pin falsely holding — the exact
-    // "conditions that prove nothing must not succeed" rule from failing()'s
-    // contract.
-    if (incident.kind === "other-failure") {
-      throw new Error(
-        `replay child aborted for a NON-OOM reason — the fixture is broken, not the bug: ` +
-          `${incident.output.slice(-500)}`,
-      );
-    }
-    if (incident.kind === "oom") {
-      // The pinned failure: V8 aborted the replay exactly as the production
-      // isolate reset. `failing` matches this message and stays green while
-      // the bug lives; once #2572 bounds the settlement the child SURVIVES,
-      // this branch is not taken, the body passes, and the pin flips red
-      // with instructions to delete the wrapper.
-      throw new Error(
-        `stream DO isolate OOMed re-materializing an oversized settlement ` +
-          `(budget ${ISOLATE_BUDGET_MB}MB): ${incident.output.slice(-400)}`,
-      );
-    }
-    expect(incident.output).toContain("SURVIVED");
+    const message = `Incident kind: ${incident.kind}. Budget: ${ISOLATE_BUDGET_MB}MB. Output:\n${incident.output.slice(-500)}`;
+    expect(incident.output, message).toContain("SURVIVED");
   });
 });
