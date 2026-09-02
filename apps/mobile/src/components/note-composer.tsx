@@ -36,13 +36,13 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Feather from "@expo/vector-icons/Feather";
+import { formatAttachmentPartLine } from "iterate/processors";
 import { base64ToUint8Array } from "../lib/attachments.ts";
 import {
   attachmentAssetId,
   attachmentKey,
-  locationXmlPart,
+  describedAttachment,
   pendingNoteAttachments,
-  voiceNoteXmlPart,
   type ComposerAttachment,
 } from "../lib/composer-attachments.ts";
 import { readFileBase64 } from "../lib/file-bytes.ts";
@@ -274,14 +274,17 @@ export function NoteCaptureOverlay() {
             : attachment,
         ),
       );
-      // Locations and voice-note transcripts ride the note text as xml lines
-      // (the chat composer's convention). Everything else becomes inline
-      // base64 — a pending note must survive offline in AsyncStorage, so
-      // bytes are read eagerly (capture never loses data, D5).
+      // Locations and voice-note transcripts ride the note text as html
+      // attachment part lines (the chat composer's vocabulary). Everything
+      // else becomes inline base64 — a pending note must survive offline in
+      // AsyncStorage, so bytes are read eagerly (capture never loses data, D5).
       const locationLines = files.flatMap((attachment) => {
-        if (attachment.kind === "location") return [locationXmlPart(attachment)];
-        const voiceNote = voiceNoteXmlPart(attachment);
-        return voiceNote === null ? [] : [voiceNote];
+        if (attachment.kind !== "location" && attachment.kind !== "audio") return [];
+        const described = describedAttachment(attachment);
+        // Picked audio maps to a plain file part; only voice notes (with a
+        // transcript to carry) and locations belong in the note text.
+        if (described === null || described.kind === "file") return [];
+        return [formatAttachmentPartLine(described)];
       });
       const note: PendingNote = {
         // Pure entropy: the file path (capturedOnDeviceAt stamp + this)

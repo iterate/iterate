@@ -4,7 +4,7 @@ import {
   type StatefulDynamicWorkerRef,
   type StreamEvent,
 } from "iterate/sdk";
-import { isIdempotencyConflict } from "iterate/processors";
+import { isIdempotencyConflict, userMessageDescriberSubscription } from "iterate/processors";
 import { CodemodeInterpreterContract } from "./codemode-interpreter.ts";
 
 // THE CODEMODE-TAG EXPERIMENT — this project's agents respond with markdown
@@ -129,6 +129,7 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
     if (!agentPath.startsWith("/agents/")) return;
     if (/^\/agents\/(slack|telegram|email|mcp)\//.test(agentPath)) return;
     await this.#installInterpreterSubscription(agentPath);
+    await this.#installUserMessageDescriber(agentPath);
     const conversion = await this.#codemodeConversion();
     await this.#appendUnlessAlreadyRecorded(() =>
       this.itx.agents.get(agentPath).append(...conversion, {
@@ -136,6 +137,28 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
         type: "events.iterate.com/agent/configured",
         idempotencyKey: "codemode-tag/birth-debounce:v1",
         payload: { config: { llmRequestDebounceMs: 250 } },
+      }),
+    );
+  }
+
+  /** Put the user-message describer facet on this agent's stream — the
+   * reusable package processor that parses the mobile composer's html
+   * attachment parts into typed render facts (its entry file re-exports the
+   * facet class from iterate/processors). */
+  async #installUserMessageDescriber(agentPath: string): Promise<void> {
+    const payload = userMessageDescriberSubscription(agentPath, "user-message-describer.ts");
+    const digest = await crypto.subtle.digest(
+      "SHA-256",
+      new TextEncoder().encode(JSON.stringify(payload)),
+    );
+    const hash = [...new Uint8Array(digest).slice(0, 8)]
+      .map((byte) => byte.toString(16).padStart(2, "0"))
+      .join("");
+    await this.#appendUnlessAlreadyRecorded(() =>
+      this.itx.streams.get(agentPath).append({
+        type: "events.iterate.com/stream/subscription-configured",
+        idempotencyKey: `codemode-tag/user-message-describer:${hash}`,
+        payload,
       }),
     );
   }

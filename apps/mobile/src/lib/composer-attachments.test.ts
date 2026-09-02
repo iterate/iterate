@@ -1,12 +1,12 @@
 import { expect, test } from "vitest";
+import { describeUserMessage } from "iterate/processors";
 import {
   attachmentKey,
   attachmentLabel,
   attachmentUploads,
   formatClipDuration,
-  locationXmlPart,
   MAX_UPLOAD_BYTES,
-  messageWithXmlParts,
+  messageWithAttachmentParts,
   oversizeReason,
   parseAttachmentDimensions,
   parseUserLocations,
@@ -109,32 +109,41 @@ test("uploads: a file that reads back oversized refuses with the filename", asyn
   ).rejects.toThrow(/huge\.pdf.*too big/);
 });
 
-test("location and dimensions become self-describing xml parts appended to the text", () => {
-  expect(messageWithXmlParts("meet me here", [photo, location])).toBe(
-    'meet me here\n<attachment filename="sunset.jpg" width="100" height="80" />\n<user-location latitude="51.5074" longitude="-0.1278" accuracy-meters="12" captured-at="2026-08-30T12:00:00.000Z" />',
+test("attachments become html vocabulary parts appended to the text", () => {
+  expect(messageWithAttachmentParts("meet me here", [photo, location])).toBe(
+    [
+      "meet me here",
+      '<img alt="sunset.jpg" width="100" height="80">',
+      '<a href="geo:51.5074,-0.1278" data-accuracy-m="12" data-captured-at="2026-08-30T12:00:00.000Z">Shared location</a>',
+    ].join("\n"),
   );
   // Location-only send: no leading newline.
-  expect(messageWithXmlParts("", [location])).toBe(
-    '<user-location latitude="51.5074" longitude="-0.1278" accuracy-meters="12" captured-at="2026-08-30T12:00:00.000Z" />',
+  expect(messageWithAttachmentParts("", [location])).toBe(
+    '<a href="geo:51.5074,-0.1278" data-accuracy-m="12" data-captured-at="2026-08-30T12:00:00.000Z">Shared location</a>',
   );
   // A recorded voice clip announces itself so the agent knows to transcribe
   // — and so the bubble can render as just the player. With the on-device
   // transcript hydrated, the agent may not need to transcribe at all.
-  expect(messageWithXmlParts("", [voiceClip])).toBe(
-    '<voice-note filename="voice-123.m4a" duration-seconds="83" />',
+  expect(messageWithAttachmentParts("", [voiceClip])).toBe(
+    '<audio data-filename="voice-123.m4a" data-duration="83"></audio>',
   );
-  const withTranscript = messageWithXmlParts("", [
-    { ...voiceClip, transcript: 'I said "hi" & left' },
-  ]);
-  expect(withTranscript).toBe(
-    '<voice-note filename="voice-123.m4a" duration-seconds="83" transcript="I said &quot;hi&quot; &amp; left" />',
+  expect(messageWithAttachmentParts("", [{ ...voiceClip, transcript: 'I said "hi" & left' }])).toBe(
+    '<audio data-filename="voice-123.m4a" data-duration="83" data-transcript="I said &quot;hi&quot; &amp; left"></audio>',
   );
-  // ...and the player reads it back for the under-waveform display.
-  expect(parseVoiceNoteTranscripts(withTranscript)).toEqual({
-    "voice-123.m4a": 'I said "hi" & left',
+  // Every part round-trips through the package parser a derivation
+  // processor runs — the vocabulary's emitter and parser live together in
+  // iterate/processors, and this pins the composer's mapping into it.
+  const sent = messageWithAttachmentParts("look", [photo, voiceClip, location]);
+  expect(describeUserMessage(sent)).toMatchObject({
+    text: "look",
+    attachments: [
+      { kind: "image", filename: "sunset.jpg", width: 100, height: 80 },
+      { kind: "audio", filename: "voice-123.m4a", durationSeconds: 83 },
+      { kind: "location", latitude: 51.5074, longitude: -0.1278 },
+    ],
   });
-  expect(parseVoiceNoteTranscripts(messageWithXmlParts("", [voiceClip]))).toEqual({});
-  // Nothing part-worthy (a document-picked file) → text passes through.
+  // A document-picked file gets a real part now too (no more silent
+  // "[Files attached: …]"-only wire shape).
   const pdf: ComposerAttachment = {
     kind: "file",
     filename: "doc.pdf",
@@ -142,7 +151,9 @@ test("location and dimensions become self-describing xml parts appended to the t
     uri: "file:///tmp/doc.pdf",
     sizeBytes: 10,
   };
-  expect(messageWithXmlParts("hi", [pdf])).toBe("hi");
+  expect(messageWithAttachmentParts("hi", [pdf])).toBe(
+    'hi\n<a type="application/pdf" data-size="10">doc.pdf</a>',
+  );
 });
 
 test("captions hide metadata parts and the server's default attachment note", () => {
@@ -151,7 +162,7 @@ test("captions hide metadata parts and the server's default attachment note", ()
   expect(stripAttachmentXmlParts("real words\n[Files attached: a.pdf, b.png]")).toBe("real words");
 });
 
-test("dimension parts round-trip: sent for sized media, parsed back, hidden from the caption", () => {
+test("dimensions ride the parts for sized media so the mosaic never reflows", () => {
   const video: ComposerAttachment = {
     kind: "video",
     assetId: null,
@@ -164,17 +175,14 @@ test("dimension parts round-trip: sent for sized media, parsed back, hidden from
     width: 1920,
     height: 1080,
   };
-  const sent = messageWithXmlParts("look at these", [photo, video, voiceClip]);
-  // The renderer gets exact dimensions before any bytes load — the whole
-  // point: the mosaic never reflows.
-  expect(parseAttachmentDimensions(sent)).toEqual({
-    "sunset.jpg": { width: 100, height: 80 },
-    'clip "a&b".mov': { width: 1920, height: 1080 },
+  const sent = messageWithAttachmentParts("look at these", [photo, video]);
+  expect(describeUserMessage(sent)).toMatchObject({
+    text: "look at these",
+    attachments: [
+      { kind: "image", width: 100, height: 80 },
+      { kind: "video", filename: 'clip "a&b".mov', width: 1920, height: 1080, durationSeconds: 3 },
+    ],
   });
-  // ...and the human never sees the metadata lines.
-  expect(stripAttachmentXmlParts(sent)).toBe("look at these");
-  // A message with no parts is untouched (multiline text survives).
-  expect(stripAttachmentXmlParts("line one\nline two")).toBe("line one\nline two");
 });
 
 test("note attachments: bytes inline (pending notes must survive offline), locations skipped", async () => {
@@ -195,32 +203,21 @@ test("note attachments: bytes inline (pending notes must survive offline), locat
   expect(Buffer.from(converted[1]!.base64, "base64").toString()).toBe("pdf bytes");
 });
 
-test("location parts parse back into coordinates and hide from the caption", () => {
-  const sent = messageWithXmlParts("meet me here", [location]);
-  expect(parseUserLocations(sent)).toEqual([
-    {
-      latitude: 51.5074,
-      longitude: -0.1278,
-      accuracyMeters: 12,
-      capturedAt: "2026-08-30T12:00:00.000Z",
-    },
-  ]);
-  expect(stripAttachmentXmlParts(sent)).toBe("meet me here");
-  // No accuracy attribute → null, not NaN.
+test("legacy xml parts still parse (old threads render until the presentation cutover)", () => {
   expect(
     parseUserLocations('<user-location latitude="1.5" longitude="-2" captured-at="t" />'),
   ).toEqual([{ latitude: 1.5, longitude: -2, accuracyMeters: null, capturedAt: "t" }]);
-});
-
-test("xml attributes escape reserved characters", () => {
   expect(
-    locationXmlPart({
-      latitude: 1,
-      longitude: 2,
-      accuracyMeters: null,
-      capturedAt: '"<&>"',
-    }),
-  ).toBe('<user-location latitude="1" longitude="2" captured-at="&quot;&lt;&amp;&gt;&quot;" />');
+    parseAttachmentDimensions('<attachment filename="a.png" width="10" height="8" />'),
+  ).toEqual({ "a.png": { width: 10, height: 8 } });
+  expect(
+    parseVoiceNoteTranscripts(
+      '<voice-note filename="v.m4a" duration-seconds="3" transcript="yo" />',
+    ),
+  ).toEqual({ "v.m4a": "yo" });
+  expect(
+    stripAttachmentXmlParts('hi\n<user-location latitude="1" longitude="2" captured-at="t" />'),
+  ).toBe("hi");
 });
 
 test("oversize guard and labels", () => {

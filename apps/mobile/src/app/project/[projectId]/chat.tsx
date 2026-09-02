@@ -63,7 +63,7 @@ import {
   attachmentAssetId,
   attachmentKey,
   attachmentUploads,
-  messageWithXmlParts,
+  messageWithAttachmentParts,
   parseAttachmentDimensions,
   parseUserLocations,
   parseVoiceNoteTranscripts,
@@ -247,7 +247,7 @@ function ChatScreen() {
       // lazily from their local uris here, at send time); location becomes
       // an XML part appended to the text (lib/composer-attachments.ts).
       const uploads = await attachmentUploads(files, readFileBase64);
-      const message = messageWithXmlParts(input.message, files);
+      const message = messageWithAttachmentParts(input.message, files);
       const project = await getProjectItx(baseUrl!, projectId);
       const agent = project.agents.get(path) as RpcStub<Agent>;
       // create() is idempotent (its birth events carry deterministic
@@ -713,7 +713,7 @@ function PendingSendBubble({
   const message: AgentUiMessageItem = {
     kind: "user",
     id: `pending-${entry.clientId}`,
-    text: messageWithXmlParts(entry.message, displayFiles),
+    text: messageWithAttachmentParts(entry.message, displayFiles),
     timestampMs: entry.sentAtMs,
     files: entry.files.flatMap((attachment): AgentUiFileAttachment[] => {
       const key = attachmentKey(attachment);

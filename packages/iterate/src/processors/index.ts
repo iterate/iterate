@@ -19,3 +19,4 @@ export * from "./event-consumption-metrics.ts";
 export * from "./stream-runtime-metrics.ts";
 export * from "./prompt-sections.ts";
 export * from "./render-events.ts";
+export * from "./user-message-describer.ts";
