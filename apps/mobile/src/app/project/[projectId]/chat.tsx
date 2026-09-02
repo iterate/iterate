@@ -47,6 +47,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import type { RpcStub } from "capnweb";
 import type { Agent, StreamEvent } from "iterate/sdk/itx/react";
+import { mosaicLayout } from "@iterate-com/ui/lib/mosaic-layout";
 import {
   ActivityCard,
   CodeBlock,
@@ -83,7 +84,6 @@ import {
 } from "../../../lib/feed.ts";
 import { awaitingAgentActivity, latestAgentTitle } from "../../../lib/chat.ts";
 import { photoFrame, photoFrameMaxWidth, PHOTO_MAX_HEIGHT } from "../../../lib/photo-layout.ts";
-import { mosaicLayout } from "../../../lib/mosaic-layout.ts";
 import { getProjectItx } from "../../../lib/itx.ts";
 // APPROVAL_STREAM_EVENT_TYPES is module-level (identity-stable) on purpose:
 // useLiveEvents folds eventTypes into its connection-hook deps, so an inline

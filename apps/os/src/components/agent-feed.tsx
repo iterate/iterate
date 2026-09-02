@@ -19,6 +19,7 @@ import {
   formatAgentUiDuration,
   summarizeAgentUiActivity,
   type AgentUiActivity,
+  type AgentUiAttachment,
   type AgentUiFileAttachment,
   type AgentUiItem,
   type AgentUiMessageItem,
@@ -45,6 +46,7 @@ import {
   looksLikeCode,
 } from "~/lib/feed-format.ts";
 import { AgentActivityRoundRow, AgentActivityRounds } from "~/components/agent-activity-rounds.tsx";
+import { MessageRichAttachments } from "~/components/message-rich-attachments.tsx";
 import { linkOptionsForStreamPath } from "~/lib/stream-routes.ts";
 import { useTickingNowMs } from "~/lib/use-ticking-now-ms.ts";
 
@@ -136,7 +138,11 @@ export const AgentFeedItemRow = memo(function AgentFeedItemRow({
           >
             {item.text}
           </MessageResponse>
-          <MessageAttachments files={item.files} hasText={item.text !== ""} />
+          <MessageAttachments
+            files={item.files}
+            attachments={item.attachments}
+            hasText={item.text !== ""}
+          />
         </MessageContent>
       </Message>
     );
@@ -507,7 +513,11 @@ function UserMessageBody({ item }: { item: AgentUiMessageItem }) {
           {item.text}
         </MessageResponse>
       )}
-      <MessageAttachments files={item.files} hasText={item.text !== ""} />
+      <MessageAttachments
+        files={item.files}
+        attachments={item.attachments}
+        hasText={item.text !== ""}
+      />
     </>
   );
 }
@@ -522,20 +532,50 @@ function MessageViaLabel({ via, className }: { via: AgentUiMessageVia; className
   );
 }
 
+/** Which filenames this component renders richly — the caller hides the same
+ * files from its plain chip fallback so nothing shows twice. */
+function richlyRenderedFilenames(
+  attachments: AgentUiAttachment[],
+  files: AgentUiFileAttachment[] | undefined,
+): Set<string> {
+  const fileByName = new Set((files || []).map((file) => file.filename));
+  const rendered = new Set<string>();
+  for (const attachment of attachments) {
+    if (attachment.kind === "location") continue;
+    if (fileByName.has(attachment.filename)) rendered.add(attachment.filename);
+  }
+  return rendered;
+}
+
 function MessageAttachments({
   files,
+  attachments,
   hasText,
 }: {
   files: AgentUiMessageItem["files"];
+  attachments: AgentUiMessageItem["attachments"];
   hasText: boolean;
 }) {
-  if (files == null || files.length === 0) return null;
+  // Derived typed attachments render richly (mosaic, audio + transcript,
+  // location cards — message-rich-attachments.tsx); the plain chip fallback
+  // below then only shows files the derivation didn't cover, so nothing
+  // renders twice.
+  const rich = attachments !== undefined && attachments.length > 0;
+  const covered = rich ? richlyRenderedFilenames(attachments, files) : null;
+  const chipFiles = (files || []).filter((file) => covered === null || !covered.has(file.filename));
   return (
-    <div className={cn("flex max-w-full flex-col gap-2", hasText && "mt-1")}>
-      {files.map((file) => (
-        <MessageAttachment key={file.path} file={file} />
-      ))}
-    </div>
+    <>
+      {rich ? (
+        <MessageRichAttachments attachments={attachments} files={files} hasText={hasText} />
+      ) : null}
+      {chipFiles.length === 0 ? null : (
+        <div className={cn("flex max-w-full flex-col gap-2", hasText && "mt-1")}>
+          {chipFiles.map((file) => (
+            <MessageAttachment key={file.path} file={file} />
+          ))}
+        </div>
+      )}
+    </>
   );
 }
 
