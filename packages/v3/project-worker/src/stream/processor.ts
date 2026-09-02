@@ -2,7 +2,7 @@
 // PURE class (a contract and three hooks: `reduce` / `processEvent` / `projectLiveState`, no
 // constructor arguments, no storage, no stream), so `new PresenceProcessor().reduce({ event, state })` is a
 // unit test. `ProcessorEngine` drives ONE such instance against a stream and a storage (serial
-// chain, checkpoint, gap repair, at-head pass, version refold, live-state publishing); the SDK's
+// chain, checkpoint, gap repair, at-head pass, version re-reduce, live-state publishing); the SDK's
 // `StreamProcessorDurableObject` (sdk/) builds one per hosted facet. The author surface mirrors
 // apps/os (`blockProcessorWhile`/`runInBackground`, `delivery.caughtUp`) so processors port both
 // ways. Node-testable; bundled with zod into every loaded isolate as `processor.js` via
@@ -29,7 +29,7 @@
 // redeliver it) and NEVER trigger a progress persist: an ephemeral-only range advances the
 // cursor in memory alone, so a pure-ephemeral flood costs this class ZERO storage writes.
 //
-// `reduce` is a PURE reduce (new object out, inputs immutable), cached per contract version;
+// `reduce` is a PURE reduce (new object out, its arguments immutable), cached per contract version;
 // bumping `contract.version` re-reduces from offset 0 through `reduce` only (never re-running
 // side effects) — and a re-reduce reads durable rows only, which is why durable product truth must
 // never be derived from an ephemeral event.
@@ -126,17 +126,17 @@ export function consumesEvent(
   return consumes === undefined || consumes.includes("*") || consumes.includes(event.type);
 }
 
-/** What the ENGINE folds: the contract's consumes, minus the one type no processor may ever reduce or
+/** What the ENGINE reduces: the contract's consumes, minus the one type no processor may ever reduce or
  *  react to — a live-state delta. Deltas are notifications ABOUT state; letting one feed a reduce is
  *  the feedback-loop class, made unspellable here rather than discouraged. */
-const foldsEvent = (consumes: readonly string[], event: { type: string; ephemeral?: boolean }) =>
+const reducesEvent = (consumes: readonly string[], event: { type: string; ephemeral?: boolean }) =>
   event.type !== "events.iterate.com/live-state/changed" && consumesEvent(consumes, event);
 
 /** THE AUTHOR CLASS. A processor is a contract and three hooks, nothing else: no constructor
  *  arguments, no stream, no storage — a plain object a unit test constructs with `new` and calls
  *  `reduce` on. Deps an effect needs (a client, a binding) arrive through the subclass's own
  *  constructor, exactly as they would for any class. One instance lives as long as its host; a field
- *  on it is RUNTIME state (gone with the host), which `projectLiveState` may fold into the live view. */
+ *  on it is RUNTIME state (gone with the host), which `projectLiveState` may reduce into the live view. */
 export abstract class StreamProcessor<State> {
   abstract readonly contract: ProcessorContract<State>;
 
@@ -153,7 +153,7 @@ export abstract class StreamProcessor<State> {
    *  a delta emits on every change whether or not anyone is watching. That is deliberate: the delta
    *  is an EPHEMERAL, unconsumable event (memory-only, no storage write, dropped at delivery if no
    *  subscriber names its key), so "always live" costs an offset and a cheap diff, nothing durable.
-   *  Override to redact/trim, or to FOLD IN RUNTIME FIELDS the reduce doesn't own
+   *  Override to redact/trim, or to REDUCE IN RUNTIME FIELDS the reduce doesn't own
    *  (`return { ...state, lastSeenMs: this.lastSeenMs }`). The engine re-projects after EVERY batch,
    *  so a runtime field bumped inside `processEvent` publishes on its own; one changed outside a batch
    *  (an RPC method on the host) needs the host's `publishLiveState()`. */
@@ -171,7 +171,7 @@ export abstract class StreamProcessor<State> {
 
 /** THE ENGINE: drives one `StreamProcessor` against a stream and a storage. Everything below the
  *  author's three hooks lives here — the serial chain, the checkpoint, gap repair from the
- *  scanned-range proof, the at-head pass, version refolds, live-state publishing. Constructed by the
+ *  scanned-range proof, the at-head pass, version re-reduces, live-state publishing. Constructed by the
  *  host (`StreamProcessorDurableObject` with the facet's kv and `env.ITX`; a test with the in-memory
  *  stand-ins in test-support.ts). */
 export class ProcessorEngine<State> {
@@ -199,8 +199,8 @@ export class ProcessorEngine<State> {
   // One LiveState holder per processor (stream/live-state.ts) — it owns the revision chain and the
   // diff→emit dance. Lazily materialized so its epoch is minted once per incarnation; seeded with
   // the PREVIOUS projection at the top of each batch (so the first change after (re)materialization
-  // still diffs from the right base). A version refold clears it (#rereduceIfVersionChanged), so a
-  // reborn chain mints a fresh epoch and clients re-seed — which a refold wants.
+  // still diffs from the right base). A version re-reduce clears it (#rereduceIfVersionChanged), so a
+  // reborn chain mints a fresh epoch and clients re-seed — which a re-reduce wants.
   #live?: LiveState<unknown>;
   #liveHolder(seedState?: State): LiveState<unknown> {
     if (this.#live) return this.#live;
@@ -253,7 +253,7 @@ export class ProcessorEngine<State> {
       await this.#rereduceIfVersionChanged();
       const cursor = this.#loadProgress().reducedThroughOffset;
       // DURABLE GAP REPAIR is the ONLY reason not to process the push immediately: a durable prefix
-      // the push assumes but we haven't folded must be healed from the log FIRST. The push carries
+      // the push assumes but we haven't reduced must be healed from the log FIRST. The push carries
       // fresh named ephemerals the log can't return (reads are durable-only), so a blanket catch-up
       // would repair the durables but drop the ephemerals — hence repair up to the push
       // start, then process the push itself.
@@ -261,12 +261,12 @@ export class ProcessorEngine<State> {
         await this.#repairThrough(range.after);
         // Log can't reach the push start (a durable row genuinely missing) → full durable catch-up,
         // then STILL process the push below so its ephemerals aren't dropped (the durables are
-        // simply filtered as already-folded).
+        // simply filtered as already-reduced).
         if (this.#loadProgress().reducedThroughOffset !== range.after) await this.#catchUpBody();
       }
-      // ALWAYS process the push — no push is ever discarded. Durables fold iff fresh (`offset >
+      // ALWAYS process the push — no push is ever discarded. Durables reduce iff fresh (`offset >
       // cursor`); ephemerals ALWAYS deliver (one push, unredeliverable); the cursor never regresses.
-      // A wholly-behind (stale) push folds nothing and just delivers its ephemerals.
+      // A wholly-behind (stale) push reduces nothing and just delivers its ephemerals.
       const atHead = range.through >= (this.#pushedThroughOffset ?? 0);
       await this.#processBatch(events, range, atHead);
     });
@@ -279,7 +279,7 @@ export class ProcessorEngine<State> {
 
   // ── the read surface ──
 
-  /** Fold-and-effects caught up through the log, then the current snapshot. */
+  /** Reduce-and-effects caught up through the log, then the current snapshot. */
   async snapshot(): Promise<ProcessorSnapshot<State>> {
     if (!this.#caughtUp()) await this.wake();
     const progress = this.#loadProgress();
@@ -320,7 +320,7 @@ export class ProcessorEngine<State> {
       this.#waiters.push(waiter);
       void this.wake()
         .then(() => {
-          // The offset may have been reached by the wake's own catch-up OR by a version refold
+          // The offset may have been reached by the wake's own catch-up OR by a version re-reduce
           // (which sets progress without a #processBatch that resolves waiters). Re-check here.
           const i = this.#waiters.indexOf(waiter);
           if (i !== -1 && this.#loadProgress().reducedThroughOffset >= offset) {
@@ -354,7 +354,7 @@ export class ProcessorEngine<State> {
   /** The persisted reduce checkpoint (see reduce-checkpoint.ts) — cached per incarnation. A
    *  version MATCH is cached; a MISMATCH (or no cursor) returns the fresh fallback WITHOUT caching
    *  it, because `#rereduceIfVersionChanged` bails when `#progress` is already set — caching here
-   *  would skip the refold and replay the whole log WITH side effects. */
+   *  would skip the re-reduce and replay the whole log WITH side effects. */
   #loadProgress(): ReduceCheckpoint<State> {
     if (this.#progress) return this.#progress;
     const cp = readReduceCheckpoint(
@@ -379,11 +379,11 @@ export class ProcessorEngine<State> {
       reduceCursorKey(this.#contract.slug),
     );
     if (!stored || stored.reducerVersion === this.#contract.version) return;
-    // The OLD-version state blob, read before the refold overwrites it — the diff base for the one
+    // The OLD-version state blob, read before the re-reduce overwrites it — the diff base for the one
     // heal delta emitted below.
     const oldState = this.#storage.get<State>(reduceStateKey(this.#contract.slug));
     // Rebuild ONLY through the offset the OLD cursor covered (reduce-only, no effects). Events
-    // past it are the job of the normal flow that follows — refolding to the live head instead
+    // past it are the job of the normal flow that follows — re-reducing to the live head instead
     // would judge an already-queued in-flight push stale and swallow its effects.
     const target = stored.reducedThroughOffset;
     let state = this.#contract.initialState();
@@ -392,7 +392,7 @@ export class ProcessorEngine<State> {
       const page = await this.#stream.read(after, 500);
       for (const event of page.events) {
         if (event.offset > target) break;
-        if (foldsEvent(this.#contract.consumes, event))
+        if (reducesEvent(this.#contract.consumes, event))
           state = this.processor.reduce({ event, state }) ?? state;
       }
       const scannedTo = Math.min(page.scannedThroughOffset, target);
@@ -406,13 +406,13 @@ export class ProcessorEngine<State> {
       state,
     };
     writeReduceCheckpoint(this.#storage, this.#contract.slug, this.#progress, state, true);
-    // A refold jumped the state under the holder. Rebirth the chain NOW on a fresh epoch seeded at
-    // the OLD-version projection, and publish the refolded one through it: clients synced to the old
+    // A re-reduce jumped the state under the holder. Rebirth the chain NOW on a fresh epoch seeded at
+    // the OLD-version projection, and publish the re-reduced one through it: clients synced to the old
     // chain get one delta whose `from` can't match any rev they hold → they re-seed — even when this
-    // refold is the last state change for a long while. (Dropping the holder alone left them
+    // re-reduce is the last state change for a long while. (Dropping the holder alone left them
     // silently stale until an unrelated later change happened to emit.) An unchanged projection
     // emits nothing — there is nothing to heal. If the old state blob is absent (state never left
-    // initial under the old version), the fresh holder seeds at the refolded projection and the
+    // initial under the old version), the fresh holder seeds at the re-reduced projection and the
     // publish no-ops — same quiet outcome as before.
     this.#live = undefined;
     if (oldState !== undefined) this.#liveHolder(oldState);
@@ -453,7 +453,7 @@ export class ProcessorEngine<State> {
       if (page.scannedThroughOffset <= after) return; // nothing more durable to repair
       const through = Math.min(page.scannedThroughOffset, target);
       await this.#processBatch(
-        page.events.filter((e) => e.offset <= target),
+        page.events.filter((event) => event.offset <= target),
         { after, through },
         false,
       );
@@ -462,9 +462,9 @@ export class ProcessorEngine<State> {
   }
 
   /** Rules 2–5 over one range (the caller has healed any durable prefix gap first).
-   *  DURABLES fold at-most-once — `offset > cursor`. EPHEMERALS ALWAYS deliver — each rides exactly
+   *  DURABLES reduce at-most-once — `offset > cursor`. EPHEMERALS ALWAYS deliver — each rides exactly
    *  one push and can never be a redelivery, so a durable-only wake that clamped the cursor PAST an
-   *  ephemeral offset must not suppress it. The cursor is a DURABLE-fold watermark and never
+   *  ephemeral offset must not suppress it. The cursor is a DURABLE-reduce watermark and never
    *  regresses. There is no separate ephemeral path. */
   async #processBatch(events: StreamEventT[], range: ScannedRange, atHead: boolean): Promise<void> {
     const progress = this.#loadProgress();
@@ -474,15 +474,15 @@ export class ProcessorEngine<State> {
     // the end diffs prev→next, not next→next (the first-change-lost trap if the holder is born after).
     this.#liveHolder(prevState);
 
-    const consumable = events.filter(
-      (e) =>
-        foldsEvent(this.#contract.consumes, e) &&
-        (e.ephemeral || e.offset > progress.reducedThroughOffset),
+    const consumableEvents = events.filter(
+      (event) =>
+        reducesEvent(this.#contract.consumes, event) &&
+        (event.ephemeral || event.offset > progress.reducedThroughOffset),
     );
     let caughtUpDelivered = false;
-    for (let i = 0; i < consumable.length; i++) {
-      const last = i === consumable.length - 1;
-      state = await this.#applyEvent(consumable[i], state, atHead && last);
+    for (let i = 0; i < consumableEvents.length; i++) {
+      const last = i === consumableEvents.length - 1;
+      state = await this.#applyEvent(consumableEvents[i], state, atHead && last);
       if (atHead && last) caughtUpDelivered = true;
     }
     // Rule 5: reached the head with no caught-up event → one eventless at-head pass.
@@ -490,13 +490,13 @@ export class ProcessorEngine<State> {
 
     // Rule 4: ONE persist per range, iff a DURABLE actually ADVANCED the cursor. The
     // cursor never REGRESSES (`max`), so a wholly-behind (stale) push leaves it put — and must NOT
-    // re-persist (a stale durable re-push already folded is a no-op write; a pure-ephemeral range
+    // re-persist (a stale durable re-push already reduced is a no-op write; a pure-ephemeral range
     // writes zero — the flood stays free). `advanced` excludes the stale re-push; `sawDurable`
     // excludes the ephemeral-only range. (This is why B's stale push delivers its ephemerals in
     // memory yet persists nothing.)
     const reducedThroughOffset = Math.max(progress.reducedThroughOffset, range.through);
     const advanced = reducedThroughOffset > progress.reducedThroughOffset;
-    const sawDurable = events.some((e) => !e.ephemeral);
+    const sawDurable = events.some((event) => !event.ephemeral);
     const next: ReduceCheckpoint<State> = {
       reducerVersion: this.#contract.version,
       reducedThroughOffset,
@@ -510,7 +510,7 @@ export class ProcessorEngine<State> {
     // healed by the chain gap; never state). #progress is already `next`, so publishLiveState reads
     // the just-committed state; the holder diffs against the previous projection and no-ops if
     // unchanged. Re-projected after EVERY batch, not only when the reduce moved: a runtime field the
-    // author bumped inside `processEvent` (folded in by `projectLiveState`) publishes on its own.
+    // author bumped inside `processEvent` (reduced in by `projectLiveState`) publishes on its own.
     this.publishLiveState();
   }
 
@@ -562,13 +562,13 @@ export class ProcessorEngine<State> {
   /** Provenance stamper: every emit carries this processor's slug/version (+ what it was processing),
    *  validated against the declared `emits`. */
   #makeAppend(whileProcessing: StreamEventT | null) {
-    return async (...inputs: StreamEventInputT[]): Promise<StreamEventT[]> => {
-      for (const input of inputs) {
-        if (!this.#contract.emits.includes(input.type))
+    return async (...events: StreamEventInputT[]): Promise<StreamEventT[]> => {
+      for (const event of events) {
+        if (!this.#contract.emits.includes(event.type))
           throw new Error(
-            `processor "${this.#contract.slug}" emits ${JSON.stringify(input.type)} without declaring it`,
+            `processor "${this.#contract.slug}" emits ${JSON.stringify(event.type)} without declaring it`,
           );
-        input.source = {
+        event.source = {
           processor: {
             slug: this.#contract.slug,
             version: this.#contract.version,
@@ -578,7 +578,7 @@ export class ProcessorEngine<State> {
           },
         };
       }
-      return await this.#stream.append(...inputs);
+      return await this.#stream.append(...events);
     };
   }
 

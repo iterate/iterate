@@ -10,8 +10,8 @@
 //   (a) PROXY: the stream verbs (append / read / waitForEvent), egress (fetch) and capability
 //       dispatch (invokeCapability, provide / revoke, subscribe, enable-/disableProcessor) forward
 //       to the context DO over Workers RPC — the DO owns every contract, these methods just relay;
-//   (b) FOLD + PARK: the two jobs only the edge can do, because only the edge holds the client's
-//       capnweb session — path invocation (the prototype fallback at the bottom folds dotted
+//   (b) REDUCE + PARK: the two jobs only the edge can do, because only the edge holds the client's
+//       capnweb session — path invocation (the prototype fallback at the bottom reduces dotted
 //       sugar `itx.a.b(x)` into ONE invokeCapability expression) and the live-stub Parking (the
 //       DON'T-PIN relay — see below);
 // HOW A CLIENT REACHES ONE: `/api` → `UnauthenticatedSession.authenticate()` → `Session.projects.get(id)`
@@ -19,7 +19,7 @@
 // context with `cd(path)` (absolute by convention, relative resolves).
 //
 // AXIOMS AND SUGAR, kept apart on the class body below. The axioms are the doors that need the edge
-// (a session-held stub, a live Request, the fold): `cd`, `invokeCapability`, `append`, `read`,
+// (a session-held stub, a live Request, the reduce): `cd`, `invokeCapability`, `append`, `read`,
 // `waitForEvent`, `fetch`, `rpcStubs`. Everything else is SUGAR — one-line compositions of those
 // that append no event shape of their own:
 //   • `provide(path, target)` — an itx EXPRESSION mounts (`capability-provided { path, target }`); a
@@ -68,7 +68,7 @@ export type WaitUntil = (p: Promise<unknown>) => void;
 
 /** The `itx.rpcStubs` REGISTRY, edge half — the physical axiom under a live provide. `provide` is
  *  the one member that must live HERE (only the edge holds the client's capnweb session, so only
- *  the edge can retain a stub — DON'T-PIN); `get`/`list` fold onto the DO's built-in exactly as the
+ *  the edge can retain a stub — DON'T-PIN); `get`/`list` reduce onto the DO's built-in exactly as the
  *  dotted surface would. Parking is SEPARATE from mounting: nothing in this class appends an
  *  event. A declared getter on `IterateContext` (not the dotted fallback) because `provide` and
  *  `close` are edge verbs. */
@@ -185,7 +185,7 @@ export class IterateContext extends RpcTarget {
 
   /** The live-stub registry (`itx.rpcStubs.provide/get/list/close`) — the physical axiom `provide`
    *  composes with a mount. A declared getter so it wins over the dotted fallback (the fallback
-   *  would fold `get`/`list` correctly but cannot park). */
+   *  would reduce `get`/`list` correctly but cannot park). */
   get rpcStubs(): RpcStubs {
     return new RpcStubs(this.#context, this.#parking, (k) => this.#parkingKey(k), this.#waitUntil);
   }
@@ -193,7 +193,7 @@ export class IterateContext extends RpcTarget {
   /** THE dispatch door (built-ins + provided capabilities) — the ONE way to call the itx surface.
    *  Takes an `ItxExpression`: a dotted string (`"itx.append({...})"`) OR the parsed array
    *  (`["itx",["append",{...}]]`); both carry mid-path call args, and both work here. The dotted
-   *  sugar `itx.a.b(x)` folds into `["itx","a",["b",x]]` (see the prototype fallback at the bottom
+   *  sugar `itx.a.b(x)` reduces into `["itx","a",["b",x]]` (see the prototype fallback at the bottom
    *  of this file) and lands right here.
    *
    *  ONE routing rule: a call whose TERMINAL step is `fetch(request)` carrying a live Request rides
@@ -360,7 +360,7 @@ export class IterateContext extends RpcTarget {
    *  facet named `name`, and subscribe its `processEventBatch` to every commit. Literally `subscribe({ name, target: itx.load(source).getDurableObjectClass(className)
    *  .get(name).processEventBatch, consumes })` — a processor is a named facet that is pushed the
    *  log. `consumes` is the SUBSCRIPTION's filter (what is sent; absent = every durable event); the
-   *  processor's contract is the FOLD's (what it reduces) — so a processor that folds ephemerals
+   *  processor's contract is the REDUCE's (what it reduces) — so a processor that reduces ephemerals
    *  names them here too, exactly as a live subscriber would. */
   enableProcessor(
     name: string,
@@ -402,9 +402,9 @@ function assertLiveValue(target: unknown, where: string): void {
 // THE NATURAL DOTTED SURFACE. Insert the dynamic-capability fallback into `IterateContext.prototype`'s chain
 // so an unknown segment (`itx.slack`, `itx.kv`) becomes an accumulated invokeCapability dispatch,
 // while the declared methods/getters above (invokeCapability / provide / subscribe / …) always win.
-// The receiver IS the invoker — the accumulated access folds into ONE `invokeCapability(expression)`
+// The receiver IS the invoker — the accumulated access reduces into ONE `invokeCapability(expression)`
 // call (`[...root, ...prefix, [method, ...args]]`), and `IterateContext.invokeCapability` is exactly
-// the door the fold dispatches onto. Runs once at module load, after the class body. See
+// the door the reduce dispatches onto. Runs once at module load, after the class body. See
 // context/dotted-path-proxy.ts for the workerd brand-check reason this is a prototype hop and not a
 // Proxy AROUND the instance.
 installPrototypeInvokeCapabilityFallback(IterateContext, ["itx"]);

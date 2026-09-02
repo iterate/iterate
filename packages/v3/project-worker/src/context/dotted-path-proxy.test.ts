@@ -12,7 +12,7 @@ import { toExpression, type ItxExpression } from "./expression.ts";
 
 type DynamicCall = { args: unknown[]; path: string[] };
 
-// The fallback now folds dotted access into ONE relative `ItxExpression` (root `[]`): property-read
+// The fallback now reduces dotted access into ONE relative `ItxExpression` (root `[]`): property-read
 // steps then a final call step. Unpack it back to `{ path, args }` so these tests can keep asserting
 // on the accumulated path — the mechanism under test is the accumulation, not the wire shape.
 function unpackRelative(call: ItxExpression): DynamicCall {

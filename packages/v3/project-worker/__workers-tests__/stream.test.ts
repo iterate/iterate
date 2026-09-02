@@ -1,6 +1,6 @@
 // __workers-tests__/stream.test.ts — the `Stream` class (stream/stream.ts) against REAL
 // DurableObjectStorage, inside workerd (the workers lane): waitForEvent's park/settle/timeout
-// mechanics, the storage-lazy virgin guarantee, the wake record (`wake()` — an explicit call here;
+// mechanics, what construction writes, the wake record (`wake()` — an explicit call here;
 // in production the DO constructor's first act) and the pause check at the append door. Each test
 // borrows a dedicated ctx's DO purely for its storage (runInDurableObject), WIPES it (the DO's
 // constructor woke its own stream into it) and constructs a BARE Stream over it with no-op host
@@ -108,7 +108,7 @@ test("waitForEvent: the default afterOffset means the NEXT occurrence — histor
   });
 });
 
-test("waitForEvent: a timed-out wait on a VIRGIN stream leaves it virgin (no storage minted)", async () => {
+test("waitForEvent: a timed-out wait writes nothing — construction made the tables and counted the incarnation; no row, no mark", async () => {
   await runInDurableObject(stub("prj_wait_virgin"), async (_instance, state) => {
     const stream = bareStream(await virgin(state));
     const err = await stream.waitForEvent({ timeoutMs: 100 }).then(
@@ -116,16 +116,17 @@ test("waitForEvent: a timed-out wait on a VIRGIN stream leaves it virgin (no sto
       (e: unknown) => e,
     );
     expect(errorCode(err)).toBe("WAIT_TIMEOUT");
-    // Nothing minted: no event tables, no incarnation bump, no offset watermark.
+    // The constructor opened storage (both tables, incarnation 1) — the wait itself wrote nothing.
     const tables = state.storage.sql
       .exec("SELECT name FROM sqlite_master WHERE type = 'table'")
       .toArray()
       .map((r) => String(r.name));
-    expect(tables).not.toContain("events");
-    expect(tables).not.toContain("event_chunks");
-    expect(state.storage.kv.get("incarnation")).toBeUndefined();
+    expect(tables).toContain("events");
+    expect(tables).toContain("event_chunks");
+    expect(state.storage.kv.get("incarnation")).toBe(1);
     expect(state.storage.kv.get("maxAssignedOffset")).toBeUndefined();
-    expect(stream.currentIncarnation()).toBe(0);
+    expect(state.storage.sql.exec("SELECT count(*) AS n FROM events").one().n).toBe(0);
+    expect(stream.currentIncarnation()).toBe(1);
     expect(stream.highestAssignedOffset()).toBe(0);
   });
 });
@@ -193,19 +194,15 @@ test("waitForEvent: a nested onCommit re-append cannot outrun the outer commit �
   });
 });
 
-test("append with ZERO inputs is a pure no-op — no rows, no offsets, no fan-out; and append prepends NO wake record (the first real append IS row 1)", async () => {
+test("append with ZERO events is a pure no-op — no rows, no offsets, no fan-out; and append prepends NO wake record (the first real append IS row 1)", async () => {
   await runInDurableObject(stub("prj_wait_empty"), async (_instance, state) => {
     const batches: StreamEvent[][] = [];
     const stream = bareStream(await virgin(state), { batches });
-    // Empty append on a VIRGIN stream: nothing minted, nothing committed, no fan-out.
+    // Empty append: nothing committed, no offset, no fan-out (the constructor already opened storage).
     expect(stream.append()).toEqual([]);
-    const tables = state.storage.sql
-      .exec("SELECT name FROM sqlite_master WHERE type = 'table'")
-      .toArray()
-      .map((r) => String(r.name));
-    expect(tables).not.toContain("events");
-    expect(state.storage.kv.get("incarnation")).toBeUndefined();
+    expect(state.storage.sql.exec("SELECT count(*) AS n FROM events").one().n).toBe(0);
     expect(state.storage.kv.get("maxAssignedOffset")).toBeUndefined();
+    expect(stream.highestAssignedOffset()).toBe(0);
     expect(batches).toHaveLength(0);
     // The wake record is `wake()`'s (the DO constructor's) — never append's: with no wake, the
     // first real append is the log's first row, and the fan-out sees exactly that one event.
@@ -233,7 +230,7 @@ test("wake(): a fresh store gets created@1 + woken@2 in ONE fanned-out batch (co
     expect(page.events[0].payload).toEqual({ projectId: "prj_bare", path: "/" });
     expect(page.events[1].payload).toEqual({ incarnation: 1 });
     expect(first.currentIncarnation()).toBe(1);
-    // the wake batch, then core's live-state delta (the fold changed identity + incarnation) at 3
+    // the wake batch, then core's live-state delta (the reduce changed identity + incarnation) at 3
     expect(batches.map((b) => b.map((e) => [e.type, e.offset]))).toEqual([
       [
         ["events.iterate.com/stream/created", 1],
@@ -241,7 +238,11 @@ test("wake(): a fresh store gets created@1 + woken@2 in ONE fanned-out batch (co
       ],
       [["events.iterate.com/live-state/changed", 3]],
     ]);
-    expect(first.core()).toMatchObject({ projectId: "prj_bare", path: "/", incarnation: 1 });
+    expect(first.coreReducedState).toMatchObject({
+      projectId: "prj_bare",
+      path: "/",
+      incarnation: 1,
+    });
     // the first user append lands at offset 4 — and prepends nothing (its batch is itself alone)
     const [hello] = first.append({ type: "hello" });
     expect(hello.offset).toBe(4);
@@ -259,7 +260,7 @@ test("wake(): a fresh store gets created@1 + woken@2 in ONE fanned-out batch (co
     ]);
     expect(all[3]).toMatchObject({ offset: 5, payload: { incarnation: 2 } });
     expect(ownBatches(batches)[2].map((e) => e.type)).toEqual(["events.iterate.com/stream/woken"]);
-    expect(second.core().incarnation).toBe(2);
+    expect(second.coreReducedState.incarnation).toBe(2);
   });
 });
 
@@ -268,7 +269,7 @@ test("a stream/paused event pauses the stream through its own core reduce: every
     const stream = bareStream(await virgin(state));
     stream.wake(); // created@1, woken@2, core's delta@3
     stream.append({ type: "events.iterate.com/stream/paused", payload: { reason: "x" } }); // @4
-    expect(stream.core().paused).toEqual({ reason: "x" });
+    expect(stream.coreReducedState.paused).toEqual({ reason: "x" });
     expect(stream.read(0).events.map((e) => e.type)).toEqual([
       "events.iterate.com/stream/created",
       "events.iterate.com/stream/woken",
@@ -292,7 +293,7 @@ test("a stream/paused event pauses the stream through its own core reduce: every
     // …while the bare resume lands: a paused stream must always accept its own resume
     const [resumed] = stream.append({ type: "events.iterate.com/stream/resumed" });
     expect(resumed.offset).toBe(5);
-    expect(stream.core().paused).toBeNull(); // the reduce reopened it — and its delta took 6
+    expect(stream.coreReducedState.paused).toBeNull(); // the reduce reopened it — and its delta took 6
     expect(stream.append({ type: "work" })[0].offset).toBe(7);
   });
 });

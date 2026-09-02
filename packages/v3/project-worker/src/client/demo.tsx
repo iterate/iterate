@@ -2,7 +2,7 @@
 // fork + the useLiveState hook, all inlined — no CDN) into one self-contained HTML string the worker
 // serves at `/demo` (worker.ts). Open it against any deployment: it dials `/api` over capnweb exactly
 // like production, loads the `PresenceProcessor` into a dynamic worker, subscribes to its live state,
-// and renders reduced ⊕ runtime — the `ticks` fold and the `lastPokeMs` runtime field — updating live
+// and renders reduced ⊕ runtime — the `ticks` reduce and the `lastPokeMs` runtime field — updating live
 // as you press the buttons, each of which just appends an event on the stream.
 
 import { useEffect, useState } from "react";
@@ -12,7 +12,7 @@ import { useLiveState } from "./react.tsx";
 
 const CTX = "prj_demo_livestate";
 
-// The demo processor, inline (a self-contained page needs no repo files): reduced `ticks` folded
+// The demo processor, inline (a self-contained page needs no repo files): reduced `ticks` reduced
 // from durable 'tick' events, runtime `lastPokeMs` bumped by a 'poke' ephemeral in processEvent (the
 // engine re-projects after the batch). Two classes: the pure `PresenceProcessor`, and the one-line host
 // `PresenceDurableObject` that `enableProcessor`'s `className` names.
@@ -44,7 +44,7 @@ async function connectAndEnable(): Promise<any> {
   await itx.enableProcessor("presence", {
     source: "itx.kv.get('src/presence.js')",
     className: "PresenceDurableObject",
-    // What is SENT: the contract above says what is folded. `poke` is ephemeral, and an
+    // What is SENT: the contract above says what is reduced. `poke` is ephemeral, and an
     // ephemeral reaches a processor only when its subscription names the type.
     consumes: ["tick", "poke"],
   });

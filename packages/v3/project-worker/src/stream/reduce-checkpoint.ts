@@ -27,14 +27,14 @@ type CheckpointStore = {
   put(key: string, value: unknown): void;
 };
 
-/** The cursor key — read directly by the facet's version-refold probe. */
+/** The cursor key — read directly by the facet's version-re-reduce probe. */
 export const reduceCursorKey = (slug: string): string => `reduce:${slug}:progress`;
 export const reduceStateKey = (slug: string): string => `reduce:${slug}:state`;
 
 /** Read the persisted checkpoint for `slug`, or `undefined` when there is no cursor OR the stored
- *  cursor's version doesn't match — the caller then rebuilds from offset 0 (a version refold / cold
+ *  cursor's version doesn't match — the caller then rebuilds from offset 0 (a version re-reduce / cold
  *  catch-up). Returning undefined (not a fresh checkpoint) is deliberate: the caller must NOT cache
- *  the fresh fallback, or the refold it triggers would be skipped and replay the whole log. */
+ *  the fresh fallback, or the re-reduce it triggers would be skipped and replay the whole log. */
 export function readReduceCheckpoint<State>(
   store: CheckpointStore,
   slug: string,

@@ -1,7 +1,7 @@
 // stream/stream.ts — THE STREAM, a simple dependency-injected JS class:
 // SQLite rows + one kv high-water mark, idempotency at the door, one shared offset sequence,
 // chunked large bodies, the append validation + the pause check, the wake record, waitForEvent, and
-// the alarm armer — and THE CORE REDUCE (`core()`), the stream's own state folded inside every
+// the alarm armer — and THE CORE REDUCE (`core()`), the stream's own state reduced inside every
 // commit. The DurableObject holds a `Stream` and drives it; the one thing the stream needs from its
 // host is `onCommit` (the post-commit fan-out), so nothing here reaches back into the DO.
 //
@@ -29,7 +29,7 @@
 
 import { codedError, reportIssue } from "../lib/errors.ts";
 import type { ItxExpression } from "../context/expression.ts";
-import { CoreStreamProcessor, isCoreControl, type CoreState } from "./core-processor.ts";
+import { CoreStreamProcessor, type CoreState } from "./core-processor.ts";
 import {
   idempotencyConflictMessage,
   sameIdempotentEvent,
@@ -78,62 +78,15 @@ interface StreamDeps {
   path: string;
   /** Who this stream belongs to — the birth certificate's payload (`wake`). */
   projectId: string;
-  /** The post-commit fan-out, called once per offset-advancing commit with `fresh` — the newly
-   *  committed events in offset order, ephemerals included (the host's delivery loop; the
+  /** The post-commit fan-out, called once per offset-advancing commit with `freshEvents` — the
+   *  newly committed events in offset order, ephemerals included (the host's delivery loop; the
    *  waitForEvent waiters settle before it). */
-  onCommit: (fresh: StreamEvent[], afterOffset: number, nextOffset: number) => void;
-}
-
-/** What `#plan` decides for one batch, before anything is written. */
-type Plan = {
-  /** One receipt per INPUT, in input order — a dedupe hit echoes the existing event. */
-  receipts: StreamEvent[];
-  /** The events that are NEW to the log, in offset order (what commits, folds, and fans out). */
-  fresh: StreamEvent[];
-  nextOffset: number;
-};
-
-/** The events table + the chunk overflow table. */
-const SCHEMA = [
-  `CREATE TABLE IF NOT EXISTS events (
-     offset INTEGER PRIMARY KEY,
-     body TEXT NOT NULL,
-     idempotency_key TEXT UNIQUE
-   )`,
-  // Overflow rows for a large body: the events row keeps an EMPTY body as the "chunked" marker
-  // (a real body is always non-empty JSON), and the pieces live here, ordered by chunk_index.
-  `CREATE TABLE IF NOT EXISTS event_chunks (
-     offset INTEGER NOT NULL,
-     chunk_index INTEGER NOT NULL,
-     chunk TEXT NOT NULL,
-     PRIMARY KEY (offset, chunk_index)
-   )`,
-];
-
-/** The commit door every path funnels through (public stream/contexts/env.ITX + internal): an event
- *  must carry a non-blank type; `ephemeral` is literal `true` or ABSENT — a boolean `false` is a
- *  LOUD input error, never a silent synonym for durable (every consumer tests truthiness); and an
- *  ephemeral cannot carry an idempotencyKey (nothing idempotent about the unreplayable). This
- *  runtime guard is the SOLE enforcement (no capnweb-validate boundary). */
-function assertWellFormed(inputs: StreamEventInput[]): void {
-  for (const input of inputs) {
-    if (typeof input.type !== "string" || input.type.trim() === "")
-      throw new Error("append: every event needs a non-empty type");
-    if ("ephemeral" in input && input.ephemeral !== undefined && input.ephemeral !== true)
-      throw new Error(
-        `append: ephemeral must be literal true or absent — got ${JSON.stringify(input.ephemeral)} on "${input.type}"`,
-      );
-    if (input.ephemeral && input.idempotencyKey)
-      throw codedError(
-        "EPHEMERAL_IDEMPOTENCY_KEY",
-        "ephemeral events cannot carry an idempotencyKey — nothing idempotent about the unreplayable",
-      );
-  }
+  onCommit: (freshEvents: StreamEvent[], afterOffset: number, nextOffset: number) => void;
 }
 
 /** THE STREAM — the commit point: SQLite rows + ONE kv high-water mark, idempotency at the door,
  *  offsets assigned from one shared sequence (ephemeral events consume offsets, never rows — after
- *  a reboot their offsets survive as valid gaps), and THE CORE REDUCE (core-processor.ts) folded
+ *  a reboot their offsets survive as valid gaps), and THE CORE REDUCE (core-processor.ts) reduced
  *  inside every commit: the stream's own state — who it is, its incarnation, pause, mounts,
  *  subscriptions — checkpointed with the rows it was reduced from. A body over EVENT_CHUNK_SIZE is
  *  chunked into `event_chunks` rows keyed (offset, chunk_index) — INVISIBLE to the events table, so a
@@ -143,29 +96,29 @@ export class Stream {
   readonly #path: string;
   readonly #projectId: string;
   readonly #onCommit: StreamDeps["onCommit"];
-  #incarnation = 0; // durable, bumped once per incarnation that WRITES — growth across idle ⇒ it hibernated
-  #storageReady = false;
-  /** The highest offset assigned THIS INCARNATION — ephemerals included. Seeded from the kv
-   *  high-water mark (`maxAssignedOffset`), which append commits ONLY with a batch that stored a
-   *  durable row, atomically with those rows; an ephemeral-only batch advances this cache alone
-   *  (see the header: an ephemeral's offset is unique within an incarnation). */
-  #highestAssignedOffsetCache?: number;
+  /** This incarnation's number — the kv counter, bumped by the constructor; growth across idle ⇒ it hibernated. */
+  readonly #incarnation: number;
+  /** The highest offset assigned THIS INCARNATION — ephemerals included. Seeded from the durable
+   *  mark; an ephemeral-only batch advances this alone (an ephemeral's offset is unique within an
+   *  incarnation and may be reused by the next one — see the header). */
+  #highestAssignedOffset: number;
   /** The kv high-water mark (`maxAssignedOffset`) as of the last COMMITTED durable batch: the
-   *  DURABLE head. What `read()` proves a scan through, what the core reduce folds up to, and
-   *  what a resume's seek is clamped to — never the in-memory head above. */
-  #durableMarkCache?: number;
-  /** Parked waitForEvent callers, FIFO. Fed from `fresh` in append's post-commit tail. */
+   *  DURABLE head. What `read()` proves a scan through, what the core reduce has reduced to, and what
+   *  a resume's seek is clamped to — never the in-memory head above. */
+  #durableMark: number;
+  /** Parked waitForEvent callers, FIFO. Fed from `freshEvents` in append's step 5. */
   readonly #waiters: EventWaiter[] = [];
   #armedForMs: number | null = null;
 
-  // ── THE CORE REDUCE: the stream's own state, event-sourced from its own log (core-processor.ts).
-  // Rehydrated from a versioned checkpoint (reduce-checkpoint.ts), caught up to the durable mark by
-  // replaying the log, folded inside every durable commit, checkpointed with it (the cursor every
-  // batch — a ~1 µs kv put inside the transaction already open — the state only on change), and
+  // ── THE CORE REDUCE: the stream's own state (core-processor.ts), event-sourced from its own log.
+  // The processor is a pure reduce; the REDUCED STATE lives here — rehydrated by the constructor from
+  // the versioned checkpoint (reduce-checkpoint.ts) and caught up to the durable mark, reduced inside
+  // every durable commit and checkpointed with it (the cursor every batch, the state on change),
   // published as a live-state delta after the commit. Durable events only, so it rebuilds
   // bit-identically. ──
-  readonly #core = new CoreStreamProcessor();
-  #coreCache?: { state: CoreState; throughOffset: number };
+  readonly #coreProcessor = new CoreStreamProcessor();
+  #coreReducedState: CoreState;
+  #coreReducedThroughOffset: number;
   /** ONE LiveState holder, born at the first durable commit SEEDED WITH THE PRE-BATCH STATE so the
    *  first publish diffs exactly what that batch changed (`payload.key` = "core"). */
   #coreLive?: LiveState<CoreState>;
@@ -176,27 +129,59 @@ export class Stream {
     this.#path = deps.path;
     this.#projectId = deps.projectId;
     this.#onCommit = deps.onCommit;
-  }
-
-  /** First write of this incarnation: the tables + one incarnation bump (the hibernation tell —
-   *  workless incarnations don't count, which is the point). Synchronous (the kv API), so append
-   *  needs no boot barrier. */
-  touch(): void {
-    if (this.#storageReady) return;
-    for (const ddl of SCHEMA) this.#storage.sql.exec(ddl);
+    // Storage opens HERE, synchronously (sync SQLite, the DO constructor's own turn): the two
+    // tables if this store has none, and this incarnation's number — constructing the stream IS an
+    // incarnation starting.
+    this.#storage.sql.exec(
+      `CREATE TABLE IF NOT EXISTS events (
+         offset INTEGER PRIMARY KEY,
+         body TEXT NOT NULL,
+         idempotency_key TEXT UNIQUE
+       )`,
+    );
+    // Overflow rows for a large body: the events row keeps an EMPTY body as the "chunked" marker
+    // (a real body is always non-empty JSON), and the pieces live here, ordered by chunk_index.
+    this.#storage.sql.exec(
+      `CREATE TABLE IF NOT EXISTS event_chunks (
+         offset INTEGER NOT NULL,
+         chunk_index INTEGER NOT NULL,
+         chunk TEXT NOT NULL,
+         PRIMARY KEY (offset, chunk_index)
+       )`,
+    );
     this.#incarnation = ((this.#storage.kv.get("incarnation") as number | undefined) ?? 0) + 1;
     this.#storage.kv.put("incarnation", this.#incarnation);
-    this.#storageReady = true;
+    this.#durableMark = (this.#storage.kv.get("maxAssignedOffset") as number | undefined) ?? 0;
+    this.#highestAssignedOffset = this.#durableMark;
+    // The core reduce: the checkpoint (schema-initial when there is none or its version changed),
+    // then the durable log replayed up to the mark — so the reduced state is current before any door
+    // opens. Every durable commit checkpoints in its own transaction, so the replay is normally
+    // empty; a version bump is what makes it a full re-reduce.
+    const { contract } = this.#coreProcessor;
+    const checkpoint = readReduceCheckpoint<CoreState>(
+      this.#storage.kv,
+      contract.slug,
+      contract.version,
+      () => contract.initialState(),
+    );
+    this.#coreReducedState = checkpoint?.state ?? contract.initialState();
+    this.#coreReducedThroughOffset = checkpoint?.reducedThroughOffset ?? 0;
+    while (this.#coreReducedThroughOffset < this.#durableMark) {
+      const page = this.read(this.#coreReducedThroughOffset, 500);
+      for (const event of page.events)
+        if (event.offset <= this.#durableMark) this.#reduceCoreEvent(event);
+      this.#coreReducedThroughOffset = Math.min(page.scannedThroughOffset, this.#durableMark);
+      if (page.events.length < 500) break;
+    }
   }
 
   /** THE WAKE RECORD — the DO constructor calls this, synchronously, before any door opens (the
    *  apps/os shape). The first incarnation ever appends `stream/created { projectId, path }` — offset
    *  1, the birth certificate — and every incarnation appends `stream/woken { incarnation }`, so the
    *  core reduce knows who it is and which incarnation runs before the first append, read or facet
-   *  call. Both are control events: a paused stream still records its wake. */
+   *  call. Both are exempt from pause: a paused stream still records its wake. */
   wake(): void {
-    this.touch();
-    const born = this.durableMark() === 0;
+    const born = this.#durableMark === 0;
     this.append(
       ...(born
         ? [
@@ -210,260 +195,216 @@ export class Stream {
     );
   }
 
-  /** Read-only (never the write that mints storage — observability probes ride this). */
   currentIncarnation(): number {
-    return this.#storageReady
-      ? this.#incarnation
-      : ((this.#storage.kv.get("incarnation") as number | undefined) ?? 0);
+    return this.#incarnation;
   }
 
   highestAssignedOffset(): number {
-    this.#highestAssignedOffsetCache ??= this.durableMark();
-    return this.#highestAssignedOffsetCache;
+    return this.#highestAssignedOffset;
   }
 
-  /** The durable high-water mark — the highest offset any durable row holds (a non-minting kv read
-   *  on a virgin stream). Ephemeral offsets above it exist only in this incarnation's memory. */
+  /** The durable high-water mark — the highest offset any durable row holds (0 on a store that never
+   *  held one). Ephemeral offsets above it exist only in this incarnation's memory. */
   durableMark(): number {
-    this.#durableMarkCache ??= (this.#storage.kv.get("maxAssignedOffset") as number) ?? 0;
-    return this.#durableMarkCache;
+    return this.#durableMark;
   }
 
-  /** Has the events table been created yet? A virgin stream has none, and READING must never mint
-   *  it (see touch()) — so read() probes through here. */
-  #eventsTableExists(): boolean {
-    return (
-      this.#storageReady ||
-      this.#storage.sql
-        .exec("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'events'")
-        .toArray().length > 0
-    );
+  /** The core reduced state, current as of the last commit: who this context is, its incarnation,
+   *  pause, the capability mounts, the subscription rows. What the append door, the dispatcher and the
+   *  delivery loop read — synchronously. */
+  get coreReducedState(): CoreState {
+    return this.#coreReducedState;
+  }
+
+  /** `{ offset, state }` — the `itx.facets.get('core').snapshot()` door. */
+  coreSnapshot(): { offset: number; state: CoreState } {
+    return { offset: this.#coreReducedThroughOffset, state: this.#coreReducedState };
+  }
+
+  /** The live-state SEED — `{ rev, state }` in step with the deltas the holder emits (the same door a
+   *  facet processor's `liveSnapshot()` is). Before the first durable commit of an incarnation there
+   *  is no holder yet: rev 0 over the current reduced state, which the first delta (`from: 0`) chains onto. */
+  coreLiveSnapshot(): { rev: number; state: CoreState } {
+    return this.#coreLive?.snapshot() ?? { rev: 0, state: this.#coreReducedState };
   }
 
   // ── APPEND: the commit pipeline, top to bottom ──
 
   /** Commit a batch. Synchronous end to end (sync SQLite), so the steps never interleave:
    *
-   *    1. MAY THIS LAND?  well-formed · not paused · idempotency (dedupe or refuse) · expected offsets
-   *    2. OFFSETS         one shared sequence, ephemerals included, assigned in memory
-   *    3. REDUCE + 4. COMMIT   rows + the high-water mark + the core reduce's checkpoint, ONE transaction
-   *                            (an ephemeral-only batch skips this entirely: memory only, zero SQL)
+   *    1. MAY THIS LAND?  well-formed · not paused
+   *    2. OFFSETS         idempotency (dedupe or refuse) · expected offsets · one shared sequence,
+   *                       ephemerals included — decided in memory, nothing written yet
+   *    3 + 4. REDUCE + COMMIT   rows + the high-water mark + the core reduce with its checkpoint, ONE
+   *                             transaction (an ephemeral-only batch skips this entirely: zero SQL)
    *    5. AFTER           waiters, then the host's fan-out (every subscriber), then core's live delta
    *
-   *  Every refusal happens in step 1, before a single write. THE PRE-BATCH FENCE: both caches (the
-   *  assigned head and the durable mark) are read at the top and advanced only AFTER the transaction
-   *  returns — inside it the core reduce catches up to `durableMark()`, which must still be the
-   *  pre-batch value (kv already holds nextOffset in-txn; reading it there would replay the
-   *  just-inserted rows = a double reduce). */
-  append(...inputs: StreamEventInput[]): StreamEvent[] {
-    if (inputs.length === 0) return []; // a pure no-op: nothing checked, minted, or fanned out
-    // 1. may this land?
-    assertWellFormed(inputs);
-    const paused = this.core().paused; // control events (created/woken/paused/resumed) are exempt
-    if (paused && inputs.some((input) => !isCoreControl(input.type)))
-      throw codedError("STREAM_PAUSED", `stream paused: ${paused.reason}`);
-    this.touch();
-    const after = this.highestAssignedOffset();
-    // 2. offsets (and the last of step 1: idempotency + expected offsets — decided in memory)
-    const { receipts, fresh, nextOffset } = this.#plan(inputs, after);
-    if (fresh.length === 0) return receipts; // every input deduped to an existing event
+   *  Every refusal happens before a single write. The two marks are advanced only AFTER the
+   *  transaction returns, so a throw leaves them true. */
+  append(...events: StreamEventInput[]): StreamEvent[] {
+    if (events.length === 0) return []; // a pure no-op: nothing checked, minted, or fanned out
+    // 1. may this land? — the shape first (this runtime check is the SOLE enforcement; there is no
+    //    boundary validator): a non-blank type; `ephemeral` literal true or absent (a `false` is a
+    //    LOUD error, never a silent synonym for durable — every consumer tests truthiness); no
+    //    idempotencyKey on an ephemeral (nothing idempotent about the unreplayable)
+    for (const event of events) {
+      if (typeof event.type !== "string" || event.type.trim() === "")
+        throw new Error("append: every event needs a non-empty type");
+      if ("ephemeral" in event && event.ephemeral !== undefined && event.ephemeral !== true)
+        throw new Error(
+          `append: ephemeral must be literal true or absent — got ${JSON.stringify(event.ephemeral)} on "${event.type}"`,
+        );
+      if (event.ephemeral && event.idempotencyKey)
+        throw codedError(
+          "EPHEMERAL_IDEMPOTENCY_KEY",
+          "ephemeral events cannot carry an idempotencyKey — nothing idempotent about the unreplayable",
+        );
+    }
+    //    then the pause: a paused stream refuses everything except the platform's own records and
+    //    the pause/resume pair itself (it must always accept its own resume)
+    const paused = this.#coreReducedState.paused;
+    if (paused) {
+      const exempt = [
+        "events.iterate.com/stream/created",
+        "events.iterate.com/stream/woken",
+        "events.iterate.com/stream/paused",
+        "events.iterate.com/stream/resumed",
+      ];
+      if (events.some((event) => !exempt.includes(event.type)))
+        throw codedError("STREAM_PAUSED", `stream paused: ${paused.reason}`);
+    }
+    // 2. offsets — decided in memory, nothing written yet
+    const after = this.#highestAssignedOffset;
+    const createdAt = new Date().toISOString();
+    const committedEvents: StreamEvent[] = []; // one per appended event, in order (a dedupe hit echoes the existing event)
+    const freshEvents: StreamEvent[] = []; // the events NEW to the log, in offset order — what commits, reduces, fans out
+    const eventsByKey = new Map<string, StreamEvent>(); // keys landing earlier in THIS batch
+    let nextOffset = after;
+    for (const event of events) {
+      const { offset: expectedOffset, ...eventInput } = event;
+      // IDEMPOTENCY: a key already in the log (or earlier in this batch) answers with THAT event and
+      // consumes no offset; a different body under the same key refuses the whole batch.
+      let existingEvent = eventInput.idempotencyKey
+        ? eventsByKey.get(eventInput.idempotencyKey)
+        : undefined;
+      if (eventInput.idempotencyKey && !existingEvent) {
+        const row = this.#storage.sql
+          .exec(
+            "SELECT offset, body FROM events WHERE idempotency_key = ?",
+            eventInput.idempotencyKey,
+          )
+          .toArray()[0];
+        if (row)
+          existingEvent = {
+            ...(JSON.parse(this.#reassemble(Number(row.offset), String(row.body))) as object),
+            offset: Number(row.offset),
+            path: this.#path,
+          } as StreamEvent;
+      }
+      if (existingEvent) {
+        if (!sameIdempotentEvent(existingEvent, eventInput))
+          throw codedError(
+            "IDEMPOTENCY_CONFLICT",
+            idempotencyConflictMessage(eventInput.idempotencyKey!, existingEvent.offset),
+            { existingOffset: existingEvent.offset },
+          );
+        if (expectedOffset !== undefined && expectedOffset !== existingEvent.offset)
+          throw codedError(
+            "OFFSET_CONFLICT",
+            `expected offset ${expectedOffset}, but "${eventInput.idempotencyKey}" already landed at ${existingEvent.offset}`,
+            { expected: expectedOffset, actual: existingEvent.offset },
+          );
+        committedEvents.push(existingEvent);
+        continue;
+      }
+      // EXPECTED OFFSET: an event carrying `offset` lands exactly there or the batch is refused —
+      // "nothing has happened since I last looked" (apps/os's optimistic-concurrency shape).
+      const offset = nextOffset + 1;
+      if (expectedOffset !== undefined && expectedOffset !== offset)
+        throw codedError(
+          "OFFSET_CONFLICT",
+          `expected offset ${expectedOffset}, but the next offset is ${offset}`,
+          { expected: expectedOffset, actual: offset },
+        );
+      nextOffset = offset;
+      const committedEvent = { ...eventInput, offset, createdAt, path: this.#path } as StreamEvent;
+      if (eventInput.idempotencyKey) eventsByKey.set(eventInput.idempotencyKey, committedEvent);
+      committedEvents.push(committedEvent);
+      freshEvents.push(committedEvent);
+    }
+    if (freshEvents.length === 0) return committedEvents; // every event deduped to an existing one
     // 3 + 4. reduce and commit
-    if (fresh.every((e) => e.ephemeral)) {
+    if (freshEvents.every((event) => event.ephemeral)) {
       // THE EPHEMERAL FAST PATH: nothing to store, so no transaction and no high-water write —
       // what lets a flood of ephemerals leave SQLite untouched (the flood proofs measure it).
-      this.#highestAssignedOffsetCache = nextOffset; // the durable mark is untouched
+      this.#highestAssignedOffset = nextOffset; // the durable mark is untouched
     } else {
       this.#storage.transactionSync(() => {
-        const createdAt = fresh[0].createdAt;
-        for (const e of fresh)
-          if (!e.ephemeral)
-            this.#storeEvent(
-              e.offset,
-              JSON.stringify(this.#body(e, createdAt)),
-              e.idempotencyKey ?? null,
-            );
+        for (const event of freshEvents) {
+          if (event.ephemeral) continue;
+          // the stored body is the event as appended plus createdAt — the row carries the offset,
+          // the stream is the path
+          const { offset: _offset, path: _path, ...eventBody } = event;
+          this.#storeEvent(event.offset, JSON.stringify(eventBody), event.idempotencyKey ?? null);
+        }
         // The mark rides the durable rows' transaction — every offset this batch handed out,
         // ephemeral ones included, is covered by this write.
         this.#storage.kv.put("maxAssignedOffset", nextOffset);
-        this.#foldCore(fresh, nextOffset);
+        // The core reduce takes this batch's durables and checkpoints with them: the cursor every
+        // batch (the transaction is already open, so the put is free), the reduced state on change.
+        const { contract } = this.#coreProcessor;
+        this.#coreLive ??= new LiveState(
+          { append: (event) => this.append(event) },
+          contract.slug,
+          this.#coreReducedState,
+        );
+        const reducedStateBefore = this.#coreReducedState;
+        for (const event of freshEvents) this.#reduceCoreEvent(event);
+        this.#coreReducedThroughOffset = nextOffset;
+        const changed = this.#coreReducedState !== reducedStateBefore;
+        if (changed) this.#coreChangedAtCommit = true; // published in step 5 — never inside the txn
+        writeReduceCheckpoint(
+          this.#storage.kv,
+          contract.slug,
+          { reducerVersion: contract.version, reducedThroughOffset: nextOffset },
+          this.#coreReducedState,
+          changed,
+        );
       });
-      this.#highestAssignedOffsetCache = nextOffset;
-      this.#durableMarkCache = nextOffset;
+      this.#highestAssignedOffset = nextOffset;
+      this.#durableMark = nextOffset;
     }
     // 5. after the commit
-    this.#settleWaiters(fresh); // waiters first: onCommit may append again (a nested commit)
-    this.#onCommit(fresh, after, nextOffset);
-    this.#publishCoreDelta();
-    return receipts;
-  }
-
-  /** Decide the batch before writing anything: which inputs are DEDUPED to an existing event (same
-   *  key + same body → that event, no offset), which are REFUSED (same key, different body; an
-   *  expected `offset` that isn't the next one), and which offset each NEW event takes. */
-  #plan(inputs: StreamEventInput[], after: number): Plan {
-    const createdAt = new Date().toISOString();
-    const receipts: StreamEvent[] = [];
-    const fresh: StreamEvent[] = [];
-    const byKey = new Map<string, StreamEvent>(); // keys landing earlier in THIS batch
-    let nextOffset = after;
-    for (const input of inputs) {
-      const { offset: expected, ...rest } = input;
-      // IDEMPOTENCY: a key already in the log (or earlier in this batch) answers with THAT event
-      // and consumes no offset; a different body under the same key is a conflict, refused whole.
-      const existing = rest.idempotencyKey
-        ? (byKey.get(rest.idempotencyKey) ?? this.#findByKey(rest.idempotencyKey))
-        : undefined;
-      if (existing) {
-        if (!sameIdempotentEvent(existing, rest))
-          throw codedError(
-            "IDEMPOTENCY_CONFLICT",
-            idempotencyConflictMessage(rest.idempotencyKey!, existing.offset),
-            { existingOffset: existing.offset },
-          );
-        if (expected !== undefined && expected !== existing.offset)
-          throw codedError(
-            "OFFSET_CONFLICT",
-            `expected offset ${expected}, but "${rest.idempotencyKey}" already landed at ${existing.offset}`,
-            { expected, actual: existing.offset },
-          );
-        receipts.push(existing);
-        continue;
-      }
-      // EXPECTED OFFSET: an input carrying `offset` lands exactly there or the batch is refused —
-      // "nothing has happened since I last looked" (apps/os's optimistic-concurrency shape).
-      const offset = nextOffset + 1;
-      if (expected !== undefined && expected !== offset)
-        throw codedError(
-          "OFFSET_CONFLICT",
-          `expected offset ${expected}, but the next offset is ${offset}`,
-          { expected, actual: offset },
-        );
-      nextOffset = offset;
-      const event = { ...rest, offset, createdAt, path: this.#path } as StreamEvent;
-      if (rest.idempotencyKey) byKey.set(rest.idempotencyKey, event);
-      receipts.push(event);
-      fresh.push(event);
+    this.#settleWaiters(freshEvents); // waiters first: onCommit may append again (a nested commit)
+    this.#onCommit(freshEvents, after, nextOffset);
+    // Core's live-state delta, when this commit changed the reduced state: `set` mints the standard
+    // ephemeral live-state/changed delta through this stream's own append (a nested commit). LOSSY BY
+    // CONTRACT — LiveState.set contains every refusal (a PAUSED stream refuses the delta) as a
+    // revision-chain gap the client heals by re-seeding. No feedback loop: the delta is ephemeral and
+    // changes no core state; the flag is cleared BEFORE the set, so the nested commit's own step 5
+    // finds nothing left.
+    if (this.#coreChangedAtCommit) {
+      this.#coreChangedAtCommit = false;
+      this.#coreLive?.set(this.#coreReducedState);
     }
-    return { receipts, fresh, nextOffset };
+    return committedEvents;
   }
 
-  /** The stored body of an event: the input as written plus `createdAt` — never its offset or path
-   *  (the row's own columns / the stream's identity carry those). */
-  #body(event: StreamEvent, createdAt: string): StreamEventInput & { createdAt: string } {
-    const { offset: _offset, path: _path, ...body } = event;
-    return { ...body, createdAt };
-  }
-
-  /** The committed event a durable row already carries under `idempotencyKey`, if any (its body may
-   *  be chunked — reassembled). Runs only for keyed inputs, so an unkeyed batch pays no SELECT. */
-  #findByKey(idempotencyKey: string): StreamEvent | undefined {
-    if (!this.#eventsTableExists()) return undefined;
-    const hit = this.#storage.sql
-      .exec("SELECT offset, body FROM events WHERE idempotency_key = ?", idempotencyKey)
-      .toArray()[0];
-    if (!hit) return undefined;
-    const offset = Number(hit.offset);
-    const body = JSON.parse(this.#reassemble(offset, String(hit.body))) as StreamEventInput & {
-      createdAt: string;
-    };
-    return { ...body, offset, path: this.#path } as StreamEvent;
-  }
-
-  // ── the core reduce ──
-
-  /** The core state, current as of the last commit — rehydrated (checkpoint, else initial) and
-   *  caught up to the durable mark. Synchronous: what the append door, the dispatcher and the
-   *  delivery loop read. */
-  core(): CoreState {
-    return this.#coreEntry().state;
-  }
-
-  /** `{ offset, state }` — the `itx.facets.get('core').snapshot()` door. */
-  coreSnapshot(): { offset: number; state: CoreState } {
-    const entry = this.#coreEntry();
-    return { offset: entry.throughOffset, state: entry.state };
-  }
-
-  /** The live-state SEED — `{ rev, state }` in step with the deltas the holder emits (the same door
-   *  a facet processor's `liveSnapshot()` is). Before the first durable commit of an incarnation
-   *  there is no holder yet: rev 0 over the caught-up state, which the first delta (`from: 0`) chains onto. */
-  coreLiveSnapshot(): { rev: number; state: CoreState } {
-    return this.#coreLive?.snapshot() ?? { rev: 0, state: this.core() };
-  }
-
-  #coreEntry(): { state: CoreState; throughOffset: number } {
-    const { contract } = this.#core;
-    if (!this.#coreCache) {
-      const cp = readReduceCheckpoint<CoreState>(
-        this.#storage.kv,
-        contract.slug,
-        contract.version,
-        () => contract.initialState(),
-      );
-      this.#coreCache = cp
-        ? { state: cp.state, throughOffset: cp.reducedThroughOffset }
-        : { state: contract.initialState(), throughOffset: 0 };
-    }
-    const entry = this.#coreCache;
-    const head = this.durableMark(); // durables only: the mark is the reduce's head, never the in-memory one
-    while (entry.throughOffset < head) {
-      const page = this.read(entry.throughOffset, 500);
-      for (const e of page.events) if (e.offset <= head) this.#reduceCore(entry, e);
-      entry.throughOffset = Math.min(page.scannedThroughOffset, head);
-      if (page.events.length < 500) break;
-    }
-    return entry;
-  }
-
-  /** Step 3, inside the commit transaction: fold the fresh durables and checkpoint — the cursor
-   *  every batch (the transaction is already open, so the put is free), the state on change. */
-  #foldCore(fresh: StreamEvent[], nextOffset: number): void {
-    const entry = this.#coreEntry(); // caught up to the PRE-batch mark (see the fence in append)
-    this.#coreLive ??= new LiveState(
-      { append: (e) => this.append(e) },
-      this.#core.contract.slug,
-      entry.state,
-    );
-    const before = entry.state;
-    for (const e of fresh) if (!e.ephemeral) this.#reduceCore(entry, e);
-    entry.throughOffset = nextOffset;
-    const changed = entry.state !== before;
-    if (changed) this.#coreChangedAtCommit = true; // published in step 5 — never inside the txn
-    writeReduceCheckpoint(
-      this.#storage.kv,
-      this.#core.contract.slug,
-      { reducerVersion: this.#core.contract.version, reducedThroughOffset: nextOffset },
-      entry.state,
-      changed,
-    );
-  }
-
-  #reduceCore(entry: { state: CoreState }, e: StreamEvent): void {
-    if (!consumesEvent(this.#core.contract.consumes, e)) return;
+  /** Reduce one durable event into the core reduced state — the constructor's catch-up and the commit
+   *  both come here. A malformed control event must not wedge the stream: record the skip, move on. */
+  #reduceCoreEvent(event: StreamEvent): void {
+    if (event.ephemeral || !consumesEvent(this.#coreProcessor.contract.consumes, event)) return;
     try {
-      entry.state = this.#core.reduce({ event: e, state: entry.state }) ?? entry.state;
+      this.#coreReducedState =
+        this.#coreProcessor.reduce({ event, state: this.#coreReducedState }) ??
+        this.#coreReducedState;
     } catch (err) {
-      // A malformed/hostile control event must not wedge the stream: record the skip, move on.
-      reportIssue("stream.core-reduce", err, { offset: e.offset, type: e.type });
+      reportIssue("stream.core-reduce", err, { offset: event.offset, type: event.type });
     }
-  }
-
-  /** Step 5, after the commit: `set` the changed core state on its LiveState, minting the standard
-   *  ephemeral live-state/changed delta through this stream's own append (a nested commit).
-   *  LOSSY BY CONTRACT — LiveState.set contains every refusal (a PAUSED stream refuses the delta) as
-   *  a revision-chain gap the client heals by re-seeding. No feedback loop: the delta is ephemeral
-   *  and changes no core state, so at most one delta chases each changing batch; the flag is
-   *  cleared BEFORE the set, so the nested commit's own step 5 finds nothing left to publish. */
-  #publishCoreDelta(): void {
-    if (!this.#coreChangedAtCommit) return;
-    this.#coreChangedAtCommit = false;
-    if (this.#coreCache && this.#coreLive) this.#coreLive.set(this.#coreCache.state);
   }
 
   read(afterOffset = 0, limit = 500): StreamPage {
     limit = Math.max(1, limit); // limit 0 crashed the full-page check (userspace-reachable)
-    // A virgin stream has no events table (and reading must not create one — see touch()).
-    if (!this.#eventsTableExists()) return { events: [], scannedThroughOffset: this.durableMark() };
     const events = this.#storage.sql
       .exec(
         "SELECT offset, body FROM events WHERE offset > ? ORDER BY offset LIMIT ?",
@@ -501,7 +442,7 @@ export class Stream {
    *  registration (read is sync; an await there would lose a racing commit → spurious
    *  WAIT_TIMEOUT). The initial scan PAGES read() to the head; it rides the non-minting read path
    *  and never touches — a waitForEvent on a virgin stream must leave it virgin. Parked waiters
-   *  are fed from `fresh` in append's tail, so EPHEMERAL events resolve waits too (they ride the
+   *  are fed from `freshEvents` in append's tail, so EPHEMERAL events resolve waits too (they ride the
    *  fan-out — always-an-event — but are only catchable while parked, since they never hit the
    *  log). Multiple waiters settle FIFO per event; one event can resolve many waiters; a waiter
    *  resolves once, with its first matching event in offset order. */
@@ -512,8 +453,8 @@ export class Stream {
     let cursor = afterOffset;
     for (;;) {
       const page = this.read(cursor, 500);
-      for (const e of page.events)
-        if (type === undefined || e.type === type) return Promise.resolve(e);
+      for (const event of page.events)
+        if (type === undefined || event.type === type) return Promise.resolve(event);
       if (page.events.length < 500) break; // a short page proves the scan reached the head
       cursor = page.scannedThroughOffset;
     }
@@ -540,17 +481,18 @@ export class Stream {
 
   /** Feed one committed batch to the parked waiters — fire-and-forget from append's tail, each
    *  resolution armored so a waiter can never delay or fail a commit. */
-  #settleWaiters(fresh: StreamEvent[]): void {
-    for (const e of fresh) {
+  #settleWaiters(freshEvents: StreamEvent[]): void {
+    for (const event of freshEvents) {
       if (this.#waiters.length === 0) return;
       for (const w of [...this.#waiters]) {
-        if ((w.type !== undefined && e.type !== w.type) || e.offset <= w.afterOffset) continue;
+        if ((w.type !== undefined && event.type !== w.type) || event.offset <= w.afterOffset)
+          continue;
         this.#waiters.splice(this.#waiters.indexOf(w), 1);
         clearTimeout(w.timer);
         try {
-          w.resolve(e);
+          w.resolve(event);
         } catch (err) {
-          reportIssue("stream.wait-for-event", err, { type: e.type, offset: e.offset });
+          reportIssue("stream.wait-for-event", err, { type: event.type, offset: event.offset });
         }
       }
     }

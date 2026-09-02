@@ -45,7 +45,7 @@ subscription-configured fact.
 
 ONE reduce-only processor runs INLINE at the commit point: `CoreStreamProcessor`
 (`stream/core-processor.ts`, slug `core`, contract 3.0.0), owned by the `Stream` itself (`core()`) with
-zero runner apparatus. It folds the context's own control events into
+zero runner apparatus. It reduces the context's own control events into
 `{ projectId, path, createdAt, incarnation, paused, mounts, subscriptions }` — layer 2's mounts and
 layer 3's rows are slices of that one state, each layer keeping its OWN event family. Runtime state
 IS reduced state: `itx.facets.get('core').snapshot().state`. Policy is not in core: a token-bucket
@@ -55,7 +55,7 @@ breaker is a facet processor that appends `stream/paused { reason }` (layer 4).
 
 `capability-table.ts` is the two COMMANDS that build `capability-provided { path, target }` /
 `capability-revoked { providedAtOffset }` (the DO appends them) and the READER (`route(mounts, call)`
-and `CapabilityResolver`); the core reduce folds the events into `state.mounts`, a shadow stack. That
+and `CapabilityResolver`); the core reduce reduces the events into `state.mounts`, a shadow stack. That
 is the WHOLE event — no policies, no flags.
 One dispatch path: parse → longest-path-prefix match (final segment may consume boundary args, ties
 → newest) → evaluate the target against `{ itx }` → replay the remainder. A built-in root resolves
@@ -68,7 +68,7 @@ idempotent (a reconnect appends nothing).
 
 Four events of its own: `subscription-configured { name, target, consumes? }` (same name REPLACES),
 `subscription-removed`, `subscription-delivery-halted` (appended by the loop), `subscription-
-delivery-resumed` (appended by an operator; un-halt, optional seek). The core reduce folds them into
+delivery-resumed` (appended by an operator; un-halt, optional seek). The core reduce reduces them into
 `state.subscriptions`; `subscriptions.ts` is the two commands that build the first two
 (`subscriptionConfiguredEvent` / `subscriptionRemovedEvent`, `null` = idempotent no-op). Pure data;
 the layer knows only the stream and the codec.
@@ -97,7 +97,7 @@ writes — a contract plus `reduce` (pure switch), `processEvent` (effect switch
 no constructor arguments, so `new PresenceProcessor().reduce(...)` is a unit test. Its host is a
 `StreamProcessorDurableObject` (`sdk/stream-processor-durable-object.ts`, bundled into
 `processor.js`) with one field, `processor = new PresenceProcessor()`; the host builds a `ProcessorEngine`
-(serial chain, checkpoint, gap repair from the scanned-range proof, at-head pass, version refold,
+(serial chain, checkpoint, gap repair from the scanned-range proof, at-head pass, version re-reduce,
 live-state publishing) over its facet kv and `env.ITX`. A processor class ends in `Processor`, a Durable Object
 class in `DurableObject`. The host is hosted like ANY class:
 `itx.load(src).getDurableObjectClass('PresenceDurableObject').get('presence')`, identity in
@@ -106,7 +106,7 @@ class in `DurableObject`. The host is hosted like ANY class:
 `unsubscribe` + `itx.facets.delete(name)`. No built-in processor runs as a facet — `tally` is a
 fixture, and the one built-in `StreamProcessor` is the core reduce, hosted inline (layer 1). Policy
 that need not gate an append synchronously is a userspace facet processor speaking core's control
-events: `BreakerProcessor` (`e2e/support/sources.ts`) folds durable events into a token bucket and,
+events: `BreakerProcessor` (`e2e/support/sources.ts`) reduces durable events into a token bucket and,
 on exhaustion, appends `stream/paused { reason }`; an operator appends `stream/resumed`.
 
 ## Layer 5 — the edge (sessions and the relay)
@@ -114,7 +114,7 @@ on exhaustion, appends `stream/paused { reason }`; an operator appends `stream/r
 `session.ts` + `iterate-context.ts`: capnweb terminates in `worker.ts`'s `/api`, never in a DO
 (`session.ts`: `UnauthenticatedSession → authenticate() → Session → projects.get(id)`;
 `iterate-context.ts`: `IterateContext`, `cd(path)` for the rest). The edge
-is a PROXY for the DO's verbs, plus the two jobs only it can do: FOLD dotted sugar into one
+is a PROXY for the DO's verbs, plus the two jobs only it can do: REDUCE dotted sugar into one
 `invokeCapability(expression)` (a terminal `.fetch(request)` rides the fetch channel), and PARK
 live stubs in the session's `Parking` (`context/rpc-stub-relay.ts`) — the DON'T-PIN relay the pager
 pages. Everything a client ever does — Slack-bridge RpcTargets included — is these layers composed.

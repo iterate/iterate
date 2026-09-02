@@ -1,5 +1,5 @@
 // subscriptions.ts — THE SUBSCRIPTIONS TABLE's two COMMANDS. The rows THEMSELVES are `core` state
-// (stream/core-processor.ts folds subscription-configured/-removed/-delivery-halted/-delivery-resumed
+// (stream/core-processor.ts reduces subscription-configured/-removed/-delivery-halted/-delivery-resumed
 // into `state.subscriptions`); the READER is the delivery loop (subscription-delivery.ts), which
 // evaluates each row's target after every commit and asks the value whether it owns its progress (a
 // facet, a live stub ⇒ push) or not (⇒ the stream keeps a cursor, at-least-once).

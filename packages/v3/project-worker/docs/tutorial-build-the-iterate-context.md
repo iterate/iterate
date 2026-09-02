@@ -477,7 +477,7 @@ in the toy it is deliberately _dumb_: storage in, committed events out.
 
 ```ts
 // The log and its one commit point. (The real Stream also OWNS the core reduce —
-// `core()`, folded INSIDE the commit transaction, atomicity the toy gets for free,
+// `core()`, reduced INSIDE the commit transaction, atomicity the toy gets for free,
 // each sql.exec being atomic — and takes one injected hook, onCommit, the fan-out.
 // Its deps add `path` and `projectId`; the pause check is one `if` in append reading
 // its own core state; facets ride the DO's ctx
@@ -506,15 +506,15 @@ class Stream {
 }
 ```
 
-The DO _composes_ commit + fold + fan-out at the call site, because — the
+The DO _composes_ commit + reduce + fan-out at the call site, because — the
 reveal — **every mount is an event**. Notice what is _not_ in the log: the live
 stubs. A socket is a connection, not data; the directory is physical and stays
-physical. The mount table, on the other hand, is nothing but a fold of the log:
+physical. The mount table, on the other hand, is nothing but a reduce of the log:
 
 ```ts
 export class IterateContextDurableObject extends DurableObject<Env> {
-  // The toy's inline capability-table processor: #mounts is reduced state, folded
-  // from the log by #fold. In the real platform this exact fold is the reduce-only
+  // The toy's inline capability-table processor: #mounts is reduced state, reduced
+  // from the log by #reduce. In the real platform this exact reduce is the reduce-only
   // "capability-table" processor — its reduced state IS the routing table.
   #mounts = new Map<string, string>();
 
@@ -526,10 +526,10 @@ export class IterateContextDurableObject extends DurableObject<Env> {
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
-    this.#fold(this.#stream.read(0)); // wake: replay the log through the same fold
+    this.#reduce(this.#stream.read(0)); // wake: replay the log through the same reduce
   }
 
-  #fold(events: StreamEventInput[]) {
+  #reduce(events: StreamEventInput[]) {
     for (const event of events)
       if (event.type === "capability-provided")
         this.#mounts.set(event.path as string, event.target as string);
@@ -547,7 +547,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
 
   append(event: StreamEventInput) {
     const committed = this.#stream.append(event);
-    this.#fold([committed]);
+    this.#reduce([committed]);
     this.#fanOut([committed]);
     return committed;
   }
@@ -562,24 +562,24 @@ There is no `subscribe` method — a subscription **is**
 `provide("itx.subscribers.printer", callback)`, served by `#fanOut` over the
 pager you already built. And `read(0)` shows your mounts were events all along —
 and that your live provides never were. The proof's last beat: **kill the
-worker and restart it** — the constructor re-folds the mount table from the
+worker and restart it** — the constructor re-reduces the mount table from the
 persisted log, and the mounted greeter still answers; the laptop's stub is gone
 with its socket, exactly as a socket should be.
 
 Three bridges to the real thing. First, the toy's commit point is `Stream.append`
 (dumb, returns the committed event) and the DO's `append` is where commit →
-fold → fan-out visibly compose. The real platform inverts that composition — the
-fold rides an injected hook _inside_ the commit transaction, so the routing table
+reduce → fan-out visibly compose. The real platform inverts that composition — the
+reduce rides an injected hook _inside_ the commit transaction, so the routing table
 is atomically exact with the batch. Same pieces, inverted wiring, one reason.
 Second, the toy's walker checks two tables — the directory, then the mounts. The
 real platform has one: the directory is a **built-in** named `itx.rpcStubs`, and
 a live provide _also_ appends an ordinary mount whose target is the expression
 `itx.rpcStubs.get('<path>')`. So the log says where every name points, live ones
 included, while never claiming a socket is open. The toy's live-before-durable
-check at each prefix is that mount, folded by hand. Third, the toy makes a
+check at each prefix is that mount, reduced by hand. Third, the toy makes a
 subscription a mount at `itx.subscribers.*`. The real platform gives
 subscriptions their own event — `subscription-configured { name, target,
-consumes? }`, folded by the one core reduce beside the mounts — because a subscription names a
+consumes? }`, reduced by the one core reduce beside the mounts — because a subscription names a
 _delivery_, not a capability: the target is still an expression (a parked stub,
 a facet, a loaded entrypoint's `processEventBatch`), and the context decides how
 to serve it by looking at what the expression evaluates to. Same fan-out, one
@@ -706,7 +706,7 @@ client ──capnweb──▶  IterateContext              // runs: stateless ed
                  IterateContextDurableObject     // runs: the context DO
 ```
 
-The edge `IterateContext` is a thin proxy: it folds `itx.a.b(x)` into one call
+The edge `IterateContext` is a thin proxy: it reduces `itx.a.b(x)` into one call
 expression and hands it to the DO's single dispatch door, `invoke(call)`. The DO
 resolves the path against its table and calls whatever is mounted there. For a
 live capability, the edge keeps the client's stub in memory — _parks_ it — and
@@ -730,7 +730,7 @@ await itx.load("itx.kv.get('src/tool.js')").getEntrypoint().run("hello");
 `itx.load(source)` mirrors Cloudflare's Worker Loader: load code into a fresh
 confined isolate, then pick the host — `.getEntrypoint()` for a stateless
 `WorkerEntrypoint`. The source is itself an expression, here fetching the code
-from the built-in `itx.kv`. (The folded-array wire shape above and this string
+from the built-in `itx.kv`. (The reduced-array wire shape above and this string
 are the same thing: itx expressions.)
 
 Loaded code isn't sandboxed away _from_ the context — it gets a binding to it:
@@ -1037,15 +1037,15 @@ await itx.enableProcessor("unread-counts", {
 A processor's reduced state is queryable through its `snapshot()` — and even the
 capability table is reduced state: the context's own control events
 (`stream/created`, `stream/woken`, `stream/paused`, `capability-provided`,
-`subscription-configured`, …) fold into ONE core reduce — `CoreStreamProcessor`,
+`subscription-configured`, …) reduce into ONE core reduce — `CoreStreamProcessor`,
 the same `StreamProcessor` class you just wrote, run inline at the commit point
 and read as `itx.facets.get('core').snapshot()`. "What's mounted where" is one
-slice of it, folded from the same log that everything else rides. Policy that
+slice of it, reduced from the same log that everything else rides. Policy that
 need not gate an append synchronously stays out of core: a token-bucket breaker
 is an ordinary facet processor that appends `stream/paused { reason }`.
 
 **That's the third primitive**: an append-only log with one commit point,
-subscribers served over the pager, and processors — facets that fold the log
+subscribers served over the pager, and processors — facets that reduce the log
 into state.
 
 ---
@@ -1094,7 +1094,7 @@ Contexts nest: a capability can be a facet that itself loads code and provides
 capabilities — a call is a path, a path is a walk, and every hop pipelines.
 Three primitives hold it all: **the context** (capabilities called in both
 directions, hibernating on the pager), **fetch** (out with secrets, in to
-anything fetch-shaped), and **the stream** (one commit point; processors fold it
+anything fetch-shaped), and **the stream** (one commit point; processors reduce it
 into state). Everything a client can do is a capability; everything durable is a
 reduced event.
 
@@ -1135,6 +1135,6 @@ specs/       `pnpm spec` — Playwright drives the hosted /demo page
 | Ch 2 fetch-in / tunnel                                        | `/cap` in `src/worker.ts`, `src/fetch/fetch-capabilities.ts`, `upgradeWebSocketResponse` in the capnweb fork                                                                                                                                     |
 | Ch 2 auth gate                                                | `UnauthenticatedSession.authenticate()` → `Session` → `projects.get(id)` in `src/session.ts`                                                                                                                                                     |
 | Ch 3 stream                                                   | `Stream` in `src/stream/stream.ts`                                                                                                                                                                                                               |
-| Ch 3 subscribe / the one delivery loop                        | `src/stream/subscriptions.ts` (the two commands; the fold is `src/stream/core-processor.ts`), `src/stream/subscription-delivery.ts` (push vs stream-kept cursor, decided by the evaluated target)                                                |
+| Ch 3 subscribe / the one delivery loop                        | `src/stream/subscriptions.ts` (the two commands; the reduce is `src/stream/core-processor.ts`), `src/stream/subscription-delivery.ts` (push vs stream-kept cursor, decided by the evaluated target)                                              |
 | Ch 3 processors                                               | `StreamProcessor` (pure author class) + `ProcessorEngine` in `src/stream/processor.ts`; the host `src/sdk/stream-processor-durable-object.ts` (bundled into `processor.js`)                                                                      |
 | Ch 4 LiveState / control plane                                | `src/stream/live-state.ts`; `packages/v3/control-plane` (not yet wired)                                                                                                                                                                          |

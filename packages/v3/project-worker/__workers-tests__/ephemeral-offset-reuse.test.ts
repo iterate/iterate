@@ -3,7 +3,7 @@
 // durable, so NOTHING a reader persists (a facet's checkpoint, a stream-kept cursor) may name an
 // offset beyond the durable mark — `read()`'s short-page proof stops there. Each test drives
 // ephemerals to the head, quiesces, evicts, re-mints durables at those offsets, and proves they
-// are folded / delivered exactly as at-least-once promises. (Found by the r1 correctness review;
+// are reduced / delivered exactly as at-least-once promises. (Found by the r1 correctness review;
 // the same hunt found that an undisposed facet RPC RESULT pinned the parent after a quiesce — the
 // read-verb cases below are also the pin for that fix: they evict at once after ONE quiesce.)
 import { evictDurableObject, runDurableObjectAlarm } from "cloudflare:test";
@@ -48,7 +48,7 @@ const loadChain = (src: string, cls: string, name: string): Expression => [
   ["get", name],
 ];
 
-test("processor: a fresh facet's first snapshot (wake) with ephemerals at head checkpoints the durable mark; after quiesce + evict the tick re-minted at a dead ephemeral's offset is folded exactly once", async () => {
+test("processor: a fresh facet's first snapshot (wake) with ephemerals at head checkpoints the durable mark; after quiesce + evict the tick re-minted at a dead ephemeral's offset is reduced exactly once", async () => {
   const ctx = "prj_rev_procskip";
   const s = stub(ctx);
   await s.invoke(["itx", "kv", ["put", "procsrc", COUNTER_SRC]]);
@@ -69,7 +69,7 @@ test("processor: a fresh facet's first snapshot (wake) with ephemerals at head c
     ...loadChain("procsrc", "CounterDurableObject", "counter"),
     ["snapshot"],
   ])) as { offset: number; state: { n: number } };
-  expect(before.state.n).toBe(p0.events.length); // folded every durable
+  expect(before.state.n).toBe(p0.events.length); // reduced every durable
   expect(before.offset).toBe(durableMark); // the persisted checkpoint is the durable mark, not the ephemeral head
 
   await sleep(400); // let the facet's fire-and-forget live-state delta land before the clock jumps (else #lastActivityMs reads fresh and the quiesce skips)
@@ -86,10 +86,10 @@ test("processor: a fresh facet's first snapshot (wake) with ephemerals at head c
     offset: number;
     state: { n: number };
   };
-  // The pushed tick@mark+3 is folded exactly once — and so is the new incarnation's woken@mark+1,
+  // The pushed tick@mark+3 is reduced exactly once — and so is the new incarnation's woken@mark+1,
   // ONCE, by a different path: the subscription's consumes filter never SENDS it (its own commit
   // is filtered to nothing, and empty sends are skipped), so the tick's push range starts one past
-  // the facet's cursor and the engine's durable gap repair reads woken from the log and folds it
+  // the facet's cursor and the engine's durable gap repair reads woken from the log and reduces it
   // (the contract consumes "*") — the two-filter rule: the subscription decides what is PUSHED, the
   // contract decides what is FOLDED. (The first incarnation's wake read the log from 0 — created,
   // woken, configured — hence `before`.)
@@ -158,7 +158,7 @@ test("enable with a consumes filter: itx.facets.get(name) answers before the fir
   expect(snap.state.n).toBeGreaterThanOrEqual(0);
 });
 
-test("processor: a read-driven catch-up (snapshot after quiesce) with ephemerals at head checkpoints the durable mark; after quiesce + evict the durable re-minted at an ephemeral's offset is folded exactly once", async () => {
+test("processor: a read-driven catch-up (snapshot after quiesce) with ephemerals at head checkpoints the durable mark; after quiesce + evict the durable re-minted at an ephemeral's offset is reduced exactly once", async () => {
   const ctx = "prj_rev_procskip_b";
   const s = stub(ctx);
   await s.invoke(["itx", "kv", ["put", "procsrc", COUNTER_SRC]]);
@@ -168,7 +168,7 @@ test("processor: a read-driven catch-up (snapshot after quiesce) with ephemerals
     consumes: ["tick", "events.iterate.com/stream/subscription-configured"],
   });
   await sleep(300); // the configured event is consumed → push → facet materialized, cursor = its offset (durable ground)
-  await s.append({ type: "tick" }); // pushed → folded, cursor = tick offset (durable)
+  await s.append({ type: "tick" }); // pushed → reduced, cursor = tick offset (durable)
   await sleep(300);
   await s.append({ type: "note" }); // NOT consumed by the subscription → not pushed → the facet now lags by one durable
   await s.append({ type: "blip", ephemeral: true }, { type: "blip", ephemeral: true }); // ephemeral tail of 2
@@ -183,7 +183,7 @@ test("processor: a read-driven catch-up (snapshot after quiesce) with ephemerals
     state: { n: number };
   };
   // n = created + woken + configured + tick + note: the configured push's gap repair read the log
-  // from 0 (so the filter's unsent created@1 + woken@2 were folded too), the push folded tick, this
+  // from 0 (so the filter's unsent created@1 + woken@2 were reduced too), the push reduced tick, this
   // wake read note.
   expect(mid.state.n).toBe(5);
   expect(p0.scannedThroughOffset).toBe(durableMark); // read() proves the durable log only
@@ -199,7 +199,7 @@ test("processor: a read-driven catch-up (snapshot after quiesce) with ephemerals
     offset: number;
     state: { n: number };
   };
-  // the pushed tick@mark+3 is folded exactly once, and the new incarnation's woken@mark+1 exactly
+  // the pushed tick@mark+3 is reduced exactly once, and the new incarnation's woken@mark+1 exactly
   // once via the engine's durable gap repair (the push range starts past the cursor; the contract
   // consumes "*") → n grows by exactly 2.
   expect(after.state.n).toBe(mid.state.n + 2);

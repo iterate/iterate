@@ -18,7 +18,7 @@ converged design, with the disagreements decided — and one decision (D3) REOPE
 - **Mounts carry NO policies.** capability-table 5.0.0 is `{ path, target }` and nothing else;
   `delivery` and `processor` are gone. The one filter the platform needed before evaluating a target
   (a subscriber's `consumes`) became its OWN event family — `subscription-configured { name, target,
-consumes? }` and three siblings, folded by the one core reduce (`stream/core-processor.ts`, the
+consumes? }` and three siblings, reduced by the one core reduce (`stream/core-processor.ts`, the
   `subscriptions` slice beside `mounts`), read through `itx.subscriptions.list()`. D3 ("a rule is a
   mount with a `fetch` policy") therefore contradicts the landed doctrine and is reopened below.
 - `itx.subscribers.*` is gone (it was the precedent D1 cited); `itx.connections` is `itx.rpcStubs`;
@@ -181,7 +181,7 @@ serve at `/`). The label is an IDENT, so it is a legal capability-path segment; 
 
 The six cuts converged on the shape below. The onion then established that a mount is `{ path,
 target }` and nothing else, and gave the one pre-target filter the platform has (`consumes`) an event
-family of its own, folded by the core reduce. The rule shape stays; where the matcher lives is the
+family of its own, reduced by the core reduce. The rule shape stays; where the matcher lives is the
 open question — see §6 Q1.
 
 ```jsonc
@@ -248,12 +248,12 @@ target, match? }` / `fetch-rule-removed`, two commands in the `stream/subscripti
   any target. A host-rewriting middleware (a prompt-injected agent) gets a 502 with the secret's NAME,
   never a substituted request. Today's clean room has NO pin and follows redirects with custom headers.
 - CAN be userspace: rules, deny, batching/debounce/expiry, the approval event vocabulary
-  (`approval/requested|decided|released|key-added|key-revoked|rules-configured`), key folds, signature
+  (`approval/requested|decided|released|key-added|key-revoked|rules-configured`), key reduces, signature
   verification (WebCrypto over public keys), the CLI, live shadows. The gate is a facet: a `DurableObject`
   class hosted through `itx.load(src).getDurableObjectClass('ApprovalGateDurableObject').get(name)`.
   Since 2026-09-02 a processor host is an ordinary DO class with one `processor` field, so the gate
   can BE a processor host that also defines a `fetch(request)` door: the pure `ApprovalGateProcessor extends
-StreamProcessor` folds `requested`/`decided` events (unit-tested bare), the host's `fetch` holds the
+StreamProcessor` reduces `requested`/`decided` events (unit-tested bare), the host's `fetch` holds the
   request and awaits the decision (`env.ITX.waitForEvent`). No runner, no verb allow-list.
 - Signatures: no crypto change. Same `approval.v2` canonical bytes with `projectId → context` (the DO
   name), `approvalRequestEventOffset → requestedAtOffset`, `secretPaths → secrets`. The pure half of
@@ -285,7 +285,7 @@ prefixes). Every URL-ish identifier ALREADY rides in the expression's ARG slot (
   (`itx.apps.<label>`). The DO-name convention survives as one rule kind (`itx.apps.bot ⇒
 itx.cd('/agents/bot').apps`), never as automatic path-to-context splitting (contexts are an open
   namespace; only a table can split).
-- MUST NOT fold: hostnames into the context's log (directory state); URL paths into dotted capability
+- MUST NOT reduce: hostnames into the context's log (directory state); URL paths into dotted capability
   paths (IDENT excludes `1password.com`, `/2024`, `x.css`; DNS is suffix-significant, the walker
   prefix-significant; `/agents/bot/site` has an ambiguous split); expressions into URLs (call chains,
   stubs as args, mid-chain calls). Seductive-but-wrong list in `4-identifiers.md` §6.
@@ -399,7 +399,7 @@ itx.apps.site` on its own egress and reach the app from inside (today's feature)
 ## 6. The jam — the trade-offs and philosophical questions (2026-09-02)
 
 **Q1 — Is a fetch rule a subscription?** Structurally, yes: `{ name, target, filter }`, evaluated
-before the target is called, newest wins, revocable by name, folded by the core reduce, read through
+before the target is called, newest wins, revocable by name, reduced by the core reduce, read through
 a list. The onion made subscriptions their own layer for exactly this reason (a filter is not a
 mount). Following it gives rules their own small event family — one more slice of the core reduce,
 not a new inline host — and keeps mounts pure; refusing it means either
@@ -437,7 +437,7 @@ vs ciphertext, body scanning, and the 202 long-hold tier are the honest gaps; "a
 eviction" is a promise the kernel must never make.
 
 **Q7 — Is the approval gate a processor?** With the split, a processor host is a DO class that may
-carry a `fetch` door: `ApprovalGateProcessor extends StreamProcessor` folds the approval events (pure,
+carry a `fetch` door: `ApprovalGateProcessor extends StreamProcessor` reduces the approval events (pure,
 unit-tested), `ApprovalGateDurableObject` hosts it and holds requests. That makes "human in the loop"
 a rule whose target is a processor — events are the interface, the hold is a facet call. The question
 is whether a held fetch pinning the gate facet (≤ the delivery watchdog) is acceptable, or whether the

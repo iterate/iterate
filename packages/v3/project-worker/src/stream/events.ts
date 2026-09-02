@@ -45,7 +45,7 @@ const EventInputShape = z.strictObject({
   ephemeral: z.literal(true).optional(),
 });
 export const StreamEventInput = EventInputShape.refine(
-  (e) => !(e.ephemeral && e.idempotencyKey),
+  (event) => !(event.ephemeral && event.idempotencyKey),
   "ephemeral events cannot carry an idempotencyKey — nothing idempotent about the unreplayable",
 );
 export type StreamEventInput = z.infer<typeof StreamEventInput>;
@@ -66,13 +66,13 @@ export function idempotencyConflictMessage(idempotencyKey: string, existingOffse
 
 /** Structural equality of the parts an idempotent retry must not change. */
 export function sameIdempotentEvent(
-  existing: StreamEventInput,
-  requested: StreamEventInput,
+  existingEvent: StreamEventInput,
+  requestedEvent: StreamEventInput,
 ): boolean {
   return (
-    existing.type === requested.type &&
-    jsonEqual(existing.payload, requested.payload) &&
-    jsonEqual(existing.metadata, requested.metadata)
+    existingEvent.type === requestedEvent.type &&
+    jsonEqual(existingEvent.payload, requestedEvent.payload) &&
+    jsonEqual(existingEvent.metadata, requestedEvent.metadata)
   );
 }
 

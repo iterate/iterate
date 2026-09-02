@@ -5,7 +5,7 @@
 // at itx) THROWS at the door, nothing appended. A subscription is PURE DATA — a name, a target
 // expression stored as its printed string, an optional `consumes` filter; nothing here knows HOW a
 // target is served (subscription-delivery.ts decides that by evaluating it). The rows THEMSELVES are
-// `core` state, folded here through `CoreStreamProcessor` exactly as the DO does; the reduce's own
+// `core` state, reduced here through `CoreStreamProcessor` exactly as the DO does; the reduce's own
 // pins (replace / drop / halted / resumed) live in core-processor.test.ts.
 import { describe, expect, test } from "vitest";
 import { print, type ItxExpression } from "../context/expression.ts";
@@ -17,7 +17,7 @@ import { memoryStream } from "./test-support.ts";
 const setup = () => {
   const { stream, events } = memoryStream();
   const core = new CoreStreamProcessor();
-  // INLINE HOSTING, exactly like the parent: the rows are core state, folded from the durable log
+  // INLINE HOSTING, exactly like the parent: the rows are core state, reduced from the durable log
   // per call.
   const rows = (): Record<string, Subscription> =>
     events.reduce(

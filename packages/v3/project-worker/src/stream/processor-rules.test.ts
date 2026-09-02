@@ -2,7 +2,7 @@
 // per-event barrier under slow and nested blockers (rule 2), background work that never blocks the
 // commit (rule 3), one durable commit per batch — all or nothing (rule 4), exactly one caughtUp per
 // at-head batch (rule 5), waitUntilProcessed under gap repair and concurrent timeouts, the
-// version-bump refold's edges, a flaky live-state projection, and ephemeral windows across a stale
+// version-bump re-reduce's edges, a flaky live-state projection, and ephemeral windows across a stale
 // push, an eviction and a non-contiguous push. The hook-by-hook spec is processor.test.ts; the
 // in-memory stream and storage are stream/test-support.ts. Each processor is the pure author class
 // (`new X()`), driven by a `ProcessorEngine` — the engine is what wakes, snapshots and takes pushes.
@@ -326,7 +326,7 @@ describe("waitUntilProcessed", () => {
   });
 });
 
-// ═══════════════════ version bump — the reduce-only refold (#rereduceIfVersionChanged) ═══════════════════
+// ═══════════════════ version bump — the reduce-only re-reduce (#rereduceIfVersionChanged) ═══════════════════
 
 const makeVersioned = (
   mem: ReturnType<typeof memoryStream>,
@@ -354,7 +354,7 @@ const makeVersioned = (
 
 describe("version bump re-reduce", () => {
   test("a push in flight on a bumped incarnation keeps the NEW event's processEvent", async () => {
-    // The refold's ceiling is the STORED cursor, not the current head: old events replay through
+    // The re-reduce's ceiling is the STORED cursor, not the current head: old events replay through
     // reduce only (their effects already ran), and a durable event that landed while the processor
     // was behind is NEW work whose processEvent runs exactly once — "deploy a new version" plus
     // "traffic during the deploy" is the normal case, and its side effects must not vanish.
@@ -370,14 +370,14 @@ describe("version bump re-reduce", () => {
     // The in-flight push lands on the bumped incarnation's chain (contiguous with the durable cursor).
     await p2.processEventBatch(committed, { after: 2, through: 3 });
     expect((await p2.snapshot()).state.n).toBe(3); // the reduce saw it…
-    // …its side effects ran exactly once, and the refold replayed NONE of the old ones
+    // …its side effects ran exactly once, and the re-reduce replayed NONE of the old ones
     expect(effects).toEqual(["effect 1", "effect 2", "effect 3"]);
   });
 
-  test("waitUntilProcessed before the first chain slot keeps the refold reduce-only", async () => {
+  test("waitUntilProcessed before the first chain slot keeps the re-reduce reduce-only", async () => {
     // Whether a version bump re-runs years of side effects must not depend on which verb touches
     // the facet first after the deploy: a read-your-writes barrier (exactly what fires right after
-    // one) must refold like snapshot() does, never through the ordinary catch-up WITH processEvent.
+    // one) must re-reduce like snapshot() does, never through the ordinary catch-up WITH processEvent.
     const mem = memoryStream();
     const storage = memoryStorage();
     const effects: string[] = [];
@@ -387,7 +387,7 @@ describe("version bump re-reduce", () => {
     expect(effects).toEqual(["effect 1", "effect 2"]);
     const p2 = makeVersioned(mem, storage, "2.0.0", effects);
     await p2.waitUntilProcessed({ offset: 2, timeoutMs: 2000 });
-    expect((await p2.snapshot()).state.n).toBe(2); // refolded state is right…
+    expect((await p2.snapshot()).state.n).toBe(2); // re-reduced state is right…
     expect(effects).toEqual(["effect 1", "effect 2"]); // …but effects must NOT have re-run
   });
 });
@@ -414,7 +414,7 @@ describe("live state with a projection that throws only sometimes", () => {
     });
     mem.procs.push(p);
     const changes = () =>
-      mem.pushed.filter((e) => e.type === "events.iterate.com/live-state/changed");
+      mem.pushedEvents.filter((e) => e.type === "events.iterate.com/live-state/changed");
 
     mem.stream.append({ type: "tick" }) as StreamEvent[]; // n: 0→1 — projecting NEW state throws
     await settle();
@@ -505,7 +505,7 @@ describe("ephemeral windows and repair", () => {
     // (3,4] is non-contiguous with b's durable cursor 1 → gap repair from the log: the dead
     // ephemerals are simply offset gaps; the durable events each reduce exactly once.
     expect(b.seen).toEqual(["tick@4"]); // reduce calls THIS incarnation made (tick@1 came from the checkpoint)
-    expect((await engineB.snapshot()).state.n).toBe(2); // tick@1 (persisted fold) + tick@4 — no double-consume
+    expect((await engineB.snapshot()).state.n).toBe(2); // tick@1 (persisted reduce) + tick@4 — no double-consume
     expect((await engineB.snapshot()).offset).toBe(4);
     expect(mem.reads).toBeGreaterThan(readsBefore); // it really was a repair, not a blind fast path
   });
@@ -557,7 +557,7 @@ describe("ephemeral windows and repair", () => {
         return { n: state.n + 1 };
       }
       override projectLiveState(state: { n: number }): unknown {
-        return { n: state.n }; // emits live-state/changed — which the ENGINE never folds, even for "*"+named (foldsEvent, not consumesEvent, is the guard)
+        return { n: state.n }; // emits live-state/changed — which the ENGINE never reduces, even for "*"+named (reducesEvent, not consumesEvent, is the guard)
       }
     }
     const p = new StarPlusProcessor();
@@ -569,7 +569,7 @@ describe("ephemeral windows and repair", () => {
     mem.stream.append({ type: "noise", ephemeral: true }) as StreamEvent[]; // unnamed → skipped
     mem.stream.append({ type: "tock" }) as StreamEvent[]; // durable → swept
     await settle();
-    const liveStateOffsets = mem.pushed
+    const liveStateOffsets = mem.pushedEvents
       .filter((e) => e.type === "events.iterate.com/live-state/changed")
       .map((e) => `${e.type}@${e.offset}`);
     expect(liveStateOffsets.length).toBeGreaterThan(0); // the projection did emit…

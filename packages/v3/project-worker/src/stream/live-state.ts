@@ -5,7 +5,7 @@
 //     and treats it as its store: `get()` reads, `set(next)` replaces (and notifies).
 //   • the ProcessorEngine owns one per processor (stream/processor.ts): after every batch it
 //     `set`s the current PROJECTION of the state, so a processor's reduced state is live by default,
-//     and a processor folds runtime fields into the projection (projectLiveState) — bumped inside
+//     and a processor reduces runtime fields into the projection (projectLiveState) — bumped inside
 //     a batch they publish on their own; changed outside one, the host's publishLiveState() `set`s.
 //
 // MUTATION AND NOTIFICATION ARE INSEPARABLE: `set(next)` diffs the held value → next; on a real
@@ -18,16 +18,16 @@
 // The revision is seeded from a per-incarnation EPOCH (not 0): a reborn holder mints a fresh epoch,
 // so every stale client rev mismatches and re-reads the door instead of applying a patch onto a
 // diverged base. Lossy by contract — a dropped delta append is a chain gap the client heals, never
-// state loss (the durable truth is the reduced fold; the runtime truth reseeds).
+// state loss (the durable truth is the reduced reduce; the runtime truth reseeds).
 
 import { diff } from "../lib/patch.ts";
 
 // THE one live-state change type is the literal "events.iterate.com/live-state/changed" — ephemeral,
 // payload `{key, from, to, patch}`: the delta patch rides the event (LiveView-style), chained by
 // producer-owned revisions (`from` = the previous emission's `to`). HARD RULE: no processor can ever
-// FOLD it (the engine's `foldsEvent` refuses it before contracts are consulted), so state-change
+// REDUCE it (the engine's `reducesEvent` refuses it before contracts are consulted), so state-change
 // notifications can never feed a reduce — the feedback-loop class is unspellable, not discouraged.
-// A SUBSCRIPTION may name the type to watch live state; that is delivery, not a fold.
+// A SUBSCRIPTION may name the type to watch live state; that is delivery, not a reduce.
 
 /** The only thing a LiveState needs from its host: somewhere to append the delta. Both a
  *  `ProcessorStream` (`this.stream`) and the itx scope (`env.ITX`) satisfy it — the shape is the

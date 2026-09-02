@@ -1,6 +1,6 @@
 // __workers-tests__/do-doors.test.ts — the IterateContextDurableObject's Workers-RPC doors,
 // pinned at zero distance (the workers lane is the only one that can BOTH call the DO verbs raw —
-// no capnweb edge folding the returns away — AND inspect the DO's own storage via
+// no capnweb edge reducing the returns away — AND inspect the DO's own storage via
 // runInDurableObject). Three pins live here:
 //
 //   • the QUIET CLOCK's reason to exist: a probe (`itx.facets.get('core').snapshot()`) on a
@@ -59,7 +59,7 @@ test("a core-snapshot probe on a NEVER-TOUCHED ctx materializes it (created@1 + 
       incarnation: 1,
     });
     expect(typeof snap.state.createdAt).toBe("string");
-    expect(snap.offset).toBe(2); // folded through the wake record
+    expect(snap.offset).toBe(2); // reduced through the wake record
     expect(await state.storage.getAlarm()).toBeNull(); // THE pin: no quiet-clock arm
     expect(instance.read(0).events.map((e) => [e.type, e.offset])).toEqual([
       ["events.iterate.com/stream/created", 1],

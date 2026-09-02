@@ -4,7 +4,7 @@
 // offset 1 and events.iterate.com/stream/woken { incarnation } at offset 2; every later incarnation
 // writes woken as its first event. So ANY door on a never-touched context materializes it — a bare
 // read, a probe, an append — and the first user append lands past both records. The core reduce
-// folds them into `state.projectId / path / createdAt / incarnation`, and the ONE inline reduced
+// reduces them into `state.projectId / path / createdAt / incarnation`, and the ONE inline reduced
 // state (key `core`: identity, pause, mounts, subscriptions) emits the standard ephemeral
 // live-state/changed deltas on change, delivered to a subscriber that names the one live-state
 // event type — exactly like any facet processor's.
@@ -35,7 +35,7 @@ test("any door materializes a fresh context: read(0) starts with created then wo
   expect(receipts[0].type).toBe("hello");
   expect(receipts[0].offset).toBe(4);
 
-  // the core reduce folded both records — runtime state IS reduced state
+  // the core reduce reduced both records — runtime state IS reduced state
   const snap = await itx.invokeCapability("itx.facets.get('core').snapshot()");
   expect(snap.state).toMatchObject({ projectId: ctx, path: "/", incarnation });
   expect(snap.state.createdAt).toBe(page.events[0].createdAt);

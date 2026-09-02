@@ -9,7 +9,7 @@
 // on both hops (capnweb's RpcTarget IS the native `cloudflare:workers` RpcTarget on workerd), so the
 // second call pipelines.
 //
-// The prototype-hop fallback (dotted-path-proxy.ts) folds unknown dotted members (`.hello`,
+// The prototype-hop fallback (dotted-path-proxy.ts) reduces unknown dotted members (`.hello`,
 // `.demo.timer.callLater`) into ONE `invokeCapability(expression)` — `[...prefix, [method, ...args]]`,
 // relative to the handle (empty scope root). Providers stay plain `RpcTarget` subclasses (which
 // capnweb already requires to pass a capability by reference); the client stays just capnweb.
@@ -18,8 +18,8 @@ import { RpcTarget } from "capnweb";
 import { installPrototypeInvokeCapabilityFallback } from "./dotted-path-proxy.ts";
 import { toExpression, type ItxExpression } from "./expression.ts";
 
-/** A branded, pipelinable handle whose unknown dotted members fold into ONE `dispatch(path, args)`.
- *  `dispatch` routes the folded path into the underlying object — a connection's retained callback
+/** A branded, pipelinable handle whose unknown dotted members reduce into ONE `dispatch(path, args)`.
+ *  `dispatch` routes the reduced path into the underlying object — a connection's retained callback
  *  (`RpcStubDirectory.invoke`), a facet's method walk (the DO's facet door), a sibling context, or a
  *  stateful loaded class. Declared members (`invokeCapability` / `applyRoot`) win over the fallback,
  *  so a capability cannot be named either — the two reserved words this wrapper adds. */
@@ -29,7 +29,7 @@ export class InvokeHandle extends RpcTarget {
     super();
     this.#dispatch = dispatch;
   }
-  /** THE fold door the prototype hop dispatches onto (the receiver IS the invoker — this instance).
+  /** THE reduce door the prototype hop dispatches onto (the receiver IS the invoker — this instance).
    *  The `ItxExpression` is RELATIVE to this handle (empty scope root — the hop is installed with
    *  `[]`): property-read steps then a final call step, unpacked back into `(path, args)`. */
   invokeCapability(call: ItxExpression): unknown {

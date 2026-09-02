@@ -7,7 +7,7 @@
 //     the alarm armer), `wake()` — the constructor's created/woken records — and `core()`, the
 //     stream's own reduced state. The DO's append/read/waitForEvent are thin wrappers; the stream's
 //     one injected callback (onCommit) closes over this class — nothing in stream/stream.ts reaches back;
-//   • the CORE REDUCE — ONE reduce-only processor (core-processor.ts) folded INSIDE the commit
+//   • the CORE REDUCE — ONE reduce-only processor (core-processor.ts) reduced INSIDE the commit
 //     transaction, always on: who this context is, which incarnation runs, whether appends are
 //     paused, the CAPABILITY MOUNTS every call routes through (capability-table.ts reads them) and
 //     the SUBSCRIPTION rows every commit is sent to (subscriptions.ts builds their events). Runtime
@@ -41,7 +41,7 @@ import {
   versionedFacet,
   type WorkerSource,
 } from "./context/worker-loader.ts";
-import { CoreContract, type CoreState } from "./stream/core-processor.ts";
+import { CoreContract } from "./stream/core-processor.ts";
 import { codedError, reportIssue } from "./lib/errors.ts";
 import type { StreamEvent, StreamEventInput } from "./stream/events.ts";
 import {
@@ -103,7 +103,7 @@ const CORE = CoreContract.slug;
  *  expression in hand. */
 type FacetMemo = { source: string; className: string };
 
-// The parent folds the CORE REDUCE inline (identity, pause, the routing table, the subscriptions),
+// The parent reduces the CORE REDUCE inline (identity, pause, the routing table, the subscriptions),
 // so it needs the full roots env.
 export class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
   /** WHO THIS DO IS — the first line, the apps/os shape: the DO name parsed ONCE into `{ name,
@@ -159,14 +159,14 @@ export class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
 
   /** THE STREAM — the commit point AND the core reduce (stream/stream.ts: `append` is the pipeline
    *  top to bottom — may-this-land, offsets, reduce + commit, after — and `core()` is the stream's own
-   *  reduced state, folded inside every commit). The name check already happened above (`#name`).
+   *  reduced state, reduced inside every commit). The name check already happened above (`#name`).
    *  Its one callback, `onCommit`, is the post-commit fan-out: the ONE delivery loop. */
   readonly #stream = new Stream({
     storage: this.ctx.storage,
     path: this.#name.path,
     projectId: this.#name.projectId,
-    onCommit: (fresh, scannedAfterOffset, nextOffset) =>
-      this.#delivery.onCommit(fresh, scannedAfterOffset, nextOffset),
+    onCommit: (freshEvents, scannedAfterOffset, nextOffset) =>
+      this.#delivery.onCommit(freshEvents, scannedAfterOffset, nextOffset),
   });
 
   /** Commit events: idempotency-checked, offsets assigned from ONE shared sequence (ephemeral
@@ -176,10 +176,10 @@ export class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
    *  Stream.append; the tail runs #noteActivity on every LANDED append regardless of offset growth
    *  (a REFUSED one doesn't: arming the quiet-clock alarm is a storage write a rejected probe must
    *  not pay). */
-  async append(...inputs: StreamEventInput[]): Promise<StreamEvent[]> {
-    const committed = this.#stream.append(...inputs);
+  async append(...events: StreamEventInput[]): Promise<StreamEvent[]> {
+    const committedEvents = this.#stream.append(...events);
     this.#noteActivity();
-    return committed;
+    return committedEvents;
   }
 
   /** Wait for the next event matching `filter` (or the first committed durable match already in
@@ -193,12 +193,6 @@ export class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
 
   read(afterOffset = 0, limit = 500): { events: StreamEvent[]; scannedThroughOffset: number } {
     return this.#stream.read(afterOffset, limit);
-  }
-
-  /** The core state, current as of the last commit — the stream's own reduce (identity, pause, the
-   *  routing table, the subscription rows), read synchronously. */
-  #core(): CoreState {
-    return this.#stream.core();
   }
 
   #resolverInstance?: CapabilityResolver;
@@ -257,7 +251,7 @@ export class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
 
   readonly #delivery = new SubscriptionDelivery({
     kv: this.ctx.storage.kv,
-    subscriptions: () => this.#core().subscriptions,
+    subscriptions: () => this.#stream.coreReducedState.subscriptions,
     read: (after, limit) => this.#stream.read(after, limit),
     head: () => this.#stream.durableMark(), // a persisted cursor may never point past the mark
     append: (event) => this.append(event),
@@ -277,24 +271,24 @@ export class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
     target: ItxExpression;
     consumes?: string[];
   }): Promise<{ name: string; configuredAtOffset: number }> {
-    const rows = this.#core().subscriptions;
+    const rows = this.#stream.coreReducedState.subscriptions;
     const event = subscriptionConfiguredEvent(rows, input);
     if (!event)
       return { name: input.name, configuredAtOffset: rows[input.name].configuredAtOffset };
-    const [committed] = await this.append(event);
-    return { name: input.name, configuredAtOffset: committed.offset };
+    const [committedEvent] = await this.append(event);
+    return { name: input.name, configuredAtOffset: committedEvent.offset };
   }
 
   /** Remove a subscription. Idempotent. A cursor target's cursor goes with it — the delivery loop
    *  drops it when the removed event commits (so a hand-appended removal is honoured the same way). */
   async removeSubscription(name: string): Promise<void> {
-    const event = subscriptionRemovedEvent(this.#core().subscriptions, name);
+    const event = subscriptionRemovedEvent(this.#stream.coreReducedState.subscriptions, name);
     if (event) await this.append(event);
   }
 
   /** The `itx.subscriptions` view: the reduced table joined with the delivery loop's cursors. */
   #subscriptionList(): SubscriptionListEntry[] {
-    return Object.entries(this.#core().subscriptions).map(([name, s]) => {
+    return Object.entries(this.#stream.coreReducedState.subscriptions).map(([name, s]) => {
       const cursor = this.#delivery.cursor(name);
       return {
         name,
@@ -504,7 +498,7 @@ export class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
         : undefined;
     const { worker, version, modules } = await loadConfinedWorker({
       env: this.env,
-      invoke: (e) => this.invoke(e),
+      invoke: (call) => this.invoke(call),
       host: this.#itxHost,
       kind: "facet",
       owner: facetLoaderOwner(this.#name.name, memo.className),
@@ -551,7 +545,12 @@ export class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
    *  STRING never could — callbacks, Dates, bytes: `["itx","tools",["transform",21,cb]]`). */
   async invoke(call: ItxExpression, depth = 0): Promise<unknown> {
     this.#noteActivity();
-    return this.#resolver().resolve(this.#core().mounts, toExpression(call), undefined, depth);
+    return this.#resolver().resolve(
+      this.#stream.coreReducedState.mounts,
+      toExpression(call),
+      undefined,
+      depth,
+    );
   }
 
   /** Mount a capability: `path ⇒ target` (an expression rooted at itx). That is the whole event.
@@ -569,10 +568,10 @@ export class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
     const winner = this.#newestMountAt(pathString);
     if (winner && print(winner.target) === targetString)
       return { providedAtOffset: winner.providedAtOffset };
-    const [committed] = await this.append(
+    const [committedEvent] = await this.append(
       capabilityProvidedEvent({ path: pathString, target: input.target }),
     );
-    return { providedAtOffset: committed.offset };
+    return { providedAtOffset: committedEvent.offset };
   }
 
   /** Revoke by the mount's identity — or by its capability path (pops the newest winner at that
@@ -597,8 +596,8 @@ export class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
 
   /** The mount answering at a canonical path right now — the newest of its shadow stack. */
   #newestMountAt(pathString: string) {
-    return this.#core()
-      .mounts.filter((m) => m.path.join(".") === pathString)
+    return this.#stream.coreReducedState.mounts
+      .filter((m) => m.path.join(".") === pathString)
       .sort((a, b) => b.providedAtOffset - a.providedAtOffset)[0];
   }
 
@@ -615,7 +614,7 @@ export class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
       (r) => this.#liveCapabilityFetch.acceptFetchUpgradeLeg(r),
       (r) =>
         serveCapabilityFetchLane(r, (expr, req) =>
-          this.#resolver().resolveFetch(this.#core().mounts, expr, req),
+          this.#resolver().resolveFetch(this.#stream.coreReducedState.mounts, expr, req),
         ),
     ];
     for (const door of doors) {

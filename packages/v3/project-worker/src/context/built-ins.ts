@@ -305,7 +305,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
       const classHandle = (className: string) =>
         new InvokeHandle((seg, args) => {
           if (seg.length === 1 && seg[0] === "get")
-            // .get(instance?) → the durable facet; deps.facets.get folds the rest into the DO's facet door.
+            // .get(instance?) → the durable facet; deps.facets.get reduces the rest into the DO's facet door.
             return deps.facets.get({ source, className, name: args[0] as string | undefined });
           throw new Error(
             `load(src).getDurableObjectClass('${className}').${seg.join(".")}: call .get(name?)`,

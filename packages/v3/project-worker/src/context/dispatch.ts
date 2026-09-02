@@ -1,7 +1,7 @@
 // context/dispatch.ts — match a capability call to a mount, then EXECUTE it against a LIVE object graph
 // (the codec that turns strings ⇄ these structures is ./expression.ts). One engine (`walkSteps`)
 // under two doors — `invokePath` (from a bare target) and `apply` (a matched mount); `evaluate` is
-// apply's own scope-rooted walk (not a separate caller). The dotted write-half (a scope symbol whose access folds into one
+// apply's own scope-rooted walk (not a separate caller). The dotted write-half (a scope symbol whose access reduces into one
 // dispatch) is `InvokeHandle` (context/invoke-handle.ts) — the ONE such primitive, pipelinable over
 // Workers RPC. `match` claims a call for a capability path (longest-prefix; the final segment may
 // consume the call's args as boundary args; the unmatched tail is the remainder apply() replays).
@@ -11,7 +11,7 @@ import type { Expression } from "./expression.ts";
 import { InvokeHandle } from "./invoke-handle.ts";
 
 // Promise brands the step walk threads UNAWAITED (see walkSteps): property access and calls
-// pipeline on them natively, so the whole chain folds into one round trip and the caller's terminal
+// pipeline on them natively, so the whole chain reduces into one round trip and the caller's terminal
 // await is the single flush. worker.ts registers the native cloudflare:workers RpcPromise/RpcProperty
 // at boot — that import can't live here because the unit lane runs this module in Node, where the
 // list stays empty and every step is simply awaited.
@@ -93,7 +93,7 @@ async function walkSteps(
   let { value, receiver } = start;
   for (const step of steps) {
     // A pipelinable RPC promise (native workerd — PIPELINED_RPC_BRANDS) must NOT be awaited
-    // mid-chain: property access and calls pipeline on it natively, so the whole chain folds into
+    // mid-chain: property access and calls pipeline on it natively, so the whole chain reduces into
     // one round trip and the caller's terminal await settles it (a facet's `.get(n).method()`, a
     // loaded entrypoint's `.run()`). Everything else (plain promises, thenables) keeps the
     // await-every-step behavior.

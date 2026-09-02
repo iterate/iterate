@@ -1,7 +1,7 @@
 // client/live-state-client.ts — wire an itx session's `subscribe` + a seed door to a LiveStateStore.
 // This is the whole cleanroom client: a subscription that consumes the one live-state event type
 // (`itx.subscribe({ target, consumes: ["events.iterate.com/live-state/changed"] })`) delivers every
-// key's deltas in batches; this filters the watched `key` and folds each delta into the store; a
+// key's deltas in batches; this filters the watched `key` and reduces each delta into the store; a
 // `door` thunk reads `{rev, state}` for the first paint and every gap heal. Transport lives here so
 // the store (client/live-state-store.ts) and the React hook stay pure.
 
@@ -27,11 +27,11 @@ export type LiveItx = {
  *  connection leaks a durable mount per mount() call). */
 export type LiveStateConnection<S> = {
   store: LiveStateStore<S>;
-  /** Unsubscribe on the server and stop folding deltas. Safe to call more than once. */
+  /** Unsubscribe on the server and stop reducing deltas. Safe to call more than once. */
   dispose(): Promise<void>;
 };
 
-/** Subscribe to a producer's live state and fold it into a store. `door` reads the seed
+/** Subscribe to a producer's live state and reduce it into a store. `door` reads the seed
  *  (`itx.invokeCapability("itx.facets.get('slug').liveSnapshot()")` for a processor, or a mini-app's
  *  own `state()` method). Subscribe happens BEFORE the first seed, so a delta racing the seed just
  *  triggers one door re-read — never a lost update. Gap heals are SINGLE-FLIGHT (a burst of gapped
@@ -72,7 +72,7 @@ export async function connectLiveState<S>(
     name: opts.name,
     consumes: ["events.iterate.com/live-state/changed"],
     // A batch of live-state deltas (every key's); keep the watched key's. capnweb hands each event
-    // as a live proxy value — deep-copy to a plain object before folding.
+    // as a live proxy value — deep-copy to a plain object before reducing.
     target: (events: unknown[]) => {
       if (disposed) return;
       for (const e of events) {

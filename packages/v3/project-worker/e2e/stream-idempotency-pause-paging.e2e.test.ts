@@ -92,7 +92,7 @@ test("an in-batch idempotency dedupe hit is reduced ONCE, not twice", async () =
   expect(pair[1].offset).toBe(pair[0].offset);
   const page = await read(itx);
   expect(page.events.filter((e) => e.idempotencyKey === "dup-in-batch")).toHaveLength(1);
-  // …and the commit-point reduce folded it exactly ONCE: one mount, at that offset.
+  // …and the commit-point reduce reduced it exactly ONCE: one mount, at that offset.
   const core = await itx.invokeCapability("itx.facets.get('core').snapshot()");
   const mounts = (core.state.mounts as { path: string[]; providedAtOffset: number }[]).filter(
     (m) => m.path.join(".") === "itx.dup",
@@ -217,7 +217,7 @@ test("an idempotent RETRY of a 64-deep payload dedupes instead of tripping the d
   expect(retry.offset).toBe(first.offset); // same key + same body = same event
 });
 
-// ── the core reduce's pause slice (control is ordinary events; enforcement reads the fold) ──
+// ── the core reduce's pause slice (control is ordinary events; enforcement reads the reduce) ──
 
 test("a bare stream/paused event (no payload) actually pauses the stream", async () => {
   // CoreStreamProcessor.reduce defaults `event.payload ?? {}` — a pause that silently doesn't pause

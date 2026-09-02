@@ -1,5 +1,5 @@
 // capability-table.ts — THE CAPABILITY TABLE: how the context's mounts are WRITTEN and READ. The
-// mounts THEMSELVES are `core` state — stream/core-processor.ts folds capability-provided/-revoked
+// mounts THEMSELVES are `core` state — stream/core-processor.ts reduces capability-provided/-revoked
 // into `state.mounts` — so this module is the two COMMANDS that build those events and the READER
 // that routes a call against them:
 //
@@ -192,7 +192,7 @@ export class CapabilityResolver {
 
   /** The `itx` scope symbol at a given recursion depth: dotted/called access re-enters
    *  `resolve` with the CURRENT mounts, carrying the depth. This is what makes alias mounts
-   *  compose and default routes forward whole calls. An `InvokeHandle` (the ONE dotted-fold
+   *  compose and default routes forward whole calls. An `InvokeHandle` (the ONE dotted-reduce
    *  primitive). */
   #itxAtDepth(depth: number): unknown {
     return new InvokeHandle((segments, args) => {

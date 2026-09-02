@@ -15,7 +15,7 @@ import type { Expression, ItxExpression } from "./expression.ts";
 
 /** The dispatch door every dotted miss collapses onto. `IterateContext` implements it directly (root `itx`); a
  *  mid-chain `InvokeHandle` implements it relative to itself (empty root). The accumulated dotted
- *  access folds into ONE `ItxExpression` — `[...root, ...prefix, [method, ...args]]`. */
+ *  access reduces into ONE `ItxExpression` — `[...root, ...prefix, [method, ...args]]`. */
 type InvokeCapabilityTarget = {
   invokeCapability(call: ItxExpression): unknown;
 };
@@ -74,7 +74,7 @@ function isReserved(key: string): boolean {
  * Builds the dotted-path fallback used by dynamic itx capabilities.
  *
  * A function-backed proxy (not an RpcTarget instance): each missing property extends the path,
- * and applying the function folds the whole accumulated access into ONE
+ * and applying the function reduces the whole accumulated access into ONE
  * `invokeCapability(expression)` call — `[...root, ...prefix, [method, ...args]]`.
  */
 export function createInvokeCapabilityPathProxy(
@@ -85,7 +85,7 @@ export function createInvokeCapabilityPathProxy(
   const valueFor = (key: string) => createInvokeCapabilityPathProxy(invoker, root, [...path, key]);
   return new Proxy(function () {}, {
     apply(_target, _thisArg, args) {
-      // Fold the accumulated dotted access into ONE ItxExpression (structured half): the scope root,
+      // Reduce the accumulated dotted access into ONE ItxExpression (structured half): the scope root,
       // the property-read prefix, then the final call step carrying the args.
       const method = path[path.length - 1];
       const expr: Expression = [...root, ...path.slice(0, -1), [method, ...(args as unknown[])]];

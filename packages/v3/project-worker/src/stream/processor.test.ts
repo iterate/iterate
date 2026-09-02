@@ -131,7 +131,7 @@ describe("consumesEvent — THE ONE consumes rule (engine, delivery loop, inline
   });
 
   test("a live-state delta is an ephemeral like any other here: never swept by default or '*', delivered when NAMED", () => {
-    // (That no PROCESSOR may fold a delta is the engine's `foldsEvent`, not this rule: a
+    // (That no PROCESSOR may reduce a delta is the engine's `reducesEvent`, not this rule: a
     // SUBSCRIPTION names the type to watch live state.)
     const t = "events.iterate.com/live-state/changed";
     expect(consumesEvent(undefined, { type: t, ephemeral: true })).toBe(false);
@@ -344,7 +344,7 @@ describe("delivery.caughtUp is tied to the SHOWN head", () => {
   test("two contiguous pushes enqueued back-to-back — only the one reaching the shown head fires caughtUp", async () => {
     // Both pushes sit on the chain before either runs, so the processor has been SHOWN through=2
     // when the through=1 batch runs: that batch is not at head. Contiguity alone never earns the
-    // at-head pass — the reconcile work it triggers must run against the head fold, not a stale one.
+    // at-head pass — the reconcile work it triggers must run against the head reduce, not a stale one.
     const { probe, engine } = caughtUpProbe();
     const first = engine.processEventBatch([ev(1)], { after: 0, through: 1 });
     const second = engine.processEventBatch([ev(2)], { after: 1, through: 2 });
@@ -455,7 +455,7 @@ describe("ephemeral events", () => {
   test("a barrier that reaches the head BEFORE the commit's own push still leaves the named ephemeral delivered", async () => {
     // The wake behind a read-your-writes barrier catches up the durable log and, via the
     // head-clamped proof, advances the cursor OVER the ephemeral's offset while consuming only the
-    // durable. The commit's fire-and-forget push then arrives wholly behind the cursor: it must fold
+    // durable. The commit's fire-and-forget push then arrives wholly behind the cursor: it must reduce
     // nothing twice yet still deliver its named ephemeral (pushes are an ephemeral's ONLY delivery,
     // and a live processor was handed it).
     const mem = memoryStream();
@@ -503,8 +503,8 @@ describe("review round 1 regressions", () => {
   }, 5000);
 });
 
-describe("reduce cache + refold", () => {
-  test("version bump refolds via reduce only — effects never re-run", async () => {
+describe("reduce cache + re-reduce", () => {
+  test("version bump re-reduces via reduce only — effects never re-run", async () => {
     const mem = memoryStream();
     const storage = memoryStorage();
     const make = (version: string, effects: string[]) => {
@@ -538,10 +538,10 @@ describe("reduce cache + refold", () => {
     ) as StreamEvent[];
     await p1.wake();
     expect(effects).toHaveLength(2);
-    // new incarnation with a bumped contract version: refold, but NO new effects for old events
+    // new incarnation with a bumped contract version: re-reduce, but NO new effects for old events
     const p2 = make("2.0.0", effects);
     const snap = await p2.snapshot();
-    expect(snap.state.n).toBe(2); // refolded
+    expect(snap.state.n).toBe(2); // re-reduced
     expect(effects).toHaveLength(2); // side effects did NOT re-run
   });
 });
@@ -621,7 +621,7 @@ describe("live state (the delta patches on the wire)", () => {
   }
 
   const changes = (mem: ReturnType<typeof memoryStream>) =>
-    mem.pushed.filter((e) => e.type === "events.iterate.com/live-state/changed");
+    mem.pushedEvents.filter((e) => e.type === "events.iterate.com/live-state/changed");
 
   test("a reduce that changes the projection emits ONE ephemeral change event carrying the patch", async () => {
     const mem = memoryStream();
@@ -706,10 +706,10 @@ describe("live state (the delta patches on the wire)", () => {
   });
 
   test("the loop guard: a processor's reduce never sees a live-state delta, even when its contract names the type", async () => {
-    // The refusal lives in the ENGINE (`foldsEvent`), not in `consumesEvent`: naming
+    // The refusal lives in the ENGINE (`reducesEvent`), not in `consumesEvent`: naming
     // `events.iterate.com/live-state/changed` in a SUBSCRIPTION's `consumes` is how a live tab
     // receives deltas, so `consumesEvent` says yes to a named delta — and the engine still never
-    // folds one (a delta feeding a reduce is the feedback-loop class, made unspellable here).
+    // reduces one (a delta feeding a reduce is the feedback-loop class, made unspellable here).
     const contract3 = defineProcessorContract({
       slug: "sneaky",
       version: "1.0.0",
@@ -758,12 +758,12 @@ describe("live state (the delta patches on the wire)", () => {
     expect(bare.idempotencyKey("k", ticked)).toBe("counter/k@1");
   });
 
-  test("a runtime field bumped inside processEvent (folded in by projectLiveState) publishes ONE delta at batch end — no publishLiveState call", async () => {
+  test("a runtime field bumped inside processEvent (reduced in by projectLiveState) publishes ONE delta at batch end — no publishLiveState call", async () => {
     const contract4 = defineProcessorContract({
       slug: "runtime",
       version: "1.0.0",
       description:
-        "reduce owns nothing; processEvent moves a runtime field the projection folds in",
+        "reduce owns nothing; processEvent moves a runtime field the projection reduces in",
       stateSchema: z.object({}),
       events: {},
       consumes: ["tick"],
@@ -808,7 +808,7 @@ describe("live state (the delta patches on the wire)", () => {
     });
     class StillProcessor extends StreamProcessor<{ n: number }> {
       contract = contract5;
-      fired = 0; // a runtime field the DEFAULT projection does NOT fold in
+      fired = 0; // a runtime field the DEFAULT projection does NOT reduce in
       override processEvent(args: ProcessEventArgs<{ n: number }>): undefined {
         if (args.event) this.fired++;
       }
@@ -856,14 +856,14 @@ describe("live state emission failure is contained", () => {
     // the reduce committed and the read surface works — the failure was only the notification
     await expect(p.snapshot()).resolves.toMatchObject({ state: { n: 1 } });
     expect(
-      mem.pushed.filter((e) => e.type === "events.iterate.com/live-state/changed"),
+      mem.pushedEvents.filter((e) => e.type === "events.iterate.com/live-state/changed"),
     ).toHaveLength(0);
   });
 });
 
 // ── the persisted cursor across evictions and version bumps; the barrier's failure modes ──
 
-/** Reduces ticks AND records an effect per consumed event — the two things a refold and an
+/** Reduces ticks AND records an effect per consumed event — the two things a re-reduce and an
  *  eviction must treat differently (state is rebuilt from the log; effects never re-run). */
 const CountContract = (version: string) =>
   defineProcessorContract({
@@ -968,7 +968,7 @@ describe("eviction honors the persisted cursor", () => {
 });
 
 describe("waitUntilProcessed — resolution and failure modes", () => {
-  test("resolves a waiter whose offset the version refold reached (no batch was ever pushed)", async () => {
+  test("resolves a waiter whose offset the version re-reduce reached (no batch was ever pushed)", async () => {
     const mem = memoryStream();
     const storage = memoryStorage();
     const p1 = new ProcessorEngine(new CountProcessor(), { stream: mem.stream, storage });
@@ -976,15 +976,15 @@ describe("waitUntilProcessed — resolution and failure modes", () => {
     for (let i = 0; i < 3; i++) mem.stream.append({ type: "tick" });
     await p1.wake();
 
-    // A bumped incarnation waits for an offset the refold (ceiling = 3) covers. No new push, so
-    // the wake's catch-up reads an empty page and never runs a batch — only the refold advances
+    // A bumped incarnation waits for an offset the re-reduce (ceiling = 3) covers. No new push, so
+    // the wake's catch-up reads an empty page and never runs a batch — only the re-reduce advances
     // progress; the post-wake re-check must still resolve the waiter.
     const p2 = new CountProcessor("2.0.0");
     const e2 = new ProcessorEngine(p2, { stream: mem.stream, storage });
     mem.procs.length = 0;
     mem.procs.push(e2);
     await expect(e2.waitUntilProcessed({ offset: 3, timeoutMs: 2000 })).resolves.toBeUndefined();
-    expect(p2.effects).toEqual([]); // and the refold stayed reduce-only
+    expect(p2.effects).toEqual([]); // and the re-reduce stayed reduce-only
   });
 
   test("does not spuriously resolve a waiter whose offset was NOT reached", async () => {

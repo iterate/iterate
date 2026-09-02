@@ -11,7 +11,7 @@ import type { IterateContextDurableObject } from "../src/iterate-context-durable
 
 /** The context DO for a ctx name (a project id or a full codec name), through the CONTEXT
  *  binding — the raw Workers-RPC stub, which is this lane's whole point: the DO's verbs with no
- *  edge folding the returns away, plus runInDurableObject over the same instance. */
+ *  edge reducing the returns away, plus runInDurableObject over the same instance. */
 export const stub = (ctx: string) =>
   (
     env as unknown as { CONTEXT: DurableObjectNamespace<IterateContextDurableObject> }

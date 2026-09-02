@@ -25,7 +25,7 @@ on top of the stream.
   a terminal `.fetch(request)`), and every outbound fetch from project code is
   egress with `{{secret:project:NAME}}` substitution.
 - **The stream.** One append-only log per context. One inline reduce (`core`)
-  folds the context's own control events at the commit point — identity, wake,
+  reduces the context's own control events at the commit point — identity, wake,
   pause, the mounts, the subscriptions; one delivery loop hands every commit to
   the subscriptions; a processor is a Durable Object class hosted as a facet and
   subscribed to the log.
@@ -49,7 +49,7 @@ flowchart LR
   end
   subgraph do["IterateContextDurableObject, one per {projectId, path}"]
     stream["Stream: log, offsets, idempotency, waitForEvent"]
-    inline["core(): the core reduce, folded inside every commit<br/>(identity, wake, pause, mounts, subscriptions)"]
+    inline["core(): the core reduce, reduced inside every commit<br/>(identity, wake, pause, mounts, subscriptions)"]
     delivery["SubscriptionDelivery: push or stream-kept cursor"]
     transport["RpcStubDirectory: pager sockets"]
     facets["Facets: loaded DurableObject classes,<br/>StreamProcessorDurableObject hosts"]
@@ -100,7 +100,7 @@ packages/v3/project-worker/
                                  + the reader: route(mounts, call), CapabilityResolver (resolve / resolveFetch)
       expression.ts              the codec: "itx.a.b(1)" ⇄ ["itx","a",["b",1]]
       dispatch.ts                match(path, call), evaluate / apply / invokePath
-      dotted-path-proxy.ts       the prototype hop: unknown dotted members fold into ONE
+      dotted-path-proxy.ts       the prototype hop: unknown dotted members reduce into ONE
                                  invokeCapability(expression)
       invoke-handle.ts           InvokeHandle + the two brands FacetHandle / RpcStubHandle
       rpc-stub-directory.ts      the live transport table: key → pager socket; presence events
@@ -111,13 +111,13 @@ packages/v3/project-worker/
     fetch/                       chapter 2 — fetch, in both directions
       fetch-capabilities.ts      fetch-shaped capabilities, the x-itx-cap lane, the 101 tunnel
                                  (fenced WORKAROUND, delete-day checklist inside)
-    stream/                      chapter 3 — the log and what folds it
+    stream/                      chapter 3 — the log and what reduces it
       stream.ts                  Stream (the commit pipeline), Context interface, localContext
       events.ts                  StreamEventInput / StreamEvent (zod), defineProcessorContract
       processor.ts               StreamProcessor (the pure author class), ProcessorEngine, consumesEvent
       reduce-checkpoint.ts       the one persisted reduce-checkpoint shape
       core-processor.ts          CoreStreamProcessor (slug core, 3.0.0): created/woken/paused/resumed
-                                 + the mounts + the subscriptions, one fold
+                                 + the mounts + the subscriptions, one reduce
       subscriptions.ts           the subscriptions' two commands: subscriptionConfiguredEvent /
                                  subscriptionRemovedEvent (null = idempotent no-op)
       subscription-delivery.ts   THE ONE DELIVERY LOOP: push to a facet or live stub, else a
@@ -190,7 +190,7 @@ await itx.invokeCapability(["itx", "kv", ["get", "greeting"]]); // structured ex
 
 The dotted sugar works because `IterateContext.prototype` carries a prototype
 hop (`src/context/dotted-path-proxy.ts`): a member the class does not declare
-becomes an accumulating path, and the final call folds everything into one
+becomes an accumulating path, and the final call reduces everything into one
 `invokeCapability([...])`. The structured form is the only one that can carry
 non-JSON args (a callback function, a Date, bytes, a `Request`).
 
@@ -228,7 +228,7 @@ class ProjectCollection extends RpcTarget {
 ### 4.2 `IterateContext` (the `itx` you hold)
 
 `src/iterate-context.ts`. The class body is two banded sections. The AXIOMS are
-the doors that need the edge (a session-held stub, a live Request, the fold);
+the doors that need the edge (a session-held stub, a live Request, the reduce);
 everything else is SUGAR: one-line compositions of the axioms that append no
 event shape of their own. Every method forwards to the context DO over Workers
 RPC; the DO owns every contract.
@@ -263,7 +263,7 @@ class IterateContext extends RpcTarget {
   fetch(request: Request): Promise<Response>;
 
   /** The live-stub registry, edge half: `provide(value, { key })` parks a capnweb value for the
-   *  session (DON'T-PIN relay); `get(key)` / `list()` fold onto the DO's built-in; `close(key)`. */
+   *  session (DON'T-PIN relay); `get(key)` / `list()` reduce onto the DO's built-in; `close(key)`. */
   get rpcStubs(): RpcStubs;
 
   // ── SUGAR ──
@@ -304,7 +304,7 @@ class IterateContext extends RpcTarget {
   disableProcessor(name: string): Promise<void>;
 
   // ── everything else ──
-  /** Any undeclared dotted access folds into invokeCapability: itx.kv.get(k), itx.cd('/x').read(),
+  /** Any undeclared dotted access reduces into invokeCapability: itx.kv.get(k), itx.cd('/x').read(),
    *  itx.facets.get('tally').snapshot(), itx.myCap.hello(), itx.site.fetch(request). */
   [dotted: string]: unknown;
 }
@@ -473,7 +473,7 @@ type SubscriptionListEntry = {
 };
 
 // cd and getEntrypoint return a plain InvokeHandle (context/invoke-handle.ts): a real RpcTarget
-// whose unknown dotted members fold into one dispatch, so the chain pipelines over every lane.
+// whose unknown dotted members reduce into one dispatch, so the chain pipelines over every lane.
 // FacetHandle and RpcStubHandle are InvokeHandle SUBCLASSES — brands the delivery loop reads
 // (section 6). Spell whatever the target exposes.
 ```
@@ -498,7 +498,7 @@ fetch channel (so a 101 works).
 
 One reduce-only processor is always on and runs **inline** in the commit
 transaction: `CoreStreamProcessor` (`src/stream/core-processor.ts`, slug `core`,
-contract 3.0.0), owned by the `Stream` itself (`stream.core()`). It folds the context's own control
+contract 3.0.0), owned by the `Stream` itself (`stream.coreReducedState`). It reduces the context's own control
 events — and nothing else — into everything the DO needs synchronously at its
 doors: who it is, which incarnation runs, whether appends are paused, the mounts
 every call routes through, the subscriptions every commit is sent to. It has no
@@ -536,7 +536,7 @@ type CoreState = {
 };
 ```
 
-The layering is in the EVENTS, not in the fold: the mounts are Layer 1's two
+The layering is in the EVENTS, not in the reduce: the mounts are Layer 1's two
 events (`capability-provided` / `capability-revoked`), the rows are Layer 2's
 four; the commands that build them live beside their readers
 (`context/capability-table.ts`, `stream/subscriptions.ts`). `core` holds no
@@ -632,7 +632,7 @@ A processor is two classes. The processor itself is **pure**: a class extending
 nothing else, so a unit test calls its `reduce` directly. Its **host** is a
 `DurableObject` extending `StreamProcessorDurableObject` with one field,
 `processor = new PresenceProcessor()`, hosted exactly like the counter above; the host
-knows how to fold the log. The names follow the base class: a processor class
+knows how to reduce the log. The names follow the base class: a processor class
 ends in `Processor`, a Durable Object class in `DurableObject`. `src/sdk/index.ts`
 is the whole userspace SDK, bundled into `./processor.js`:
 
@@ -740,7 +740,7 @@ type ProcessEventArgs<State> = {
 
 The core reduce (`CoreStreamProcessor`, section 4.5) is the same
 `StreamProcessor` class, hosted INLINE at the commit point instead of in a facet:
-only its `reduce` is ever called — the stream folds it inside every commit and
+only its `reduce` is ever called — the stream reduces it inside every commit and
 never runs `processEvent`. A processor class is a contract plus a reduce — nothing
 else.
 
@@ -767,7 +767,7 @@ const contract = defineProcessorContract({
 // The processor: pure. `new PresenceProcessor().reduce({ event, state })` is a unit test.
 class PresenceProcessor extends StreamProcessor {
   contract = contract;
-  #lastPokeMs = 0; // runtime: a field, not reduced state — gone with the host, never refolded
+  #lastPokeMs = 0; // runtime: a field, not reduced state — gone with the host, never re-reduced
   reduce({ event, state }) {
     if (event.type === "tick") return { ...state, ticks: state.ticks + 1 };
   }
@@ -790,7 +790,7 @@ await itx.kv.put("src/presence.js", PRESENCE_SRC);
 await itx.enableProcessor("presence", {
   source: "itx.kv.get('src/presence.js')",
   className: "PresenceDurableObject",
-  consumes: ["tick", "poke"], // what is SENT; the contract above says what is folded
+  consumes: ["tick", "poke"], // what is SENT; the contract above says what is reduced
 });
 await itx.append({ type: "tick" });
 await itx.facets.get("presence").snapshot(); // { offset, state: { ticks: 1 } }
@@ -811,13 +811,13 @@ from the log when a range does not chain. There is no runner module and no
 host-side processor registry.
 
 Testing a processor needs no worker: `new PresenceProcessor().reduce({ event, state })`
-for the fold; for the effect rules (serial chain, blockers, at-head pass) build a
+for the reduce; for the effect rules (serial chain, blockers, at-head pass) build a
 `ProcessorEngine` over `memoryStream()` / `memoryStorage()` from
 `src/stream/test-support.ts`, the way `src/stream/processor.test.ts` does.
 
 Two filters, in two places: the subscription's `consumes` decides what is
 **sent** (absent means every durable event), the contract's `consumes` decides
-what the engine **folds**. A processor that folds ephemerals must name them on
+what the engine **reduces**. A processor that reduces ephemerals must name them on
 `enableProcessor` too, or they never reach it.
 
 The DO remembers `{ source, className }` for each facet name in its own kv
@@ -827,7 +827,7 @@ after an eviction without the load expression in hand.
 **A policy processor: the breaker.** Stream control is ordinary events the core
 reduce reads (section 5.5), so a policy that decides WHEN to pause is not
 kernel code — it is a facet processor that speaks those events.
-`BreakerProcessor` (`e2e/support/sources.ts`) folds every durable event into a
+`BreakerProcessor` (`e2e/support/sources.ts`) reduces every durable event into a
 token bucket and, when the bucket runs dry, appends `stream/paused` with its
 reason; the next non-control append is refused with `STREAM_PAUSED` by the one
 `if` in `Stream.append`, and an operator's `stream/resumed` lifts it. Core knows
@@ -1000,7 +1000,7 @@ Refusals surface as coded errors: `STREAM_PAUSED`, `IDEMPOTENCY_CONFLICT`,
 
 `src/stream/subscriptions.ts` is the two commands that build the layer's events
 (`subscriptionConfiguredEvent` / `subscriptionRemovedEvent` — `null` when the
-current rows already say so, and the DO appends nothing); the core reduce folds
+current rows already say so, and the DO appends nothing); the core reduce reduces
 the four events into `state.subscriptions`. `src/stream/subscription-delivery.ts` is the loop, run from the
 stream's post-commit hook. For every subscription it filters the batch by
 `consumes`, evaluates the target expression, and asks the **value** what it is:
@@ -1079,7 +1079,7 @@ context only through `env.ITX`.
 ```ts
 class IterateContextDurableObject extends DurableObject<BuiltInsEnv> {
   // ── the stream ──
-  append(...inputs: StreamEventInput[]): Promise<StreamEvent[]>;
+  append(...events: StreamEventInput[]): Promise<StreamEvent[]>;
   read(
     afterOffset?: number,
     limit?: number,
@@ -1178,14 +1178,14 @@ class ControlPlaneShell extends WorkerEntrypoint<Env> {
 
 Bindings (`wrangler.jsonc`):
 
-| Binding               | Kind                                                | Used for                                                      |
-| --------------------- | --------------------------------------------------- | ------------------------------------------------------------- |
-| `CONTEXT`             | DO namespace → `IterateContextDurableObject`        | every context, `getByName(codec)`                             |
-| `LOADER`              | Worker Loader                                       | `itx.load`, `runScript`, processors                           |
-| `ITX_KV`              | KV                                                  | `itx.kv`, keys prefixed `${projectId}:`                       |
-| `SECRETS_KV`          | KV                                                  | egress substitution, keys `secret:${projectId}:${name}`       |
-| `CF_VERSION_METADATA` | version metadata                                    | folded into loader cacheKeys so a deploy mints fresh isolates |
-| `FALLBACK`            | service → `iterate-control-plane#ControlPlaneShell` | the egress terminal                                           |
+| Binding               | Kind                                                | Used for                                                       |
+| --------------------- | --------------------------------------------------- | -------------------------------------------------------------- |
+| `CONTEXT`             | DO namespace → `IterateContextDurableObject`        | every context, `getByName(codec)`                              |
+| `LOADER`              | Worker Loader                                       | `itx.load`, `runScript`, processors                            |
+| `ITX_KV`              | KV                                                  | `itx.kv`, keys prefixed `${projectId}:`                        |
+| `SECRETS_KV`          | KV                                                  | egress substitution, keys `secret:${projectId}:${name}`        |
+| `CF_VERSION_METADATA` | version metadata                                    | reduced into loader cacheKeys so a deploy mints fresh isolates |
+| `FALLBACK`            | service → `iterate-control-plane#ControlPlaneShell` | the egress terminal                                            |
 
 The loader cacheKey is `${kind}:${deploy}:${owner}:${contentHash}`. Every
 distinct key is a billed dynamic worker, so nothing per request may ever enter
@@ -1208,7 +1208,7 @@ sequenceDiagram
   participant D as IterateContextDurableObject
   participant T as CapabilityResolver (capability-table.ts)
   C->>E: itx.greet.run("jonas")
-  Note over E: prototype hop folds to<br/>["itx","greet",["run","jonas"]]
+  Note over E: prototype hop reduces to<br/>["itx","greet",["run","jonas"]]
   E->>D: invoke(expression)   (Workers RPC)
   D->>T: resolve(core.mounts, expression)
   alt root is a built-in (kv, cd, load, facets, rpcStubs, ...)
@@ -1272,7 +1272,7 @@ sequenceDiagram
   participant A as caller (itx.append)
   participant D as context DO
   participant S as Stream
-  participant I as core reduce (Stream.core(), a CoreStreamProcessor)
+  participant I as core reduce (Stream.coreReducedState, a CoreStreamProcessor)
   participant L as SubscriptionDelivery
   participant F as facet (processor)
   participant P as live stub (tab)
@@ -1292,7 +1292,7 @@ sequenceDiagram
   L->>F: processEventBatch(events, range)   FacetHandle: awaited push
   L->>P: (events, range)                    RpcStubHandle: fire-and-forget push
   L->>W: processEventBatch(events, range)   else: from the stream-kept cursor, awaited = ack
-  I->>P: live-state/changed delta (key "core") when the fold changed
+  I->>P: live-state/changed delta (key "core") when the reduce changed
   D-->>A: StreamEvent[]
 ```
 

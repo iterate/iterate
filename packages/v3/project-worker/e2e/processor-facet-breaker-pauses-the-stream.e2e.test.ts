@@ -20,7 +20,7 @@ test("a burst past the breaker's capacity pauses the stream (the facet appends `
   // enableProcessor("breaker", { source: "itx.kv.get('src/breaker.js')", className: "BreakerDurableObject" })
   await enableFixtureProcessor(itx, "breaker");
   // The breaker's own enablement (subscription-configured) is a durable non-control event: the bucket
-  // (capacity 5) is at 4 once it has folded its own row. Nothing paused yet.
+  // (capacity 5) is at 4 once it has reduced its own row. Nothing paused yet.
   await append(itx, { type: "warm" }); // 3 left
   expect((await readAll(itx)).some((e) => e.type === PAUSED)).toBe(false);
 
@@ -30,7 +30,7 @@ test("a burst past the breaker's capacity pauses the stream (the facet appends `
     itx,
     ...Array.from({ length: 8 }, (_, i) => ({ type: "burst", payload: { i } })),
   );
-  expect(burst).toHaveLength(8); // the burst itself was admitted — policy reads the FOLD, after the commit
+  expect(burst).toHaveLength(8); // the burst itself was admitted — policy reads the REDUCE, after the commit
   const paused = await itx.waitForEvent({ type: PAUSED, afterOffset: 0, timeoutMs: 20_000 });
   expect(paused.payload).toEqual({ reason: "breaker: durable events exceeded the bucket" });
   // provenance: the engine stamps every processor emit with its slug — the log says WHO paused it
@@ -52,7 +52,7 @@ test("a burst past the breaker's capacity pauses the stream (the facet appends `
   expect(after.offset).toBeGreaterThan(paused.offset); // flow restored
   // the bucket is in debt (no second crossing) — the ONE trip is the only `paused` in the log
   expect((await readAll(itx)).filter((e) => e.type === PAUSED)).toHaveLength(1);
-  // and the breaker's reduced state is the pure fold of the log: tokens below zero, replayable
+  // and the breaker's reduced state is the pure reduce of the log: tokens below zero, replayable
   const snap = await itx.invokeCapability("itx.facets.get('breaker').snapshot()");
   expect(snap.state.tokens).toBeLessThan(0);
   expect(snap.state.lastAtMs).toBeGreaterThan(0);

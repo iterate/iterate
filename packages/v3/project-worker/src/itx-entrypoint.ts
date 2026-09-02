@@ -49,8 +49,8 @@ export class ItxEntrypoint extends WorkerEntrypoint<Env, { contextName: string }
     );
   }
 
-  append(...inputs: StreamEventInput[]): Promise<StreamEvent[]> {
-    return this.#context().append(...inputs);
+  append(...events: StreamEventInput[]): Promise<StreamEvent[]> {
+    return this.#context().append(...events);
   }
 
   read(

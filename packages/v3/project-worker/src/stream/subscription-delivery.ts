@@ -87,7 +87,10 @@ export class SubscriptionDelivery {
   readonly #deliveredThrough = new Map<string, number>();
   /** The freshest pushed batch per cursor subscription — the way ephemerals reach a caught-up cursor
    *  target (the log has no ephemerals; the push does). Latest wins; a stale one is ignored. */
-  readonly #pushed = new Map<string, { events: StreamEvent[]; after: number; through: number }>();
+  readonly #pushedEventBatches = new Map<
+    string,
+    { events: StreamEvent[]; after: number; through: number }
+  >();
   readonly #pumping = new Set<string>();
   /** The cursor truth for this incarnation; kv is its durable shadow, written at durable boundaries. */
   readonly #cursors = new Map<string, SubscriptionCursor>();
@@ -103,17 +106,17 @@ export class SubscriptionDelivery {
   }
 
   /** The post-commit hook: one pass over the table. Fire-and-forget from append's view. */
-  onCommit(fresh: StreamEvent[], scannedAfterOffset: number, nextOffset: number): void {
+  onCommit(freshEvents: StreamEvent[], scannedAfterOffset: number, nextOffset: number): void {
     const table = this.#deps.subscriptions();
-    for (const e of fresh) {
+    for (const event of freshEvents) {
       // A removed subscription takes its cursor row and its in-memory traces with it.
-      if (e.type === "events.iterate.com/stream/subscription-removed")
-        this.forget((e.payload as { name: string }).name);
+      if (event.type === "events.iterate.com/stream/subscription-removed")
+        this.forget((event.payload as { name: string }).name);
       // An operator's resume is itself the wake: pump that name NOW, whatever its `consumes` says
       // (the resumed fact is rarely one of the types the subscriber asked for, and a halted row has
       // no retry armed — without this it would wait for the next matching commit or the quiet clock).
-      if (e.type === "events.iterate.com/stream/subscription-delivery-resumed") {
-        const name = (e.payload as { name: string }).name;
+      if (event.type === "events.iterate.com/stream/subscription-delivery-resumed") {
+        const name = (event.payload as { name: string }).name;
         if (table[name])
           void this.#pump(name).catch((error) =>
             reportIssue("subscription-delivery.resume-pump", error, { name }),
@@ -127,8 +130,8 @@ export class SubscriptionDelivery {
       // reported here, once, instead of once per commit. The wake is the HEAD of this name's push
       // chain, so the first push (often this very event) queues behind it: one materialization,
       // one source evaluation — never two loads racing each other.
-      if (e.type === "events.iterate.com/stream/subscription-configured") {
-        const name = (e.payload as { name: string }).name;
+      if (event.type === "events.iterate.com/stream/subscription-configured") {
+        const name = (event.payload as { name: string }).name;
         this.forget(name);
         const sub = table[name];
         if (sub)
@@ -149,13 +152,13 @@ export class SubscriptionDelivery {
       }
     }
     for (const [name, sub] of Object.entries(table)) {
-      const events = fresh.filter((e) => consumesEvent(sub.consumes, e));
+      const events = freshEvents.filter((event) => consumesEvent(sub.consumes, event));
       // A batch the filter skipped is NOT handed over — so the watermark stays put and the skipped
       // span rides inside the NEXT delivered range (the subscriber's chain stays contiguous).
       if (events.length === 0) continue;
       const after = this.#deliveredThrough.get(name) ?? scannedAfterOffset;
       this.#deliveredThrough.set(name, nextOffset);
-      this.#pushed.set(name, { events, after, through: nextOffset });
+      this.#pushedEventBatches.set(name, { events, after, through: nextOffset });
       const chain = (this.#pushes.get(name) ?? Promise.resolve()).then(() =>
         this.#dispatch(name, sub, events, { after, through: nextOffset }),
       );
@@ -196,7 +199,7 @@ export class SubscriptionDelivery {
     this.#deps.kv.delete(CURSOR_PREFIX + name);
     this.#pushes.delete(name);
     this.#deliveredThrough.delete(name);
-    this.#pushed.delete(name);
+    this.#pushedEventBatches.delete(name);
   }
 
   /** Adopt a cursor: memory always; kv only when `durable` (a durable boundary moved, a ladder step,
@@ -223,7 +226,7 @@ export class SubscriptionDelivery {
         // the order, and a stalled client blocks nothing but itself. CONNECTION_OFFLINE is the benign
         // heal-by-pull case (the stub is not there right now; the mount stays, the client re-parks);
         // anything else is a real drop worth a line — the subscriber sees the range gap and heals.
-        this.#pushed.delete(name); // only a stream-kept cursor ever reads it
+        this.#pushedEventBatches.delete(name); // only a stream-kept cursor ever reads it
         void call([events, range]).catch((error) => {
           if (errorCode(error) !== "CONNECTION_OFFLINE")
             log.warn("push delivery dropped", { event: "delivery.push.dropped", name, error });
@@ -235,7 +238,7 @@ export class SubscriptionDelivery {
         // materialization must not let a later batch overtake an earlier one) and the quiesce never
         // aborts it mid-reduce — under the same watchdog as a cursor delivery (a hung facet must not
         // hold this chain, and this actor, forever). Its own gap repair covers a dropped push.
-        this.#pushed.delete(name);
+        this.#pushedEventBatches.delete(name);
         await withTimeout(call([events, range]), DELIVERY_TIMEOUT_MS, name);
         return;
       }
@@ -316,37 +319,37 @@ export class SubscriptionDelivery {
         // only UP TO the pushed batch's start, so that once the durables before it are delivered the
         // row IS contiguous with it and takes it, ephemerals included. A pushed batch the cursor has
         // already passed is stale and forgotten.
-        let pushed = this.#pushed.get(name);
-        if (pushed && pushed.after < row.confirmedOffset) {
-          this.#pushed.delete(name);
-          pushed = undefined;
+        let pushedEventBatch = this.#pushedEventBatches.get(name);
+        if (pushedEventBatch && pushedEventBatch.after < row.confirmedOffset) {
+          this.#pushedEventBatches.delete(name);
+          pushedEventBatch = undefined;
         }
-        let batch: { events: StreamEvent[]; through: number };
-        if (pushed && pushed.after === row.confirmedOffset) {
-          this.#pushed.delete(name);
-          batch = { events: pushed.events, through: pushed.through };
+        let eventBatch: { events: StreamEvent[]; through: number };
+        if (pushedEventBatch && pushedEventBatch.after === row.confirmedOffset) {
+          this.#pushedEventBatches.delete(name);
+          eventBatch = { events: pushedEventBatch.events, through: pushedEventBatch.through };
         } else {
           const page = this.#deps.read(row.confirmedOffset, 100);
-          const ceiling = pushed
-            ? Math.min(page.scannedThroughOffset, pushed.after)
+          const ceiling = pushedEventBatch
+            ? Math.min(page.scannedThroughOffset, pushedEventBatch.after)
             : page.scannedThroughOffset;
           if (ceiling <= row.confirmedOffset) return; // caught up
-          batch = {
+          eventBatch = {
             events: page.events.filter(
-              (e) => e.offset <= ceiling && consumesEvent(current.consumes, e),
+              (event) => event.offset <= ceiling && consumesEvent(current.consumes, event),
             ),
             through: ceiling,
           };
         }
-        const range: ScannedRange = { after: row.confirmedOffset, through: batch.through };
-        const durable = batch.events.some((e) => !e.ephemeral);
-        if (batch.events.length === 0) {
+        const range: ScannedRange = { after: row.confirmedOffset, through: eventBatch.through };
+        const durable = eventBatch.events.some((event) => !event.ephemeral);
+        if (eventBatch.events.length === 0) {
           this.#save(name, { ...row, confirmedOffset: range.through }, true); // a log page: durable ground
           continue;
         }
         try {
           const { call } = await this.#resolve(current.target);
-          await withTimeout(call([batch.events, range]), DELIVERY_TIMEOUT_MS, name);
+          await withTimeout(call([eventBatch.events, range]), DELIVERY_TIMEOUT_MS, name);
           if (!this.#sameGeneration(name, row)) continue; // a resume (or removal) landed mid-delivery
           this.#save(
             name,
@@ -398,8 +401,8 @@ export class SubscriptionDelivery {
 
   /** The row we started from is still the row (same resume generation, not removed)? */
   #sameGeneration(name: string, started: SubscriptionCursor): boolean {
-    const fresh = this.cursor(name);
-    return fresh !== undefined && fresh.resumedAt === started.resumedAt;
+    const latestCursor = this.cursor(name);
+    return latestCursor !== undefined && latestCursor.resumedAt === started.resumedAt;
   }
 }
 

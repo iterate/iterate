@@ -1,12 +1,12 @@
-// processor-facet-folds-and-address.e2e.test.ts — THE FACET SPINE live: a processor is a userspace
+// processor-facet-reduces-and-address.e2e.test.ts — THE FACET SPINE live: a processor is a userspace
 // pure `StreamProcessor` (`TallyProcessor`) hosted by its one-line `StreamProcessorDurableObject` subclass
 // (`TallyDurableObject`) in a real workerd facet on the context DO (there are no built-in processors —
 // `tally` is a fixture source like any other). enableFixtureProcessor(tally) → events land → the facet
-// folds them → snapshot through the parent. Proves COLD CATCH-UP (an event appended BEFORE enable is
+// reduces them → snapshot through the parent. Proves COLD CATCH-UP (an event appended BEFORE enable is
 // counted), that the subscriptions table lists the processor (a processor IS a subscription whose
 // target is a facet's processEventBatch — no separate machinery, no cursor: a facet owns its
 // progress), same-name-replaces (no shadow stack), the facet ADDRESS (any facet method through the
-// routing table, aliasable, the barrier verb, probe-resistant), and two userspace processors folding
+// routing table, aliasable, the barrier verb, probe-resistant), and two userspace processors reducing
 // side by side.
 
 import { expect, test } from "vitest";
@@ -17,7 +17,7 @@ const PROVIDED = "events.iterate.com/capability-table/capability-provided";
 const REVOKED = "events.iterate.com/capability-table/capability-revoked";
 const CONFIGURED = "events.iterate.com/stream/subscription-configured";
 
-test("facet spine: cold catch-up + driven folds + the subscriptions table lists the processor", async () => {
+test("facet spine: cold catch-up + driven reduces + the subscriptions table lists the processor", async () => {
   const itx = openItx(freshCtx("facet"));
 
   // one mount BEFORE enabling — the facet must count it via cold catch-up
@@ -36,10 +36,10 @@ test("facet spine: cold catch-up + driven folds + the subscriptions table lists 
   await itx.revoke({ providedAtOffset: p2.providedAtOffset });
 
   const s2 = await itx.invokeCapability("itx.facets.get('tally').snapshot()");
-  // the facet folds the pushed events (3 provided + 1 revoked). Its checkpoint sits at or past the
+  // the facet reduces the pushed events (3 provided + 1 revoked). Its checkpoint sits at or past the
   // 7 durable events (created, woken, before, configured, a, b, revoked) — live-state deltas are
   // ephemerals in the SAME offset space, so the exact position depends on how many the core reduce
-  // emitted; the counts pin the real fold.
+  // emitted; the counts pin the real reduce.
   expect(s2.state?.counts?.[PROVIDED]).toBe(3);
   expect(s2.state?.counts?.[REVOKED]).toBe(1);
   expect(s2.offset).toBeGreaterThanOrEqual(7);
@@ -114,7 +114,7 @@ test("facet address: table routing, alias/shadow, barrier verb, probe-resistance
   );
 });
 
-test("two userspace facet processors fold side-by-side — user-tally and tally", async () => {
+test("two userspace facet processors reduce side-by-side — user-tally and tally", async () => {
   const itx = openItx(freshCtx("ufacet"));
 
   // both classes arrive via the loader from a seeded source expression — the one way to host a processor
@@ -126,7 +126,7 @@ test("two userspace facet processors fold side-by-side — user-tally and tally"
   await itx.provide("itx.b", "itx.kv");
   await itx.revoke({ providedAtOffset: p1.providedAtOffset });
 
-  // Both fold the same 7 durable events (created, woken, 2 configured, 2 provided, 1 revoked): an
+  // Both reduce the same 7 durable events (created, woken, 2 configured, 2 provided, 1 revoked): an
   // enablement is a subscription-configured event, not a mount, so provided = 2. Checkpoints sit at
   // or past offset 7 (live-state deltas share the offset space).
   const su = await itx.invokeCapability("itx.facets.get('user-tally').snapshot()");

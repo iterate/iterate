@@ -3,7 +3,7 @@
 // deliberately tiny, and pointed at the CLEAN-ROOM wire instead of apps/os's in-band snapshot:
 //
 //   • SEED through the producer's door — `{rev, state}` read via an RPC method (a processor's
-//     `liveSnapshot()`, a mini-app's `state()`). apps/os folds the first snapshot in-band on the
+//     `liveSnapshot()`, a mini-app's `state()`). apps/os reduces the first snapshot in-band on the
 //     subscription; here the stream keeps no per-subscriber state, so the seed is a separate read.
 //   • APPLY each `{key, from, to, patch}` delta the subscription delivers: a patch lands only when
 //     its `from` matches the held rev; a mismatch means a missed delta (or a reborn producer's fresh
@@ -31,7 +31,7 @@ export type LiveStateStore<S> = {
   subscribe(listener: () => void): () => void;
   /** Seed (or re-seed) from the door — the first paint, and the heal after a gap. */
   seed(seed: LiveStateSeed<S>): void;
-  /** Fold one delta in; on a revision gap call `resync` and hold the value until a fresh seed. */
+  /** Reduce one delta in; on a revision gap call `resync` and hold the value until a fresh seed. */
   apply(delta: LiveStateDelta, resync: () => void): void;
 };
 

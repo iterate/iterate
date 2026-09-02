@@ -1,6 +1,6 @@
-// stream-core-reduce.e2e.test.ts — THE CORE REDUCE live: the stream's operational truth folded
+// stream-core-reduce.e2e.test.ts — THE CORE REDUCE live: the stream's operational truth reduced
 // INLINE at the commit point (the apps/os shape). Control is ordinary events; enforcement is the
-// parent reading the fold. Proves: pause refuses appends (control passes), resume heals, ephemerals
+// parent reading the reduce. Proves: pause refuses appends (control passes), resume heals, ephemerals
 // flow when unpaused, and the ONE core snapshot exposes the whole core truth — identity (created),
 // incarnation (woken), pause, the mounts and the subscription rows (runtime state IS reduced state
 // — hostState() died in C5; the breaker left core for a facet processor, see
@@ -9,7 +9,7 @@
 import { expect, test } from "vitest";
 import { freshCtx, openItx } from "./support/client.ts";
 
-test("core fold: pause/resume, ephemerals flow when unpaused, ONE core snapshot carries identity + incarnation + pause + mounts + subscriptions", async () => {
+test("core reduce: pause/resume, ephemerals flow when unpaused, ONE core snapshot carries identity + incarnation + pause + mounts + subscriptions", async () => {
   const ctx = freshCtx("core");
   const itx = openItx(ctx);
 

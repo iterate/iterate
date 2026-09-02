@@ -84,7 +84,7 @@ class ChunkyProcessor extends StreamProcessor {
 export class ChunkyDurableObject extends StreamProcessorDurableObject {
   processor = new ChunkyProcessor();
 }`,
-  // A processor whose live state COMBINES reduced state (ticks, folded from durable 'tick' events)
+  // A processor whose live state COMBINES reduced state (ticks, reduced from durable 'tick' events)
   // with RUNTIME state (lastPokeMs — a plain field on the pure class, NOT the reduce checkpoint, gone
   // on eviction). A 'poke' ephemeral event bumps the runtime field in processEvent; the engine
   // re-projects after the batch and emits the delta itself (the reduce never touches it). Proves
@@ -101,10 +101,10 @@ const contract = defineProcessorContract({
 });
 class PresenceProcessor extends StreamProcessor {
   contract = contract;
-  #lastPokeMs = 0; // RUNTIME: a field, not reduced state — reset to 0 on eviction, never refolded
+  #lastPokeMs = 0; // RUNTIME: a field, not reduced state — reset to 0 on eviction, never re-reduced
   reduce({ event, state }) {
     if (event.type === "tick") return { ...state, ticks: state.ticks + 1 };
-    // 'poke' is deliberately NOT folded — it drives a runtime field, not durable truth
+    // 'poke' is deliberately NOT reduced — it drives a runtime field, not durable truth
   }
   processEvent({ event }) {
     // no publish call: the engine re-projects after every batch and emits the delta itself

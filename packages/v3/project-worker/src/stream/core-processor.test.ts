@@ -1,20 +1,15 @@
-// The core reduce's executable spec (src/stream/core-processor.ts): ONE pure fold of the context's
+// The core reduce's executable spec (src/stream/core-processor.ts): ONE pure reduce of the context's
 // ten control events into the state the DO reads SYNCHRONOUSLY at its doors — identity (created),
 // incarnation (woken), the pause latch (paused/resumed), the capability table (a SHADOW STACK:
 // provided pushes, revoked-by-offset pops exactly one) and the subscriptions table (by name:
 // configured REPLACES, removed drops, delivery-halted marks, delivery-resumed clears the halt and
-// records the seek). No clock, no effects: the same log always folds to the same state, an ephemeral
+// records the seek). No clock, no effects: the same log always reduces to the same state, an ephemeral
 // event never reduces (the checkpoint must rebuild from the durable log alone), and a malformed
 // hand-appended event is SKIPPED, never a wedge. The DOORS that build these events are pinned beside
 // their modules (context/capability-table.test.ts, stream/subscriptions.test.ts).
 import { describe, expect, test } from "vitest";
 import { parse, print } from "../context/expression.ts";
-import {
-  CoreContract,
-  CoreStreamProcessor,
-  isCoreControl,
-  type CoreState,
-} from "./core-processor.ts";
+import { CoreContract, CoreStreamProcessor, type CoreState } from "./core-processor.ts";
 import type { StreamEvent } from "./events.ts";
 
 const proc = new CoreStreamProcessor();
@@ -30,7 +25,7 @@ const reduceAll = (events: StreamEvent[], initial = proc.contract.initialState()
   events.reduce((s, e) => proc.reduce({ event: e, state: s }) ?? s, initial);
 
 describe("the contract", () => {
-  test("slug `core` v3.0.0; the schema-initial state; consumes EXACTLY its ten control events (an inline reduce folds only what it consumes)", () => {
+  test("slug `core` v3.0.0; the schema-initial state; consumes EXACTLY its ten control events (an inline reduce reduces only what it consumes)", () => {
     expect(proc.contract.slug).toBe("core");
     expect(proc.contract.version).toBe("3.0.0");
     expect(proc.contract.initialState()).toEqual({ paused: null, mounts: [], subscriptions: {} });
@@ -47,17 +42,6 @@ describe("the contract", () => {
       "events.iterate.com/stream/subscription-delivery-resumed",
     ]);
     expect(proc.contract.emits).toEqual([]);
-  });
-
-  test("isCoreControl: the platform's own records and the pause/resume pair are exempt from pause — nothing else is", () => {
-    expect(isCoreControl("events.iterate.com/stream/created")).toBe(true);
-    expect(isCoreControl("events.iterate.com/stream/woken")).toBe(true);
-    expect(isCoreControl("events.iterate.com/stream/paused")).toBe(true);
-    expect(isCoreControl("events.iterate.com/stream/resumed")).toBe(true);
-    // the other core events are ordinary appends: a paused stream refuses a mount or a subscribe
-    expect(isCoreControl("events.iterate.com/capability-table/capability-provided")).toBe(false);
-    expect(isCoreControl("events.iterate.com/stream/subscription-configured")).toBe(false);
-    expect(isCoreControl("work")).toBe(false);
   });
 });
 

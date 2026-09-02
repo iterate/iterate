@@ -67,7 +67,7 @@ test("live state chains client-side from the door — mini-app + processor flavo
   expect(JSON.stringify(chat.doc)).toBe(JSON.stringify(door.state));
   expect(chat.rev).toBe(chatSeedRev + 2);
 
-  // ── processor flavor: chunky's fold, door = liveSnapshot() ──
+  // ── processor flavor: chunky's reduce, door = liveSnapshot() ──
   await itx.enableProcessor("chunky", {
     source: "itx.kv.get('src/chunky.js')",
     className: "ChunkyDurableObject",
@@ -86,7 +86,7 @@ test("live state chains client-side from the door — mini-app + processor flavo
   expect((proc.doc as { marks: number }).marks).toBe(0);
 
   await itx.invokeCapability(`itx.append({ type: 'mark' })`);
-  await until("mark folded", () => ((proc.doc as { marks?: number })?.marks ?? 0) >= 1);
+  await until("mark reduced", () => ((proc.doc as { marks?: number })?.marks ?? 0) >= 1);
   await itx.invokeCapability(`itx.append({ type: 'mark' })`);
   await until("second mark", () => ((proc.doc as { marks?: number })?.marks ?? 0) >= 2);
   // processor patches chained from the seed rev, zero re-reads; the doc matches the projection
@@ -103,10 +103,10 @@ test("live state chains client-side from the door — mini-app + processor flavo
 type PresenceLive = { ticks: number; lastPokeMs: number };
 
 test("a dynamic-worker processor's live state combines reduced (ticks) + runtime (lastPokeMs); a client syncs both via ephemeral deltas", async () => {
-  // PresenceProcessor (e2e/support/sources.ts) exposes live state combining REDUCED state — `ticks`, folded
+  // PresenceProcessor (e2e/support/sources.ts) exposes live state combining REDUCED state — `ticks`, reduced
   // from durable 'tick' events — with RUNTIME state — `lastPokeMs`, a plain field the reduce never
   // touches, bumped when a 'poke' EPHEMERAL reaches its processEvent. The client seeds through
-  // `liveSnapshot()` and folds deltas with the SHIPPABLE store (the same one the browser hook uses).
+  // `liveSnapshot()` and reduces deltas with the SHIPPABLE store (the same one the browser hook uses).
   const itx = openItx(freshCtx("lsruntime"));
   await seedSources(itx, ["presence"]);
   // PresenceProcessor's contract consumes the EPHEMERAL 'poke', so its subscription must NAME it: the ONE
@@ -136,7 +136,7 @@ test("a dynamic-worker processor's live state combines reduced (ticks) + runtime
   // Seed: reduced 0 ticks, runtime lastPokeMs 0 — the whole projection, read atomically through the door.
   expect(store.get()).toEqual({ ticks: 0, lastPokeMs: 0 });
 
-  // REDUCED change: a durable 'tick' advances the fold → one delta syncs `ticks`; runtime untouched.
+  // REDUCED change: a durable 'tick' advances the reduce → one delta syncs `ticks`; runtime untouched.
   await itx.invokeCapability("itx.append({ type: 'tick' })");
   await until("ticks synced", () => store.get()?.ticks === 1);
   expect(store.get()!.lastPokeMs).toBe(0);

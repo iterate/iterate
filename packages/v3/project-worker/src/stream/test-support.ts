@@ -20,47 +20,47 @@ import {
 import type { ProcessorEngine, ProcessorStream } from "./processor.ts";
 
 export function memoryStream(path = "/") {
-  const events: StreamEvent[] = []; // the durable log — what `read` answers
-  const pushed: StreamEvent[] = []; // every committed event, ephemerals included (the pump's view)
-  const byKey = new Map<string, StreamEvent>();
+  const durableEvents: StreamEvent[] = []; // the durable log — what `read` answers
+  const pushedEvents: StreamEvent[] = []; // every committed event, ephemerals included (the pump's view)
+  const eventsByKey = new Map<string, StreamEvent>();
   const procs: ProcessorEngine<any>[] = []; // the pump only needs `processEventBatch`
   let maxAssigned = 0;
   let reads = 0;
   const stream: ProcessorStream = {
-    append: (...inputs: StreamEventInput[]) => {
+    append: (...events: StreamEventInput[]) => {
       const scannedAfterOffset = maxAssigned;
-      const committed = inputs.map((input) => {
-        if (input.idempotencyKey) {
-          const existing = byKey.get(input.idempotencyKey);
-          if (existing) {
-            if (sameIdempotentEvent(existing, input)) return existing;
-            throw new Error(idempotencyConflictMessage(input.idempotencyKey, existing.offset));
+      const committedEvents = events.map((event) => {
+        if (event.idempotencyKey) {
+          const existingEvent = eventsByKey.get(event.idempotencyKey);
+          if (existingEvent) {
+            if (sameIdempotentEvent(existingEvent, event)) return existingEvent;
+            throw new Error(idempotencyConflictMessage(event.idempotencyKey, existingEvent.offset));
           }
         }
         maxAssigned += 1;
-        const event: StreamEvent = {
-          ...input,
+        const committedEvent: StreamEvent = {
+          ...event,
           offset: maxAssigned,
           createdAt: new Date(0).toISOString(),
           path,
         };
-        if (!input.ephemeral) {
-          events.push(event);
-          if (input.idempotencyKey) byKey.set(input.idempotencyKey, event);
+        if (!event.ephemeral) {
+          durableEvents.push(committedEvent);
+          if (event.idempotencyKey) eventsByKey.set(event.idempotencyKey, committedEvent);
         }
-        return event;
+        return committedEvent;
       });
-      pushed.push(...committed);
+      pushedEvents.push(...committedEvents);
       if (maxAssigned > scannedAfterOffset) {
         const scannedOffsetRange = { after: scannedAfterOffset, through: maxAssigned };
         for (const p of procs)
-          void p.processEventBatch(committed, scannedOffsetRange).catch(() => {});
+          void p.processEventBatch(committedEvents, scannedOffsetRange).catch(() => {});
       }
-      return committed;
+      return committedEvents;
     },
     read: (afterOffset = 0, limit = 500) => {
       reads += 1;
-      const page = events.filter((e) => e.offset > afterOffset).slice(0, limit);
+      const page = durableEvents.filter((event) => event.offset > afterOffset).slice(0, limit);
       return Promise.resolve({
         events: page,
         scannedThroughOffset:
@@ -70,8 +70,8 @@ export function memoryStream(path = "/") {
   };
   return {
     stream,
-    events,
-    pushed,
+    events: durableEvents,
+    pushedEvents,
     procs,
     get reads() {
       return reads;

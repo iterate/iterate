@@ -30,7 +30,7 @@ test("/cap serves a LOADED-WORKER capability: GET → 200 HTML, WebSocket upgrad
   expect(ws.closeCode).toBe(1000);
 
   // observability is the core reduce's snapshot (the provide above already committed, so the wake
-  // record has folded)
+  // record has reduced)
   const snap = await itx.invokeCapability("itx.facets.get('core').snapshot()");
   expect(typeof snap.state.incarnation).toBe("number");
 });

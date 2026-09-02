@@ -8,7 +8,7 @@
 // the genuine itx scope with `env.ITX.get()` — a real `IterateContext` RpcTarget — and then writes plain
 // dotted access (`itx.demo.timer.callLater(cb)`), identical to what a capnweb client writes after
 // `projects.get(id)`. There is no client-side wrapper: the scope IS a real RpcTarget, so mid-chain
-// handles and callbacks pipeline natively over both lanes (no accumulating Proxy, no fold shim).
+// handles and callbacks pipeline natively over both lanes (no accumulating Proxy, no reduce shim).
 
 // A loaded SOURCE now EXPORTS its own host object — a `WorkerEntrypoint` (reached with
 // `itx.load(src).getEntrypoint(name?)`) or a `DurableObject` class (`…getDurableObjectClass(name)`),

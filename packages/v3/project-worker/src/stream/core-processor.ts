@@ -1,4 +1,4 @@
-// core-processor.ts — THE CORE REDUCE: the one processor the context DO folds INLINE at its commit
+// core-processor.ts — THE CORE REDUCE: the one processor the context DO reduces INLINE at its commit
 // point. Its reduced state is everything the DO needs SYNCHRONOUSLY at its doors, event-sourced from
 // the context's own control events and nothing else:
 //
@@ -10,7 +10,7 @@
 //                             -delivery-halted|-delivery-resumed            → subscriptions (the delivery loop)
 //
 // ONE reduce, no effects, no verbs — the same `StreamProcessor` class every facet processor is,
-// owned by the Stream itself (stream.ts `core()`, folded inside every commit) because its readers are the append door, the
+// owned by the Stream itself (stream.ts `core()`, reduced inside every commit) because its readers are the append door, the
 // dispatcher and the delivery loop, all synchronous. The COMMANDS that append these events live
 // beside the code that reads each slice (context/capability-table.ts for mounts,
 // stream/subscriptions.ts for rows); the READERS are pure functions over the state. Control is
@@ -37,17 +37,6 @@ const log = createLogger("core");
 export const SubscriptionName = z
   .string()
   .regex(/^[A-Za-z0-9_-]+$/, "a subscription name is one segment: [A-Za-z0-9_-]+");
-
-/** The events no pause may refuse: the platform's own records and the pause/resume pair itself. */
-const CONTROL_TYPES = new Set([
-  "events.iterate.com/stream/created",
-  "events.iterate.com/stream/woken",
-  "events.iterate.com/stream/paused",
-  "events.iterate.com/stream/resumed",
-]);
-export function isCoreControl(type: string): boolean {
-  return CONTROL_TYPES.has(type);
-}
 
 export const CoreContract = defineProcessorContract({
   slug: "core",

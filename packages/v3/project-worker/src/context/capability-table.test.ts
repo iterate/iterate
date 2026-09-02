@@ -2,7 +2,7 @@
 // (`capabilityProvidedEvent` / `capabilityRevokedEvent` BUILD the events — validation and the codec
 // round-trip fail LOUD at the door, the caller appends), the pure `route`, and `CapabilityResolver`
 // (built-ins first + unshadowable, longest path then newest, default-deny, recursion through the
-// `itx` scope symbol, the depth-32 budget). The mounts THEMSELVES are `core` state: this file folds
+// `itx` scope symbol, the depth-32 budget). The mounts THEMSELVES are `core` state: this file reduces
 // the durable log through `CoreStreamProcessor` per call, exactly as the DO does (the reduce's own
 // pins live in stream/core-processor.test.ts). The live-capability shape rides along: a live provide
 // is PURE DATA naming the `itx.rpcStubs` built-in (the physical registry), so reconnect is zero
@@ -49,7 +49,7 @@ const setup = () => {
   const builtIns = fakeBuiltIns();
   // No config, no base mounts: whoami/kv/openai are KEYS in fakeBuiltIns(), so `itx.<root>…`
   // resolves DIRECTLY against the physical scope (built-ins first, unshadowable).
-  // INLINE HOSTING, exactly like the parent: the mounts are core state, folded from the durable
+  // INLINE HOSTING, exactly like the parent: the mounts are core state, reduced from the durable
   // log per call.
   const mounts = (): Mount[] =>
     events.reduce(

@@ -6,7 +6,7 @@ import { expect, test } from "vitest";
 import { freshCtx, openItx, until } from "./support/client.ts";
 import { enableFixtureProcessor, seedSources } from "./support/sources.ts";
 
-test("ephemeral lane: a named-type subscription folds ephemeral chunks, '*' never sweeps them, misuse is loud", async () => {
+test("ephemeral lane: a named-type subscription reduces ephemeral chunks, '*' never sweeps them, misuse is loud", async () => {
   const itx = openItx(freshCtx("eph"));
   await seedSources(itx, ["chunky"]);
 
@@ -39,13 +39,13 @@ test("ephemeral lane: a named-type subscription folds ephemeral chunks, '*' neve
   }
   const [mark2] = await itx.invokeCapability(`itx.append({ type: 'mark' })`);
 
-  // 3. the NAMED subscriber folded the chunks; "*" saw none; both checkpoints cover the whole window
+  // 3. the NAMED subscriber reduced the chunks; "*" saw none; both checkpoints cover the whole window
   // (pushes are fire-and-forget — wait for the reduce to land rather than racing it)
   const chunky = await until("chunky reduced the chunks", async () => {
     const snap = await itx.invokeCapability("itx.facets.get('chunky').snapshot()");
     return snap.state.chunks === 3 && snap.state.marks === 2 ? snap : undefined;
   });
-  // named-type subscriber folded 3 ephemeral chunks + 2 durable marks
+  // named-type subscriber reduced 3 ephemeral chunks + 2 durable marks
   expect(chunky.state.chunks).toBe(3);
   expect(chunky.state.marks).toBe(2);
 
