@@ -60,13 +60,13 @@ test("captures a note from the global composer and manages it on /notes", async 
   // 💬 pre-types a pointer to the note; the question under it is the human's
   // to write, so nothing is sent on the way in.
   await page.getByLabel("Chat about this note").click();
-  // The Opening chat spinner keeps the locator waiting through the server-side
-  // note read and prior-message check; then require the exact seeded value.
+  // The Opening chat spinner covers the server-side work and initial mount;
+  // polling the value then tolerates a transient composer remount.
   const chatComposer = page.getByPlaceholder("Message");
   await chatComposer.waitFor();
-  expect(await chatComposer.inputValue()).toMatch(
-    /About my note `\/repos\/notes\/.*\.md`:[\s\S]*confirmed at home/,
-  );
+  await expect
+    .poll(() => chatComposer.inputValue())
+    .toMatch(/About my note `\/repos\/notes\/.*\.md`:[\s\S]*confirmed at home/);
 
   // Send it. This is the step that makes the platform PARSE the derived agent
   // path (create() + message()), so a path it would reject — the note's

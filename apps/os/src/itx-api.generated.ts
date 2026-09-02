@@ -487,7 +487,7 @@ export interface CfBrowserCapability {
 export interface Agent {
   /**
    * The agent scope's own capability host (provide/revoke/runScript/
-   * __describe) — and the explicit dotted door to the scope's DYNAMIC
+   * __describe) — and the explicit dotted access point for the scope's DYNAMIC
    * capabilities: `agents.get(path).capabilityHost.someTool(args)`. The
    * shorthand `agents.get(path).someTool(args)` resolves through the same
    * host via the handle's prototype-chain fallback; both pipeline over
@@ -516,7 +516,7 @@ export interface Agent {
    * outside the Agent vocabulary or for an intentionally ephemeral event.
    */
   append(...events: AgentEventInput[]): Promise<StreamEvent[]>;
-  /** The agent's web-chat door (what the user sees). */
+  /** The agent's web-chat output surface (what the user sees). */
   chat: AgentChat;
   /**
    * Create the generic agent machinery on this stream and wait until the
@@ -532,7 +532,7 @@ export interface Agent {
    */
   create(payload?: AgentCreateInput): Promise<Agent>;
   /**
-   * Send a message to this agent — THE inbound door for every caller. The
+   * Send a message to this agent — the canonical entry point for every caller. The
    * context item's actor derives from the calling scope: inside an agent script
    * (itx scoped to an agent path), the message is stamped
    * `{ type: "agent", path }` and does NOT refill the receiver's autonomous
