@@ -53,7 +53,7 @@ const ALLOWED_UNDATED: AllowedUndated[] = [
   {
     file: "specs/notes-view.spec.ts",
     match: "Email OTP sign-in is disabled for this deployment",
-    note: "env-gated: the notes view proof rides the same real-member auth lane as seeded-apps",
+    note: "env-gated: the notes view proof signs in the same way as seeded-apps (a real member via email OTP)",
   },
   {
     file: "specs/mobile/expected-backend-signin.spec.ts",

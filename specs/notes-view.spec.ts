@@ -15,7 +15,8 @@ import { test } from "./test-support/test.ts";
 // heading, typing lands in /repos/config/notes/log.md, a new note becomes a
 // file in notes/, and the day's commit is AMENDED for later edits rather
 // than stacked — proven against the real repo history, not the UI's word
-// for it. Same real-member auth lane as the Docs review proof.
+// for it. Signs in the same way as the Docs review proof: a real member,
+// email OTP, no minted session.
 test("write in the notes view and amend the day's commit", async ({ baseURL, page }, testInfo) => {
   test.setTimeout(E2E_HEAVY_TEST_TIMEOUT_MS);
   test.skip(
@@ -42,8 +43,8 @@ test("write in the notes view and amend the day's commit", async ({ baseURL, pag
   notesUrl.pathname = "/notes";
   notesUrl.searchParams.set("repo", "/repos/config");
   await page.goto(notesUrl.toString());
-  // Same cold-build lane as the other seeded-app proofs: the building
-  // page's spinner carries the wait, ceiling raised to match.
+  // The same cold build the other seeded-app proofs sit through: the
+  // building page's spinner carries the wait, ceiling raised to match.
   await spinnerWaiter.settings.run({ spinnerTimeout: 130_000 }, async () => {
     await page.getByRole("heading", { name: "Sign in to iterate" }).waitFor();
   });
