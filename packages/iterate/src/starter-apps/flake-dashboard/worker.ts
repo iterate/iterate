@@ -5,8 +5,7 @@ import {
 } from "../../sdk.ts";
 import { flakesStreamPath } from "./app-ref.ts";
 import type { FlakeDashboardState } from "./contract.ts";
-import { FlakeDashboardProcessor } from "./processor.ts";
-import { renderFlakeDashboardIssue } from "./render.ts";
+import { FlakeDashboardProcessor, renderFlakeDashboardIssue } from "./processor.ts";
 
 /**
  * One stateful worker owns the `/flakes` processor. It serves no HTTP: CI

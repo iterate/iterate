@@ -10,12 +10,12 @@
 // CI; a broken prd only gaps the data.
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { connectItx } from "../node.ts";
+import { connectItx } from "../src/node.ts";
 import {
   flakeDashboardCreationEvents,
   flakesStreamPath,
-} from "../starter-apps/flake-dashboard/app-ref.ts";
-import { FlakeRecord } from "../starter-apps/flake-dashboard/contract.ts";
+} from "../src/starter-apps/flake-dashboard/app-ref.ts";
+import { FlakeRecord } from "../src/starter-apps/flake-dashboard/contract.ts";
 
 const DEADLINE_MS = 20_000;
 

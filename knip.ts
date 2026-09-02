@@ -168,8 +168,6 @@ function makeIterateCliWorkspace(): WorkspaceConfig {
       "src/cli.ts",
       "bin/iterate.js",
       "scripts/*.ts",
-      // CI post-steps invoke this directly via `pnpm tsx`; nothing imports it.
-      "src/scripts/report-flake-records.ts",
       "tsdown.app-clients.config.ts",
       "tsdown.config.ts",
       "vitest.config.ts",

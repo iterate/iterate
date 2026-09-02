@@ -66,7 +66,7 @@ jobs:
         # on every failure path, and it no-ops until the FLAKE_REPORT_* secrets
         # exist in _shared/prd — a broken or unprovisioned target only gaps the
         # flake data.
-        run: doppler run --project _shared --config prd -- pnpm tsx packages/iterate/src/scripts/report-flake-records.ts
+        run: doppler run --project _shared --config prd -- pnpm tsx packages/iterate/scripts/report-flake-records.ts
       - name: Upload test telemetry artifacts
         if: always()
         uses: actions/upload-artifact@v4
