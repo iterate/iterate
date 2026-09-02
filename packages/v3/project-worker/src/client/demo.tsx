@@ -39,6 +39,9 @@ async function connectAndEnable(): Promise<any> {
   await itx.enableProcessor("presence", {
     source: "itx.kv.get('src/presence.js')",
     className: "Presence",
+    // What is SENT: the contract above says what is folded. `poke` is ephemeral, and an
+    // ephemeral reaches a processor only when its subscription names the type.
+    consumes: ["tick", "poke"],
   });
   return itx;
 }
