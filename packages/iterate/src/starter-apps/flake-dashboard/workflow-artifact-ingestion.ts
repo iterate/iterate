@@ -1,5 +1,6 @@
 // iterate-lint-disable terminology/no-metaphorical-lane-door-seam -- `suite` values arrive in artifact names derived from TEST_TELEMETRY_LANE; see tasks/rename-lane-vocabulary.md
 import { strFromU8, unzipSync } from "fflate";
+import { z } from "zod";
 import { isIdempotencyConflict } from "../../processors/index.ts";
 import type { Project, StreamEvent } from "../../sdk.ts";
 import { flakeDashboardCreationEvents, flakesStreamPath } from "./app-ref.ts";
@@ -9,23 +10,44 @@ const ARTIFACT_PREFIX = "flake-records-";
 const MAX_ARTIFACT_BYTES = 5 * 1024 * 1024;
 
 /**
- * The cheap gate, callable on every delivered event without opening itx:
- * returns the webhook's useful coordinates only for a completed workflow_run
- * delivered on a GitHub connection stream, else null.
+ * The exact shape of a delivered event this app ingests: a platform-verified
+ * GitHub webhook for a COMPLETED workflow_run on a connection stream. Zod
+ * strips the rest of GitHub's (huge) payload; only these fields are read.
+ */
+const WorkflowRunWebhookEvent = z.object({
+  type: z.literal("events.iterate.com/github/webhook-received"),
+  path: z.string().regex(/^\/integrations\/github\/[^/]+$/),
+  payload: z.object({
+    delivery: z.object({ name: z.literal("workflow_run") }),
+    body: z.object({
+      action: z.literal("completed"),
+      workflow_run: z.object({
+        id: z.number().int().positive(),
+        run_attempt: z.number().int().positive().optional(),
+        head_branch: z.string().nullish(),
+        head_sha: z.string().nullish(),
+      }),
+      repository: z.object({
+        name: z.string().min(1),
+        owner: z.object({ login: z.string().min(1) }),
+        default_branch: z.string().nullish(),
+      }),
+    }),
+  }),
+});
+
+/**
+ * The cheap gate, callable on every delivered event without opening itx.
+ * The `type` guard short-circuits before any zod work; a matching event
+ * safeParses into exactly the fields ingestion reads, plus the connection
+ * from the stream path.
  */
 export function parseWorkflowRunWebhook(event: StreamEvent) {
   if (event.type !== "events.iterate.com/github/webhook-received") return null;
-  const connection = /^\/integrations\/github\/([^/]+)$/.exec(event.path || "")?.[1];
-  if (connection === undefined) return null;
-  // The webhook payload is GitHub's own delivery, platform-verified but not
-  // schema-validated here — every field access below stays defensive.
-  const webhook = event.payload as any;
-  if (webhook?.delivery?.name !== "workflow_run") return null;
-  const body = webhook.body;
-  if (body?.action !== "completed") return null;
-  const run = body.workflow_run;
-  const repository = body.repository;
-  if (!run?.id || !repository?.name || !repository?.owner?.login) return null;
+  const parsed = WorkflowRunWebhookEvent.safeParse(event);
+  if (!parsed.success) return null;
+  const connection = parsed.data.path.split("/")[3]!;
+  const { workflow_run: run, repository } = parsed.data.payload.body;
   return { connection, run, repository };
 }
 
@@ -45,7 +67,7 @@ export async function ingestWorkflowRunFlakeArtifacts(
   webhook: NonNullable<ReturnType<typeof parseWorkflowRunWebhook>>,
 ): Promise<void> {
   const { connection, run, repository } = webhook;
-  const params = { owner: repository.owner.login as string, repo: repository.name as string };
+  const params = { owner: repository.owner.login, repo: repository.name };
   const octokit = itx.integrations.github.get(connection).octokit;
   const artifacts = await octokit.paginate(
     "GET /repos/{owner}/{repo}/actions/runs/{run_id}/artifacts",

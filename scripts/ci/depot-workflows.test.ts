@@ -338,7 +338,14 @@ describe("Depot validation capacity", () => {
     const finalizer = steps.find((step) =>
       step.run?.includes("scripts/ci/upload-test-telemetry.ts"),
     );
-    const upload = steps.find((step) => step.uses === "actions/upload-artifact@v4");
+    // Select by payload, not position: the flake-records upload (a sibling
+    // artifact step with laxer if-no-files-found semantics) is not the
+    // telemetry retention step this guard is about.
+    const upload = steps.find(
+      (step) =>
+        step.uses === "actions/upload-artifact@v4" &&
+        !String((step.with as any)?.name).startsWith("flake-records"),
+    );
 
     expect(finalizer, `${file} must normalize and send telemetry`).toMatchObject({
       if: "always()",
