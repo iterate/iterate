@@ -1046,8 +1046,11 @@ function reduceAgentUiEvent(
       // Host-stamped provenance: the status belongs to ONE script run, so
       // place it exactly. A stamp from another stream's script set THIS
       // stream's status deliberately (cross-stream append) — record the
-      // stream-level text but attribute no step.
-      if (script !== undefined && script.streamPath === event.streamPath) {
+      // stream-level text but attribute no step. Stream identity comes from
+      // whichever field the consumer supplies: mobile backfills
+      // `streamPath`, the browser-feed projector passes committed envelopes
+      // whose stream lives in `path`.
+      if (script !== undefined && script.streamPath === (event.streamPath || event.path)) {
         if (state.live != null) {
           const index = state.live.steps.findIndex(
             (step) => step.kind === "code" && step.executionId === script.executionId,

@@ -648,7 +648,7 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
     });
   }
 
-  constructor(props: { auth: ItxAuth; projectId: string | null; path: string }) {
+  constructor(props: StreamRpcTarget["props"]) {
     super();
     props.auth.assertCanAccessProject(props.projectId);
     this.props = { ...props, path: canonicalizeStreamPath(props.path) };
@@ -708,26 +708,26 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
    */
   #withScriptProvenance(event: StreamEventInput): StreamEventInput {
     const context = this.props.streamContext;
-    const callerSource = { ...event.source };
-    delete callerSource.script;
-    if (context?.kind !== "script-execution") {
-      if (event.source?.script === undefined) return event;
-      // Strip the forged slot; drop `source` entirely rather than carrying
-      // an explicit-undefined key through RPC serialization.
-      const { source: _discarded, ...rest } = event;
-      return Object.keys(callerSource).length === 0 ? rest : { ...rest, source: callerSource };
+    const { script: _discardedScript, ...rest } = event.source || {};
+    const callerSource: NonNullable<StreamEventInput["source"]> = rest;
+    if (context?.kind === "script-execution") {
+      // Field by field, not `= context`: the source schema is strict, and the
+      // context's extra `kind` key would be rejected at commit.
+      callerSource.script = {
+        executionId: context.executionId,
+        streamPath: context.streamPath,
+        scriptRunRequestedEventOffset: context.scriptRunRequestedEventOffset,
+      };
+      return { ...event, source: callerSource };
     }
-    return {
-      ...event,
-      source: {
-        ...callerSource,
-        script: {
-          executionId: context.executionId,
-          streamPath: context.streamPath,
-          scriptRunRequestedEventOffset: context.scriptRunRequestedEventOffset,
-        },
-      },
-    };
+    if (event.source?.script) {
+      const { source: _discardedSource, ...eventWithoutSource } = event;
+      return {
+        ...eventWithoutSource,
+        ...(Object.keys(callerSource).length > 0 && { source: callerSource }),
+      };
+    }
+    return event;
   }
 
   async #appendRetrying(
@@ -798,9 +798,7 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
       auth: this.props.auth,
       projectId: this.props.projectId,
       path: resolveStreamPath(this.props.path, path),
-      ...(this.props.streamContext === undefined
-        ? {}
-        : { streamContext: this.props.streamContext }),
+      streamContext: this.props.streamContext,
     });
   }
 
@@ -1479,9 +1477,7 @@ class StreamCollectionRpcTarget<
       auth: this.props.auth,
       projectId: this.props.projectId,
       path,
-      ...(this.props.streamContext === undefined
-        ? {}
-        : { streamContext: this.props.streamContext }),
+      streamContext: this.props.streamContext,
     });
   }
 }
@@ -2129,9 +2125,7 @@ class AgentCollectionRpcTarget extends IterateRpcTarget<"AgentCollection"> {
       ...(this.props.sourceScopePath === undefined
         ? {}
         : { sourceScopePath: this.props.sourceScopePath }),
-      ...(this.props.streamContext === undefined
-        ? {}
-        : { streamContext: this.props.streamContext }),
+      streamContext: this.props.streamContext,
     });
   }
 
@@ -4995,9 +4989,7 @@ class AgentChatRpcTarget extends IterateRpcTarget<"AgentChat"> {
     return new StreamRpcTarget({
       auth: this.props.auth,
       projectId: this.props.projectId,
-      ...(this.props.streamContext === undefined
-        ? {}
-        : { streamContext: this.props.streamContext }),
+      streamContext: this.props.streamContext,
       path: this.props.path,
     });
   }
@@ -5141,9 +5133,7 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
       auth: this.#props.auth,
       projectId: this.#props.projectId,
       path: this.#path,
-      ...(this.#props.streamContext === undefined
-        ? {}
-        : { streamContext: this.#props.streamContext }),
+      streamContext: this.#props.streamContext,
     });
   }
 
@@ -5169,9 +5159,7 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
       auth: this.#props.auth,
       path: this.#path,
       projectId: this.#props.projectId,
-      ...(this.#props.streamContext === undefined
-        ? {}
-        : { streamContext: this.#props.streamContext }),
+      streamContext: this.#props.streamContext,
     });
   }
 
@@ -6068,9 +6056,7 @@ class CapabilityHostRpcTarget extends IterateRpcTarget<"CapabilityHost"> {
   get #stream(): StreamRpcTarget {
     return new StreamRpcTarget({
       auth: this.#props.auth,
-      ...(this.#props.streamContext === undefined
-        ? {}
-        : { streamContext: this.#props.streamContext }),
+      streamContext: this.#props.streamContext,
       path: this.#props.path,
       projectId: this.#props.projectId,
     });

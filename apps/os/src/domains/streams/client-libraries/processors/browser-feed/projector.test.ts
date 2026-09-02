@@ -289,3 +289,58 @@ describe("browser-feed projector — one interleaved order", () => {
     expect(perEvent).toEqual(planBrowserFeedOps(START, events).endState);
   });
 });
+
+describe("browser-feed projector — script-attributed status corrections", () => {
+  const LLM_REQUESTED = "events.iterate.com/agent/llm-request-requested";
+  const LLM_SETTLED = "events.iterate.com/agent/llm-request-settled";
+  const SCRIPT_REQUESTED = "events.iterate.com/capability-host/script-run-requested";
+  const SCRIPT_SETTLED = "events.iterate.com/capability-host/script-run-settled";
+  const SUMMARY_UPDATED = "events.iterate.com/agent/summary-updated";
+
+  it("replaces the settled card when a stamped status races the settle — never a duplicate row", () => {
+    // A normal SUCCESSFUL settle is not provisional, so before the
+    // lastSettledActivityRow slot existed the correction re-emit landed as a
+    // second activity row. These events carry only `path` (as committed itx
+    // envelopes do), so this also proves attribution works without the
+    // backfilled `streamPath` alias.
+    const turn: StreamEvent[] = [
+      userMessage(1, "sweep it"),
+      event(2, LLM_REQUESTED, {}),
+      event(3, LLM_SETTLED, {
+        requestOffset: 2,
+        result: { status: "succeeded", text: "await work()" },
+      }),
+      event(4, SCRIPT_REQUESTED, {
+        executionId: "x1",
+        code: "await work()",
+        expiresAt: Date.UTC(2100, 0, 1),
+      }),
+      event(5, WEB_MESSAGE_SENT, { message: "All done." }),
+      event(6, SCRIPT_SETTLED, { executionId: "x1", settlement: { status: "succeeded" } }),
+      {
+        ...event(7, SUMMARY_UPDATED, { activity: "Extracting the voice brief" }),
+        source: {
+          script: {
+            executionId: "x1",
+            streamPath: "/tests/feed",
+            scriptRunRequestedEventOffset: 4,
+          },
+        },
+      } as StreamEvent,
+    ];
+    const { ops } = planBrowserFeedOps(START, turn);
+    const activityInserts = ops.filter(
+      (op) => op.kind === "insert" && op.itemKind === "agent.activity",
+    );
+    const activityReplaces = ops.filter(
+      (op) => op.kind === "replace" && op.itemKind === "agent.activity",
+    );
+    expect(activityInserts).toHaveLength(1);
+    expect(activityReplaces.length).toBeGreaterThanOrEqual(1);
+    const correction = activityReplaces.at(-1)!;
+    expect(correction.localIndex).toBe(activityInserts[0]!.localIndex);
+    expect(correction.data).toMatchObject({
+      steps: [{ kind: "llm" }, { kind: "code", activitySummary: "Extracting the voice brief" }],
+    });
+  });
+});

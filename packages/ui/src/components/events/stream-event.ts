@@ -29,4 +29,8 @@ export type StreamEvent<Type extends string = string, Payload = unknown> = {
   idempotencyKey?: string;
   offset: number;
   createdAt: string;
+  /** The stream the event was committed on, as itx envelopes carry it.
+   * Consumers that feed the reducer without backfilling `streamPath`
+   * (the browser-feed projector) still provide stream identity here. */
+  path?: string;
 };
