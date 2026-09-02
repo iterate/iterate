@@ -2012,3 +2012,34 @@ reducer … 4) commit … 5) the after-event stuff." And: "idempotency key check
   hit must match it too. The precondition is never stored in the body.
 - GATES: tsc×3 · unit+workers 235 (24 files) · e2e 136p/2xf (35 files) · tutorial-proof 8 ·
   Playwright 2 · oxlint 0/0 · knip clean.
+
+## 2026-09-02 — less abstract: `append` inlined, storage opens in the constructor, names say what they hold
+
+Jonas: rename `inputs` → `events` and put "event" in every identifier that holds one; `touch()` is
+"weirdly named" — what does it do, how many callers; is `InlineReduce` needed; `core()` → the
+reduced state; inline `assertWellFormed`, spell out the handful of pause-exempt events instead of
+`isCoreControl`; `#plan` is single-use, so it lives inside `append`; "less abstract, less magical";
+the verb is reduce, never fold.
+
+- **`Stream` opens storage in its constructor** (the two tables, the incarnation counter, both
+  marks, the core reduced state rehydrated from its checkpoint and caught up to the mark). `touch()`
+  had two callers, `wake` and `append`, and is gone; so are `#eventsTableExists` and the "virgin
+  stream" probes — constructing a stream IS an incarnation starting. `wake()` now only appends
+  created/woken.
+- **`append` is one linear method**: shape → pause (the four exempt types listed at the point of
+  use) → dedupe + expected offsets + offset assignment → the ephemeral fast path or ONE transaction
+  (rows, mark, the core reduce + its checkpoint) → waiters, fan-out, core's live delta. `#plan`,
+  `#eventBody`, `#eventByIdempotencyKey`, `#reduceCoreAtCommit`, `#publishCoreDelta`,
+  `assertWellFormed`, `isCoreControl` and `InlineReduce` no longer exist. What remains as helpers has
+  two callers or is a unit of its own: `#reduceCoreEvent`, `#settleWaiters`, `#storeEvent` (chunking),
+  `#reassemble`.
+- **The core reduced state is a field**, `#coreReducedState` (+ `#coreReducedThroughOffset`), filled
+  by the constructor and advanced by every durable commit; `stream.coreReducedState` is the getter the
+  DO reads. The processor stays pure (a contract and a reduce), as decided.
+- **Names**: `inputs` → `events` everywhere; `fresh`/`receipts`/`distinct`/`e`/`existing`/`rest`
+  → `freshEvents`/`committedEvents`/`event`/`existingEvent`/`eventInput`; the delivery loop's
+  `#pushed`/`batch` → `#pushedEventBatches`/`eventBatch`; test support's log is `durableEvents`,
+  `pushedEvents`. The verb is reduce: `foldsEvent` → `reducesEvent`, "refold" → "re-reduce", every
+  "fold" in code, tests and current docs.
+- GATES: tsc×3 · unit+workers 234 (24 files) · e2e 136p/2xf (35 files) · tutorial-proof 8 ·
+  Playwright 2 · oxlint 0/0 · knip clean.
