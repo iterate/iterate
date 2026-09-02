@@ -379,6 +379,26 @@ export function reduceAgentEvents(events: readonly StreamEvent[]): AgentProcesso
 // Pure reduce helpers — exported for direct unit testing.
 // -----------------------------------------------------------------------------
 
+export type AgentContextSchedulingSemantics = {
+  triggerSource: "external" | "agent-loop" | null;
+  clearsWaitingFor: boolean;
+};
+
+/** Capture the source item's scheduling meaning before reference resolution
+ * replaces it as the event that actually drives the turn loop. */
+export function contextSchedulingSemanticsForReferenceResolution(
+  payload: AgentContextAddedPayload,
+): AgentContextSchedulingSemantics {
+  return {
+    // `agent.message()` stages a reference-bearing source with
+    // dont-trigger-request. Resolution replaces that gate, so derive the
+    // source's actual actor/role meaning without carrying the staging policy
+    // onto the resolver event.
+    triggerSource: intrinsicContextTriggerSource(payload, false),
+    clearsWaitingFor: intrinsicContextClearsWaitingFor(payload, false),
+  };
+}
+
 /** Which turn-loop trigger a context item carries. A trigger only ever comes
  * from context or from a failed settlement's reduction — there is no other
  * scheduling input. The agent's own notes, its scripts, and platform
@@ -386,9 +406,21 @@ export function reduceAgentEvents(events: readonly StreamEvent[]): AgentProcesso
  * named outside author — a user, slack/telegram/email/github, any
  * integration — is an external trigger that refills the loop budget. */
 function contextTriggerSource(payload: AgentContextAddedPayload): "external" | "agent-loop" | null {
-  if (payload.role === "system" || payload.role === "assistant") return null;
-  if (payload.llmRequestPolicy.behaviour === "dont-trigger-request") return null;
   if (contextNeedsReferenceMaterialization(payload)) return null;
+  const sourceScheduling = referenceResolutionSourceScheduling(payload);
+  return sourceScheduling === undefined
+    ? intrinsicContextTriggerSource(payload)
+    : sourceScheduling.triggerSource;
+}
+
+function intrinsicContextTriggerSource(
+  payload: AgentContextAddedPayload,
+  honorLlmRequestPolicy = true,
+): "external" | "agent-loop" | null {
+  if (payload.role === "system" || payload.role === "assistant") return null;
+  if (honorLlmRequestPolicy && payload.llmRequestPolicy.behaviour === "dont-trigger-request") {
+    return null;
+  }
   if (payload.role === "user") {
     // A resolving slash command runs deterministically (the processor's
     // event handler appends the script request from the SAME pure resolver)
@@ -406,14 +438,54 @@ function contextTriggerSource(payload: AgentContextAddedPayload): "external" | "
  * input" summary. Script results and platform feedback (no actor) are
  * continuations of the same turn, so they deliberately do not clear it. */
 export function contextClearsWaitingFor(payload: AgentContextAddedPayload): boolean {
-  if (payload.role !== "user" && payload.role !== "developer") return false;
-  if (payload.llmRequestPolicy.behaviour === "dont-trigger-request") return false;
   if (contextNeedsReferenceMaterialization(payload)) return false;
+  return (
+    referenceResolutionSourceScheduling(payload)?.clearsWaitingFor ??
+    intrinsicContextClearsWaitingFor(payload)
+  );
+}
+
+function intrinsicContextClearsWaitingFor(
+  payload: AgentContextAddedPayload,
+  honorLlmRequestPolicy = true,
+): boolean {
+  if (payload.role !== "user" && payload.role !== "developer") return false;
+  if (honorLlmRequestPolicy && payload.llmRequestPolicy.behaviour === "dont-trigger-request") {
+    return false;
+  }
   // A resolving slash command is a side-band action, not an answer — the
   // agent is still waiting for the human's actual reply (same pure resolver
   // as contextTriggerSource, so the two derivations can never disagree).
   if (payload.role === "user") return resolveSlashCommand(payload.content) === null;
   return payload.actor !== undefined && payload.actor.type !== "script";
+}
+
+function referenceResolutionSourceScheduling(
+  payload: AgentContextAddedPayload,
+): AgentContextSchedulingSemantics | undefined {
+  if (
+    payload.role !== "developer" ||
+    payload.actor?.type !== "integration" ||
+    payload.actor.name !== "agent-reference-resolver"
+  ) {
+    return undefined;
+  }
+  const resolution = payload.referenceResolution;
+  if (resolution === null || typeof resolution !== "object" || Array.isArray(resolution)) {
+    return undefined;
+  }
+  const scheduling = (resolution as Record<string, unknown>).sourceScheduling;
+  if (scheduling === null || typeof scheduling !== "object" || Array.isArray(scheduling)) {
+    return undefined;
+  }
+  const { clearsWaitingFor, triggerSource } = scheduling as Record<string, unknown>;
+  if (
+    typeof clearsWaitingFor !== "boolean" ||
+    (triggerSource !== null && triggerSource !== "external" && triggerSource !== "agent-loop")
+  ) {
+    return undefined;
+  }
+  return { clearsWaitingFor, triggerSource };
 }
 
 function contextNeedsReferenceMaterialization(payload: AgentContextAddedPayload): boolean {

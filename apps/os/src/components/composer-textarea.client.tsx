@@ -70,6 +70,17 @@ function referenceDecorations(
   );
 }
 
+function referencesInDocumentOrder(
+  references: readonly AgentRichContentReferenceRange[],
+): AgentRichContentReferenceRange[] {
+  return references.toSorted(
+    (left, right) =>
+      left.from - right.from ||
+      left.to - right.to ||
+      left.occurrenceId.localeCompare(right.occurrenceId),
+  );
+}
+
 function mapReferences(
   references: readonly AgentRichContentReferenceRange[],
   transaction: Transaction,
@@ -93,6 +104,7 @@ const referenceField = StateField.define<ReferenceFieldValue>({
       if (effect.is(setReferences)) references = effect.value;
       if (effect.is(addReference)) references = [...references, effect.value];
     }
+    references = referencesInDocumentOrder(references);
     return { decorations: referenceDecorations(references), references };
   },
   provide: (field) => [

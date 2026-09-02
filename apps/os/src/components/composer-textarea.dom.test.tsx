@@ -190,6 +190,37 @@ test("choosing a mention before existing text advances past its separator", asyn
   await act(async () => root.unmount());
 });
 
+test("choosing a mention before an existing pill preserves document order and the caret", async () => {
+  const { content, root, view } = await mountHarness();
+  await act(async () => view.focus());
+  await enterText(view, "@wor");
+  await settleSuggestionSearch();
+  await act(async () =>
+    content.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }),
+    ),
+  );
+  expect(view.state.doc.toString()).toBe("@worker.ts ");
+
+  await act(async () => {
+    view.dispatch({ changes: { from: 0, insert: "@ag " }, selection: { anchor: 3 } });
+  });
+  await settleSuggestionSearch();
+  await act(async () =>
+    content.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }),
+    ),
+  );
+
+  expect(view.state.doc.toString()).toBe("@AGENTS.md @worker.ts ");
+  expect(view.state.selection.main.head).toBe(11);
+  expect(
+    [...document.querySelectorAll(".cm-agent-reference")].map((pill) => pill.textContent),
+  ).toEqual(["@AGENTS.md", "@worker.ts"]);
+
+  await act(async () => root.unmount());
+});
+
 test("retry keeps editor focus while refetching failed suggestions", async () => {
   let attempts = 0;
   const flaky: ComposerSuggestionProvider = {

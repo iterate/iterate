@@ -6,6 +6,7 @@ import {
 import type { ProcessEventArgs } from "iterate/processors";
 import { appendUnlessLostIdempotencyRace, stringifyError, type AgentHost } from "./agent-host.ts";
 import type { AgentProcessorContract } from "./agent-processor-contract.ts";
+import { contextSchedulingSemanticsForReferenceResolution } from "./agent-prompt-fold.ts";
 
 export const AGENT_REFERENCE_MAX_FILE_BYTES = 64 * 1024;
 export const AGENT_REFERENCE_MAX_TOTAL_BYTES = 128 * 1024;
@@ -211,6 +212,7 @@ export class AgentReferenceMaterializer {
         throw new Error("Agent reference materialization requires the readRepoFile dependency.");
       }
       const outcomes = await materializeAgentReferences(document, readRepoFile);
+      const sourceScheduling = contextSchedulingSemanticsForReferenceResolution(event.payload);
       await appendUnlessLostIdempotencyRace(args.append, [
         {
           type: "events.iterate.com/agents/context-added",
@@ -221,6 +223,7 @@ export class AgentReferenceMaterializer {
             content: renderAgentReferenceMaterialization(event.offset, outcomes),
             referenceResolution: {
               sourceOffset: event.offset,
+              sourceScheduling,
               outcomes: resolutionMetadata(outcomes),
             },
           },

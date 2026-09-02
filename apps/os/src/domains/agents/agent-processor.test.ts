@@ -106,7 +106,39 @@ function userMessageWithConfigFileReferences(): AgentEventInput {
           },
         ],
       },
-      llmRequestPolicy: { behaviour: "after-current-request" },
+      // `agent.message()` stages rich references without scheduling; the
+      // resolver event restores this user actor's external trigger.
+      llmRequestPolicy: { behaviour: "dont-trigger-request" },
+    },
+  };
+}
+
+function agentMessageWithConfigFileReference(): AgentEventInput {
+  return {
+    type: "events.iterate.com/agents/context-added",
+    payload: {
+      role: "developer",
+      content: "Read @AGENTS.md",
+      actor: { type: "agent", path: "/agents/sender" },
+      richContent: {
+        version: 1,
+        nodes: [
+          { type: "text", text: "Read " },
+          {
+            type: "reference",
+            occurrenceId: "agent-reference",
+            display: "@AGENTS.md",
+            target: {
+              kind: "config-repo-file",
+              repoPath: "/repos/config",
+              path: "AGENTS.md",
+            },
+          },
+        ],
+      },
+      // Same staging gate as `agent.message()`; resolution must restore the
+      // agent actor's bounded agent-loop trigger rather than refill it.
+      llmRequestPolicy: { behaviour: "dont-trigger-request" },
     },
   };
 }
@@ -211,6 +243,7 @@ describe("AgentProcessor turn lifecycle", () => {
         role: "developer",
         actor: { type: "integration", name: "agent-reference-resolver" },
         referenceResolution: {
+          sourceScheduling: { triggerSource: "external", clearsWaitingFor: true },
           outcomes: [
             {
               status: "resolved",
@@ -238,6 +271,45 @@ describe("AgentProcessor turn lifecycle", () => {
     expect(h.llm.calls).toHaveLength(2);
     expect(h.llm.calls[1]!.messages).toContainEqual(firstMaterializedMessage);
     expect(readRepoFile).toHaveBeenCalledOnce();
+  });
+
+  it("preserves agent-loop bounds while materializing an agent-authored file mention", async () => {
+    const h = makeAgentHarness(undefined, {
+      readRepoFile: async () => ({
+        bytes: new TextEncoder().encode("latest config contents"),
+        commitOid: "latest-commit",
+      }),
+    });
+    await h.play([
+      "append",
+      ...NEW_AGENT_EVENTS,
+      {
+        type: "events.iterate.com/agent/configured",
+        payload: { config: { maxAutonomousTurns: 1 } },
+      },
+    ]);
+    await h.play(["append", agentLoopNote("first autonomous turn")], ["advanceTime", 10_000]);
+    await h.play(() => h.llm.respond("done"));
+    expect(h.state().autonomousTurnCount).toBe(1);
+
+    await h.play(["append", agentMessageWithConfigFileReference()], ["advanceTime", 10_000]);
+
+    expect(h.events("events.iterate.com/agent/paused")).toMatchObject([
+      { payload: { triggerOffset: expect.any(Number) } },
+    ]);
+    expect(h.state().autonomousTurnCount).toBe(1);
+    expect(h.llm.calls).toHaveLength(1);
+    const materialized = h
+      .events(CONTEXT_ADDED)
+      .find((event) => event.payload?.referenceResolution !== undefined);
+    expect(materialized).toMatchObject({
+      payload: {
+        actor: { type: "integration", name: "agent-reference-resolver" },
+        referenceResolution: {
+          sourceScheduling: { triggerSource: "agent-loop", clearsWaitingFor: true },
+        },
+      },
+    });
   });
 
   it("runs a full turn: user message → intent → offset-identified request → atomic assistant+settled+usage", async () => {
