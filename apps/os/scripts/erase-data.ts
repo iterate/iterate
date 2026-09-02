@@ -27,6 +27,12 @@
  *     sandboxes) survive as unreachable orphans — recreating them is broken
  *     upstream. Container applications/classes left by another branch are
  *     retired instead (do-reset.ts explains).
+ *   - the env's Cloudflare Artifacts repos (namespace `<worker>-repos`) — the
+ *     git repos backing project repos, each carrying a long-lived write
+ *     token. With every project erased they are all orphans; leaving them
+ *     grew the dev/preview account to ~783k repos before this pass existed
+ *     (backfill for that pile: scripts/artifacts-gc.ts). Skipped under
+ *     `--preserve-auth`, where they are the recreated projects' git history.
  *   - normally, the auth D1 database (identities, orgs, projects — the source
  *     of every project id) and project-directory KV. `--preserve-auth` keeps
  *     both for a planned production recreation: selected OS projects can then
@@ -235,6 +241,58 @@ export default async function eraseData(options: {
       console.log(`R2 ${bucket}: deleted ${objectsDeleted} objects`);
     } catch (error) {
       console.warn(`R2 ${bucket} wipe skipped: ${String(error).slice(0, 200)}`);
+    }
+  }
+
+  // ---- Artifacts: delete the namespace's repos ---------------------------------
+  // Every project repo is backed by an Artifacts repo in `<worker>-repos`
+  // (repo-durable-object.ts), and each creation also mints a 365-day write
+  // token. Nothing server-side expires them, so before this pass existed the
+  // dev/preview account piled up ~783k orphaned repos. After the wipes above
+  // no project in this env survives, so every repo here is an orphan — delete
+  // them all, oldest first, under the same per-resource budget as the R2 walk
+  // (partial progress carries over: the next erase continues). Under
+  // --preserve-auth the repos are the recreated projects' git history
+  // (getOrCreateArtifact adopts an existing repo), so they must survive.
+  if (!options.preserveAuth) {
+    const artifactsNamespace = `${env.osWorkerName}-repos`;
+    const artifactsDeadline = Date.now() + 90_000;
+    try {
+      let reposDeleted = 0;
+      for (;;) {
+        // This endpoint paginates by cursor (which cf() discards), so
+        // delete-then-relist until the namespace is empty — the same idiom as
+        // the R2 loop. cf()'s truncation guard only fires on total_count,
+        // which cursor-paginated listings don't carry. limit=200 is the API's
+        // max page size.
+        const repos = await cf<{ name: string }[]>(
+          `/artifacts/namespaces/${artifactsNamespace}/repos?limit=200&sort=created_at&direction=asc`,
+        );
+        if (repos.length === 0) break;
+        const { deleted, failed } = await deleteAll({
+          items: repos.map((repo) => repo.name),
+          deadline: artifactsDeadline,
+          deleteOne: async (name) => {
+            await cf(
+              `/artifacts/namespaces/${artifactsNamespace}/repos/${encodeURIComponent(name)}`,
+              {
+                method: "DELETE",
+              },
+            );
+          },
+        });
+        reposDeleted += deleted;
+        if (failed > 0 && deleted === 0) break; // every delete failing = stop churning
+        if (Date.now() > artifactsDeadline) {
+          console.warn(
+            `Artifacts ${artifactsNamespace}: deadline hit with repos remaining — next release continues`,
+          );
+          break;
+        }
+      }
+      console.log(`Artifacts ${artifactsNamespace}: deleted ${reposDeleted} repos`);
+    } catch (error) {
+      console.warn(`Artifacts ${artifactsNamespace} wipe skipped: ${String(error).slice(0, 200)}`);
     }
   }
 

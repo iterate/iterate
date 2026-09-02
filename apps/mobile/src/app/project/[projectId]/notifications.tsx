@@ -39,6 +39,7 @@ import {
   deriveDeviceNotifications,
   deriveNotificationListRows,
   DEVICE_NOTIFICATION_EVENT_TYPES,
+  safePath,
   type NotificationListRow,
 } from "../../../lib/notifications.ts";
 import { pushNotificationRoute } from "../../../lib/notification-routing.ts";
@@ -247,6 +248,11 @@ function NotificationRow({
         {row.body === "" ? null : (
           <Text numberOfLines={2} style={styles.body}>
             {row.body}
+          </Text>
+        )}
+        {row.requests && (
+          <Text numberOfLines={1} style={styles.body}>
+            {[...new Set(row.requests.map((request) => safePath(request.url)))].join(" · ")}
           </Text>
         )}
         <Text

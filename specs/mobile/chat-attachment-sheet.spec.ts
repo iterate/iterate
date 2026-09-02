@@ -18,44 +18,33 @@
 
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { localOsDevServer } from "../../apps/os/scripts/dev.ts";
-import { signUpWithEmailOtp, uniqueSignupEmail } from "../test-support/email-otp-signup.ts";
 import { test } from "../test-support/test.ts";
 
 test("+ opens the sheet; carousel attaches chips that need a confirm to remove", async ({
   page,
-}, testInfo) => {
-  const osBaseUrl = await resolveOsBaseUrl();
-  const projectSlug = `mobile-sheet-${Date.now().toString(36)}`;
-
+  helpers,
+}) => {
   await page.addInitScript(fixturePhotoLibrary());
-  await signUpToProject(page, testInfo, osBaseUrl, projectSlug);
-  page.videoMode?.setStartTime();
+  await using fixture = await helpers.createMobileFixture("mobile-sheet");
 
-  await page.getByText("New chat").click();
-  await page.getByRole("heading", { name: /^mobile\// }).waitFor();
+  const agent = await fixture.createAgent();
+  agent.responses.set(async () => "ok"); // the optimistic send opens a turn; answer it deterministically
+  await page.goto(agent.mobileUrl);
 
-  // The + no longer jumps into the system picker — it opens the sheet, with
-  // the recent-media carousel and the way into everything else.
   await page.getByLabel("Attach something").click();
   await page.getByText("All photos").waitFor();
   await page.getByText("Files").waitFor();
 
-  // One tap on a recent photo attaches it as a chip above the input —
-  // nothing sends, the tile flips to its detach state, and the chip carries
-  // the photo's own filename.
   await page.getByLabel("Attach recent photo").first().click();
   await page.getByLabel(/Attachment: ticket\.png/).waitFor();
   await page.getByLabel("Detach recent photo").waitFor();
 
-  // Tap the same tile again: attached → gone (the toggle semantics). The
-  // positive signal is BOTH tiles back in their attach state.
+  // Positive detach signal: BOTH tiles back in their attach state.
   await page.getByLabel("Detach recent photo").click();
   await page.getByLabel("Attach recent photo").nth(1).waitFor();
 
-  // Re-attach. Tapping the chip ITSELF previews it full screen — the same
-  // MediaViewer sent photos open in — and swiping down (here: the close
-  // control) returns to the composer with the chip intact.
+  // Tapping the chip ITSELF previews it full screen; closing returns to the
+  // composer with the chip intact.
   await page.getByLabel("Attach recent photo").first().click();
   const chip = page.getByLabel(/Attachment: ticket\.png/);
   await chip.waitFor();
@@ -66,14 +55,12 @@ test("+ opens the sheet; carousel attaches chips that need a confirm to remove",
   await page.getByLabel("Close image").click();
   await chip.waitFor();
 
-  // Removal lives on the corner ✕, behind the confirm dialog. First tap:
-  // dismiss — the chip must survive.
+  // First tap: dismiss the confirm — the chip must survive.
   const removeBadge = page.getByLabel(/Remove ticket\.png/);
   page.once("dialog", (dialog) => void dialog.dismiss());
   await removeBadge.click();
   await chip.waitFor();
-  // Accept — now it goes, and the carousel tile flips back to its attach
-  // state (the positive signal that the attachment came off).
+  // Accept — now it goes.
   page.once("dialog", (dialog) => void dialog.accept());
   await removeBadge.click();
   await page.getByLabel("Attach recent photo").nth(1).waitFor();
@@ -112,35 +99,4 @@ function fixturePhotoLibrary(): string {
     ).toString("base64")}`,
   }));
   return `globalThis.__ITERATE_WEB_PHOTO_LIBRARY__ = ${JSON.stringify(photos)};`;
-}
-
-async function signUpToProject(
-  page: test.Page,
-  testInfo: test.TestInfo,
-  osBaseUrl: string,
-  projectSlug: string,
-): Promise<void> {
-  await page.goto("/");
-  await page.getByPlaceholder("https://os.iterate.com").fill(osBaseUrl);
-  // timeout: OIDC discovery + client registration have no loading UI for the spinner waiter
-  const popupPromise = page.waitForEvent("popup", { timeout: 15_000 });
-  await page.getByRole("button", { name: "Sign in" }).click();
-  const popup = await popupPromise;
-  // timeout: the popup is outside the wrapped page, so no spinner waiter covers it
-  await popup.getByTestId("email-login-button").click({ timeout: 15_000 });
-  await signUpWithEmailOtp(popup, {
-    email: uniqueSignupEmail("mobile-sheet"),
-    projectSlug,
-    testInfo,
-  });
-  // timeout: same unwrapped popup — the spinner waiter cannot see it.
-  await popup.getByRole("button", { name: "Allow access" }).click({ timeout: 15_000 });
-  await page.getByText("New chat").waitFor();
-}
-
-async function resolveOsBaseUrl(): Promise<string> {
-  const configured = process.env.APP_CONFIG_BASE_URL?.replace(/\/+$/, "");
-  if (configured) return configured;
-  const target = await localOsDevServer.resolveTarget();
-  return target.baseUrl;
 }

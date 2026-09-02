@@ -9,40 +9,24 @@
 //
 //   MOBILE_MEDIA_SPECS=1 pnpm spec --project=mobile -g "media"
 
+import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { connectItx } from "iterate/node";
-import { localOsDevServer } from "../../apps/os/scripts/dev.ts";
-import { signUpWithEmailOtp, uniqueSignupEmail } from "../test-support/email-otp-signup.ts";
 import { test } from "../test-support/test.ts";
 
-test("renders, searches, and views seeded media", async ({ page }, testInfo) => {
-  test.skip(
-    !process.env.APP_CONFIG_ADMIN_API_SECRET,
-    "structural: seeding needs the deployment's admin API secret in the environment",
-  );
-  const osBaseUrl = await resolveOsBaseUrl();
-  const projectSlug = `mobile-media-${Date.now().toString(36)}`;
-
-  await signUpToProject(page, testInfo, osBaseUrl, projectSlug);
-  const projectId = new URL(page.url()).pathname.split("/")[2];
+test("renders, searches, and views seeded media", async ({ page, helpers }) => {
+  await using fixture = await helpers.createMobileFixture("mobile-media");
+  const { itx } = fixture;
 
   // Seed one captured item the way the pipeline would have written it — no
-  // AI involved, so assertions are exact.
-  using project = connectItx({
-    baseUrl: osBaseUrl,
-    auth: { type: "admin-secret", secret: process.env.APP_CONFIG_ADMIN_API_SECRET! },
-    projectId,
-  });
-  // Vocabulary inlined from apps/mobile/src/lib/media.ts (Playwright's
-  // transformer cannot load that module from here).
+  // AI involved, so assertions are exact. (Vocabulary inlined from
+  // apps/mobile/src/lib/media.ts, which Playwright's transformer can't load.)
   const stableKey = "spec-seeded-ticket";
   const path = `/media/${stableKey}-ticket.png`;
-  const { readFileSync } = await import("node:fs");
   const png = readFileSync(
     resolve(import.meta.dirname, "../../apps/mobile/e2e/fixtures/ticket.png"),
   );
-  await project.files.get(path).put({ data: new Uint8Array(png), contentType: "image/png" });
-  await project.streams.get("/media").append({
+  await itx.files.get(path).put({ data: new Uint8Array(png), contentType: "image/png" });
+  await itx.streams.get("/media").append({
     type: "events.iterate.com/media/captured",
     idempotencyKey: `media-captured-${stableKey}`,
     payload: {
@@ -97,18 +81,12 @@ test("renders, searches, and views seeded media", async ({ page }, testInfo) => 
   await page.getByText("Nothing here yet").waitFor();
 });
 
-test("captures through the live vision pipeline", async ({ page }, testInfo) => {
+test("captures through the live vision pipeline", async ({ page, helpers }) => {
   test.skip(
     process.env.MOBILE_MEDIA_SPECS !== "1",
     "parked: AI-dependent (real toMarkdown + vision calls), so never CI-deterministic — likely becomes an eval; run with MOBILE_MEDIA_SPECS=1 — revisit by 2026-09-21",
   );
-  // Test BUDGET (not an action timeout): two real vision-model calls ride
-  // this test and routinely take over a minute together.
-  test.setTimeout(240_000);
-  const osBaseUrl = await resolveOsBaseUrl();
-  const projectSlug = `mobile-media-ai-${Date.now().toString(36)}`;
-
-  await signUpToProject(page, testInfo, osBaseUrl, projectSlug);
+  await using _fixture = await helpers.createMobileFixture("mobile-media-ai");
   await page.getByLabel("Open project menu").filter({ visible: true }).click();
   await page.getByRole("button", { name: "/media" }).click();
   await page.getByText("Nothing here yet").waitFor();
@@ -129,39 +107,3 @@ test("captures through the live vision pipeline", async ({ page }, testInfo) => 
     .first()
     .waitFor();
 });
-
-async function signUpToProject(
-  page: any,
-  testInfo: any,
-  osBaseUrl: string,
-  projectSlug: string,
-): Promise<void> {
-  await page.goto("/");
-  await page.getByPlaceholder("https://os.iterate.com").fill(osBaseUrl);
-  // timeout: OIDC discovery + client registration have no loading UI for the spinner waiter
-  const popupPromise = page.waitForEvent("popup", { timeout: 15_000 });
-  await page.getByRole("button", { name: "Sign in" }).click();
-  const popup = await popupPromise;
-  // timeout: the popup is outside the wrapped page, so no spinner waiter covers it
-  await popup.getByTestId("email-login-button").click({ timeout: 15_000 });
-  await signUpWithEmailOtp(popup, {
-    // A constant prefix, NOT the slug: the signup display name embeds this,
-    // and a slug-containing name makes getByText(projectSlug) ambiguous.
-    email: uniqueSignupEmail("mobile-media"),
-    projectSlug,
-    testInfo,
-  });
-  // Project selection auto-continues for test identities (project-access.tsx)
-  // — consent is the next interactive page.
-  // timeout: same unwrapped popup — the spinner waiter cannot see it.
-  await popup.getByRole("button", { name: "Allow access" }).click({ timeout: 15_000 });
-  // The app auto-opens the account's only project — no picker tap.
-  await page.getByText("New chat").waitFor();
-}
-
-async function resolveOsBaseUrl(): Promise<string> {
-  const configured = process.env.APP_CONFIG_BASE_URL?.replace(/\/+$/, "");
-  if (configured) return configured;
-  const target = await localOsDevServer.resolveTarget();
-  return target.baseUrl;
-}

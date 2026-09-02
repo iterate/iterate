@@ -38,6 +38,7 @@
     "logs.json",
     ".github/workflows/",
     ".git/",
+    "**/.claude/worktrees/",
     "**/db/migrations/**",
     "**/.corepack/**",
     "pnpm-lock.yaml",

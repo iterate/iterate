@@ -33,6 +33,8 @@ export default defineConfig([
     // Cap'n Web servers, and separately prebuilt browser clients. Config
     // supplies only package.json so worker-bundler can resolve these files.
     entry: {
+      "starter-apps/flake-dashboard/configured-worker":
+        "src/starter-apps/flake-dashboard/configured-worker.ts",
       "starter-apps/guestbook/configured-worker": "src/starter-apps/guestbook/configured-worker.ts",
       "starter-apps/media/configured-worker": "src/starter-apps/media/configured-worker.ts",
       "starter-apps/notes/configured-worker": "src/starter-apps/notes/configured-worker.ts",
@@ -134,6 +136,8 @@ export default defineConfig([
     // in the build script instead.
     entry: {
       sdk: "src/sdk.ts",
+      "starter-apps/flake-dashboard/index": "src/starter-apps/flake-dashboard/index.ts",
+      "starter-apps/flake-dashboard/contract": "src/starter-apps/flake-dashboard/contract.ts",
       "starter-apps/github-ai-linter/index": "src/starter-apps/github-ai-linter/index.ts",
       "starter-apps/github-ai-linter/worker": "src/starter-apps/github-ai-linter/worker.ts",
       "starter-apps/guestbook/index": "src/starter-apps/guestbook/index.ts",
