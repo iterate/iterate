@@ -125,21 +125,19 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
    * that lands the text IS the trigger: this reads back the notes the commit
    * changed and tells each distinct agent once, as a developer message
    * carrying a link it can open (born on first mention if it does not exist
-   * yet). Content is read at HEAD, not at the commit: an autosave burst
-   * (several commits, one edit) then notifies once with the latest text. The
-   * idempotency key hashes the mentioning line (for a watcher: the whole
-   * file), so an amended commit re-landing the same text, a later commit that
-   * left the line alone, and an at-least-once redelivery are all no-ops —
-   * only a changed line (or file) speaks again.
+   * yet). Every note at HEAD is read back on every commit — the file list is
+   * the repo's cheap manifest, never a clone or a diff (commitDetails clones
+   * the whole repo per call, far too heavy for a hook that fires on every
+   * agent commit) — and the idempotency key hashes the mentioning line (for
+   * a watcher: the whole file), so unchanged text, an amended commit
+   * re-landing the same text, and an at-least-once redelivery are all
+   * no-ops: only a changed line (or file) speaks again. An autosave burst
+   * (several commits, one edit) therefore notifies once with the final text.
    */
-  async #notifyNoteMentions(event: StreamEvent): Promise<void> {
-    const commitOid = event.payload?.commitOid;
-    if (typeof commitOid !== "string") return;
+  async #notifyNoteMentions(): Promise<void> {
     const itx = this.itx;
-    const { files } = await itx.repo.commitDetails({ commitOid });
-    const notePaths = files
-      .filter((file) => file.status !== "deleted" && /^notes\/.+\.md$/.test(file.path))
-      .map((file) => file.path);
+    const { paths } = await itx.repo.listFiles();
+    const notePaths = paths.filter((path) => /^notes\/.+\.md$/.test(path));
     const results = await Promise.allSettled(
       notePaths.map(async (path) => {
         const file = await itx.repo.readFile({ path });
@@ -388,7 +386,7 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
         const itx = this.itx;
         const agents = await itx.agents.list();
         await this.#syncAgentsMdContext(agents.map((agent) => agent.path));
-        await this.#notifyNoteMentions(event);
+        await this.#notifyNoteMentions();
         break;
       }
       case "events.iterate.com/project/heartbeat-triggered": {

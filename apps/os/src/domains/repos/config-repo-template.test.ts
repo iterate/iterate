@@ -440,13 +440,11 @@ test("a config commit that changes a note tells the agents it mentions or watche
     },
     appUrl: vi.fn(async () => "https://docs--demo.iterate.app"),
     repo: {
-      commitDetails: vi.fn(async () => ({
-        files: [
-          { path: "notes/plan.md", status: "modified" },
-          { path: "notes/gone.md", status: "deleted" },
-          { path: "docs/notes/elsewhere.md", status: "added" },
-          { path: "AGENTS.md", status: "modified" },
-        ],
+      // The HEAD manifest — never a clone or a diff: a hook that fires on
+      // every agent commit cannot afford commitDetails.
+      listFiles: vi.fn(async () => ({
+        commitOid: "a".repeat(40),
+        paths: ["AGENTS.md", "docs/notes/elsewhere.md", "notes/plan.md", "worker.ts"],
       })),
       readFile,
     },
@@ -467,9 +465,9 @@ test("a config commit that changes a note tells the agents it mentions or watche
 
   await deliver(worker, commit);
 
-  // Only the surviving note under notes/ is read back; the deleted note, the
-  // nested lookalike, and AGENTS.md never are.
-  expect(project.repo.commitDetails).toHaveBeenCalledWith({ commitOid: "a".repeat(40) });
+  // Only the note under notes/ is read back; the nested lookalike and
+  // AGENTS.md never are.
+  expect(project.repo.listFiles).toHaveBeenCalledTimes(1);
   expect(readFile.mock.calls.map(([input]) => input.path)).toEqual(["notes/plan.md"]);
   const url = "https://docs--demo.iterate.app/notes?repo=%2Frepos%2Fconfig&note=notes%2Fplan.md";
   // A sentence-ending period is prose, not path.

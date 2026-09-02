@@ -1055,21 +1055,19 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "   * that lands the text IS the trigger: this reads back the notes the commit\n" +
       "   * changed and tells each distinct agent once, as a developer message\n" +
       "   * carrying a link it can open (born on first mention if it does not exist\n" +
-      "   * yet). Content is read at HEAD, not at the commit: an autosave burst\n" +
-      "   * (several commits, one edit) then notifies once with the latest text. The\n" +
-      "   * idempotency key hashes the mentioning line (for a watcher: the whole\n" +
-      "   * file), so an amended commit re-landing the same text, a later commit that\n" +
-      "   * left the line alone, and an at-least-once redelivery are all no-ops —\n" +
-      "   * only a changed line (or file) speaks again.\n" +
+      "   * yet). Every note at HEAD is read back on every commit — the file list is\n" +
+      "   * the repo's cheap manifest, never a clone or a diff (commitDetails clones\n" +
+      "   * the whole repo per call, far too heavy for a hook that fires on every\n" +
+      "   * agent commit) — and the idempotency key hashes the mentioning line (for\n" +
+      "   * a watcher: the whole file), so unchanged text, an amended commit\n" +
+      "   * re-landing the same text, and an at-least-once redelivery are all\n" +
+      "   * no-ops: only a changed line (or file) speaks again. An autosave burst\n" +
+      "   * (several commits, one edit) therefore notifies once with the final text.\n" +
       "   */\n" +
-      "  async #notifyNoteMentions(event: StreamEvent): Promise<void> {\n" +
-      "    const commitOid = event.payload?.commitOid;\n" +
-      "    if (typeof commitOid !== \"string\") return;\n" +
+      "  async #notifyNoteMentions(): Promise<void> {\n" +
       "    const itx = this.itx;\n" +
-      "    const { files } = await itx.repo.commitDetails({ commitOid });\n" +
-      "    const notePaths = files\n" +
-      "      .filter((file) => file.status !== \"deleted\" && /^notes\\/.+\\.md$/.test(file.path))\n" +
-      "      .map((file) => file.path);\n" +
+      "    const { paths } = await itx.repo.listFiles();\n" +
+      "    const notePaths = paths.filter((path) => /^notes\\/.+\\.md$/.test(path));\n" +
       "    const results = await Promise.allSettled(\n" +
       "      notePaths.map(async (path) => {\n" +
       "        const file = await itx.repo.readFile({ path });\n" +
@@ -1318,7 +1316,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "        const itx = this.itx;\n" +
       "        const agents = await itx.agents.list();\n" +
       "        await this.#syncAgentsMdContext(agents.map((agent) => agent.path));\n" +
-      "        await this.#notifyNoteMentions(event);\n" +
+      "        await this.#notifyNoteMentions();\n" +
       "        break;\n" +
       "      }\n" +
       "      case \"events.iterate.com/project/heartbeat-triggered\": {\n" +
