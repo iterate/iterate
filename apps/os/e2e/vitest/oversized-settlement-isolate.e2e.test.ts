@@ -35,12 +35,6 @@ import { expect, test } from "vitest";
 import { failing } from "@iterate-com/shared/test-support/failing-test";
 import { adminSecret, deployedBaseUrl, withItxSession } from "./test-helpers.ts";
 
-// ~7MB, the incident's shape: a base64 blob in a script's stdout.
-const OVERSIZED_SCRIPT = `async () => ({ stdout: "iVBORw0KGgo".repeat(660_000) })`;
-// The bound the fix enforces (settlement events fan out to every fold and
-// subscriber, so a durable one this large is a memory bomb).
-const MAX_SETTLEMENT_BYTES = 1_000_000;
-
 const failUnbounded = failing(test, /journaled unbounded/i, { timeoutMs: 90_000 });
 
 failUnbounded("an oversized script result is bounded before it is journaled", async () => {
@@ -59,13 +53,13 @@ failUnbounded("an oversized script result is bounded before it is journaled", as
   // rejects with a bounded "too large to retain" explanation; without it, it
   // resolves with the whole ~7MB value.
   const returnedBytes = await project.capabilityHost
-    .runScript(OVERSIZED_SCRIPT)
+    .runScript(`async () => ({ stdout: "iVBORw0KGgo".repeat(660_000) })`)
     .then((settled) => JSON.stringify(settled.result ?? null).length)
     .catch((error: unknown) => {
       if (/too large to retain/i.test(String(error))) return 0; // bounded — the fix
       throw error;
     });
 
-  const message = `oversized script result journaled unbounded (${returnedBytes} chars) — this resets the stream DO isolate under the fold/delivery fan-out`;
-  expect(returnedBytes, message).toBeLessThan(MAX_SETTLEMENT_BYTES);
+  const message = `an oversized script should not be journaled unbounded - this resets the stream DO isolate under the fold/delivery fan-out`;
+  expect(returnedBytes, message).toBeLessThan(1_000_000);
 });

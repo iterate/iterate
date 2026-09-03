@@ -7,14 +7,21 @@
  * native as far as reporting goes: it shows up in the "expected fail" summary
  * count, telemetry classifies it as expected-to-fail, and nothing downstream
  * needs to know the wrapper exists. The wrapper's only job is filtering WHICH
- * failure is allowed to satisfy that machinery:
+ * failure is allowed to satisfy that machinery.
+ *
+ * To use it, write a *normal* test body, and use a regex that you know the test (unfortunately) will fail with.
  *
  * ```ts
- * const fail = failing(test, /SAME-BOOT STALENESS/);
- * fail("a userspace facet rebuilds on a source commit", { timeout: 240_000 }, async () => {
- *   // asserts the DESIRED behavior; today it throws the matched error
+ * const failOOM = failing(test, /out of memory/i);
+ * failOOM("saying hello millions of times works", async () => {
+ *   const result = await system.sayHello({ times: 5_000_000 });
+ *   expect(result, "system should not run out of memory").toMatchObject({ success: true });
  * });
  * ```
+ *
+ * Try to write normal-looking assertions - `expect` lets you pass in a custom message if you want to
+ * tip the scales for a single assertion. Use "should" so you can write a truthful statement that remains
+ * true even when the test *stops* failing (the system really should not run out of memory!).
  *
  * Three outcomes:
  * - body fails matching the pattern → the error is rethrown, the runner's
