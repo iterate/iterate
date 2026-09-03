@@ -93,6 +93,20 @@ export class SubscriptionDelivery {
    *  incarnation — classified once, on their first push or by the alarm's row pass; the pass and the
    *  commit-time arming skip them from then on. Memory: a fresh incarnation classifies again. */
   readonly #pushSubscriptionNames = new Set<string>();
+  /** The evaluated target head per row, reused across pushes: a row delivered every commit (a PCM
+   *  stream, an audio call) would otherwise re-walk its target and re-mint a Facet/RpcStub handle on
+   *  EVERY push. Valid while the row's identity (`configuredAtOffset`) AND the rewrite-rule table
+   *  (its object identity in core state — any `provide`/un-set replaces it) are unchanged; either
+   *  moving re-evaluates. Dropped in `#forgetSubscription`. */
+  readonly #evaluatedTargetHeadByRow = new Map<
+    string,
+    {
+      configuredAtOffset: number;
+      rewriteRulesRef: object;
+      head: unknown;
+      call: (args: unknown[]) => Promise<unknown>;
+    }
+  >();
 
   constructor(deps: SubscriptionDeliveryDeps) {
     this.#kv = deps.kv;
@@ -198,6 +212,7 @@ export class SubscriptionDelivery {
 
   #forgetSubscription(name: string): void {
     this.#dropCursor(name);
+    this.#evaluatedTargetHeadByRow.delete(name);
     this.#pushSubscriptionNames.delete(name);
     this.#deliveryChainBySubscription.delete(name);
     this.#lastDeliveredThroughOffset.delete(name);
@@ -229,7 +244,7 @@ export class SubscriptionDelivery {
       // load chain materializes its facet, so a push racing `disableProcessor` must not call — and
       // must not resurrect what `facets.delete` just removed.
       if (!this.#stream.coreReducedState.subscriptions[name]) return;
-      const { head, call } = await this.#evaluateItxExpressionTargetHead(row.target);
+      const { head, call } = await this.#evaluateTargetHeadForRow(name, row);
       if (!this.#stream.coreReducedState.subscriptions[name]) return;
       if (head instanceof FacetHandle || head instanceof RpcStubHandle)
         this.#pushSubscriptionNames.add(name);
@@ -273,6 +288,31 @@ export class SubscriptionDelivery {
     } finally {
       this.#recordActivityForQuietClock();
     }
+  }
+
+  /** The push path's per-row memo of the evaluated target head — one evaluation per row per
+   *  (identity, rule-table) generation, not one per push. A rule change replaces the rule table
+   *  object in core state, and a reconfigure moves `configuredAtOffset`; either invalidates. */
+  async #evaluateTargetHeadForRow(
+    name: string,
+    row: Subscription,
+  ): Promise<{ head: unknown; call: (args: unknown[]) => Promise<unknown> }> {
+    const rewriteRulesRef = this.#stream.coreReducedState.itxExpressionRewriteRules;
+    const cached = this.#evaluatedTargetHeadByRow.get(name);
+    if (
+      cached &&
+      cached.configuredAtOffset === row.configuredAtOffset &&
+      cached.rewriteRulesRef === rewriteRulesRef
+    )
+      return { head: cached.head, call: cached.call };
+    const evaluated = await this.#evaluateItxExpressionTargetHead(row.target);
+    this.#evaluatedTargetHeadByRow.set(name, {
+      configuredAtOffset: row.configuredAtOffset,
+      rewriteRulesRef,
+      head: evaluated.head,
+      call: evaluated.call,
+    });
+    return evaluated;
   }
 
   /** Evaluate a target's HEAD (everything but a trailing method name) and return the value plus the

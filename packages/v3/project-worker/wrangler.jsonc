@@ -25,7 +25,11 @@
   // whole life — so the 10,000 paid default is hit by an ordinary long-lived client (3 appends/s for
   // ~1 h). Raise the ceiling; only subrequests actually made are billed, so this costs nothing until
   // used. (The durable fix is client-side batching/reconnect — docs/perf learnings F-subreq.)
-  "limits": { "subrequests": 1000000 },
+  // subrequests: a long-lived capnweb WS session accumulates against its one pump invocation (above).
+  // cpu_ms: a cold re-reduce over a long log, or a large per-commit fan-out, is CPU-bound on the DO's
+  // single thread; 5 min (the paid max) gives 10x the 30 s default before a CPU-limit abort. Neither
+  // is billed until used.
+  "limits": { "subrequests": 1000000, "cpu_ms": 300000 },
 
   // The hosted /demo page as a static asset (build-sdk.mjs writes public/demo.html): served by the
   // platform, not the script — 255 KiB fewer in every /api and DO isolate.
