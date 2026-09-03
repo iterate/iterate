@@ -24,6 +24,7 @@ import { expect, test } from "vitest";
 import { failing } from "@iterate-com/shared/test-support/failing-test";
 import type { StreamEvent } from "../../src/itx-api.generated.ts";
 import { createTestProject } from "../test-support/create-test-project.ts";
+import { installResilientAiInterceptor } from "../test-support/resilient-ai-interceptor.ts";
 import { deployedBaseUrl } from "./test-helpers.ts";
 
 const QUIET_SECONDS = Number(process.env.ABANDONED_PROJECT_QUIET_SECONDS || 90);
@@ -48,15 +49,22 @@ goesQuiet(
 
     // One real agent turn against a scripted model — the shape every spec
     // leaves behind. The reply is asserted so the test cannot pass vacuously
-    // by never having created the work it claims to abandon.
-    // The agent runs codemode: a reply is a script, and only a script that
-    // calls the chat produces the `web-message-sent` that `ask()` waits for
-    // (same shape as specs/agent-fake-model-chat.spec.ts).
-    using interception = await itx.ai.intercept(async () =>
-      ["```ts", `async (itx) => {\n  await itx.chat.sendMessage("scripted reply")\n}`, "```"].join(
-        "\n",
-      ),
-    );
+    // by never having created the work it claims to abandon. The agent runs
+    // codemode: a reply is a script, and only a script that calls the chat
+    // produces the `web-message-sent` that `ask()` waits for (same shape as
+    // specs/agent-fake-model-chat.spec.ts). The interceptor rides the shared
+    // churn-surviving loop, so a DO restart mid-turn re-installs it instead of
+    // failing the test for a reason that proves nothing about the pin.
+    const interception = await installResilientAiInterceptor({
+      baseUrl: handle.baseUrl,
+      projectId: handle.project.id,
+      handler: async () =>
+        [
+          "```ts",
+          `async (itx) => {\n  await itx.chat.sendMessage("scripted reply")\n}`,
+          "```",
+        ].join("\n"),
+    });
     using agent = handle.agent("/agents/abandoned");
     await agent.create();
     await agent.append({
@@ -90,7 +98,7 @@ goesQuiet(
     const baseline = await readOffsets(itx);
 
     // Abandon it the way every test does.
-    await interception.release();
+    await interception[Symbol.asyncDispose]();
     await handle[Symbol.asyncDispose]();
 
     await sleep(QUIET_SECONDS * 1000);
@@ -111,12 +119,6 @@ goesQuiet(
     }
 
     const total = rows.reduce((sum, row) => sum + row.count, 0);
-    // The table is the evidence; the expected-fail summary swallows the
-    // assertion message, so print it where CI logs keep it.
-    if (rows.length > 0)
-      console.error(
-        `[abandoned-project] ${handle.project.slug} woke after dispose:\n${table(rows)}`,
-      );
     expect(
       rows,
       `project ${handle.project.slug} should be quiet after dispose (${QUIET_SECONDS}s), but it woke ${total} times after dispose:\n${table(rows)}`,
