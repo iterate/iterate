@@ -1,0 +1,87 @@
+---
+status: in-progress
+size: small
+branch: flake-dashboard-streaks
+---
+
+# Flake dashboard: row expiry, emoji streaks, createFailing rename
+
+Three follow-ups from the first live week of the flake dashboard (#2580), agreed in discussion 2026-09-03.
+
+## Status
+
+Spec committed; implementation not started.
+
+## Motivation
+
+Renaming the chat-photos test in PR #2584 split its dashboard row in two: the
+old name (`multiple photos share a mosaic row; …`) is frozen at 1 run / 100%
+forever, next to the new name's row. More generally, deleted tests never leave
+the table.
+
+Decision: **the test name is the identity, and rows expire by absence.** No
+rename detection, no lineage linking, no stable-id API. A rename resets the
+streak — you touched the test, so fresh stats are honest — and history stays
+readable in the issue's edit history and replayable from the immutable
+`/flakes` event log. Expiry is a pure projection choice in the reducer/render:
+nothing is deleted, so a transiently-absent row comes back with its full
+history the next time it records.
+
+## Checklist
+
+- [ ] Row expiry (absence-based, N=1, default-branch-judged): a test row
+      renders only if, for at least one of its suites, the test was present in
+      the latest **default-branch** `run-recorded` event of that suite.
+      Reduce-side: state gains per-suite `lastDefaultBranchRunOffset`, and each
+      tracked test gains per-suite `lastSeenOffset` (bumped by any branch's
+      run, so a test added on a PR shows immediately via `>=`). Judging absence
+      from default-branch runs only means a PR that deletes/renames a test
+      cannot hide the row repo-wide while the PR is the newest run.
+- [ ] Expired rows are hidden from the table, not dropped from state. Footer
+      gains a one-liner: `_N retired tests hidden (no longer present in the
+      latest default-branch run of their suite)._` when N > 0.
+- [ ] Emoji streak column: each tracked test keeps its last 10
+      **default-branch** outcomes (ring buffer in reduced state, oldest first).
+      Render as a `recent` column: 🟩 pass, 🟥 flake-fail, ❌ unexpected-error,
+      oldest→newest. The existing numeric `default-branch streak` column stays
+      (it carries the transition-threshold counts past 10).
+- [ ] Contract: new fields with defaults so existing prd state parses
+      untouched; bump contract version 0.1.0 → 0.2.0.
+- [ ] Harness tests in flake-dashboard.test.ts: rename splits then retires the
+      old row on the next default-branch suite run; transient absence
+      (PR-branch run without the test) does NOT retire; retired row revives
+      with history intact when the name records again; emoji bar renders and
+      caps at 10.
+- [ ] `failing(…)` → `createFailing(…)` rename for consistency with
+      `createFlake` (both are two-level: `createX(test, …)` returns the
+      registrar). Rename the export in
+      packages/shared/src/test-support/failing-test.ts, update the
+      docstring + log-message strings ("delete the createFailing() wrapper"),
+      and all callsites (9 files, see notes). Filename stays failing-test.ts.
+      No deprecated alias — few callsites, and an alias defeats the
+      less-confusing goal.
+- [ ] Sweep doc references to `failing(` (docs/testing.md etc.).
+
+## Non-goals / explicitly rejected
+
+- Rename detection or a stable-id param on createFlake/createFailing.
+- Deleting expired tests from reduced state (a lazy GC can come later if state
+  size ever matters; the log is the source of truth regardless).
+- Renaming the `switch-to-failing` transition enum value or any durable event
+  shape — event values are append-only vocabulary.
+
+## Notes
+
+- `failing(` callsites on main: failing-test.ts, failing-test.test.ts,
+  flake-test.ts (docstring), userspace-facet-source-version.e2e.test.ts,
+  userspace-facet-recycle-false-alarm.e2e.test.ts,
+  project-create-concurrency.regression.e2e.test.ts,
+  abandoned-project-goes-quiet.e2e.test.ts,
+  oversized-settlement-isolate.e2e.test.ts, artifact-rpc-ownership /
+  scheduler-rpc-ownership / guarantees-not-given / oversized-settlement-crash
+  tests.
+- Conflict heads-up: PR #2575 (oversized-settlement-repro) edits
+  failing-test.ts (adds the vitest `retry: 0` pin) and
+  oversized-settlement-isolate.e2e.test.ts. This branch keeps its
+  failing-test.ts diff to the mechanical rename only, so the merge either way
+  is small; whichever lands second merges main and fixes up.
