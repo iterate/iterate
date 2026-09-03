@@ -89,7 +89,7 @@ const RetiredQueueConsumer = z.object({
  * manifests — name-agnostic, so template packages come and go without deploy
  * changes), each with its `@<ref>` swapped for the pinned SHA.
  */
-export function previewPackageSpecsToAwait(ref: string): string[] {
+export function pinnedPackageSpecsToAwait(ref: string) {
   return templateIterateRepoPkgSpecs().map((spec) => pinIterateRepoPkgRef(spec, ref)!);
 }
 
@@ -99,7 +99,7 @@ export function previewPackageSpecsToAwait(ref: string): string[] {
  * explicit deployment prerequisite. This runs beside the Vite build and
  * sidecar uploads; the healthy path adds no critical-path work.
  */
-export async function waitForPreviewPackage(
+export async function waitForPinnedPackage(
   packageSpec: string,
   dependencies: {
     fetch?: typeof fetch;
@@ -358,18 +358,24 @@ export default async function deploy(
         secrets: ctx.secrets,
       });
 
-      // Preview deploys pass their PR head sha (scripts/preview/preview.ts)
-      // so project seeds and every dynamic build pin the template's
-      // iterate/iterate pkg.pr.new specs to that exact commit's builds
-      // instead of @main — e2e tests then exercise the branch tip, pinned
-      // (unlike @<pr>/@main, which are moving refs). The pkg-pr-new GHA
-      // workflow publishes every first-party package under the PR HEAD sha on
-      // every push, so the URLs exist by the time anything npm-installs a
-      // seeded repo. Unset everywhere else (prod, direct doppler-run
-      // deploys), leaving each repo's specs untouched.
-      const previewHeadSha = process.env.PREVIEW_PULL_REQUEST_HEAD_SHA;
-      if (previewHeadSha) {
-        secretValues.APP_CONFIG_ITERATE_REPO_PKG_REF = previewHeadSha;
+      // Sha-pin the template's iterate/iterate pkg.pr.new specs so project
+      // seeds and every dynamic build install exact immutable tarballs
+      // instead of the moving @main/@<pr> refs. Preview deploys pass their PR
+      // head sha (scripts/preview/preview.ts) so e2e exercises the branch
+      // tip; prd deploys pass their own main commit (deploy-os.yml) so live
+      // config repos build in lockstep with the deployed platform — a
+      // mutable @main is also CACHED by the dynamic worker host, which left
+      // the iterate project building against a stale package for hours on
+      // 2026-09-02 ("the installed 'iterate' package does not provide this
+      // entry") while the stale worker kept serving. The pkg-pr-new GHA
+      // workflow publishes every first-party package under the commit sha on
+      // every push (PRs and main alike), and the pinned URLs are awaited as
+      // deployment prerequisites below. Unset for dev/local deploys, where no
+      // sha build exists for uncommitted state.
+      const pinnedHeadSha =
+        process.env.PREVIEW_PULL_REQUEST_HEAD_SHA || process.env.PLATFORM_DEPLOY_HEAD_SHA;
+      if (pinnedHeadSha) {
+        secretValues.APP_CONFIG_ITERATE_REPO_PKG_REF = pinnedHeadSha;
       }
 
       assertPreviewPetshopIntegrationConfigured(ctx.name, secretValues);
@@ -446,10 +452,10 @@ export default async function deploy(
           }
         })(),
       ];
-      const previewPkgRef = secretValues.APP_CONFIG_ITERATE_REPO_PKG_REF;
-      if (previewPkgRef) {
+      const pinnedPkgRef = secretValues.APP_CONFIG_ITERATE_REPO_PKG_REF;
+      if (pinnedPkgRef) {
         tasks.push(
-          ...previewPackageSpecsToAwait(previewPkgRef).map((spec) => waitForPreviewPackage(spec)),
+          ...pinnedPackageSpecsToAwait(pinnedPkgRef).map((spec) => waitForPinnedPackage(spec)),
         );
       }
 
@@ -461,7 +467,7 @@ export default async function deploy(
       if (failures.length > 1) {
         throw new AggregateError(
           failures,
-          "Compiler-sidecar deployment and preview package preflight both failed",
+          "Compiler-sidecar deployment and pinned package preflight both failed",
         );
       }
     },
