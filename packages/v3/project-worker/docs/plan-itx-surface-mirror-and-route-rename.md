@@ -1,5 +1,12 @@
 # Proposal: ONE itx surface (the edge is a proxy), `route` vs `provide`, fully qualified stub names
 
+> **SUPERSEDED same day** (banner added 2026-09-03) — the `route`/`provide` SPLIT was rejected:
+> one verb shipped, `provide(match, target)`, positional, no options bag. `context/routing.ts`
+> is deleted (the rules live in `src/context/itx-expression-rewriting.ts`) and the event that
+> landed is `events.iterate.com/itx/rewrite-rule-configured`, not `capability-table/route-added`.
+> The fully-qualified-identifier rule in §0 below is the part that stuck. The surface as built
+> is `docs/itx-surface-as-built.md`.
+>
 > 2026-09-02, for Jonas. Terminology + symmetry only. Fetch stays parked (in the back of the mind:
 > a fetch rule will one day be a route with a pinned pattern on `itx.fetch(...)` — nothing here
 > pre-empts or blocks that).

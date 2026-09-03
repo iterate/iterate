@@ -142,7 +142,7 @@ export async function loadConfinedWorker(
       // What every loaded isolate runs under. PURE-PLAY: no node:* — userspace code stays portable
       // across workerd builds (nodejs_compat is on by default at this date for the platform worker
       // itself; the loaded half opts out). `allow_irrevocable_stub_storage` (experimental) lets
-      // loaded code store its `env.ITX` stub and replay it (load-persistent-stub.e2e pins it) —
+      // loaded code store its `env.ITX` stub and replay it (facets-persistent-stub.e2e pins it) —
       // every worker in the chain needs it, so the parent config carries it too. No `limits`
       // (cpuMs / subRequests): trusted clients. Note the platform bound of 10 distinct dynamic
       // workers with in-flight requests per DO — the idle quiesce is what keeps a context's facet

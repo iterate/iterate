@@ -1,4 +1,4 @@
-// rewrite-rules-tour.e2e.test.ts — the itx surface, toured end to end against the local
+// itx-surface-tour.e2e.test.ts — the itx surface, toured end to end against the local
 // project-worker. Covers: the built-in roots through the ONE dispatch door, client rpc stubs through the
 // ONE provide door (an opaque rpcStubKey the stub is lent under + the REWRITE RULE that names it),
 // THE MAP (a re-set replaces, setting the old target back restores, null deletes — on expression

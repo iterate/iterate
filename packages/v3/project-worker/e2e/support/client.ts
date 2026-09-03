@@ -12,10 +12,9 @@ const baseUrl = (): string => {
   return u;
 };
 
-/** A URL on the one shared worker — for the raw HTTP doors that have no itx method (/cap, /version). */
+/** A URL on the one shared worker — for the raw HTTP doors that have no itx method (/version, /demo). */
 export const workerUrl = (path: string): string => new URL(path, baseUrl()).toString();
 
-/** The /cap door for `cap` in `ctx`, as http or ws. */
 /** The plain-HTTP fetch lane: `/expression?context=<ctx>&itx=<itx expression>` (the worker copies the
  *  expression into `x-itx-expression` for the DO). */
 export const expressionUrl = (
@@ -127,7 +126,8 @@ export async function subscriptions(itx: any): Promise<any[]> {
 }
 
 /** PRESENCE — the registry keys with an open transport RIGHT NOW (`itx.rpcStubs.list()`, the
- *  physical built-in). Shrinks when a provider's session dies; a mount never does. */
+ *  physical built-in). Shrinks when a provider's session dies; a rewrite rule never does (it is
+ *  pure data). */
 export async function presence(itx: any): Promise<string[]> {
   return (await itx.rpcStubs.list()) as string[];
 }

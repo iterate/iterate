@@ -8,7 +8,9 @@ name for a target; a subscription is a name for a delivery; a processor is a sub
 target is a facet's `processEventBatch`; a lent rpc stub is the physical thing all three may name.**
 
 Two vocabularies run through everything, and they are kept apart on purpose. **(a) rpc stubs** are
-physical: a live capnweb value a session LENDS under an OPAQUE `rpcStubKey`, which the DO BORROWS
+physical: a live capnweb value a session LENDS under an `rpcStubKey` — OPAQUE to the directory,
+which never parses it, but spelled by contract at the two lenders (`provide` uses the canonical
+match, `subscribe` uses `subscription:<name>`) — which the DO BORROWS
 and RETURNS at idle; a PAGER (one hibernatable WebSocket per key) is how the DO asks the edge to
 lend it back. **(b) itx-expression rewrite rules** are pure data: `{ match, target }` — "a call
 starting with `match` runs as the same call with `match` replaced by `target`" — kept in a MAP by

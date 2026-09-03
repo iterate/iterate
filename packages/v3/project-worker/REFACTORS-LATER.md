@@ -1,3 +1,7 @@
+> **HISTORY (2026-09-03).** Deferred-refactor notes from the fix campaign; the lanes and layer
+> numbers they cite predate the itx-surface rename (proofs became `pnpm e2e`). Kept for the
+> reasoning. The surface as built is `docs/itx-surface-as-built.md`.
+
 # Deferred refactors — larger layering/design changes, recorded not done
 
 Things that would meaningfully change layering or design. Kept OUT of the fix campaign so each

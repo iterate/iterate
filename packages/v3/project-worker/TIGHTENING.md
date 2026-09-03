@@ -1,3 +1,9 @@
+> **HISTORY (2026-09-03).** A tightening menu written before the itx-surface rename; kept as the
+> record of what was found and why. The "3-4 core files" it names are gone
+> (`stream-durable-object.ts` → `iterate-context-durable-object.ts`, `capability-table-processor.ts`
+> and `core/itx-surface.ts` deleted), `#liveFacets` is `#liveFacetNames`, and `configure()` is
+> deleted. The surface as built is `docs/itx-surface-as-built.md`.
+
 # Tightening the core — menu
 
 A 9-agent sweep of `project-worker` (7 subsystem readers + apps/os and capnweb/Kenton comparison

@@ -2,8 +2,10 @@
 
 Grow the platform from nothing but capnweb into the full streaming, hibernatable
 Iterate Context. Each chapter ends with something you can call, and each exists
-because the last one left something on the table. Every snippet is real code —
-and the whole client dependency is one npm package, `@iterate-com/capnweb`
+because the last one left something on the table. Every client snippet is
+spelled against today's shipped surface; the server snippets are the real code,
+abridged where an elision is marked, and Part 0's are a working toy of their
+own. The whole client dependency is one npm package, `@iterate-com/capnweb`
 (imported as `capnweb`). There is no client SDK: a client is just a capnweb peer.
 
 There are exactly **three primitives** — the **context** (things you can call,
@@ -14,27 +16,35 @@ of every concept in about 30 minutes, each brick's flaw forcing the next. Then
 Chapters 1–3 rebuild each primitive properly, against the real thing.
 
 Two words are kept apart throughout, because the code keeps them apart. An
-**rpc stub** is physical: a live value a session LENDS under an opaque
-`rpcStubKey`, which the context BORROWS and RETURNS at idle. A **rewrite rule**
-is pure data, `{ match, target }`: a call starting with `match` runs as the same
-call with `match` replaced by `target`.
+**rpc stub** is physical: a live value a session LENDS under an `rpcStubKey`,
+which the context BORROWS and RETURNS at idle — `provide` lends under the key
+that IS the canonical match, `subscribe` under `subscription:<name>`. A
+**rewrite rule** is pure data, `{ match, target }`: a call starting with `match`
+runs as the same call with `match` replaced by `target`.
 
 ---
 
 ## Part 0 — the whole platform in ~200 lines
 
-> **ORDER NOTE (2026-09-02).** The code's layer order is: **(1) rpc stubs** —
-> `provide(rpcStubKey, stub)` + `invoke`, the directory's two layers being
-> the borrowed table first and the pager as "the second `if`"; **(2) itx
-> expressions** and the dotted surface (`invoke` takes an `ItxExpressionInput`;
-> `itx.a.b(x)` reduces onto it); **(3) rewrite rules** —
-> `rewrite(match, target | null)` and `provide`'s `rewrite` option; **(4)
-> subscriptions**; **(5) processors**. Fetch sits outside the order. Today's
-> bricks predate that cut: brick 2 conflates the stub KEY with the dotted name
-> you call it by (expressions arrive only implicitly, as dotted strings), rewrite
-> rules are brick 6, subscriptions hide inside brick 8's fan-out, and fetch sits
-> between them as brick 7 / Chapter 2. The names below already follow the code;
-> the bricks will be re-cut to its order.
+> **ORDER NOTE (2026-09-03).** The order of record — the code's layer order — is:
+> **(1) rpc stubs** — `provide(match, stub)` + `invoke`, the directory's two
+> layers being the borrowed table first and the pager as "the second `if`";
+> **(2) itx expressions** and the dotted surface (`invoke` takes an
+> `ItxExpressionInput`; `itx.a.b(x)` reduces onto it); **(3) rewrite rules** —
+> the SAME verb, `provide(match, target | null)`, with an itx expression as the
+> target; **(4) subscriptions** — `subscribe({ name?, target, consumes? })`;
+> **(5) processors** — `enableProcessor(name, { source, className, consumes? })`
+> and `disableProcessor(name)`. Fetch sits outside the order. Two spellings a
+> reader may remember are GONE: the edge verb `rewrite(match, target | null)` was
+> deleted and absorbed into `provide`, and `provide` never had an options bag —
+> it takes exactly two positional arguments, and for a live stub the key it is
+> lent under IS the canonical match. Today's bricks predate that cut: brick 2
+> conflates the stub KEY with the dotted name you call it by (expressions arrive
+> only implicitly, as dotted strings), rewrite rules are brick 6, subscriptions
+> hide inside brick 8's fan-out, and fetch sits between them as brick 7 /
+> Chapter 2. Chapters 1–3 predate the `provide`-unification too — their client
+> snippets have been corrected to the shipped surface; the bricks will be re-cut
+> to its order.
 
 One file, grown eight times. Set up once — a fresh directory with
 `npm i capnweb@npm:@iterate-com/capnweb wrangler` and this `wrangler.jsonc`
@@ -47,7 +57,7 @@ One file, grown eight times. Set up once — a fresh directory with
   "compatibility_date": "2026-07-01",
   "worker_loaders": [{ "binding": "LOADER" }],
   "durable_objects": {
-    "bindings": [{ "name": "CONTEXT", "class_name": "IterateContextDurableObject" }],
+    "bindings": [{ "name": "ITERATE_CONTEXT", "class_name": "IterateContextDurableObject" }],
   },
   "exports": { "IterateContextDurableObject": { "type": "durable-object", "storage": "sqlite" } },
   "vars": { "OPENAI_API_KEY": "sk-test-12345" },
@@ -188,7 +198,7 @@ plain argument, and calls on the loaned stub **route back to the provider's own
 session** — from any caller. Brick 2's error dissolves. No WebSockets anywhere:
 
 ```ts
-type Env = { CONTEXT: DurableObjectNamespace<IterateContextDurableObject> };
+type Env = { ITERATE_CONTEXT: DurableObjectNamespace<IterateContextDurableObject> };
 
 // Walk remaining dotted segments on a target, then apply the args.
 const applyPath = (target: unknown, tail: string[], args: unknown[]) => {
@@ -397,8 +407,10 @@ export class ItxEntrypoint extends WorkerEntrypoint<Env> {
 ```
 
 (No cast on `ctx.exports` — `wrangler types` generates the whole loopback
-typing, `ItxEntrypoint({ props })` included. The DO is untouched in this brick;
-execution stays edge-side until rewrite rules need it.)
+typing, `ItxEntrypoint({ props })` included. `LOADER.get(...).getEntrypoint()` is
+Cloudflare's own Worker Loader API, called raw here; the real platform wraps
+exactly this door as the built-in `itx.workers.get({ source })`. The DO is
+untouched in this brick; execution stays edge-side until rewrite rules need it.)
 
 The proof closes a beautiful loop — a script, running _inside_ the context,
 calls back out through the walker and the pager to the same client's own
@@ -422,17 +434,21 @@ export default class extends WorkerEntrypoint {
 A lent stub is a phone line. For something that should _keep existing_, write a
 **rewrite rule** — `{ match, target }`, pure data, no stub anywhere. In v0 the
 target is a code string the walker loads on demand; the real platform's target
-is an itx expression such as `itx.load(...).getEntrypoint()`. The rule table
+is an itx expression such as `itx.workers.get({ source })`. The rule table
 lives beside the directory:
 
 ```ts
-// the edge grows a second verb:
-  rewrite(match: string, target: string) { return this.#context().rewrite(match, target); }
+// the edge's provide grows a SECOND kind of target — one verb, one more `if`
+// (the real platform's `provide(match, target)`, exactly):
+  async provide(match: string, target: RpcStub<object> | string) {
+    if (typeof target === "string") return this.#context().provide(match, target);
+    await lendRpcStubOverPager(this.#context(), target, match);
+  }
 
-// the DO gains its second table, its own loader, and the verb:
+// the DO gains its second table, its own loader, and the rule door:
   #itxExpressionRewriteRules = new Map<string, string>(); // match → target
 
-  rewrite(match: string, target: string) { this.#itxExpressionRewriteRules.set(match, target); }
+  provide(match: string, target: string) { this.#itxExpressionRewriteRules.set(match, target); }
 
   // Targets resolve where the walker runs — the same loader door, DO-side
   // (DurableObjectState carries typed ctx.exports too).
@@ -446,7 +462,8 @@ lives beside the directory:
 (Stub-before-rule at each prefix length means a lent stub under a key that
 equals a rule's match wins while connected — reconnect-friendly by accident of
 ordering. The real platform has ONE table to consult, because a lent stub is
-reached through a rule too: `itx.<match> ⇒ itx.rpcStubs.get('<rpcStubKey>')`.)
+reached through a rule too, under the key that IS its match:
+`itx.shell ⇒ itx.rpcStubs.get('itx.shell')`.)
 
 The proof is the beat that teaches live-vs-durable in ten seconds: configure a
 greeter as a rule, provide `itx.double` live, then **kill the providing
@@ -479,7 +496,8 @@ const secretFromEnv = (env: Env, name: string) =>
 
 (Sync `replace` is right _here_ because the secrets are env vars; the moment the
 lookup is async — a KV store — you must `await` the substitution before
-fetching. Chapter 2 does.)
+fetching. Chapter 2 does — and its real sentinel carries a scope segment,
+`{{secret:project:NAME}}`, where v0's is bare.)
 
 Inbound: one route, through the SAME walker — anything fetch-shaped is a web
 server:
@@ -539,7 +557,9 @@ The DO _composes_ commit + reduce + fan-out at the call site, because — the
 reveal — **every rewrite rule is an event**. Notice what is _not_ in the log: the
 lent stubs. A socket is a connection, not data; the directory is physical and
 stays physical. The rule table, on the other hand, is nothing but a reduce of
-the log:
+the log. (Every real event type is namespaced — `events.iterate.com/<domain>/<name>`
+— so a `read(0)` filter must carry the prefix; every type below is written in
+full.)
 
 ```ts
 export class IterateContextDurableObject extends DurableObject<Env> {
@@ -561,7 +581,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
 
   #reduce(events: StreamEventInput[]) {
     for (const event of events)
-      if (event.type === "itx/rewrite-rule-configured") {
+      if (event.type === "events.iterate.com/itx/rewrite-rule-configured") {
         if (event.target === null) this.#itxExpressionRewriteRules.delete(event.match as string);
         else this.#itxExpressionRewriteRules.set(event.match as string, event.target as string);
       }
@@ -586,9 +606,13 @@ export class IterateContextDurableObject extends DurableObject<Env> {
 
   read(afterOffset = 0) { return this.#stream.read(afterOffset); }
 
-  // the refactor-reveal — rewrite IS an append:
-  rewrite(match: string, target: string | null) {
-    return this.append({ type: "itx/rewrite-rule-configured", match, target });
+  // the refactor-reveal — configuring a rule IS an append:
+  provide(match: string, target: string | null) {
+    return this.append({
+      type: "events.iterate.com/itx/rewrite-rule-configured",
+      match,
+      target,
+    });
   }
 ```
 
@@ -607,13 +631,14 @@ reduce rides an injected hook _inside_ the commit transaction, so the rule table
 is atomically exact with the batch. Same pieces, inverted wiring, one reason.
 Second, the toy's walker checks two tables — the directory, then the rules. The
 real platform has one: the directory is a **built-in** named `itx.rpcStubs`, and
-a live `provide(rpcStubKey, stub, { rewrite })` _also_ appends an ordinary rule
-whose target is the expression `itx.rpcStubs.get('<rpcStubKey>')`. So the log
-says where every name points, live ones included, while never claiming a socket
+a live `provide(match, stub)` _also_ appends an ordinary rule whose target is the
+expression `itx.rpcStubs.get('<match>')`. So the log says where every name
+points, live ones included, while never claiming a socket
 is open. The toy's stub-before-rule check at each prefix is that rule, reduced by
 hand. Third, the toy makes a subscription a name at `itx.subscribers.*`. The real
-platform gives subscriptions their own event — `subscription-configured { name,
-target | null, consumes? }`, reduced by the one core reduce beside the rules — because a
+platform gives subscriptions their own event —
+`events.iterate.com/stream/subscription-configured { name, target | null,
+consumes? }`, reduced by the one core reduce beside the rules — because a
 subscription names a _delivery_, not a callable: the target is still an
 expression (a lent stub, a facet, a loaded entrypoint's `processEventBatch`), and
 the context decides how to serve it by looking at what the expression evaluates
@@ -623,11 +648,13 @@ to. Same fan-out, one layer up.
 
 That's every concept, in one file (~200 lines of code): and the skeleton you
 built is not _like_ the architecture — it IS the architecture, in miniature,
-with the production names —
+under the production names where v0 has them (the two it invents for itself are
+called out where they appear: the `itx.subscribers.*` subscriber keys, and the
+dotted strings that stand in for itx expressions) —
 
 ```ts
 function lendRpcStubOverPager(context, clientRpcStub, rpcStubKey)   // brick 4: lend a live stub
-class IterateContext extends RpcTarget { ... }                      // bricks 1,2,6,7: the surface — provide · invoke · rewrite · fetch
+class IterateContext extends RpcTarget { ... }                      // bricks 1,2,6,7: the surface — provide · invoke · fetch
 class ItxEntrypoint extends WorkerEntrypoint { ... }                // brick 5: env.ITX
 class RpcStubDirectory { acceptRpcStubPagerWebSocket() ... }        // bricks 3→4: borrowed stubs → pager sockets (the itx.rpcStubs built-in)
 class Stream { append / read }                                      // brick 8: the log + commit point
@@ -643,7 +670,7 @@ What v0 deliberately punts (each is a deep chapter): the pager carrying calls
 (the real one only pages — the stub rides Workers RPC); itx expressions as data
 (v0 walks dotted strings; the real `invoke` takes an `ItxExpressionInput`, and a
 match may pin literal args); stateful facets; un-setting a rule (`target: null`
-— v0's re-rewrite just overwrites) and disposable handles; idempotency,
+— v0's re-provide just overwrites) and disposable handles; idempotency,
 chunking, pause on the stream; real auth. Now the second pass — each primitive,
 done properly.
 
@@ -698,12 +725,9 @@ it. Your laptop offers `.exec()` to the cloud:
 
 ```ts
 // runs: your laptop (a Node capnweb client)
-using laptop = await itx.provide("laptop", {
-  stub: async (cmd: string, args: string[]) => {
-    const { stdout } = await execFile(cmd, args);
-    return stdout;
-  },
-  rewrite: "itx.runOnMyComputer",
+using laptop = await itx.provide("itx.runOnMyComputer", async (cmd: string, args: string[]) => {
+  const { stdout } = await execFile(cmd, args);
+  return stdout;
 });
 ```
 
@@ -712,27 +736,29 @@ using laptop = await itx.provide("laptop", {
 const out = await itx.runOnMyComputer("ls", ["-la"]);
 ```
 
-Two things happened there, and the platform names them apart. `"laptop"` is an
-OPAQUE `rpcStubKey`: the function itself is _physical_ — a socket and a capnweb
-reference your session holds — so it is LENT to a built-in registry,
-`itx.rpcStubs`, under that key, callable as `itx.rpcStubs.get('laptop')(cmd, args)`.
-`rewrite` is _data_: the same `itx/rewrite-rule-configured` event any rule
-appends, with `match: "itx.runOnMyComputer"` and
-`target: "itx.rpcStubs.get('laptop')"`. Read the log and that is exactly what
-you'll see; the lend step has no client verb of its own (only `provide` and
-`subscribe` take a live value), but the rule step is spellable on its own —
-`itx.rewrite("itx.shell", "itx.rpcStubs.get('laptop')")` points another name at
-an already-lent stub. The handle you get back is DISPOSABLE: `using` recalls the
-stub and un-sets the rule at scope end, and capnweb disposes it for you when the
+Two things happened there, and one verb made both. The function itself is
+_physical_ — a socket and a capnweb reference your session holds — so it is LENT
+to a built-in registry, `itx.rpcStubs`, under a key; for `provide` that key IS
+the canonical match, so the function is callable as
+`itx.rpcStubs.get('itx.runOnMyComputer')(cmd, args)`. (`subscribe` is the only
+other verb that takes a live value, and it lends under `subscription:<name>`.)
+The rule is _data_: the same
+`events.iterate.com/itx/rewrite-rule-configured` event any rule appends, with
+`match: "itx.runOnMyComputer"` and
+`target: "itx.rpcStubs.get('itx.runOnMyComputer')"`. Read the log and that is
+exactly what you'll see; the rule step is spellable on its own —
+`itx.provide("itx.shell", "itx.rpcStubs.get('itx.runOnMyComputer')")` points
+another name at an already-lent stub. The handle you get back is DISPOSABLE:
+`using` recalls the stub at scope end, and capnweb disposes it for you when the
 session ends. The split buys three things you'll lean on: a reconnect re-provides
 under the same key (the pager is replaced) and sets the same rule again — the
 table entry is unchanged; "who is connected right now" is a physical question
 with a physical answer — `itx.rpcStubs.list()` — that the log never pretends to
-know; and the rule dies with the stub from both sides — the handle's dispose
-un-sets it from the edge, and when your laptop's LAST pager closes the context
-itself un-sets every rule (and subscription) that named the stub, a reconnect
-replacing the pager rather than closing it. `RPC_STUB_OFFLINE` is what a call
-answers when a rule names a key nobody has lent right now. (An offset into
+know; and the rule dies with the stub — disposing the handle recalls it, and when
+your laptop's LAST pager closes the context itself un-sets every rule (and
+subscription) that named the stub, a reconnect replacing the pager rather than
+closing it. `RPC_STUB_OFFLINE` is what a call answers when a rule names a key
+nobody has lent right now. (An offset into
 _what_ is that event appended? Chapter 3 answers that.)
 
 The server object is no longer a little API — it holds and routes everyone's
@@ -767,20 +793,24 @@ hibernation possible at the end of this chapter.
 A lent stub dies with its provider's connection. For something that should
 _keep existing_, write a rewrite rule whose target is an **expression** — a
 string (or its parsed array) the context evaluates against its own built-ins on
-every call:
+every call. (This section reaches past the order of record for two of those
+built-ins — itx expressions, layer 2, and the loader roots `itx.workers` /
+`itx.facets` — so both are unpacked right here; the ORDER NOTE has the order.)
 
 ```ts
 // runs: any client
-const toolSource = { type: "inline", files: { "tool.js": TOOL_SRC } };
-await itx.load(toolSource).getEntrypoint().run("hello");
+const toolSource = { "cap.js": TOOL_SRC }; // a source IS its modules; "cap.js" is the main one
+await itx.workers.get({ source: toolSource }).run("hello");
 ```
 
-`itx.load(source)` mirrors Cloudflare's Worker Loader: load code into a fresh
-confined isolate, then pick the host — `.getEntrypoint()` for a stateless
-`WorkerEntrypoint`. The source here is handed over inline; it may also be an
-expression that fetches the code (`"itx.kv.get('src/tool.js')"`) — a storage
-choice, not a different API. (The reduced-array wire shape `invoke` carries and
-this dotted call are the same thing: itx expressions.)
+`itx.workers.get({ source })` mirrors Cloudflare's Worker Loader: load code into
+a fresh confined isolate and call any method its entrypoint exports (`run`,
+`fetch`, `processEventBatch`, …). A `source` is the worker's modules, literally,
+with `"cap.js"` as the main module; it may instead be an expression that PRODUCES
+them (`"itx.kv.get('src/tool.js')"`), and then a `cacheKey` is required, because
+the caller owns "same key ⇒ same code" — a storage choice, not a different API.
+(The reduced-array wire shape `invoke` carries and this dotted call are the same
+thing: itx expressions.)
 
 Loaded code isn't sandboxed away _from_ the context — it gets a binding to it:
 
@@ -796,10 +826,11 @@ export default class extends WorkerEntrypoint {
 }
 ```
 
-A `getEntrypoint()` is a stateless isolate: no storage, reused warm while the
-source hash is unchanged. For a _stateful_ mini-app — a
-todo list an agent builds for itself — load a durable class instead. It becomes
-a **facet** of the context's DO: its own storage, shared lifecycle.
+`itx.workers.get` is the stateless host: no storage, the isolate reused warm
+while the source hash (or your `cacheKey`) is unchanged. For a _stateful_
+mini-app — a todo list an agent builds for itself — load a durable class through
+`itx.facets.get(name, { source, className })` instead. It becomes a **facet** of
+the context's DO: its own storage, shared lifecycle.
 
 ```js
 // runs: the loaded isolate (the app an agent wrote for itself) — plain JS again
@@ -820,12 +851,11 @@ export class TodoAppDurableObject extends DurableObject {
 
 ```ts
 // runs: any client — configure the rule, then call it by name
-const todoSource = { type: "inline", files: { "todo.js": TODO_SRC } };
-using todos = await itx.rewrite("itx.todos", [
+const todoSource = { "cap.js": TODO_SRC };
+using todos = await itx.provide("itx.todos", [
   "itx",
-  ["load", todoSource],
-  ["getDurableObjectClass", "TodoAppDurableObject"],
-  ["get", "main"],
+  "facets",
+  ["get", "todos", { source: todoSource, className: "TodoAppDurableObject" }],
 ]);
 
 await itx.todos.add("write the tutorial");
@@ -835,10 +865,11 @@ await itx.todos.list();
 That is the one mechanic underneath both faces: a rewrite rule replaces the
 matched prefix with its target, and the steps after the match — `add("x")` —
 ride along onto whatever the rewritten call evaluates to, here the facet across
-the Workers-RPC hop. `provide`'s `rewrite` option is the same rule with the
-target `itx.rpcStubs.get('<rpcStubKey>')`. The rule made through `rewrite` is
-session-scoped by its handle; the durable spelling is the raw event,
-`itx.append(rewriteRuleConfiguredEvent(match, target))`.
+the Workers-RPC hop. Lending a live stub is that same rule with the target
+`itx.rpcStubs.get('<match>')` — one verb, two kinds of target. A rule made
+through `provide` is session-scoped by its handle; the durable spelling is the
+raw event — in a worker, `itx.append(rewriteRuleConfiguredEvent(match, target))`;
+from a client, the same event written out as a literal.
 
 ### Make it hibernatable: the pager
 
@@ -868,8 +899,9 @@ export class IterateContextDurableObject extends DurableObject {
   #rpcStubs = new RpcStubDirectory({
     hooks: { acceptWebSocket: (ws, tags) => this.ctx.acceptWebSocket(ws, tags) },
     // (elided here: hooks also needs getWebSockets, and the directory takes two
-    // more deps — onPresence, which mints the ephemeral rpc-stub/attached and
-    // /detached { rpcStubKey } events, and the rpc-stub fetch server)
+    // more deps — onPresence, which mints the ephemeral
+    // events.iterate.com/rpc-stub/attached and .../detached { rpcStubKey }
+    // events, and the rpc-stub fetch server)
   });
 
   fetch(request: Request) {
@@ -926,7 +958,7 @@ async fetch(request: Request): Promise<Response> {
 // runs: the client — calls OpenAI without ever holding the key
 await itx.fetch(
   new Request("https://api.openai.com/v1/models", {
-    headers: { Authorization: "Bearer {{secret:OPENAI_API_KEY}}" },
+    headers: { Authorization: "Bearer {{secret:project:OPENAI_API_KEY}}" },
   }),
 );
 ```
@@ -980,7 +1012,7 @@ class Tunnel extends RpcTarget {
   }
 }
 
-using tunnel = await itx.provide("tunnel", new Tunnel(), { rewrite: "itx.bla" });
+using tunnel = await itx.provide("itx.bla", new Tunnel());
 ```
 
 Now `https://example.com/expression?context=prj_demo&itx=itx.bla` serves your
@@ -1047,11 +1079,12 @@ using printer = await itx.subscribe({
   is itself an event on), ephemeral events allowed.
 - **`read`** — a page of history plus how far the scan reached, so a client can
   chain pages without gaps.
-- **`subscribe`** — appends one event, `subscription-configured { name,
-target | null, consumes? }`; a live callback is first lent to `itx.rpcStubs`
-  (Chapter 1) under `itx.subscriptions.<name>` and the target names it. HOW it
-  is served is not declared: after each commit the context evaluates the target
-  and looks at the value. A lent stub or a facet _owns its progress_, so it gets
+- **`subscribe`** — appends one event,
+  `events.iterate.com/stream/subscription-configured { name, target | null,
+consumes? }`; a live callback is first lent to `itx.rpcStubs` (Chapter 1) under
+  `subscription:<name>` and the target names it. HOW it is served is not
+  declared: after each commit the context evaluates the target and looks at the
+  value. A lent stub or a facet _owns its progress_, so it gets
   a push of `(events, range)`: over the pager, fire-and-forget, for a stub;
   awaited, in-DO, for a facet. No server cursor for either; a client owns its
   offset and heals any gap with `read`. Anything else (a loaded entrypoint's
@@ -1074,11 +1107,11 @@ new Stream({
 ```
 
 The DO's constructor calls `stream.appendCreatedAndWokenEvents()` before any door opens: the first
-incarnation appends `stream/created { projectId, path }` at offset 1, then
-`stream/woken { incarnation }` at offset 2; every later incarnation appends its
-`woken` first, and core's own live-state delta takes offset 3 (an ephemeral). So your first
-`append` lands at offset 4, and any door — a read, a
-snapshot — materializes a context.
+incarnation appends `events.iterate.com/stream/created { projectId, path }` at
+offset 1, then `events.iterate.com/stream/woken { incarnation }` at offset 2;
+every later incarnation appends its `woken` first, and core's own live-state
+delta takes offset 3 (an ephemeral). So your first `append` lands at offset 4,
+and any door — a read, a snapshot — materializes a context.
 
 ### Processors: react to the log, as facets
 
@@ -1092,21 +1125,23 @@ handle:
 
 ```ts
 await itx.enableProcessor("unread-counts", {
-  source: { type: "inline", files: { "counter.js": COUNTER_SRC } },
+  source: { "cap.js": COUNTER_SRC },
   className: "UnreadCounterDurableObject", // the host; `processor = new UnreadCounterProcessor()` inside
 });
 ```
 
 A processor's reduced state is queryable through its `snapshot()` — and even the
 rewrite-rule table is reduced state: the context's own control events
-(`stream/created`, `stream/woken`, `stream/paused`, `itx/rewrite-rule-configured`,
-`stream/subscription-configured`, …) reduce into ONE core reduce — `CoreStreamProcessor`,
+(`events.iterate.com/stream/created`, `…/stream/woken`, `…/stream/paused`,
+`…/itx/rewrite-rule-configured`, `…/stream/subscription-configured`, …) reduce
+into ONE core reduce — `CoreStreamProcessor`,
 the same `StreamProcessor` class you just wrote, run inline at the commit point
 and read as `itx.facets.get('core').snapshot()`. "What rewrites to what" is one
 slice of it (`itxExpressionRewriteRules`, a map by canonical match), reduced from
 the same log that everything else rides. Policy that
 need not gate an append synchronously stays out of core: a token-bucket breaker
-is an ordinary facet processor that appends `stream/paused { reason }`.
+is an ordinary facet processor that appends
+`events.iterate.com/stream/paused { reason }`.
 
 **That's the third primitive**: an append-only log with one commit point,
 subscribers served over the pager, and processors — facets that reduce the log
@@ -1122,9 +1157,10 @@ for every FUTURE item:
 **Shipped**
 
 - **LiveState** — a processor's reduced state, made live: after each batch it
-  appends an ephemeral `live-state/changed` delta `{key, from, to, patch}`;
-  clients seed from `liveSnapshot()`'s `{rev, state}` (a mini-app's own
-  door, such as `state()`, returns its `LiveState`'s snapshot), chain patches by revision,
+  appends an ephemeral `events.iterate.com/live-state/changed` delta
+  `{key, from, to, patch}`; clients seed from `liveSnapshot()`'s `{rev, state}`
+  (a mini-app's own door, such as `state()`, returns its `LiveState`'s snapshot),
+  chain patches by revision,
   and re-read on any mismatch — lossy, always healable. A small React hook
   (`useLiveState`) rides this on the client.
 - **Projects & routing** — a project is just the prefix of every context DO name
@@ -1134,9 +1170,9 @@ for every FUTURE item:
   layered through an egress fallback chain.
 - **MCP for agents** — put an MCP server in front of the context: each rewrite
   rule is a tool; a `tools/call` is an `itx.<match>(...)` invocation. Provide
-  your robot from your desk with `rewrite: "itx.robot"` and your coding agent
-  can make it nod. (The context layer is shipped; the MCP shim itself lives in
-  the control plane, not yet wired to serving.)
+  your robot from your desk — `itx.provide("itx.robot", robot)` — and your
+  coding agent can make it nod. (The context layer is shipped; the MCP shim
+  itself lives in the control plane, not yet wired to serving.)
 
 **Ahead**
 
@@ -1173,7 +1209,7 @@ src/
   worker.ts                          the edge: `/api` (capnweb) and `/expression` (fetch-in)
   session.ts                         UnauthenticatedSession → Session → ProjectCollection.get(id); SessionTeardown
   iterate-context.ts                 IterateContext, the client-facing RpcTarget — a proxy in front of the DO:
-                                     cd · invoke · provide · rewrite · subscribe · enableProcessor · disableProcessor
+                                     cd · invoke · provide · subscribe · enableProcessor · disableProcessor
   iterate-context-durable-object.ts  IterateContextDurableObject — composes the stream, the rules, the stubs
   itx-entrypoint.ts                  env.ITX for loaded code
   context/   built-ins, expression, itx-expression-rewriting, dispatch, invoke-handle, dotted-path-proxy,
@@ -1194,8 +1230,8 @@ specs/       `pnpm spec` — Playwright drives the hosted /demo page
 | ------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Ch 1 edge worker + `IterateContext` + `provide`              | `src/worker.ts` (`/api`), `src/iterate-context.ts`                                                                                                                                                                                                                                  |
 | Ch 1 the context DO                                          | `IterateContextDurableObject`, `src/iterate-context-durable-object.ts`                                                                                                                                                                                                              |
-| Ch 1 rewrite rules / the walker                              | `src/context/itx-expression-rewriting.ts` (the rules 1–5, `rewriteRuleConfiguredEvent`, `ItxExpressionResolver`), `src/context/expression.ts` (the codec), `src/context/dispatch.ts` (the step walk); the edge verb `rewrite` in `src/iterate-context.ts`                           |
-| Ch 1 load / facets / tail replay                             | `src/context/built-ins.ts`, the DO's private facet door                                                                                                                                                                                                                             |
+| Ch 1 rewrite rules / the walker                              | `src/context/itx-expression-rewriting.ts` (the rules 1–5, `rewriteRuleConfiguredEvent`, `ItxExpressionResolver`), `src/context/expression.ts` (the codec), `src/context/dispatch.ts` (the step walk); the edge verb `provide` in `src/iterate-context.ts`                           |
+| Ch 1 workers.get / facets.get / tail replay                  | `src/context/built-ins.ts`, the DO's private facet door                                                                                                                                                                                                                             |
 | Ch 1 the pager (the `itx.rpcStubs` built-in's backing table) | `RpcStubDirectory`, `src/context/rpc-stub-directory.ts` (two layers: borrowed stubs, then pagers), and the edge's `lendRpcStubOverPager`, `src/context/rpc-stub-relay.ts`; the built-in itself in `src/context/built-ins.ts`, the edge half (`provide`) in `src/iterate-context.ts` |
 | Ch 2 secret sentinel                                         | `{{secret:project:NAME}}` — `../shared/src/egress.ts`, the DO's `#egress` terminal                                                                                                                                                                                                  |
 | Ch 2 fetch-in / tunnel                                       | `/expression` in `src/worker.ts`, `src/fetch/rpc-stub-fetch.ts` (the `x-itx-expression` lane), `upgradeWebSocketResponse` in the capnweb fork                                                                                                                                       |

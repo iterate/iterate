@@ -1,3 +1,9 @@
+> **HISTORY (2026-09-03).** Research into serving WebSockets from a client-provided live handler.
+> The fetch lane it designs against is gone: there are no mounts, the `/cap` route is deleted (the
+> expression fetch lane is `/expression`), and the shipped WORKAROUND fence lives in
+> `src/fetch/rpc-stub-fetch.ts`. Kept for the platform findings. The surface as built is
+> `docs/itx-surface-as-built.md`.
+
 # R3b — a LIVE capnweb-provided fetch handler that serves WebSockets
 
 ## The problem

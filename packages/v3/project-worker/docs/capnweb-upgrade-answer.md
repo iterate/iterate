@@ -85,7 +85,8 @@ Everything below is verified against `iterate/capnweb` branch `rebase-0.12` (≈
 **The experiment (2026-08-31).** A scratch harness test ran the full tunnel scenario with
 spelling (4): Node capnweb provider on `/api`, undici client socket to a local hand-rolled
 RFC 6455 echo server, plain Node eyeball WebSocket on
-`/cap?ctx=…&cap=itx.bla`. Result on published 0.12.0: `{"opened":true,"echo":
+`/cap?ctx=…&cap=itx.bla` (the route of that day; the expression fetch lane is now
+`/expression?context=…&itx=…`). Result on published 0.12.0: `{"opened":true,"echo":
 "local-echo:hello-through-tunnel","closeCode":1000}` — fully green. The clean close surfaced one
 **real platform bug** (not a fork bug): `handleWebSocketClose` closed only the _peer_, never
 echo-closing the initiating socket, and workerd's hibernatable API does not auto-complete a

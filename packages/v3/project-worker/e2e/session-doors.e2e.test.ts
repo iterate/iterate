@@ -1,6 +1,6 @@
 // session-doors.e2e.test.ts — the session's doors: one-shot HTTP batch at /api (no WebSocket),
 // a fetch-shaped target through the session as a dotted `.fetch(request)` behind a rewrite rule (the
-// commissioned fork feature carries the Response back), disableProcessor, the repo.
+// commissioned fork feature carries the Response back), and disableProcessor.
 
 import { expect, test } from "vitest";
 import { freshCtx, httpBatch, openItx, processorNames } from "./support/client.ts";

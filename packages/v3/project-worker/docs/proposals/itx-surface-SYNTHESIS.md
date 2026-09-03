@@ -1,3 +1,9 @@
+> **HISTORY (2026-09-03).** §§1-8 argue for an API that LOST: the verb they propose, `rewrite`, was
+> never shipped — `provide(match, target)` is THE ONE FRONT DOOR for a live stub, an expression and
+> `null` alike, and the DO has no configuration verb. §9 is the only section that records what was
+> actually built. Read §9 first; read §§1-8 as the argument, not the surface. The surface as built
+> is `docs/itx-surface-as-built.md`.
+
 # itx surface — synthesis of the four proposals (A radical minimum · B setter symmetry · C onion rings · D transparent proxy)
 
 > 2026-09-02. Four sub-agents designed the surface under four incompatible constraints, each answering
@@ -16,7 +22,7 @@
 | 6   | **The DO's four config verbs die** (`provideCapability`, `revokeCapability`, `configureSubscription`, `removeSubscription`); the DO's Workers-RPC surface is `invoke` + transport plumbing.                                                                                                                                                                                                                                                                                      | A B C D     |
 | 7   | **`path: string[]` → `itxExpressionSteps: ItxExpression`** in `RpcStubDirectory.invoke` and `InvokeHandle` — deletes two `(path, args)` ↔ expression conversions (A and B found the same double conversion) and makes `itx.cam.zoom(2).snap()` spellable on a live stub.                                                                                                                                                                                                         | A B C D     |
 | 8   | **The stub key stays opaque, the sugar derives it** from the canonical match string so a reconnect appends zero events. D's alternative (a DO-side rename of the stub) is the one place D leaks a layer downward; D itself flags it.                                                                                                                                                                                                                                             | B C (D: no) |
-| 9   | **Layer order**: stream → expressions/dispatch → rewrites → rpc stubs → subscriptions → processors; processors add no event and no door of their own.                                                                                                                                                                                                                                                                                                                            | A B C D     |
+| 9   | **Layer order** (corrected 2026-09-03 to the order the tutorial builds them): rpc stubs → stream → itx expressions/dispatch → rewrite rules → subscriptions → processors; processors add no event and no door of their own.                                                                                                                                                                                                                                                      | A B C D     |
 | 10  | **Fully qualified stub names**, the same list in all four: `#borrowedRpcStubs`, `#pendingRpcStubPagerAttachments`, `#rpcStubPagesInFlight`, `BorrowedRpcStub` (DO) / `LentRpcStub` (edge) / `ClientRpcStub`, `attachRpcStubPager`, `lendRpcStub`, `invokeRpcStub`, `returnBorrowedRpcStubs`, `lendRpcStubOverPager`, `#lendRpcStub`, `#recallRpcStub`, `#sessionTeardownKey`, `rpcStubTransportState`, `RPC_STUB_OFFLINE` (was `CONNECTION_OFFLINE`), `NO_ITX_EXPRESSION_MATCH`. | A B C D     |
 
 ## 2. Where they split — four decisions
@@ -43,7 +49,7 @@ discoverability to three names.
 nothing, then a second call for the rewrite (loses lend-first/rewrite-second, opens a
 `RPC_STUB_OFFLINE` window, a refused rewrite leaves a dangling stub). C: `provide(path, stub)` =
 lend + rewrite, two doors writing one table. D: intercept ANY live value in ANY `invoke` — D's own
-trade-off #1 shows this breaks call-scoped callbacks (`load-mid-chain-pipelining.e2e`: `callLater(200,
+trade-off #1 shows this breaks call-scoped callbacks (`facets-mid-chain-pipelining.e2e`: `callLater(200,
 cb)` must reach loaded code as a callable) and turns one-shot callbacks into session-lived pager
 sockets; D's retreat is "declared slots", i.e. B. B: the SAME write door accepts a live value in the
 value position; the edge lends at exactly those doors. **Recommendation: B's shape with flat verbs:**
@@ -240,7 +246,7 @@ today: mounts are durable data that outlive sessions; under this design the dura
 the scoped spelling is the verb. (Annotation 3 dissolves with the map: disposing the handle deletes the entry at that match.)
 
 **8.5 Examples use INLINE sources** (annotation 8). `WorkerSource` already accepts `{ type: "inline", files:
-{ "tally.js": "export class TallyProcessor …" } }` (worker-loader.ts; `load-sources.e2e` proves it). Every
+{ "tally.js": "export class TallyProcessor …" } }` (worker-loader.ts; `workers-and-facets-sources.e2e` proves it). Every
 example and the tutorial write the processor inline; `itx.kv.get('src/tally.js')` is a storage choice, not
 the shape of the API. If an inline processor cannot be written in one string, that is a defect to fix.
 
@@ -264,13 +270,15 @@ removal: `stream/subscription-configured { name, target | null, consumes? }`;
 
 The code is the record; the differences from the sketches above, so this doc does not lie:
 
-- **Handles**: one class per thing — `ProvidedRpcStubHandle` (`provide`), `RewriteRuleHandle` (`rewrite`),
+- **Handles** (corrected 2026-09-03): TWO classes — `RewriteRuleHandle` (`provide`) and
   `SubscriptionHandle` (`subscribe`, plus a `name` getter: the generated name when none was given). Each
   is just `[Symbol.dispose]`; the caller already holds the key/match it passed. (fe8168c13 replaced the
-  earlier single `SessionScopedHandle` — a lifetime is not a name for a thing.)
-- **`provide(rpcStubKey, stub, options?)`** (positional stub; `options.rewrite` is the chapter-3b sugar) is the chapter-1
-  door and the sugar in one signature; `invoke` takes an `ItxExpressionInput` from the start (the chapter-1 `invoke(key, ...args)`
-  spelling is `itx.rpcStubs.get('<key>')(...args)`).
+  earlier single `SessionScopedHandle` — a lifetime is not a name for a thing; the `ProvidedRpcStubHandle`
+  this bullet first named never reached HEAD, see the ONE FRONT DOOR bullet below.)
+- **`provide(match, target)`** — two positional arguments, no options bag (corrected 2026-09-03; the
+  `provide(rpcStubKey, stub, options?)` form this bullet first recorded was deleted by the ONE FRONT DOOR
+  round below). `invoke` takes an `ItxExpressionInput` from the start (the chapter-1 `invoke(key, ...args)`
+  spelling is `itx.rpcStubs.get('<match>')(...args)`).
 - **The edge writes through `invoke(["itx", ["append", event]])`** — the same door a client's dotted
   `itx.append(...)` takes; the DO has no `append` verb the edge calls directly.
 - **Reads on the surface**: `itx.rewriteRules.list()/get(match)` (strings), `itx.rpcStubs.list()`
@@ -286,12 +294,19 @@ The code is the record; the differences from the sketches above, so this doc doe
   door; it survives inside `RpcStubDirectory` and as `subscription:<name>` for a live subscriber.
 - **2026-09-02, same round — ONE facet door and INLINE sources.** `itx.facets.get(name, { source, className })`
   hosts a loaded `DurableObject` class as the facet `name` (the mirror of `ctx.facets.get(name,
-startupCallback)`); `itx.facets.get(name)` addresses a running one; `load(src)` keeps `getEntrypoint` only
-  — the `getDurableObjectClass(C).get(name?)` chain is gone. `enableProcessor`'s target is
+startupCallback)`); `itx.facets.get(name)` addresses a running one; `load(src)` is DELETED outright (12d19384a) —
+  the two loader doors are `itx.workers.get({ source, cacheKey?, className?, props? })` for a stateless
+  isolate and `itx.facets.get(name, { source, cacheKey?, className })` for a durable one, and the
+  `getDurableObjectClass(C).get(name?)` chain is gone. `enableProcessor`'s target is
   `itx.facets.get(name, spec).processEventBatch`. A `WorkerSource` is the worker's MODULES, literally
-  (`Record<string, string>`, `"cap.js"` the main module): the producer-expression branch
-  (`"itx.kv.get('src/x.js')"`) and the `{ type: "inline", files }` wrapper are deleted, and a facet's
-  startup memo stores the modules. Jonas: "I thought we said no more itx.kv.get… we should just rub that out."
+  (`Record<string, string>`, `"cap.js"` the main module): the `{ type: "inline", files }` wrapper is
+  deleted and a facet's startup memo stores the modules. Jonas: "I thought we said no more itx.kv.get…
+  we should just rub that out."
+- **2026-09-02, later the same day — the producer expression came BACK, behind a required `cacheKey`**
+  (038f127a9, after 690d7770c deleted it). `WorkerSource = WorkerModules | ItxExpressionInput`: a source
+  may be an expression that PRODUCES the modules, but only when the caller also passes a `cacheKey`,
+  because the loader cannot key a cache on code it has not fetched yet. `worker-loader.test.ts` pins
+  the refusal.
 - **Wire**: `x-itx-expression`, `/expression?context=…&itx=…`, `x-itx-rpc-stub-pager`; codes
   `NO_ITX_EXPRESSION_MATCH`, `RPC_STUB_OFFLINE`; events `itx/rewrite-rule-configured { match, target|null }`,
   `stream/subscription-configured { name, target|null, consumes? }`; core contract 4.0.0.

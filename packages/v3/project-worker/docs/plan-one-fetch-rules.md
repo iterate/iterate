@@ -1,3 +1,11 @@
+> **HISTORY (2026-09-03).** The fetch design is PARKED and this plan predates the itx-surface
+> rename: there are no mounts and no capability-table contract (core is slug `core`, v4.0.0), a
+> rule is `{ match, target }` written by ONE event
+> (`events.iterate.com/itx/rewrite-rule-configured`), `itx.load(...)` is now
+> `itx.workers.get({ source, cacheKey? })` / `itx.facets.get(name, { source, className })`, and the
+> live routes are `/version`, `/demo`, `/api`, `/expression`. The surface as built is
+> `docs/itx-surface-as-built.md`.
+
 # One fetch, ruled by events — synthesis of six design cuts (2026-09-01)
 
 Clean room `packages/v3/project-worker`, written at 69080fd9e (C7) and **re-aligned 2026-09-02 to the

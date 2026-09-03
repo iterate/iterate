@@ -25,10 +25,9 @@ function harness() {
     },
   };
   const doorReads: ((seed: Seed) => void)[] = [];
-  const door = () => new Promise<Seed>((resolve) => doorReads.push(resolve));
   return {
     itx,
-    door,
+    door: () => new Promise<Seed>((resolve) => doorReads.push(resolve)),
     doorReads,
     deliverDelta: (delta: LiveStateDelta) => deliver([{ payload: delta }], {}),
   };

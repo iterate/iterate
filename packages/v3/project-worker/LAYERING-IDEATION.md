@@ -1,3 +1,9 @@
+> **HISTORY (2026-09-03).** Greenfield ideation from 2026-08-20, superseded by what actually
+> landed: mounts, connections and the pathProxy are deleted, and `SturdyRefTransport` is an
+> invented noun that was never built — the real thing is the pager relay
+> (`src/context/rpc-stub-relay.ts`). The surface as built is `docs/itx-surface-as-built.md`; the
+> layer map is `LAYERS.md`.
+
 # Layering ideation — the clean target (greenfield, then reconciled)
 
 Jonas called the incremental "name the seam with `unknown` casts" approach _gross_. This is the

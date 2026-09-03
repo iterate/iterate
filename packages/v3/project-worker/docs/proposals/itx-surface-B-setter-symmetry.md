@@ -1,3 +1,6 @@
+> **HISTORY** — one of four options considered 2026-09-02; see `docs/itx-surface-as-built.md` for
+> what shipped.
+
 # Design B — setter symmetry: every configurable thing is a keyed setter, `null` removes
 
 > **One rule.** `collection.set(key, value)` sets; `collection.set(key, null)` removes. Six verbs (`provide`/`revoke`/`subscribe`/`unsubscribe`/`enableProcessor`/`disableProcessor`) collapse into three collections, and **each event has the same shape as its setter** — one event with a nullable target, no provided/revoked pair. Fetch stays parked.

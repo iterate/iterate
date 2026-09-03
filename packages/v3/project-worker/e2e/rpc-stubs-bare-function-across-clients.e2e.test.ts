@@ -7,7 +7,7 @@
 import { expect, test } from "vitest";
 import { freshCtx, openItx } from "./support/client.ts";
 
-test("client A: provide('itx.runOnMyComputer', async fn, rewrite) · client B: await itx.runOnMyComputer('ls', ['-la']) runs A's function", async () => {
+test("client A: provide('itx.runOnMyComputer', async fn) · client B: await itx.runOnMyComputer('ls', ['-la']) runs A's function", async () => {
   const ctx = freshCtx("barefn");
   const laptop = openItx(ctx);
   const otherClient = openItx(ctx);

@@ -1,5 +1,5 @@
 // fetch-door-dynamic-live-ws.e2e.test.ts — DYNAMIC WORKER ⇄ DYNAMIC WORKER over a LENT fetch-shaped
-// rpc stub, WebSocket included. Provider worker A (loaded via itx.load) PROVIDES a live RpcTarget
+// rpc stub, WebSocket included. Provider worker A (loaded via `itx.workers.get({ source })`) PROVIDES a live RpcTarget
 // whose fetch() upgrades WebSockets, behind the rewrite rule `itx.wsdyn`; consumer worker B fetches
 // it through its own env.ITX binding — a real Fetcher (the ItxEntrypoint loopback) — with the
 // x-itx-expression header, riding the DO's fetch lane. Every hop is native Workers RPC / native

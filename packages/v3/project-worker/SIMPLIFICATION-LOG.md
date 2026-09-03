@@ -1,3 +1,8 @@
+> **HISTORY (2026-09-03).** The append-only record of the 2026-08 simplification campaign, which is
+> closed. Names and file paths here are the names of their day (the campaign predates the
+> itx-surface rename of 2026-09-02). The surface as built is `docs/itx-surface-as-built.md`; the
+> layer map is `LAYERS.md`.
+
 # Simplification log — stream/context/sturdy-ref clean-up (2026-08-20)
 
 Goal (Jonas): do the roadmap we discussed as cleanly as possible, with legible well-explained

@@ -1,3 +1,10 @@
+> **HISTORY (2026-09-03).** The plan of record for increments 55-57, written 2026-08-19 and
+> since overtaken: there is no `CapabilityTableProcessor` and no `capability-table` slug (core is
+> slug `core`, v4.0.0), `itx.clients` / `itx.contexts` / connections were deleted, and
+> `stream-durable-object.ts` is now `iterate-context-durable-object.ts`. The surface as built is
+> `docs/itx-surface-as-built.md`; the layer map is `LAYERS.md`. Kept for its vocabulary and its
+> record of what was agreed; do not read it as current.
+
 # Plan of record — the consolidation waves (2026-08-19)
 
 The owner-agreed implementation spec for increments 55-57 plus the two review passes. This file

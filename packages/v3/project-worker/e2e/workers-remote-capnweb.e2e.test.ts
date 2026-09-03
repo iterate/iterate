@@ -1,4 +1,5 @@
-// load-remote-capnweb.e2e.test.ts — dialing a REMOTE capnweb API is USERSPACE: a loaded WorkerEntrypoint imports
+// workers-remote-capnweb.e2e.test.ts — dialing a REMOTE capnweb API is USERSPACE: a WorkerEntrypoint loaded
+// through `itx.workers.get({ source, className, props })` imports
 // capnweb's client from the SDK (`./processor.js`), reads the remote's url from Cloudflare's own
 // `ctx.props` (minted at `workers.get({ source, className, props })`), and dials it over ONE one-shot HTTP
 // batch through the context's egress. No built-in, no persistent socket, so the remote never pins

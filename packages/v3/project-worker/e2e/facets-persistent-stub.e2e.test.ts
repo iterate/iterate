@@ -1,4 +1,5 @@
-// load-persistent-stub.e2e.test.ts — Kenton's persistent-stub machinery IN USE: a userspace durable object
+// facets-persistent-stub.e2e.test.ts — Kenton's persistent-stub machinery IN USE: a userspace durable object
+// hosted through `itx.facets.get(name, { source, className })`
 // stores its live itx handle (the ctx.exports-minted ItxEntrypoint stub) in
 // its OWN storage, then uses the handle read back from storage — which replays the restore
 // chain on use. storage.put would THROW for any non-restorable stub, so put succeeding + the

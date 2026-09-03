@@ -1,3 +1,8 @@
+> **HISTORY (2026-09-03).** The defect-fix campaign of 2026-08; closed 2026-08-28. Its "PHASE 0
+> (DOING NOW)" is done, and the verbs it plans against (`provideCapability({ path, type })`,
+> mounts, connections, the pathProxy) are all deleted. The surface as built is
+> `docs/itx-surface-as-built.md`; the defects themselves are `DEFECTS.md`.
+
 # Action plan — fixing the 45 defects while clarifying the code
 
 Companion to DEFECTS.md. Principle (owner): NO invented machinery. Every fix is either (a) a

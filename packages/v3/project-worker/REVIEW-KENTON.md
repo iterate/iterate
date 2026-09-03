@@ -1,3 +1,7 @@
+> **HISTORY (2026-09-03).** The Kenton-bar review of increment 30. Every path it names under
+> `src/core/` has since moved (`src/core/*` → `src/context/*` and `src/stream/*`), so read the
+> findings, not the file names. The surface as built is `docs/itx-surface-as-built.md`.
+
 # REVIEW-KENTON — the Kenton-bar review (increment 30, `kenton-1`)
 
 Owner's instruction: "review everything for simplicity, clarity, elegance — it should be as

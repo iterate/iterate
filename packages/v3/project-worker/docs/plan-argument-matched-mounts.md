@@ -1,6 +1,13 @@
 # Plan: argument-matched mounts (`itx.ai.run('some-model')` as a capability path)
 
-> **LANDED 2026-09-02** — with two differences from the recommendation below, both Jonas's calls:
+> **LANDED 2026-09-02, then renamed** (banner corrected 2026-09-03): `routing.ts` +
+> `capability-table.ts` → `context/itx-expression-rewriting.ts`; the verb is `provide`, not
+> `route`. Every `src/context/routing.ts`, `capability-table.ts` and `itx.load(...)` reference
+> below is a name of its day — the rules live in `src/context/itx-expression-rewriting.ts`,
+> table-tested by `itx-expression-rewriting.test.ts`, and the loader doors are
+> `itx.workers.get({ source, cacheKey? })` / `itx.facets.get(name, { source, className })`.
+> The surface as built is `docs/itx-surface-as-built.md`. The matching rules themselves landed
+> as described — with two differences from the recommendation below, both Jonas's calls:
 > the pinned args are CONSUMED by the match (partial application: `itx.ai.run('gpt-5') ⇒
 itx.openai.chat` makes `itx.ai.run('gpt-5', inputs)` into `itx.openai.chat(inputs)`), consistent
 > with every other matched step being replaced by the target; and mid-path pinned steps are allowed

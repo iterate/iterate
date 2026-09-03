@@ -1,3 +1,6 @@
+> **HISTORY** — one of four options considered 2026-09-02; see `docs/itx-surface-as-built.md` for
+> what shipped.
+
 # itx surface A — the radical minimum
 
 > **A method exists only for what cannot be an appended event or a capability call.** Six survive:
@@ -129,7 +132,7 @@ brand-checks a method's return (`NonPipelinable`; cloudflare/workerd#6873).
 instead of `DO.append(e)`: the same single Workers-RPC hop plus one `Object.hasOwn` built-in check
 and a `walkSteps` walk. Mid-chain pipelining is untouched — what the DO returns mid-chain is a
 genuine `RpcTarget` (`InvokeHandle`, `FacetHandle`, `RpcStubHandle`) either way, which is what
-`load-mid-chain-pipelining.e2e` pins. Two real costs: `invoke` types its return `unknown`, and a
+`facets-mid-chain-pipelining.e2e` pins. Two real costs: `invoke` types its return `unknown`, and a
 typo lands as `NO_EXPRESSION_MATCH` rather than a missing-method error — both already true for
 `itx.kv`, `itx.facets`, `itx.load`. `waitForEvent` gains a built-in root so the mirror is exact;
 `ItxEntrypoint` keeps flat `append`/`read` as the processor engine's fast path.

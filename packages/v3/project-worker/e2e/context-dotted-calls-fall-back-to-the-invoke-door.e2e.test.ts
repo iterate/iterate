@@ -1,4 +1,4 @@
-// context-dotted-calls-fall-back-to-the-table.e2e.test.ts — the NATURAL DOTTED CLIENT SURFACE. A
+// context-dotted-calls-fall-back-to-the-invoke-door.e2e.test.ts — the NATURAL DOTTED CLIENT SURFACE. A
 // client speaks deep dotted itx expressions as PLAIN PROPERTY ACCESS on the capnweb stub —
 // `itx.slack.chat.postMessage({...})`, `itx.kv.put('k','v')` — even though only fixed members are
 // real methods anywhere along the path: the prototype hop (context/dotted-path-proxy.ts) turns every

@@ -1,9 +1,10 @@
-// load-sources.e2e.test.ts — loading code: ONE door per host kind. `itx.workers.get({ source })` (a
+// workers-and-facets-sources.e2e.test.ts — loading code: ONE door per host kind. `itx.workers.get({ source })` (a
 // stateless WorkerEntrypoint — its spec is its address) and `itx.facets.get(name, { source, className })`
 // (a DurableObject hosted as the durable facet `name`). Plus `itx.facets.get(name)` — the same door,
 // addressing a RUNNING facet. The
 // SOURCE is the worker's MODULES (module name → code, `"cap.js"` is the main module), handed over
-// INLINE at the load site; `itx.runScript(lambda)` is the source-less sugar.
+// at the `workers.get` / `facets.get` site; `itx.runScript(lambda)` is the source-less sugar. A source
+// may instead be an EXPRESSION that produces the modules, but only under a required `cacheKey`.
 
 import { RpcTarget } from "capnweb";
 import { expect, test } from "vitest";
@@ -57,7 +58,7 @@ export class CounterDurableObject extends DurableObject {
   ).toBe(1);
 });
 
-test("the load door takes the modules INLINE, and runScript(lambda) sugar", async () => {
+test("itx.workers.get takes the modules INLINE, and runScript(lambda) sugar", async () => {
   const ctx = freshCtx("inline");
   const itx = openItx(ctx);
 

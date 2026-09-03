@@ -1,3 +1,7 @@
+> **HISTORY (2026-09-03).** The first proof, PROVEN 2026-08-04 and long since absorbed into the
+> package. Names and routes here predate the itx-surface rename. The surface as built is
+> `docs/itx-surface-as-built.md`.
+
 # Walking skeleton — a "proper" fetch (WebSocket upgrades and all) through the whole stack
 
 Implements target-core §6.0 (D33): the FIRST thing to prove, because a 101 can't cross an RPC hop, so every

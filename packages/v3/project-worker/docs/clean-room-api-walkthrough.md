@@ -85,7 +85,7 @@ The tree is laid out by primitive, one folder per chapter of the tutorial.
 
 ```text
 packages/v3/project-worker/
-  wrangler.jsonc                 bindings: CONTEXT (DO), LOADER, ITX_KV, SECRETS_KV,
+  wrangler.jsonc                 bindings: ITERATE_CONTEXT (DO), LOADER, ITX_KV, SECRETS_KV,
                                  CF_VERSION_METADATA, FALLBACK (service → ControlPlaneShell)
   build-sdk.mjs                  bundles src/sdk/index.ts → generated/processor-sdk.ts (processor.js),
                                  client/demo.tsx → generated/demo-page.ts
@@ -95,15 +95,15 @@ packages/v3/project-worker/
     session.ts                   UnauthenticatedSession → Session → ProjectCollection (the gate + catalog),
                                  SessionTeardown (what a session undoes at its end)
     iterate-context.ts           IterateContext, the client-facing RpcTarget: a PROXY in front of the DO —
-                                 cd · invoke · provide · rewrite · subscribe · enableProcessor · disableProcessor;
+                                 cd · invoke · provide · subscribe · enableProcessor · disableProcessor;
                                  RewriteRuleHandle / SubscriptionHandle (disposable)
     iterate-context-durable-object.ts  THE CONTEXT DO: stream + the core reduce + delivery + facets +
-                                 rpc stubs + the fetch doors. One class, ~600 lines. First line:
+                                 rpc stubs + the fetch doors. One class, ~675 lines. First line:
                                  #name = parseIterateContextDurableObjectName(ctx.id.name)
     itx-entrypoint.ts            ItxEntrypoint: what a loaded worker's env.ITX is
     context/                     chapter 1 — the context: rpc stubs, expressions, rewrite rules
       built-ins.ts               the kernel roots: whoami, kv, append, read, waitForEvent, cd, fetch,
-                                 rpcStubs, rewriteRules, facets, subscriptions, load, runScript
+                                 rpcStubs, rewriteRules, facets, subscriptions, workers, runScript
       expression.ts              the codec: "itx.a.b(1)" ⇄ ["itx","a",["b",1]]; ItxExpression /
                                  ItxExpressionInput / ItxExpressionPrefix; canonicalItxExpressionPrefix
       itx-expression-rewriting.ts  THE RULES 1–5 (match / pick / apply / rewrite-to-built-in), the ONE
@@ -293,8 +293,8 @@ class IterateContext extends RpcTarget {
     name: string,
     ref: { source: WorkerSource; className: string; consumes?: string[] },
   ): Promise<{ name: string }>;
-  /** `subscription-configured { name, target: null }` + `itx.facets.delete(name)`, storage
-   *  included: a re-enable is a clean rebuild. */
+  /** `subscription-configured { name, target: null }` — ONE event; the DO deletes the facet the
+   *  removed row hosted, storage included: a re-enable is a clean rebuild. */
   disableProcessor(name: string): Promise<void>;
 
   // ── everything else: the DO's built-in roots and every rewrite rule ──
@@ -327,7 +327,8 @@ minus the handle:
 ```ts
 // session-scoped: gone when `rule` leaves scope, or when this session ends
 using rule = await itx.provide("itx.db", "itx.kv");
-// durable: the same event, appended by hand
+// durable: the same event, appended by hand — the IN-WORKER spelling (the builder lives in
+// src/, not in the SDK; a capnweb client's whole dependency is capnweb, so it writes the literal)
 await itx.append(rewriteRuleConfiguredEvent("itx.db", "itx.kv"));
 await itx.append({
   type: "events.iterate.com/itx/rewrite-rule-configured",
@@ -506,9 +507,18 @@ interface BuiltInScope {
     get(match: string): { match: string; target: string } | null;
   };
 
-  /** Address a facet that is ALREADY RUNNING by name (a processor, a named instance); reaches
-   *  any method the facet's object exposes. `delete` removes it, storage included. */
-  facets: { get(name: string): FacetHandle; delete(name: string): void };
+  /** `get(name)` ADDRESSES a facet that is ALREADY RUNNING (a processor, a named instance) and
+   *  reaches any method its object exposes; `get(name, { source, cacheKey?, className })` LOADS the
+   *  class and hosts it as the durable facet `name` (own storage) — `source`/`cacheKey` as for
+   *  `workers.get` below, a new key restarting the facet with its storage surviving. There is NO
+   *  delete verb: a facet leaves with the subscription that hosted it
+   *  (`subscription-configured { name, target: null }`), storage included. */
+  facets: {
+    get(
+      name: string,
+      spec?: { source: WorkerSource; cacheKey?: string; className: string },
+    ): FacetHandle;
+  };
 
   /** The subscriptions layer, READ: the core reduce's `subscriptions` slice joined with the
    *  stream-kept cursors. Written by the edge's `subscribe`, never a verb here. */
@@ -583,8 +593,8 @@ rewrite rules every call goes through, the subscriptions every commit is sent
 to. It has no facet, but `snapshot()`, `liveSnapshot()` and `waitUntilProcessed()` (always
 `{ ok: true }`) are exposed through the same door (it publishes
 `live-state/changed` deltas like any processor, keyed `core`), and the name
-`core` is reserved (a subscription may not take it; `facets.delete('core')` is
-refused):
+`core` is reserved (a subscription may not take it, and the DO refuses to delete
+that facet):
 
 ```ts
 // itx.facets.get('core').snapshot().state
@@ -734,7 +744,7 @@ ends in `Processor`, a Durable Object class in `DurableObject`. `src/sdk/index.t
 is the whole userspace SDK, bundled into `./processor.js`:
 
 ```ts
-export { StreamProcessor }; // + ProcessorContract, ReduceArgs, ProcessEventArgs, ScannedRange, ...
+export { StreamProcessor }; // + ProcessorContract, ProcessorStream, ReduceArgs, ProcessEventArgs, ScannedRange
 export { StreamProcessorDurableObject, type StreamProcessorProps };
 export { defineProcessorContract, StreamEvent, StreamEventInput, jsonEqual };
 export { z } from "zod";
@@ -1140,7 +1150,7 @@ using digest = await itx.subscribe({
   consumes: ["mark"],
 });
 (await itx.subscriptions.get("digest")).cursor; // { confirmedOffset, attempt, nextAttemptAtMs? }
-// the same row, DURABLE: the raw event outlives this session
+// the same row, DURABLE: the event outlives this session — the IN-WORKER spelling
 await itx.append(
   subscriptionConfiguredEvent({
     name: "digest",
@@ -1148,6 +1158,12 @@ await itx.append(
     consumes: ["mark"],
   }),
 );
+// the same event as a literal — what a capnweb client writes, its whole dependency being capnweb
+await itx.append({
+  type: "events.iterate.com/stream/subscription-configured",
+  // target is the printed expression; `target: null` removes the row
+  payload: { name: "digest", target: "itx.digest.processEventBatch", consumes: ["mark"] },
+});
 // remove by hand
 await itx.subscribe({ name: "digest", target: null });
 // recovery from a halt, or a seek
@@ -1171,8 +1187,8 @@ exported handle); `enableProcessor` returns no handle, so a processor's row
 stays until `disableProcessor`. The DO's
 quiet clock is 60 s: an alarm that finds no delivery or facet call in flight
 and no activity for a minute aborts every live facet and returns every borrowed
-stub; the next call re-materializes them (a `facets.delete` that lands while a
-facet's source is loading wins: the load refuses with `NO_FACET` instead of
+stub; the next call re-materializes them (a facet delete — `disableProcessor`'s
+one effect — that lands while a facet's source is loading wins: the load refuses with `NO_FACET` instead of
 resurrecting an orphan), and a context with no live facet and no borrowed stub
 arms no alarm at all. Configuring a subscription drops whatever the loop remembered under
 that name (the old target's cursor included) and wakes a facet target at once,
@@ -1266,7 +1282,7 @@ interface Context {
 | Export (from `src/worker.ts`) | Kind                                                                                          | Surface                                                                                                                                                                                                |
 | ----------------------------- | --------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `default`                     | module worker `fetch`                                                                         | `/api` (capnweb: WS or one-shot HTTP batch → `UnauthenticatedSession`), `/expression?context=<id or name>&itx=<expr>` (fetch lane → DO with `x-itx-expression`; 400 without both), `/demo`, `/version` |
-| `IterateContextDurableObject` | Durable Object (binding `CONTEXT`)                                                            | section 7                                                                                                                                                                                              |
+| `IterateContextDurableObject` | Durable Object (binding `ITERATE_CONTEXT`)                                                    | section 7                                                                                                                                                                                              |
 | `ItxEntrypoint`               | `WorkerEntrypoint`, minted via `ctx.exports.ItxEntrypoint({ props: { iterateContextName } })` | `get()` → the real `IterateContext` scope (every stream verb rides it: `env.ITX.get().append(…)`); `fetch` (egress). Nothing else.                                                                     |
 | `DummyControlPlane`           | `WorkerEntrypoint`                                                                            | `fetch` = bare `fetch(request)`. Bound as `FALLBACK` only in solo/test config                                                                                                                          |
 
@@ -1292,8 +1308,8 @@ Bindings (`wrangler.jsonc`):
 
 | Binding               | Kind                                                | Used for                                                       |
 | --------------------- | --------------------------------------------------- | -------------------------------------------------------------- |
-| `CONTEXT`             | DO namespace → `IterateContextDurableObject`        | every context, `getByName(codec)`                              |
-| `LOADER`              | Worker Loader                                       | `itx.load`, `runScript`, processors                            |
+| `ITERATE_CONTEXT`     | DO namespace → `IterateContextDurableObject`        | every context, `getByName(codec)`                              |
+| `LOADER`              | Worker Loader                                       | `itx.workers.get`, `runScript`, processors                     |
 | `ITX_KV`              | KV                                                  | `itx.kv`, keys prefixed `${projectId}:`                        |
 | `SECRETS_KV`          | KV                                                  | egress substitution, keys `secret:${projectId}:${name}`        |
 | `CF_VERSION_METADATA` | version metadata                                    | reduced into loader cacheKeys so a deploy mints fresh isolates |
@@ -1303,7 +1319,7 @@ The loader cacheKey is `${kind}:${deploy}:${owner}:${cacheKey ?? contentHash}`: 
 `cacheKey` when the source is a producer expression (required there — the producer runs only
 inside Cloudflare's `getCode`, on a cold isolate), else the modules' content hash. Every
 distinct key is a billed dynamic worker, so nothing per request may ever enter it. Loaded isolates run under one compatibility block (inline in `loadConfinedWorker`): the same
-compatibility date, `no_nodejs_compat` (userspace stays pure-play), and
+compatibility date, `no_nodejs_compat` and `no_nodejs_compat_v2` (userspace stays pure-play), and
 `allow_irrevocable_stub_storage` (loaded code may store its `env.ITX` stub and
 replay it; the parent config carries the same flag). The DO's lifecycle is the
 declarative `exports` entry, not a migrations history; observability is on.
@@ -1324,7 +1340,7 @@ sequenceDiagram
   Note over E: prototype hop reduces to<br/>["itx","greet",["run","jonas"]]
   E->>D: invoke(expression)   (Workers RPC)
   D->>R: resolve(expression)
-  loop until the root is a built-in (kv, cd, load, facets, rpcStubs, ...) — 32 rewrites max
+  loop until the root is a built-in (kv, cd, workers, facets, rpcStubs, ...) — 32 rewrites max
     R->>R: pick the most SPECIFIC matching rule: longest match, then most pinned args
     R->>R: rewrite: target, then the unpinned args, then the steps after the match
   end
@@ -1362,9 +1378,9 @@ sequenceDiagram
   E-->>C: RewriteRuleHandle
   Note over D: ... idle: DO hibernates, the pager socket survives ...
   C->>D: itx.robot.move(10)   (via edge, invoke)
-  Note over D: rewrite → itx.rpcStubs.get('robot').move(10)
+  Note over D: rewrite → itx.rpcStubs.get('itx.robot').move(10)
   D->>E: { type: "page" } down the pager socket
-  E->>D: lendRpcStub({ rpcStubKey: "robot", stub })   a fresh Workers-RPC LentRpcStub
+  E->>D: lendRpcStub({ rpcStubKey: "itx.robot", stub })   a fresh Workers-RPC LentRpcStub
   D->>E: stub.invoke([["move", 10]])
   E->>C: robotObject.move(10)   (capnweb, same session)
   C-->>D: result
@@ -1374,25 +1390,26 @@ sequenceDiagram
 The DO never holds a client stub across idle, so any number of connected
 clients leave it free to hibernate. The relay sends a keepalive frame down the
 pager every 30 s; the DO answers it with a WebSocket auto-response set once in
-its constructor, without waking. The `rpcStubKey` is OPAQUE — the caller picks
-it; the registry never parses it; a new pager under an existing key attaches
-before the old one drops (the reconnect swap; the newest pager wins). Presence
-is `itx.rpcStubs.list()`; a key gaining its first pager appends
-`rpc-stub/attached`, losing its last appends `rpc-stub/detached` (both ephemeral;
-a replaced pager emits neither). A provided stub's rule dies with the stub, from
-both sides: disposing the handle (or the session ending) recalls the stub and
-appends `rewrite-rule-configured { match, target: null }` from the edge; and
-when a key's LAST pager closes, the DO itself appends the un-set for every
-rewrite rule and every subscription whose target is
-`itx.rpcStubs.get('<rpcStubKey>')` (`#unsetWhatNamesRpcStub`, run from the
-directory's `onPresence("detached")`) — decided DO-side because only the DO
-knows the truth: a reconnect REPLACES the pager and is never a detach, so a
-reconnected session's rule survives a late-dying old session, while a genuine
-last close un-sets it exactly once. Whichever un-set lands first wins; the other
-is a no-op in the reduce. `RPC_STUB_OFFLINE` is what a call answers when a rule
-names a key nobody has lent right now — a rule appended raw by hand, or the
-window before the un-set lands (a paused stream refuses it, and the rule then
-stays until the stream resumes and someone un-sets it).
+its constructor, without waking. The `rpcStubKey` is OPAQUE TO THE DIRECTORY —
+it never parses one; the verbs pick it (`provide` lends under the canonical
+match, `subscribe` under `subscription:<name>`); a new pager under an existing
+key attaches before the old one drops (the reconnect swap; the newest pager
+wins). Presence is `itx.rpcStubs.list()`; a key gaining its first pager
+appends `rpc-stub/attached`, losing its last appends `rpc-stub/detached` (both
+ephemeral; a replaced pager emits neither). A provided stub's rule dies with
+the stub, and the un-set is the DO's: disposing the handle (or the session
+ending) recalls the stub — the DO appends the un-set when the key's last pager
+closes, `rewrite-rule-configured { match, target: null }` for every rewrite
+rule and every subscription whose target is `itx.rpcStubs.get('<rpcStubKey>')`
+(`#unsetWhatNamesRpcStub`, run from the directory's `onPresence("detached")`)
+— decided DO-side because only the DO knows the truth: a reconnect REPLACES
+the pager and is never a detach, so a reconnected session's rule survives a
+late-dying old session, while a genuine last close un-sets it exactly once.
+Only an EXPRESSION rule's handle appends the `null` itself; an un-set on a
+match with no row is a no-op in the reduce. `RPC_STUB_OFFLINE` is what a call
+answers when a rule names a key nobody has lent right now — a rule appended
+raw by hand, or the window before the un-set lands (a paused stream refuses
+it, and the rule then stays until the stream resumes and someone un-sets it).
 
 ### 9.3 A commit
 
@@ -1436,6 +1453,7 @@ a target in the parent:
 
 ```ts
 const child = itx.cd("/agents/support");
+// in-worker spelling; a client appends the literal (section 4.2)
 await child.append(rewriteRuleConfiguredEvent("itx", "itx.cd('/')")); // durable: misses go to the project root
 await child.someRootCapability.doThing(1); // not a built-in, no longer match → the default rule
 ```
@@ -1470,7 +1488,7 @@ itself.
 | rewrite rule          | `{ match, target }`: a call starting with `match` runs as the same call with `match` replaced by `target`; one map entry per canonical match, written by `itx/rewrite-rule-configured { match, target \| null }`; nothing else rides it   |
 | default rule          | a rule at the bare prefix `itx`; claims any non-built-in call                                                                                                                                                                             |
 | built-in              | a root of `BuiltInScope`; resolved before the rules; unshadowable                                                                                                                                                                         |
-| InvokeHandle          | a pipelinable `RpcTarget` returned mid-chain (`cd`, `load(...)`); `FacetHandle` and `RpcStubHandle` are its two brands                                                                                                                    |
+| InvokeHandle          | a pipelinable `RpcTarget` returned mid-chain (`cd`, `workers.get(...)`); `FacetHandle` and `RpcStubHandle` are its two brands                                                                                                             |
 | rpc stub              | a live capnweb value a session LENDS under an opaque `rpcStubKey`; the edge owns it, the DO BORROWS it per page and RETURNS it at idle; `itx.rpcStubs.get(rpcStubKey)` is how a rule or a subscription names it; presence is `list()`     |
 | pager                 | the hibernatable WebSocket from the edge relay to the DO, one per key, carrying `{ transportId, rpcStubKey }`; the DO sends `{ type: "page" }` to get a fresh stub lent                                                                   |
 | session-scoped handle | what `provide` / `subscribe` return (`RewriteRuleHandle`, `SubscriptionHandle`): disposable; disposing — or the session ending — undoes the act; the durable spelling is the raw event                                                    |

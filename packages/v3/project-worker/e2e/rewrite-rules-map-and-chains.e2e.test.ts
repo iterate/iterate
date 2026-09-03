@@ -46,8 +46,8 @@ test("the table is a MAP: 5 concurrent re-sets of ONE match leave exactly the la
   expect(await race()).toBe(3);
 });
 
-test("a NON-CANONICAL match spelling through the rewrite door is stored CANONICAL and rewrites", async () => {
-  // The one-canonicalizer pin: the rewrite door canonicalizes ONCE at the top, so the reduce stores
+test("a NON-CANONICAL match spelling through the provide door is stored CANONICAL and rewrites", async () => {
+  // The one-canonicalizer pin: the provide door canonicalizes ONCE at the top, so the reduce stores
   // exactly the match every later door (dispatch, un-set by match) compares against — a stray space
   // can never mint a row no call reaches.
   const ctx = freshCtx("canon");

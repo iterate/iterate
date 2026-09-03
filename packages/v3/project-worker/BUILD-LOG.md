@@ -2556,3 +2556,17 @@ cacheKey?, className }`) spells the hosting spec everywhere, and `enableProcesso
   alarm to arm) and a failed `getCode` poisoning its cacheKey (Cloudflare caches the failure).
 - GATES: tsc×3 · oxlint 0/0 · knip clean · unit+workers 259p/1xf · e2e 145p/3xf (38 files) ·
   Playwright 2. Docs and test titles: a parallel agent, committed separately.
+- CORRECTION on the lint gate: `packages/v3/project-worker` has no `lint` script, so every `pnpm -s lint`
+  run from the package earlier in this record did NOTHING (its "0/0" claims were vacuous). The real
+  gate is the repo root's `oxlint . --deny-warnings`, run here as `npx oxlint . --deny-warnings` from
+  the package (116 files, 93 rules). Run today it found ONE warning and TWO errors, all from the review
+  round (an import the FacetSpec edit orphaned; two single-use helpers in the red-proof files that the
+  repo's own `iterate/no-single-use-helpers` rule refuses) — fixed. The gate line from here on says
+  `oxlint 0/0 (npx oxlint . --deny-warnings)`.
+- The docs agent's narrative sweep (40 of 42 findings; the two left were already true at HEAD): every
+  live doc re-pointed, HISTORY banners on 19 superseded docs, seven e2e files renamed for what they
+  prove (`facets-mid-chain-pipelining`, `facets-persistent-stub`, `workers-remote-capnweb`,
+  `workers-and-facets-sources`, `processor-facet-reduces-and-address`, `itx-surface-tour`,
+  `context-dotted-calls-fall-back-to-the-invoke-door`), test headers and titles fixed, and three src
+  residues it handed on fixed here (a comment naming the old test file, a comment naming the deleted
+  `facets.delete`, `ItxExpressionStep` exported).

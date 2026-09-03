@@ -1,3 +1,6 @@
+> **HISTORY** — one of four options considered 2026-09-02; see `docs/itx-surface-as-built.md` for
+> what shipped.
+
 # Proposal D — the transparent proxy: the edge has no mirror, because there is nothing to mirror
 
 > 2026-09-02. The DO's built-in scope IS the itx surface, written once; the edge declares two things and forwards
@@ -124,7 +127,7 @@ brand-checks natively (workerd#6873). D changes only the ratio: 9 declared metho
 count CLIENT frames, and a dotted call and a declared method cost the same `{out:push 1, out:pull 1, in:resolve 1,
 out:release 1}` — the reduce happens server-side at the edge, so `itx.slack.chat.postMessage(…)` is already ONE push
 (test 4) and `authenticate().projects.get(ctx).invokeCapability(…)` already 3 pushes / one round trip (test 1). Moving
-the declared methods onto that path changes no frame, and mid-chain pipelining (`load-mid-chain-pipelining.e2e.test.ts`)
+the declared methods onto that path changes no frame, and mid-chain pipelining (`facets-mid-chain-pipelining.e2e.test.ts`)
 is a DO-side chain of genuine `InvokeHandle` RpcTargets, untouched. The one thing a generic forward _would_ cost is
 `cd`, which answers today with **zero** DO hops — which is why `cd` stays declared.
 
@@ -267,7 +270,7 @@ chapter N−1 still runs.
 ## 8. Trade-offs — what this makes worse
 
 1. **Blind substitution breaks call-scoped callbacks. This is the big one.** Today a live value passed as an ordinary
-   argument crosses edge→DO _raw_ and reaches loaded code as a callable: `load-mid-chain-pipelining.e2e.test.ts` does
+   argument crosses edge→DO _raw_ and reaches loaded code as a callable: `facets-mid-chain-pipelining.e2e.test.ts` does
    `.demo.timer.callLater(200, cb)` and worker A runs `cb.dup(); await run()`. After substitution the callee gets
    `itx.rpcStubs.get('k_…')` — an `RpcStubHandle`, an `RpcTarget`, **not callable as `cb()`** — so that test and
    `rpc-stubs-callback-fires-back.e2e.test.ts` break; and a one-shot callback becomes session-lived with its own pager

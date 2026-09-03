@@ -1,6 +1,7 @@
-> **⚠️ SUPERSEDED.** This document describes an earlier shape of the clean room and is kept as
-> history. The current surface is `docs/clean-room-api-walkthrough.md`; the layer map is
-> `LAYERS.md`; the design of record for subscriptions and processors is
+> **⚠️ SUPERSEDED (banner re-pointed 2026-09-03).** This document describes an earlier shape of
+> the clean room and is kept as history. The surface as built is `docs/itx-surface-as-built.md`;
+> the long-form walkthrough is `docs/clean-room-api-walkthrough.md`; the layer map is `LAYERS.md`;
+> the design of record for subscriptions and processors is
 > `docs/design-onion-subscriptions-processors.md`.
 
 # ITX kernel shape — design (WIP, 2026-08-29)

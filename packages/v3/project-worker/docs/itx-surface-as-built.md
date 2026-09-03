@@ -4,7 +4,9 @@
 > round on this document). Every signature below is transcribed from source; the file is named so
 > you can check. Sections 1–11 are what exists. Section 12 records what the review decided and
 > what is still open, each open item with a concrete proposal. The long-form walkthrough is
-> `docs/clean-room-api-walkthrough.md`; the design record is `docs/proposals/itx-surface-SYNTHESIS.md`.
+> `docs/clean-room-api-walkthrough.md`. `docs/proposals/itx-surface-SYNTHESIS.md` is HISTORY: its
+> §§1-8 argue for an API that lost (the verb `rewrite`, never shipped) and only its §9 records
+> what was built.
 
 ---
 
@@ -98,12 +100,12 @@ await itx.append({
 
 The one codec every door speaks. String half ⇄ structured half.
 
-| Type                  | Shape                                             | Example                                          |
-| --------------------- | ------------------------------------------------- | ------------------------------------------------ |
-| `ItxExpressionStep`   | `string` (property) or `[method, ...args]` (call) | `"kv"`, `["get", "x"]`                           |
-| `ItxExpression`       | `ItxExpressionStep[]`, root first                 | `["itx", "kv", ["get", "x"]]`                    |
-| `ItxExpressionInput`  | `string \| ItxExpression`                         | `"itx.kv.get('x')"` — what every door accepts    |
-| `ItxExpressionPrefix` | an `ItxExpression` used as a rule's `match`       | `["itx", "ai", ["run", "gpt-5"]]` pins `'gpt-5'` |
+| Type                  | Shape                                                                                    | Example                                          |
+| --------------------- | ---------------------------------------------------------------------------------------- | ------------------------------------------------ |
+| `ItxExpressionStep`   | `string` (property) or `[method, ...args]` (call) — NOT exported, unlike the three below | `"kv"`, `["get", "x"]`                           |
+| `ItxExpression`       | `ItxExpressionStep[]`, root first                                                        | `["itx", "kv", ["get", "x"]]`                    |
+| `ItxExpressionInput`  | `string \| ItxExpression`                                                                | `"itx.kv.get('x')"` — what every door accepts    |
+| `ItxExpressionPrefix` | an `ItxExpression` used as a rule's `match`                                              | `["itx", "ai", ["run", "gpt-5"]]` pins `'gpt-5'` |
 
 - Args are JSON5 in the string half. `print(parse(s))` round-trips; the canonical spelling
   (`canonicalItxExpressionPrefix`) is the rewrite-rule record's key.
@@ -117,7 +119,7 @@ The one codec every door speaks. String half ⇄ structured half.
 
 ---
 
-## 4. The edge: what `IterateContext` declares (`src/iterate-context.ts`, 355 lines)
+## 4. The edge: what `IterateContext` declares (`src/iterate-context.ts`)
 
 The class declares only what the edge must do itself. Everything else rides the hop. Since this
 review the class's TYPE also carries every built-in root (section 5) by declaration merging
@@ -148,7 +150,7 @@ How a client reaches one (`src/session.ts`):
 
 ---
 
-## 5. The built-in roots: the DO's physical scope (`src/context/built-ins.ts`, 318 lines)
+## 5. The built-in roots: the DO's physical scope (`src/context/built-ins.ts`)
 
 A plain record. A call `itx.<root>…` resolves DIRECTLY against these, no rule. A rule's target
 must be rooted at `itx`, so a bare root is unspellable and the built-ins are unshadowable.
@@ -227,7 +229,7 @@ null }` for every subscription whose target is `itx.rpcStubs.get('<key>')`. The 
 
 ---
 
-## 7. Vocabulary (b): rewrite rules (`src/context/itx-expression-rewriting.ts`, 201 lines)
+## 7. Vocabulary (b): rewrite rules (`src/context/itx-expression-rewriting.ts`)
 
 ONE file: the rules, the one event, the resolver. Every rule is a row in its table test.
 
@@ -324,7 +326,7 @@ running facet (`itx.facets.get(name)…`, no spec) deletes nothing. So the raw e
 
 ## 10. Processors, loaded code, lifetimes, fetch
 
-**Processors** (`stream/processor.ts` 560 · `sdk/stream-processor-durable-object.ts` 103).
+**Processors** (`stream/processor.ts` · `sdk/stream-processor-durable-object.ts`).
 Two classes. `StreamProcessor` is pure: a contract plus `reduce` / `processEvent` /
 `projectLiveState`, no constructor args, unit-testable bare. Its host is a
 `StreamProcessorDurableObject` with one field, `processor = new PresenceProcessor()`.
@@ -332,7 +334,7 @@ Hosted like any class: `itx.facets.get('presence', { source, className: 'Presenc
 identity in `ctx.props` as `{ iterateContextName, name }`. A processor IS a subscription whose
 target is that chain plus `.processEventBatch`. Durable configuration, no handle.
 
-**Loaded code's world** (`src/itx-entrypoint.ts`, 55 lines). Every loaded worker's `env.ITX`
+**Loaded code's world** (`src/itx-entrypoint.ts`). Every loaded worker's `env.ITX`
 and `globalOutbound` are one stub of `ItxEntrypoint`, minted with `{ iterateContextName }` as
 its prop. It has TWO doors and nothing else: `get()` BUILDS the same `IterateContext` RpcTarget
 a capnweb client holds (every stream verb rides it: the processor engine appends with
@@ -355,7 +357,7 @@ initializer is one line over the scope:
 | a processor                  | `enableProcessor`                       | its `null` event (verb or raw), which also deletes the facet it hosted |
 | anything spelled as an event | `itx.append(event)`                     | its `null` event                                                       |
 
-**Fetch** (`src/fetch/rpc-stub-fetch.ts`, 286 lines, parked). A fetch-shaped capability is
+**Fetch** (`src/fetch/rpc-stub-fetch.ts`, parked). A fetch-shaped capability is
 always called through a terminal `.fetch(request)`. Two doors: the plain-HTTP lane
 `/expression?context=<id>&itx=<expression>` (the worker copies the expression into
 `x-itx-expression`), and a terminal `.fetch` inside a session, which `invoke` forks onto the DO's
@@ -370,25 +372,29 @@ Two ways to count, both honest. **Code lines** (non-blank, non-comment) in non-t
 4,481 on the morning of 2026-09-01 → 3,879 at `fe8168c13` → 3,903 after this review's six
 commits (the entrypoint verbs, the `rewrite` verb, the `getDurableObjectClass` chain and the
 `load`/`getEntrypoint` two-step went; the facet-delete effect, the typed interface and the
-cacheKey-gated producer source came). **Raw lines** including comments and blanks: 6,293 in 36
+cacheKey-gated producer source came). **Raw lines** including comments and blanks: 6,186 in 34
 files. About 38 percent of the source is comment. The first review figure of 6,234 was the raw
 count; it was never a thousand added lines of code.
 
+Every number in this section is a COUNT OF A MOMENT (recounted 2026-09-03) and drifts with the next
+commit — it is kept in one place, the table below, and nowhere else in this document. Recount rather
+than trust it. The rows sum to 6,180; the remaining six lines are the two generated bundles.
+
 Tests: unit + workers 252; e2e 141 passed and 2 expected fails on 36 files.
 
-| Layer                    | Files (raw lines, comments included)                                                  | Lines |
-| ------------------------ | ------------------------------------------------------------------------------------- | ----: |
-| the edge                 | `worker.ts` · `session.ts` · `iterate-context.ts` · `itx-entrypoint.ts`               |   626 |
-| the DO                   | `iterate-context-durable-object.ts`                                                   |   667 |
-| expressions + dispatch   | `context/expression.ts` · `dispatch.ts` · `dotted-path-proxy.ts` · `invoke-handle.ts` |   442 |
-| built-ins + loader       | `context/built-ins.ts` · `worker-loader.ts` · `durable-object-names.ts`               |   555 |
-| (a) rpc stubs            | `context/rpc-stub-directory.ts` · `rpc-stub-relay.ts`                                 |   551 |
-| (b) rewrite rules        | `context/itx-expression-rewriting.ts`                                                 |   206 |
-| the stream + core        | `stream/stream.ts` · `core-processor.ts` · `events.ts` · `reduce-checkpoint.ts`       | 1,037 |
-| subscriptions + delivery | `stream/subscriptions.ts` · `subscription-delivery.ts`                                |   421 |
-| processors + live state  | `stream/processor.ts` · `live-state.ts` · `sdk/*`                                     |   814 |
-| fetch (parked)           | `fetch/rpc-stub-fetch.ts`                                                             |   286 |
-| lib, client demo         | `lib/*` · `client/*` (the generated bundles excluded)                                 |   675 |
+| Layer                    | Files (raw lines, comments included)                                                                | Lines |
+| ------------------------ | --------------------------------------------------------------------------------------------------- | ----: |
+| the edge                 | `worker.ts` · `session.ts` · `iterate-context.ts` · `itx-entrypoint.ts`                             |   661 |
+| the DO                   | `iterate-context-durable-object.ts`                                                                 |   694 |
+| expressions + dispatch   | `context/expression.ts` · `dispatch.ts` · `dotted-path-proxy.ts` · `invoke-handle.ts`               |   459 |
+| built-ins + loader       | `context/built-ins.ts` · `worker-loader.ts` · `durable-object-names.ts`                             |   542 |
+| (a) rpc stubs            | `context/rpc-stub-directory.ts` · `rpc-stub-relay.ts`                                               |   557 |
+| (b) rewrite rules        | `context/itx-expression-rewriting.ts`                                                               |   206 |
+| the stream + core        | `stream/stream.ts` · `core-processor.ts` · `events.ts` · `reduce-checkpoint.ts` · `test-support.ts` | 1,141 |
+| subscriptions + delivery | `stream/subscriptions.ts` · `subscription-delivery.ts`                                              |   429 |
+| processors + live state  | `stream/processor.ts` · `live-state.ts` · `sdk/*`                                                   |   801 |
+| fetch (parked)           | `fetch/rpc-stub-fetch.ts`                                                                           |   279 |
+| lib, client demo         | `lib/*` · `client/*` (the generated bundles excluded)                                               |   411 |
 
 Error codes (`src/lib/errors.ts`): `NO_ITX_EXPRESSION_MATCH`, `RPC_STUB_OFFLINE`,
 `IDEMPOTENCY_CONFLICT`, `OFFSET_CONFLICT`, `STREAM_PAUSED`, `NOT_A_METHOD`, `NO_FACET`,

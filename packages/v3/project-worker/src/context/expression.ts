@@ -9,7 +9,7 @@ import JSON5 from "json5";
  *  method `""` is the ANONYMOUS call — call the value itself: `itx.rpcStubs.get('cam')(1, 2)` is
  *  `["itx","rpcStubs",["get","cam"],["",1,2]]` — what a rewrite rule spells when a lent stub is
  *  called with args. */
-type ItxExpressionStep = string | [method: string, ...args: unknown[]];
+export type ItxExpressionStep = string | [method: string, ...args: unknown[]];
 /** An itx expression as data: the scope root (`itx`) then get/call steps. THE parsed form every door
  *  works on. */
 export type ItxExpression = ItxExpressionStep[];

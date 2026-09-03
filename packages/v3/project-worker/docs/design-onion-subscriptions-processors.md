@@ -1,4 +1,4 @@
-# Design: the onion — rpcStubs → rewrite rules → subscriptions → processors
+# Design: the onion — rpcStubs → itx expressions → rewrite rules → subscriptions → processors
 
 > Synthesis of six candidate designs (five subagents with opposed stances, plus my own baseline),
 > written against HEAD `69080fd9e` (C7), revised after the first annotation round. Section 1 is the
@@ -7,15 +7,17 @@
 > written. Sections 0–6 are kept in line with the code AS BUILT — including the itx-surface rename
 > of 2026-09-02 (`docs/proposals/itx-surface-SYNTHESIS.md`, §9 "as built"): the noun is **rewrite
 > rule** (`{ match, target }`, ONE event `itx/rewrite-rule-configured { match, target | null }`, a MAP
-> by canonical match), a live value enters through `provide(match, stub | expression | null)` under an
-> OPAQUE key, the dispatch door is `invoke`, and every verb hands back a DISPOSABLE handle. Sections
-> 7–9 are the decision and sequence record and keep the names of their day.
+> by canonical match), a live value enters through `provide(match, stub | expression | null)` under the
+> key = the canonical match, the dispatch door is `invoke`, and every verb hands back a DISPOSABLE handle. Sections
+> 7–9 are the decision and sequence record and keep the names of their day. The LAYER NUMBERS below
+> are local to this doc (L0 axioms · L1 rewrite rules · L2 subscriptions · L3 processors); `LAYERS.md`
+> numbers the same nouns differently because it gives the stream and the edge layers of their own.
 
 ## 0. Your constraints, restated as the rules this design obeys
 
 - **The interface is events, except the axiomatic built-ins.** Physical facts live in a built-in;
   events are pure data that name things by expression. No discriminator flags on events.
-- **Layering.** Low axioms (`rpcStubs` and its presence events, the stream, `facets`, `load`) at
+- **Layering.** Low axioms (`rpcStubs` and its presence events, the stream, `facets`, `workers`) at
   the core; rewrite rules, subscriptions, and processors are successive layers that only use what is
   below them. Sugar is kept visibly apart from axioms. `itx.connections` could one day be one more
   layer over `rpcStubs`. Not built here.
@@ -47,11 +49,11 @@ flowchart TB
   subgraph L0["Layer 0 — axioms (built-ins, physical or platform)"]
     stream["stream: append · read · waitForEvent"]
     stubs["rpcStubs: get(rpcStubKey) · list — lent by the edge's provide<br/>+ ephemeral attached/detached { rpcStubKey } events"]
-    facets["facets · load (Worker Loader)"]
+    facets["facets · workers (Worker Loader)"]
     misc["kv · whoami · cd · fetch (egress)"]
   end
   subgraph L1["Layer 1 — itx-expression rewrite rules (ONE event, a slice of the core reduce)"]
-    rule["itx/rewrite-rule-configured { match, target | null } — a MAP by canonical match<br/>provide(match, stub) = lend to rpcStubs + rule rewrite ⇒ itx.rpcStubs.get(rpcStubKey)"]
+    rule["itx/rewrite-rule-configured { match, target | null } — a MAP by canonical match<br/>provide(match, stub) = lend to rpcStubs under the key = the canonical match + rule match ⇒ itx.rpcStubs.get('&lt;match&gt;')"]
   end
   subgraph L2["Layer 2 — subscriptions (own events, reduced by the core reduce + ONE delivery loop)"]
     sub["subscription-configured { name, target | null, consumes? }<br/>push if the target owns progress (facet / rpc stub)<br/>else the stream keeps a kv cursor, at-least-once"]
@@ -70,7 +72,9 @@ Client usage, the whole surface in one block. Lines marked SUGAR are composition
 them (section 6 keeps the two groups apart in the code too). Every verb that returns a handle
 returns a DISPOSABLE one (`using`); capnweb disposes it at session end, so a rule or subscription
 made through the verb is SESSION-SCOPED — the durable spelling is the raw event through
-`itx.append(...)`. Sources are handed over INLINE:
+`itx.append(...)`. Sources are handed over as the MODULES, literally (`"cap.js"` the main module);
+as built, a source may instead be an expression that PRODUCES the modules, but only under a required
+`cacheKey`:
 
 ```ts
 using api = newWebSocketRpcSession("wss://<worker>/api");
@@ -79,7 +83,7 @@ const agent = itx.cd("/agents/support"); // absolute by convention; relative and
 
 const greetSource = { "cap.js": GREET_SRC };
 using greet = await itx.provide("itx.greet", ["itx", "workers", ["get", { source: greetSource }]]); // a rewrite rule
-using robot = await itx.provide("itx.robot", robotObject); // SUGAR: lends to rpcStubs under the opaque key + rule itx.robot ⇒ itx.rpcStubs.get('robot')
+using robot = await itx.provide("itx.robot", robotObject); // SUGAR: lends to rpcStubs under the key = the canonical match + rule itx.robot ⇒ itx.rpcStubs.get('itx.robot')
 await itx.rpcStubs.list(); // presence, physical
 await itx.rewriteRules.list(); // the rules, printed
 
@@ -107,7 +111,8 @@ what the live-state client already does, and it is why a browser tab needs no se
 ## 2. Layer 0 — the axioms
 
 Unchanged from C7 except: `fetch` becomes a root, `rpcStubs` gains presence events,
-`getEntrypoint` takes Cloudflare's own `props`, and `connectToCapnweb` leaves. AS BUILT, three more
+`workers.get` takes Cloudflare's own `props` (as built: the `load(...).getEntrypoint()` two-step is
+gone), and `connectToCapnweb` leaves. AS BUILT, three more
 roots: `waitForEvent` (so the edge declares nothing for it) and the two READ views of core's
 slices, `rewriteRules` and `subscriptions`.
 
@@ -127,19 +132,38 @@ interface BuiltInScope {
   cd(path: string): InvokeHandle;
   /** Egress: {{secret:project:NAME}} substituted here, then FALLBACK. Loaded code's globalOutbound already lands here. */
   fetch(request: Request): Promise<Response>;
-  /** THE physical registry. Keys are OPAQUE rpcStubKeys the lender picks; a rewrite rule names one as itx.rpcStubs.get('<rpcStubKey>'). */
+  /** THE physical registry. The key is OPAQUE to the directory, which never parses it — but the two
+   *  lenders spell it by contract: `provide` uses the canonical match, `subscribe` uses
+   *  `subscription:<name>`. A rewrite rule names one as itx.rpcStubs.get('<rpcStubKey>'). */
   rpcStubs: { get(rpcStubKey: string): RpcStubHandle; list(): string[] };
   /** The rewrite-rule table, READ (a slice of core, printed). Written only by the ONE event. */
   rewriteRules: {
     list(): { match: string; target: string }[];
     get(match: string): { match: string; target: string } | null;
   };
-  /** A facet that is already running, by name. Re-materializes from the parent's startup memo after eviction. */
-  facets: { get(name: string): FacetHandle; delete(name: string): void };
+  /** ONE door: with a spec it HOSTS a loaded DurableObject class as the facet `name`; without one it
+   *  addresses a facet that is already running (re-materializing from the parent's startup memo after
+   *  eviction). AS BUILT there is no delete verb — a facet leaves with the subscription that hosted it. */
+  facets: {
+    get(
+      name: string,
+      spec?: { source: WorkerSource; cacheKey?: string; className?: string },
+    ): FacetHandle;
+  };
+  /** The subscription rows, READ (a slice of core ⋈ the stream's cursors). Written only by the ONE event. */
+  subscriptions: {
+    list(): Promise<SubscriptionListEntry[]>;
+    get(name: string): Promise<SubscriptionListEntry | null>;
+  };
   /** The stateless host (as built 2026-09-02: one door, no `load`/`getEntrypoint` two-step). `props` is
    *  Cloudflare's WorkerStubEntrypointOptions.props — a url, a key name, whatever the code wants. */
   workers: {
-    get(spec: { source: WorkerSource; className?: string; props?: unknown }): InvokeHandle;
+    get(spec: {
+      source: WorkerSource;
+      cacheKey?: string;
+      className?: string;
+      props?: unknown;
+    }): InvokeHandle;
   }; // run · fetch · processEventBatch · anything it exports
   runScript(script: string, ...args: unknown[]): Promise<unknown>; // sugar over workers.get({ source }).run — kept for the bare-lambda case
 }
@@ -488,7 +512,7 @@ class ProjectCollection extends RpcTarget {
 } // the ROOT context; pure addressing
 
 // iterate-context.ts — A PROXY IN FRONT OF THE DO. Declares only what must be edge code, in the order the tutorial builds them;
-// every DO built-in root (append · read · waitForEvent · fetch · whoami · kv · rpcStubs.get/list · rewriteRules · facets · subscriptions · load · runScript)
+// every DO built-in root (append · read · waitForEvent · fetch · whoami · kv · rpcStubs.get/list · rewriteRules · facets · subscriptions · workers · runScript)
 // and every rewrite rule ride the prototype hop into ONE invoke(expression) with ZERO code here.
 class IterateContext extends RpcTarget {
   cd(path: string): IterateContext; // pure addressing, zero DO hops; returns an EDGE context

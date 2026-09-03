@@ -1,11 +1,11 @@
-// load-mid-chain-pipelining.e2e.test.ts — DYNAMIC WORKER → DYNAMIC WORKER mid-chain pipelining, live.
+// facets-mid-chain-pipelining.e2e.test.ts — DYNAMIC WORKER → DYNAMIC WORKER mid-chain pipelining, live.
 //
 // Worker A is a STATEFUL dynamic-worker DO whose getter chain returns nested RpcTargets:
 //   get demo → Demo, get timer → Timer, timer.callLater(ms, cb).
 // Worker B is a SECOND dynamic worker (a stateless loaded entrypoint) that reaches A THROUGH ITS OWN
 // `env.ITX.get()` and writes the natural dotted chain:
 //   itx.facets.get('counterA', { source, className: 'CounterDurableObject' }).demo.timer.callLater(ms, cb)
-// The mid-path load→class→instance returns HANDLES that B then walks `.demo.timer.callLater`
+// The mid-path facets.get→facet returns HANDLES that B then walks `.demo.timer.callLater`
 // on — the case that only pipelines because each handle is a genuine, branded RpcTarget
 // (context/invoke-handle.ts) and not a bare Proxy (NonPipelinable over Workers RPC, workerd#6873).
 // The callback B passes rides the membrane the other way and fires back INSIDE B.

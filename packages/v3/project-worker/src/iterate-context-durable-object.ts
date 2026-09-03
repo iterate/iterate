@@ -44,13 +44,7 @@ import { CoreContract, type CoreState } from "./stream/core-processor.ts";
 import { codedError, errorCode } from "./lib/errors.ts";
 import { withTimeout } from "./lib/timeout.ts";
 import type { StreamEvent, StreamEventInput } from "./stream/events.ts";
-import {
-  parse,
-  print,
-  toItxExpression,
-  type ItxExpression,
-  type ItxExpressionInput,
-} from "./context/expression.ts";
+import { parse, print, type ItxExpression, type ItxExpressionInput } from "./context/expression.ts";
 import {
   ITX_EXPRESSION_FETCH_HEADER,
   itxExpressionEndingInFetch,
@@ -473,7 +467,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         invoke: (call) => this.invoke(call),
         where: `facet "${name}"`,
       });
-      // The load awaited: a `facets.delete(name)` (disableProcessor) may have landed meanwhile — its
+      // The load awaited: a removal (`disableProcessor`'s null row) may have deleted this facet meanwhile — its
       // facetStartupMemo is gone, and materializing now would resurrect the deleted facet as an orphan this
       // actor never quiesces. Refuse instead; the caller's row is gone too.
       if (!this.ctx.storage.kv.get(`facet:${name}`))
@@ -555,7 +549,8 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     }
   }
 
-  /** Delete a facet, storage included (`itx.facets.delete(name)`; `disableProcessor` ends here). A
+  /** Delete a facet, storage included — the removal effect of `subscription-configured { target: null }`
+   *  (`disableProcessor` ends here; there is no delete verb). A
    *  re-load into the same name is a clean rebuild, never a resume from orphaned state. */
   #deleteFacet(name: string): void {
     if (name === CORE_SLUG)

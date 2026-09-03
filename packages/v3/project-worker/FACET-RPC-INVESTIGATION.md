@@ -1,3 +1,9 @@
+> **HISTORY (2026-09-03).** RESOLVED 2026-08-05 (see the resolution further down): facet-method
+> RPC works, and the rule that makes it work is permanent at `src/context/dispatch.ts`
+> (`Reflect.apply(Reflect.get(facet, m), facet, args)`, never `facet[m].apply`). The symptom
+> described up front is the OLD state — facet RPC is not broken. Paths named `apps/project-worker`
+> are now `packages/v3/project-worker`.
+
 # Investigation: why native facet-method RPC works in apps/os but throws in the clean room
 
 **Symptom.** Calling a custom RPC method on a Durable Object _facet_ whose class was

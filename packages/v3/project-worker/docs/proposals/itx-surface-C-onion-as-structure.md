@@ -1,3 +1,6 @@
+> **HISTORY** — one of four options considered 2026-09-02; see `docs/itx-surface-as-built.md` for
+> what shipped. ("against today's tree" below means the tree of 2026-09-02.)
+
 # itx surface C — the onion as code structure
 
 > 2026-09-02. Alternative to `docs/plan-itx-surface-mirror-and-route-rename.md`, against today's tree. One thesis:

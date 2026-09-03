@@ -9,13 +9,12 @@ import { expect, test } from "vitest";
 import { RPC_STUB_PAGER_WEBSOCKET_HEADER } from "../src/context/rpc-stub-directory.ts";
 import { stub } from "./support.ts";
 
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const until = async (label: string, fn: () => unknown | Promise<unknown>, timeoutMs = 8_000) => {
   const t0 = Date.now();
   for (;;) {
     if (await Promise.resolve(fn()).catch(() => undefined)) return;
     if (Date.now() - t0 > timeoutMs) throw new Error(`until(${label}): timed out`);
-    await sleep(25);
+    await new Promise((r) => setTimeout(r, 25));
   }
 };
 
