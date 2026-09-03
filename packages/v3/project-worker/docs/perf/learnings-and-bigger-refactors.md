@@ -142,3 +142,36 @@ invisible at today's small fixtures and only matter at scale — said where.
 - `transactionSync`'s SAVEPOINT/RELEASE are the only UNPREPARED statements on the commit path
   (workerd has a `TODO(perf)`); state-put-first ordering could retire the explicit transaction
   (−2 dynamic prepares/commit). Measure first; it is a correctness trade (rollback semantics).
+
+## Platform facts learned from source (workerd / capnweb / cloudflare-docs), round 1 (2026-09-03)
+
+These bound what the clean room can gain; verified by reading, not measured unless noted.
+
+- **DO storage writes commit once per event-loop turn, gated.** Every SQLite/kv write between two JS
+  awaits joins ONE implicit transaction; the COMMIT (and the durable `commitCallback`) runs after a
+  later turn (`co_await kj::yield()`), and the OUTPUT GATE holds every outgoing message — including
+  an RPC reply — until that commit confirms durable (~10 ms, matches the measured durable-vs-ephemeral
+  append gap). So: (1) many writes in one turn cost ONE commit, not N; (2) a reply is gated on the
+  confirm, which is why `allowUnconfirmed` and "reply before the write" levers exist; (3) 100
+  pipelined appends CAN share one commit if they land in one turn.
+- **`sql.exec` prepared-statement cache is per-DO-incarnation, LRU 1 MiB, keyed by string identity.**
+  Every wake re-prepares each distinct SQL string on first use. `transactionSync`'s SAVEPOINT/RELEASE
+  are built with `kj::str` and run UNPREPARED every call (workerd carries a `TODO(perf)`); they are
+  the only unprepared statements on our commit path.
+- **`ctx.storage.kv` is SQLite** (`_cf_KV`, prepared once/db): each `put` is a `serializeV8Value`
+  (structured-clone) + UPSERT row; each `get` a SELECT + deserialize. rows_written / kv get/put are
+  traced spans, but NOT in `wrangler tail --format json`'s default output — proving a per-commit row
+  count needs a trace, not a tail.
+- **`setAlarm` writes nothing when the time is unchanged**, and moving the alarm EARLIER makes the
+  commit await an alarm-scheduler round trip before it commits. Our `armAlarmNoLaterThan` memo already
+  limits it to one write per quiet-period start.
+- **The subrequest cap is per top-level invocation** (paid default 10,000, max 10,000,000, configurable
+  via `limits.subrequests`); a long-lived capnweb WS session accumulates against its one pump
+  invocation. A DO's own limits (30 s wall unless doing I/O, 128 MB) are separate.
+- **Worker Loader (`env.LOADER.get`) caches isolates per id; a named startup failure stays in the map
+  until aborted** (the bug we fixed in `f974cf47f`); cacheKeys are billed Dynamic Worker identities.
+- **capnweb** pipelines property AND call access on an unresolved promise (one round trip for an
+  N-step chain); each call is a small JSON frame over the WS. The append path carries ZERO zod
+  parses (zod runs only building a control event and at construction).
+- **Cold script parse** dominates cold start: the ~843 KB minified worker is ~6 ms compile + ~4.6 ms
+  eval locally; zod is ~2.2 ms of the eval, the 394 KB SDK string ~1.5 ms of the compile.
