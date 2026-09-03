@@ -138,6 +138,9 @@ export function createFlake<TestFn extends (...args: any[]) => any>(
       // body whenever the wrapper throws (both green outcomes) because the
       // retry fires before the `.fails` inversion — one run would execute and
       // record the body twice. Caller options (e.g. timeout) pass through.
+      // The cast states vitest's three-argument shape: with more than two
+      // arguments the middle one is the per-test options object (the trailing
+      // argument was already checked to be the body function above).
       const callerOptions = args.length > 2 ? (args[1] as object) : {};
       return failer(args[0], { ...callerOptions, retry: 0 }, wrapped);
     }
