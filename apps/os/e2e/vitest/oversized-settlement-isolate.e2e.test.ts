@@ -1,38 +1,45 @@
 // The 2026-09-02 incident ("Durable Object's isolate exceeded its memory limit
-// and was reset", crash-looping a stream), reproduced and A/B-tested on REAL
-// deployed OS workers — real workerd, the real 128MiB isolate, the real
+// and was reset", crash-looping a stream for hours), reproduced and A/B-tested
+// on REAL deployed OS workers — real workerd, the real 128MiB isolate, the real
 // chunk-blob StreamEventLog and settlement path. The node repro
 // (src/domains/streams/oversized-settlement-crash.test.ts) proves the crash
 // shape under a node heap proxy; this file proves it on the real engine.
 //
-// MEASURED 2026-09-03, by hand, preview_2 (no fix) vs preview_3 (fix):
-//   - no fix, 3 of 3 attempts: four codemode scripts each returning ~14MB
-//     journal their settlements verbatim and the stream DO dies on them. It
-//     surfaces either as the run itself failing ("Internal error in Durable
-//     Object storage caused object to be reset") or — when the settlement is
-//     journaled by the NEXT incarnation and the run reports success — only as
-//     a `stream/woken` reboot in the journal. One attempt went straight into
-//     the incident's crash loop: a reboot every ~5s, each wake replaying the
-//     oversized settlement and dying again.
-//   - fix: the same four scripts settle at ~3KB each (`oversized.kind ===
-//     "omitted"`), runScript rejects with "too large to retain", zero reboots.
-//   - control, no fix: four tiny scripts, zero reboots — a `stream/woken`
-//     between runs is a reboot, not per-request noise.
+// MEASURED 2026-09-04 on main after the zod 4.5.4 bump (#2561), which moved the
+// write-side threshold — before it, four ~14MB settlements reset the DO while
+// being journaled, 3 of 3; after it the journaling incarnation survives them:
+//   - no fix: six codemode scripts each returning ~14MB journal fine, ~3s each,
+//     zero reboots. Then the NEXT incarnation cannot boot: it replays the
+//     journal through the processor facets and dies with "Durable Object's
+//     isolate exceeded its memory limit and was reset" — on every wake, 3 of 3
+//     — the incident's crash loop. A plain kill() (what a platform eviction
+//     does) followed by the smallest filtered read is enough to show it; a
+//     whole-window read of the live incarnation resets it the same way. Four
+//     such settlements still boot (7.5s), six do not.
+//   - fix: the same scripts settle at ~3KB each (`oversized.kind ===
+//     "omitted"`), runScript rejects with "too large to retain", the eviction
+//     is followed by a normal boot.
+//   - wrangler tail during the pin (2026-09-03, pre-bump recipe): the resets
+//     show as outcome `exceededMemory` on the stream DO and its ProcessorFacet
+//     only; 42 WebSocket-heavy bystander tests on the same worker passed 42/42.
+//     The blast radius is the poisoned DO and its facets, not the isolate's
+//     other DOs.
 //
 // Why ~14MB: a single result above ~32MB cannot cross the Workers RPC boundary
 // at all ("Incoming message exceeds maximum size of 33554432 UTF-16 code
-// units"), and ~7MB survives a handful of runs on a fresh stream — at that
-// size the incident needed prod's accumulated history to tip.
+// units"), and ~7MB needed prod's accumulated history to tip.
 //
 // Both tests are pinned with failing(): green against a worker WITHOUT the fix,
 // red WITH it — then delete the wrappers and keep the bodies as plain tests.
 //
-// Run against a preview (never shared/prod — it deliberately kills a DO):
+// Run against a preview (never shared/prod — it deliberately bricks a DO):
 //   doppler run --config preview_N -- pnpm --dir apps/os e2e --run oversized-settlement-isolate
 //
-// On a worker without the fix the second test would leave its stream
-// crash-looping — the incident's other half, see tasks/stream-crash-quarantine.md
-// (#2573) — so it wipes the stream's storage on the way out (see the disposer).
+// On a worker without the fix the second test leaves its stream crash-looping,
+// and nothing test-side can clear that: the wipe RPC needs an incarnation that
+// can boot. The preview lane erases the slot after every e2e run (#2585); by
+// hand, `pnpm run erase-data --env preview_N`. The platform-side answer is
+// tasks/stream-crash-quarantine.md (#2573).
 import { expect, test } from "vitest";
 import { failing } from "@iterate-com/shared/test-support/failing-test";
 import { adminSecret, deployedBaseUrl, withItxSession } from "./test-helpers.ts";
@@ -66,60 +73,53 @@ failUnbounded("an oversized script result is bounded before it is journaled", as
   expect(returnedBytes, message).toBeLessThan(1_000_000);
 });
 
+// The reset's own spellings, all seen on real workerd. Only these count as the
+// pinned failure; anything else — transport, auth, a hang — is rethrown so it
+// cannot hold the pin.
+const RESET = /caused object to be reset|exceeded its memory limit|went away/i;
+
 // The crash itself, on the real engine: the test above only proves the payload
-// is unbounded; this one makes the isolate actually die. Four ~14MB runs on a
-// no-fix worker took 110–135s by hand and in CI, hence the deadline — kept
-// under the e2e policy's 240s per-test ceiling (E2E_HEAVY_TEST_TIMEOUT_MS):
-// a hung test plus its one CI retry must finish before the preview run's
-// 480s kill timer stops the whole vitest process.
+// is unbounded; this one makes the isolate actually die.
 const failReset = failing(test.skipIf(deployedBaseUrl() === null), /should not reset or reboot/i, {
-  timeoutMs: 230_000,
+  timeoutMs: 120_000,
 });
 
-failReset("the stream DO survives journaling oversized script results", async () => {
+failReset("a stream survives being evicted after journaling oversized script results", async () => {
   using session = withItxSession();
   using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
   using project = await itx.projects
     .get(`oversized-reset-${crypto.randomUUID().slice(0, 8)}`)
     .create({});
-  // Without the fix the stream is left crash-looping: every wake replays the
-  // oversized settlement and dies again, burning DO duration until someone
-  // erases the slot. Until test-created projects get a real teardown, wipe the
-  // root stream's storage on the way out — a fresh empty stream has no poison
-  // event to fold (verified by hand: the ~5s reboots stop). testReset aborts
-  // the incarnation from inside the call, so its own "kill requested"
-  // rejection is the success; a mid-reboot stream is retried. A wipe that
-  // still fails is a real red, not the pin: it means a crash-looping DO was
-  // left in the slot. Its throw wraps the pin's own failure in a
-  // SuppressedError, so the reason is logged first where it can be found.
+  const stream = project.streams.get("/");
+  // Best-effort wipe on the way out (deleteAll + abort, admin-only), so a
+  // fixed worker — or a size that can still boot — leaves nothing behind.
+  // testReset aborts the incarnation from inside the call, so its own "kill
+  // requested" rejection is the success. Without the fix the stream cannot
+  // boot at all after this test, so the wipe cannot land either: that is the
+  // crash loop, logged and left for the lane's post-run erase (#2585).
   await using _wipe = {
     [Symbol.asyncDispose]: async () => {
-      const stream = project.streams.get("/") as unknown as { testReset(): Promise<void> };
+      const admin = stream as unknown as { testReset(): Promise<void> };
       let failure = "";
       for (let attempt = 0; attempt < 6; attempt++) {
-        failure = await stream.testReset().then(
+        failure = await admin.testReset().then(
           () => "",
           (error: unknown) => String(error),
         );
         if (/kill requested/i.test(failure) || failure === "") return;
       }
-      const message = `could not wipe the stream after its oversized settlements - it may be crash-looping in this slot: ${failure}`;
+      const message = `could not wipe the stream after its oversized settlements - it is crash-looping in this slot until the slot is erased: ${failure}`;
       console.error(`[oversized-settlement] ${message}`);
+      if (RESET.test(failure)) return; // the pinned crash loop itself, not a test failure
       throw new Error(message);
     },
   };
 
-  // Without the fix each ~14MB result is journaled verbatim and the DO dies on
-  // it — sometimes as the run itself failing with a reset, sometimes only as a
-  // reboot in the journal (the settlement is then journaled by the next
-  // incarnation and the run reports success). With the fix every run rejects
-  // with the bounded explanation instead, which is the fix and is swallowed.
-  // Only the reset's own spellings (all three seen on real workerd) count as
-  // the pinned failure; anything else — transport, auth, a hang — is rethrown
-  // so it cannot hold the pin.
-  const RESET = /caused object to be reset|exceeded its memory limit|went away/i;
+  // Six ~14MB results. Without the fix they are journaled verbatim (the live
+  // incarnation survives that on current main); with the fix every run
+  // rejects with the bounded explanation, which is the fix and is swallowed.
   const resets: string[] = [];
-  for (let run = 0; run < 4; run++) {
+  for (let run = 0; run < 6; run++) {
     await project.capabilityHost
       .runScript(`async () => ({ stdout: "iVBORw0KGgo".repeat(1_334_568) })`)
       .catch((error: unknown) => {
@@ -129,12 +129,15 @@ failReset("the stream DO survives journaling oversized script results", async ()
       });
   }
 
-  // Reboots show up in the journal as `stream/woken`: one when the stream is
-  // created, and none between runs unless an incarnation died. Read only those
-  // event types — a whole-window read of ~14MB settlements would itself be
-  // enough to kill the DO again, which would be the pinned failure too.
-  const timeline = await project.streams
-    .get("/")
+  // Evict the incarnation the way the platform does — kill() aborts it and
+  // touches no storage — then make the next one boot with the smallest
+  // possible read. Reboots show up in the journal as `stream/woken`: exactly
+  // one is expected here (this boot); a boot that dies replaying the journal
+  // is the reset instead.
+  await stream.kill().catch((error: unknown) => {
+    if (!/kill requested/i.test(String(error))) throw error;
+  });
+  const timeline = await stream
     .getEventPage({
       afterOffset: 0,
       limit: 500,
@@ -150,10 +153,10 @@ failReset("the stream DO survives journaling oversized script results", async ()
       return [];
     });
   const firstRun = timeline.indexOf("capability-host/script-run-requested");
-  const reboots = timeline.slice(firstRun).filter((type) => type === "stream/woken");
+  const reboots = timeline.slice(firstRun).filter((type) => type === "stream/woken").length;
 
   expect(
     { resets, reboots },
-    "the stream DO should not reset or reboot while journaling oversized script results",
-  ).toEqual({ resets: [], reboots: [] });
+    "the stream DO should not reset or reboot beyond the one eviction after journaling oversized script results",
+  ).toEqual({ resets: [], reboots: 1 });
 });
