@@ -60,6 +60,16 @@ function startDummyCapnweb(): Promise<{ url: string; server: Server }> {
 }
 
 export default async function setup(project: TestProject): Promise<() => Promise<void>> {
+  // DEPLOYED-TARGET MODE — the proof that counts: `WORKER_BASE_URL=https://project-worker.<sub>.workers.dev
+  // pnpm e2e` runs the SAME suite against the deployed worker, no local boot. The dummy remote API is
+  // Node-hosted here, unreachable from the edge, so workers-remote-capnweb.e2e skips unless
+  // `DUMMY_CAPNWEB_URL` names a public one (a captun tunnel).
+  const deployedWorkerBaseUrl = process.env.WORKER_BASE_URL;
+  if (deployedWorkerBaseUrl) {
+    project.provide("workerBaseUrl", deployedWorkerBaseUrl);
+    project.provide("dummyCapnwebUrl", process.env.DUMMY_CAPNWEB_URL ?? "");
+    return async () => {};
+  }
   const config = soloWorkerConfig();
   const server = createTestHarness({ root: PACKAGE_DIR, workers: [{ config }] });
   const { url } = await server.listen();

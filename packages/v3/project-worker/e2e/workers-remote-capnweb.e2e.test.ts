@@ -8,8 +8,12 @@
 // (was the `itx.connectToCapnweb(url)` built-in's proof — connectToCapnweb is gone, this is its
 // userspace spelling)
 
-import { expect, test } from "vitest";
+import { expect, test as vitestTest } from "vitest";
 import { freshCtx, openItx } from "./support/client.ts";
+
+// In DEPLOYED-TARGET mode (support/global-setup.ts) the Node-hosted dummy is unreachable from the
+// edge; these run only when a public dummy url is provided (`DUMMY_CAPNWEB_URL`).
+const test = vitestTest.skipIf(!process.env.DUMMY_CAPNWEB_URL);
 
 // The whole remote-dialing worker, handed over inline. Each method builds ONE capnweb chain with no
 // intervening awaits (the one-shot batch flushes on the first await), so even a call-then-call chain

@@ -37,7 +37,13 @@
   },
   // The DO's lifecycle, declaratively: one SQLite-backed class, no migration history to replay
   // (the legacy `migrations` array is gone; a deployed namespace keeps its data across this change).
-  "exports": { "IterateContextDurableObject": { "type": "durable-object", "storage": "sqlite" } },
+  "exports": {
+    "IterateContextDurableObject": { "type": "durable-object", "storage": "sqlite" },
+    // The pre-rename class (StreamDurableObject → IterateContextDurableObject, clean-room C2) still
+    // had a provisioned namespace on workers.dev; wrangler refuses to deploy over an orphan, so it is
+    // retired here — a tombstone, its data gone with it (the clean room's deployment is resettable).
+    "StreamDurableObject": { "type": "durable-object", "state": "deleted" },
+  },
 
   // The DO's fallback (target-core §4.4). SELF-HOST/HOSTED: a service binding to the real control-plane shell
   // worker (deployed from packages/v3/control-plane-shell). SOLO would instead bind
