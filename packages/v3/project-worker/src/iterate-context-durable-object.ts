@@ -40,7 +40,12 @@
 import { DurableObject } from "cloudflare:workers";
 import { substituteHeaderSecrets } from "@v3/shared/egress";
 import { facetLoaderOwner, loadConfinedWorker, type FacetSpec } from "./context/worker-loader.ts";
-import { CoreContract, type CoreState } from "./stream/core-processor.ts";
+import {
+  CoreContract,
+  facetSpecFromHostingTarget,
+  type CoreState,
+  type Subscription,
+} from "./stream/core-processor.ts";
 import { codedError, errorCode } from "./lib/errors.ts";
 import { withTimeout } from "./lib/timeout.ts";
 import type { StreamEvent, StreamEventInput } from "./stream/events.ts";
@@ -212,27 +217,23 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     committedEvents: StreamEvent[],
     subscriptionsBeforeCommit: CoreState["subscriptions"],
   ): void {
-    // The facet a row HOSTS: `itx.facets.get(name, spec)…` — a `get` with a spec; an address-only
-    // `itx.facets.get(name)…` hosts nothing.
-    const hostedFacetName = (target: ItxExpression): string | undefined => {
-      const [, root, getStep] = target;
-      return root === "facets" &&
-        Array.isArray(getStep) &&
-        getStep[0] === "get" &&
-        getStep.length >= 3 &&
-        typeof getStep[1] === "string"
-        ? getStep[1]
-        : undefined;
+    // The facet a row HOSTS: a row with `hostedFacet` set (M1 — the source is elided from the target,
+    // so the marker, not the target's spec, is what says "hosts"). The facet NAME is still in the
+    // elided target (`itx.facets.get(name)…`). An address-only row has no `hostedFacet`.
+    const hostedFacetName = (row: Subscription): string | undefined => {
+      if (!row.hostedFacet) return undefined;
+      const getStep = row.target[2];
+      return Array.isArray(getStep) && typeof getStep[1] === "string" ? getStep[1] : undefined;
     };
     for (const event of committedEvents) {
       if (event.type !== "events.iterate.com/stream/subscription-configured") continue;
       const { name, target } = event.payload as { name: string; target: string | null };
       const removedRow = target === null ? subscriptionsBeforeCommit[name] : undefined;
-      const facetName = removedRow && hostedFacetName(removedRow.target);
+      const facetName = removedRow && hostedFacetName(removedRow);
       if (!facetName) continue;
       // Another row still hosts it (a mirror, an audit): the facet is theirs now, not gone.
       const stillHosted = Object.values(this.#stream.coreReducedState.subscriptions).some(
-        (row) => hostedFacetName(row.target) === facetName,
+        (row) => hostedFacetName(row) === facetName,
       );
       if (!stillHosted) this.#deleteFacet(facetName);
     }
@@ -338,6 +339,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         target: print(s.target),
         ...(s.consumes && { consumes: s.consumes }),
         configuredAtOffset: s.configuredAtOffset,
+        ...(s.hostedFacet && { hostedFacet: s.hostedFacet }),
         ...(cursor && {
           cursor: {
             confirmedOffset: cursor.confirmedOffset,
@@ -454,6 +456,29 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       if (!facetStartupMemo || JSON.stringify(facetStartupMemo) !== JSON.stringify(storedSpec))
         this.ctx.storage.kv.put(`facet:${name}`, storedSpec);
       facetStartupMemo = storedSpec;
+    }
+    if (!facetStartupMemo) {
+      // M1: a hosting row keeps NO source in core state — recover it from the DURABLE log event that
+      // configured it (its `configuredAtOffset`), write the memo once, and proceed. The memo survives
+      // eviction (kv), so this log read happens at most once per facet per deployment, never per push.
+      const row = this.#stream.coreReducedState.subscriptions[name];
+      if (row?.hostedFacet) {
+        const [configuredEvent] = this.#stream.read(row.configuredAtOffset - 1, 1).events;
+        const configuredTarget = (configuredEvent?.payload as { target?: string } | undefined)
+          ?.target;
+        const spec = configuredTarget
+          ? facetSpecFromHostingTarget(parse(configuredTarget))
+          : undefined;
+        if (spec) {
+          const recovered: FacetSpec = {
+            source: spec.source as FacetSpec["source"],
+            ...(spec.cacheKey !== undefined && { cacheKey: spec.cacheKey }),
+            className: spec.className,
+          };
+          this.ctx.storage.kv.put(`facet:${name}`, recovered);
+          facetStartupMemo = recovered;
+        }
+      }
     }
     if (!facetStartupMemo)
       throw codedError("NO_FACET", `no facet "${name}" — load a class into it first`);

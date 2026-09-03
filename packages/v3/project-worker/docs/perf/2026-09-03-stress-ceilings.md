@@ -92,3 +92,23 @@ correctness-sensitive code. Menu.
 - Multiplex/early-out "kill the 20×20 storm" as a cheap onCommit early-out — the loop it skips is
   already cheap; the real cost is the 20 loopback APPENDS, which the early-out does not remove.
 - Lazy CoreContract construction — CoreContract is already a plain object literal (no zod) since W3(b).
+
+## M1 LANDED (2026-09-03): inline processor sources out of core state
+
+Implemented and proved. A hosting subscription target (`itx.facets.get(name, { source, className,
+cacheKey? }).processEventBatch`) is stored in the reduced state with its SOURCE ELIDED — the row
+keeps the bare `itx.facets.get(name).processEventBatch` target plus a `hostedFacet: { className,
+cacheKey? }` marker. The source lives only where it is already durable: the subscription-configured
+LOG event (chunked) and the `facet:<name>` kv memo. `#invokeFacet` recovers the source from the log
+on the ONE first-materialization memo miss (the memo survives eviction, so it is at most one log read
+per facet per deployment, never per push). The disable effect reads `row.hostedFacet` instead of
+sniffing the target's spec; the subscription view and `processorNames` use the marker.
+
+Version bump 4.0.0 → 5.0.0 (the reduced shape changed → a one-time re-reduce from the log on deploy;
+the source is in the log, so re-reduce reconstructs the elided rows exactly). Result: the checkpoint
+blob (rewritten on EVERY core change — every provide, subscribe, pause) drops from O(Σ source) to
+O(rows); resident core state shrinks the same way; the SQLITE_TOOBIG reconfiguration cliff moves from
+~20 processors (at 100 KB sources) toward thousands. LOC: ~+70 / −20. Files: core-processor.ts
+(reduce + row type + version + two helpers), iterate-context-durable-object.ts (delete-check +
+memo-miss log recovery + view), built-ins.ts (view type), e2e/support/client.ts (processorNames),
+two test assertions.

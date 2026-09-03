@@ -29,6 +29,7 @@ import {
   parseItxExpressionPrefix,
   type ItxExpression,
   type ItxExpressionPrefix,
+  type ItxExpressionStep,
 } from "../context/expression.ts";
 import type { StreamEventInput } from "./events.ts";
 import { StreamProcessor, type ProcessorContract, type ReduceArgs } from "./processor.ts";
@@ -36,6 +37,46 @@ import { StreamProcessor, type ProcessorContract, type ReduceArgs } from "./proc
 /** One rewrite rule: a canonical match prefix and the target it rewrites to (both parsed once, at
  *  reduce; a call step pins literal args, `itx.ai.run('gpt-5')` — expression.ts). */
 export type ItxExpressionRewriteRule = { match: ItxExpressionPrefix; target: ItxExpression };
+
+/** The hosting spec inside a FULL configured target (`itx.facets.get(name, { source, className,
+ *  cacheKey? }).…`) — present ONLY in the raw log event's target, before the reduce elides the
+ *  source. `#invokeFacet` reads it back from the log on a first-materialization memo miss (M1).
+ *  Undefined if the target is not a facet-host (an address-only `itx.facets.get(name).…`). */
+export function facetSpecFromHostingTarget(
+  target: ItxExpression,
+): { source: unknown; className: string; cacheKey?: string } | undefined {
+  const getStep = target[2];
+  if (
+    target[1] === "facets" &&
+    Array.isArray(getStep) &&
+    getStep[0] === "get" &&
+    getStep.length >= 3 &&
+    typeof getStep[1] === "string" &&
+    typeof getStep[2] === "object" &&
+    getStep[2] !== null
+  )
+    return getStep[2] as { source: unknown; className: string; cacheKey?: string };
+  return undefined;
+}
+
+/** M1: split a configured target into the SOURCE-LESS target the reduce stores and the `hostedFacet`
+ *  marker (the class + cacheKey it hosts). A non-hosting target passes through with no marker. */
+function elideHostedFacetSource(target: ItxExpression): {
+  target: ItxExpression;
+  hostedFacet?: { className: string; cacheKey?: string };
+} {
+  const spec = facetSpecFromHostingTarget(target);
+  if (!spec) return { target };
+  const getStep = target[2] as [string, string, ...unknown[]];
+  const sourceLessGet: ItxExpressionStep = ["get", getStep[1]];
+  return {
+    target: [target[0], target[1], sourceLessGet, ...target.slice(3)],
+    hostedFacet: {
+      className: spec.className,
+      ...(spec.cacheKey !== undefined && { cacheKey: spec.cacheKey }),
+    },
+  };
+}
 
 /** One subscription row (by name; a same-named configure REPLACES). */
 export type Subscription = {
@@ -45,6 +86,11 @@ export type Subscription = {
   consumes?: string[];
   /** The row's identity — the offset of its subscription-configured event. */
   configuredAtOffset: number;
+  /** Set when this row HOSTS a facet (`itx.facets.get(name, spec)…`, M1): the class and cacheKey,
+   *  but NOT the source — the source stays in the durable log event (and the `facet:<name>` kv memo),
+   *  never in this reduced state, so a 100 KB processor no longer bloats the checkpoint blob that is
+   *  rewritten on every core change. A row that only ADDRESSES a running facet has no `hostedFacet`. */
+  hostedFacet?: { className: string; cacheKey?: string };
   /** A CURSOR target that exhausted its retries (the loop appended the halted fact). */
   halted?: { afterOffset: number; attempts: number; error?: string };
   /** The newest delivery-resumed: the loop applies it once (a seek, an un-halt). */
@@ -108,7 +154,7 @@ export const CoreContract: ProcessorContract<CoreState> & {
   }) => StreamEventInput;
 } = {
   slug: "core",
-  version: "4.0.0", // 4.0.0: rewrite rules are a MAP under itx/rewrite-rule-configured; subscription-configured absorbs removal
+  version: "5.0.0", // 5.0.0 (M1): a hosted facet's SOURCE is elided from the reduced target (kept in the log + facet:<name> kv), leaving hostedFacet {className, cacheKey?} on the row
   description:
     "The context's own state, reduced inline at the commit point: who it is, which incarnation runs, whether appends are paused, the itx-expression rewrite rules every call goes through, and the subscriptions every commit is sent to.",
   consumes: CORE_EVENT_TYPES,
@@ -184,14 +230,19 @@ export class CoreStreamProcessor extends StreamProcessor<CoreState> {
           return { ...state, subscriptions: rest };
         }
         const consumes = payload.consumes as string[] | undefined;
+        // M1: a hosting target (`itx.facets.get(name, spec)…`) keeps its NAME and shape but sheds its
+        // SOURCE here — the source is durable in this very event (and the facet's kv memo), so the
+        // reduced state, and the checkpoint blob it is written into on every core change, stay small.
+        const { target, hostedFacet } = elideHostedFacetSource(parse(payload.target as string));
         return {
           ...state,
           subscriptions: {
             ...state.subscriptions,
             [name]: {
-              target: parse(payload.target as string),
+              target,
               ...(consumes && { consumes }),
               configuredAtOffset: event.offset,
+              ...(hostedFacet && { hostedFacet }),
             },
           },
         };

@@ -26,9 +26,9 @@ const reduceAll = (events: StreamEvent[], initial = proc.contract.initialState()
   events.reduce((s, e) => proc.reduce({ event: e, state: s }) ?? s, initial);
 
 describe("the contract", () => {
-  test("slug `core` v4.0.0; the schema-initial state; consumes EXACTLY its eight control events (an inline reduce reduces only what it consumes)", () => {
+  test("slug `core` v5.0.0; the schema-initial state; consumes EXACTLY its eight control events (an inline reduce reduces only what it consumes)", () => {
     expect(proc.contract.slug).toBe("core");
-    expect(proc.contract.version).toBe("4.0.0");
+    expect(proc.contract.version).toBe("5.0.0");
     expect(proc.contract.initialState()).toEqual({
       paused: null,
       itxExpressionRewriteRules: {},

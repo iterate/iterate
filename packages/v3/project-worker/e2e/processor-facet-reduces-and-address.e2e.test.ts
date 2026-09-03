@@ -44,12 +44,13 @@ test("facet spine: cold catch-up + driven reduces + the subscriptions table list
   expect(s2.offset).toBeGreaterThanOrEqual(7);
 
   // the subscriptions table lists the processor: ONE row whose target is the facet's
-  // processEventBatch through the load chain, and NO cursor — the facet keeps its own checkpoint
+  // processEventBatch, and NO cursor — the facet keeps its own checkpoint. M1: the SOURCE is elided
+  // from the reduced target (it lives in the log + the facet's kv memo); the row carries a
+  // `hostedFacet` marker with the class instead.
   expect(await processorNames(itx)).toEqual(["tally"]);
   const row = (await subscriptions(itx)).find((r: { name: string }) => r.name === "tally");
-  expect(row.target).toMatch(
-    /^itx\.facets\.get\(["']tally["'],\s*\{.*className:\s*["']TallyDurableObject["'].*\}\)\.processEventBatch$/,
-  );
+  expect(row.target).toBe("itx.facets.get('tally').processEventBatch");
+  expect(row.hostedFacet).toEqual({ className: "TallyDurableObject" });
   expect(row.cursor).toBeUndefined();
 });
 

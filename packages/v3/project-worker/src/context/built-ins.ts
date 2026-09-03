@@ -36,6 +36,9 @@ export type SubscriptionListEntry = {
   target: string;
   consumes?: string[];
   configuredAtOffset: number;
+  /** Set when this row HOSTS a facet (a processor): its class and cacheKey (the source lives in the
+   *  log + the facet's kv memo, never here — M1). Address-only rows have none. */
+  hostedFacet?: { className: string; cacheKey?: string };
   /** Present only when the STREAM keeps the cursor (a target that cannot own its progress). */
   cursor?: { confirmedOffset: number; attempt: number; nextAttemptAtMs?: number };
   halted?: { afterOffset: number; attempts: number; error?: string };

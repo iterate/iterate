@@ -140,11 +140,11 @@ export async function rpcStubRewriteRuleMatches(itx: any): Promise<string[]> {
     .map((rule) => rule.match);
 }
 
-/** Enabled processors = subscriptions whose target HOSTS a facet (`facets.get(name, { source,
- *  className })`) and pushes its processEventBatch. */
+/** Enabled processors = subscriptions that HOST a facet (M1 marks the row `hostedFacet`; the source
+ *  is no longer in the target) and push its processEventBatch. */
 export async function processorNames(itx: any): Promise<string[]> {
   return (await subscriptions(itx))
-    .filter((s) => /^itx\.facets\.get\(.+,\s*\{.*\}\)\.processEventBatch$/.test(s.target))
+    .filter((s) => s.hostedFacet && /\.processEventBatch$/.test(s.target))
     .map((s) => s.name);
 }
 
