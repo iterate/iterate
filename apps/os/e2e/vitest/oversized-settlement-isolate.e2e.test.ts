@@ -69,8 +69,9 @@ failUnbounded("an oversized script result is bounded before it is journaled", as
 // The crash itself, on the real engine: the test above only proves the payload
 // is unbounded; this one makes the isolate actually die. Four ~14MB runs on a
 // no-fix worker took 110–135s by hand and in CI, hence the deadline — kept
-// under the e2e policy's 240s per-test ceiling (E2E_HEAVY_TEST_TIMEOUT_MS,
-// sized so a hang plus its one retry stays inside the lane watchdog).
+// under the e2e policy's 240s per-test ceiling (E2E_HEAVY_TEST_TIMEOUT_MS):
+// a hung test plus its one CI retry must finish before the preview run's
+// 480s kill timer stops the whole vitest process.
 const failReset = failing(test.skipIf(deployedBaseUrl() === null), /should not reset or reboot/i, {
   timeoutMs: 230_000,
 });
