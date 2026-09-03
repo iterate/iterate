@@ -22,8 +22,8 @@
 //   doppler run --config preview_N -- pnpm --dir apps/os e2e --run abandoned-project-goes-quiet
 import { expect, test } from "vitest";
 import { failing } from "@iterate-com/shared/test-support/failing-test";
-import type { StreamEvent } from "../../src/itx-api.generated.ts";
 import { installResilientAiInterceptor } from "@iterate-com/shared/test-support/resilient-ai-interceptor";
+import type { StreamEvent } from "../../src/itx-api.generated.ts";
 import { createTestProject } from "../test-support/create-test-project.ts";
 import { createAdminOsItx } from "../test-support/os-client.ts";
 import { deployedBaseUrl } from "./test-helpers.ts";

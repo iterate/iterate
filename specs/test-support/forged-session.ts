@@ -14,9 +14,9 @@ import {
   type ProjectAiInterceptorInput,
 } from "iterate/node";
 import dedent from "dedent";
+import { installResilientAiInterceptor } from "@iterate-com/shared/test-support/resilient-ai-interceptor";
 import { doppler, localOsDevServer } from "../../apps/os/scripts/dev.ts";
 import { mintForgedAccessToken, mintForgedIdToken } from "../../scripts/auth/forge-token.ts";
-import { installResilientAiInterceptor } from "@iterate-com/shared/test-support/resilient-ai-interceptor";
 import { signUpWithEmailOtp, uniqueSignupEmail } from "./email-otp-signup.ts";
 
 type OsPlaywrightAuthConfig = {
