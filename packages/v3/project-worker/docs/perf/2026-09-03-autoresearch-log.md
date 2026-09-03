@@ -261,3 +261,31 @@ esbuild-equivalent main bundle 843 → 534 KB. DEPLOYED: **Total Upload 1,226 �
 none dropped — userspace processors keep full zod; core-event validation moves from a runtime schema
 to hand code + the command builders, which is the trusted-client doctrine. LOC: +~55 (the new module)
 / −~65 (events + core schema) ≈ net negative in the edge graph; the SDK bundle is unchanged.
+
+## Round 2 summary (2026-09-03) — "all guns blazing"
+
+Delivered against the user's push (60k ephemeral/s, 20 facets, 10-person audio, high-volume durable,
+OOM/CPU, "edge worker super fast", "delete the zod"):
+
+- **W3(b) zod deleted from the edge/DO script** — Worker Startup Time **18 → 7 ms**, upload 1,226 →
+  695 KiB, gzip 233 → 155 KiB. The edge worker is now ~2.5× faster to cold-start. Deployed + proved.
+- **M1: inline sources out of core state** — the checkpoint blob (rewritten on every core change)
+  drops from O(Σ source) to O(rows); the SQLITE_TOOBIG facet ceiling moves from ~20 processors toward
+  thousands; resident core state shrinks. Core contract 5.0.0. Deployed + proved (145 e2e green).
+- **Streaming/audio fan-out memo** — a PCM/audio row evaluates its target once per generation, not
+  per push (invalidated by row identity AND rule-table identity).
+- **`limits.cpu_ms: 300000`** — 10× the CPU-time default for cold re-reduce / large fan-out.
+- **The full ceiling map** (`2026-09-03-stress-ceilings.md`) — every named workload quantified, the
+  OOM/CPU paths, and the ranked raises. Headline: the server already accepts multi-event appends, so
+  CLIENT-SIDE batching is the architectural answer (60k individual ephemerals/s is CPU+subrequest
+  bound; single durable appends cap at ~100/s on the output-gate confirm, batched ~2,900/s).
+
+A 6-agent stress analysis + adversarial verify drove this; the verify killed several overstated or
+capability-breaking ideas (allowUnconfirmed on transactionSync — not in the JS API; defer-fan-out —
+breaks the alarm-arm; drop-UNIQUE-index — schema migration, ~0 gain) before they were built.
+
+Big menu items left (all confirmed, all bigger than a loop step): multiplex N reducers into ONE
+facet isolate (~10× all three facet ceilings; large refactor), push frames DO→client directly down
+the pager WS (skip the edge hop; protocol change), bound the per-subscription delivery backlog (the
+slow-subscriber OOM fix), client-side burst coalescing (the batching answer; client SDK). Sized in
+learnings-and-bigger-refactors.md and stress-ceilings.md.
