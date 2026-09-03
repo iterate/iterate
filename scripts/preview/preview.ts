@@ -480,8 +480,9 @@ async function deployPreviewApps({
       ...erasedApps,
       ...(slotMoved
         ? Object.keys(current.state.apps).filter(
-            (appSlug): appSlug is CloudflarePreviewAppSlugType =>
-              cloudflarePreviewApps[appSlug as CloudflarePreviewAppSlugType] != null,
+            // The recorded state can name apps this branch no longer knows;
+            // membership in the fleet map is the narrowing.
+            (appSlug): appSlug is CloudflarePreviewAppSlugType => appSlug in cloudflarePreviewApps,
           )
         : []),
     ]),
