@@ -39,7 +39,7 @@ flowchart LR
   end
 
   subgraph pw["project-worker (Cloudflare Worker)"]
-    edge["fetch handler<br/>/api /cap /version /demo"]
+    edge["fetch handler<br/>/api /expression /version (+ /demo as a static asset)"]
     relay["ProjectSession + relay<br/>(capnweb terminates HERE)"]
     subgraph dos["Durable Objects (pure Workers RPC)"]
       itx["ItxDurableObject<br/>(capability host,<br/>one per {projectId,path})"]

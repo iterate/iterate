@@ -10,7 +10,6 @@ import { registerPipelinedRpcBrand } from "./context/dispatch.ts";
 import { ITX_EXPRESSION_FETCH_HEADER } from "./fetch/rpc-stub-fetch.ts";
 import { DurableObjectNameCodec } from "./context/durable-object-names.ts";
 import { UnauthenticatedSession } from "./session.ts";
-import { DEMO_PAGE_HTML } from "./generated/demo-page.ts";
 
 // Native workerd RPC promises pipeline exactly like capnweb ones — thread them unawaited through
 // the step walk too (dispatch.ts can't import cloudflare:workers itself: the unit lane runs it in
@@ -43,13 +42,8 @@ export default {
 
     if (url.pathname === "/version") return new Response(CODE_VERSION + "\n");
 
-    // The hosted live-state demo: a self-contained page (React + the capnweb fork + useLiveState,
-    // all inlined by build-sdk.mjs) that dials THIS worker's /api and renders a processor's reduced
-    // ⊕ runtime live state. Open /demo against any deployment.
-    if (url.pathname === "/demo")
-      return new Response(DEMO_PAGE_HTML, {
-        headers: { "content-type": "text/html;charset=utf-8" },
-      });
+    // /demo — the hosted live-state demo — is a STATIC ASSET (public/demo.html, built by
+    // build-sdk.mjs; wrangler.jsonc `assets`): the platform serves it before this handler runs.
 
     // THE ONE capnweb ENTRYPOINT (the hard rule): capnweb terminates HERE, in the stateless worker;
     // the DO is reached only over Workers RPC. A client dials `/api` and holds an

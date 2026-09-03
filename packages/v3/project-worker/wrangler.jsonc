@@ -20,6 +20,10 @@
   "observability": { "enabled": true, "logs": { "head_sampling_rate": 1 } },
   "workers_dev": true,
 
+  // The hosted /demo page as a static asset (build-sdk.mjs writes public/demo.html): served by the
+  // platform, not the script — 255 KiB fewer in every /api and DO isolate.
+  "assets": { "directory": "./public" },
+
   // The Worker Loader that runs each project's confined config worker / agents.
   "worker_loaders": [{ "binding": "LOADER" }],
 

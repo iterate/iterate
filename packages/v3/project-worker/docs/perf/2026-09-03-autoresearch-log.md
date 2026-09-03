@@ -72,3 +72,43 @@ costs ≈0.54 ms of DO time each (the commits serialise), an ephemeral ≈0.32 m
 overhead (capnweb frame → edge → RPC → dispatch) is ~0.3 ms and dominates every small call; batching
 100 events into one append is 11× cheaper per event than pipelining 100 appends. A facet cold start
 is 27 ms (loader + class + first call + catch-up).
+
+### DEPLOYED baseline (workers.dev from the laptop, `BENCH_TIME_MS=5000`) — the numbers that count
+
+Client-perceived mean ms (laptop → edge; network RTT ~13–17 ms is the floor), with the deployed
+worker's own tail cpuTime beside it (p50 unless noted):
+
+| scenario                                     | client mean ms               | DO/edge cpu p50 ms |
+| -------------------------------------------- | ---------------------------- | ------------------ |
+| boot: fresh context, first whoami            | 488 (n=13, ±42%)             | —                  |
+| boot: warm context, whoami                   | 16.9                         | edge 0 / DO 0      |
+| boot: FETCH LANE fresh context whoami        | 396                          | —                  |
+| boot: FETCH LANE warm context whoami         | 36.9                         | —                  |
+| latency: durable append, 1 event             | 27.1                         | DO 0–1             |
+| latency: ephemeral append, 1 event           | 17.5                         | —                  |
+| latency: read 100                            | 18.0                         | —                  |
+| latency: kv.get through a rewrite rule       | 22.8                         | —                  |
+| latency: core snapshot                       | 17.6                         | —                  |
+| latency: FETCH LANE durable append           | 32.5                         | edge 0 / DO ≤1     |
+| throughput: 1 append of 100 events (batched) | 34.8 (≈2,900 ev/s wire)      | —                  |
+| throughput: 100 pipelined single appends     | 121 THEN **the run aborted** | —                  |
+
+Tail (4,018 events over the run): `durableObject rpc:invoke` cpuTime p50 **0 ms**, p95 0, wall p50
+33 ms; every lane's cpuTime p50 is 0 and p95 ≤ 5 ms. **CPU is not the bottleneck at these fixture
+sizes — wall time is network RTT + the DO's own I/O.** The one number with real signal: a durable
+append is ~27 ms vs an ephemeral ~17 ms — ~10 ms for the SQLite row + the full-core-state checkpoint
+put, on the edge, on the client's critical path. First cold boot of a context is ~490 ms (a genuine
+DO cold start; n is tiny and noisy).
+
+### Finding F-subreq (→ learnings): 100 appends pipelined over ONE session abort with "Too many API
+
+requests by single Worker invocation"
+
+The `100 single-event appends in flight` scenario aborted the whole bench with `Too many API requests
+by single Worker invocation` (Cloudflare's per-invocation subrequest cap, 1,000 by default). 100
+concurrent `itx.invoke(["itx",["append",…]])` over one capnweb WS become 100 stateless→DO Workers-RPC
+subrequests attributed to ONE stateless invocation. This is the deployed confirmation of the review's
+measure-next #1 (the 10,000-delivery wall apps/os hit) at the APPEND door, and it bounds how hard a
+single client can hammer one session before it must either batch (one append of N events — 34.8 ms
+for 100, and it is ONE subrequest) or reconnect. Not a regression; a real ceiling. Detail and options
+in learnings.

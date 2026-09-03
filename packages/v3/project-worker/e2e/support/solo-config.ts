@@ -20,6 +20,7 @@ export function soloWorkerConfig(): Unstable_RawConfig {
   return {
     ...rawConfig,
     main: join(PACKAGE_DIR, String(rawConfig.main)),
+    assets: { ...rawConfig.assets, directory: join(PACKAGE_DIR, "public") },
     build: { ...rawConfig.build, cwd: PACKAGE_DIR },
     services: [
       { binding: "FALLBACK", service: String(rawConfig.name), entrypoint: "DummyControlPlane" },
