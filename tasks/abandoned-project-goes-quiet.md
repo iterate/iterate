@@ -70,7 +70,10 @@ Lives in the normal e2e lane (plan approved 2026-09-03): an expected-fail
 that starts passing is exactly the signal CI should raise the day teardown
 (or a revert) lands.
 
-- [ ] `apps/os/e2e/vitest/abandoned-project-goes-quiet.e2e.test.ts` as a
-      `failing()` pin
-- [ ] Verified red-for-the-right-reason against a preview (failure table in
-      the PR body)
+- [x] `apps/os/e2e/vitest/abandoned-project-goes-quiet.e2e.test.ts` as a
+      `failing()` pin _(codemode reply shape from agent-fake-model-chat.spec.ts; ask waits for web-message-sent)_
+- [x] Verified red-for-the-right-reason against preview_5 2026-09-03: 24
+      heartbeat fires in the 90s window; no stream-loop wakes from a cleanly
+      finished turn _(table in PR #2583)_
+- [ ] Follow-up scenario: abandon a turn MID-flight (kill the interceptor
+      before the reply) to pin the stream-loop flavor too
