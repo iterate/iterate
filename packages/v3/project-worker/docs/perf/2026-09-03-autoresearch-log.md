@@ -29,3 +29,46 @@ KEPT or REVERTED, the commit.
 - Cloudflare MCP: the OAuth flow needs a browser; the Chrome extension is not connected in this
   session, so observability is read through the Workers Observability API with wrangler's token
   (same data the MCP wraps). The MCP login URL is in the session transcript for Jonas to complete.
+
+## 1. The harness (`pnpm bench`) and the baselines
+
+`bench/api.bench.ts` on vitest's benchmark runner (tinybench), over the e2e client (capnweb at /api;
+FETCH LANE scenarios go one HTTP request per call so the deployed worker's tail attributes cpuTime /
+wallTime per call — `bench/tail-summary.ts` summarises a `wrangler tail --format json` capture by
+lane). `WORKER_BASE_URL=<url>` targets the deployed worker; `BENCH_OUT=<json>` keeps the samples.
+Scenarios: boot (fresh context's first call vs the warm round trip beneath it), latency (durable /
+ephemeral append, read 100, a one-rule chain onto kv, core snapshot), throughput (100 pipelined
+appends, one 100-event append, 100 ephemerals), delivery (append → lent callback push; append →
+processor reduced; warm facet snapshot), facet cold start (fresh context: enableProcessor + first
+waitUntilProcessed).
+
+LOC baseline for the 10 % rule: `src` non-test, non-generated = 6,512 lines (4,044 code lines); the
+ceiling is 7,163.
+
+### LOCAL baseline (workerd on the laptop, `BENCH_TIME_MS=1500`) — for iteration only
+
+| scenario                                            | mean ms            | p99 ms |
+| --------------------------------------------------- | ------------------ | ------ |
+| boot: fresh context, first whoami (warm session)    | 1.69               | 4.6    |
+| boot: warm context, whoami                          | 0.31               | 0.8    |
+| boot: FETCH LANE fresh context whoami               | 2.72               | 13.0   |
+| boot: FETCH LANE warm context whoami                | 1.01               | 3.3    |
+| latency: durable append, 1 event                    | 0.48               | 2.7    |
+| latency: ephemeral append, 1 event                  | 0.43               | 4.0    |
+| latency: read 100                                   | 0.54               | 4.2    |
+| latency: kv.get through a rewrite rule              | 0.57               | 5.2    |
+| latency: core snapshot                              | 0.32               | 2.1    |
+| latency: FETCH LANE durable append                  | 1.22               | 3.9    |
+| throughput: 100 pipelined single appends            | 53.9 (≈1,860 ev/s) | 275    |
+| throughput: 1 append of 100 events                  | 4.78 (≈21k ev/s)   | 12.6   |
+| throughput: 100 ephemeral appends in flight         | 31.9               | 40     |
+| delivery: append → lent callback push               | 0.59               | 2.5    |
+| delivery: append → processor reduced                | 1.68               | 5.4    |
+| delivery: warm facet snapshot                       | 0.52               | 4.6    |
+| facet cold start (fresh ctx, enable + first reduce) | 27.3               | 31     |
+
+First reading (local): a DO boot is ≈1.4 ms over the warm round trip; a pipelined single append
+costs ≈0.54 ms of DO time each (the commits serialise), an ephemeral ≈0.32 ms — the PER-CALL
+overhead (capnweb frame → edge → RPC → dispatch) is ~0.3 ms and dominates every small call; batching
+100 events into one append is 11× cheaper per event than pipelining 100 appends. A facet cold start
+is 27 ms (loader + class + first call + catch-up).

@@ -10,7 +10,8 @@
     "test": "node build-sdk.mjs && vitest run",
     "test:unit": "vitest run --project unit",
     "e2e": "node build-sdk.mjs && vitest run --config e2e/vitest.config.ts",
-    "spec": "node build-sdk.mjs && playwright test"
+    "spec": "node build-sdk.mjs && playwright test",
+    "bench": "node build-sdk.mjs && vitest bench --run --config bench/vitest.config.ts"
   },
   "exports": {
     ".": "./src/worker.ts"
