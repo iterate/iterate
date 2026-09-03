@@ -517,10 +517,12 @@ export class IterateContextDurableObject extends DurableObject<Env> {
             );
       let result: unknown;
       try {
+        // The label PRINTS the whole pushed batch (JSON5 + key-sort) — built lazily, so a facet
+        // push pays it only if the watchdog actually fires, never on the green path.
         result = await withTimeout(
           call,
           FACET_CALL_WATCHDOG_MS,
-          `facet "${name}" ${print(itxExpressionSteps)}`,
+          () => `facet "${name}" ${print(itxExpressionSteps)}`,
         );
       } catch (error) {
         if (errorCode(error) === "TIMEOUT") {

@@ -165,3 +165,40 @@ dispatch pipelining doctrine), so there is no extra hop to remove. Making the pa
 delta would only PIN the DO against hibernation for a delta that is allowed to drop. So: left as is.
 The real lever here is T2 (emit fewer deltas under many changing processors) — a semantics change,
 on the menu, not the loop.
+
+## 4. Commit-path storage + per-push CPU + the subrequest ceiling (reader workflow round 1)
+
+A 5-agent dynamic workflow read the hot paths and the platform source (workerd SQLite/kv, capnweb,
+the loader) and produced per-operation inventories + ranked hypotheses (full journal in the run dir).
+Four landed this round; the rest are on the menu below with sizes.
+
+- **The mark IS the core cursor (cpu/high).** The stream stopped writing a separate
+  `maxAssignedOffset` every durable commit: the durable head is the core reduce's cursor offset
+  (`reduce:core:progress.reducedThroughOffset`), written every durable commit anyway. Read the RAW
+  cursor cell at construction for the offset (version-independent — a core-version bump still
+  recovers the head and re-reduces). −1 SQLite row written per durable commit (3 → 2 for a single
+  append, −33 % of its storage write units; 102 → 101 for a 100-event batch). `stream.ts`; the
+  workers-lane mark pins re-pointed to the cursor via a `persistedDurableMark` helper. Proof: by
+  construction + the unchanged mark-behaviour pins (rows_written is not in `wrangler tail`'s default
+  output, so this is not a tail number); the deployed e2e stays green.
+- **Skip the two CREATE TABLE on a store that already has an incarnation (boot/medium).** A re-wake
+  no longer prepares+parses the two `CREATE TABLE IF NOT EXISTS` — a store with an incarnation has
+  the tables (never dropped). LOC-neutral (a reorder + one `if`). −20–60 µs DO CPU per re-wake; zero
+  steady-state.
+- **The facet watchdog label is built lazily (cpu/high, two readers).** `#invokeFacet` passed
+  `` `facet "${name}" ${print(itxExpressionSteps)}` `` to `withTimeout` on EVERY push — `print`
+  JSON5-serializes the whole pushed batch, used only if the watchdog fires. `withTimeout` now takes
+  `string | (() => string)` and the facet site passes a thunk. −O(pushed bytes) DO CPU per facet
+  push: ~10–30 µs at fixtures (invisible at Cloudflare's 1 ms cpuTime resolution), ~0.3–1 ms per
+  100-event push, ~2–5 ms per 900-event push. `timeout.ts`, `iterate-context-durable-object.ts`.
+- **Lift the per-invocation subrequest ceiling (throughput/medium).** `wrangler.jsonc`
+  `limits.subrequests: 1000000` (paid default 10,000, max 10,000,000). A capnweb WS session is pumped
+  by ONE long-lived stateless invocation and every edge→DO `invoke` counts against it for the
+  session's life, so 10,000 is hit by an ordinary long-lived client. Proof (DEPLOYED): the throughput
+  bench's `100 single-event appends in flight` and `100 ephemeral appends in flight` scenarios, which
+  previously ABORTED the run with "Too many API requests by single Worker invocation", now complete
+  the full 6 s window (41 and 59 samples). Only subrequests actually made are billed, so the higher
+  ceiling costs nothing until used; the durable fix stays client-side (F-subreq in learnings).
+
+LOC after this round: src non-test, non-generated stayed at ~6,510 (mark change −1, DDL gate +0,
+watchdog +8, one config line) — well inside the 10 % ceiling (7,163).

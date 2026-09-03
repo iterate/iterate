@@ -38,6 +38,12 @@ function bareStream(storage: DurableObjectStorage, opts?: { batches?: StreamEven
 const ownBatches = (batches: StreamEvent[][]): StreamEvent[][] =>
   batches.filter((b) => !b.every((e) => e.type === "events.iterate.com/live-state/changed"));
 
+/** The persisted durable head. The stream stopped writing a separate `maxAssignedOffset`; the core
+ *  reduce's cursor, written every durable commit, IS the mark. `undefined` before the first commit. */
+const persistedDurableMark = (state: { storage: DurableObjectStorage }): number | undefined =>
+  (state.storage.kv.get("reduce:core:progress") as { reducedThroughOffset: number } | undefined)
+    ?.reducedThroughOffset;
+
 test("waitForEvent: a registered waiter resolves with the committed event, fed from the fresh batch", async () => {
   await runInDurableObject(stub("prj_wait_park"), async (_instance, state) => {
     const batches: StreamEvent[][] = [];
@@ -124,7 +130,7 @@ test("waitForEvent: a timed-out wait writes nothing — construction made the ta
     expect(tables).toContain("events");
     expect(tables).toContain("event_chunks");
     expect(state.storage.kv.get("incarnation")).toBe(1);
-    expect(state.storage.kv.get("maxAssignedOffset")).toBeUndefined();
+    expect(persistedDurableMark(state)).toBeUndefined();
     expect(state.storage.sql.exec("SELECT count(*) AS n FROM events").one().n).toBe(0);
     expect(stream.currentIncarnation()).toBe(1);
     expect(stream.highestAssignedOffset()).toBe(0);
@@ -201,7 +207,7 @@ test("append with ZERO events is a pure no-op — no rows, no offsets, no fan-ou
     // Empty append: nothing committed, no offset, no fan-out (the constructor already opened storage).
     expect(stream.append()).toEqual([]);
     expect(state.storage.sql.exec("SELECT count(*) AS n FROM events").one().n).toBe(0);
-    expect(state.storage.kv.get("maxAssignedOffset")).toBeUndefined();
+    expect(persistedDurableMark(state)).toBeUndefined();
     expect(stream.highestAssignedOffset()).toBe(0);
     expect(batches).toHaveLength(0);
     // The wake record is `appendCreatedAndWokenEvents()`'s (the DO constructor's) — never append's: with no wake, the
@@ -350,14 +356,14 @@ test("an ephemeral-only append writes NOTHING — no row, no high-water mark —
     // One durable first: this row mints storage and the mark (offset 1 — a bare stream has no wake
     // record; see the appendCreatedAndWokenEvents() pins above for the DO's shape).
     await stream.append({ type: "durable" });
-    const markAfterDurable = state.storage.kv.get("maxAssignedOffset");
+    const markAfterDurable = persistedDurableMark(state);
     expect(markAfterDurable).toBe(1);
     const rowsBefore = state.storage.sql.exec("SELECT count(*) AS n FROM events").one().n;
     // A flood of ephemeral-only batches: offsets advance in memory, storage stays byte-identical.
     for (let i = 0; i < 25; i++)
       stream.append({ type: "chunk", ephemeral: true }, { type: "chunk", ephemeral: true });
     expect(stream.highestAssignedOffset()).toBe(1 + 50);
-    expect(state.storage.kv.get("maxAssignedOffset")).toBe(markAfterDurable); // NOT written
+    expect(persistedDurableMark(state)).toBe(markAfterDurable); // NOT written
     expect(state.storage.sql.exec("SELECT count(*) AS n FROM events").one().n).toBe(rowsBefore);
     // …and every batch reached onCommit with contiguous ranges (the fan-out saw all 50).
     expect(batches.slice(1).flat()).toHaveLength(50);
@@ -366,7 +372,7 @@ test("an ephemeral-only append writes NOTHING — no row, no high-water mark —
     // handed out this incarnation is covered by the durable row's transaction.
     const [d] = await stream.append({ type: "durable" });
     expect(d.offset).toBe(52);
-    expect(state.storage.kv.get("maxAssignedOffset")).toBe(52);
+    expect(persistedDurableMark(state)).toBe(52);
   });
 });
 
@@ -384,7 +390,7 @@ test("across incarnations an ephemeral-only tail's offsets are REUSED by the nex
     second.appendCreatedAndWokenEvents();
     const [d] = await second.append({ type: "durable" });
     expect(d.offset).toBe(7); // woken took 5, the delta 6 — both numbers the dead ephemerals held
-    expect(state.storage.kv.get("maxAssignedOffset")).toBe(7);
+    expect(persistedDurableMark(state)).toBe(7);
     // The log itself is exact: created, woken, durable (1, 2, 4) from the first life; woken, durable
     // (5, 7) from the second — 3 and 6 were ephemeral deltas, valid gaps.
     expect((await second.read(0)).events.map((e) => e.offset)).toEqual([1, 2, 4, 5, 7]);

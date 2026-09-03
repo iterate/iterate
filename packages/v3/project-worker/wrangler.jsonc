@@ -20,6 +20,13 @@
   "observability": { "enabled": true, "logs": { "head_sampling_rate": 1 } },
   "workers_dev": true,
 
+  // A capnweb WebSocket session is pumped by ONE long-lived stateless invocation, and every
+  // edge->DO `invoke` it makes is a subrequest counted against that one invocation for the session's
+  // whole life — so the 10,000 paid default is hit by an ordinary long-lived client (3 appends/s for
+  // ~1 h). Raise the ceiling; only subrequests actually made are billed, so this costs nothing until
+  // used. (The durable fix is client-side batching/reconnect — docs/perf learnings F-subreq.)
+  "limits": { "subrequests": 1000000 },
+
   // The hosted /demo page as a static asset (build-sdk.mjs writes public/demo.html): served by the
   // platform, not the script — 255 KiB fewer in every /api and DO isolate.
   "assets": { "directory": "./public" },

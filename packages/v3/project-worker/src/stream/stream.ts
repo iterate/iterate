@@ -38,7 +38,11 @@ import {
 } from "./events.ts";
 import { LiveState } from "./live-state.ts";
 import { consumesEvent } from "./processor.ts";
-import { readReduceCheckpoint, writeReduceCheckpoint } from "./reduce-checkpoint.ts";
+import {
+  readReduceCheckpoint,
+  reduceCursorKey,
+  writeReduceCheckpoint,
+} from "./reduce-checkpoint.ts";
 
 /** One page of the log: the events after an offset, plus how far the scan reached (the range a
  *  client chains for contiguity). Structurally identical to IterateContextDurableObject.read's return. */
@@ -102,9 +106,10 @@ export class Stream {
    *  mark; an ephemeral-only batch advances this alone (an ephemeral's offset is unique within an
    *  incarnation and may be reused by the next one — see the header). */
   #highestAssignedOffset: number;
-  /** The kv high-water mark (`maxAssignedOffset`) as of the last COMMITTED durable batch: the
-   *  DURABLE head. What `read()` proves a scan through, what the core reduce has reduced to, and what
-   *  a resume's seek is clamped to — never the in-memory head above. */
+  /** The DURABLE head as of the last COMMITTED durable batch — the core reduce's cursor offset
+   *  (`reduce:core:progress.reducedThroughOffset`, written every durable commit; there is no separate
+   *  mark). What `read()` proves a scan through, what the core reduce has reduced to, and what a
+   *  resume's seek is clamped to — never the in-memory head above. */
   #highestDurableOffset: number;
   /** FIFO; resolved from `freshEvents` in append's step 5. */
   readonly #waitForEventWaiters: WaitForEventWaiter[] = [];
@@ -129,29 +134,40 @@ export class Stream {
     this.#projectId = deps.projectId;
     this.#onCommit = deps.onCommit;
     // Storage opens HERE, synchronously (sync SQLite, the DO constructor's own turn): the two
-    // tables if this store has none, and this incarnation's number — constructing the stream IS an
-    // incarnation starting.
-    this.#storage.sql.exec(
-      `CREATE TABLE IF NOT EXISTS events (
-         offset INTEGER PRIMARY KEY,
-         body TEXT NOT NULL,
-         idempotency_key TEXT UNIQUE
-       )`,
-    );
-    // Overflow rows for a large body: the events row keeps an EMPTY body as the "chunked" marker
-    // (a real body is always non-empty JSON), and the pieces live here, ordered by chunk_index.
-    this.#storage.sql.exec(
-      `CREATE TABLE IF NOT EXISTS event_chunks (
-         offset INTEGER NOT NULL,
-         chunk_index INTEGER NOT NULL,
-         chunk TEXT NOT NULL,
-         PRIMARY KEY (offset, chunk_index)
-       )`,
-    );
-    this.#incarnation = ((this.#storage.kv.get("incarnation") as number | undefined) ?? 0) + 1;
+    // tables ONLY on a virgin store, and this incarnation's number — constructing the stream IS an
+    // incarnation starting. A store that already has an incarnation was opened by a prior
+    // incarnation, so it already has the tables (they are never dropped); skipping the two
+    // `CREATE TABLE IF NOT EXISTS` saves their prepare+parse on every re-wake.
+    const priorIncarnation = this.#storage.kv.get("incarnation") as number | undefined;
+    if (priorIncarnation === undefined) {
+      this.#storage.sql.exec(
+        `CREATE TABLE IF NOT EXISTS events (
+           offset INTEGER PRIMARY KEY,
+           body TEXT NOT NULL,
+           idempotency_key TEXT UNIQUE
+         )`,
+      );
+      // Overflow rows for a large body: the events row keeps an EMPTY body as the "chunked" marker
+      // (a real body is always non-empty JSON), and the pieces live here, ordered by chunk_index.
+      this.#storage.sql.exec(
+        `CREATE TABLE IF NOT EXISTS event_chunks (
+           offset INTEGER NOT NULL,
+           chunk_index INTEGER NOT NULL,
+           chunk TEXT NOT NULL,
+           PRIMARY KEY (offset, chunk_index)
+         )`,
+      );
+    }
+    this.#incarnation = (priorIncarnation ?? 0) + 1;
     this.#storage.kv.put("incarnation", this.#incarnation);
-    this.#highestDurableOffset =
-      (this.#storage.kv.get("maxAssignedOffset") as number | undefined) ?? 0;
+    // THE DURABLE HEAD is the core reduce's cursor offset — written every durable commit anyway
+    // (writeReduceCheckpoint, below), so there is no separate mark to write. Read the RAW cursor
+    // cell for the offset alone: the version gate on the STATE (readReduceCheckpoint) does not gate
+    // the offset, so a core-version bump still recovers the head and re-reduces the log up to it.
+    const persistedCursor = this.#storage.kv.get<{ reducedThroughOffset: number }>(
+      reduceCursorKey(this.#coreProcessor.contract.slug),
+    );
+    this.#highestDurableOffset = persistedCursor?.reducedThroughOffset ?? 0;
     this.#highestAssignedOffset = this.#highestDurableOffset;
     // The core reduced state. Its checkpoint is written in the SAME synchronous transaction as the
     // rows it was reduced from (SQLite storage writes in one synchronous block are one atomic
@@ -353,11 +369,9 @@ export class Stream {
             event.idempotencyKey ?? null,
           );
         }
-        // The mark rides the durable rows' transaction — every offset this batch handed out,
-        // ephemeral ones included, is covered by this write.
-        this.#storage.kv.put("maxAssignedOffset", throughOffset);
         // The core reduce takes this batch's durables and checkpoints with them: the cursor every
-        // batch (the transaction is already open, so the put is free), the reduced state on change.
+        // batch IS the durable head (read back as such at construction — one write, not two), the
+        // reduced state on change.
         // Reduced into a LOCAL: the fields move only after the transaction commits, so a failed
         // write never leaves phantom core state in memory (a subscription row the log never got).
         const { contract } = this.#coreProcessor;
