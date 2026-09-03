@@ -77,3 +77,12 @@ that starts passing is exactly the signal CI should raise the day teardown
       finished turn _(table in PR #2583)_
 - [ ] Follow-up scenario: abandon a turn MID-flight (kill the interceptor
       before the reply) to pin the stream-loop flavor too
+- [ ] Follow-up (blind spot): the test only sees appended events. An alarm
+      firing into a *resident* DO and re-arming without appending is
+      invisible to it (an evicted DO's fire boots it, which appends `woken`,
+      so only the resident case hides). Close it at a product seam: have
+      `StreamDurableObject.alarm()` (and the scheduler DO) bump a durable
+      `{ alarmFires, lastAlarmAt }` in DO KV and surface it in
+      `runtimeState()` — a read that plants no alarm — so the test can
+      assert "no events AND no alarm fires" across the quiet window. Reads
+      and pinned calls stay invisible, but those don't self-perpetuate.
