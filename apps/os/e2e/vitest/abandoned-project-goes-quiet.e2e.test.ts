@@ -118,13 +118,23 @@ failWakeUp(
     // The measurement. Leaves first so a parent's boot cannot cascade into a
     // child that is read after it.
     const readStart = Date.now();
-    const woke: { path: string; type: string; count: number; first: string; last: string }[] = [];
+    // Tallied by stream + event type: what woke, how often, when.
+    const woke: Record<
+      string,
+      { path: string; type: string; count: number; first: string; last: string }
+    > = {};
     const paths = (await itx.streams.list()).map((stream) => stream.path);
     paths.sort((a, b) => b.split("/").length - a.split("/").length || a.localeCompare(b));
     for (const path of paths) {
       const since = baseline.get(path);
       if (since === undefined) {
-        woke.push({ path, type: "(stream created after dispose)", count: 1, first: "", last: "" });
+        woke[path] = {
+          path,
+          type: "(stream created after dispose)",
+          count: 1,
+          first: "",
+          last: "",
+        };
         continue;
       }
       const events = await itx.streams.get(path).getEvents({ afterOffset: since });
@@ -133,29 +143,24 @@ failWakeUp(
       const ourBoot = events.findIndex(
         (event) => event.type === WOKEN && Date.parse(event.createdAt) >= readStart - 1_000,
       );
-      if (ourBoot !== -1) events.splice(ourBoot, 1);
-      for (const event of events) {
-        const row = woke.find((r) => r.path === path && r.type === event.type);
-        if (row) {
-          row.count += 1;
-          row.last = event.createdAt;
-        } else {
-          woke.push({
-            path,
-            type: event.type,
-            count: 1,
-            first: event.createdAt,
-            last: event.createdAt,
-          });
-        }
+      const withoutOurBoot = events.filter((_, index) => index !== ourBoot);
+      for (const event of withoutOurBoot) {
+        const key = `${path} ${event.type}`;
+        woke[key] ||= {
+          path,
+          type: event.type,
+          count: 0,
+          first: event.createdAt,
+          last: event.createdAt,
+        };
+        woke[key].count += 1;
+        woke[key].last = event.createdAt;
       }
     }
 
-    const total = woke.reduce((sum, row) => sum + row.count, 0);
-    expect(
-      woke,
-      `project ${project.slug} should be quiet after dispose (${QUIET_SECONDS}s), but it woke ${total} times after dispose`,
-    ).toEqual([]);
+    const total = Object.values(woke).reduce((sum, row) => sum + row.count, 0);
+    const message = `project ${project.slug} should be quiet after dispose (${QUIET_SECONDS}s), but it woke ${total} times after dispose`;
+    expect(woke, message).toEqual({});
   },
 );
 
