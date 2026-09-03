@@ -66,9 +66,12 @@ demand.
       never include push N's population _(runs 2–4 on preview-1 each logged
       one erase before deploy; the pre-erase StreamDurableObject namespace
       disappears from the account's namespace list after each erase)_
-- [ ] Watch the first after-run erases in CI: the step must log
-      `erased preview-N after the run` on a finished run and `erase skipped:
-      … moved on` on a run cancelled by a push.
+- [x] Watch the first after-run erases in CI _(runs 5–7 each logged `erased
+      preview-1 after the run`, two of them after a failed deploy step. Run 8,
+      cancelled by a push mid-e2e, ran none of its `always()` steps — Depot
+      kills the job outright — so the `erase skipped: … moved on` branch is
+      never reached from CI; it stays as the guard for a human running
+      `preview erase` after the head moved on)_
 
 ## Out of scope
 

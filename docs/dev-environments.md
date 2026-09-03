@@ -394,9 +394,11 @@ invariants:
   population of test projects whose Durable Objects keep waking until the
   next push or the lease expiry (~$15–25/hour per slot; the 2026-09-01
   runaway), and a push that cancels a running e2e SIGKILLs it, so in-test
-  cleanup can never be the guarantee — the before-deploy erase is. The
-  after-run erase skips itself when the PR head has moved on (that push's
-  run erases before it deploys). Consequence: manual QA state on a preview
+  cleanup can never be the guarantee — the before-deploy erase is. A
+  cancelled job runs none of its `always()` steps on Depot, so a cancelled
+  run's population waits for the next run's before-deploy erase; the
+  after-run erase also skips itself if it ever runs after the PR head moved
+  on (that push's run erases before it deploys). Consequence: manual QA state on a preview
   does not survive a push or an e2e run — the login link in the PR body
   mints a fresh test user and project on demand.
 - **The semaphore is the single source of lease truth.** The PR body's

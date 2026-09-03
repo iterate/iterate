@@ -133,10 +133,14 @@ jobs:
             ${{ github.event_name == 'workflow_dispatch' && '--all-apps' || '' }}
       # The e2e leaves a population of test projects behind whose Durable
       # Objects keep waking; erase them the moment the run is over instead of
-      # letting them burn until the next push or the lease expiry. Skipped when
-      # the PR head has moved on: that push's own run erases before it deploys,
-      # and racing it here would tombstone a Worker it is deploying. Not
-      # red-making — the next deploy erases anyway.
+      # letting them burn until the next push or the lease expiry. Not
+      # red-making — the next deploy erases anyway. A run cancelled by a newer
+      # push never gets here: Depot kills the whole job, always() steps
+      # included (observed 2026-09-03), so that population is the next run's
+      # before-deploy erase to clean. --ran-head-sha is the guard for the case
+      # this step does run after the PR moved on (a human running it late):
+      # the newer push's run erases before it deploys, and racing it would
+      # tombstone a Worker it is deploying.
       - name: Preview / erase slot data after e2e
         if: always()
         continue-on-error: true
