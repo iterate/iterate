@@ -330,9 +330,7 @@ export class FlakeDashboardProcessor extends StreamProcessor<
               ? existing.suites
               : [...(existing?.suites || []), event.payload.suite],
             lastSeenOffset: { ...existing?.lastSeenOffset, [event.payload.suite]: event.offset },
-            recent: onDefaultBranch
-              ? [...(existing?.recent || []), record.outcome].slice(-10)
-              : existing?.recent || [],
+            recent: [...(existing?.recent || []), record.outcome].slice(-10),
             counts: {
               pass: counts.pass + (record.outcome === "pass" ? 1 : 0),
               flakeFail: counts.flakeFail + (record.outcome === "flake-fail" ? 1 : 0),
@@ -346,12 +344,15 @@ export class FlakeDashboardProcessor extends StreamProcessor<
             proposed: existing?.proposed || [],
           };
         }
-        const suites = onDefaultBranch
-          ? {
-              ...state.suites,
-              [event.payload.suite]: { lastDefaultBranchRunOffset: event.offset },
-            }
-          : state.suites;
+        const suites = {
+          ...state.suites,
+          [event.payload.suite]: {
+            recentRunOffsets: [
+              ...(state.suites[event.payload.suite]?.recentRunOffsets || []),
+              event.offset,
+            ].slice(-3),
+          },
+        };
         return { ...state, tests, suites, lastDataOffset: event.offset };
       }
 
@@ -568,15 +569,18 @@ export function renderBody(state: FlakeDashboardState): string {
     .sort()
     .at(-1);
   // The test name is the identity: a renamed or deleted test is simply absent
-  // from its suite's latest default-branch run, and its row retires. Hidden,
-  // never deleted — the events stay in the log, so a transiently-absent test
-  // (a crashed suite, a PR experiment) returns with full history on its next
-  // record, and a genuinely retired name stays readable in the issue's edit
-  // history.
+  // from its suite's recent runs, and its row retires. A test stays visible
+  // while it appeared in at least one of the last 3 ingested runs of one of
+  // its suites (any branch — the specs and preview-e2e suites never run on
+  // main, see the suites field's contract docstring). Hidden, never deleted —
+  // the events stay in the log, so a transiently-absent test (a crashed
+  // suite, a PR experiment) returns with full history on its next record, and
+  // a genuinely retired name stays readable in the issue's edit history.
   const visible = tests.filter(([, test]) =>
-    Object.entries(test.lastSeenOffset).some(
-      ([suite, seen]) => seen >= (state.suites[suite]?.lastDefaultBranchRunOffset || 0),
-    ),
+    Object.entries(test.lastSeenOffset).some(([suite, seen]) => {
+      const windowStart = state.suites[suite]?.recentRunOffsets[0];
+      return windowStart === undefined || seen >= windowStart;
+    }),
   );
   const retiredCount = tests.length - visible.length;
   const rows = visible.map(([name, test]) => {
@@ -602,7 +606,7 @@ export function renderBody(state: FlakeDashboardState): string {
   });
   return [
     DASHBOARD_MARKER,
-    "Per-test outcomes of every [`createFlake`](https://github.com/iterate/iterate/blob/main/packages/shared/src/test-support/flake-test.ts)-wrapped test, folded from CI-reported runs. Maintained automatically — edits to this body will be overwritten. Recent = last 10 default-branch outcomes, oldest→newest (🟩 pass, 🟥 flake-fail, ❌ unexpected error).",
+    "Per-test outcomes of every [`createFlake`](https://github.com/iterate/iterate/blob/main/packages/shared/src/test-support/flake-test.ts)-wrapped test, folded from CI-reported runs. Maintained automatically — edits to this body will be overwritten. Recent = last 10 recorded outcomes on any branch, oldest→newest (🟩 pass, 🟥 flake-fail, ❌ unexpected error).",
     "",
     "test | allowed pattern | suites | runs | flake rate | last flake | recent | default-branch streak | proposed",
     "--- | --- | --- | --- | --- | --- | --- | --- | ---",
@@ -612,7 +616,7 @@ export function renderBody(state: FlakeDashboardState): string {
     ...(retiredCount === 0
       ? []
       : [
-          `_${retiredCount} retired ${retiredCount === 1 ? "test" : "tests"} hidden (no longer present in the latest default-branch run of their suite)._`,
+          `_${retiredCount} retired ${retiredCount === 1 ? "test" : "tests"} hidden (absent from the last 3 runs of their suite)._`,
         ]),
   ].join("\n");
 }

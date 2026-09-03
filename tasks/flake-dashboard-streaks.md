@@ -13,7 +13,12 @@ Three follow-ups from the first live week of the flake dashboard (#2580), agreed
 Implemented and pushed; awaiting CI + review. All checklist items done: expiry
 + emoji bar in the dashboard reducer/render (contract 0.2.0), createFailing
 rename across 10 files + docs. 20/20 dashboard tests, shared + renamed-callsite
-suites green, typecheck/lint/knip clean.
+suites green, typecheck/lint/knip clean. Bugbot found the default-branch
+expiry judgment never fires for PR-only suites (specs/preview-e2e); reworked
+to a 3-run any-branch window, tests updated.
+
+Known follow-up (pre-existing, out of scope): `defaultBranchStreak` — and
+therefore transition proposals — also never fires for PR-only suites.
 
 ## Motivation
 
@@ -32,19 +37,24 @@ history the next time it records.
 
 ## Checklist
 
-- [x] Row expiry (absence-based, N=1, default-branch-judged): a test row
-      renders only if, for at least one of its suites, the test was present in
-      the latest **default-branch** `run-recorded` event of that suite.
-      Reduce-side: state gains per-suite `lastDefaultBranchRunOffset`, and each
-      tracked test gains per-suite `lastSeenOffset` (bumped by any branch's
-      run, so a test added on a PR shows immediately via `>=`). Judging absence
-      from default-branch runs only means a PR that deletes/renames a test
-      cannot hide the row repo-wide while the PR is the newest run.
+- [x] Row expiry (absence-based): a test row renders only if it appeared in
+      at least one of the last **3** `run-recorded` events (any branch) of one
+      of its suites. _Originally specced as default-branch-judged with N=1;
+      bugbot correctly flagged that specs/preview-e2e only run on PRs
+      (cloudflare-previews.yml has no push trigger), so a default-branch
+      reference point would never exist for them and the motivating
+      chat-photos row could never retire. The 3-run window replaces the
+      default-branch guard as the protection against one PR push hiding a row
+      repo-wide. State: per-suite `recentRunOffsets` (≤3) + per-test
+      `lastSeenOffset`._
 - [x] Expired rows are hidden from the table, not dropped from state. Footer
       gains a one-liner: `_N retired tests hidden (no longer present in the
       latest default-branch run of their suite)._` when N > 0.
-- [x] Emoji streak column: each tracked test keeps its last 10
-      **default-branch** outcomes (ring buffer in reduced state, oldest first).
+- [x] Emoji streak column: each tracked test keeps its last 10 outcomes
+      from **any branch** (ring buffer in reduced state, oldest first).
+      _Any-branch for the same reason as expiry: PR-only suites would
+      otherwise have permanently empty bars; matches the all-branch counts and
+      flake-rate columns. `defaultBranchStreak` stays main-only._
       Render as a `recent` column: 🟩 pass, 🟥 flake-fail, ❌ unexpected-error,
       oldest→newest. The existing numeric `default-branch streak` column stays
       (it carries the transition-threshold counts past 10).

@@ -33,27 +33,40 @@ test("folds CI-reported records into per-test stats", async () => {
   });
 });
 
-test("a renamed test's old row retires on the next default-branch suite run, but a PR run cannot retire it", async () => {
+test("a renamed test's old row retires once absent from 3 suite runs, not before", async () => {
+  // The specs suite runs on PR branches only (cloudflare-previews.yml has no
+  // push trigger), so expiry must work from PR-branch runs alone — but a
+  // 3-run window means no single PR push can hide a row by itself.
   const h = makeHarness();
   await h.append(
     birth(),
-    runRecorded(1, [record("old name", "flake-fail", { at: day(0) })], { suite: "specs" }),
-  );
-  expect(renderBody(h.state())).toContain("`old name`");
-
-  // Someone renames the test on a PR branch: that branch's runs carry only
-  // the new name, but a PR must not hide the old row repo-wide.
-  await h.append(
-    runRecorded(2, [record("new name", "pass", { at: day(1) })], {
+    runRecorded(1, [record("old name", "flake-fail", { at: day(0) })], {
       suite: "specs",
-      branch: "rename-pr",
+      branch: "some-pr",
     }),
   );
   expect(renderBody(h.state())).toContain("`old name`");
 
-  // The rename lands on main: the next default-branch specs run retires the
-  // old row — hidden from the table, never deleted from state.
-  await h.append(runRecorded(3, [record("new name", "pass", { at: day(2) })], { suite: "specs" }));
+  // Two runs carrying only the new name: the old row is still within the
+  // suite's 3-run window, so it stays.
+  for (const n of [2, 3]) {
+    await h.append(
+      runRecorded(n, [record("new name", "pass", { at: day(n) })], {
+        suite: "specs",
+        branch: "rename-pr",
+      }),
+    );
+  }
+  expect(renderBody(h.state())).toContain("`old name`");
+
+  // The third absent run pushes the old name out of the window: retired —
+  // hidden from the table, never deleted from state.
+  await h.append(
+    runRecorded(4, [record("new name", "pass", { at: day(4) })], {
+      suite: "specs",
+      branch: "another-pr",
+    }),
+  );
   const body = renderBody(h.state());
   expect(body).not.toContain("`old name`");
   expect(body).toContain("`new name`");
@@ -61,18 +74,18 @@ test("a renamed test's old row retires on the next default-branch suite run, but
   expect(h.state().tests["old name"]).toBeDefined();
 });
 
-test("a transiently-absent test returns with its history intact", async () => {
+test("a transiently-absent test survives the window and returns with its history intact", async () => {
   const h = makeHarness();
   await h.append(
     birth(),
     runRecorded(1, [record("deploy", "flake-fail", { at: day(0) })]),
-    // A partial run (a push-cancelled suite that died before this test)
-    // retires the row for one render...
+    // A partial run (a push-cancelled suite that died before this test) does
+    // not retire the row — one absent run is inside the 3-run window...
     runRecorded(2, [record("boot", "pass", { at: day(1) })]),
   );
-  expect(renderBody(h.state())).not.toContain("`deploy`");
-  // ...and the next record brings it straight back, counts and all — expiry
-  // is a projection choice over the log, nothing was deleted.
+  expect(renderBody(h.state())).toContain("`deploy`");
+  // ...and its next record resets the window, counts accumulated across the
+  // gap — expiry is a projection choice over the log, nothing was deleted.
   await h.append(runRecorded(3, [record("deploy", "pass", { at: day(2) })]));
   expect(renderBody(h.state())).toContain("`deploy`");
   expect(h.state().tests.deploy!.counts).toMatchObject({ pass: 1, flakeFail: 1 });
@@ -84,30 +97,37 @@ test("a multi-suite test stays visible while any of its suites still carries it"
     birth(),
     runRecorded(1, [record("flake sentinel", "pass", { at: day(0) })], { suite: "unit" }),
     runRecorded(2, [record("flake sentinel", "pass", { at: day(0) })], { suite: "local-smoke" }),
-    // A later unit run without the sentinel: still present in local-smoke's
-    // latest run, so the row stays.
+    // Three unit runs without the sentinel retire it from unit's window —
+    // but it is still in local-smoke's latest run, so the row stays.
     runRecorded(3, [record("boot", "pass", { at: day(1) })], { suite: "unit" }),
+    runRecorded(4, [record("boot", "pass", { at: day(1) })], { suite: "unit" }),
+    runRecorded(5, [record("boot", "pass", { at: day(1) })], { suite: "unit" }),
   );
   expect(renderBody(h.state())).toContain("`flake sentinel`");
 });
 
-test("the recent column shows up to 10 default-branch outcomes as emojis, oldest first", async () => {
+test("the recent column shows up to 10 outcomes from any branch as emojis, oldest first", async () => {
   const h = makeHarness();
   await h.append(birth(), runRecorded(0, [record("deploy", "flake-fail", { at: day(0) })]));
-  for (let i = 1; i <= 9; i++) {
+  for (let i = 1; i <= 8; i++) {
     await h.append(runRecorded(i, [record("deploy", "pass", { at: day(i) })]));
   }
-  // A PR-branch outcome never enters the bar.
+  // A PR-branch outcome enters the bar too — the specs suites only ever run
+  // on PRs, so a main-only bar would stay empty for the flakiest lane.
   await h.append(
-    runRecorded(99, [record("deploy", "unexpected-error", { at: day(10) })], {
+    runRecorded(99, [record("deploy", "unexpected-error", { at: day(9) })], {
       branch: "some-pr",
     }),
   );
-  expect(renderBody(h.state())).toContain("🟥🟩🟩🟩🟩🟩🟩🟩🟩🟩");
+  expect(renderBody(h.state())).toContain("🟥🟩🟩🟩🟩🟩🟩🟩🟩❌");
 
-  // An 11th default-branch outcome evicts the oldest: the bar caps at 10.
-  await h.append(runRecorded(10, [record("deploy", "pass", { at: day(11) })]));
-  expect(h.state().tests.deploy!.recent).toEqual(Array<string>(10).fill("pass"));
+  // An 11th outcome evicts the oldest: the bar caps at 10.
+  await h.append(runRecorded(10, [record("deploy", "pass", { at: day(10) })]));
+  expect(h.state().tests.deploy!.recent).toEqual([
+    ...Array<string>(8).fill("pass"),
+    "unexpected-error",
+    "pass",
+  ]);
 });
 
 test("default-branch streaks ignore other branches and reset on unexpected errors", async () => {

@@ -86,14 +86,17 @@ const TrackedTest = z.object({
   /**
    * Per suite, the offset of the newest run-recorded event (any branch) whose
    * records included this test. Compared against the suite's
-   * `lastDefaultBranchRunOffset` at render time: a test absent from its
-   * suite's latest default-branch run is retired from the table — hidden, not
+   * `recentRunOffsets` window at render time: a test absent from all of its
+   * suite's last few ingested runs is retired from the table — hidden, not
    * deleted, so a transient absence self-heals on the next record.
    */
   lastSeenOffset: z.record(z.string(), StreamOffset).default({}),
   /**
-   * The last (up to) 10 default-branch outcomes, oldest first — the render's
-   * emoji streak bar. The numeric defaultBranchStreak below carries the
+   * The last (up to) 10 recorded outcomes on any branch, oldest first — the
+   * render's emoji streak bar. All branches, like the counts: the specs and
+   * preview-e2e suites only run on pull requests, so a default-branch-only
+   * bar would stay empty forever for exactly the flakiest lane. The numeric
+   * defaultBranchStreak below stays main-only and carries the
    * transition-threshold counts past what 10 entries can show.
    */
   recent: z.array(FlakeOutcome).max(10).default([]),
@@ -118,12 +121,18 @@ export const FlakeDashboardState = z.object({
   birthCertificate: z.object({ config: FlakeDashboardConfig }).nullable().default(null),
   tests: z.record(z.string(), TrackedTest).default({}),
   /**
-   * Per suite, the offset of its newest default-branch run-recorded event —
-   * the reference point for retiring absent tests. Judged from default-branch
-   * runs only, so a PR that deletes or renames a test cannot hide its row
-   * repo-wide while that PR happens to be the newest run.
+   * Per suite, the offsets of its newest (up to 3) run-recorded events across
+   * ALL branches, oldest first — the reference window for retiring absent
+   * tests. All branches because the specs and preview-e2e suites only ever
+   * run on pull requests (cloudflare-previews.yml has no push trigger), so a
+   * default-branch reference point would never exist for them and their rows
+   * could never retire. A window of 3 rather than the single latest run so
+   * one PR push that deletes or renames a test — or a partial, push-cancelled
+   * run — cannot hide a row repo-wide by itself.
    */
-  suites: z.record(z.string(), z.object({ lastDefaultBranchRunOffset: StreamOffset })).default({}),
+  suites: z
+    .record(z.string(), z.object({ recentRunOffsets: z.array(StreamOffset).max(3).default([]) }))
+    .default({}),
   /**
    * Offset of the newest reduced DATA event (created / run-recorded /
    * transition-proposed). Render settlements deliberately do not bump it —
