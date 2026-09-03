@@ -387,15 +387,18 @@ invariants:
   GC sweep — see **[Preview resource GC](preview-resource-gc.md)** for how
   teardown is decoupled from releasing the slot (and how disposable data
   expires 3h after last use).
-- **A slot is fresh on every deploy.** `preview deploy` erases the slot's
-  data (Durable Objects, D1, KV — `erase-data`) before every deploy, not just
-  when the slot changes hands. Each push otherwise stacks a new population of
-  abandoned test projects whose Durable Objects keep waking (~$15–25/hour per
-  slot; the 2026-09-01 runaway), and a push that cancels a running e2e
-  SIGKILLs it, so in-test cleanup can never be the guarantee. Consequence:
-  manual QA state on a preview does not survive a push — recreate it. A
-  same-PR redeploy keeps its own Artifacts repos (`--keep-artifacts`); a
-  handover deletes them.
+- **A slot is only populated while a run is in progress.** `preview deploy`
+  erases the slot's data (Durable Objects, D1, KV, Artifacts repos —
+  `erase-data`) before every deploy, not just when the slot changes hands,
+  and CI runs `preview erase` again after the e2e. Each run otherwise leaves a
+  population of test projects whose Durable Objects keep waking until the
+  next push or the lease expiry (~$15–25/hour per slot; the 2026-09-01
+  runaway), and a push that cancels a running e2e SIGKILLs it, so in-test
+  cleanup can never be the guarantee — the before-deploy erase is. The
+  after-run erase skips itself when the PR head has moved on (that push's
+  run erases before it deploys). Consequence: manual QA state on a preview
+  does not survive a push or an e2e run — the login link in the PR body
+  mints a fresh test user and project on demand.
 - **The semaphore is the single source of lease truth.** The PR body's
   managed section only _displays_ the slot (and per-app results); it is never
   consulted for ownership and never a reason to skip. Before running tests or
