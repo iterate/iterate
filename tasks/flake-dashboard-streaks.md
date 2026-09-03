@@ -10,7 +10,10 @@ Three follow-ups from the first live week of the flake dashboard (#2580), agreed
 
 ## Status
 
-Spec committed; implementation not started.
+Implemented and pushed; awaiting CI + review. All checklist items done: expiry
++ emoji bar in the dashboard reducer/render (contract 0.2.0), createFailing
+rename across 10 files + docs. 20/20 dashboard tests, shared + renamed-callsite
+suites green, typecheck/lint/knip clean.
 
 ## Motivation
 
@@ -29,7 +32,7 @@ history the next time it records.
 
 ## Checklist
 
-- [ ] Row expiry (absence-based, N=1, default-branch-judged): a test row
+- [x] Row expiry (absence-based, N=1, default-branch-judged): a test row
       renders only if, for at least one of its suites, the test was present in
       the latest **default-branch** `run-recorded` event of that suite.
       Reduce-side: state gains per-suite `lastDefaultBranchRunOffset`, and each
@@ -37,22 +40,22 @@ history the next time it records.
       run, so a test added on a PR shows immediately via `>=`). Judging absence
       from default-branch runs only means a PR that deletes/renames a test
       cannot hide the row repo-wide while the PR is the newest run.
-- [ ] Expired rows are hidden from the table, not dropped from state. Footer
+- [x] Expired rows are hidden from the table, not dropped from state. Footer
       gains a one-liner: `_N retired tests hidden (no longer present in the
       latest default-branch run of their suite)._` when N > 0.
-- [ ] Emoji streak column: each tracked test keeps its last 10
+- [x] Emoji streak column: each tracked test keeps its last 10
       **default-branch** outcomes (ring buffer in reduced state, oldest first).
       Render as a `recent` column: 🟩 pass, 🟥 flake-fail, ❌ unexpected-error,
       oldest→newest. The existing numeric `default-branch streak` column stays
       (it carries the transition-threshold counts past 10).
-- [ ] Contract: new fields with defaults so existing prd state parses
+- [x] Contract: new fields with defaults so existing prd state parses
       untouched; bump contract version 0.1.0 → 0.2.0.
-- [ ] Harness tests in flake-dashboard.test.ts: rename splits then retires the
+- [x] Harness tests in flake-dashboard.test.ts: rename splits then retires the
       old row on the next default-branch suite run; transient absence
       (PR-branch run without the test) does NOT retire; retired row revives
       with history intact when the name records again; emoji bar renders and
       caps at 10.
-- [ ] `failing(…)` → `createFailing(…)` rename for consistency with
+- [x] `failing(…)` → `createFailing(…)` rename for consistency with
       `createFlake` (both are two-level: `createX(test, …)` returns the
       registrar). Rename the export in
       packages/shared/src/test-support/failing-test.ts, update the
@@ -60,7 +63,7 @@ history the next time it records.
       and all callsites (9 files, see notes). Filename stays failing-test.ts.
       No deprecated alias — few callsites, and an alias defeats the
       less-confusing goal.
-- [ ] Sweep doc references to `failing(` (docs/testing.md etc.).
+- [x] Sweep doc references to `failing(` (docs/testing.md etc.).
 
 ## Non-goals / explicitly rejected
 
