@@ -23,8 +23,9 @@
 import { expect, test } from "vitest";
 import { failing } from "@iterate-com/shared/test-support/failing-test";
 import type { StreamEvent } from "../../src/itx-api.generated.ts";
+import { installResilientAiInterceptor } from "@iterate-com/shared/test-support/resilient-ai-interceptor";
 import { createTestProject } from "../test-support/create-test-project.ts";
-import { installResilientAiInterceptor } from "../test-support/resilient-ai-interceptor.ts";
+import { createAdminOsItx } from "../test-support/os-client.ts";
 import { deployedBaseUrl } from "./test-helpers.ts";
 
 const QUIET_SECONDS = Number(process.env.ABANDONED_PROJECT_QUIET_SECONDS || 90);
@@ -56,8 +57,8 @@ goesQuiet(
     // churn-surviving loop, so a DO restart mid-turn re-installs it instead of
     // failing the test for a reason that proves nothing about the pin.
     const interception = await installResilientAiInterceptor({
-      baseUrl: handle.baseUrl,
       projectId: handle.project.id,
+      connect: (options) => createAdminOsItx({ baseUrl: handle.baseUrl, ...options }),
       handler: async () =>
         [
           "```ts",
