@@ -23,7 +23,6 @@
 import { expect, test } from "vitest";
 import { failing } from "@iterate-com/shared/test-support/failing-test";
 import { installResilientAiInterceptor } from "@iterate-com/shared/test-support/resilient-ai-interceptor";
-import type { StreamEvent } from "../../src/itx-api.generated.ts";
 import { createTestProject } from "../test-support/create-test-project.ts";
 import { createAdminOsItx } from "../test-support/os-client.ts";
 import { deployedBaseUrl } from "./test-helpers.ts";
@@ -37,11 +36,15 @@ const WOKEN = "events.iterate.com/stream/woken";
 // build is the slow part), 15s of settling, the 90s quiet window, two read
 // passes. Raising ABANDONED_PROJECT_QUIET_SECONDS past ~120 needs the
 // ceiling raised by hand — the pin's own deadline must stay below it.
-const goesQuiet = failing(test.skipIf(deployedBaseUrl() === null), /woke \d+ times after dispose/, {
-  timeoutMs: 200_000,
-});
+const failWakeUp = failing(
+  test.skipIf(deployedBaseUrl() === null),
+  /woke \d+ times after dispose/,
+  {
+    timeoutMs: 200_000,
+  },
+);
 
-goesQuiet(
+failWakeUp(
   "a disposed test project stops waking its Durable Objects",
   { timeout: 240_000 },
   async () => {
@@ -117,74 +120,58 @@ goesQuiet(
     // The measurement. Leaves first so a parent's boot cannot cascade into a
     // child that is read after it.
     const readStart = Date.now();
-    const rows: WakeRow[] = [];
-    const afterPaths = (await itx.streams.list()).map((stream) => stream.path);
-    for (const path of afterPaths.sort(leavesFirst)) {
+    const woke: { path: string; type: string; count: number; first: string; last: string }[] = [];
+    const paths = (await itx.streams.list()).map((stream) => stream.path);
+    paths.sort((a, b) => b.split("/").length - a.split("/").length || a.localeCompare(b));
+    for (const path of paths) {
       const since = baseline.get(path);
       if (since === undefined) {
-        rows.push({ path, type: "(stream created after dispose)", count: 1, first: "", last: "" });
+        woke.push({ path, type: "(stream created after dispose)", count: 1, first: "", last: "" });
         continue;
       }
       const events = await itx.streams.get(path).getEvents({ afterOffset: since });
-      for (const row of summarize(path, withoutOurOwnBoot(events, readStart))) rows.push(row);
+      // This read booted the stream, which appended exactly one `woken` after
+      // readStart. Drop that one; any other late `woken` is a real wake.
+      const ourBoot = events.findIndex(
+        (event) => event.type === WOKEN && Date.parse(event.createdAt) >= readStart - 1_000,
+      );
+      if (ourBoot !== -1) events.splice(ourBoot, 1);
+      for (const event of events) {
+        const row = woke.find((r) => r.path === path && r.type === event.type);
+        if (row) {
+          row.count += 1;
+          row.last = event.createdAt;
+        } else {
+          woke.push({
+            path,
+            type: event.type,
+            count: 1,
+            first: event.createdAt,
+            last: event.createdAt,
+          });
+        }
+      }
     }
 
-    const total = rows.reduce((sum, row) => sum + row.count, 0);
+    const total = woke.reduce((sum, row) => sum + row.count, 0);
     expect(
-      rows,
-      `project ${handle.project.slug} should be quiet after dispose (${QUIET_SECONDS}s), but it woke ${total} times after dispose:\n${table(rows)}`,
+      woke,
+      `project ${handle.project.slug} should be quiet after dispose (${QUIET_SECONDS}s), but it woke ${total} times after dispose`,
     ).toEqual([]);
   },
 );
 
 // ---------------------------------------------------------------------------
 
-type WakeRow = { path: string; type: string; count: number; first: string; last: string };
-
 async function readOffsets(itx: ReturnType<Awaited<ReturnType<typeof createTestProject>>["itx"]>) {
   const offsets = new Map<string, number>();
-  const streams = await itx.streams.list();
-  for (const stream of streams.map((s) => s.path).sort(leavesFirst)) {
-    offsets.set(stream, (await itx.streams.get(stream).getEventPage({ limit: 1 })).streamMaxOffset);
+  const paths = (await itx.streams.list()).map((stream) => stream.path);
+  // Leaves first, same order as the final read pass.
+  paths.sort((a, b) => b.split("/").length - a.split("/").length || a.localeCompare(b));
+  for (const path of paths) {
+    offsets.set(path, (await itx.streams.get(path).getEventPage({ limit: 1 })).streamMaxOffset);
   }
   return offsets;
-}
-
-/**
- * Drop exactly ONE `stream/woken` stamped after the final read pass began —
- * the boot this read itself caused. A second late `woken` is a real wake
- * that happened to land during the pass, and it counts.
- */
-function withoutOurOwnBoot(events: StreamEvent[], readStart: number): StreamEvent[] {
-  const ours = events.findIndex(
-    (event) => event.type === WOKEN && Date.parse(event.createdAt) >= readStart - 1_000,
-  );
-  return ours === -1 ? events : events.filter((_, index) => index !== ours);
-}
-
-function summarize(path: string, events: StreamEvent[]): WakeRow[] {
-  const byType = new Map<string, StreamEvent[]>();
-  for (const event of events) byType.set(event.type, [...(byType.get(event.type) || []), event]);
-  return [...byType.entries()].map(([type, group]) => ({
-    path,
-    type,
-    count: group.length,
-    first: group[0]!.createdAt,
-    last: group.at(-1)!.createdAt,
-  }));
-}
-
-function table(rows: WakeRow[]) {
-  const header = "path | event type | count | first | last";
-  return [
-    header,
-    ...rows.map((r) => `${r.path} | ${r.type} | ${r.count} | ${r.first} | ${r.last}`),
-  ].join("\n");
-}
-
-/** Deeper paths first, so `/agents/x` is read before `/agents` before `/`. */
-function leavesFirst(a: string, b: string) {
-  return b.split("/").length - a.split("/").length || a.localeCompare(b);
 }
 
 function sleep(ms: number) {
