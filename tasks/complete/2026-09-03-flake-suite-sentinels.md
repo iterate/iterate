@@ -16,6 +16,7 @@ size: small
 - [x] docs/testing.md: note the per-suite sentinel convention + the stance that `createFlake` replaces retries only for tests that opted in (unwrapped specs keep playwright retries)
 - [x] createFlake pins per-test `retry: 0` on vitest _(surfaced by the first real preview run: the e2e suite's `retry: {count:1, delay:5000}` re-ran the sentinel after the wrapper's green throw — vitest retry fires before the `.fails` inversion — recording every green outcome twice; fixture child now runs with suite retry to pin it)_
 - [x] ingestion: drop the Depot run-status filter _(also surfaced live: Depot's per-sha run status settles only after the LAST check completes, and that check's webhook beats the flip, so `status: ["finished","failed"]` in ListRuns permanently skipped the last-completing check's artifacts — always the slow preview check, i.e. exactly these two new suites)_
+- [x] first real adoptee: `specs/mobile/chat-photos.spec.ts` wrapped with `createFlake` _(defeated its playwright retry twice on 2026-09-03 — `Timeout …ms exceeded` waiting for `getByLabel('phone-screenshot.png')`; pattern scoped to that signature, 120s wrapper deadline under the 240s spec timeout)_
 
 ## Post-merge
 
