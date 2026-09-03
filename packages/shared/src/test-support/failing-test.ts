@@ -73,7 +73,7 @@ export function failing<TestFn extends (...args: any[]) => any>(
     // The body's own arguments pass through untouched — playwright fixtures
     // ({ page, ... }, testInfo), vitest context — whatever the wrapped test
     // function provides.
-    const wrapped = async (...bodyArgs: any[]) => {
+    const wrappedBody = async (...bodyArgs: any[]) => {
       (test as any).setTimeout?.(timeoutMs + 1000);
       // Race the body against the wrapper's own deadline: a hung body must
       // fail as NOT-the-pinned-failure rather than letting the runner's test
@@ -119,14 +119,18 @@ export function failing<TestFn extends (...args: any[]) => any>(
       );
       // Fall through to success for the same reason as above.
     };
-    // Playwright and vitest's test.extend decide WHICH fixtures to set up by
-    // parsing the test function's source for its destructured first
-    // parameter. A rest-args wrapper would hide the body's fixture names and
-    // the runner would instantiate none of them — so present the body's own
-    // source when the runner looks.
-    Object.defineProperty(wrapped, "toString", { value: () => body.toString() });
-    const options = Object.assign({}, ...args.slice(1, -1), { timeout: timeoutMs + 1000 });
-    return failer(args[0], options, wrapped);
+
+    // playwright and vitest look at function's source to see what's destructured into the test function, so fake that it looks like the original.
+    Object.defineProperty(wrappedBody, "toString", { value: () => body.toString() });
+
+    if ("setTimeout" in test) {
+      // playwright-like, no `timeout` option, we set the timeout manually above
+      return failer(...args.slice(0, -1), wrappedBody);
+    } else {
+      // vitest-like, we pass the timeout option to the test function. args.slice(1, -1) is either `[]` or `[{ ...otherOptions }]`
+      const options = Object.assign({}, ...args.slice(1, -1), { timeout: timeoutMs + 1000 });
+      return failer(args[0], options, wrappedBody);
+    }
   };
   // The cast restates the contract the wrapper keeps by construction: it
   // forwards every argument unchanged except the trailing body, which it
