@@ -139,3 +139,13 @@ Both capability-neutral, behaviour-identical, pinned by the existing unit suites
   fixture number; it removes an O(source) loop from the per-push path.
 
 LOC: +18 net (worker-loader memo helper + comments), well inside the 10 % ceiling.
+
+### Deployed proof of L4+L1a
+
+Full deployed e2e after L4+L1a: 36 files passed, 1 skipped, 144 passed, 2 expected fail, and ONE
+failure — `rpc-stubs-slack-bridge.e2e` ("a live bridge replays the natural dotted spelling onto the
+SDK end to end"). Re-run ALONE against the deployed worker it passes 3/3, and the local full lane is
+147/2xf. So it is a timing-sensitive live-bridge test flaking under 144 parallel tests hammering one
+edge worker plus network jitter, not an L4/L1a regression (the rules-thunk and hash-memo paths are
+behaviour-identical and unit-pinned). Script upload after both changes: 1,225.86 KiB (was 1,480.38
+before W2), startup 19 ms.
