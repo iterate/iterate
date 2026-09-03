@@ -120,6 +120,7 @@
     "iterate/no-raw-durable-object-binding-access": "error",
     "iterate/no-implied-eval": "error",
     "iterate/no-single-use-helpers": "error",
+    "iterate/no-shouting-constants": "off",
     "iterate/colocate-single-use-types": "error",
     "iterate/no-single-use-types": "error",
     "iterate/prefer-logical-and-spread": "error",

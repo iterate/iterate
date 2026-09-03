@@ -314,6 +314,16 @@ function needsParensInsideLogicalAnd(node: any) {
   );
 }
 
+function isPlainLiteral(init: any) {
+  if (init.type === "Literal") {
+    return typeof init.value === "number" || typeof init.value === "string";
+  }
+  if (init.type === "TemplateLiteral") return init.expressions.length === 0;
+  if (init.type === "UnaryExpression" && init.operator === "-") {
+    return init.argument.type === "Literal" && typeof init.argument.value === "number";
+  }
+  return false;
+}
 function findVariableInScopeChain(scope: Scope.Scope | null, name: string) {
   for (let current = scope; current; current = current.upper) {
     const variable = current.variables.find((v: any) => v.name === name);
@@ -999,6 +1009,54 @@ const plugin: StrictPlugin = {
               return;
             }
             checkHelper(node.id, node.init, node.parent);
+          },
+        };
+      },
+    },
+    "no-shouting-constants": {
+      meta: {
+        type: "suggestion",
+        docs: {
+          description:
+            "Flag module-scope SCREAMING_SNAKE consts that hold a plain literal and are read once. The literal belongs inline at its use site.",
+        },
+      },
+      create(context) {
+        return {
+          VariableDeclarator(node) {
+            const declaration = node.parent as any;
+            if (declaration.type !== "VariableDeclaration" || declaration.kind !== "const") return;
+            // Module scope only. `export const` has an ExportNamedDeclaration
+            // parent, so exported consts fall out here too.
+            if (declaration.parent?.type !== "Program") return;
+            if (node.id.type !== "Identifier" || !node.init) return;
+            if (!/^[A-Z][A-Z0-9_]+$/.test(node.id.name)) return;
+            if (!isPlainLiteral(node.init)) return;
+            // A JSDoc block right above is a written rationale for the name —
+            // same escape hatch as no-single-use-helpers.
+            if (hasLeadingJsDocComment(context.sourceCode, declaration)) return;
+
+            const variable = findVariableInScopeChain(
+              context.sourceCode.getScope(node),
+              node.id.name,
+            );
+            if (!variable) return;
+            const reads = variable.references.filter((ref: any) => ref.isRead());
+            // `export { X }` / `export default X` make it part of the module's surface
+            const isExportedReference = reads.some((ref: any) => {
+              const parentType = ref.identifier.parent?.type;
+              return parentType === "ExportSpecifier" || parentType === "ExportDefaultDeclaration";
+            });
+            if (isExportedReference) return;
+            if (reads.length !== 1) return;
+
+            context.report({
+              node: node.id,
+              message:
+                `${node.id.name} is a SCREAMING_SNAKE constant holding a plain literal that is used once. ` +
+                `Write the literal inline at its use site instead of naming it at module scope ` +
+                `(expect(x).toBeLessThan(1_000_000), not const MAX_BYTES = 1_000_000).`,
+            });
           },
         };
       },

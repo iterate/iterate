@@ -7,8 +7,9 @@ tags: [lint, coding-style]
 
 # Lint rule: `iterate/no-shouting-constants`
 
-**Status:** rule + tests written; repo sweep pending. See the log at the bottom
-for the violation count and the enable/off decision.
+**Status:** rule and tests done, registered `"off"`. The sweep found 263
+single-use hits in 144 files; enabling it means inlining all of them, so the
+enable decision and the sweep are waiting on Misha (see the log).
 
 ## Why
 
@@ -70,15 +71,57 @@ log below once the sweep has run.
 
 ## Checklist
 
-- [ ] Rule `no-shouting-constants` in `lint/oxlint-plugin-iterate.ts`.
-- [ ] Register in root `.oxlintrc.json`.
-- [ ] Tests in `lint/oxlint-plugin-no-shouting-constants.test.ts`: flagged
+- [x] Rule `no-shouting-constants` in `lint/oxlint-plugin-iterate.ts`. _Sits next to `no-single-use-helpers` and reuses its scope walk + JSDoc escape hatch; `isPlainLiteral` is the literal filter._
+- [x] Register in root `.oxlintrc.json`. _As `"off"` for now: root lint runs `--deny-warnings`, so anything else fails CI until the 263 hits are inlined._
+- [x] Tests in `lint/oxlint-plugin-no-shouting-constants.test.ts`: flagged
       single-use number/string/template/negative consts; allowed exported,
-      non-literal, multi-reference, JSDoc'd, non-module-scope consts.
-- [ ] Sweep the repo, record the count and hotspots, fix trivial inlines.
+      non-literal, multi-reference, JSDoc'd, non-module-scope consts. _Six
+      tests against the real oxlint binary, same fixture as the
+      logical-and-spread tests._
+- [ ] Sweep the repo, record the count and hotspots, fix trivial inlines. _Count and breakdown recorded below; the inlining itself waits on the enable decision._
 - [ ] `pnpm install && pnpm typecheck && pnpm format && pnpm lint && pnpm knip`
       green; lint workspace tests green (`pnpm --dir lint test`).
-- [ ] Draft PR with risk map.
+- [ ] Draft PR with risk map. _Held until Misha has seen the sweep results._
 
 ## Implementation log
 
+### 2026-09-03 sweep
+
+Flip the rule to `"error"` and run `pnpm lint` to regenerate. Result:
+**263 hits in 144 files**, zero other diagnostics. Nothing needed the name
+regex tightened: every hit is a real SCREAMING_SNAKE single-use literal.
+
+Rough breakdown by what the literal is:
+
+| kind                                                       | ~count | example                                                    |
+| ---------------------------------------------------------- | ------ | ---------------------------------------------------------- |
+| timeouts, intervals, limits, thresholds (numbers)          | 120    | `const INGEST_WAIT_TIMEOUT_MS = 15_000;` (three DOs)       |
+| event type strings                                         | 40     | `agent-ui-reducer.ts` alone declares 24 of them            |
+| URLs, paths, storage keys, cookie names                    | 40     | `const POSTHOG_HOST = "https://eu.i.posthog.com";`         |
+| test fixture ids                                           | 20     | `const PROJECT_ID = "prj_test";`                           |
+| long / multi-line strings (GraphQL, YAML, error messages)  | 17     | `waitrose-api.ts` queries, `use-my-computer.ts` `TYPES`    |
+| wire-format / protocol numbers where the name IS the doc   | 10     | `TS_NAME_NEAR_MISS = 2552`, `FIELD_WIFI_PASSWORD = 2`      |
+| misc                                                       | 15     | `SIDEBAR_KEYBOARD_SHORTCUT = "b"`                          |
+
+Hotspot files: `packages/ui/src/components/events/agent-ui-reducer.ts` (24),
+`cloudflare-sandbox-durable-object.ts` (7), `apps/kit/src/firmware/config-image.ts`
+(6), `apps/os/src/rpc-targets.ts` (6), `infer-json-type.ts` (5),
+`sdk/capnweb/react.tsx` (5), `packages/ui/src/components/sidebar.tsx` (5).
+
+Two classes look like genuine false positives under the stated preference:
+
+1. Multi-line literals. Inlining a 15-line GraphQL query or a YAML fixture into
+   a call argument is not the one-liner style the rule is after. Proposed
+   exemption: skip a literal whose source spans more than one line (about 8
+   of the 17 long strings; the rest are one-liners the formatter wrapped).
+2. Protocol numbers where the literal is opaque and the name is the only
+   documentation (`2552`, exit code `124`, the WebSocket GUID, the kit
+   config-image field tags). The JSDoc escape hatch already covers these if
+   the author writes `/** */`; today they mostly carry a trailing `//`
+   comment or nothing. Option: also honour a trailing line comment on the
+   declaration line, or just require the JSDoc form when sweeping.
+
+The `FIELD_*` tags in `config-image.ts` also show the single-use threshold
+misfiring on enum-like groups: fields 1 and 5 are used twice and stay, fields
+2/3/4/6/7 are used once and get flagged, so the file would end up half named,
+half inlined.
