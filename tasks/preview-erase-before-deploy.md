@@ -61,3 +61,9 @@ state is gone by design (recreate the project after pushing).
 One erase per push: tombstone deploy + D1/KV wipe (+ auth redeploy). Roughly
 a couple of minutes on the preview critical path; the Artifacts pass skip
 keeps it from being more.
+
+## Implementation log
+
+- 2026-09-03: first push landed on preview-1 as a handover (erase 106s), then
+  the OS deploy hit Cloudflare's startup-limits validation coin flip. This
+  push is the same-holder redeploy that proves the new path.
