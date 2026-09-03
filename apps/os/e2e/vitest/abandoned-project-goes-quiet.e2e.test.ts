@@ -27,20 +27,20 @@ import { createTestProject } from "../test-support/create-test-project.ts";
 import { createAdminOsItx } from "../test-support/os-client.ts";
 import { deployedBaseUrl } from "./test-helpers.ts";
 
-const QUIET_SECONDS = Number(process.env.ABANDONED_PROJECT_QUIET_SECONDS || 90);
+const QUIET_SECONDS = Number(process.env.ABANDONED_PROJECT_QUIET_SECONDS || 60);
 const WOKEN = "events.iterate.com/stream/woken";
 
 // Everything fits under the heavy-test ceiling (E2E_HEAVY_TEST_TIMEOUT_MS,
-// 240s, guarded by scripts/preview/e2e-policy.test.ts): ~30s of setup (the
-// intercepted turn settles in well under a second; the first-turn worker
-// build is the slow part), 15s of settling, the 90s quiet window, two read
-// passes. Raising ABANDONED_PROJECT_QUIET_SECONDS past ~120 needs the
-// ceiling raised by hand — the pin's own deadline must stay below it.
+// 240s, guarded by scripts/preview/e2e-policy.test.ts): project creation and
+// the first turn (~30s locally, up to ~90s under full-lane CI load), 15s of
+// settling, the 60s quiet window (12 heartbeats at 5s), two read passes. The
+// pin's own deadline sits just under the ceiling. Raising
+// ABANDONED_PROJECT_QUIET_SECONDS past ~90 needs the ceiling raised by hand.
 const failWakeUp = failing(
   test.skipIf(deployedBaseUrl() === null),
   /woke \d+ times after dispose/,
   {
-    timeoutMs: 200_000,
+    timeoutMs: 230_000,
   },
 );
 
@@ -54,7 +54,6 @@ failWakeUp(
     // the agent handle are all released by `using` whether the turn succeeded
     // or threw. Only what the measurement needs escapes.
     let project: { id: string; slug: string; baseUrl: string };
-    let baseline: Map<string, number>;
     {
       await using handle = await createTestProject({ slugPrefix: "abandoned" });
       using itx = handle.itx();
@@ -101,20 +100,25 @@ failWakeUp(
         }`,
       });
 
-      // Let the turn's own deliveries and the first heartbeat land, then take
-      // the baseline. The baseline reads boot every stream; a second short
-      // settle lets that cascade finish before the offsets are recorded.
+      // Let the turn's own deliveries and the first heartbeat land before the
+      // handles go away.
       await sleep(10_000);
-      await readOffsets(itx);
-      await sleep(5_000);
-      baseline = await readOffsets(itx);
     }
+
+    // A fresh admin session for everything after: none of the test's own
+    // connections survive the block above.
+    using itx = createAdminOsItx({ baseUrl: project.baseUrl, context: project.id });
+
+    // Baseline AFTER teardown, so the teardown's own trail (the interceptor's
+    // pager disconnecting appends to the root stream) is not counted as a
+    // wake. The baseline reads boot every stream; a short settle lets that
+    // cascade finish before the offsets are recorded.
+    await readOffsets(itx);
+    await sleep(5_000);
+    const baseline = await readOffsets(itx);
 
     await sleep(QUIET_SECONDS * 1000);
 
-    // A fresh admin session for the measurement: none of the test's own
-    // connections survive the block above.
-    using itx = createAdminOsItx({ baseUrl: project.baseUrl, context: project.id });
     // The measurement. Leaves first so a parent's boot cannot cascade into a
     // child that is read after it.
     const readStart = Date.now();
