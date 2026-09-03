@@ -1276,11 +1276,27 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "        break;\n" +
       "    }\n" +
       "\n" +
-      "    await this.#aiLintApp.processEvent(event);\n" +
-      "    await this.#flakeDashboardApp.processEvent(event);\n" +
-      "    await this.#guestbookApp.processEvent(event);\n" +
-      "    await this.#mediaApp.processEvent(event);\n" +
-      "    await this.#notesApp.processEvent(event);\n" +
+      "    // Every app sees every event even when a sibling throws — one app must\n" +
+      "    // not starve the others within a delivery. Rejections are NOT swallowed:\n" +
+      "    // rethrowing after allSettled keeps the platform's at-least-once\n" +
+      "    // redelivery for the failing app (apps are idempotent), where a\n" +
+      "    // log-and-continue would silently lose its retry.\n" +
+      "    const results = await Promise.allSettled([\n" +
+      "      this.#aiLintApp.processEvent(event),\n" +
+      "      this.#flakeDashboardApp.processEvent(event),\n" +
+      "      this.#guestbookApp.processEvent(event),\n" +
+      "      this.#mediaApp.processEvent(event),\n" +
+      "      this.#notesApp.processEvent(event),\n" +
+      "    ]);\n" +
+      "    const failures = results.flatMap((result) =>\n" +
+      "      result.status === \"rejected\" ? [result.reason] : [],\n" +
+      "    );\n" +
+      "    if (failures.length > 0) {\n" +
+      "      throw new AggregateError(\n" +
+      "        failures,\n" +
+      "        `${failures.length} app(s) failed to process ${event.type}`,\n" +
+      "      );\n" +
+      "    }\n" +
       "  }\n" +
       "\n" +
       "  async fetch(req: Request): Promise<Response> {\n" +

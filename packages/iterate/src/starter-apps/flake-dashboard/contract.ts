@@ -128,6 +128,33 @@ export const flakeTransitionThresholds = {
   "switch-to-failing": { runs: 25, minSpanMs: 2 * 24 * 60 * 60 * 1000 },
 } as const;
 
+/**
+ * The exact shape of a delivered event this app ingests: a platform-verified
+ * GitHub webhook for a COMPLETED workflow_run on a connection stream. Zod
+ * strips the rest of GitHub's (huge) payload; only these fields are read.
+ */
+export const WorkflowRunWebhookEvent = z.object({
+  type: z.literal("events.iterate.com/github/webhook-received"),
+  path: z.string().regex(/^\/integrations\/github\/[^/]+$/),
+  payload: z.object({
+    delivery: z.object({ name: z.literal("workflow_run") }),
+    body: z.object({
+      action: z.literal("completed"),
+      workflow_run: z.object({
+        id: z.number().int().positive(),
+        run_attempt: z.number().int().positive().optional(),
+        head_branch: z.string().nullish(),
+        head_sha: z.string().nullish(),
+      }),
+      repository: z.object({
+        name: z.string().min(1),
+        owner: z.object({ login: z.string().min(1) }),
+        default_branch: z.string().nullish(),
+      }),
+    }),
+  }),
+});
+
 export const FlakeDashboardProcessorContract = defineProcessorContract({
   slug: "flake-dashboard",
   version: "0.1.0",

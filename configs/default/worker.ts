@@ -346,11 +346,27 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
         break;
     }
 
-    await this.#aiLintApp.processEvent(event);
-    await this.#flakeDashboardApp.processEvent(event);
-    await this.#guestbookApp.processEvent(event);
-    await this.#mediaApp.processEvent(event);
-    await this.#notesApp.processEvent(event);
+    // Every app sees every event even when a sibling throws — one app must
+    // not starve the others within a delivery. Rejections are NOT swallowed:
+    // rethrowing after allSettled keeps the platform's at-least-once
+    // redelivery for the failing app (apps are idempotent), where a
+    // log-and-continue would silently lose its retry.
+    const results = await Promise.allSettled([
+      this.#aiLintApp.processEvent(event),
+      this.#flakeDashboardApp.processEvent(event),
+      this.#guestbookApp.processEvent(event),
+      this.#mediaApp.processEvent(event),
+      this.#notesApp.processEvent(event),
+    ]);
+    const failures = results.flatMap((result) =>
+      result.status === "rejected" ? [result.reason] : [],
+    );
+    if (failures.length > 0) {
+      throw new AggregateError(
+        failures,
+        `${failures.length} app(s) failed to process ${event.type}`,
+      );
+    }
   }
 
   async fetch(req: Request): Promise<Response> {
