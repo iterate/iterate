@@ -75,16 +75,18 @@ describe("identity, incarnation, the pause latch", () => {
     expect(reduceAll([at(2, "events.iterate.com/stream/resumed")], paused).paused).toBeNull();
   });
 
-  test('paused without a reason defaults to "paused" — in the reduce AND in the built event', () => {
+  test('paused without a reason defaults to "paused" in the reduce (the state guarantee)', () => {
     expect(reduceAll([at(1, "events.iterate.com/stream/paused")]).paused).toEqual({
       reason: "paused",
     });
     expect(reduceAll([at(1, "events.iterate.com/stream/paused", {})]).paused).toEqual({
       reason: "paused",
     });
-    expect(CoreContract.buildEvent({ type: "events.iterate.com/stream/paused" }).payload).toEqual({
-      reason: "paused",
-    });
+    // buildEvent is a TRUSTED PASSTHROUGH now (the zod default that once lived here is gone with the
+    // edge/DO script's zod); the REDUCE owns the "paused" default, which is the only path to state.
+    expect(CoreContract.buildEvent({ type: "events.iterate.com/stream/paused" }).payload).toEqual(
+      {},
+    );
   });
 });
 

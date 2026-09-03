@@ -10,7 +10,7 @@
 // halted fact is appended by the delivery loop; the resumed fact by an operator's plain `itx.append`.
 
 import { print, toItxExpression, type ItxExpressionInput } from "../context/expression.ts";
-import { CoreContract, SubscriptionName } from "./core-processor.ts";
+import { CoreContract, parseSubscriptionName } from "./core-processor.ts";
 import type { StreamEventInput } from "./events.ts";
 
 /** The `subscription-configured` event for (or replacing, or with `target: null` removing)
@@ -21,7 +21,7 @@ export function subscriptionConfiguredEvent(input: {
   target: ItxExpressionInput | null;
   consumes?: string[];
 }): StreamEventInput {
-  const name = SubscriptionName.parse(input.name);
+  const name = parseSubscriptionName(input.name);
   // A processor's subscription name IS its facet name, and the core reduce's address
   // (`itx.facets.get('core')`) is taken. Refused at the door, never at delivery.
   if (name === CoreContract.slug)

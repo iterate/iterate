@@ -8,7 +8,8 @@
 // processor-rules.test.ts.
 import { describe, expect, test } from "vitest";
 import { z } from "zod";
-import { defineProcessorContract, type StreamEvent } from "./events.ts";
+import { defineProcessorContract } from "../sdk/processor-contract.ts";
+import type { StreamEvent } from "./events.ts";
 import {
   consumesEvent,
   ProcessorEngine,

@@ -1,11 +1,9 @@
-// stream/events.ts — the stream event envelope (plain types) + idempotency rules + the zod contract
-// helper. API mirrors apps/os (`packages/iterate/src/processors/schemas.ts` / `idempotency.ts`) so
-// processors port both ways. zod is for CONTRACTS (state + owned-event payload schemas — built-ins
-// and userspace alike); the envelope itself is two plain types the append door checks by hand.
+// stream/events.ts — the stream event envelope (plain types) + idempotency rules. Zod-FREE on
+// purpose: this module is on the edge/DO script's graph, so it carries no runtime validator (the
+// zod contract helper `defineProcessorContract` lives on the SDK side, sdk/processor-contract.ts).
+// The envelope itself is two plain types the append door checks by hand.
 
-import { z } from "zod";
 import { jsonEqual } from "../lib/patch.ts";
-import type { EventDefinition, ProcessorContract } from "./processor.ts";
 // THE one deep-equal lives in patch.ts (the live-state diff needs it dependency-free); the
 // idempotency-body compare below is the same test, re-exported here for the SDK bundle.
 export { jsonEqual };
@@ -63,50 +61,6 @@ export function sameIdempotentEvent(
   );
 }
 
-// ── the zod contract helper (the host-side way to author a ProcessorContract) ──
-// Userspace SDK contracts are plain object literals with `initialState`; built-ins get schema
-// validation on top. Both produce the SAME ProcessorContract shape the base class consumes.
-
-export function defineProcessorContract<StateSchema extends z.ZodType>(contract: {
-  slug: string;
-  version: string;
-  description: string;
-  /** Must parse `{}` — the initial state is `stateSchema.parse({})` (all fields defaulted). */
-  stateSchema: StateSchema;
-  events: Record<string, EventDefinition>;
-  consumes: readonly string[];
-  emits: readonly string[];
-}): ProcessorContract<z.infer<StateSchema>> & {
-  stateSchema: StateSchema;
-  /** Build a typed input for an owned event (validates the payload against its schema). */
-  buildEvent: (event: {
-    type: string;
-    payload?: unknown;
-    idempotencyKey?: string;
-  }) => StreamEventInput;
-} {
-  const initial = contract.stateSchema.safeParse({});
-  if (!initial.success)
-    throw new Error(`contract "${contract.slug}": stateSchema must parse {} (default every field)`);
-  return {
-    slug: contract.slug,
-    version: contract.version,
-    description: contract.description,
-    consumes: contract.consumes,
-    emits: contract.emits,
-    stateSchema: contract.stateSchema,
-    initialState: () => contract.stateSchema.parse({}) as z.infer<StateSchema>,
-    buildEvent: (event) => {
-      const def = contract.events[event.type];
-      if (!def)
-        throw new Error(
-          `contract "${contract.slug}": buildEvent event type "${event.type}" is not owned`,
-        );
-      return {
-        type: event.type,
-        payload: def.payloadSchema.parse(event.payload ?? {}) as Record<string, unknown>,
-        ...(event.idempotencyKey && { idempotencyKey: event.idempotencyKey }),
-      };
-    },
-  };
-}
+// The contract helper `defineProcessorContract` (the zod-based authoring surface) lives on the SDK
+// side now — sdk/processor-contract.ts — so this module and the edge/DO script it belongs to stay
+// zod-free. The platform's own contract is hand-built in stream/core-processor.ts.

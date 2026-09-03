@@ -24,136 +24,110 @@
 // first event is its wake record. The platform's own records and the pause/resume pair are exempt
 // from pause — a paused stream must always accept its own resume.
 
-import { z } from "zod";
 import {
   parse,
   parseItxExpressionPrefix,
   type ItxExpression,
   type ItxExpressionPrefix,
 } from "../context/expression.ts";
-import { defineProcessorContract } from "./events.ts";
-import { StreamProcessor, type ReduceArgs } from "./processor.ts";
+import type { StreamEventInput } from "./events.ts";
+import { StreamProcessor, type ProcessorContract, type ReduceArgs } from "./processor.ts";
 
-/** One segment, [A-Za-z0-9_-]: the facet name for a processor, the registry key's tail for a live
- *  callback. */
-export const SubscriptionName = z
-  .string()
-  .regex(/^[A-Za-z0-9_-]+$/, "a subscription name is one segment: [A-Za-z0-9_-]+");
+/** One rewrite rule: a canonical match prefix and the target it rewrites to (both parsed once, at
+ *  reduce; a call step pins literal args, `itx.ai.run('gpt-5')` — expression.ts). */
+export type ItxExpressionRewriteRule = { match: ItxExpressionPrefix; target: ItxExpression };
 
-export const CoreContract = defineProcessorContract({
+/** One subscription row (by name; a same-named configure REPLACES). */
+export type Subscription = {
+  /** The target, parsed; its terminal is callable with (events, range). */
+  target: ItxExpression;
+  /** Event types delivered; absent = every durable event; naming a type opts its ephemerals in. */
+  consumes?: string[];
+  /** The row's identity — the offset of its subscription-configured event. */
+  configuredAtOffset: number;
+  /** A CURSOR target that exhausted its retries (the loop appended the halted fact). */
+  halted?: { afterOffset: number; attempts: number; error?: string };
+  /** The newest delivery-resumed: the loop applies it once (a seek, an un-halt). */
+  resumed?: { afterOffset?: number; atOffset: number };
+};
+
+/** THE CORE STATE — the context's own state, reduced inline at the commit point. HAND-WRITTEN (no
+ *  zod on the edge/DO script): these events are the platform's own, trusted, and the reduce reads
+ *  them by hand, so the 310 KB zod runtime validator earned its removal. `paused` and the two tables
+ *  are always present (the initial state defaults them); the identity fields fill in from
+ *  created/woken. */
+export type CoreState = {
+  /** From the birth certificate (stream/created, offset 1). */
+  projectId?: string;
+  path?: string;
+  createdAt?: string;
+  /** From the wake record (stream/woken) — growth across idle is the hibernation tell. */
+  incarnation?: number;
+  paused: { reason: string } | null;
+  /** THE REWRITE-RULE TABLE, by canonical match: a configured target REPLACES, `null` DELETES (a
+   *  map — no stack, no identity beyond the match). */
+  itxExpressionRewriteRules: Record<string, ItxExpressionRewriteRule>;
+  /** THE SUBSCRIPTIONS TABLE, by name. */
+  subscriptions: Record<string, Subscription>;
+};
+
+/** A subscription/registry name is ONE segment, [A-Za-z0-9_-]: the facet name for a processor, the
+ *  registry key's tail for a live callback. (Was a zod `.regex` on the SDK; hand-checked here now.) */
+const SUBSCRIPTION_NAME_PATTERN = /^[A-Za-z0-9_-]+$/;
+export function parseSubscriptionName(name: string): string {
+  if (typeof name !== "string" || !SUBSCRIPTION_NAME_PATTERN.test(name))
+    throw new Error(
+      `a subscription name is one segment: [A-Za-z0-9_-]+ (got ${JSON.stringify(name)})`,
+    );
+  return name;
+}
+
+/** The event types the core reduce consumes — and the only types its `buildEvent` will build. */
+const CORE_EVENT_TYPES = [
+  "events.iterate.com/stream/created",
+  "events.iterate.com/stream/woken",
+  "events.iterate.com/stream/paused",
+  "events.iterate.com/stream/resumed",
+  "events.iterate.com/itx/rewrite-rule-configured",
+  "events.iterate.com/stream/subscription-configured",
+  "events.iterate.com/stream/subscription-delivery-halted",
+  "events.iterate.com/stream/subscription-delivery-resumed",
+] as const;
+const CORE_EVENT_TYPE_SET = new Set<string>(CORE_EVENT_TYPES);
+
+/** THE CORE CONTRACT — hand-built (was `defineProcessorContract` + a zod schema). `buildEvent` for a
+ *  trusted core command checks the type is owned and passes the payload through: the command builders
+ *  (itx-expression-rewriting.ts `rewriteRuleConfiguredEvent`, subscriptions.ts
+ *  `subscriptionConfiguredEvent`) construct the exact payload and validate rooting themselves.
+ *  `initialState` is the literal every-field-defaulted state. */
+export const CoreContract: ProcessorContract<CoreState> & {
+  buildEvent: (event: {
+    type: string;
+    payload?: Record<string, unknown>;
+    idempotencyKey?: string;
+  }) => StreamEventInput;
+} = {
   slug: "core",
   version: "4.0.0", // 4.0.0: rewrite rules are a MAP under itx/rewrite-rule-configured; subscription-configured absorbs removal
   description:
     "The context's own state, reduced inline at the commit point: who it is, which incarnation runs, whether appends are paused, the itx-expression rewrite rules every call goes through, and the subscriptions every commit is sent to.",
-  stateSchema: z.object({
-    /** From the birth certificate (stream/created, offset 1). */
-    projectId: z.string().optional(),
-    path: z.string().optional(),
-    createdAt: z.string().optional(),
-    /** From the wake record (stream/woken) — growth across idle is the hibernation tell. */
-    incarnation: z.number().optional(),
-    paused: z.object({ reason: z.string() }).nullable().default(null),
-    /** THE REWRITE-RULE TABLE, by canonical match: a configured target REPLACES, `null` DELETES (a
-     *  map — no stack, no identity beyond the match). The EVENT stores both halves as strings; they
-     *  are parsed here, once. */
-    itxExpressionRewriteRules: z
-      .record(
-        z.string(),
-        z.object({
-          /** Dotted names; a call step pins literal args (`itx.ai.run('gpt-5')`) — expression.ts ItxExpressionPrefix. */
-          match: z.custom<ItxExpressionPrefix>(() => true),
-          target: z.custom<ItxExpression>(() => true),
-        }),
-      )
-      .default({}),
-    /** THE SUBSCRIPTIONS TABLE: by name; a same-named configure REPLACES (no stack). */
-    subscriptions: z
-      .record(
-        z.string(),
-        z.object({
-          /** The target, parsed; its terminal is callable with (events, range). */
-          target: z.custom<ItxExpression>(() => true),
-          /** Event types delivered; absent = every durable event; naming a type opts its ephemerals in. */
-          consumes: z.array(z.string()).optional(),
-          /** The row's identity — the offset of its subscription-configured event. */
-          configuredAtOffset: z.number().int().positive(),
-          /** A CURSOR target that exhausted its retries (the loop appended the halted fact). */
-          halted: z
-            .object({ afterOffset: z.number(), attempts: z.number(), error: z.string().optional() })
-            .optional(),
-          /** The newest delivery-resumed: the loop applies it once (a seek, an un-halt). */
-          resumed: z
-            .object({ afterOffset: z.number().optional(), atOffset: z.number() })
-            .optional(),
-        }),
-      )
-      .default({}),
-  }),
-  events: {
-    "events.iterate.com/stream/created": {
-      description:
-        "The birth certificate — the log's first event, appended by the first incarnation's constructor.",
-      payloadSchema: z.object({ projectId: z.string(), path: z.string() }),
-    },
-    "events.iterate.com/stream/woken": {
-      description:
-        "The wake record — appended by every incarnation's constructor before any door opens.",
-      payloadSchema: z.object({ incarnation: z.number() }),
-    },
-    "events.iterate.com/stream/paused": {
-      description: "Refuse every non-control append until resumed.",
-      payloadSchema: z.object({ reason: z.string().default("paused") }),
-    },
-    "events.iterate.com/stream/resumed": { payloadSchema: z.object({}) },
-    "events.iterate.com/itx/rewrite-rule-configured": {
-      description:
-        "The rewrite rule at `match` is now `target` (string half of the codec — the log stays human-readable) — or, with `target: null`, gone. A call starting with `match` runs as the same call with `match` replaced by `target`. A lent stub's rule targets `itx.rpcStubs.get('<rpcStubKey>')`.",
-      payloadSchema: z.object({ match: z.string(), target: z.string().nullable() }),
-    },
-    "events.iterate.com/stream/subscription-configured": {
-      description:
-        "Send each committed batch (filtered by `consumes`) to `target`, an itx expression whose terminal is callable with (events, range). Same name REPLACES; `target: null` removes the row (and, for a cursor target, its cursor).",
-      payloadSchema: z.object({
-        name: SubscriptionName,
-        target: z.string().nullable(),
-        consumes: z.array(z.string()).optional(),
-      }),
-    },
-    "events.iterate.com/stream/subscription-delivery-halted": {
-      description:
-        "Appended by the delivery loop: a cursor target failed too many times (or with retryable: false); deliveries stop until a delivery-resumed.",
-      payloadSchema: z.object({
-        name: SubscriptionName,
-        afterOffset: z.number().int().nonnegative(),
-        attempts: z.number().int().nonnegative(),
-        error: z.string().optional(),
-      }),
-    },
-    "events.iterate.com/stream/subscription-delivery-resumed": {
-      description:
-        "The operator's recovery: un-halt the named cursor subscription, optionally seeking its cursor to `afterOffset` first.",
-      payloadSchema: z.object({
-        name: SubscriptionName,
-        afterOffset: z.number().int().nonnegative().optional(),
-      }),
-    },
-  },
-  consumes: [
-    "events.iterate.com/stream/created",
-    "events.iterate.com/stream/woken",
-    "events.iterate.com/stream/paused",
-    "events.iterate.com/stream/resumed",
-    "events.iterate.com/itx/rewrite-rule-configured",
-    "events.iterate.com/stream/subscription-configured",
-    "events.iterate.com/stream/subscription-delivery-halted",
-    "events.iterate.com/stream/subscription-delivery-resumed",
-  ],
+  consumes: CORE_EVENT_TYPES,
   emits: [],
-});
-
-export type CoreState = z.infer<typeof CoreContract.stateSchema>;
-export type ItxExpressionRewriteRule = CoreState["itxExpressionRewriteRules"][string];
-export type Subscription = CoreState["subscriptions"][string];
+  initialState: (): CoreState => ({
+    paused: null,
+    itxExpressionRewriteRules: {},
+    subscriptions: {},
+  }),
+  buildEvent: (event) => {
+    if (!CORE_EVENT_TYPE_SET.has(event.type))
+      throw new Error(`contract "core": buildEvent event type "${event.type}" is not owned`);
+    return {
+      type: event.type,
+      payload: event.payload ?? {},
+      ...(event.idempotencyKey && { idempotencyKey: event.idempotencyKey }),
+    };
+  },
+};
 
 export class CoreStreamProcessor extends StreamProcessor<CoreState> {
   readonly contract = CoreContract;

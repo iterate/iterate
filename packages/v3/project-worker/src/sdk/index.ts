@@ -18,12 +18,8 @@ export {
   type ReduceArgs,
   type ScannedRange,
 } from "../stream/processor.ts";
-export {
-  defineProcessorContract,
-  jsonEqual,
-  type StreamEvent,
-  type StreamEventInput,
-} from "../stream/events.ts";
+export { defineProcessorContract } from "./processor-contract.ts";
+export { jsonEqual, type StreamEvent, type StreamEventInput } from "../stream/events.ts";
 export { z } from "zod";
 // capnweb's CLIENT constructors, so userspace can dial a remote capnweb API from inside its isolate
 // through the context's own egress — `itx.provide("itx.os", "itx.workers.get({ source, className: 'Remote',

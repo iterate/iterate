@@ -236,3 +236,28 @@ are real refactors or doctrine calls, sized on the menu in learnings-and-bigger-
 Next round (deliberate, with guards): fold `attachRpcStubPager` into the pager upgrade (top menu
 item — −1 client RTT, −12 LOC) with the reconnect/hibernation e2e as the guard; add the bench re-wake
 lane so wake-side changes become provable; then W3/M1 as owner decisions.
+
+## 5. W3(b): zod DELETED from the edge/DO script — Worker Startup Time 18 → 7 ms
+
+The user authorized it: "def delete the zod in whichever worker doesnt need it. edge worker should
+be super duper fast." The edge/DO script validated only the platform's OWN trusted core events with
+zod (~310 KB of runtime); the SDK needs zod for userspace processor authoring. So:
+
+- `defineProcessorContract` (the only zod user in `events.ts`) moved to a new SDK-only module
+  `src/sdk/processor-contract.ts`; `sdk/index.ts` re-exports it. `events.ts` is now zod-free.
+- `src/stream/core-processor.ts` HAND-BUILDS the core contract: `CoreState`/`Subscription`/
+  `ItxExpressionRewriteRule` are hand-written TS types (were `z.infer`), `initialState` is a literal,
+  `buildEvent` is a trusted passthrough with an owned-type check (the command builders already
+  validate rooting), and `parseSubscriptionName` replaces the zod regex. The reduce was already
+  hand-written (plain casts), so it is unchanged.
+- `subscriptions.ts` uses `parseSubscriptionName`; two processor tests import
+  `defineProcessorContract` from the SDK module; one test updated (buildEvent no longer applies the
+  paused-reason default — the REDUCE owns it, the only path to state).
+
+Proof: no runtime zod import remains in the main bundle (`from"zod"` = 0; the 472 `_zod` markers are
+one contiguous 307 KB block = the SDK string's embedded zod TEXT, which userspace still needs). The
+esbuild-equivalent main bundle 843 → 534 KB. DEPLOYED: **Total Upload 1,226 → 695 KiB, gzip 233 →
+155 KiB, and Cloudflare's own Worker Startup Time 18 → 7 ms — a 2.5× faster cold start.** Capability:
+none dropped — userspace processors keep full zod; core-event validation moves from a runtime schema
+to hand code + the command builders, which is the trusted-client doctrine. LOC: +~55 (the new module)
+/ −~65 (events + core schema) ≈ net negative in the edge graph; the SDK bundle is unchanged.
