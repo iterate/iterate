@@ -149,3 +149,19 @@ SDK end to end"). Re-run ALONE against the deployed worker it passes 3/3, and th
 edge worker plus network jitter, not an L4/L1a regression (the rules-thunk and hash-memo paths are
 behaviour-identical and unit-pinned). Script upload after both changes: 1,225.86 KiB (was 1,480.38
 before W2), startup 19 ms.
+
+## 3. Investigated, NOT a problem: the facet→parent loopback and the 49 CANCELED ItxEntrypoint invocations
+
+The tail showed 49 `stateless ItxEntrypoint` invocations with outcome `canceled`, ~63 ms wall, 0
+cpuTime, during the e2e run. Traced: a facet's engine sink is
+`append: (...events) => this.env.ITX.get().append(...events)`
+(`src/sdk/stream-processor-durable-object.ts`), and the live-state delta rides it fire-and-forget
+(`src/stream/live-state.ts` `set` → `void Promise.resolve(sink.append(...)).catch(...)`). When the
+parent request that triggered the push finishes first, the fire-and-forget loopback append is
+canceled. This is HARMLESS and by contract: 0 cpuTime (nothing billed), and a dropped live-state
+delta is a revision-chain gap the client re-seeds (lossy by design). `env.ITX.get().append(...)` is
+already ONE round trip — Workers-RPC pipelines `.append` onto the unresolved `.get()` promise (the
+dispatch pipelining doctrine), so there is no extra hop to remove. Making the parent `waitUntil` the
+delta would only PIN the DO against hibernation for a delta that is allowed to drop. So: left as is.
+The real lever here is T2 (emit fewer deltas under many changing processors) — a semantics change,
+on the menu, not the loop.
