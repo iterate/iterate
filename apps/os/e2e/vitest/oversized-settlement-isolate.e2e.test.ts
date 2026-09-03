@@ -37,8 +37,8 @@
 //
 // On a worker without the fix the second test leaves its stream crash-looping,
 // and nothing test-side can clear that: the wipe RPC needs an incarnation that
-// can boot. The preview lane erases the slot after every e2e run (#2585); by
-// hand, `pnpm run erase-data --env preview_N`. The platform-side answer is
+// can boot. The preview CI job (scripts/preview/preview.ts) runs erase-data on
+// the slot after every e2e run (#2585); by hand, `pnpm run erase-data --env preview_N`. The platform-side answer is
 // tasks/stream-crash-quarantine.md (#2573).
 import { expect, test } from "vitest";
 import { failing } from "@iterate-com/shared/test-support/failing-test";
@@ -96,7 +96,7 @@ failReset("a stream survives being evicted after journaling oversized script res
   // testReset aborts the incarnation from inside the call, so its own "kill
   // requested" rejection is the success. Without the fix the stream cannot
   // boot at all after this test, so the wipe cannot land either: that is the
-  // crash loop, logged and left for the lane's post-run erase (#2585).
+  // crash loop, logged and left for the preview CI job's post-run erase-data (#2585).
   await using _wipe = {
     [Symbol.asyncDispose]: async () => {
       const admin = stream as unknown as { testReset(): Promise<void> };
