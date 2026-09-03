@@ -964,7 +964,7 @@ describe("preview test commands", () => {
     expect(script).toContain(e2eLane);
     expect(script).toContain(playwrightSpec);
     expect(script).toContain(
-      "env TEST_TELEMETRY_LANE=playwright TEST_TELEMETRY_WORKSPACE=iterate-root PLAYWRIGHT_PREVIEW_SLOW_FIRST=1",
+      "env TEST_TELEMETRY_LANE=playwright TEST_TELEMETRY_WORKSPACE=iterate-root FLAKE_RECORD_DIR=test-results/flake-records/specs PLAYWRIGHT_PREVIEW_SLOW_FIRST=1",
     );
     expect(script).toContain('wait "$PW_INSTALL_PID"');
     expect(script).toContain("SMOKE_PID");

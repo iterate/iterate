@@ -38,7 +38,10 @@
  *
  * There is no retry and no repetition: one body execution per run, one
  * recorded sample. Retry-until-pass would bias the flake rate — the one
- * number this exists to measure.
+ * number this exists to measure. On vitest this needs an explicit per-test
+ * `retry: 0`: a suite-level `retry` re-runs the body on the wrapper's thrown
+ * green outcomes (the retry fires before the `.fails` inversion is applied),
+ * which recorded every green run twice in the preview e2e suite.
  */
 export interface FlakeRecord {
   name: string;
@@ -130,6 +133,17 @@ export function createFlake<TestFn extends (...args: any[]) => any>(
     // Present the body's own source when the runner parses for destructured
     // fixture names — same trick, and same reasoning, as failing-test.ts.
     Object.defineProperty(wrapped, "toString", { value: () => body.toString() });
+    if ("fails" in test) {
+      // vitest: pin per-test retry to zero. A suite-level `retry` re-runs the
+      // body whenever the wrapper throws (both green outcomes) because the
+      // retry fires before the `.fails` inversion — one run would execute and
+      // record the body twice. Caller options (e.g. timeout) pass through.
+      // The cast states vitest's three-argument shape: with more than two
+      // arguments the middle one is the per-test options object (the trailing
+      // argument was already checked to be the body function above).
+      const callerOptions = args.length > 2 ? (args[1] as object) : {};
+      return failer(args[0], { ...callerOptions, retry: 0 }, wrapped);
+    }
     return failer(...args.slice(0, -1), wrapped);
   };
   // Same contract-preserving cast as failing(): every argument forwards

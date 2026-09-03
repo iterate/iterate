@@ -147,3 +147,22 @@ jobs:
           path: test-results
           include-hidden-files: true
           if-no-files-found: error
+      # flake-records-<suite> artifacts feed the flake dashboard's check_run
+      # ingestion (artifact-name-driven; #2582). ignore-when-empty: a lane
+      # that recorded nothing is normal; overwrite: a job retry re-uploads.
+      - name: Upload specs flake records
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: flake-records-specs
+          path: test-results/flake-records/specs
+          if-no-files-found: ignore
+          overwrite: true
+      - name: Upload preview e2e flake records
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: flake-records-preview-e2e
+          path: test-results/flake-records/preview-e2e
+          if-no-files-found: ignore
+          overwrite: true

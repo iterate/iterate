@@ -138,10 +138,19 @@ export class FlakeDashboardApp extends StreamProcessorDurableObject<FlakeDashboa
     // and push-triggered runs both resolve.
     // Connect's JSON protocol emits proto3 canonical camelCase field names
     // (verified against the live API) — snake_case reads come back undefined.
+    // No run-status filter: Depot groups every workflow for a sha into one
+    // run, whose status settles only after the LAST check completes — and the
+    // check_run webhook for that last check arrives before the flip. A
+    // finished/failed filter therefore permanently skipped the artifacts of
+    // whichever check completed last (in practice the slow preview check,
+    // i.e. the specs and preview-e2e suites — seen live on prd, run
+    // rs7dwp1l27). A completed check's own artifacts are always uploaded
+    // before its check_run event fires, so an in-progress run is safe to
+    // scan; the conclusion gate already excludes cancelled/skipped checks and
+    // the run+attempt+suite keys dedupe rescans.
     const runs = await depotRpc<{ runs?: { runId: string }[] }>("ListRuns", {
       repo: `${params.owner}/${params.repo}`,
       sha: checkRun.head_sha,
-      status: ["finished", "failed"],
       pageSize: 10,
     });
     for (const run of runs.runs || []) {

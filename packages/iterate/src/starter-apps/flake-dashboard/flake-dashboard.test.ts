@@ -234,7 +234,7 @@ function day(days: number) {
 // --- webhook artifact ingestion, driven through the DO's real processEvent ---
 
 test("a completed workflow_run's flake artifacts become one run-recorded event per suite", async () => {
-  const { itx, appended } = fakeItx({
+  const { itx, appended, depotRequests } = fakeItx({
     artifacts: [
       { artifactId: "art-71", name: "flake-records-unit", sizeBytes: 1000, attempt: 2 },
       { artifactId: "art-72", name: "unit-test-telemetry", sizeBytes: 1000 },
@@ -258,6 +258,13 @@ test("a completed workflow_run's flake artifacts become one run-recorded event p
     },
   });
   await makeApp(itx).processEvent(webhookEvent());
+
+  // The run lookup must NOT filter by run status: Depot groups all workflows
+  // for a sha into one run whose status settles only after the last check
+  // completes, and that check's webhook arrives before the flip — a
+  // finished/failed filter permanently missed the last-completing check's
+  // artifacts on prd (run rs7dwp1l27's specs + preview-e2e suites).
+  expect(depotRequests.find((r) => r.method === "ListRuns")!.body).not.toHaveProperty("status");
 
   // Birth offered first, then exactly one run-recorded for the one matching
   // artifact — the telemetry artifact is ignored, malformed lines skipped.
@@ -438,10 +445,12 @@ function fakeItx(setup: {
   failAppendsMatching?: RegExp;
 }) {
   const appended: any[] = [];
+  const depotRequests: { method: string; body: any }[] = [];
   // The worker talks to Depot's Connect API and the signed download URL over
   // plain fetch; the stub answers both by URL shape.
   vi.stubGlobal("fetch", async (url: string, init?: any) => {
     const method = String(url).split("/").pop();
+    if (init?.body) depotRequests.push({ method: method!, body: JSON.parse(init.body) });
     if (method === "ListRuns") return jsonResponse({ runs: [{ runId: "run-77" }] });
     if (method === "ListArtifacts") return jsonResponse({ artifacts: setup.artifacts });
     if (method === "GetArtifactDownloadURL") {
@@ -472,7 +481,7 @@ function fakeItx(setup: {
       }),
     },
   } as any;
-  return { itx, appended };
+  return { itx, appended, depotRequests };
 }
 
 function jsonResponse(body: unknown) {
