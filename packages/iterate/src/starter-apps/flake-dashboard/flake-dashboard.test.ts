@@ -7,7 +7,7 @@ import {
   CheckRunWebhookEvent,
   type FlakeDashboardState,
 } from "./contract.ts";
-import { FlakeDashboardApp, FlakeDashboardProcessor } from "./worker.ts";
+import { FlakeDashboardApp, FlakeDashboardProcessor, renderBody } from "./worker.ts";
 
 test("folds CI-reported records into per-test stats", async () => {
   const h = makeHarness();
@@ -31,6 +31,83 @@ test("folds CI-reported records into per-test stats", async () => {
     },
     boot: { counts: { pass: 1 } },
   });
+});
+
+test("a renamed test's old row retires on the next default-branch suite run, but a PR run cannot retire it", async () => {
+  const h = makeHarness();
+  await h.append(
+    birth(),
+    runRecorded(1, [record("old name", "flake-fail", { at: day(0) })], { suite: "specs" }),
+  );
+  expect(renderBody(h.state())).toContain("`old name`");
+
+  // Someone renames the test on a PR branch: that branch's runs carry only
+  // the new name, but a PR must not hide the old row repo-wide.
+  await h.append(
+    runRecorded(2, [record("new name", "pass", { at: day(1) })], {
+      suite: "specs",
+      branch: "rename-pr",
+    }),
+  );
+  expect(renderBody(h.state())).toContain("`old name`");
+
+  // The rename lands on main: the next default-branch specs run retires the
+  // old row — hidden from the table, never deleted from state.
+  await h.append(runRecorded(3, [record("new name", "pass", { at: day(2) })], { suite: "specs" }));
+  const body = renderBody(h.state());
+  expect(body).not.toContain("`old name`");
+  expect(body).toContain("`new name`");
+  expect(body).toContain("1 retired test hidden");
+  expect(h.state().tests["old name"]).toBeDefined();
+});
+
+test("a transiently-absent test returns with its history intact", async () => {
+  const h = makeHarness();
+  await h.append(
+    birth(),
+    runRecorded(1, [record("deploy", "flake-fail", { at: day(0) })]),
+    // A partial run (a push-cancelled suite that died before this test)
+    // retires the row for one render...
+    runRecorded(2, [record("boot", "pass", { at: day(1) })]),
+  );
+  expect(renderBody(h.state())).not.toContain("`deploy`");
+  // ...and the next record brings it straight back, counts and all — expiry
+  // is a projection choice over the log, nothing was deleted.
+  await h.append(runRecorded(3, [record("deploy", "pass", { at: day(2) })]));
+  expect(renderBody(h.state())).toContain("`deploy`");
+  expect(h.state().tests.deploy!.counts).toMatchObject({ pass: 1, flakeFail: 1 });
+});
+
+test("a multi-suite test stays visible while any of its suites still carries it", async () => {
+  const h = makeHarness();
+  await h.append(
+    birth(),
+    runRecorded(1, [record("flake sentinel", "pass", { at: day(0) })], { suite: "unit" }),
+    runRecorded(2, [record("flake sentinel", "pass", { at: day(0) })], { suite: "local-smoke" }),
+    // A later unit run without the sentinel: still present in local-smoke's
+    // latest run, so the row stays.
+    runRecorded(3, [record("boot", "pass", { at: day(1) })], { suite: "unit" }),
+  );
+  expect(renderBody(h.state())).toContain("`flake sentinel`");
+});
+
+test("the recent column shows up to 10 default-branch outcomes as emojis, oldest first", async () => {
+  const h = makeHarness();
+  await h.append(birth(), runRecorded(0, [record("deploy", "flake-fail", { at: day(0) })]));
+  for (let i = 1; i <= 9; i++) {
+    await h.append(runRecorded(i, [record("deploy", "pass", { at: day(i) })]));
+  }
+  // A PR-branch outcome never enters the bar.
+  await h.append(
+    runRecorded(99, [record("deploy", "unexpected-error", { at: day(10) })], {
+      branch: "some-pr",
+    }),
+  );
+  expect(renderBody(h.state())).toContain("🟥🟩🟩🟩🟩🟩🟩🟩🟩🟩");
+
+  // An 11th default-branch outcome evicts the oldest: the bar caps at 10.
+  await h.append(runRecorded(10, [record("deploy", "pass", { at: day(11) })]));
+  expect(h.state().tests.deploy!.recent).toEqual(Array<string>(10).fill("pass"));
 });
 
 test("default-branch streaks ignore other branches and reset on unexpected errors", async () => {

@@ -15,9 +15,11 @@ const StreamOffset = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER)
  * `@iterate-com/shared/test-support/flake-test` — the wrapper writes these
  * lines to `FLAKE_RECORD_DIR` and CI ships them here verbatim.
  */
+export const FlakeOutcome = z.enum(["pass", "flake-fail", "unexpected-error"]);
+
 export const FlakeRecord = z.object({
   name: z.string().min(1).max(1_000),
-  outcome: z.enum(["pass", "flake-fail", "unexpected-error"]),
+  outcome: FlakeOutcome,
   pattern: z.string().min(1).max(2_000),
   durationMs: z.number().nonnegative(),
   at: z.string().min(1),
@@ -81,6 +83,20 @@ const DefaultBranchStreak = z.object({
 const TrackedTest = z.object({
   pattern: z.string(),
   suites: z.array(z.string()).default([]),
+  /**
+   * Per suite, the offset of the newest run-recorded event (any branch) whose
+   * records included this test. Compared against the suite's
+   * `lastDefaultBranchRunOffset` at render time: a test absent from its
+   * suite's latest default-branch run is retired from the table — hidden, not
+   * deleted, so a transient absence self-heals on the next record.
+   */
+  lastSeenOffset: z.record(z.string(), StreamOffset).default({}),
+  /**
+   * The last (up to) 10 default-branch outcomes, oldest first — the render's
+   * emoji streak bar. The numeric defaultBranchStreak below carries the
+   * transition-threshold counts past what 10 entries can show.
+   */
+  recent: z.array(FlakeOutcome).max(10).default([]),
   counts: z
     .object({
       pass: z.number().int().nonnegative().default(0),
@@ -102,6 +118,13 @@ export const FlakeDashboardState = z.object({
   birthCertificate: z.object({ config: FlakeDashboardConfig }).nullable().default(null),
   tests: z.record(z.string(), TrackedTest).default({}),
   /**
+   * Per suite, the offset of its newest default-branch run-recorded event —
+   * the reference point for retiring absent tests. Judged from default-branch
+   * runs only, so a PR that deletes or renames a test cannot hide its row
+   * repo-wide while that PR happens to be the newest run.
+   */
+  suites: z.record(z.string(), z.object({ lastDefaultBranchRunOffset: StreamOffset })).default({}),
+  /**
    * Offset of the newest reduced DATA event (created / run-recorded /
    * transition-proposed). Render settlements deliberately do not bump it —
    * that is what stops a settled render from demanding another render.
@@ -120,7 +143,7 @@ export const FlakeDashboardState = z.object({
 /**
  * Thresholds for the data-provable lifecycle transitions (grilled decision:
  * unwrap after 50 consecutive default-branch passes over >=5 days; propose
- * `failing` after 25 consecutive matched failures over >=2 days). Tunable
+ * `createFailing` after 25 consecutive matched failures over >=2 days). Tunable
  * constants; the ~10% sentinel false-unwraps with probability 0.9^50 ~= 0.5%.
  */
 export const flakeTransitionThresholds = {
@@ -159,7 +182,7 @@ export const CheckRunWebhookEvent = z.object({
 
 export const FlakeDashboardProcessorContract = defineProcessorContract({
   slug: "flake-dashboard",
-  version: "0.1.0",
+  version: "0.2.0",
   description:
     "Folds createFlake test outcomes reported by CI into per-test flake stats, renders the GitHub 'Flake dashboard' issue, and proposes data-provable lifecycle transitions.",
   stateSchema: FlakeDashboardState,

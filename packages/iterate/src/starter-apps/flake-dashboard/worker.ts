@@ -329,6 +329,10 @@ export class FlakeDashboardProcessor extends StreamProcessor<
             suites: existing?.suites.includes(event.payload.suite)
               ? existing.suites
               : [...(existing?.suites || []), event.payload.suite],
+            lastSeenOffset: { ...existing?.lastSeenOffset, [event.payload.suite]: event.offset },
+            recent: onDefaultBranch
+              ? [...(existing?.recent || []), record.outcome].slice(-10)
+              : existing?.recent || [],
             counts: {
               pass: counts.pass + (record.outcome === "pass" ? 1 : 0),
               flakeFail: counts.flakeFail + (record.outcome === "flake-fail" ? 1 : 0),
@@ -342,7 +346,13 @@ export class FlakeDashboardProcessor extends StreamProcessor<
             proposed: existing?.proposed || [],
           };
         }
-        return { ...state, tests, lastDataOffset: event.offset };
+        const suites = onDefaultBranch
+          ? {
+              ...state.suites,
+              [event.payload.suite]: { lastDefaultBranchRunOffset: event.offset },
+            }
+          : state.suites;
+        return { ...state, tests, suites, lastDataOffset: event.offset };
       }
 
       case flakeEventTypes.transitionProposed: {
@@ -548,13 +558,28 @@ async function renderFlakeDashboardIssue(
   return { status: "succeeded", issueNumber: created.data.number, issueUrl: created.data.html_url };
 }
 
-function renderBody(state: FlakeDashboardState): string {
+const OUTCOME_EMOJI = { pass: "🟩", "flake-fail": "🟥", "unexpected-error": "❌" } as const;
+
+/** Exported for tests: the table is a pure projection of folded state. */
+export function renderBody(state: FlakeDashboardState): string {
   const tests = Object.entries(state.tests).sort(([a], [b]) => a.localeCompare(b));
   const lastRecordedAt = tests
     .map(([, test]) => test.lastRecordedAt)
     .sort()
     .at(-1);
-  const rows = tests.map(([name, test]) => {
+  // The test name is the identity: a renamed or deleted test is simply absent
+  // from its suite's latest default-branch run, and its row retires. Hidden,
+  // never deleted — the events stay in the log, so a transiently-absent test
+  // (a crashed suite, a PR experiment) returns with full history on its next
+  // record, and a genuinely retired name stays readable in the issue's edit
+  // history.
+  const visible = tests.filter(([, test]) =>
+    Object.entries(test.lastSeenOffset).some(
+      ([suite, seen]) => seen >= (state.suites[suite]?.lastDefaultBranchRunOffset || 0),
+    ),
+  );
+  const retiredCount = tests.length - visible.length;
+  const rows = visible.map(([name, test]) => {
     const gated = test.counts.pass + test.counts.flakeFail;
     const rate = gated === 0 ? "—" : `${Math.round((test.counts.flakeFail / gated) * 100)}%`;
     const streak =
@@ -568,19 +593,27 @@ function renderBody(state: FlakeDashboardState): string {
       String(gated + test.counts.unexpectedError),
       rate,
       test.lastFlakeAt || "never",
+      test.recent.length === 0
+        ? "—"
+        : test.recent.map((outcome) => OUTCOME_EMOJI[outcome]).join(""),
       streak,
       test.proposed.length === 0 ? "" : test.proposed.map((p) => p.split(":")[0]).join(", "),
     ].join(" | ");
   });
   return [
     DASHBOARD_MARKER,
-    "Per-test outcomes of every [`createFlake`](https://github.com/iterate/iterate/blob/main/packages/shared/src/test-support/flake-test.ts)-wrapped test, folded from CI-reported runs. Maintained automatically — edits to this body will be overwritten.",
+    "Per-test outcomes of every [`createFlake`](https://github.com/iterate/iterate/blob/main/packages/shared/src/test-support/flake-test.ts)-wrapped test, folded from CI-reported runs. Maintained automatically — edits to this body will be overwritten. Recent = last 10 default-branch outcomes, oldest→newest (🟩 pass, 🟥 flake-fail, ❌ unexpected error).",
     "",
-    "test | allowed pattern | suites | runs | flake rate | last flake | default-branch streak | proposed",
-    "--- | --- | --- | --- | --- | --- | --- | ---",
-    ...(rows.length === 0 ? ["_no flake tests recorded yet_ | | | | | | |"] : rows),
+    "test | allowed pattern | suites | runs | flake rate | last flake | recent | default-branch streak | proposed",
+    "--- | --- | --- | --- | --- | --- | --- | --- | ---",
+    ...(rows.length === 0 ? ["_no flake tests recorded yet_ | | | | | | | |"] : rows),
     "",
     `_Last recorded outcome: ${lastRecordedAt || "none"}._`,
+    ...(retiredCount === 0
+      ? []
+      : [
+          `_${retiredCount} retired ${retiredCount === 1 ? "test" : "tests"} hidden (no longer present in the latest default-branch run of their suite)._`,
+        ]),
   ].join("\n");
 }
 
