@@ -3,9 +3,9 @@ import { installResilientAiInterceptor as installGeneric } from "@iterate-com/sh
 import { connectAdminItx } from "./forged-session.ts";
 
 /**
- * The spec lane's churn-surviving `intercepted/*` handler: the shared
+ * The Playwright specs' churn-surviving `intercepted/*` handler: the shared
  * recovery loop (`@iterate-com/shared/test-support/resilient-ai-interceptor`)
- * dialing through this lane's forged admin session.
+ * dialing through the specs' forged admin session (`connectAdminItx`).
  */
 export function installResilientAiInterceptor(input: {
   baseUrl: string;

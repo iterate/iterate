@@ -3,9 +3,9 @@ import { installResilientAiInterceptor as installGeneric } from "@iterate-com/sh
 import { createAdminOsItx } from "./os-client.ts";
 
 /**
- * The os e2e lane's churn-surviving `intercepted/*` handler: the shared
+ * The os e2e vitest tests' churn-surviving `intercepted/*` handler: the shared
  * recovery loop (`@iterate-com/shared/test-support/resilient-ai-interceptor`)
- * dialing through this lane's admin session. Dispose with `await using`.
+ * dialing through `createAdminOsItx`. Dispose with `await using`.
  * Guide: docs/intercepted-models.md.
  */
 export function installResilientAiInterceptor(input: {

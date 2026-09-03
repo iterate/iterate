@@ -15,8 +15,8 @@
  *
  * Dedicated connection on purpose: the test's main admin session dying must
  * not take the interception with it, and vice versa. The connection is
- * injected — Playwright specs and the os e2e lane each have their own admin
- * session factory (specs/test-support/forged-session.ts,
+ * injected — the Playwright specs and the os e2e vitest tests each dial their
+ * own admin session (specs/test-support/forged-session.ts,
  * apps/os/e2e/test-support/os-client.ts); the recovery loop is the same.
  *
  * Guide: docs/intercepted-models.md.
