@@ -176,6 +176,12 @@ export function getAuthPlugins(options: AuthPluginOptions) {
       userCodeLength: 8,
       deviceCodeLength: 40,
       validateClient: async (clientId) => clientId === "iterate-cli",
+      // better-auth 1.6.9 declares this option as a non-optional z.custom, and
+      // zod ≥4.4 rejects a missing object key for that (the plugin parses its
+      // options at worker startup, so omitting it bricks the deploy). An empty
+      // object is a no-op for better-auth's mergeSchema. Upstream already made
+      // the field optional; drop this when better-auth is bumped past 1.6.9.
+      schema: {},
     }),
     oneTimeToken({
       disableClientRequest: true,
