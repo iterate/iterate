@@ -93,7 +93,7 @@ await using interception = await fixture.interceptAi(async (call) => "reply");
 ```
 
 (`fixture.interceptAi` wraps
-[installResilientAiInterceptor](../specs/test-support/resilient-ai-interceptor.ts);
+[installResilientAiInterceptor](../packages/shared/src/test-support/resilient-ai-interceptor.ts);
 real usage: [agent-fake-model-chat.spec.ts](../specs/agent-fake-model-chat.spec.ts).)
 
 **Plain node** — the node client is deliberately vanilla and never reconnects
