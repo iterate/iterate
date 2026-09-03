@@ -152,6 +152,9 @@ export async function testTarget(options: TestTargetOptions) {
     (await retakeRecordedSlotIfFree({
       holder,
       leaseMs: defaultPreviewLeaseMs,
+      // Tests only renew — the deployment on a lapsed-but-free slot is this
+      // PR's own, and nothing is deployed after this.
+      onRetaken: async () => true,
       recordedSlug: displaySlot?.slug ?? null,
       semaphore,
     }));
@@ -866,6 +869,9 @@ async function testPreviewApps({
     (await retakeRecordedSlotIfFree({
       holder,
       leaseMs: defaultPreviewLeaseMs,
+      // Tests only renew — the deployment on a lapsed-but-free slot is this
+      // PR's own, and nothing is deployed after this.
+      onRetaken: async () => true,
       recordedSlug: displaySlot?.slug ?? null,
       semaphore,
     }));
@@ -1246,32 +1252,30 @@ export async function assign(options: AssignOptions = {}) {
     wantedSlug,
   });
 
-  // Anything but a kept/renewed lease breaks continuous ownership: even a
-  // re-acquisition of the SAME slug means someone else may have deployed over
-  // this PR's apps in the interim, so recorded deployments cannot be trusted.
-  const needsRedeploy = result.outcome !== "kept";
+  // Every outcome needs a redeploy now: taking a slot erases it, and that
+  // includes keeping the one this PR already held (fresh on every acquire).
+  // A changed slug additionally means the recorded apps point at the wrong
+  // hostname.
   const redeployMessage = result.changedFromSlug
     ? `Slot reassigned from ${result.changedFromSlug} to ${result.lease.slug}; run preview deploy to redeploy here.`
-    : `Slot ${result.lease.slug} was re-acquired after this PR's lease lapsed — previous deployments there may have been replaced. Run preview deploy to redeploy.`;
+    : result.outcome === "kept"
+      ? `Slot ${result.lease.slug} kept and erased — taking a slot always erases it. Run preview deploy to redeploy.`
+      : `Slot ${result.lease.slug} was re-acquired after this PR's lease lapsed — previous deployments there may have been replaced. Run preview deploy to redeploy.`;
   const update = await updatePreviewState(context, (state) => ({
     ...state,
     environmentConfigLease: toSlotDisplay(result.lease),
-    notice: needsRedeploy
-      ? `${redeployMessage} (preview assign at ${new Date().toISOString()})`
-      : null,
-    apps: needsRedeploy
-      ? Object.fromEntries(
-          Object.entries(state.apps).map(([appSlug, entry]) => [
-            appSlug,
-            {
-              ...entry,
-              status: "claim-failed" as const,
-              message: redeployMessage,
-              updatedAt: new Date().toISOString(),
-            },
-          ]),
-        )
-      : state.apps,
+    notice: `${redeployMessage} (preview assign at ${new Date().toISOString()})`,
+    apps: Object.fromEntries(
+      Object.entries(state.apps).map(([appSlug, entry]) => [
+        appSlug,
+        {
+          ...entry,
+          status: "claim-failed" as const,
+          message: redeployMessage,
+          updatedAt: new Date().toISOString(),
+        },
+      ]),
+    ),
   }));
   logPreview(
     `PR body updated: PR #${context.pullRequestNumber} now records ${result.lease.slug} (doppler config ${result.lease.dopplerConfig})`,
@@ -1286,7 +1290,7 @@ export async function assign(options: AssignOptions = {}) {
     outcome: result.outcome,
     previousSlot: result.changedFromSlug,
     previousLeaseReleased: result.previousLeaseReleased,
-    appsMarkedForRedeploy: needsRedeploy ? Object.keys(update.state.apps) : [],
+    appsMarkedForRedeploy: Object.keys(update.state.apps),
     nextStep: `doppler run --project _shared --config prd -- pnpm preview deploy --pull-request-number ${context.pullRequestNumber}`,
   };
 }
@@ -4137,6 +4141,7 @@ async function cleanupPreviewForPullRequest(
     (await retakeRecordedSlotIfFree({
       holder,
       leaseMs: defaultPreviewLeaseMs,
+      onRetaken: async () => true,
       recordedSlug: displaySlot?.slug ?? null,
       semaphore,
     }));
@@ -5204,6 +5209,12 @@ async function claimEnvironmentConfigLease(input: {
   const retaken = await retakeRecordedSlotIfFree({
     holder: input.holder,
     leaseMs: input.leaseMs,
+    onRetaken: (lease) =>
+      eraseAcquiredSlotOrGiveItBack({
+        eraseSlotData: input.eraseSlotData,
+        lease,
+        semaphore: input.semaphore,
+      }),
     recordedSlug: input.recordedSlug,
     semaphore: input.semaphore,
   });
@@ -5264,6 +5275,12 @@ async function assignEnvironmentConfigLease(input: {
     (await retakeRecordedSlotIfFree({
       holder: input.holder,
       leaseMs: input.leaseMs,
+      onRetaken: (lease) =>
+        eraseAcquiredSlotOrGiveItBack({
+          eraseSlotData: input.eraseSlotData,
+          lease,
+          semaphore: input.semaphore,
+        }),
       recordedSlug: input.recordedSlug,
       semaphore: input.semaphore,
     }));
@@ -5482,12 +5499,18 @@ async function adoptLeaseHeldBySemaphore(input: {
  * lives on recordedSlug, and if the semaphore says nobody holds that slot,
  * take it back. Non-force, so the semaphore still arbitrates — a slot someone
  * else holds returns null and the caller refuses or moves elsewhere; the
- * recorded slug is only a hint about where to look, never authority. No
- * erase: the deployment on the slot is this PR's own.
+ * recorded slug is only a hint about where to look, never authority.
+ *
+ * onRetaken is the same ready check as adopt's onAdopted: deploy paths erase
+ * there (the slot carries this PR's last population — or a half-finished
+ * erase whose failure just handed the lease back — and a slot is fresh on
+ * every deploy); returning false gives up on the slot so the caller moves on
+ * to any free one. Cleanup passes a no-op: it erases as the teardown itself.
  */
 async function retakeRecordedSlotIfFree(input: {
   holder: string;
   leaseMs: number;
+  onRetaken: (lease: PreviewSemaphoreLease) => Promise<boolean>;
   recordedSlug: string | null;
   semaphore: PreviewSemaphoreResourceClient;
 }): Promise<EnvironmentConfigLease | null> {
@@ -5507,6 +5530,9 @@ async function retakeRecordedSlotIfFree(input: {
   logPreview(
     `lease re-acquired: ${retaken.slug} had lapsed but was still free; ${input.holder} holds it again until ${formatUntil(retaken.expiresAt)}`,
   );
+  if (!(await input.onRetaken(retaken))) {
+    return null;
+  }
   return toEnvironmentConfigLease(retaken);
 }
 

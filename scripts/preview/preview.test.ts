@@ -2228,6 +2228,64 @@ describe("claimEnvironmentConfigLease", () => {
     });
   });
 
+  test("a failed erase hands the slot back, and taking it back erases again — never a dirty deploy", async () => {
+    // The adopt's erase dies half-way, so the lease is released. The recorded
+    // slot is then free, and retaking it must not skip the erase (that is the
+    // half-wiped slot). Here the second erase succeeds, so the PR keeps its slot.
+    const eraseSlotData = vi
+      .fn(async () => {})
+      .mockRejectedValueOnce(new Error("D1 wipe failed half-way"));
+    const semaphore = fakeSemaphore({
+      acquireSpecific: vi.fn(async () => fakeLease()),
+      list: vi.fn(async () => [leasedResource("preview-2", "pr-1600")]),
+    });
+
+    const lease = await claimEnvironmentConfigLease({
+      eraseSlotData,
+      holder: "pr-1600",
+      leaseMs: 1000,
+      recordedSlug: "preview-2",
+      semaphore,
+      waitTotalMs: 0,
+    });
+
+    expect(lease.slug).toBe("preview-2");
+    expect(eraseSlotData).toHaveBeenCalledTimes(2);
+    expect(semaphore.release).toHaveBeenCalledTimes(1);
+    expect(semaphore.acquire).not.toHaveBeenCalled();
+  });
+
+  test("when the retake's erase fails too, the claim moves on to any free slot", async () => {
+    const eraseSlotData = vi
+      .fn(async () => {})
+      .mockRejectedValueOnce(new Error("D1 wipe failed half-way"))
+      .mockRejectedValueOnce(new Error("D1 wipe failed again"));
+    const semaphore = fakeSemaphore({
+      acquire: vi.fn(async () =>
+        fakeLease({ slug: "preview-3", data: { dopplerConfig: "preview_3" } }),
+      ),
+      acquireSpecific: vi.fn(async () => fakeLease()),
+      list: vi.fn(async () => [leasedResource("preview-2", "pr-1600")]),
+    });
+
+    const lease = await claimEnvironmentConfigLease({
+      eraseSlotData,
+      holder: "pr-1600",
+      leaseMs: 1000,
+      recordedSlug: "preview-2",
+      semaphore,
+      waitTotalMs: 0,
+    });
+
+    expect(lease.slug).toBe("preview-3");
+    expect(eraseSlotData).toHaveBeenCalledTimes(3);
+    expect(eraseSlotData).toHaveBeenLastCalledWith({
+      dopplerConfig: "preview_3",
+      slug: "preview-3",
+    });
+    expect(semaphore.release).toHaveBeenCalledTimes(2);
+  });
+
   test("prefers the recorded slug when the semaphore attributes several slots to this holder", async () => {
     const semaphore = fakeSemaphore({
       acquireSpecific: vi.fn(async (input: { slug: string }) =>
@@ -2526,6 +2584,7 @@ describe("retakeRecordedSlotIfFree", () => {
     const lease = await retakeRecordedSlotIfFree({
       holder: "pr-1600",
       leaseMs: 1000,
+      onRetaken: async () => true,
       recordedSlug: "preview-2",
       semaphore,
     });
@@ -2536,6 +2595,20 @@ describe("retakeRecordedSlotIfFree", () => {
     );
   });
 
+  test("gives the slot up when its ready check fails, so the caller moves on", async () => {
+    const semaphore = fakeSemaphore({ acquireSpecific: vi.fn(async () => fakeLease()) });
+
+    const lease = await retakeRecordedSlotIfFree({
+      holder: "pr-1600",
+      leaseMs: 1000,
+      onRetaken: async () => false,
+      recordedSlug: "preview-2",
+      semaphore,
+    });
+
+    expect(lease).toBeNull();
+  });
+
   test("returns null when the slot is held (or nothing is recorded)", async () => {
     const semaphore = fakeSemaphore();
 
@@ -2543,6 +2616,7 @@ describe("retakeRecordedSlotIfFree", () => {
       await retakeRecordedSlotIfFree({
         holder: "pr-1600",
         leaseMs: 1000,
+        onRetaken: async () => true,
         recordedSlug: "preview-2",
         semaphore,
       }),
@@ -2551,6 +2625,7 @@ describe("retakeRecordedSlotIfFree", () => {
       await retakeRecordedSlotIfFree({
         holder: "pr-1600",
         leaseMs: 1000,
+        onRetaken: async () => true,
         recordedSlug: null,
         semaphore,
       }),
