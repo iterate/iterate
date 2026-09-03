@@ -77,7 +77,7 @@ export class FlakeDashboardApp extends StreamProcessorDurableObject<FlakeDashboa
   }
 
   /**
-   * The pull lane for flake telemetry: fetch the completed run's
+   * Artifact-pull ingestion for flake telemetry: fetch the completed run's
    * `flake-records-<suite>` artifacts with the App's own installation token,
    * parse the recorder lines, and append one run-recorded event per artifact
    * to /flakes. Redeliveries are harmless: the append is idempotency-keyed on
