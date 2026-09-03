@@ -55,18 +55,22 @@ export type WorkerSource = WorkerModules | ItxExpressionInput;
  *  owns "same key ⇒ same code"), optional beside literal modules (it then replaces the content hash). */
 export type WorkerCacheKey = string;
 
+/** What hosts a class as a durable FACET — `itx.facets.get(name, spec)`, `enableProcessor(name, spec)`:
+ *  the source (modules, or a producer expression with its `cacheKey`) and the exported class. */
+export type FacetSpec = { source: WorkerSource; cacheKey?: WorkerCacheKey; className: string };
+
 const isWorkerModules = (source: unknown): source is WorkerModules =>
   typeof source === "object" && source !== null && !Array.isArray(source);
 
 /** What `loadConfinedWorker` needs. */
 type LoadConfinedWorkerOptions = {
   env: { LOADER: WorkerLoader; CF_VERSION_METADATA?: { id: string } };
-  /** The loaded isolate's whole world: its `env.ITX` and its `globalOutbound` (the ItxEntrypoint
-   *  loopback minted for the owning context — itx-entrypoint.ts). */
-  host: Fetcher;
-  /** `code` = a stateless isolate; `facet` = a durable class hosted as a facet. A CLOSED union so a
-   *  new cacheKey family is a deliberate type change. */
-  kind: "code" | "facet";
+  /** The `ItxEntrypoint` stub a loaded worker gets as `env.ITX` and `globalOutbound` — the loopback
+   *  minted for the owning context (itx-entrypoint.ts). */
+  itxEntrypoint: Fetcher;
+  /** `worker` = a stateless isolate (`itx.workers.get`); `facet` = a durable class hosted as a facet
+   *  (`itx.facets.get`). A CLOSED union so a new cacheKey family is a deliberate type change. */
+  kind: "worker" | "facet";
   /** The owning context (a facet's owner is composed collision-free by `facetLoaderOwner`). */
   owner: string;
   source: WorkerSource;
@@ -161,8 +165,8 @@ export async function loadConfinedWorker(
         );
         return importsProcessorSdk ? { ...modules, "processor.js": PROCESSOR_SDK_MODULE } : modules;
       })(),
-      env: { ITX: opts.host },
-      globalOutbound: opts.host,
+      env: { ITX: opts.itxEntrypoint },
+      globalOutbound: opts.itxEntrypoint,
     }),
   );
   return { worker, sourceVersion };

@@ -46,10 +46,7 @@ import {
   reduceStateKey,
   writeReduceCheckpoint,
 } from "./reduce-checkpoint.ts";
-import type {
-  StreamEvent as StreamEventT,
-  StreamEventInput as StreamEventInputT,
-} from "./events.ts";
+import type { StreamEvent, StreamEventInput } from "./events.ts";
 
 /** One owned event type: its payload schema (and prose for humans/docs). Shipped in the SDK
  *  too — userspace contracts carry real zod schemas, same as built-ins. */
@@ -76,26 +73,26 @@ export type ProcessorContract<State = unknown> = {
  *  `scannedThroughOffset` is how far the read is CONTIGUOUSLY known (the last row when a full
  *  page came back, the stream's DURABLE mark when the page ran short — never the in-memory head, whose ephemeral offsets a later incarnation may reuse). */
 export type ProcessorStream = {
-  append(...events: StreamEventInputT[]): Promise<StreamEventT[]> | StreamEventT[];
+  append(...events: StreamEventInput[]): Promise<StreamEvent[]> | StreamEvent[];
   read(
     afterOffset?: number,
     limit?: number,
-  ): Promise<{ events: StreamEventT[]; scannedThroughOffset: number }>;
+  ): Promise<{ events: StreamEvent[]; scannedThroughOffset: number }>;
 };
 
 /** The contiguity proof a delivery carries: the half-open offset window `(after, through]`. A chain
  *  of these (each `after` === the previous `through`) is how a subscriber proves it missed nothing. */
 export type ScannedRange = { after: number; through: number };
 
-export type ReduceArgs<State> = { event: StreamEventT; state: State };
+export type ReduceArgs<State> = { event: StreamEvent; state: State };
 
 export type ProcessEventArgs<State> = {
   /** The consumed event — or `null` for the eventless at-head pass. */
-  event: StreamEventT | null;
+  event: StreamEvent | null;
   state: State;
   previousState: State;
   /** Emit (validated against `emits`, provenance-stamped) onto this processor's own stream. */
-  append: (...events: StreamEventInputT[]) => Promise<StreamEventT[]>;
+  append: (...events: StreamEventInput[]) => Promise<StreamEvent[]>;
   /** Hold the cursor until `work` settles; FIFO with other blockers of the SAME event. */
   blockProcessorWhile: (work: () => Promise<unknown>) => void;
   /** Fire-and-forget attempt; may overtake later events; outcome must be state-recoverable. */
@@ -153,7 +150,7 @@ export abstract class StreamProcessor<State> {
   }
 
   /** Stable idempotency key namespaced by slug; pass the event being processed for a per-event key. */
-  idempotencyKey(key: string, event?: StreamEventT): string {
+  idempotencyKey(key: string, event?: StreamEvent): string {
     return event ? `${this.contract.slug}/${key}@${event.offset}` : `${this.contract.slug}/${key}`;
   }
 }
@@ -266,7 +263,7 @@ export class ProcessorEngine<State> {
   /** THE push door: the stream (or hosting facet) hands the just-committed batch with its
    *  range. Contiguous → reduce it directly (the fast path — no read); anything else → gap
    *  repair from the own cursor. Fire-and-forget safe: enqueues on the serial chain. */
-  processEventBatch(events: StreamEventT[], range: ScannedRange): Promise<void> {
+  processEventBatch(events: StreamEvent[], range: ScannedRange): Promise<void> {
     // Recorded SYNCHRONOUSLY: the head this processor has been SHOWN. Read verbs skip their
     // wake when the reduce has provably reached it — the fast path that deletes one parent read
     // RPC from every capability dispatch (and every level of rule-names-rule nesting) once caught up.
@@ -437,7 +434,7 @@ export class ProcessorEngine<State> {
    *  ephemeral offset must not suppress it. The cursor is a DURABLE-reduce watermark and never
    *  regresses. There is no separate ephemeral path. */
   async #reduceAndCommitEventBatch(
-    events: StreamEventT[],
+    events: StreamEvent[],
     range: ScannedRange,
     atHead: boolean,
   ): Promise<void> {
@@ -490,7 +487,7 @@ export class ProcessorEngine<State> {
    *  here: a GUARDED reduce, then `processEvent` with a FIFO blocker chain drained to a FIXED POINT.
    *  Returns the next state; owns NO cursor / persist / waiter — the caller does. */
   async #reduceAndProcessEvent(
-    event: StreamEventT | null,
+    event: StreamEvent | null,
     state: State,
     caughtUp: boolean,
   ): Promise<State> {

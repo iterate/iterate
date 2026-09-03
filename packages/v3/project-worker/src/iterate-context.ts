@@ -50,7 +50,7 @@ import {
   type ItxExpressionInput,
 } from "./context/expression.ts";
 import { rewriteRuleConfiguredEvent } from "./context/itx-expression-rewriting.ts";
-import type { WorkerSource } from "./context/worker-loader.ts";
+import type { FacetSpec } from "./context/worker-loader.ts";
 import { installPrototypeInvokeFallback } from "./context/dotted-path-proxy.ts";
 import type { BuiltInScope } from "./context/built-ins.ts";
 import {
@@ -105,7 +105,7 @@ export class SubscriptionHandle extends RpcTarget {
 }
 
 /** WHAT RIDES THE HOP, TYPED: every built-in root (`append`, `read`, `waitForEvent`, `kv`, `rpcStubs`,
- *  `facets`, `load`, …) is a member of this class's TYPE by declaration merging — zero runtime; the
+ *  `facets`, `workers`, …) is a member of this class's TYPE by declaration merging — zero runtime; the
  *  prototype fallback at the bottom of this file is the runtime. So a reader of this file sees the
  *  whole surface, and `env.ITX.get().append(…)` typechecks in loaded code. `cd` is the edge's own
  *  (below) — it returns an EDGE context, not the built-in's handle. */
@@ -203,9 +203,25 @@ export class IterateContext extends RpcTarget {
       return new RewriteRuleHandle(() => undefined);
     }
     if (typeof target === "string" || Array.isArray(target)) {
-      await this.#append(rewriteRuleConfiguredEvent(matchString, target));
+      // A pure rewrite: whatever THIS session lent under the match stops meaning the stub — recall it.
+      this.#sessionTeardown.dispose(sessionTeardownKey);
+      const event = rewriteRuleConfiguredEvent(matchString, target);
+      await this.#append(event);
+      const targetString = (event.payload as { target: string }).target;
       return new RewriteRuleHandle(() =>
-        this.#appendInBackground(rewriteRuleConfiguredEvent(matchString, null)),
+        this.#waitUntil(
+          (async () => {
+            // Un-set ONLY the rule this handle wrote: a later provide at the same match (a live
+            // provider's, another session's) owns the row now — never a stale undo over it.
+            const rule = (await this.#durableObject.invoke([
+              "itx",
+              "rewriteRules",
+              ["get", matchString],
+            ])) as { target: string } | null;
+            if (rule?.target === targetString)
+              await this.#append(rewriteRuleConfiguredEvent(matchString, null));
+          })().catch(() => undefined),
+        ),
       );
     }
     // Built BEFORE the lend so a match the codec refuses throws with nothing lent.
@@ -257,6 +273,7 @@ export class IterateContext extends RpcTarget {
     const rpcStubKey = `subscription:${name}`;
     const sessionTeardownKey = this.#sessionTeardownKey(rpcStubKey);
     let target = input.target as ItxExpressionInput | null;
+    let lentHere = false; // recorded, never inferred from the target's spelling
     if (target !== null && typeof target !== "string" && !Array.isArray(target)) {
       const pager = await lendRpcStubOverPager(
         this.#durableObject,
@@ -265,21 +282,30 @@ export class IterateContext extends RpcTarget {
         this.#waitUntil,
       );
       this.#sessionTeardown.add(sessionTeardownKey, pager);
+      lentHere = true;
       target = ["itx", "rpcStubs", ["get", rpcStubKey]];
+    } else {
+      // An expression (or a removal): whatever THIS session lent under the name stops meaning it.
+      this.#sessionTeardown.dispose(sessionTeardownKey);
     }
-    await this.#append(
-      subscriptionConfiguredEvent({
-        name,
-        target,
-        ...(input.consumes && { consumes: input.consumes }),
-      }),
-    );
-    if (target === null) this.#sessionTeardown.dispose(sessionTeardownKey);
-    const targetIsLentRpcStub = Array.isArray(target) && target[1] === "rpcStubs";
+    try {
+      await this.#append(
+        subscriptionConfiguredEvent({
+          name,
+          target,
+          ...(input.consumes && { consumes: input.consumes }),
+        }),
+      );
+    } catch (e) {
+      // The DO refused the row (STREAM_PAUSED, a name the reduce rejects): recall the lend, or a stub
+      // nothing names would linger for the session. Let the refusal propagate.
+      if (lentHere) this.#sessionTeardown.dispose(sessionTeardownKey);
+      throw e;
+    }
     return new SubscriptionHandle(name, () => {
       // A lent callback's row is un-set by the DO when its last pager closes (see provide); an
       // expression target has no pager, so the handle un-sets the row itself.
-      if (targetIsLentRpcStub) this.#sessionTeardown.dispose(sessionTeardownKey);
+      if (lentHere) this.#sessionTeardown.dispose(sessionTeardownKey);
       else if (target !== null)
         this.#appendInBackground(subscriptionConfiguredEvent({ name, target: null }));
     });
@@ -290,13 +316,14 @@ export class IterateContext extends RpcTarget {
   /** Enable a processor: host `className` (the `StreamProcessorDurableObject` subclass exported by
    *  the loaded `source` — the host whose `processor` field holds the pure `StreamProcessor`) as the
    *  facet named `name`, and subscribe its `processEventBatch` to every commit. Literally the
-   *  subscription event with the target `itx.facets.get(name, { source, className }).processEventBatch`
-   *  — a processor is a named facet that is pushed the log. DURABLE (no handle):
-   *  a processor outlives the session that enabled it; `disableProcessor` is the explicit inverse.
-   *  `consumes` is the SUBSCRIPTION's filter (what is sent; absent = every durable event). */
+   *  subscription event with the target `itx.facets.get(name, spec).processEventBatch` — a processor
+   *  is a named facet that is pushed the log; `spec` is the `FacetSpec` `itx.facets.get` takes
+   *  (`source`, `cacheKey?`, `className`). DURABLE (no handle): a processor outlives the session that
+   *  enabled it; `disableProcessor` is the explicit inverse. `consumes` is the SUBSCRIPTION's filter
+   *  (what is sent; absent = every durable event). */
   async enableProcessor(
     name: string,
-    ref: { source: WorkerSource; className: string; consumes?: string[] },
+    spec: FacetSpec & { consumes?: string[] },
   ): Promise<{ name: string }> {
     await this.#append(
       subscriptionConfiguredEvent({
@@ -304,10 +331,18 @@ export class IterateContext extends RpcTarget {
         target: [
           "itx",
           "facets",
-          ["get", name, { source: ref.source, className: ref.className }],
+          [
+            "get",
+            name,
+            {
+              source: spec.source,
+              ...(spec.cacheKey !== undefined && { cacheKey: spec.cacheKey }),
+              className: spec.className,
+            },
+          ],
           "processEventBatch",
         ],
-        ...(ref.consumes && { consumes: ref.consumes }),
+        ...(spec.consumes && { consumes: spec.consumes }),
       }),
     );
     return { name };

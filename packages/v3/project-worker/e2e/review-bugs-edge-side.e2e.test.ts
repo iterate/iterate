@@ -32,7 +32,7 @@ import { Tools } from "./support/targets.ts";
 //      codec halves, two behaviours, where the codec promises "either works wherever one works".
 // EXPECTED: disposing a SubscriptionHandle removes its row for every target that is an expression,
 //      in either codec half — only a callback THIS call lent is un-set by closing its pager.
-test.fails("subscribe: disposing the handle of a row whose target is the ARRAY spelling of itx.rpcStubs.get(...) removes nothing — the row leaks", async () => {
+test("subscribe: disposing the handle of a row whose target is the ARRAY spelling of itx.rpcStubs.get(...) removes nothing — the row leaks", async () => {
   // CONTROL — the STRING half of the very same target: dispose removes the row.
   const control = openItx(freshCtx("subrow-string"));
   const controlHandle = await control.subscribe({
@@ -66,7 +66,7 @@ test.fails("subscribe: disposing the handle of a row whose target is the ARRAY s
 //      got it.
 // EXPECTED: a refused subscribe recalls what it lent before it propagates the refusal, exactly as
 //      `provide` does — presence must be identical before and after a call that failed.
-test.fails("subscribe: an append the DO refuses (paused stream) leaves the callback lent — presence keeps a stub nothing names", async () => {
+test("subscribe: an append the DO refuses (paused stream) leaves the callback lent — presence keeps a stub nothing names", async () => {
   const itx = openItx(freshCtx("paused-subscribe"));
   await append(itx, { type: "events.iterate.com/stream/paused", payload: { reason: "review" } });
 
@@ -101,7 +101,7 @@ test.fails("subscribe: an append the DO refuses (paused stream) leaves the callb
 //      never runs because no pager closed.
 // EXPECTED: the same guarantee both branches claim to share — an undo un-sets the rule it wrote and
 //      leaves a rule someone else has since configured at that match alone.
-test.fails("provide: an expression rule's undo un-sets a LIVE provider's rule configured later at the same match", async () => {
+test("provide: an expression rule's undo un-sets a LIVE provider's rule configured later at the same match", async () => {
   const ctx = freshCtx("clobbered-rule");
   const observer = openItx(ctx);
 
@@ -131,7 +131,7 @@ test.fails("provide: an expression rule's undo un-sets a LIVE provider's rule co
 //      help: its last-pager-close un-set only fires when a pager CLOSES, and nothing closed this one.
 // EXPECTED: whatever this session lent under the key stops being lent the moment the key stops
 //      meaning it — an expression target replaces a live one exactly as `null` does.
-test.fails("provide/subscribe: replacing a live target with an EXPRESSION target leaves the lend open — presence reports a stub nothing names", async () => {
+test("provide/subscribe: replacing a live target with an EXPRESSION target leaves the lend open — presence reports a stub nothing names", async () => {
   const itx = openItx(freshCtx("swap-to-expression"));
 
   await itx.provide("itx.p", new Tools("live"));

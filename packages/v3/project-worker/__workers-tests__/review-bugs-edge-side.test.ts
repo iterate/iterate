@@ -56,7 +56,7 @@ class LentAnswer extends RpcTarget {
 // EXPECTED: a replaced pager is a reconnect, not a close (the module header's own words) — the
 //      in-flight page should survive the swap and be answered by the new pager's lend, exactly as
 //      it would have been by the old one.
-test.fails("a pager reconnect while a page is in flight kills the page (RPC_STUB_OFFLINE) instead of letting the new pager answer it", async () => {
+test("a pager reconnect while a page is in flight kills the page (RPC_STUB_OFFLINE) instead of letting the new pager answer it", async () => {
   const ctx = "prj_review_page_replaced";
   const s = stub(ctx);
   const rpcStubKey = "itx.reconnecting";

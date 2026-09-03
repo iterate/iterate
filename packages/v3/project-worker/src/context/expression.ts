@@ -89,13 +89,25 @@ export function toItxExpression(input: ItxExpressionInput): ItxExpression {
   return typeof input === "string" ? parse(input) : input;
 }
 
-/** Canonical stored form: dotted path + `.method(args)` calls (args `JSON5.stringify`d); `parse(print(e))` round-trips. */
+/** Object args print with their keys SORTED, so two spellings of one object are one canonical string
+ *  — one rewrite-rule row, one facet memo — the way `jsonEqual` already matches them. */
+const keySortedForPrint = (_key: string, value: unknown): unknown =>
+  value !== null && typeof value === "object" && !Array.isArray(value)
+    ? Object.fromEntries(
+        Object.keys(value as Record<string, unknown>)
+          .sort()
+          .map((k) => [k, (value as Record<string, unknown>)[k]]),
+      )
+    : value;
+
+/** Canonical stored form: dotted path + `.method(args)` calls (args `JSON5.stringify`d, object keys
+ *  sorted); `parse(print(e))` round-trips. */
 export function print(expr: ItxExpression): string {
   return expr
     .map((step, i) => {
       const dot = i ? "." : "";
       if (typeof step === "string") return dot + step;
-      const args = JSON5.stringify(step.slice(1)).slice(1, -1);
+      const args = JSON5.stringify(step.slice(1), keySortedForPrint).slice(1, -1);
       return step[0] === "" ? `(${args})` : `${dot}${step[0]}(${args})`;
     })
     .join("");

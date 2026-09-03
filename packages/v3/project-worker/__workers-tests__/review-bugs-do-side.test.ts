@@ -139,7 +139,7 @@ test.fails("the alarm's cursor pass recovers a subscription whose first delivery
 // so `??=` never re-evaluates. The replacement's own delivery attempt, meanwhile, returned early on
 // `#cursorDeliveryRunning`, so nothing is left to deliver to the new target.
 // EXPECTED: every batch after `subscription-configured` replaced the row goes to the NEW target.
-test.fails("a subscription re-configured mid-delivery delivers the next batch to the NEW target", async () => {
+test("a subscription re-configured mid-delivery delivers the next batch to the NEW target", async () => {
   await runInDurableObject(stub("prj_bugs_retarget"), async (_instance, state) => {
     await state.storage.deleteAll();
     const sinkA: number[][] = [];
@@ -204,7 +204,7 @@ test.fails("a subscription re-configured mid-delivery delivers the next batch to
 // EXPECTED: `subscribe({ target: 'itx.sink' })` delivers `(events, range)` to whatever `itx.sink`
 // resolves to — the layer's own claim that "a rule whose target names another rule classifies
 // correctly because it evaluates to the same handle".
-test.fails("a two-step subscription target (itx.<alias>) is delivered to", async () => {
+test("a two-step subscription target (itx.<alias>) is delivered to", async () => {
   await runInDurableObject(stub("prj_bugs_alias_target"), async (_instance, state) => {
     await state.storage.deleteAll();
     const delivered: number[][] = [];
@@ -221,8 +221,11 @@ test.fails("a two-step subscription target (itx.<alias>) is delivered to", async
     stream.append({ type: "demo/ping", payload: { n: 1 } });
     await settle();
 
-    // The head it actually tried to evaluate was the bare scope root, which can never resolve.
-    expect({ delivered, evaluated }).toEqual({ delivered: [[1]], evaluated: ["itx.sink"] });
+    // FIXED 2026-09-03 (the guard is `> 2`): the target evaluated is `itx.sink` itself — once per
+    // commit that reached the row (the configure's own batch, then the ping) — and the ping arrives.
+    expect(delivered).toEqual([[1]]);
+    expect(evaluated.length).toBeGreaterThan(0);
+    expect(evaluated.every((printed) => printed === "itx.sink")).toBe(true);
   });
 });
 
@@ -246,7 +249,7 @@ export class CounterDurableObject extends DurableObject {
   catchUpFromLog() {}
 }
 `;
-test.fails("removing one hosting subscription keeps the facet another row still hosts", async () => {
+test("removing one hosting subscription keeps the facet another row still hosts", async () => {
   const context = stub("prj_bugs_shared_facet");
   const spec = { source: { "cap.js": COUNTER_SRC }, className: "CounterDurableObject" };
   const target: ItxExpression = ["itx", "facets", ["get", "shared", spec], "processEventBatch"];

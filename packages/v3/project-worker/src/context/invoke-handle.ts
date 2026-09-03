@@ -16,7 +16,7 @@
 
 import { RpcTarget } from "capnweb";
 import { installPrototypeInvokeFallback } from "./dotted-path-proxy.ts";
-import { toItxExpression, type ItxExpression, type ItxExpressionInput } from "./expression.ts";
+import type { ItxExpression } from "./expression.ts";
 
 /** A branded, pipelinable handle whose unknown dotted members reduce into ONE dispatch of the
  *  itx-expression STEPS relative to it. `dispatch` routes those steps into the underlying object — a
@@ -32,8 +32,8 @@ export class InvokeHandle extends RpcTarget {
   }
   /** THE reduce door the prototype hop dispatches onto (the receiver IS the invoker — this instance).
    *  The expression is RELATIVE to this handle (empty scope root — the hop is installed with `[]`). */
-  invoke(call: ItxExpressionInput): unknown {
-    return this.#dispatchItxExpressionSteps(toItxExpression(call));
+  invoke(itxExpressionSteps: ItxExpression): unknown {
+    return this.#dispatchItxExpressionSteps(itxExpressionSteps);
   }
   /** Root-apply: call the bare capability this handle fronts — the ANONYMOUS call step. `callOn`
    *  (dispatch.ts) uses this when a rewritten call's target IS an InvokeHandle and args are applied

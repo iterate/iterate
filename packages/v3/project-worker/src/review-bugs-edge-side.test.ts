@@ -49,7 +49,7 @@ const settle = async () => {
 // EXPECTED: a delta that could not be applied because a heal was already running must leave the
 //      connection knowing it is still behind — one more door read after the heal lands (or the
 //      delta queued and applied), so the store converges on the producer's revision.
-test.fails("live-state: a delta delivered during a gap heal is dropped and never re-triggers — the store stays behind the producer", async () => {
+test("live-state: a delta delivered during a gap heal is dropped and never re-triggers — the store stays behind the producer", async () => {
   const h = harness();
   const connecting = connectLiveState(h.itx, { key: "k", door: h.door });
   await settle();

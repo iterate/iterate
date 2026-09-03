@@ -27,9 +27,9 @@ function normalizePath(path: string): string {
  *  edge method and the built-in root) share. Absolute ("/agents/x") stands alone; relative
  *  ("agents/x", "../inbox", ".") joins onto `base`. `.` and `..` resolve; the root cannot be
  *  escaped ("/.." is "/"). The result is canonical: leading slash, no trailing slash but for "/". */
-export function resolveContextPath(base: string, target: string): string {
+export function resolveContextPath(basePath: string, contextPath: string): string {
   const segments: string[] = [];
-  for (const seg of `${target.startsWith("/") ? "" : base}/${target}`.split("/")) {
+  for (const seg of `${contextPath.startsWith("/") ? "" : basePath}/${contextPath}`.split("/")) {
     if (seg === "" || seg === ".") continue;
     if (seg === "..") segments.pop();
     else segments.push(seg);

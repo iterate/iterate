@@ -81,7 +81,7 @@ interface StreamDeps {
   /** The post-commit fan-out, called once per offset-advancing commit with `freshEvents` — the
    *  newly committed events in offset order, ephemerals included (the host's delivery loop; the
    *  waitForEvent waiters settle before it). */
-  onCommit: (freshEvents: StreamEvent[], afterOffset: number, nextOffset: number) => void;
+  onCommit: (freshEvents: StreamEvent[], afterOffset: number, throughOffset: number) => void;
 }
 
 /** THE STREAM — the commit point: SQLite rows + ONE kv high-water mark, idempotency at the door,
@@ -119,10 +119,9 @@ export class Stream {
   readonly #coreProcessor = new CoreStreamProcessor();
   #coreReducedState: CoreState;
   #coreReducedThroughOffset: number;
-  /** ONE LiveState holder, born at the first durable commit SEEDED WITH THE PRE-BATCH STATE so the
-   *  first publish diffs exactly what that batch changed (`payload.key` = "core"). */
-  #coreLiveState?: LiveState<CoreState>;
-  #coreReducedStateChangedAtCommit = false;
+  /** ONE LiveState holder for the core reduced state, born with the stream over the rehydrated state
+   *  (`payload.key` = "core"); every commit that changed the state publishes a delta from it. */
+  readonly #coreLiveState: LiveState<CoreState>;
 
   constructor(deps: StreamDeps) {
     this.#storage = deps.storage;
@@ -175,11 +174,20 @@ export class Stream {
       this.#coreReducedThroughOffset = 0;
       while (this.#coreReducedThroughOffset < this.#highestDurableOffset) {
         const page = this.read(this.#coreReducedThroughOffset, 500);
-        for (const event of page.events) this.#reduceEventIntoCoreReducedState(event);
+        for (const event of page.events)
+          this.#coreReducedState = this.#reduceEventIntoCoreReducedState(
+            event,
+            this.#coreReducedState,
+          );
         this.#coreReducedThroughOffset = page.scannedThroughOffset;
         if (page.events.length < 500) break;
       }
     }
+    this.#coreLiveState = new LiveState(
+      { append: (event) => this.append(event) },
+      contract.slug,
+      this.#coreReducedState,
+    );
   }
 
   /** THE WAKE RECORD — the DO constructor calls this, synchronously, before any door opens (the
@@ -229,10 +237,9 @@ export class Stream {
   }
 
   /** The live-state SEED — `{ rev, state }` in step with the deltas the holder emits (the same door a
-   *  facet processor's `liveSnapshot()` is). Before the first durable commit of an incarnation there
-   *  is no holder yet: rev 0 over the current reduced state, which the first delta (`from: 0`) chains onto. */
+   *  facet processor's `liveSnapshot()` is). */
   coreLiveStateSnapshot(): { rev: number; state: CoreState } {
-    return this.#coreLiveState?.snapshot() ?? { rev: 0, state: this.#coreReducedState };
+    return this.#coreLiveState.snapshot();
   }
 
   // ── APPEND: the commit pipeline, top to bottom ──
@@ -270,12 +277,12 @@ export class Stream {
         throw codedError("STREAM_PAUSED", `stream paused: ${paused.reason}`);
     }
     // 2. offsets — decided in memory, nothing written yet
-    const after = this.#highestAssignedOffset;
+    const afterOffset = this.#highestAssignedOffset;
     const createdAt = new Date().toISOString();
     const committedEvents: StreamEvent[] = []; // one per appended event, in order (a dedupe hit echoes the existing event)
     const freshEvents: StreamEvent[] = []; // the events NEW to the log, in offset order — what commits, reduces, fans out
     const eventsByIdempotencyKey = new Map<string, StreamEvent>(); // keys landing earlier in THIS batch
-    let nextOffset = after;
+    let throughOffset = afterOffset;
     for (const event of events) {
       const { offset: expectedOffset, ...eventInput } = event;
       // IDEMPOTENCY: a key already in the log (or earlier in this batch) answers with THAT event and
@@ -311,14 +318,14 @@ export class Stream {
       }
       // EXPECTED OFFSET: an event carrying `offset` lands exactly there or the batch is refused —
       // "nothing has happened since I last looked" (apps/os's optimistic-concurrency shape).
-      const offset = nextOffset + 1;
+      const offset = throughOffset + 1;
       if (expectedOffset !== undefined && expectedOffset !== offset)
         throw codedError(
           "OFFSET_CONFLICT",
           `expected offset ${expectedOffset}, but the next offset is ${offset}`,
           { expected: expectedOffset, actual: offset },
         );
-      nextOffset = offset;
+      throughOffset = offset;
       const committedEvent = { ...eventInput, offset, createdAt, path: this.#path } as StreamEvent;
       if (eventInput.idempotencyKey)
         eventsByIdempotencyKey.set(eventInput.idempotencyKey, committedEvent);
@@ -327,11 +334,13 @@ export class Stream {
     }
     if (freshEvents.length === 0) return committedEvents; // every event deduped to an existing one
     // 3 + 4. reduce and commit
+    let coreReducedStateChanged = false;
     if (freshEvents.every((event) => event.ephemeral)) {
       // THE EPHEMERAL FAST PATH: nothing to store, so no transaction and no high-water write —
       // what lets a flood of ephemerals leave SQLite untouched (the flood proofs measure it).
-      this.#highestAssignedOffset = nextOffset; // the durable mark is untouched
+      this.#highestAssignedOffset = throughOffset; // the durable mark is untouched
     } else {
+      let reducedState = this.#coreReducedState;
       this.#storage.transactionSync(() => {
         for (const event of freshEvents) {
           if (event.ephemeral) continue;
@@ -346,58 +355,52 @@ export class Stream {
         }
         // The mark rides the durable rows' transaction — every offset this batch handed out,
         // ephemeral ones included, is covered by this write.
-        this.#storage.kv.put("maxAssignedOffset", nextOffset);
+        this.#storage.kv.put("maxAssignedOffset", throughOffset);
         // The core reduce takes this batch's durables and checkpoints with them: the cursor every
         // batch (the transaction is already open, so the put is free), the reduced state on change.
+        // Reduced into a LOCAL: the fields move only after the transaction commits, so a failed
+        // write never leaves phantom core state in memory (a subscription row the log never got).
         const { contract } = this.#coreProcessor;
-        this.#coreLiveState ??= new LiveState(
-          { append: (event) => this.append(event) },
-          contract.slug,
-          this.#coreReducedState,
-        );
-        const reducedStateBefore = this.#coreReducedState;
-        for (const event of freshEvents) this.#reduceEventIntoCoreReducedState(event);
-        this.#coreReducedThroughOffset = nextOffset;
-        const changed = this.#coreReducedState !== reducedStateBefore;
-        if (changed) this.#coreReducedStateChangedAtCommit = true; // published in step 5 — never inside the txn
+        for (const event of freshEvents)
+          reducedState = this.#reduceEventIntoCoreReducedState(event, reducedState);
         writeReduceCheckpoint(
           this.#storage.kv,
           contract.slug,
-          { reducerVersion: contract.version, reducedThroughOffset: nextOffset },
-          this.#coreReducedState,
-          changed,
+          { reducerVersion: contract.version, reducedThroughOffset: throughOffset },
+          reducedState,
+          reducedState !== this.#coreReducedState,
         );
       });
-      this.#highestAssignedOffset = nextOffset;
-      this.#highestDurableOffset = nextOffset;
+      coreReducedStateChanged = reducedState !== this.#coreReducedState;
+      this.#coreReducedState = reducedState;
+      this.#coreReducedThroughOffset = throughOffset;
+      this.#highestAssignedOffset = throughOffset;
+      this.#highestDurableOffset = throughOffset;
     }
     // 5. after the commit
     this.#resolveWaitForEventWaiters(freshEvents); // waiters first: onCommit may append again (a nested commit)
-    this.#onCommit(freshEvents, after, nextOffset);
+    this.#onCommit(freshEvents, afterOffset, throughOffset);
     // Core's live-state delta, when this commit changed the reduced state: `set` mints the standard
     // ephemeral live-state/changed delta through this stream's own append (a nested commit). LOSSY BY
     // CONTRACT — LiveState.set contains every refusal (a PAUSED stream refuses the delta) as a
     // revision-chain gap the client heals by re-seeding. No feedback loop: the delta is ephemeral and
     // changes no core state; the flag is cleared BEFORE the set, so the nested commit's own step 5
     // finds nothing left.
-    if (this.#coreReducedStateChangedAtCommit) {
-      this.#coreReducedStateChangedAtCommit = false;
-      this.#coreLiveState?.set(this.#coreReducedState);
-    }
+    if (coreReducedStateChanged) this.#coreLiveState.set(this.#coreReducedState);
     return committedEvents;
   }
 
   /** Reduce one durable event into the core reduced state — the commit and the constructor's
    *  version-bump re-reduce both come here. A malformed control event must not wedge the stream:
    *  record the skip, move on. */
-  #reduceEventIntoCoreReducedState(event: StreamEvent): void {
-    if (event.ephemeral || !consumesEvent(this.#coreProcessor.contract.consumes, event)) return;
+  #reduceEventIntoCoreReducedState(event: StreamEvent, state: CoreState): CoreState {
+    if (event.ephemeral || !consumesEvent(this.#coreProcessor.contract.consumes, event))
+      return state;
     try {
-      this.#coreReducedState =
-        this.#coreProcessor.reduce({ event, state: this.#coreReducedState }) ??
-        this.#coreReducedState;
+      return this.#coreProcessor.reduce({ event, state }) ?? state;
     } catch (err) {
       reportIssue("stream.core-reduce", err, { offset: event.offset, type: event.type });
+      return state;
     }
   }
 

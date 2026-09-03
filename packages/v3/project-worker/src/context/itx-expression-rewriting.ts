@@ -199,7 +199,7 @@ export class ItxExpressionResolver {
     let value: unknown = this.#builtIns[Array.isArray(rootStep) ? rootStep[0] : rootStep];
     let receiver: unknown = undefined;
     if (Array.isArray(rootStep)) value = await callOn(value, receiver, rootStep.slice(1));
-    ({ value, receiver } = await walkSteps({ value, receiver }, rewritten.slice(2), "remainder"));
+    ({ value, receiver } = await walkSteps({ value, receiver }, rewritten.slice(2)));
     if (extraArgs) value = await callOn(value, receiver, extraArgs);
     return await value;
   }

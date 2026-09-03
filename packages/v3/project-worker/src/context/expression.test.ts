@@ -16,7 +16,8 @@ const TABLE: [string, ItxExpression][] = [
     ["itx", "facets", ["get", { className: "CounterDurableObject" }]],
   ],
   [
-    "itx.append({type:'evt',payload:{n:1,ok:true,tags:['a','b']}})",
+    // the CANONICAL spelling sorts object keys (one spelling per object ⇒ one rewrite-rule row)
+    "itx.append({payload:{n:1,ok:true,tags:['a','b']},type:'evt'})",
     ["itx", ["append", { type: "evt", payload: { n: 1, ok: true, tags: ["a", "b"] } }]],
   ],
   ["itx.math.add(1,-2.5,true,null)", ["itx", "math", ["add", 1, -2.5, true, null]]], // primitives

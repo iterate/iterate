@@ -38,7 +38,7 @@ test("two DIFFERENT facet identities never share one Worker Loader cacheKey", as
   const load = (iterateContextName: string, className: string) =>
     loadConfinedWorker({
       env,
-      host: {} as Fetcher,
+      itxEntrypoint: {} as Fetcher,
       kind: "facet",
       owner: facetLoaderOwner(iterateContextName, className),
       source: modules,
@@ -61,8 +61,8 @@ test("a producer source runs INSIDE getCode — once per cold isolate, never on 
   const load = (cacheKey?: string) =>
     loadConfinedWorker({
       env,
-      host: {} as Fetcher,
-      kind: "code",
+      itxEntrypoint: {} as Fetcher,
+      kind: "worker",
       owner: "prj_u.iterate/",
       source: "itx.build('todo')",
       cacheKey,
@@ -75,7 +75,7 @@ test("a producer source runs INSIDE getCode — once per cold isolate, never on 
   // with a key: the producer runs when the key is cold …
   const first = await load("todo@3f2a1c");
   expect(first.sourceVersion).toBe("todo@3f2a1c");
-  expect(keys.at(-1)).toBe("code:deploy-1:prj_u.iterate/:todo@3f2a1c");
+  expect(keys.at(-1)).toBe("worker:deploy-1:prj_u.iterate/:todo@3f2a1c");
   await Promise.resolve(); // let getCode's async body run
   expect(produced).toBe(1);
   // … and NOT when it is warm — "same key ⇒ same code" is the caller's contract
@@ -92,8 +92,8 @@ test("literal modules: the key is their content hash unless the caller names a c
   const { env, keys } = fakeLoaderEnv();
   const base = {
     env,
-    host: {} as Fetcher,
-    kind: "code" as const,
+    itxEntrypoint: {} as Fetcher,
+    kind: "worker" as const,
     owner: "prj_u.iterate/",
     invoke: () => Promise.reject(new Error("literal modules — nothing to invoke")),
     where: "workers.get",
@@ -107,7 +107,7 @@ test("literal modules: the key is their content hash unless the caller names a c
     cacheKey: "v7",
   });
   expect(named.sourceVersion).toBe("v7");
-  expect(keys.at(-1)).toBe("code:deploy-1:prj_u.iterate/:v7");
+  expect(keys.at(-1)).toBe("worker:deploy-1:prj_u.iterate/:v7");
   await expect(
     loadConfinedWorker({ ...base, source: { "index.js": "export default 1" } }),
   ).rejects.toThrow(/"cap.js" main module/);

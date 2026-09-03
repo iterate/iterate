@@ -4,20 +4,20 @@
 // of the server-side `IterateContext` RpcTarget. This module is what lets that proxy be spoken as deep
 // dotted property access — `itx.slack.chat.postMessage({...})`, `itx.kv.put('k','v')`,
 // `itx.myLiveCap.hello()` — even though `IterateContext` declares only fixed methods
-// (invoke / provide / rewrite / …). Every unknown segment accumulates into ONE `invoke`
-// dispatch carrying an `ItxExpressionInput`; declared methods always win.
+// (invoke / provide / subscribe / …). Every unknown segment accumulates into ONE `invoke`
+// dispatch carrying an `ItxExpression`; declared methods always win.
 //
-// `IterateContext.invoke(ItxExpressionInput)` is the exact InvokeTarget shape this
+// `IterateContext.invoke(ItxExpressionInput)` satisfies the InvokeTarget shape this
 // expects (installed with scope root `["itx"]`), and the receiver IS the invoker — so it wires with
 // zero glue.
 
-import type { ItxExpression, ItxExpressionInput } from "./expression.ts";
+import type { ItxExpression } from "./expression.ts";
 
 /** The dispatch door every dotted miss collapses onto. `IterateContext` implements it directly (root `itx`); a
  *  mid-chain `InvokeHandle` implements it relative to itself (empty root). The accumulated dotted
- *  access reduces into ONE `ItxExpressionInput` — `[...root, ...prefix, [method, ...args]]`. */
+ *  access reduces into ONE `ItxExpression` — `[...root, ...prefix, [method, ...args]]`. */
 type InvokeTarget = {
-  invoke(call: ItxExpressionInput): unknown;
+  invoke(itxExpression: ItxExpression): unknown;
 };
 
 /** Names that must NEVER become dynamic capability segments — a dispatcher answering them would turn
@@ -73,7 +73,7 @@ export function createItxExpressionPathProxy(
   const valueFor = (key: string) => createItxExpressionPathProxy(invoker, root, [...path, key]);
   return new Proxy(function () {}, {
     apply(_target, _thisArg, args) {
-      // Reduce the accumulated dotted access into ONE ItxExpressionInput (structured half): the scope root,
+      // Reduce the accumulated dotted access into ONE ItxExpression (the structured half): the scope root,
       // the property-read prefix, then the final call step carrying the args.
       const method = path[path.length - 1];
       const expr: ItxExpression = [...root, ...path.slice(0, -1), [method, ...(args as unknown[])]];

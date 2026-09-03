@@ -25,11 +25,7 @@
 // Two-phase pager attach: `attachRpcStubPager` mints the transportId FIRST, then the relay opens the
 // pager WebSocket carrying it; an unknown id 409s so a relay that outlived a DO restart re-attaches.
 
-import type {
-  RpcStubFetchServer,
-  RpcStubFetchTransport,
-  WebSocketHooks,
-} from "../fetch/rpc-stub-fetch.ts";
+import type { RpcStubFetchServer, RpcStubFetchTransport } from "../fetch/rpc-stub-fetch.ts";
 import { codedError } from "../lib/errors.ts";
 import type { ItxExpression } from "./expression.ts";
 
@@ -66,7 +62,7 @@ export function disposeRpcStub(x: unknown): void {
 }
 
 export class RpcStubDirectory {
-  readonly #hooks: WebSocketHooks;
+  readonly #ctx: Pick<DurableObjectState, "acceptWebSocket" | "getWebSockets">;
   /** PRESENCE as it changes: a key gained its (only) pager, or lost its last one. The DO turns these
    *  into the two ephemeral `rpc-stub/attached` / `rpc-stub/detached` events — live watchers see
    *  presence move; the log never claims a socket is open. A REPLACED pager (same key, new socket)
@@ -79,7 +75,7 @@ export class RpcStubDirectory {
   // LAYER 1 — the borrowed rpc stubs, by key, in memory ONLY and kept WARM: steady traffic pays ONE
   // page, then every delivery is a plain RPC call. Returned at the DO's idle quiesce — never per
   // call, never on a timer (a pending timer would itself pin the DO out of hibernation).
-  readonly #borrowedRpcStubs = new Map<string, { stub: BorrowedRpcStub; inFlight: number }>();
+  readonly #borrowedRpcStubs = new Map<string, BorrowedRpcStub>();
 
   // LAYER 2 — the pagers. transportId → the reservation whose pager WebSocket hasn't arrived yet
   // (in memory on purpose: if the DO dies in between, the upgrade 409s and the relay re-attaches);
@@ -100,11 +96,11 @@ export class RpcStubDirectory {
   readonly #closedRpcStubPagerSockets = new WeakSet<WebSocket>();
 
   constructor(deps: {
-    hooks: WebSocketHooks;
+    ctx: Pick<DurableObjectState, "acceptWebSocket" | "getWebSockets">;
     onPresence: (kind: "attached" | "detached", rpcStubKey: string) => void;
     rpcStubFetch: RpcStubFetchServer;
   }) {
-    this.#hooks = deps.hooks;
+    this.#ctx = deps.ctx;
     this.#onPresence = deps.onPresence;
     this.#rpcStubFetch = deps.rpcStubFetch;
   }
@@ -115,11 +111,8 @@ export class RpcStubDirectory {
    *  here too, and resolves the waiting call). Re-lending a key REPLACES its stub. */
   lendRpcStub(input: { rpcStubKey: string; stub: BorrowedRpcStub }): void {
     const previous = this.#borrowedRpcStubs.get(input.rpcStubKey);
-    this.#borrowedRpcStubs.set(input.rpcStubKey, {
-      stub: input.stub.dup?.() ?? input.stub,
-      inFlight: 0,
-    });
-    if (previous) disposeRpcStub(previous.stub);
+    this.#borrowedRpcStubs.set(input.rpcStubKey, input.stub.dup?.() ?? input.stub);
+    if (previous) disposeRpcStub(previous);
     const page = this.#rpcStubPagesInFlight.get(input.rpcStubKey);
     if (page) {
       clearTimeout(page.timer);
@@ -138,8 +131,7 @@ export class RpcStubDirectory {
       borrowed = await this.#pageRpcStub(rpcStubKey); // 2. can a pager lend it back?
     if (!borrowed)
       throw codedError("RPC_STUB_OFFLINE", `rpc stub ${JSON.stringify(rpcStubKey)} is offline`);
-    borrowed.inFlight += 1;
-    try {
+    {
       // THE TERMINAL-FETCH BRANCH (fetch/rpc-stub-fetch.ts, doctrine point 1 — dies with its
       // WORKAROUND fence): a terminal `fetch` carrying the one live Request rides the rpc-stub fetch
       // path; the borrowed stub is the transport. Everything else is a plain dotted dispatch. Either
@@ -152,14 +144,8 @@ export class RpcStubDirectory {
         last.length === 2 &&
         last[1] instanceof Request
       )
-        return await this.#rpcStubFetch.serve(
-          borrowed.stub,
-          itxExpressionSteps.slice(0, -1),
-          last[1],
-        );
-      return await borrowed.stub.invoke(itxExpressionSteps);
-    } finally {
-      borrowed.inFlight -= 1;
+        return await this.#rpcStubFetch.serve(borrowed, itxExpressionSteps.slice(0, -1), last[1]);
+      return await borrowed.invoke(itxExpressionSteps);
     }
   }
 
@@ -173,7 +159,7 @@ export class RpcStubDirectory {
   returnBorrowedRpcStubs(): void {
     for (const [rpcStubKey, borrowed] of this.#borrowedRpcStubs) {
       this.#borrowedRpcStubs.delete(rpcStubKey);
-      disposeRpcStub(borrowed.stub);
+      disposeRpcStub(borrowed);
     }
   }
 
@@ -202,14 +188,22 @@ export class RpcStubDirectory {
     // Accepted and stamped in ONE synchronous turn, so every pager socket this side ever sees
     // carries its record — through hibernation too (the attachment is what survives).
     const pair = new WebSocketPair();
-    this.#hooks.acceptWebSocket(pair[1], [RPC_STUB_PAGER_WEBSOCKET_TAG]);
+    this.#ctx.acceptWebSocket(pair[1], [RPC_STUB_PAGER_WEBSOCKET_TAG]);
     pair[1].serializeAttachment({ transportId, rpcStubKey } satisfies RpcStubPagerRecord);
     // ONE pager per key, enforced when a pager becomes VISIBLE: a CONCURRENT provide at the same key
     // may still be opening its own pager, invisible to any earlier scan — so when THIS pager opens,
-    // drop every OTHER same-key pager now (the newest wins). "replaced" ⇒ a swap, not a real close.
+    // drop every OTHER same-key pager now (the newest wins). "replaced" ⇒ a swap, not a real close:
+    // a page in flight for the key SURVIVES it — parked out of the drop's reach, then re-sent down
+    // this pager, which can answer it (its own 10 s timeout stays the backstop).
+    const pageInFlight = this.#rpcStubPagesInFlight.get(rpcStubKey);
+    if (pageInFlight) this.#rpcStubPagesInFlight.delete(rpcStubKey);
     for (const record of this.#rpcStubPagerRecords())
       if (record.rpcStubKey === rpcStubKey && record.transportId !== transportId)
         this.dropRpcStubPager(record.transportId, "replaced");
+    if (pageInFlight) {
+      this.#rpcStubPagesInFlight.set(rpcStubKey, pageInFlight);
+      pair[1].send(JSON.stringify({ type: "page" }));
+    }
     if (!hadPager) this.#onPresence("attached", rpcStubKey);
     return new Response(null, { status: 101, webSocket: pair[0] });
   }
@@ -274,7 +268,7 @@ export class RpcStubDirectory {
   // ── the pager sockets ──
 
   #rpcStubPagerSockets(): WebSocket[] {
-    return this.#hooks
+    return this.#ctx
       .getWebSockets(RPC_STUB_PAGER_WEBSOCKET_TAG)
       .filter((ws) => ws.readyState === WebSocket.OPEN);
   }
@@ -300,7 +294,7 @@ export class RpcStubDirectory {
   }
 
   /** PAGE the edge for `rpcStubKey`: send `{type:"page"}` down its pager and wait for the lend. */
-  async #pageRpcStub(rpcStubKey: string): Promise<{ stub: BorrowedRpcStub; inFlight: number }> {
+  async #pageRpcStub(rpcStubKey: string): Promise<BorrowedRpcStub> {
     let page = this.#rpcStubPagesInFlight.get(rpcStubKey);
     if (page === undefined) {
       let resolve!: () => void;
@@ -311,7 +305,12 @@ export class RpcStubDirectory {
       });
       const timer = setTimeout(() => {
         if (this.#rpcStubPagesInFlight.delete(rpcStubKey))
-          reject(new Error(`rpc stub ${JSON.stringify(rpcStubKey)}: page timed out`));
+          reject(
+            codedError(
+              "RPC_STUB_OFFLINE",
+              `rpc stub ${JSON.stringify(rpcStubKey)}: page timed out`,
+            ),
+          );
       }, RPC_STUB_PAGE_TIMEOUT_MS);
       page = { resolve, reject, timer, arrived };
       this.#rpcStubPagesInFlight.set(rpcStubKey, page);
@@ -327,7 +326,10 @@ export class RpcStubDirectory {
     await page.arrived;
     const borrowed = this.#borrowedRpcStubs.get(rpcStubKey);
     if (borrowed === undefined)
-      throw new Error(`rpc stub ${JSON.stringify(rpcStubKey)}: page answered empty`);
+      throw codedError(
+        "RPC_STUB_OFFLINE",
+        `rpc stub ${JSON.stringify(rpcStubKey)}: page answered empty`,
+      );
     return borrowed;
   }
 
@@ -336,7 +338,7 @@ export class RpcStubDirectory {
     const borrowed = this.#borrowedRpcStubs.get(rpcStubKey);
     if (borrowed) {
       this.#borrowedRpcStubs.delete(rpcStubKey);
-      disposeRpcStub(borrowed.stub);
+      disposeRpcStub(borrowed);
     }
     const page = this.#rpcStubPagesInFlight.get(rpcStubKey);
     if (page) {

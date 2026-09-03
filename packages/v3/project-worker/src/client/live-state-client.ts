@@ -49,21 +49,32 @@ export async function connectLiveState<S>(
 ): Promise<LiveStateConnection<S>> {
   const store = createLiveStateStore<S>();
   let healing = false;
+  let healWantedAgain = false; // a gap seen WHILE a heal was in flight: the seed may predate it
   let disposed = false;
   const reseed = () => {
-    if (healing || disposed) return;
+    if (disposed) return;
+    if (healing) {
+      healWantedAgain = true;
+      return;
+    }
     healing = true;
+    const settled = () => {
+      healing = false;
+      if (disposed || !healWantedAgain) return;
+      healWantedAgain = false;
+      reseed();
+    };
     void opts.door().then(
       (s) => {
-        healing = false;
-        if (disposed) return;
-        store.seed(s);
-        opts.onResync?.("healed");
+        if (!disposed) {
+          store.seed(s);
+          opts.onResync?.("healed");
+        }
+        settled();
       },
       (e: unknown) => {
-        healing = false;
-        if (disposed) return;
-        opts.onResync?.(e instanceof Error ? e : new Error(String(e)));
+        if (!disposed) opts.onResync?.(e instanceof Error ? e : new Error(String(e)));
+        settled();
       },
     );
   };

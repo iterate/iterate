@@ -20,7 +20,12 @@
 
 import type { ReachableContext, StreamPage, WaitForEventFilter } from "../stream/stream.ts";
 import type { StreamEvent, StreamEventInput } from "../stream/events.ts";
-import { loadConfinedWorker, type WorkerCacheKey, type WorkerSource } from "./worker-loader.ts";
+import {
+  loadConfinedWorker,
+  type FacetSpec,
+  type WorkerCacheKey,
+  type WorkerSource,
+} from "./worker-loader.ts";
 import { resolveContextPath } from "./durable-object-names.ts";
 import { print, type ItxExpression } from "./expression.ts";
 import { FacetHandle, InvokeHandle, RpcStubHandle } from "./invoke-handle.ts";
@@ -111,15 +116,9 @@ export interface BuiltInScope {
    *  named instance) — no source; `get(name, { source, cacheKey?, className })` LOADS the class and
    *  hosts it as the durable facet `name` (own storage) — the mirror of Cloudflare's
    *  `ctx.facets.get(name, startupCallback)`; `source`/`cacheKey` as for `workers.get` (a new key
-   *  restarts the facet, its storage surviving). `delete` removes it, storage included (the mirror of
-   *  `ctx.facets.delete`). */
-  facets: {
-    get(
-      name: string,
-      spec?: { source: WorkerSource; cacheKey?: WorkerCacheKey; className: string },
-    ): FacetHandle;
-    delete(name: string): void;
-  };
+   *  restarts the facet, its storage surviving). A facet leaves with the subscription that hosted it
+   *  (`subscription-configured { name, target: null }`) — there is no delete verb. */
+  facets: { get(name: string, spec?: FacetSpec): FacetHandle };
   /** The subscriptions layer, read: the table (a slice of core) joined with the stream-kept
    *  cursors. Read-only — `subscribe` lives on the edge as sugar over the `subscription-configured`
    *  event, never a verb here. */
@@ -174,29 +173,19 @@ interface BuildBuiltInsDeps {
   rewriteRules: BuiltInScope["rewriteRules"];
   /** The stream's waitForEvent (the own context's — a wait never crosses a hop). */
   waitForEvent: BuiltInScope["waitForEvent"];
-  /** `facets.get(ref)` — address a facet by name, OR materialize `{ name, source, cacheKey?,
-   *  className }` (a loaded durable object hosted as the facet `name` of this stream — the public
-   *  `itx.facets.get(name, spec)` routes here; accepted trade: a busy stateful facet pins its
-   *  stream). */
-  facets: {
-    get(
-      ref:
-        | string
-        | { name: string; source: WorkerSource; cacheKey?: WorkerCacheKey; className: string },
-    ): FacetHandle;
-    delete(name: string): void;
-  };
-  /** The `env.ITX` / `globalOutbound` stub every worker this context loads receives — the
-   *  ItxEntrypoint loopback minted once for this context (the DO's `#itxHost`; itx-entrypoint.ts
-   *  for why it is never a raw getByName stub). */
-  host: Fetcher;
+  /** `facets.get(name, spec?)` — the public door, verbatim: address a running facet by name, or host
+   *  `spec` as the facet `name` (accepted trade: a busy stateful facet pins its stream). */
+  facets: { get(name: string, spec?: FacetSpec): FacetHandle };
+  /** The `ItxEntrypoint` stub a loaded worker gets as `env.ITX` and `globalOutbound` — the loopback
+   *  minted once for this context (the DO's `#itxEntrypoint`; itx-entrypoint.ts for why it is never a
+   *  raw getByName stub). */
+  itxEntrypoint: Fetcher;
 }
 
 /** Assemble the built-in scope for one context. Every entry closes over the context's identity —
  *  PRE-SCOPED, not policed: cross-project access is unspellable by construction. */
 export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> {
   const { projectId, path, iterateContextName, env } = deps;
-  const { host } = deps;
 
   /** THE stateless host — `itx.workers.get(spec)`: a fresh confined isolate (no DO, no storage,
    *  `env.ITX` bound) over the loaded WorkerEntrypoint, and ONE method on it by name — `run`,
@@ -213,8 +202,8 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
   ) => {
     const { worker } = await loadConfinedWorker({
       env,
-      host,
-      kind: "code",
+      itxEntrypoint: deps.itxEntrypoint,
+      kind: "worker",
       owner: iterateContextName,
       source: spec.source,
       cacheKey: spec.cacheKey,
@@ -248,13 +237,13 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
         await env.ITX_KV.delete(kvPrefix + k);
         return { ok: true };
       },
-      list: async (start = "") => {
+      list: async (prefix = "") => {
         // Paginate on the cursor: Cloudflare KV caps ONE list page at 1000 keys, so a single
         // `list()` would present page 1 as the whole truth (sweep/GC would orphan key 1001+). Drain.
         const out: string[] = [];
         for (let cursor: string | undefined; ; ) {
           const page = await env.ITX_KV.list({
-            prefix: kvPrefix + start,
+            prefix: kvPrefix + prefix,
             ...(cursor && { cursor }),
           });
           for (const k of page.keys) out.push(k.name.slice(kvPrefix.length));
@@ -265,14 +254,14 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
     },
     // Own-enumerable closures (NOT prototype methods) — the resolver's `Object.hasOwn` gate is why.
     append: (...e: StreamEventInput[]) => ownContext().append(...e),
-    read: (after?: number, limit?: number) => ownContext().read(after, limit),
+    read: (afterOffset?: number, limit?: number) => ownContext().read(afterOffset, limit),
     waitForEvent: deps.waitForEvent,
     // `cd` routes through the target context's own table, EXCEPT append/read, which skip the facet
     // hop straight to the log door (the physical fast path). Codec-named, so only THIS project is
     // reachable; the path resolves against THIS context (absolute, or relative with `.`/`..`).
-    cd: (target: string) =>
+    cd: (contextPath: string) =>
       new InvokeHandle((itxExpressionSteps) => {
-        const sibling = deps.context(resolveContextPath(path, target)); // a ReachableContext — real-typed seam
+        const sibling = deps.context(resolveContextPath(path, contextPath)); // a ReachableContext — real-typed seam
         const [first] = itxExpressionSteps;
         if (itxExpressionSteps.length === 1 && Array.isArray(first) && first[0] === "append")
           return sibling.append(...(first.slice(1) as StreamEventInput[]));
@@ -283,26 +272,13 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
     fetch: (request: Request) => deps.egress(request),
     rpcStubs: deps.rpcStubs,
     facets: {
-      get: (
-        name: string,
-        spec?: { source: WorkerSource; cacheKey?: WorkerCacheKey; className: string },
-      ) => {
+      get: (name: string, spec?: FacetSpec) => {
         if (typeof name !== "string")
           throw new Error(
             "itx.facets.get(name, spec?): name the facet; pass { source, className } to load and host it",
           );
-        return deps.facets.get(
-          spec
-            ? {
-                name,
-                source: spec.source,
-                ...(spec.cacheKey !== undefined && { cacheKey: spec.cacheKey }),
-                className: spec.className,
-              }
-            : name,
-        );
+        return deps.facets.get(name, spec);
       },
-      delete: (name: string) => deps.facets.delete(name),
     },
     subscriptions: deps.subscriptions,
     rewriteRules: deps.rewriteRules,

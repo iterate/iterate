@@ -25,14 +25,11 @@ import type { ItxExpression } from "../context/expression.ts";
 import { callOn, walkSteps } from "../context/dispatch.ts";
 import { FacetHandle, RpcStubHandle } from "../context/invoke-handle.ts";
 import { errorCode, reportIssue } from "../lib/errors.ts";
-import { createLogger } from "../lib/logs.ts";
 import { withTimeout } from "../lib/timeout.ts";
 import type { StreamEvent } from "./events.ts";
 import { consumesEvent, type ScannedRange } from "./processor.ts";
 import type { Subscription } from "./core-processor.ts";
 import type { Stream } from "./stream.ts";
-
-const log = createLogger("subscription-delivery");
 
 /** THE cursor of a subscription the stream delivers at-least-once. Memory is the truth for this
  *  incarnation; kv (`subscription-cursor:<name>`) mirrors it at DURABLE boundaries only — an
@@ -87,7 +84,7 @@ export class SubscriptionDelivery {
   }
 
   /** The post-commit hook: one pass over the rows. Fire-and-forget from append's view. */
-  onCommit(freshEvents: StreamEvent[], afterOffset: number, nextOffset: number): void {
+  onCommit(freshEvents: StreamEvent[], afterOffset: number, throughOffset: number): void {
     const rows = this.#stream.coreReducedState.subscriptions;
     for (const event of freshEvents) {
       switch (event.type) {
@@ -139,10 +136,10 @@ export class SubscriptionDelivery {
       // rides inside the NEXT delivered range (the subscriber's chain stays contiguous).
       if (events.length === 0) continue;
       const after = this.#lastDeliveredThroughOffset.get(name) ?? afterOffset;
-      this.#lastDeliveredThroughOffset.set(name, nextOffset);
-      this.#pushedEventBatches.set(name, { events, after, through: nextOffset });
+      this.#lastDeliveredThroughOffset.set(name, throughOffset);
+      this.#pushedEventBatches.set(name, { events, after, through: throughOffset });
       const chain = (this.#deliveryChainBySubscription.get(name) ?? Promise.resolve()).then(() =>
-        this.#deliverEventBatch(name, row, events, { after, through: nextOffset }),
+        this.#deliverEventBatch(name, row, events, { after, through: throughOffset }),
       );
       this.#deliveryChainBySubscription.set(
         name,
@@ -206,7 +203,14 @@ export class SubscriptionDelivery {
         this.#pushedEventBatches.delete(name);
         void call([events, range]).catch((error) => {
           if (errorCode(error) !== "RPC_STUB_OFFLINE")
-            log.warn("push delivery dropped", { event: "delivery.push.dropped", name, error });
+            console.warn({
+              event: "delivery.push.dropped",
+              namespace: "subscription-delivery",
+              message: "push delivery dropped",
+              name,
+              error: String(error),
+              errorStack: error instanceof Error ? error.stack : undefined,
+            });
         });
         return;
       }
@@ -238,17 +242,14 @@ export class SubscriptionDelivery {
     target: ItxExpression,
   ): Promise<{ head: unknown; call: (args: unknown[]) => Promise<unknown> }> {
     const last = target.at(-1);
-    const method = typeof last === "string" && target.length > 1 ? last : undefined;
+    // A trailing name is a METHOD only past the root and one more step: a two-step target
+    // (`itx.<alias>`) IS the callee and is root-called whole — peeling its name would leave the bare
+    // scope root as the head, which nothing can ever match.
+    const method = typeof last === "string" && target.length > 2 ? last : undefined;
     const head = await this.#evaluateItxExpression(method ? target.slice(0, -1) : target);
     const call = async (args: unknown[]): Promise<unknown> =>
       method
-        ? (
-            await walkSteps(
-              { value: head, receiver: undefined },
-              [[method, ...args]],
-              `subscription target ${JSON.stringify(method)}`,
-            )
-          ).value
+        ? (await walkSteps({ value: head, receiver: undefined }, [[method, ...args]])).value
         : callOn(head, undefined, args);
     return { head, call };
   }
@@ -328,8 +329,12 @@ export class SubscriptionDelivery {
         try {
           call ??= (await this.#evaluateItxExpressionTargetHead(row.target)).call;
           await withTimeout(call([eventBatch.events, range]), 20_000, `subscription "${name}"`);
-          // Removed or replaced while the call was in flight? Its progress belonged to the old row.
-          if (!this.#cursors.has(name)) continue;
+          // Removed or replaced while the call was in flight? Its progress belonged to the old row —
+          // and so did `call`: the next round evaluates the replacement's target.
+          if (!this.#cursors.has(name)) {
+            call = undefined;
+            continue;
+          }
           this.#adoptCursor(
             name,
             {
@@ -341,7 +346,10 @@ export class SubscriptionDelivery {
           );
           this.#recordActivityForQuietClock();
         } catch (error) {
-          if (!this.#cursors.has(name)) continue;
+          if (!this.#cursors.has(name)) {
+            call = undefined; // the row was replaced mid-flight: the NEW target is evaluated next round
+            continue;
+          }
           // A delivery-resumed that landed DURING this attempt is not yet applied: loop back and apply
           // it instead of arming the old ladder or, worse, appending a halt on top of the operator's resume.
           const latest = this.#stream.coreReducedState.subscriptions[name];

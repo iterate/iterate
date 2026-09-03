@@ -32,13 +32,6 @@
 //
 import type { ItxExpression } from "../context/expression.ts";
 
-/** The two hibernation-API hooks the DO-side machinery needs (`ctx.acceptWebSocket` /
- *  `ctx.getWebSockets`). Timeless — the stub pager uses it too. */
-export type WebSocketHooks = {
-  acceptWebSocket(ws: WebSocket, tags: string[]): void;
-  getWebSockets(tag: string): WebSocket[];
-};
-
 // ── THE ITX-EXPRESSION FETCH LANE (the `x-itx-expression` door) ──
 // A fetch-shaped capability is reached over HTTP by naming an itx expression in this header (the
 // edge worker copies `/expression?itx=` into it). The DO rewrites the expression through its rules
@@ -153,7 +146,7 @@ export async function dialRpcStubFetch(
   providerFetch: (request: Request) => Promise<unknown>,
   request: Request,
   upgradeId: string,
-  host: { fetch(url: string, init?: RequestInit): Promise<Response> },
+  durableObject: { fetch(url: string, init?: RequestInit): Promise<Response> },
 ): Promise<Response | FetchUpgradeMarker> {
   const response = (await providerFetch(request)) as {
     status?: number;
@@ -165,7 +158,7 @@ export async function dialRpcStubFetch(
   // drop any frame the provider sends immediately after upgrading (a server hello). The leg is a
   // plain fetch upgrade into the DO, opened mid-dial: the DO is awaiting the dial RPC and serves
   // this upgrade concurrently (no deadlock, probed); frames ride it RAW.
-  const legResponse = await host.fetch("https://fetch-upgrade.internal/", {
+  const legResponse = await durableObject.fetch("https://fetch-upgrade.internal/", {
     headers: { Upgrade: "websocket", [FETCH_UPGRADE_SOCKET_HEADER]: upgradeId },
   });
   const leg = legResponse.webSocket;
@@ -197,10 +190,10 @@ export async function dialRpcStubFetch(
  *  between them. One instance per DO, wired into its fetch / webSocketMessage / webSocketClose
  *  alongside the other doors. */
 export class RpcStubFetchServer {
-  readonly #hooks: WebSocketHooks;
+  readonly #ctx: Pick<DurableObjectState, "acceptWebSocket" | "getWebSockets">;
 
-  constructor(hooks: WebSocketHooks) {
-    this.#hooks = hooks;
+  constructor(ctx: Pick<DurableObjectState, "acceptWebSocket" | "getWebSockets">) {
+    this.#ctx = ctx;
   }
 
   /** Serve one fetch-shaped call on a lent rpc stub: dial through the transport; pass a plain
@@ -222,7 +215,7 @@ export class RpcStubFetchServer {
    *  answering a real 101 carrying the other half of the pair. */
   #acceptUpgradeSocket(side: "eyeball" | "leg", upgradeId: string): Response {
     const pair = new WebSocketPair();
-    this.#hooks.acceptWebSocket(pair[1], [upgradeTag(side, upgradeId)]);
+    this.#ctx.acceptWebSocket(pair[1], [upgradeTag(side, upgradeId)]);
     pair[1].serializeAttachment({
       fetchUpgrade: { upgradeId, side },
     } satisfies FetchUpgradeAttachment);
@@ -279,7 +272,7 @@ export class RpcStubFetchServer {
       ?.fetchUpgrade;
     if (!upgrade) return undefined;
     const peerSide = upgrade.side === "eyeball" ? "leg" : "eyeball";
-    return this.#hooks.getWebSockets(upgradeTag(peerSide, upgrade.upgradeId))[0] ?? null;
+    return this.#ctx.getWebSockets(upgradeTag(peerSide, upgrade.upgradeId))[0] ?? null;
   }
 }
 

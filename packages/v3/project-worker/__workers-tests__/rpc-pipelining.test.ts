@@ -37,11 +37,10 @@ test("the step walk threads a NATIVE RpcPromise unawaited — regression = this 
     abstract new () => unknown
   >;
   const itx = { transport: () => stub("prj_rpc_pipelining").rpcStubTransportState() };
-  const { value } = await walkSteps(
-    { value: itx, receiver: undefined },
-    [["transport"], "rpcStubPagers"],
-    "expression",
-  );
+  const { value } = await walkSteps({ value: itx, receiver: undefined }, [
+    ["transport"],
+    "rpcStubPagers",
+  ]);
   // NOT the settled number — the chain is still open (a pipelined property off a pipelined call)
   expect(value instanceof RpcProperty || value instanceof RpcPromise).toBe(true);
   expect(typeof (await value)).toBe("number"); // the terminal await settles the pipelined chain

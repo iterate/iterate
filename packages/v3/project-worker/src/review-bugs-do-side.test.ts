@@ -25,7 +25,10 @@ import {
 // EXPECTED: either the canonical spelling is key-order-normalized (one map row, a re-provide
 // REPLACES, as the MAP contract says), or the tie is broken deterministically rather than by
 // configuration order.
-test.fails("a pinned object arg picks the same rule whatever order the rules are scanned in", () => {
+// FIXED 2026-09-03 the first way: `print` sorts object keys, so both spellings are ONE canonical
+// match — one map row, the later provide replaces — and the picker never sees two equal-specificity
+// rows for one call. The proof below pins that.
+test("a pinned object arg picks the same rule whatever order the rules are scanned in", () => {
   const first = {
     match: parseItxExpressionPrefix("itx.ai.run({model:'x',fast:true})"),
     target: parse("itx.openai.chat"),
@@ -36,14 +39,17 @@ test.fails("a pinned object arg picks the same rule whatever order the rules are
   };
   const call = parse("itx.ai.run({model:'x',fast:true}, 'hello')");
 
-  // The two matches are two DIFFERENT rows of the rewrite-rule map…
-  expect(print(first.match)).not.toBe(print(second.match));
-  // …and BOTH of them claim this one call, with the same length and the same pin count.
+  // The two spellings are ONE canonical match — the same row of the rewrite-rule map…
+  expect(print(first.match)).toBe(print(second.match));
+  // …and either claims this call (the pinned object matches structurally, as before).
   expect(matchItxExpressionPrefix(first.match, call)).not.toBeNull();
   expect(matchItxExpressionPrefix(second.match, call)).not.toBeNull();
 
-  // So the winner must not depend on the order the table is scanned in.
-  expect(print(pickItxExpressionRewriteRule([first, second], call)!.rule.target)).toBe(
-    print(pickItxExpressionRewriteRule([second, first], call)!.rule.target),
+  // So the table (a record keyed by the canonical match) holds one rule, the later one — and the
+  // picker, handed the table's rows, finds exactly it whatever order they arrive in.
+  const table = Object.fromEntries([first, second].map((rule) => [print(rule.match), rule]));
+  expect(Object.keys(table)).toHaveLength(1);
+  expect(print(pickItxExpressionRewriteRule(Object.values(table), call)!.rule.target)).toBe(
+    "itx.anthropic.chat",
   );
 });

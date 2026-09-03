@@ -7,7 +7,7 @@
 // ONE such primitive, pipelinable over Workers RPC.
 
 import { codedError } from "../lib/errors.ts";
-import type { ItxExpression } from "./expression.ts";
+import { print, type ItxExpression } from "./expression.ts";
 import { InvokeHandle } from "./invoke-handle.ts";
 
 // Promise brands the step walk threads UNAWAITED (see walkSteps): property access and calls
@@ -44,17 +44,19 @@ function stepGet(value: object, key: string): unknown {
 export async function walkSteps(
   start: { value: unknown; receiver: unknown },
   steps: ItxExpression,
-  where: string,
 ): Promise<{ value: unknown; receiver: unknown }> {
   let { value, receiver } = start;
-  for (const step of steps) {
+  for (const [stepIndex, step] of steps.entries()) {
     // A pipelinable RPC promise (native workerd — PIPELINED_RPC_BRANDS) must NOT be awaited
     // mid-chain: property access and calls pipeline on it natively, so the whole chain reduces into
     // one round trip and the caller's terminal await settles it (a facet's `.get(n).method()`, a
     // loaded entrypoint's `.run()`). Everything else (plain promises, thenables) keeps the
     // await-every-step behavior.
     if (!pipelined(value)) value = await value;
-    if (value == null) throw new Error(`${where} hit ${String(value)} at ${JSON.stringify(step)}`);
+    if (value == null)
+      throw new Error(
+        `hit ${String(value)} at step ${stepIndex + 1} of ${print(steps)} (${JSON.stringify(step)})`,
+      );
     if (typeof step === "string") {
       receiver = value;
       value = stepGet(value as object, step);
@@ -69,7 +71,10 @@ export async function walkSteps(
       }
       const fn = stepGet(value as object, method);
       if (typeof fn !== "function")
-        throw codedError("NOT_A_METHOD", `${where}: ${JSON.stringify(method)} is not a method`);
+        throw codedError(
+          "NOT_A_METHOD",
+          `${JSON.stringify(method)} is not a method at step ${stepIndex + 1} of ${print(steps)}`,
+        );
       receiver = undefined;
       value = Reflect.apply(fn, value, args);
       if (!pipelined(value)) value = await value;

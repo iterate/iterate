@@ -64,7 +64,6 @@ describe("walkSteps + resolve", () => {
     const { value } = await walkSteps(
       { value: s.builtIns, receiver: undefined },
       parse("itx.facets.get({ className: 'CounterDurableObject' }).counters.add(2)").slice(1),
-      "expression",
     );
     expect(value).toBe(42);
   });
@@ -99,8 +98,7 @@ describe("walkSteps + resolve", () => {
 
   test("`__proto__` / `constructor` / `prototype` never resolve as steps (hand-built — the codec refuses to parse them)", async () => {
     const kv = { get: (k: string) => `v:${k}` };
-    const walk = (steps: ItxExpression) =>
-      walkSteps({ value: kv, receiver: undefined }, steps, "expression");
+    const walk = (steps: ItxExpression) => walkSteps({ value: kv, receiver: undefined }, steps);
     await expect(walk(["constructor", "name"])).rejects.toThrow(/hit undefined/);
     await expect(walk(["__proto__", "x"])).rejects.toThrow(/hit undefined/);
   });
@@ -144,7 +142,6 @@ describe("pipelined RPC promise threading", () => {
     const { value } = await walkSteps(
       { value: itx, receiver: undefined },
       parse("itx.dial().svc('x').add(2, 3)").slice(1),
-      "expression",
     );
     // no step awaited any intermediate — the chain BUILT on the promises
     expect(FakeRpcPromise.awaited).toEqual([]);
@@ -167,7 +164,6 @@ describe("pipelined RPC promise threading", () => {
     const { value } = await walkSteps(
       { value: itx, receiver: undefined },
       parse("itx.dial().svc('x')").slice(1),
-      "expression",
     );
     // the walk awaited the intermediate before stepping into it, and settled the tail too
     expect(awaited).toEqual(["dial", "dial.svc(x)"]);

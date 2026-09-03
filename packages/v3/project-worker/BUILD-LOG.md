@@ -1854,7 +1854,7 @@ and what landed:
   isolates pure-play via one `LOADED_WORKER_COMPATIBILITY`), `WorkerEntrypoint<Env, Props>`,
   `setWebSocketAutoResponse` once in the constructor, `Symbol.dispose` direct (fourteen polyfills
   gone, one of them a fake), `ItxBinding.waitForEvent`. Kept: `allow_irrevocable_stub_storage` —
-  it has a consumer (e2e/load-persistent-stub.e2e.test.ts).
+  it has a consumer (e2e/facets-persistent-stub.e2e.test.ts).
 - **Performance.** Verdict: ≥5000 ev/s met with 4× headroom durable (21.5k end-to-end) and 10×
   ephemeral; DO commit CPU is 40 µs / 175 µs per 50-event batch, so transport and storage commit
   are the bottleneck. Do not touch the SQLite schema or batch the INSERTs (measured no gain). Open:
@@ -2401,9 +2401,9 @@ options?)` with `options.rewrite`; chapter 1 reads `itx.provide("laptop", fn)`, 
 - `enableProcessor`'s target is `itx.facets.get(name, { source, className }).processEventBatch`; the
   DO's "did the removed row HOST a facet?" check is now "a `facets.get` with a spec" — one shape,
   three lines. `#invokeFacet` takes `{ name, source, className }` with `name` required.
-- Sweep: every e2e/workers-test chain re-spelled (load-sources, load-mid-chain-pipelining — the
+- Sweep: every e2e/workers-test chain re-spelled (workers-and-facets-sources, facets-mid-chain-pipelining — the
   dyn-worker→dyn-worker pipelining case now pipelines `facets.get(name, spec).demo.timer.callLater`;
-  load-persistent-stub, live-state-chains, subscriptions-ephemeral-opt-in, lineage, tour,
+  facets-persistent-stub, live-state-chains, subscriptions-ephemeral-opt-in, lineage, tour,
   alarm-quiesce, ephemeral-offset-reuse); `processorNames` matches `facets.get(…, {…}).processEventBatch`.
   Docs: as-built §5/§9/§10/§12 (C → decided), LAYERS, walkthrough, onion design (a dated note where
   the doc sketched the chain).
@@ -2478,7 +2478,7 @@ string>`, `cap.js` main). `workers.get({ source, cacheKey?, className?, props? }
   (`sourceVersion`), so a new key restarts the facet, storage surviving. The billing note stays.
 - Reverses part of B on purpose: the producer is back, but only WITH the key that makes it safe.
 - Tests: worker-loader.test.ts pins refused-without-key, produced-once-per-cold-key, re-produced on a
-  new key, content-hash vs named key; load-sources.e2e proves it end to end with a LIVE code store
+  new key, content-hash vs named key; workers-and-facets-sources.e2e proves it end to end with a LIVE code store
   (counts evaluations) for a stateless worker and a facet (`facets.get(name)` re-materializes from the
   memo, producer count still 1).
 - GATES: tsc×3 · oxlint 0/0 · knip clean · unit+workers 252 · e2e 141p/2xf (36 files).
@@ -2518,3 +2518,41 @@ bugs-edge-side,layering,workerd-idioms,futures}.md`; the smells and performance 
   in the day's gates. Fixed by passing the modules literally (`source: { "cap.js": PRESENCE_SRC }`),
   demo page regenerated; Playwright 2/2. Lesson recorded: `pnpm spec` joins the gate list whenever
   `src/client/*` or the SDK surface moves.
+
+## 2026-09-03 — the review's small renames and deletions applied; ten bugs fixed under ten lines each
+
+- Jonas: "please do all the small renames and deletions and any docs fixup and also fix any bugs with
+  obvious no brainer fixes with < 10 LOC".
+- DELETIONS: `lib/logs.ts` (one consumer — the warn is inline now); the write-only `inFlight` counter on
+  borrowed stubs; the SDK host's three unused protected members (the scope is `this.env.ITX.get()`,
+  typed); the coined `WebSocketHooks` (both classes hold `#ctx: Pick<DurableObjectState, …>`);
+  `walkSteps`'s caller-invented `where` (the walk names its own step: `"x" is not a method at step 3
+of itx.kv.x()`); `InvokeHandle.invoke` takes the structured half only (a relative expression has no
+  string spelling); the `itx.facets.delete` built-in (zero callers, and wrong — the row that hosts a
+  facet outlives it); the lazily-born core `LiveState` (born in the `Stream` constructor; the false
+  `rev: 0` fallback is gone).
+- RENAMES: `nextOffset` → `throughOffset` (it is the batch's LAST offset), `after` → `afterOffset`;
+  `#itxHost` / deps `host` → `itxEntrypoint` (it IS the `ItxEntrypoint` stub; `dialRpcStubFetch`'s
+  `host` → `durableObject`); the DO's `#name` → `#durableObjectAddress` (what it holds); loader
+  `kind: "code"` → `"worker"` (the door is `itx.workers.get`); built-in closures take their
+  interface's parameter names (`prefix`, `afterOffset`, `contextPath`; `resolveContextPath(basePath,
+contextPath)`); `StreamEventT` aliases dropped; egress `sub` → `substitutedRequest`; the four
+  `60_000`s are `IDLE_QUIESCE_AFTER_MS` and `FACET_CALL_WATCHDOG_MS`. ONE `FacetSpec` (`{ source,
+cacheKey?, className }`) spells the hosting spec everywhere, and `enableProcessor(name, spec)` now
+  carries `cacheKey`. The two uncoded page exits are `RPC_STUB_OFFLINE`.
+- BUGS FIXED (proofs flipped from `test.fails` to `test`): a two-step subscription target
+  `itx.<alias>` is delivered to (guard `> 2`); a subscription re-configured mid-delivery re-evaluates
+  its target (`call = undefined` on the replaced-row branch); a `subscribe` the DO refuses recalls
+  the lend (the try/catch `provide` had); replacing a live target with an expression recalls the lend
+  (both verbs); `subscribe`'s handle records `lentHere` instead of sniffing the target's spelling;
+  an expression rule's undo un-sets ONLY the rule it wrote (reads the row first — a live provider's
+  later rule survives a stale handle); a removal deletes a facet only when no remaining row hosts it;
+  a pager swap parks the in-flight page and re-sends it down the NEW pager; the live-state client
+  re-heals when a delta arrived during a heal; object args PRINT with sorted keys, so two spellings
+  of one pinned object are ONE rule row (the proof and one codec pin re-pinned to the canonical
+  spelling). Also, with no proof: the core reduce runs into a LOCAL and the fields move after the
+  transaction commits — a failed checkpoint write can no longer leave phantom core state.
+- LEFT RED, both over ten lines: the cursor-lane stranding after an eviction (rows vs cursors, and an
+  alarm to arm) and a failed `getCode` poisoning its cacheKey (Cloudflare caches the failure).
+- GATES: tsc×3 · oxlint 0/0 · knip clean · unit+workers 259p/1xf · e2e 145p/3xf (38 files) ·
+  Playwright 2. Docs and test titles: a parallel agent, committed separately.

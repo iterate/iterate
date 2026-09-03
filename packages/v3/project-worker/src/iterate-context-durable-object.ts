@@ -39,12 +39,7 @@
 
 import { DurableObject } from "cloudflare:workers";
 import { substituteHeaderSecrets } from "@v3/shared/egress";
-import {
-  facetLoaderOwner,
-  loadConfinedWorker,
-  type WorkerCacheKey,
-  type WorkerSource,
-} from "./context/worker-loader.ts";
+import { facetLoaderOwner, loadConfinedWorker, type FacetSpec } from "./context/worker-loader.ts";
 import { CoreContract, type CoreState } from "./stream/core-processor.ts";
 import { codedError, errorCode } from "./lib/errors.ts";
 import { withTimeout } from "./lib/timeout.ts";
@@ -88,6 +83,13 @@ function parseIterateContextDurableObjectName(name: string | undefined) {
   return DurableObjectNameCodec.parse(name);
 }
 
+/** How long a context stays quiet — no call, no delivery, no borrow — before the alarm aborts its
+ *  idle facets and returns its borrowed rpc stubs so the actor can hibernate. */
+const IDLE_QUIESCE_AFTER_MS = 60_000;
+/** How long one facet call may take before the facet is aborted (a call that never answers would
+ *  hold the quiesce, and with it this actor, forever). */
+const FACET_CALL_WATCHDOG_MS = 60_000;
+
 /** The core reduce's facet-shaped address (`itx.facets.get('core')`) — always on, never deletable,
  *  and reserved as a subscription name. */
 const CORE_SLUG = CoreContract.slug;
@@ -109,18 +111,18 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   /** WHO THIS DO IS — the first line, the apps/os shape: the DO name parsed ONCE into `{ name,
    *  projectId, path }` (`name` is the codec string itself). A context is only ever reached
    *  `getByName`; an id-addressed instance fails right here, before it can touch anything. */
-  readonly #name = parseIterateContextDurableObjectName(this.ctx.id.name);
+  readonly #durableObjectAddress = parseIterateContextDurableObjectName(this.ctx.id.name);
   /** The `env.ITX` / `globalOutbound` stub every worker this context loads receives — a loopback onto
    *  this worker's own ItxEntrypoint with this context's name as its one prop. Minted once: it names
    *  the context, not an incarnation, and a warm loader never re-reads it anyway. */
-  readonly #itxHost = itxEntrypointFor(this.ctx, this.#name.name);
+  readonly #itxEntrypoint = itxEntrypointFor(this.ctx, this.#durableObjectAddress.name);
   /** The rpc-stub fetch subsystem (fetch/rpc-stub-fetch.ts) — the DO wires its three halves
    *  directly: the upgrade-leg door (fetch), frame forwarding (webSocketMessage), and peer close
    *  (webSocketClose); the rpc-stub directory borrows it for serve(). */
   readonly #rpcStubFetch = new RpcStubFetchServer(this.ctx);
   readonly #rpcStubs = new RpcStubDirectory({
     rpcStubFetch: this.#rpcStubFetch,
-    hooks: this.ctx,
+    ctx: this.ctx,
     // PRESENCE, as it changes: an EPHEMERAL fact a live watcher can subscribe to (`consumes:
     // ["events.iterate.com/rpc-stub/attached", …]`), never a durable row — presence is physical
     // (`itx.rpcStubs.list()`), and the log must never claim a socket is open. A refusal (a paused
@@ -177,14 +179,14 @@ export class IterateContextDurableObject extends DurableObject<Env> {
 
   /** THE STREAM — the commit point AND the core reduce (stream/stream.ts: `append` is the pipeline
    *  top to bottom — may-this-land, offsets, reduce + commit, after — and `coreReducedState` is the stream's own
-   *  reduced state, reduced inside every commit). The name check already happened above (`#name`).
+   *  reduced state, reduced inside every commit). The name check already happened above (`#durableObjectAddress`).
    *  Its one callback, `onCommit`, is the post-commit fan-out: the ONE delivery loop. */
   readonly #stream = new Stream({
     storage: this.ctx.storage,
-    path: this.#name.path,
-    projectId: this.#name.projectId,
-    onCommit: (freshEvents, afterOffset, nextOffset) =>
-      this.#subscriptionDelivery.onCommit(freshEvents, afterOffset, nextOffset),
+    path: this.#durableObjectAddress.path,
+    projectId: this.#durableObjectAddress.projectId,
+    onCommit: (freshEvents, afterOffset, throughOffset) =>
+      this.#subscriptionDelivery.onCommit(freshEvents, afterOffset, throughOffset),
   });
 
   /** Commit events: idempotency-checked, offsets assigned from ONE shared sequence (ephemeral
@@ -216,20 +218,29 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     committedEvents: StreamEvent[],
     subscriptionsBeforeCommit: CoreState["subscriptions"],
   ): void {
+    // The facet a row HOSTS: `itx.facets.get(name, spec)…` — a `get` with a spec; an address-only
+    // `itx.facets.get(name)…` hosts nothing.
+    const hostedFacetName = (target: ItxExpression): string | undefined => {
+      const [, root, getStep] = target;
+      return root === "facets" &&
+        Array.isArray(getStep) &&
+        getStep[0] === "get" &&
+        getStep.length >= 3 &&
+        typeof getStep[1] === "string"
+        ? getStep[1]
+        : undefined;
+    };
     for (const event of committedEvents) {
       if (event.type !== "events.iterate.com/stream/subscription-configured") continue;
       const { name, target } = event.payload as { name: string; target: string | null };
       const removedRow = target === null ? subscriptionsBeforeCommit[name] : undefined;
-      if (!removedRow) continue;
-      const [, root, getStep] = removedRow.target;
-      if (
-        root === "facets" &&
-        Array.isArray(getStep) &&
-        getStep[0] === "get" &&
-        getStep.length >= 3 && // a spec: the row hosted the facet
-        typeof getStep[1] === "string"
-      )
-        this.#deleteFacet(getStep[1]);
+      const facetName = removedRow && hostedFacetName(removedRow.target);
+      if (!facetName) continue;
+      // Another row still hosts it (a mirror, an audit): the facet is theirs now, not gone.
+      const stillHosted = Object.values(this.#stream.coreReducedState.subscriptions).some(
+        (row) => hostedFacetName(row.target) === facetName,
+      );
+      if (!stillHosted) this.#deleteFacet(facetName);
     }
   }
 
@@ -250,17 +261,20 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   readonly #itxExpressionResolver = new ItxExpressionResolver({
     rewriteRules: () => Object.values(this.#stream.coreReducedState.itxExpressionRewriteRules),
     builtIns: buildBuiltIns({
-      projectId: this.#name.projectId,
-      path: this.#name.path,
-      iterateContextName: this.#name.name,
+      projectId: this.#durableObjectAddress.projectId,
+      path: this.#durableObjectAddress.path,
+      iterateContextName: this.#durableObjectAddress.name,
       env: this.env,
       invoke: (call) => this.invoke(call),
       // a sibling context by path; the own path is this DO as a uniform-async ReachableContext (stream.ts)
       context: (p) =>
-        p === this.#name.path
+        p === this.#durableObjectAddress.path
           ? localReachableContext(this)
           : this.env.ITERATE_CONTEXT.getByName(
-              DurableObjectNameCodec.stringify({ projectId: this.#name.projectId, path: p }),
+              DurableObjectNameCodec.stringify({
+                projectId: this.#durableObjectAddress.projectId,
+                path: p,
+              }),
             ),
       egress: (request) => this.#egress(request),
       // THE LIVE-STUB REGISTRY, DO half: `get(key)` is the transport's pipelinable handle (a GENUINE
@@ -282,9 +296,10 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       // The facets view is PARENT-LOCAL — the facets live here and can never move (workerd#6702:
       // sockets never leave the parent). Branded FacetHandle for the delivery loop.
       facets: {
-        get: (ref) =>
-          new FacetHandle((itxExpressionSteps) => this.#invokeFacet(ref, itxExpressionSteps)),
-        delete: (name) => this.#deleteFacet(name),
+        get: (name, spec) =>
+          new FacetHandle((itxExpressionSteps) =>
+            this.#invokeFacet(name, spec, itxExpressionSteps),
+          ),
       },
       subscriptions: {
         list: () => this.#subscriptionList(),
@@ -302,7 +317,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         },
       },
       waitForEvent: (filter) => this.#stream.waitForEvent(filter),
-      host: this.#itxHost,
+      itxEntrypoint: this.#itxEntrypoint,
     }),
   });
 
@@ -352,7 +367,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     // that. `#lastActivityMs` still updates, so the first facet materialization (#invokeFacet's
     // `finally` re-notes after `#liveFacetNames` grows) or borrow arms with an honest quiet-period start.
     if (this.#liveFacetNames.size === 0 && !this.#rpcStubs.hasBorrowedRpcStubs()) return;
-    this.#stream.armNoLaterThan(this.#lastActivityMs + 60_000);
+    this.#stream.armNoLaterThan(this.#lastActivityMs + IDLE_QUIESCE_AFTER_MS);
   }
 
   /** EVERY facet materialized this incarnation, by name. The quiesce alarm aborts the whole set in
@@ -371,7 +386,10 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     // pins nothing local (a facet it calls into is counted by #facetWorkInFlight for the call), so the
     // quiesce below needs no count of its own.
     await this.#subscriptionDelivery.deliverEveryCursorSubscription();
-    if (Date.now() - this.#lastActivityMs >= 60_000 && this.#facetWorkInFlight === 0) {
+    if (
+      Date.now() - this.#lastActivityMs >= IDLE_QUIESCE_AFTER_MS &&
+      this.#facetWorkInFlight === 0
+    ) {
       for (const facetName of this.#liveFacetNames) {
         try {
           this.ctx.facets.abort(facetName, "idle quiesce");
@@ -386,7 +404,9 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     } else {
       // Not quiet yet — look again when the quiet period would end; but never in the PAST (work in
       // flight for over a minute would otherwise re-fire this alarm in a tight, billed loop).
-      this.#stream.armNoLaterThan(Math.max(this.#lastActivityMs + 60_000, Date.now() + 10_000));
+      this.#stream.armNoLaterThan(
+        Math.max(this.#lastActivityMs + IDLE_QUIESCE_AFTER_MS, Date.now() + 10_000),
+      );
     }
   }
 
@@ -398,15 +418,15 @@ export class IterateContextDurableObject extends DurableObject<Env> {
    *  to bottom: the startup memo → the load → the racing-delete check → the class + version marker →
    *  the call under the watchdog → copy + dispose the answer. */
   async #invokeFacet(
-    ref:
-      | string
-      | { name: string; source: WorkerSource; cacheKey?: WorkerCacheKey; className: string },
+    name: string,
+    spec: FacetSpec | undefined,
     itxExpressionSteps: ItxExpression,
   ): Promise<unknown> {
     if (itxExpressionSteps.length === 0) throw new Error(`facet: name a method`);
     // The core reduce answers at its facet-shaped address with a synthesized view — it is not a
-    // facet, pins nothing, and needs no watchdog.
-    if (ref === CORE_SLUG)
+    // facet, pins nothing, needs no watchdog, and can never be hosted.
+    if (name === CORE_SLUG) {
+      if (spec) throw new Error(`"${name}" is the core reduce — never a facet name`);
       return (
         await walkSteps(
           {
@@ -418,29 +438,26 @@ export class IterateContextDurableObject extends DurableObject<Env> {
             receiver: undefined,
           },
           itxExpressionSteps,
-          `facet "${CORE_SLUG}"`,
         )
       ).value;
-    // THE STARTUP MEMO `facet:<name>` = { source, cacheKey?, className } in this DO's kv (the source
-    // is its modules, literally, or the producer expression — stored as given): a hosting spec writes
-    // it (when it changed) BEFORE the load, so `itx.facets.get(name)` alone re-materializes the facet
-    // after an eviction; a bare name reads it — an unknown name is NO_FACET.
-    const name = typeof ref === "string" ? ref : ref.name;
-    if (name === CORE_SLUG) throw new Error(`"${name}" is the core reduce — never a facet name`);
-    let memo = this.ctx.storage.kv.get(`facet:${name}`) as
-      | { source: WorkerSource; cacheKey?: WorkerCacheKey; className: string }
-      | undefined;
-    if (typeof ref !== "string") {
-      const spec = {
-        source: ref.source,
-        ...(ref.cacheKey !== undefined && { cacheKey: ref.cacheKey }),
-        className: ref.className,
-      };
-      if (!memo || JSON.stringify(memo) !== JSON.stringify(spec))
-        this.ctx.storage.kv.put(`facet:${name}`, spec);
-      memo = spec;
     }
-    if (!memo) throw codedError("NO_FACET", `no facet "${name}" — load a class into it first`);
+    // THE STARTUP MEMO `facet:<name>` = the FacetSpec in this DO's kv (the source is its modules,
+    // literally, or the producer expression — stored as given): a hosting spec writes it (when it
+    // changed) BEFORE the load, so `itx.facets.get(name)` alone re-materializes the facet after an
+    // eviction; a bare name reads it — an unknown name is NO_FACET.
+    let facetStartupMemo = this.ctx.storage.kv.get(`facet:${name}`) as FacetSpec | undefined;
+    if (spec) {
+      const storedSpec: FacetSpec = {
+        source: spec.source,
+        ...(spec.cacheKey !== undefined && { cacheKey: spec.cacheKey }),
+        className: spec.className,
+      };
+      if (!facetStartupMemo || JSON.stringify(facetStartupMemo) !== JSON.stringify(storedSpec))
+        this.ctx.storage.kv.put(`facet:${name}`, storedSpec);
+      facetStartupMemo = storedSpec;
+    }
+    if (!facetStartupMemo)
+      throw codedError("NO_FACET", `no facet "${name}" — load a class into it first`);
     // Counted so a CONCURRENT alarm's quiesce never aborts the facet mid-call.
     this.#facetWorkInFlight++;
     try {
@@ -448,26 +465,27 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       // is reused and a producer expression runs only on a cold one.
       const { worker, sourceVersion } = await loadConfinedWorker({
         env: this.env,
-        host: this.#itxHost,
+        itxEntrypoint: this.#itxEntrypoint,
         kind: "facet",
-        owner: facetLoaderOwner(this.#name.name, memo.className),
-        source: memo.source,
-        cacheKey: memo.cacheKey,
+        owner: facetLoaderOwner(this.#durableObjectAddress.name, facetStartupMemo.className),
+        source: facetStartupMemo.source,
+        cacheKey: facetStartupMemo.cacheKey,
         invoke: (call) => this.invoke(call),
         where: `facet "${name}"`,
       });
       // The load awaited: a `facets.delete(name)` (disableProcessor) may have landed meanwhile — its
-      // memo is gone, and materializing now would resurrect the deleted facet as an orphan this
+      // facetStartupMemo is gone, and materializing now would resurrect the deleted facet as an orphan this
       // actor never quiesces. Refuse instead; the caller's row is gone too.
       if (!this.ctx.storage.kv.get(`facet:${name}`))
         throw codedError("NO_FACET", `no facet "${name}" — deleted while its source loaded`);
       // THE CLASS, minted with its identity (`ctx.props`), and THE VERSION MARKER: a source change
       // within a deploy (new content hash, or a new cacheKey) restarts the facet in place, its storage
       // surviving (the deploy id is already in the loader's cacheKey).
-      const klass = worker.getDurableObjectClass(memo.className, {
-        props: { iterateContextName: this.#name.name, name },
+      const klass = worker.getDurableObjectClass(facetStartupMemo.className, {
+        props: { iterateContextName: this.#durableObjectAddress.name, name },
       });
-      if (!klass) throw new Error(`loaded worker does not export class "${memo.className}"`);
+      if (!klass)
+        throw new Error(`loaded worker does not export class "${facetStartupMemo.className}"`);
       const previousSourceVersion = this.ctx.storage.kv.get(`facet:${name}:version`) as
         | string
         | undefined;
@@ -487,19 +505,21 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       // receiver-preservingly (walkSteps). THE WATCHDOG: a call that never answers would hold
       // `#facetWorkInFlight` — and with it the quiesce, and with THAT this actor — forever; past 60 s
       // the facet is aborted (its pending call rejects, the counter drains, the next call
-      // re-materializes it from its memo).
+      // re-materializes it from its facetStartupMemo).
       const [first] = itxExpressionSteps;
       const call =
         itxExpressionSteps.length === 1 && Array.isArray(first) && first[0] === "fetch"
           ? (facet as { fetch(r: Request): Promise<Response> }).fetch(first[1] as Request)
-          : walkSteps(
-              { value: facet, receiver: undefined },
-              itxExpressionSteps,
-              `facet "${name}"`,
-            ).then((walked) => walked.value);
+          : walkSteps({ value: facet, receiver: undefined }, itxExpressionSteps).then(
+              (walked) => walked.value,
+            );
       let result: unknown;
       try {
-        result = await withTimeout(call, 60_000, `facet "${name}" ${print(itxExpressionSteps)}`);
+        result = await withTimeout(
+          call,
+          FACET_CALL_WATCHDOG_MS,
+          `facet "${name}" ${print(itxExpressionSteps)}`,
+        );
       } catch (error) {
         if (errorCode(error) === "TIMEOUT") {
           try {
@@ -617,19 +637,19 @@ export class IterateContextDurableObject extends DurableObject<Env> {
    *  leak the secret's NAME to the external destination and send a garbage credential in its place.
    *  (`platform`-scope tokens pass through untouched — the next door down owns those.) */
   async #egress(request: Request): Promise<Response> {
-    const sub = await substituteHeaderSecrets(request, "project", (name) =>
+    const substitutedRequest = await substituteHeaderSecrets(request, "project", (name) =>
       this.env.SECRETS_KV
-        ? this.env.SECRETS_KV.get(`secret:${this.#name.projectId}:${name}`)
+        ? this.env.SECRETS_KV.get(`secret:${this.#durableObjectAddress.projectId}:${name}`)
         : null,
     );
     const unresolvedProjectToken = (value: string) =>
       /\{\{secret:project:[a-zA-Z0-9._-]+\}\}/.exec(value)?.[0];
-    const inUrl = unresolvedProjectToken(sub.url);
+    const inUrl = unresolvedProjectToken(substitutedRequest.url);
     if (inUrl)
       return new Response(`egress: no stored project secret for ${inUrl} in the request URL\n`, {
         status: 502,
       });
-    for (const [header, value] of sub.headers) {
+    for (const [header, value] of substitutedRequest.headers) {
       const token = unresolvedProjectToken(value);
       if (token)
         return new Response(
@@ -637,7 +657,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
           { status: 502 },
         );
     }
-    return this.env.FALLBACK.fetch(sub);
+    return this.env.FALLBACK.fetch(substitutedRequest);
   }
 
   webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): void {

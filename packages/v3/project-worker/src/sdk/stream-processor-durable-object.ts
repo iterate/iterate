@@ -31,10 +31,6 @@ import { DurableObject } from "cloudflare:workers";
 import { ProcessorEngine, type ScannedRange, type StreamProcessor } from "../stream/processor.ts";
 import type { StreamEvent } from "../stream/events.ts";
 import type { ItxEntrypoint } from "../itx-entrypoint.ts";
-import {
-  DurableObjectNameCodec,
-  type DurableObjectAddress,
-} from "../context/durable-object-names.ts";
 
 /** What the parent mints the class with — the whole identity. */
 export type StreamProcessorProps = { iterateContextName: string; name: string };
@@ -46,19 +42,8 @@ export abstract class StreamProcessorDurableObject<
   /** The processor this object hosts — `processor = new PresenceProcessor()` at the top of the subclass. */
   abstract readonly processor: StreamProcessor<State>;
 
-  // ── what an author reaches ──
+  // ── what an author reaches (the itx scope is `this.env.ITX.get()`, typed; identity is `this.ctx.props`) ──
 
-  /** The owning context's parsed address — `{ projectId, path, name }`, `name` its canonical codec
-   *  string (the same object the context DO holds). From `ctx.props.iterateContextName`. */
-  protected readonly context: DurableObjectAddress = DurableObjectNameCodec.parse(
-    this.ctx.props.iterateContextName,
-  );
-  /** This processor's own name: the facet name, the subscription name, the `.get(name)` name. */
-  protected readonly name: string = this.ctx.props.name;
-  /** The owning context's itx scope — what a capnweb client holds, reached through `env.ITX`. */
-  protected get itx(): Promise<unknown> {
-    return this.env.ITX.get();
-  }
   /** Emit a delta for the current projection if it changed — after a runtime field on the processor
    *  moved OUTSIDE a batch (an RPC method on this object). Inside `processEvent` the engine
    *  re-projects after the batch on its own. */
