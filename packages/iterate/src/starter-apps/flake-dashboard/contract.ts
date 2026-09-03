@@ -130,21 +130,23 @@ export const flakeTransitionThresholds = {
 
 /**
  * The exact shape of a delivered event this app ingests: a platform-verified
- * GitHub webhook for a COMPLETED workflow_run on a connection stream. Zod
+ * GitHub webhook for a COMPLETED check_run on a connection stream. This
+ * repo's test suites run on Depot CI, whose jobs are GitHub check runs (NOT
+ * GitHub Actions workflow runs — `workflow_run` never fires for them). Zod
  * strips the rest of GitHub's (huge) payload; only these fields are read.
  */
-export const WorkflowRunWebhookEvent = z.object({
+export const CheckRunWebhookEvent = z.object({
   type: z.literal("events.iterate.com/github/webhook-received"),
   path: z.string().regex(/^\/integrations\/github\/[^/]+$/),
   payload: z.object({
-    delivery: z.object({ name: z.literal("workflow_run") }),
+    delivery: z.object({ name: z.literal("check_run") }),
     body: z.object({
       action: z.literal("completed"),
-      workflow_run: z.object({
-        id: z.number().int().positive(),
-        run_attempt: z.number().int().positive().optional(),
-        head_branch: z.string().nullish(),
-        head_sha: z.string().nullish(),
+      check_run: z.object({
+        // Cancelled/skipped checks upload no fresh artifacts worth scanning.
+        conclusion: z.enum(["success", "failure"]),
+        head_sha: z.string().min(1),
+        check_suite: z.object({ head_branch: z.string().nullish() }).optional(),
       }),
       repository: z.object({
         name: z.string().min(1),
