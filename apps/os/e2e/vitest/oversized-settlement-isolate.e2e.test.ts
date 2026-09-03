@@ -114,12 +114,17 @@ failReset("the stream DO survives journaling oversized script results", async ()
   // reboot in the journal (the settlement is then journaled by the next
   // incarnation and the run reports success). With the fix every run rejects
   // with the bounded explanation instead, which is the fix and is swallowed.
+  // Only the reset's own spellings (all three seen on real workerd) count as
+  // the pinned failure; anything else — transport, auth, a hang — is rethrown
+  // so it cannot hold the pin.
+  const RESET = /caused object to be reset|exceeded its memory limit|went away/i;
   const resets: string[] = [];
   for (let run = 0; run < 4; run++) {
     await project.capabilityHost
       .runScript(`async () => ({ stdout: "iVBORw0KGgo".repeat(1_334_568) })`)
       .catch((error: unknown) => {
         if (/too large to retain/i.test(String(error))) return; // the fix
+        if (!RESET.test(String(error))) throw error;
         resets.push(String(error));
       });
   }
@@ -140,6 +145,7 @@ failReset("the stream DO survives journaling oversized script results", async ()
     })
     .then((page) => page.events.map((event) => event.type.replace("events.iterate.com/", "")))
     .catch((error: unknown): string[] => {
+      if (!RESET.test(String(error))) throw error;
       resets.push(String(error));
       return [];
     });
