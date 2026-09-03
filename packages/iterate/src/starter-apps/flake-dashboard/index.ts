@@ -1,12 +1,17 @@
 import type { DynamicWorkerCapability, ItxBinding, StreamEvent } from "../../sdk.ts";
 import { flakeDashboardWorkerRef, flakesStreamPath } from "./app-ref.ts";
 import { CheckRunWebhookEvent } from "./contract.ts";
-import type { FlakeDashboardApp as FlakeDashboardWorker } from "./worker.ts";
+import type { DepotIngestionConfig, FlakeDashboardApp as FlakeDashboardWorker } from "./worker.ts";
 
 export { flakeDashboardCreationEvents, flakesStreamPath } from "./app-ref.ts";
 
 export const FlakeDashboardApp = {
-  create(env: { ITX: Pick<ItxBinding, "get"> }) {
+  /**
+   * `config.depot` points ingestion at the project's own CI artifact store;
+   * omit it to run the dashboard without check_run ingestion (records can
+   * still arrive by any other append to /flakes).
+   */
+  create(env: { ITX: Pick<ItxBinding, "get"> }, config?: { depot?: DepotIngestionConfig }) {
     return {
       async processEvent(event: StreamEvent): Promise<void> {
         // Pure routing: /flakes events and completed workflow_run webhooks
@@ -23,7 +28,7 @@ export const FlakeDashboardApp = {
         using worker = project.workers.get(flakeDashboardWorkerRef) as DynamicWorkerCapability<
           Pick<FlakeDashboardWorker, "processEvent">
         >;
-        await worker.processEvent(event);
+        await worker.processEvent(event, { depot: config?.depot });
       },
     };
   },

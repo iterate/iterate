@@ -23,9 +23,17 @@ import {
 } from "./contract.ts";
 
 const ARTIFACT_PREFIX = "flake-records-";
-/** Where the Depot org API read token lives as a project secret (ops-created). */
-const DEPOT_TOKEN_SECRET_PATH = "/secrets/depot-ci-token";
-const DEPOT_ORG_ID = "0p91s0lz49";
+
+/**
+ * Where a project's CI artifacts live. Supplied by the config worker
+ * (FlakeDashboardApp.create's config) — the starter app itself carries no
+ * organization identity. secretPath names a project secret holding a
+ * Depot org API read token.
+ */
+export interface DepotIngestionConfig {
+  orgId: string;
+  secretPath: string;
+}
 const MAX_ARTIFACT_BYTES = 5 * 1024 * 1024;
 
 /**
@@ -57,15 +65,23 @@ export class FlakeDashboardApp extends StreamProcessorDurableObject<FlakeDashboa
    * re-reads committed events from the stream and owns validation, ordering,
    * checkpointing, and dedupe.
    */
-  override async processEvent(event: StreamEvent): Promise<void> {
+  override async processEvent(
+    event: StreamEvent,
+    options?: { depot?: DepotIngestionConfig },
+  ): Promise<void> {
     const webhook = CheckRunWebhookEvent.safeParse(event);
     if (webhook.success) {
+      if (options?.depot === undefined) {
+        // Platform-direct delivery, or a config worker mounted without CI
+        // ingestion: nothing to pull from.
+        return;
+      }
       // Telemetry must never wedge event delivery: a throw from ingestion
       // would fail the delivery batch and retry the same poisoned webhook
       // forever, stalling every app behind it. Any failure — Depot down, an
       // unreadable zip — logs and drops this run's records.
       try {
-        await this.#ingestCheckRunFlakeArtifacts(webhook.data);
+        await this.#ingestCheckRunFlakeArtifacts(webhook.data, options.depot);
       } catch (error) {
         console.error(
           `[flake-ingest] ingestion failed for sha ${webhook.data.payload.body.check_run.head_sha} (records dropped):`,
@@ -92,19 +108,20 @@ export class FlakeDashboardApp extends StreamProcessorDurableObject<FlakeDashboa
    */
   async #ingestCheckRunFlakeArtifacts(
     webhook: (typeof CheckRunWebhookEvent)["_output"],
+    depot: DepotIngestionConfig,
   ): Promise<void> {
     const { check_run: checkRun, repository } = webhook.payload.body;
     const params = { owner: repository.owner.login, repo: repository.name };
     using itx = await this.env.ITX.get();
-    const token = await itx.secrets.get(DEPOT_TOKEN_SECRET_PATH).reveal();
+    const token = await itx.secrets.get(depot.secretPath).reveal();
 
-    const depot = async <T>(method: string, body: unknown): Promise<T> => {
+    const depotRpc = async <T>(method: string, body: unknown): Promise<T> => {
       const response = await fetch(`https://api.depot.dev/depot.ci.v1.CIService/${method}`, {
         method: "POST",
         headers: {
           "content-type": "application/json",
           authorization: `Bearer ${token}`,
-          "x-depot-org": DEPOT_ORG_ID,
+          "x-depot-org": depot.orgId,
         },
         body: JSON.stringify(body),
       });
@@ -119,14 +136,14 @@ export class FlakeDashboardApp extends StreamProcessorDurableObject<FlakeDashboa
 
     // sha matches either the run's merge sha or its head sha, so PR-triggered
     // and push-triggered runs both resolve.
-    const runs = await depot<{ runs?: { run_id: string }[] }>("ListRuns", {
+    const runs = await depotRpc<{ runs?: { run_id: string }[] }>("ListRuns", {
       repo: `${params.owner}/${params.repo}`,
       sha: checkRun.head_sha,
       status: ["finished", "failed"],
       page_size: 10,
     });
     for (const run of runs.runs || []) {
-      const listed = await depot<{
+      const listed = await depotRpc<{
         artifacts?: {
           artifact_id: string;
           name: string;
@@ -165,7 +182,7 @@ export class FlakeDashboardApp extends StreamProcessorDurableObject<FlakeDashboa
           continue;
         }
         const suite = artifact.name.slice(ARTIFACT_PREFIX.length);
-        const download = await depot<{ url?: string }>("GetArtifactDownloadURL", {
+        const download = await depotRpc<{ url?: string }>("GetArtifactDownloadURL", {
           artifact_id: artifact.artifact_id,
         });
         if (!download.url) {

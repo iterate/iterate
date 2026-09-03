@@ -329,6 +329,15 @@ test("a birth conflict means already born and the records still append", async (
   ]);
 });
 
+test("a webhook without depot config is skipped without touching itx", async () => {
+  const { itx, appended } = fakeItx({ artifacts: [], zips: {} });
+  itx.secrets.get = () => {
+    throw new Error("must not be called");
+  };
+  await expect(makeApp(itx).raw.processEvent(webhookEvent())).resolves.toBeUndefined();
+  expect(appended).toEqual([]);
+});
+
 test("an idempotency conflict on run-recorded means already ingested and does not throw", async () => {
   const { itx, appended } = fakeItx({
     artifacts: [
@@ -419,7 +428,12 @@ function makeApp(itx: any) {
   // Just enough ctx for the base constructor's alarm overlay; the ingestion
   // path never touches storage or alarms.
   const ctx = { storage: { kv: { put() {}, get() {} }, setAlarm() {}, deleteAlarm() {} } };
-  return new FlakeDashboardApp(ctx as any, { ITX: { get: async () => itx } } as any);
+  const app = new FlakeDashboardApp(ctx as any, { ITX: { get: async () => itx } } as any);
+  return {
+    processEvent: (event: any) =>
+      app.processEvent(event, { depot: { orgId: "org-1", secretPath: "/secrets/depot-ci-token" } }),
+    raw: app,
+  };
 }
 
 function fakeItx(setup: {

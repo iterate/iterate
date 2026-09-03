@@ -36,8 +36,12 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
       repoPath: "/repos/config",
     },
   });
-  /** /flakes -> GitHub "Flake dashboard" issue. Inert if /flakes stream never receives events. */
-  #flakeDashboardApp = FlakeDashboardApp.create(this.env);
+  /** /flakes -> GitHub "Flake dashboard" issue. Inert if /flakes stream never receives events.
+   * `depot` is THIS project's CI artifact store — edit per project (or drop
+   * it to disable check_run ingestion). */
+  #flakeDashboardApp = FlakeDashboardApp.create(this.env, {
+    depot: { orgId: "0p91s0lz49", secretPath: "/secrets/depot-ci-token" },
+  });
   #docsApp = DocsApp.create(this.env, {
     auth: { policy: "project-member" },
     proxy: {
