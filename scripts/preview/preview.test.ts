@@ -2136,8 +2136,9 @@ describe("claimEnvironmentConfigLease", () => {
   test("adopts (and thereby renews) the slot the semaphore attributes to this holder", async () => {
     // The PR body's copy is never consulted for ownership: the semaphore says
     // pr-1600 holds preview-2, so the claim re-issues that lease. Matching
-    // the recorded slug means the slot carries this PR's own deployment — no
-    // erase.
+    // the recorded slug means the slot carries this PR's own deployment — it
+    // is still erased (fresh on every deploy), but its Artifacts repos are
+    // kept.
     const eraseSlotData = vi.fn(async () => {});
     const semaphore = fakeSemaphore({
       acquireSpecific: vi.fn(async () => fakeLease({ expiresAt: 1_800_000_000_000 })),
@@ -2159,7 +2160,11 @@ describe("claimEnvironmentConfigLease", () => {
       expect.objectContaining({ slug: "preview-2", holder: "pr-1600", force: true }),
     );
     expect(semaphore.acquire).not.toHaveBeenCalled();
-    expect(eraseSlotData).not.toHaveBeenCalled();
+    expect(eraseSlotData).toHaveBeenCalledExactlyOnceWith({
+      dopplerConfig: "preview_2",
+      slug: "preview-2",
+      keepArtifacts: true,
+    });
   });
 
   test("prefers the recorded slug when the semaphore attributes several slots to this holder", async () => {
@@ -2292,6 +2297,7 @@ describe("claimEnvironmentConfigLease", () => {
     expect(eraseSlotData).toHaveBeenCalledExactlyOnceWith({
       dopplerConfig: "preview_three",
       slug: "preview-3",
+      keepArtifacts: false,
     });
   });
 
@@ -2759,6 +2765,7 @@ describe("lease ownership during acquire", () => {
     expect(eraseSlotData).toHaveBeenCalledExactlyOnceWith({
       dopplerConfig: "preview_seven",
       slug: "preview-7",
+      keepArtifacts: false,
     });
   });
 });
@@ -2888,6 +2895,7 @@ describe("assignEnvironmentConfigLease", () => {
     expect(eraseSlotData).toHaveBeenCalledExactlyOnceWith({
       dopplerConfig: "preview_17",
       slug: "preview-17",
+      keepArtifacts: false,
     });
   });
 
@@ -3132,6 +3140,7 @@ describe("assignEnvironmentConfigLease", () => {
     expect(eraseSlotData).toHaveBeenCalledExactlyOnceWith({
       dopplerConfig: "preview_five",
       slug: "preview-5",
+      keepArtifacts: false,
     });
   });
 

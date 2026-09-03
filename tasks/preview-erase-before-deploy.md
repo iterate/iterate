@@ -28,22 +28,24 @@ state is gone by design (recreate the project after pushing).
 
 ## What changes
 
-- [ ] `scripts/preview/preview.ts`: the same-holder **re-issue** path (lease
+- [x] `scripts/preview/preview.ts`: the same-holder **re-issue** path (lease
       renewed, no handover) runs the same erase as the acquire path,
       through the existing `eraseAcquiredSlotOrGiveItBack` machinery (a
       failed erase gives the lease back rather than deploying dirty).
-- [ ] After an erase the deploy plan must include `auth` (erase wipes the
-      auth D1, so the OS client must be re-seeded) — same as the acquire
-      path already forces **[assumption: verify how acquire forces it]**.
-- [ ] Skip the Artifacts-repo delete pass on same-holder redeploys
-      **[assumption]**: those repos are the PR's own, the pass is the slow,
-      rate-limited part of erase-data, and the next real handover deletes
-      them anyway. Needs an `erase-data` flag (e.g. `--keep-artifacts`).
-- [ ] Concurrency: erase must never race a deploy to the same slot. The
-      workflow group is per PR (`cloudflare-previews-<pr>`,
-      cancel-in-progress) — one PR = one slot, so per-PR serialises per-slot
-      **[assumption: confirm nothing else deploys to a leased slot]**.
-- [ ] `docs/dev-environments.md` / preview docs: state the contract.
+      _(both `claimEnvironmentConfigLease` and `assignEnvironmentConfigLease`
+      dropped the recorded-slug short-circuit in `onAdopted`)_
+- [x] After an erase the deploy plan includes `auth` (erase wipes the
+      auth D1, so the OS client must be re-seeded) _(the acquire path never
+      forced it — it relied on the diff; now every claim adds the erased data
+      owners os + streams-example-app plus auth to `appsToDeploy`)_
+- [x] Skip the Artifacts-repo delete pass on same-holder redeploys _(`erase-data
+      --keep-artifacts`, passed when the adopted slot is the PR body's recorded
+      one; handovers and GC reclaims still delete)_
+- [x] Concurrency: the workflow group is per PR (`cloudflare-previews-<pr>`,
+      cancel-in-progress) and the semaphore gives a slot to one holder, so
+      per-PR serialises per-slot; the GC sweep only touches expired leases
+      (`preview gc`, non-force acquire) — it cannot erase a live tenant.
+- [x] `docs/dev-environments.md`: the contract, under the lease model.
 - [ ] Verify on this PR's own slot: DO-hours on the slot after push N+1
       never include push N's population (namespace ids change each erase;
       the old namespace shows as deleted in analytics).

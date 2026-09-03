@@ -468,21 +468,34 @@ async function deployPreviewApps({
   // the diff-selected apps: anything left undeployed would keep old-slot URLs
   // and e2e would run against another slot's deployment.
   const previousSlug = current.state.environmentConfigLease?.slug ?? null;
-  const appsToDeploy =
-    previousSlug && previousSlug !== environmentConfigLease.slug
-      ? expandPreviewDependencies([
-          ...new Set([
-            ...selectedApps.map((app) => app.slug),
-            ...Object.keys(current.state.apps).filter(
-              (appSlug): appSlug is CloudflarePreviewAppSlugType =>
-                cloudflarePreviewApps[appSlug as CloudflarePreviewAppSlugType] != null,
-            ),
-          ]),
-        ]).map((appSlug) => cloudflarePreviewApps[appSlug])
-      : selectedApps;
-  if (appsToDeploy.length > selectedApps.length) {
+  const slotMoved = previousSlug !== null && previousSlug !== environmentConfigLease.slug;
+  // Every claim erased the slot (fresh-per-deploy contract), so the apps whose
+  // state that wiped must redeploy regardless of the diff: OS is parked at
+  // 503 by its tombstone deploy, the streams playground lost its DO
+  // namespace, and auth's D1 lost the OS client it re-seeds on deploy.
+  const erasedApps = [...selectPreviewSlotDataOwners().map((app) => app.slug), "auth" as const];
+  const appsToDeploy = expandPreviewDependencies([
+    ...new Set([
+      ...selectedApps.map((app) => app.slug),
+      ...erasedApps,
+      ...(slotMoved
+        ? Object.keys(current.state.apps).filter(
+            (appSlug): appSlug is CloudflarePreviewAppSlugType =>
+              cloudflarePreviewApps[appSlug as CloudflarePreviewAppSlugType] != null,
+          )
+        : []),
+    ]),
+  ]).map((appSlug) => cloudflarePreviewApps[appSlug]);
+  if (slotMoved) {
     logPreview(
       `slot changed from ${previousSlug} to ${environmentConfigLease.slug}: redeploying every previously recorded app (${appsToDeploy.map((app) => app.slug).join(", ")}) so nothing keeps pointing at the old slot`,
+    );
+  } else if (appsToDeploy.length > selectedApps.length) {
+    logPreview(
+      `slot erased before deploy: also redeploying ${appsToDeploy
+        .filter((app) => !selectedApps.includes(app))
+        .map((app) => app.slug)
+        .join(", ")}`,
     );
   }
   // A successful claim clears exhaustion/takeover banners; a slot move
@@ -1497,7 +1510,11 @@ export async function reclaim(options: ReclaimOptions = {}) {
   if (!taken) {
     throw new Error(`Could not take ${slug} from ${slot.holder ?? "its holder"} — retry.`);
   }
-  await makePreviewSlotDataEraser(runtime)({ dopplerConfig: slot.dopplerConfig, slug });
+  await makePreviewSlotDataEraser(runtime)({
+    dopplerConfig: slot.dopplerConfig,
+    slug,
+    keepArtifacts: false,
+  });
   const result = await semaphore.release({
     slug,
     type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
@@ -1614,7 +1631,11 @@ export async function gc(options: GcOptions = {}) {
       logPreview(
         `gc: reclaiming ${slot.slug} — lease from ${slot.holder ?? "unknown"} expired ${formatDurationMs(now - slot.leasedUntil)} ago; erasing`,
       );
-      await eraseSlotData({ dopplerConfig: slot.dopplerConfig, slug: slot.slug });
+      await eraseSlotData({
+        dopplerConfig: slot.dopplerConfig,
+        slug: slot.slug,
+        keepArtifacts: false,
+      });
       outcomes.push({ slug: slot.slug, action: "reclaimed", holder: slot.holder });
     } catch (error) {
       logPreview(
@@ -4489,6 +4510,8 @@ async function runPreviewDeployCommand(input: {
   commandEnvironment: NodeJS.ProcessEnv;
   dopplerConfig: string;
   operation: "up" | "down";
+  /** "down" only: forwarded to os erase-data as --keep-artifacts. */
+  keepArtifacts?: boolean;
   repositoryRoot: string;
   signal?: AbortSignal;
 }) {
@@ -4498,7 +4521,15 @@ async function runPreviewDeployCommand(input: {
   // resolve the env from the DOPPLER_CONFIG the `doppler run` wrapper sets.
   const commandArgs =
     input.operation === "down"
-      ? [...input.app.destroyCommandArgs, "--env", input.dopplerConfig]
+      ? [
+          ...input.app.destroyCommandArgs,
+          "--env",
+          input.dopplerConfig,
+          // Only the OS erase owns an Artifacts namespace.
+          ...(input.keepArtifacts && input.app === cloudflarePreviewApps.os
+            ? ["--keep-artifacts"]
+            : []),
+        ]
       : input.app.deployCommandArgs;
 
   return await runCommand({
@@ -4527,7 +4558,13 @@ async function runPreviewDeployCommand(input: {
  * preview-5: 208 orphaned project-directory KV keys against an empty auth D1
  * → every itx project lookup answered "KV GET failed: 500").
  */
-type EraseSlotData = (input: { dopplerConfig: string; slug: string }) => Promise<void>;
+type EraseSlotData = (input: {
+  dopplerConfig: string;
+  slug: string;
+  /** Same-holder redeploy: the Artifacts repos are this PR's own, skip the
+   * slow, rate-limited delete pass; the next real handover deletes them. */
+  keepArtifacts: boolean;
+}) => Promise<void>;
 
 /**
  * Every app that owns slot-persistent data. OS wipes the shared data plane;
@@ -4542,15 +4579,18 @@ function makePreviewSlotDataEraser(runtime: {
   repositoryRoot: string;
   signal?: AbortSignal;
 }): EraseSlotData {
-  return async ({ dopplerConfig, slug }) => {
+  return async ({ dopplerConfig, slug, keepArtifacts }) => {
     const startedAt = Date.now();
-    logPreview(`erasing ${slug} data before handover (doppler config ${dopplerConfig})`);
+    logPreview(
+      `erasing ${slug} data before deploy (doppler config ${dopplerConfig}${keepArtifacts ? ", keeping this PR's Artifacts repos" : ""})`,
+    );
     for (const app of selectPreviewSlotDataOwners()) {
       const result = await runPreviewDeployCommand({
         app,
         commandEnvironment: runtime.commandEnvironment,
         dopplerConfig,
         operation: "down",
+        keepArtifacts,
         repositoryRoot: runtime.repositoryRoot,
         signal: runtime.signal,
       });
@@ -4925,9 +4965,14 @@ function parsePullRequestHolder(holder: string | null | undefined) {
  * Erase a just-acquired slot before it is handed to the caller, giving the
  * lease back on failure. Returns true when the slot is clean and ours.
  *
- * This runs on EVERY handover — plain acquire included, not just reclaims —
- * so slot cleanliness is an invariant of entry rather than an assumption
- * about how the previous tenant exited. Every exit path that skips the
+ * This runs on EVERY claim — a renewed lease this PR already held included,
+ * not just handovers and reclaims — so a preview slot is fresh on every
+ * deploy, never just on entry. Within one PR each push otherwise stacks a
+ * new population of abandoned test projects (whose Durable Objects keep
+ * waking, ~$15-25/hour per slot; the 2026-09-01 runaway) on the last push's,
+ * and a push that cancels the running e2e SIGKILLs it, so in-test finalizers
+ * can never be the guarantee — the next deploy is. Cross-push manual QA
+ * state on a preview is gone by design: recreate after pushing. Every exit path that skips the
  * cleanup erase (failed cleanup + 24h lease expiry, `release --force`, a run
  * cancelled mid-claim) becomes harmless: whoever picks the slot up next
  * wipes it first. A failed erase releases the lease rather than handing out
@@ -4936,6 +4981,7 @@ function parsePullRequestHolder(holder: string | null | undefined) {
  */
 async function eraseAcquiredSlotOrGiveItBack(input: {
   eraseSlotData: EraseSlotData;
+  keepArtifacts: boolean;
   lease: { data: Record<string, unknown>; leaseId: string; slug: string; type: string };
   semaphore: PreviewSemaphoreResourceClient;
 }) {
@@ -4943,6 +4989,7 @@ async function eraseAcquiredSlotOrGiveItBack(input: {
     await input.eraseSlotData({
       dopplerConfig: parseEnvironmentConfigLeaseData(input.lease.data).dopplerConfig,
       slug: input.lease.slug,
+      keepArtifacts: input.keepArtifacts,
     });
     return true;
   } catch (error) {
@@ -5007,6 +5054,7 @@ async function acquireAnyEnvironmentConfigLease(input: {
       if (
         await eraseAcquiredSlotOrGiveItBack({
           eraseSlotData: input.eraseSlotData,
+          keepArtifacts: false,
           lease: acquired,
           semaphore: input.semaphore,
         })
@@ -5106,13 +5154,12 @@ async function claimEnvironmentConfigLease(input: {
     holder: input.holder,
     leaseMs: input.leaseMs,
     onAdopted: (lease) =>
-      lease.slug === input.recordedSlug
-        ? Promise.resolve(true)
-        : eraseAcquiredSlotOrGiveItBack({
-            eraseSlotData: input.eraseSlotData,
-            lease,
-            semaphore: input.semaphore,
-          }),
+      eraseAcquiredSlotOrGiveItBack({
+        eraseSlotData: input.eraseSlotData,
+        keepArtifacts: lease.slug === input.recordedSlug,
+        lease,
+        semaphore: input.semaphore,
+      }),
     preferSlug: input.recordedSlug,
     semaphore: input.semaphore,
   });
@@ -5169,14 +5216,16 @@ async function assignEnvironmentConfigLease(input: {
     (await adoptLeaseHeldBySemaphore({
       holder: input.holder,
       leaseMs: input.leaseMs,
+      // Every adoption erases — a preview slot is fresh on every deploy (see
+      // claimEnvironmentConfigLease). This PR's own recorded slot keeps its
+      // Artifacts repos; an unrecorded one is of unknown provenance.
       onAdopted: (lease) =>
-        lease.slug === input.recordedSlug
-          ? Promise.resolve(true)
-          : eraseAcquiredSlotOrGiveItBack({
-              eraseSlotData: input.eraseSlotData,
-              lease,
-              semaphore: input.semaphore,
-            }),
+        eraseAcquiredSlotOrGiveItBack({
+          eraseSlotData: input.eraseSlotData,
+          keepArtifacts: lease.slug === input.recordedSlug,
+          lease,
+          semaphore: input.semaphore,
+        }),
       preferSlug: input.recordedSlug,
       semaphore: input.semaphore,
     })) ??
@@ -5251,6 +5300,7 @@ async function assignEnvironmentConfigLease(input: {
       // --force eviction, where the acquired slot holds the evicted PR's data.
       const clean = await eraseAcquiredSlotOrGiveItBack({
         eraseSlotData: input.eraseSlotData,
+        keepArtifacts: false,
         lease: acquired,
         semaphore: input.semaphore,
       });
