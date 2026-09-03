@@ -202,3 +202,37 @@ Four landed this round; the rest are on the menu below with sizes.
 
 LOC after this round: src non-test, non-generated stayed at ~6,510 (mark change −1, DDL gate +0,
 watchdog +8, one config line) — well inside the 10 % ceiling (7,163).
+
+## Round 1 summary (2026-09-03)
+
+Deployed and proved the clean room on workers.dev, built a deployed-aware bench + tail harness,
+banked six capability-neutral wins, and produced a sized menu of the rest. All work committed and
+pushed; the deployed worker (version after the batch) passes the full e2e: 37 files, 145 tests
+passed, 2 expected fail, 1 skipped (the remote-capnweb test needs a public dummy), 0 unexpected.
+
+Landed (each deployed + proved, or proved-by-construction where a tail number is not exposed):
+
+1. `/demo` is a Workers static asset — −255 KiB out of every /api and DO isolate (upload 1,480 →
+   1,225 KiB). Proved: deployed /demo 200 + the browser spec against the deployed URL.
+2. A built-in-rooted dispatch no longer materializes the rewrite-rules table (L4).
+3. A warm facet push no longer re-hashes its source (L1a, WeakMap by identity).
+4. The mark IS the core cursor — −1 storage row per durable commit (−33% of a single append's write
+   units).
+5. Skip the two CREATE TABLE on a re-wake.
+6. The facet watchdog label is built lazily — no `print()` over the batch per push.
+7. Lifted the per-invocation subrequest ceiling — proved: the two pipelined-append bench scenarios
+   that ABORTED the run now complete.
+
+LOC: src non-test/non-generated 6,512 → 6,553 (+41, +0.6%); ceiling 7,163. No capability dropped; no
+event made ephemeral (stream/woken stays durable and unfiltered).
+
+The honest finding: at the clean room's current fixture sizes the green path is already fast and
+cpuTime p50 on the deployed tail is 0 for every lane — wall time is network RTT + the single durable
+output-gate commit (~10 ms), both largely irreducible without batching. The banked CPU/script wins
+matter at scale (large sources, many rows, long sessions, cold isolates), and the biggest remaining
+levers (W3 zod −37% script; fold `attachRpcStubPager` −1 RTT; defer fan-out; M1 inline-source blob)
+are real refactors or doctrine calls, sized on the menu in learnings-and-bigger-refactors.md.
+
+Next round (deliberate, with guards): fold `attachRpcStubPager` into the pager upgrade (top menu
+item — −1 client RTT, −12 LOC) with the reconnect/hibernation e2e as the guard; add the bench re-wake
+lane so wake-side changes become provable; then W3/M1 as owner decisions.
