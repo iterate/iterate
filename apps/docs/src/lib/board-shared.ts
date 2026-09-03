@@ -40,6 +40,21 @@ export function boardWorkspacePath(boardId: string, repoPath: string): string {
 }
 
 /**
+ * The notes workspace for one repo — ONE app-owned workspace per repo,
+ * shared by every project member: notes are plain files on that repo's
+ * main, so one overlay keeps concurrent writers from clobbering each other's
+ * pending edits (two private overlays of the same file would each commit
+ * the other's edits away). Same slug + hash recipe as boards. Only the notes
+ * view commits here (its capability is minted with owner acts); to the
+ * board, this workspace is a GUEST lens like an agent's — a task opened from
+ * a note pill must never let the board commit or discard the notes overlay.
+ */
+export function notesWorkspacePath(repoPath: string): string {
+  const slug = repoPath.replace(/^\/+/, "").replaceAll("/", "--");
+  return `/workspaces/notes/${slug}-${fnv1a32Hex(repoPath)}`;
+}
+
+/**
  * Which board address a workspace path carries, resolved EXACTLY: the slug
  * alone is not injective ("--" is both the path separator and a legal repo
  * name substring), so instead of guessing readings we re-mint the path for

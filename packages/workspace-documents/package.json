@@ -12,6 +12,7 @@
     "./html-annotations": "./src/html-document-annotations.ts",
     "./identity": "./src/comment-identity.ts",
     "./preview": "./src/markdown-document-preview.tsx",
+    "./references": "./src/references.ts",
     "./server": "./src/server.ts",
     "./types": "./src/types.ts"
   },
@@ -20,6 +21,7 @@
     "test": "vitest run --reporter=default --reporter=../shared/src/test-support/e2e-policy/retry-telemetry-reporter.ts"
   },
   "dependencies": {
+    "@codemirror/autocomplete": "^6.20.1",
     "@codemirror/collab": "^6.1.1",
     "@codemirror/commands": "^6.10.4",
     "@codemirror/lang-html": "^6.4.11",

@@ -60,7 +60,12 @@ test("captures a note from the global composer and manages it on /notes", async 
   // 💬 pre-types a pointer to the note; the question under it is the human's
   // to write, so nothing is sent on the way in.
   await page.getByLabel("Chat about this note").click();
-  // inputValue() does the waiting; expect only checks the string it returned.
+  // waitFor() does the waiting: the row shows "Opening chat…" while the
+  // hand-off creates a fresh note-chat stream (a couple of seconds on
+  // Cloudflare), and that loading text is what the spinner-waiter extends
+  // for. inputValue() is not a spinner-waited action — left to wait on its
+  // own it gets the raw 1s budget and fails whenever the stream is slower.
+  await page.getByPlaceholder("Message").waitFor();
   expect(await page.getByPlaceholder("Message").inputValue()).toMatch(
     /About my note `\/repos\/notes\/.*\.md`:[\s\S]*confirmed at home/,
   );

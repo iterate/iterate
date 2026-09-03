@@ -30,6 +30,17 @@ export function workspaceFor(project: unknown, address: BoardAddress): TasksWork
   ) as TasksWorkspace;
 }
 
+/**
+ * The notes workspace capability for one repo, on a live project stub. The
+ * vessel's `DocsProject.notes` returns a `TasksWorkspace` capability; capnweb
+ * maps a stub's promise-returning members distributively, which cannot
+ * express a nested capability's own methods, so the vessel-declared shape is
+ * asserted here — the same convention as workspaceFor above.
+ */
+export function notesFor(project: unknown, repoPath: string): TasksWorkspace {
+  return (project as { notes(repoPath: string): unknown }).notes(repoPath) as TasksWorkspace;
+}
+
 /** The project's repos, for the board home's per-repo sections. */
 export function listRepos(): Promise<string[]> {
   return withProject((project) => project.repos());

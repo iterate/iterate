@@ -121,6 +121,50 @@ CAPTUN_TUNNEL_NAME=jonas-tasks CAPTUN_TOKEN=… pnpm dev
 # → https://jonas-tasks.tunnels.iterate.com → localhost:5173, HMR included
 ```
 
+`apps/docs` already carries the plugin (activated by `CAPTUN_TUNNEL_NAME`, the
+same knobs as `apps/os`). The tunnel is not optional locally: the config
+worker's proxy accepts **HTTPS origins only**, on both the configured origin
+and the KV override, so `http://localhost:5199` is refused. The whole
+fully-local loop for the Docs app against a local OS is then:
+
+```bash
+pnpm dev                                   # local OS: http://localhost:<port>
+pnpm getin --print                         # the `test` project + a sign-in URL
+
+# the vessel, dialing the LOCAL OS back, exposed through the tunnel — as a
+# PRODUCTION PREVIEW, not `pnpm dev` (see below)
+cd apps/docs && OS_BASE_URL=http://localhost:<port> pnpm exec vite build && \
+  doppler run --project docs --config dev_<you> -- \
+  env OS_BASE_URL=http://localhost:<port> CAPTUN_TUNNEL_NAME=<you>-docs \
+  pnpm exec vite preview --port 5199 --strictPort   # → https://<you>-docs.tunnels.iterate.com
+
+# point the project at it (once; KV survives restarts)
+cd apps/os && pnpm cli itx run --context prj_… --base-url http://localhost:<port> \
+  -e 'await itx.kv.set("docs-app-origin", "https://<you>-docs.tunnels.iterate.com")'
+```
+
+Why a preview build and not the dev server: the local OS is itself a Vite dev
+server, and Vite's dev middleware answers `/@vite/client`, `/@fs/…`,
+`/@id/…`, and `/node_modules/.vite/…` for EVERY host before ingress routes
+anything to the project. A proxied dev-mode vessel page would therefore load
+OS's own client modules and crash on hydration; the production build's hashed
+`/assets/…` paths do not collide. Against a deployed OS (a preview slot) the
+dev server works fine through the same tunnel, HMR included. Rebuild + restart
+the preview to pick up vessel changes.
+
+Then open `http://docs--test.localhost:<port>/` in a browser signed in **through
+the real auth flow** (Google or a `+test@nustom.com` email with OTP `424242`):
+the project-host gate mints its cookie at the auth worker, where a forged
+`auth:mint` session means nothing. The Playwright spec `specs/notes-view.spec.ts`
+runs the same loop headlessly given `DOCS_APP_ORIGIN=<tunnel origin>`.
+
+The config worker installs `@iterate-com/docs` — the proxy lines above — from
+its package.json spec, and local dev pins that spec to THIS worktree's packed
+bridge, the same lockstep it applies to the `iterate` SDK
+(`apps/os/scripts/lib/dev-sdk-tarball.ts`). So a bridge edit reaches every
+project the local server builds after the next `pnpm dev restart`; without
+that, a fresh local project would run the published `@main` bridge.
+
 **The knob** is `itx.kv` — the small durable project key-value store
 (Workers KV, project-scoped, no Durable Object in the read path, so the
 connector can consult it on every request for microseconds). The

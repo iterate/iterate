@@ -40,6 +40,15 @@ export type WorkspaceStatus = {
 
 /** Input to `WorkspaceGit.commit` — one mount's changes become one commit on its repo's main. */
 export type WorkspaceCommitInput = {
+  /**
+   * Tidy history: when the repo's head is EXACTLY this commit oid, the new
+   * commit REPLACES it (same parents, head's tree plus these changes, this
+   * message) instead of stacking on top; when the head has moved on, an
+   * ordinary commit lands on top — as it always does on a GitHub-linked repo,
+   * whose history stays append-only. The result's `amended` says which
+   * happened.
+   */
+  amendIfHead?: string;
   author?: { email: string; name: string };
   message: string;
   /** The mount to commit (its mount path). Optional when exactly one mount is dirty. */
@@ -48,6 +57,8 @@ export type WorkspaceCommitInput = {
 
 /** Result of `WorkspaceGit.commit` — the commit landed on the scoped mount's repo main. */
 export type WorkspaceCommitResult = {
+  /** True when `amendIfHead` matched the head and the commit replaced it. */
+  amended: boolean;
   branch: string;
   /** Committed paths, spelled as absolute WORKSPACE paths (mount point included). */
   changedPaths: string[];

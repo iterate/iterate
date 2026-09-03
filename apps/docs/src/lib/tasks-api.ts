@@ -20,6 +20,15 @@ export type WorkspaceListEntry = {
   board: { boardId: string; repoPath: string } | null;
 };
 
+/** One commit of a mount's repo, as `log` returns it (the platform's shape). */
+export type WorkspaceGitLogEntry = {
+  author: { email: string; name: string };
+  message: string;
+  oid: string;
+  /** Epoch milliseconds. */
+  timestamp: number;
+};
+
 /** One event from the workspace's platform stream (the event-sourced spine). */
 export type WorkspaceStreamEvent = {
   createdAt: string;
@@ -56,6 +65,8 @@ export interface TasksWorkspace extends WorkspaceDocumentLane {
   ): Promise<{ ping?(): Promise<boolean> | boolean; unsubscribe(): void }>;
   /** Every task file in the merged view (board seed). */
   files(): Promise<Record<string, string>>;
+  /** Merged-view paths matching a repo-relative glob, returned repo-relative. */
+  glob(pattern: string): Promise<string[]>;
   /** Filesystem trio with the platform gateway's semantics: live sessions
    * route reads/writes; delete durably ends a session. */
   read(path: string): Promise<string | null>;
@@ -67,9 +78,16 @@ export interface TasksWorkspace extends WorkspaceDocumentLane {
   // status() is workspace-wide (one entry per mounted repo) — consumers pick
   // their mount; commit/log are already scoped to the capability's repo.
   status(): Promise<unknown>;
-  /** Owner act: publishes this mount's ENTIRE dirty set to the repo's main. */
-  commit(message: string): Promise<unknown>;
-  log(limit?: number): Promise<unknown>;
+  /** Owner act: publishes this mount's ENTIRE dirty set to the repo's main.
+   * `amendIfHead` asks the platform to REPLACE the head commit when it is
+   * still exactly that oid (an ordinary commit lands otherwise); the result
+   * reports which happened. */
+  commit(
+    message: string,
+    options?: { amendIfHead?: string },
+  ): Promise<{ amended: boolean; commitOid: string }>;
+  /** The mount's repo history, newest first. */
+  log(limit?: number): Promise<WorkspaceGitLogEntry[]>;
   /**
    * Assign an agent to one task, the apps/os way: sets `state: in-progress`
    * + the `agent:` frontmatter, commits the mount so the assignment is

@@ -136,6 +136,16 @@ PR's diff:
   inconclusive and a fresh revision is committed against the new boot.
   Rebuild provenance (thread 5) is still a nice-to-have for the platform,
   no longer this test's gate.
+  **2026-09-02 update (PR #2578):** the round-based pin still false-alarmed —
+  four preview-8 runs in a row (both vitest attempts each time) while the
+  same body run alone against the same deployment pinned the bug 3/3, and
+  a worker tail during twelve minutes of suite load showed seven "Internal
+  error in Durable Object storage caused object to be reset" events (each a
+  parent restart → facet rebuilt on newest source, inside every 45s
+  window). Moved from `failing` to `createFlake(test, /SAME-BOOT STALENESS/)`
+  per the quarantine protocol: bug reproduced = "flake-fail", masked = "pass",
+  both green, both recorded. **Exit:** the flake dashboard shows passes on
+  quiet runs too (a real fix) → unwrap to a plain test.
 
 ## Checklist
 

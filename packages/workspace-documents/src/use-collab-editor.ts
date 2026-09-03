@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Compartment, EditorState, type Extension } from "@codemirror/state";
 import { getSyncedVersion, sendableUpdates } from "@codemirror/collab";
 import { EditorView } from "@codemirror/view";
+import { startCompletion } from "@codemirror/autocomplete";
 import { CollabConnection, peerExtension } from "./collab-client.ts";
 import { redlineExtension } from "./collab-redline.ts";
 import { remoteCursorsExtension } from "./collab-cursors.ts";
@@ -190,10 +191,22 @@ export function useCollabEditor(input: {
               if (pending.length === 0) return;
               await connection.pushOnce(getSyncedVersion(live.state), pending).catch(() => {});
             },
+            insert: (text) => {
+              const { from, to } = live.state.selection.main;
+              live.dispatch({
+                changes: { from, insert: text, to },
+                scrollIntoView: true,
+                selection: { anchor: from + text.length },
+              });
+              live.focus();
+            },
             isLive: () => !connection.dead,
             path,
             selectionHead: () => live.state.selection.main.head,
             source: () => live.state.doc.toString(),
+            startCompletion: () => {
+              startCompletion(live);
+            },
           };
         }
         if (focusHeadline !== undefined) {

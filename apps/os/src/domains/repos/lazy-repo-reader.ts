@@ -52,8 +52,15 @@ const textDecoder = new TextDecoder();
 const parentDirOf = (path: string): string =>
   path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "";
 
+/** What a landed push reports to the caller's `onApplied` hook — the new
+ * head, the tip it superseded (its parent, or for an amend the commit it
+ * replaced), and whether it was an amend. */
+type LazyCommitApplied = { amended: boolean; commitOid: string; parentCommitOid: string };
+
 type LazyCommitOutcome =
   | {
+      /** True when `amendIfHead` matched: the commit REPLACED the head. */
+      amended: boolean;
       changedPaths: string[];
       commitOid: string;
       kind: "applied";
@@ -349,13 +356,36 @@ export function createLazyRepoReader(input: {
      */
     commitFiles: (
       input: {
+        amendIfHead?: string;
         author: { date: Date; email: string; name: string };
         changes: RepoFileChange[];
         message: string;
       },
-      opts?: { onApplied?: (applied: { commitOid: string; parentCommitOid: string }) => void },
+      opts?: { onApplied?: (applied: LazyCommitApplied) => void },
     ): Promise<LazyCommitOutcome> => serialized(() => commitFilesLocked(input, opts)),
   };
+
+  /**
+   * The head commit's parents, for an amend. The head commit object is kept
+   * by reachability (git_heads is a prune root), so this is normally one
+   * store read; a missing row heals by exact oid with `deepen: 1` — a bare
+   * want of a commit would otherwise pull its whole ancestry.
+   */
+  async function headCommitParents(commitOid: string): Promise<string[]> {
+    let object = await store.getObject(commitOid).catch(() => null);
+    if (object === null) {
+      const fetched = await wire.fetchObjects({
+        deepen: 1,
+        haves: store.dirTrees(branch).map((dir) => dir.treeOid),
+        wants: [commitOid],
+      });
+      object = fetched.find((candidate) => candidate.oid === commitOid) ?? null;
+    }
+    if (object === null || object.type !== "commit") {
+      throw new Error(`head commit ${commitOid} is unavailable from the store and the remote`);
+    }
+    return parseCommit(object.payload).parents;
+  }
 
   /** The whole commit — snapshot capture, compile, push, local install —
    * runs as ONE chained operation: a sync arriving mid-commit queues behind
@@ -363,15 +393,23 @@ export function createLazyRepoReader(input: {
    * head B that slipped in between. */
   async function commitFilesLocked(
     input: {
+      amendIfHead?: string;
       author: { date: Date; email: string; name: string };
       changes: RepoFileChange[];
       message: string;
     },
-    opts?: { onApplied?: (applied: { commitOid: string; parentCommitOid: string }) => void },
+    opts?: { onApplied?: (applied: LazyCommitApplied) => void },
   ): Promise<LazyCommitOutcome> {
     {
       const head = store.head(branch);
       if (head === null) throw new Error("lazy commit requires a synced head");
+      // Amend: the new commit takes the head's PARENTS, so the head itself
+      // drops out of history. The push below still CASes head → new, which
+      // is exactly what makes "unless the head moved" atomic: a competing
+      // writer's push rejects ours, and the retry sees a head that no
+      // longer matches — an ordinary commit on top.
+      const amended = input.amendIfHead !== undefined && input.amendIfHead === head.commitOid;
+      const parents = amended ? await headCommitParents(head.commitOid) : [head.commitOid];
       const manifest = new Map(store.manifest(branch).map((file) => [file.path, file]));
       const oldDirs = new Map(store.dirTrees(branch).map((dir) => [dir.path, dir.treeOid]));
 
@@ -479,6 +517,7 @@ export function createLazyRepoReader(input: {
       newDirs.set("", newRootOid);
       if (newRootOid === head.rootTreeOid) {
         return {
+          amended: false,
           changedPaths: [],
           commitOid: head.commitOid,
           kind: "applied",
@@ -489,7 +528,7 @@ export function createLazyRepoReader(input: {
       const commitPayload = encodeCommit({
         author: input.author,
         message: input.message.endsWith("\n") ? input.message : `${input.message}\n`,
-        parents: [head.commitOid],
+        parents,
         tree: newRootOid,
       });
       const commitOid = await hashObject("commit", commitPayload);
@@ -543,7 +582,7 @@ export function createLazyRepoReader(input: {
       // store — so authority bookkeeping (the pushed floor) and the snapshot
       // move together; a concurrent freshness read can never see the new
       // snapshot under the old floor and "correct" it backwards.
-      opts?.onApplied?.({ commitOid, parentCommitOid: head.commitOid });
+      opts?.onApplied?.({ amended, commitOid, parentCommitOid: head.commitOid });
       // Local install failures degrade the outcome, not the verdict — the
       // caller must never re-run the mutation.
       const changedPaths = [...new Set([...upserts.keys(), ...removes])].sort();
@@ -558,6 +597,7 @@ export function createLazyRepoReader(input: {
         });
       } catch (localInstallError) {
         return {
+          amended,
           changedPaths,
           commitOid,
           kind: "applied",
@@ -565,7 +605,7 @@ export function createLazyRepoReader(input: {
           parentCommitOid: head.commitOid,
         };
       }
-      return { changedPaths, commitOid, kind: "applied", parentCommitOid: head.commitOid };
+      return { amended, changedPaths, commitOid, kind: "applied", parentCommitOid: head.commitOid };
     }
   }
 }

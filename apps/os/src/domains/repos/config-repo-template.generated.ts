@@ -985,7 +985,8 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  #todoApp = TodoApp.create(this.env);\n" +
       "\n" +
       "  /** Agent-callable app helpers: `itx.worker.docs.link({ workspace, path })`\n" +
-      "   * mints the document view, `link({ workspace, repo, task? })` the board. */\n" +
+      "   * mints the document view, `link({ workspace, repo, task? })` the board,\n" +
+      "   * `link({ notes, note? })` the notes view. */\n" +
       "  get docs() {\n" +
       "    return this.#docsApp.rpc;\n" +
       "  }\n" +
@@ -1023,10 +1024,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "      file === null\n" +
       "        ? \"(AGENTS.md was deleted from /repos/config — no standing project notes.)\"\n" +
       "        : `Project AGENTS.md (auto-injected from /repos/config/AGENTS.md — commit updates there to teach every agent):\\n\\n${file.content}`;\n" +
-      "    const digest = await crypto.subtle.digest(\"SHA-256\", new TextEncoder().encode(content));\n" +
-      "    const hash = [...new Uint8Array(digest).slice(0, 8)]\n" +
-      "      .map((byte) => byte.toString(16).padStart(2, \"0\"))\n" +
-      "      .join(\"\");\n" +
+      "    const hash = await sha256Prefix(content);\n" +
       "    const results = await Promise.allSettled(\n" +
       "      agentPaths.map(async (path) => {\n" +
       "        const agent = itx.agents.get(path);\n" +
@@ -1048,6 +1046,88 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "    // Attempt every agent before failing: the batch is redelivered\n" +
       "    // at-least-once on a throw, and the per-transition keys turn retries of\n" +
       "    // the agents that DID land into no-ops.\n" +
+      "    const failed = results.find((result) => result.status === \"rejected\");\n" +
+      "    if (failed !== undefined && failed.status === \"rejected\") throw failed.reason;\n" +
+      "  }\n" +
+      "\n" +
+      "  /**\n" +
+      "   * NOTE MENTIONS — agents addressed from plain text. Notes are Markdown\n" +
+      "   * files under notes/ (the Docs app's Notes view edits and auto-commits\n" +
+      "   * them; any other commit path works too). A note mentions an agent inline\n" +
+      "   * as `@/agents/<path>`, and frontmatter `agent: /agents/<path>` makes that\n" +
+      "   * agent a watcher of the whole note. Nothing runs at edit time — the commit\n" +
+      "   * that lands the text IS the trigger: this reads back the notes the commit\n" +
+      "   * changed and tells each distinct agent once, as a developer message\n" +
+      "   * carrying a link it can open (born on first mention if it does not exist\n" +
+      "   * yet). Every note at HEAD is read back on every commit — the file list is\n" +
+      "   * the repo's cheap manifest, never a clone or a diff (commitDetails clones\n" +
+      "   * the whole repo per call, far too heavy for a hook that fires on every\n" +
+      "   * agent commit) — and the idempotency key hashes the mentioning line (for\n" +
+      "   * a watcher: the whole file), so unchanged text, an amended commit\n" +
+      "   * re-landing the same text, and an at-least-once redelivery are all\n" +
+      "   * no-ops: only a changed line (or file) speaks again. An autosave burst\n" +
+      "   * (several commits, one edit) therefore notifies once with the final text.\n" +
+      "   */\n" +
+      "  async #notifyNoteMentions(): Promise<void> {\n" +
+      "    const itx = this.itx;\n" +
+      "    const { paths } = await itx.repo.listFiles();\n" +
+      "    const notePaths = paths.filter((path) => /^notes\\/.+\\.md$/.test(path));\n" +
+      "    const results = await Promise.allSettled(\n" +
+      "      notePaths.map(async (path) => {\n" +
+      "        const file = await itx.repo.readFile({ path });\n" +
+      "        if (file === null) return;\n" +
+      "        const { mentions, watcher } = noteAgentMentions(file.content);\n" +
+      "        if (mentions.length === 0 && watcher === null) return;\n" +
+      "        const url = await this.#docsApp.rpc.link({ notes: \"/repos/config\", note: path });\n" +
+      "        const notifications: { agentPath: string; idempotencyKey: string; content: string }[] = [];\n" +
+      "        for (const { agentPath, line } of mentions) {\n" +
+      "          notifications.push({\n" +
+      "            agentPath,\n" +
+      "            idempotencyKey: `iterate/config/notes-mention:v1:${path}:${agentPath}:${await sha256Prefix(line)}`,\n" +
+      "            content: `You were mentioned in ${url} (${path}):\\n\\n> ${line}`,\n" +
+      "          });\n" +
+      "        }\n" +
+      "        if (watcher !== null) {\n" +
+      "          const content =\n" +
+      "            file.content.length > 8_000\n" +
+      "              ? `${file.content.slice(0, 8_000)}\\n…(truncated; open the link for the rest)`\n" +
+      "              : file.content;\n" +
+      "          notifications.push({\n" +
+      "            agentPath: watcher,\n" +
+      "            idempotencyKey: `iterate/config/notes-watch:v1:${path}:${watcher}:${await sha256Prefix(file.content)}`,\n" +
+      "            content: `A note you watch changed: ${url} (${path}). Current content:\\n\\n${content}`,\n" +
+      "          });\n" +
+      "        }\n" +
+      "        const perAgent = await Promise.allSettled(\n" +
+      "          [...new Set(notifications.map((notification) => notification.agentPath))].map(\n" +
+      "            async (agentPath) => {\n" +
+      "              const agent = itx.agents.get(agentPath);\n" +
+      "              const snapshot = await agent.processor.snapshot();\n" +
+      "              if ((snapshot.state?.birthCertificate ?? null) === null) await agent.create();\n" +
+      "              // ONE append per agent: the batch commits atomically.\n" +
+      "              await agent.append(\n" +
+      "                ...notifications\n" +
+      "                  .filter((notification) => notification.agentPath === agentPath)\n" +
+      "                  .map(({ idempotencyKey, content }) => ({\n" +
+      "                    type: \"events.iterate.com/agents/context-added\" as const,\n" +
+      "                    idempotencyKey,\n" +
+      "                    payload: {\n" +
+      "                      content,\n" +
+      "                      llmRequestPolicy: { behaviour: \"after-current-request\" as const },\n" +
+      "                      role: \"developer\" as const,\n" +
+      "                    },\n" +
+      "                  })),\n" +
+      "              );\n" +
+      "            },\n" +
+      "          ),\n" +
+      "        );\n" +
+      "        const failed = perAgent.find((result) => result.status === \"rejected\");\n" +
+      "        if (failed !== undefined && failed.status === \"rejected\") throw failed.reason;\n" +
+      "      }),\n" +
+      "    );\n" +
+      "    // Attempt every note and agent before failing: the batch is redelivered\n" +
+      "    // at-least-once on a throw, and the per-line/per-file keys turn retries\n" +
+      "    // of the notifications that DID land into no-ops.\n" +
       "    const failed = results.find((result) => result.status === \"rejected\");\n" +
       "    if (failed !== undefined && failed.status === \"rejected\") throw failed.reason;\n" +
       "  }\n" +
@@ -1140,10 +1220,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "    // The platform's embedded copy is newline-stripped; the same\n" +
       "    // normalization keeps \"unforked file\" byte-identical.\n" +
       "    const content = file.content.replace(/\\n$/, \"\");\n" +
-      "    const digest = await crypto.subtle.digest(\"SHA-256\", new TextEncoder().encode(content));\n" +
-      "    const hash = [...new Uint8Array(digest).slice(0, 8)]\n" +
-      "      .map((byte) => byte.toString(16).padStart(2, \"0\"))\n" +
-      "      .join(\"\");\n" +
+      "    const hash = await sha256Prefix(content);\n" +
       "    return parsePromptSections({ content, fallbackKey: \"agent/system-prompt\" }).map(\n" +
       "      (section, index) => ({\n" +
       "        type: \"events.iterate.com/agents/context-added\" as const,\n" +
@@ -1243,6 +1320,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "        const itx = this.itx;\n" +
       "        const agents = await itx.agents.list();\n" +
       "        await this.#syncAgentsMdContext(agents.map((agent) => agent.path));\n" +
+      "        await this.#notifyNoteMentions();\n" +
       "        break;\n" +
       "      }\n" +
       "      case \"events.iterate.com/project/heartbeat-triggered\": {\n" +
@@ -1359,6 +1437,42 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  );\n" +
       "  if (item === undefined) return null;\n" +
       "  return { offset: item.offset, content: item.payload?.content };\n" +
+      "}\n" +
+      "\n" +
+      "/**\n" +
+      " * The agents a note addresses: every inline `@/agents/<path>` with the exact\n" +
+      " * line that carries it, plus the frontmatter `agent:` watcher. Plain-text\n" +
+      " * conventions — a path may contain dots but never ends in one, so a\n" +
+      " * sentence-ending period (\"ping @/agents/ops.\") is prose, not path. The\n" +
+      " * frontmatter parse is deliberately minimal: a `---` fence at the very top,\n" +
+      " * one `agent:` line inside it, no YAML library.\n" +
+      " */\n" +
+      "function noteAgentMentions(content: string): {\n" +
+      "  mentions: { agentPath: string; line: string }[];\n" +
+      "  watcher: string | null;\n" +
+      "} {\n" +
+      "  const mentions: { agentPath: string; line: string }[] = [];\n" +
+      "  for (const line of content.split(/\\r?\\n/)) {\n" +
+      "    for (const match of line.matchAll(/@(\\/agents\\/[A-Za-z0-9_./-]*[A-Za-z0-9_/-])/g)) {\n" +
+      "      mentions.push({ agentPath: match[1]!, line });\n" +
+      "    }\n" +
+      "  }\n" +
+      "  const frontmatter = /^---\\r?\\n([\\s\\S]*?)\\r?\\n---(?:\\r?\\n|$)/.exec(content);\n" +
+      "  const agentValue = frontmatter === null ? null : /^agent:(.*)$/m.exec(frontmatter[1]!);\n" +
+      "  const watcher = agentValue === null ? \"\" : agentValue[1]!.trim();\n" +
+      "  return {\n" +
+      "    mentions,\n" +
+      "    watcher: /^\\/agents\\/[A-Za-z0-9_./-]*[A-Za-z0-9_/-]$/.test(watcher) ? watcher : null,\n" +
+      "  };\n" +
+      "}\n" +
+      "\n" +
+      "/** The first 16 hex chars of SHA-256(text) — the idempotency-key fingerprint\n" +
+      " * every reaction in this file uses for \"same content, same key\". */\n" +
+      "async function sha256Prefix(text: string): Promise<string> {\n" +
+      "  const digest = await crypto.subtle.digest(\"SHA-256\", new TextEncoder().encode(text));\n" +
+      "  return [...new Uint8Array(digest).slice(0, 8)]\n" +
+      "    .map((byte) => byte.toString(16).padStart(2, \"0\"))\n" +
+      "    .join(\"\");\n" +
       "}\n",
   },
 ];

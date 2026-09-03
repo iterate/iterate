@@ -6,6 +6,7 @@ import {
   ChevronsLeft,
   ChevronsUpDown,
   FileTextIcon,
+  NotebookPenIcon,
   Plus,
   SquareKanbanIcon,
 } from "lucide-react";
@@ -45,7 +46,9 @@ import { CloseMobileSidebarOnNavigate } from "./close-mobile-sidebar-on-navigate
 /**
  * The VIEWS a workspace can be seen through — documents and the task board
  * are two lenses of THIS one app (the board is the /w route), so switching
- * views is plain navigation carrying the workspace along.
+ * views is plain navigation carrying the workspace along. Notes (/notes) is
+ * the odd one out: scoped to a repo, not a workspace, so it carries only
+ * the repo.
  * Composition follows the apps/os AppSidebar (shadcn sidebar blocks 07/08):
  * workspace-switcher dropdown in the header (the os project switcher, with
  * workspaces for projects), icon collapse, footer collapse button, rail.
@@ -58,6 +61,7 @@ export function AppSidebar() {
   const location = useRouterState({ select: (state) => state.location });
   const search = location.search as { repo?: string; workspace?: string };
   const boardView = location.pathname.startsWith("/w");
+  const notesView = location.pathname.startsWith("/notes");
   // An owned board (/w/<boardId>) carries no ?workspace= — its workspace
   // path is DERIVED from the id + repo, so derive it here too or the
   // switcher (and the Docs view link) would lose the workspace on the
@@ -90,7 +94,7 @@ export function AppSidebar() {
               <SidebarMenu>
                 <SidebarMenuItem>
                   <SidebarMenuButton
-                    isActive={!boardView}
+                    isActive={!boardView && !notesView}
                     tooltip="Docs — the document view of this workspace"
                     render={
                       <Link
@@ -126,6 +130,16 @@ export function AppSidebar() {
                   >
                     <SquareKanbanIcon aria-hidden />
                     <span>Tasks</span>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+                <SidebarMenuItem>
+                  <SidebarMenuButton
+                    isActive={notesView}
+                    tooltip="Notes — plain files in the repo's notes folder"
+                    render={<Link to="/notes" search={{ note: "", repo: search.repo ?? "" }} />}
+                  >
+                    <NotebookPenIcon aria-hidden />
+                    <span>Notes</span>
                   </SidebarMenuButton>
                 </SidebarMenuItem>
               </SidebarMenu>

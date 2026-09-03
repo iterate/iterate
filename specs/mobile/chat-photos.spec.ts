@@ -79,6 +79,12 @@ flake("photos share a mosaic row; tall solo on a blurred backdrop", async ({ pag
   // out the reflow after the images report their dimensions.
   const screenshot = page.getByLabel("phone-screenshot.png");
   const landscape = page.getByLabel("swim-email.png");
+  // The message reaches the phone over the live stream after addFiles
+  // returns; boundingBox() is not a spinner-waited action, so the bubbles
+  // are waited for first. Once rendered, the photo's own "Loading" state
+  // covers the dimension lookup the poll below rides out.
+  await screenshot.waitFor({ timeout: 15_000 }); // timeout: live-stream delivery of the attachment message — nothing on screen for the spinner-waiter until it renders
+  await landscape.waitFor();
   await expect.poll(async () => (await screenshot.boundingBox())?.width).toBeLessThan(100);
   const screenshotBox = (await screenshot.boundingBox())!;
   const landscapeBox = (await landscape.boundingBox())!;

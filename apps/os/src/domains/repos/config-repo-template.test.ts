@@ -393,6 +393,139 @@ test("the birth reaction shapes each newborn and lowers the debounce as its last
   expect(copied.append).not.toHaveBeenCalled();
 });
 
+test("a config commit that changes a note tells the agents it mentions or watches", async () => {
+  const note = [
+    "---",
+    "title: Plan",
+    "agent: /agents/watcher",
+    "---",
+    "ping @/agents/ops. and @/agents/research/deep-dive too",
+    "second line @/agents/ops",
+    "",
+  ].join("\n");
+  const stubs = new Map<
+    string,
+    { append: ReturnType<typeof vi.fn>; create: ReturnType<typeof vi.fn> }
+  >();
+  const stub = (path: string) => {
+    const existing = stubs.get(path);
+    if (existing !== undefined) return existing;
+    const created = {
+      append: vi.fn(async (...events: unknown[]) => events),
+      create: vi.fn(async () => undefined),
+    };
+    stubs.set(path, created);
+    return created;
+  };
+  const readFile = vi.fn(async (input: { path: string }) =>
+    input.path === "notes/plan.md"
+      ? { commitOid: "a".repeat(40), content: note, path: input.path }
+      : null,
+  );
+  const project = {
+    agents: {
+      get: vi.fn((path: string) => ({
+        ...stub(path),
+        processor: {
+          // Only the watcher already exists; the mentioned agents are born.
+          snapshot: async () => ({
+            state: {
+              contextItems: [],
+              birthCertificate: path === "/agents/watcher" ? {} : undefined,
+            },
+          }),
+        },
+      })),
+      list: vi.fn(async () => []),
+    },
+    appUrl: vi.fn(async () => "https://docs--demo.iterate.app"),
+    repo: {
+      // The HEAD manifest — never a clone or a diff: a hook that fires on
+      // every agent commit cannot afford commitDetails.
+      listFiles: vi.fn(async () => ({
+        commitOid: "a".repeat(40),
+        paths: ["AGENTS.md", "docs/notes/elsewhere.md", "notes/plan.md", "worker.ts"],
+      })),
+      readFile,
+    },
+    [Symbol.dispose]: vi.fn(),
+  };
+  const worker = new ProjectWorker(
+    {} as never,
+    {
+      ITERATE_WORKER_VERSION: "test",
+      ITX: { get: vi.fn(() => pipelinedProject(project)) },
+    } as never,
+  );
+  const commit = {
+    type: "events.iterate.com/repo/commit-completed",
+    path: "/repos/config",
+    payload: { beforeCommitOid: null, branch: "main", commitOid: "a".repeat(40) },
+  };
+
+  await deliver(worker, commit);
+
+  // Only the note under notes/ is read back; the nested lookalike and
+  // AGENTS.md never are.
+  expect(project.repo.listFiles).toHaveBeenCalledTimes(1);
+  expect(readFile.mock.calls.map(([input]) => input.path)).toEqual(["notes/plan.md"]);
+  const url = "https://docs--demo.iterate.app/notes?repo=%2Frepos%2Fconfig&note=notes%2Fplan.md";
+  // A sentence-ending period is prose, not path.
+  expect([...stubs.keys()].sort()).toEqual([
+    "/agents/ops",
+    "/agents/research/deep-dive",
+    "/agents/watcher",
+  ]);
+  expect(stub("/agents/ops").create).toHaveBeenCalledOnce();
+  expect(stub("/agents/research/deep-dive").create).toHaveBeenCalledOnce();
+  expect(stub("/agents/watcher").create).not.toHaveBeenCalled();
+  // One atomic append per agent: one event per mentioning line.
+  expect(stub("/agents/ops").append).toHaveBeenCalledExactlyOnceWith(
+    {
+      type: "events.iterate.com/agents/context-added",
+      idempotencyKey: expect.stringMatching(
+        /^iterate\/config\/notes-mention:v1:notes\/plan\.md:\/agents\/ops:[0-9a-f]{16}$/,
+      ),
+      payload: {
+        content: `You were mentioned in ${url} (notes/plan.md):\n\n> ping @/agents/ops. and @/agents/research/deep-dive too`,
+        llmRequestPolicy: { behaviour: "after-current-request" },
+        role: "developer",
+      },
+    },
+    {
+      type: "events.iterate.com/agents/context-added",
+      idempotencyKey: expect.stringMatching(
+        /^iterate\/config\/notes-mention:v1:notes\/plan\.md:\/agents\/ops:[0-9a-f]{16}$/,
+      ),
+      payload: {
+        content: `You were mentioned in ${url} (notes/plan.md):\n\n> second line @/agents/ops`,
+        llmRequestPolicy: { behaviour: "after-current-request" },
+        role: "developer",
+      },
+    },
+  );
+  expect(stub("/agents/watcher").append).toHaveBeenCalledExactlyOnceWith({
+    type: "events.iterate.com/agents/context-added",
+    idempotencyKey: expect.stringMatching(
+      /^iterate\/config\/notes-watch:v1:notes\/plan\.md:\/agents\/watcher:[0-9a-f]{16}$/,
+    ),
+    payload: {
+      content: `A note you watch changed: ${url} (notes/plan.md). Current content:\n\n${note}`,
+      llmRequestPolicy: { behaviour: "after-current-request" },
+      role: "developer",
+    },
+  });
+
+  // Keys derive from the text alone: a redelivery (or an amended commit that
+  // re-lands the same lines) produces byte-identical events, which the
+  // platform's idempotency turns into no-ops.
+  await deliver(worker, { ...commit, payload: { ...commit.payload, commitOid: "b".repeat(40) } });
+  for (const agent of stubs.values()) {
+    expect(agent.append.mock.calls).toHaveLength(2);
+    expect(agent.append.mock.calls[1]).toEqual(agent.append.mock.calls[0]);
+  }
+});
+
 test("packaged apps stay behind the thin router", () => {
   const worker = templateFile("worker.ts");
   expect(worker).not.toContain("rootDir");

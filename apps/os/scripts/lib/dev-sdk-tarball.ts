@@ -1,29 +1,30 @@
 /**
- * Local-dev lockstep for the `iterate` SDK.
+ * Local-dev lockstep for this repo's published packages.
  *
  * WHY THIS EXISTS: dynamic worker builds (the seeded template apps included)
- * npm-install the `iterate` package from the spec in the template's
- * package.json — published `iterate@main` by default. Preview deploys pin
- * that spec's ref to the PR head's published build
- * (APP_CONFIG_ITERATE_REPO_PKG_REF in deploy.ts), so preview e2e always
- * tests template + SDK in lockstep. Local dev had no such override: a branch
- * that adds an SDK export and uses it from template code was silently broken
- * under plain `pnpm dev` — the template built against yesterday's @main,
- * failed in a background worker build, and the page just sat on the
+ * npm-install the `iterate` package — and the `@iterate-com/docs` config
+ * bridge — from the specs in the template's package.json: published `@main`
+ * by default. Preview deploys pin those specs' ref to the PR head's published
+ * build (APP_CONFIG_ITERATE_REPO_PKG_REF in deploy.ts), so preview e2e always
+ * tests template + packages in lockstep. Local dev had no such override: a
+ * branch that adds an SDK export and uses it from template code was silently
+ * broken under plain `pnpm dev` — the template built against yesterday's
+ * @main, failed in a background worker build, and the page just sat on the
  * "building" overlay. (Exactly how this branch's createProcessorHost
- * regression hid.) These two halves give local dev preview's semantics: the
- * `iterate` dependency points at THIS worktree's packed SDK, via the
+ * regression hid; a docs-bridge fix was equally invisible until the bridge
+ * joined this list.) These two halves give local dev preview's semantics:
+ * each dependency points at THIS worktree's packed package, via the
  * name-keyed APP_CONFIG_ITERATE_REPO_PKG_SPEC_OVERRIDES map (a ref cannot
  * express a local tarball, and name-keying re-points repos still carrying a
- * stale tarball URL from before an SDK edit).
+ * stale tarball URL from before an edit).
  *
  * HOW THE PIECES FIT (the ordering is load-bearing):
  *
- * - `packLocalIterateSdk` runs in dev.ts — the PARENT process — before the
- *   server spawns. It builds packages/iterate, packs it into a
- *   content-named tarball under .dev-server/sdk, picks a free loopback port,
- *   and returns the finished spec URL. dev.ts then exports
- *   APP_CONFIG_ITERATE_REPO_PKG_SPEC_OVERRIDES (+ ITERATE_DEV_SDK_TARBALL)
+ * - `packLocalPackages` runs in dev.ts — the PARENT process — before the
+ *   server spawns. It builds and packs every package in LOCAL_PACKAGES into
+ *   content-named tarballs under .dev-server/sdk, picks a free loopback
+ *   port, and returns the finished spec URLs. dev.ts then exports
+ *   APP_CONFIG_ITERATE_REPO_PKG_SPEC_OVERRIDES (+ ITERATE_DEV_SDK_TARBALL_DIR)
  *   into the child's environment. Setting the overrides in the parent is NOT
  *   an implementation detail: generate-wrangler-config.ts reads process.env
  *   in module-level constants, which ES import hoisting evaluates before any
@@ -32,16 +33,16 @@
  *
  * - `serveDevSdkTarball` runs at the top of vite.config.ts — the CHILD
  *   process, which owns the long-lived server — and binds the pre-chosen
- *   port from the overridden spec URL, serving the one tarball file.
+ *   port from the overridden spec URLs, serving the tarballs by file name.
  *   worker-bundler installs direct HTTP(S) tarball URLs, so no registry is
  *   involved. Bound to 127.0.0.1 explicitly ("localhost" can resolve to ::1
  *   and break the workerd-side dial).
  *
- * - The tarball name carries a content hash of the BUILT package (dist +
+ * - Each tarball name carries a content hash of the BUILT package (dist +
  *   manifest, not the tarball bytes — pack embeds mtimes, which would rotate
  *   the name every restart). The spec URL participates in dynamic-worker
- *   build keys, so an unchanged SDK keeps its build cache across dev
- *   restarts and any SDK change is a new spec → a fresh build, never a stale
+ *   build keys, so an unchanged package keeps its build cache across dev
+ *   restarts and any change is a new spec → a fresh build, never a stale
  *   cached artifact.
  *
  * An explicit APP_CONFIG_ITERATE_REPO_PKG_SPEC_OVERRIDES in the environment
@@ -51,56 +52,90 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { createServer } from "node:http";
 import { createServer as createNetServer } from "node:net";
-import { createReadStream, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import {
+  createReadStream,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+} from "node:fs";
 import path from "node:path";
 import process from "node:process";
 
-/** Build + pack the workspace `iterate` package and reserve a loopback port;
- * returns the spec URL for the child environment. Parent-process half. */
-export async function packLocalIterateSdk(
+/**
+ * The workspace packages the seeded config-repo templates install by name.
+ * `build` is the pnpm script that produces `dist` (hashed for the tarball
+ * name); `pnpm pack` then honors each package's own `files`/publishConfig.
+ */
+const LOCAL_PACKAGES = [
+  { build: "build", dist: "dist", name: "iterate", root: "../../packages/iterate" },
+  { build: "build:package", dist: "dist-package", name: "@iterate-com/docs", root: "../docs" },
+] as const;
+
+/** Build + pack every local package and reserve a loopback port; returns
+ * the name-keyed spec URLs for the child environment. Parent-process half. */
+export async function packLocalPackages(
   appRoot: string,
-): Promise<{ specUrl: string; tarball: string }> {
-  const packageRoot = path.resolve(appRoot, "../../packages/iterate");
+): Promise<{ dir: string; overrides: Record<string, string> }> {
   const outDir = path.resolve(appRoot, ".dev-server/sdk");
   mkdirSync(outDir, { recursive: true });
-
-  run("pnpm", ["--dir", packageRoot, "build"], appRoot);
-
-  const distDir = path.join(packageRoot, "dist");
-  const hash = createHash("sha256");
-  for (const file of readdirSync(distDir, { recursive: true }).sort()) {
-    const absolute = path.join(distDir, String(file));
-    if (!statSync(absolute).isFile()) continue;
-    hash.update(String(file));
-    hash.update(readFileSync(absolute));
-  }
-  hash.update(readFileSync(path.join(packageRoot, "package.json")));
-  const tarball = path.join(outDir, `iterate-${hash.digest("hex").slice(0, 12)}.tgz`);
-
   const existing = readdirSync(outDir).filter((name) => name.endsWith(".tgz"));
-  if (!existing.includes(path.basename(tarball))) {
-    run("pnpm", ["--dir", packageRoot, "pack", "--out", tarball], appRoot);
+
+  const tarballs: string[] = [];
+  for (const pkg of LOCAL_PACKAGES) {
+    const packageRoot = path.resolve(appRoot, pkg.root);
+    run("pnpm", ["--dir", packageRoot, pkg.build], appRoot);
+
+    const distDir = path.join(packageRoot, pkg.dist);
+    const hash = createHash("sha256");
+    for (const file of readdirSync(distDir, { recursive: true }).sort()) {
+      const absolute = path.join(distDir, String(file));
+      if (!statSync(absolute).isFile()) continue;
+      hash.update(String(file));
+      hash.update(readFileSync(absolute));
+    }
+    hash.update(readFileSync(path.join(packageRoot, "package.json")));
+    const stem = pkg.name.replace(/^@/, "").replaceAll("/", "-");
+    const tarball = path.join(outDir, `${stem}-${hash.digest("hex").slice(0, 12)}.tgz`);
+    if (!existing.includes(path.basename(tarball))) {
+      run("pnpm", ["--dir", packageRoot, "pack", "--out", tarball], appRoot);
+    }
+    tarballs.push(tarball);
   }
   for (const name of existing) {
-    if (name !== path.basename(tarball)) rmSync(path.join(outDir, name), { force: true });
+    if (!tarballs.some((tarball) => path.basename(tarball) === name)) {
+      rmSync(path.join(outDir, name), { force: true });
+    }
   }
 
   const port = await pickFreePort();
-  return { specUrl: `http://127.0.0.1:${port}/${path.basename(tarball)}`, tarball };
+  const overrides = Object.fromEntries(
+    LOCAL_PACKAGES.map((pkg, index) => [
+      pkg.name,
+      `http://127.0.0.1:${port}/${path.basename(tarballs[index]!)}`,
+    ]),
+  );
+  return { dir: outDir, overrides };
 }
 
-/** Serve the packed tarball on the port dev.ts baked into the override spec
- * URL. Child-process (vite.config.ts) half; no-op without the dev.ts env. */
+/** Serve the packed tarballs on the port dev.ts baked into the override spec
+ * URLs. Child-process (vite.config.ts) half; no-op without the dev.ts env. */
 export async function serveDevSdkTarball(): Promise<void> {
-  const tarball = process.env.ITERATE_DEV_SDK_TARBALL;
+  const dir = process.env.ITERATE_DEV_SDK_TARBALL_DIR;
   const overrides = process.env.APP_CONFIG_ITERATE_REPO_PKG_SPEC_OVERRIDES;
-  if (!tarball || !overrides) return;
-  // The loopback URL among the override specs is the tarball dev.ts packed;
-  // an explicit developer-provided overrides map may not carry one.
-  const spec = Object.values(JSON.parse(overrides) as Record<string, string>).find(
+  if (!dir || !overrides) return;
+  // The env var is dev.ts's own JSON.stringify of packLocalPackages's
+  // overrides — package name → spec string — and a hand-set value follows
+  // the same APP_CONFIG contract (the app parses it as that map). The
+  // loopback URLs among the specs are the tarballs dev.ts packed (one port
+  // for all); an explicit developer-provided map may not carry any.
+  const specs = Object.values(JSON.parse(overrides) as Record<string, string>).filter(
     (candidate) => URL.canParse(candidate) && new URL(candidate).hostname === "127.0.0.1",
   );
-  if (!spec) return;
+  const spec = specs[0];
+  if (spec === undefined) return;
   const url = new URL(spec);
 
   // Vite re-evaluates this config module on change; keep one server per
@@ -109,7 +144,11 @@ export async function serveDevSdkTarball(): Promise<void> {
   const globals = globalThis as { [key]?: true };
   if (globals[key]) return;
   const server = createServer((request, response) => {
-    if (request.url !== url.pathname) {
+    // Basename only: the served set is exactly the packed tarballs, never a
+    // path walk out of the directory.
+    const name = path.basename(request.url ?? "");
+    const tarball = path.join(dir, name);
+    if (!name.endsWith(".tgz") || !existsSync(tarball)) {
       response.writeHead(404).end();
       return;
     }
@@ -129,7 +168,7 @@ export async function serveDevSdkTarball(): Promise<void> {
   // The server must not keep the vite process alive on its own.
   server.unref();
   globals[key] = true;
-  console.log(`[dev] dynamic worker builds pinned to local iterate sdk: ${spec}`);
+  console.log(`[dev] dynamic worker builds pinned to local packages: ${specs.join(", ")}`);
 }
 
 async function pickFreePort(): Promise<number> {

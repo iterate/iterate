@@ -515,6 +515,86 @@ describe("resilience and reach (round 2)", () => {
   });
 });
 
+describe("amendIfHead", () => {
+  test("amends when the head matches: same parents, new tree, head dropped from history", async () => {
+    const { head: seed, remote } = await seededRemote();
+    const { reader } = subject(remote);
+    await syncTip(reader);
+    const first = await reader.commitFiles({
+      author: AUTHOR,
+      changes: [{ content: "## today\n- one\n", path: "log.md" }],
+      message: "log",
+    });
+    expect(first).toMatchObject({ amended: false, kind: "applied", parentCommitOid: seed });
+    if (first.kind !== "applied") throw new Error("unreachable");
+
+    const second = await reader.commitFiles({
+      amendIfHead: first.commitOid,
+      author: AUTHOR,
+      changes: [{ content: "## today\n- one\n- two\n", path: "log.md" }],
+      message: "log",
+    });
+    expect(second).toMatchObject({
+      amended: true,
+      kind: "applied",
+      parentCommitOid: first.commitOid,
+    });
+    if (second.kind !== "applied") throw new Error("unreachable");
+    // The remote's head is the amended commit, whose parent is the SEED —
+    // the first commit is gone from main's history.
+    expect(remote.refs.get("refs/heads/main")).toBe(second.commitOid);
+    expect(parseCommit(remote.objects.get(second.commitOid)!.payload).parents).toEqual([seed]);
+    await expect(reader.readPaths(["log.md"])).resolves.toEqual(["## today\n- one\n- two\n"]);
+    // The store's head follows too, so the next amend chains from here.
+    expect(reader.head()?.commitOid).toBe(second.commitOid);
+  });
+
+  test("stacks an ordinary commit when the head moved on", async () => {
+    const { remote } = await seededRemote();
+    const { reader } = subject(remote);
+    await syncTip(reader);
+    const first = await reader.commitFiles({
+      author: AUTHOR,
+      changes: [{ content: "## today\n- one\n", path: "log.md" }],
+      message: "log",
+    });
+    if (first.kind !== "applied") throw new Error("unreachable");
+    const intervening = await externalEdit(remote, "tasks/one.md", "# someone else\n");
+    await reader.syncToHead(intervening);
+
+    const second = await reader.commitFiles({
+      amendIfHead: first.commitOid,
+      author: AUTHOR,
+      changes: [{ content: "## today\n- one\n- two\n", path: "log.md" }],
+      message: "log",
+    });
+    expect(second).toMatchObject({ amended: false, kind: "applied", parentCommitOid: intervening });
+    if (second.kind !== "applied") throw new Error("unreachable");
+    expect(parseCommit(remote.objects.get(second.commitOid)!.payload).parents).toEqual([
+      intervening,
+    ]);
+    await expect(reader.readPaths(["tasks/one.md", "log.md"])).resolves.toEqual([
+      "# someone else\n",
+      "## today\n- one\n- two\n",
+    ]);
+  });
+
+  test("an amend of the root commit yields a new root commit", async () => {
+    const { head: seed, remote } = await seededRemote();
+    const { reader } = subject(remote);
+    await syncTip(reader);
+    const outcome = await reader.commitFiles({
+      amendIfHead: seed,
+      author: AUTHOR,
+      changes: [{ content: "# one amended\n", path: "tasks/one.md" }],
+      message: "seed, amended",
+    });
+    expect(outcome).toMatchObject({ amended: true, kind: "applied" });
+    if (outcome.kind !== "applied") throw new Error("unreachable");
+    expect(parseCommit(remote.objects.get(outcome.commitOid)!.payload).parents).toEqual([]);
+  });
+});
+
 describe("install-time guards (round 4)", () => {
   test("onApplied fires INSIDE the chain: a queued guarded sync sees the new floor and skips", async () => {
     const { head, remote } = await seededRemote();

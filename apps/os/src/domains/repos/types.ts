@@ -29,6 +29,18 @@ export type RepoFileChange =
 
 /** Command object for committing a batch of repo file mutations. */
 export type CommitRepoFilesInput = {
+  /**
+   * Tidy history: when the branch head is EXACTLY this commit (a full 40-hex
+   * oid), the new commit REPLACES it — same parents, the head's tree plus
+   * these changes, this message — instead of stacking on top. When the head
+   * has moved on (someone else committed in between) an ordinary commit lands
+   * on top; the result's `amended` says which happened. Decided inside the
+   * repo's serialized write, so "still the head" cannot race another writer.
+   * Ignored on a GitHub-linked repo (its history stays append-only — a
+   * rewrite would need a force push through the mirror). Content is never at
+   * stake either way, only the shape of history.
+   */
+  amendIfHead?: string;
   author?: { email: string; name: string };
   branch?: string;
   changes: RepoFileChange[];
@@ -37,6 +49,8 @@ export type CommitRepoFilesInput = {
 
 /** Result returned after a repo commit attempt, including no-op commits. */
 export type CommitRepoFilesResult = {
+  /** True when `amendIfHead` matched the head and the commit replaced it. */
+  amended: boolean;
   branch: string;
   changedPaths: string[];
   commitOid: string;
