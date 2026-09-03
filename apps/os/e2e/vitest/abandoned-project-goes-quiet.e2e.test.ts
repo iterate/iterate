@@ -48,17 +48,17 @@ failWakeUp(
   "a disposed test project stops waking its Durable Objects",
   { timeout: 240_000 },
   async () => {
-    // `await using`, like every spec: if anything below throws, the fixture is
-    // still disposed and nothing leaks into the test process.
-    await using handle = await createTestProject({ slugPrefix: "abandoned" });
-    using itx = handle.itx();
-
     // Everything the "test" holds open lives in this block, so leaving it IS
-    // the test ending: the interceptor's dedicated session (and its reconnect
-    // loop) and the agent handle are released by `using` whether the turn
-    // succeeded or threw.
+    // the test ending: the fixture (its disposer is the thing a real teardown
+    // hangs off), the interceptor's dedicated session and reconnect loop, and
+    // the agent handle are all released by `using` whether the turn succeeded
+    // or threw. Only what the measurement needs escapes.
+    let project: { id: string; slug: string; baseUrl: string };
     let baseline: Map<string, number>;
     {
+      await using handle = await createTestProject({ slugPrefix: "abandoned" });
+      using itx = handle.itx();
+      project = { ...handle.project, baseUrl: handle.baseUrl };
       // One real agent turn against a scripted model — the shape every spec
       // leaves behind. The reply is asserted so the test cannot pass vacuously
       // by never having created the work it claims to abandon. The agent runs
@@ -110,13 +110,11 @@ failWakeUp(
       baseline = await readOffsets(itx);
     }
 
-    // The fixture's own disposer — the thing a real teardown would hang off.
-    // Called here so the quiet window starts after it; the `await using`
-    // above runs it again at the end, which a disposer must tolerate anyway.
-    await handle[Symbol.asyncDispose]();
-
     await sleep(QUIET_SECONDS * 1000);
 
+    // A fresh admin session for the measurement: none of the test's own
+    // connections survive the block above.
+    using itx = createAdminOsItx({ baseUrl: project.baseUrl, context: project.id });
     // The measurement. Leaves first so a parent's boot cannot cascade into a
     // child that is read after it.
     const readStart = Date.now();
@@ -156,7 +154,7 @@ failWakeUp(
     const total = woke.reduce((sum, row) => sum + row.count, 0);
     expect(
       woke,
-      `project ${handle.project.slug} should be quiet after dispose (${QUIET_SECONDS}s), but it woke ${total} times after dispose`,
+      `project ${project.slug} should be quiet after dispose (${QUIET_SECONDS}s), but it woke ${total} times after dispose`,
     ).toEqual([]);
   },
 );
