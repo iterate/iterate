@@ -17,12 +17,23 @@ import {
   flakeEventTypes,
   FlakeRecord,
   flakeTransitionThresholds,
-  WorkflowRunWebhookEvent,
+  CheckRunWebhookEvent,
   type FlakeDashboardRenderResult,
   type FlakeDashboardState,
 } from "./contract.ts";
 
 const ARTIFACT_PREFIX = "flake-records-";
+
+/**
+ * Where a project's CI artifacts live. Supplied by the config worker
+ * (FlakeDashboardApp.create's config) — the starter app itself carries no
+ * organization identity. secretPath names a project secret holding a
+ * Depot org API read token.
+ */
+export interface DepotIngestionConfig {
+  orgId: string;
+  secretPath: string;
+}
 const MAX_ARTIFACT_BYTES = 5 * 1024 * 1024;
 
 /**
@@ -54,18 +65,26 @@ export class FlakeDashboardApp extends StreamProcessorDurableObject<FlakeDashboa
    * re-reads committed events from the stream and owns validation, ordering,
    * checkpointing, and dedupe.
    */
-  override async processEvent(event: StreamEvent): Promise<void> {
-    const webhook = WorkflowRunWebhookEvent.safeParse(event);
+  override async processEvent(
+    event: StreamEvent,
+    options?: { depot?: DepotIngestionConfig },
+  ): Promise<void> {
+    const webhook = CheckRunWebhookEvent.safeParse(event);
     if (webhook.success) {
+      if (!options?.depot) {
+        // Platform-direct delivery, or a config worker mounted without CI
+        // ingestion: nothing to pull from.
+        return;
+      }
       // Telemetry must never wedge event delivery: a throw from ingestion
       // would fail the delivery batch and retry the same poisoned webhook
-      // forever, stalling every app behind it. Any failure — GitHub down, an
+      // forever, stalling every app behind it. Any failure — Depot down, an
       // unreadable zip — logs and drops this run's records.
       try {
-        await this.#ingestWorkflowRunFlakeArtifacts(webhook.data);
+        await this.#ingestCheckRunFlakeArtifacts(webhook.data, options.depot);
       } catch (error) {
         console.error(
-          `[flake-ingest] ingestion failed for run ${webhook.data.payload.body.workflow_run.id} (records dropped):`,
+          `[flake-ingest] ingestion failed for sha ${webhook.data.payload.body.check_run.head_sha} (records dropped):`,
           error,
         );
       }
@@ -77,113 +96,159 @@ export class FlakeDashboardApp extends StreamProcessorDurableObject<FlakeDashboa
   }
 
   /**
-   * Artifact-pull ingestion for flake telemetry: fetch the completed run's
-   * `flake-records-<suite>` artifacts with the App's own installation token,
-   * parse the recorder lines, and append one run-recorded event per artifact
-   * to /flakes. Redeliveries are harmless: the append is idempotency-keyed on
-   * run+attempt+suite, and a same-key conflict means already ingested.
+   * Artifact-pull ingestion for flake telemetry. This repo's suites run on
+   * Depot CI, so a completed check_run is the signal: resolve the Depot run
+   * by commit sha, list its `flake-records-<suite>` artifacts, fetch each
+   * via a short-lived signed URL, and append one run-recorded event per
+   * artifact to /flakes. CI holds no iterate credential; the Depot read
+   * token is a platform-held project secret. Any check_run completing on the
+   * same Depot run re-scans it — repeated appends dedupe on the
+   * run+attempt+suite idempotency key, so redeliveries and sibling checks
+   * are harmless.
    */
-  async #ingestWorkflowRunFlakeArtifacts(
-    webhook: (typeof WorkflowRunWebhookEvent)["_output"],
+  async #ingestCheckRunFlakeArtifacts(
+    webhook: (typeof CheckRunWebhookEvent)["_output"],
+    depot: DepotIngestionConfig,
   ): Promise<void> {
-    const connection = webhook.path.split("/")[3]!;
-    const { workflow_run: run, repository } = webhook.payload.body;
+    const { check_run: checkRun, repository } = webhook.payload.body;
     const params = { owner: repository.owner.login, repo: repository.name };
     using itx = await this.env.ITX.get();
-    const octokit = itx.integrations.github.get(connection).octokit;
-    const artifacts = await octokit.paginate(
-      "GET /repos/{owner}/{repo}/actions/runs/{run_id}/artifacts",
-      { ...params, run_id: run.id, per_page: 100 },
-    );
-    const flakeArtifacts = artifacts.filter((artifact) =>
-      artifact.name.startsWith(ARTIFACT_PREFIX),
-    );
-    if (flakeArtifacts.length === 0) return;
+    const token = await itx.secrets.get(depot.secretPath).reveal();
 
-    const stream = itx.streams.get(flakesStreamPath);
-    // Idempotency-keyed birth: whoever ingests first births the dashboard,
-    // pinned to the repository the records came from. A same-key/different-
-    // body conflict also means already born — it must not abort the record
-    // appends below (a poisoned birth key on prd once silently dropped every
-    // CI run's records this way).
-    try {
-      await stream.append(
-        ...flakeDashboardCreationEvents({
-          repository: params,
-          issueTitle: "Flake dashboard",
-          defaultBranch: repository.default_branch || "main",
-        }),
-      );
-    } catch (error) {
-      if (!isIdempotencyConflict(error)) throw error;
-    }
-
-    for (const artifact of flakeArtifacts) {
-      if (artifact.size_in_bytes > MAX_ARTIFACT_BYTES) {
-        console.warn(
-          `[flake-ingest] skipping oversized artifact ${artifact.name} (${artifact.size_in_bytes} bytes)`,
-        );
-        continue;
-      }
-      const suite = artifact.name.slice(ARTIFACT_PREFIX.length);
-      const download = await octokit.rest.actions.downloadArtifact({
-        ...params,
-        artifact_id: artifact.id,
-        archive_format: "zip",
+    const depotRpc = async <T>(method: string, body: unknown): Promise<T> => {
+      const response = await fetch(`https://api.depot.dev/depot.ci.v1.CIService/${method}`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${token}`,
+          "x-depot-org": depot.orgId,
+        },
+        body: JSON.stringify(body),
       });
-      // Octokit types the redirect-following response data as `unknown`; for
-      // archive_format "zip" it is the archive bytes as an ArrayBuffer at
-      // runtime. unzip() throws on anything else, and the catch in
-      // processEvent turns that into a logged drop, not a stalled batch.
-      const files = await unzip(new Uint8Array(download.data as ArrayBuffer));
-      const records = Object.entries(files)
-        .filter(([name]) => name.endsWith(".jsonl"))
-        .flatMap(([name, bytes]) =>
-          new TextDecoder()
-            .decode(bytes)
-            .split("\n")
-            .filter((line) => line.trim() !== "")
-            .flatMap((line) => {
-              // A torn line from a crashed test worker skips, never aborts.
-              let json: unknown;
-              try {
-                json = JSON.parse(line);
-              } catch {
-                console.warn(`[flake-ingest] skipping malformed line in ${artifact.name}/${name}`);
-                return [];
-              }
-              const parsed = FlakeRecord.safeParse(json);
-              if (!parsed.success) {
-                console.warn(`[flake-ingest] skipping malformed line in ${artifact.name}/${name}`);
-                return [];
-              }
-              return [parsed.data];
-            }),
-        );
-      if (records.length === 0) continue;
+      if (!response.ok) {
+        throw new Error(`depot ${method} failed: HTTP ${response.status} ${await response.text()}`);
+      }
+      // Connect's JSON protocol returns the response message as a plain JSON
+      // object; the assertion states which message this method returns — the
+      // fields read below are checked for presence before use.
+      return (await response.json()) as T;
+    };
 
-      const runId = `${run.id}-${run.run_attempt || 1}`;
+    // sha matches either the run's merge sha or its head sha, so PR-triggered
+    // and push-triggered runs both resolve.
+    // Connect's JSON protocol emits proto3 canonical camelCase field names
+    // (verified against the live API) — snake_case reads come back undefined.
+    const runs = await depotRpc<{ runs?: { runId: string }[] }>("ListRuns", {
+      repo: `${params.owner}/${params.repo}`,
+      sha: checkRun.head_sha,
+      status: ["finished", "failed"],
+      pageSize: 10,
+    });
+    for (const run of runs.runs || []) {
+      const listed = await depotRpc<{
+        artifacts?: {
+          artifactId: string;
+          name: string;
+          sizeBytes?: string | number;
+          attempt?: number;
+        }[];
+      }>("ListArtifacts", { runId: run.runId, pageSize: 100 });
+      const flakeArtifacts = (listed.artifacts || []).filter((artifact) =>
+        artifact.name.startsWith(ARTIFACT_PREFIX),
+      );
+      if (flakeArtifacts.length === 0) continue;
+
+      const stream = itx.streams.get(flakesStreamPath);
+      // Idempotency-keyed birth: whoever ingests first births the dashboard,
+      // pinned to the repository the records came from. A same-key/different-
+      // body conflict also means already born — it must not abort the record
+      // appends below (a poisoned birth key on prd once silently dropped
+      // every CI run's records this way).
       try {
-        await stream.append({
-          type: "events.iterate.com/flakes/run-recorded",
-          idempotencyKey: `flakes/run:${runId}:${suite}`,
-          payload: {
-            runId,
-            suite,
-            branch: run.head_branch || "unknown",
-            commit: run.head_sha || "unknown",
-            records,
-          },
-        });
+        await stream.append(
+          ...flakeDashboardCreationEvents({
+            repository: params,
+            issueTitle: "Flake dashboard",
+            defaultBranch: repository.default_branch || "main",
+          }),
+        );
       } catch (error) {
-        // Same key, different body: the run+attempt+suite is already
-        // ingested (a webhook redelivery racing a slow first attempt) — the
-        // first committed fact wins.
         if (!isIdempotencyConflict(error)) throw error;
       }
-      console.log(
-        `[flake-ingest] ingested ${records.length} records from ${artifact.name} (run ${runId})`,
-      );
+
+      for (const artifact of flakeArtifacts) {
+        if (Number(artifact.sizeBytes || 0) > MAX_ARTIFACT_BYTES) {
+          console.warn(
+            `[flake-ingest] skipping oversized artifact ${artifact.name} (${artifact.sizeBytes} bytes)`,
+          );
+          continue;
+        }
+        const suite = artifact.name.slice(ARTIFACT_PREFIX.length);
+        const download = await depotRpc<{ url?: string }>("GetArtifactDownloadURL", {
+          artifactId: artifact.artifactId,
+        });
+        if (!download.url) {
+          console.warn(`[flake-ingest] no download url for artifact ${artifact.name}`);
+          continue;
+        }
+        const zipResponse = await fetch(download.url);
+        if (!zipResponse.ok) {
+          throw new Error(`artifact download failed: HTTP ${zipResponse.status}`);
+        }
+        const files = await unzip(new Uint8Array(await zipResponse.arrayBuffer()));
+        const records = Object.entries(files)
+          .filter(([name]) => name.endsWith(".jsonl"))
+          .flatMap(([name, bytes]) =>
+            new TextDecoder()
+              .decode(bytes)
+              .split("\n")
+              .filter((line) => line.trim() !== "")
+              .flatMap((line) => {
+                // A torn line from a crashed test worker skips, never aborts.
+                let json: unknown;
+                try {
+                  json = JSON.parse(line);
+                } catch {
+                  console.warn(
+                    `[flake-ingest] skipping malformed line in ${artifact.name}/${name}`,
+                  );
+                  return [];
+                }
+                const parsed = FlakeRecord.safeParse(json);
+                if (!parsed.success) {
+                  console.warn(
+                    `[flake-ingest] skipping malformed line in ${artifact.name}/${name}`,
+                  );
+                  return [];
+                }
+                return [parsed.data];
+              }),
+          );
+        if (records.length === 0) continue;
+
+        const runId = `${run.runId}-${artifact.attempt || 1}`;
+        try {
+          await stream.append({
+            type: "events.iterate.com/flakes/run-recorded",
+            idempotencyKey: `flakes/run:${runId}:${suite}`,
+            payload: {
+              runId,
+              suite,
+              branch: checkRun.check_suite?.head_branch || "unknown",
+              commit: checkRun.head_sha,
+              records,
+            },
+          });
+        } catch (error) {
+          // Same key, different body: the run+attempt+suite is already
+          // ingested (a sibling check_run racing this one) — the first
+          // committed fact wins.
+          if (!isIdempotencyConflict(error)) throw error;
+        }
+        console.log(
+          `[flake-ingest] ingested ${records.length} records from ${artifact.name} (run ${runId})`,
+        );
+      }
     }
   }
 

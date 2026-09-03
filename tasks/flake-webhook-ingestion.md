@@ -26,6 +26,8 @@ The push lane made CI hold the project API key — the project's root credential
 
 ## Post-merge ops
 
+> **Superseded by `tasks/flake-checkrun-ingestion.md`:** the confirmation steps below can never pass — Depot CI jobs are check runs, so `workflow_run` webhooks never fire for the test suites. The check_run + Depot-artifact-pull design replaces this lane's trigger; the CI-side artifact upload steps remain correct.
+
 - [ ] Unset `FLAKE_REPORT_*` in `_shared/prd` Doppler (push-lane reporter is gone) — and consider rotating the project API key (a fragment echoed into a local session transcript during setup)
 - [ ] Update the live iterate project's config worker to the new package build (the mount is already live; the mapper rides the same `iterate@main` bump)
 - [ ] Confirm ingestion on a real CI run: `flakes/run-recorded` appears after the workflow_run webhook, issue updates

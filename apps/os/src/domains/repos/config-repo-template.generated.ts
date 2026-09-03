@@ -966,8 +966,12 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "      repoPath: \"/repos/config\",\n" +
       "    },\n" +
       "  });\n" +
-      "  /** /flakes -> GitHub \"Flake dashboard\" issue. Inert if /flakes stream never receives events. */\n" +
-      "  #flakeDashboardApp = FlakeDashboardApp.create(this.env);\n" +
+      "  /** /flakes -> GitHub \"Flake dashboard\" issue. Inert if /flakes stream never receives events.\n" +
+      "   * `depot` is THIS project's CI artifact store — edit per project (or drop\n" +
+      "   * it to disable check_run ingestion). */\n" +
+      "  #flakeDashboardApp = FlakeDashboardApp.create(this.env, {\n" +
+      "    depot: { orgId: \"0p91s0lz49\", secretPath: \"/secrets/depot-ci-token\" },\n" +
+      "  });\n" +
       "  #docsApp = DocsApp.create(this.env, {\n" +
       "    auth: { policy: \"project-member\" },\n" +
       "    proxy: {\n" +
