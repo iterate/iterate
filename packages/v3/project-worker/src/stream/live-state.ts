@@ -70,6 +70,11 @@ export class LiveState<S> {
    *  A diff/append failure degrades to a LOST notification (the client re-seeds on the chain gap),
    *  never a throw the caller sees. */
   set(next: S): void {
+    // The SAME object is the same JSON: no diff to compute, no delta, no rev move (the contract
+    // above forbids in-place mutation, which is what makes identity a proof of equality). A processor
+    // whose projection is its reduced state hands this holder the identical object on every batch
+    // that changed nothing in the projection — the common case for a runtime-field processor.
+    if (next === this.#lastSerializedState) return;
     // The diff is JSON.stringify on both sides (lib/patch.ts), so a `next` the wire cannot carry (a
     // BigInt, a cycle) throws HERE and nowhere later: adopt it anyway, and STILL advance the rev —
     // the base moved without an emit, and the bump is what mints the chain gap that forces a stale

@@ -2482,3 +2482,33 @@ string>`, `cap.js` main). `workers.get({ source, cacheKey?, className?, props? }
   (counts evaluations) for a stateless worker and a facet (`facets.get(name)` re-materializes from the
   memo, producer count still 1).
 - GATES: tsc×3 · oxlint 0/0 · knip clean · unit+workers 252 · e2e 141p/2xf (36 files).
+
+## 2026-09-02/03 — the review round: eight reviewers, twelve red proofs, three performance no-brainers
+
+- Jonas: "send a bunch of subagents to review narrative failures, bugs, illogical layering, unidiomatic
+  stuff kenton varda wouldn't have done etc. for the bugs create failing tests without fixing. for
+  everything else make a bouquet of recommendations… also trawl apps/os and this branch… for future
+  features… flag which ones will be awkward" and then "also do a pass on 1) other code smells… and 2)
+  PERFORMANCE… no brainers with big gains for v small refactors should just be done. the rest goes on the
+  menu… all stream processor side effects must be tolerant of at least once delivery".
+- Six independent reviewers wrote `docs/reviews/2026-09-02-{narrative-failures,bugs-do-side,
+bugs-edge-side,layering,workerd-idioms,futures}.md`; the smells and performance passes ran as ONE
+  workflow (six finders → three adversarial judges per finding → two writers): 48 findings, 21 do-now,
+  27 menu, 0 rejected → `2026-09-02-{smells,performance}.md`. `2026-09-02-SYNTHESIS.md` ties them together.
+- TWELVE BUGS, each with a red proof marked `test.fails` (`review-bugs-{do,edge}-side` in all three
+  lanes), NOT fixed: the lend/un-set seam in iterate-context.ts (4), the cursor lane of delivery (3),
+  a failed `getCode` poisoning its cacheKey (Cloudflare caches a failed load like a success), the
+  removal effect deleting a facet another row hosts, a pager swap rejecting an in-flight page, the
+  live-state client's gap heal, the rule tie-break on structurally equal pinned objects.
+- PERFORMANCE DO-NOWS APPLIED (the only src changes of the round): (1) `LentRpcStub#walkItxExpressionSteps`
+  no longer awaits mid-chain — every step is a pipelined capnweb path, so an n-step call on a client's
+  stub is ONE client round trip; (2) the ~370 KB processor SDK is injected only into isolates whose
+  modules import `./processor.js` (a stateless worker skips compiling it; a forgotten import fails loud,
+  by name); (3) `LiveState.set` returns at once when handed the SAME object (identity ⇒ same JSON under
+  the no-in-place-mutation contract), one unit row. The fourth do-now — a failed core-checkpoint write
+  leaving phantom core state in memory — is a BUG, not a green-path win, so it joins the bug list
+  unfixed. The rest is the menu.
+- A twelve-strong Codex pass (gpt-5.6-sol, xhigh, read-only) was launched over the same questions and
+  died at the OpenAI workspace's credit wall before finishing its reading; the prompts and a relaunch
+  recipe are in `docs/reviews/codex/`.
+- GATES: tsc×3 · oxlint 0/0 · knip clean · unit+workers 253p/7xf · e2e 141p/7xf (38 files).

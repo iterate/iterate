@@ -60,6 +60,10 @@ class LentRpcStub extends WorkersRpcTarget {
    *  the stub; a call step calls the method; the ANONYMOUS call step (`""`) calls the value itself
    *  (a bare function lent as a capability). */
   async #walkItxExpressionSteps(itxExpressionSteps: ItxExpression): Promise<unknown> {
+    // NO await inside the loop: on a capnweb stub every step is a PIPELINED path — a property read
+    // yields a stub for the property, a call yields a promise that is itself a stub — so an n-step
+    // chain costs the client ONE round trip, flushed by the single await at the end. A rejection
+    // anywhere in the chain lands there too, where the callers' catch → #recodeIfBroken sees it.
     let value: unknown = this.#clientRpcStub;
     for (const step of itxExpressionSteps) {
       if (typeof step === "string") value = (value as Record<string, unknown>)[step];
@@ -69,11 +73,11 @@ class LentRpcStub extends WorkersRpcTarget {
         const [method, ...args] = step;
         value =
           method === ""
-            ? await (value as (...a: unknown[]) => unknown)(...args)
-            : await (value as Record<string, (...a: unknown[]) => unknown>)[method](...args);
+            ? (value as (...a: unknown[]) => unknown)(...args)
+            : (value as Record<string, (...a: unknown[]) => unknown>)[method](...args);
       }
     }
-    return value;
+    return await value;
   }
 
   /** The client died mid-call: capnweb throws its raw, UNCODED close error. Re-code LOCALLY to

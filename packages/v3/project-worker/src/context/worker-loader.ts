@@ -150,10 +150,17 @@ export async function loadConfinedWorker(
         "allow_irrevocable_stub_storage",
       ],
       mainModule: "cap.js",
-      // The processor SDK ("processor.js", ~330KB) rides EVERY load, so any user code may
-      // `import "./processor.js"` uniformly. The itx scope is reached via `env.ITX.get()`, not an
-      // injected module.
-      modules: { ...(await getModules()), "processor.js": PROCESSOR_SDK_MODULE },
+      // The processor SDK ("processor.js", ~370 KB) is injected only when a module IMPORTS it — a
+      // stateless worker that never does skips compiling it (the review measured the SDK at ~40× a
+      // typical fixture). The failure mode is loud: a forgotten import fails at module link, by
+      // name. The itx scope is reached via `env.ITX.get()`, not an injected module.
+      modules: await (async () => {
+        const modules = await getModules();
+        const importsProcessorSdk = Object.values(modules).some((code) =>
+          /["']\.\/processor\.js["']/.test(code),
+        );
+        return importsProcessorSdk ? { ...modules, "processor.js": PROCESSOR_SDK_MODULE } : modules;
+      })(),
       env: { ITX: opts.host },
       globalOutbound: opts.host,
     }),

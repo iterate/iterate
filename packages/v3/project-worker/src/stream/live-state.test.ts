@@ -37,6 +37,16 @@ test("set() chains rev exactly and emits the diff a client can apply", () => {
   expect(live.snapshot()).toEqual({ rev: epoch + 2, state: { n: 2 } });
 });
 
+test("the SAME object set again is a no-op — no diff computed, no delta, the rev untouched", () => {
+  const sink = collectingSink();
+  const initial = { n: 1, big: Array.from({ length: 1000 }, (_, i) => ({ i })) };
+  const live = new LiveState(sink, "k", initial);
+  const epoch = live.snapshot().rev;
+  live.set(live.get()); // identity ⇒ same JSON by contract (no in-place mutation)
+  expect(sink.frames).toEqual([]);
+  expect(live.snapshot().rev).toBe(epoch);
+});
+
 test("an unchanged set emits nothing and leaves the rev alone", () => {
   const sink = collectingSink();
   const live = new LiveState(sink, "k", { n: 1 });
