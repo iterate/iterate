@@ -9,11 +9,11 @@ size: small
 
 ## Checklist
 
-- [ ] `specs/flake-sentinel.spec.ts` — playwright sentinel via `createFlake` (first playwright use of the wrapper)
-- [ ] `apps/os/e2e/vitest/flake-sentinel.e2e.test.ts` — preview e2e sentinel (fixture-free: no deployment needed)
-- [ ] preview lanes: `FLAKE_RECORD_DIR` per lane in `scripts/preview/preview.ts` (playwright → `test-results/flake-records/specs`, vitest e2e → `.../preview-e2e`), guard tests updated
-- [ ] `cloudflare-previews.yml`: `flake-records-specs` + `flake-records-preview-e2e` artifact uploads (`if: always()`, `if-no-files-found: ignore`, `overwrite: true`)
-- [ ] docs/testing.md: note the per-suite sentinel convention + the stance that `createFlake` replaces retries only for tests that opted in (unwrapped specs keep playwright retries)
+- [x] `specs/flake-sentinel.spec.ts` — playwright sentinel _(verified through the real spec runner: expected-fail registration accepted, record line written; cosmetic wart: playwright shows the wrapper's file as the test location)_
+- [x] `apps/os/e2e/vitest/flake-sentinel.e2e.test.ts` — preview e2e sentinel _(verified under the e2e vitest config; it flaked on the verification run and stayed green, recording the flake-fail)_
+- [x] preview lanes: `FLAKE_RECORD_DIR` per lane in `scripts/preview/preview.ts` (playwright → `test-results/flake-records/specs`, vitest e2e → `.../preview-e2e`), guard tests updated
+- [x] `cloudflare-previews.yml`: `flake-records-specs` + `flake-records-preview-e2e` artifact uploads (`if: always()`, `if-no-files-found: ignore`, `overwrite: true`)
+- [x] docs/testing.md: note the per-suite sentinel convention + the stance that `createFlake` replaces retries only for tests that opted in (unwrapped specs keep playwright retries)
 
 ## Post-merge
 

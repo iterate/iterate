@@ -607,6 +607,17 @@ flaky moves to `createFlake`; if it stops passing entirely, switch it to
 ~10%-flaky sentinel that proves the pipeline works — if its flake rate reads
 0%, distrust the dashboard, not the sentinel.
 
+Every suite carries its own sentinel (`flake sentinel (specs)` in
+`specs/flake-sentinel.spec.ts`, `flake sentinel (e2e)` in
+`apps/os/e2e/vitest/flake-sentinel.e2e.test.ts`) — distinct names, so each
+gets its own dashboard row and a suite whose row reads 0% has broken
+recording/ingestion plumbing, not a healthy month.
+
+For playwright specs, `createFlake` REPLACES retries — but only for tests
+that opted in by being wrapped. A matched flake is green on the first
+attempt (no retry consumed, no retry-until-pass shrinking the measured
+rate); unwrapped specs keep the suite's ordinary retry policy.
+
 This IS the quarantine protocol (previous section): a skipped test produces
 no data, so nothing can ever prove it deserves to come back. Skips remain
 only for tests that cannot keep executing at all.
