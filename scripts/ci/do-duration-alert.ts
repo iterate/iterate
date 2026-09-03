@@ -98,7 +98,7 @@ function formatAlert(input: {
   summary: ProbeSummary;
   testPrefix: string;
   runUrl: string | null;
-}): string {
+}) {
   const { activeTime, pinnedInvocations } = input.summary;
   const lines: string[] = [];
   const latestHour = activeTime.breachedHours.at(-1);
@@ -123,7 +123,7 @@ function formatAlert(input: {
   return lines.join("\n");
 }
 
-function links(runUrl: string | null): string {
+function links(runUrl: string | null) {
   return [
     `<${DOCS_URL}|incident docs>`,
     runUrl ? `<${runUrl}|workflow run>` : null,
@@ -133,9 +133,14 @@ function links(runUrl: string | null): string {
     .join(" ");
 }
 
-function parseSummary(stdout: string): ProbeSummary | undefined {
+function parseSummary(stdout: string) {
   const lastLine = stdout.trim().split("\n").at(-1) || "";
   try {
+    // The probe's --json contract: its LAST stdout line is one ProbeSummary
+    // (apps/os/scripts/do-duration-probe.ts prints it after the human report
+    // moves to stderr). Anything else — a crash before the summary, a stray
+    // line — fails JSON.parse and is reported as "probe FAILED to run" by the
+    // caller, so a wrong shape cannot masquerade as a clean account.
     return JSON.parse(lastLine) as ProbeSummary;
   } catch {
     return undefined;

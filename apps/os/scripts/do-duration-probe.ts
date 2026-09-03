@@ -62,6 +62,11 @@ async function cfGraphql<T>(input: {
     headers: { Authorization: `Bearer ${input.apiToken}`, "Content-Type": "application/json" },
     body: JSON.stringify({ query: input.query, variables: input.variables }),
   });
+  // Cloudflare's GraphQL endpoint always answers with a `{ data, errors }`
+  // envelope; `data`'s shape is whatever the query above selected, which is
+  // what T describes per call site. Nothing validates it at runtime — a
+  // schema drift surfaces as a thrown "GraphQL errors" below or as NaN maths
+  // in the caller, both of which fail the probe loudly rather than silently.
   const body = (await response.json()) as CfGraphqlResponse<T>;
   if (body.errors?.length) {
     throw new Error(`Cloudflare GraphQL errors: ${body.errors.map((e) => e.message).join("; ")}`);
