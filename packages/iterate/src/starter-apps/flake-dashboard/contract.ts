@@ -95,7 +95,7 @@ const TrackedTest = z.object({
    * The last (up to) 10 recorded outcomes on any branch, oldest first — the
    * render's emoji streak bar. All branches, like the counts: the specs and
    * preview-e2e suites only run on pull requests, so a default-branch-only
-   * bar would stay empty forever for exactly the flakiest lane. The numeric
+   * bar would stay empty forever for the suites where most flakes live. The numeric
    * defaultBranchStreak below stays main-only and carries the
    * transition-threshold counts past what 10 entries can show.
    */

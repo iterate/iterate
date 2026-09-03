@@ -112,8 +112,9 @@ test("the recent column shows up to 10 outcomes from any branch as emojis, oldes
   for (let i = 1; i <= 8; i++) {
     await h.append(runRecorded(i, [record("deploy", "pass", { at: day(i) })]));
   }
-  // A PR-branch outcome enters the bar too — the specs suites only ever run
-  // on PRs, so a main-only bar would stay empty for the flakiest lane.
+  // A PR-branch outcome enters the bar too — the specs and preview-e2e
+  // suites only ever run on PRs, so a main-only bar would stay empty for
+  // the suites where most flakes live.
   await h.append(
     runRecorded(99, [record("deploy", "unexpected-error", { at: day(9) })], {
       branch: "some-pr",
