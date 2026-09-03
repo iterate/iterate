@@ -72,6 +72,7 @@ export function createFlake<TestFn extends (...args: any[]) => any>(
     // The body's own arguments pass through untouched — playwright fixtures,
     // vitest context — whatever the wrapped test function provides.
     const wrapped = async (...bodyArgs: any[]) => {
+      (test as any).setTimeout?.(timeoutMs + 1000);
       const startedAt = Date.now();
       let timer: ReturnType<typeof setTimeout> | undefined;
       // `as const` keeps the outcome union discriminated (same reasoning as
@@ -130,7 +131,18 @@ export function createFlake<TestFn extends (...args: any[]) => any>(
     // Present the body's own source when the runner parses for destructured
     // fixture names — same trick, and same reasoning, as failing-test.ts.
     Object.defineProperty(wrapped, "toString", { value: () => body.toString() });
-    return failer(...args.slice(0, -1), wrapped);
+
+    // Same runner-timeout coordination as failing(): the runner must never
+    // fire before the wrapper's own deadline resolves, or a hang would read
+    // as the expected failure.
+    if ("setTimeout" in test) {
+      // playwright-like, no `timeout` option, we set the timeout manually above
+      return failer(...args.slice(0, -1), wrapped);
+    } else {
+      // vitest-like, we pass the timeout option to the test function. args.slice(1, -1) is either `[]` or `[{ ...otherOptions }]`
+      const options = Object.assign({}, ...args.slice(1, -1), { timeout: timeoutMs + 1000 });
+      return failer(args[0], options, wrapped);
+    }
   };
   // Same contract-preserving cast as failing(): every argument forwards
   // unchanged except the trailing body.

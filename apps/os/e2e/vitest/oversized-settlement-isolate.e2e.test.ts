@@ -1,36 +1,39 @@
-// The 2026-09-02 incident, verified against a REAL deployed OS worker — the
-// check that isn't circular: real workerd, the real 128MiB Durable Object
-// isolate, the real chunk-blob StreamEventLog and settlement path. The node
-// repro (src/domains/streams/oversized-settlement-crash.test.ts) proves the
-// crash shape under a node heap proxy; this proves the fix on the real engine.
+// The 2026-09-02 incident ("Durable Object's isolate exceeded its memory limit
+// and was reset", crash-looping a stream), reproduced and A/B-tested on REAL
+// deployed OS workers — real workerd, the real 128MiB isolate, the real
+// chunk-blob StreamEventLog and settlement path. The node repro
+// (src/domains/streams/oversized-settlement-crash.test.ts) proves the crash
+// shape under a node heap proxy; this file proves it on the real engine.
 //
-// WHAT WAS MEASURED on preview_5 (2026-09-02), by hand, both worker versions:
-//   - no fix: a codemode script returning ~7MB journals a ~7,090KB settlement
-//     verbatim (confirmed on the stream). Its fold/read materialization DID
-//     reset the real isolate — observed as both "Durable Object's isolate
-//     exceeded its memory limit and was reset" (getEventPage over a dozen such
-//     settlements) and "Internal error in Durable Object storage caused object
-//     to be reset" (during a 20-settlement journaling fan-out).
-//   - fix: the same script's result is bounded at the settlement boundary —
-//     journaled at ~3KB with `oversized.kind === "omitted"` — and runScript
-//     rejects with a clear "too large to retain" instead of returning 7MB.
+// MEASURED 2026-09-03, by hand, preview_2 (no fix) vs preview_3 (fix):
+//   - no fix, 3 of 3 attempts: four codemode scripts each returning ~14MB
+//     journal their settlements verbatim and the stream DO dies on them. It
+//     surfaces either as the run itself failing ("Internal error in Durable
+//     Object storage caused object to be reset") or — when the settlement is
+//     journaled by the NEXT incarnation and the run reports success — only as
+//     a `stream/woken` reboot in the journal. One attempt went straight into
+//     the incident's crash loop: a reboot every ~5s, each wake replaying the
+//     oversized settlement and dying again.
+//   - fix: the same four scripts settle at ~3KB each (`oversized.kind ===
+//     "omitted"`), runScript rejects with "too large to retain", zero reboots.
+//   - control, no fix: four tiny scripts, zero reboots — a `stream/woken`
+//     between runs is a reboot, not per-request noise.
 //
-// WHY THIS TEST ASSERTS THE BOUND, NOT THE RESET. The reset itself is a memory
-// threshold: on a clean single-client preview the client read paths are
-// byte-guarded and each settlement's fold is individually transient, so it
-// takes the concurrent multi-facet + multi-subscriber fan-out under an already
-// large conversation (the prod conditions) to tip 128MiB — not reliably
-// reproducible from one e2e, and a flaky pin is a bad pin. What IS deterministic
-// on the real engine is the fix's mechanism: an oversized settlement is bounded
-// before it is journaled. That is the exact thing whose absence caused the
-// reset, so guarding it on real workerd is the honest, stable check.
+// Why ~14MB: a single result above ~32MB cannot cross the Workers RPC boundary
+// at all ("Incoming message exceeds maximum size of 33554432 UTF-16 code
+// units"), and ~7MB survives a handful of runs on a fresh stream — at that
+// size the incident needed prod's accumulated history to tip.
 //
-// Pinned with failing(/journaled unbounded/): against a preview WITHOUT the fix
-// the oversized result comes back unbounded (pin green); WITH the fix it is
-// bounded, the body passes, and the pin flips red — delete the wrapper.
+// Both tests are pinned with failing(): green against a worker WITHOUT the fix,
+// red WITH it — then delete the wrappers and keep the bodies as plain tests.
 //
-// Run against a preview (never shared/prod — it deliberately stresses a DO):
+// Run against a preview (never shared/prod — it deliberately kills a DO):
 //   doppler run --config preview_N -- pnpm --dir apps/os e2e --run oversized-settlement-isolate
+//
+// CAUTION: on a worker without the fix the second test leaves its stream
+// crash-looping after the project is disposed, burning DO duration until the
+// slot's data is erased (`pnpm run erase-data --env preview_N`). That is the
+// incident's other half — see tasks/stream-crash-quarantine.md (#2573).
 import { expect, test } from "vitest";
 import { failing } from "@iterate-com/shared/test-support/failing-test";
 import { adminSecret, deployedBaseUrl, withItxSession } from "./test-helpers.ts";
@@ -62,4 +65,61 @@ failUnbounded("an oversized script result is bounded before it is journaled", as
 
   const message = `an oversized script should not be journaled unbounded - this resets the stream DO isolate under the fold/delivery fan-out`;
   expect(returnedBytes, message).toBeLessThan(1_000_000);
+});
+
+// The crash itself, on the real engine: the test above only proves the payload
+// is unbounded; this one makes the isolate actually die. Four ~14MB runs on a
+// no-fix worker took 20–140s by hand, hence the deadline.
+const failReset = failing(test.skipIf(deployedBaseUrl() === null), /should not reset or reboot/i, {
+  timeoutMs: 300_000,
+});
+
+failReset("the stream DO survives journaling oversized script results", async () => {
+  using session = withItxSession();
+  using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
+  using project = await itx.projects
+    .get(`oversized-reset-${crypto.randomUUID().slice(0, 8)}`)
+    .create({});
+
+  // Without the fix each ~14MB result is journaled verbatim and the DO dies on
+  // it — sometimes as the run itself failing with a reset, sometimes only as a
+  // reboot in the journal (the settlement is then journaled by the next
+  // incarnation and the run reports success). With the fix every run rejects
+  // with the bounded explanation instead, which is the fix and is swallowed.
+  const resets: string[] = [];
+  for (let run = 0; run < 4; run++) {
+    await project.capabilityHost
+      .runScript(`async () => ({ stdout: "iVBORw0KGgo".repeat(1_334_568) })`)
+      .catch((error: unknown) => {
+        if (/too large to retain/i.test(String(error))) return; // the fix
+        resets.push(String(error));
+      });
+  }
+
+  // Reboots show up in the journal as `stream/woken`: one when the stream is
+  // created, and none between runs unless an incarnation died. Read only those
+  // event types — a whole-window read of ~14MB settlements would itself be
+  // enough to kill the DO again, which would be the pinned failure too.
+  const timeline = await project.streams
+    .get("/")
+    .getEventPage({
+      afterOffset: 0,
+      limit: 500,
+      eventTypes: [
+        "events.iterate.com/stream/woken",
+        "events.iterate.com/capability-host/script-run-requested",
+      ],
+    })
+    .then((page) => page.events.map((event) => event.type.replace("events.iterate.com/", "")))
+    .catch((error: unknown): string[] => {
+      resets.push(String(error));
+      return [];
+    });
+  const firstRun = timeline.indexOf("capability-host/script-run-requested");
+  const reboots = timeline.slice(firstRun).filter((type) => type === "stream/woken");
+
+  expect(
+    { resets, reboots },
+    "the stream DO should not reset or reboot while journaling oversized script results",
+  ).toEqual({ resets: [], reboots: [] });
 });

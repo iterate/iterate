@@ -80,7 +80,10 @@ test("registration lands on the runner's own expected-fail variant", async () =>
   });
 
   expect(plain).not.toHaveBeenCalled();
-  expect(registered).toMatchObject([{ args: ["name", { timeout: 123 }] }]);
+  // The registrar timeout is forced to the wrapper's own deadline + 1s so the
+  // runner never fires before the wrapper's race resolves — a caller-passed
+  // timeout (123) is overridden (default timeoutMs 30_000 → 31_000).
+  expect(registered).toMatchObject([{ args: ["name", { timeout: 31_000 }] }]);
   // A matching throw passes through to satisfy the expected-fail machinery,
   // with playwright-style fixtures forwarded.
   await expect(registered[0]!.body({ page: "fake-page" })).rejects.toThrow(/flaked/);
