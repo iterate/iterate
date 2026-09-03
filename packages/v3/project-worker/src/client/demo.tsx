@@ -40,9 +40,8 @@ async function connectAndEnable(): Promise<any> {
   const itx = await (newWebSocketRpcSession(url.toString()) as any)
     .authenticate()
     .projects.get(CTX);
-  await itx.invoke(["itx", "kv", ["put", "src/presence.js", PRESENCE_SRC]]);
   await itx.enableProcessor("presence", {
-    source: "itx.kv.get('src/presence.js')",
+    source: { "cap.js": PRESENCE_SRC }, // the modules, literally — nothing seeded anywhere first
     className: "PresenceDurableObject",
     // What is SENT: the contract above says what is reduced. `poke` is ephemeral, and an
     // ephemeral reaches a processor only when its subscription names the type.

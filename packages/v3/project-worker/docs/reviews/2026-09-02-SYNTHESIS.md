@@ -6,8 +6,9 @@
 > (smells, performance) ran as a find → three-judge adversarial verify → synthesize workflow. A
 > twelfth-hand pass by twelve Codex reviewers was launched and died at the OpenAI workspace's
 > credit wall before any of them finished reading (`docs/reviews/codex/` is empty; the prompts and
-> driver are ready to relaunch). Nothing in `src/` was changed by this round except the
-> performance DO-NOW items listed at the end; every bug has a red proof marked `test.fails`.
+> driver are ready to relaunch). Nothing in `src/` was changed by this round except three
+> performance DO-NOW items (section 5) and the demo page's own regression; every bug but one has
+> a red proof marked `test.fails`.
 
 The reports, each self-contained:
 
@@ -44,6 +45,7 @@ The proofs live in `src/review-bugs-*.test.ts`, `__workers-tests__/review-bugs-*
 | 10  | `subscribe`'s handle is a no-op for the array spelling of an `rpcStubs` target                                            | `iterate-context.ts:278`                           | e2e        |
 | 11  | Live-state client drops a delta that arrives during a gap heal and never re-triggers                                      | `client/live-state-client.ts:53-69`                | unit       |
 | 12  | Rewrite-rule tie-break is configuration-order dependent for structurally equal pinned object args                         | `context/itx-expression-rewriting.ts:83-101`       | unit       |
+| 13  | A failed core-checkpoint write leaves phantom core state in memory (reduce mutates fields inside the transaction)         | `stream/stream.ts:359`                             | none yet   |
 
 Where they cluster: bugs 2, 6, 9, 10 are one seam (who recalls a lend and who un-sets a rule, in
 `iterate-context.ts`), which the layering review independently proposes to collapse into one
@@ -164,11 +166,45 @@ The ledger also lists 31 things the owner's record says not to copy, with citati
 
 ## 5. Smells and performance
 
-See `2026-09-02-smells.md` and `2026-09-02-performance.md`, produced by the find → verify →
-synthesize workflow. Their DO-NOW items were applied in the commit that follows this synthesis; the
-MENU is theirs to keep.
+Produced by the find → three-judge verify → synthesize workflow: 48 findings, 21 do-now, 27 menu,
+0 rejected. `2026-09-02-smells.md` and `2026-09-02-performance.md` carry the full lists with
+every judge's dissent; the highlights:
 
----
+**Performance** (five finders, one of them measuring on a laptop; every number an order of
+magnitude). The steady path is already fast: a built-in call is about 0.3 ms round trip on local
+workerd, a durable append 0.4 ms, a rule chain adds microseconds. What is expensive is structural:
+a processor's source text parked in the core reduced state is re-serialized on every facet push,
+and a durable `stream/woken` fans out a push to every default-subscribed processor on every wake.
+Two claims from earlier reviews were corrected by measurement, most notably the layering review's
+"the source rides every live-state delta": it does not, the enable delta was about 1 KB, and the
+amplification is elsewhere.
+
+- **Applied in this round (three of the four DO-NOW items, all green on every lane):**
+  `LentRpcStub`'s step walk no longer awaits mid-chain, so an n-step call onto a client's stub is
+  one client round trip (capnweb pipelines the steps); the ~370 KB processor SDK is injected only
+  into isolates whose modules import `./processor.js`, so a stateless worker skips compiling it;
+  `LiveState.set` returns at once when handed the identical object.
+- **Not applied, reclassified:** "a failed core-checkpoint write leaves phantom core state in
+  memory" is a bug on a storage-failure path, not a green-path win; it joins the bug list as
+  number 13, unproven (the proposal includes the shape of the workers-lane proof).
+- **The menu** is grouped by latency, throughput, startup and wake, memory and CPU, and ends with
+  "what to measure next", led by the delivery loop at the 10,000-subrequest budget and the
+  ~2 MB SQLite cell cap that reproduced locally.
+
+**Smells** (two finders: naming, concept). The vocabulary is mostly right; what is left is residue
+from deleted designs (the capability table, `routing.ts`, transport ids) and one word carrying two
+or three referents (`host`, `target`, `ref`, `sub`, `hooks`, `resolve`). 17 DO-NOW items, about
+95 lines net deletion, each a rename or a deletion of dead state, none applied in this round (the
+owner asked for a pass, not a sweep); they are listed as a checklist in the report. Two of them
+change behaviour and deserve a look first:
+
+- `enableProcessor` cannot carry a `cacheKey`, and the hosted `/demo` page still seeded its
+  processor source through kv with a producer expression, so after today's inline-only and
+  cacheKey changes the page failed on the refusal message. Fixed in the commit after this one: the
+  demo passes its modules literally (the Playwright spec is green again); `enableProcessor`'s spec
+  shape is the smells report's item 9.
+- Two of the three "stub not reachable" exits in the rpc-stub directory are uncoded, so the
+  delivery loop logs the designed heal path as a dropped push (two lines).
 
 ## 6. Suggested order of work
 

@@ -2512,3 +2512,9 @@ bugs-edge-side,layering,workerd-idioms,futures}.md`; the smells and performance 
   died at the OpenAI workspace's credit wall before finishing its reading; the prompts and a relaunch
   recipe are in `docs/reviews/codex/`.
 - GATES: tsc×3 · oxlint 0/0 · knip clean · unit+workers 253p/7xf · e2e 141p/7xf (38 files).
+- POSTSCRIPT: the smells pass caught a regression of my own from the day — the hosted `/demo` page
+  still seeded its processor source through kv and named it with a producer expression, which B
+  (inline only) and F (a producer needs a cacheKey) had made a refusal; `pnpm spec` (Playwright) was not
+  in the day's gates. Fixed by passing the modules literally (`source: { "cap.js": PRESENCE_SRC }`),
+  demo page regenerated; Playwright 2/2. Lesson recorded: `pnpm spec` joins the gate list whenever
+  `src/client/*` or the SDK surface moves.
