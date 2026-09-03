@@ -30,10 +30,9 @@
 // Run against a preview (never shared/prod — it deliberately kills a DO):
 //   doppler run --config preview_N -- pnpm --dir apps/os e2e --run oversized-settlement-isolate
 //
-// CAUTION: on a worker without the fix the second test leaves its stream
-// crash-looping after the project is disposed, burning DO duration until the
-// slot's data is erased (`pnpm run erase-data --env preview_N`). That is the
-// incident's other half — see tasks/stream-crash-quarantine.md (#2573).
+// On a worker without the fix the second test would leave its stream
+// crash-looping — the incident's other half, see tasks/stream-crash-quarantine.md
+// (#2573) — so it wipes the stream's storage on the way out (see the disposer).
 import { expect, test } from "vitest";
 import { failing } from "@iterate-com/shared/test-support/failing-test";
 import { adminSecret, deployedBaseUrl, withItxSession } from "./test-helpers.ts";
@@ -80,6 +79,27 @@ failReset("the stream DO survives journaling oversized script results", async ()
   using project = await itx.projects
     .get(`oversized-reset-${crypto.randomUUID().slice(0, 8)}`)
     .create({});
+  // Without the fix the stream is left crash-looping: every wake replays the
+  // oversized settlement and dies again, burning DO duration until someone
+  // erases the slot. Until test-created projects get a real teardown, wipe the
+  // root stream's storage on the way out — a fresh empty stream has no poison
+  // event to fold (verified by hand: the ~5s reboots stop). testReset aborts
+  // the incarnation from inside the call, so its own "kill requested"
+  // rejection is the success; a mid-reboot stream is retried.
+  await using _wipe = {
+    [Symbol.asyncDispose]: async () => {
+      const stream = project.streams.get("/") as unknown as { testReset(): Promise<void> };
+      let failure = "";
+      for (let attempt = 0; attempt < 6; attempt++) {
+        failure = await stream.testReset().then(
+          () => "",
+          (error: unknown) => String(error),
+        );
+        if (/kill requested/i.test(failure) || failure === "") return;
+      }
+      throw new Error(`could not wipe the stream after its oversized settlements: ${failure}`);
+    },
+  };
 
   // Without the fix each ~14MB result is journaled verbatim and the DO dies on
   // it — sometimes as the run itself failing with a reset, sometimes only as a
