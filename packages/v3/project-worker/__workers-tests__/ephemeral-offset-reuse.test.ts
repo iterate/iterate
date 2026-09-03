@@ -135,9 +135,9 @@ test("stream-kept cursor: an alarm pump with ephemerals at head leaves the curso
   expect(row0.cursor!.confirmedOffset).toBe(highestDurableOffset); // acked on durable ground ✓
 
   await s.append({ type: "blip", ephemeral: true }, { type: "blip", ephemeral: true }); // head = mark+2, mark unchanged
-  // ARM THE ALARM FIRST. `dig` is a CURSOR subscription onto a stateless entrypoint: it schedules an
-  // alarm only for a RETRY, and nothing here failed — so this context has no live facet, no borrowed
-  // stub and therefore no alarm at all. Materialize an unrelated facet to arm the quiet clock (it
+  // ARM THE QUIET CLOCK. `dig` is a CURSOR subscription onto a stateless entrypoint: the cursor lane
+  // armed the alarm for its own delivery (the mark's batch), but this pin is about the QUIESCE, which
+  // arms only while a facet is live or a stub is borrowed. Materialize an unrelated facet for that (it
   // consumes nothing of `dig`'s and writes no durable row — its live-state delta is ephemeral, so the
   // durable mark this pin is about does not move) and read the schedule back before firing.
   await s.invoke([...hostedFacet(COUNTER_MODULES, "CounterDurableObject", "armer"), ["snapshot"]]);

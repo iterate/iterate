@@ -25,17 +25,19 @@ The reports, each self-contained:
 
 ---
 
-## 1. Bugs — thirteen; eleven fixed on 2026-09-03, two still red
+## 1. Bugs — thirteen; all fixed by 2026-09-03 (the last two with their own commit)
 
 The proofs live in `src/review-bugs-*.test.ts`, `__workers-tests__/review-bugs-*.test.ts`,
 `e2e/review-bugs-*.e2e.test.ts`, each with a `// BUG:` header. On 2026-09-03 every bug with a fix
 under ten lines was fixed and its proof flipped from `test.fails` to `test` (commit `5154b70a4`);
-the two that need more than ten lines stay `test.fails`. Ordered by severity across both reports.
+bugs 1 and 3, the two over ten lines, followed in their own commit (worker-loader.ts
+`loaderIdGenerations` + the facet's loaded-identity marker; the row-driven alarm pass + the cursor
+lane arming its own alarm). Ordered by severity across both reports.
 
-| Status            | Bugs                                                                                              |
-| ----------------- | ------------------------------------------------------------------------------------------------- |
-| fixed, proof live | 2, 4, 5, 6, 7, 8, 9, 10, 11, 12; 13 fixed without a proof                                         |
-| still red         | 1 (a failed `getCode` poisons its cacheKey), 3 (a cursor subscription stranded after an eviction) |
+| Status            | Bugs                                                            |
+| ----------------- | --------------------------------------------------------------- |
+| fixed, proof live | 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12; 13 fixed without a proof |
+| still red         | none                                                            |
 
 | #   | Bug                                                                                                                       | Where                                              | Proof lane |
 | --- | ------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------- | ---------- |

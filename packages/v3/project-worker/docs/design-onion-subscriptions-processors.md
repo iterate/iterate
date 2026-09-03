@@ -304,7 +304,7 @@ cursorLane.push / pump(name, sub):                               // one in fligh
   try:   await callOn(await resolve(sub.target), [events, range]), 20s watchdog
          kv.put(row with confirmedOffset = next, attempt 0)
   catch: attempt++; if attempt ≥ 15 or error.retryable === false → append subscription-delivery-halted
-         else row.nextAttemptAtMs = now + jitter(1s·2^attempt, ≤30m); kv.put(row); stream.armNoLaterThan(it)
+         else row.nextAttemptAtMs = now + jitter(1s·2^attempt, ≤30m); kv.put(row); stream.armAlarmNoLaterThan(it)
 alarm(): pump every cursor row that is due; then the idle quiesce as today
 ```
 

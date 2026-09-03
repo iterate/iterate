@@ -552,7 +552,7 @@ export class Stream {
    *  Memo-only: a fresh incarnation writes one redundant setAlarm and a later target may overwrite
    *  an earlier one, which is safe because every alarm() pass re-derives its obligations and
    *  re-arms. */
-  armNoLaterThan(atMs: number): void {
+  armAlarmNoLaterThan(atMs: number): void {
     if (this.#alarmArmedForMs !== null && this.#alarmArmedForMs <= atMs) return;
     this.#alarmArmedForMs = atMs;
     // Not awaited: the native output gate owns the write and turns an async failure into an

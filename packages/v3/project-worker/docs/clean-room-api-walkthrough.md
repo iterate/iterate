@@ -727,7 +727,8 @@ await itx.counter.bump(); // 3
 ```
 
 A facet keeps its storage across restarts; a source change restarts it in
-place (the `facet:<name>:version` marker). The class is minted with `props: { iterateContextName, name }`,
+place (the `facet:<name>:loader-id` marker — the loader id the class came from, so a deploy or a
+recovered load restarts it too). The class is minted with `props: { iterateContextName, name }`,
 readable as `this.ctx.props`. A busy stateful facet pins its context DO awake,
 an accepted trade. Facets have no alarms (workerd#6810); a future "append at
 this time" primitive on the context is the planned replacement, not a proxy.

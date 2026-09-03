@@ -1,7 +1,7 @@
 // __workers-tests__/review-bugs-do-side.test.ts — RED proofs from the 2026-09-02 DO-side bug hunt
 // (docs/reviews/2026-09-02-bugs-do-side.md). Every test here is marked `test.fails` — the house
 // convention for a known-red proof, so the lane stays green — with the defect stated above it.
-// Nothing is fixed: flipping a `test.fails` back to `test` is how a fix is proved.
+// Flipping a `test.fails` back to `test` is how a fix is proved (every proof here is green now).
 //
 // Two harnesses:
 //   • THE DELIVERY HARNESS (`incarnation`) — a bare `Stream` over a DurableObjectStorage plus the
@@ -66,9 +66,10 @@ function incarnation(
 
 // ── THE DELIVERY LOOP ─────────────────────────────────────────────────────────────────────────
 
-// BUG: a cursor subscription whose FIRST delivery is interrupted by an eviction is stranded — the
-// alarm's recovery pass never touches it, and no alarm was armed for it in the first place.
-// WHY: two halves, of subscription-delivery.ts and iterate-context-durable-object.ts.
+// BUG (fixed 2026-09-03): a cursor subscription whose FIRST delivery is interrupted by an eviction
+// was stranded — the alarm's recovery pass never touched it, and no alarm was armed for it in the
+// first place.
+// WHY (as it was): two halves, of subscription-delivery.ts and iterate-context-durable-object.ts.
 //   (a) `deliverEveryCursorSubscription` iterates `#cursors` — the CURSOR table, seeded from kv —
 //       not the subscription ROWS. A subscription's first cursor is adopted with `writeKv: false`
 //       ("the first durable delivery writes it"), so an eviction before that first ack leaves kv
@@ -79,9 +80,10 @@ function incarnation(
 // `consumes` — which on a quiet stream is never. That is the at-least-once guarantee, lost, in the
 // exact case the DO's own alarm comment claims to cover ("anything an eviction left behind
 // mid-delivery runs here").
-// EXPECTED: the alarm's pass re-derives its obligations from the ROWS and delivers from the log
-// (and the DO arms an alarm while any cursor subscription is behind).
-test.fails("the alarm's cursor pass recovers a subscription whose first delivery an eviction interrupted", async () => {
+// FIX: the alarm's pass re-derives its obligations from the ROWS (`deliverEveryCursorSubscription`),
+// and the cursor lane arms the alarm itself whenever a delivery is owed — when a batch is queued for
+// a row it does not know as a push row, and before every awaited call.
+test("the alarm's cursor pass recovers a subscription whose first delivery an eviction interrupted", async () => {
   await runInDurableObject(stub("prj_bugs_cursor_eviction"), async (_instance, state) => {
     await state.storage.deleteAll();
     const neverAcks = new Promise<void>(() => {});
@@ -111,7 +113,7 @@ test.fails("the alarm's cursor pass recovers a subscription whose first delivery
     await settle();
     expect(beforeEviction).toEqual([1]); // in flight, never acked
     expect(state.storage.kv.get("subscription-cursor:s")).toBeUndefined(); // …so kv holds nothing
-    expect(await state.storage.getAlarm()).toBeNull(); // …and nothing is armed to come back
+    expect(await state.storage.getAlarm()).not.toBeNull(); // …but the lane armed the alarm to come back
 
     // THE EVICTION: a fresh incarnation over the same storage — the log and the kv, nothing else.
     const second = incarnation(state.storage, (printed) =>

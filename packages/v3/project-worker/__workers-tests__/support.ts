@@ -69,8 +69,9 @@ afterAll(async () => {
  *  non-hibernatable (workerd#6800), and evicting such a DO times out after 30s on "still has active
  *  references". You must quiesce BEFORE you can evict — the exact production sequence.
  *
- *  NOTE the precondition: the quiet clock ARMS only while a facet is live or a stub is borrowed, so
- *  a context with neither has no alarm and this is a no-op. */
+ *  NOTE the precondition: the quiet clock ARMS only while a facet is live or a stub is borrowed (the
+ *  cursor lane arms the alarm for its own deliveries, subscription-delivery.ts), so a context with
+ *  none of those has no alarm and this is a no-op. */
 export async function quiesce(ctx: string): Promise<void> {
   vi.useFakeTimers({ now: Date.now(), toFake: ["Date"] });
   try {

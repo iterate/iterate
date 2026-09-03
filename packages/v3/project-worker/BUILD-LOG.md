@@ -2570,3 +2570,52 @@ cacheKey?, className }`) spells the hosting spec everywhere, and `enableProcesso
   `context-dotted-calls-fall-back-to-the-invoke-door`), test headers and titles fixed, and three src
   residues it handed on fixed here (a comment naming the old test file, a comment naming the deleted
   `facets.delete`, `ItxExpressionStep` exported).
+
+## 2026-09-03 — the last two red proofs: a dead loader id recovers; a stranded cursor row is re-derived from the rows
+
+- Jonas: "propose clean minimal fixes for the two remaining bugs — including refactors if useful",
+  then "'arm' should always be 'armAlarm' wtf — but otherwise yeah do it". The first draft was run
+  past four adversarial reviewers (a workflow, two lenses per bug) and refuted on three points, all
+  verified against workerd's source before the redesign below.
+- RENAME: `Stream.armNoLaterThan` → `armAlarmNoLaterThan` — a verb carries its object too.
+- BUG 1 (a producer that throws poisons its loader cacheKey). Root cause verified in workerd
+  server.c++: a named `loadIsolate` does `findOrCreate`, a failed `start()` (getCode threw, or the
+  code failed to start) leaves the entry with a rejected startup, and only an abort ever removes it —
+  every later `get(id)` replays the failure (still so on upstream main). The durable fix is upstream
+  (drop the map entry on startup failure the way abort does; drafted separately). Our side, fenced as
+  a WORKAROUND in worker-loader.ts: `loaderIdGenerations` — a producer that threw marks its id DEAD;
+  the next attempt produces OUTSIDE the loader (a failure there reaches no map entry and mints
+  nothing, however often it is tried) and, once the modules are in hand, loads them literally under
+  the id's next GENERATION (`<id>#<n>`). One identity per dead→recovered transition, never per
+  attempt; the happy path still produces inside `getCode`. The reviewers' blocker: the salt alone
+  never recovered a FACET — `#invokeFacet` had already created the facet container bound to the dead
+  class, and workerd hands back the SAME container on every `facets.get` (`findOrCreateEntry`), even
+  for a class that never started; only an abort clears it. So the facet's restart marker is now the
+  LOADED IDENTITY (`facet:<name>:loader-id`, the loader id the class came from) instead of the source
+  version: a recovered generation, a source change, or a deploy all abort-and-restart the facet in
+  place, storage surviving. `loadConfinedWorker` returns `{ worker, loaderId }`; `sourceVersion` is
+  gone. Proofs: the e2e `workers.get` proof flipped; its facet twin added; a unit row with a fake
+  loader that keeps a rejected `getCode` under the key (dead → produced outside → literal load under
+  `#1`; a producer that keeps failing mints nothing).
+- BUG 3 (a cursor subscription stranded by an eviction before its first ack). `deliverEveryCursorSubscription`
+  is ROW-driven (the rows are the durable truth; a first cursor is memory-only until its first durable
+  ack, so the cursor table cannot be), skipping rows the lane knows as push rows
+  (`#pushSubscriptionNames`, classified once per incarnation). `#deliverFromCursor` evaluates FOR THE
+  ROW IT IS READING — `EvaluatedSubscriptionTarget { call, forRowConfiguredAtOffset }`, a row's
+  identity being its `configuredAtOffset` — lazily (only once there is a batch), inside the ladder;
+  a push handle reached by the row pass is remembered and its birth cursor dropped. That also closes
+  the cousin of bug 4 (a row replaced between commit and evaluation kept the OLD target's call for
+  the whole loop). The lane ARMS THE ALARM ITSELF whenever a delivery is owed: in `onCommit` when a
+  batch is queued for a row not known as a push row, and before every awaited call, for the call's
+  own watchdog horizon (`CURSOR_DELIVERY_CALL_WATCHDOG_MS`, the inline 20 s named) — die mid-call and
+  the alarm survives to re-derive from the rows. The DO's quiet-clock guard is untouched (bare probes
+  arm nothing). The reviewers' blocker: evaluating at the loop head went through `invoke`, which
+  notes ACTIVITY, so the quiesce would never have fired and every context with a row would have woken
+  every minute forever — so the loop's `evaluateItxExpression` is wired to the resolver directly (the
+  loop's own evaluation is not activity; a finished delivery is). Proof flipped; its `getAlarm()`
+  line re-pinned to armed.
+- Docs: the delivery header (the at-least-once argument), the DO alarm comment (its claim is true
+  now), the walkthrough's marker name, the synthesis table (no red rows), two stale test comments
+  (`ephemeral-offset-reuse`, `support.ts quiesce`).
+- GATES: tsc×3 · oxlint 0/0 (npx oxlint . --deny-warnings) · knip clean · unit+workers 261p/0xf ·
+  e2e 147p/2xf (38 files) · Playwright 2.

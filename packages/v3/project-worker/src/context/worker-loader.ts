@@ -62,6 +62,19 @@ export type FacetSpec = { source: WorkerSource; cacheKey?: WorkerCacheKey; class
 const isWorkerModules = (source: unknown): source is WorkerModules =>
   typeof source === "object" && source !== null && !Array.isArray(source);
 
+/** WORKAROUND — workerd keeps a named isolate whose startup FAILED (a `getCode` that threw, code that
+ *  failed to start) in its isolate map for the process's life, so every later `LOADER.get(id)` replays
+ *  the failure: server.c++ `WorkerStubImpl` never gets a `service`, and only an abort removes the map
+ *  entry (still so on upstream main, 2026-09-03; the fix belongs there — drop the entry on startup
+ *  failure the way abort does). Until a workerd release carries it: a producer that threw marks its
+ *  loader id DEAD; the next attempt runs the producer OUTSIDE the loader (a failure there reaches no
+ *  map entry and mints nothing) and, once the modules are in hand, loads them LITERALLY under the next
+ *  GENERATION of the id (`<id>#<n>`). One extra identity per dead→recovered transition, never per
+ *  attempt; the happy path still produces inside `getCode`, on a cold isolate only. Memory-only: a
+ *  platform-isolate reset costs one replayed failure before recovering. Code that fails to START is
+ *  outside this (same key ⇒ same code — the author's bug) and is replayed until upstream lands. */
+const loaderIdGenerations = new Map<string, { generation: number; dead: boolean }>();
+
 /** What `loadConfinedWorker` needs. */
 type LoadConfinedWorkerOptions = {
   env: { LOADER: WorkerLoader; CF_VERSION_METADATA?: { id: string } };
@@ -85,9 +98,10 @@ type LoadConfinedWorkerOptions = {
 /**
  * THE one loading step: source → the cache key → the confined worker (SDK injected, the modules
  * produced inside Cloudflare's `getCode` when the source is an expression). It stops at the loaded
- * `worker` handle — "load the code" and "choose the host" are visibly separate. `sourceVersion` is
- * the key's last component (the caller's cacheKey, or the modules' content hash) — what the facet
- * door stores as its source-change marker.
+ * `worker` handle — "load the code" and "choose the host" are visibly separate. `loaderId` is the
+ * id the worker was loaded under — the LOADED IDENTITY the facet door stores as its restart marker
+ * (a source change within a deploy, a deploy, or a workaround generation restarts the facet in
+ * place, its storage surviving).
  *
  * ⚠️  THE cacheKey IS A DOLLAR AMOUNT. Cloudflare bills EVERY DISTINCT value ever passed to
  * `LOADER.get` as a Dynamic Worker at $0.002/worker/day. apps/os PR #2504: a per-request random
@@ -103,7 +117,7 @@ type LoadConfinedWorkerOptions = {
  */
 export async function loadConfinedWorker(
   opts: LoadConfinedWorkerOptions,
-): Promise<{ worker: WorkerStub; sourceVersion: string }> {
+): Promise<{ worker: WorkerStub; loaderId: string }> {
   const { where, source, cacheKey } = opts;
   const requireMainModule = (modules: unknown): WorkerModules => {
     if (!isWorkerModules(modules) || typeof modules["cap.js"] !== "string")
@@ -134,11 +148,40 @@ export async function loadConfinedWorker(
     };
   }
   // 2. the confined worker under the billed cacheKey (see the header). `getCode` runs on a cold
-  //    isolate only — a producer expression is evaluated exactly there.
+  //    isolate only — a producer expression is evaluated exactly there, unless the id is DEAD
+  //    (`loaderIdGenerations`): then the modules are produced here, outside the loader, and loaded
+  //    literally under the next generation of the id.
   const deploy = opts.env.CF_VERSION_METADATA?.id ?? "unversioned";
-  const worker = opts.env.LOADER.get(
-    `${opts.kind}:${deploy}:${opts.owner}:${sourceVersion}`,
-    async () => ({
+  const loaderIdBase = `${opts.kind}:${deploy}:${opts.owner}:${sourceVersion}`;
+  let { generation, dead } = loaderIdGenerations.get(loaderIdBase) ?? {
+    generation: 0,
+    dead: false,
+  };
+  let modulesForWorkerCode = getModules;
+  if (dead) {
+    const modules = await getModules(); // outside the loader: a throw here poisons nothing
+    generation += 1;
+    dead = false;
+    loaderIdGenerations.set(loaderIdBase, { generation, dead });
+    modulesForWorkerCode = () => modules;
+  }
+  const loaderId = generation ? `${loaderIdBase}#${generation}` : loaderIdBase;
+  const worker = opts.env.LOADER.get(loaderId, async () => {
+    let modules: WorkerModules;
+    try {
+      modules = await modulesForWorkerCode();
+    } catch (error) {
+      loaderIdGenerations.set(loaderIdBase, { generation, dead: true });
+      throw error;
+    }
+    // The processor SDK ("processor.js", ~370 KB) is injected only when a module IMPORTS it — a
+    // stateless worker that never does skips compiling it (the review measured the SDK at ~40× a
+    // typical fixture). The failure mode is loud: a forgotten import fails at module link, by
+    // name. The itx scope is reached via `env.ITX.get()`, not an injected module.
+    const importsProcessorSdk = Object.values(modules).some((code) =>
+      /["']\.\/processor\.js["']/.test(code),
+    );
+    return {
       // What every loaded isolate runs under. PURE-PLAY: no node:* — userspace code stays portable
       // across workerd builds (nodejs_compat is on by default at this date for the platform worker
       // itself; the loaded half opts out). `allow_irrevocable_stub_storage` (experimental) lets
@@ -154,20 +197,10 @@ export async function loadConfinedWorker(
         "allow_irrevocable_stub_storage",
       ],
       mainModule: "cap.js",
-      // The processor SDK ("processor.js", ~370 KB) is injected only when a module IMPORTS it — a
-      // stateless worker that never does skips compiling it (the review measured the SDK at ~40× a
-      // typical fixture). The failure mode is loud: a forgotten import fails at module link, by
-      // name. The itx scope is reached via `env.ITX.get()`, not an injected module.
-      modules: await (async () => {
-        const modules = await getModules();
-        const importsProcessorSdk = Object.values(modules).some((code) =>
-          /["']\.\/processor\.js["']/.test(code),
-        );
-        return importsProcessorSdk ? { ...modules, "processor.js": PROCESSOR_SDK_MODULE } : modules;
-      })(),
+      modules: importsProcessorSdk ? { ...modules, "processor.js": PROCESSOR_SDK_MODULE } : modules,
       env: { ITX: opts.itxEntrypoint },
       globalOutbound: opts.itxEntrypoint,
-    }),
-  );
-  return { worker, sourceVersion };
+    };
+  });
+  return { worker, loaderId };
 }

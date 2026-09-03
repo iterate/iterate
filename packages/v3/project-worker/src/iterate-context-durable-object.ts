@@ -320,10 +320,12 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   readonly #subscriptionDelivery = new SubscriptionDelivery({
     kv: this.ctx.storage.kv,
     stream: this.#stream,
-    // A target is evaluated through the ONE dispatch door — through every rewrite rule, one naming another included — so what
-    // comes back is exactly what a caller would get: a FacetHandle, an RpcStubHandle, an entrypoint
-    // handle, a value.
-    evaluateItxExpression: (itxExpression) => this.invoke(itxExpression),
+    // A target is evaluated through the ONE resolver — through every rewrite rule, one naming another
+    // included — so what comes back is exactly what a caller would get: a FacetHandle, an RpcStubHandle,
+    // an entrypoint handle, a value. The RESOLVER, not `invoke`: the loop's own evaluation is not
+    // activity (a finished delivery is — the loop records it), so the alarm's row-driven pass, which
+    // classifies every row's target once, can never postpone its own quiesce.
+    evaluateItxExpression: (itxExpression) => this.#itxExpressionResolver.resolve(itxExpression),
     recordActivityForQuietClock: () => this.#recordActivityForQuietClock(),
   });
 
@@ -361,7 +363,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     // that. `#lastActivityMs` still updates, so the first facet materialization (#invokeFacet's
     // `finally` re-notes after `#liveFacetNames` grows) or borrow arms with an honest quiet-period start.
     if (this.#liveFacetNames.size === 0 && !this.#rpcStubs.hasBorrowedRpcStubs()) return;
-    this.#stream.armNoLaterThan(this.#lastActivityMs + IDLE_QUIESCE_AFTER_MS);
+    this.#stream.armAlarmNoLaterThan(this.#lastActivityMs + IDLE_QUIESCE_AFTER_MS);
   }
 
   /** EVERY facet materialized this incarnation, by name. The quiesce alarm aborts the whole set in
@@ -375,10 +377,13 @@ export class IterateContextDurableObject extends DurableObject<Env> {
 
   async alarm(): Promise<void> {
     this.#stream.noteAlarmFired();
-    // The stream-kept cursors' due retries (and anything an eviction left behind mid-delivery) run
-    // here, AWAITED so a re-arm for a later retry lands before this actor hibernates. A cursor delivery
-    // pins nothing local (a facet it calls into is counted by #facetWorkInFlight for the call), so the
-    // quiesce below needs no count of its own.
+    // The stream-kept cursors' due retries — and anything an eviction left behind mid-delivery, the
+    // pass re-deriving its obligations from the ROWS, never from what memory or kv happened to hold —
+    // run here, AWAITED so a re-arm for a later retry lands before this actor hibernates. A cursor
+    // delivery pins nothing local (a facet it calls into is counted by #facetWorkInFlight for the
+    // call), so the quiesce below needs no count of its own. The cursor lane arms this alarm itself
+    // while a delivery is owed (subscription-delivery.ts); the quiet clock below arms it for facets
+    // and borrowed stubs.
     await this.#subscriptionDelivery.deliverEveryCursorSubscription();
     if (
       Date.now() - this.#lastActivityMs >= IDLE_QUIESCE_AFTER_MS &&
@@ -398,7 +403,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     } else {
       // Not quiet yet — look again when the quiet period would end; but never in the PAST (work in
       // flight for over a minute would otherwise re-fire this alarm in a tight, billed loop).
-      this.#stream.armNoLaterThan(
+      this.#stream.armAlarmNoLaterThan(
         Math.max(this.#lastActivityMs + IDLE_QUIESCE_AFTER_MS, Date.now() + 10_000),
       );
     }
@@ -457,7 +462,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     try {
       // THE LOAD — the loader caches by the key (cacheKey | content hash), so a warm facet's isolate
       // is reused and a producer expression runs only on a cold one.
-      const { worker, sourceVersion } = await loadConfinedWorker({
+      const { worker, loaderId } = await loadConfinedWorker({
         env: this.env,
         itxEntrypoint: this.#itxEntrypoint,
         kind: "facet",
@@ -472,26 +477,29 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       // actor never quiesces. Refuse instead; the caller's row is gone too.
       if (!this.ctx.storage.kv.get(`facet:${name}`))
         throw codedError("NO_FACET", `no facet "${name}" — deleted while its source loaded`);
-      // THE CLASS, minted with its identity (`ctx.props`), and THE VERSION MARKER: a source change
-      // within a deploy (new content hash, or a new cacheKey) restarts the facet in place, its storage
-      // surviving (the deploy id is already in the loader's cacheKey).
+      // THE CLASS, minted with its identity (`ctx.props`), and THE LOADED IDENTITY (`facet:<name>:
+      // loader-id`, the loader id the class came from): when it moves — a source change within a
+      // deploy (new content hash, a new cacheKey), a deploy, a workaround generation after a dead load
+      // (worker-loader.ts) — the facet restarts in place, its storage surviving. The abort matters for
+      // the dead-load case too: workerd hands back the SAME facet container on every `facets.get`,
+      // even one whose class never started, and only an abort clears it.
       const klass = worker.getDurableObjectClass(facetStartupMemo.className, {
         props: { iterateContextName: this.#durableObjectAddress.name, name },
       });
       if (!klass)
         throw new Error(`loaded worker does not export class "${facetStartupMemo.className}"`);
-      const previousSourceVersion = this.ctx.storage.kv.get(`facet:${name}:version`) as
+      const previousLoaderId = this.ctx.storage.kv.get(`facet:${name}:loader-id`) as
         | string
         | undefined;
-      if (previousSourceVersion !== undefined && previousSourceVersion !== sourceVersion) {
+      if (previousLoaderId !== undefined && previousLoaderId !== loaderId) {
         try {
-          this.ctx.facets.abort(name, "source changed");
+          this.ctx.facets.abort(name, "loaded identity changed");
         } catch {
           /* facet not running */
         }
       }
-      if (previousSourceVersion !== sourceVersion)
-        this.ctx.storage.kv.put(`facet:${name}:version`, sourceVersion);
+      if (previousLoaderId !== loaderId)
+        this.ctx.storage.kv.put(`facet:${name}:loader-id`, loaderId);
       const facet = this.ctx.facets.get(name, () => ({ class: klass }));
       this.#liveFacetNames.add(name); // live from here
       // THE CALL. A top-level `.fetch` rides the facet's own fetch — the one channel that carries a
@@ -557,7 +565,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       throw new Error(`"${name}" is the core reduce — always on, never a facet`);
     this.ctx.facets.delete(name);
     this.ctx.storage.kv.delete(`facet:${name}`);
-    this.ctx.storage.kv.delete(`facet:${name}:version`);
+    this.ctx.storage.kv.delete(`facet:${name}:loader-id`);
     this.#liveFacetNames.delete(name);
   }
 
