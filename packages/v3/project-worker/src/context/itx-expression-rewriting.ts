@@ -115,20 +115,23 @@ export function applyItxExpressionRewriteRule(
 
 /** Rules 3–5 together: rewrite `call` through `rules` until its root is a built-in (`isBuiltInRoot`);
  *  the result is what runs. Throws NO_ITX_EXPRESSION_MATCH when no rule matches (default-deny) and a
- *  depth error after 32 rewrites. */
+ *  depth error after 32 rewrites. `rules` is a THUNK read at most once, and NOT AT ALL when the call
+ *  is already built-in-rooted (every append/read/kv and the whole facet-push path — no rule can apply
+ *  to a built-in root): a built-in-rooted dispatch never materializes the rules table. */
 export function rewriteItxExpressionToBuiltIn(
-  rules: readonly ItxExpressionRewriteRule[],
+  rules: () => readonly ItxExpressionRewriteRule[],
   call: ItxExpression,
   isBuiltInRoot: (root: string) => boolean,
 ): ItxExpression {
   let current = call;
+  let rulesList: readonly ItxExpressionRewriteRule[] | undefined;
   for (let rewrites = 0; ; rewrites++) {
     const rootStep = current[1];
     const root = Array.isArray(rootStep) ? rootStep[0] : rootStep;
     if (current[0] === "itx" && typeof root === "string" && isBuiltInRoot(root)) return current;
     if (rewrites >= 32)
       throw new Error(`itx-expression rewriting exceeded depth 32 — self-referential rule?`);
-    const winner = pickItxExpressionRewriteRule(rules, current);
+    const winner = pickItxExpressionRewriteRule((rulesList ??= rules()), current);
     if (!winner)
       throw codedError(
         "NO_ITX_EXPRESSION_MATCH",
@@ -191,7 +194,7 @@ export class ItxExpressionResolver {
    *  expression data). */
   async resolve(call: ItxExpressionInput, extraArgs?: unknown[]): Promise<unknown> {
     const rewritten = rewriteItxExpressionToBuiltIn(
-      this.#rewriteRules(),
+      this.#rewriteRules,
       toItxExpression(call),
       (root) => Object.hasOwn(this.#builtIns, root),
     );

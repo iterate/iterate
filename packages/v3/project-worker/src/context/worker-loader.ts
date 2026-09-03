@@ -75,6 +75,24 @@ const isWorkerModules = (source: unknown): source is WorkerModules =>
  *  outside this (same key ⇒ same code — the author's bug) and is replayed until upstream lands. */
 const loaderIdGenerations = new Map<string, { generation: number; dead: boolean }>();
 
+/** The content hash of a literal module map, memoized by the map's IDENTITY. A warm facet push
+ *  evaluates `itx.facets.get(name, spec).processEventBatch` with the SAME `spec.source` object every
+ *  commit (the row's parsed target in core state), so the per-character djb2 (≈7 µs per KB, on the
+ *  producer's append RTT in workerd) runs ONCE per source per incarnation instead of once per push.
+ *  A bare-name call reads a fresh kv memo, so it misses — rare, and correct. */
+const contentHashByWorkerModules = new WeakMap<WorkerModules, string>();
+function contentHashOfWorkerModules(modules: WorkerModules): string {
+  let hash = contentHashByWorkerModules.get(modules);
+  if (hash === undefined) {
+    const serialized = JSON.stringify(modules);
+    let h = 5381;
+    for (let i = 0; i < serialized.length; i++) h = ((h << 5) + h + serialized.charCodeAt(i)) | 0;
+    hash = (h >>> 0).toString(36);
+    contentHashByWorkerModules.set(modules, hash);
+  }
+  return hash;
+}
+
 /** What `loadConfinedWorker` needs. */
 type LoadConfinedWorkerOptions = {
   env: { LOADER: WorkerLoader; CF_VERSION_METADATA?: { id: string } };
@@ -129,12 +147,9 @@ export async function loadConfinedWorker(
   let getModules: () => Promise<WorkerModules> | WorkerModules;
   if (isWorkerModules(source)) {
     const modules = requireMainModule(source);
-    // The content hash — djb2 over the modules' JSON: stable, so the cacheKey and the facet's
-    // version marker change exactly when the source does.
-    const serialized = JSON.stringify(modules);
-    let h = 5381;
-    for (let i = 0; i < serialized.length; i++) h = ((h << 5) + h + serialized.charCodeAt(i)) | 0;
-    sourceVersion = cacheKey ?? (h >>> 0).toString(36);
+    // The content hash — djb2 over the modules' JSON, memoized by identity: stable, so the cacheKey
+    // and the facet's version marker change exactly when the source does.
+    sourceVersion = cacheKey ?? contentHashOfWorkerModules(modules);
     getModules = () => modules;
   } else {
     if (cacheKey === undefined)

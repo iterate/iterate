@@ -27,7 +27,11 @@ const table = (rows: string[]): ItxExpressionRewriteRule[] =>
 const runs = (rules: string[], call: string): string => {
   try {
     return print(
-      rewriteItxExpressionToBuiltIn(table(rules), parse(call), (root) => BUILT_IN_ROOTS.has(root)),
+      rewriteItxExpressionToBuiltIn(
+        () => table(rules),
+        parse(call),
+        (root) => BUILT_IN_ROOTS.has(root),
+      ),
     );
   } catch (error) {
     return `THROWS ${(error as Error).message}`;

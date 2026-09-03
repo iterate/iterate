@@ -112,3 +112,30 @@ measure-next #1 (the 10,000-delivery wall apps/os hit) at the APPEND door, and i
 single client can hammer one session before it must either batch (one append of N events — 34.8 ms
 for 100, and it is ONE subrequest) or reconnect. Not a regression; a real ceiling. Detail and options
 in learnings.
+
+## 2. Two CPU no-brainers on the dispatch and facet-push paths (L4, L1a)
+
+Both capability-neutral, behaviour-identical, pinned by the existing unit suites.
+
+- **L4 — a built-in-rooted dispatch no longer materializes the rewrite-rules table.**
+  `rewriteItxExpressionToBuiltIn` now takes the rules THUNK and reads it at most once, and NOT AT ALL
+  when the call is already built-in-rooted (`itx.append`, `itx.read`, `itx.kv.*`, and every
+  facet-push target `itx.facets.get(...)` — no rule can apply to a built-in root). Before, the DO
+  thunk `() => Object.values(coreReducedState.itxExpressionRewriteRules)` was invoked as an argument
+  on EVERY dispatch, building and dropping the array even when the root short-circuits before the
+  rule loop. `itx-expression-rewriting.ts`; the resolver passes `this.#rewriteRules` (the field is
+  already a thunk); one table-test call site. Gain: −1 `Object.values(rules)` allocation per dispatch
+  for every built-in call — ~0 at small rule counts, 5 µs/dispatch at R=100, 63 µs at R=1000; the
+  point is the hot path stops allocating a table it will not read.
+- **L1a — a warm facet push no longer re-hashes its source.** The literal-module content hash (djb2,
+  ≈7 µs per KB) is memoized in a `WeakMap<WorkerModules, string>` keyed on the source object. A push
+  evaluates `itx.facets.get(name, spec).processEventBatch` with the SAME `spec.source` object every
+  commit (the row's parsed target in core state, stable across pushes within an incarnation), so the
+  per-character loop runs once per source per incarnation, not once per push. `worker-loader.ts`.
+  Gain: ≈7 µs/KB/push of literal-module source off the DO thread (and off the producer's append RTT
+  in workerd, where the review measured this on the critical path) — ~0.25 ms/push at 40 KB, ~2 ms at
+  330 KB; zero for `cacheKey` producer sources. Unmeasurable at the 0.3–0.7 KB fixtures (cpuTime p50
+  is already 0 on the tail), so proven by construction + the unchanged loaderId assertions, not by a
+  fixture number; it removes an O(source) loop from the per-push path.
+
+LOC: +18 net (worker-loader memo helper + comments), well inside the 10 % ceiling.
