@@ -24,6 +24,7 @@
     "./test-support/preview-rollout-gate": "./src/test-support/preview-rollout-gate.ts",
     "./test-support/fetch-safe-port": "./src/test-support/fetch-safe-port.ts",
     "./test-support/fixture-slug": "./src/test-support/fixture-slug.ts",
+    "./test-support/resilient-ai-interceptor": "./src/test-support/resilient-ai-interceptor.ts",
     "./request-logging": "./src/request-logging.ts",
     "./script-execution": "./src/script-execution.ts",
     "./slugify": "./src/slugify.ts",

@@ -38,7 +38,10 @@
  *
  * There is no retry and no repetition: one body execution per run, one
  * recorded sample. Retry-until-pass would bias the flake rate — the one
- * number this exists to measure.
+ * number this exists to measure. On vitest this needs an explicit per-test
+ * `retry: 0`: a suite-level `retry` re-runs the body on the wrapper's thrown
+ * green outcomes (the retry fires before the `.fails` inversion is applied),
+ * which recorded every green run twice in the preview e2e suite.
  */
 export interface FlakeRecord {
   name: string;
@@ -131,7 +134,6 @@ export function createFlake<TestFn extends (...args: any[]) => any>(
     // Present the body's own source when the runner parses for destructured
     // fixture names — same trick, and same reasoning, as failing-test.ts.
     Object.defineProperty(wrapped, "toString", { value: () => body.toString() });
-
     // Same runner-timeout coordination as failing(): the runner must never
     // fire before the wrapper's own deadline resolves, or a hang would read
     // as the expected failure.
@@ -139,8 +141,15 @@ export function createFlake<TestFn extends (...args: any[]) => any>(
       // playwright-like, no `timeout` option, we set the timeout manually above
       return failer(...args.slice(0, -1), wrapped);
     } else {
-      // vitest-like, we pass the timeout option to the test function. args.slice(1, -1) is either `[]` or `[{ ...otherOptions }]`
-      const options = Object.assign({}, ...args.slice(1, -1), { timeout: timeoutMs + 1000 });
+      // vitest-like: pass the timeout option, and pin per-test retry to zero
+      // — a suite-level `retry` re-runs the body whenever the wrapper throws
+      // (both green outcomes) because the retry fires before the `.fails`
+      // inversion, so one run would execute and record the body twice.
+      // args.slice(1, -1) is either `[]` or `[{ ...otherOptions }]`
+      const options = Object.assign({}, ...args.slice(1, -1), {
+        timeout: timeoutMs + 1000,
+        retry: 0,
+      });
       return failer(args[0], options, wrapped);
     }
   };

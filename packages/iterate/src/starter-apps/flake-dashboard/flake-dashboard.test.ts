@@ -1,11 +1,13 @@
+import { strToU8, zipSync } from "fflate";
 import { expect, test, vi } from "vitest";
 import { makeProcessorHarness } from "../../processors/testing.ts";
 import {
   FlakeDashboardProcessorContract,
   flakeEventTypes,
+  CheckRunWebhookEvent,
   type FlakeDashboardState,
 } from "./contract.ts";
-import { FlakeDashboardProcessor } from "./processor.ts";
+import { FlakeDashboardApp, FlakeDashboardProcessor } from "./worker.ts";
 
 test("folds CI-reported records into per-test stats", async () => {
   const h = makeHarness();
@@ -213,18 +215,275 @@ function runRecorded(
 function record(
   name: string,
   outcome: "pass" | "flake-fail" | "unexpected-error",
-  overrides: { at: string },
+  overrides?: { at: string },
 ) {
   return {
     name,
     outcome,
     pattern: "CPU startup time exceeded",
     durationMs: 5,
-    at: overrides.at,
+    at: overrides?.at || "2026-09-02T09:00:00Z",
   };
 }
 
 /** ISO timestamp `days` (fractional ok) after a fixed epoch. */
 function day(days: number) {
   return new Date(Date.UTC(2026, 0, 1) + days * 24 * 60 * 60 * 1000).toISOString();
+}
+
+// --- webhook artifact ingestion, driven through the DO's real processEvent ---
+
+test("a completed workflow_run's flake artifacts become one run-recorded event per suite", async () => {
+  const { itx, appended, depotRequests } = fakeItx({
+    artifacts: [
+      { artifactId: "art-71", name: "flake-records-unit", sizeBytes: 1000, attempt: 2 },
+      { artifactId: "art-72", name: "unit-test-telemetry", sizeBytes: 1000 },
+    ],
+    zips: {
+      // Two files exercising both zip entry kinds our reader supports:
+      // deflate-compressed (fflate's default) and stored (level 0).
+      "art-71": zipSync({
+        "flake-records-123.jsonl": strToU8(
+          [
+            JSON.stringify(record("flake sentinel", "pass")),
+            "not json at all",
+            JSON.stringify({ name: "bad shape" }),
+          ].join("\n"),
+        ),
+        "flake-records-124.jsonl": [
+          strToU8(JSON.stringify(record("deploy", "flake-fail"))),
+          { level: 0 },
+        ],
+      }),
+    },
+  });
+  await makeApp(itx).processEvent(webhookEvent());
+
+  // The run lookup must NOT filter by run status: Depot groups all workflows
+  // for a sha into one run whose status settles only after the last check
+  // completes, and that check's webhook arrives before the flip — a
+  // finished/failed filter permanently missed the last-completing check's
+  // artifacts on prd (run rs7dwp1l27's specs + preview-e2e suites).
+  expect(depotRequests.find((r) => r.method === "ListRuns")!.body).not.toHaveProperty("status");
+
+  // Birth offered first, then exactly one run-recorded for the one matching
+  // artifact — the telemetry artifact is ignored, malformed lines skipped.
+  expect(appended.map((event: any) => event.type)).toEqual([
+    "events.iterate.com/flakes/created",
+    "events.iterate.com/flakes/run-recorded",
+  ]);
+  expect(appended[1]).toMatchObject({
+    idempotencyKey: "flakes/run:run-77-2:unit",
+    payload: {
+      runId: "run-77-2",
+      suite: "unit",
+      branch: "main",
+      commit: "abc123",
+      records: [
+        { name: "flake sentinel", outcome: "pass" },
+        { name: "deploy", outcome: "flake-fail" },
+      ],
+    },
+  });
+});
+
+test("runs without flake artifacts append nothing, not even a birth", async () => {
+  const { itx, appended } = fakeItx({
+    artifacts: [{ artifactId: "art-72", name: "unit-test-telemetry", sizeBytes: 1000 }],
+    zips: {},
+  });
+  await makeApp(itx).processEvent(webhookEvent());
+  expect(appended).toEqual([]);
+});
+
+test("the webhook schema accepts only completed check_run deliveries on connection streams", () => {
+  expect(CheckRunWebhookEvent.safeParse(webhookEvent({ conclusion: "cancelled" })).success).toBe(
+    false,
+  );
+  expect(CheckRunWebhookEvent.safeParse(webhookEvent())).toMatchObject({
+    success: true,
+    data: { payload: { body: { check_run: { head_sha: "abc123" } } } },
+  });
+  expect(CheckRunWebhookEvent.safeParse(webhookEvent({ path: "/flakes" })).success).toBe(false);
+  expect(
+    CheckRunWebhookEvent.safeParse(webhookEvent({ deliveryName: "workflow_run" })).success,
+  ).toBe(false);
+  expect(CheckRunWebhookEvent.safeParse(webhookEvent({ action: "created" })).success).toBe(false);
+  expect(
+    CheckRunWebhookEvent.safeParse({
+      type: "events.iterate.com/flakes/run-recorded",
+      path: "/integrations/github/install-1",
+      payload: {},
+    }).success,
+  ).toBe(false);
+});
+
+test("a birth conflict means already born and the records still append", async () => {
+  // The poisoned-prd lesson: once ANY body exists under the birth key, every
+  // later offer conflicts — that must never cost the run's records.
+  const { itx, appended } = fakeItx({
+    artifacts: [{ artifactId: "art-71", name: "flake-records-unit", sizeBytes: 1000, attempt: 2 }],
+    zips: {
+      "art-71": zipSync({ "r.jsonl": strToU8(JSON.stringify(record("flake sentinel", "pass"))) }),
+    },
+    failAppendsMatching: /flakes\/created/,
+  });
+  await expect(makeApp(itx).processEvent(webhookEvent())).resolves.toBeUndefined();
+  expect(appended.map((event: any) => event.type)).toEqual([
+    "events.iterate.com/flakes/run-recorded",
+  ]);
+});
+
+test("a webhook without depot config is skipped without touching itx", async () => {
+  const { itx, appended } = fakeItx({ artifacts: [], zips: {} });
+  itx.secrets.get = () => {
+    throw new Error("must not be called");
+  };
+  await expect(makeApp(itx).raw.processEvent(webhookEvent())).resolves.toBeUndefined();
+  expect(appended).toEqual([]);
+});
+
+test("an idempotency conflict on run-recorded means already ingested and does not throw", async () => {
+  const { itx, appended } = fakeItx({
+    artifacts: [{ artifactId: "art-71", name: "flake-records-unit", sizeBytes: 1000, attempt: 2 }],
+    zips: {
+      "art-71": zipSync({ "r.jsonl": strToU8(JSON.stringify(record("flake sentinel", "pass"))) }),
+    },
+    failAppendsMatching: /run-recorded/,
+  });
+  await expect(makeApp(itx).processEvent(webhookEvent())).resolves.toBeUndefined();
+  expect(appended.map((event: any) => event.type)).toEqual(["events.iterate.com/flakes/created"]);
+});
+
+test("an ingest failure logs and drops instead of propagating into event delivery", async () => {
+  const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+  try {
+    const { itx } = fakeItx({ artifacts: [], zips: {} });
+    // A poisoned webhook that throws mid-ingest must not reject: a throw out
+    // of the app's processEvent would fail the whole delivery batch and
+    // retry the same webhook forever.
+    itx.secrets.get = () => {
+      throw new Error("Depot token unavailable");
+    };
+    await expect(makeApp(itx).processEvent(webhookEvent())).resolves.toBeUndefined();
+    expect(consoleError).toHaveBeenCalledWith(
+      expect.stringMatching(/ingestion failed for sha abc123/),
+      expect.objectContaining({ message: "Depot token unavailable" }),
+    );
+  } finally {
+    consoleError.mockRestore();
+  }
+});
+
+test("oversized artifacts are skipped with a warning", async () => {
+  const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    const { itx, appended } = fakeItx({
+      artifacts: [
+        { artifactId: "art-71", name: "flake-records-unit", sizeBytes: 50 * 1024 * 1024 },
+      ],
+      zips: {},
+    });
+    await makeApp(itx).processEvent(webhookEvent());
+    expect(appended.map((event: any) => event.type)).toEqual(["events.iterate.com/flakes/created"]);
+    expect(consoleWarn).toHaveBeenCalledWith(expect.stringMatching(/oversized artifact/));
+  } finally {
+    consoleWarn.mockRestore();
+  }
+});
+
+// --- helpers ---
+
+function webhookEvent(overrides?: {
+  path?: string;
+  deliveryName?: string;
+  action?: string;
+  conclusion?: string;
+}) {
+  return {
+    type: "events.iterate.com/github/webhook-received",
+    path: overrides?.path || "/integrations/github/install-1",
+    payload: {
+      delivery: { name: overrides?.deliveryName || "check_run" },
+      body: {
+        action: overrides?.action || "completed",
+        check_run: {
+          conclusion: overrides?.conclusion || "success",
+          head_sha: "abc123",
+          check_suite: { head_branch: "main" },
+        },
+        repository: {
+          name: "iterate",
+          owner: { login: "iterate" },
+          default_branch: "main",
+        },
+      },
+    },
+  } as any;
+}
+
+/**
+ * The real Durable Object with fake platform underpinnings: ctx is never
+ * touched on the ingestion path, and env.ITX hands back the fake itx. Tests
+ * drive the same public processEvent the config worker dispatches to.
+ */
+function makeApp(itx: any) {
+  // Just enough ctx for the base constructor's alarm overlay; the ingestion
+  // path never touches storage or alarms.
+  const ctx = { storage: { kv: { put() {}, get() {} }, setAlarm() {}, deleteAlarm() {} } };
+  const app = new FlakeDashboardApp(ctx as any, { ITX: { get: async () => itx } } as any);
+  return {
+    processEvent: (event: any) =>
+      app.processEvent(event, { depot: { orgId: "org-1", secretPath: "/secrets/depot-ci-token" } }),
+    raw: app,
+  };
+}
+
+function fakeItx(setup: {
+  artifacts: { artifactId: string; name: string; sizeBytes: number; attempt?: number }[];
+  zips: Record<string, Uint8Array>;
+  failAppendsMatching?: RegExp;
+}) {
+  const appended: any[] = [];
+  const depotRequests: { method: string; body: any }[] = [];
+  // The worker talks to Depot's Connect API and the signed download URL over
+  // plain fetch; the stub answers both by URL shape.
+  vi.stubGlobal("fetch", async (url: string, init?: any) => {
+    const method = String(url).split("/").pop();
+    if (init?.body) depotRequests.push({ method: method!, body: JSON.parse(init.body) });
+    if (method === "ListRuns") return jsonResponse({ runs: [{ runId: "run-77" }] });
+    if (method === "ListArtifacts") return jsonResponse({ artifacts: setup.artifacts });
+    if (method === "GetArtifactDownloadURL") {
+      const { artifactId } = JSON.parse(init.body);
+      return jsonResponse({ url: `https://signed.example/${artifactId}` });
+    }
+    if (String(url).startsWith("https://signed.example/")) {
+      const id = String(url).split("/").pop()!;
+      return new Response(setup.zips[id]!.slice().buffer as ArrayBuffer);
+    }
+    throw new Error(`unexpected fetch: ${url}`);
+  });
+  const itx = {
+    [Symbol.dispose]() {},
+    secrets: { get: () => ({ reveal: async () => "depot-test-token" }) },
+    streams: {
+      get: () => ({
+        append: async (...events: any[]) => {
+          for (const event of events) {
+            if (setup.failAppendsMatching?.test(event.type)) {
+              throw new Error(
+                `idempotency key "${event.idempotencyKey}" already names a different event at offset 6`,
+              );
+            }
+            appended.push(event);
+          }
+        },
+      }),
+    },
+  } as any;
+  return { itx, appended, depotRequests };
+}
+
+function jsonResponse(body: unknown) {
+  return new Response(JSON.stringify(body), { headers: { "content-type": "application/json" } });
 }

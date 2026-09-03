@@ -14,11 +14,9 @@ import {
   type ProjectAiInterceptorInput,
 } from "iterate/node";
 import dedent from "dedent";
+import { installResilientAiInterceptor } from "@iterate-com/shared/test-support/resilient-ai-interceptor";
 import { doppler, localOsDevServer } from "../../apps/os/scripts/dev.ts";
 import { mintForgedAccessToken, mintForgedIdToken } from "../../scripts/auth/forge-token.ts";
-// Lazy circular import (function-call-time only): the helper dials its
-// dedicated session through connectAdminItx below.
-import { installResilientAiInterceptor } from "./resilient-ai-interceptor.ts";
 import { signUpWithEmailOtp, uniqueSignupEmail } from "./email-otp-signup.ts";
 
 type OsPlaywrightAuthConfig = {
@@ -310,11 +308,12 @@ export function createAgentHelper<
 }) {
   const resources = new AsyncDisposableStack();
 
+  // The churn-surviving handler dials its own dedicated admin session.
   const interceptAi = (handler: ProjectAiInterceptor) =>
     installResilientAiInterceptor({
-      baseUrl: input.baseUrl,
       projectId: input.projectId,
       handler,
+      connect: (options) => connectAdminItx(input.baseUrl, options),
     });
 
   const agentTurnInterceptors: Map<string, ProjectAiInterceptor> = new Map();
@@ -460,7 +459,7 @@ export function createAgentHelper<
  * append events and assert the browser repaints from the push). Dispose with
  * `using` — the handle owns its WebSocket. `onWebSocketClose` observes the
  * socket dying, however it dies — the hook a reconnect loop hangs off (see
- * resilient-ai-interceptor.ts).
+ * @iterate-com/shared/test-support/resilient-ai-interceptor).
  */
 export async function connectAdminItx(
   baseUrl: string,
