@@ -160,6 +160,9 @@ failWakeUp(
 
     const total = Object.values(woke).reduce((sum, row) => sum + row.count, 0);
     const message = `project ${project.slug} should be quiet after dispose (${QUIET_SECONDS}s), but it woke ${total} times after dispose`;
+    // The expected-fail reporter prints nothing for a pinned failure, so the
+    // evidence goes to the log by hand.
+    console.log(woke);
     expect(woke, message).toEqual({});
   },
 );
