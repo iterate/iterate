@@ -11,7 +11,7 @@
 // The measurement has two traps, both handled below:
 //  - Reading a stream boots it, and the boot appends `stream/woken` before
 //    serving the read. So the final pass reads each stream exactly once,
-//    leaves first, and tolerates only ONE `woken` per stream stamped after
+//    leaves first, and tolerates exactly ONE `woken` per stream stamped after
 //    the pass began. Anything else is a wake we did not cause.
 //  - The template's heartbeat is 15 minutes. Waiting 16 minutes is not a
 //    test, so an extra 5-second heartbeat is installed on the scheduler; a
@@ -29,16 +29,19 @@ import { deployedBaseUrl } from "./test-helpers.ts";
 const QUIET_SECONDS = Number(process.env.ABANDONED_PROJECT_QUIET_SECONDS || 90);
 const WOKEN = "events.iterate.com/stream/woken";
 
-// Budget: first-turn worker build + ask under preview load (up to ~3 min, see
-// agent-tools.itx.e2e.test.ts) + the quiet window + the read passes.
-const SETUP_BUDGET_MS = 240_000;
+// Everything fits under the heavy-test ceiling (E2E_HEAVY_TEST_TIMEOUT_MS,
+// 240s, guarded by scripts/preview/e2e-policy.test.ts): ~30s of setup (the
+// intercepted turn settles in well under a second; the first-turn worker
+// build is the slow part), 15s of settling, the 90s quiet window, two read
+// passes. Raising ABANDONED_PROJECT_QUIET_SECONDS past ~120 needs the
+// ceiling raised by hand — the pin's own deadline must stay below it.
 const goesQuiet = failing(test.skipIf(deployedBaseUrl() === null), /woke \d+ times after dispose/, {
-  timeoutMs: QUIET_SECONDS * 1000 + SETUP_BUDGET_MS,
+  timeoutMs: 200_000,
 });
 
 goesQuiet(
   "a disposed test project stops waking its Durable Objects",
-  { timeout: QUIET_SECONDS * 1000 + SETUP_BUDGET_MS + 30_000 },
+  { timeout: 240_000 },
   async () => {
     const handle = await createTestProject({ slugPrefix: "abandoned" });
     using itx = handle.itx();
@@ -60,9 +63,8 @@ goesQuiet(
       type: "events.iterate.com/agent/configured",
       payload: { config: { llm: { model: "intercepted/scripted" } } },
     });
-    // The first turn also waits on the project worker's first build; well past the
-    // 45s default under preview load (agent-tools.itx.e2e.test.ts measured it).
-    const reply = await agent.ask({ message: "hello", timeoutMs: 180_000 });
+    // The first turn also waits on the project worker's first build.
+    const reply = await agent.ask({ message: "hello", timeoutMs: 60_000 });
     expect(reply, "the agent turn should complete before the project is abandoned").toBeTruthy();
 
     // The template's heartbeat fires every 15 minutes; a proper teardown must
@@ -105,12 +107,7 @@ goesQuiet(
         continue;
       }
       const events = await itx.streams.get(path).getEvents({ afterOffset: since });
-      for (const row of summarize(
-        path,
-        events.filter((event) => !isOurOwnBoot(event, readStart)),
-      )) {
-        rows.push(row);
-      }
+      for (const row of summarize(path, withoutOurOwnBoot(events, readStart))) rows.push(row);
     }
 
     const total = rows.reduce((sum, row) => sum + row.count, 0);
@@ -140,9 +137,16 @@ async function readOffsets(itx: ReturnType<Awaited<ReturnType<typeof createTestP
   return offsets;
 }
 
-/** The one event the final read pass itself manufactures: a boot's `woken`. */
-function isOurOwnBoot(event: StreamEvent, readStart: number) {
-  return event.type === WOKEN && Date.parse(event.createdAt) >= readStart - 1_000;
+/**
+ * Drop exactly ONE `stream/woken` stamped after the final read pass began —
+ * the boot this read itself caused. A second late `woken` is a real wake
+ * that happened to land during the pass, and it counts.
+ */
+function withoutOurOwnBoot(events: StreamEvent[], readStart: number): StreamEvent[] {
+  const ours = events.findIndex(
+    (event) => event.type === WOKEN && Date.parse(event.createdAt) >= readStart - 1_000,
+  );
+  return ours === -1 ? events : events.filter((_, index) => index !== ours);
 }
 
 function summarize(path: string, events: StreamEvent[]): WakeRow[] {
