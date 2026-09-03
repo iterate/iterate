@@ -236,8 +236,8 @@ function day(days: number) {
 test("a completed workflow_run's flake artifacts become one run-recorded event per suite", async () => {
   const { itx, appended } = fakeItx({
     artifacts: [
-      { artifact_id: "art-71", name: "flake-records-unit", size_bytes: 1000, attempt: 2 },
-      { artifact_id: "art-72", name: "unit-test-telemetry", size_bytes: 1000 },
+      { artifactId: "art-71", name: "flake-records-unit", sizeBytes: 1000, attempt: 2 },
+      { artifactId: "art-72", name: "unit-test-telemetry", sizeBytes: 1000 },
     ],
     zips: {
       // Two files exercising both zip entry kinds our reader supports:
@@ -282,7 +282,7 @@ test("a completed workflow_run's flake artifacts become one run-recorded event p
 
 test("runs without flake artifacts append nothing, not even a birth", async () => {
   const { itx, appended } = fakeItx({
-    artifacts: [{ artifact_id: "art-72", name: "unit-test-telemetry", size_bytes: 1000 }],
+    artifacts: [{ artifactId: "art-72", name: "unit-test-telemetry", sizeBytes: 1000 }],
     zips: {},
   });
   await makeApp(itx).processEvent(webhookEvent());
@@ -315,9 +315,7 @@ test("a birth conflict means already born and the records still append", async (
   // The poisoned-prd lesson: once ANY body exists under the birth key, every
   // later offer conflicts — that must never cost the run's records.
   const { itx, appended } = fakeItx({
-    artifacts: [
-      { artifact_id: "art-71", name: "flake-records-unit", size_bytes: 1000, attempt: 2 },
-    ],
+    artifacts: [{ artifactId: "art-71", name: "flake-records-unit", sizeBytes: 1000, attempt: 2 }],
     zips: {
       "art-71": zipSync({ "r.jsonl": strToU8(JSON.stringify(record("flake sentinel", "pass"))) }),
     },
@@ -340,9 +338,7 @@ test("a webhook without depot config is skipped without touching itx", async () 
 
 test("an idempotency conflict on run-recorded means already ingested and does not throw", async () => {
   const { itx, appended } = fakeItx({
-    artifacts: [
-      { artifact_id: "art-71", name: "flake-records-unit", size_bytes: 1000, attempt: 2 },
-    ],
+    artifacts: [{ artifactId: "art-71", name: "flake-records-unit", sizeBytes: 1000, attempt: 2 }],
     zips: {
       "art-71": zipSync({ "r.jsonl": strToU8(JSON.stringify(record("flake sentinel", "pass"))) }),
     },
@@ -377,7 +373,7 @@ test("oversized artifacts are skipped with a warning", async () => {
   try {
     const { itx, appended } = fakeItx({
       artifacts: [
-        { artifact_id: "art-71", name: "flake-records-unit", size_bytes: 50 * 1024 * 1024 },
+        { artifactId: "art-71", name: "flake-records-unit", sizeBytes: 50 * 1024 * 1024 },
       ],
       zips: {},
     });
@@ -437,7 +433,7 @@ function makeApp(itx: any) {
 }
 
 function fakeItx(setup: {
-  artifacts: { artifact_id: string; name: string; size_bytes: number; attempt?: number }[];
+  artifacts: { artifactId: string; name: string; sizeBytes: number; attempt?: number }[];
   zips: Record<string, Uint8Array>;
   failAppendsMatching?: RegExp;
 }) {
@@ -446,11 +442,11 @@ function fakeItx(setup: {
   // plain fetch; the stub answers both by URL shape.
   vi.stubGlobal("fetch", async (url: string, init?: any) => {
     const method = String(url).split("/").pop();
-    if (method === "ListRuns") return jsonResponse({ runs: [{ run_id: "run-77" }] });
+    if (method === "ListRuns") return jsonResponse({ runs: [{ runId: "run-77" }] });
     if (method === "ListArtifacts") return jsonResponse({ artifacts: setup.artifacts });
     if (method === "GetArtifactDownloadURL") {
-      const { artifact_id } = JSON.parse(init.body);
-      return jsonResponse({ url: `https://signed.example/${artifact_id}` });
+      const { artifactId } = JSON.parse(init.body);
+      return jsonResponse({ url: `https://signed.example/${artifactId}` });
     }
     if (String(url).startsWith("https://signed.example/")) {
       const id = String(url).split("/").pop()!;

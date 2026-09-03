@@ -136,21 +136,23 @@ export class FlakeDashboardApp extends StreamProcessorDurableObject<FlakeDashboa
 
     // sha matches either the run's merge sha or its head sha, so PR-triggered
     // and push-triggered runs both resolve.
-    const runs = await depotRpc<{ runs?: { run_id: string }[] }>("ListRuns", {
+    // Connect's JSON protocol emits proto3 canonical camelCase field names
+    // (verified against the live API) — snake_case reads come back undefined.
+    const runs = await depotRpc<{ runs?: { runId: string }[] }>("ListRuns", {
       repo: `${params.owner}/${params.repo}`,
       sha: checkRun.head_sha,
       status: ["finished", "failed"],
-      page_size: 10,
+      pageSize: 10,
     });
     for (const run of runs.runs || []) {
       const listed = await depotRpc<{
         artifacts?: {
-          artifact_id: string;
+          artifactId: string;
           name: string;
-          size_bytes?: string | number;
+          sizeBytes?: string | number;
           attempt?: number;
         }[];
-      }>("ListArtifacts", { run_id: run.run_id, page_size: 100 });
+      }>("ListArtifacts", { runId: run.runId, pageSize: 100 });
       const flakeArtifacts = (listed.artifacts || []).filter((artifact) =>
         artifact.name.startsWith(ARTIFACT_PREFIX),
       );
@@ -175,15 +177,15 @@ export class FlakeDashboardApp extends StreamProcessorDurableObject<FlakeDashboa
       }
 
       for (const artifact of flakeArtifacts) {
-        if (Number(artifact.size_bytes || 0) > MAX_ARTIFACT_BYTES) {
+        if (Number(artifact.sizeBytes || 0) > MAX_ARTIFACT_BYTES) {
           console.warn(
-            `[flake-ingest] skipping oversized artifact ${artifact.name} (${artifact.size_bytes} bytes)`,
+            `[flake-ingest] skipping oversized artifact ${artifact.name} (${artifact.sizeBytes} bytes)`,
           );
           continue;
         }
         const suite = artifact.name.slice(ARTIFACT_PREFIX.length);
         const download = await depotRpc<{ url?: string }>("GetArtifactDownloadURL", {
-          artifact_id: artifact.artifact_id,
+          artifactId: artifact.artifactId,
         });
         if (!download.url) {
           console.warn(`[flake-ingest] no download url for artifact ${artifact.name}`);
@@ -224,7 +226,7 @@ export class FlakeDashboardApp extends StreamProcessorDurableObject<FlakeDashboa
           );
         if (records.length === 0) continue;
 
-        const runId = `${run.run_id}-${artifact.attempt || 1}`;
+        const runId = `${run.runId}-${artifact.attempt || 1}`;
         try {
           await stream.append({
             type: "events.iterate.com/flakes/run-recorded",
