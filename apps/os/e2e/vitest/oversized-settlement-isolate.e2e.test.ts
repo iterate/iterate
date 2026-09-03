@@ -35,14 +35,14 @@ import { expect, test } from "vitest";
 import { failing } from "@iterate-com/shared/test-support/failing-test";
 import { adminSecret, deployedBaseUrl, withItxSession } from "./test-helpers.ts";
 
-const failUnbounded = failing(test, /journaled unbounded/i, { timeoutMs: 90_000 });
+// Only against a deployed preview — it deliberately stresses a DO. SKIP (not
+// fail) elsewhere, like the sibling e2e tests: a guard thrown inside the pin
+// would not match the pinned failure and would read as an unrelated red.
+const failUnbounded = failing(test.skipIf(deployedBaseUrl() === null), /journaled unbounded/i, {
+  timeoutMs: 90_000,
+});
 
 failUnbounded("an oversized script result is bounded before it is journaled", async () => {
-  // Guard: only ever run this against a preview — it deliberately stresses a DO.
-  if (deployedBaseUrl() === null) {
-    throw new Error("oversized-settlement e2e must run against a deployed preview (not local)");
-  }
-
   using session = withItxSession();
   using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
   using project = await itx.projects
