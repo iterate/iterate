@@ -32,7 +32,7 @@ const WOKEN = "events.iterate.com/stream/woken";
 
 // Everything fits under the heavy-test ceiling (E2E_HEAVY_TEST_TIMEOUT_MS,
 // 240s, guarded by scripts/preview/e2e-policy.test.ts): project creation and
-// the first turn (~30s locally, up to ~90s under full-lane CI load), 15s of
+// the first turn (~30s locally, up to ~90s when the whole preview e2e suite runs concurrently on the slot), 15s of
 // settling, the 60s quiet window (12 heartbeats at 5s), two read passes. The
 // pin's own deadline sits just under the ceiling. Raising
 // ABANDONED_PROJECT_QUIET_SECONDS past ~90 needs the ceiling raised by hand.
