@@ -102,7 +102,7 @@ function formatAlert(input: {
   const { activeTime, pinnedInvocations } = input.summary;
   const lines: string[] = [];
   const latestHour = activeTime.breachedHours.at(-1);
-  if (latestHour !== undefined) {
+  if (latestHour) {
     lines.push(
       `${input.testPrefix}🚨 Durable Objects hours exceed threshold of ${activeTime.ceilingDoHours}. account: ${input.label}.`,
       `Latest: ${latestHour.hour}  ${latestHour.doHours} DO-hours (~$${Math.round(latestHour.doHours * 0.005625)}/h)`,
@@ -115,7 +115,7 @@ function formatAlert(input: {
       `Worst: ${worst.script}  wallTimeP99=${worst.wallTimeP99Hours}h  reqs=${worst.requests}`,
     );
   }
-  if (latestHour !== undefined && pinnedInvocations.rows.length > 0) {
+  if (latestHour && pinnedInvocations.rows.length > 0) {
     const worst = pinnedInvocations.rows[0]!;
     lines.push(`Also pinned: ${worst.script}  wallTimeP99=${worst.wallTimeP99Hours}h`);
   }
