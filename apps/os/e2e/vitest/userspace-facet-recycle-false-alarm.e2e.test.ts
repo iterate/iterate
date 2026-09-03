@@ -1,4 +1,4 @@
-import { failing } from "@iterate-com/shared/test-support/failing-test";
+import { createFailing } from "@iterate-com/shared/test-support/failing-test";
 import { expect, test } from "vitest";
 import type { StreamEventInput } from "iterate/processors";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
@@ -52,7 +52,7 @@ import { adminSecret, withItxSession } from "./test-helpers.ts";
  * The `[facet-recycle]` phase log is not decoration. Three runs of this test
  * "passed" while never reaching the assertion at all, back when it was a bare
  * `test.fails` and every throw counted as the expected one. The
- * `failing(test, /PIN CANNOT TELL RECYCLE FROM REBUILD/)` wrapper now closes
+ * `createFailing(test, /PIN CANNOT TELL RECYCLE FROM REBUILD/)` wrapper now closes
  * that hole — only the tagged verdict counts, and a fall-over on the way goes
  * red with the mismatched error in the `[failing-test]` log — but the phase
  * log is still how you tell which phase a run reached. A run proves
@@ -61,7 +61,7 @@ import { adminSecret, withItxSession } from "./test-helpers.ts";
 // timeoutMs: the wrapper's hang deadline, kept just below the 180s runner
 // ceiling so a hung phase goes red as not-the-pin instead of riding the
 // runner's timeout into a vacuous expected-fail pass.
-failing(test, /PIN CANNOT TELL RECYCLE FROM REBUILD/, { timeoutMs: 170_000 })(
+createFailing(test, /PIN CANNOT TELL RECYCLE FROM REBUILD/, { timeoutMs: 170_000 })(
   "the source-version pin tells a facet that recycled from one the commit rebuilt",
   // Ceiling, not an expectation: ~6s against a warm local deployment, and the
   // pin's comparable scenario takes 50-75s on a busy preview. Matched to the

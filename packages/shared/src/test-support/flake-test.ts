@@ -3,7 +3,7 @@
  * exactly one error pattern is tolerated as "the flake". Anything else is a
  * real failure.
  *
- * The sibling of `failing` (./failing-test.ts) — same registration trick,
+ * The sibling of `createFailing` (./failing-test.ts) — same registration trick,
  * different contract. `createFlake` registers through the runner's own
  * expected-fail variant (vitest `test.fails`, playwright `test.fail`) and
  * inverts outcomes so that:
@@ -31,9 +31,9 @@
  * without the variable record nothing.
  *
  * Lifecycle (see docs/testing.md): a test that seems flaky moves from a plain
- * test to `createFlake`; if it stops passing entirely, switch to `failing`;
+ * test to `createFlake`; if it stops passing entirely, switch to `createFailing`;
  * once it passes consistently, unwrap it back to a plain test. Wrapping is a
- * human/agent diagnosis; the unwrap and switch-to-`failing` directions are
+ * human/agent diagnosis; the unwrap and switch-to-`createFailing` directions are
  * proposed automatically from the recorded data.
  *
  * There is no retry and no repetition: one body execution per run, one
@@ -146,7 +146,7 @@ export function createFlake<TestFn extends (...args: any[]) => any>(
     }
     return failer(...args.slice(0, -1), wrapped);
   };
-  // Same contract-preserving cast as failing(): every argument forwards
+  // Same contract-preserving cast as createFailing(): every argument forwards
   // unchanged except the trailing body.
   return register as TestFn;
 }
