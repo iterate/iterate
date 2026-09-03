@@ -128,7 +128,14 @@ export function failing<TestFn extends (...args: any[]) => any>(
       return failer(...args.slice(0, -1), wrappedBody);
     } else {
       // vitest-like, we pass the timeout option to the test function. args.slice(1, -1) is either `[]` or `[{ ...otherOptions }]`
-      const options = Object.assign({}, ...args.slice(1, -1), { timeout: timeoutMs + 1000 });
+      // retry is pinned to zero: a suite-level `retry` re-runs the body on the
+      // rethrown pinned failure (the retry fires before the `.fails`
+      // inversion), so every pin would run twice per CI run and show up as
+      // "(retry x1)" noise in retry telemetry — same pin as createFlake.
+      const options = Object.assign({}, ...args.slice(1, -1), {
+        timeout: timeoutMs + 1000,
+        retry: 0,
+      });
       return failer(args[0], options, wrappedBody);
     }
   };
