@@ -68,9 +68,11 @@ failUnbounded("an oversized script result is bounded before it is journaled", as
 
 // The crash itself, on the real engine: the test above only proves the payload
 // is unbounded; this one makes the isolate actually die. Four ~14MB runs on a
-// no-fix worker took 20–140s by hand, hence the deadline.
+// no-fix worker took 110–135s by hand and in CI, hence the deadline — kept
+// under the e2e policy's 240s per-test ceiling (E2E_HEAVY_TEST_TIMEOUT_MS,
+// sized so a hang plus its one retry stays inside the lane watchdog).
 const failReset = failing(test.skipIf(deployedBaseUrl() === null), /should not reset or reboot/i, {
-  timeoutMs: 300_000,
+  timeoutMs: 230_000,
 });
 
 failReset("the stream DO survives journaling oversized script results", async () => {
@@ -85,7 +87,10 @@ failReset("the stream DO survives journaling oversized script results", async ()
   // root stream's storage on the way out — a fresh empty stream has no poison
   // event to fold (verified by hand: the ~5s reboots stop). testReset aborts
   // the incarnation from inside the call, so its own "kill requested"
-  // rejection is the success; a mid-reboot stream is retried.
+  // rejection is the success; a mid-reboot stream is retried. A wipe that
+  // still fails is a real red, not the pin: it means a crash-looping DO was
+  // left in the slot. Its throw wraps the pin's own failure in a
+  // SuppressedError, so the reason is logged first where it can be found.
   await using _wipe = {
     [Symbol.asyncDispose]: async () => {
       const stream = project.streams.get("/") as unknown as { testReset(): Promise<void> };
@@ -97,7 +102,9 @@ failReset("the stream DO survives journaling oversized script results", async ()
         );
         if (/kill requested/i.test(failure) || failure === "") return;
       }
-      throw new Error(`could not wipe the stream after its oversized settlements: ${failure}`);
+      const message = `could not wipe the stream after its oversized settlements - it may be crash-looping in this slot: ${failure}`;
+      console.error(`[oversized-settlement] ${message}`);
+      throw new Error(message);
     },
   };
 
