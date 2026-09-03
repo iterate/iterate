@@ -122,8 +122,20 @@ async function checkAccountActiveTime(input: {
     };
   }>({ apiToken: input.apiToken, query, variables: { accountTag: input.accountTag, start } });
 
+  const rows = data.viewer.accounts[0]?.durableObjectsPeriodicGroups ?? [];
+  // An empty series is never "quiet": both accounts have DO activity every
+  // hour (prd's chronic baseline alone is ~120 DO-hours/hour), so no rows
+  // means dataset lag, a wrong account tag, or a broken token. Fail loudly —
+  // the alert wrapper reports a thrown probe as "FAILED to run" — instead of
+  // exiting zero as if under the ceiling.
+  if (rows.length === 0) {
+    throw new Error(
+      `no durableObjectsPeriodicGroups rows for account ${input.accountTag} in the last ` +
+        `${input.lookbackHours}h — analytics lag or misconfiguration, not evidence of quiet`,
+    );
+  }
   const byHour = new Map<string, number>();
-  for (const row of data.viewer.accounts[0]?.durableObjectsPeriodicGroups ?? []) {
+  for (const row of rows) {
     const hour = row.dimensions.datetimeHour;
     byHour.set(hour, (byHour.get(hour) || 0) + row.sum.activeTime);
   }
