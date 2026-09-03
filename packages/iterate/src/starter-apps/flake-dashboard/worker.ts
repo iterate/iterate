@@ -71,7 +71,7 @@ export class FlakeDashboardApp extends StreamProcessorDurableObject<FlakeDashboa
   ): Promise<void> {
     const webhook = CheckRunWebhookEvent.safeParse(event);
     if (webhook.success) {
-      if (options?.depot === undefined) {
+      if (!options?.depot) {
         // Platform-direct delivery, or a config worker mounted without CI
         // ingestion: nothing to pull from.
         return;
