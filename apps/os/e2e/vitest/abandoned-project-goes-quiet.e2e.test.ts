@@ -45,61 +45,71 @@ goesQuiet(
   "a disposed test project stops waking its Durable Objects",
   { timeout: 240_000 },
   async () => {
-    const handle = await createTestProject({ slugPrefix: "abandoned" });
+    // `await using`, like every spec: if anything below throws, the fixture is
+    // still disposed and nothing leaks into the test process.
+    await using handle = await createTestProject({ slugPrefix: "abandoned" });
     using itx = handle.itx();
 
-    // One real agent turn against a scripted model — the shape every spec
-    // leaves behind. The reply is asserted so the test cannot pass vacuously
-    // by never having created the work it claims to abandon. The agent runs
-    // codemode: a reply is a script, and only a script that calls the chat
-    // produces the `web-message-sent` that `ask()` waits for (same shape as
-    // specs/agent-fake-model-chat.spec.ts). The interceptor rides the shared
-    // churn-surviving loop, so a DO restart mid-turn re-installs it instead of
-    // failing the test for a reason that proves nothing about the pin.
-    const interception = await installResilientAiInterceptor({
-      projectId: handle.project.id,
-      connect: (options) => createAdminOsItx({ baseUrl: handle.baseUrl, ...options }),
-      handler: async () =>
-        [
-          "```ts",
-          `async (itx) => {\n  await itx.chat.sendMessage("scripted reply")\n}`,
-          "```",
-        ].join("\n"),
-    });
-    using agent = handle.agent("/agents/abandoned");
-    await agent.create();
-    await agent.append({
-      type: "events.iterate.com/agent/configured",
-      payload: { config: { llm: { model: "intercepted/scripted" } } },
-    });
-    // The first turn also waits on the project worker's first build.
-    const reply = await agent.ask({ message: "hello", timeoutMs: 60_000 });
-    expect(reply, "the agent turn should complete before the project is abandoned").toBeTruthy();
+    // Everything the "test" holds open lives in this block, so leaving it IS
+    // the test ending: the interceptor's dedicated session (and its reconnect
+    // loop) and the agent handle are released by `using` whether the turn
+    // succeeded or threw.
+    let baseline: Map<string, number>;
+    {
+      // One real agent turn against a scripted model — the shape every spec
+      // leaves behind. The reply is asserted so the test cannot pass vacuously
+      // by never having created the work it claims to abandon. The agent runs
+      // codemode: a reply is a script, and only a script that calls the chat
+      // produces the `web-message-sent` that `ask()` waits for (same shape as
+      // specs/agent-fake-model-chat.spec.ts). The interceptor rides the shared
+      // churn-surviving loop, so a DO restart mid-turn re-installs it instead
+      // of failing the test for a reason that proves nothing about the pin.
+      await using _interception = await installResilientAiInterceptor({
+        projectId: handle.project.id,
+        connect: (options) => createAdminOsItx({ baseUrl: handle.baseUrl, ...options }),
+        handler: async () =>
+          [
+            "```ts",
+            `async (itx) => {\n  await itx.chat.sendMessage("scripted reply")\n}`,
+            "```",
+          ].join("\n"),
+      });
+      using agent = handle.agent("/agents/abandoned");
+      await agent.create();
+      await agent.append({
+        type: "events.iterate.com/agent/configured",
+        payload: { config: { llm: { model: "intercepted/scripted" } } },
+      });
+      // The first turn also waits on the project worker's first build.
+      const reply = await agent.ask({ message: "hello", timeoutMs: 60_000 });
+      expect(reply, "the agent turn should complete before the project is abandoned").toBeTruthy();
 
-    // The template's heartbeat fires every 15 minutes; a proper teardown must
-    // stop the scheduler, so give it something to fire within the window.
-    await itx.scheduler.set({
-      key: "e2e/abandoned-heartbeat",
-      recurrence: { every: 5 },
-      script: `async (itx, schedule, trigger) => {
-        await itx.streams.get("/").append({
-          type: "events.iterate.com/project/heartbeat-triggered",
-          idempotencyKey: "e2e/abandoned-heartbeat:" + trigger.executionId,
-          payload: { scheduleKey: schedule.key },
-        });
-      }`,
-    });
+      // The template's heartbeat fires every 15 minutes; a proper teardown must
+      // stop the scheduler, so give it something to fire within the window.
+      await itx.scheduler.set({
+        key: "e2e/abandoned-heartbeat",
+        recurrence: { every: 5 },
+        script: `async (itx, schedule, trigger) => {
+          await itx.streams.get("/").append({
+            type: "events.iterate.com/project/heartbeat-triggered",
+            idempotencyKey: "e2e/abandoned-heartbeat:" + trigger.executionId,
+            payload: { scheduleKey: schedule.key },
+          });
+        }`,
+      });
 
-    // Let the turn's own deliveries and the first heartbeat land, then take
-    // the baseline. The baseline reads boot every stream; a second short
-    // settle lets that cascade finish before the offsets are recorded.
-    await sleep(10_000);
-    await readOffsets(itx);
-    await sleep(5_000);
-    const baseline = await readOffsets(itx);
+      // Let the turn's own deliveries and the first heartbeat land, then take
+      // the baseline. The baseline reads boot every stream; a second short
+      // settle lets that cascade finish before the offsets are recorded.
+      await sleep(10_000);
+      await readOffsets(itx);
+      await sleep(5_000);
+      baseline = await readOffsets(itx);
+    }
 
-    // Abandon it the way every test does.
-    await interception[Symbol.asyncDispose]();
+    // The fixture's own disposer — the thing a real teardown would hang off.
+    // Called here so the quiet window starts after it; the `await using`
+    // above runs it again at the end, which a disposer must tolerate anyway.
     await handle[Symbol.asyncDispose]();
 
     await sleep(QUIET_SECONDS * 1000);
