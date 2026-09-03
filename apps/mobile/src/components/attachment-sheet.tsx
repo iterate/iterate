@@ -27,6 +27,7 @@ import { captureCurrentLocation, pickDocuments, pickLibraryMedia } from "../lib/
 import { CAROUSEL_LIMIT, readMediaAsAttachment, readRecentMedia } from "../lib/recent-media.ts";
 import { readPhotoLibraryAccess, requestPhotoLibraryAccess } from "../lib/recent-photos.ts";
 import { colors, radius, spacing } from "../lib/theme.ts";
+import { useCameraFacing } from "../lib/camera-facing.ts";
 import { CameraCaptureModal } from "./camera-capture.tsx";
 
 const TILE = 100;
@@ -263,6 +264,7 @@ function CameraTile(props: { loading: boolean; onPress: () => void }) {
     queryFn: async () => (await Camera.getCameraPermissionsAsync()).granted,
     staleTime: Infinity,
   });
+  const { facing } = useCameraFacing();
   return (
     <Pressable
       accessibilityLabel="Open camera"
@@ -272,7 +274,7 @@ function CameraTile(props: { loading: boolean; onPress: () => void }) {
       style={[styles.tile, styles.plainTile]}
     >
       {permission.data === true ? (
-        <CameraView facing="back" style={StyleSheet.absoluteFill} />
+        <CameraView facing={facing} style={StyleSheet.absoluteFill} />
       ) : null}
       <View style={styles.cameraGlyph}>
         {props.loading ? (

@@ -20,8 +20,6 @@ catalogs:
 minimumReleaseAge: 1440
 
 minimumReleaseAgeExclude:
-  # OpenTUI is exact-pinned in its two consumers. Allow deliberate same-day
-  # upgrades without weakening the age gate for the rest of the dependency graph.
   - '@opentui/*'
   - miniflare
   - wrangler
@@ -61,12 +59,8 @@ onlyBuiltDependencies:
 
 overrides:
   '@babel/parser': ^7.28.0
-  # CodeMirror resolves StateFields by module identity: two copies of
-  # state/view in one graph break typecheck AND runtime ("Field is not
-  # present in this state"). Force a single resolution for the whole repo.
   '@codemirror/state': ^6.7.1
   '@codemirror/view': ^6.43.6
-  # ESP Web Tools 10.4 imports a Material dialog module removed in 2.5.
   '@material/web': 2.4.1
   '@orpc/client': 1.13.14
   '@orpc/contract': 1.13.14
@@ -105,8 +99,11 @@ packageExtensions:
 
 patchedDependencies:
   '@better-auth/oauth-provider@1.6.9': patches/@better-auth__oauth-provider@1.6.9.patch
-  # Remove once Cloudflare releases upstream fix 5fc1224cd73012d087b9438ff0ad931174e4bd86.
   '@cloudflare/sandbox@0.12.3': patches/@cloudflare__sandbox@0.12.3.patch
   '@cloudflare/worker-bundler@0.2.1': patches/@cloudflare__worker-bundler@0.2.1.patch
   '@cloudflare/workers-types@4.20260621.1': patches/@cloudflare__workers-types@4.20260621.1.patch
   '@journeyapps/wa-sqlite@1.7.0': patches/@journeyapps__wa-sqlite@1.7.0.patch
+  # Metro cannot parse its non-literal dynamic import() (a module-loader
+  # fallback the mobile filter pipeline never hits — it loads wasm via blob
+  # URLs). The patch turns that fallback into a thrown error.
+  '@mediapipe/tasks-vision@0.10.35': patches/@mediapipe__tasks-vision@0.10.35.patch

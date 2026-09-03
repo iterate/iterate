@@ -64,6 +64,9 @@ patchedDependencies:
   '@journeyapps/wa-sqlite@1.7.0':
     hash: 628f45a8b65f5811216d637fb5cc4584db8f69a125d1ae417c4e49bc38ebca83
     path: patches/@journeyapps__wa-sqlite@1.7.0.patch
+  '@mediapipe/tasks-vision@0.10.35':
+    hash: 02a9460674b3f5052d1951b1aed6de3fe929c8f688675c191cd41462bcb63ed4
+    path: patches/@mediapipe__tasks-vision@0.10.35.patch
 
 importers:
 
@@ -601,6 +604,9 @@ importers:
       '@iterate-com/ui':
         specifier: workspace:*
         version: link:../../packages/ui
+      '@mediapipe/tasks-vision':
+        specifier: 0.10.35
+        version: 0.10.35(patch_hash=02a9460674b3f5052d1951b1aed6de3fe929c8f688675c191cd41462bcb63ed4)
       '@noble/curves':
         specifier: ^2.2.0
         version: 2.2.0
@@ -761,6 +767,9 @@ importers:
       '@types/react-dom':
         specifier: ~19.1.11
         version: 19.1.11(@types/react@19.1.17)
+      trpc-cli:
+        specifier: 0.15.1
+        version: 0.15.1(@orpc/server@1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0))(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(zod@4.4.3)
       typescript:
         specifier: ~5.9.3
         version: 5.9.3
@@ -4057,6 +4066,9 @@ packages:
 
   '@material/web@2.4.1':
     resolution: {integrity: sha512-0sk9t25acJ72Qv3r0n9r0lgDbPaAKnpm0p+QmEAAwYyZomHxuVbgrrAdtNXaRm7jFyGh+WsTr8bhtvCnpPRFjw==}
+
+  '@mediapipe/tasks-vision@0.10.35':
+    resolution: {integrity: sha512-HOvadwVRE6JC+45nyYhmnywnr5h/J8KZvOeUNVOG9q/0875pZgItznFB9bRTvLc264YSJqiZ1NsIpCStJw/egg==}
 
   '@mermaid-js/parser@1.0.0':
     resolution: {integrity: sha512-vvK0Hi/VWndxoh03Mmz6wa1KDriSPjS2XMZL/1l19HFwygiObEEoEwSDxOqyLzzAI6J2PU3261JjTMTO7x+BPw==}
@@ -16874,6 +16886,8 @@ snapshots:
     dependencies:
       lit: 3.3.3
       tslib: 2.8.1
+
+  '@mediapipe/tasks-vision@0.10.35(patch_hash=02a9460674b3f5052d1951b1aed6de3fe929c8f688675c191cd41462bcb63ed4)': {}
 
   '@mermaid-js/parser@1.0.0':
     dependencies:
