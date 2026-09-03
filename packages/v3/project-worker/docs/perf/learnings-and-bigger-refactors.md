@@ -64,3 +64,81 @@ Why it is not a loop no-brainer (both options are real refactors with a tradeoff
 Recommendation: option (a) if the 285 KiB / faster cold start is wanted and a second zod dialect is
 acceptable; otherwise leave it. Re-measure the upload after either. NOT done in the loop because it
 is neither small nor free of a design choice.
+
+## The menu after reader-workflow round 1 (2026-09-03) — sized, capability-neutral unless noted
+
+Ordered by deployed value per LOC. All keep every event durable (woken included) and drop no
+capability. "Deployed value" = shows on Cloudflare cpuTime/wallTime or client latency; several are
+invisible at today's small fixtures and only matter at scale — said where.
+
+### Latency (deployed, client-facing)
+
+- **Fold `attachRpcStubPager` into the pager upgrade (latency/high, ≈ −12 LOC).** A `provide(stub)` /
+  `subscribe({target: fn})` today does the pager WS upgrade AND a separate `attachRpcStubPager`
+  edge→DO call. Carry the key in the upgrade header and delete the verb + its map + a 409 branch:
+  −1 edge→DO RTT per provide/subscribe-with-callback (1–3 ms same-colo, tens cross-colo), −1
+  subrequest. DO-only transport verb (off the itx surface). A protocol change touching
+  rpc-stub-directory + the relay + the fetch handler — test with the wire-frames e2e. Strong
+  candidate for the next round.
+- **Defer the post-commit fan-out to a macrotask (latency/medium, +3/−1 stream.ts).** The append
+  reply is gated on the commit's replication confirm (~10 ms deployed); the fan-out runs
+  synchronously before the reply escapes, so today reply ≈ confirm + fan-out-sync. Queue the fan-out
+  as a macrotask and reply ≈ max(confirm, fan-out) — up to ~10 ms of fan-out CPU hidden per durable
+  append at many rows, ≈0 at few. Risk: reorders onCommit relative to the waitForEvent waiters
+  ("waiters first" today); needs an ordering proof.
+- **Facet checkpoint as `allowUnconfirmed` / skip the cursor put when nothing was consumed
+  (latency, processor.ts + SDK host).** A facet's storage write holds its reply's output gate ~10 ms
+  on the edge. Two levers: (a) write the cursor unconfirmed (async), so the reply and the delta
+  append don't wait for the facet's own storage confirm; (b) skip the cursor put when a push consumed
+  nothing and state didn't change. NUANCE found in-loop: onCommit only pushes matching events to a
+  filtered facet, so a filtered facet ALWAYS consumes its steady-state pushes — (b) helps mainly
+  CATCH-UP / gap-repair over a log of non-matching events (overlaps M2), not the green path. (a) is
+  the broader win but changes the facet's durability to "confirmed shortly after reply" — an
+  at-least-once-safe relaxation, but state a doctrine line. Both regenerate the SDK bundle.
+- **Arm the quiet-clock alarm `allowUnconfirmed` (latency/low, +3).** The first facet-touching read
+  after each idle→active transition waits on the alarm-manager sync + commit; unconfirmed removes
+  that from the reply. Once per quiet window per context.
+
+### Throughput / CPU (deployed, at scale)
+
+- **Per-commit fan-out CPU at many rows (cpu, subscription-delivery.ts):** three readers found O(rows)
+  work per commit — re-resolving each row's target head + minting a handle/Proxy (memoize per row
+  identity, +10/−1, ≈−1–4 ms at 200 rows); allocating a filtered batch copy per default/`*` row
+  (share when no ephemerals, +4/−1, ≈−1–3 ms at 200 rows). ≈0 at ≤10 rows. Bundle together.
+- **`#unsetWhatNamesRpcStub` / racing-delete re-read JSON5-print or re-read the whole inline source
+  (cpu, iterate-context-durable-object.ts):** per last-pager close and per facet push at 300–600 KB
+  inline sources, O(Σ source) work → O(rows) field compares / a per-name delete generation. Zero at
+  fixture sizes; overlaps M1 (get the source OUT of core state and these all shrink).
+- **Coalesce queued pushes into one `processEventBatch` per facet when behind (throughput/medium,
+  +15/−5):** a burst of K appends into one processor pays K confirms; coalescing pays ~2. Contiguous
+  range chain preserved.
+- **Multi-row INSERT / IN-list SELECT for a batched append (throughput/low, +10–14):** −(N−N/16)
+  statement dispatches per N-event batch, ≈−0.3–0.5 ms of the 4.78 ms for 100 events; zero for
+  single-event (the dominant path).
+- **Drop the UNIQUE index write for keyless events (cpu/low, +8/−2):** idempotency keys in their own
+  table → −1 row per keyless durable event (4→3 for a 1-event append, −25% of its storage-write
+  bill). A storage-schema change.
+- **Edge-side `invokeMany` coalescing (throughput/low, +25–35):** K concurrent edge `invoke`s in one
+  turn → 1 DO call. Only worth it if the subrequest ceiling turns out non-configurable — it IS
+  configurable (done), so this is lower priority now.
+
+### Boot / script size
+
+- **W3(b): delete runtime zod from the main worker (script-size/high, ≈ −40–60 net LOC):** −310 KB
+  minified (−37%), ≈−6 ms cold isolate. Core contract becomes a TS type + literal initialState;
+  `defineProcessorContract` moves to the SDK. Capability-neutral per the reader (core events are
+  trusted, snapshot shape identical) BUT retires the "built-ins get schemas like userspace" symmetry
+  — a doctrine call. THE biggest single script lever; owner decision (see the W3 section above).
+- **Ship the SDK as a wrangler Text module, not a 394 KB escaped string literal (boot/medium,
+  +6/−2):** −1.5 ms compile per cold isolate, −10 KB upload, −1 huge generated TS file from
+  typecheck. Byte-identical injection. RISK: the vitest pool-workers + esbuild test lanes must
+  resolve a Text-module import the way deploy does — verify before landing.
+- **Bench: add a RE-WAKE lane (boot/high, bench-only):** no wake-side change is provable on the
+  deployed worker without it. Expected ≈150–250 ms re-wake vs ≈20–40 ms warm. Do this before any
+  boot/wake item above.
+
+### Correctness-adjacent (from the append reader, not a perf item)
+
+- `transactionSync`'s SAVEPOINT/RELEASE are the only UNPREPARED statements on the commit path
+  (workerd has a `TODO(perf)`); state-put-first ordering could retire the explicit transaction
+  (−2 dynamic prepares/commit). Measure first; it is a correctness trade (rollback semantics).
