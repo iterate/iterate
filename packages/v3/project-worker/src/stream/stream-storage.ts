@@ -28,7 +28,7 @@ export type DurableObjectStorageSlice = {
 /** A serialized body longer than this (chars) is split across `event_chunks` rows instead of one
  *  SQLite TEXT cell (which caps around 2MB — SQLITE_TOOBIG). 512KiB matches apps/os; a body at or
  *  under it stays single-cell (the fast path — no chunk join on read). */
-export const EVENT_CHUNK_SIZE = 512 * 1024;
+const EVENT_CHUNK_SIZE = 512 * 1024;
 
 /** THE cursor of a subscription the stream delivers at-least-once (subscription-delivery.ts): the
  *  offset an acked call confirmed, the ladder attempt, when the next attempt is due, and the

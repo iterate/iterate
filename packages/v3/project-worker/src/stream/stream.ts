@@ -56,7 +56,7 @@ export interface StreamPage {
  *  32 MiB serialized (every hop, no knob), and a 128 MiB isolate holds ~4 transient copies of a body
  *  while reading it back — 8 MiB keeps both comfortable, and is the one number to tune. An event is
  *  a fact, not a blob: a large payload lives elsewhere and the event names it. */
-export const EVENT_BODY_MAX_CHARS = 8 * 1024 * 1024;
+const EVENT_BODY_MAX_CHARS = 8 * 1024 * 1024;
 /** THE READ BUDGET, in UTF-8 bytes as SQLite counts them (≥ JS chars): a page stops BEFORE the row
  *  that would cross it and always carries ≥ 1 row, so the largest legal event still rides alone.
  *  Every replay loop in the package pages through this budget. */

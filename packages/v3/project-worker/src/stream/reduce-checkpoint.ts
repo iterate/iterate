@@ -16,7 +16,7 @@ import { codedError } from "../lib/errors.ts";
 
 /** The most chars a checkpoint's JSON state may be — under the documented 2 MB cell, with room for
  *  the row's other columns. */
-export const REDUCE_CHECKPOINT_STATE_MAX_CHARS = 2 * 1024 * 1024 - 4096;
+const REDUCE_CHECKPOINT_STATE_MAX_CHARS = 2 * 1024 * 1024 - 4096;
 
 /** Sync SQLite as the platform hands it over (`ctx.storage.sql`): a query is a LAZY cursor —
  *  iterate it, or `toArray()`. Spelled structurally so a node:sqlite stand-in satisfies it. */
