@@ -4,7 +4,11 @@
 
 import * as cloudflareWorkers from "cloudflare:workers";
 import { WorkerEntrypoint } from "cloudflare:workers";
-import { newWorkersRpcResponse } from "capnweb";
+import {
+  newWorkersRpcResponse,
+  RpcPromise as CapnwebRpcPromise,
+  RpcStub as CapnwebRpcStub,
+} from "capnweb";
 import { IterateContextDurableObject, type Env } from "./iterate-context-durable-object.ts";
 import { registerPipelinedRpcBrand } from "./context/dispatch.ts";
 import { ITX_EXPRESSION_FETCH_HEADER } from "./fetch/rpc-stub-fetch.ts";
@@ -20,6 +24,12 @@ const { RpcPromise: NativeRpcPromise, RpcProperty: NativeRpcProperty } =
   cloudflareWorkers as unknown as Record<"RpcPromise" | "RpcProperty", abstract new () => unknown>;
 registerPipelinedRpcBrand(NativeRpcPromise);
 registerPipelinedRpcBrand(NativeRpcProperty);
+// capnweb's own promises pipeline the same way, and the library's `itx.connectToCapnweb` puts them
+// in the walk (library/capnweb.ts): a remote chain `.a().b(x)` must stay unawaited between steps or
+// a one-shot batch session dies after its first message. A capnweb RpcStub is not a promise; it
+// registers so a stub-valued step is never awaited either (awaiting one is a no-op anyway).
+registerPipelinedRpcBrand(CapnwebRpcPromise as unknown as abstract new () => unknown);
+registerPipelinedRpcBrand(CapnwebRpcStub as unknown as abstract new () => unknown);
 
 export { IterateContextDurableObject };
 export { ItxEntrypoint } from "./itx-entrypoint.ts";
@@ -60,7 +70,9 @@ export default {
     // context (a project id = its root, or a full context name), `?itx=` the itx expression. The
     // expression rides to the context DO in `x-itx-expression`. capnweb clients need no door: a
     // terminal `itx.x.fetch(request)` takes the same lane from inside the session.
-    if (url.pathname === "/expression") {
+    // `/expression/<path>` too: the Request rides to the target verbatim, so a server behind the lane
+    // (an OpenAPI service loaded as a worker) sees a real path.
+    if (url.pathname === "/expression" || url.pathname.startsWith("/expression/")) {
       const context = url.searchParams.get("context");
       const itxExpression = url.searchParams.get("itx");
       if (!context || !itxExpression)

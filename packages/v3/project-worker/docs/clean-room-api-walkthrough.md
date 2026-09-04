@@ -103,7 +103,8 @@ packages/v3/project-worker/
     itx-entrypoint.ts            ItxEntrypoint: what a loaded worker's env.ITX is
     context/                     chapter 1 — the context: rpc stubs, expressions, rewrite rules
       built-ins.ts               the kernel roots: whoami, kv, append, read, waitForEvent, cd, fetch,
-                                 rpcStubs, rewriteRules, facets, subscriptions, workers, runScript
+                                 rpcStubs, rewriteRules, facets, subscriptions, workers, runScript,
+                                 connectToMcp, connectToOpenApi, connectToCapnweb (src/library/: the LIBRARY tier)
       expression.ts              the codec: "itx.a.b(1)" ⇄ ["itx","a",["b",1]]; ItxExpression /
                                  ItxExpressionInput / ItxExpressionPrefix; canonicalItxExpressionPrefix
       itx-expression-rewriting.ts  THE RULES 1–5 (match / pick / apply / rewrite-to-built-in), the ONE
@@ -542,6 +543,10 @@ interface BuiltInScope {
   /** Sugar for a bare lambda string: wraps it into a WorkerEntrypoint and runs
    *  workers.get({ source }).run(...). The lambda receives (itx, ...args). */
   runScript(script: string, ...args: unknown[]): Promise<unknown>;
+  // THE LIBRARY (src/library/): first-party code that takes ONLY `itx` — could be userspace unchanged
+  connectToMcp(url: string, options?: McpConnectOptions): Promise<McpConnection>;
+  connectToOpenApi(specOrUrl: string | OpenApiDocument, options?: OpenApiConnectOptions): Promise<OpenApiConnection>;
+  connectToCapnweb(url: string, options?: CapnwebConnectOptions): Promise<CapnwebConnection>;
 }
 
 /** Where code comes from: the worker's MODULES, literally — module name → code, `"cap.js"` the

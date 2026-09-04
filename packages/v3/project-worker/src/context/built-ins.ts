@@ -26,6 +26,17 @@
 import type { ReachableContext, StreamPage, WaitForEventFilter } from "../stream/stream.ts";
 import type { StreamEvent, StreamEventInput } from "../stream/events.ts";
 import {
+  buildLibrary,
+  type CapnwebConnection,
+  type CapnwebConnectOptions,
+  type LibraryItx,
+  type McpConnection,
+  type McpConnectOptions,
+  type OpenApiConnection,
+  type OpenApiConnectOptions,
+  type OpenApiDocument,
+} from "../library/index.ts";
+import {
   loadConfinedWorker,
   type FacetSpec,
   type WorkerCacheKey,
@@ -173,6 +184,22 @@ export interface BuiltInScope {
   /** Run a stateless lambda STRING — sugar: wrap into a `WorkerEntrypoint`, then
    *  `workers.get({ source }).run(...)`. The one bare-lambda ergonomic (same as apps/os). */
   runScript(script: string, ...args: unknown[]): Promise<unknown>;
+  // ── THE LIBRARY (src/library/): the second group of built-ins — first-party code that takes ONLY
+  // `itx`, so each verb could move to a userspace worker unchanged (library/index.ts says why; its
+  // boundary.test.ts pins it). All their HTTP goes through `itx.fetch`. `connectToGraphql` is the
+  // obvious next member and does not exist yet. ──
+  /** An MCP server over Streamable HTTP: `callTool(name, args)`, `listTools()`, and one method per
+   *  tool whose name is a legal identifier. */
+  connectToMcp(url: string, options?: McpConnectOptions): Promise<McpConnection>;
+  /** An OpenAPI 3 service from its document or the URL of one: one method per `operationId`, taking
+   *  one input object (path, query, header and body fields together); `call(operationId, input)` too. */
+  connectToOpenApi(
+    specOrUrl: string | OpenApiDocument,
+    options?: OpenApiConnectOptions,
+  ): Promise<OpenApiConnection>;
+  /** A remote capnweb API's main object as a pipelinable handle — a WebSocket session through egress
+   *  (default) or one HTTP batch per chain (`{ transport: "batch" }`). */
+  connectToCapnweb(url: string, options?: CapnwebConnectOptions): Promise<CapnwebConnection>;
 }
 
 // THE ONE LIST: `keyof BuiltInScope` and context/built-in-roots.ts's `BUILT_IN_ROOTS` are the same
@@ -266,6 +293,14 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
   const kvPrefix = `${projectId}:`;
   const ownContext = () => deps.context(path);
 
+  // THE LIBRARY's one dependency: `itx` — this context's own dotted handle, a genuine InvokeHandle
+  // over the DO's `invoke`, so a library call's `itx.fetch(...)` resolves through THIS context's
+  // rules (a test may shadow `itx.fetch`) and lands on egress with zero hops. The same shape a
+  // loaded worker holds after `env.ITX.get()`, which is what makes the tier movable.
+  const libraryItx = new InvokeHandle((steps) =>
+    deps.invoke(["itx", ...steps]),
+  ) as unknown as LibraryItx;
+
   // Each root implements one member of the BuiltInScope interface above (the canonical doc of the
   // kernel surface); the comments here add only what the interface can't say — the WHY of a code branch.
   return {
@@ -345,5 +380,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
     // this bare-lambda door bottoms out at `workers.get({ source }).run(...)`.
     runScript: (script: string, ...args: unknown[]) =>
       callEntrypoint({ source: { "cap.js": RUN_SCRIPT_ENTRYPOINT(script) } }, "run", args),
+    // THE LIBRARY: three verbs closed over `libraryItx` (library/index.ts).
+    ...buildLibrary(libraryItx),
   } satisfies BuiltInScope;
 }

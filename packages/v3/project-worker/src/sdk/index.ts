@@ -23,12 +23,14 @@ export { jsonEqual, type StreamEvent, type StreamEventInput } from "../stream/ev
 export { z } from "zod";
 // capnweb's CLIENT constructors, so userspace can dial a remote capnweb API from inside its isolate
 // through the context's own egress — `itx.provide("itx.os", "itx.workers.get({ source, className: 'Remote',
-// { props: { url } })")`. The server half is not here: inside workerd a class extends `RpcTarget`
-// from "cloudflare:workers". The HTTP batch is exported ON PURPOSE beside the WebSocket session: a
+// { props: { url } })")` — and `newWorkersRpcResponse`, the SERVER half, so a loaded worker can serve a
+// capnweb API over its `fetch` (its targets extend `RpcTarget` from "cloudflare:workers"; the
+// platform's own `itx.connectToCapnweb` is the client that dials it). The HTTP batch is exported ON
+// PURPOSE beside the WebSocket session: a
 // stateless entrypoint answering one method with one remote call has no session to hold across
 // calls, and a one-shot POST is the honest shape for it (the lint rule targets long-lived workers).
 // eslint-disable-next-line iterate/no-capnweb-http-batch -- userspace one-shot remote calls; see above
-export { newHttpBatchRpcSession, newWebSocketRpcSession } from "capnweb";
+export { newHttpBatchRpcSession, newWebSocketRpcSession, newWorkersRpcResponse } from "capnweb";
 export { applyPatch, diff, type PatchOp } from "../lib/patch.ts";
 
 // LIVE STATE — the one holder used two ways: a processor's base owns one internally (reduced state

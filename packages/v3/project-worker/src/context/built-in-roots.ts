@@ -22,6 +22,10 @@ export const BUILT_IN_ROOTS = [
   "subscriptions",
   "workers",
   "runScript",
+  // THE LIBRARY (library/index.ts): first-party verbs that take only `itx` — could be userspace
+  "connectToMcp",
+  "connectToOpenApi",
+  "connectToCapnweb",
 ] as const;
 
 export type BuiltInRoot = (typeof BUILT_IN_ROOTS)[number];

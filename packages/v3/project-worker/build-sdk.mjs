@@ -30,6 +30,11 @@ const sdk = await build({
   bundle: true,
   format: "esm",
   platform: "neutral",
+  // capnweb's WORKERD build: inside a loaded isolate its RpcTarget/RpcPromise are the native
+  // cloudflare:workers ones (inject-workers-module), so a class the fixture extends from
+  // "cloudflare:workers" is what `newWorkersRpcResponse` serves, and what the platform's
+  // `itx.connectToCapnweb` dials — one RpcTarget, not two.
+  conditions: ["workerd"],
   target: "es2022",
   minify: true,
   write: false,

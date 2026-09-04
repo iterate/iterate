@@ -191,6 +191,22 @@ own append, a lent stub's rule, a processor's row are all `itx.builtins.…`, so
 | `subscriptions`                    | `.list() → SubscriptionListEntry[]` · `.get(name)`                                                                                                                                                                                                                           | core state ⋈ the loop's cursors                               |
 | `workers`                          | `.get({ source, cacheKey?, className?, props? }) → InvokeHandle`, a stateless WorkerEntrypoint; any exported method                                                                                                                                                          | Worker Loader; the stateless twin of `facets.get`             |
 | `runScript(script, ...args)`       | sugar: wrap the lambda string → `workers.get({ source }).run(...)`                                                                                                                                                                                                           | same                                                          |
+| `connectToMcp(url, { headers? })`  | THE LIBRARY: an MCP server over Streamable HTTP → `McpConnection`: `.callTool(name, args)` `.listTools()` `.tools()` `.close()` + one method per tool                                                                                                              | `src/library/mcp.ts`, over `itx.fetch` only                     |
+| `connectToOpenApi(specOrUrl, { baseUrl?, headers? })` | THE LIBRARY: an OpenAPI 3 service → `OpenApiConnection`: `.call(operationId, input)` `.operations()` + one method per `operationId` (one input object: path, query, header, body fields)                                                        | `src/library/openapi.ts`, over `itx.fetch` only                 |
+| `connectToCapnweb(url, { headers?, transport? })` | THE LIBRARY: a remote capnweb API's main object as a pipelinable handle — a WebSocket session through egress, or `{ transport: "batch" }` = one POST per chain                                                                                   | `src/library/capnweb.ts`, over `itx.fetch` only                 |
+
+**Two groups of built-ins, one record.** Everything above `connectToMcp` is a ROOT, implemented
+against `ctx` or `env` (the log, the stub registry, the rule table, the two hosts, the bindings).
+The last three are THE LIBRARY (`src/library/`): first-party code whose ONLY dependency is `itx`,
+the same dotted handle a loaded worker holds after `env.ITX.get()` — the record hands each verb a
+local `InvokeHandle` over this context's own `invoke`, so a library call's `itx.fetch(...)` resolves
+through this context's rules (a test shadows `itx.fetch` to fake a remote) and lands on egress with
+no hop. That signature is the litmus test ("could this be written in a userspace worker?") and the
+whole layering: a library module could move to userspace unchanged, and the surface shows no level.
+`src/library/boundary.test.ts` pins it — no runtime import from the stream, the DO, the fetch module
+or `context/` except `invoke-handle.ts`. A held capnweb WebSocket connection pins the context awake
+like a busy facet; a batch connection and the two HTTP connectors hold nothing. `connectToGraphql`
+is the obvious next member of the family and does not exist yet.
 
 `WorkerSource` is the worker's modules, literally (`Record<string, string>`, module name → code,
 `"cap.js"` the main module) OR an itx expression that PRODUCES them. A producer needs a `cacheKey`
@@ -518,6 +534,12 @@ Record<string, string>`, `"cap.js"` the main module), and the old inline wrapper
   the row `itx.fable ⇒ itx.ai.run('@cf/…', @)`, and the deployed lane runs one real inference.
 - **`read` → `readEvents`** on the surface (`append` and `waitForEvent` unchanged; `Stream.read`
   and the DO's method keep their names — only the root and its callers renamed).
+
+- **Arc three, the library tier** (`src/library/`): `connectToMcp`, `connectToOpenApi`,
+  `connectToCapnweb` as built-in verbs that take only `itx` (section 5, "Two groups"); the fetch lane
+  accepts a path suffix (`/expression/<path>?context=&itx=`) so a service served behind it sees real
+  paths; the SDK bundle is capnweb's workerd build and exports `newWorkersRpcResponse`, so a loaded
+  worker can serve a capnweb API; capnweb's own promises register as pipelinable in the step walk.
 
 ### Open
 
