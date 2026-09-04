@@ -13,6 +13,7 @@ import type { TestTelemetryArtifact } from "@iterate-com/shared/test-support/ci-
 import PlaywrightTelemetryReporter from "./playwright-telemetry-reporter.ts";
 
 const originalArtifactDirectory = process.env.TEST_TELEMETRY_ARTIFACT_DIR;
+const originalFlakeRecordDirectory = process.env.FLAKE_RECORD_DIR;
 const originalTelemetryKind = process.env.TEST_TELEMETRY_KIND;
 const originalTelemetryLane = process.env.TEST_TELEMETRY_LANE;
 
@@ -23,13 +24,16 @@ beforeEach(() => {
 
 afterEach(() => {
   restoreEnv("TEST_TELEMETRY_ARTIFACT_DIR", originalArtifactDirectory);
+  restoreEnv("FLAKE_RECORD_DIR", originalFlakeRecordDirectory);
   restoreEnv("TEST_TELEMETRY_KIND", originalTelemetryKind);
   restoreEnv("TEST_TELEMETRY_LANE", originalTelemetryLane);
 });
 
-it("records every Playwright attempt and nested step without uploading", () => {
+it("records every Playwright attempt and nested step without uploading", async () => {
   const artifactDirectory = mkdtempSync(join(tmpdir(), "playwright-telemetry-"));
   process.env.TEST_TELEMETRY_ARTIFACT_DIR = artifactDirectory;
+  const flakeRecordDirectory = mkdtempSync(join(tmpdir(), "flake-records-"));
+  process.env.FLAKE_RECORD_DIR = flakeRecordDirectory;
   const firstResult = {
     retry: 0,
     status: "failed",
@@ -73,7 +77,7 @@ it("records every Playwright attempt and nested step without uploading", () => {
       allTests: () => [test],
     } as unknown as Suite,
   );
-  reporter.onEnd({
+  await reporter.onEnd({
     status: "passed",
     startTime: new Date("2026-07-21T12:00:00Z"),
     duration: 1500,
@@ -109,9 +113,23 @@ it("records every Playwright attempt and nested step without uploading", () => {
     }),
   ]);
   rmSync(artifactDirectory, { recursive: true });
+
+  // The flaky (passed-after-retry) test also produced an unknown-flake
+  // record — the test-health dashboard's adoption-funnel signal — while the
+  // deterministic passer did not.
+  const flakeRecords = readdirSync(flakeRecordDirectory).flatMap((file) =>
+    readFileSync(join(flakeRecordDirectory, file), "utf8").trim().split("\n").map(JSON.parse),
+  );
+  expect(flakeRecords).toMatchObject([
+    {
+      name: "chromium › greeting.spec.ts › greets",
+      kind: "unknown",
+      outcome: "retried-pass",
+    },
+  ]);
 });
 
-it("keeps Playwright's raw result status separate from its expected outcome", () => {
+it("keeps Playwright's raw result status separate from its expected outcome", async () => {
   const artifactDirectory = mkdtempSync(join(tmpdir(), "playwright-telemetry-expected-"));
   process.env.TEST_TELEMETRY_ARTIFACT_DIR = artifactDirectory;
   const failedAsExpected = {
@@ -136,7 +154,7 @@ it("keeps Playwright's raw result status separate from its expected outcome", ()
     { rootDir: "/repo/specs" } as FullConfig,
     { allTests: () => [test] } as unknown as Suite,
   );
-  reporter.onEnd({
+  await reporter.onEnd({
     status: "passed",
     startTime: new Date("2026-07-21T12:00:00Z"),
     duration: 100,
@@ -149,7 +167,7 @@ it("keeps Playwright's raw result status separate from its expected outcome", ()
   rmSync(artifactDirectory, { recursive: true });
 });
 
-it("preserves timed-out runs and run-level Playwright errors", () => {
+it("preserves timed-out runs and run-level Playwright errors", async () => {
   const artifactDirectory = mkdtempSync(join(tmpdir(), "playwright-telemetry-timeout-"));
   process.env.TEST_TELEMETRY_ARTIFACT_DIR = artifactDirectory;
   const reporter = new PlaywrightTelemetryReporter();
@@ -158,7 +176,7 @@ it("preserves timed-out runs and run-level Playwright errors", () => {
     { allTests: () => [] } as unknown as Suite,
   );
   reporter.onError({ message: "worker stopped responding", stack: "stack" });
-  reporter.onEnd({
+  await reporter.onEnd({
     status: "timedout",
     startTime: new Date("2026-07-21T12:00:00Z"),
     duration: 30_000,
@@ -178,7 +196,7 @@ it("preserves timed-out runs and run-level Playwright errors", () => {
   rmSync(artifactDirectory, { recursive: true });
 });
 
-it("preserves interrupted attempts whose unfinished Playwright steps use negative durations", () => {
+it("preserves interrupted attempts whose unfinished Playwright steps use negative durations", async () => {
   const artifactDirectory = mkdtempSync(join(tmpdir(), "playwright-telemetry-interrupted-"));
   process.env.TEST_TELEMETRY_ARTIFACT_DIR = artifactDirectory;
   const interruptedResult = {
@@ -210,7 +228,7 @@ it("preserves interrupted attempts whose unfinished Playwright steps use negativ
     { rootDir: "/repo/specs" } as FullConfig,
     { allTests: () => [test] } as unknown as Suite,
   );
-  reporter.onEnd({
+  await reporter.onEnd({
     status: "interrupted",
     startTime: new Date("2026-07-21T12:00:00Z"),
     duration: -1,
