@@ -48,7 +48,7 @@ import { appendFlakeRecord, type FlakeRecord } from "./flake-record.ts";
 export function createFlake<TestFn extends (...args: any[]) => any>(
   test: TestFn,
   flake: RegExp,
-  options?: { timeoutMs?: number; sentinel?: boolean },
+  options?: { timeoutMs: number },
 ): TestFn {
   const timeoutMs = options?.timeoutMs || 30_000;
   const failer: unknown = "fails" in test ? test.fails : "fail" in test ? test.fail : undefined;
@@ -87,7 +87,6 @@ export function createFlake<TestFn extends (...args: any[]) => any>(
           kind: "flake",
           outcome: result,
           pattern: flake.source,
-          ...(options?.sentinel && { sentinel: true }),
           durationMs,
           at: new Date(startedAt).toISOString(),
           ...(error === undefined ? {} : { error: String(error).split("\n")[0] }),

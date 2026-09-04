@@ -336,7 +336,6 @@ export class FlakeDashboardProcessor extends StreamProcessor<
               : null;
           tests[record.name] = {
             kind: record.kind,
-            sentinel: record.sentinel || existing?.sentinel || false,
             pattern: record.pattern || existing?.pattern || "",
             suites: existing?.suites.includes(event.payload.suite)
               ? existing.suites
@@ -419,7 +418,7 @@ export class FlakeDashboardProcessor extends StreamProcessor<
       for (const [testName, test] of Object.entries(state.tests)) {
         // Sentinels are designed to flake: their streaks prove the pipeline
         // works and must never propose lifecycle changes.
-        if (test.sentinel) continue;
+        if (isSentinel(testName)) continue;
         const streak = test.defaultBranchStreak;
         if (streak === null) continue;
         const transition =
@@ -605,6 +604,16 @@ const OUTCOME_EMOJI = {
 /** Unknown-flake rows only exist while they keep flaking: quiet ones retire. */
 const UNKNOWN_ROW_TTL_MS = 14 * 24 * 60 * 60 * 1000;
 
+/**
+ * The deliberate canary flakes are identified by naming convention — every
+ * suite's sentinel test contains this phrase ("flake sentinel",
+ * "flake sentinel (specs)", …). A convention beats a record flag: it needs no
+ * wire-format field and holds for all historical records.
+ */
+function isSentinel(testName: string): boolean {
+  return testName.includes("flake sentinel");
+}
+
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
 /** "Sep 4, 7:16am" (UTC) — ISO timestamps read like log spam in the table. */
@@ -707,7 +716,7 @@ export function renderBody(state: FlakeDashboardState, nowMs: number): string {
     {
       title: "Flakes",
       legend: "_createFlake-wrapped: 🟩 pass, 🟥 the known flake struck._",
-      tests: visible.filter(([, test]) => test.kind === "flake" && !test.sentinel),
+      tests: visible.filter(([name, test]) => test.kind === "flake" && !isSentinel(name)),
     },
     {
       title: "Failures",
@@ -718,7 +727,7 @@ export function renderBody(state: FlakeDashboardState, nowMs: number): string {
     {
       title: "Sentinels",
       legend: "_Deliberate ~10% canary flakes proving the recording pipeline works._",
-      tests: visible.filter(([, test]) => test.kind === "flake" && test.sentinel),
+      tests: visible.filter(([name, test]) => test.kind === "flake" && isSentinel(name)),
     },
     {
       title: "Unknown flakes",

@@ -22,7 +22,7 @@ shared tests, typecheck/lint/knip clean. Awaiting CI + review.
 old events must still parse for refolds):
 
 - `kind: "flake" | "failing" | "unknown"` (absent in old records → "flake")
-- `sentinel?: boolean` (createFlake option, replaces name-matching)
+- ~~`sentinel?: boolean` createFlake option~~ _(Misha: prefer matching the name — sentinels are identified by "flake sentinel" in the test name; no wire-format field, works for all historical records)_
 - `pattern` becomes optional (unknown records have none)
 - outcome grows: `pinned-fail`, `unexpected-pass` (createFailing),
   `retried-pass` (unknown)
@@ -71,9 +71,9 @@ Tests that fail all retries are just red CI — not recorded.
 - [x] Extract `flake-record.ts` (FlakeRecord type + appendFlakeRecord +
       unknownFlakeRecordFromTelemetry) in shared test-support; add package
       export. _(No re-export needed — nothing outside shared imported the type.)_
-- [x] createFlake: `sentinel` option flows into records; mark the three
-      sentinel files (`flake-sentinel.test.ts`, `flake-sentinel.e2e.test.ts`,
-      `flake-sentinel.spec.ts`).
+- [x] ~~createFlake `sentinel` option~~ Sentinels detected by name instead
+      (`isSentinel` in worker.ts matches "flake sentinel"); the three
+      sentinel files stay untouched.
 - [x] createFailing writes records (kind failing, three outcomes).
 - [x] Wire unknownFlakeRecordFromTelemetry into RetryTelemetryReporter and
       PlaywrightTelemetryReporter.

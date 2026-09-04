@@ -7,7 +7,8 @@
  *
  * Three producers write records:
  * - `createFlake` (./flake-test.ts): kind "flake" — pass / flake-fail /
- *   unexpected-error, plus `sentinel: true` for the deliberate canary tests.
+ *   unexpected-error. The deliberate canary tests are just createFlake tests
+ *   whose names contain "flake sentinel"; the dashboard groups them by name.
  * - `createFailing` (./failing-test.ts): kind "failing" — pinned-fail (the
  *   pin held) / unexpected-pass (the bug looks fixed) / unexpected-error.
  * - The telemetry reporters (vitest's RetryTelemetryReporter, the root
@@ -28,8 +29,6 @@ export interface FlakeRecord {
     | "retried-pass";
   /** Source of the tracked-error RegExp; absent for kind "unknown". */
   pattern?: string;
-  /** Deliberate canary flakes (the monthly sentinels) — grouped separately on the dashboard. */
-  sentinel?: boolean;
   durationMs: number;
   at: string;
   /** First line of the relevant error, when there is one. */

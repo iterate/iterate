@@ -155,7 +155,7 @@ test("rows group into sections by kind, sentinels split out of Flakes", async ()
     birth(),
     runRecorded(1, [
       record("deploy", "flake-fail", { at: day(0) }),
-      record("flake sentinel", "pass", { at: day(0), sentinel: true }),
+      record("flake sentinel", "pass", { at: day(0) }),
       record("stale facet", "pinned-fail", { at: day(0), kind: "failing" }),
       record("chat upload", "retried-pass", {
         at: day(0),
@@ -233,9 +233,7 @@ test("sentinel streaks never propose transitions", async () => {
   const h = makeHarness();
   await h.append(birth());
   for (let i = 0; i < 60; i++) {
-    await h.append(
-      runRecorded(i, [record("flake sentinel", "pass", { at: day(i / 5), sentinel: true })]),
-    );
+    await h.append(runRecorded(i, [record("flake sentinel", "pass", { at: day(i / 5) })]));
   }
   expect(h.events(flakeEventTypes.transitionProposed)).toHaveLength(0);
 });
@@ -443,12 +441,7 @@ function record(
     | "pinned-fail"
     | "unexpected-pass"
     | "retried-pass",
-  overrides?: {
-    at?: string;
-    kind?: "flake" | "failing" | "unknown";
-    sentinel?: boolean;
-    error?: string;
-  },
+  overrides?: { at?: string; kind?: "flake" | "failing" | "unknown"; error?: string },
 ) {
   const kind = overrides?.kind || "flake";
   return {
@@ -456,7 +449,6 @@ function record(
     kind,
     outcome,
     ...(kind === "unknown" ? {} : { pattern: "CPU startup time exceeded" }),
-    ...(overrides?.sentinel && { sentinel: true }),
     ...(overrides?.error === undefined ? {} : { error: overrides.error }),
     durationMs: 5,
     at: overrides?.at || "2026-09-02T09:00:00Z",

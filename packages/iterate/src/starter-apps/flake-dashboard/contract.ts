@@ -37,7 +37,6 @@ export const FlakeRecord = z.object({
   outcome: FlakeOutcome,
   // Optional: kind "unknown" records carry error samples instead of a pattern.
   pattern: z.string().min(1).max(2_000).optional(),
-  sentinel: z.boolean().optional(),
   durationMs: z.number().nonnegative(),
   at: z.string().min(1),
   error: z.string().max(4_000).optional(),
@@ -101,7 +100,6 @@ const DefaultBranchStreak = z.object({
 const TrackedTest = z.object({
   /** Latest record's kind wins: adopting an unknown flake into createFlake migrates its row. */
   kind: FlakeKind.default("flake"),
-  sentinel: z.boolean().default(false),
   /** Empty for kind "unknown" — those rows show error samples instead. */
   pattern: z.string().default(""),
   suites: z.array(z.string()).default([]),

@@ -1,7 +1,7 @@
 import { test } from "vitest";
 import { createFlake } from "./flake-test.ts";
 
-const flake = createFlake(test, /monthly flake sentinel/, { sentinel: true });
+const flake = createFlake(test, /monthly flake sentinel/);
 
 // A deliberately flaky test that validates the flake-tracking pipeline
 // end-to-end. Until the month below ends it throws the allowed error ~10% of

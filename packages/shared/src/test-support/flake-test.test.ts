@@ -123,15 +123,6 @@ test("a playwright-shaped test object registers through .fail", async () => {
   expect(registered).toHaveLength(1);
 });
 
-test("the sentinel option flows into every record", async () => {
-  using recordDir = flakeRecordDir();
-  const body = registerWithFakeRunner(/monthly flake sentinel/, async () => {}, { sentinel: true });
-  await expect(body()).rejects.toThrow(/Flaky test passed this run/);
-  expect(recordDir.records()).toMatchObject([
-    { name: "name", kind: "flake", outcome: "pass", sentinel: true },
-  ]);
-});
-
 test("a matching failure rethrows (green) and records a flake-fail line", async () => {
   using recordDir = flakeRecordDir();
   const body = registerWithFakeRunner(/CPU startup time exceeded \d+ms/, async () => {
@@ -248,7 +239,7 @@ test("without FLAKE_RECORD_DIR nothing is written anywhere", async () => {
 function registerWithFakeRunner(
   pattern: RegExp,
   body: (...args: any[]) => any,
-  options?: { timeoutMs?: number; sentinel?: boolean },
+  options?: { timeoutMs: number },
 ) {
   const registered: ((...args: unknown[]) => Promise<unknown>)[] = [];
   const fake = Object.assign(vi.fn(), {

@@ -1,7 +1,7 @@
 import { createFlake } from "@iterate-com/shared/test-support/flake-test";
 import { test } from "./test-support/test.ts";
 
-const flake = createFlake(test, /monthly flake sentinel/, { sentinel: true });
+const flake = createFlake(test, /monthly flake sentinel/);
 
 // The specs suite's deliberately flaky test: proves this suite's
 // recorder -> artifact -> ingestion -> dashboard path monthly (see the unit
