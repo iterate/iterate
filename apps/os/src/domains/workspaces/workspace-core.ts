@@ -51,10 +51,17 @@ export interface MountRepoAccess {
     files: Record<string, string>;
   }>;
   commitFiles(input: {
+    amendIfHead?: string;
     author?: { email: string; name: string };
     changes: RepoFileChange[];
     message: string;
-  }): Promise<{ branch: string; changedPaths: string[]; commitOid: string; noChanges: boolean }>;
+  }): Promise<{
+    amended: boolean;
+    branch: string;
+    changedPaths: string[];
+    commitOid: string;
+    noChanges: boolean;
+  }>;
   log(input: { branch?: string; limit?: number }): Promise<{
     commits: {
       author: { email: string; name: string };
@@ -826,6 +833,7 @@ export class WorkspaceCore {
       }
 
       const result = await this.#repo(mount.repoPath).commitFiles({
+        amendIfHead: input.amendIfHead,
         author: input.author ?? DEFAULT_COMMIT_AUTHOR,
         changes: repoChanges,
         message: input.message,
@@ -847,6 +855,7 @@ export class WorkspaceCore {
       }
 
       return {
+        amended: result.amended,
         branch: result.branch,
         changedPaths: result.changedPaths
           .map((path) => `${mountPath}/${path.replace(/^\//, "")}`)
