@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: done
 size: small
 branch: playwright-wrapper-retry-pin
 ---
