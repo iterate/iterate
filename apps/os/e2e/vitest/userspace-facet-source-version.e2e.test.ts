@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { failing } from "@iterate-com/shared/test-support/failing-test";
+import { createFailing } from "@iterate-com/shared/test-support/failing-test";
 import type { StreamEventInput } from "iterate/processors";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
 import {
@@ -36,7 +36,7 @@ const WOKEN = "events.iterate.com/stream/woken";
 const ECHO_PATH = "version-echo.js";
 
 /*
- * A PINNED BUG, held by `failing(test, …)`: the body asserts the desired contract,
+ * A PINNED BUG, held by `createFailing(test, …)`: the body asserts the desired contract,
  * and while the bug exists it must fail with the SAME-BOOT STALENESS error
  * the wrapper matches. The moment somebody fixes the bug, the body succeeds
  * and the wrapper goes red with delete-me instructions.
@@ -70,8 +70,8 @@ const ECHO_PATH = "version-echo.js";
  * still demonstrates the old comparisons' blind spot by forcing a recycle.
  */
 // timeoutMs: the wrapper's own hang deadline, just below the runner ceiling —
-// the expected run is ~60-110s, well past failing()'s 60s default.
-failing(test, /SAME-BOOT STALENESS/, { timeoutMs: 230_000 })(
+// the expected run is ~60-110s, well past createFailing()'s 60s default.
+createFailing(test, /SAME-BOOT STALENESS/, { timeoutMs: 230_000 })(
   "a userspace facet rebuilds on a source commit and only on a source commit",
   // Ceiling for the cold build, the two stability kills, and up to three
   // 45s observation rounds. The expected run (bug present, no recycles)
@@ -264,7 +264,7 @@ failing(test, /SAME-BOOT STALENESS/, { timeoutMs: 230_000 })(
     }
     // Every round ended with the running facet replaced by one serving the
     // just-committed revision — the fix's shape, three times in a row. The
-    // body succeeding here is what makes the failing() wrapper raise the
+    // body succeeding here is what makes the createFailing() wrapper raise the
     // delete-me alert. (Residual risk: three independent coincidental
     // recycles in a row would masquerade as the fix — roughly the cube of an
     // already-uncommon event, and the next run self-corrects.)

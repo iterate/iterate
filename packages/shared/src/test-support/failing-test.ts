@@ -2,7 +2,7 @@
  * Pinned-bug tests: the body asserts the DESIRED behavior, and while the bug
  * exists it must fail with an error matching the given pattern.
  *
- * `failing` registers the test through the runner's own expected-fail variant
+ * `createFailing` registers the test through the runner's own expected-fail variant
  * — vitest spells it `test.fails`, playwright `test.fail` — so the pin is
  * native as far as reporting goes: it shows up in the "expected fail" summary
  * count, telemetry classifies it as expected-to-fail, and nothing downstream
@@ -10,7 +10,7 @@
  * failure is allowed to satisfy that machinery:
  *
  * ```ts
- * const fail = failing(test, /SAME-BOOT STALENESS/);
+ * const fail = createFailing(test, /SAME-BOOT STALENESS/);
  * fail("a userspace facet rebuilds on a source commit", { timeout: 240_000 }, async () => {
  *   // asserts the DESIRED behavior; today it throws the matched error
  * });
@@ -46,7 +46,7 @@
  * apps/os/e2e/vitest/userspace-facet-source-version.e2e.test.ts for the
  * worked example (its predecessor bare `test.fails` false-alarmed 7+ times).
  */
-export function failing<TestFn extends (...args: any[]) => any>(
+export function createFailing<TestFn extends (...args: any[]) => any>(
   test: TestFn,
   failure: RegExp,
   options?: { timeoutMs: number },
@@ -55,13 +55,13 @@ export function failing<TestFn extends (...args: any[]) => any>(
   const failer: unknown = "fails" in test ? test.fails : "fail" in test ? test.fail : undefined;
   if (typeof failer !== "function") {
     throw new Error(
-      "failing(test, pattern): test has neither .fails (vitest) nor .fail (playwright)",
+      "createFailing(test, pattern): test has neither .fails (vitest) nor .fail (playwright)",
     );
   }
   const register = (...args: any[]) => {
     const body = args.at(-1);
     if (typeof body !== "function") {
-      throw new Error("failing(test, pattern): the last argument must be the test body");
+      throw new Error("createFailing(test, pattern): the last argument must be the test body");
     }
     // The body's own arguments pass through untouched — playwright fixtures
     // ({ page, ... }, testInfo), vitest context — whatever the wrapped test
@@ -99,14 +99,14 @@ export function failing<TestFn extends (...args: any[]) => any>(
       if (outcome.kind === "timed-out") {
         console.error(
           `[failing-test] The body is still running after ${timeoutMs}ms — a hang is not the ` +
-            `pinned failure. Raise failing()'s options.timeoutMs (keeping it below the runner's ` +
+            `pinned failure. Raise createFailing()'s options.timeoutMs (keeping it below the runner's ` +
             `test timeout) if the pin legitimately needs longer.`,
         );
         return; // same inversion: success → the expected-fail machinery goes red
       }
       console.error(
         `[failing-test] The test should have failed with /${failure.source}/ but it succeeded. ` +
-          `If the pinned bug is fixed, delete the failing() wrapper and keep the body as a plain test.`,
+          `If the pinned bug is fixed, delete the createFailing() wrapper and keep the body as a plain test.`,
       );
       // Fall through to success for the same reason as above.
     };
@@ -129,7 +129,7 @@ export function failing<TestFn extends (...args: any[]) => any>(
 
 /**
  * Assert that a body fails for exactly the given reason — the standalone
- * sibling of {@link failing} for use INSIDE a plain test, where throwing (not
+ * sibling of {@link createFailing} for use INSIDE a plain test, where throwing (not
  * inverted success) is the right failure signal.
  */
 export async function expectFailure(options: { failure: RegExp }, body: () => Promise<unknown>) {
@@ -147,6 +147,6 @@ export async function expectFailure(options: { failure: RegExp }, body: () => Pr
   // mistaken for a candidate failure.
   throw new Error(
     `The test should have failed with /${options.failure.source}/ but it succeeded. ` +
-      `If the pinned bug is fixed, delete the failing() wrapper and keep the body as a plain test.`,
+      `If the pinned bug is fixed, delete the createFailing() wrapper and keep the body as a plain test.`,
   );
 }
