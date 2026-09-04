@@ -58,7 +58,10 @@ test("every outcome writes a kind-failing record when FLAKE_RECORD_DIR is set", 
     await expect(registered[1]!()).resolves.toBeUndefined();
 
     const records = readdirSync(dir).flatMap((file) =>
-      readFileSync(join(dir, file), "utf8").trim().split("\n").map(JSON.parse),
+      readFileSync(join(dir, file), "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line)),
     );
     expect(records).toMatchObject([
       { name: "holds", kind: "failing", outcome: "pinned-fail", pattern: "pinned" },

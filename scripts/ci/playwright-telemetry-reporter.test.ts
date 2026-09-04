@@ -118,7 +118,10 @@ it("records every Playwright attempt and nested step without uploading", async (
   // record — the test-health dashboard's adoption-funnel signal — while the
   // deterministic passer did not.
   const flakeRecords = readdirSync(flakeRecordDirectory).flatMap((file) =>
-    readFileSync(join(flakeRecordDirectory, file), "utf8").trim().split("\n").map(JSON.parse),
+    readFileSync(join(flakeRecordDirectory, file), "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line)),
   );
   expect(flakeRecords).toMatchObject([
     {

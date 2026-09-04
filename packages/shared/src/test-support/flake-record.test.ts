@@ -53,7 +53,10 @@ test("appendFlakeRecord writes one jsonl line per record into FLAKE_RECORD_DIR",
       at: "2026-09-04T09:00:00Z",
     });
     const lines = readdirSync(dir).flatMap((file) =>
-      readFileSync(join(dir, file), "utf8").trim().split("\n").map(JSON.parse),
+      readFileSync(join(dir, file), "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line)),
     );
     expect(lines).toMatchObject([{ name: "some test", kind: "unknown" }]);
   } finally {
