@@ -62,31 +62,23 @@ function projectRuntime(
 }
 
 describe("agent-ui reducer", () => {
-  test("preserves a valid rich document and falls back to plain text on mismatch", () => {
-    const richContent = {
-      version: 1,
-      nodes: [
-        { type: "text", text: "Read " },
-        {
-          type: "reference",
-          occurrenceId: "one",
-          display: "@AGENTS.md",
-          target: {
-            kind: "config-repo-file",
-            repoPath: "/repos/config",
-            path: "AGENTS.md",
-          },
-        },
-      ],
-    };
+  test("preserves valid linked attachments and falls back to plain text on mismatch", () => {
+    const attachments = [
+      {
+        id: "config-repo/AGENTS.md",
+        type: "repo-file",
+        repoPath: "/repos/config",
+        path: "AGENTS.md",
+      },
+    ];
     const state = reduceAll([
       {
         type: "events.iterate.com/agents/context-added",
         payload: {
           role: "user",
           actor: { type: "user", origin: "web" },
-          content: "Read @AGENTS.md",
-          richContent,
+          content: "Read [@AGENTS.md](attachment:config-repo/AGENTS.md)",
+          attachments,
         },
       },
       {
@@ -95,40 +87,33 @@ describe("agent-ui reducer", () => {
           role: "user",
           actor: { type: "user", origin: "web" },
           content: "plain fallback",
-          richContent,
+          attachments,
         },
       },
     ]);
 
-    expect(state.items[0]).toMatchObject({ kind: "user", richContent });
+    expect(state.items[0]).toMatchObject({ kind: "user", attachments });
     expect(state.items[1]).toMatchObject({ kind: "user", text: "plain fallback" });
-    expect(state.items[1]).not.toHaveProperty("richContent");
+    expect(state.items[1]).not.toHaveProperty("attachments");
   });
 
   test("projects durable reference outcomes onto their original occurrences", () => {
-    const richContent = {
-      version: 1,
-      nodes: [
-        {
-          type: "reference",
-          occurrenceId: "one",
-          display: "@AGENTS.md",
-          target: {
-            kind: "config-repo-file",
-            repoPath: "/repos/config",
-            path: "AGENTS.md",
-          },
-        },
-      ],
-    };
+    const attachments = [
+      {
+        id: "config-repo/AGENTS.md",
+        type: "repo-file",
+        repoPath: "/repos/config",
+        path: "AGENTS.md",
+      },
+    ];
     const state = reduceAll([
       {
         type: "events.iterate.com/agents/context-added",
         payload: {
           role: "user",
           actor: { type: "user", origin: "web" },
-          content: "@AGENTS.md",
-          richContent,
+          content: "[@AGENTS.md](attachment:config-repo/AGENTS.md)",
+          attachments,
         },
       },
       {
@@ -139,18 +124,18 @@ describe("agent-ui reducer", () => {
           content: "resolution details",
           referenceResolution: {
             sourceOffset: 1,
-            outcomes: [{ status: "missing", occurrenceIds: ["one"] }],
+            outcomes: [{ status: "missing", attachmentIds: ["config-repo/AGENTS.md"] }],
           },
         },
       },
     ]);
 
     expect(state.items).toMatchObject([
-      { id: "user-1", richContent },
+      { id: "user-1", attachments },
       {
         id: "user-1",
-        richContent,
-        referenceResolutions: { one: { status: "missing" } },
+        attachments,
+        referenceResolutions: { "config-repo/AGENTS.md": { status: "missing" } },
       },
     ]);
     expect(state.pendingReferenceMessages).toEqual({});
@@ -1390,21 +1375,14 @@ describe("agent-ui reducer", () => {
   });
 
   test("updates a queued file mention when its resolution arrives mid-turn", () => {
-    const richContent = {
-      version: 1,
-      nodes: [
-        {
-          type: "reference",
-          occurrenceId: "queued-reference",
-          display: "@AGENTS.md",
-          target: {
-            kind: "config-repo-file",
-            repoPath: "/repos/config",
-            path: "AGENTS.md",
-          },
-        },
-      ],
-    };
+    const attachments = [
+      {
+        id: "config-repo/AGENTS.md",
+        type: "repo-file",
+        repoPath: "/repos/config",
+        path: "AGENTS.md",
+      },
+    ];
     const state = reduceAll([
       {
         type: "events.iterate.com/agent/llm-request-requested",
@@ -1417,8 +1395,8 @@ describe("agent-ui reducer", () => {
         payload: {
           role: "user",
           actor: { type: "user", origin: "web" },
-          content: "@AGENTS.md",
-          richContent,
+          content: "[@AGENTS.md](attachment:config-repo/AGENTS.md)",
+          attachments,
         },
       },
       {
@@ -1434,7 +1412,7 @@ describe("agent-ui reducer", () => {
               {
                 status: "resolved",
                 truncated: true,
-                occurrenceIds: ["queued-reference"],
+                attachmentIds: ["config-repo/AGENTS.md"],
               },
             ],
           },
@@ -1446,9 +1424,9 @@ describe("agent-ui reducer", () => {
     expect(state.queuedUserMessages).toMatchObject([
       {
         id: "user-8",
-        richContent,
+        attachments,
         referenceResolutions: {
-          "queued-reference": { status: "resolved", truncated: true },
+          "config-repo/AGENTS.md": { status: "resolved", truncated: true },
         },
       },
     ]);

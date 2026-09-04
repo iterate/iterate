@@ -26,6 +26,32 @@ describe("sendAgentFirstTurn", () => {
     expect(agent.message).toHaveBeenCalledWith({ message: "  hello  " });
   });
 
+  test("inline attachment: forwards readable content and typed metadata together", async () => {
+    const agent = fakeAgent();
+    await sendAgentFirstTurn(agent, {
+      message: "Read [@AGENTS.md](attachment:config-repo/AGENTS.md)",
+      attachments: [
+        {
+          id: "config-repo/AGENTS.md",
+          type: "repo-file",
+          repoPath: "/repos/config",
+          path: "AGENTS.md",
+        },
+      ],
+    });
+    expect(agent.message).toHaveBeenCalledWith({
+      message: "Read [@AGENTS.md](attachment:config-repo/AGENTS.md)",
+      attachments: [
+        {
+          id: "config-repo/AGENTS.md",
+          type: "repo-file",
+          repoPath: "/repos/config",
+          path: "AGENTS.md",
+        },
+      ],
+    });
+  });
+
   test("with files: one message call carries text and encoded files", async () => {
     const agent = fakeAgent();
     await sendAgentFirstTurn(agent, { message: "with file", files: [fakeFile("note.txt", 4)] });
@@ -42,7 +68,7 @@ describe("sendAgentFirstTurn", () => {
     expect(payload.files[0]!.data).toBeInstanceOf(Uint8Array);
   });
 
-  test("files-only first turn preserves its plain projection", async () => {
+  test("files-only first turn preserves its whitespace message", async () => {
     const agent = fakeAgent();
     await sendAgentFirstTurn(agent, {
       message: "   ",

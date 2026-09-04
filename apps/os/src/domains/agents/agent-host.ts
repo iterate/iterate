@@ -8,7 +8,7 @@
 
 import { isIdempotencyConflict } from "iterate/processors";
 import type { EmittedInput, ProcessEventArgs, StreamEvent } from "iterate/processors";
-import type { AgentConfigRepoFileReferenceTarget } from "@iterate-com/shared/agent-rich-content";
+import type { AgentConfigRepoFileAttachmentTarget } from "@iterate-com/shared/agent-message-attachments";
 import type { AgentFileAttachment, AgentProcessorContract } from "./agent-processor-contract.ts";
 import type { AgentReferenceReadResult } from "./agent-reference-materialization.ts";
 import type {
@@ -81,7 +81,7 @@ export type AgentProcessorDeps = {
   }) => Promise<unknown>;
   resolveModelFileUrl?: (file: AgentFileAttachment) => Promise<string>;
   readRepoFile?: (
-    target: AgentConfigRepoFileReferenceTarget,
+    target: AgentConfigRepoFileAttachmentTarget,
     maximumBytes: number,
   ) => Promise<AgentReferenceReadResult | null>;
   writeWorkspaceFile?: (input: {

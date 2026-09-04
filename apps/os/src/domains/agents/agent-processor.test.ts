@@ -78,36 +78,18 @@ function userMessageWithConfigFileReferences(): AgentEventInput {
     type: "events.iterate.com/agents/context-added",
     payload: {
       role: "user",
-      content: "Read @AGENTS.md and @AGENTS.md",
+      content:
+        "Read [@AGENTS.md](attachment:config-repo/AGENTS.md) and [@AGENTS.md](attachment:config-repo/AGENTS.md)",
       actor: { type: "user", origin: "web" },
-      richContent: {
-        version: 1,
-        nodes: [
-          { type: "text", text: "Read " },
-          {
-            type: "reference",
-            occurrenceId: "first",
-            display: "@AGENTS.md",
-            target: {
-              kind: "config-repo-file",
-              repoPath: "/repos/config",
-              path: "AGENTS.md",
-            },
-          },
-          { type: "text", text: " and " },
-          {
-            type: "reference",
-            occurrenceId: "second",
-            display: "@AGENTS.md",
-            target: {
-              kind: "config-repo-file",
-              repoPath: "/repos/config",
-              path: "AGENTS.md",
-            },
-          },
-        ],
-      },
-      // `agent.message()` stages rich references without scheduling; the
+      attachments: [
+        {
+          id: "config-repo/AGENTS.md",
+          type: "repo-file",
+          repoPath: "/repos/config",
+          path: "AGENTS.md",
+        },
+      ],
+      // `agent.message()` stages linked attachments without scheduling; the
       // resolver event restores this user actor's external trigger.
       llmRequestPolicy: { behaviour: "dont-trigger-request" },
     },
@@ -119,24 +101,16 @@ function agentMessageWithConfigFileReference(): AgentEventInput {
     type: "events.iterate.com/agents/context-added",
     payload: {
       role: "developer",
-      content: "Read @AGENTS.md",
+      content: "Read [@AGENTS.md](attachment:config-repo/AGENTS.md)",
       actor: { type: "agent", path: "/agents/sender" },
-      richContent: {
-        version: 1,
-        nodes: [
-          { type: "text", text: "Read " },
-          {
-            type: "reference",
-            occurrenceId: "agent-reference",
-            display: "@AGENTS.md",
-            target: {
-              kind: "config-repo-file",
-              repoPath: "/repos/config",
-              path: "AGENTS.md",
-            },
-          },
-        ],
-      },
+      attachments: [
+        {
+          id: "config-repo/AGENTS.md",
+          type: "repo-file",
+          repoPath: "/repos/config",
+          path: "AGENTS.md",
+        },
+      ],
       // Same staging gate as `agent.message()`; resolution must restore the
       // agent actor's bounded agent-loop trigger rather than refill it.
       llmRequestPolicy: { behaviour: "dont-trigger-request" },
@@ -237,7 +211,7 @@ describe("AgentProcessor turn lifecycle", () => {
 
     expect(readRepoFile).toHaveBeenCalledOnce();
     expect(readRepoFile).toHaveBeenCalledWith(
-      { kind: "config-repo-file", repoPath: "/repos/config", path: "AGENTS.md" },
+      { type: "repo-file", repoPath: "/repos/config", path: "AGENTS.md" },
       AGENT_REFERENCE_MAX_FILE_BYTES,
     );
     expect(h.llm.calls).toHaveLength(0);
@@ -254,7 +228,7 @@ describe("AgentProcessor turn lifecycle", () => {
           outcomes: [
             {
               status: "resolved",
-              occurrenceIds: ["first", "second"],
+              attachmentIds: ["config-repo/AGENTS.md"],
               resolvedCommitOid: "latest-commit",
             },
           ],

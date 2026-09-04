@@ -81,23 +81,19 @@ test("a failed reference resolution marks the exact sent pill", () => {
   const container = renderMessage({
     kind: "user",
     id: "user-1",
-    text: "Use @AGENTS.md",
+    text: "Use [@AGENTS.md](attachment:config-repo/AGENTS.md)",
     timestampMs: 0,
-    richContent: {
-      version: 1,
-      nodes: [
-        { type: "text", text: "Use " },
-        {
-          type: "reference",
-          occurrenceId: "ref-one",
-          display: "@AGENTS.md",
-          target: { kind: "config-repo-file", repoPath: "/repos/config", path: "AGENTS.md" },
-        },
-      ],
-    },
-    referenceResolutions: { "ref-one": { status: "missing" } },
+    attachments: [
+      {
+        id: "config-repo/AGENTS.md",
+        type: "repo-file",
+        repoPath: "/repos/config",
+        path: "AGENTS.md",
+      },
+    ],
+    referenceResolutions: { "config-repo/AGENTS.md": { status: "missing" } },
   });
-  const pill = container.querySelector('[data-reference-kind="config-repo-file"]');
+  const pill = container.querySelector('[data-attachment-type="repo-file"]');
 
   expect(pill?.getAttribute("data-reference-resolution")).toBe("missing");
   expect(pill?.getAttribute("aria-label")).toBe(

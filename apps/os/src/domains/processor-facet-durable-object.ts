@@ -571,7 +571,7 @@ export class ProcessorFacet extends ProcessorFacetBase<Env> {
         }),
       readRepoFile: async (
         target: {
-          kind: "config-repo-file";
+          type: "repo-file";
           repoPath: "/repos/config";
           path: string;
         },

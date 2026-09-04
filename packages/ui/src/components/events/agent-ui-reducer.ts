@@ -1,10 +1,10 @@
 import { AgentLlmRequestCancelReason, type AgentRuntime } from "@iterate-com/shared/agent-events";
 import {
-  AgentRichContentV1,
-  decodeAgentRichContent,
-  hasAgentConfigRepoFileReferences,
-  type AgentRichContentV1 as AgentRichContentDocument,
-} from "@iterate-com/shared/agent-rich-content";
+  AgentMessageAttachments,
+  decodeAgentMessageAttachments,
+  hasAgentConfigRepoFileAttachments,
+  type AgentMessageAttachment,
+} from "@iterate-com/shared/agent-message-attachments";
 import { ScriptExecutionSettlement } from "@iterate-com/shared/script-execution";
 import { z } from "zod";
 import type { Event } from "./types.ts";
@@ -335,7 +335,7 @@ export type AgentUiMessageItem = {
   text: string;
   timestampMs: number;
   files?: AgentUiFileAttachment[];
-  richContent?: AgentRichContentDocument;
+  attachments?: AgentMessageAttachment[];
   referenceResolutions?: Record<string, AgentUiReferenceResolution>;
   via?: AgentUiMessageVia;
 };
@@ -538,7 +538,7 @@ const AgentUiMessageItemSchema = z.strictObject({
   text: z.string(),
   timestampMs: z.number().finite(),
   files: z.array(AgentUiFileAttachmentSchema).optional(),
-  richContent: AgentRichContentV1.optional(),
+  attachments: AgentMessageAttachments.optional(),
   referenceResolutions: z.record(z.string(), AgentUiReferenceResolutionSchema).optional(),
   via: AgentUiMessageViaSchema.optional(),
 }) satisfies z.ZodType<AgentUiMessageItem>;
@@ -548,7 +548,7 @@ const AgentReferenceResolutionEvent = z.object({
   outcomes: z.array(
     z.object({
       status: z.enum(["resolved", "missing", "binary", "read-failed"]),
-      occurrenceIds: z.array(z.string().min(1)),
+      attachmentIds: z.array(z.string().min(1)),
       truncated: z.boolean().optional(),
     }),
   ),
@@ -833,17 +833,20 @@ function reduceAgentUiEvent(
 
       const files = readFileAttachments(event);
       if (role === "user") {
-        const richContent = decodeAgentRichContent(text, readPayloadRecord(event)?.richContent);
+        const decodedMessage = decodeAgentMessageAttachments(
+          text,
+          readPayloadRecord(event)?.attachments,
+        );
         const item: AgentUiMessageItem = {
           kind: "user",
           id: `user-${event.offset}`,
           text,
           ...(files.length === 0 ? {} : { files }),
-          ...(richContent === null ? {} : { richContent }),
+          ...(decodedMessage === null ? {} : { attachments: decodedMessage.attachments }),
           timestampMs,
         };
         const pendingState =
-          richContent !== null && hasAgentConfigRepoFileReferences(richContent)
+          decodedMessage !== null && hasAgentConfigRepoFileAttachments(decodedMessage.attachments)
             ? rememberPendingReferenceMessage(contextState, event.offset, item)
             : contextState;
         return emitUserMessageItem(pendingState, items, item);
@@ -1485,8 +1488,8 @@ function applyAgentReferenceResolution(
 
   const referenceResolutions: Record<string, AgentUiReferenceResolution> = {};
   for (const outcome of resolution.outcomes) {
-    for (const occurrenceId of outcome.occurrenceIds) {
-      referenceResolutions[occurrenceId] = {
+    for (const attachmentId of outcome.attachmentIds) {
+      referenceResolutions[attachmentId] = {
         status: outcome.status,
         ...(outcome.truncated === undefined ? {} : { truncated: outcome.truncated }),
       };

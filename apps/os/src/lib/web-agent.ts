@@ -1,6 +1,6 @@
 /** Web-agent creation: fresh agent paths and the first conversational turn. */
 
-import type { AgentRichContentV1 } from "@iterate-com/shared/agent-rich-content";
+import type { AgentMessageAttachment } from "@iterate-com/shared/agent-message-attachments";
 
 export function newWebAgentPath(date: Date) {
   const slug = date
@@ -27,8 +27,8 @@ type WebAgentHandle = {
   create: () => Promise<unknown>;
   message: (input: {
     message: string;
+    attachments?: AgentMessageAttachment[];
     files?: Awaited<ReturnType<typeof filesToAgentPayload>>;
-    richContent?: AgentRichContentV1;
   }) => Promise<unknown>;
 };
 
@@ -38,13 +38,19 @@ type WebAgentHandle = {
  */
 export async function sendAgentFirstTurn(
   agent: WebAgentHandle,
-  input: { message: string; files?: readonly File[]; richContent?: AgentRichContentV1 },
+  input: {
+    message: string;
+    attachments?: AgentMessageAttachment[];
+    files?: readonly File[];
+  },
 ) {
   await agent.create();
   const files = input.files || [];
   await agent.message({
     message: input.message,
+    ...(input.attachments === undefined || input.attachments.length === 0
+      ? {}
+      : { attachments: input.attachments }),
     ...(files.length === 0 ? {} : { files: await filesToAgentPayload(files) }),
-    ...(input.richContent === undefined ? {} : { richContent: input.richContent }),
   });
 }

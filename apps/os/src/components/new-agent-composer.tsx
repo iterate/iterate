@@ -1,9 +1,9 @@
 import { useState } from "react";
 import {
-  flattenAgentRichContent,
-  plainAgentRichContent,
-  type AgentRichContentV1,
-} from "@iterate-com/shared/agent-rich-content";
+  agentMessageToEditorDocument,
+  emptyAgentMessageDraft,
+  type AgentMessageAttachment,
+} from "@iterate-com/shared/agent-message-attachments";
 import { useMutation } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { toast } from "@iterate-com/ui/components/sonner";
@@ -29,13 +29,13 @@ export function NewAgentComposer({
   const navigate = useNavigate();
   const attachments = useComposerAttachments();
   const fileMentions = configRepoFileMentionProvider(projectId);
-  const [message, setMessage] = useState(() => plainAgentRichContent());
+  const [message, setMessage] = useState(() => emptyAgentMessageDraft());
 
   const createAgent = useMutation({
     mutationFn: async (input: {
       content: string;
+      inlineAttachments: AgentMessageAttachment[];
       files: File[];
-      richContent: AgentRichContentV1;
     }) => {
       const agentPath = newWebAgentPath(new Date());
       // connectItx (imperative, not the suspending hook) narrows the one
@@ -43,8 +43,8 @@ export function NewAgentComposer({
       const itx = await connectItx(projectId);
       await sendAgentFirstTurn(itx.agents.get(agentPath), {
         message: input.content,
+        attachments: input.inlineAttachments,
         files: input.files,
-        richContent: input.richContent,
       });
       return agentPath;
     },
@@ -64,9 +64,13 @@ export function NewAgentComposer({
   const busy = createAgent.isPending || createAgent.isSuccess;
 
   function submit() {
-    const content = flattenAgentRichContent(message);
-    if (busy || (content.trim() === "" && attachments.files.length === 0)) return;
-    createAgent.mutate({ content, files: attachments.files, richContent: message });
+    const visibleText = agentMessageToEditorDocument(message).text;
+    if (busy || (visibleText.trim() === "" && attachments.files.length === 0)) return;
+    createAgent.mutate({
+      content: message.content,
+      files: attachments.files,
+      inlineAttachments: message.attachments,
+    });
   }
 
   return (
@@ -82,7 +86,9 @@ export function NewAgentComposer({
           value: message,
           onValueChange: setMessage,
           onSubmit: submit,
-          canSubmit: flattenAgentRichContent(message).trim() !== "" || attachments.files.length > 0,
+          canSubmit:
+            agentMessageToEditorDocument(message).text.trim() !== "" ||
+            attachments.files.length > 0,
           placeholder: "Message a new agent",
           suggestionProviders: [fileMentions],
           onAttach: attachments.openFilePicker,

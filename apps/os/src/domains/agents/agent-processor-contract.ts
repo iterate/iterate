@@ -23,6 +23,10 @@
 import { z } from "zod";
 import { AgentRuntime } from "@iterate-com/shared/agent-events";
 import {
+  AgentMessageAttachments,
+  decodeAgentMessageAttachments,
+} from "@iterate-com/shared/agent-message-attachments";
+import {
   defineProcessorContract,
   type ConsumedInput,
   type ProcessorState,
@@ -835,17 +839,12 @@ function agentContextItemSchema() {
         .enum(["system", "developer", "user", "assistant"])
         .meta({ description: "The LLM message role this item renders as." }),
       content: z.string().meta({ description: "The model-visible text." }),
-      richContent: z
-        .unknown()
-        .optional()
-        .meta({
-          description:
-            "Optional versioned semantic document whose required plain projection is content. " +
-            "Unknown versions remain stored so older readers can fall back to content.",
-        }),
+      attachments: AgentMessageAttachments.optional().meta({
+        description: "Typed resources addressed by Markdown-like attachment links in content.",
+      }),
       referenceResolution: z.unknown().optional().meta({
         description:
-          "Processor-authored, bounded resolution metadata for a prior semantic document.",
+          "Processor-authored, bounded resolution metadata for a prior message's attachments.",
       }),
       key: z
         .string()
@@ -1020,6 +1019,16 @@ function agentContextItemSchema() {
         }),
     })
     .superRefine((payload, ctx) => {
+      if (
+        payload.attachments !== undefined &&
+        decodeAgentMessageAttachments(payload.content, payload.attachments) === null
+      ) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["attachments"],
+          message: "each attachment must have a unique id and a matching inline attachment link",
+        });
+      }
       if (payload.role !== "developer" || payload.compaction === undefined) return;
       if (payload.key !== undefined) {
         ctx.addIssue({

@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "exports": {
-    "./agent-rich-content": "./src/agent-rich-content.ts",
+    "./agent-message-attachments": "./src/agent-message-attachments.ts",
     "./agent-events": "./src/agent-events.ts",
     "./config": "./src/config.ts",
     "./mobile-channel-status": "./src/mobile-channel-status.ts",

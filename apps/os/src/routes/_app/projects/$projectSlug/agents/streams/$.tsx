@@ -56,34 +56,37 @@ function ProjectAgentDetailContent() {
   // The socket is keyed by project ID (the provider pre-warmed it), and agents
   // are addressed by their stream path.
   async function submitAgentMessage({
-    message,
-    richContent,
+    content,
+    attachments,
   }: {
-    message: string;
-    richContent: import("@iterate-com/shared/agent-rich-content").AgentRichContentV1;
+    content: string;
+    attachments: import("@iterate-com/shared/agent-message-attachments").AgentMessageAttachment[];
   }) {
     const itx = await connectItx(project.id);
     // Returned so the composer can feed the committed offset into the
     // store's consume-own-append metric (real append→observed latency).
-    return await itx.agents.get(streamPath).message({ message, richContent });
+    return await itx.agents.get(streamPath).message({
+      message: content,
+      ...(attachments.length === 0 ? {} : { attachments }),
+    });
   }
 
   async function submitAgentFiles({
     files,
-    message,
-    richContent,
+    content,
+    attachments,
   }: {
     files: File[];
-    message: string;
-    richContent: import("@iterate-com/shared/agent-rich-content").AgentRichContentV1;
+    content: string;
+    attachments: import("@iterate-com/shared/agent-message-attachments").AgentMessageAttachment[];
   }) {
     const itx = await connectItx(project.id);
-    // The unified message call commits text, references, and attachments as
-    // one input event, so their resolution can gate exactly one turn.
+    // The unified message call commits text, linked resources, and uploaded
+    // files as one input event, so resolution can gate exactly one turn.
     return await itx.agents.get(streamPath).message({
       files: await filesToAgentPayload(files),
-      message,
-      richContent,
+      message: content,
+      ...(attachments.length === 0 ? {} : { attachments }),
     });
   }
 

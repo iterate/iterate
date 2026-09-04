@@ -44,7 +44,7 @@ export const RAW_GROUP_KIND = "raw.group";
  * are disposable caches and must be rebuilt, never interpreted as current
  * state (in particular, they may contain historical ephemeral activity).
  */
-export const BROWSER_FEED_SCHEMA_VERSION = 8;
+export const BROWSER_FEED_SCHEMA_VERSION = 9;
 export { isAgentActivity } from "@iterate-com/ui/components/events/agent-ui-reducer";
 
 /** Maps an event type to its specific raw renderer kind, or null to fall into the group. */
@@ -426,9 +426,7 @@ function hasPendingReferenceResolution(item: AgentUiItem): boolean {
   return (
     item.kind === "user" &&
     item.referenceResolutions === undefined &&
-    item.richContent?.nodes.some(
-      (node) => node.type === "reference" && node.target.kind === "config-repo-file",
-    ) === true
+    item.attachments?.some((attachment) => attachment.type === "repo-file") === true
   );
 }
 

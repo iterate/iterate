@@ -5,10 +5,10 @@ import { acceptCompletion, autocompletion } from "@codemirror/autocomplete";
 import { EditorState, Prec } from "@codemirror/state";
 import { EditorView, keymap, placeholder as placeholderExtension } from "@codemirror/view";
 import {
-  agentRichContentFromEditorDocument,
-  agentRichContentToEditorDocument,
-  type AgentRichContentV1,
-} from "@iterate-com/shared/agent-rich-content";
+  agentMessageFromEditorDocument,
+  agentMessageToEditorDocument,
+  type AgentMessageDraft,
+} from "@iterate-com/shared/agent-message-attachments";
 import { useQueryClient } from "@tanstack/react-query";
 import { composerCompletionSource } from "~/components/composer-completions.ts";
 import {
@@ -21,8 +21,8 @@ import {
 import type { ComposerSuggestionProvider } from "~/components/composer-suggestions.ts";
 
 export type ComposerTextareaProps = {
-  value: AgentRichContentV1;
-  onValueChange: (value: AgentRichContentV1) => void;
+  value: AgentMessageDraft;
+  onValueChange: (value: AgentMessageDraft) => void;
   onSubmit: () => void;
   placeholder: string;
   providers?: readonly ComposerSuggestionProvider[];
@@ -38,7 +38,7 @@ export function ComposerTextareaClient({
   focusOnMount = false,
 }: ComposerTextareaProps) {
   const queryClient = useQueryClient();
-  const [initial] = useState(() => agentRichContentToEditorDocument(value));
+  const [initial] = useState(() => agentMessageToEditorDocument(value));
   const [initialFocusOnMount] = useState(focusOnMount);
   const containerRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
@@ -114,7 +114,7 @@ export function ComposerTextareaClient({
             if (!update.docChanged || syncingExternalValueRef.current) return;
             const text = update.state.doc.toString();
             onValueChangeRef.current(
-              agentRichContentFromEditorDocument(text, composerReferences(update.state)),
+              agentMessageFromEditorDocument(text, composerReferences(update.state)),
             );
           }),
           EditorView.theme({
@@ -183,7 +183,7 @@ export function ComposerTextareaClient({
   useEffect(() => {
     const view = viewRef.current;
     if (view === null) return;
-    const next = agentRichContentToEditorDocument(value);
+    const next = agentMessageToEditorDocument(value);
     const currentText = view.state.doc.toString();
     if (
       currentText === next.text &&

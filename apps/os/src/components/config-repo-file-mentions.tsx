@@ -15,10 +15,10 @@ export function configRepoFileMentionProvider(projectId: string): ComposerSugges
         label: path,
         type: "file",
         completion: {
-          type: "reference" as const,
+          type: "attachment" as const,
           display: `@${path}`,
           target: {
-            kind: "config-repo-file" as const,
+            type: "repo-file" as const,
             repoPath: "/repos/config" as const,
             path,
           },

@@ -1,6 +1,7 @@
 import { memo, useCallback, useLayoutEffect, useRef, useState } from "react";
 import { Link } from "@tanstack/react-router";
 import type { AgentRuntime } from "@iterate-com/shared/agent-events";
+import { decodeAgentMessageAttachments } from "@iterate-com/shared/agent-message-attachments";
 import {
   BanIcon,
   ChevronRightIcon,
@@ -490,41 +491,53 @@ export function QueuedMessagesPanel({
 }
 
 function UserMessageBody({ item }: { item: AgentUiMessageItem }) {
+  const decodedMessage =
+    item.attachments === undefined
+      ? null
+      : decodeAgentMessageAttachments(item.text, item.attachments);
   return (
     <>
       {item.via == null ? null : <MessageViaLabel via={item.via} className="opacity-70" />}
       {item.text === "" ? null : item.via == null ? (
-        item.richContent === undefined ? (
+        decodedMessage === null ? (
           <div className="whitespace-pre-wrap leading-6">{item.text}</div>
         ) : (
           <div className="whitespace-pre-wrap leading-6">
-            {item.richContent.nodes.map((node, index) => {
-              if (node.type === "text") return <span key={`text-${index}`}>{node.text}</span>;
+            {decodedMessage.references.flatMap((reference, index) => {
+              const previousEnd = decodedMessage.references[index - 1]?.to ?? 0;
               const warning = referenceResolutionWarning(
-                item.referenceResolutions?.[node.occurrenceId],
+                item.referenceResolutions?.[reference.attachment.id],
               );
-              return (
+              return [
+                <span key={`text-${reference.from}`}>
+                  {decodedMessage.text.slice(previousEnd, reference.from)}
+                </span>,
                 <Badge
-                  key={node.occurrenceId}
+                  key={`${reference.attachment.id}-${reference.from}`}
                   variant="outline"
                   className={cn(
                     "mx-0.5 inline-flex max-w-full align-middle font-mono font-normal",
                     warning !== null &&
                       "border-amber-500/50 bg-amber-500/10 text-amber-800 dark:text-amber-300",
                   )}
-                  title={warning ?? node.target.path}
-                  aria-label={warning === null ? undefined : `${node.display}: ${warning}`}
-                  data-reference-kind={node.target.kind}
-                  data-reference-resolution={item.referenceResolutions?.[node.occurrenceId]?.status}
+                  title={warning ?? reference.attachment.path}
+                  aria-label={warning === null ? undefined : `${reference.display}: ${warning}`}
+                  data-attachment-type={reference.attachment.type}
+                  data-reference-resolution={
+                    item.referenceResolutions?.[reference.attachment.id]?.status
+                  }
                 >
                   {warning === null ? (
                     <FileIcon className="size-3" aria-hidden="true" />
                   ) : (
                     <CircleAlertIcon className="size-3" aria-hidden="true" />
                   )}
-                  <span className="truncate">{node.display}</span>
-                </Badge>
-              );
+                  <span className="truncate">{reference.display}</span>
+                </Badge>,
+                ...(index === decodedMessage.references.length - 1
+                  ? [<span key="text-tail">{decodedMessage.text.slice(reference.to)}</span>]
+                  : []),
+              ];
             })}
           </div>
         )

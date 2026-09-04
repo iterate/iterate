@@ -7,6 +7,7 @@ import {
   type CompletionSource,
 } from "@codemirror/autocomplete";
 import type { QueryClient } from "@tanstack/react-query";
+import { agentMessageAttachmentId } from "@iterate-com/shared/agent-message-attachments";
 import { isItxTransportError } from "iterate/sdk/itx/react";
 import { addComposerReference } from "~/components/composer-references.ts";
 import {
@@ -66,13 +67,15 @@ function completion(active: ActiveComposerSuggestion, suggestion: ComposerSugges
         selection: { anchor: edit.caret },
         annotations: pickedCompletion.of(picked),
         effects:
-          edit.reference === undefined
+          edit.attachment === undefined
             ? []
             : [
                 addComposerReference.of({
-                  type: "reference",
-                  occurrenceId: globalThis.crypto.randomUUID(),
-                  ...edit.reference,
+                  ...edit.attachment,
+                  attachment: {
+                    id: agentMessageAttachmentId(edit.attachment.target),
+                    ...edit.attachment.target,
+                  },
                 }),
               ],
       });

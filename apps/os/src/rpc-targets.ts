@@ -60,10 +60,7 @@ import type {
   ValidateProjectAppSessionInput,
   ValidatedProjectAppSession,
 } from "@iterate-com/auth-contract/worker";
-import {
-  decodeAgentRichContent,
-  deriveAgentContextRepoFileRefs,
-} from "@iterate-com/shared/agent-rich-content";
+import { decodeAgentMessageAttachments } from "@iterate-com/shared/agent-message-attachments";
 import type { AppConfig } from "./config.ts";
 import { parseConfig } from "./config.ts";
 import { closeItxSessionTransport } from "./session-transport.ts";
@@ -5227,9 +5224,11 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
    * `{ type: "agent", path }` and does NOT refill the receiver's autonomous
    * turn budget, so agent↔agent reply loops stay bounded; from anywhere else
    * (web UI, CLI, MCP session) it is a user message. The agent must already
-   * have been created explicitly. Optional files
-   * are stored in project file storage and ride the message as attachments
-   * (images stay visible to vision-capable models).
+   * have been created explicitly. `attachments` are typed resources addressed
+   * from `message` with Markdown-like links such as
+   * `[@AGENTS.md](attachment:config-repo/AGENTS.md)`. Optional files are stored
+   * in project file storage and ride the same event (images stay visible to
+   * vision-capable models).
    */
   async message(
     input:
@@ -5237,42 +5236,32 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
       | {
           message: string;
           files?: Array<{ contentType: string; data: FileData; filename: string }>;
-          richContent?: {
-            version: 1;
-            nodes: Array<
-              | { type: "text"; text: string }
-              | {
-                  type: "reference";
-                  occurrenceId: string;
-                  display: string;
-                  target: {
-                    kind: "config-repo-file";
-                    repoPath: "/repos/config";
-                    path: string;
-                  };
-                }
-            >;
-          };
+          attachments?: Array<{
+            id: string;
+            type: "repo-file";
+            repoPath: "/repos/config";
+            path: string;
+          }>;
         },
   ): Promise<StreamEvent> {
     await this.#assertCreated();
     const {
       message,
       files: fileInputs,
-      richContent: richContentInput,
+      attachments: attachmentInputs,
     } = typeof input === "string"
-      ? { message: input, files: undefined, richContent: undefined }
-      : { message: input.message, files: input.files, richContent: input.richContent };
-    const richContent =
-      richContentInput === undefined
+      ? { message: input, files: undefined, attachments: undefined }
+      : { message: input.message, files: input.files, attachments: input.attachments };
+    const decodedMessage =
+      attachmentInputs === undefined
         ? undefined
-        : decodeAgentRichContent(message, richContentInput);
-    if (richContent === null) {
+        : decodeAgentMessageAttachments(message, attachmentInputs);
+    if (decodedMessage === null) {
       throw new Error(
-        "agent.message richContent must be a known document whose plain projection equals message.",
+        "agent.message attachments must each have a unique id and a matching inline attachment link.",
       );
     }
-    const refs = richContent === undefined ? [] : deriveAgentContextRepoFileRefs(richContent);
+    const attachments = decodedMessage?.attachments;
     const actor = this.#contextActor();
     const files =
       fileInputs === undefined || fileInputs.length === 0
@@ -5290,9 +5279,8 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
         content: message,
         actor,
         ...(files === undefined ? {} : { files }),
-        ...(richContent === undefined ? {} : { richContent }),
-        ...(refs.length === 0 ? {} : { refs }),
-        ...(refs.length === 0
+        ...(attachments === undefined ? {} : { attachments }),
+        ...(attachments === undefined
           ? {}
           : { llmRequestPolicy: { behaviour: "dont-trigger-request" as const } }),
       },

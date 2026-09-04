@@ -1,18 +1,16 @@
 import { EditorState, StateEffect, StateField, type Transaction } from "@codemirror/state";
 import { Decoration, EditorView, type DecorationSet } from "@codemirror/view";
-import type { AgentRichContentReferenceRange } from "@iterate-com/shared/agent-rich-content";
+import type { AgentMessageAttachmentRange } from "@iterate-com/shared/agent-message-attachments";
 
 type ReferenceFieldValue = {
   decorations: DecorationSet;
-  references: AgentRichContentReferenceRange[];
+  references: AgentMessageAttachmentRange[];
 };
 
-export const setComposerReferences = StateEffect.define<AgentRichContentReferenceRange[]>();
-export const addComposerReference = StateEffect.define<AgentRichContentReferenceRange>();
+export const setComposerReferences = StateEffect.define<AgentMessageAttachmentRange[]>();
+export const addComposerReference = StateEffect.define<AgentMessageAttachmentRange>();
 
-function referenceDecorations(
-  references: readonly AgentRichContentReferenceRange[],
-): DecorationSet {
+function referenceDecorations(references: readonly AgentMessageAttachmentRange[]): DecorationSet {
   return Decoration.set(
     references.map((reference) =>
       // Keep the durable display text in the document and style it as a pill.
@@ -21,9 +19,9 @@ function referenceDecorations(
       Decoration.mark({
         class: "cm-agent-reference",
         attributes: {
-          "aria-label": `File reference ${reference.target.path}`,
-          "data-reference-kind": reference.target.kind,
-          title: reference.target.path,
+          "aria-label": `File attachment ${reference.attachment.path}`,
+          "data-attachment-type": reference.attachment.type,
+          title: reference.attachment.path,
         },
       }).range(reference.from, reference.to),
     ),
@@ -32,23 +30,23 @@ function referenceDecorations(
 }
 
 function referencesInDocumentOrder(
-  references: readonly AgentRichContentReferenceRange[],
-): AgentRichContentReferenceRange[] {
+  references: readonly AgentMessageAttachmentRange[],
+): AgentMessageAttachmentRange[] {
   return references.toSorted(
     (left, right) =>
       left.from - right.from ||
       left.to - right.to ||
-      left.occurrenceId.localeCompare(right.occurrenceId),
+      left.attachment.id.localeCompare(right.attachment.id),
   );
 }
 
 function mapReferences(
-  references: readonly AgentRichContentReferenceRange[],
+  references: readonly AgentMessageAttachmentRange[],
   transaction: Transaction,
-): AgentRichContentReferenceRange[] {
+): AgentMessageAttachmentRange[] {
   if (!transaction.docChanged) return [...references];
   const text = transaction.newDoc.toString();
-  return references.flatMap((reference): AgentRichContentReferenceRange[] => {
+  return references.flatMap((reference): AgentMessageAttachmentRange[] => {
     // Opposite associations keep typing at either pill boundary outside it.
     const from = transaction.changes.mapPos(reference.from, 1);
     const to = transaction.changes.mapPos(reference.to, -1);
@@ -76,13 +74,13 @@ const referenceField = StateField.define<ReferenceFieldValue>({
 
 export const composerReferenceExtension = referenceField;
 
-export function composerReferences(state: EditorState): readonly AgentRichContentReferenceRange[] {
+export function composerReferences(state: EditorState): readonly AgentMessageAttachmentRange[] {
   return state.field(referenceField).references;
 }
 
 export function sameComposerReferences(
-  left: readonly AgentRichContentReferenceRange[],
-  right: readonly AgentRichContentReferenceRange[],
+  left: readonly AgentMessageAttachmentRange[],
+  right: readonly AgentMessageAttachmentRange[],
 ): boolean {
   return (
     left.length === right.length &&
@@ -92,11 +90,11 @@ export function sameComposerReferences(
         candidate !== undefined &&
         reference.from === candidate.from &&
         reference.to === candidate.to &&
-        reference.occurrenceId === candidate.occurrenceId &&
         reference.display === candidate.display &&
-        reference.target.kind === candidate.target.kind &&
-        reference.target.repoPath === candidate.target.repoPath &&
-        reference.target.path === candidate.target.path
+        reference.attachment.id === candidate.attachment.id &&
+        reference.attachment.type === candidate.attachment.type &&
+        reference.attachment.repoPath === candidate.attachment.repoPath &&
+        reference.attachment.path === candidate.attachment.path
       );
     })
   );

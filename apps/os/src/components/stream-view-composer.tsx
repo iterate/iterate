@@ -1,10 +1,10 @@
 import { useState } from "react";
 import { parse as parseYaml } from "yaml";
 import {
-  flattenAgentRichContent,
-  plainAgentRichContent,
-  type AgentRichContentV1,
-} from "@iterate-com/shared/agent-rich-content";
+  agentMessageToEditorDocument,
+  emptyAgentMessageDraft,
+  type AgentMessageAttachment,
+} from "@iterate-com/shared/agent-message-attachments";
 import type { AgentUiPresenceEntry } from "@iterate-com/ui/components/events/agent-ui-reducer";
 import { StreamEventInput, type StreamEvent } from "iterate/processors";
 import type { StreamBrowserStore } from "~/domains/streams/client-libraries/browser/stream-browser-store.ts";
@@ -28,11 +28,14 @@ export type StreamMessageComposer = {
   placeholder?: string;
   suggestionProviders?: readonly ComposerSuggestionProvider[];
   onInterrupt?: (llmRequestOffset: number) => Promise<void>;
-  onSubmit: (input: { message: string; richContent: AgentRichContentV1 }) => Promise<StreamEvent>;
+  onSubmit: (input: {
+    content: string;
+    attachments: AgentMessageAttachment[];
+  }) => Promise<StreamEvent>;
   onSubmitFiles?: (input: {
     files: File[];
-    message: string;
-    richContent: AgentRichContentV1;
+    content: string;
+    attachments: AgentMessageAttachment[];
   }) => Promise<StreamEvent>;
 };
 
@@ -80,7 +83,7 @@ export function StreamViewComposer({
   const [mode, setMode] = useState<AgentComposerMode>(
     defaultMode ?? (messageComposer ? "message" : "raw"),
   );
-  const [messageDocument, setMessageDocument] = useState(() => plainAgentRichContent());
+  const [message, setMessage] = useState(() => emptyAgentMessageDraft());
   const attachments = useComposerAttachments();
   const [rawText, setRawText] = useState(DEFAULT_RAW_EVENT_YAML);
   const [submitError, setSubmitError] = useState<string | undefined>();
@@ -101,7 +104,7 @@ export function StreamViewComposer({
   }
 
   async function submitMessage() {
-    const message = flattenAgentRichContent(messageDocument);
+    const visibleText = agentMessageToEditorDocument(message).text;
     if (messageComposer == null) return;
     const { onSubmit, onSubmitFiles } = messageComposer;
     // Time the whole submit: this is the real consume-own-append t0, and the
@@ -114,23 +117,19 @@ export function StreamViewComposer({
     };
     if (attachments.files.length > 0 && onSubmitFiles != null) {
       const didSubmit = await runSubmit(() =>
-        measured(() =>
-          onSubmitFiles({ files: attachments.files, message, richContent: messageDocument }),
-        ),
+        measured(() => onSubmitFiles({ files: attachments.files, ...message })),
       );
       if (didSubmit) {
-        setMessageDocument(plainAgentRichContent());
+        setMessage(emptyAgentMessageDraft());
         attachments.clearFiles();
         onNudgeDeliveries();
       }
       return;
     }
-    if (message.trim() === "") return;
-    const didSubmit = await runSubmit(() =>
-      measured(() => onSubmit({ message, richContent: messageDocument })),
-    );
+    if (visibleText.trim() === "") return;
+    const didSubmit = await runSubmit(() => measured(() => onSubmit(message)));
     if (didSubmit) {
-      setMessageDocument(plainAgentRichContent());
+      setMessage(emptyAgentMessageDraft());
       onNudgeDeliveries();
     }
   }
@@ -179,11 +178,11 @@ export function StreamViewComposer({
           ? {}
           : {
               message: {
-                value: messageDocument,
-                onValueChange: setMessageDocument,
+                value: message,
+                onValueChange: setMessage,
                 onSubmit: submitMessage,
                 canSubmit:
-                  flattenAgentRichContent(messageDocument).trim() !== "" ||
+                  agentMessageToEditorDocument(message).text.trim() !== "" ||
                   (attachments.files.length > 0 && messageComposer.onSubmitFiles != null),
                 ...(attachmentChips == null ? {} : { attachments: attachmentChips }),
                 ...(messageComposer.onSubmitFiles == null

@@ -7,10 +7,10 @@ import { completionStatus } from "@codemirror/autocomplete";
 import { Transaction } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import {
-  flattenAgentRichContent,
-  plainAgentRichContent,
-  type AgentRichContentV1,
-} from "@iterate-com/shared/agent-rich-content";
+  agentMessageToEditorDocument,
+  emptyAgentMessageDraft,
+  type AgentMessageDraft,
+} from "@iterate-com/shared/agent-message-attachments";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { ComposerTextareaClient as ComposerTextarea } from "./composer-textarea.client.tsx";
 import type { ComposerSuggestionProvider } from "./composer-suggestions.ts";
@@ -40,10 +40,10 @@ function fileSuggestion(path: string) {
     id: path,
     label: path,
     completion: {
-      type: "reference" as const,
+      type: "attachment" as const,
       display: `@${path}`,
       target: {
-        kind: "config-repo-file" as const,
+        type: "repo-file" as const,
         repoPath: "/repos/config" as const,
         path,
       },
@@ -69,9 +69,9 @@ function Harness({
 }: {
   source?: ComposerSuggestionProvider;
   submit?: () => void;
-  onDocumentChange?: (document: AgentRichContentV1) => void;
+  onDocumentChange?: (message: AgentMessageDraft) => void;
 }) {
-  const [value, setValue] = useState(() => plainAgentRichContent());
+  const [value, setValue] = useState(() => emptyAgentMessageDraft());
   const [queryClient] = useState(
     () =>
       new QueryClient({
@@ -141,9 +141,10 @@ test("typing a trigger keeps editor focus and Enter inserts an atomic reference"
   );
   expect(view.state.doc.toString()).toBe("@AGENTS.md ");
   expect(document.querySelector(".cm-agent-reference")?.textContent).toBe("@AGENTS.md");
-  const documentValue = onDocumentChange.mock.calls.at(-1)?.[0] as AgentRichContentV1;
-  expect(flattenAgentRichContent(documentValue)).toBe("@AGENTS.md ");
-  expect(documentValue.nodes.some((node) => node.type === "reference")).toBe(true);
+  const message = onDocumentChange.mock.calls.at(-1)?.[0] as AgentMessageDraft;
+  expect(agentMessageToEditorDocument(message).text).toBe("@AGENTS.md ");
+  expect(message.content).toBe("[@AGENTS.md](attachment:config-repo/AGENTS.md) ");
+  expect(message.attachments).toHaveLength(1);
 
   await act(async () => {
     view.dispatch({ changes: { from: 10, to: 11 }, selection: { anchor: 10 } });
