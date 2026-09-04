@@ -109,6 +109,14 @@ export type BrowserFeedState = {
    * entire stream a second time.
    */
   provisionalAgentItemIndexes: Record<string, number>;
+  /**
+   * Row address of the most recently settled activity, matching the
+   * reducer's `lastSettledActivity` correction slot: a script-attributed
+   * status (source.script) that journals just after its turn's settle
+   * re-emits that activity with the same id, and the row must be REPLACED,
+   * not inserted as a duplicate card. One slot, overwritten per settle.
+   */
+  lastSettledActivityRow: { id: string; localIndex: number } | null;
 };
 
 export function initialBrowserFeedState(): BrowserFeedState {
@@ -119,6 +127,7 @@ export function initialBrowserFeedState(): BrowserFeedState {
     nextLocalIndex: 0,
     lastAgentWake: null,
     provisionalAgentItemIndexes: {},
+    lastSettledActivityRow: null,
   };
 }
 
@@ -169,6 +178,7 @@ export function planBrowserFeedOps(
   let nextLocalIndex = start.nextLocalIndex;
   let lastAgentWake = start.lastAgentWake;
   const provisionalAgentItemIndexes = { ...start.provisionalAgentItemIndexes };
+  let lastSettledActivityRow = start.lastSettledActivityRow;
   const ops: FeedOp[] = [];
   // The op for the row `open` points at, when that row is being mutated within
   // this batch — so we update it in place instead of pushing a fresh op per event.
@@ -183,7 +193,13 @@ export function planBrowserFeedOps(
     const settled = reduceAgentUi(agent, event as unknown as Parameters<typeof reduceAgentUi>[1]);
     agent = settled.endState;
     for (const item of settled.items) {
-      const existingIndex = provisionalAgentItemIndexes[item.id];
+      const provisionalIndex = provisionalAgentItemIndexes[item.id];
+      const existingIndex =
+        provisionalIndex !== undefined
+          ? provisionalIndex
+          : lastSettledActivityRow !== null && lastSettledActivityRow.id === item.id
+            ? lastSettledActivityRow.localIndex
+            : undefined;
       if (existingIndex !== undefined) {
         ops.push({
           kind: "replace",
@@ -192,7 +208,9 @@ export function planBrowserFeedOps(
           lastOffset: event.offset,
           data: item,
         });
-        if (!hasInferredScriptOutcome(item)) delete provisionalAgentItemIndexes[item.id];
+        if (provisionalIndex !== undefined && !hasInferredScriptOutcome(item)) {
+          delete provisionalAgentItemIndexes[item.id];
+        }
         continue;
       }
       if (item.kind === "stream-woken" && lastAgentWake !== null) {
@@ -218,6 +236,9 @@ export function planBrowserFeedOps(
       });
       if (hasInferredScriptOutcome(item)) {
         provisionalAgentItemIndexes[item.id] = nextLocalIndex;
+      }
+      if (item.kind === "activity") {
+        lastSettledActivityRow = { id: item.id, localIndex: nextLocalIndex };
       }
       lastAgentWake =
         item.kind === "stream-woken" ? { localIndex: nextLocalIndex, count: 1 } : null;
@@ -311,6 +332,14 @@ export function planBrowserFeedOps(
         provisionalAgentItemIndexes,
         agent,
       ),
+      // Retain the slot only while the reducer still holds the matching
+      // correction candidate — once it moves on, no re-emit with this id can
+      // occur and the address is dead weight.
+      lastSettledActivityRow:
+        lastSettledActivityRow !== null &&
+        agent.lastSettledActivity?.id === lastSettledActivityRow.id
+          ? lastSettledActivityRow
+          : null,
     },
   };
 }
@@ -324,6 +353,18 @@ export function isCurrentBrowserFeedState(value: unknown): value is BrowserFeedS
   if (!isNonNegativeSafeInteger(candidate.nextLocalIndex)) return false;
   if (!isLastAgentWake(candidate.lastAgentWake)) return false;
   if (!isRecord(candidate.provisionalAgentItemIndexes)) return false;
+  const settledRow = candidate.lastSettledActivityRow;
+  if (settledRow === undefined) return false;
+  if (
+    settledRow !== null &&
+    !(
+      isRecord(settledRow) &&
+      typeof settledRow.id === "string" &&
+      isNonNegativeSafeInteger(settledRow.localIndex)
+    )
+  ) {
+    return false;
+  }
   const agent = candidate.agent;
   const nextLocalIndex = candidate.nextLocalIndex;
   if (

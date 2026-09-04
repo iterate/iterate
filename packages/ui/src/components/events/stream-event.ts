@@ -10,6 +10,15 @@ export type StreamEventSource = {
     slug: string;
     version: string;
   };
+  /** Host-stamped script provenance: which script run wrote this event.
+   * Trusted — StreamRpcTarget.append strips caller-supplied values before
+   * commit — so the agent-ui fold may attribute events to exact code steps
+   * by executionId. */
+  script?: {
+    executionId: string;
+    streamPath: string;
+    scriptRunRequestedEventOffset: number;
+  };
 };
 
 export type StreamEvent<Type extends string = string, Payload = unknown> = {
@@ -20,4 +29,8 @@ export type StreamEvent<Type extends string = string, Payload = unknown> = {
   idempotencyKey?: string;
   offset: number;
   createdAt: string;
+  /** The stream the event was committed on, as itx envelopes carry it.
+   * Consumers that feed the reducer without backfilling `streamPath`
+   * (the browser-feed projector) still provide stream identity here. */
+  path?: string;
 };

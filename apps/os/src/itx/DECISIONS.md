@@ -527,3 +527,18 @@ so publish now happens on the awaited authenticate result. One suggestion stays
 NOT adopted: auto-prefixing query keys with the slug (it broke the existing
 `invalidateQueries`/`setQueryData` sites and duplicated the project id the keys
 already carry — the ambient slug drives the connection, not the cache key).
+
+## D-post-v4: source.script is stamped by StreamRpcTarget.append, never accepted
+
+Script provenance on journal events (`event.source.script = { executionId,
+streamPath, scriptRunRequestedEventOffset }`) is HOST TRUTH, unlike the
+`source.processor` stamp, which the schema documents as "a claim, not
+authentication". `StreamRpcTarget.append` strips any caller-supplied
+`source.script` and fills the slot only from the server-minted
+`StreamContext` of the appending itx handle (`kind: "script-execution"`,
+minted per run by the capability host and threaded through `itxForScope`).
+Rationale: the first consumer — the agent UI attributing `summary-updated`
+events to exact code steps — corrects already-rendered cards, so a
+forgeable stamp would let script text rewrite UI history. External sessions
+and non-script scopes journal no stamp at all. Guard:
+`e2e/vitest/script-append-provenance.itx.e2e.test.ts`.

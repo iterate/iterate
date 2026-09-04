@@ -443,6 +443,13 @@ export type AgentUiState = {
    * to tell a this-turn status from stale previous-turn text (code steps
    * inherit `summaryActivity` at birth regardless of age). */
   summaryActivityUpdatedAtMs: number | null;
+  /** The most recently settled activity, kept so a script-attributed status
+   * (source.script) that journaled just AFTER its turn's settle — scripts
+   * batch the append with sendMessage and their return — can still land on
+   * the card it describes. Corrections apply ONLY when this activity
+   * actually contains the named executionId; each settle overwrites the
+   * slot, so an old card can never be rewritten. */
+  lastSettledActivity: AgentUiActivity | null;
   /** The stream/agent is paused (agent/paused or stream/paused, uncleared by
    * a resume). A paused loop owes no follow-up round, so the "processing"
    * inference must not claim one. */
@@ -572,6 +579,7 @@ export const AgentUiStateSchema = z
     provisionalActivities: z.record(z.string(), AgentUiActivitySchema),
     summaryActivity: z.string().nullable(),
     summaryActivityUpdatedAtMs: z.number().finite().nullable(),
+    lastSettledActivity: AgentUiActivitySchema.nullable(),
     paused: z.boolean(),
   })
   .superRefine((state, context) => {
@@ -613,6 +621,7 @@ export function initialAgentUiState(): AgentUiState {
     provisionalActivities: {},
     summaryActivity: null,
     summaryActivityUpdatedAtMs: null,
+    lastSettledActivity: null,
     paused: false,
   };
 }
@@ -1028,23 +1037,71 @@ function reduceAgentUiEvent(
     case AGENT_SUMMARY_UPDATED: {
       const activity = readString(event, "activity");
       if (activity == null || activity === "") return state;
-      // Summaries are usually appended by the running script itself, so the
-      // running code step picks the new text up immediately (live rounds show
-      // it before the settle stamp lands).
+      const base = {
+        ...state,
+        summaryActivity: activity,
+        summaryActivityUpdatedAtMs: timestampMs,
+      };
+      const script = event.source?.script;
+      // Host-stamped provenance: the status belongs to ONE script run, so
+      // place it exactly. A stamp from another stream's script set THIS
+      // stream's status deliberately (cross-stream append) — record the
+      // stream-level text but attribute no step. Stream identity comes from
+      // whichever field the consumer supplies: mobile backfills
+      // `streamPath`, the browser-feed projector passes committed envelopes
+      // whose stream lives in `path`.
+      if (script !== undefined && script.streamPath === (event.streamPath || event.path)) {
+        if (state.live != null) {
+          const index = state.live.steps.findIndex(
+            (step) => step.kind === "code" && step.executionId === script.executionId,
+          );
+          if (index !== -1) {
+            const steps = state.live.steps.map((step, at) =>
+              at === index && step.kind === "code" ? { ...step, activitySummary: activity } : step,
+            );
+            return { ...base, live: { ...state.live, steps } };
+          }
+        }
+        // The named run's card already settled: scripts batch the status
+        // append with sendMessage and their return, so the event can journal
+        // just after the settle that flushed the card. Correct the settled
+        // card (same id — consumers replace the item) — but only when it
+        // really contains the run.
+        // The next round may already have opened a new live activity by the
+        // time this lands — executionId containment is the guard, not
+        // liveness: the named run being IN the retained card is what makes
+        // the correction safe.
+        const settled = state.lastSettledActivity;
+        if (
+          settled !== null &&
+          settled.steps.some(
+            (step) => step.kind === "code" && step.executionId === script.executionId,
+          )
+        ) {
+          const corrected: AgentUiActivity = {
+            ...settled,
+            steps: settled.steps.map((step) =>
+              step.kind === "code" && step.executionId === script.executionId
+                ? { ...step, activitySummary: activity }
+                : step,
+            ),
+          };
+          return emitItem({ ...base, lastSettledActivity: corrected }, items, corrected);
+        }
+        return base;
+      }
+      if (script !== undefined) return base;
+      // No stamp (an event from before provenance shipped, or a non-script
+      // author): the old behavior — the running code step picks it up.
       if (state.live != null) {
         const steps = state.live.steps.map((step) =>
           step.kind === "code" && step.status === "running"
             ? { ...step, activitySummary: activity }
             : step,
         );
-        return {
-          ...state,
-          summaryActivity: activity,
-          summaryActivityUpdatedAtMs: timestampMs,
-          live: { ...state.live, steps },
-        };
+        return { ...base, live: { ...state.live, steps } };
       }
-      return { ...state, summaryActivity: activity, summaryActivityUpdatedAtMs: timestampMs };
+      return base;
     }
 
     case AGENT_TOKEN_USAGE_REPORTED: {
@@ -1369,7 +1426,11 @@ function settleLive(state: AgentUiState, endedAtMs: number, items: AgentUiItem[]
       delete provisionalActivities[oldestId];
     }
   }
-  return emitItem({ ...state, live: null, provisionalActivities }, items, settled);
+  return emitItem(
+    { ...state, live: null, provisionalActivities, lastSettledActivity: settled },
+    items,
+    settled,
+  );
 }
 
 function flushQueuedUserMessages(state: AgentUiState, items: AgentUiItem[]): AgentUiState {
@@ -1458,7 +1519,18 @@ function correctProvisionalCodeStep(
   } else {
     delete provisionalActivities[corrected.id];
   }
-  return emitItem({ ...state, provisionalActivities }, items, corrected);
+  return emitItem(
+    {
+      ...state,
+      provisionalActivities,
+      // Keep the status-correction slot current: a stamped status landing
+      // after this durable correction must re-emit THIS version, not the
+      // stale inferred one.
+      ...(state.lastSettledActivity?.id === corrected.id && { lastSettledActivity: corrected }),
+    },
+    items,
+    corrected,
+  );
 }
 
 function applyDurableCodeOutcome(
