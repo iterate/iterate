@@ -16,7 +16,10 @@ import { adminSecret, deployedBaseUrl, withItxSession } from "./test-helpers.ts"
 // would not match the pinned failure and would read as an unrelated red.
 const failReset = createFailing(
   test.skipIf(deployedBaseUrl() === null),
-  /isolate exceeded its memory limit and was reset/i,
+  // Two spellings of one death: the second is what the platform reports when the
+  // isolate goes down while a storage operation is in flight (seen in CI on the
+  // first read after kill(), same as the first).
+  /isolate exceeded its memory limit and was reset|caused object to be reset/i,
   { timeoutMs: 120_000 },
 );
 
