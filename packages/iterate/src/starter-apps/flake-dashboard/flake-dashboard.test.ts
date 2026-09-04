@@ -106,7 +106,7 @@ test("a multi-suite test stays visible while any of its suites still carries it"
   expect(renderBody(h.state())).toContain("`flake sentinel`");
 });
 
-test("the recent column shows up to 10 outcomes from any branch as emojis, oldest first", async () => {
+test("streak squares show up to 10 outcomes from any branch, oldest first", async () => {
   const h = makeHarness();
   await h.append(birth(), runRecorded(0, [record("deploy", "flake-fail", { at: day(0) })]));
   for (let i = 1; i <= 8; i++) {
@@ -120,15 +120,33 @@ test("the recent column shows up to 10 outcomes from any branch as emojis, oldes
       branch: "some-pr",
     }),
   );
-  expect(renderBody(h.state())).toContain("🟥🟩🟩🟩🟩🟩🟩🟩🟩❌");
+  const row = renderBody(h.state())
+    .split("\n")
+    .find((line) => line.startsWith("`deploy`"))!;
+  // Squares in recorded order, each linking to the commit that produced it.
+  expect(row.match(/🟥|🟩|❌/gu)).toEqual(["🟥", ...Array<string>(8).fill("🟩"), "❌"]);
+  expect(row).toContain("[🟥](https://github.com/iterate/iterate/commit/commit-0)");
+  expect(row).toContain("[❌](https://github.com/iterate/iterate/commit/commit-99)");
+  // The numeric default-branch streak rides below the squares.
+  expect(row).toContain("<br>8× pass (main)");
 
   // An 11th outcome evicts the oldest: the bar caps at 10.
   await h.append(runRecorded(10, [record("deploy", "pass", { at: day(10) })]));
   expect(h.state().tests.deploy!.recent).toEqual([
-    ...Array<string>(8).fill("pass"),
-    "unexpected-error",
-    "pass",
+    ...Array.from({ length: 8 }, (_, i) => ({ outcome: "pass", commit: `commit-${i + 1}` })),
+    { outcome: "unexpected-error", commit: "commit-99" },
+    { outcome: "pass", commit: "commit-10" },
   ]);
+});
+
+test("info and stats render as line-per-fact cells with readable dates", async () => {
+  const h = makeHarness();
+  await h.append(birth(), runRecorded(1, [record("deploy", "flake-fail", { at: day(0) })]));
+  const row = renderBody(h.state())
+    .split("\n")
+    .find((line) => line.startsWith("`deploy`"))!;
+  expect(row).toContain("pattern: `/CPU startup time exceeded/`<br>suites: unit");
+  expect(row).toContain("runs: 1<br>flake rate: 100%<br>last flake: Jan 1, 12:00am");
 });
 
 test("default-branch streaks ignore other branches and reset on unexpected errors", async () => {
