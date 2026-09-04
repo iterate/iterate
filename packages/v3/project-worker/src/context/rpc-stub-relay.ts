@@ -17,9 +17,11 @@ import { RpcTarget as WorkersRpcTarget } from "cloudflare:workers";
 import type { IterateContextDurableObject } from "../iterate-context-durable-object.ts";
 import { dialRpcStubFetch } from "../fetch/rpc-stub-fetch.ts";
 import { codedError } from "../lib/errors.ts";
+import type { StreamEventInput } from "../stream/events.ts";
 import type { ItxExpression } from "./expression.ts";
 import {
   disposeRpcStub,
+  encodeRpcStubPagerAttachRequest,
   RPC_STUB_PAGER_KEEPALIVE_REQUEST,
   RPC_STUB_PAGER_WEBSOCKET_HEADER,
 } from "./rpc-stub-directory.ts";
@@ -121,31 +123,56 @@ class LentRpcStub extends WorkersRpcTarget {
 }
 
 /** Offer the DO a lend of `clientRpcStub` under `rpcStubKey`: dup the client's stub for the session,
- *  reserve a pager on the DO, open the pager WebSocket, and answer every page with a fresh
- *  `LentRpcStub`. The pager lives until disposed (explicitly, or at session end — `SessionTeardown`);
- *  its close makes the DO return the stub; when it was the key's LAST pager, the DO also un-sets every
- *  rule and subscription naming the key (iterate-context-durable-object.ts onPresence). Otherwise nothing: a
- *  replaced pager is a reconnect, and the new session's rule stands. */
+ *  open the pager WebSocket — its header carries the key AND `appendEvents`, the rule / the row that
+ *  names the key, which the DO appends in the turn it accepts the pager (ONE round trip; a refused
+ *  append comes back as the upgrade's answer with its code, and this function throws it with nothing
+ *  lent) — and answer every page with a fresh `LentRpcStub`. The pager lives until disposed
+ *  (explicitly, or at session end — `SessionTeardown`); its close makes the DO return the stub; when
+ *  it was the key's LAST pager, the DO also un-sets every rule and subscription naming the key
+ *  (iterate-context-durable-object.ts onPresence). Otherwise nothing: a replaced pager is a
+ *  reconnect, and the new session's rule stands. */
 export async function lendRpcStubOverPager(
   durableObject: IterateContextDurableObjectStub,
   clientRpcStub: ClientRpcStub,
   rpcStubKey: string,
+  appendEvents: StreamEventInput[],
   waitUntil: (p: Promise<unknown>) => void,
 ): Promise<{ dispose(): void }> {
-  const sessionRpcStub = clientRpcStub.dup(); // dup FIRST: a value that is not a stub fails here, before any reservation
-  const { transportId } = await durableObject.attachRpcStubPager({ rpcStubKey });
+  const sessionRpcStub = clientRpcStub.dup(); // dup FIRST: a value that is not a stub fails here, before any socket
   // ONE shared broken flag for the whole pager — every lent stub reads it; the single onRpcBroken
   // registration below flips it. (Registering per page would leak a listener per page: capnweb has
   // no offRpcBroken. rpc-stub-relay.test.ts pins it.)
   const clientSessionBroken = { value: false };
-  // THE PAGER WEBSOCKET, opened through the DO's fetch door carrying the transportId. Nothing but
-  // pages ever ride it (fetch-upgrade traffic has its own leg, fetch/rpc-stub-fetch.ts).
+  // THE PAGER WEBSOCKET, opened through the DO's fetch door: the header is the attach request.
+  // Nothing but pages ever ride the socket (fetch-upgrade traffic has its own leg,
+  // fetch/rpc-stub-fetch.ts).
   const response = await durableObject.fetch("https://rpc-stub-pager.internal/", {
-    headers: { Upgrade: "websocket", [RPC_STUB_PAGER_WEBSOCKET_HEADER]: transportId },
+    headers: {
+      Upgrade: "websocket",
+      [RPC_STUB_PAGER_WEBSOCKET_HEADER]: encodeRpcStubPagerAttachRequest({
+        rpcStubKey,
+        appendEvents,
+      }),
+    },
   });
   const pagerWebSocket = response.webSocket;
-  if (!pagerWebSocket)
-    throw new Error(`rpc stub pager upgrade returned ${response.status} without a WebSocket`);
+  if (response.status !== 101 || !pagerWebSocket) {
+    // The DO refused (a paused stream, a row the reduce rejects) or something is wrong with the
+    // door: nothing is lent — release the session's dup — and the refusal's CODE crosses to the
+    // caller as the same coded error the append door would have thrown.
+    disposeRpcStub(sessionRpcStub);
+    const refusal = (await response.json().catch(() => null)) as {
+      code?: string | null;
+      message?: string;
+    } | null;
+    throw Object.assign(
+      new Error(
+        refusal?.message ??
+          `rpc stub pager upgrade returned ${response.status} without a WebSocket`,
+      ),
+      refusal?.code ? { code: refusal.code } : {},
+    );
+  }
   pagerWebSocket.accept();
   // Keep this leg warm: a 30s keepalive the DO auto-answers via setWebSocketAutoResponse WITHOUT
   // waking it — defeats the ~100s idle-close and keeps the /api isolate warm. Dies with the isolate.

@@ -112,8 +112,8 @@ packages/v3/project-worker/
       dotted-path-proxy.ts       the prototype hop: unknown dotted members reduce into ONE invoke(expression)
       invoke-handle.ts           InvokeHandle + the two brands FacetHandle / RpcStubHandle
       rpc-stub-directory.ts      the rpc stubs, DO side, two layers: the BORROWED table (lendRpcStub /
-                                 invokeRpcStub / returnBorrowedRpcStubs), then the PAGERS
-                                 (attachRpcStubPager, the pager door, pages); presence events
+                                 invokeRpcStub / returnBorrowedRpcStubs), then the PAGERS (the one-shot
+                                 pager upgrade: key + the events that name it, pages); presence events
       rpc-stub-relay.ts          edge side: lendRpcStubOverPager (the DON'T-PIN relay), LentRpcStub
       worker-loader.ts           loadConfinedWorker, facetLoaderOwner, WorkerSource
       durable-object-names.ts    DurableObjectNameCodec, resolveContextPath
@@ -1232,8 +1232,9 @@ class IterateContextDurableObject extends DurableObject<Env> {
   // ── the rpc-stub plumbing the edge relay calls (OFF the itx surface) ──
   /** LAYER 1: lend a Workers-RPC stub under an opaque key — anyone with a route may. */
   lendRpcStub(input: { rpcStubKey: string; stub: unknown }): void;
-  /** LAYER 2: reserve a pager for a key; the relay then opens the pager WebSocket carrying the id. */
-  attachRpcStubPager(input: { rpcStubKey: string }): { transportId: string };
+  // LAYER 2 has no verb: the pager is the `x-itx-rpc-stub-pager` upgrade at `fetch`, whose header
+  // carries the key AND the events that name it (the rule / the row) — accepted and appended in one
+  // synchronous turn; a refused append is a 409 with the code, and no socket.
   /** In-memory socket facts { rpcStubPagers, borrowedRpcStubs, rpcStubPagesInFlight, dormant } for
    *  the hibernation probes. Not on the itx surface. */
   rpcStubTransportState(): {
@@ -1370,12 +1371,9 @@ sequenceDiagram
   participant E as edge relay (owns the stub)
   participant D as context DO
   C->>E: itx.provide("itx.robot", robotObject)
-  E->>D: attachRpcStubPager({ rpcStubKey: "itx.robot" })
-  D-->>E: { transportId }
-  E->>D: open the pager WebSocket (x-itx-rpc-stub-pager, carries transportId)
-  Note over D: rpc-stub/attached { rpcStubKey: "itx.robot" } (ephemeral)
-  E->>D: invoke(["itx", ["append", rewrite-rule-configured { match: "itx.robot", target: "itx.rpcStubs.get('itx.robot')" }]])
-  Note over D: the rule appended — pure data; the log never records the socket
+  E->>D: open the pager WebSocket — ONE request: x-itx-rpc-stub-pager = { rpcStubKey: "itx.robot", appendEvents: [rewrite-rule-configured { match: "itx.robot", target: "itx.rpcStubs.get('itx.robot')" }] }
+  Note over D: accept the socket, append the rule (pure data; the log never records the socket), then rpc-stub/attached { rpcStubKey: "itx.robot" } (ephemeral) — one synchronous turn; a paused stream answers 409 + STREAM_PAUSED and no socket
+  D-->>E: 101
   E-->>C: RewriteRuleHandle
   Note over D: ... idle: DO hibernates, the pager socket survives ...
   C->>D: itx.robot.move(10)   (via edge, invoke)

@@ -24,7 +24,9 @@
 //                 this session's teardown;
 //   • `subscribe` / `enableProcessor` / `disableProcessor` — each is visibly "build the event, append
 //                 it": the DO has `append` and no configuration verbs. `subscribe` is declared here
-//                 because its target may be a client's rpc stub.
+//                 because its target may be a client's rpc stub. When it is (as when `provide` lends),
+//                 the event RIDES THE PAGER UPGRADE and the DO appends it as it accepts the pager —
+//                 one round trip, and the DO owns both ends of what names a lent stub;
 // `provide` and `subscribe` hand back a DISPOSABLE handle (`using`): disposing un-does the act. capnweb
 // also disposes every exported handle when the session ends, so a rule or subscription made through
 // the verb is SESSION-SCOPED; one that must outlive the session is the raw event —
@@ -224,7 +226,10 @@ export class IterateContext extends RpcTarget {
         ),
       );
     }
-    // Built BEFORE the lend so a match the codec refuses throws with nothing lent.
+    // Built BEFORE the lend so a match the codec refuses throws with nothing lent. The rule rides the
+    // pager upgrade: the DO appends it in the turn it accepts the pager — ONE round trip, and the DO
+    // owns BOTH ends of a lent stub's rule (set on attach, un-set on the key's last pager close). A
+    // refusal (STREAM_PAUSED) is the upgrade's answer: it propagates from here with nothing lent.
     const ruleEvent = rewriteRuleConfiguredEvent(matchString, [
       "itx",
       "rpcStubs",
@@ -234,6 +239,7 @@ export class IterateContext extends RpcTarget {
       this.#durableObject,
       target,
       matchString,
+      [ruleEvent],
       this.#waitUntil,
     );
     // Registered with the session so a dying session recalls it even when the handle was never
@@ -242,14 +248,6 @@ export class IterateContext extends RpcTarget {
     // pager closes (a reconnect replaces the pager, so a late-dying old session cannot clobber the
     // new one's rule).
     this.#sessionTeardown.add(sessionTeardownKey, pager);
-    try {
-      await this.#append(ruleEvent);
-    } catch (e) {
-      // The DO refused the rule (STREAM_PAUSED): recall the lend, or a stub nothing names would
-      // linger for the session. Let the refusal propagate.
-      this.#sessionTeardown.dispose(sessionTeardownKey);
-      throw e;
-    }
     return new RewriteRuleHandle(() => this.#sessionTeardown.dispose(sessionTeardownKey));
   }
 
@@ -272,41 +270,36 @@ export class IterateContext extends RpcTarget {
     const name = input.name ?? `sub-${crypto.randomUUID().slice(0, 8)}`;
     const rpcStubKey = `subscription:${name}`;
     const sessionTeardownKey = this.#sessionTeardownKey(rpcStubKey);
-    let target = input.target as ItxExpressionInput | null;
-    let lentHere = false; // recorded, never inferred from the target's spelling
-    if (target !== null && typeof target !== "string" && !Array.isArray(target)) {
+    const consumes = input.consumes && { consumes: input.consumes };
+    if (input.target !== null && typeof input.target !== "string" && !Array.isArray(input.target)) {
+      // A LIVE callback: the row (built first — a name the reduce rejects throws with nothing lent)
+      // rides the pager upgrade and the DO appends it as it accepts the pager — one round trip, the
+      // DO owning both ends of the row's life (set on attach, un-set on the key's last pager close). A
+      // refusal (STREAM_PAUSED) is the upgrade's answer and propagates from here with nothing lent.
+      const row = subscriptionConfiguredEvent({
+        name,
+        target: ["itx", "rpcStubs", ["get", rpcStubKey]],
+        ...consumes,
+      });
       const pager = await lendRpcStubOverPager(
         this.#durableObject,
         input.target as ClientRpcStub,
         rpcStubKey,
+        [row],
         this.#waitUntil,
       );
       this.#sessionTeardown.add(sessionTeardownKey, pager);
-      lentHere = true;
-      target = ["itx", "rpcStubs", ["get", rpcStubKey]];
-    } else {
-      // An expression (or a removal): whatever THIS session lent under the name stops meaning it.
-      this.#sessionTeardown.dispose(sessionTeardownKey);
+      // The row is un-set by the DO when the key's last pager closes (see provide): the handle
+      // only recalls the lend.
+      return new SubscriptionHandle(name, () => this.#sessionTeardown.dispose(sessionTeardownKey));
     }
-    try {
-      await this.#append(
-        subscriptionConfiguredEvent({
-          name,
-          target,
-          ...(input.consumes && { consumes: input.consumes }),
-        }),
-      );
-    } catch (e) {
-      // The DO refused the row (STREAM_PAUSED, a name the reduce rejects): recall the lend, or a stub
-      // nothing names would linger for the session. Let the refusal propagate.
-      if (lentHere) this.#sessionTeardown.dispose(sessionTeardownKey);
-      throw e;
-    }
+    // An expression (or a removal): whatever THIS session lent under the name stops meaning it.
+    this.#sessionTeardown.dispose(sessionTeardownKey);
+    const target = input.target as ItxExpressionInput | null;
+    await this.#append(subscriptionConfiguredEvent({ name, target, ...consumes }));
     return new SubscriptionHandle(name, () => {
-      // A lent callback's row is un-set by the DO when its last pager closes (see provide); an
-      // expression target has no pager, so the handle un-sets the row itself.
-      if (lentHere) this.#sessionTeardown.dispose(sessionTeardownKey);
-      else if (target !== null)
+      // An expression target has no pager, so the handle un-sets the row itself.
+      if (target !== null)
         this.#appendInBackground(subscriptionConfiguredEvent({ name, target: null }));
     });
   }

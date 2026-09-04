@@ -73,13 +73,15 @@ invisible at today's small fixtures and only matter at scale — said where.
 
 ### Latency (deployed, client-facing)
 
-- **Fold `attachRpcStubPager` into the pager upgrade (latency/high, ≈ −12 LOC).** A `provide(stub)` /
-  `subscribe({target: fn})` today does the pager WS upgrade AND a separate `attachRpcStubPager`
-  edge→DO call. Carry the key in the upgrade header and delete the verb + its map + a 409 branch:
-  −1 edge→DO RTT per provide/subscribe-with-callback (1–3 ms same-colo, tens cross-colo), −1
-  subrequest. DO-only transport verb (off the itx surface). A protocol change touching
-  rpc-stub-directory + the relay + the fetch handler — test with the wire-frames e2e. Strong
-  candidate for the next round.
+- **LANDED 2026-09-04 — Fold `attachRpcStubPager` into the pager upgrade, AND the rule/row append
+  with it.** A `provide(stub)` / `subscribe({target: fn})` did the `attachRpcStubPager` RPC, the
+  pager WS upgrade, then its own `append` of the rule / the row: THREE edge→DO round trips. Now the
+  upgrade header carries `{ rpcStubKey, appendEvents }`, the DO accepts the socket and appends in one
+  synchronous turn (a refusal = 409 + the code, no socket): ONE round trip, −2 subrequests per
+  provide/subscribe-with-callback; the verb, its pending map and the 409 "attach first" branch are
+  gone. Pinned by `__workers-tests__/rpc-stub-pager-attach.test.ts` (census + atomic refusal) and
+  `e2e/rpc-stubs-attach-carries-the-rule.e2e.test.ts` (the rule's offset is below the key's
+  `attached`; red on the previous protocol).
 - **Defer the post-commit fan-out to a macrotask (latency/medium, +3/−1 stream.ts).** The append
   reply is gated on the commit's replication confirm (~10 ms deployed); the fan-out runs
   synchronously before the reply escapes, so today reply ≈ confirm + fan-out-sync. Queue the fan-out

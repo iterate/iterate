@@ -4,7 +4,7 @@
 // runInDurableObject). The DO has exactly these doors: the STREAM (`append`, `read`,
 // `waitForEvent`), the ONE dispatch door (`invoke`), native `fetch` (the pager door, the
 // fetch-upgrade leg, the itx-expression fetch lane, egress) and the rpc-stub plumbing
-// (`lendRpcStub`, `attachRpcStubPager`, `rpcStubTransportState`). There are NO configuration
+// (`lendRpcStub`, `rpcStubTransportState`; the pager attach IS the upgrade). There are NO configuration
 // verbs: every change to a context is an appended event, so a Workers-RPC caller configures a
 // rewrite rule exactly as the edge's `provide` does — `append(rewriteRuleConfiguredEvent(match,
 // target))` (context/itx-expression-rewriting.ts) — and a subscription with
@@ -152,6 +152,7 @@ test("the DO's doors are the stream, invoke, fetch and the rpc-stub plumbing —
       "revokeCapability",
       "configureSubscription",
       "removeSubscription",
+      "attachRpcStubPager", // folded into the pager upgrade at `fetch` (key + the events that name it)
     ])
       expect(gone in doors).toBe(false);
     for (const door of [
@@ -161,7 +162,6 @@ test("the DO's doors are the stream, invoke, fetch and the rpc-stub plumbing —
       "invoke",
       "fetch",
       "lendRpcStub",
-      "attachRpcStubPager",
       "rpcStubTransportState",
     ])
       expect(typeof doors[door]).toBe("function");

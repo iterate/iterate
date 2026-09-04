@@ -6,7 +6,10 @@
 
 import { RpcTarget } from "cloudflare:workers";
 import { expect, test } from "vitest";
-import { RPC_STUB_PAGER_WEBSOCKET_HEADER } from "../src/context/rpc-stub-directory.ts";
+import {
+  encodeRpcStubPagerAttachRequest,
+  RPC_STUB_PAGER_WEBSOCKET_HEADER,
+} from "../src/context/rpc-stub-directory.ts";
 import { stub } from "./support.ts";
 
 const until = async (label: string, fn: () => unknown | Promise<unknown>, timeoutMs = 8_000) => {
@@ -18,18 +21,22 @@ const until = async (label: string, fn: () => unknown | Promise<unknown>, timeou
   }
 };
 
-/** Open a pager for `rpcStubKey` exactly as `lendRpcStubOverPager` does: attach (mint the
- *  transportId), then upgrade at the DO's fetch door carrying it. */
+/** Open a pager for `rpcStubKey` exactly as `lendRpcStubOverPager` does: ONE upgrade at the DO's
+ *  fetch door whose header is the attach request (a bare pager here — no events name the key). */
 async function openRpcStubPager(ctx: string, rpcStubKey: string) {
-  const s = stub(ctx);
-  const { transportId } = await s.attachRpcStubPager({ rpcStubKey });
-  const response = await s.fetch("https://rpc-stub-pager.internal/", {
-    headers: { Upgrade: "websocket", [RPC_STUB_PAGER_WEBSOCKET_HEADER]: transportId },
+  const response = await stub(ctx).fetch("https://rpc-stub-pager.internal/", {
+    headers: {
+      Upgrade: "websocket",
+      [RPC_STUB_PAGER_WEBSOCKET_HEADER]: encodeRpcStubPagerAttachRequest({
+        rpcStubKey,
+        appendEvents: [],
+      }),
+    },
   });
   if (response.status !== 101 || !response.webSocket)
     throw new Error(`pager upgrade returned ${response.status}`);
   response.webSocket.accept();
-  return { transportId, ws: response.webSocket };
+  return { ws: response.webSocket };
 }
 
 /** What a relay lends: the `invoke(steps)` half of a BorrowedRpcStub. */

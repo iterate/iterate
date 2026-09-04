@@ -22,16 +22,45 @@
 // so a NEW pager under an existing key can attach before the old one drops (the reconnect swap;
 // the newest pager wins). PRESENCE (`listRpcStubKeys`) is the keys borrowed or pager-backed right now.
 //
-// Two-phase pager attach: `attachRpcStubPager` mints the transportId FIRST, then the relay opens the
-// pager WebSocket carrying it; an unknown id 409s so a relay that outlived a DO restart re-attaches.
+// ONE-SHOT pager attach: the pager upgrade's `x-itx-rpc-stub-pager` header carries the KEY and the
+// EVENTS THAT NAME IT (a rewrite rule, a subscription row); this side accepts the socket and appends
+// those events in the SAME synchronous turn — the SET half of "the DO owns both ends of a lent
+// stub's rule" (the un-set half is the key's last pager close, onPresence). A refused append (a
+// paused stream) un-accepts: the socket closes silently, nothing was named, and the refusal — its
+// CODE — is the upgrade's answer. So a `provide(stub)` costs the edge ONE round trip to this DO.
 
 import type { RpcStubFetchServer, RpcStubFetchTransport } from "../fetch/rpc-stub-fetch.ts";
-import { codedError } from "../lib/errors.ts";
+import { codedError, errorCode } from "../lib/errors.ts";
+import type { StreamEventInput } from "../stream/events.ts";
 import type { ItxExpression } from "./expression.ts";
 
 // ── the wire: what the relay (context/rpc-stub-relay.ts) speaks to this side ──
 
 export const RPC_STUB_PAGER_WEBSOCKET_HEADER = "x-itx-rpc-stub-pager";
+/** What the pager upgrade's header carries: the key, and the events that NAME it — appended by the DO
+ *  in the turn it accepts the pager (empty for a bare pager, the workers-lane probes). */
+type RpcStubPagerAttachRequest = { rpcStubKey: string; appendEvents: StreamEventInput[] };
+/** The header value: URI-encoded JSON — a header is a ByteString, a key or an event is not. */
+export const encodeRpcStubPagerAttachRequest = (request: RpcStubPagerAttachRequest): string =>
+  encodeURIComponent(JSON.stringify(request));
+/** The inverse — throws on anything that is not a well-formed attach request. */
+function decodeRpcStubPagerAttachRequest(header: string): RpcStubPagerAttachRequest {
+  const decoded = JSON.parse(decodeURIComponent(header)) as Partial<RpcStubPagerAttachRequest>;
+  if (typeof decoded?.rpcStubKey !== "string" || !Array.isArray(decoded.appendEvents))
+    throw new Error("expected { rpcStubKey: string, appendEvents: [] }");
+  return { rpcStubKey: decoded.rpcStubKey, appendEvents: decoded.appendEvents };
+}
+/** A refused attach, as the upgrade's answer: the error's CODE (lib/errors.ts) and message as JSON,
+ *  so the relay re-throws the same coded error to the caller. 409 = the DO refused (a coded refusal
+ *  such as STREAM_PAUSED); 500 = something uncoded. */
+const rpcStubPagerRefusalResponse = (error: unknown): Response =>
+  Response.json(
+    {
+      code: errorCode(error) ?? null,
+      message: error instanceof Error ? error.message : String(error),
+    },
+    { status: errorCode(error) ? 409 : 500 },
+  );
 const RPC_STUB_PAGER_WEBSOCKET_TAG = "itx-rpc-stub-pager-websocket";
 /** The pager keepalive pair — one shared definition for the edge sender and the DO's
  *  setWebSocketAutoResponse. DELIBERATELY distinctive literals: the auto-response is DO-WIDE
@@ -77,11 +106,8 @@ export class RpcStubDirectory {
   // call, never on a timer (a pending timer would itself pin the DO out of hibernation).
   readonly #borrowedRpcStubs = new Map<string, BorrowedRpcStub>();
 
-  // LAYER 2 — the pagers. transportId → the reservation whose pager WebSocket hasn't arrived yet
-  // (in memory on purpose: if the DO dies in between, the upgrade 409s and the relay re-attaches);
-  // and, per key, the page awaiting its lend — CONCURRENT cold invokes share it (`arrived`), a
-  // second caller must never replace the first's resolver (it would hang forever).
-  readonly #pendingRpcStubPagerAttachments = new Map<string, { rpcStubKey: string }>();
+  // LAYER 2 — the pagers: per key, the page awaiting its lend — CONCURRENT cold invokes share it
+  // (`arrived`), a second caller must never replace the first's resolver (it would hang forever).
   readonly #rpcStubPagesInFlight = new Map<
     string,
     {
@@ -95,14 +121,20 @@ export class RpcStubDirectory {
   // the second must not report the pager (and its presence) as lost twice.
   readonly #closedRpcStubPagerSockets = new WeakSet<WebSocket>();
 
+  /** The DO's append door, SYNCHRONOUS (Stream.append is): what a pager attach carries lands through
+   *  it in the turn the pager is accepted; a refusal throws the coded error. */
+  readonly #appendEvents: (events: StreamEventInput[]) => void;
+
   constructor(deps: {
     ctx: Pick<DurableObjectState, "acceptWebSocket" | "getWebSockets">;
     onPresence: (kind: "attached" | "detached", rpcStubKey: string) => void;
     rpcStubFetch: RpcStubFetchServer;
+    appendEvents: (events: StreamEventInput[]) => void;
   }) {
     this.#ctx = deps.ctx;
     this.#onPresence = deps.onPresence;
     this.#rpcStubFetch = deps.rpcStubFetch;
+    this.#appendEvents = deps.appendEvents;
   }
 
   // ── LAYER 1: lend · call · return ──
@@ -163,33 +195,47 @@ export class RpcStubDirectory {
     }
   }
 
-  // ── LAYER 2: attach → the pager upgrade → pages → close ──
+  // ── LAYER 2: the pager upgrade (attach + the events that name the key) → pages → close ──
 
-  /** Reserve a pager for `rpcStubKey` (the relay calls this BEFORE opening the pager WebSocket).
-   *  Mints the fresh transportId the pager carries. */
-  attachRpcStubPager(input: { rpcStubKey: string }): { transportId: string } {
-    const transportId = crypto.randomUUID();
-    this.#pendingRpcStubPagerAttachments.set(transportId, { rpcStubKey: input.rpcStubKey });
-    return { transportId };
-  }
-
-  /** PARTIAL FETCH (compose first in the DO's fetch): the pager upgrade, gated on a pending attach.
-   *  `null` = not this door's request. */
+  /** PARTIAL FETCH (compose first in the DO's fetch): the pager upgrade — the header carries the
+   *  key and the events that name it. `null` = not this door's request. Accept, append, stamp: ONE
+   *  synchronous turn, nothing interleaves, so a refused append leaves no socket, no presence and no
+   *  row — the refusal (its code) is the whole answer, and the relay lends nothing. */
   acceptRpcStubPagerWebSocket(request: Request): Response | null {
-    const transportId = request.headers.get(RPC_STUB_PAGER_WEBSOCKET_HEADER);
-    if (transportId === null) return null;
-    const rpcStubKey = this.#pendingRpcStubPagerAttachments.get(transportId)?.rpcStubKey;
-    if (rpcStubKey === undefined)
-      return new Response(`unknown rpc stub pager ${transportId} (attach first)\n`, {
-        status: 409,
-      });
-    this.#pendingRpcStubPagerAttachments.delete(transportId);
+    const header = request.headers.get(RPC_STUB_PAGER_WEBSOCKET_HEADER);
+    if (header === null) return null;
+    let attachRequest: RpcStubPagerAttachRequest;
+    try {
+      attachRequest = decodeRpcStubPagerAttachRequest(header);
+    } catch (error) {
+      return new Response(
+        `malformed ${RPC_STUB_PAGER_WEBSOCKET_HEADER} header: ${error instanceof Error ? error.message : String(error)}\n`,
+        { status: 400 },
+      );
+    }
+    const { rpcStubKey, appendEvents } = attachRequest;
+    const transportId = crypto.randomUUID(); // per SOCKET: a reconnect's new pager attaches beside the old one, then wins
     const hadPager = this.#rpcStubPagerFor(rpcStubKey) !== undefined;
     // Accepted and stamped in ONE synchronous turn, so every pager socket this side ever sees
     // carries its record — through hibernation too (the attachment is what survives).
     const pair = new WebSocketPair();
     this.#ctx.acceptWebSocket(pair[1], [RPC_STUB_PAGER_WEBSOCKET_TAG]);
     pair[1].serializeAttachment({ transportId, rpcStubKey } satisfies RpcStubPagerRecord);
+    // THE SET HALF: the events that name this key (`match ⇒ itx.rpcStubs.get('<key>')`, a
+    // subscription row) land now, with the pager already accepted — so a push the commit fans out
+    // finds the pager to page, exactly as when the edge appended after the upgrade. Still the same
+    // turn: the fan-out's first await is after this function returns.
+    try {
+      if (appendEvents.length > 0) this.#appendEvents(appendEvents);
+    } catch (error) {
+      this.#closedRpcStubPagerSockets.add(pair[1]); // its close must not report a presence it never had
+      try {
+        pair[1].close(1011, "attach refused");
+      } catch {
+        /* already closing */
+      }
+      return rpcStubPagerRefusalResponse(error);
+    }
     // ONE pager per key, enforced when a pager becomes VISIBLE: a CONCURRENT provide at the same key
     // may still be opening its own pager, invisible to any earlier scan — so when THIS pager opens,
     // drop every OTHER same-key pager now (the newest wins). "replaced" ⇒ a swap, not a real close:

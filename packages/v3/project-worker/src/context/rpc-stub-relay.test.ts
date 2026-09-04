@@ -55,7 +55,6 @@ test("a relay registers onRpcBroken on the session's stub ONCE per session, not 
 
   const pager = new FakePagerWebSocket();
   const context = {
-    attachRpcStubPager: async (_opts: { rpcStubKey: string }) => ({ transportId: "t1" }),
     fetch: async () => ({ status: 101, webSocket: pager }),
     // The stub is constructed EAGERLY as this call's argument, so anything its constructor
     // registered would land on every page regardless of what the lend door does.
@@ -66,6 +65,7 @@ test("a relay registers onRpcBroken on the session's stub ONCE per session, not 
     context as unknown as Parameters<typeof lendRpcStubOverPager>[0],
     provider as unknown as Parameters<typeof lendRpcStubOverPager>[1],
     "key-1",
+    [], // the events that name the key — none for a bare pager
     () => {}, // waitUntil
   );
 
@@ -77,4 +77,52 @@ test("a relay registers onRpcBroken on the session's stub ONCE per session, not 
   expect(onRpcBrokenRegistrations).toBeLessThanOrEqual(1);
 
   relay.dispose();
+});
+
+// The pager upgrade carries the events that name the key, and the DO appends them as it accepts the
+// pager: a REFUSED append (a paused stream) is the upgrade's answer — a non-101 whose JSON body carries
+// the code. The relay must then lend NOTHING: release the session's dup, register no listener, and
+// re-throw the same CODED error the append door would have (lib/errors.ts: classify by code).
+test("a refused pager upgrade (the DO would not append what names the key) lends nothing and re-throws the refusal's code", async () => {
+  vi.useFakeTimers();
+  let disposed = 0;
+  let onRpcBrokenRegistrations = 0;
+  const lent = {
+    onRpcBroken(_cb: () => void) {
+      onRpcBrokenRegistrations += 1;
+    },
+    [Symbol.dispose]() {
+      disposed += 1;
+    },
+  };
+  const provider = { dup: () => lent };
+  let lends = 0;
+  const context = {
+    fetch: async () => ({
+      status: 409,
+      webSocket: null,
+      json: async () => ({ code: "STREAM_PAUSED", message: "stream paused: review" }),
+    }),
+    lendRpcStub: async () => {
+      lends += 1;
+    },
+  };
+
+  const refusal = await lendRpcStubOverPager(
+    context as unknown as Parameters<typeof lendRpcStubOverPager>[0],
+    provider as unknown as Parameters<typeof lendRpcStubOverPager>[1],
+    "key-2",
+    [{ type: "events.iterate.com/itx/rewrite-rule-configured", payload: {} }],
+    () => {},
+  ).then(
+    () => undefined,
+    (e: unknown) => e as Error & { code?: string },
+  );
+
+  expect(refusal).toBeInstanceOf(Error);
+  expect(refusal?.code).toBe("STREAM_PAUSED");
+  expect(refusal?.message).toBe("stream paused: review");
+  expect(disposed).toBe(1); // the session's dup released — nothing is lent
+  expect(onRpcBrokenRegistrations).toBe(0);
+  expect(lends).toBe(0);
 });

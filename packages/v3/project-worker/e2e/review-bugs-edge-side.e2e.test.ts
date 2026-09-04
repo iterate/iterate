@@ -78,6 +78,7 @@ test("subscribe: an append the DO refuses (paused stream) leaves the callback le
   expect(codeOf(provideError)).toBe("STREAM_PAUSED");
   await sleep(600);
   expect(await presence(itx)).toEqual([]);
+  expect(await rpcStubRewriteRuleMatches(itx)).toEqual([]); // the rule rode the refused attach: never set
 
   // THE BUG — the same refusal through `subscribe` strands the lent callback.
   const subscribeError = await rejection(
@@ -87,6 +88,7 @@ test("subscribe: an append the DO refuses (paused stream) leaves the callback le
   expect(codeOf(subscribeError)).toBe("STREAM_PAUSED");
   await sleep(600);
   expect(await presence(itx)).toEqual([]);
+  expect(await subscriptions(itx)).toEqual([]); // the row rode the refused attach: never set
 });
 
 // BUG: an EXPRESSION rule's session-scoped undo clobbers a LIVE provider's rule configured LATER at

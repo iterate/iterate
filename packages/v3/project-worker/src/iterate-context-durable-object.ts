@@ -26,16 +26,19 @@
 //     plus two EPHEMERAL events as it changes (`rpc-stub/attached` / `rpc-stub/detached`) — the log
 //     never claims a socket is open;
 //   • the FETCH DOOR — the one place a 101 can enter: `x-itx-rpc-stub-pager` accepts a pager
-//     WebSocket, `x-itx-expression` resolves the fetch lane, anything else is EGRESS (secret
-//     placeholder substitution → the FALLBACK terminal).
+//     WebSocket AND appends the events that name its key in the same turn (the edge's `provide(stub)`
+//     is ONE round trip here), `x-itx-expression` resolves the fetch lane, anything else is EGRESS
+//     (secret placeholder substitution → the FALLBACK terminal).
 //
 // PURE WORKERS-RPC: capnweb never terminates here (hard rule) — the stateless `/api` worker
 // relays. Dispatch is ONE door: `invoke(call)` — parse → rewrite through the rules → evaluate →
 // replay, all against the inline core state; this class only delegates. Every OTHER change to this
 // context is an appended event: the edge's `provide`/`subscribe`/`enableProcessor` verbs build one
-// and call `append` — there are no configuration verbs here. The ONE event this class appends on its
-// own initiative is the un-set of whatever named an rpc stub whose last pager closed (onPresence);
-// the ONE effect it runs off a committed event is deleting the facet a removed subscription hosted.
+// and call `append` (a lent stub's rule or row rides its pager upgrade and is appended as the pager
+// is accepted — same door, one round trip) — there are no configuration verbs here. The ONE event
+// this class appends on its own initiative is the un-set of whatever named an rpc stub whose last
+// pager closed (onPresence); the ONE effect it runs off a committed event is deleting the facet a
+// removed subscription hosted.
 
 import { DurableObject } from "cloudflare:workers";
 import { substituteHeaderSecrets } from "@v3/shared/egress";
@@ -122,6 +125,11 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   readonly #rpcStubs = new RpcStubDirectory({
     rpcStubFetch: this.#rpcStubFetch,
     ctx: this.ctx,
+    // THE SET HALF of "the DO owns both ends of a lent stub's rule": the events a pager attach
+    // carries (the edge's `provide(stub)` / `subscribe(fn)` hand over the rule / the row it built)
+    // land through the same door as any append, in the turn the pager is accepted. The un-set half
+    // is `#unsetWhatNamesRpcStub` below.
+    appendEvents: (events) => void this.#appendAndRunCommittedEffects(events),
     // PRESENCE, as it changes: an EPHEMERAL fact a live watcher can subscribe to (`consumes:
     // ["events.iterate.com/rpc-stub/attached", …]`), never a durable row — presence is physical
     // (`itx.rpcStubs.list()`), and the log must never claim a socket is open. A refusal (a paused
@@ -196,6 +204,13 @@ export class IterateContextDurableObject extends DurableObject<Env> {
    *  (a REFUSED one doesn't: arming the quiet-clock alarm is a storage write a rejected probe must
    *  not pay). */
   async append(...events: StreamEventInput[]): Promise<StreamEvent[]> {
+    return this.#appendAndRunCommittedEffects(events);
+  }
+
+  /** The append door's body, SYNCHRONOUS end to end (Stream.append is): the commit, the activity
+   *  note, the one committed-event effect. Two callers: `append` above, and the pager attach
+   *  (rpc-stub-directory.ts), which needs the refusal in the same turn it accepted the socket. */
+  #appendAndRunCommittedEffects(events: StreamEventInput[]): StreamEvent[] {
     const subscriptionsBeforeCommit = this.#stream.coreReducedState.subscriptions;
     const committedEvents = this.#stream.append(...events);
     this.#recordActivityForQuietClock();
@@ -708,17 +723,13 @@ export class IterateContextDurableObject extends DurableObject<Env> {
 
   /** LAYER 1: lend a stub under an opaque key — anyone with a route to this DO may (the edge's page
    *  answer lands here too). `stub` is a Workers-RPC stub — a callable Proxy on the wire; structural
-   *  validation is impossible by design, so it rides permissively and the directory types it. */
+   *  validation is impossible by design, so it rides permissively and the directory types it.
+   *  (LAYER 2, the pager, has no verb: it is the `x-itx-rpc-stub-pager` upgrade at `fetch` — key and
+   *  the events that name it in one request, rpc-stub-directory.ts.) */
   lendRpcStub(input: { rpcStubKey: string; stub: unknown }): void {
     this.#rpcStubs.lendRpcStub({
       rpcStubKey: input.rpcStubKey,
       stub: input.stub as BorrowedRpcStub,
     });
-  }
-
-  /** LAYER 2: reserve a pager for `rpcStubKey` — the edge relay calls this, then opens the pager
-   *  WebSocket carrying the returned transportId. */
-  attachRpcStubPager(input: { rpcStubKey: string }): { transportId: string } {
-    return this.#rpcStubs.attachRpcStubPager(input);
   }
 }

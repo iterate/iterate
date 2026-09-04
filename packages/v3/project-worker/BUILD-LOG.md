@@ -2619,3 +2619,37 @@ cacheKey?, className }`) spells the hosting spec everywhere, and `enableProcesso
   (`ephemeral-offset-reuse`, `support.ts quiesce`).
 - GATES: tsc×3 · oxlint 0/0 (npx oxlint . --deny-warnings) · knip clean · unit+workers 261p/0xf ·
   e2e 147p/2xf (38 files) · Playwright 2.
+
+## 2026-09-04 — the DO owns both ends of a lent stub's rule: the pager upgrade carries the rule, one round trip
+
+- WHY: a `provide(match, stub)` / `subscribe({ target: fn })` cost THREE edge→DO round trips — the
+  `attachRpcStubPager` RPC (mint a transportId), the pager WebSocket upgrade carrying it, then the
+  proxy's own `append` of the rule / the row — and the set and the un-set of what names a lent key
+  lived on different sides: the edge set it, the DO un-set it on the key's last pager close
+  (`#unsetWhatNamesRpcStub`). Asymmetric, and the perf menu's top latency item.
+- WHAT: ONE request. The upgrade's `x-itx-rpc-stub-pager` header is the attach request — URI-encoded
+  JSON `{ rpcStubKey, appendEvents }` — and `acceptRpcStubPagerWebSocket` accepts the socket, appends
+  those events through the DO's own append body (`#appendAndRunCommittedEffects`, the sync body the
+  `append` verb now wraps), then reports presence, all in one synchronous turn. A refused append (a
+  paused stream) un-accepts: the socket closes silently, no presence, no row, and the refusal — its
+  CODE — is the upgrade's answer (409 + JSON `{ code, message }`); the relay releases the session's
+  dup and re-throws the coded error, so `provide` fails exactly as the append door would, with
+  nothing lent. A malformed header is a 400. DELETED: the `attachRpcStubPager` verb, the pending
+  attachments map, the 409 "attach first" branch, the proxy's second append and its recall try/catch
+  in both `provide` and `subscribe`. The proxy still BUILDS the events (`rewriteRuleConfiguredEvent`
+  / `subscriptionConfiguredEvent`); the DO gains no configuration verb — it appends what it is handed.
+  On the log, the rule / the row now has a LOWER offset than the key's `rpc-stub/attached`.
+- PROOF: `e2e/rpc-stubs-attach-carries-the-rule.e2e.test.ts` pins the order (rule/row offset below
+  the key's `attached`) for `provide` and `subscribe`, plus the atomic refusal and the resume path —
+  run against the deployed worker BEFORE deploying, it was red on both order pins ("expected 8 to be
+  less than 7": `attached` came first under the old protocol); green locally and deployed after.
+  `__workers-tests__/rpc-stub-pager-attach.test.ts` pins it at the socket census: 400 on a malformed
+  header; 101 + one pager + presence + the rule row on a good one; 409 + `STREAM_PAUSED` with ZERO
+  pagers, no presence, no rule on a paused stream, then the same attach lands after `stream/resumed`.
+  `rpc-stub-relay.test.ts` pins the relay's refusal path (dup released, no listener, no lend, the
+  code re-thrown). `do-doors` pins the verb gone. Round trips per `provide(stub)`: 3 → 1.
+- GATES: tsc×3 · oxlint 0/0 · knip clean for the touched files · oxfmt clean for the touched files ·
+  unit+workers 270 → 272 (30 files) · e2e local 150p/2xf → 153p/2xf (40 files) · e2e DEPLOYED
+  (`WORKER_BASE_URL=https://project-worker.iterate.workers.dev pnpm e2e --no-file-parallelism`,
+  version a567f4e5) 151p/2xf/2sk — the previous deployed board +3. Worker Startup Time 6 ms,
+  upload 707 KiB.

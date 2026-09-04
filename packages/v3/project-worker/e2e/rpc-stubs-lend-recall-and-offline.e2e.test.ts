@@ -55,16 +55,17 @@ test("calling a match no rule was configured for rejects with code NO_ITX_EXPRES
   expect(codeOf(err)).toBe("NO_ITX_EXPRESSION_MATCH");
 });
 
-test("rpc-stub pager upgrade with an unknown transportId is refused with 409 (attach first)", async () => {
-  // Two-phase attach: the pager door must 409 an id it never minted, so a relay that outlived a DO
-  // restart re-attaches instead of silently pairing a socket to nothing. /expression forwards to
+test("rpc-stub pager upgrade with a malformed attach header is refused with 400", async () => {
+  // ONE-SHOT attach: the pager header IS the attach request (the key + the events that name it,
+  // URI-encoded JSON); anything else is refused before a socket exists. /expression forwards to
   // the DO's fetch, whose door walk checks the pager header FIRST — the `itx` expression the door
-  // insists on is never consulted.
-  const res = await fetch(expressionUrl(freshCtx("pager409"), "itx.whoami"), {
+  // insists on is never consulted. (The attach itself is pinned DO-level, where the census is
+  // readable: __workers-tests__/rpc-stub-pager-attach.test.ts.)
+  const res = await fetch(expressionUrl(freshCtx("pager400"), "itx.whoami"), {
     headers: { "x-itx-rpc-stub-pager": "424242" },
   });
-  expect(res.status).toBe(409);
-  expect(await res.text()).toContain("attach first");
+  expect(res.status).toBe(400);
+  expect(await res.text()).toContain("malformed x-itx-rpc-stub-pager header");
 });
 
 test("same-key re-provide replaces the transport while online and appends ONE more rule event — the map still holds one rule, the match follows the survivor", async () => {
@@ -292,8 +293,9 @@ test("concurrent provides at one key collapse to ONE live transport; the map hol
   ]);
 });
 
-// (The attach-without-pager leak is pinned DO-level, where attachRpcStubPager is reachable:
-// __workers-tests__/rpc-stub-sweep.test.ts.)
+// (The pager attach itself — one upgrade carrying the key and the rule, atomic with the append — is
+// pinned DO-level, where the socket census is readable: __workers-tests__/rpc-stub-pager-attach.test.ts;
+// its ORDER relative to presence, at the surface: rpc-stubs-attach-carries-the-rule.e2e.test.ts.)
 
 // ── the same shape one layer up: a live SUBSCRIBER's stub + row ──
 

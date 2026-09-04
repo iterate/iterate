@@ -126,14 +126,14 @@ review the class's TYPE also carries every built-in root (section 5) by declarat
 (`export interface IterateContext extends Omit<BuiltInScope, "cd"> {}`): zero runtime, but a
 reader of the file sees the whole surface, and `env.ITX.get().append(…)` typechecks in loaded code.
 
-| Method                                                                                 | Returns                           | What physically happens                                                                                                                                                                                                                                                    |
-| -------------------------------------------------------------------------------------- | --------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `cd(path)`                                                                             | `IterateContext`                  | Pure addressing. Absolute by convention, relative resolves. Returns an EDGE context so a later `provide` lends in this session.                                                                                                                                            |
-| `invoke(call: ItxExpressionInput)`                                                     | `Promise<unknown>`                | THE door. `durableObject.invoke(expression)`. One fork: a terminal `fetch(Request)` rides `durableObject.fetch` with the expression in `x-itx-expression`.                                                                                                                 |
-| `provide(match, target: ClientRpcStub \| ItxExpressionInput \| null)`                  | `RewriteRuleHandle`               | THE ONE FRONT DOOR: make `match` mean `target`. A live stub is lent to the DO through a pager owned here (DON'T-PIN) under the key = the canonical match, and the rule `match ⇒ itx.rpcStubs.get('<match>')` is appended; an expression is the rule alone; `null` un-sets. |
-| `subscribe({ name?, target: ItxExpressionInput \| ClientRpcStub \| null, consumes? })` | `SubscriptionHandle` (has `name`) | A live target is lent under the key `subscription:<name>` first, then `append(subscriptionConfiguredEvent(…))` with target `itx.rpcStubs.get('subscription:<name>')`.                                                                                                      |
-| `enableProcessor(name, { source, className, consumes? })`                              | `{ name }`                        | `append(subscriptionConfiguredEvent)` with target `itx.facets.get(name, { source, className }).processEventBatch`. DURABLE, no handle.                                                                                                                                     |
-| `disableProcessor(name)`                                                               | `void`                            | ONE append: `{ name, target: null }`. The DO deletes the facet the row hosted before the append returns (section 9).                                                                                                                                                       |
+| Method                                                                                 | Returns                           | What physically happens                                                                                                                                                                                                                                                                                                                                               |
+| -------------------------------------------------------------------------------------- | --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `cd(path)`                                                                             | `IterateContext`                  | Pure addressing. Absolute by convention, relative resolves. Returns an EDGE context so a later `provide` lends in this session.                                                                                                                                                                                                                                       |
+| `invoke(call: ItxExpressionInput)`                                                     | `Promise<unknown>`                | THE door. `durableObject.invoke(expression)`. One fork: a terminal `fetch(Request)` rides `durableObject.fetch` with the expression in `x-itx-expression`.                                                                                                                                                                                                            |
+| `provide(match, target: ClientRpcStub \| ItxExpressionInput \| null)`                  | `RewriteRuleHandle`               | THE ONE FRONT DOOR: make `match` mean `target`. A live stub is lent to the DO through a pager owned here (DON'T-PIN) under the key = the canonical match; the rule `match ⇒ itx.rpcStubs.get('<match>')` RIDES the pager upgrade and the DO appends it as it accepts the pager (one round trip); an expression is the rule alone, appended from here; `null` un-sets. |
+| `subscribe({ name?, target: ItxExpressionInput \| ClientRpcStub \| null, consumes? })` | `SubscriptionHandle` (has `name`) | A live target is lent under the key `subscription:<name>`, its row (target `itx.rpcStubs.get('subscription:<name>')`) riding the same pager upgrade; an expression target is `append(subscriptionConfiguredEvent(…))` from here.                                                                                                                                      |
+| `enableProcessor(name, { source, className, consumes? })`                              | `{ name }`                        | `append(subscriptionConfiguredEvent)` with target `itx.facets.get(name, { source, className }).processEventBatch`. DURABLE, no handle.                                                                                                                                                                                                                                |
+| `disableProcessor(name)`                                                               | `void`                            | ONE append: `{ name, target: null }`. The DO deletes the facet the row hosted before the append returns (section 9).                                                                                                                                                                                                                                                  |
 
 The two handles (`RewriteRuleHandle`, `SubscriptionHandle`) are server-side RpcTargets with one
 member, `[Symbol.dispose]`, plus a `name` getter on `SubscriptionHandle`. Disposing undoes the act. capnweb disposes every
@@ -200,8 +200,12 @@ Two layers, in the order the tutorial builds them.
 key rides it, and `returnBorrowedRpcStubs()` at the 60 s idle quiesce, because a held stub
 pins the DO awake. A lender with no pager is one-shot.
 
-**Layer 2, the pagers.** One hibernatable WebSocket per key, opened by the edge relay with
-`{ transportId, rpcStubKey }` in its attachment. A standing offer: "I can lend this back."
+**Layer 2, the pagers.** One hibernatable WebSocket per key, opened by the edge relay in ONE
+request: the upgrade's `x-itx-rpc-stub-pager` header carries the key and the events that name it
+(the rule, the row), the DO accepts the socket and appends them in the same synchronous turn, and
+the socket keeps `{ transportId, rpcStubKey }` in its attachment. A standing offer: "I can lend
+this back." A refused append (a paused stream) is the upgrade's answer — a 409 with the code —
+and leaves no socket, no presence and no row.
 
 ```
 invokeRpcStub(rpcStubKey, steps):
@@ -217,15 +221,18 @@ invokeRpcStub(rpcStubKey, steps):
 - **Presence**: `itx.rpcStubs.list()` = borrowed ∪ pager-backed. Two EPHEMERAL events as it
   changes: `rpc-stub/attached` / `rpc-stub/detached { rpcStubKey }`. The log never claims a
   socket is open.
-- **The rule dies with the stub, DO-side.** On a key's LAST pager close the DO appends
-  `rewrite-rule-configured { match, null }` for every rule and `subscription-configured { name,
-null }` for every subscription whose target is `itx.rpcStubs.get('<key>')`. The edge's
-  teardown only closes the pager. Accepted: an expression rule's handle disposed after another
-  session re-set the same match deletes it (last writer wins).
+- **The DO owns both ends.** The rule (or row) that names a lent key is SET by the DO as it
+  accepts the key's pager — the edge built the event and sent it inside the upgrade — and UN-SET
+  by the DO on the key's LAST pager close: `rewrite-rule-configured { match, null }` for every
+  rule and `subscription-configured { name, null }` for every subscription whose target is
+  `itx.rpcStubs.get('<key>')`. The edge's teardown only closes the pager. On the log the set has
+  a lower offset than the key's `rpc-stub/attached`. Accepted: an expression rule's handle
+  disposed after another session re-set the same match deletes it (last writer wins).
 - **DON'T-PIN**: the client's capnweb stub lives in the stateless worker for the session. The
   DO holds no stub while idle and hibernates with any number of clients attached.
-- Wire: `x-itx-rpc-stub-pager` header; keepalive pair answered by `setWebSocketAutoResponse`
-  so a pager stays warm without waking the DO.
+- Wire: `x-itx-rpc-stub-pager` header = URI-encoded JSON `{ rpcStubKey, appendEvents }` on the
+  upgrade (no attach verb: `attachRpcStubPager` is gone); keepalive pair answered by
+  `setWebSocketAutoResponse` so a pager stays warm without waking the DO.
 
 ---
 
