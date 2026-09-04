@@ -352,7 +352,12 @@ export class FlakeDashboardProcessor extends StreamProcessor<
                 ? existing?.recentErrors || []
                 : [...(existing?.recentErrors || []), errorSample].slice(-3),
             lastFlakeAt: flakeStruck ? record.at : existing?.lastFlakeAt || null,
-            firstRecordedAt: existing?.firstRecordedAt || record.at,
+            // Dates the test's CURRENT kind (Failures render it as "pinned
+            // since"): a flake that later becomes a pin restarts the clock.
+            firstRecordedAt:
+              existing !== undefined && existing.kind === record.kind
+                ? existing.firstRecordedAt
+                : record.at,
             lastRecordedAt: record.at,
             defaultBranchStreak: nextStreak,
             proposed: existing?.proposed || [],
@@ -643,9 +648,11 @@ export function renderBody(state: FlakeDashboardState, nowMs: number): string {
   const row = ([name, test]: (typeof tests)[number]) => {
     const runs = Object.values(test.counts).reduce((total, n) => total + n, 0);
     // Lines inside a cell are <br>-separated; a literal | or backtick in a
-    // pattern or error would end the cell or the code span, so both render
-    // escaped/stripped.
-    const cellCode = (text: string) => `\`${text.replaceAll("`", "'").replaceAll("|", "\\|")}\``;
+    // pattern or error would end the cell or the code span, and a raw newline
+    // (playwright timeout messages carry a call log) would split the table
+    // row — so all three render collapsed/escaped.
+    const cellCode = (text: string) =>
+      `\`${text.replaceAll(/\s+/gu, " ").replaceAll("`", "'").replaceAll("|", "\\|")}\``;
     const info = [
       ...(test.kind === "unknown"
         ? test.recentErrors.map((sample) => cellCode(sample.error.slice(0, 140)))

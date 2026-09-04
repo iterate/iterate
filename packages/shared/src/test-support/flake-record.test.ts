@@ -7,7 +7,8 @@ import { appendFlakeRecord, unknownFlakeRecordFromTelemetry } from "./flake-reco
 test("a plain test that passed after retry maps to an unknown-flake record", () => {
   expect(
     unknownFlakeRecordFromTelemetry({
-      fullName: "chat can upload a file",
+      fullName: "chromium › chat.spec.ts › chat can upload a file",
+      leafName: "chat can upload a file",
       expectedState: "passed",
       passedAfterRetry: true,
       durationMs: 1200,

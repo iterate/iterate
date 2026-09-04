@@ -45,6 +45,13 @@ export interface FlakeRecord {
  */
 export interface RetriedTestTelemetry {
   fullName: string;
+  /**
+   * The bare test title, without describe/project/file prefixes. Records key
+   * on it when available so that wrapping a surfaced unknown flake with
+   * createFlake — which records `args[0]`, the bare title — migrates the SAME
+   * dashboard row instead of opening a second one.
+   */
+  leafName?: string;
   expectedState?: string;
   passedAfterRetry: boolean;
   durationMs: number;
@@ -64,7 +71,7 @@ export function unknownFlakeRecordFromTelemetry(test: RetriedTestTelemetry): Fla
   // tests that set any, and both wrappers always do (fails mode).
   if (test.expectedState !== undefined && test.expectedState !== "passed") return null;
   return {
-    name: test.fullName,
+    name: test.leafName || test.fullName,
     kind: "unknown",
     outcome: "retried-pass",
     durationMs: test.durationMs,

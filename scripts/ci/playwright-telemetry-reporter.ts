@@ -65,14 +65,17 @@ export default class PlaywrightTelemetryReporter implements Reporter {
   async onEnd(result: FullResult) {
     if (!this.config || !this.suite || !this.artifactId || !this.ci || !this.context)
       throw new Error("Playwright telemetry ended before it began");
-    const tests = this.suite
-      .allTests()
-      .map((test) => toTestRecord(test, result.startTime.getTime()));
+    const testCases = this.suite.allTests();
+    const tests = testCases.map((test) => toTestRecord(test, result.startTime.getTime()));
     // A plain test that passed only after a retry is an unclassified flake:
     // record it for the test-health dashboard, error sample included, so it
-    // can be adopted into createFlake (see shared flake-record.ts).
-    for (const test of tests) {
-      const unknownFlake = unknownFlakeRecordFromTelemetry(test);
+    // can be adopted into createFlake (see shared flake-record.ts). The bare
+    // test title keys the record so a later createFlake wrap keeps the row.
+    for (const [index, telemetryRecord] of tests.entries()) {
+      const unknownFlake = unknownFlakeRecordFromTelemetry({
+        ...telemetryRecord,
+        leafName: testCases[index]?.title,
+      });
       if (unknownFlake) await appendFlakeRecord(unknownFlake);
     }
     const durationMs = nonnegativeDuration(result.duration);

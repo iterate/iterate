@@ -181,23 +181,26 @@ test("rows group into sections by kind, sentinels split out of Flakes", async ()
   expect(positions.every((position) => position >= 0)).toBe(true);
 });
 
-test("failure rows show pin-held stats and pinned since", async () => {
+test("failure rows show pin-held stats and pinned since dates the pin, not the flake era", async () => {
   const h = makeHarness();
   await h.append(
     birth(),
-    runRecorded(1, [record("stale facet", "pinned-fail", { at: day(0), kind: "failing" })]),
-    runRecorded(2, [record("stale facet", "pinned-fail", { at: day(1), kind: "failing" })]),
-    runRecorded(3, [record("stale facet", "unexpected-pass", { at: day(2), kind: "failing" })]),
+    // The designed lifecycle: tracked as a flake first, then switched to a
+    // createFailing pin — "pinned since" must date the switch.
+    runRecorded(0, [record("stale facet", "flake-fail", { at: day(0) })]),
+    runRecorded(1, [record("stale facet", "pinned-fail", { at: day(1), kind: "failing" })]),
+    runRecorded(2, [record("stale facet", "pinned-fail", { at: day(2), kind: "failing" })]),
+    runRecorded(3, [record("stale facet", "unexpected-pass", { at: day(3), kind: "failing" })]),
   );
-  const row = renderBody(h.state(), Date.parse(day(3)))
+  const row = renderBody(h.state(), Date.parse(day(4)))
     .split("\n")
     .find((line) => line.startsWith("`stale facet`"))!;
   expect(row).toContain(
-    "runs: 3<br>pin held: 2<br>unexpected passes: 1<br>pinned since: Jan 1, 12:00am",
+    "runs: 4<br>pin held: 2<br>unexpected passes: 1<br>pinned since: Jan 2, 12:00am",
   );
   // Honest colors for a pin: red while the bug is present, green when it
   // unexpectedly passes.
-  expect(row.match(/🟥|🟩|❌/gu)).toEqual(["🟥", "🟥", "🟩"]);
+  expect(row.match(/🟥|🟩|❌/gu)).toEqual(["🟥", "🟥", "🟥", "🟩"]);
 });
 
 test("unknown-flake rows show error samples and retire after 14 quiet days", async () => {
@@ -208,13 +211,14 @@ test("unknown-flake rows show error samples and retire after 14 quiet days", asy
       record("chat upload", "retried-pass", {
         at: day(0),
         kind: "unknown",
-        error: "Timeout 30000ms exceeded | waiting for getByLabel('attachment')",
+        error: "Timeout 30000ms exceeded | waiting\nfor getByLabel('attachment')",
       }),
     ]),
   );
   const fresh = renderBody(h.state(), Date.parse(day(2)));
   // The error sample is the copy-paste material for a createFlake pattern —
-  // rendered as code, with the table-breaking pipe escaped.
+  // rendered as code, with the table-breaking pipe escaped and the
+  // row-splitting newline collapsed.
   expect(fresh).toContain("`Timeout 30000ms exceeded \\| waiting for getByLabel('attachment')`");
   expect(fresh).toContain("flakes: 1<br>last flake: Jan 1, 12:00am");
 

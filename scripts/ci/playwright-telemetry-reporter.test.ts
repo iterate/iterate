@@ -64,6 +64,7 @@ it("records every Playwright attempt and nested step without uploading", async (
   } as unknown as TestResult;
   const test = {
     results: [firstResult, secondResult],
+    title: "greets",
     titlePath: () => ["chromium", "greeting.spec.ts", "greets"],
     location: { file: "/repo/specs/greeting.spec.ts", line: 12, column: 3 },
     parent: { project: () => ({ name: "chromium" }) },
@@ -123,12 +124,10 @@ it("records every Playwright attempt and nested step without uploading", async (
       .split("\n")
       .map((line) => JSON.parse(line)),
   );
+  // Keyed on the bare title — the same name a later createFlake wrap would
+  // record — not the project/file-prefixed fullName.
   expect(flakeRecords).toMatchObject([
-    {
-      name: "chromium › greeting.spec.ts › greets",
-      kind: "unknown",
-      outcome: "retried-pass",
-    },
+    { name: "greets", kind: "unknown", outcome: "retried-pass" },
   ]);
 });
 
