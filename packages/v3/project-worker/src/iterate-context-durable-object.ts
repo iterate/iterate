@@ -74,6 +74,7 @@ import {
 } from "./context/rpc-stub-directory.ts";
 import { DurableObjectNameCodec } from "./context/durable-object-names.ts";
 import { itxEntrypointFor } from "./itx-entrypoint.ts";
+import { appConfigOf, type AppConfigEnv } from "./app-config.ts";
 import {
   ItxExpressionResolver,
   rewriteRuleRemovedEvent,
@@ -107,15 +108,16 @@ const FACET_CALL_WATCHDOG_MS = 60_000;
 const CORE_SLUG = CoreContract.slug;
 
 /** The context worker's bindings (wrangler.jsonc): the DO namespace, the Worker Loader, the two kv
- *  namespaces, the deploy id, and the egress terminal. */
-export interface Env {
+ *  namespaces, the deploy id, the egress terminal — and the `APP_CONFIG_*` vars app-config.ts parses. */
+export interface Env extends AppConfigEnv {
   ITERATE_CONTEXT: DurableObjectNamespace<IterateContextDurableObject>;
   LOADER: WorkerLoader;
   ITX_KV: KVNamespace;
   /** Workers AI — the built-in root `itx.ai`, the binding verbatim (context/built-ins.ts). */
   AI: Ai;
   SECRETS_KV?: KVNamespace;
-  /** Deploy identity — reduced into loader cacheKeys so a redeploy mints fresh isolates. */
+  /** Deploy identity — app-config.ts reads it into `deployId`, which every loader cacheKey folds in
+   *  so a redeploy mints fresh isolates. */
   CF_VERSION_METADATA?: { id: string };
   /** The egress terminal this context's `fetch` bottoms out at (secret-substituted, then sent). */
   FALLBACK: Fetcher;
@@ -130,6 +132,9 @@ export class IterateContextDurableObject extends DurableObject<Env> {
    *  this worker's own ItxEntrypoint with this context's name as its one prop. Minted once: it names
    *  the context, not an incarnation, and a warm loader never re-reads it anyway. */
   readonly #itxEntrypoint = itxEntrypointFor(this.ctx, this.#durableObjectAddress.name);
+  /** This deployment's configuration (app-config.ts) — parsed once per isolate; a malformed var
+   *  throws here, in the constructor, naming it. */
+  readonly #appConfig = appConfigOf(this.env);
   /** The rpc-stub fetch subsystem (fetch/rpc-stub-fetch.ts) — the DO wires its three halves
    *  directly: the upgrade-leg door (fetch), frame forwarding (webSocketMessage), and peer close
    *  (webSocketClose); the rpc-stub directory borrows it for serve(). */
@@ -315,6 +320,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     path: this.#durableObjectAddress.path,
     iterateContextName: this.#durableObjectAddress.name,
     env: this.env,
+    deployId: this.#appConfig.deployId,
     invoke: (call) => this.invoke(call),
     // a sibling context by path; the own path is this DO as a uniform-async ReachableContext (stream.ts)
     context: (p) =>
@@ -549,6 +555,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       // is reused and a producer expression runs only on a cold one.
       const { worker, loaderId } = await loadConfinedWorker({
         env: this.env,
+        deployId: this.#appConfig.deployId,
         itxEntrypoint: this.#itxEntrypoint,
         kind: "facet",
         owner: facetLoaderOwner(this.#durableObjectAddress.name, facetStartupMemo.className),

@@ -37,5 +37,6 @@
     { "binding": "SECRETS_KV", "id": "6df3b8c18a624d078d1a1da66f3251c0" },
     { "binding": "ITX_KV", "id": "08df862920b04446b3503c22f9888b04" },
   ],
-  "vars": {},
+  // Configuration (src/app-config.ts): the workers lane is its own deployment name.
+  "vars": { "APP_CONFIG_ENVIRONMENT_NAME": "test" },
 }

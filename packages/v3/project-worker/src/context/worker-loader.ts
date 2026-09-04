@@ -95,7 +95,11 @@ function contentHashOfWorkerModules(modules: WorkerModules): string {
 
 /** What `loadConfinedWorker` needs. */
 type LoadConfinedWorkerOptions = {
-  env: { LOADER: WorkerLoader; CF_VERSION_METADATA?: { id: string } };
+  env: { LOADER: WorkerLoader };
+  /** The deploy identity every loader id folds in (app-config.ts `deployId`: CF_VERSION_METADATA.id,
+   *  "unversioned" locally) — a facet built from an isolate a PRIOR deployment minted cannot be called
+   *  by the new parent, so a redeploy must mint fresh isolates. */
+  deployId: string;
   /** The `ItxEntrypoint` stub a loaded worker gets as `env.ITX` and `globalOutbound` — the loopback
    *  minted for the owning context (itx-entrypoint.ts). */
   itxEntrypoint: Fetcher;
@@ -166,8 +170,7 @@ export async function loadConfinedWorker(
   //    isolate only — a producer expression is evaluated exactly there, unless the id is DEAD
   //    (`loaderIdGenerations`): then the modules are produced here, outside the loader, and loaded
   //    literally under the next generation of the id.
-  const deploy = opts.env.CF_VERSION_METADATA?.id ?? "unversioned";
-  const loaderIdBase = `${opts.kind}:${deploy}:${opts.owner}:${sourceVersion}`;
+  const loaderIdBase = `${opts.kind}:${opts.deployId}:${opts.owner}:${sourceVersion}`;
   let { generation, dead } = loaderIdGenerations.get(loaderIdBase) ?? {
     generation: 0,
     dead: false,

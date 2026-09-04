@@ -81,6 +81,8 @@
     { "binding": "ITX_KV", "id": "08df862920b04446b3503c22f9888b04" },
   ],
 
-  // No vars: the SOLO/test topology rebinds FALLBACK in wrangler.test.jsonc and e2e/support/solo-config.ts.
-  "vars": {},
+  // Configuration (src/app-config.ts): `APP_CONFIG_*` vars, parsed once per isolate, loud on a bad one.
+  // Bindings are declared above; a var is what differs between deployments of the same code. The
+  // SOLO/test topology rebinds FALLBACK in wrangler.test.jsonc and e2e/support/solo-config.ts.
+  "vars": { "APP_CONFIG_ENVIRONMENT_NAME": "poc" },
 }

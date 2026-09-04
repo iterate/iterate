@@ -14,6 +14,7 @@ import { registerPipelinedRpcBrand } from "./context/dispatch.ts";
 import { ITX_EXPRESSION_FETCH_HEADER } from "./fetch/rpc-stub-fetch.ts";
 import { DurableObjectNameCodec } from "./context/durable-object-names.ts";
 import { UnauthenticatedSession } from "./session.ts";
+import { appConfigOf } from "./app-config.ts";
 
 // Native workerd RPC promises pipeline exactly like capnweb ones — thread them unawaited through
 // the step walk too (dispatch.ts can't import cloudflare:workers itself: the unit lane runs it in
@@ -44,13 +45,18 @@ export class DummyControlPlane extends WorkerEntrypoint {
 }
 
 // Bumped every deploy so a smoke test can wait for THIS build to propagate (workers.dev lags ~1-2min/colo).
-const CODE_VERSION = "live-45";
+const CODE_VERSION = "live-47";
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
 
-    if (url.pathname === "/version") return new Response(CODE_VERSION + "\n");
+    // `<label> <environmentName> <deployId>`: the hand-bumped label first (a smoke greps it), then the
+    // configuration (app-config.ts) — which deployment, and Cloudflare's version id of this deploy.
+    if (url.pathname === "/version") {
+      const { environmentName, deployId } = appConfigOf(env);
+      return new Response(`${CODE_VERSION} ${environmentName} ${deployId}\n`);
+    }
 
     // /demo — the hosted live-state demo — is a STATIC ASSET (public/demo.html, built by
     // build-sdk.mjs; wrangler.jsonc `assets`): the platform serves it before this handler runs.

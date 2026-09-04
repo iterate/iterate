@@ -3216,3 +3216,67 @@ exists as a probe (its harness lane went in the test-hygiene sweep). The 300-rul
   oxlint 0/0 · the connector file LOCAL 7p/3sk (the WebSocket tests; DummyControlPlane cannot upgrade) ·
   DEPLOYED (project-worker.iterate.workers.dev, the arc-three build) 10/10 including both WebSocket tests
   against the pet shop. Nothing else run here (arc four owns the full suite).
+
+## 2026-09-04 — arc four: ONE typed configuration object — `src/app-config.ts`, `APP_CONFIG_*` vars parsed once per isolate, loud on a bad one
+
+- WHY: the worker read its non-binding configuration ad hoc (`env.CF_VERSION_METADATA?.id ?? "unversioned"`
+  inside the loader; a hand-bumped `CODE_VERSION` string; nothing else — and no place to put the next
+  one). Jonas: "wire up a basic typed and parsed app config with some kind of data structure". The
+  apps/os shape (apps/os/src/config.ts + env.ts: one typed object, `APP_CONFIG_*` vars, parse once,
+  errors naming the variable) without its schema library — zod is off this script (W3(b)).
+- THE MODULE (`src/app-config.ts`, 97 code lines): `AppConfig` (docstring per field);
+  `APP_CONFIG_VAR_ROWS`, the table — one row per variable: its `APP_CONFIG_*` name, its parser,
+  `required` or a `default` — so adding configuration is adding a row and its consumer;
+  `parseAppConfigVars(rows, vars)`, the pure engine (unset/blank + default ⇒ the default; unset/blank +
+  required ⇒ refused by name; a non-string value ⇒ refused — wrangler vars may be JSON objects; an
+  `APP_CONFIG_*` variable no row names ⇒ refused with the known names, because a typo would otherwise
+  configure nothing silently); `appConfigVarParsers` — string, integer, boolean, url, json — each
+  refusal says what it wanted (`APP_CONFIG_LIMIT: expected an integer, got "abc"`); `parseAppConfig(vars,
+  deployId)` = this worker's table + the deploy identity; `appConfigOf(env)` memoized in a WeakMap on
+  the env object (= once per isolate). `AppConfigEnv` types the table's variable names onto `env`
+  (`Env extends AppConfigEnv`), so a new row types itself.
+- THE INVENTORY — configuration is what differs between deployments of the same code; a constant is a
+  property of the code. Decided per item, the reasons in the module header:
+
+  | item | verdict | consumer |
+  | --- | --- | --- |
+  | `APP_CONFIG_ENVIRONMENT_NAME` → `environmentName` ("poc" workers.dev · "test" workers lane · "solo" e2e lane) | configuration | `/version` |
+  | `CF_VERSION_METADATA.id` → `deployId` ("unversioned" where absent/blank) | configuration, platform-supplied | every loader cacheKey (was read off env inside the loader; now handed in), `/version` |
+  | `CODE_VERSION` (src/worker.ts) | the code's own stamp, a hand-bumped smoke label | `/version`, first |
+  | `IDLE_QUIESCE_AFTER_MS`, `FACET_CALL_WATCHDOG_MS`, the retry ladder, the memory budgets, the `secret:<projectId>:<name>` convention, the loaded-worker compatibility flags | constants | — |
+
+  Two fields exist because two things read them. A row nothing reads does not exist.
+- WIRED: the DO owns `#appConfig = appConfigOf(this.env)` (a malformed var throws in the constructor,
+  naming it) and hands `deployId` to `buildBuiltIns` and to the facet `loadConfinedWorker`;
+  `LoadConfinedWorkerOptions` and `BuildBuiltInsDeps` take `deployId: string` instead of the
+  version-metadata binding; the stateless worker's `/version` answers `<CODE_VERSION> <environmentName>
+  <deployId>` (the label first — the memory-budget arc's smoke greps it; d3's call). Declared:
+  wrangler.jsonc `vars: { APP_CONFIG_ENVIRONMENT_NAME: "poc" }`, wrangler.test.jsonc `"test"`, the
+  e2e solo topology overrides `"solo"` (e2e/support/solo-config.ts). Learned: local workerd MINTS a
+  version id too (a uuid), so "unversioned" is only ever a bare test env.
+- ALSO (d3's ask, mine to do): `callOn`'s root-apply on a non-callable throws the coded `NOT_A_METHOD`
+  like the dotted sibling (dispatch.ts), so the delivery loop's deterministic-halt rule sees it; a row in
+  dispatch.test.ts pins the code.
+- PINS: `src/app-config.test.ts` — the engine over a row table of every parser kind (16 rows: every kind
+  parses and trims; defaults when unset and when blank; bindings and unrelated vars ignored; refusals
+  for required-unset, required-blank, bad integer (twice), bad boolean, bad URL, bad JSON, a JSON-object
+  var, an unknown `APP_CONFIG_*` name listing the known ones); this worker's table has exactly the rows
+  the worker reads; `appConfigOf` reads the binding, blank ⇒ unversioned, memoizes per env object,
+  throws at first use naming the var. `e2e/itx-surface-tour.e2e` pins `/version`'s three words (the
+  label, "solo" or the deployed environment, a uuid or "unversioned"). `worker-loader.test.ts` hands
+  `deployId` in.
+- GATES: tsc×3 ok · unit+workers 371p/12xf (35 files) → 384p/12xf + 3 FOREIGN reds (the memory-budget
+  arc's `uncontrolled-degradation` E1–E3: "until(the first failure) timed out" — d3's announced re-pin
+  for the coded halt, red alone too) · e2e local 168p/2xf/10sk (44 files) → 168p/2xf/10sk, 0 fail ·
+  oxlint 0/0 · knip clean · oxfmt clean on touched files · DEPLOYED as 7474bb76 (`pnpm run deploy`,
+  startup 5 ms): `/version` = `live-47 poc 7474bb76-d908-4ba4-a9c4-272befd7d0fb`, the deploy id equal to
+  wrangler's "Current Version ID" — deployed e2e 171p/3f/4xf/2sk (44 files, 15 min, zero network errors). The 3 fails, each re-run
+  alone against 7474bb76: `push-delivery-throughput` (p95 7,936 ms vs the 500 ms budget under the
+  sequential suite; 4/4 alone) — load; `stream-uncontrolled-degradation` SLOW LIVE CLIENT ("Expect test
+  to fail": a `test.fails` that now passes — the memory-budget arc's xfail flipped by its own in-flight
+  work); `live-state-chains-client-side` (`chat.applied` 0, expected 2: the two messages ARRIVED but by a
+  re-seed, not two applied deltas) — red alone too, GREEN locally on the same tree and green on the previous
+  deployed version ce7d8856; the tree carries the memory-budget arc's uncommitted delivery-halt and
+  live-state work, and the run shows no NOT_A_METHOD and no halt, so this arc's one hunk on the delivery
+  path (the coded root-apply) is not implicated by the evidence — flagged to d3 as its file.
+- LOC: +100/−46 across 13 tracked files plus `src/app-config.ts` (166 lines, 97 code) and its test (130).

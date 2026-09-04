@@ -25,5 +25,7 @@ export function soloWorkerConfig(): Unstable_RawConfig {
     services: [
       { binding: "FALLBACK", service: String(rawConfig.name), entrypoint: "DummyControlPlane" },
     ],
+    // Configuration (src/app-config.ts): the e2e lane is its own deployment name.
+    vars: { ...rawConfig.vars, APP_CONFIG_ENVIRONMENT_NAME: "solo" },
   };
 }

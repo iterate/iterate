@@ -87,6 +87,9 @@ describe("walkSteps + resolve", () => {
     const s = scope();
     const resolver = resolverOver(s, rewriteRule("itx.db", "itx.kv"));
     await expect(resolver.invoke("itx.db('oops')")).rejects.toThrow(/not callable/);
+    // CODED, like the dotted sibling (NOT_A_METHOD): the delivery loop treats it as deterministic
+    // and halts an uncallable cursor target at the first failure instead of climbing the ladder.
+    await expect(resolver.invoke("itx.db('oops')")).rejects.toMatchObject({ code: "NOT_A_METHOD" });
   });
 
   test("args at the match on a method-valued target apply on the carried receiver", async () => {

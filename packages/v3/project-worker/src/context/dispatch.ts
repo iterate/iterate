@@ -92,5 +92,5 @@ export async function walkSteps(
 export async function callOn(value: unknown, receiver: unknown, args: unknown[]): Promise<unknown> {
   if (typeof value === "function") return Reflect.apply(value, receiver, args);
   if (value instanceof InvokeHandle) return value.applyRoot(args);
-  throw new Error(`target is not callable but ${args.length} arg(s) were passed`);
+  throw codedError("NOT_A_METHOD", `target is not callable but ${args.length} arg(s) were passed`);
 }

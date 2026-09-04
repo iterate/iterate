@@ -31,7 +31,6 @@ const fakeLoaderEnv = () => {
         return {};
       },
     },
-    CF_VERSION_METADATA: { id: "deploy-1" },
   } as unknown as Parameters<typeof loadConfinedWorker>[0]["env"];
   return { env, keys, warm };
 };
@@ -46,6 +45,7 @@ test("two DIFFERENT facet identities never share one Worker Loader cacheKey", as
   const load = (iterateContextName: string, className: string) =>
     loadConfinedWorker({
       env,
+      deployId: "deploy-1",
       itxEntrypoint: {} as Fetcher,
       kind: "facet",
       owner: facetLoaderOwner(iterateContextName, className),
@@ -69,6 +69,7 @@ test("a producer source runs INSIDE getCode — once per cold isolate, never on 
   const load = (cacheKey?: string) =>
     loadConfinedWorker({
       env,
+      deployId: "deploy-1",
       itxEntrypoint: {} as Fetcher,
       kind: "worker",
       owner: "prj_u.iterate/",
@@ -100,6 +101,7 @@ test("literal modules: the key is their content hash unless the caller names a c
   const { env, keys } = fakeLoaderEnv();
   const base = {
     env,
+    deployId: "deploy-1",
     itxEntrypoint: {} as Fetcher,
     kind: "worker" as const,
     owner: "prj_u.iterate/",
@@ -133,6 +135,7 @@ test("WORKAROUND: a producer that threw marks its id dead; the next attempt prod
   const load = () =>
     loadConfinedWorker({
       env,
+      deployId: "deploy-1",
       itxEntrypoint: {} as Fetcher,
       kind: "worker",
       owner: "prj_u.iterate/",

@@ -545,7 +545,10 @@ interface BuiltInScope {
   runScript(script: string, ...args: unknown[]): Promise<unknown>;
   // THE LIBRARY (src/library/): first-party code that takes ONLY `itx` — could be userspace unchanged
   connectToMcp(url: string, options?: McpConnectOptions): Promise<McpConnection>;
-  connectToOpenApi(specOrUrl: string | OpenApiDocument, options?: OpenApiConnectOptions): Promise<OpenApiConnection>;
+  connectToOpenApi(
+    specOrUrl: string | OpenApiDocument,
+    options?: OpenApiConnectOptions,
+  ): Promise<OpenApiConnection>;
   connectToCapnweb(url: string, options?: CapnwebConnectOptions): Promise<CapnwebConnection>;
 }
 
@@ -1316,14 +1319,15 @@ class ControlPlaneShell extends WorkerEntrypoint<Env> {
 
 Bindings (`wrangler.jsonc`):
 
-| Binding               | Kind                                                | Used for                                                       |
-| --------------------- | --------------------------------------------------- | -------------------------------------------------------------- |
-| `ITERATE_CONTEXT`     | DO namespace → `IterateContextDurableObject`        | every context, `getByName(codec)`                              |
-| `LOADER`              | Worker Loader                                       | `itx.workers.get`, `runScript`, processors                     |
-| `ITX_KV`              | KV                                                  | `itx.kv`, keys prefixed `${projectId}:`                        |
-| `SECRETS_KV`          | KV                                                  | egress substitution, keys `secret:${projectId}:${name}`        |
-| `CF_VERSION_METADATA` | version metadata                                    | reduced into loader cacheKeys so a deploy mints fresh isolates |
-| `FALLBACK`            | service → `iterate-control-plane#ControlPlaneShell` | the egress terminal                                            |
+| Binding               | Kind                                                | Used for                                                                           |
+| --------------------- | --------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| `ITERATE_CONTEXT`     | DO namespace → `IterateContextDurableObject`        | every context, `getByName(codec)`                                                  |
+| `LOADER`              | Worker Loader                                       | `itx.workers.get`, `runScript`, processors                                         |
+| `ITX_KV`              | KV                                                  | `itx.kv`, keys prefixed `${projectId}:`                                            |
+| `SECRETS_KV`          | KV                                                  | egress substitution, keys `secret:${projectId}:${name}`                            |
+| `CF_VERSION_METADATA` | version metadata                                    | `app-config.ts` reads it into `deployId`: every loader cacheKey, and `/version`    |
+| `APP_CONFIG_*` vars   | configuration (`src/app-config.ts`)                 | parsed once per isolate into one typed object; today `APP_CONFIG_ENVIRONMENT_NAME` |
+| `FALLBACK`            | service → `iterate-control-plane#ControlPlaneShell` | the egress terminal                                                                |
 
 The loader cacheKey is `${kind}:${deploy}:${owner}:${cacheKey ?? contentHash}`: the caller's
 `cacheKey` when the source is a producer expression (required there — the producer runs only

@@ -218,14 +218,15 @@ interface BuildBuiltInsDeps {
   path: string;
   /** The codec name of the context these roots belong to (loader cache keys). */
   iterateContextName: string;
-  /** The bindings the built-ins reach: the loader (+ the deploy id its cacheKey folds in), the
-   *  project kv and the Workers AI binding (all bound in both wrangler configs). */
+  /** The bindings the built-ins reach: the loader, the project kv and the Workers AI binding (all
+   *  bound in both wrangler configs). */
   env: {
     LOADER: WorkerLoader;
     ITX_KV: KVNamespace;
     AI: Ai;
-    CF_VERSION_METADATA?: { id: string };
   };
+  /** The deploy identity every loader cacheKey folds in (app-config.ts). */
+  deployId: string;
   /** Evaluate a producer source expression through THIS context's dispatch (inside the loader's
    *  `getCode`, so only on a cold isolate). */
   invoke: (call: ItxExpression) => Promise<unknown>;
@@ -272,6 +273,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
   ) => {
     const { worker } = await loadConfinedWorker({
       env,
+      deployId: deps.deployId,
       itxEntrypoint: deps.itxEntrypoint,
       kind: "worker",
       owner: iterateContextName,
