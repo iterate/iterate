@@ -7442,9 +7442,9 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
   }
 
   /**
-   * A NARROWER itx for `path` — the one door for handing an itx to code
-   * that must not hold this scope's authority (a visitor's browser session,
-   * a helper that should only talk). The result exposes ONLY the listed
+   * A NARROWER itx for `path` — the one way to hand an itx to code that
+   * must not hold this scope's authority (a visitor's browser session, a
+   * helper that should only talk). The result exposes ONLY the listed
    * built-in members, keeps `path`'s dynamic mounts, and runs with
    * project-confined, non-admin authority. Never widens: it is minted from
    * THIS project only.

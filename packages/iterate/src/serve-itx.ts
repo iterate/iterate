@@ -60,7 +60,7 @@ export type ServeItxOptions = {
  *   }
  *
  * WebSocket upgrades carry the live session (stream connections, live
- * state); `POST` answers the client's HTTP-batch lane.
+ * state); `POST` answers the client's HTTP-batch transport.
  */
 export async function serveItx(request: Request, options: ServeItxOptions): Promise<Response> {
   const { path, surface } = options.scope;
@@ -82,7 +82,7 @@ export async function serveItx(request: Request, options: ServeItxOptions): Prom
 
 /**
  * The served project: the relay tree over a scoped stub for these dotted
- * members. Exported for the relay's own tests — `serveItx` is the door.
+ * members. Exported for the relay's own tests; callers use `serveItx`.
  * @internal
  */
 export function relayServedProject(scoped: unknown, surface: readonly string[]): RpcTarget {
@@ -307,7 +307,7 @@ class ServedItxRoot extends RpcTarget {
     this.#session = session;
   }
 
-  /** The stock client's one door. Identity was decided by the caller of `serveItx`. */
+  /** The stock client's `authenticate` call. Identity was decided by the caller of `serveItx`. */
   authenticate(_credentials: ItxAuthCredentials): ServedItxSession {
     return this.#session;
   }
