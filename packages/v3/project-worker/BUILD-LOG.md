@@ -2620,6 +2620,274 @@ cacheKey?, className }`) spells the hosting spec everywhere, and `enableProcesso
 - GATES: tsc×3 · oxlint 0/0 (npx oxlint . --deny-warnings) · knip clean · unit+workers 261p/0xf ·
   e2e 147p/2xf (38 files) · Playwright 2.
 
+## 2026-09-04 — memory hygiene: the isolate must never run out of memory (byte-budgeted reads, an append ceiling, a bounded delivery backlog)
+
+- Jonas, after the apps/os stream brick (PR #2575: a 7 MB script settlement journaled verbatim,
+  every fold re-materializing it, the DO reset-looping for hours): reproduce the class in the clean
+  room as failing tests first — "if I append a hundred 10 MB events and read a large range I blow
+  the memory, and that should never happen" — then fix it, and audit every other way the DO can OOM.
+- THE INVENTORY (own read + a 27-item subagent audit, scratchpad oom-audit.md): `read` was
+  count-bounded only (limit 500, no cap) and materialized every body ~4× (chunk cells, the join, the
+  parse, the RPC reply); every replay loop paged 500 through it — the engine's catch-up / gap repair /
+  version re-reduce, the CORE RE-REDUCE IN THE CONSTRUCTOR (a reboot loop if it dies), waitForEvent's
+  history scan, the cursor lane; append had no size door; the delivery loop chained a `.then` closure
+  per commit per row capturing that commit's events (ceiling 4 of the stress map — a stuck facet
+  retains every commit since it stalled); the alarm's cursor pass fanned out to every behind row at
+  once. Bounded, no issue: the checkpoint blob (post-M1), latest-wins pushed batches, the rpc-stub
+  maps, frame forwarding, the loader maps.
+- PLATFORM FACTS (workerd c4e03fa1d, verified by a subagent, scratchpad platform-facts.md): Workers
+  RPC caps ONE serialized message at 32 MiB (`MAX_JS_RPC_MESSAGE_SIZE`, args and results, every stub
+  kind, no knob); capnweb caps a frame at 32 M code units; WebSockets at 32 MiB; local workerd runs
+  `NullIsolateLimitEnforcer` — NO memory limit, and `process.memoryUsage()` is zeros in-isolate; SQL
+  cursors are lazy and survive a nested `exec`; a Loader-loaded facet is its own isolate (the parent
+  still pays rows + parse + serialize per loopback page).
+- THE PINS, all born `test.fails` and all flipped: `src/stream/memory-budget.test.ts` runs the REAL
+  `Stream` (node:sqlite as `DurableObjectStorage` — `node-sqlite-durable-object-storage.ts`),
+  `ProcessorEngine` and `SubscriptionDelivery` in a Node child at `--max-old-space-size=128`
+  (`memory-budget-scenarios.ts`): read-whole-log, facet-catch-up, constructor-rereduce (a 144 MiB
+  log: 24 × 6 MiB), delivery-backlog (200 × 1 MiB behind a facet that never answers), append-oversize.
+  Before the fix the three replay rows died `FATAL ERROR: Reached heap limit`, the backlog row too,
+  the append row accepted. Two traps cost an hour and are written down in the file: `"x".repeat(n)`
+  is a cons tree (200 × 1 MiB = 3 MB) and a big `Buffer#toString` is an EXTERNAL string the cap never
+  sees — `JSON.parse` makes a heap-resident one; and an unreferenced never-resolving promise is GC'd
+  WITH its reaction chain (the backlog "vanished") — a hung RPC call is referenced, so hold the resolver.
+  `e2e/stream-memory-budget.e2e.test.ts` is the deployed twin (one 144 MiB seed, the read pin, the
+  facet pin, the door pin). `src/stream/subscription-delivery.test.ts` pins the collapse semantics.
+- DEPLOYED, before (pre-fix code re-deployed from a scratch copy): the 144 MiB read did NOT reset
+  the isolate — it materialized 151 MB and workerd refused the reply (`limited to 32MiB, but the
+size of this value was: 150997645 bytes`); a 288 MiB read (48 × 6 MiB, probe-oom.mjs) gave
+  `Durable Object's isolate exceeded its memory limit and was reset.` (`.overloaded`,
+  `.durableObjectReset`, `.remote`) 3/3 and the core snapshot after it rejected the same way — the
+  incident, on the clean room. So the cap tolerates ~150 MiB for one request and kills at ~290.
+- THE FIX, three pieces (~+270/−80 product lines):
+  1. `Stream.read` is BYTE-BUDGETED. The `events` row gains `body_chars` (schema 2 — a virgin store
+     creates it, an older store gets `ALTER TABLE … ADD COLUMN` plus a one-time backfill, keyed on
+     kv `events-schema`); the page SELECT is ITERATED (workerd cursors are lazy), adding `body_chars`
+     up BEFORE reassembling a body, and stops at `READ_PAGE_BUDGET_CHARS` (8 MiB) or
+     `READ_PAGE_MAX_EVENTS` (1000), always carrying ≥ 1 event. The SERVER decides the page; `limit`
+     only shrinks it. `StreamPage` gains `highestDurableOffset` (apps/os's `streamMaxOffset` shape),
+     so AT HEAD is `scannedThroughOffset >= highestDurableOffset` — a page's LENGTH says nothing now
+     (a budget cut is short of `limit` and not at head). Every loop switched: the engine's catch-up
+     (the `sawFullPage` dance is gone — an exact-`limit` page whose last row is the mark is at head,
+     rule 5 lands on it), the version re-reduce, the constructor re-reduce, waitForEvent's scan;
+     `memoryStream` reports the field. The cursor lane and the M1 memo recovery needed nothing.
+  2. THE APPEND CEILING. `EVENT_BODY_MAX_CHARS = 8 MiB` (one constant to tune): the stored body is
+     serialized ONCE in step 2 — the size door measures it, the transaction inserts the same string —
+     and a body over it refuses the whole batch before any write with coded `EVENT_TOO_LARGE` and the
+     WHY (Workers RPC's 32 MiB, the ~4 copies a 128 MiB isolate must hold to read it back, "an event
+     is a fact, not a blob"). Ephemerals pay the same measure (one stringify — they ride the same RPC
+     and the same delivery memory). Why 8: a read page = the ceiling so the largest legal event fits
+     a page alone; 4 copies × 8 = 32 MiB of transient per read, comfortable beside a concurrent one.
+     Above 32 MiB the PLATFORM refuses before we see anything (the WebSocket 1009 / RPC error) — the
+     door covers 8–32 MiB with a message; the client SDK owns the rest (there is none, by doctrine).
+  3. THE DELIVERY BACKLOG IS BOUNDED. Per row, a PENDING QUEUE of `{events, range, chars}` behind the
+     row's in-flight delivery and ONE drain per row on its chain (the queued flag is cleared as the
+     drain starts, so a mid-drain commit queues one follow-up, never a closure per commit). A push is
+     measured only when something is already waiting (the keeping-up case pays no stringify); past
+     `DELIVERY_BACKLOG_BUDGET_CHARS` (8 MiB) the OLDEST pushes are dropped, never the newest: a facet
+     owns its progress and gap-repairs the dropped durables from the log (the survivor's `after` is
+     the last queued `through`, exactly the gap), a cursor row loses nothing (its lane pages the log;
+     a queued push only kicks it), the ephemerals of the dropped span are lost by contract. One
+     `delivery.backlog.dropped` warn per episode. Also: the alarm's cursor pass serves
+     `CURSOR_PASS_CONCURRENCY = 4` rows at a time (a pass over N behind rows held N budgeted pages at
+     once — and an alarm that dies of memory is re-run with the same obligations), and a halted row's
+     `error` is clipped to 1 KB (it lands in the log and the core cell).
+- DEPLOYED, after: the three e2e pins pass on workers.dev (144 MiB paged, byte-identical; the
+  processor catches up over it; a 9 MiB append refused, no offset burned); probe-oom.mjs pages a
+  384 MiB log in 65 pages of ≤ 3 events, 3/3, where the old code reset at 288. The full deployed lane
+  is 148p/2xf/2 skipped — run `--no-file-parallelism` from a laptop: 39 files in parallel produced
+  ETIMEDOUT/EHOSTUNREACH storms twice (network, not code). The backlog bound is proved under the
+  node heap cap and by the semantics test; on the deployed worker it is proved only by no regression
+  (a hung facet cannot be staged from outside past the 60 s watchdog).
+- MENU, not landed (the audit's items 1, 4, 6, 7, 9, 5): the per-push facet source re-hash M1 left
+  behind (memo the startup spec by name), the EDGE-side backlog a slow live client builds (pushes
+  are fire-and-forget into the shared /api isolate — a per-key in-flight cap), `workers.get({source})`
+  targets still in core state (the M1 gap), un-disposed anonymous `subscribe` accumulation, the
+  idempotency dedupe materializing the existing body, LiveState's full-array patches, and the append
+  echo carrying full bodies back over the wire.
+- GATES: tsc×3 · oxlint 0/0 · knip clean · oxfmt clean · unit 220p (19 files, 0 xf) · workers 50p ·
+  e2e local 150p/2xf (39 files) · e2e deployed 148p/2xf/2sk (sequential).
+
+### 2026-09-04, later — the same three fixes at half the size, and 23 more red pins
+
+- Jonas: "why does it store body characters and not body bytes? … it seems quite complex, the 270
+  lines" — send refactor lenses, and "more and more failing tests … we really want to avoid the
+  durable object just disappearing; we want control over the error messages." Three refactor
+  reviewers (stream, delivery, harness; scratchpad refactor-_.md) and three pin hunters (node
+  heap-capped, workers lane, deployed e2e; scratchpad hunt-_.md).
+- CHARS VS BYTES, answered: JS has one O(1) size, `string.length` (UTF-16 code units); UTF-8 bytes
+  cost an encode pass that copies the body. The platform caps are V8-serialized bytes, ≤ 2× chars,
+  so an 8 MiB-char ceiling is a 2× margin under the 32 MiB RPC cap. The APPEND ceiling stays in
+  chars. The READ budget is now BYTES for free: SQLite counts them in the SELECT —
+  `length(CAST(body AS BLOB)) + SUM(length(CAST(chunk AS BLOB)))` per row, lazily as the cursor
+  steps (bare `length()` on TEXT counts code points and would under-count emoji 2×; the BLOB cast is
+  the byte count). So: NO `body_chars` column, NO schema-2 migration, the events table is byte-for-
+  byte HEAD's (−20 lines, and an old store needs nothing).
+- `StreamPage.highestDurableOffset` → `atHead: boolean`. Every consumer used the number only as a
+  boolean; the invalid state `scannedThroughOffset > mark` is now unspellable; `memoryStream` and the
+  engine's catch-up each drop a comment block. The exact-`limit`-page-at-the-head case is at head too
+  (processor-rules' "exact page multiple still delivers caughtUp" row caught the first draft).
+- THE APPEND CEILING moved INTO `#insertEventRowAndChunks`, where `serialized.length` is already in
+  hand: step 2 is byte-for-byte HEAD again (no parallel `freshSerializedBodies` array, no
+  `.entries()`), the message is one sentence. Losses, deliberate: ephemerals are unmeasured (never
+  stored; the pending-push budget bounds them in delivery) — which also un-broke live state: a
+  12 MiB projection's whole-array delta had been refused as EVENT_TOO_LARGE and swallowed by
+  `LiveState.set` as a lost notification, the watcher getting NOTHING (the node hunter's pin; now a
+  control). The refusal happens after offsets are assigned in LOCALS — the transaction rolls back,
+  the marks move only after it commits, the "no offset burned" e2e pin still holds.
+- THE DELIVERY BACKLOG folded: ONE pending push per row (`#pendingPushByRow`) that later commits
+  MERGE into (concat the events, widen `through`); past `PENDING_PUSH_BUDGET_CHARS` the oldest
+  EVENTS are dropped and `after` moves to the last dropped offset — exactly the span a facet's gap
+  repair reads. The pending entry's existence IS "a closure is coming" (it deletes the entry before
+  delivering), so no drain flag, no queue, no `dropping` flag: `#enqueuePush` + `#drainPendingPushes`
+  - `PendingPush` + two fields → one method + one field (−45 lines). The bound is EXACT now (the
+    first draft never measured the first queued push). One warn when the folded push is taken, with
+    `droppedEvents` and `healFromOffset`. The 4-way alarm-pass limiter is GONE: it guarded only the
+    alarm entrance while the commit path fans out to every behind cursor row unbounded (the node
+    hunter's pin 6c proves that path OOMs at 20 rows) — a limiter that covers one of two doors is
+    speculative machinery; the real bound is the menu item below.
+- Product diff for the round now +175/−62 over stream.ts / processor.ts / subscription-delivery.ts /
+  test-support.ts / errors.ts (was +270/−80). The harness reviewer's recommendation — run each
+  scenario in a `worker_threads` Worker with `resourceLimits.maxOldGenerationSizeMb: 128` (OOM =
+  `ERR_WORKER_OUT_OF_MEMORY` on the 'error' event; no child process, no argv/JSON, no stdout
+  parsing, no `SURVIVED` regex; −47 lines) and narrow the node:sqlite shim to what the Stream calls
+  (−36) — is proved in the scratchpad (vt/alt/\*, all rows green) and NOT applied: the two pin
+  hunters were editing those files concurrently; it is the next cut.
+- THE PINS, 23 new red rows across three lanes, every one `test.fails` with the observed message in
+  its title or comment, so a change of behavior flips it (control rows beside them):
+  · node heap-capped (`memory-budget.test.ts`, 21 rows: 12p/9xf → 13p/8xf after the ceiling moved):
+  a LEGAL 32 MiB batch (40k × 780 chars) commits and its ECHO serializes to 34.9 MB > the RPC cap
+  — a committed-but-errored append; a hoarding reducer past the 2 MB cell cap TEARS its checkpoint
+  (`writeReduceCheckpoint` puts the cursor, then the state throws; workerd's implicit transaction
+  does not roll back on a JS throw) → the reborn engine has cursor 95 and 31 items: 33 events
+  silently lost; 20 stuck facet rows on DISJOINT types OOM (the pending budget is per row: 20 ×
+  8 MiB); 20 behind cursor rows + ONE commit OOM (the commit path drains every row at once); ~17k
+  core rows fill the core cell → the next configure dies UNCODED `SQLITE_TOOBIG`; the core
+  re-reduce over 17k rows takes 25 s in the constructor (O(rows²) spread: reboot-loop territory
+  against the 30 s CPU limit); two 4 MiB `[[]]`-dense events on one 8 MiB page OOM the read (the
+  byte budget cannot see parsed cost: ~18 heap bytes per char); one legal 8 MiB dense event OOMs at
+  deserialize before the door runs. The shim's kv.put now throws workerd's `string or blob too
+big: SQLITE_TOOBIG` past 2 MiB.
+  · workers lane (`__workers-tests__/uncontrolled-degradation.test.ts`, 3p/14xf, each row with a
+  `stillDiesOf(err, /message/)` guard so a moved failure reads `PIN MOVED`): core state over the
+  cell cap dies of the raw SQLITE_TOOBIG with no code; a hosting source over the cell cap LANDS and
+  can never materialize (every push re-reads the event and dies at the memo); a facet whose
+  checkpoint crosses the cap is wedged forever; a `className` not exported dies of workerd's
+  opaque `internal error; reference = <id>` (the door's own guard is dead code); a module that
+  throws at evaluation replays `Failed to start Worker` per commit; a throwing constructor is
+  `broken.constructorFailed` + `durableObjectReset: true` per push; a `processEvent` that throws
+  on one event wedges the facet at that offset (disable + re-enable rebuilds into the same wall);
+  one unparseable row body poisons every reader (`is not valid JSON`, no offset named) and, under a
+  core version bump, bricks the constructor on EVERY wake; a lost `reduce:core:progress` cell makes
+  the constructor re-append `stream/created` over offset 1 → `UNIQUE constraint failed` every
+  wake, no operator door; a never-callable target walks 14 alarm wakes (~7 h) before halting; on a
+  PAUSED stream the halt is REFUSED (STREAM_PAUSED), the cursor was already reset, the ladder
+  restarts forever; `deleteAll()` under a live incarnation → `no such table: events` until an
+  eviction nobody can force; a raw row named `core` slips past the reduce (M1 elision bypasses the
+  facet guard).
+  · deployed (`e2e/stream-uncontrolled-degradation.e2e.test.ts`, 4p/3xf on workers.dev, every reset
+  the incident's `exceeded its memory limit and was reset` with `.overloaded` +
+  `.durableObjectReset`, the ctx recovering on the next call): 24 sessions paging one 144 MiB log
+  CONCURRENTLY reset the DO (the budget bounds one read, not N sharing the isolate; 8 hold, 20
+  reset); a live client whose callback never resolves resets the PRODUCER at ~125 × 1 MiB pushes
+  (each fire-and-forget push stays in flight on the DO); 30 × 7 MiB ephemerals to 10 facets reset
+  the parent (to 0 facets the burst is absorbed — the fan-out is the amplifier). Controls that
+  HOLD: 8 × 28 MiB concurrent appends through the shared edge; a hoarding facet wedges with
+  SQLITE_TOOBIG but the parent stays serviceable; a runaway loaded entrypoint dies of its OWN
+  `Worker exceeded memory limit.` (no `.durableObjectReset`), parent intact.
+- Where the pins point (the menu, owner decides): (1) write the checkpoint STATE before the CURSOR
+  (or both under `transactionSync`) and refuse an over-cap state with a coded halt instead of a torn
+  write — data loss today; (2) a per-DO budget for in-flight pushes beside the per-row one, and the
+  commit path's cursor fan-out bounded like the alarm's; (3) cap a batch's serialized ARGS so the
+  echo fits the RPC reply, or echo `{offset}`-only past a size; (4) a coded `STORAGE_CELL_TOO_LARGE`
+  at every `kv.put` of a checkpoint / core state, and clip `halted.error`; (5) the constructor must
+  never throw on a poison cell — skip + report, never re-append `stream/created` over an existing
+  offset; (6) a deterministic call failure (`not callable`, `NO_FACET`, a module that fails to
+  start) halts at once instead of walking the ladder; the halt must not be refusable by pause.
+- GATES (my files; the peer session's in-flight builtins arc owns the two other reds): tsc×3 ·
+  oxlint 0/0 · knip clean · oxfmt clean · unit 123p/8xf excluding src/context · workers 53p/14xf ·
+  deployed: memory pins 3/3, degradation 4p/3xf, run one file at a time.
+
+### 2026-09-04, later still — the stream's storage is ONE typed SQL module; kv and the torn checkpoint are gone
+
+- Jonas, on the harness cut: "do we need to pass in SyncKvStorage? … just use sql and, just like
+  cloudflare/os does, wrap the sql in a module with strongly typed utility methods. i also don't
+  think we need transactionSync?" Two platform facts settled it (workerd source): kv IS a SQLite
+  table (`_cf_KV`, util/sqlite-kv.c++:69), so "just sql" changes only the contract; and the
+  implicit per-turn transaction is rolled back ONLY when the database resets
+  (`ImplicitTxn::rollback()`, io/actor-sqlite.c++:101) — a JS throw mid-turn does not undo the
+  writes before it, so `transactionSync` (a SAVEPOINT) is what turns "the checkpoint put threw
+  after the rows landed" into a clean refusal. Decision: kv leaves the stream's contract;
+  `transactionSync` stays.
+- `stream-storage.ts` — THE STREAM'S TABLES, typed (the apps/os `StreamEventLog` shape): every SQL
+  statement the stream runs lives there behind real-typed methods (`insertEvent` with the chunking,
+  `readEventByIdempotencyKey`, `readEventPage(after, limit, budgetBytes)` — the byte-budgeted lazy
+  cursor —, `listSubscriptionCursors` / `writeSubscriptionCursor` / `deleteSubscriptionCursor`,
+  `highestEventOffset`), over `DurableObjectStorageSlice = { sql, transactionSync, setAlarm }`. The
+  incarnation counter is a `stream_meta` row, the cursors a `subscription_cursors` row each (JSON),
+  the core checkpoint a `reduce_checkpoints` row. stream.ts keeps policy only (the ceilings, the
+  at-head proof, the reduce); `Stream.storage` is public so the delivery loop keeps its cursors
+  through it (the DO's `kv:` dep is gone; its own `facet:*` memos stay on kv — they are the DO's).
+- `reduce-checkpoint.ts` — `ReduceCheckpointTable`, ONE ROW per slug (version, offset, state as
+  JSON; NULL state = never changed = `initialState()`), ONE statement per write (`INSERT … ON
+CONFLICT DO UPDATE`, `COALESCE` keeps the state when unchanged). So a checkpoint can never TEAR —
+  the node hunter's "cursor landed, state did not, 33 events silently lost" is structurally gone.
+  And THE CELL CEILING is measured BEFORE the write: a state whose JSON would not fit the
+  documented 2 MB cell is refused coded, `REDUCE_CHECKPOINT_TOO_LARGE`, naming the slug, the size,
+  the ceiling and "nothing was written" — where the platform's raw `string or blob too big:
+SQLITE_TOOBIG` used to cross the hop from inside the write. Local workerd (4 MiB cell) and the
+  edge (2 MB) now refuse at the same size. The facet host (`StreamProcessorDurableObject`) uses the
+  same table over its own `ctx.storage.sql`; the engine's `ReduceCheckpointStore` interface has an
+  in-memory twin for the unit lane (`memoryStorage()`, one write per checkpoint now — rule 4's
+  counts moved from 2 to 1).
+- A MISSING core checkpoint is recoverable: the log is the truth and the checkpoint its cache, so
+  the constructor derives the mark from `MAX(offset)` and re-reduces from 0 (one issue line) — the
+  D1 pin (the constructor re-appending `stream/created` over offset 1 and dying of a UNIQUE
+  constraint on every wake, bricked) FLIPPED to a passing row. It is also what a store from before
+  this layout does on its first wake.
+- The node stand-in (`node-sqlite-durable-object-storage.ts`) is 41 lines: `exec` (writes run
+  eagerly via `columns()` — an un-consumed `iterate()` never executes), a real BEGIN/ROLLBACK
+  `transactionSync`, a no-op `setAlarm`. No kv, no cursor extras, no cell cap of its own.
+- PINS MOVED BY THIS CUT: node lane — the torn checkpoint → "refused coded, checkpoint consistent,
+  still retried forever" (`wakeRetriesFailed` is the WANTED); core rows over the cell → a passing
+  control (coded `REDUCE_CHECKPOINT_TOO_LARGE`). Workers lane — A1 → control (coded, in our words),
+  A2 → sizes 1 + 1.5 MiB (the ceiling is 2 MB now), A4 → "refused coded, then wedged" (a halt is
+  the WANTED), D1 → passing. Net: workers 56p/12xf, unit 128p/7xf.
+- Menu, unchanged in substance: (1) a deterministic refusal (`REDUCE_CHECKPOINT_TOO_LARGE`, a
+  never-callable target, a module that fails to start) should HALT the row instead of retrying per
+  push and per wake (A4, E2, the node accumulating pin); (2) a per-DO in-flight push budget beside
+  the per-row one, and the commit path's cursor fan-out bounded; (3) the append echo over the RPC
+  cap; (4) M1's gap — `workers.get({source})` rule targets still ride the core cell (A-section).
+- The harness cut the reviewer proved (`worker_threads` + `resourceLimits`) was tried and REVERTED:
+  a heap death inside `JSON.parse` / `v8.serialize` aborts the whole process, so a thread took the
+  vitest fork with it (two rows vanished, "Worker exited unexpectedly"). The runner stays a child
+  process; the scenario module now prints ONE JSON line of facts instead of `key=value` lines plus
+  `SURVIVED`, the runner parses it. The shim is 41 lines (sql + a real BEGIN/ROLLBACK + a no-op
+  alarm). `e2e/stream-uncontrolled-degradation.e2e.test.ts` is DEPLOYED-ONLY now (`test.skipIf`
+  on a local URL): locally it proved nothing and its 300 MiB of uploads starved the parallel lane
+  (11 collateral reds, all green alone).
+- DEPLOYED (live-45 = this layout + the peer's arc-one hunks): stream-memory-budget 3/3 on the SQL
+  tables; stream-uncontrolled-degradation 3p/3xf with the POISON FACET control re-pinned to the coded
+  ceiling (it had asserted the raw SQLITE_TOOBIG). The full sequential lane was invalidated by the
+  peer's `read → readEvents` root rename landing in the tree mid-run against a worker that still
+  spoke `read` (50 × "no rewrite rule matches itx.readEvents…") — the shared-worktree cost, no code
+  fault; the peer redeploys with the rename and runs both stream-\* files in its lane.
+- GATES: tsc×3 · oxlint 0/0 · knip clean · oxfmt clean · unit 128p/7xf (excluding the peer's
+  in-flight context tests) · workers 56p/12xf · e2e local 159p/2xf/7 skipped (41 files + the
+  deployed-only one) · SDK bundle builds · deployed memory pins 3/3 on live-45.
+- DEPLOYED AGAIN on the peer's redeploy (the readEvents rename in): stream-memory-budget green in
+  the peer's full lane (165p/1f/5xf) and mine; stream-uncontrolled-degradation 4p/3xf with the
+  poison-facet control green on the coded ceiling. The one red in the peer's lane was the
+  CONCURRENT BIG APPENDS control: 8 sessions × one 28 MiB batch to their own ctxs at once — ONE
+  session dies of `Peer closed WebSocket: 1006` (no code, no reset stamp; the DO never saw it): the
+  shared /api EDGE isolate closing the socket, each batch held there twice (the capnweb frame, the
+  Workers-RPC copy). A probe from the laptop (8 sessions, 95–135 s each) committed 8/8; the row went
+  8/8 twice yesterday, 7/8 four times today, then 8/8 — whether the eight coincide in ONE edge
+  isolate is the platform's routing. A `.fails` pin flakes symmetrically, so the row is now a
+  BOUNDARY CONTROL asserting what holds either way: no DO reset, every landed batch whole, any loss
+  is that one 1006 (named in the assertion message), ≥ 7/8. It is the audit's "least-isolated
+  tenant" (item 4/27) made visible; the fix — an edge-side in-flight budget — is on the menu.
+
 ## 2026-09-04 — the DO owns both ends of a lent stub's rule: the pager upgrade carries the rule, one round trip
 
 - WHY: a `provide(match, stub)` / `subscribe({ target: fn })` cost THREE edge→DO round trips — the
@@ -2770,7 +3038,7 @@ exists as a probe (its harness lane went in the test-hygiene sweep). The 300-rul
   Rule 4's value semantics are untouched: a hole-free target takes today's path byte for byte.
 - **`itx.ai`** — Cloudflare's Workers AI binding VERBATIM (`run(model, inputs, options?)`, `models()`,
   `gateway(id).run({ provider, endpoint, headers, query })`, `toMarkdown()`, `autorag(id)`): `"ai": {
-  "binding": "AI" }` in wrangler.jsonc, `AI: Ai` on the DO's `Env`, `ai` in `BUILT_IN_ROOTS`, `ai: env.AI`
+"binding": "AI" }` in wrangler.jsonc, `AI: Ai` on the DO's `Env`, `ai` in `BUILT_IN_ROOTS`, `ai: env.AI`
   in the record — no wrapper. NOT in wrangler.test.jsonc: Workers AI is remote-only in local dev and
   vitest-pool-workers starts a remote proxy session for it at boot (an account to pick); the workers
   lane never calls it, the e2e lane boots from wrangler.jsonc and carries it, and its AI tests shadow it

@@ -70,10 +70,12 @@ at N=10 @ 50 fps) — tune N to the latency budget.
   LentRpcStub Workers-RPC hop — removes one subrequest + one structured-clone per push, halving
   per-push cost and removing the F-subreq accumulation on the fan-out side. Protocol change (relay +
   directory rework); the biggest single per-push saving for audio/streaming.
-- **Bound the per-subscription delivery backlog** (the OOM fix) — carry a RANGE, not per-commit event
-  arrays, so a slow subscriber costs O(subscriptions) memory not O(backlog). Verify: needs care — for
-  a FacetHandle target the closure events ARE the awaited in-order payload, so the range-carry must
-  keep the facet's ordered delivery. Protocol-ish.
+- **Bound the per-subscription delivery backlog** (the OOM fix) — LANDED 2026-09-04 (BUILD-LOG): a
+  per-row pending queue bounded at 8 MiB with one drain per row; past the budget the oldest pushes
+  are dropped and the facet gap-repairs the durables from the log (the survivor's range chains from
+  the last queued `through`), ephemerals in the dropped span are lost by contract. Same round:
+  `read` is byte-budgeted (8 MiB pages, `body_chars`, the page carries `highestDurableOffset`) and
+  append refuses a body over 8 MiB with `EVENT_TOO_LARGE`.
 - **Client-side burst coalescing** (the batching answer above) — client SDK, out of this package.
 
 ## Multi-row INSERT (confirmed, small, menu)

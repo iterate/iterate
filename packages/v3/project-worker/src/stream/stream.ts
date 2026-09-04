@@ -1,5 +1,6 @@
 // stream/stream.ts — THE STREAM, a simple dependency-injected JS class:
-// SQLite rows + one kv high-water mark, idempotency at the door, one shared offset sequence,
+// SQLite rows (stream-storage.ts, the typed tables) + one durable mark (the core checkpoint's
+// offset), idempotency at the door, one shared offset sequence,
 // chunked large bodies, the append validation + the pause check, the wake record, waitForEvent, and
 // the alarm armer — and THE CORE REDUCE (`coreReducedState`), the stream's own state reduced inside every
 // commit. The DurableObject holds a `Stream` and drives it; the one thing the stream needs from its
@@ -38,23 +39,31 @@ import {
 } from "./events.ts";
 import { LiveState } from "./live-state.ts";
 import { consumesEvent } from "./processor.ts";
-import {
-  readReduceCheckpoint,
-  reduceCursorKey,
-  writeReduceCheckpoint,
-} from "./reduce-checkpoint.ts";
+import { StreamStorage, type DurableObjectStorageSlice } from "./stream-storage.ts";
 
-/** One page of the log: the events after an offset, plus how far the scan reached (the range a
- *  client chains for contiguity). Structurally identical to IterateContextDurableObject.read's return. */
+/** One page of the log: the events after an offset, how far the scan reached (the range a client
+ *  chains for contiguity), and whether that reached the durable head — a page is CUT by `limit` or
+ *  by the server's byte budget (`read` below), and its length says nothing about which. */
 export interface StreamPage {
   events: StreamEvent[];
   scannedThroughOffset: number;
+  /** True iff the scan reached the durable mark: nothing more to read until the next commit. */
+  atHead: boolean;
 }
 
-/** A serialized body longer than this (JSON string chars) is split across `event_chunks` rows
- *  instead of one SQLite TEXT cell (which caps around 2MB — SQLITE_TOOBIG). 512KiB matches apps/os;
- *  a body at or under it stays single-cell (the fast path — no chunk join on read). */
-const EVENT_CHUNK_SIZE = 512 * 1024;
+/** THE APPEND CEILING on one serialized body, in JS chars (`JSON.stringify(body).length` — the one
+ *  O(1) size JS has; V8 serializes a string at 1–2 bytes per char). Workers RPC caps ONE message at
+ *  32 MiB serialized (every hop, no knob), and a 128 MiB isolate holds ~4 transient copies of a body
+ *  while reading it back — 8 MiB keeps both comfortable, and is the one number to tune. An event is
+ *  a fact, not a blob: a large payload lives elsewhere and the event names it. */
+export const EVENT_BODY_MAX_CHARS = 8 * 1024 * 1024;
+/** THE READ BUDGET, in UTF-8 bytes as SQLite counts them (≥ JS chars): a page stops BEFORE the row
+ *  that would cross it and always carries ≥ 1 row, so the largest legal event still rides alone.
+ *  Every replay loop in the package pages through this budget. */
+const READ_PAGE_BUDGET_BYTES = 8 * 1024 * 1024;
+/** The most rows one page returns whatever `limit` asks — the object overhead of tiny events, which
+ *  the byte budget cannot see. */
+const READ_PAGE_MAX_EVENTS = 1000;
 
 /** The waitForEvent selector: `type` is an exact event-type match (absent = any type); only events
  *  with offset strictly greater than `afterOffset` match (default = the head at call time — "the
@@ -76,8 +85,9 @@ type WaitForEventWaiter = {
 
 /** Everything the stream needs from its host, enumerated (see the header). */
 interface StreamDeps {
-  /** The DO's sqlite + kv + alarms — the ONE platform handle. */
-  storage: DurableObjectStorage;
+  /** The DO's storage handle — sync SQLite, the sync transaction, the alarm (the DO passes its
+   *  whole `ctx.storage`; stream-storage.ts types the tables over it). */
+  storage: DurableObjectStorageSlice;
   /** Idempotency-scope / logging identity — the event-identity stamp on every StreamEvent. */
   path: string;
   /** Who this stream belongs to — the birth certificate's payload (`wake`). */
@@ -88,7 +98,7 @@ interface StreamDeps {
   onCommit: (freshEvents: StreamEvent[], afterOffset: number, throughOffset: number) => void;
 }
 
-/** THE STREAM — the commit point: SQLite rows + ONE kv high-water mark, idempotency at the door,
+/** THE STREAM — the commit point: SQLite rows + ONE durable mark, idempotency at the door,
  *  offsets assigned from one shared sequence (ephemeral events consume offsets, never rows — after
  *  a reboot their offsets survive as valid gaps), and THE CORE REDUCE (core-processor.ts) reduced
  *  inside every commit: the stream's own state — who it is, its incarnation, pause, rewrite rules,
@@ -96,19 +106,20 @@ interface StreamDeps {
  *  chunked into `event_chunks` rows keyed (offset, chunk_index) — INVISIBLE to the events table, so a
  *  chunked event is still ONE row at ONE offset; reads and idempotency-dedupe reassemble it. */
 export class Stream {
-  readonly #storage: DurableObjectStorage;
+  /** THE TABLES (stream-storage.ts) — the delivery loop keeps its cursors through here too. */
+  readonly storage: StreamStorage;
   readonly #path: string;
   readonly #projectId: string;
   readonly #onCommit: StreamDeps["onCommit"];
-  /** This incarnation's number — the kv counter, bumped by the constructor; growth across idle ⇒ it hibernated. */
+  /** This incarnation's number — the `stream_meta` counter, bumped by the storage's constructor; growth across idle ⇒ it hibernated. */
   readonly #incarnation: number;
   /** The highest offset assigned THIS INCARNATION — ephemerals included. Seeded from the durable
    *  mark; an ephemeral-only batch advances this alone (an ephemeral's offset is unique within an
    *  incarnation and may be reused by the next one — see the header). */
   #highestAssignedOffset: number;
   /** The DURABLE head as of the last COMMITTED durable batch — the core reduce's cursor offset
-   *  (`reduce:core:progress.reducedThroughOffset`, written every durable commit; there is no separate
-   *  mark). What `read()` proves a scan through, what the core reduce has reduced to, and what a
+   *  (the core checkpoint's offset, written every durable commit; there is no separate mark).
+   *  What `read()` proves a scan through, what the core reduce has reduced to, and what a
    *  resume's seek is clamped to — never the in-memory head above. */
   #highestDurableOffset: number;
   /** FIFO; resolved from `freshEvents` in append's step 5. */
@@ -129,65 +140,46 @@ export class Stream {
   readonly #coreLiveState: LiveState<CoreState>;
 
   constructor(deps: StreamDeps) {
-    this.#storage = deps.storage;
+    this.storage = new StreamStorage(deps.storage);
     this.#path = deps.path;
     this.#projectId = deps.projectId;
     this.#onCommit = deps.onCommit;
-    // Storage opens HERE, synchronously (sync SQLite, the DO constructor's own turn): the two
-    // tables ONLY on a virgin store, and this incarnation's number — constructing the stream IS an
-    // incarnation starting. A store that already has an incarnation was opened by a prior
-    // incarnation, so it already has the tables (they are never dropped); skipping the two
-    // `CREATE TABLE IF NOT EXISTS` saves their prepare+parse on every re-wake.
-    const priorIncarnation = this.#storage.kv.get("incarnation") as number | undefined;
-    if (priorIncarnation === undefined) {
-      this.#storage.sql.exec(
-        `CREATE TABLE IF NOT EXISTS events (
-           offset INTEGER PRIMARY KEY,
-           body TEXT NOT NULL,
-           idempotency_key TEXT UNIQUE
-         )`,
-      );
-      // Overflow rows for a large body: the events row keeps an EMPTY body as the "chunked" marker
-      // (a real body is always non-empty JSON), and the pieces live here, ordered by chunk_index.
-      this.#storage.sql.exec(
-        `CREATE TABLE IF NOT EXISTS event_chunks (
-           offset INTEGER NOT NULL,
-           chunk_index INTEGER NOT NULL,
-           chunk TEXT NOT NULL,
-           PRIMARY KEY (offset, chunk_index)
-         )`,
-      );
-    }
-    this.#incarnation = (priorIncarnation ?? 0) + 1;
-    this.#storage.kv.put("incarnation", this.#incarnation);
-    // THE DURABLE HEAD is the core reduce's cursor offset — written every durable commit anyway
-    // (writeReduceCheckpoint, below), so there is no separate mark to write. Read the RAW cursor
-    // cell for the offset alone: the version gate on the STATE (readReduceCheckpoint) does not gate
-    // the offset, so a core-version bump still recovers the head and re-reduces the log up to it.
-    const persistedCursor = this.#storage.kv.get<{ reducedThroughOffset: number }>(
-      reduceCursorKey(this.#coreProcessor.contract.slug),
-    );
-    this.#highestDurableOffset = persistedCursor?.reducedThroughOffset ?? 0;
-    this.#highestAssignedOffset = this.#highestDurableOffset;
-    // The core reduced state. Its checkpoint is written in the SAME synchronous transaction as the
-    // rows it was reduced from (SQLite storage writes in one synchronous block are one atomic
-    // implicit transaction; ours is an explicit one), so after any commit the two cannot disagree.
-    // A checkpoint is therefore only ever ABSENT on a store with no commits (mark 0, nothing to
-    // reduce) or DISCARDED because the contract's version changed — then the durable log is
-    // re-reduced from offset 0, the one-time cost of a version bump.
+    this.#incarnation = this.storage.incarnation;
+    // THE DURABLE HEAD is the core checkpoint's offset — written every durable commit anyway (the
+    // reduce inside the transaction below), so there is no separate mark to write. Read WHATEVER
+    // version wrote it: a core-version bump still recovers the head and re-reduces the log up to it.
     const { contract } = this.#coreProcessor;
-    const checkpoint = readReduceCheckpoint<CoreState>(
-      this.#storage.kv,
-      contract.slug,
-      contract.version,
-      () => contract.initialState(),
-    );
-    if (checkpoint) {
-      this.#coreReducedState = checkpoint.state;
+    const checkpoint = this.storage.reduceCheckpoints.read<CoreState>(contract.slug);
+    // A log with rows but NO checkpoint (a lost row; a store from before the SQL layout) is
+    // recoverable: the log is the truth and the checkpoint its cache — the mark is the highest row,
+    // and the state is re-reduced below exactly as after a version bump. Reported, never fatal: the
+    // alternative was re-appending the birth certificate over offset 1 and dying of a UNIQUE
+    // constraint on every wake.
+    const highestDurableOffset = checkpoint
+      ? checkpoint.reducedThroughOffset
+      : this.storage.highestEventOffset();
+    if (!checkpoint && highestDurableOffset > 0)
+      reportIssue(
+        "stream.core-checkpoint-missing",
+        new Error(
+          `stream ${this.#path}: the log holds rows through offset ${highestDurableOffset} but no core checkpoint — re-deriving the mark and the state from the log`,
+        ),
+        { highestDurableOffset },
+      );
+    this.#highestDurableOffset = highestDurableOffset;
+    this.#highestAssignedOffset = highestDurableOffset;
+    // The core reduced state. Its checkpoint is written in the SAME synchronous transaction as the
+    // rows it was reduced from, so after any commit the two cannot disagree; it is only ever ABSENT
+    // on a store with no commits (mark 0, nothing to reduce) or written under ANOTHER contract
+    // version — then the durable log is re-reduced from offset 0, the one-time cost of a version bump.
+    if (checkpoint?.reducerVersion === contract.version) {
+      this.#coreReducedState = checkpoint.state ?? contract.initialState();
       this.#coreReducedThroughOffset = checkpoint.reducedThroughOffset;
     } else {
       this.#coreReducedState = contract.initialState();
       this.#coreReducedThroughOffset = 0;
+      // Budgeted pages (READ_PAGE_BUDGET_CHARS): this runs in the DO constructor, where a page that
+      // did not fit the isolate would be a reboot loop — every wake re-running the same re-reduce.
       while (this.#coreReducedThroughOffset < this.#highestDurableOffset) {
         const page = this.read(this.#coreReducedThroughOffset, 500);
         for (const event of page.events)
@@ -195,8 +187,8 @@ export class Stream {
             event,
             this.#coreReducedState,
           );
+        if (page.scannedThroughOffset <= this.#coreReducedThroughOffset) break; // nothing left
         this.#coreReducedThroughOffset = page.scannedThroughOffset;
-        if (page.events.length < 500) break;
       }
     }
     this.#coreLiveState = new LiveState(
@@ -307,18 +299,11 @@ export class Stream {
         ? eventsByIdempotencyKey.get(eventInput.idempotencyKey)
         : undefined;
       if (eventInput.idempotencyKey && !existingEvent) {
-        const row = this.#storage.sql
-          .exec(
-            "SELECT offset, body FROM events WHERE idempotency_key = ?",
-            eventInput.idempotencyKey,
-          )
-          .toArray()[0];
+        const row = this.storage.readEventByIdempotencyKey(eventInput.idempotencyKey);
         if (row)
           existingEvent = {
-            ...(JSON.parse(
-              this.#reassembleEventBodyFromChunks(Number(row.offset), String(row.body)),
-            ) as object),
-            offset: Number(row.offset),
+            ...(JSON.parse(row.body) as object),
+            offset: row.offset,
             path: this.#path,
           } as StreamEvent;
       }
@@ -357,17 +342,27 @@ export class Stream {
       this.#highestAssignedOffset = throughOffset; // the durable mark is untouched
     } else {
       let reducedState = this.#coreReducedState;
-      this.#storage.transactionSync(() => {
+      this.storage.transactionSync(() => {
         for (const event of freshEvents) {
           if (event.ephemeral) continue;
           // the stored body is the event as appended plus createdAt — the row carries the offset,
           // the stream is the path
           const { offset: _offset, path: _path, ...eventBody } = event;
-          this.#insertEventRowAndChunks(
-            event.offset,
-            JSON.stringify(eventBody),
-            event.idempotencyKey ?? null,
-          );
+          const serializedBody = JSON.stringify(eventBody);
+          // THE APPEND CEILING (EVENT_BODY_MAX_CHARS). The transaction rolls back and the marks are
+          // locals until it commits: nothing written, no offset burned. Ephemerals are never
+          // stored, so they are not measured — the pending-push budget bounds them in delivery.
+          if (serializedBody.length > EVENT_BODY_MAX_CHARS)
+            throw codedError(
+              "EVENT_TOO_LARGE",
+              `append: the event that would land at offset ${event.offset} serializes to ${serializedBody.length} chars, over the ${EVENT_BODY_MAX_CHARS / (1024 * 1024)} MiB ceiling — Workers RPC caps a message at 32 MiB and a read holds several copies; store the payload elsewhere and let the event name it`,
+              {
+                offset: event.offset,
+                chars: serializedBody.length,
+                maxChars: EVENT_BODY_MAX_CHARS,
+              },
+            );
+          this.storage.insertEvent(event.offset, serializedBody, event.idempotencyKey ?? null);
         }
         // The core reduce takes this batch's durables and checkpoints with them: the cursor every
         // batch IS the durable head (read back as such at construction — one write, not two), the
@@ -377,8 +372,7 @@ export class Stream {
         const { contract } = this.#coreProcessor;
         for (const event of freshEvents)
           reducedState = this.#reduceEventIntoCoreReducedState(event, reducedState);
-        writeReduceCheckpoint(
-          this.#storage.kv,
+        this.storage.reduceCheckpoints.write(
           contract.slug,
           { reducerVersion: contract.version, reducedThroughOffset: throughOffset },
           reducedState,
@@ -418,37 +412,38 @@ export class Stream {
     }
   }
 
+  /** One page after `afterOffset`: at most `limit` rows AND at most READ_PAGE_BUDGET_BYTES of
+   *  bodies (stream-storage.ts pages the cursor) — the SERVER decides the page; `limit` only shrinks it. */
   read(afterOffset = 0, limit = 500): StreamPage {
-    limit = Math.max(1, limit); // limit 0 crashed the full-page check (userspace-reachable)
-    const events = this.#storage.sql
-      .exec(
-        "SELECT offset, body FROM events WHERE offset > ? ORDER BY offset LIMIT ?",
-        afterOffset,
-        limit,
-      )
-      .toArray()
-      .map((r) => {
-        const offset = Number(r.offset);
-        // Chunk rows never enter this SELECT, so the page counts EVENTS and its scannedThroughOffset
-        // is an event offset — never a chunk boundary. Reassemble each body for the caller.
-        return {
-          ...(JSON.parse(
-            this.#reassembleEventBodyFromChunks(offset, String(r.body)),
-          ) as StreamEventInput & {
-            createdAt: string;
-          }),
-          offset,
-          path: this.#path,
-        };
-      });
-    // The scanned-offset-range proof: a FULL page is only contiguously known through its last
-    // row; a short page proves the read scanned the whole DURABLE log — through the durable mark,
-    // never the in-memory head. The head counts ephemeral offsets, which die with the incarnation
-    // and may be handed to durables by the next one; a proof that named one would let a persisted
-    // checkpoint skip those durables (the zero-write contract in the header).
-    const scannedThroughOffset =
-      events.length === limit ? events[events.length - 1].offset : this.highestDurableOffset();
-    return { events, scannedThroughOffset };
+    limit = Math.min(Math.max(1, limit), READ_PAGE_MAX_EVENTS); // limit 0 crashed the cut check (userspace-reachable)
+    const { rows, nextRowDidNotFit } = this.storage.readEventPage(
+      afterOffset,
+      limit,
+      READ_PAGE_BUDGET_BYTES,
+    );
+    // Chunk rows never enter a page, so it counts EVENTS and its scannedThroughOffset is an event
+    // offset — never a chunk boundary.
+    const events: StreamEvent[] = rows.map((row) => ({
+      ...(JSON.parse(row.body) as StreamEventInput & { createdAt: string }),
+      offset: row.offset,
+      path: this.#path,
+    }));
+    // The scanned-offset-range proof: a CUT page (by `limit` or by the budget) is only contiguously
+    // known through its last row; a complete page proves the read scanned the whole DURABLE log —
+    // through the durable mark, never the in-memory head (ephemeral offsets die with the
+    // incarnation and may be handed to durables by the next one; a proof naming one would let a
+    // persisted checkpoint skip those durables — the zero-write contract in the header).
+    // At head: the scan ran out of rows (a short page), or the page's last row IS the durable mark
+    // (an exact-`limit` page at the head must say so — rule 5's caught-up pass rides it).
+    const highestDurableOffset = this.highestDurableOffset();
+    const lastOffset = events.length ? events[events.length - 1].offset : afterOffset;
+    const atHead =
+      !nextRowDidNotFit && (events.length < limit || lastOffset >= highestDurableOffset);
+    return {
+      events,
+      scannedThroughOffset: atHead ? highestDurableOffset : lastOffset,
+      atHead,
+    };
   }
 
   /** Resolve with the next event matching `filter` — or the first COMMITTED durable match already
@@ -472,8 +467,8 @@ export class Stream {
       const page = this.read(cursor, 500);
       for (const event of page.events)
         if (type === undefined || event.type === type) return Promise.resolve(event);
-      if (page.events.length < 500) break; // a short page proves the scan reached the head
-      cursor = page.scannedThroughOffset;
+      if (page.atHead) break;
+      cursor = page.scannedThroughOffset; // cut by `limit` or the byte budget: read on
     }
     return new Promise<StreamEvent>((resolve, reject) => {
       const waiter: WaitForEventWaiter = {
@@ -510,56 +505,6 @@ export class Stream {
     }
   }
 
-  /** A body over EVENT_CHUNK_SIZE rides `event_chunks` behind an empty marker cell; both writes are
-   *  the caller's transaction, so a throw rolls back the chunk rows with the event row. */
-  #insertEventRowAndChunks(
-    offset: number,
-    serialized: string,
-    idempotencyKey: string | null,
-  ): void {
-    if (serialized.length <= EVENT_CHUNK_SIZE) {
-      this.#storage.sql.exec(
-        "INSERT INTO events (offset, body, idempotency_key) VALUES (?, ?, ?)",
-        offset,
-        serialized,
-        idempotencyKey,
-      );
-      return;
-    }
-    this.#storage.sql.exec(
-      "INSERT INTO events (offset, body, idempotency_key) VALUES (?, '', ?)",
-      offset,
-      idempotencyKey,
-    );
-    for (let start = 0, idx = 0; start < serialized.length; idx++) {
-      let end = Math.min(start + EVENT_CHUNK_SIZE, serialized.length);
-      // NEVER split a UTF-16 surrogate PAIR across two cells: a lone surrogate becomes U+FFFD on
-      // the SQLite TEXT bind, silently corrupting the body (byte-identity breaks). If the cut lands
-      // right after a high surrogate, keep it with its low half in the next cell.
-      if (end < serialized.length) {
-        const c = serialized.charCodeAt(end - 1);
-        if (c >= 0xd800 && c <= 0xdbff) end -= 1;
-      }
-      this.#storage.sql.exec(
-        "INSERT INTO event_chunks (offset, chunk_index, chunk) VALUES (?, ?, ?)",
-        offset,
-        idx,
-        serialized.slice(start, end),
-      );
-      start = end;
-    }
-  }
-
-  /** An EMPTY cell is the chunked marker (a real body is never empty JSON); otherwise the cell IS the body. */
-  #reassembleEventBodyFromChunks(offset: number, cell: string): string {
-    if (cell !== "") return cell;
-    return this.#storage.sql
-      .exec("SELECT chunk FROM event_chunks WHERE offset = ? ORDER BY chunk_index", offset)
-      .toArray()
-      .map((r) => String(r.chunk))
-      .join("");
-  }
-
   // ── the alarm armer ──
 
   /** ONE alarm write per quiet-period start, never per append (an ephemeral flood arms once).
@@ -571,7 +516,7 @@ export class Stream {
     this.#alarmArmedForMs = atMs;
     // Not awaited: the native output gate owns the write and turns an async failure into an
     // invocation failure — and a lost memo just re-arms on the next alarm() pass.
-    void this.#storage.setAlarm(atMs);
+    void this.storage.setAlarm(atMs);
   }
 
   noteAlarmFired(): void {

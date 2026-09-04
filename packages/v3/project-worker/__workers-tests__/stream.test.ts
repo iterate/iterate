@@ -38,11 +38,19 @@ function bareStream(storage: DurableObjectStorage, opts?: { batches?: StreamEven
 const ownBatches = (batches: StreamEvent[][]): StreamEvent[][] =>
   batches.filter((b) => !b.every((e) => e.type === "events.iterate.com/live-state/changed"));
 
-/** The persisted durable head. The stream stopped writing a separate `maxAssignedOffset`; the core
- *  reduce's cursor, written every durable commit, IS the mark. `undefined` before the first commit. */
-const persistedDurableMark = (state: { storage: DurableObjectStorage }): number | undefined =>
-  (state.storage.kv.get("reduce:core:progress") as { reducedThroughOffset: number } | undefined)
-    ?.reducedThroughOffset;
+/** The persisted durable head. The stream writes no separate mark; the core checkpoint's offset
+ *  (`reduce_checkpoints`, written every durable commit) IS the mark. `undefined` before the first commit. */
+const persistedDurableMark = (state: { storage: DurableObjectStorage }): number | undefined => {
+  const row = state.storage.sql
+    .exec("SELECT reduced_through_offset AS offset FROM reduce_checkpoints WHERE slug = 'core'")
+    .toArray()[0];
+  return row === undefined ? undefined : Number(row.offset);
+};
+/** The incarnation counter, as `stream_meta` holds it. */
+const persistedIncarnation = (state: { storage: DurableObjectStorage }): number =>
+  Number(
+    state.storage.sql.exec("SELECT value FROM stream_meta WHERE key = 'incarnation'").one().value,
+  );
 
 test("waitForEvent: a registered waiter resolves with the committed event, fed from the fresh batch", async () => {
   await runInDurableObject(stub("prj_wait_park"), async (_instance, state) => {
@@ -129,7 +137,7 @@ test("waitForEvent: a timed-out wait writes nothing — construction made the ta
       .map((r) => String(r.name));
     expect(tables).toContain("events");
     expect(tables).toContain("event_chunks");
-    expect(state.storage.kv.get("incarnation")).toBe(1);
+    expect(persistedIncarnation(state)).toBe(1);
     expect(persistedDurableMark(state)).toBeUndefined();
     expect(state.storage.sql.exec("SELECT count(*) AS n FROM events").one().n).toBe(0);
     expect(stream.currentIncarnation()).toBe(1);

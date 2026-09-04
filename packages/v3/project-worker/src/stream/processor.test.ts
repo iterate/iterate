@@ -205,9 +205,9 @@ describe("the concurrency contract", () => {
     ) as StreamEvent[];
     await engine.catchUpFromLog();
     await settle();
-    // the whole 3-event scannedOffsetRange persists ONCE: cursor + state (2 writes). The milestone lands
-    // as its own scannedOffsetRange — cursor only, its reduce didn't change state (1 write, no state blob).
-    expect(storage.writes - before).toBe(3);
+    // the whole 3-event scannedOffsetRange persists ONCE (one checkpoint row). The milestone lands as
+    // its own scannedOffsetRange — a second write (cursor only: its reduce didn't change state).
+    expect(storage.writes - before).toBe(2);
   });
 
   test("rule 5 — at-head pass fires exactly once when the scannedOffsetRange reaches the head", async () => {
@@ -255,7 +255,7 @@ describe("the concurrency contract", () => {
     mem.engines.push(flaky);
     mem.stream.append({ type: "e" }) as StreamEvent[]; // the auto-push fails (attempt 1)
     await settle();
-    expect(storage.get("reduce:flaky:progress")).toBeUndefined(); // nothing persisted
+    expect(storage.read("flaky")).toBeUndefined(); // nothing persisted
     await flaky.catchUpFromLog(); // retried whole
     expect(attempts).toBe(2);
     const snap = await flaky.snapshot();
@@ -334,7 +334,7 @@ const caughtUpProbe = (readFails?: Error) => {
       read: () =>
         readFails
           ? Promise.reject(readFails)
-          : Promise.resolve({ events: [], scannedThroughOffset: 0 }),
+          : Promise.resolve({ events: [], scannedThroughOffset: 0, atHead: true }),
     },
     storage: memoryStorage(),
   });
@@ -928,7 +928,7 @@ describe("eviction honors the persisted cursor", () => {
     await e1.catchUpFromLog();
     expect(p1.effects).toEqual([1, 2, 3, 4]);
     // The cursor IS persisted (rule 4), even though state never changed.
-    expect(storage.get("reduce:eff:progress")).toMatchObject({ reducedThroughOffset: 4 });
+    expect(storage.read("eff")).toMatchObject({ reducedThroughOffset: 4 });
 
     // Eviction: fresh instance, SAME storage + log, SAME version.
     const p2 = new EffectOnlyProcessor();
@@ -961,7 +961,7 @@ describe("eviction honors the persisted cursor", () => {
     const mem = memoryStream();
     const storage = memoryStorage();
     // A v1 cursor at offset 0 (as if nothing was ever consumed), then a v2 incarnation.
-    storage.put("reduce:count:progress", { reducerVersion: "1.0.0", reducedThroughOffset: 0 });
+    storage.write("count", { reducerVersion: "1.0.0", reducedThroughOffset: 0 }, undefined, false);
     const p2 = new ProcessorEngine(new CountProcessor("2.0.0"), { stream: mem.stream, storage });
     mem.engines.push(p2);
     expect(await p2.snapshot()).toEqual({ offset: 0, state: { ticks: 0 } });

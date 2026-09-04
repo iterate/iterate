@@ -60,7 +60,12 @@ import {
 } from "./fetch/rpc-stub-fetch.ts";
 import { walkSteps } from "./context/dispatch.ts";
 import { FacetHandle, RpcStubHandle } from "./context/invoke-handle.ts";
-import { localReachableContext, Stream, type WaitForEventFilter } from "./stream/stream.ts";
+import {
+  localReachableContext,
+  Stream,
+  type StreamPage,
+  type WaitForEventFilter,
+} from "./stream/stream.ts";
 import {
   RpcStubDirectory,
   RPC_STUB_PAGER_KEEPALIVE_REQUEST,
@@ -277,7 +282,9 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     return this.#stream.waitForEvent(filter);
   }
 
-  read(afterOffset = 0, limit = 500): { events: StreamEvent[]; scannedThroughOffset: number } {
+  /** One BUDGETED page of the log (Stream.read: at most `limit` rows and at most the server's byte
+   *  budget of bodies; the page says whether it was cut). */
+  read(afterOffset = 0, limit = 500): StreamPage {
     return this.#stream.read(afterOffset, limit);
   }
 
@@ -367,7 +374,6 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   // ── SUBSCRIPTION DELIVERY: the one loop (subscription-delivery.ts), wired to this DO ──
 
   readonly #subscriptionDelivery = new SubscriptionDelivery({
-    kv: this.ctx.storage.kv,
     stream: this.#stream,
     // A target is evaluated through the ONE resolver — through every rewrite rule, one naming another
     // included — so what comes back is exactly what a caller would get: a FacetHandle, an RpcStubHandle,

@@ -39,13 +39,7 @@
 import type { z } from "zod";
 import { reportIssue } from "../lib/errors.ts";
 import { LiveState } from "./live-state.ts";
-import {
-  type CheckpointStore,
-  readReduceCheckpoint,
-  reduceCursorKey,
-  reduceStateKey,
-  writeReduceCheckpoint,
-} from "./reduce-checkpoint.ts";
+import type { ReduceCheckpointStore } from "./reduce-checkpoint.ts";
 import type { StreamEvent, StreamEventInput } from "./events.ts";
 
 /** One owned event type: its payload schema (and prose for humans/docs). Shipped in the SDK
@@ -70,14 +64,16 @@ export type ProcessorContract<State = unknown> = {
 };
 
 /** The stream a processor reduces. `read` answers durable rows plus the scanned-offset-range proof:
- *  `scannedThroughOffset` is how far the read is CONTIGUOUSLY known (the last row when a full
- *  page came back, the stream's DURABLE mark when the page ran short — never the in-memory head, whose ephemeral offsets a later incarnation may reuse). */
+ *  `scannedThroughOffset` is how far the read is CONTIGUOUSLY known (the last row when the page was
+ *  CUT — by `limit` or by the server's byte budget — the stream's DURABLE mark when it was complete;
+ *  never the in-memory head, whose ephemeral offsets a later incarnation may reuse), and `atHead`
+ *  says which — a page's length says nothing (a budget cut is short of `limit` and not at head). */
 export type ProcessorStream = {
   append(...events: StreamEventInput[]): Promise<StreamEvent[]> | StreamEvent[];
   read(
     afterOffset?: number,
     limit?: number,
-  ): Promise<{ events: StreamEvent[]; scannedThroughOffset: number }>;
+  ): Promise<{ events: StreamEvent[]; scannedThroughOffset: number; atHead: boolean }>;
 };
 
 /** The contiguity proof a delivery carries: the half-open offset window `(after, through]`. A chain
@@ -164,7 +160,7 @@ export class ProcessorEngine<State> {
   readonly processor: StreamProcessor<State>;
   readonly #contract: ProcessorContract<State>;
   readonly #stream: ProcessorStream;
-  readonly #storage: CheckpointStore;
+  readonly #storage: ReduceCheckpointStore;
 
   /** Rule 1: every batch runs on this chain, one after another. */
   #serialBatchChain: Promise<void> = Promise.resolve();
@@ -186,37 +182,29 @@ export class ProcessorEngine<State> {
 
   constructor(
     processor: StreamProcessor<State>,
-    deps: { stream: ProcessorStream; storage: CheckpointStore },
+    deps: { stream: ProcessorStream; storage: ReduceCheckpointStore },
   ) {
     this.processor = processor;
     this.#contract = processor.contract;
     this.#stream = deps.stream;
     this.#storage = deps.storage;
-    // The checkpoint, read synchronously (kv). Its cursor and state blob are written in one
-    // event-loop turn (reduce-checkpoint.ts), so they never disagree; the only checkpoint that cannot
-    // be used as-is is one written under another contract version. That one is kept as
-    // #staleCheckpoint: the durable log is re-reduced from offset 0 through its cursor (reduce only)
-    // as the chain's first work — the one-time cost of a version bump.
+    // The checkpoint, read synchronously — ONE row (reduce-checkpoint.ts), so cursor and state never
+    // disagree; the only checkpoint that cannot be used as-is is one written under another contract
+    // version. That one is kept as #staleCheckpoint: the durable log is re-reduced from offset 0
+    // through its cursor (reduce only) as the chain's first work — the one-time cost of a version bump.
     const { slug, version } = this.#contract;
-    const checkpoint = readReduceCheckpoint(this.#storage, slug, version, () =>
-      this.#contract.initialState(),
-    );
-    if (checkpoint) {
-      this.#reducedState = checkpoint.state;
+    const checkpoint = this.#storage.read<State>(slug);
+    if (checkpoint?.reducerVersion === version) {
+      this.#reducedState = checkpoint.state ?? this.#contract.initialState();
       this.#reducedThroughOffset = checkpoint.reducedThroughOffset;
     } else {
       this.#reducedState = this.#contract.initialState();
       this.#reducedThroughOffset = 0;
-      const staleCursor = this.#storage.get<{ reducedThroughOffset: number }>(
-        reduceCursorKey(slug),
-      );
-      if (staleCursor) {
-        const staleState = this.#storage.get<State>(reduceStateKey(slug));
+      if (checkpoint)
         this.#staleCheckpoint = {
-          reducedThroughOffset: staleCursor.reducedThroughOffset,
-          state: staleState !== undefined ? staleState : this.#reducedState,
+          reducedThroughOffset: checkpoint.reducedThroughOffset,
+          state: checkpoint.state ?? this.#reducedState,
         };
-      }
     }
     // The live-state holder, seeded with the projection of the state this incarnation starts from —
     // after a version bump the OLD version's, so the publish that follows the re-reduce emits the
@@ -306,26 +294,18 @@ export class ProcessorEngine<State> {
   catchUpFromLog(): Promise<void> {
     return this.#runOnSerialChain(async () => {
       await this.#rereduceIfVersionChanged();
-      let sawFullPage = false;
       for (;;) {
         const after = this.#reducedThroughOffset;
         const page = await this.#stream.read(after, 500);
-        if (page.scannedThroughOffset <= after) {
-          // No new contiguous events beyond the cursor → we are AT HEAD. An EXACT full page (500)
-          // was judged not-at-head and never got rule 5's caught-up pass; a log whose length is an
-          // exact page multiple must still learn it is caught up — deliver the eventless at-head pass.
-          if (sawFullPage)
-            await this.#reduceAndCommitEventBatch([], { after, through: after }, true);
-          return;
-        }
-        const atHead = page.events.length < 500;
+        if (page.scannedThroughOffset <= after) return; // no new contiguous events beyond the cursor: AT HEAD already
+        // The page says whether it reached the head — never judge by its length: the server cuts a
+        // page by `limit` OR by its byte budget (rule 5's caught-up pass rides the last page).
         await this.#reduceAndCommitEventBatch(
           page.events,
           { after, through: page.scannedThroughOffset },
-          atHead,
+          page.atHead,
         );
-        if (atHead) return;
-        sawFullPage = true;
+        if (page.atHead) return;
       }
     });
   }
@@ -409,11 +389,10 @@ export class ProcessorEngine<State> {
       for (const event of page.events)
         if (event.offset <= target && reducesEvent(this.#contract.consumes, event))
           state = this.processor.reduce({ event, state }) ?? state;
+      if (page.scannedThroughOffset <= reducedThroughOffset) break; // nothing left below the target
       reducedThroughOffset = Math.min(page.scannedThroughOffset, target);
-      if (page.events.length < 500) break;
     }
-    writeReduceCheckpoint(
-      this.#storage,
+    this.#storage.write(
       this.#contract.slug,
       { reducerVersion: this.#contract.version, reducedThroughOffset: target },
       state,
@@ -465,8 +444,7 @@ export class ProcessorEngine<State> {
     const advanced = reducedThroughOffset > reducedThroughOffsetBefore;
     const sawDurable = events.some((event) => !event.ephemeral);
     if (sawDurable && advanced)
-      writeReduceCheckpoint(
-        this.#storage,
+      this.#storage.write(
         this.#contract.slug,
         { reducerVersion: this.#contract.version, reducedThroughOffset },
         state,

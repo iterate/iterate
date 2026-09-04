@@ -46,7 +46,6 @@ function incarnation(
     onCommit: (fresh, after, next) => delivery.onCommit(fresh, after, next),
   });
   delivery = new SubscriptionDelivery({
-    kv: storage.kv,
     stream,
     evaluateItxExpression: async (expression: ItxExpression) => {
       const printed = print(expression);
@@ -112,7 +111,9 @@ test("the alarm's cursor pass recovers a subscription whose first delivery an ev
     first.stream.append({ type: "demo/ping", payload: { n: 2 } });
     await settle();
     expect(beforeEviction).toEqual([1]); // in flight, never acked
-    expect(state.storage.kv.get("subscription-cursor:s")).toBeUndefined(); // …so kv holds nothing
+    expect(
+      state.storage.sql.exec("SELECT cursor FROM subscription_cursors WHERE name = 's'").toArray(),
+    ).toEqual([]); // …so the table holds nothing
     expect(await state.storage.getAlarm()).not.toBeNull(); // …but the lane armed the alarm to come back
 
     // THE EVICTION: a fresh incarnation over the same storage — the log and the kv, nothing else.

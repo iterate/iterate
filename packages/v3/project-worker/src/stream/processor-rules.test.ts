@@ -124,9 +124,7 @@ describe("rule 3 — runInBackground never blocks the batch commit", () => {
     await p.processEventBatch(committed, { after: 0, through: 1 });
     // The batch is durably committed BEFORE the background work lands (overtaking allowed):
     expect(bgDone).toBe(false);
-    expect(storage.get<{ reducedThroughOffset: number }>("reduce:bg:progress")).toMatchObject({
-      reducedThroughOffset: 1,
-    });
+    expect(storage.read("bg")).toMatchObject({ reducedThroughOffset: 1 });
     await sleep(120);
     expect(bgDone).toBe(true); // and the attempt did run (droppable, not dropped here)
     // the failed background attempt never poisoned the chain — the next batch still commits
@@ -163,7 +161,7 @@ describe("rule 4 — one durable commit per batch, all-or-nothing", () => {
     ) as StreamEvent[];
     const before = storage.writes;
     await p.processEventBatch(committed, { after: 0, through: 3 });
-    expect(storage.writes - before).toBe(2); // ONE persist: cursor + state, nothing extra
+    expect(storage.writes - before).toBe(1); // ONE persist: the checkpoint row, nothing extra
     expect(effects).toEqual([1, 2, 3]); // each event's processEvent ran exactly once
     const snap = await p.snapshot();
     expect(snap.offset).toBe(3); // cursor covers the skipped event — no wedge, no retry loop
@@ -200,7 +198,7 @@ describe("rule 4 — one durable commit per batch, all-or-nothing", () => {
     expect(storage.writes).toBe(0); // events 1+2 fully processed, yet NOTHING persisted
     await p.catchUpFromLog(); // retried whole — 1 and 2 run again (droppable-attempt semantics)
     expect(effects).toEqual([1, 2, 3, 1, 2, 3]);
-    expect(storage.writes).toBe(2); // and then exactly one persist
+    expect(storage.writes).toBe(1); // and then exactly one persist
     expect((await p.snapshot()).state.n).toBe(3); // the reduce restarted from the persisted state
   });
 });

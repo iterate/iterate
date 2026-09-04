@@ -6,7 +6,7 @@
 //     own checkpoint and gap-repairs from the log, a live client owns its offset and heals with read —
 //     so it gets a PUSH of `(events, { after, through })`, one delivery chain per subscription;
 //   • anything else — a Worker-Loader entrypoint, a sibling context, a remote — cannot own progress, so
-//     THE STREAM KEEPS A CURSOR for it (`subscription-cursor:<name>` in this DO's kv, never in the log):
+//     THE STREAM KEEPS A CURSOR for it (a row in its `subscription_cursors` table, never in the log):
 //     deliver from the cursor, the awaited call IS the ack, one bounded retry ladder (1s·2ⁿ, ≤30 min,
 //     15 attempts, `retryable: false` halts at once) then a `subscription-delivery-halted` fact; an
 //     operator's `subscription-delivery-resumed` un-halts and may seek. Retries ride the DO's own alarm
@@ -36,24 +36,22 @@ import type { StreamEvent } from "./events.ts";
 import { consumesEvent, type ScannedRange } from "./processor.ts";
 import type { Subscription } from "./core-processor.ts";
 import type { Stream } from "./stream.ts";
-
-/** THE cursor of a subscription the stream delivers at-least-once. Memory is the truth for this
- *  incarnation; kv (`subscription-cursor:<name>`) mirrors it at DURABLE boundaries only — an
- *  ephemeral-only batch advances memory and touches no storage (ephemerals are not in the log; after
- *  an eviction the kv cursor rewinds to the last durable boundary and durables are redelivered from
- *  there, which at-least-once allows). `resumeAppliedAtOffset` is the offset of the delivery-resumed
- *  fact this cursor already applied, so a resume is applied exactly once. */
-type SubscriptionCursor = {
-  confirmedOffset: number;
-  attempt: number;
-  nextAttemptAtMs?: number;
-  resumeAppliedAtOffset?: number;
-};
+import type { SubscriptionCursor } from "./stream-storage.ts";
 
 /** A cursor delivery's awaited call is bounded by this; it is also how far ahead the lane arms the
  *  alarm before the call — by the time it fires the call has acked (the cursor is in kv) or failed
  *  (the ladder armed), and an eviction in between leaves the alarm behind to re-derive. */
 const CURSOR_DELIVERY_CALL_WATCHDOG_MS = 20_000;
+
+/** THE PENDING-PUSH BUDGET: the most serialized event chars one row may hold back while a delivery
+ *  is in flight. Past it the OLDEST events are dropped and the push's `after` moves up to the last
+ *  dropped offset — the span a facet heals from the log (its ephemerals are gone; nothing can
+ *  redeliver an ephemeral); a cursor row never needed them (its lane pages the log). One read page,
+ *  so a stuck subscriber costs this actor one page, not every commit since it stalled. */
+const PENDING_PUSH_BUDGET_CHARS = 8 * 1024 * 1024;
+
+const serializedChars = (events: StreamEvent[]): number =>
+  events.reduce((n, event) => n + JSON.stringify(event).length, 0);
 
 /** The target of a row, evaluated — and FOR WHICH row: a row's identity is its `configuredAtOffset`
  *  (halt and resume keep it; a re-configure changes it), so an evaluation done for a row since
@@ -64,7 +62,6 @@ type EvaluatedSubscriptionTarget = {
 };
 
 type SubscriptionDeliveryDeps = {
-  kv: DurableObjectStorage["kv"];
   /** The stream: its rows (`coreReducedState.subscriptions`), its log, its durable mark, its alarm. */
   stream: Stream;
   /** Evaluate an itx expression through the context's own dispatch — a handle, a function, a value. */
@@ -74,12 +71,18 @@ type SubscriptionDeliveryDeps = {
 };
 
 export class SubscriptionDelivery {
-  readonly #kv: DurableObjectStorage["kv"];
   readonly #stream: Stream;
   readonly #evaluateItxExpression: SubscriptionDeliveryDeps["evaluateItxExpression"];
   readonly #recordActivityForQuietClock: () => void;
   /** Deliveries queue per subscription: a slow target never lets a later batch overtake an earlier one. */
   readonly #deliveryChainBySubscription = new Map<string, Promise<unknown>>();
+  /** Per row: THE ONE push waiting behind its in-flight delivery. A commit landing while one waits
+   *  FOLDS into it (one range, one call, one facet commit) — never a closure per commit — and it is
+   *  measured only once something folds in: the keeping-up case pays no stringify. */
+  readonly #pendingPushByRow = new Map<
+    string,
+    { events: StreamEvent[]; range: ScannedRange; chars?: number; droppedEvents: number }
+  >();
   readonly #lastDeliveredThroughOffset = new Map<string, number>();
   /** The freshest pushed batch per cursor subscription — how ephemerals reach a caught-up cursor
    *  target (the log has no ephemerals; the push does). Latest wins; a stale one is ignored. */
@@ -88,6 +91,10 @@ export class SubscriptionDelivery {
     { events: StreamEvent[]; after: number; through: number }
   >();
   readonly #cursorDeliveryRunning = new Set<string>();
+  /** The cursors, in memory — the truth for this incarnation; the `subscription_cursors` table
+   *  mirrors it at DURABLE boundaries only (an ephemeral-only batch advances memory and touches no
+   *  storage: ephemerals are not in the log, and after an eviction the persisted cursor rewinds to
+   *  the last durable boundary and durables are redelivered from there, which at-least-once allows). */
   readonly #cursors = new Map<string, SubscriptionCursor>();
   /** Rows whose target evaluated to a handle that OWNS ITS PROGRESS (a facet, a lent rpc stub) this
    *  incarnation — classified once, on their first push or by the alarm's row pass; the pass and the
@@ -109,15 +116,12 @@ export class SubscriptionDelivery {
   >();
 
   constructor(deps: SubscriptionDeliveryDeps) {
-    this.#kv = deps.kv;
     this.#stream = deps.stream;
     this.#evaluateItxExpression = deps.evaluateItxExpression;
     this.#recordActivityForQuietClock = deps.recordActivityForQuietClock;
-    // The kv cursors seed memory once, here — after this, memory is the one truth.
-    for (const [key, cursor] of this.#kv.list<SubscriptionCursor>({
-      prefix: "subscription-cursor:",
-    }))
-      this.#cursors.set(key.slice("subscription-cursor:".length), cursor);
+    // The persisted cursors seed memory once, here — after this, memory is the one truth.
+    for (const [name, cursor] of this.#stream.storage.listSubscriptionCursors())
+      this.#cursors.set(name, cursor);
   }
 
   /** The post-commit hook: one pass over the rows. Fire-and-forget from append's view. */
@@ -179,14 +183,55 @@ export class SubscriptionDelivery {
       // before the cursor lane even evaluates the target leaves something behind to come back.
       if (!this.#pushSubscriptionNames.has(name))
         this.#stream.armAlarmNoLaterThan(Date.now() + CURSOR_DELIVERY_CALL_WATCHDOG_MS);
-      const chain = (this.#deliveryChainBySubscription.get(name) ?? Promise.resolve()).then(() =>
-        this.#deliverEventBatch(name, row, events, { after, through: throughOffset }),
-      );
-      this.#deliveryChainBySubscription.set(
-        name,
-        chain.catch(() => undefined),
-      );
+      this.#queuePushBehindInFlightDelivery(name, events, { after, through: throughOffset });
     }
+  }
+
+  /** Queue a push behind the row's in-flight delivery — or FOLD it into the one already waiting.
+   *  The pending entry's existence IS "a delivery closure is coming": the closure takes the entry
+   *  before it delivers, so the next commit starts a fresh one. Past PENDING_PUSH_BUDGET_CHARS the
+   *  oldest events are dropped (never the newest) and `after` moves up to the last dropped offset —
+   *  `(cursor, after]` is then exactly what a facet's gap repair reads from the log. */
+  #queuePushBehindInFlightDelivery(name: string, events: StreamEvent[], range: ScannedRange): void {
+    const pending = this.#pendingPushByRow.get(name);
+    if (pending) {
+      pending.chars = (pending.chars ?? serializedChars(pending.events)) + serializedChars(events);
+      pending.events = pending.events.concat(events); // a fresh array: the old one may be an in-flight call's argument
+      pending.range.through = range.through;
+      let dropCount = 0;
+      while (pending.chars > PENDING_PUSH_BUDGET_CHARS && dropCount < pending.events.length - 1)
+        pending.chars -= JSON.stringify(pending.events[dropCount++]).length;
+      if (dropCount > 0) {
+        pending.range.after = pending.events[dropCount - 1].offset;
+        pending.events = pending.events.slice(dropCount);
+        pending.droppedEvents += dropCount;
+      }
+      return;
+    }
+    this.#pendingPushByRow.set(name, { events, range, droppedEvents: 0 });
+    const chain = (this.#deliveryChainBySubscription.get(name) ?? Promise.resolve()).then(
+      async () => {
+        const push = this.#pendingPushByRow.get(name);
+        this.#pendingPushByRow.delete(name);
+        const row = this.#stream.coreReducedState.subscriptions[name];
+        if (!push || !row) return; // removed meanwhile — #forgetSubscription emptied it
+        if (push.droppedEvents > 0)
+          console.warn({
+            event: "delivery.pending-push.dropped",
+            namespace: "subscription-delivery",
+            message:
+              "a subscriber did not keep up: the oldest pending events were dropped (a facet heals durables from the log; the span's ephemerals are lost)",
+            name,
+            droppedEvents: push.droppedEvents,
+            healFromOffset: push.range.after,
+          });
+        await this.#deliverEventBatch(name, row, push.events, push.range);
+      },
+    );
+    this.#deliveryChainBySubscription.set(
+      name,
+      chain.catch(() => undefined),
+    );
   }
 
   /** The alarm's half: every cursor subscription — a due retry, or one an eviction left mid-delivery.
@@ -215,20 +260,21 @@ export class SubscriptionDelivery {
     this.#evaluatedTargetHeadByRow.delete(name);
     this.#pushSubscriptionNames.delete(name);
     this.#deliveryChainBySubscription.delete(name);
+    this.#pendingPushByRow.delete(name); // a closure still queued finds nothing and exits
     this.#lastDeliveredThroughOffset.delete(name);
     this.#pushedEventBatches.delete(name);
   }
 
   #dropCursor(name: string): void {
     this.#cursors.delete(name);
-    this.#kv.delete(`subscription-cursor:${name}`);
+    this.#stream.storage.deleteSubscriptionCursor(name);
   }
 
-  /** Memory always; kv only when `writeKv` (a durable boundary moved, a ladder step, a halt, a resume
-   *  — never an ephemeral-only advance). */
-  #adoptCursor(name: string, cursor: SubscriptionCursor, writeKv: boolean): void {
+  /** Memory always; the table only when `persist` (a durable boundary moved, a ladder step, a halt,
+   *  a resume — never an ephemeral-only advance). */
+  #adoptCursor(name: string, cursor: SubscriptionCursor, persist: boolean): void {
     this.#cursors.set(name, cursor);
-    if (writeKv) this.#kv.put(`subscription-cursor:${name}`, cursor);
+    if (persist) this.#stream.storage.writeSubscriptionCursor(name, cursor);
   }
 
   // ── one batch, one subscription: evaluate, look at the value, push or cursor ──
@@ -449,7 +495,9 @@ export class SubscriptionDelivery {
           const latest = this.#stream.coreReducedState.subscriptions[name];
           if (latest?.resumed && latest.resumed.atOffset !== cursor.resumeAppliedAtOffset) continue;
           const attempt = cursor.attempt + 1;
-          const message = error instanceof Error ? error.message : String(error);
+          // Clipped: the message lands in the halted event AND the core state's row (one kv cell) — a
+          // target that throws a response body must not bloat either.
+          const message = (error instanceof Error ? error.message : String(error)).slice(0, 1024);
           // Honor stamped flags over an invented taxonomy: `retryable: false` (workerd stamps these;
           // providers may too) will never succeed — halt now, not in half an hour.
           const neverRetryable = (error as { retryable?: unknown } | null)?.retryable === false;

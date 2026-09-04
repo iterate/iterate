@@ -19,7 +19,7 @@
 // binding to its owning context (itx-entrypoint.ts); the engine's `append`/`read` ride it like any
 // other dotted call (one pipelined round trip: `env.ITX.get().append(…)`).
 //
-// The engine — stream/processor.ts's `ProcessorEngine` — is built on first use with this object's kv
+// The engine — stream/processor.ts's `ProcessorEngine` — is built on first use with this object's storage
 // and `env.ITX`; this class is that wiring plus the doors, ~a screen. Bundled into `processor.js`
 // (build-sdk.mjs), so userspace imports it from "./processor.js".
 //
@@ -29,6 +29,7 @@
 
 import { DurableObject } from "cloudflare:workers";
 import { ProcessorEngine, type ScannedRange, type StreamProcessor } from "../stream/processor.ts";
+import { ReduceCheckpointTable } from "../stream/reduce-checkpoint.ts";
 import type { StreamEvent } from "../stream/events.ts";
 import type { ItxEntrypoint } from "../itx-entrypoint.ts";
 
@@ -74,7 +75,7 @@ export abstract class StreamProcessorDurableObject<
     return this.#engine.waitUntilProcessed(input);
   }
 
-  // ── the engine: one ProcessorEngine over `processor` and this object's kv, built on first use —
+  // ── the engine: one ProcessorEngine over `processor` and this object's storage, built on first use —
   // `processor` is a subclass field, which does not exist yet while this base class constructs. ──
   #engineBuiltOnFirstUse?: ProcessorEngine<State>;
   get #engine(): ProcessorEngine<State> {
@@ -83,7 +84,7 @@ export abstract class StreamProcessorDurableObject<
         append: (...events) => this.env.ITX.get().append(...events),
         read: (after, limit) => this.env.ITX.get().readEvents(after, limit),
       },
-      storage: this.ctx.storage.kv,
+      storage: new ReduceCheckpointTable(this.ctx.storage.sql),
     }));
   }
 }

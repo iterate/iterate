@@ -18,6 +18,7 @@ import {
   type StreamEventInput,
 } from "./events.ts";
 import type { ProcessorEngine, ProcessorStream } from "./processor.ts";
+import type { ReduceCheckpoint, ReduceCheckpointStore } from "./reduce-checkpoint.ts";
 
 export function memoryStream(path = "/") {
   const durableEvents: StreamEvent[] = []; // the durable log — what `read` answers
@@ -66,6 +67,10 @@ export function memoryStream(path = "/") {
         events: page,
         scannedThroughOffset:
           page.length === limit ? page[page.length - 1].offset : Math.max(afterOffset, maxAssigned),
+        // Short page, or a full page whose last row is the durable head (the real Stream's rule).
+        atHead:
+          page.length < limit ||
+          page[page.length - 1].offset === durableEvents[durableEvents.length - 1].offset,
       });
     },
   };
@@ -80,16 +85,20 @@ export function memoryStream(path = "/") {
   };
 }
 
-/** A facet's own kv, in memory. `writes` counts every put — rule 4 ("one durable commit per
- *  batch") and the ephemeral zero-write rule are pinned by counting it. */
-export function memoryStorage() {
-  const map = new Map<string, unknown>();
+/** A facet's checkpoint store (reduce-checkpoint.ts `ReduceCheckpointStore`), in memory — one
+ *  checkpoint per slug, exactly as the table keeps it. `writes` counts every write — rule 4 ("one
+ *  durable commit per batch") and the ephemeral zero-write rule are pinned by counting it. */
+export function memoryStorage(): ReduceCheckpointStore & { readonly writes: number } {
+  const checkpoints = new Map<string, ReduceCheckpoint<unknown>>();
   let writes = 0;
   return {
-    get: <T>(k: string) => map.get(k) as T | undefined,
-    put: (k: string, v: unknown) => {
+    read: <State>(slug: string) => checkpoints.get(slug) as ReduceCheckpoint<State> | undefined,
+    write: (slug, cursor, state, stateChanged) => {
       writes++;
-      map.set(k, structuredClone(v));
+      checkpoints.set(slug, {
+        ...cursor,
+        state: stateChanged ? structuredClone(state) : checkpoints.get(slug)?.state,
+      });
     },
     get writes() {
       return writes;
