@@ -57,7 +57,7 @@ test("provide(match, stub): the rule is appended INSIDE the pager attach — its
   const ruleEvent = (await readAll(observer)).find(
     (e) => e.type === RULE_CONFIGURED && e.payload?.match === "itx.pinned",
   );
-  expect(ruleEvent?.payload.target).toBe("itx.rpcStubs.get('itx.pinned')");
+  expect(ruleEvent?.payload.target).toBe("itx.builtins.rpcStubs.get('itx.pinned')");
   // THE PIN: the DO appended the rule while accepting the pager, before it announced presence.
   expect(ruleEvent.offset).toBeLessThan(attachedOffset);
   // And it all works: presence, the rule, a call through the match.
@@ -78,7 +78,7 @@ test("subscribe({ target: fn }): the row is appended INSIDE the pager attach —
   const rowEvent = (await readAll(observer)).find(
     (e) => e.type === SUBSCRIPTION_CONFIGURED && e.payload?.name === "live",
   );
-  expect(rowEvent?.payload.target).toBe("itx.rpcStubs.get('subscription:live')");
+  expect(rowEvent?.payload.target).toBe("itx.builtins.rpcStubs.get('subscription:live')");
   expect(rowEvent.offset).toBeLessThan(attachedOffset);
   // The row delivers: a mark lands on the live callback through the pager the attach opened.
   await append(observer, { type: "mark", payload: { n: 1 } });

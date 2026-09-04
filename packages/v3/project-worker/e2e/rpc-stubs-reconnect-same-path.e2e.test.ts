@@ -74,7 +74,7 @@ test("a provider drops and re-provides at the same key — default-deny in betwe
   expect(online).toBe(true); // 1. provider online: itx.p.echo() answers
   expect(await ruleAtP()).toEqual({
     match: ["itx", "p"],
-    target: ["itx", "rpcStubs", ["get", "itx.p"]],
+    target: ["itx", "builtins", "rpcStubs", ["get", "itx.p"]],
   });
 
   // 2. provider goes OFFLINE — dispose its session (WS closes → the DO drops the itx.p transport;
@@ -93,7 +93,12 @@ test("a provider drops and re-provides at the same key — default-deny in betwe
   expect(await ruleAtP()).toBeUndefined(); // the rule went with the session
   await until("the stub gone from presence", async () => !(await presence(itx)).includes("itx.p"));
   const logBefore = await itx.invoke("itx.read(0, 500)");
-  expect(ruleTargetsAtP(logBefore)).toEqual(["itx.rpcStubs.get('itx.p')", null]); // set, then un-set
+  // set, then REMOVED (the platform-equivalent spelling `itx.builtins.p` — the DO restores whatever
+  // platform row lies beneath a dead stub's match; here there is none, so the row is simply gone)
+  expect(ruleTargetsAtP(logBefore)).toEqual([
+    "itx.builtins.rpcStubs.get('itx.p')",
+    "itx.builtins.p",
+  ]);
 
   // 3. provider RE-PROVIDES at the SAME key with a fresh instance — this re-lends under the same
   //    registry key and appends ONE more rule event (no dedupe; the map holds one rule again).
@@ -111,14 +116,14 @@ test("a provider drops and re-provides at the same key — default-deny in betwe
   // 5. RECONNECT APPENDS EXACTLY ONE EVENT — the rule's re-set — and the map holds one rule at itx.p.
   const logAfter = await itx.invoke("itx.read(0, 500)");
   expect(ruleTargetsAtP(logAfter)).toEqual([
-    "itx.rpcStubs.get('itx.p')",
-    null,
-    "itx.rpcStubs.get('itx.p')",
+    "itx.builtins.rpcStubs.get('itx.p')",
+    "itx.builtins.p",
+    "itx.builtins.rpcStubs.get('itx.p')",
   ]);
   expect(logAfter.events.length).toBe(logBefore.events.length + 1);
   expect(await ruleAtP()).toEqual({
     match: ["itx", "p"],
-    target: ["itx", "rpcStubs", ["get", "itx.p"]],
+    target: ["itx", "builtins", "rpcStubs", ["get", "itx.p"]],
   });
   expect((await rpcStubRewriteRuleMatches(itx)).filter((m) => m === "itx.p")).toEqual(["itx.p"]);
 });

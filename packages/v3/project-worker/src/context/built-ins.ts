@@ -1,9 +1,11 @@
 // built-ins.ts — THE BUILT-INS: a plain record whose KEYS are the physical-layer roots (`whoami`,
 // `kv`, `append`, `read`, `waitForEvent`, `cd`, `fetch`, `rpcStubs`, `rewriteRules`,
-// `facets`, `subscriptions`, `workers`, `runScript`). A call `itx.<root>…` resolves DIRECTLY against
-// these (itx-expression-rewriting.ts `ItxExpressionResolver`, built-in first) — no rule. Rewrite
-// rules name `itx.…` targets that rewrite through the same rules to reach a root; a bare root is
-// unspellable, so the built-ins are unshadowable.
+// `facets`, `subscriptions`, `workers`, `runScript` — the one list is context/built-in-roots.ts).
+// THE RECORD IS `itx.builtins`, the reserved root: a call `itx.builtins.<root>…` runs against it
+// directly and never reads the rule table; a short `itx.<root>…` reaches it through the IMPLICIT
+// PLATFORM ROW `itx.<root> ⇒ itx.builtins.<root>` unless the context's own table says otherwise
+// (itx-expression-rewriting.ts, rule 5) — so a test may shadow `itx.ai`, a context may mask
+// `itx.kv`, and `itx.builtins.…` is always the physical door. The platform never spells a short name.
 //
 // LOADING DYNAMIC CODE — two doors, ONE PER HOST KIND, each a `get` on a noun:
 //   • `itx.workers.get({ source, className?, props? }).method(...)` — a STATELESS `WorkerEntrypoint`
@@ -27,8 +29,17 @@ import {
   type WorkerSource,
 } from "./worker-loader.ts";
 import { resolveContextPath } from "./durable-object-names.ts";
-import { print, type ItxExpression } from "./expression.ts";
+import { print, type ItxExpression, type ItxExpressionInput } from "./expression.ts";
 import { FacetHandle, InvokeHandle, RpcStubHandle } from "./invoke-handle.ts";
+import type { BuiltInRoot } from "./built-in-roots.ts";
+
+/** One row of `itx.rewriteRules.list()`: a context row (`target` a string, or `null` for a mask) or an
+ *  implicit platform row. */
+export type RewriteRuleListEntry = {
+  match: string;
+  target: string | null;
+  origin: "platform" | "context";
+};
 
 /** One row of `itx.subscriptions.list()`. */
 export type SubscriptionListEntry = {
@@ -36,9 +47,9 @@ export type SubscriptionListEntry = {
   target: string;
   consumes?: string[];
   configuredAtOffset: number;
-  /** Set when this row HOSTS a facet (a processor): its class and cacheKey (the source lives in the
-   *  log + the facet's kv memo, never here — M1). Address-only rows have none. */
-  hostedFacet?: { className: string; cacheKey?: string };
+  /** Set when this row HOSTS a facet (a processor): the facet's name, class and cacheKey (the source
+   *  lives in the log + the facet's kv memo, never here — M1). Address-only rows have none. */
+  hostedFacet?: { name: string; className: string; cacheKey?: string };
   /** Present only when the STREAM keeps the cursor (a target that cannot own its progress). */
   cursor?: { confirmedOffset: number; attempt: number; nextAttemptAtMs?: number };
   halted?: { afterOffset: number; attempts: number; error?: string };
@@ -108,12 +119,17 @@ export interface BuiltInScope {
     /** PRESENCE — the keys borrowed or pager-backed right now. */
     list(): string[];
   };
-  /** The itx-expression rewrite-rule table, read (a slice of core) — the rules every call goes
-   *  through. Written by `itx.provide(match, target | null)` on the edge (sugar over the ONE
-   *  `itx/rewrite-rule-configured` event), never a verb here. */
+  /** The itx-expression rewrite-rule table, read — THE EFFECTIVE table: the context's own rows (a
+   *  slice of core; `origin: "context"`, a mask shown as `target: null`) plus the implicit platform
+   *  rows `itx.<root> ⇒ itx.builtins.<root>` (`origin: "platform"`) for every root the context has
+   *  not re-set. Written by `itx.provide(match, target | null)` on the edge (sugar over the ONE
+   *  `itx/rewrite-rule-configured` event), never a verb here. `resolve(call)` is the PURE half of
+   *  `invoke`: the chain of rewrites, each printed, from the call to the builtins-rooted call that
+   *  would run — nothing is dispatched; the law is `invoke(call) ≡ invoke(resolve(call).at(-1))`. */
   rewriteRules: {
-    list(): { match: string; target: string }[];
-    get(match: string): { match: string; target: string } | null;
+    list(): RewriteRuleListEntry[];
+    get(match: string): RewriteRuleListEntry | null;
+    resolve(call: ItxExpressionInput): string[];
   };
   /** The facets of this context. `get(name)` ADDRESSES one that is already running (a processor, a
    *  named instance) — no source; `get(name, { source, cacheKey?, className })` LOADS the class and
@@ -149,6 +165,16 @@ export interface BuiltInScope {
    *  `workers.get({ source }).run(...)`. The one bare-lambda ergonomic (same as apps/os). */
   runScript(script: string, ...args: unknown[]): Promise<unknown>;
 }
+
+// THE ONE LIST: `keyof BuiltInScope` and context/built-in-roots.ts's `BUILT_IN_ROOTS` are the same
+// set — a root added to either without the other fails to typecheck right here.
+type RootsAreTheSameSet = [keyof BuiltInScope] extends [BuiltInRoot]
+  ? [BuiltInRoot] extends [keyof BuiltInScope]
+    ? true
+    : never
+  : never;
+const _rootsAreTheSameSet: RootsAreTheSameSet = true;
+void _rootsAreTheSameSet;
 
 /** What the CONTEXT (the DO) injects: identity, the bindings, and the seams only it can serve. */
 interface BuildBuiltInsDeps {
@@ -259,19 +285,16 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
     append: (...e: StreamEventInput[]) => ownContext().append(...e),
     read: (afterOffset?: number, limit?: number) => ownContext().read(afterOffset, limit),
     waitForEvent: deps.waitForEvent,
-    // `cd` routes through the target context's own table, EXCEPT append/read, which skip the facet
-    // hop straight to the log door (the physical fast path). Codec-named, so only THIS project is
-    // reachable; the path resolves against THIS context (absolute, or relative with `.`/`..`).
+    // `cd` routes EVERY call through the target context's own table — a sibling's rows apply, its
+    // whole-context override included; the physical spelling is `cd(p).builtins.append(…)`, which is
+    // the fixed point there and reads no table. Codec-named, so only THIS project is reachable; the
+    // path resolves against THIS context (absolute, or relative with `.`/`..`).
     cd: (contextPath: string) =>
-      new InvokeHandle((itxExpressionSteps) => {
-        const sibling = deps.context(resolveContextPath(path, contextPath)); // a ReachableContext — real-typed seam
-        const [first] = itxExpressionSteps;
-        if (itxExpressionSteps.length === 1 && Array.isArray(first) && first[0] === "append")
-          return sibling.append(...(first.slice(1) as StreamEventInput[]));
-        if (itxExpressionSteps.length === 1 && Array.isArray(first) && first[0] === "read")
-          return sibling.read(...(first.slice(1) as [number?, number?]));
-        return sibling.invoke(["itx", ...itxExpressionSteps]);
-      }),
+      new InvokeHandle((itxExpressionSteps) =>
+        deps
+          .context(resolveContextPath(path, contextPath)) // a ReachableContext — real-typed seam
+          .invoke(["itx", ...itxExpressionSteps]),
+      ),
     fetch: (request: Request) => deps.egress(request),
     rpcStubs: deps.rpcStubs,
     facets: {

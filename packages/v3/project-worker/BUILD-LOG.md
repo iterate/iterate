@@ -2653,3 +2653,101 @@ cacheKey?, className }`) spells the hosting spec everywhere, and `enableProcesso
   (`WORKER_BASE_URL=https://project-worker.iterate.workers.dev pnpm e2e --no-file-parallelism`,
   version a567f4e5) 151p/2xf/2sk — the previous deployed board +3. Worker Startup Time 6 ms,
   upload 707 KiB.
+
+## 2026-09-04 — the builtins root: `itx.builtins` is the fixed point, rules resolve FIRST, the platform rows are implicit; `resolve` is pure; `invoke(call, ...args)`
+
+**Why.** Misha wants a deterministic `itx.ai` in a vitest run: shadow the real one with a provided
+stub, for one project, and get the real one back when the test ends. Under the built-ins-first
+resolver that was unspellable (a built-in root could never be a rule's match). And the two "what
+does a name mean" questions that kept coming up in the jam — where the fallback lives, whether
+`itx.rewriteRules` is itself protected — both dissolve once there is exactly ONE reserved root and
+everything short-named is a row.
+
+**What.** `src/context/itx-expression-rewriting.ts` (RULES 1–6 in the header):
+
+- THE FIXED POINT is `itx.builtins`: a builtins-rooted call runs as is and never reads the table.
+  Any other `itx.…` call, RULES FIRST: the context's most specific row (rule 3; a bare `itx` row
+  matches every call — the whole-context override); a matching row whose target is `null` is a
+  MASK (refused, default-deny, even with a platform row beneath); no matching row and a built-in
+  root is THE IMPLICIT PLATFORM ROW `itx.<root> ⇒ itx.builtins.<root>` — applied in the loop, never
+  stored, never materialized on the hot path. `src/context/built-in-roots.ts` is the one list,
+  type-checked against `keyof BuiltInScope` in built-ins.ts.
+- `resolve(call)` is PURE and returns the CHAIN (the call first, the builtins-rooted call last);
+  `invoke(call, extraArgs?)` is resolve then dispatch (today's resolve-and-run, renamed). The law
+  `invoke(call) ≡ invoke(resolve(call).at(-1))` is pinned in the unit table and end to end.
+  `itx.builtins.rewriteRules.resolve(call)` exposes the chain, printed.
+- The door: a match may not be rooted at `itx.builtins`, nor start with a proxy verb (`cd`,
+  `invoke`, `provide`, `subscribe`, `enableProcessor`, `disableProcessor` — the sugar never hands
+  those to the table); a target must be rooted at `itx` (as before). `rewriteRuleConfiguredEvent`
+  builds the event literally (no `CoreContract` import — the reduce imports the pure rules now, and
+  a cycle would have followed).
+- `rewriteRuleRemovedEvent(match)` — the REMOVAL spelling: the platform-equivalent target
+  `itx.builtins.<match…>`, which the reduce turns into a deletion. A disposed handle and a dead
+  stub append THAT, never `null`, so a fake `itx.ai` restores the real one rather than masking it;
+  `null` is the caller's deliberate deny.
+
+`src/stream/core-processor.ts` (contract 6.0.0): `null` is KEPT as a mask row when the match
+shadows a platform row (bare `itx`, `itx.kv`, `itx.kv.get`, `itx.kv.get('a')`) and deletes
+otherwise (a mask there would equal a deletion and only grow the table); the platform-equivalent
+target deletes the row; hosting is decided on the RESOLVED target (`resolveThroughState` — a user's
+short `itx.facets.get(n, spec)` and a user's own rule naming the door host exactly like the
+platform's `itx.builtins.facets.get(n, spec)`), the source elided from the ORIGINAL spelling so a
+target re-resolves at every delivery; `hostedFacet` carries the facet's `name` (the DO's removal
+effect and the M1 recovery read the marker, not a position in the target).
+
+The platform never spells a short name: the proxy's `#append` targets `itx.builtins.append`; a lent
+stub's rule is `match ⇒ itx.builtins.rpcStubs.get('<match>')`; a live subscriber's row
+`itx.builtins.rpcStubs.get('subscription:<name>')`; a processor's row
+`itx.builtins.facets.get(name, spec).processEventBatch`; the DO's un-set compares targets RESOLVED
+and appends the removal spelling. So a row at `itx.rpcStubs` or `itx.facets` redirects the
+caller's calls and nothing the platform relies on. The built-in `cd`'s hidden append/read bypass is
+DELETED: `cd(p)` routes every call through the sibling's table (its whole-context override
+included); the physical spelling is `cd(p).builtins.append(…)`.
+
+`itx.builtins.rewriteRules.list()` / `get(match)` return the EFFECTIVE table — context rows
+(`origin: "context"`, masks as `target: null`) plus the implicit platform rows (`origin:
+"platform"`) for every root the context has not re-set. `invoke(call, ...args)` is public on the
+proxy and the DO: the args are applied to the value the expression denotes (the fetch lane's
+`extraArgs`, unchanged); `invoke("itx.laptop.fetch", request)` folds into the terminal-fetch fork.
+
+**Pins.** `src/context/itx-expression-rewriting.test.ts` — THE TABLE, re-cut: every `becomes` is
+builtins-rooted; rows for the fixed point, the shadow, the partial shadow, the whole-context
+override, the masks (full, partial, bare, reached through another rule), the chain, "a
+builtins-rooted call never reads the table" (a throwing thunk), the depth budget (31 rules + the
+platform row = 32), the door's two new refusals, the removal spelling; the resolver section:
+Misha's test, the mask lifecycle (`null` → refused, `itx.builtins.kv` still answers, a repeat is a
+no-op, the removal restores, a plain name's `null` deletes), the partial mask, the law over a table
+of calls, `invoke(call, ...args)`. `src/stream/core-processor.test.ts` — masks kept/deleted/no-op,
+the platform-equivalent delete (pinned match included), hosting on the resolved target (platform,
+short, via a rule, address-only), a target that cannot resolve yet hosts nothing.
+`e2e/rewrite-rules-builtins-root.e2e.test.ts` (6) — Misha's test verbatim through `/api` with the
+handle's dispose restoring the platform row; the deny + its dispose + the explicit restore; the
+effective table with origins; `resolve` and the law and live args; the whole-context override
+(`cd('/x').append` reaches the stub, `cd('/x').builtins.append` the log, an expression-side
+`itx.cd('/x')` honours it too); the door and "the platform never spells a short name" (a mask at
+`itx.rpcStubs` leaves a provided tool served). Expectations re-spelled in 6 e2e files + the pager
+attach workers test; `e2e/support/client.ts`'s rule-matches helper accepts either registry spelling.
+
+**Hot path.** The resolver's own cost, measured in node over the pure function: 0.13 µs per
+short-name resolve with 0 context rows (the platform-row step), 2.36 µs with 300 rows (the linear
+scan rules-first now pays), 0.01–0.04 µs at the fixed point; a DO round trip is milliseconds. The
+one local probe that survives (`push-delivery-throughput` ephemeral flood, run alone):
+`2000/2000 | append 54054 ev/s | end-to-end 54054 ev/s | p50 17ms p95 28ms | batching 50×` —
+last recorded on this lane 58824 ev/s p50 15 ms (2026-09-03, before the memory-budget arc that now
+also sits on the read/append path; not attributable to this change). `[perf-guard]` no longer
+exists as a probe (its harness lane went in the test-hygiene sweep). The 300-rules e2e
+(`rewrite-rules-map-and-chains`) tripped its 150 ms median once under the full suite's load (a
+144 MiB concurrent-reader test runs beside it) and passes alone; the throughput p95 budget likewise
+(525 ms under load, 28 ms alone).
+
+- LOC: code lines (non-blank, non-comment, non-test `src/`) 4,888 in the working tree (3,961 at HEAD — the tree also carries the memory-budget arc's two new source files); the six source files this arc touched 1,208 → 1,400. This arc's hunks:
+  +1,067/−369 across 19 tracked files across the files above, plus `built-in-roots.ts` (36) and the new e2e file (181);
+  in `iterate-context-durable-object.ts` about 206 of 218 of the lines changed vs HEAD are this
+  arc's (the rest is the memory-budget arc's, in flight in the same tree).
+- GATES: tsc×3 · oxlint 0/0 · knip clean · oxfmt clean for the touched files · unit+workers
+  280p/23xf → 308p/22xf (31 files) · e2e local 152p/8f/2xf → 160p/6f/2xf (42 files; the 6 are
+  the memory-budget arc's `stream-uncontrolled-degradation` ×5 — red alone too, they assert a DO
+  reset the local runtime never provokes — and the throughput p95 under load, green alone) ·
+  deployed as version 139758ba (Worker Startup Time 7 ms, upload 711 KiB) · e2e DEPLOYED
+  (`WORKER_BASE_URL=https://project-worker.iterate.workers.dev pnpm e2e --no-file-parallelism`)
+  160p/2f/4xf/2sk on 42 files, the previous deployed board +9: the 2 are the memory-budget arc's `LARGE EPHEMERAL FAN-OUT` (foreign) and `rpc-stubs-slack-bridge` (a codeless error inside the network-drop window of that run; 1/1 green alone against the same version).

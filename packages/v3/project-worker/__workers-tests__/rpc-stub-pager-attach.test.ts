@@ -59,7 +59,8 @@ test("a malformed pager header is a 400; a well-formed one attaches the pager AN
   expect(await presence(ctx)).toEqual(["itx.k1"]);
   expect(await ruleAt(ctx, "itx.k1")).toEqual({
     match: "itx.k1",
-    target: "itx.rpcStubs.get('itx.k1')",
+    target: "itx.rpcStubs.get('itx.k1')", // stored as the lender spelled it (it resolves through the platform row)
+    origin: "context",
   });
   ok.webSocket!.close(1000, "test done");
 });

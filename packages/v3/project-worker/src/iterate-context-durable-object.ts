@@ -71,10 +71,15 @@ import { DurableObjectNameCodec } from "./context/durable-object-names.ts";
 import { itxEntrypointFor } from "./itx-entrypoint.ts";
 import {
   ItxExpressionResolver,
-  rewriteRuleConfiguredEvent,
+  rewriteRuleRemovedEvent,
 } from "./context/itx-expression-rewriting.ts";
+import { BUILT_IN_ROOTS } from "./context/built-in-roots.ts";
 import { subscriptionConfiguredEvent } from "./stream/subscriptions.ts";
-import { buildBuiltIns, type SubscriptionListEntry } from "./context/built-ins.ts";
+import {
+  buildBuiltIns,
+  type RewriteRuleListEntry,
+  type SubscriptionListEntry,
+} from "./context/built-ins.ts";
 import { SubscriptionDelivery } from "./stream/subscription-delivery.ts";
 
 function parseIterateContextDurableObjectName(name: string | undefined) {
@@ -151,13 +156,25 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   });
 
   #unsetWhatNamesRpcStub(rpcStubKey: string): void {
-    const target = print(["itx", "rpcStubs", ["get", rpcStubKey]]);
+    // Compared RESOLVED: a caller's short spelling (`itx.rpcStubs.get('k')`, or a rule of their own
+    // naming the registry) names the key exactly as the platform's `itx.builtins.rpcStubs.get('k')`.
+    // A rule is REMOVED (back to the platform row beneath, if any — a dead fake `itx.ai` restores the
+    // real one), never masked: `null` is the caller's deliberate deny.
+    const physical = print(["itx", "builtins", "rpcStubs", ["get", rpcStubKey]]);
+    const namesTheKey = (target: ItxExpression | null): boolean => {
+      if (target === null) return false;
+      try {
+        return print(this.#itxExpressionResolver.resolve(target).at(-1)!) === physical;
+      } catch {
+        return false;
+      }
+    };
     const { itxExpressionRewriteRules, subscriptions } = this.#stream.coreReducedState;
     for (const rule of Object.values(itxExpressionRewriteRules))
-      if (print(rule.target) === target)
-        void this.append(rewriteRuleConfiguredEvent(rule.match, null)).catch(() => undefined);
+      if (namesTheKey(rule.target))
+        void this.append(rewriteRuleRemovedEvent(rule.match)).catch(() => undefined);
     for (const [name, subscription] of Object.entries(subscriptions))
-      if (print(subscription.target) === target)
+      if (namesTheKey(subscription.target))
         void this.append(subscriptionConfiguredEvent({ name, target: null })).catch(
           () => undefined,
         );
@@ -233,13 +250,9 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     subscriptionsBeforeCommit: CoreState["subscriptions"],
   ): void {
     // The facet a row HOSTS: a row with `hostedFacet` set (M1 — the source is elided from the target,
-    // so the marker, not the target's spec, is what says "hosts"). The facet NAME is still in the
-    // elided target (`itx.facets.get(name)…`). An address-only row has no `hostedFacet`.
-    const hostedFacetName = (row: Subscription): string | undefined => {
-      if (!row.hostedFacet) return undefined;
-      const getStep = row.target[2];
-      return Array.isArray(getStep) && typeof getStep[1] === "string" ? getStep[1] : undefined;
-    };
+    // so the marker, read off the RESOLVED target at configure time, is what says "hosts" and names
+    // the facet). An address-only row has no `hostedFacet`.
+    const hostedFacetName = (row: Subscription): string | undefined => row.hostedFacet?.name;
     for (const event of committedEvents) {
       if (event.type !== "events.iterate.com/stream/subscription-configured") continue;
       const { name, target } = event.payload as { name: string; target: string | null };
@@ -266,69 +279,87 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     return this.#stream.read(afterOffset, limit);
   }
 
+  /** THE EFFECTIVE rule table, read: the context's own rows (masks as `target: null`) plus the
+   *  implicit platform row for every built-in root the context has not re-set. */
+  #rewriteRuleList(): RewriteRuleListEntry[] {
+    const contextRows = Object.values(this.#stream.coreReducedState.itxExpressionRewriteRules).map(
+      (rule): RewriteRuleListEntry => ({
+        match: print(rule.match),
+        target: rule.target && print(rule.target),
+        origin: "context",
+      }),
+    );
+    const reset = new Set(contextRows.map((row) => row.match));
+    const platformRows = BUILT_IN_ROOTS.filter((root) => !reset.has(`itx.${root}`)).map(
+      (root): RewriteRuleListEntry => ({
+        match: `itx.${root}`,
+        target: `itx.builtins.${root}`,
+        origin: "platform",
+      }),
+    );
+    return [...contextRows, ...platformRows];
+  }
+
+  /** `itx.builtins` — the physical scope this context resolves against (context/built-ins.ts). */
+  readonly #builtIns: Record<string, unknown> = buildBuiltIns({
+    projectId: this.#durableObjectAddress.projectId,
+    path: this.#durableObjectAddress.path,
+    iterateContextName: this.#durableObjectAddress.name,
+    env: this.env,
+    invoke: (call) => this.invoke(call),
+    // a sibling context by path; the own path is this DO as a uniform-async ReachableContext (stream.ts)
+    context: (p) =>
+      p === this.#durableObjectAddress.path
+        ? localReachableContext(this)
+        : this.env.ITERATE_CONTEXT.getByName(
+            DurableObjectNameCodec.stringify({
+              projectId: this.#durableObjectAddress.projectId,
+              path: p,
+            }),
+          ),
+    egress: (request) => this.#egress(request),
+    // THE LIVE-STUB REGISTRY, DO half: `get(key)` is the transport's pipelinable handle (a GENUINE
+    // RpcTarget so `itx.rpcStubs.get('k').hello()` pipelines the mid-chain `.hello()` on every lane
+    // — workerd's classifier rejects a Proxy, #6873), branded RpcStubHandle for the delivery loop.
+    rpcStubs: {
+      // Re-note AFTER the call: this invoke may have borrowed the stub, and a borrowed stub is
+      // exactly what the quiet clock exists to return — the arm must not wait for the next call.
+      get: (rpcStubKey) =>
+        new RpcStubHandle(async (itxExpressionSteps) => {
+          try {
+            return await this.#rpcStubs.invokeRpcStub(rpcStubKey, itxExpressionSteps);
+          } finally {
+            this.#recordActivityForQuietClock();
+          }
+        }),
+      list: () => this.#rpcStubs.listRpcStubKeys(),
+    },
+    // The facets view is PARENT-LOCAL — the facets live here and can never move (workerd#6702:
+    // sockets never leave the parent). Branded FacetHandle for the delivery loop.
+    facets: {
+      get: (name, spec) =>
+        new FacetHandle((itxExpressionSteps) => this.#invokeFacet(name, spec, itxExpressionSteps)),
+    },
+    subscriptions: {
+      list: () => this.#subscriptionList(),
+      get: (name) => this.#subscriptionList().find((s) => s.name === name) ?? null,
+    },
+    rewriteRules: {
+      list: () => this.#rewriteRuleList(),
+      get: (match) => this.#rewriteRuleList().find((row) => row.match === match) ?? null,
+      // PURE: the chain of rewrites, printed — nothing dispatched, nothing noted as activity.
+      resolve: (call) => this.#itxExpressionResolver.resolve(call).map(print),
+    },
+    waitForEvent: (filter) => this.#stream.waitForEvent(filter),
+    itxEntrypoint: this.#itxEntrypoint,
+  });
+
   /** THE DISPATCHER (context/itx-expression-rewriting.ts), built once over the physical built-ins —
-   *  every entry below closes over this context's identity, so cross-project access is unspellable. */
+   *  `itx.builtins`, the reserved root (declared ABOVE: a class field initializes in order); every
+   *  entry closes over this context's identity, so cross-project access is unspellable. */
   readonly #itxExpressionResolver = new ItxExpressionResolver({
     rewriteRules: () => Object.values(this.#stream.coreReducedState.itxExpressionRewriteRules),
-    builtIns: buildBuiltIns({
-      projectId: this.#durableObjectAddress.projectId,
-      path: this.#durableObjectAddress.path,
-      iterateContextName: this.#durableObjectAddress.name,
-      env: this.env,
-      invoke: (call) => this.invoke(call),
-      // a sibling context by path; the own path is this DO as a uniform-async ReachableContext (stream.ts)
-      context: (p) =>
-        p === this.#durableObjectAddress.path
-          ? localReachableContext(this)
-          : this.env.ITERATE_CONTEXT.getByName(
-              DurableObjectNameCodec.stringify({
-                projectId: this.#durableObjectAddress.projectId,
-                path: p,
-              }),
-            ),
-      egress: (request) => this.#egress(request),
-      // THE LIVE-STUB REGISTRY, DO half: `get(key)` is the transport's pipelinable handle (a GENUINE
-      // RpcTarget so `itx.rpcStubs.get('k').hello()` pipelines the mid-chain `.hello()` on every lane
-      // — workerd's classifier rejects a Proxy, #6873), branded RpcStubHandle for the delivery loop.
-      rpcStubs: {
-        // Re-note AFTER the call: this invoke may have borrowed the stub, and a borrowed stub is
-        // exactly what the quiet clock exists to return — the arm must not wait for the next call.
-        get: (rpcStubKey) =>
-          new RpcStubHandle(async (itxExpressionSteps) => {
-            try {
-              return await this.#rpcStubs.invokeRpcStub(rpcStubKey, itxExpressionSteps);
-            } finally {
-              this.#recordActivityForQuietClock();
-            }
-          }),
-        list: () => this.#rpcStubs.listRpcStubKeys(),
-      },
-      // The facets view is PARENT-LOCAL — the facets live here and can never move (workerd#6702:
-      // sockets never leave the parent). Branded FacetHandle for the delivery loop.
-      facets: {
-        get: (name, spec) =>
-          new FacetHandle((itxExpressionSteps) =>
-            this.#invokeFacet(name, spec, itxExpressionSteps),
-          ),
-      },
-      subscriptions: {
-        list: () => this.#subscriptionList(),
-        get: (name) => this.#subscriptionList().find((s) => s.name === name) ?? null,
-      },
-      rewriteRules: {
-        list: () =>
-          Object.values(this.#stream.coreReducedState.itxExpressionRewriteRules).map((rule) => ({
-            match: print(rule.match),
-            target: print(rule.target),
-          })),
-        get: (match) => {
-          const rule = this.#stream.coreReducedState.itxExpressionRewriteRules[match];
-          return rule ? { match: print(rule.match), target: print(rule.target) } : null;
-        },
-      },
-      waitForEvent: (filter) => this.#stream.waitForEvent(filter),
-      itxEntrypoint: this.#itxEntrypoint,
-    }),
+    builtIns: this.#builtIns,
   });
 
   // ── SUBSCRIPTION DELIVERY: the one loop (subscription-delivery.ts), wired to this DO ──
@@ -338,10 +369,10 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     stream: this.#stream,
     // A target is evaluated through the ONE resolver — through every rewrite rule, one naming another
     // included — so what comes back is exactly what a caller would get: a FacetHandle, an RpcStubHandle,
-    // an entrypoint handle, a value. The RESOLVER, not `invoke`: the loop's own evaluation is not
-    // activity (a finished delivery is — the loop records it), so the alarm's row-driven pass, which
-    // classifies every row's target once, can never postpone its own quiesce.
-    evaluateItxExpression: (itxExpression) => this.#itxExpressionResolver.resolve(itxExpression),
+    // an entrypoint handle, a value. The RESOLVER's run door, not this class's `invoke`: the loop's
+    // own evaluation is not activity (a finished delivery is — the loop records it), so the alarm's
+    // row-driven pass, which classifies every row's target once, can never postpone its own quiesce.
+    evaluateItxExpression: (itxExpression) => this.#itxExpressionResolver.invoke(itxExpression),
     recordActivityForQuietClock: () => this.#recordActivityForQuietClock(),
   });
 
@@ -476,13 +507,19 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       // M1: a hosting row keeps NO source in core state — recover it from the DURABLE log event that
       // configured it (its `configuredAtOffset`), write the memo once, and proceed. The memo survives
       // eviction (kv), so this log read happens at most once per facet per deployment, never per push.
-      const row = this.#stream.coreReducedState.subscriptions[name];
+      // The row that HOSTS this facet (its marker names it — the subscription's own name may differ).
+      const row = Object.values(this.#stream.coreReducedState.subscriptions).find(
+        (candidate) => candidate.hostedFacet?.name === name,
+      );
       if (row?.hostedFacet) {
         const [configuredEvent] = this.#stream.read(row.configuredAtOffset - 1, 1).events;
         const configuredTarget = (configuredEvent?.payload as { target?: string } | undefined)
           ?.target;
+        // RESOLVED before reading the spec off it, as the reduce did when it marked the row.
         const spec = configuredTarget
-          ? facetSpecFromHostingTarget(parse(configuredTarget))
+          ? facetSpecFromHostingTarget(
+              this.#itxExpressionResolver.resolve(parse(configuredTarget)).at(-1)!,
+            )
           : undefined;
         if (spec) {
           const recovered: FacetSpec = {
@@ -615,10 +652,13 @@ export class IterateContextDurableObject extends DurableObject<Env> {
 
   /** Resolve + run one call through the current rewrite rules. The ONE dispatch door — `IterateContext`
    *  builds the call client-side and hands it here (the ARRAY half can carry call args a dotted STRING
-   *  never could — callbacks, Dates, bytes: `["itx","tools",["transform",21,cb]]`). */
-  async invoke(call: ItxExpressionInput): Promise<unknown> {
+   *  never could — callbacks, Dates, bytes: `["itx","tools",["transform",21,cb]]`). `args`, when
+   *  given, are LIVE args applied to the value the expression denotes — the string is the pure part,
+   *  the args the live part (`invoke("itx.kv.get", "k")` ≡ `itx.kv.get("k")`; the fetch lane's
+   *  Request is the same door). */
+  async invoke(call: ItxExpressionInput, ...args: unknown[]): Promise<unknown> {
     this.#recordActivityForQuietClock();
-    return this.#itxExpressionResolver.resolve(call);
+    return this.#itxExpressionResolver.invoke(call, args.length > 0 ? args : undefined);
   }
 
   // ── native fetch: the rpc-stub pager door, the fetch lane, egress ──
@@ -645,7 +685,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
           : parse(itxExpressionHeader);
         const headers = new Headers(request.headers);
         headers.delete(ITX_EXPRESSION_FETCH_HEADER);
-        const result = await this.#itxExpressionResolver.resolve(
+        const result = await this.#itxExpressionResolver.invoke(
           itxExpressionEndingInFetch(itxExpression),
           [new Request(request, { headers })],
         );

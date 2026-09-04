@@ -49,7 +49,7 @@ test("a pinned object arg picks the same rule whatever order the rules are scann
   // picker, handed the table's rows, finds exactly it whatever order they arrive in.
   const table = Object.fromEntries([first, second].map((rule) => [print(rule.match), rule]));
   expect(Object.keys(table)).toHaveLength(1);
-  expect(print(pickItxExpressionRewriteRule(Object.values(table), call)!.rule.target)).toBe(
+  expect(print(pickItxExpressionRewriteRule(Object.values(table), call)!.rule.target!)).toBe(
     "itx.anthropic.chat",
   );
 });

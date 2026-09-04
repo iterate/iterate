@@ -12,16 +12,20 @@
 //   • `cd`      — pure addressing, zero DO hops; returns an EDGE context so a later lend lands in
 //                 THIS session;
 //   • `invoke`  — the landing door of the prototype hop at the bottom (`itx.a.b(x)` reduces to ONE
-//                 expression) plus the one fetch-lane fork; every built-in root (`itx.append(…)`,
-//                 `itx.read(…)`, `itx.waitForEvent(…)`, `itx.kv.get(…)`, `itx.rpcStubs.list()`,
-//                 `itx.rewriteRules.list()`, …) rides it with ZERO code here;
+//                 expression) plus the one fetch-lane fork; `invoke(call, ...args)` applies LIVE args
+//                 (a Request, a callback) to the value the expression denotes; every built-in root
+//                 (`itx.append(…)`, `itx.read(…)`, `itx.waitForEvent(…)`, `itx.kv.get(…)`,
+//                 `itx.rpcStubs.list()`, `itx.rewriteRules.list()`, …) and the reserved physical root
+//                 `itx.builtins.…` ride it with ZERO code here;
 //   • `provide` — THE ONE FRONT DOOR: make `match` mean `target`. A target that is a client's rpc stub
 //                 (a function, an RpcTarget) must live in this stateless worker, never in the DO
 //                 (DON'T-PIN, below), so the lend happens here — under the key = the canonical match —
-//                 plus the pure-data rule `match ⇒ itx.rpcStubs.get('<match>')`; an expression target
-//                 is that rule alone; `null` un-sets it. A rule or subscription naming a lent key is
-//                 un-set by the DO when the key's last pager closes — the physical fact decides, not
-//                 this session's teardown;
+//                 plus the pure-data rule `match ⇒ itx.builtins.rpcStubs.get('<match>')`; an expression
+//                 target is that rule alone; `null` is a DENY (a mask over a platform row, `itx.kv`; a
+//                 deletion elsewhere). A rule or subscription naming a lent key is REMOVED by the DO
+//                 when the key's last pager closes — the physical fact decides, not this session's
+//                 teardown — and removal restores the platform row beneath (a fake `itx.ai` gives the
+//                 real one back);
 //   • `subscribe` / `enableProcessor` / `disableProcessor` — each is visibly "build the event, append
 //                 it": the DO has `append` and no configuration verbs. `subscribe` is declared here
 //                 because its target may be a client's rpc stub. When it is (as when `provide` lends),
@@ -51,10 +55,13 @@ import {
   toItxExpression,
   type ItxExpressionInput,
 } from "./context/expression.ts";
-import { rewriteRuleConfiguredEvent } from "./context/itx-expression-rewriting.ts";
+import {
+  rewriteRuleConfiguredEvent,
+  rewriteRuleRemovedEvent,
+} from "./context/itx-expression-rewriting.ts";
 import type { FacetSpec } from "./context/worker-loader.ts";
 import { installPrototypeInvokeFallback } from "./context/dotted-path-proxy.ts";
-import type { BuiltInScope } from "./context/built-ins.ts";
+import type { BuiltInScope, RewriteRuleListEntry } from "./context/built-ins.ts";
 import {
   DurableObjectNameCodec,
   resolveContextPath,
@@ -163,8 +170,14 @@ export class IterateContext extends RpcTarget {
    *  the DO's FETCH CHANNEL with the expression in the `x-itx-expression` header, not `invoke` — the
    *  fetch channel is the only hop kind that carries a socket-bearing Response back (a 101 from a
    *  tunnel or a WS-serving worker; fetch/rpc-stub-fetch.ts doctrine, points 1 & 4). */
-  invoke(call: ItxExpressionInput): Promise<unknown> {
-    const itxExpression = toItxExpression(call);
+  invoke(call: ItxExpressionInput, ...args: unknown[]): Promise<unknown> {
+    let itxExpression = toItxExpression(call);
+    // `invoke("itx.laptop.fetch", request)` is the terminal-fetch call spelled with its live arg —
+    // fold it, so the fork below sees the one shape.
+    if (args.length === 1 && args[0] instanceof Request && itxExpression.at(-1) === "fetch") {
+      itxExpression = [...itxExpression.slice(0, -1), ["fetch", args[0]]];
+      args = [];
+    }
     const last = itxExpression.at(-1);
     if (
       Array.isArray(last) &&
@@ -176,7 +189,7 @@ export class IterateContext extends RpcTarget {
       headers.set(ITX_EXPRESSION_FETCH_HEADER, JSON.stringify(itxExpression.slice(0, -1))); // the lane parses a JSON ItxExpression
       return this.#durableObject.fetch(new Request(last[1], { headers }));
     }
-    return this.#durableObject.invoke(itxExpression);
+    return this.#durableObject.invoke(itxExpression, ...args) as Promise<unknown>;
   }
 
   // ── THE ONE FRONT DOOR: make `match` mean `target` — (a) a lent rpc stub or (b) a pure rewrite ──
@@ -200,9 +213,12 @@ export class IterateContext extends RpcTarget {
     const matchString = canonicalItxExpressionPrefix(match);
     const sessionTeardownKey = this.#sessionTeardownKey(matchString);
     if (target === null) {
+      // A deliberate DENY: a MASK where a platform row lies beneath (`itx.kv` refuses, `itx.builtins.kv`
+      // still answers), a deletion elsewhere. Disposing the handle LIFTS the deny — back to the
+      // platform row — while the row is still this mask.
       await this.#append(rewriteRuleConfiguredEvent(matchString, null));
       this.#sessionTeardown.dispose(sessionTeardownKey);
-      return new RewriteRuleHandle(() => undefined);
+      return new RewriteRuleHandle(() => this.#removeRuleInBackground(matchString, null));
     }
     if (typeof target === "string" || Array.isArray(target)) {
       // A pure rewrite: whatever THIS session lent under the match stops meaning the stub — recall it.
@@ -210,28 +226,16 @@ export class IterateContext extends RpcTarget {
       const event = rewriteRuleConfiguredEvent(matchString, target);
       await this.#append(event);
       const targetString = (event.payload as { target: string }).target;
-      return new RewriteRuleHandle(() =>
-        this.#waitUntil(
-          (async () => {
-            // Un-set ONLY the rule this handle wrote: a later provide at the same match (a live
-            // provider's, another session's) owns the row now — never a stale undo over it.
-            const rule = (await this.#durableObject.invoke([
-              "itx",
-              "rewriteRules",
-              ["get", matchString],
-            ])) as { target: string } | null;
-            if (rule?.target === targetString)
-              await this.#append(rewriteRuleConfiguredEvent(matchString, null));
-          })().catch(() => undefined),
-        ),
-      );
+      return new RewriteRuleHandle(() => this.#removeRuleInBackground(matchString, targetString));
     }
     // Built BEFORE the lend so a match the codec refuses throws with nothing lent. The rule rides the
     // pager upgrade: the DO appends it in the turn it accepts the pager — ONE round trip, and the DO
-    // owns BOTH ends of a lent stub's rule (set on attach, un-set on the key's last pager close). A
-    // refusal (STREAM_PAUSED) is the upgrade's answer: it propagates from here with nothing lent.
+    // owns BOTH ends of a lent stub's rule (set on attach, REMOVED on the key's last pager close — a
+    // fake `itx.ai` gives the real one back). A refusal (STREAM_PAUSED) is the upgrade's answer: it
+    // propagates from here with nothing lent. The target is the PHYSICAL registry, `itx.builtins.…`.
     const ruleEvent = rewriteRuleConfiguredEvent(matchString, [
       "itx",
+      "builtins",
       "rpcStubs",
       ["get", matchString],
     ]);
@@ -278,7 +282,7 @@ export class IterateContext extends RpcTarget {
       // refusal (STREAM_PAUSED) is the upgrade's answer and propagates from here with nothing lent.
       const row = subscriptionConfiguredEvent({
         name,
-        target: ["itx", "rpcStubs", ["get", rpcStubKey]],
+        target: ["itx", "builtins", "rpcStubs", ["get", rpcStubKey]],
         ...consumes,
       });
       const pager = await lendRpcStubOverPager(
@@ -323,6 +327,7 @@ export class IterateContext extends RpcTarget {
         name,
         target: [
           "itx",
+          "builtins",
           "facets",
           [
             "get",
@@ -353,7 +358,29 @@ export class IterateContext extends RpcTarget {
    *  the same door a client's dotted `itx.append(...)` takes. (The cast: workers-types collapses a stub
    *  method's `unknown` result to `never`.) */
   #append(event: StreamEventInput): Promise<unknown> {
-    return this.#durableObject.invoke(["itx", ["append", event]]) as Promise<unknown>;
+    // THE PLATFORM NEVER SPELLS A SHORT NAME: `itx.builtins.append` is the fixed point — a context's
+    // own rows (a whole-context override, a mask at `itx.append`) redirect the user's calls, never this.
+    return this.#durableObject.invoke(["itx", "builtins", ["append", event]]) as Promise<unknown>;
+  }
+
+  /** An undo's REMOVAL of a rule: un-set ONLY the row this handle wrote (its target still
+   *  `expectedTarget` — a later provide at the same match, a live provider's, another session's, owns
+   *  the row now, never a stale undo over it), spelled as the removal (back to the platform row
+   *  beneath, if any), never as a mask. Fire-and-forget under waitUntil (a disposer cannot await), a
+   *  refusal ignored. */
+  #removeRuleInBackground(matchString: string, expectedTarget: string | null): void {
+    this.#waitUntil(
+      (async () => {
+        const row = (await this.#durableObject.invoke([
+          "itx",
+          "builtins",
+          "rewriteRules",
+          ["get", matchString],
+        ])) as RewriteRuleListEntry | null;
+        if (row?.origin === "context" && row.target === expectedTarget)
+          await this.#append(rewriteRuleRemovedEvent(matchString));
+      })().catch(() => undefined),
+    );
   }
 
   /** An undo's append: fire-and-forget under waitUntil (a disposer cannot await), a refusal ignored

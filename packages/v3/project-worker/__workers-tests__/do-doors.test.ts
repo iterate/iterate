@@ -117,7 +117,12 @@ test("a core-snapshot probe on a NEVER-TOUCHED ctx materializes it (created@1 + 
       ["events.iterate.com/stream/created", 1],
       ["events.iterate.com/stream/woken", 2],
     ]);
-    expect(state.storage.kv.get("incarnation")).toBe(1);
+    expect(
+      Number(
+        state.storage.sql.exec("SELECT value FROM stream_meta WHERE key = 'incarnation'").one()
+          .value,
+      ),
+    ).toBe(1);
     // A plain append is activity — but still nothing to quiesce, so still no alarm. (Offset 4: past
     // created, woken and core's ephemeral live-state delta for the wake commit at 3.)
     const [mark] = (await instance.append({ type: "mark" })) as unknown as { offset: number }[];

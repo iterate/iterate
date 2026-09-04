@@ -569,8 +569,11 @@ Two rules that follow from the resolver:
 
 - A rewrite rule's target must be rooted at `itx`
   (`itx.provide("itx.greet", "itx.kv.get")` is legal; `"kv.get"` is rejected
-  when the event is built). Userspace can only reach a root by recursing
-  through the `itx` symbol, so the built-ins are unshadowable.
+  when the event is built). The physical spelling is `itx.builtins.<root>`, the
+  fixed point of rewriting: a rule may target it, never match it. A short
+  `itx.<root>` is the implicit platform row `itx.<root> ⇒ itx.builtins.<root>`,
+  consulted only after the context's own rows — so a context may shadow or
+  mask a built-in, and `itx.builtins.…` always reaches the real one.
 - The prefix `itx` by itself is the shortest legal match and acts as a
   default rule: it claims any call whose root is not a built-in. This is how
   ancestry is spelled (section 9.4).
@@ -1342,7 +1345,7 @@ sequenceDiagram
   Note over E: prototype hop reduces to<br/>["itx","greet",["run","jonas"]]
   E->>D: invoke(expression)   (Workers RPC)
   D->>R: resolve(expression)
-  loop until the root is a built-in (kv, cd, workers, facets, rpcStubs, ...) — 32 rewrites max
+  loop until the call is rooted at itx.builtins (the fixed point; a bare built-in root is the implicit platform row) — 32 rewrites max
     R->>R: pick the most SPECIFIC matching rule: longest match, then most pinned args
     R->>R: rewrite: target, then the unpinned args, then the steps after the match
   end
@@ -1486,7 +1489,7 @@ itself.
 | itx-expression prefix | a rewrite rule's `match`: dotted names, any step may pin literal args — `itx.greet`, `itx.ai.run('gpt-5')`; `canonicalItxExpressionPrefix` is its one spelling, the table's key                                                           |
 | rewrite rule          | `{ match, target }`: a call starting with `match` runs as the same call with `match` replaced by `target`; one map entry per canonical match, written by `itx/rewrite-rule-configured { match, target \| null }`; nothing else rides it   |
 | default rule          | a rule at the bare prefix `itx`; claims any non-built-in call                                                                                                                                                                             |
-| built-in              | a root of `BuiltInScope`; resolved before the rules; unshadowable                                                                                                                                                                         |
+| built-in              | a root of `BuiltInScope`, reached as `itx.builtins.<root>` (the reserved root, the fixed point — never a rule's match) or as the implicit platform row `itx.<root>`, which the context's own rows come before (shadowable, maskable)      |
 | InvokeHandle          | a pipelinable `RpcTarget` returned mid-chain (`cd`, `workers.get(...)`); `FacetHandle` and `RpcStubHandle` are its two brands                                                                                                             |
 | rpc stub              | a live capnweb value a session LENDS under an opaque `rpcStubKey`; the edge owns it, the DO BORROWS it per page and RETURNS it at idle; `itx.rpcStubs.get(rpcStubKey)` is how a rule or a subscription names it; presence is `list()`     |
 | pager                 | the hibernatable WebSocket from the edge relay to the DO, one per key, carrying `{ transportId, rpcStubKey }`; the DO sends `{ type: "page" }` to get a fresh stub lent                                                                   |

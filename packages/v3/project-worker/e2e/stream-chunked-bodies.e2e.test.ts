@@ -104,7 +104,7 @@ test("read paging across a chunked event keeps the scanned-offset-range proof ho
   expect(page2.scannedThroughOffset).toBe(e5.offset);
 }, 60_000);
 
-const EVENT_CHUNK_SIZE = 512 * 1024; // must match src/stream/stream.ts
+const EVENT_CHUNK_SIZE = 512 * 1024; // must match src/stream/stream-storage.ts
 const EMOJI = String.fromCodePoint(0x1f600); // "grinning face" = high+low surrogate pair
 
 test("a surrogate pair straddling a chunk boundary round-trips byte-identically", async () => {

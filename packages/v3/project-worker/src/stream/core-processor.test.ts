@@ -26,9 +26,9 @@ const reduceAll = (events: StreamEvent[], initial = proc.contract.initialState()
   events.reduce((s, e) => proc.reduce({ event: e, state: s }) ?? s, initial);
 
 describe("the contract", () => {
-  test("slug `core` v5.0.0; the schema-initial state; consumes EXACTLY its eight control events (an inline reduce reduces only what it consumes)", () => {
+  test("slug `core` v6.0.0; the schema-initial state; consumes EXACTLY its eight control events (an inline reduce reduces only what it consumes)", () => {
     expect(proc.contract.slug).toBe("core");
-    expect(proc.contract.version).toBe("5.0.0");
+    expect(proc.contract.version).toBe("6.0.0");
     expect(proc.contract.initialState()).toEqual({
       paused: null,
       itxExpressionRewriteRules: {},
@@ -119,7 +119,7 @@ describe("the rewrite-rule table — a MAP by match", () => {
       }),
     ]);
     expect(Object.keys(set.itxExpressionRewriteRules)).toEqual(["itx.greeter", "itx.other"]);
-    expect(print(set.itxExpressionRewriteRules["itx.greeter"].target)).toBe("itx.tab2");
+    expect(print(set.itxExpressionRewriteRules["itx.greeter"].target!)).toBe("itx.tab2");
     const deleted = reduceAll(
       [
         at(4, "events.iterate.com/itx/rewrite-rule-configured", {
@@ -382,5 +382,139 @@ describe("purity", () => {
       at(7, "events.iterate.com/stream/woken", { incarnation: 2 }),
     ];
     expect(reduceAll(log)).toEqual(reduceAll(log));
+  });
+});
+
+describe("the builtins root, as the reduce sees it: masks, the platform-equivalent target, hosting on the RESOLVED target", () => {
+  const SPEC = { source: { "cap.js": "export class T {}" }, className: "TallyDurableObject" };
+  const configured = (offset: number, name: string, target: string) =>
+    at(offset, "events.iterate.com/stream/subscription-configured", { name, target });
+
+  test("`null` at a built-in's name is KEPT as a mask row; `null` at a plain name deletes; a repeat of either is a no-op (undefined)", () => {
+    const masked = reduceAll([
+      at(1, "events.iterate.com/itx/rewrite-rule-configured", { match: "itx.kv", target: null }),
+      at(2, "events.iterate.com/itx/rewrite-rule-configured", {
+        match: "itx.other",
+        target: "itx.kv",
+      }),
+      at(3, "events.iterate.com/itx/rewrite-rule-configured", { match: "itx.other", target: null }),
+      at(4, "events.iterate.com/itx/rewrite-rule-configured", { match: "itx", target: null }),
+      at(5, "events.iterate.com/itx/rewrite-rule-configured", {
+        match: "itx.kv.get('a')",
+        target: null,
+      }),
+    ]);
+    expect(Object.keys(masked.itxExpressionRewriteRules).sort()).toEqual([
+      "itx",
+      "itx.kv",
+      "itx.kv.get('a')",
+    ]);
+    expect(masked.itxExpressionRewriteRules["itx.kv"]).toEqual({
+      match: ["itx", "kv"],
+      target: null,
+    });
+    expect(
+      proc.reduce({
+        event: at(6, "events.iterate.com/itx/rewrite-rule-configured", {
+          match: "itx.kv",
+          target: null,
+        }),
+        state: masked,
+      }),
+    ).toBeUndefined();
+    expect(
+      proc.reduce({
+        event: at(7, "events.iterate.com/itx/rewrite-rule-configured", {
+          match: "itx.other",
+          target: null,
+        }),
+        state: masked,
+      }),
+    ).toBeUndefined();
+  });
+
+  test("the platform-equivalent target `itx.builtins.<match…>` DELETES the row (back to the platform row) — a mask, an override, or nothing at all", () => {
+    const s = reduceAll([
+      at(1, "events.iterate.com/itx/rewrite-rule-configured", { match: "itx.kv", target: null }),
+      at(2, "events.iterate.com/itx/rewrite-rule-configured", {
+        match: "itx.whoami",
+        target: "itx.fake",
+      }),
+      at(3, "events.iterate.com/itx/rewrite-rule-configured", {
+        match: "itx.kv",
+        target: "itx.builtins.kv",
+      }),
+      at(4, "events.iterate.com/itx/rewrite-rule-configured", {
+        match: "itx.whoami",
+        target: "itx.builtins.whoami",
+      }),
+    ]);
+    expect(s.itxExpressionRewriteRules).toEqual({});
+    expect(
+      proc.reduce({
+        event: at(5, "events.iterate.com/itx/rewrite-rule-configured", {
+          match: "itx.kv",
+          target: "itx.builtins.kv",
+        }),
+        state: s,
+      }),
+    ).toBeUndefined();
+    // a pinned match's equivalent carries the pin
+    const pinned = reduceAll([
+      at(1, "events.iterate.com/itx/rewrite-rule-configured", {
+        match: "itx.ai.run('gpt-5')",
+        target: "itx.fake",
+      }),
+      at(2, "events.iterate.com/itx/rewrite-rule-configured", {
+        match: "itx.ai.run('gpt-5')",
+        target: "itx.builtins.ai.run('gpt-5')",
+      }),
+    ]);
+    expect(pinned.itxExpressionRewriteRules).toEqual({});
+  });
+
+  test("HOSTING is decided on the RESOLVED target: the platform's spelling, a user's short spelling and a user's own rule naming the door all host; the source is elided from the ORIGINAL spelling", () => {
+    const specJson = JSON.stringify(SPEC);
+    const s = reduceAll([
+      at(1, "events.iterate.com/itx/rewrite-rule-configured", {
+        match: "itx.hosts",
+        target: "itx.facets",
+      }),
+      configured(2, "platform", `itx.builtins.facets.get('a', ${specJson}).processEventBatch`),
+      configured(3, "short", `itx.facets.get('b', ${specJson}).processEventBatch`),
+      configured(4, "viaRule", `itx.hosts.get('c', ${specJson}).processEventBatch`),
+      configured(5, "address", "itx.facets.get('d').processEventBatch"),
+    ]);
+    expect(s.subscriptions.platform).toMatchObject({
+      hostedFacet: { name: "a", className: "TallyDurableObject" },
+    });
+    expect(print(s.subscriptions.platform.target)).toBe(
+      "itx.builtins.facets.get('a').processEventBatch",
+    );
+    expect(s.subscriptions.short).toMatchObject({
+      hostedFacet: { name: "b", className: "TallyDurableObject" },
+    });
+    expect(print(s.subscriptions.short.target)).toBe("itx.facets.get('b').processEventBatch");
+    expect(s.subscriptions.viaRule).toMatchObject({
+      hostedFacet: { name: "c", className: "TallyDurableObject" },
+    });
+    expect(print(s.subscriptions.viaRule.target)).toBe("itx.hosts.get('c').processEventBatch"); // the caller's spelling, minus the source
+    expect(s.subscriptions.address).not.toHaveProperty("hostedFacet");
+    for (const row of Object.values(s.subscriptions))
+      expect(JSON.stringify(row)).not.toContain("cap.js");
+  });
+
+  test("a hosting target that cannot resolve yet (its rule comes later, or a mask sits on the door) is stored as given and hosts nothing", () => {
+    const specJson = JSON.stringify(SPEC);
+    const s = reduceAll([
+      configured(1, "early", `itx.later.get('e', ${specJson}).processEventBatch`),
+      at(2, "events.iterate.com/itx/rewrite-rule-configured", {
+        match: "itx.facets",
+        target: null,
+      }),
+      configured(3, "masked", `itx.facets.get('f', ${specJson}).processEventBatch`),
+    ]);
+    expect(s.subscriptions.early).not.toHaveProperty("hostedFacet");
+    expect(s.subscriptions.masked).not.toHaveProperty("hostedFacet");
   });
 });

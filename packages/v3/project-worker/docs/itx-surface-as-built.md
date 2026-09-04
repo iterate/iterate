@@ -109,9 +109,16 @@ The one codec every door speaks. String half ⇄ structured half.
 
 - Args are JSON5 in the string half. `print(parse(s))` round-trips; the canonical spelling
   (`canonicalItxExpressionPrefix`) is the rewrite-rule record's key.
-- The **anonymous call step** `""` calls the value itself: `itx.rpcStubs.get('cam')(1)` is
-  `["itx","rpcStubs",["get","cam"],["",1]]`. It is what a rule spells when a lent stub is
-  called with args.
+- **The reserved root** is `itx.builtins`: the physical scope (section 5) and the FIXED POINT of
+  rewriting (section 7). `itx.builtins.kv.get('x')` runs as is and reads no rule; `itx.kv.get('x')`
+  reaches the same door through the implicit platform row `itx.kv ⇒ itx.builtins.kv` unless the
+  context's own table says otherwise. A rule's match may not be rooted there; a target may.
+- The **anonymous call step** `""` calls the value itself: `itx.builtins.rpcStubs.get('cam')(1)` is
+  `["itx","builtins","rpcStubs",["get","cam"],["",1]]`. It is what a rule spells when a lent stub
+  is called with args.
+- `invoke(call, ...args)`: the string is the pure part, the args the live part — `args` are applied
+  to the value the expression denotes (`invoke("itx.kv.get", "k")` ≡ `itx.kv.get("k")`; the fetch
+  lane's Request rides the same door).
 - **The dotted surface is a prototype hop**, not a Proxy around the instance
   (`src/context/dotted-path-proxy.ts`, `installPrototypeInvokeFallback`). Declared methods
   win; every unknown segment accumulates and lands on `invoke` as ONE expression. It is a
@@ -152,24 +159,31 @@ How a client reaches one (`src/session.ts`):
 
 ## 5. The built-in roots: the DO's physical scope (`src/context/built-ins.ts`)
 
-A plain record. A call `itx.<root>…` resolves DIRECTLY against these, no rule. A rule's target
-must be rooted at `itx`, so a bare root is unspellable and the built-ins are unshadowable.
+A plain record — and THE RECORD IS `itx.builtins`, the reserved root. A call `itx.builtins.<root>…`
+runs against it directly and never reads the rule table. A short call `itx.<root>…` reaches it
+through the IMPLICIT PLATFORM ROW `itx.<root> ⇒ itx.builtins.<root>` (never stored; applied by the
+resolver when no context row matches), so a context may shadow a root (`provide("itx.ai", fake)`),
+mask one (`provide("itx.kv", null)`), or override itself whole (`provide("itx", stub)`), and
+`itx.builtins.…` is always the physical door. The one list of roots is `src/context/built-in-roots.ts`,
+type-checked against `keyof BuiltInScope`. **The platform never spells a short name**: the proxy's
+own append, a lent stub's rule, a processor's row are all `itx.builtins.…`, so a user's row at
+`itx.facets` or `itx.rpcStubs` redirects the user's calls and nothing the platform relies on.
 
-| Root                         | Signature                                                                                                                          | Backed by                                                     |
-| ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
-| `whoami()`                   | `→ { projectId, path }`                                                                                                            | the DO name                                                   |
-| `kv`                         | `.get(k)` `.put(k, v)` `.delete(k)` `.list(prefix?)`                                                                               | `ITX_KV`, `${projectId}:` prefixed                            |
-| `append(...events)`          | `→ StreamEvent[]`                                                                                                                  | the stream                                                    |
-| `read(afterOffset?, limit?)` | `→ { events, scannedThroughOffset }`                                                                                               | the stream                                                    |
-| `waitForEvent(filter?)`      | `{ type?, afterOffset?, timeoutMs? } → StreamEvent`                                                                                | the stream                                                    |
-| `cd(path)`                   | `→ InvokeHandle` onto a sibling context (append/read skip its rules; else `invoke`)                                                | `ITERATE_CONTEXT.getByName`                                   |
-| `fetch(request)`             | egress: `{{secret:project:NAME}}` substituted → `FALLBACK`                                                                         | the control plane                                             |
-| `rpcStubs`                   | `.get(rpcStubKey) → RpcStubHandle` · `.list() → string[]` (presence)                                                               | `RpcStubDirectory`                                            |
-| `rewriteRules`               | `.list() → { match, target }[]` · `.get(match)`                                                                                    | a read of core state                                          |
-| `facets`                     | `.get(name) → FacetHandle` (a RUNNING facet) · `.get(name, { source, cacheKey?, className })` (load and host it) · `.delete(name)` | `ctx.facets`; mirrors `ctx.facets.get(name, startupCallback)` |
-| `subscriptions`              | `.list() → SubscriptionListEntry[]` · `.get(name)`                                                                                 | core state ⋈ the loop's cursors                               |
-| `workers`                    | `.get({ source, cacheKey?, className?, props? }) → InvokeHandle`, a stateless WorkerEntrypoint; any exported method                | Worker Loader; the stateless twin of `facets.get`             |
-| `runScript(script, ...args)` | sugar: wrap the lambda string → `workers.get({ source }).run(...)`                                                                 | same                                                          |
+| Root                         | Signature                                                                                                                                                                                                                                                                    | Backed by                                                     |
+| ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
+| `whoami()`                   | `→ { projectId, path }`                                                                                                                                                                                                                                                      | the DO name                                                   |
+| `kv`                         | `.get(k)` `.put(k, v)` `.delete(k)` `.list(prefix?)`                                                                                                                                                                                                                         | `ITX_KV`, `${projectId}:` prefixed                            |
+| `append(...events)`          | `→ StreamEvent[]`                                                                                                                                                                                                                                                            | the stream                                                    |
+| `read(afterOffset?, limit?)` | `→ { events, scannedThroughOffset }`                                                                                                                                                                                                                                         | the stream                                                    |
+| `waitForEvent(filter?)`      | `{ type?, afterOffset?, timeoutMs? } → StreamEvent`                                                                                                                                                                                                                          | the stream                                                    |
+| `cd(path)`                   | `→ InvokeHandle` onto a sibling context, every call through ITS table (`cd(p).builtins.append(…)` is its physical door)                                                                                                                                                      | `ITERATE_CONTEXT.getByName`                                   |
+| `fetch(request)`             | egress: `{{secret:project:NAME}}` substituted → `FALLBACK`                                                                                                                                                                                                                   | the control plane                                             |
+| `rpcStubs`                   | `.get(rpcStubKey) → RpcStubHandle` · `.list() → string[]` (presence)                                                                                                                                                                                                         | `RpcStubDirectory`                                            |
+| `rewriteRules`               | `.list() → { match, target, origin }[]` (the EFFECTIVE table: context rows, masks as `target: null`, and the platform rows, `origin: "platform" \| "context"`) · `.get(match)` · `.resolve(call) → string[]` (the pure chain; `invoke(call) ≡ invoke(resolve(call).at(-1))`) | core state + the platform rows                                |
+| `facets`                     | `.get(name) → FacetHandle` (a RUNNING facet) · `.get(name, { source, cacheKey?, className })` (load and host it) · `.delete(name)`                                                                                                                                           | `ctx.facets`; mirrors `ctx.facets.get(name, startupCallback)` |
+| `subscriptions`              | `.list() → SubscriptionListEntry[]` · `.get(name)`                                                                                                                                                                                                                           | core state ⋈ the loop's cursors                               |
+| `workers`                    | `.get({ source, cacheKey?, className?, props? }) → InvokeHandle`, a stateless WorkerEntrypoint; any exported method                                                                                                                                                          | Worker Loader; the stateless twin of `facets.get`             |
+| `runScript(script, ...args)` | sugar: wrap the lambda string → `workers.get({ source }).run(...)`                                                                                                                                                                                                           | same                                                          |
 
 `WorkerSource` is the worker's modules, literally (`Record<string, string>`, module name → code,
 `"cap.js"` the main module) OR an itx expression that PRODUCES them. A producer needs a `cacheKey`
@@ -246,16 +260,27 @@ ONE file: the rules, the one event, the resolver. Every rule is a row in its tab
    literal args (`itx.ai.run('gpt-5')`).
 2. A name step matches the same property, or as the final step a call of that name. A call
    step matches a call whose leading args equal the pinned literals; pinned args are CONSUMED.
-3. The most SPECIFIC rule wins: longest match, then most pinned args.
+3. The most SPECIFIC row of the CONTEXT's table wins: longest match, then most pinned args. A
+   bare `itx` row matches every call (the whole-context override).
 4. The rewrite is the target, then the unpinned args, then the call's remaining steps. Args
    fold into the target's final step when it is a name (`itx.grok ⇒ itx.openai.chat`), else
-   become an anonymous call on the target's result (`itx.cam ⇒ itx.rpcStubs.get('cam')`).
-5. Repeat until the root is a built-in. 32 rewrites is the budget. No match is
-   `NO_ITX_EXPRESSION_MATCH` (default-deny).
+   become an anonymous call on the target's result (`itx.cam ⇒ itx.builtins.rpcStubs.get('cam')`).
+   A target denotes a VALUE; calling the match calls that value.
+5. THE FIXED POINT is `itx.builtins`: a call rooted there runs as is and never reads the table.
+   Any other `itx.…` call, RULES FIRST: a matching row whose target is `null` is a MASK and the
+   call is refused; a matching row rewrites and the loop repeats; NO matching row and a root that
+   is a built-in is the IMPLICIT PLATFORM ROW `itx.<root> ⇒ itx.builtins.<root>`, applied and done;
+   anything else is `NO_ITX_EXPRESSION_MATCH` (default-deny). 32 rewrites is the budget.
+6. THE DOOR: a match is rooted at `itx`, never at `itx.builtins`, never at a proxy verb (`cd`,
+   `invoke`, `provide`, `subscribe`, `enableProcessor`, `disableProcessor`); a target is rooted at `itx`.
 
 **The table** is a plain-object record keyed by canonical match in core state
-(`itxExpressionRewriteRules`, a `z.record`, JSON-safe; the values hold the two halves parsed).
-Set replaces, `null` deletes. No stack, no offset, no identity beyond the match.
+(`itxExpressionRewriteRules`, JSON-safe; the values hold the two halves parsed). Set replaces.
+`null` is KEPT as a mask when the match shadows a platform row (`itx.kv`, `itx.kv.get`, bare `itx`)
+and deletes otherwise. The platform-equivalent target `itx.builtins.<match…>` DELETES the row
+(back to the platform row) — that is what a disposed handle and a dead stub append
+(`rewriteRuleRemovedEvent`), so a fake `itx.ai` gives the real one back rather than masking it.
+No stack, no offset, no identity beyond the match.
 
 **The one event** `events.iterate.com/itx/rewrite-rule-configured { match: string, target:
 string | null }`. Both halves are canonicalized through the codec at build time, so a bad
@@ -263,17 +288,23 @@ spelling fails at the door, never silently in the reduce.
 
 **A live stub behind a pinned match** (`rewrite-rules-argument-pinned.e2e`):
 `provide("itx.ai.run('gpt-5')", fn)`, then `itx.ai.run('gpt-5', inputs)` runs as
-`itx.rpcStubs.get("itx.ai.run('gpt-5')")(inputs)`, so `fn(inputs)`. No key to invent: the key is the match.
+`itx.builtins.rpcStubs.get("itx.ai.run('gpt-5')")(inputs)`, so `fn(inputs)`. No key to invent: the key is the match.
 
-**A chain**:
+**A chain** (`rewriteRules.resolve("itx.greeter.hello()")` returns exactly these four lines):
 
 ```
 itx.greeter.hello()
   rule itx.greeter ⇒ itx.greeterA
 itx.greeterA.hello()
   rule itx.greeterA ⇒ itx.rpcStubs.get('greeterA')
-itx.rpcStubs.get('greeterA').hello()          ← root is a built-in: runs
+itx.rpcStubs.get('greeterA').hello()
+  the implicit platform row itx.rpcStubs ⇒ itx.builtins.rpcStubs
+itx.builtins.rpcStubs.get('greeterA').hello()   ← the fixed point: runs
 ```
+
+**Misha's test** (`rewrite-rules-builtins-root.e2e`): `provide("itx.ai", fake)` shadows `itx.ai` for
+the context, `itx.builtins.ai` is the real one throughout, and disposing the handle (or the test
+session ending) restores the platform row.
 
 ---
 
@@ -444,6 +475,19 @@ Record<string, string>`, `"cap.js"` the main module), and the old inline wrapper
   stores what it was given. The unkeyed producer-expression branch (`"itx.kv.get('src/x.js')"`) is
   gone; F brought a producer back only behind a required `cacheKey`. The e2e fixtures are inline;
   nothing is seeded into kv.
+
+### Decided on 2026-09-04, done (the builtins arc)
+
+- **The reserved root.** `itx.builtins` is the physical scope and the fixed point; rules resolve
+  FIRST, the platform rows are implicit (`src/context/built-in-roots.ts` is the one list); `null`
+  masks under a built-in root and deletes elsewhere; the platform-equivalent target deletes;
+  two new door guards (a match at `itx.builtins`, a match at a proxy verb); the platform spells
+  `itx.builtins.…` in every expression it writes; the built-in `cd`'s append/read bypass is gone.
+- **`rewriteRules.resolve(call)`** is the pure chain; the resolver's run door is `invoke`; the law
+  `invoke(call) ≡ invoke(resolve(call).at(-1))` is pinned in the unit table and end to end.
+- **`invoke(call, ...args)`** is public on the proxy and the DO with the fetch lane's semantics.
+- Hosting is decided on the RESOLVED target (a user's short spelling hosts like the platform's);
+  `hostedFacet` carries the facet's `name`. Core contract 6.0.0.
 
 ### Open
 

@@ -146,9 +146,9 @@ test("MEASURED FINDING: a push subscriber that stops reading mid-flood is NOT cl
   // one probe proves the lane end-to-end BEFORE the stall
   await append(itx, { type: "flood", ephemeral: true, payload: { probe: true } });
   await until("probe delivered over the victim socket", () => c.invocations.length >= 1);
-  // the victim's row is a PUSH row (pure data — target `itx.rpcStubs.get('subscription:victim')`,
+  // the victim's row is a PUSH row (pure data — target `itx.builtins.rpcStubs.get('subscription:victim')`,
   // no cursor); whether that stub is ONLINE is the registry's fact, read separately
-  const victimRow = { name: "victim", target: "itx.rpcStubs.get('subscription:victim')" };
+  const victimRow = { name: "victim", target: "itx.builtins.rpcStubs.get('subscription:victim')" };
   const before = await subscriptions(itx);
   expect(before).toContainEqual(expect.objectContaining(victimRow));
   expect(before.find((r) => r.name === "victim").cursor).toBeUndefined();

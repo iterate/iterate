@@ -29,53 +29,120 @@ import {
   parseItxExpressionPrefix,
   type ItxExpression,
   type ItxExpressionPrefix,
-  type ItxExpressionStep,
 } from "../context/expression.ts";
+import { isBuiltInRoot } from "../context/built-in-roots.ts";
+import {
+  BUILTINS_ROOT,
+  resolveItxExpression,
+  type ItxExpressionRewriteRule,
+} from "../context/itx-expression-rewriting.ts";
+import { jsonEqual } from "../lib/patch.ts";
 import type { StreamEventInput } from "./events.ts";
 import { StreamProcessor, type ProcessorContract, type ReduceArgs } from "./processor.ts";
 
-/** One rewrite rule: a canonical match prefix and the target it rewrites to (both parsed once, at
- *  reduce; a call step pins literal args, `itx.ai.run('gpt-5')` — expression.ts). */
-export type ItxExpressionRewriteRule = { match: ItxExpressionPrefix; target: ItxExpression };
+export type { ItxExpressionRewriteRule } from "../context/itx-expression-rewriting.ts";
 
-/** The hosting spec inside a FULL configured target (`itx.facets.get(name, { source, className,
- *  cacheKey? }).…`) — present ONLY in the raw log event's target, before the reduce elides the
- *  source. `#invokeFacet` reads it back from the log on a first-materialization memo miss (M1).
- *  Undefined if the target is not a facet-host (an address-only `itx.facets.get(name).…`). */
+/** A hosting spec, read off a RESOLVED target. */
+export type HostingFacetSpec = {
+  name: string;
+  source: unknown;
+  className: string;
+  cacheKey?: string;
+};
+
+/** The hosting spec inside a FULL configured target, RESOLVED to the fixed point
+ *  (`itx.builtins.facets.get(name, { source, className, cacheKey? }).…`) — present ONLY in the raw log
+ *  event's target, before the reduce elides the source. `#invokeFacet` reads it back from the log on a
+ *  first-materialization memo miss (M1). Undefined if the target is not a facet-host (an address-only
+ *  `…facets.get(name).…`). Resolution is what makes a user's short spelling (`itx.facets.get(…)`, or a
+ *  rule of their own naming the door) host exactly like the platform's. */
 export function facetSpecFromHostingTarget(
-  target: ItxExpression,
-): { source: unknown; className: string; cacheKey?: string } | undefined {
-  const getStep = target[2];
+  resolvedTarget: ItxExpression,
+): HostingFacetSpec | undefined {
+  const getStep = resolvedTarget[3];
   if (
-    target[1] === "facets" &&
+    resolvedTarget[1] === BUILTINS_ROOT &&
+    resolvedTarget[2] === "facets" &&
     Array.isArray(getStep) &&
     getStep[0] === "get" &&
     getStep.length >= 3 &&
     typeof getStep[1] === "string" &&
     typeof getStep[2] === "object" &&
     getStep[2] !== null
-  )
-    return getStep[2] as { source: unknown; className: string; cacheKey?: string };
+  ) {
+    const spec = getStep[2] as { source: unknown; className: string; cacheKey?: string };
+    return {
+      name: getStep[1],
+      source: spec.source,
+      className: spec.className,
+      ...(spec.cacheKey !== undefined && { cacheKey: spec.cacheKey }),
+    };
+  }
   return undefined;
 }
 
-/** M1: split a configured target into the SOURCE-LESS target the reduce stores and the `hostedFacet`
- *  marker (the class + cacheKey it hosts). A non-hosting target passes through with no marker. */
-function elideHostedFacetSource(target: ItxExpression): {
+/** Resolve a target through THIS state's rules to the fixed point — or undefined when it cannot be
+ *  resolved right now (a prefix nothing names yet, a mask, the depth budget): such a target is stored
+ *  as given and hosts nothing until it can. */
+function resolveThroughState(state: CoreState, target: ItxExpression): ItxExpression | undefined {
+  try {
+    return resolveItxExpression(
+      () => Object.values(state.itxExpressionRewriteRules),
+      target,
+      isBuiltInRoot,
+    ).at(-1);
+  } catch {
+    return undefined;
+  }
+}
+
+/** M1: split a configured target into the SOURCE-LESS target the reduce stores (the ORIGINAL
+ *  spelling, minus the spec — a target re-resolves at every delivery, so the reduce never freezes
+ *  its resolution) and the `hostedFacet` marker (the facet's name, class and cacheKey). A non-hosting
+ *  target passes through with no marker. */
+function elideHostedFacetSource(
+  target: ItxExpression,
+  resolvedTarget: ItxExpression | undefined,
+): {
   target: ItxExpression;
-  hostedFacet?: { className: string; cacheKey?: string };
+  hostedFacet?: { name: string; className: string; cacheKey?: string };
 } {
-  const spec = facetSpecFromHostingTarget(target);
+  const spec = resolvedTarget && facetSpecFromHostingTarget(resolvedTarget);
   if (!spec) return { target };
-  const getStep = target[2] as [string, string, ...unknown[]];
-  const sourceLessGet: ItxExpressionStep = ["get", getStep[1]];
+  // The spec rides the ORIGINAL target's `get` call step, wherever a rule of the caller's put it.
+  const specStepIndex = target.findIndex(
+    (step) =>
+      Array.isArray(step) &&
+      step[0] === "get" &&
+      step.length >= 3 &&
+      typeof step[1] === "string" &&
+      typeof step[2] === "object" &&
+      step[2] !== null &&
+      "className" in (step[2] as object),
+  );
   return {
-    target: [target[0], target[1], sourceLessGet, ...target.slice(3)],
+    target:
+      specStepIndex === -1
+        ? target
+        : [
+            ...target.slice(0, specStepIndex),
+            ["get", (target[specStepIndex] as [string, string])[1]],
+            ...target.slice(specStepIndex + 1),
+          ],
     hostedFacet: {
+      name: spec.name,
       className: spec.className,
       ...(spec.cacheKey !== undefined && { cacheKey: spec.cacheKey }),
     },
   };
+}
+
+/** Does a `null` at `match` MASK a platform row (kept as a row) or merely delete (nothing beneath)?
+ *  A bare `itx` masks everything; a match under a built-in root masks that root's calls it claims. */
+function matchShadowsAPlatformRow(match: ItxExpressionPrefix): boolean {
+  if (match.length === 1) return true;
+  const step = match[1];
+  return isBuiltInRoot(Array.isArray(step) ? step[0] : step);
 }
 
 /** One subscription row (by name; a same-named configure REPLACES). */
@@ -86,11 +153,12 @@ export type Subscription = {
   consumes?: string[];
   /** The row's identity — the offset of its subscription-configured event. */
   configuredAtOffset: number;
-  /** Set when this row HOSTS a facet (`itx.facets.get(name, spec)…`, M1): the class and cacheKey,
-   *  but NOT the source — the source stays in the durable log event (and the `facet:<name>` kv memo),
-   *  never in this reduced state, so a 100 KB processor no longer bloats the checkpoint blob that is
-   *  rewritten on every core change. A row that only ADDRESSES a running facet has no `hostedFacet`. */
-  hostedFacet?: { className: string; cacheKey?: string };
+  /** Set when this row HOSTS a facet (a target that RESOLVES to `itx.builtins.facets.get(name,
+   *  spec)…`, M1): the facet's name, class and cacheKey, but NOT the source — the source stays in the
+   *  durable log event (and the `facet:<name>` kv memo), never in this reduced state, so a 100 KB
+   *  processor no longer bloats the checkpoint blob that is rewritten on every core change. A row
+   *  that only ADDRESSES a running facet has no `hostedFacet`. */
+  hostedFacet?: { name: string; className: string; cacheKey?: string };
   /** A CURSOR target that exhausted its retries (the loop appended the halted fact). */
   halted?: { afterOffset: number; attempts: number; error?: string };
   /** The newest delivery-resumed: the loop applies it once (a seek, an un-halt). */
@@ -110,8 +178,10 @@ export type CoreState = {
   /** From the wake record (stream/woken) — growth across idle is the hibernation tell. */
   incarnation?: number;
   paused: { reason: string } | null;
-  /** THE REWRITE-RULE TABLE, by canonical match: a configured target REPLACES, `null` DELETES (a
-   *  map — no stack, no identity beyond the match). */
+  /** THE REWRITE-RULE TABLE, by canonical match (a map — no stack, no identity beyond the match): a
+   *  configured target REPLACES; `null` is kept as a MASK when the match shadows a platform row
+   *  (`itx.kv`, `itx.ai.run('gpt-5')`, bare `itx`) and DELETES otherwise; the platform-equivalent
+   *  target `itx.builtins.<match…>` DELETES the row (back to the platform row). */
   itxExpressionRewriteRules: Record<string, ItxExpressionRewriteRule>;
   /** THE SUBSCRIPTIONS TABLE, by name. */
   subscriptions: Record<string, Subscription>;
@@ -154,7 +224,7 @@ export const CoreContract: ProcessorContract<CoreState> & {
   }) => StreamEventInput;
 } = {
   slug: "core",
-  version: "5.0.0", // 5.0.0 (M1): a hosted facet's SOURCE is elided from the reduced target (kept in the log + facet:<name> kv), leaving hostedFacet {className, cacheKey?} on the row
+  version: "6.0.0", // 6.0.0 (the builtins root): `null` rows kept as MASKS under a built-in root, the platform-equivalent target deletes, hosting detected on the RESOLVED target, hostedFacet carries the facet's `name`. 5.0.0 (M1): a hosted facet's SOURCE is elided from the reduced target (kept in the log + facet:<name> kv)
   description:
     "The context's own state, reduced inline at the commit point: who it is, which incarnation runs, whether appends are paused, the itx-expression rewrite rules every call goes through, and the subscriptions every commit is sent to.",
   consumes: CORE_EVENT_TYPES,
@@ -201,23 +271,40 @@ export class CoreStreamProcessor extends StreamProcessor<CoreState> {
         return { ...state, paused: null };
 
       case "events.iterate.com/itx/rewrite-rule-configured": {
-        // A `null` on a match that has no rule is a NO-OP (undefined), not a fresh object: the inline
-        // host detects change by identity, and a benign double-delete must not rewrite the checkpoint
-        // or publish a live-state delta.
+        // A no-op is `undefined`, not a fresh object: the inline host detects change by identity, and
+        // a benign double-delete or double-mask must not rewrite the checkpoint or publish a
+        // live-state delta.
         const matchString = payload.match as string;
-        if (payload.target === null) {
-          if (!(matchString in state.itxExpressionRewriteRules)) return undefined;
+        const matchPrefix = parseItxExpressionPrefix(matchString);
+        const existing = state.itxExpressionRewriteRules[matchString];
+        const without = () => {
           const { [matchString]: _gone, ...rest } = state.itxExpressionRewriteRules;
           return { ...state, itxExpressionRewriteRules: rest };
+        };
+        if (payload.target === null) {
+          // A MASK where a platform row lies beneath (rule 5: the call is refused, not defaulted);
+          // a plain deletion anywhere else (a mask there would equal a deletion and only grow the table).
+          if (!matchShadowsAPlatformRow(matchPrefix)) return existing ? without() : undefined;
+          if (existing && existing.target === null) return undefined;
+          return {
+            ...state,
+            itxExpressionRewriteRules: {
+              ...state.itxExpressionRewriteRules,
+              [matchString]: { match: matchPrefix, target: null },
+            },
+          };
         }
+        const target = parse(payload.target as string);
+        // THE PLATFORM-EQUIVALENT TARGET (`itx.kv ⇒ itx.builtins.kv`, `itx ⇒ itx.builtins`) is "back to
+        // the platform row": the row is deleted, never stored — so an un-mask is one ordinary event and
+        // the table never carries a row that only restates the default.
+        if (jsonEqual(target, ["itx", BUILTINS_ROOT, ...matchPrefix.slice(1)]))
+          return existing ? without() : undefined;
         return {
           ...state,
           itxExpressionRewriteRules: {
             ...state.itxExpressionRewriteRules,
-            [matchString]: {
-              match: parseItxExpressionPrefix(matchString),
-              target: parse(payload.target as string),
-            },
+            [matchString]: { match: matchPrefix, target },
           },
         };
       }
@@ -230,10 +317,15 @@ export class CoreStreamProcessor extends StreamProcessor<CoreState> {
           return { ...state, subscriptions: rest };
         }
         const consumes = payload.consumes as string[] | undefined;
-        // M1: a hosting target (`itx.facets.get(name, spec)…`) keeps its NAME and shape but sheds its
-        // SOURCE here — the source is durable in this very event (and the facet's kv memo), so the
-        // reduced state, and the checkpoint blob it is written into on every core change, stay small.
-        const { target, hostedFacet } = elideHostedFacetSource(parse(payload.target as string));
+        // M1: a hosting target (one that RESOLVES to `itx.builtins.facets.get(name, spec)…`) keeps its
+        // spelling but sheds its SOURCE here — the source is durable in this very event (and the
+        // facet's kv memo), so the reduced state, and the checkpoint blob it is written into on every
+        // core change, stay small.
+        const configuredTarget = parse(payload.target as string);
+        const { target, hostedFacet } = elideHostedFacetSource(
+          configuredTarget,
+          resolveThroughState(state, configuredTarget),
+        );
         return {
           ...state,
           subscriptions: {

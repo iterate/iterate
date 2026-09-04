@@ -27,6 +27,7 @@ test("the table is a MAP: 5 concurrent re-sets of ONE match leave exactly the la
   expect(await itx.rewriteRules.get("itx.race")).toEqual({
     match: "itx.race",
     target: lastTarget,
+    origin: "context",
   });
   expect(
     (await itx.rewriteRules.list()).filter((r: { match: string }) => r.match === "itx.race"),

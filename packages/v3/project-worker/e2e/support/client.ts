@@ -132,11 +132,13 @@ export async function presence(itx: any): Promise<string[]> {
   return (await itx.rpcStubs.list()) as string[];
 }
 
-/** The matches of the LIVE rewrite rules — rules whose target names the `itx.rpcStubs` registry.
+/** The matches of the LIVE rewrite rules — rules whose target names the `itx.builtins.rpcStubs` registry.
  *  Pure data: this set does NOT shrink when a provider dies; it shrinks when the rule is un-set. */
 export async function rpcStubRewriteRuleMatches(itx: any): Promise<string[]> {
-  return ((await itx.rewriteRules.list()) as { match: string; target: string }[])
-    .filter((rule) => rule.target.startsWith("itx.rpcStubs.get("))
+  return ((await itx.rewriteRules.list()) as { match: string; target: string | null }[])
+    .filter(
+      (rule) => rule.target !== null && /^itx\.(builtins\.)?rpcStubs\.get\(/.test(rule.target),
+    ) // either spelling names the registry
     .map((rule) => rule.match);
 }
 

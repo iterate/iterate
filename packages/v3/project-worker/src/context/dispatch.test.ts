@@ -71,14 +71,14 @@ describe("walkSteps + resolve", () => {
   test("a rule targeting a call, end to end — the steps after the match replay on the value", async () => {
     const s = scope();
     const resolver = resolverOver(s, rewriteRule("itx.robot", "itx.robots.get('robot-arm-1')"));
-    expect(await resolver.resolve("itx.robot.arm.move(10)")).toBe("moved");
+    expect(await resolver.invoke("itx.robot.arm.move(10)")).toBe("moved");
     expect(s.log).toEqual(["move 10 @robot-arm-1"]);
   });
 
   test("args at the match apply the rewritten target as a call", async () => {
     const s = scope();
     const resolver = resolverOver(s, rewriteRule("itx.grok", "itx.openai.chat"));
-    expect(await resolver.resolve("itx.grok({ model: 'grok-4', messages: ['hi'] })")).toBe(
+    expect(await resolver.invoke("itx.grok({ model: 'grok-4', messages: ['hi'] })")).toBe(
       "chat(grok-4)",
     );
   });
@@ -86,14 +86,14 @@ describe("walkSteps + resolve", () => {
   test("args at the match on a non-callable target error LOUDLY (no silent drop)", async () => {
     const s = scope();
     const resolver = resolverOver(s, rewriteRule("itx.db", "itx.kv"));
-    await expect(resolver.resolve("itx.db('oops')")).rejects.toThrow(/not callable/);
+    await expect(resolver.invoke("itx.db('oops')")).rejects.toThrow(/not callable/);
   });
 
   test("args at the match on a method-valued target apply on the carried receiver", async () => {
     const s = scope();
     const resolver = resolverOver(s, rewriteRule("itx.remember", "itx.kv.put"));
-    expect(await resolver.resolve("itx.remember('k', 'v')")).toEqual({ ok: true });
-    expect(await resolver.resolve("itx.kv.get('k')")).toBe("v"); // `this` was kv, not the rule
+    expect(await resolver.invoke("itx.remember('k', 'v')")).toEqual({ ok: true });
+    expect(await resolver.invoke("itx.kv.get('k')")).toBe("v"); // `this` was kv, not the rule
   });
 
   test("`__proto__` / `constructor` / `prototype` never resolve as steps (hand-built — the codec refuses to parse them)", async () => {
