@@ -75,7 +75,7 @@ async function cfGraphql<T>(input: {
   return body.data;
 }
 
-export type ActiveTimeBreachRow = { hour: string; doHours: number };
+export type ActiveTimeRow = { hour: string; doHours: number };
 export type PinnedInvocationRow = {
   date: string;
   script: string;
@@ -85,7 +85,12 @@ export type PinnedInvocationRow = {
 /** The machine-readable result printed as one JSON line under `--json`,
  * consumed by scripts/ci/do-duration-alert.ts to build the Slack message. */
 export type ProbeSummary = {
-  activeTime: { ceilingDoHours: number; breachedHours: ActiveTimeBreachRow[] };
+  activeTime: {
+    ceilingDoHours: number;
+    /** Every hour of the lookback that had any DO activity, oldest first. */
+    hours: ActiveTimeRow[];
+    breachedHours: ActiveTimeRow[];
+  };
   pinnedInvocations: { thresholdHours: number; rows: PinnedInvocationRow[] };
 };
 
@@ -95,7 +100,7 @@ async function checkAccountActiveTime(input: {
   apiToken: string;
   lookbackHours: number;
   maxAccountDoHours: number;
-}): Promise<ActiveTimeBreachRow[]> {
+}): Promise<{ hours: ActiveTimeRow[]; breachedHours: ActiveTimeRow[] }> {
   const query = `
     query DoActiveTimeProbe($accountTag: string!, $start: Time!) {
       viewer {
@@ -123,16 +128,15 @@ async function checkAccountActiveTime(input: {
   }>({ apiToken: input.apiToken, query, variables: { accountTag: input.accountTag, start } });
 
   const rows = data.viewer.accounts[0]?.durableObjectsPeriodicGroups ?? [];
-  // An empty series is never "quiet": both accounts have DO activity every
-  // hour (prd's chronic baseline alone is ~120 DO-hours/hour), so no rows
-  // means dataset lag, a wrong account tag, or a broken token. Fail loudly —
-  // the alert wrapper reports a thrown probe as "FAILED to run" — instead of
-  // exiting zero as if under the ceiling.
+  // An empty series CAN be quiet: since preview slots are erased after every
+  // run (#2585), dev/preview has no DO activity at all overnight, and this
+  // dataset drops a deleted namespace's history retroactively. But it can
+  // also be a wrong account tag or a broken token, which must not pass as
+  // "under the ceiling". Tell them apart with a call that does not depend on
+  // activity: the account's DO namespace listing answers with the same
+  // credentials whether or not anything ran.
   if (rows.length === 0) {
-    throw new Error(
-      `no durableObjectsPeriodicGroups rows for account ${input.accountTag} in the last ` +
-        `${input.lookbackHours}h — analytics lag or misconfiguration, not evidence of quiet`,
-    );
+    await proveCredentials(input);
   }
   const byHour = new Map<string, number>();
   for (const row of rows) {
@@ -142,10 +146,26 @@ async function checkAccountActiveTime(input: {
   // µs of 128MB-DO active time per hour → "DO-hours" (1 DO continuously active
   // for the hour). Cloudflare bills duration at $12.50/M GB-s; 1 DO-hour =
   // 0.125GB * 3600s = 450 GB-s ≈ $0.0056.
-  return [...byHour.entries()]
+  const hours = [...byHour.entries()]
     .map(([hour, activeTimeUs]) => ({ hour, doHours: Math.round(activeTimeUs / 3600e6) }))
-    .filter((row) => row.doHours > input.maxAccountDoHours)
     .sort((a, b) => a.hour.localeCompare(b.hour));
+  return { hours, breachedHours: hours.filter((row) => row.doHours > input.maxAccountDoHours) };
+}
+
+async function proveCredentials(input: { accountTag: string; apiToken: string }): Promise<void> {
+  const response = await fetch(
+    `https://api.cloudflare.com/client/v4/accounts/${input.accountTag}/workers/durable_objects/namespaces?per_page=1`,
+    { headers: { Authorization: `Bearer ${input.apiToken}` } },
+  );
+  // The REST envelope is `{ success, errors }`; only `success` is read.
+  const body = (await response.json()) as { success: boolean; errors: Array<{ message: string }> };
+  if (!body.success) {
+    throw new Error(
+      `no durableObjectsPeriodicGroups rows for account ${input.accountTag} AND the DO namespace ` +
+        `listing failed (${body.errors.map((e) => e.message).join("; ") || response.status}) — ` +
+        `misconfiguration, not quiet`,
+    );
+  }
 }
 
 async function main(): Promise<void> {
@@ -161,7 +181,7 @@ async function main(): Promise<void> {
   const report = json ? console.error : console.log;
   const thresholdMicros = thresholdHours * 3.6e9; // hours → microseconds
 
-  const breachedHours = await checkAccountActiveTime({
+  const { hours, breachedHours } = await checkAccountActiveTime({
     accountTag,
     apiToken,
     lookbackHours,
@@ -170,7 +190,7 @@ async function main(): Promise<void> {
   if (breachedHours.length === 0) {
     report(
       `✅ DO active-time probe clean: no hour in the last ${lookbackHours}h exceeded ` +
-        `${maxAccountDoHours} account-wide DO-hours.`,
+        `${maxAccountDoHours} account-wide DO-hours (${hours.length} hour(s) with any activity).`,
     );
   } else {
     process.exitCode = 1;
@@ -263,7 +283,7 @@ async function main(): Promise<void> {
 
   if (json) {
     const summary: ProbeSummary = {
-      activeTime: { ceilingDoHours: maxAccountDoHours, breachedHours },
+      activeTime: { ceilingDoHours: maxAccountDoHours, hours, breachedHours },
       pinnedInvocations: { thresholdHours, rows: flagged },
     };
     console.log(JSON.stringify(summary));
