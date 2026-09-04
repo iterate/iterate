@@ -70,7 +70,7 @@ Tests that fail all retries are just red CI — not recorded.
 
 - [x] Extract `flake-record.ts` (FlakeRecord type + appendFlakeRecord +
       unknownFlakeRecordFromTelemetry) in shared test-support; add package
-      export; flake-test.ts re-exports the type for existing importers.
+      export. _(No re-export needed — nothing outside shared imported the type.)_
 - [x] createFlake: `sentinel` option flows into records; mark the three
       sentinel files (`flake-sentinel.test.ts`, `flake-sentinel.e2e.test.ts`,
       `flake-sentinel.spec.ts`).
