@@ -13,7 +13,8 @@ flakes nobody has classified yet.
 
 ## Status
 
-Spec committed; implementation not started.
+Implemented. All checklist items done; 26/26 dashboard harness tests, 44+2
+shared tests, typecheck/lint/knip clean. Awaiting CI + review.
 
 ## Design
 
@@ -67,21 +68,21 @@ Tests that fail all retries are just red CI — not recorded.
 
 ## Checklist
 
-- [ ] Extract `flake-record.ts` (FlakeRecord type + appendFlakeRecord +
+- [x] Extract `flake-record.ts` (FlakeRecord type + appendFlakeRecord +
       unknownFlakeRecordFromTelemetry) in shared test-support; add package
       export; flake-test.ts re-exports the type for existing importers.
-- [ ] createFlake: `sentinel` option flows into records; mark the three
+- [x] createFlake: `sentinel` option flows into records; mark the three
       sentinel files (`flake-sentinel.test.ts`, `flake-sentinel.e2e.test.ts`,
       `flake-sentinel.spec.ts`).
-- [ ] createFailing writes records (kind failing, three outcomes).
-- [ ] Wire unknownFlakeRecordFromTelemetry into RetryTelemetryReporter and
+- [x] createFailing writes records (kind failing, three outcomes).
+- [x] Wire unknownFlakeRecordFromTelemetry into RetryTelemetryReporter and
       PlaywrightTelemetryReporter.
-- [ ] Dashboard contract + reduce + render per design; version 0.5.0.
-- [ ] Tests: dashboard harness (sections, unknown expiry by time, sentinel
+- [x] Dashboard contract + reduce + render per design; version 0.5.0.
+- [x] Tests: dashboard harness (sections, unknown expiry by time, sentinel
       proposal exclusion, unwrap-failing proposal, error samples render);
       shared (failing records, sentinel passthrough,
       unknownFlakeRecordFromTelemetry cases).
-- [ ] docs/testing.md: short paragraph on unknown-flake records and the
+- [x] docs/testing.md: short paragraph on unknown-flake records and the
       adoption funnel.
 
 ## Notes

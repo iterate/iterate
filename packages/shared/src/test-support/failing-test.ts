@@ -1,3 +1,4 @@
+import { appendFlakeRecord, type FlakeRecord } from "./flake-record.ts";
 /**
  * Pinned-bug tests: the body asserts the DESIRED behavior, and while the bug
  * exists it must fail with an error matching the given pattern.
@@ -63,10 +64,12 @@ export function createFailing<TestFn extends (...args: any[]) => any>(
     if (typeof body !== "function") {
       throw new Error("createFailing(test, pattern): the last argument must be the test body");
     }
+    const name = String(args[0]);
     // The body's own arguments pass through untouched — playwright fixtures
     // ({ page, ... }, testInfo), vitest context — whatever the wrapped test
     // function provides.
     const wrapped = async (...bodyArgs: any[]) => {
+      const startedAt = Date.now();
       // Race the body against the wrapper's own deadline: a hung body must
       // fail as NOT-the-pinned-failure rather than letting the runner's test
       // timeout fire, which the expected-fail machinery would count as the
@@ -85,10 +88,29 @@ export function createFailing<TestFn extends (...args: any[]) => any>(
         }),
       ]).finally(() => clearTimeout(timer));
 
+      // Same telemetry channel as createFlake (see ./flake-record.ts): the
+      // dashboard's Failures section folds these — pinned-fail means the pin
+      // held, unexpected-pass means the bug looks fixed.
+      const record = async (result: FlakeRecord["outcome"], error?: unknown): Promise<void> => {
+        await appendFlakeRecord({
+          name,
+          kind: "failing",
+          outcome: result,
+          pattern: failure.source,
+          durationMs: Date.now() - startedAt,
+          at: new Date(startedAt).toISOString(),
+          ...(error === undefined ? {} : { error: String(error).split("\n")[0] }),
+        });
+      };
+
       if (outcome.kind === "failed") {
-        // The ONLY throw allowed out: the pinned failure, which satisfies the
-        // runner's expected-fail machinery.
-        if (failure.test(String(outcome.error))) throw outcome.error;
+        if (failure.test(String(outcome.error))) {
+          await record("pinned-fail", outcome.error);
+          // The ONLY throw allowed out: the pinned failure, which satisfies
+          // the runner's expected-fail machinery.
+          throw outcome.error;
+        }
+        await record("unexpected-error", outcome.error);
         console.error(
           `[failing-test] Expected failure to match /${failure.source}/, got a different failure — ` +
             `this run proves nothing about the pinned bug:`,
@@ -97,6 +119,7 @@ export function createFailing<TestFn extends (...args: any[]) => any>(
         return; // "success" here is what makes test.fails / test.fail go red
       }
       if (outcome.kind === "timed-out") {
+        await record("unexpected-error", `hung: still running after ${timeoutMs}ms`);
         console.error(
           `[failing-test] The body is still running after ${timeoutMs}ms — a hang is not the ` +
             `pinned failure. Raise createFailing()'s options.timeoutMs (keeping it below the runner's ` +
@@ -104,6 +127,7 @@ export function createFailing<TestFn extends (...args: any[]) => any>(
         );
         return; // same inversion: success → the expected-fail machinery goes red
       }
+      await record("unexpected-pass");
       console.error(
         `[failing-test] The test should have failed with /${failure.source}/ but it succeeded. ` +
           `If the pinned bug is fixed, delete the createFailing() wrapper and keep the body as a plain test.`,

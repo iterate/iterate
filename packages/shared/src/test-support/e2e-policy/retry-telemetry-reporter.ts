@@ -1,3 +1,4 @@
+import { appendFlakeRecord, unknownFlakeRecordFromTelemetry } from "../flake-record.ts";
 import {
   ciTelemetrySourceFromEnvironment,
   normalizeTestTelemetryError,
@@ -276,6 +277,13 @@ export class RetryTelemetryReporter {
             ...(firstFailure && { firstFailure }),
           });
         }
+      }
+      // A plain test that passed only after a retry is an unclassified flake:
+      // record it for the test-health dashboard, error sample included, so it
+      // can be adopted into createFlake (see flake-record.ts).
+      for (const test of tests) {
+        const unknownFlake = unknownFlakeRecordFromTelemetry(test);
+        if (unknownFlake) await appendFlakeRecord(unknownFlake);
       }
       const retried = tests.filter((test) => test.retryCount > 0);
       const unhandled = unhandledErrors.map((error) =>

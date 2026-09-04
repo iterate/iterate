@@ -36,6 +36,40 @@ test("registration lands on the runner's own expected-fail variant", async () =>
   expect(String(registered[0]!.body)).not.toContain("bodyArgs");
 });
 
+test("every outcome writes a kind-failing record when FLAKE_RECORD_DIR is set", async () => {
+  const { mkdtempSync, readFileSync, readdirSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const dir = mkdtempSync(join(tmpdir(), "failing-records-"));
+  vi.stubEnv("FLAKE_RECORD_DIR", dir);
+  vi.stubEnv("GITHUB_WORKSPACE", "");
+  const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+  try {
+    const registered: ((...args: unknown[]) => Promise<unknown>)[] = [];
+    const fake = Object.assign(vi.fn(), {
+      fails: (...args: unknown[]) => registered.push(args.at(-1) as any),
+    });
+    const fail = createFailing(fake, /pinned/);
+    fail("holds", async () => {
+      throw new Error("pinned as expected");
+    });
+    fail("fixed?", async () => {});
+    await expect(registered[0]!()).rejects.toThrow(/pinned/);
+    await expect(registered[1]!()).resolves.toBeUndefined();
+
+    const records = readdirSync(dir).flatMap((file) =>
+      readFileSync(join(dir, file), "utf8").trim().split("\n").map(JSON.parse),
+    );
+    expect(records).toMatchObject([
+      { name: "holds", kind: "failing", outcome: "pinned-fail", pattern: "pinned" },
+      { name: "fixed?", kind: "failing", outcome: "unexpected-pass" },
+    ]);
+  } finally {
+    consoleError.mockRestore();
+    vi.unstubAllEnvs();
+  }
+});
+
 test("a playwright-shaped test object registers through .fail", async () => {
   const registered: unknown[][] = [];
   const fakePlaywright = Object.assign(vi.fn(), {

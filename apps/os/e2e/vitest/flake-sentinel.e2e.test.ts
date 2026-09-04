@@ -1,7 +1,7 @@
 import { test } from "vitest";
 import { createFlake } from "@iterate-com/shared/test-support/flake-test";
 
-const flake = createFlake(test, /monthly flake sentinel/);
+const flake = createFlake(test, /monthly flake sentinel/, { sentinel: true });
 
 // The preview e2e suite's deliberately flaky test: proves this suite's
 // recorder -> artifact -> ingestion -> dashboard path monthly (see the unit
