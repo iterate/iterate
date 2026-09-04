@@ -93,6 +93,10 @@ export function WorkspaceFilesPane({
         .sort((left, right) => left.path.localeCompare(right.path)),
     [files.changes],
   );
+  // Publishing is the workspace OWNER's act (the board's rule): on someone
+  // else's workspace — an agent's, mid-thought — the whole commit surface is
+  // withheld, discard-all and the auto-commit timer included.
+  const guest = isGuestWorkspacePath(workspacePath, repoPath);
   const [autoCommit, setAutoCommit] = useState(false);
   const [commitPending, setCommitPending] = useState(false);
   const commitFiles = files.commit;
@@ -112,7 +116,7 @@ export function WorkspaceFilesPane({
     api: null,
     taskChanges,
     taskChangeSignature: taskChanges.map((change) => `${change.path}:${change.status}`).join("\n"),
-    enabled: autoCommit,
+    enabled: autoCommit && !guest,
     onCommit,
   });
 
@@ -140,25 +144,29 @@ export function WorkspaceFilesPane({
       {files.error === null ? null : (
         <p className="shrink-0 border-t px-3 py-2 text-xs text-red-700">{files.error}</p>
       )}
-      <div className="flex shrink-0 items-center justify-between gap-2 border-t p-2">
-        <CommitControls
-          taskChanges={taskChanges}
-          commitMessage={commit.commitMessage}
-          onCommitMessageChange={commit.setCommitMessage}
-          commitPending={commitPending}
-          generatingMessage={commit.generatingMessage}
-          autoSaveDueAt={commit.autoSaveDueAt}
-          autoCommit={autoCommit}
-          onAutoCommitChange={setAutoCommit}
-          canCommit={!isGuestWorkspacePath(workspacePath, repoPath)}
-          onMakeCommit={commit.makeCommit}
-          onWriteCommitMessage={commit.writeCommitMessage}
-          onDiscardAll={() => void files.discardAll()}
-        />
-        {isJamWorkspacePath(workspacePath) ? (
-          <InviteAgentButton workspacePath={workspacePath} path={selectedPath} />
-        ) : null}
-      </div>
+      {guest && !isJamWorkspacePath(workspacePath) ? null : (
+        <div className="flex shrink-0 flex-col gap-2 border-t p-2">
+          {guest ? null : (
+            <CommitControls
+              taskChanges={taskChanges}
+              commitMessage={commit.commitMessage}
+              onCommitMessageChange={commit.setCommitMessage}
+              commitPending={commitPending}
+              generatingMessage={commit.generatingMessage}
+              autoSaveDueAt={commit.autoSaveDueAt}
+              autoCommit={autoCommit}
+              onAutoCommitChange={setAutoCommit}
+              canCommit
+              onMakeCommit={commit.makeCommit}
+              onWriteCommitMessage={commit.writeCommitMessage}
+              onDiscardAll={() => void files.discardAll()}
+            />
+          )}
+          {isJamWorkspacePath(workspacePath) ? (
+            <InviteAgentButton workspacePath={workspacePath} path={selectedPath} />
+          ) : null}
+        </div>
+      )}
     </div>
   );
 }

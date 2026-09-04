@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { RepoFileStatus } from "@iterate-com/ui/components/repo-file-tree";
 import { withDocsProject } from "./docs-client.ts";
 import { isDocumentPath } from "./jam.ts";
@@ -38,11 +38,17 @@ export function useWorkspaceFiles({
     [workspacePath, repoPath],
   );
 
+  // Newest refresh wins: a poll that started before a create/rename/delete/
+  // discard/commit must not land after the post-mutation refresh and hide
+  // the user's own change until the next tick.
+  const generation = useRef(0);
   const refresh = useCallback(async () => {
+    const mine = ++generation.current;
     const [documents, status] = await Promise.all([
       withDocsProject((project) => project.documentsUnder(workspacePath, repoPath)),
       lane((ws) => ws.status()),
     ]);
+    if (generation.current !== mine) return;
     const next = changeMap(status, repoPath, isDocumentPath);
     // The listing is the MERGED view (overlay over HEAD); HEAD itself is
     // that minus what the overlay added, plus what it deleted.

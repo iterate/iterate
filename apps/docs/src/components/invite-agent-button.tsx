@@ -33,8 +33,9 @@ export function InviteAgentButton({
         }),
       );
   };
+  // No chrome of its own: the files pane's footer row owns border and padding.
   return (
-    <div className="shrink-0 border-t p-2 text-xs">
+    <div className="text-xs">
       {state.kind === "invited" ? (
         <p className="text-muted-foreground">
           AI joined as <code className="font-mono">{state.agentPath}</code>
