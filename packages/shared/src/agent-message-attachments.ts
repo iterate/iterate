@@ -186,7 +186,15 @@ export function agentMessageAttachmentLink(display: string, attachmentId: string
 }
 
 export function configRepoFileAttachmentId(path: string): string {
-  return `config-repo/${path.split("/").map(encodeURIComponent).join("/")}`;
+  return `config-repo/${path
+    .split("/")
+    .map((segment) =>
+      encodeURIComponent(segment).replaceAll(
+        /[!'()*]/g,
+        (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`,
+      ),
+    )
+    .join("/")}`;
 }
 
 export function agentMessageAttachmentId(target: AgentMessageAttachmentTarget): string {

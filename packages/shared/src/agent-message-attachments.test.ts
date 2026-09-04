@@ -65,4 +65,32 @@ describe("agent message attachment codec", () => {
     );
     expect(agentMessageToEditorDocument(encoded).text).toBe("@docs/a file [draft].md");
   });
+
+  test("percent-encodes filename punctuation omitted by encodeURIComponent", () => {
+    const path = "docs/!'()*.md";
+    const id = configRepoFileAttachmentId(path);
+    const punctuationAttachment = {
+      id,
+      type: "repo-file" as const,
+      repoPath: "/repos/config" as const,
+      path,
+    };
+    const message = {
+      content: `[@${path}](attachment:${id})`,
+      attachments: [punctuationAttachment],
+    };
+
+    expect(id).toBe("config-repo/docs/%21%27%28%29%2A.md");
+    expect(agentMessageToEditorDocument(message)).toEqual({
+      text: `@${path}`,
+      references: [
+        {
+          attachment: punctuationAttachment,
+          display: `@${path}`,
+          from: 0,
+          to: 14,
+        },
+      ],
+    });
+  });
 });
