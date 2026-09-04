@@ -157,7 +157,11 @@ async function proveCredentials(input: { accountTag: string; apiToken: string })
     `https://api.cloudflare.com/client/v4/accounts/${input.accountTag}/workers/durable_objects/namespaces?per_page=1`,
     { headers: { Authorization: `Bearer ${input.apiToken}` } },
   );
-  // The REST envelope is `{ success, errors }`; only `success` is read.
+  // Cloudflare's REST API always answers with a `{ success, errors }`
+  // envelope; the asserted shape is that envelope and only `success` is
+  // read. Nothing validates it at runtime, like cfGraphql above: if the
+  // shape ever drifts, `success` reads as undefined — falsy — and this
+  // throws, so a drift fails the probe loudly rather than passing as quiet.
   const body = (await response.json()) as { success: boolean; errors: Array<{ message: string }> };
   if (!body.success) {
     throw new Error(
