@@ -1,10 +1,10 @@
 import { expect, test, vi } from "vitest";
-import { expectFailure, failing } from "./failing-test.ts";
+import { expectFailure, createFailing } from "./failing-test.ts";
 
 // The wrapper in real use, registered through vitest itself: this lands on
 // vitest's native `test.fails`, so it reports in the "expected fail" summary
 // count, and it is green because its body throws the pinned error.
-const fail = failing(test, /foo bar exploded/);
+const fail = createFailing(test, /foo bar exploded/);
 fail("a body failing for the pinned reason passes", async () => {
   throw new Error("boom: foo bar exploded (as pinned)");
 });
@@ -17,7 +17,7 @@ test("registration lands on the runner's own expected-fail variant", async () =>
       registered.push({ args: args.slice(0, -1), body: args.at(-1) as any }),
   });
 
-  failing(fakeVitest, /pinned/)("name", { timeout: 123 }, async (fixtures: any) => {
+  createFailing(fakeVitest, /pinned/)("name", { timeout: 123 }, async (fixtures: any) => {
     throw new Error(`pinned, saw fixture ${fixtures.page}`);
   });
 
@@ -45,7 +45,7 @@ test("a playwright-shaped test object registers through .fail", async () => {
   const fakePlaywright = Object.assign(vi.fn(), {
     fail: (...args: unknown[]) => registered.push(args),
   });
-  failing(fakePlaywright, /pinned/)("name", async () => {});
+  createFailing(fakePlaywright, /pinned/)("name", async () => {});
   expect(registered).toHaveLength(1);
 });
 
@@ -56,7 +56,7 @@ test("a body failing for a different reason returns success, so the native machi
     const fake = Object.assign(vi.fn(), {
       fails: (...args: unknown[]) => registered.push(args.at(-1) as any),
     });
-    failing(fake, /foo bar exploded/)("name", async () => {
+    createFailing(fake, /foo bar exploded/)("name", async () => {
       throw new Error("ECONNREFUSED: the test infra broke");
     });
 
@@ -81,13 +81,13 @@ test("a body that succeeds returns success with delete-the-wrapper instructions 
     const fake = Object.assign(vi.fn(), {
       fails: (...args: unknown[]) => registered.push(args.at(-1) as any),
     });
-    failing(fake, /foo bar exploded/)("name", async () => {
+    createFailing(fake, /foo bar exploded/)("name", async () => {
       expect(1 + 1).toBe(2);
     });
 
     await expect(registered[0]!()).resolves.toBeUndefined();
     expect(consoleError).toHaveBeenCalledWith(
-      expect.stringMatching(/should have failed .* delete the failing\(\) wrapper/s),
+      expect.stringMatching(/should have failed .* delete the createFailing\(\) wrapper/s),
     );
   } finally {
     consoleError.mockRestore();
@@ -101,7 +101,7 @@ test("a hung body reports as not-the-pinned-failure at the wrapper's own deadlin
     const fake = Object.assign(vi.fn(), {
       fails: (...args: unknown[]) => registered.push(args.at(-1) as any),
     });
-    failing(fake, /pinned/, { timeoutMs: 50 })("name", async () => new Promise(() => {}));
+    createFailing(fake, /pinned/, { timeoutMs: 50 })("name", async () => new Promise(() => {}));
 
     // Without the wrapper's own deadline this would ride to the RUNNER's test
     // timeout, which the expected-fail machinery counts as the pin holding —
@@ -130,6 +130,6 @@ test("expectFailure: success throws with delete-the-wrapper instructions", async
       expect(1 + 1).toBe(2);
     }),
   ).rejects.toThrow(
-    /should have failed with \/foo bar exploded\/ but it succeeded.*delete the failing\(\) wrapper/,
+    /should have failed with \/foo bar exploded\/ but it succeeded.*delete the createFailing\(\) wrapper/,
   );
 });

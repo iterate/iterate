@@ -5,7 +5,7 @@
 // population of billable DOs behind (~4,500 DO-hours in 90 minutes from one
 // deploy + e2e on 2026-09-02). Today `createTestProject`'s disposer is a
 // no-op (test-support/create-test-project.ts) because itx has no project
-// removal; when teardown lands this test flips to passing and the `failing`
+// removal; when teardown lands this test flips to passing and the `createFailing`
 // wrapper comes off.
 //
 // The measurement has two traps, both handled below:
@@ -21,7 +21,7 @@
 // Run against a preview (it leaves a project behind on purpose):
 //   doppler run --config preview_N -- pnpm --dir apps/os e2e --run abandoned-project-goes-quiet
 import { expect, test } from "vitest";
-import { failing } from "@iterate-com/shared/test-support/failing-test";
+import { createFailing } from "@iterate-com/shared/test-support/failing-test";
 import { installResilientAiInterceptor } from "@iterate-com/shared/test-support/resilient-ai-interceptor";
 import { createTestProject } from "../test-support/create-test-project.ts";
 import { createAdminOsItx } from "../test-support/os-client.ts";
@@ -36,7 +36,7 @@ const WOKEN = "events.iterate.com/stream/woken";
 // settling, the 60s quiet window (12 heartbeats at 5s), two read passes. The
 // pin's own deadline sits just under the ceiling. Raising
 // ABANDONED_PROJECT_QUIET_SECONDS past ~90 needs the ceiling raised by hand.
-const failWakeUp = failing(
+const failWakeUp = createFailing(
   test.skipIf(deployedBaseUrl() === null),
   /woke \d+ times after dispose/,
   {

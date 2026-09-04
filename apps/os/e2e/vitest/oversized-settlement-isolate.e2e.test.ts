@@ -29,7 +29,7 @@
 // at all ("Incoming message exceeds maximum size of 33554432 UTF-16 code
 // units"), and ~7MB needed prod's accumulated history to tip.
 //
-// Both tests are pinned with failing(): green against a worker WITHOUT the fix,
+// Both tests are pinned with createFailing(): green against a worker WITHOUT the fix,
 // red WITH it — then delete the wrappers and keep the bodies as plain tests.
 //
 // Run against a preview (never shared/prod — it deliberately bricks a DO):
@@ -41,15 +41,19 @@
 // the slot after every e2e run (#2585); by hand, `pnpm run erase-data --env preview_N`. The platform-side answer is
 // tasks/stream-crash-quarantine.md (#2573).
 import { expect, test } from "vitest";
-import { failing } from "@iterate-com/shared/test-support/failing-test";
+import { createFailing } from "@iterate-com/shared/test-support/failing-test";
 import { adminSecret, deployedBaseUrl, withItxSession } from "./test-helpers.ts";
 
 // Only against a deployed preview — it deliberately stresses a DO. SKIP (not
 // fail) elsewhere, like the sibling e2e tests: a guard thrown inside the pin
 // would not match the pinned failure and would read as an unrelated red.
-const failUnbounded = failing(test.skipIf(deployedBaseUrl() === null), /journaled unbounded/i, {
-  timeoutMs: 90_000,
-});
+const failUnbounded = createFailing(
+  test.skipIf(deployedBaseUrl() === null),
+  /journaled unbounded/i,
+  {
+    timeoutMs: 90_000,
+  },
+);
 
 failUnbounded("an oversized script result is bounded before it is journaled", async () => {
   using session = withItxSession();
@@ -80,9 +84,13 @@ const RESET = /caused object to be reset|exceeded its memory limit|went away/i;
 
 // The crash itself, on the real engine: the test above only proves the payload
 // is unbounded; this one makes the isolate actually die.
-const failReset = failing(test.skipIf(deployedBaseUrl() === null), /should not reset or reboot/i, {
-  timeoutMs: 120_000,
-});
+const failReset = createFailing(
+  test.skipIf(deployedBaseUrl() === null),
+  /should not reset or reboot/i,
+  {
+    timeoutMs: 120_000,
+  },
+);
 
 failReset("a stream survives being evicted after journaling oversized script results", async () => {
   using session = withItxSession();

@@ -550,20 +550,20 @@ called out prominently in the PR description.
 Once the remaining CI is green, either form of quarantine is explicit
 coverage debt, not a reason to keep the unrelated PR open indefinitely.
 
-### Pinned bugs: `failing(test, …)`, not bare `test.fails`
+### Pinned bugs: `createFailing(test, …)`, not bare `test.fails`
 
 For a KNOWN bug held open on purpose, wrap the runner's own test function
-with `failing` from `@iterate-com/shared/test-support/failing-test` — it
+with `createFailing` from `@iterate-com/shared/test-support/failing-test` — it
 works for vitest and playwright alike, passing fixtures and options through:
 
 ```ts
-const fail = failing(test, /SAME-BOOT STALENESS/);
+const fail = createFailing(test, /SAME-BOOT STALENESS/);
 fail("a userspace facet rebuilds on a source commit", { timeout: 240_000 }, async () => {
   // asserts the DESIRED behavior; today it throws the matched error
 });
 ```
 
-`failing` registers through the runner's own expected-fail variant
+`createFailing` registers through the runner's own expected-fail variant
 (vitest `test.fails`, playwright `test.fail`), so pins report natively —
 the "expected fail" summary count and telemetry's expected state need no
 extra plumbing. The wrapper filters WHICH failure satisfies that machinery:
@@ -593,7 +593,7 @@ flake("Worker can be deployed", async () => {
 });
 ```
 
-Like `failing`, it registers through the runner's expected-fail variant, but
+Like `createFailing`, it registers through the runner's expected-fail variant, but
 the contract differs: a pass and a failure matching the one allowed pattern
 are both green; anything else — a different error, or a body still running at
 the wrapper's deadline — is red. The test keeps running on every branch and,
@@ -602,7 +602,7 @@ the flake dashboard, so the flake rate stays measured instead of hidden.
 
 The lifecycle is wrapper-switching, driven by that data: a test that seems
 flaky moves to `createFlake`; if it stops passing entirely, switch it to
-`failing`; once it passes consistently, unwrap it back to a plain test.
+`createFailing`; once it passes consistently, unwrap it back to a plain test.
 `packages/shared/src/test-support/flake-sentinel.test.ts` is a deliberately
 ~10%-flaky sentinel that proves the pipeline works — if its flake rate reads
 0%, distrust the dashboard, not the sentinel.

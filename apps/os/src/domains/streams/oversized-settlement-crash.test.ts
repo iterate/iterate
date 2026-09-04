@@ -30,7 +30,7 @@ import { execFileSync } from "node:child_process";
 import { rmSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "vitest";
-import { failing } from "@iterate-com/shared/test-support/failing-test";
+import { createFailing } from "@iterate-com/shared/test-support/failing-test";
 
 const ISOLATE_BUDGET_MB = 96;
 const INCIDENT_CHARS = 7_260_000; // the prod settlement was 7,051KB
@@ -64,12 +64,12 @@ describe("stream DO isolate under an oversized settlement (real processors)", ()
   // - oom (bug present)    → no SURVIVED, assertion fails, message says
   //                          "Incident kind: oom" → matches → pin green.
   // - survived (bug fixed) → SURVIVED present, assertion passes, body succeeds
-  //                          → failing() flips red: delete the wrapper.
+  //                          → createFailing() flips red: delete the wrapper.
   // - other-failure        → no SURVIVED, but the message says "Incident kind:
-  //   (import error, etc.)   other-failure" → does NOT match → failing() reports
+  //   (import error, etc.)   other-failure" → does NOT match → createFailing() reports
   //                          red. A child abort that is not a real OOM proves
   //                          nothing and must not hold the pin.
-  const failOOM = failing(test, /Incident kind: oom/);
+  const failOOM = createFailing(test, /Incident kind: oom/);
   failOOM("survives the real folds re-materializing an oversized settlement", () => {
     const incident = runReplay(INCIDENT_CHARS);
     const message = `Incident kind: ${incident.kind}. Budget: ${ISOLATE_BUDGET_MB}MB. Output:\n${incident.output.slice(-500)}`;

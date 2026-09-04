@@ -1,4 +1,4 @@
-import { failing } from "@iterate-com/shared/test-support/failing-test";
+import { createFailing } from "@iterate-com/shared/test-support/failing-test";
 import { expect, test, vi } from "vitest";
 import {
   makeMemoryProgressStore,
@@ -61,7 +61,7 @@ async function runOneAction(
   return h.events(COMPLETED_TYPE)[0]!;
 }
 
-failing(test, /SCHEDULER RESULT NOT DISPOSED/)(
+createFailing(test, /SCHEDULER RESULT NOT DISPOSED/)(
   "DESIRED: a scheduler action disposes its RPC result after detaching the JSON value",
   async () => {
     const dispose = vi.fn();
@@ -77,7 +77,7 @@ failing(test, /SCHEDULER RESULT NOT DISPOSED/)(
   },
 );
 
-failing(test, /SCHEDULER CLEANUP FAILURE NOT ISOLATED/)(
+createFailing(test, /SCHEDULER CLEANUP FAILURE NOT ISOLATED/)(
   "DESIRED: RPC result cleanup failure does not replace a successful scheduler action",
   async () => {
     const cleanupError = new Error("dispose failed");
@@ -96,7 +96,7 @@ failing(test, /SCHEDULER CLEANUP FAILURE NOT ISOLATED/)(
   },
 );
 
-failing(test, /SCHEDULER NO DISPOSE ON DETACH FAILURE/)(
+createFailing(test, /SCHEDULER NO DISPOSE ON DETACH FAILURE/)(
   "DESIRED: a scheduler disposes its RPC result even when JSON detachment fails",
   async () => {
     const dispose = vi.fn();
