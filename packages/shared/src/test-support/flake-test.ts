@@ -26,7 +26,7 @@
  *
  * A flake test therefore never blocks unrelated work, but it keeps running and
  * keeps producing data. When `FLAKE_RECORD_DIR` is set, every execution
- * appends one JSON line (see {@link FlakeRecord}) to a per-process file in
+ * appends one JSON line (see FlakeRecord in ./flake-record.ts) to a per-process file in
  * that directory; CI ships those lines to the flake dashboard. Local runs
  * without the variable record nothing.
  *
@@ -43,16 +43,7 @@
  * green outcomes (the retry fires before the `.fails` inversion is applied),
  * which recorded every green run twice in the preview e2e suite.
  */
-export interface FlakeRecord {
-  name: string;
-  outcome: "pass" | "flake-fail" | "unexpected-error";
-  /** Source of the allowed-error RegExp, e.g. "CPU startup time exceeded \\d+ms". */
-  pattern: string;
-  durationMs: number;
-  at: string;
-  /** First line of the error, present for both failure outcomes. */
-  error?: string;
-}
+import { appendFlakeRecord, type FlakeRecord } from "./flake-record.ts";
 
 export function createFlake<TestFn extends (...args: any[]) => any>(
   test: TestFn,
@@ -93,6 +84,7 @@ export function createFlake<TestFn extends (...args: any[]) => any>(
       const record = async (result: FlakeRecord["outcome"], error?: unknown): Promise<void> => {
         await appendFlakeRecord({
           name,
+          kind: "flake",
           outcome: result,
           pattern: flake.source,
           durationMs,
@@ -144,39 +136,25 @@ export function createFlake<TestFn extends (...args: any[]) => any>(
       const callerOptions = args.length > 2 ? (args[1] as object) : {};
       return failer(args[0], { ...callerOptions, retry: 0 }, wrapped);
     }
-    return failer(...args.slice(0, -1), wrapped);
+    // playwright-like: no per-test retry option exists, so pin retries
+    // structurally — an anonymous describe scope (empty title segment,
+    // dropped by titlePath().filter(Boolean), so the test's identity is
+    // unchanged) with retries pinned to zero. The green outcomes already
+    // satisfy test.fail unretried; this also stops the RED path ("passed
+    // unexpectedly") from being retried, which double-recorded the run and
+    // could rescue it into a distorting green. The cast reaches playwright's
+    // describe statics, which the wrapped TestFn type does not carry.
+    const playwrightLike = test as unknown as {
+      describe: ((body: () => void) => void) & {
+        configure: (options: { retries: number }) => void;
+      };
+    };
+    return playwrightLike.describe(() => {
+      playwrightLike.describe.configure({ retries: 0 });
+      failer(...args.slice(0, -1), wrapped);
+    });
   };
   // Same contract-preserving cast as createFailing(): every argument forwards
   // unchanged except the trailing body.
   return register as TestFn;
-}
-
-/**
- * Append one record to `$FLAKE_RECORD_DIR/flake-records-<pid>.jsonl`. A no-op
- * when the variable is unset (local runs). Per-pid files keep parallel test
- * workers from interleaving writes. Recording failures are logged, never
- * thrown — telemetry must not change a test's outcome.
- *
- * A relative FLAKE_RECORD_DIR is rebased against GITHUB_WORKSPACE (the same
- * rule as TEST_TELEMETRY_ARTIFACT_DIR in ci-telemetry.ts): root `pnpm test`
- * runs each workspace with its own cwd, so without the rebase every package
- * would write under its own directory and the CI reporter — which reads from
- * the repo root — would find nothing.
- */
-async function appendFlakeRecord(record: FlakeRecord): Promise<void> {
-  const dir = typeof process === "undefined" ? undefined : process.env.FLAKE_RECORD_DIR;
-  if (!dir) return;
-  try {
-    const { appendFileSync, mkdirSync } = await import("node:fs");
-    const { join, resolve } = await import("node:path");
-    const repositoryRoot = process.env.GITHUB_WORKSPACE;
-    const resolved = repositoryRoot ? resolve(repositoryRoot, dir) : dir;
-    mkdirSync(resolved, { recursive: true });
-    appendFileSync(
-      join(resolved, `flake-records-${process.pid}.jsonl`),
-      JSON.stringify(record) + "\n",
-    );
-  } catch (error) {
-    console.error("[flake-test] failed to append flake record:", error);
-  }
 }

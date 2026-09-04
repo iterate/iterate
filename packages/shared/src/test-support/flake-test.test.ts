@@ -66,6 +66,7 @@ test("vitest's real expected-fail machinery produces the contracted verdicts", a
     "matched flake failure is green": "passed",
     "a pass is green": "passed",
     "an unexpected error is red": "failed",
+    "a pinned failure is green (createFailing)": "passed",
   });
 
   // Exactly one record per case: the fixture config sets a suite-level
@@ -79,6 +80,7 @@ test("vitest's real expected-fail machinery produces the contracted verdicts", a
   );
   expect(recorded.toSorted()).toEqual([
     "a pass is green",
+    "a pinned failure is green (createFailing)",
     "an unexpected error is red",
     "matched flake failure is green",
   ]);
@@ -116,11 +118,23 @@ test("registration lands on the runner's own expected-fail variant", async () =>
 
 test("a playwright-shaped test object registers through .fail", async () => {
   const registered: unknown[][] = [];
+  const configured: unknown[] = [];
+  // A faithful playwright shape: describe invokes its body synchronously and
+  // carries configure, exactly like the real test object — the wrapper calls
+  // both unconditionally rather than hedging on their presence.
   const fakePlaywright = Object.assign(vi.fn(), {
     fail: (...args: unknown[]) => registered.push(args),
+    setTimeout: vi.fn(),
+    describe: Object.assign((body: () => void) => body(), {
+      configure: (options: unknown) => configured.push(options),
+    }),
   });
   createFlake(fakePlaywright, /flaked/)("name", async () => {});
   expect(registered).toHaveLength(1);
+  // Registration happens inside a describe scope pinned to zero retries —
+  // playwright has no per-test retry option, and a retried RED outcome would
+  // double-record the run.
+  expect(configured).toEqual([{ retries: 0 }]);
 });
 
 test("a matching failure rethrows (green) and records a flake-fail line", async () => {
