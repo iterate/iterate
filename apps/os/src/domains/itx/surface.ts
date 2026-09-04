@@ -31,12 +31,7 @@ const SURFACE_ENTRY = /^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*$/;
  * (`"repo.readFile"` would otherwise hand out all of `repo`): list the bare
  * root, or nothing.
  */
-export const NARROWABLE_MEMBERS: ReadonlySet<string> = new Set([
-  "agent",
-  "chat",
-  "liveState",
-  "stream",
-]);
+const NARROWABLE_MEMBERS: ReadonlySet<string> = new Set(["agent", "chat", "liveState", "stream"]);
 
 /** Members every restricted prototype keeps: identity and introspection. */
 const ALWAYS_ALLOWED: ReadonlySet<string> = new Set(["constructor", "__describe"]);
