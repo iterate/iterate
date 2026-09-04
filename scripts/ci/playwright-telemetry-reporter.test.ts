@@ -20,6 +20,8 @@ const originalTelemetryLane = process.env.TEST_TELEMETRY_LANE;
 beforeEach(() => {
   delete process.env.TEST_TELEMETRY_KIND;
   delete process.env.TEST_TELEMETRY_LANE;
+  // Never let a CI run's real record dir catch this file's synthetic flakes.
+  delete process.env.FLAKE_RECORD_DIR;
 });
 
 afterEach(() => {

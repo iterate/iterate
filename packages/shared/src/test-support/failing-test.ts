@@ -140,6 +140,16 @@ export function createFailing<TestFn extends (...args: any[]) => any>(
     // the runner would instantiate none of them — so present the body's own
     // source when the runner looks.
     Object.defineProperty(wrapped, "toString", { value: () => body.toString() });
+    if ("fails" in test) {
+      // vitest: pin per-test retry to zero, same as createFlake — a
+      // suite-level `retry` re-runs the body on the rethrown pinned failure
+      // (the retry fires before the `.fails` inversion), which would execute
+      // and record every pin twice per run. The cast states vitest's
+      // three-argument shape: with more than two arguments the middle one is
+      // the per-test options object.
+      const callerOptions = args.length > 2 ? (args[1] as object) : {};
+      return failer(args[0], { ...callerOptions, retry: 0 }, wrapped);
+    }
     return failer(...args.slice(0, -1), wrapped);
   };
   // The cast restates the contract the wrapper keeps by construction: it

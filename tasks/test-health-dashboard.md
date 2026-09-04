@@ -87,6 +87,16 @@ Tests that fail all retries are just red CI — not recorded.
 
 ## Notes
 
+- Found while previewing against the PR's own CI artifacts: several unit
+  tests executed wrapper bodies (and the vitest reporter) under CI's real
+  FLAKE_RECORD_DIR, leaking synthetic records (`name`, the failing-test live
+  registration, the reporter fixture's `network > reconnects`). Fixed by
+  scoping FLAKE_RECORD_DIR in every body-executing test, moving the live
+  registration into the child-process fixture, and stripping the env in the
+  playwright reporter test. The fixture also re-proved #2575's finding —
+  createFailing needed the vitest `retry: 0` pin (added here minimally;
+  #2575's fuller version supersedes on merge).
+
 - Conflict heads-up: #2575 (still open) edits failing-test.ts; keep this
   branch's edits there additive (imports + record calls inside the existing
   outcome branches).
