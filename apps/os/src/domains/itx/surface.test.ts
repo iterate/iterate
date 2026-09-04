@@ -18,6 +18,16 @@ describe("parseItxSurface", () => {
       expect(() => parseItxSurface(value)).toThrow(/itx surface/);
     },
   );
+
+  test("accepts dotted entries only under members that implement narrowing", () => {
+    expect(
+      parseItxSurface(["agent.stream.openConnection", "agent.liveState.get", "chat.sendMessage"]),
+    ).toEqual(["agent.liveState.get", "agent.stream.openConnection", "chat.sendMessage"]);
+    // A child that is served whole would be WIDER than the entry states.
+    expect(() => parseItxSurface(["repo.readFile"])).toThrow(/"repo" cannot be narrowed/);
+    expect(() => parseItxSurface(["agents.get"])).toThrow(/"agents" cannot be narrowed/);
+    expect(() => parseItxSurface(["agent.message.x"])).toThrow(/"message" cannot be narrowed/);
+  });
 });
 
 describe("surfaceRoots / surfaceUnder", () => {

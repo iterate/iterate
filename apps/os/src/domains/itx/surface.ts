@@ -6,7 +6,9 @@
  *
  * Entries are dotted member paths. A bare root (`"chat"`) allows that whole
  * subtree; a dotted entry (`"agent.message"`) allows one member of a child,
- * and the child itself is narrowed to its listed members. Unknown roots keep
+ * and the child itself is narrowed to its listed members — for the members
+ * that implement narrowing (NARROWABLE_MEMBERS); a dotted entry under any
+ * other member is rejected at parse time. Unknown roots keep
  * resolving through the scope's dynamic capability table, so a removed
  * built-in reads exactly like an unmounted capability: `no capability "repo"`.
  *
@@ -22,6 +24,20 @@ export type ItxSurface = readonly string[];
 
 const SURFACE_ENTRY = /^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*$/;
 
+/**
+ * The members whose children a dotted entry can narrow: an itx's `agent` and
+ * `chat`, an agent's `chat`, `stream`, and `liveState`. Everywhere else a
+ * dotted entry is REJECTED rather than silently widened to the whole child
+ * (`"repo.readFile"` would otherwise hand out all of `repo`): list the bare
+ * root, or nothing.
+ */
+export const NARROWABLE_MEMBERS: ReadonlySet<string> = new Set([
+  "agent",
+  "chat",
+  "liveState",
+  "stream",
+]);
+
 /** Members every restricted prototype keeps: identity and introspection. */
 const ALWAYS_ALLOWED: ReadonlySet<string> = new Set(["constructor", "__describe"]);
 
@@ -33,6 +49,13 @@ export function parseItxSurface(value: unknown): ItxSurface {
     if (typeof entry !== "string" || !SURFACE_ENTRY.test(entry)) {
       throw new Error(
         `invalid itx surface entry ${JSON.stringify(entry)}: expected a dotted member path such as "chat" or "agent.message"`,
+      );
+    }
+    const segments = entry.split(".");
+    const unnarrowable = segments.slice(0, -1).find((segment) => !NARROWABLE_MEMBERS.has(segment));
+    if (unnarrowable !== undefined) {
+      throw new Error(
+        `invalid itx surface entry ${JSON.stringify(entry)}: "${unnarrowable}" cannot be narrowed to one member — only ${[...NARROWABLE_MEMBERS].map((name) => `"${name}"`).join(", ")} can; list "${segments[0]}" bare to allow all of it, or leave it out`,
       );
     }
     entries.add(entry);

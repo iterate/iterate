@@ -1,36 +1,13 @@
-import { readFileSync } from "node:fs";
 import { expect, test } from "vitest";
 import { uniqueFixtureSlug } from "@iterate-com/shared/test-support/fixture-slug";
 import { connectItx } from "iterate/node";
 import type { RpcStub } from "iterate/sdk/capnweb";
-import type { Agent, Project, StreamEventBatch } from "../../src/itx-api.generated.ts";
+import type { Agent, LiveUpdate, Project, StreamEventBatch } from "../../src/itx-api.generated.ts";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
-import { AGENT_CONTEXT_ADDED_TYPE } from "./itx-test-support.ts";
+import { AGENT_CONTEXT_ADDED_TYPE, serveItxSourceForProjectRepo } from "./itx-test-support.ts";
 import { adminSecret, buildUrl, withItxSession } from "./test-helpers.ts";
 
 const VISITOR_AGENT_PATH = "/agents/web/visitor";
-
-/**
- * The REAL `serveItx` (packages/iterate/src/serve-itx.ts), committed into the
- * project repo next to a tiny worker: the seeded project installs the
- * published `iterate` package, which predates the helper, so its relative
- * imports are rewritten to the published entry points and the one new
- * platform member (`Project.scope`) is reached through a cast. What this
- * proves is the crossing the helper exists for: a scoped itx minted inside
- * the worker, relayed through the worker's Cap'n Web session to the STOCK
- * client, and driven from there — calls, a live connection callback, and a
- * removed member.
- */
-const SERVE_ITX_SOURCE = readFileSync(
-  new URL("../../../../packages/iterate/src/serve-itx.ts", import.meta.url),
-  "utf8",
-)
-  .replace('from "./sdk/capnweb/index.ts"', 'from "iterate/sdk/capnweb"')
-  .replace('from "./itx-api.generated.ts"', 'from "iterate/sdk"')
-  .replace(
-    "const scoped = options.project.scope(options.scope);",
-    "const scoped = (options.project as unknown as { scope(input: unknown): unknown }).scope(options.scope);",
-  );
 
 const SERVED_ITX_WORKER = `
 import { IterateWorkerEntrypoint } from "iterate/sdk";
@@ -44,7 +21,13 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
       project: await this.env.ITX.get(),
       scope: {
         path: ${JSON.stringify(VISITOR_AGENT_PATH)},
-        surface: ["agent.message", "agent.stream.getEvents", "agent.stream.openConnection"],
+        surface: [
+          "agent.message",
+          "agent.liveState.get",
+          "agent.liveState.subscribe",
+          "agent.stream.getEvents",
+          "agent.stream.openConnection",
+        ],
       },
     });
   }
@@ -64,7 +47,7 @@ test(
     await agent.create();
     await project.repo.commitFiles({
       changes: [
-        { content: SERVE_ITX_SOURCE, path: "serve-itx.ts" },
+        { content: serveItxSourceForProjectRepo(), path: "serve-itx.ts" },
         { content: SERVED_ITX_WORKER, path: "worker.ts" },
       ],
       message: "Serve a narrowed itx over /api",
@@ -155,6 +138,35 @@ test(
         );
       } finally {
         await handle.close();
+      }
+
+      // Live state through the served itx — what `useLiveState()` needs: an
+      // object-valued member listed through to its methods, `get()` answering
+      // a snapshot and `subscribe()` pushing updates to a relayed callback.
+      const liveState = (
+        served as unknown as {
+          agent: {
+            liveState: {
+              get(): Promise<Record<string, unknown>>;
+              subscribe(
+                onUpdate: (update: LiveUpdate) => unknown,
+              ): Promise<{ unsubscribe(): Promise<void> }>;
+            };
+          };
+        }
+      ).agent.liveState;
+      expect(await liveState.get()).toEqual(expect.any(Object));
+      const updates: LiveUpdate[] = [];
+      const subscription = await liveState.subscribe((update) => {
+        updates.push(update);
+      });
+      try {
+        await waitForCondition(() => updates.some((update) => update.type === "snapshot"), {
+          description: "a live-state snapshot through the served subscription",
+          timeoutMs: 15_000,
+        });
+      } finally {
+        await subscription.unsubscribe();
       }
 
       // A member the surface does not list does not exist on the served

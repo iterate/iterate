@@ -35,9 +35,11 @@ export type ServeItxOptions = {
   project: Project;
   /**
    * What the browser gets: `project.scope(scope)`. `surface` must list the
-   * members served as DOTTED paths down to the method (`"agent.message"`,
-   * `"agent.stream.openConnection"`); a bare root cannot be relayed because
-   * its members are unknown here.
+   * members served as DOTTED paths down to each METHOD: a leaf is called,
+   * so an object-valued member is listed through to its methods —
+   * `"agent.liveState.get"` and `"agent.liveState.subscribe"`, never
+   * `"agent.liveState"`. A bare root cannot be relayed because its members
+   * are unknown here.
    */
   scope: { path: string; surface: string[] };
   /** When set, `projects.get(slug)` resolves only for this slug. */
@@ -53,7 +55,12 @@ export type ServeItxOptions = {
  *       project: await this.env.ITX.get(),
  *       scope: {
  *         path: `/agents/web/${visitorIdFrom(request)}`,
- *         surface: ["agent.message", "agent.liveState", "agent.stream.openConnection"],
+ *         surface: [
+ *           "agent.message",
+ *           "agent.liveState.get",
+ *           "agent.liveState.subscribe",
+ *           "agent.stream.openConnection",
+ *         ],
  *       },
  *       slug: "garple",
  *     });
@@ -124,7 +131,9 @@ function surfaceTree(surface: readonly string[]): SurfaceTree {
  * One node of the served project: a real Cap'n Web target whose PROTOTYPE
  * carries exactly the served members — a method per leaf, a getter per
  * branch — plus `__describe`, which forwards so the platform's restricted
- * description comes back unchanged.
+ * description comes back unchanged. A leaf IS a method call: an
+ * object-valued member (`liveState`) must appear as a branch, i.e. listed
+ * through to its methods.
  */
 function relayNode(stub: unknown, path: string[], tree: SurfaceTree): RpcTarget {
   class ServedNode extends RpcTarget {}

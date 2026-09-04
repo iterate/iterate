@@ -22,6 +22,7 @@
 import { z } from "zod";
 import { defineProcessorContract } from "iterate/processors";
 import { ItxExpression, ItxExpressionStep } from "../../itx/expression.ts";
+import { parseItxSurface } from "../itx/surface.ts";
 import type {
   CapabilityProvidedPayload,
   CapabilityRecord,
@@ -590,6 +591,18 @@ function capabilityHostBirthCertificateSchema() {
       .strictObject({
         surface: z
           .array(z.string().min(1))
+          .superRefine((entries, context) => {
+            // The same rules the runtime applies when minting the binding:
+            // a certificate is fixed at birth, so a bad entry must fail here.
+            try {
+              parseItxSurface(entries);
+            } catch (error) {
+              context.addIssue({
+                code: "custom",
+                message: error instanceof Error ? error.message : String(error),
+              });
+            }
+          })
           .optional()
           .meta({
             description:

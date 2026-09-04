@@ -5094,11 +5094,20 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
 
   /** The agent's transient runtime as a push-driven live-state surface. */
   get liveState(): LiveStateRpc<AgentLiveState> {
-    return facetProcessorLiveStateRelay<AgentLiveState>({
+    const liveState = facetProcessorLiveStateRelay<AgentLiveState>({
       name: AgentProcessorContract.slug,
       path: this.#path,
       projectId: this.#props.projectId,
     });
+    const surface = this.#props.surface;
+    if (surface !== undefined) {
+      applySurface(
+        liveState,
+        surfaceUnder(surface, "liveState"),
+        LiveStateRelayRpcTarget.prototype,
+      );
+    }
+    return liveState;
   }
 
   /** The agent's own event stream. */

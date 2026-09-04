@@ -11,7 +11,11 @@ authority. Two doors use it.
 `ItxSurface` (`src/domains/itx/surface.ts`) is a list of dotted member paths.
 A bare root (`"chat"`) allows the whole subtree; a dotted entry
 (`"agent.message"`) allows one member of a child, and the child narrows to
-its listed members. `__describe` always stays.
+its listed members. Narrowing is implemented for `agent`, `chat`, `stream`,
+and `liveState` (the agent-scope chain); a dotted entry under any other
+member is rejected when the surface is parsed — at `scope()`, at the
+binding, and in the certificate schema — because serving that child whole
+would be wider than the entry states. `__describe` always stays.
 
 - **Runtime.** A restricted instance gets a prototype in front of its class
   prototype that shadows every removed member; a shadow defers to the
@@ -67,7 +71,12 @@ if (url.pathname === "/api") {
     project: await this.env.ITX.get(),
     scope: {
       path: `/agents/web/${visitor}`,
-      surface: ["agent.message", "agent.liveState", "agent.stream.openConnection"],
+      surface: [
+        "agent.message",
+        "agent.liveState.get",
+        "agent.liveState.subscribe",
+        "agent.stream.openConnection",
+      ],
     },
     slug: "garple",
   });
@@ -79,7 +88,9 @@ relays: the served project is a tree of Cap'n Web targets built from the
 surface's dotted members, each leaf forwarding onto the scoped stub as a
 genuine member call, browser callbacks retained with `dup()` and re-wrapped
 as plain functions, and returned stubs (connection handles) wrapped so their
-methods stay callable. Anything not listed does not exist on the served
+methods stay callable. A leaf is a method call, so an object-valued member
+is listed through to its methods (`agent.liveState.get`, never
+`agent.liveState`). Anything not listed does not exist on the served
 project at all. Bare roots cannot be served; list the members.
 
 ## Proof
@@ -91,4 +102,10 @@ project at all. Bare roots cannot be served; list the members.
   surface, the gate, the runtime wall, `project.scope()`.
 - `e2e/vitest/itx-served-surface.e2e.test.ts`: a committed project worker
   serving a scoped itx over `/api` to the stock node client — message,
-  a live connection with replay and a live event, close, a removed member.
+  a live connection with replay and a live event, live state, close, a
+  removed member.
+- `e2e/vitest/itx-garple-storefront.e2e.test.ts`: the use case, end to end
+  — a visitor on a website chats with an agent that runs on the REAL agent
+  processor, born with `surface: ["chat.sendMessage"]` and one mounted
+  catalogue tool, sells a domain, and cannot be prompt-injected into the
+  repo (the gate blocks the script; a cast-around attempt dies at runtime).
