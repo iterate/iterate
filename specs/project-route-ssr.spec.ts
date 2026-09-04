@@ -17,9 +17,9 @@ test("project home hydrates the dashboard and REPL still server-renders", async 
   await composer.fill("@onb");
   await page.getByRole("option", { name: "ONBOARDING.md" }).click();
   expect(await composer.textContent()).toBe("@ONBOARDING.md ");
-  expect(
-    await composer.locator('[data-reference-kind="config-repo-file"]').getAttribute("title"),
-  ).toBe("ONBOARDING.md");
+  expect(await composer.locator('[data-attachment-type="repo-file"]').getAttribute("title")).toBe(
+    "ONBOARDING.md",
+  );
   await composer.fill("Hello from dashboard");
 
   // The legacy new-agent URL is a router redirect (server-side 3xx on a
