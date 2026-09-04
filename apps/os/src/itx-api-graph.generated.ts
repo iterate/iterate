@@ -1929,7 +1929,7 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "CommitRepoFilesInput",
     kind: "typeAlias",
     sourceText:
-      "/** Command object for committing a batch of repo file mutations. */\nexport type CommitRepoFilesInput = {\n  author?: { email: string; name: string };\n  branch?: string;\n  changes: RepoFileChange[];\n  message: string;\n};",
+      "/** Command object for committing a batch of repo file mutations. */\nexport type CommitRepoFilesInput = {\n  /**\n   * When the branch head is exactly this commit oid, the new commit REPLACES\n   * it (same parents, this message) instead of stacking on top. If the head\n   * has moved on — or the repo is GitHub-linked, whose history stays\n   * append-only — an ordinary commit lands; the result's `amended` says which.\n   */\n  amendIfHead?: string;\n  author?: { email: string; name: string };\n  branch?: string;\n  changes: RepoFileChange[];\n  message: string;\n};",
     summary: "Command object for committing a batch of repo file mutations.",
     memberSummaries: {},
     referencedTypeNames: ["RepoFileChange"],
@@ -1938,7 +1938,7 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "CommitRepoFilesResult",
     kind: "typeAlias",
     sourceText:
-      "/** Result returned after a repo commit attempt, including no-op commits. */\nexport type CommitRepoFilesResult = {\n  branch: string;\n  changedPaths: string[];\n  commitOid: string;\n  noChanges: boolean;\n};",
+      "/** Result returned after a repo commit attempt, including no-op commits. */\nexport type CommitRepoFilesResult = {\n  /** True when `amendIfHead` matched the head and the commit replaced it. */\n  amended: boolean;\n  branch: string;\n  changedPaths: string[];\n  commitOid: string;\n  noChanges: boolean;\n};",
     summary: "Result returned after a repo commit attempt, including no-op commits.",
     memberSummaries: {},
     referencedTypeNames: [],
@@ -2713,7 +2713,7 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "WorkspaceCommitInput",
     kind: "typeAlias",
     sourceText:
-      "/** Input to `WorkspaceGit.commit` — one mount's changes become one commit on its repo's main. */\nexport type WorkspaceCommitInput = {\n  author?: { email: string; name: string };\n  message: string;\n  /** The mount to commit (its mount path). Optional when exactly one mount is dirty. */\n  scope?: string;\n};",
+      "/** Input to `WorkspaceGit.commit` — one mount's changes become one commit on its repo's main. */\nexport type WorkspaceCommitInput = {\n  /** Replace the repo's head commit when it is exactly this oid instead of\n   * stacking on it — see the repo's `commitFiles`. The result's `amended`\n   * says which happened. */\n  amendIfHead?: string;\n  author?: { email: string; name: string };\n  message: string;\n  /** The mount to commit (its mount path). Optional when exactly one mount is dirty. */\n  scope?: string;\n};",
     summary:
       "Input to `WorkspaceGit.commit` — one mount's changes become one commit on its repo's main.",
     memberSummaries: {},
@@ -2723,7 +2723,7 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "WorkspaceCommitResult",
     kind: "typeAlias",
     sourceText:
-      "/** Result of `WorkspaceGit.commit` — the commit landed on the scoped mount's repo main. */\nexport type WorkspaceCommitResult = {\n  branch: string;\n  /** Committed paths, spelled as absolute WORKSPACE paths (mount point included). */\n  changedPaths: string[];\n  commitOid: string;\n  /** The mount the commit was scoped to (its workspace path). */\n  mount: string;\n  repoPath: string;\n};",
+      "/** Result of `WorkspaceGit.commit` — the commit landed on the scoped mount's repo main. */\nexport type WorkspaceCommitResult = {\n  /** True when `amendIfHead` matched the head and the commit replaced it. */\n  amended: boolean;\n  branch: string;\n  /** Committed paths, spelled as absolute WORKSPACE paths (mount point included). */\n  changedPaths: string[];\n  commitOid: string;\n  /** The mount the commit was scoped to (its workspace path). */\n  mount: string;\n  repoPath: string;\n};",
     summary: "Result of `WorkspaceGit.commit` — the commit landed on the scoped mount's repo main.",
     memberSummaries: {},
     referencedTypeNames: [],

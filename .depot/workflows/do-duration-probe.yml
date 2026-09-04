@@ -9,8 +9,10 @@
 #      2026-09-01 stream-DO wake-loop runaway: ~$300/hour, noticed only on
 #      the bill after 28 hours — this workflow is the "never again")
 #
-# On breach, the alert script posts the probe report to Slack #error-pulse
-# and the run goes red.
+# Every run rewrites the headline of the day's thread in Slack #error-pulse
+# (one message per UTC day: latest hour, today's total, hours over the
+# ceiling, per account). A breach in the last two hours or a probe that could
+# not run is a reply in that thread, and the run goes red.
 #
 # Test the Slack hookup end to end (a tiny threshold forces an alert, marked
 # 🧪 TEST RUN in the message):
@@ -42,7 +44,7 @@ on:
       threshold-do-hours:
         description: >-
           Override BOTH accounts' active-time ceiling (DO-hours per hour).
-          Empty uses the per-account defaults (dev/preview 1000, prd 400).
+          Empty uses the per-account defaults (dev/preview 500, prd 600).
           Set 1 to force an alert and test the Slack hookup.
         type: string
         default: ""

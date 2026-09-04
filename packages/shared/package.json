@@ -18,6 +18,7 @@
     "./test-support/e2e-policy": "./src/test-support/e2e-policy/index.ts",
     "./test-support/failing-test": "./src/test-support/failing-test.ts",
     "./test-support/flake-test": "./src/test-support/flake-test.ts",
+    "./test-support/flake-record": "./src/test-support/flake-record.ts",
     "./test-support/ci-telemetry": "./src/test-support/ci-telemetry.ts",
     "./test-support/measure-e2e-phase": "./src/test-support/measure-e2e-phase.ts",
     "./test-support/cloudflare-worker-version-overrides": "./src/test-support/cloudflare-worker-version-overrides.ts",
