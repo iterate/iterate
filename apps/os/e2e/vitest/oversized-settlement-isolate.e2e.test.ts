@@ -16,7 +16,7 @@ import { adminSecret, deployedBaseUrl, withItxSession } from "./test-helpers.ts"
 // would not match the pinned failure and would read as an unrelated red.
 const failReset = createFailing(
   test.skipIf(deployedBaseUrl() === null),
-  /isolate exceeded its memory limit and was reset|caused object to be reset/i,
+  /isolate exceeded its memory limit and was reset/i,
   { timeoutMs: 120_000 },
 );
 
