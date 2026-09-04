@@ -26,7 +26,7 @@ test("folds CI-reported records into per-test stats", async () => {
     deploy: {
       pattern: "CPU startup time exceeded",
       suites: ["unit", "e2e"],
-      counts: { pass: 1, flakeFail: 1, unexpectedError: 0 },
+      counts: { pass: 1, "flake-fail": 1 },
       lastFlakeAt: day(0),
     },
     boot: { counts: { pass: 1 } },
@@ -45,7 +45,7 @@ test("a renamed test's old row retires once absent from 3 suite runs, not before
       branch: "some-pr",
     }),
   );
-  expect(renderBody(h.state())).toContain("`old name`");
+  expect(renderBody(h.state(), Date.UTC(2026, 0, 10))).toContain("`old name`");
 
   // Two runs carrying only the new name: the old row is still within the
   // suite's 3-run window, so it stays.
@@ -57,7 +57,7 @@ test("a renamed test's old row retires once absent from 3 suite runs, not before
       }),
     );
   }
-  expect(renderBody(h.state())).toContain("`old name`");
+  expect(renderBody(h.state(), Date.UTC(2026, 0, 10))).toContain("`old name`");
 
   // The third absent run pushes the old name out of the window: retired —
   // hidden from the table, never deleted from state.
@@ -67,7 +67,7 @@ test("a renamed test's old row retires once absent from 3 suite runs, not before
       branch: "another-pr",
     }),
   );
-  const body = renderBody(h.state());
+  const body = renderBody(h.state(), Date.UTC(2026, 0, 10));
   expect(body).not.toContain("`old name`");
   expect(body).toContain("`new name`");
   expect(body).toContain("1 retired test hidden");
@@ -83,12 +83,12 @@ test("a transiently-absent test survives the window and returns with its history
     // not retire the row — one absent run is inside the 3-run window...
     runRecorded(2, [record("boot", "pass", { at: day(1) })]),
   );
-  expect(renderBody(h.state())).toContain("`deploy`");
+  expect(renderBody(h.state(), Date.UTC(2026, 0, 10))).toContain("`deploy`");
   // ...and its next record resets the window, counts accumulated across the
   // gap — expiry is a projection choice over the log, nothing was deleted.
   await h.append(runRecorded(3, [record("deploy", "pass", { at: day(2) })]));
-  expect(renderBody(h.state())).toContain("`deploy`");
-  expect(h.state().tests.deploy!.counts).toMatchObject({ pass: 1, flakeFail: 1 });
+  expect(renderBody(h.state(), Date.UTC(2026, 0, 10))).toContain("`deploy`");
+  expect(h.state().tests.deploy!.counts).toMatchObject({ pass: 1, "flake-fail": 1 });
 });
 
 test("a multi-suite test stays visible while any of its suites still carries it", async () => {
@@ -103,7 +103,7 @@ test("a multi-suite test stays visible while any of its suites still carries it"
     runRecorded(4, [record("boot", "pass", { at: day(1) })], { suite: "unit" }),
     runRecorded(5, [record("boot", "pass", { at: day(1) })], { suite: "unit" }),
   );
-  expect(renderBody(h.state())).toContain("`flake sentinel`");
+  expect(renderBody(h.state(), Date.UTC(2026, 0, 10))).toContain("`flake sentinel`");
 });
 
 test("streak squares show up to 10 outcomes from any branch, oldest first", async () => {
@@ -120,7 +120,7 @@ test("streak squares show up to 10 outcomes from any branch, oldest first", asyn
       branch: "some-pr",
     }),
   );
-  const row = renderBody(h.state())
+  const row = renderBody(h.state(), Date.UTC(2026, 0, 10))
     .split("\n")
     .find((line) => line.startsWith("`deploy`"))!;
   // Squares in recorded order, each linking to the commit that produced it.
@@ -142,11 +142,115 @@ test("streak squares show up to 10 outcomes from any branch, oldest first", asyn
 test("info and stats render as line-per-fact cells with readable dates", async () => {
   const h = makeHarness();
   await h.append(birth(), runRecorded(1, [record("deploy", "flake-fail", { at: day(0) })]));
-  const row = renderBody(h.state())
+  const row = renderBody(h.state(), Date.UTC(2026, 0, 10))
     .split("\n")
     .find((line) => line.startsWith("`deploy`"))!;
   expect(row).toContain("pattern: `/CPU startup time exceeded/`<br>suites: unit");
   expect(row).toContain("runs: 1<br>flake rate: 100%<br>last flake: Jan 1, 12:00am");
+});
+
+test("rows group into sections by kind, sentinels split out of Flakes", async () => {
+  const h = makeHarness();
+  await h.append(
+    birth(),
+    runRecorded(1, [
+      record("deploy", "flake-fail", { at: day(0) }),
+      record("flake sentinel", "pass", { at: day(0) }),
+      record("stale facet", "pinned-fail", { at: day(0), kind: "failing" }),
+      record("chat upload", "retried-pass", {
+        at: day(0),
+        kind: "unknown",
+        error: "Timeout 30000ms exceeded | waiting for getByLabel('attachment')",
+      }),
+    ]),
+  );
+  const body = renderBody(h.state(), Date.parse(day(1)));
+  // Section order and membership: each row under its own heading.
+  const order = [
+    "## Flakes",
+    "`deploy`",
+    "## Failures",
+    "`stale facet`",
+    "## Sentinels",
+    "`flake sentinel`",
+    "## Unknown flakes",
+    "`chat upload`",
+  ];
+  const positions = order.map((needle) => body.indexOf(needle));
+  expect(positions).toEqual([...positions].toSorted((a, b) => a - b));
+  expect(positions.every((position) => position >= 0)).toBe(true);
+});
+
+test("failure rows show pin-held stats and pinned since dates the pin, not the flake era", async () => {
+  const h = makeHarness();
+  await h.append(
+    birth(),
+    // The designed lifecycle: tracked as a flake first, then switched to a
+    // createFailing pin — "pinned since" must date the switch.
+    runRecorded(0, [record("stale facet", "flake-fail", { at: day(0) })]),
+    runRecorded(1, [record("stale facet", "pinned-fail", { at: day(1), kind: "failing" })]),
+    runRecorded(2, [record("stale facet", "pinned-fail", { at: day(2), kind: "failing" })]),
+    runRecorded(3, [record("stale facet", "unexpected-pass", { at: day(3), kind: "failing" })]),
+  );
+  const row = renderBody(h.state(), Date.parse(day(4)))
+    .split("\n")
+    .find((line) => line.startsWith("`stale facet`"))!;
+  expect(row).toContain(
+    "runs: 4<br>pin held: 2<br>unexpected passes: 1<br>pinned since: Jan 2, 12:00am",
+  );
+  // Honest colors for a pin: red while the bug is present, green when it
+  // unexpectedly passes.
+  expect(row.match(/🟥|🟩|❌/gu)).toEqual(["🟥", "🟥", "🟥", "🟩"]);
+});
+
+test("unknown-flake rows show error samples and retire after 14 quiet days", async () => {
+  const h = makeHarness();
+  await h.append(
+    birth(),
+    runRecorded(1, [
+      record("chat upload", "retried-pass", {
+        at: day(0),
+        kind: "unknown",
+        error: "Timeout 30000ms exceeded | waiting\nfor getByLabel('attachment')",
+      }),
+    ]),
+  );
+  const fresh = renderBody(h.state(), Date.parse(day(2)));
+  // The error sample is the copy-paste material for a createFlake pattern —
+  // rendered as code, with the table-breaking pipe escaped and the
+  // row-splitting newline collapsed.
+  expect(fresh).toContain("`Timeout 30000ms exceeded \\| waiting for getByLabel('attachment')`");
+  expect(fresh).toContain("flakes: 1<br>last flake: Jan 1, 12:00am");
+
+  // Unknown rows only record when they flake, so absence-from-runs cannot
+  // retire them; time does instead.
+  const stale = renderBody(h.state(), Date.parse(day(15)));
+  expect(stale).not.toContain("`chat upload`");
+  expect(stale).toContain("1 retired test hidden");
+});
+
+test("sentinel streaks never propose transitions", async () => {
+  const h = makeHarness();
+  await h.append(birth());
+  for (let i = 0; i < 60; i++) {
+    await h.append(runRecorded(i, [record("flake sentinel", "pass", { at: day(i / 5) })]));
+  }
+  expect(h.events(flakeEventTypes.transitionProposed)).toHaveLength(0);
+});
+
+test("a pin that keeps passing unexpectedly proposes unwrap-failing", async () => {
+  const h = makeHarness();
+  await h.append(birth());
+  for (let i = 0; i < 10; i++) {
+    await h.append(
+      runRecorded(i, [
+        record("stale facet", "unexpected-pass", { at: day(i / 3), kind: "failing" }),
+      ]),
+    );
+  }
+  expect(h.events(flakeEventTypes.transitionProposed)).toMatchObject([
+    { payload: { testName: "stale facet", transition: "unwrap-failing" } },
+  ]);
 });
 
 test("default-branch streaks ignore other branches and reset on unexpected errors", async () => {
@@ -330,13 +434,22 @@ function runRecorded(
 
 function record(
   name: string,
-  outcome: "pass" | "flake-fail" | "unexpected-error",
-  overrides?: { at: string },
+  outcome:
+    | "pass"
+    | "flake-fail"
+    | "unexpected-error"
+    | "pinned-fail"
+    | "unexpected-pass"
+    | "retried-pass",
+  overrides?: { at?: string; kind?: "flake" | "failing" | "unknown"; error?: string },
 ) {
+  const kind = overrides?.kind || "flake";
   return {
     name,
+    kind,
     outcome,
-    pattern: "CPU startup time exceeded",
+    ...(kind === "unknown" ? {} : { pattern: "CPU startup time exceeded" }),
+    ...(overrides?.error === undefined ? {} : { error: overrides.error }),
     durationMs: 5,
     at: overrides?.at || "2026-09-02T09:00:00Z",
   };

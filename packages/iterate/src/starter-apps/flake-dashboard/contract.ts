@@ -15,12 +15,28 @@ const StreamOffset = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER)
  * `@iterate-com/shared/test-support/flake-test` — the wrapper writes these
  * lines to `FLAKE_RECORD_DIR` and CI ships them here verbatim.
  */
-export const FlakeOutcome = z.enum(["pass", "flake-fail", "unexpected-error"]);
+export const FlakeOutcome = z.enum([
+  "pass",
+  "flake-fail",
+  "unexpected-error",
+  "pinned-fail",
+  "unexpected-pass",
+  "retried-pass",
+]);
+
+/**
+ * Which wrapper (or reporter) produced a record: createFlake, createFailing,
+ * or the telemetry reporters' retried-pass records for tests nobody has
+ * classified yet. Old events predate the field — they were all createFlake.
+ */
+export const FlakeKind = z.enum(["flake", "failing", "unknown"]);
 
 export const FlakeRecord = z.object({
   name: z.string().min(1).max(1_000),
+  kind: FlakeKind.default("flake"),
   outcome: FlakeOutcome,
-  pattern: z.string().min(1).max(2_000),
+  // Optional: kind "unknown" records carry error samples instead of a pattern.
+  pattern: z.string().min(1).max(2_000).optional(),
   durationMs: z.number().nonnegative(),
   at: z.string().min(1),
   error: z.string().max(4_000).optional(),
@@ -43,7 +59,7 @@ const FlakeRunRecorded = z.object({
   records: z.array(FlakeRecord).min(1).max(10_000),
 });
 
-export const FlakeTransition = z.enum(["unwrap", "switch-to-failing"]);
+export const FlakeTransition = z.enum(["unwrap", "switch-to-failing", "unwrap-failing"]);
 
 const FlakeTransitionProposed = z.object({
   testName: z.string().min(1),
@@ -74,14 +90,18 @@ const FlakeDashboardRenderResult = z.discriminatedUnion("status", [
  * than being recomputed from history.
  */
 const DefaultBranchStreak = z.object({
-  outcome: z.enum(["pass", "flake-fail"]),
+  // Any outcome except unexpected-error, which resets the streak instead.
+  outcome: FlakeOutcome,
   runs: z.number().int().positive(),
   firstAt: z.string().min(1),
   lastAt: z.string().min(1),
 });
 
 const TrackedTest = z.object({
-  pattern: z.string(),
+  /** Latest record's kind wins: adopting an unknown flake into createFlake migrates its row. */
+  kind: FlakeKind.default("flake"),
+  /** Empty for kind "unknown" — those rows show error samples instead. */
+  pattern: z.string().default(""),
   suites: z.array(z.string()).default([]),
   /**
    * Per suite, the offset of the newest run-recorded event (any branch) whose
@@ -105,14 +125,19 @@ const TrackedTest = z.object({
     .array(z.object({ outcome: FlakeOutcome, commit: z.string().min(1).max(100) }))
     .max(10)
     .default([]),
-  counts: z
-    .object({
-      pass: z.number().int().nonnegative().default(0),
-      flakeFail: z.number().int().nonnegative().default(0),
-      unexpectedError: z.number().int().nonnegative().default(0),
-    })
-    .default({ pass: 0, flakeFail: 0, unexpectedError: 0 }),
+  /** Keyed by outcome value ("pass", "pinned-fail", …). */
+  counts: z.record(z.string(), z.number().int().nonnegative()).default({}),
+  /**
+   * The last few error samples worth showing (retried-pass and
+   * unexpected-error records) — for unknown flakes these are the copy-paste
+   * material for the createFlake pattern.
+   */
+  recentErrors: z
+    .array(z.object({ error: z.string().max(4_000), commit: z.string(), at: z.string() }))
+    .max(3)
+    .default([]),
   lastFlakeAt: z.string().nullable().default(null),
+  firstRecordedAt: z.string(),
   lastRecordedAt: z.string(),
   defaultBranchStreak: DefaultBranchStreak.nullable().default(null),
   /**
@@ -157,12 +182,16 @@ export const FlakeDashboardState = z.object({
 /**
  * Thresholds for the data-provable lifecycle transitions (grilled decision:
  * unwrap after 50 consecutive default-branch passes over >=5 days; propose
- * `createFailing` after 25 consecutive matched failures over >=2 days). Tunable
- * constants; the ~10% sentinel false-unwraps with probability 0.9^50 ~= 0.5%.
+ * `createFailing` after 25 consecutive matched failures over >=2 days).
+ * Tunable constants. Sentinel tests are excluded from proposals entirely —
+ * they are designed to flake.
  */
 export const flakeTransitionThresholds = {
   unwrap: { runs: 50, minSpanMs: 5 * 24 * 60 * 60 * 1000 },
   "switch-to-failing": { runs: 25, minSpanMs: 2 * 24 * 60 * 60 * 1000 },
+  // A pin that keeps passing unexpectedly looks fixed: propose deleting the
+  // createFailing wrapper after a sustained streak.
+  "unwrap-failing": { runs: 10, minSpanMs: 2 * 24 * 60 * 60 * 1000 },
 } as const;
 
 /**
@@ -196,7 +225,7 @@ export const CheckRunWebhookEvent = z.object({
 
 export const FlakeDashboardProcessorContract = defineProcessorContract({
   slug: "flake-dashboard",
-  version: "0.4.0",
+  version: "0.5.0",
   description:
     "Folds createFlake test outcomes reported by CI into per-test flake stats, renders the GitHub 'Flake dashboard' issue, and proposes data-provable lifecycle transitions.",
   stateSchema: FlakeDashboardState,

@@ -66,6 +66,7 @@ test("vitest's real expected-fail machinery produces the contracted verdicts", a
     "matched flake failure is green": "passed",
     "a pass is green": "passed",
     "an unexpected error is red": "failed",
+    "a pinned failure is green (createFailing)": "passed",
   });
 
   // Exactly one record per case: the fixture config sets a suite-level
@@ -79,6 +80,7 @@ test("vitest's real expected-fail machinery produces the contracted verdicts", a
   );
   expect(recorded.toSorted()).toEqual([
     "a pass is green",
+    "a pinned failure is green (createFailing)",
     "an unexpected error is red",
     "matched flake failure is green",
   ]);

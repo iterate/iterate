@@ -11,6 +11,7 @@ const originalTelemetryKind = process.env.TEST_TELEMETRY_KIND;
 const originalTelemetryLane = process.env.TEST_TELEMETRY_LANE;
 const originalPackageName = process.env.npm_package_name;
 const originalGithubWorkspace = process.env.GITHUB_WORKSPACE;
+const originalFlakeRecordDir = process.env.FLAKE_RECORD_DIR;
 
 afterEach(() => {
   restoreEnv("TEST_TELEMETRY_ARTIFACT_FILE", originalTelemetryFile);
@@ -19,6 +20,7 @@ afterEach(() => {
   restoreEnv("TEST_TELEMETRY_LANE", originalTelemetryLane);
   restoreEnv("npm_package_name", originalPackageName);
   restoreEnv("GITHUB_WORKSPACE", originalGithubWorkspace);
+  restoreEnv("FLAKE_RECORD_DIR", originalFlakeRecordDir);
   vi.restoreAllMocks();
 });
 
@@ -67,6 +69,10 @@ it("preserves an interrupted Vitest run instead of reporting a test failure", as
 
 it("records the first failed attempt when a retry passes", async () => {
   const file = join(tmpdir(), `retry-telemetry-${process.pid}-${Date.now()}.json`);
+  // Scoped: the flaky fixture below writes an unknown-flake record, which
+  // must land here and never in the CI run's real FLAKE_RECORD_DIR.
+  const flakeRecordDir = mkdtempSync(join(tmpdir(), "retry-flake-records-"));
+  process.env.FLAKE_RECORD_DIR = flakeRecordDir;
   delete process.env.TEST_TELEMETRY_ARTIFACT_DIR;
   delete process.env.TEST_TELEMETRY_KIND;
   delete process.env.TEST_TELEMETRY_LANE;
@@ -76,6 +82,7 @@ it("records the first failed attempt when a retry passes", async () => {
   const testCase = {
     id: "network-test-id",
     fullName: "network > reconnects",
+    name: "reconnects",
     location: { line: 12, column: 4 },
     options: { mode: "run" as const, timeout: 30_000 },
     tags: ["network"],
@@ -106,6 +113,19 @@ it("records the first failed attempt when a retry passes", async () => {
   reporter.onTestModuleStart(testModule);
   reporter.onTestModuleEnd(testModule);
   await reporter.onTestRunEnd([testModule]);
+
+  // The retried-pass also produced an unknown-flake record, keyed on the
+  // BARE test name (what a later createFlake wrap would record) with the
+  // failed attempt's error as the sample.
+  const flakeRecords = readdirSync(flakeRecordDir).flatMap((recordFile) =>
+    readFileSync(join(flakeRecordDir, recordFile), "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line)),
+  );
+  expect(flakeRecords).toMatchObject([
+    { name: "reconnects", kind: "unknown", outcome: "retried-pass" },
+  ]);
 
   const telemetry = JSON.parse(readFileSync(file, "utf8")) as TestTelemetryArtifact;
   expect(telemetry.tests).toEqual([

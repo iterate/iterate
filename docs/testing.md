@@ -613,6 +613,16 @@ Every suite carries its own sentinel (`flake sentinel (specs)` in
 gets its own dashboard row and a suite whose row reads 0% has broken
 recording/ingestion plumbing, not a healthy month.
 
+The dashboard also surfaces flakes nobody has classified: a PLAIN test that
+failed and then passed on a CI retry gets a `kind: "unknown"` record from the
+telemetry reporters (see `packages/shared/src/test-support/flake-record.ts`),
+error text included. Those rows are the adoption funnel — the "Unknown
+flakes" section of the dashboard shows the error samples to turn into a
+`createFlake` pattern, and once wrapped, the same test name migrates into the
+Flakes section. `createFailing` pins record too (`pinned-fail` /
+`unexpected-pass`), so the Failures section shows how long each pin has stood
+and proposes deleting wrappers whose bugs look fixed.
+
 For playwright specs, `createFlake` REPLACES retries — but only for tests
 that opted in by being wrapped. A matched flake is green on the first
 attempt (no retry consumed, no retry-until-pass shrinking the measured

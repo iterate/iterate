@@ -1,15 +1,18 @@
+import { mkdtempSync, readdirSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { expect, test, vi } from "vitest";
 import { expectFailure, createFailing } from "./failing-test.ts";
 
-// The wrapper in real use, registered through vitest itself: this lands on
-// vitest's native `test.fails`, so it reports in the "expected fail" summary
-// count, and it is green because its body throws the pinned error.
-const fail = createFailing(test, /foo bar exploded/);
-fail("a body failing for the pinned reason passes", async () => {
-  throw new Error("boom: foo bar exploded (as pinned)");
-});
+// The wrapper through vitest's REAL expected-fail machinery is proven by the
+// child-process fixture in ./flake-test-fixture (the createFailing case): a
+// live registration here would run under the CI suite's FLAKE_RECORD_DIR and
+// leak a synthetic pin row onto the real test-health dashboard.
 
 test("registration lands on the runner's own expected-fail variant", async () => {
+  // Scoped record dir: the body executions below would otherwise write
+  // kind-failing records into the CI run's real FLAKE_RECORD_DIR.
+  using _records = scopedFlakeRecordDir();
   const registered: { args: unknown[]; body: (...bodyArgs: unknown[]) => Promise<unknown> }[] = [];
   const plain = vi.fn();
   const fakeVitest = Object.assign(plain, {
@@ -36,6 +39,31 @@ test("registration lands on the runner's own expected-fail variant", async () =>
   expect(String(registered[0]!.body)).not.toContain("bodyArgs");
 });
 
+test("every outcome writes a kind-failing record when FLAKE_RECORD_DIR is set", async () => {
+  using records = scopedFlakeRecordDir();
+  const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+  try {
+    const registered: ((...args: unknown[]) => Promise<unknown>)[] = [];
+    const fake = Object.assign(vi.fn(), {
+      fails: (...args: unknown[]) => registered.push(args.at(-1) as any),
+    });
+    const fail = createFailing(fake, /pinned/);
+    fail("holds", async () => {
+      throw new Error("pinned as expected");
+    });
+    fail("fixed?", async () => {});
+    await expect(registered[0]!()).rejects.toThrow(/pinned/);
+    await expect(registered[1]!()).resolves.toBeUndefined();
+
+    expect(records.records()).toMatchObject([
+      { name: "holds", kind: "failing", outcome: "pinned-fail", pattern: "pinned" },
+      { name: "fixed?", kind: "failing", outcome: "unexpected-pass" },
+    ]);
+  } finally {
+    consoleError.mockRestore();
+  }
+});
+
 test("a playwright-shaped test object registers through .fail", async () => {
   const registered: unknown[][] = [];
   const fakePlaywright = Object.assign(vi.fn(), {
@@ -46,6 +74,9 @@ test("a playwright-shaped test object registers through .fail", async () => {
 });
 
 test("a body failing for a different reason returns success, so the native machinery goes red", async () => {
+  // Scoped record dir: the body executions below would otherwise write
+  // kind-failing records into the CI run's real FLAKE_RECORD_DIR.
+  using _records = scopedFlakeRecordDir();
   const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
   try {
     const registered: ((...args: unknown[]) => Promise<unknown>)[] = [];
@@ -71,6 +102,9 @@ test("a body failing for a different reason returns success, so the native machi
 });
 
 test("a body that succeeds returns success with delete-the-wrapper instructions in the log", async () => {
+  // Scoped record dir: the body executions below would otherwise write
+  // kind-failing records into the CI run's real FLAKE_RECORD_DIR.
+  using _records = scopedFlakeRecordDir();
   const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
   try {
     const registered: ((...args: unknown[]) => Promise<unknown>)[] = [];
@@ -91,6 +125,9 @@ test("a body that succeeds returns success with delete-the-wrapper instructions 
 });
 
 test("a hung body reports as not-the-pinned-failure at the wrapper's own deadline", async () => {
+  // Scoped record dir: the body executions below would otherwise write
+  // kind-failing records into the CI run's real FLAKE_RECORD_DIR.
+  using _records = scopedFlakeRecordDir();
   const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
   try {
     const registered: ((...args: unknown[]) => Promise<unknown>)[] = [];
@@ -129,3 +166,25 @@ test("expectFailure: success throws with delete-the-wrapper instructions", async
     /should have failed with \/foo bar exploded\/ but it succeeded.*delete the createFailing\(\) wrapper/,
   );
 });
+
+// Same shape as flake-test.test.ts's fixture: point FLAKE_RECORD_DIR at a
+// scratch dir for the test's lifetime so synthetic outcomes never leak into
+// real telemetry, and read back what was written.
+function scopedFlakeRecordDir() {
+  const previous = process.env.FLAKE_RECORD_DIR;
+  const dir = mkdtempSync(join(tmpdir(), "failing-test-"));
+  process.env.FLAKE_RECORD_DIR = dir;
+  return {
+    records: () =>
+      readdirSync(dir).flatMap((file) =>
+        readFileSync(join(dir, file), "utf8")
+          .trim()
+          .split("\n")
+          .map((line) => JSON.parse(line)),
+      ),
+    [Symbol.dispose]() {
+      if (previous === undefined) delete process.env.FLAKE_RECORD_DIR;
+      else process.env.FLAKE_RECORD_DIR = previous;
+    },
+  };
+}

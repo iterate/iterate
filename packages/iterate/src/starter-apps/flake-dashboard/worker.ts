@@ -315,7 +315,8 @@ export class FlakeDashboardProcessor extends StreamProcessor<
         const tests = { ...state.tests };
         for (const record of event.payload.records) {
           const existing = tests[record.name];
-          const counts = existing?.counts || { pass: 0, flakeFail: 0, unexpectedError: 0 };
+          const counts = { ...existing?.counts };
+          counts[record.outcome] = (counts[record.outcome] || 0) + 1;
           const streak = existing?.defaultBranchStreak || null;
           const nextStreak = !onDefaultBranch
             ? streak
@@ -324,8 +325,18 @@ export class FlakeDashboardProcessor extends StreamProcessor<
               : streak !== null && streak.outcome === record.outcome
                 ? { ...streak, runs: streak.runs + 1, lastAt: record.at }
                 : { outcome: record.outcome, runs: 1, firstAt: record.at, lastAt: record.at };
+          const flakeStruck = record.outcome === "flake-fail" || record.outcome === "retried-pass";
+          // Error samples worth keeping: an unknown flake's evidence, or an
+          // unexpected error anywhere. A matched flake-fail / pinned-fail is
+          // already described by the pattern.
+          const errorSample =
+            record.error !== undefined &&
+            (record.outcome === "retried-pass" || record.outcome === "unexpected-error")
+              ? { error: record.error, commit: event.payload.commit, at: record.at }
+              : null;
           tests[record.name] = {
-            pattern: record.pattern,
+            kind: record.kind,
+            pattern: record.pattern || existing?.pattern || "",
             suites: existing?.suites.includes(event.payload.suite)
               ? existing.suites
               : [...(existing?.suites || []), event.payload.suite],
@@ -334,14 +345,18 @@ export class FlakeDashboardProcessor extends StreamProcessor<
               ...(existing?.recent || []),
               { outcome: record.outcome, commit: event.payload.commit },
             ].slice(-10),
-            counts: {
-              pass: counts.pass + (record.outcome === "pass" ? 1 : 0),
-              flakeFail: counts.flakeFail + (record.outcome === "flake-fail" ? 1 : 0),
-              unexpectedError:
-                counts.unexpectedError + (record.outcome === "unexpected-error" ? 1 : 0),
-            },
-            lastFlakeAt:
-              record.outcome === "flake-fail" ? record.at : existing?.lastFlakeAt || null,
+            counts,
+            recentErrors:
+              errorSample === null
+                ? existing?.recentErrors || []
+                : [...(existing?.recentErrors || []), errorSample].slice(-3),
+            lastFlakeAt: flakeStruck ? record.at : existing?.lastFlakeAt || null,
+            // Dates the test's CURRENT kind (Failures render it as "pinned
+            // since"): a flake that later becomes a pin restarts the clock.
+            firstRecordedAt:
+              existing !== undefined && existing.kind === record.kind
+                ? existing.firstRecordedAt
+                : record.at,
             lastRecordedAt: record.at,
             defaultBranchStreak: nextStreak,
             proposed: existing?.proposed || [],
@@ -401,9 +416,20 @@ export class FlakeDashboardProcessor extends StreamProcessor<
     // the processor advances past the run that crossed the threshold.
     if (event?.type === flakeEventTypes.runRecorded) {
       for (const [testName, test] of Object.entries(state.tests)) {
+        // Sentinels are designed to flake: their streaks prove the pipeline
+        // works and must never propose lifecycle changes.
+        if (isSentinel(testName)) continue;
         const streak = test.defaultBranchStreak;
         if (streak === null) continue;
-        const transition = streak.outcome === "pass" ? "unwrap" : "switch-to-failing";
+        const transition =
+          streak.outcome === "pass"
+            ? "unwrap"
+            : streak.outcome === "flake-fail"
+              ? "switch-to-failing"
+              : streak.outcome === "unexpected-pass"
+                ? "unwrap-failing"
+                : null;
+        if (transition === null) continue;
         const threshold = flakeTransitionThresholds[transition];
         const spanMs = Date.parse(streak.lastAt) - Date.parse(streak.firstAt);
         if (streak.runs < threshold.runs || spanMs < threshold.minSpanMs) continue;
@@ -519,7 +545,7 @@ async function renderFlakeDashboardIssue(
   }
   const octokit = itx.integrations.github.get(link.connection).octokit;
   const params = { owner: config.repository.owner, repo: config.repository.repo };
-  const body = renderBody(state);
+  const body = renderBody(state, Date.now());
 
   const rememberedIssueNumber = state.render?.issueNumber || null;
   if (rememberedIssueNumber !== null) {
@@ -562,7 +588,31 @@ async function renderFlakeDashboardIssue(
   return { status: "succeeded", issueNumber: created.data.number, issueUrl: created.data.html_url };
 }
 
-const OUTCOME_EMOJI = { pass: "🟩", "flake-fail": "🟥", "unexpected-error": "❌" } as const;
+// One map across kinds, honest per section: green = the expected thing
+// happened (a pass, or a pin passing unexpectedly — worth a look), red = the
+// tracked failure struck (a flake, a held pin, a retried-pass), ❌ = an
+// unexpected error that proves nothing.
+const OUTCOME_EMOJI = {
+  pass: "🟩",
+  "unexpected-pass": "🟩",
+  "flake-fail": "🟥",
+  "pinned-fail": "🟥",
+  "retried-pass": "🟥",
+  "unexpected-error": "❌",
+} as const;
+
+/** Unknown-flake rows only exist while they keep flaking: quiet ones retire. */
+const UNKNOWN_ROW_TTL_MS = 14 * 24 * 60 * 60 * 1000;
+
+/**
+ * The deliberate canary flakes are identified by naming convention — every
+ * suite's sentinel test contains this phrase ("flake sentinel",
+ * "flake sentinel (specs)", …). A convention beats a record flag: it needs no
+ * wire-format field and holds for all historical records.
+ */
+function isSentinel(testName: string): boolean {
+  return testName.includes("flake sentinel");
+}
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
@@ -576,45 +626,71 @@ function shortDate(iso: string) {
 }
 
 /** Exported for tests: the table is a pure projection of folded state. */
-export function renderBody(state: FlakeDashboardState): string {
+export function renderBody(state: FlakeDashboardState, nowMs: number): string {
   const tests = Object.entries(state.tests).sort(([a], [b]) => a.localeCompare(b));
   const lastRecordedAt = tests
     .map(([, test]) => test.lastRecordedAt)
     .sort()
     .at(-1);
   // The test name is the identity: a renamed or deleted test is simply absent
-  // from its suite's recent runs, and its row retires. A test stays visible
-  // while it appeared in at least one of the last 3 ingested runs of one of
-  // its suites (any branch — the specs and preview-e2e suites never run on
-  // main, see the suites field's contract docstring). Hidden, never deleted —
-  // the events stay in the log, so a transiently-absent test (a crashed
-  // suite, a PR experiment) returns with full history on its next record, and
-  // a genuinely retired name stays readable in the issue's edit history.
+  // from its suite's recent runs, and its row retires. A tracked test (flake,
+  // failing, sentinel) stays visible while it appeared in at least one of the
+  // last 3 ingested runs of one of its suites (any branch — the specs and
+  // preview-e2e suites never run on main, see the suites field's contract
+  // docstring). Unknown flakes are absent from most runs by nature — they
+  // only record when they flake — so they expire by time instead. Hidden,
+  // never deleted: the events stay in the log, so a transiently-absent test
+  // returns with full history on its next record, and a genuinely retired
+  // name stays readable in the issue's edit history.
   const visible = tests.filter(([, test]) =>
-    Object.entries(test.lastSeenOffset).some(([suite, seen]) => {
-      const windowStart = state.suites[suite]?.recentRunOffsets[0];
-      return windowStart === undefined || seen >= windowStart;
-    }),
+    test.kind === "unknown"
+      ? nowMs - Date.parse(test.lastRecordedAt) <= UNKNOWN_ROW_TTL_MS
+      : Object.entries(test.lastSeenOffset).some(([suite, seen]) => {
+          const windowStart = state.suites[suite]?.recentRunOffsets[0];
+          return windowStart === undefined || seen >= windowStart;
+        }),
   );
   const retiredCount = tests.length - visible.length;
   const config = state.birthCertificate?.config;
-  const rows = visible.map(([name, test]) => {
-    const gated = test.counts.pass + test.counts.flakeFail;
-    const rate = gated === 0 ? "—" : `${Math.round((test.counts.flakeFail / gated) * 100)}%`;
-    // Lines inside a cell are <br>-separated; a literal | in the pattern
-    // would end the cell, so it renders escaped.
+
+  const count = (test: (typeof tests)[number][1], outcome: string) => test.counts[outcome] || 0;
+  const row = ([name, test]: (typeof tests)[number]) => {
+    const runs = Object.values(test.counts).reduce((total, n) => total + n, 0);
+    // Lines inside a cell are <br>-separated; a literal | or backtick in a
+    // pattern or error would end the cell or the code span, and a raw newline
+    // (playwright timeout messages carry a call log) would split the table
+    // row — so all three render collapsed/escaped.
+    const cellCode = (text: string) =>
+      `\`${text.replaceAll(/\s+/gu, " ").replaceAll("`", "'").replaceAll("|", "\\|")}\``;
     const info = [
-      `pattern: \`/${test.pattern.replaceAll("|", "\\|")}/\``,
+      ...(test.kind === "unknown"
+        ? test.recentErrors.map((sample) => cellCode(sample.error.slice(0, 140)))
+        : [`pattern: ${cellCode(`/${test.pattern}/`)}`]),
       `suites: ${test.suites.join(", ")}`,
       ...(test.proposed.length === 0
         ? []
         : [`proposed: ${test.proposed.map((p) => p.split(":")[0]).join(", ")}`]),
     ].join("<br>");
-    const stats = [
-      `runs: ${gated + test.counts.unexpectedError}`,
-      `flake rate: ${rate}`,
-      `last flake: ${test.lastFlakeAt === null ? "never" : shortDate(test.lastFlakeAt)}`,
-    ].join("<br>");
+    const gated = count(test, "pass") + count(test, "flake-fail");
+    const stats = (
+      test.kind === "failing"
+        ? [
+            `runs: ${runs}`,
+            `pin held: ${count(test, "pinned-fail")}`,
+            `unexpected passes: ${count(test, "unexpected-pass")}`,
+            `pinned since: ${shortDate(test.firstRecordedAt)}`,
+          ]
+        : test.kind === "unknown"
+          ? [
+              `flakes: ${count(test, "retried-pass")}`,
+              `last flake: ${test.lastFlakeAt === null ? "never" : shortDate(test.lastFlakeAt)}`,
+            ]
+          : [
+              `runs: ${runs}`,
+              `flake rate: ${gated === 0 ? "—" : `${Math.round((count(test, "flake-fail") / gated) * 100)}%`}`,
+              `last flake: ${test.lastFlakeAt === null ? "never" : shortDate(test.lastFlakeAt)}`,
+            ]
+    ).join("<br>");
     // Tests only exist after birth, so config is always set here; the plain
     // emoji fallback keeps the render total rather than throwing over a link.
     const squares = test.recent
@@ -634,20 +710,52 @@ export function renderBody(state: FlakeDashboardState): string {
           ]),
     ].join("<br>");
     return [`\`${name}\``, info, stats, streak].join(" | ");
-  });
+  };
+
+  const sections = [
+    {
+      title: "Flakes",
+      legend: "_createFlake-wrapped: 🟩 pass, 🟥 the known flake struck._",
+      tests: visible.filter(([name, test]) => test.kind === "flake" && !isSentinel(name)),
+    },
+    {
+      title: "Failures",
+      legend:
+        "_createFailing pins: 🟥 the pinned bug is present (expected), 🟩 passed unexpectedly — the bug may be fixed._",
+      tests: visible.filter(([, test]) => test.kind === "failing"),
+    },
+    {
+      title: "Sentinels",
+      legend: "_Deliberate ~10% canary flakes proving the recording pipeline works._",
+      tests: visible.filter(([name, test]) => test.kind === "flake" && isSentinel(name)),
+    },
+    {
+      title: "Unknown flakes",
+      legend:
+        "_Plain tests that failed then passed on a CI retry. Wrap them with createFlake, using the error samples as the pattern; rows retire after 14 quiet days._",
+      tests: visible.filter(([, test]) => test.kind === "unknown"),
+    },
+  ].filter((section) => section.tests.length > 0);
+
   return [
     DASHBOARD_MARKER,
-    "Per-test outcomes of every [`createFlake`](https://github.com/iterate/iterate/blob/main/packages/shared/src/test-support/flake-test.ts)-wrapped test, folded from CI-reported runs. Maintained automatically — edits to this body will be overwritten. Streak = last 10 recorded outcomes on any branch, oldest→newest (🟩 pass, 🟥 flake-fail, ❌ unexpected error); each square links to the commit that produced it.",
-    "",
-    "test | info | stats | streak",
-    "--- | --- | --- | ---",
-    ...(rows.length === 0 ? ["_no flake tests recorded yet_ | | |"] : rows),
+    "Test health, folded from CI-reported runs: [`createFlake`](https://github.com/iterate/iterate/blob/main/packages/shared/src/test-support/flake-test.ts) wraps, [`createFailing`](https://github.com/iterate/iterate/blob/main/packages/shared/src/test-support/failing-test.ts) pins, and unclassified flaky tests caught by CI retries. Maintained automatically — edits to this body will be overwritten. Streak = last 10 recorded outcomes on any branch, oldest→newest; each square links to the commit that produced it.",
+    ...(sections.length === 0 ? ["", "_no tests recorded yet_"] : []),
+    ...sections.flatMap((section) => [
+      "",
+      `## ${section.title}`,
+      section.legend,
+      "",
+      "test | info | stats | streak",
+      "--- | --- | --- | ---",
+      ...section.tests.map(row),
+    ]),
     "",
     `_Last recorded outcome: ${lastRecordedAt || "none"}._`,
     ...(retiredCount === 0
       ? []
       : [
-          `_${retiredCount} retired ${retiredCount === 1 ? "test" : "tests"} hidden (absent from the last 3 runs of their suite)._`,
+          `_${retiredCount} retired ${retiredCount === 1 ? "test" : "tests"} hidden (absent from the last 3 runs of their suite; unknown flakes, quiet for 14 days)._`,
         ]),
   ].join("\n");
 }
