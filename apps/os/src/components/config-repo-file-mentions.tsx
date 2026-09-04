@@ -1,4 +1,3 @@
-import { FileIcon } from "lucide-react";
 import { connectItx } from "iterate/sdk/itx/react";
 import type { ComposerSuggestionProvider } from "~/components/composer-suggestions.ts";
 
@@ -14,6 +13,7 @@ export function configRepoFileMentionProvider(projectId: string): ComposerSugges
       return files.paths.map((path) => ({
         id: path,
         label: path,
+        type: "file",
         completion: {
           type: "reference" as const,
           display: `@${path}`,
@@ -23,7 +23,6 @@ export function configRepoFileMentionProvider(projectId: string): ComposerSugges
             path,
           },
         },
-        icon: <FileIcon aria-hidden />,
       }));
     },
   };

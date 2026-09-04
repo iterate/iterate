@@ -1,4 +1,3 @@
-import type { ReactNode } from "react";
 import type { AgentReferenceTarget } from "@iterate-com/shared/agent-rich-content";
 
 export type ComposerSuggestion = {
@@ -10,7 +9,8 @@ export type ComposerSuggestion = {
     | { type: "text"; text: string }
     | { type: "reference"; display: string; target: AgentReferenceTarget };
   description?: string;
-  icon?: ReactNode;
+  /** CodeMirror completion icon class; providers may define their own type. */
+  type?: string;
 };
 
 export type ComposerSuggestionProvider = {
@@ -64,12 +64,13 @@ export function activeComposerSuggestion(
   return active;
 }
 
-export function applyComposerSuggestion(
+export function composerSuggestionEdit(
   value: string,
-  active: ActiveComposerSuggestion,
+  from: number,
+  to: number,
   suggestion: ComposerSuggestion,
 ): {
-  value: string;
+  insert: string;
   caret: number;
   reference?: { display: string; from: number; target: AgentReferenceTarget; to: number };
 } {
@@ -77,20 +78,18 @@ export function applyComposerSuggestion(
     suggestion.completion.type === "text"
       ? suggestion.completion.text
       : suggestion.completion.display;
-  const after = value.slice(active.to);
+  const after = value.slice(to);
   const separator = after === "" || !/^\s/.test(after) ? " " : "";
   const existingSeparatorLength = separator === "" && /^\s/.test(after) ? 1 : 0;
-  const before = value.slice(0, active.from);
-  const nextValue = `${before}${inserted}${separator}${after}`;
   return {
-    value: nextValue,
-    caret: before.length + inserted.length + separator.length + existingSeparatorLength,
+    insert: `${inserted}${separator}`,
+    caret: from + inserted.length + separator.length + existingSeparatorLength,
     ...(suggestion.completion.type === "reference" && {
       reference: {
         display: suggestion.completion.display,
-        from: before.length,
+        from,
         target: suggestion.completion.target,
-        to: before.length + suggestion.completion.display.length,
+        to: from + suggestion.completion.display.length,
       },
     }),
   };

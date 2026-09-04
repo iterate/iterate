@@ -3,6 +3,8 @@
 import { act, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { completionStatus } from "@codemirror/autocomplete";
+import { Transaction } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import {
   flattenAgentRichContent,
@@ -112,12 +114,13 @@ async function enterText(view: EditorView, value: string, caret = value.length) 
     view.dispatch({
       changes: { from: 0, to: view.state.doc.length, insert: value },
       selection: { anchor: caret },
+      annotations: Transaction.userEvent.of("input.type"),
     });
   });
 }
 
-async function settleSuggestionSearch() {
-  await act(async () => new Promise((resolve) => setTimeout(resolve, 10)));
+async function settleSuggestionSearch(delayMs = 10) {
+  await act(async () => new Promise((resolve) => setTimeout(resolve, delayMs)));
 }
 
 test("typing a trigger keeps editor focus and Enter inserts an atomic reference", async () => {
@@ -156,16 +159,18 @@ test("typing a trigger keeps editor focus and Enter inserts an atomic reference"
   await act(async () => root.unmount());
 });
 
-test("pointer selection works without moving focus away from the mobile editor", async () => {
+test("pointer selection works without moving focus away from the editor", async () => {
   const { content, root, view } = await mountHarness();
   await act(async () => view.focus());
   await enterText(view, "@");
   await settleSuggestionSearch();
-  const worker = [...document.querySelectorAll<HTMLElement>("[cmdk-item]")].find(
-    (item) => item.textContent === "worker.ts",
+  const worker = [...document.querySelectorAll<HTMLElement>(".cm-tooltip-autocomplete li")].find(
+    (item) => item.textContent?.includes("worker.ts"),
   );
   if (worker === undefined) throw new Error("missing worker suggestion");
-  await act(async () => worker.click());
+  await act(async () =>
+    worker.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true })),
+  );
 
   expect(view.state.doc.toString()).toBe("@worker.ts ");
   expect(document.activeElement).toBe(content);
@@ -185,7 +190,7 @@ test("choosing a mention before existing text advances past its separator", asyn
   );
   expect(view.state.doc.toString()).toBe("@AGENTS.md later");
   expect(view.state.selection.main.head).toBe(11);
-  expect(content.getAttribute("aria-expanded")).toBe("false");
+  expect(completionStatus(view.state)).toBeNull();
 
   await act(async () => root.unmount());
 });
@@ -203,7 +208,11 @@ test("choosing a mention before an existing pill preserves document order and th
   expect(view.state.doc.toString()).toBe("@worker.ts ");
 
   await act(async () => {
-    view.dispatch({ changes: { from: 0, insert: "@ag " }, selection: { anchor: 3 } });
+    view.dispatch({
+      changes: { from: 0, insert: "@ag " },
+      selection: { anchor: 3 },
+      annotations: Transaction.userEvent.of("input.type"),
+    });
   });
   await settleSuggestionSearch();
   await act(async () =>
@@ -221,7 +230,7 @@ test("choosing a mention before an existing pill preserves document order and th
   await act(async () => root.unmount());
 });
 
-test("retry keeps editor focus while refetching failed suggestions", async () => {
+test("failed completion remains visible and retries from the keyboard", async () => {
   let attempts = 0;
   const flaky: ComposerSuggestionProvider = {
     id: "files",
@@ -238,24 +247,24 @@ test("retry keeps editor focus while refetching failed suggestions", async () =>
   await act(async () => view.focus());
   await enterText(view, "@wor");
   await settleSuggestionSearch();
-  const retry = [...document.querySelectorAll("button")].find(
-    (button) => button.textContent === "Try again",
-  );
-  if (retry === undefined) throw new Error("missing retry button");
-
-  const pointerDown = new MouseEvent("pointerdown", { bubbles: true, cancelable: true });
-  await act(async () => retry.dispatchEvent(pointerDown));
-  expect(pointerDown.defaultPrevented).toBe(true);
+  expect(document.body.textContent).toContain("Couldn’t load config repo files");
+  expect(document.body.textContent).toContain("temporary outage · select to retry");
   expect(document.activeElement).toBe(content);
-  await act(async () => retry.click());
-  await settleSuggestionSearch();
+  await act(async () =>
+    content.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }),
+    ),
+  );
+  await settleSuggestionSearch(75);
+  expect(attempts).toBe(2);
+  expect(completionStatus(view.state)).toBe("active");
   expect(document.activeElement).toBe(content);
   expect(document.body.textContent).toContain("worker.ts");
 
   await act(async () => root.unmount());
 });
 
-test("loading is explicit and Enter still submits when there is no selectable result", async () => {
+test("a pending completion does not steal Enter from message submission", async () => {
   const submit = vi.fn();
   const loading: ComposerSuggestionProvider = {
     id: "files",
@@ -267,7 +276,8 @@ test("loading is explicit and Enter still submits when there is no selectable re
   const { content, root, view } = await mountHarness({ source: loading, submit });
   await act(async () => view.focus());
   await enterText(view, "@");
-  expect(document.body.textContent).toContain("Loading config repo files…");
+  await settleSuggestionSearch();
+  expect(completionStatus(view.state)).toBe("pending");
   await act(async () =>
     content.dispatchEvent(
       new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }),

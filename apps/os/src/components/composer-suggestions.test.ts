@@ -1,7 +1,7 @@
 import { describe, expect, test } from "vitest";
 import {
   activeComposerSuggestion,
-  applyComposerSuggestion,
+  composerSuggestionEdit,
   type ComposerSuggestionProvider,
 } from "./composer-suggestions.ts";
 
@@ -58,13 +58,13 @@ describe("activeComposerSuggestion", () => {
   });
 });
 
-test("applyComposerSuggestion replaces the whole token and restores a useful caret", () => {
+test("composerSuggestionEdit replaces the whole token and restores a useful caret", () => {
   const value = "read @agent-old next";
   const active = activeComposerSuggestion(value, 11, [provider]);
   if (active === null) throw new Error("expected an active suggestion");
 
-  expect(applyComposerSuggestion(value, active, suggestions[0]!)).toEqual({
-    value: "read @AGENTS.md next",
+  expect(composerSuggestionEdit(value, active.from, active.to, suggestions[0]!)).toEqual({
+    insert: "@AGENTS.md",
     caret: 16,
     reference: {
       display: "@AGENTS.md",
