@@ -93,13 +93,18 @@ const TrackedTest = z.object({
   lastSeenOffset: z.record(z.string(), StreamOffset).default({}),
   /**
    * The last (up to) 10 recorded outcomes on any branch, oldest first — the
-   * render's emoji streak bar. All branches, like the counts: the specs and
-   * preview-e2e suites only run on pull requests, so a default-branch-only
-   * bar would stay empty forever for the suites where most flakes live. The numeric
-   * defaultBranchStreak below stays main-only and carries the
-   * transition-threshold counts past what 10 entries can show.
+   * render's emoji streak bar, each entry carrying the commit that produced
+   * it so the square can link straight to that commit's checks. All branches,
+   * like the counts: the specs and preview-e2e suites only run on pull
+   * requests, so a default-branch-only bar would stay empty forever for the
+   * suites where most flakes live. The numeric defaultBranchStreak below
+   * stays main-only and carries the transition-threshold counts past what 10
+   * entries can show.
    */
-  recent: z.array(FlakeOutcome).max(10).default([]),
+  recent: z
+    .array(z.object({ outcome: FlakeOutcome, commit: z.string().min(1).max(100) }))
+    .max(10)
+    .default([]),
   counts: z
     .object({
       pass: z.number().int().nonnegative().default(0),
@@ -191,7 +196,7 @@ export const CheckRunWebhookEvent = z.object({
 
 export const FlakeDashboardProcessorContract = defineProcessorContract({
   slug: "flake-dashboard",
-  version: "0.3.0",
+  version: "0.4.0",
   description:
     "Folds createFlake test outcomes reported by CI into per-test flake stats, renders the GitHub 'Flake dashboard' issue, and proposes data-provable lifecycle transitions.",
   stateSchema: FlakeDashboardState,

@@ -330,7 +330,10 @@ export class FlakeDashboardProcessor extends StreamProcessor<
               ? existing.suites
               : [...(existing?.suites || []), event.payload.suite],
             lastSeenOffset: { ...existing?.lastSeenOffset, [event.payload.suite]: event.offset },
-            recent: [...(existing?.recent || []), record.outcome].slice(-10),
+            recent: [
+              ...(existing?.recent || []),
+              { outcome: record.outcome, commit: event.payload.commit },
+            ].slice(-10),
             counts: {
               pass: counts.pass + (record.outcome === "pass" ? 1 : 0),
               flakeFail: counts.flakeFail + (record.outcome === "flake-fail" ? 1 : 0),
@@ -561,6 +564,17 @@ async function renderFlakeDashboardIssue(
 
 const OUTCOME_EMOJI = { pass: "🟩", "flake-fail": "🟥", "unexpected-error": "❌" } as const;
 
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+/** "Sep 4, 7:16am" (UTC) — ISO timestamps read like log spam in the table. */
+function shortDate(iso: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return iso;
+  const hours = date.getUTCHours();
+  const minutes = String(date.getUTCMinutes()).padStart(2, "0");
+  return `${MONTHS[date.getUTCMonth()]} ${date.getUTCDate()}, ${hours % 12 || 12}:${minutes}${hours >= 12 ? "pm" : "am"}`;
+}
+
 /** Exported for tests: the table is a pure projection of folded state. */
 export function renderBody(state: FlakeDashboardState): string {
   const tests = Object.entries(state.tests).sort(([a], [b]) => a.localeCompare(b));
@@ -583,34 +597,51 @@ export function renderBody(state: FlakeDashboardState): string {
     }),
   );
   const retiredCount = tests.length - visible.length;
+  const config = state.birthCertificate?.config;
   const rows = visible.map(([name, test]) => {
     const gated = test.counts.pass + test.counts.flakeFail;
     const rate = gated === 0 ? "—" : `${Math.round((test.counts.flakeFail / gated) * 100)}%`;
-    const streak =
-      test.defaultBranchStreak === null
-        ? "—"
-        : `${test.defaultBranchStreak.runs}× ${test.defaultBranchStreak.outcome}`;
-    return [
-      `\`${name}\``,
-      `\`/${test.pattern}/\``,
-      test.suites.join(", "),
-      String(gated + test.counts.unexpectedError),
-      rate,
-      test.lastFlakeAt || "never",
-      test.recent.length === 0
-        ? "—"
-        : test.recent.map((outcome) => OUTCOME_EMOJI[outcome]).join(""),
-      streak,
-      test.proposed.length === 0 ? "" : test.proposed.map((p) => p.split(":")[0]).join(", "),
-    ].join(" | ");
+    // Lines inside a cell are <br>-separated; a literal | in the pattern
+    // would end the cell, so it renders escaped.
+    const info = [
+      `pattern: \`/${test.pattern.replaceAll("|", "\\|")}/\``,
+      `suites: ${test.suites.join(", ")}`,
+      ...(test.proposed.length === 0
+        ? []
+        : [`proposed: ${test.proposed.map((p) => p.split(":")[0]).join(", ")}`]),
+    ].join("<br>");
+    const stats = [
+      `runs: ${gated + test.counts.unexpectedError}`,
+      `flake rate: ${rate}`,
+      `last flake: ${test.lastFlakeAt === null ? "never" : shortDate(test.lastFlakeAt)}`,
+    ].join("<br>");
+    // Tests only exist after birth, so config is always set here; the plain
+    // emoji fallback keeps the render total rather than throwing over a link.
+    const squares = test.recent
+      .map((entry) => {
+        const emoji = OUTCOME_EMOJI[entry.outcome];
+        if (config === undefined) return emoji;
+        const { owner, repo } = config.repository;
+        return `[${emoji}](https://github.com/${owner}/${repo}/commit/${entry.commit})`;
+      })
+      .join("");
+    const streak = [
+      squares || "—",
+      ...(test.defaultBranchStreak === null || config === undefined
+        ? []
+        : [
+            `${test.defaultBranchStreak.runs}× ${test.defaultBranchStreak.outcome} (${config.defaultBranch})`,
+          ]),
+    ].join("<br>");
+    return [`\`${name}\``, info, stats, streak].join(" | ");
   });
   return [
     DASHBOARD_MARKER,
-    "Per-test outcomes of every [`createFlake`](https://github.com/iterate/iterate/blob/main/packages/shared/src/test-support/flake-test.ts)-wrapped test, folded from CI-reported runs. Maintained automatically — edits to this body will be overwritten. Recent = last 10 recorded outcomes on any branch, oldest→newest (🟩 pass, 🟥 flake-fail, ❌ unexpected error).",
+    "Per-test outcomes of every [`createFlake`](https://github.com/iterate/iterate/blob/main/packages/shared/src/test-support/flake-test.ts)-wrapped test, folded from CI-reported runs. Maintained automatically — edits to this body will be overwritten. Streak = last 10 recorded outcomes on any branch, oldest→newest (🟩 pass, 🟥 flake-fail, ❌ unexpected error); each square links to the commit that produced it.",
     "",
-    "test | allowed pattern | suites | runs | flake rate | last flake | recent | default-branch streak | proposed",
-    "--- | --- | --- | --- | --- | --- | --- | --- | ---",
-    ...(rows.length === 0 ? ["_no flake tests recorded yet_ | | | | | | | |"] : rows),
+    "test | info | stats | streak",
+    "--- | --- | --- | ---",
+    ...(rows.length === 0 ? ["_no flake tests recorded yet_ | | |"] : rows),
     "",
     `_Last recorded outcome: ${lastRecordedAt || "none"}._`,
     ...(retiredCount === 0
