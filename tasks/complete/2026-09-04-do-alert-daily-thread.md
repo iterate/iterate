@@ -1,5 +1,5 @@
 ---
-status: ready
+status: complete
 size: small
 ---
 
@@ -9,7 +9,7 @@ size: small
 
 Spec'd 2026-09-04 from the first night of hourly alerts in #error-pulse
 (screenshot: prd breached every hour at ~540 DO-hours, dev/preview reported
-"probe FAILED to run" twice). Implemented on this branch; a forced 🧪 TEST RUN from CI produced the daily thread in #error-pulse (headline + 2 threaded replies + in-place headline edit), read back through the Slack API. Left: watching the first real scheduled runs.
+"probe FAILED to run" twice). Implemented on this branch; a forced 🧪 TEST RUN from CI produced the daily thread in #error-pulse (headline + 2 threaded replies + in-place headline edit), read back through the Slack API. Merged in #2590; the 37 hourly alert messages from the prior 48h were deleted from #error-pulse by hand after merge.
 
 ## Why
 
