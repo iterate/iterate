@@ -28,13 +28,10 @@ failReset("a stream survives being evicted after journaling oversized events", a
     .create({});
   await using stream = withTestReset(project.streams.get("/"));
 
-  // Six: four such events still boot (7.5s), six do not.
+  // Six events: four such events still boot (7.5s), six do not. 14MB, <<< 32MiB ceiling of Workers RPC
+  const bigEvent = { type: "oversized-e2e/blob", payload: { blob: "x".repeat(14_000_000) } };
   for (let n = 0; n < 6; n++) {
-    const fourteenMBEvent = {
-      type: "oversized-e2e/blob",
-      payload: { blob: "x".repeat(14_000_000) }, // 14MB, <<< 32MiB ceiling of Workers RPC
-    };
-    await stream.append(fourteenMBEvent).catch((error) => {
+    await stream.append(bigEvent).catch((error) => {
       if (!/event.* too large/i.test(String(error))) throw error;
     });
   }
@@ -42,9 +39,8 @@ failReset("a stream survives being evicted after journaling oversized events", a
   // .kill() aborts like a platform eviction (abort reported through the call and touches no storage.
   await expect(stream.kill(), "kill() reports its own abort").rejects.toThrow(/kill requested/);
 
-  // Read a few times. Each read is filtered to the small events only, so what
-  // it costs is the boot, not the response. A boot that dies replaying the
-  // journal throws the reset instead — the pinned failure.
+  // Read a few times. Each read filtered to small wake events, so the cost is the boot, not the response.
+  // A boot that dies replaying the journal throws the ooom+reset instead - a bad bug, at least on 2026-09-04.
   for (let read = 0; read < 3; read++) {
     const page = await stream.getEventPage({
       afterOffset: 0,
