@@ -567,7 +567,7 @@ const OUTCOME_EMOJI = { pass: "🟩", "flake-fail": "🟥", "unexpected-error": 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
 /** "Sep 4, 7:16am" (UTC) — ISO timestamps read like log spam in the table. */
-function shortDate(iso: string): string {
+function shortDate(iso: string) {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return iso;
   const hours = date.getUTCHours();
