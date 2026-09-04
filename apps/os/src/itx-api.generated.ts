@@ -93,7 +93,7 @@ export interface Project {
    * The durable-delivery subscriptions committed in the birth batch are what
    * guarantee the saga runs; create also nudges both root processors AFTER
    * this response, and a failed nudge is telemetry, not a create failure —
-   * the checklist's stall detector covers the rest. Either lane returns this
+   * the checklist's stall detector covers the rest. Either path returns this
    * same handle, and addressing an unknown slug is side-effect free.
    */
   create(
@@ -164,7 +164,7 @@ export interface Project {
   browser: CfBrowserCapability;
   /** This scope's agent control handle, when its address is under `/agents/`. */
   agent?: Agent;
-  /** THIS agent's web-chat door — present only on an agent-scoped itx. */
+  /** THIS agent's web chat — present only on an agent-scoped itx. */
   chat?: AgentChat;
   /**
    * This scope's own capability host: the durable capability table behind
@@ -201,7 +201,7 @@ export interface Project {
   egress: ProjectEgress;
   /** Project email: send(...) and the connection-scoped inbound address. */
   email: EmailCapability;
-  /** The docs door: `search({ q })` finds e2e-tested example scripts, type
+  /** The docs: `search({ q })` finds e2e-tested example scripts, type
    * declarations, and this scope's mounted capabilities; `get({ name })`
    * fetches one. Pass search MANY related words — matching is dumb word
    * overlap. */
@@ -496,7 +496,7 @@ export interface CfBrowserCapability {
 export interface Agent {
   /**
    * The agent scope's own capability host (provide/revoke/runScript/
-   * __describe) — and the explicit dotted door to the scope's DYNAMIC
+   * __describe) — and the explicit dotted path to the scope's DYNAMIC
    * capabilities: `agents.get(path).capabilityHost.someTool(args)`. The
    * shorthand `agents.get(path).someTool(args)` resolves through the same
    * host via the handle's prototype-chain fallback; both pipeline over
@@ -525,7 +525,7 @@ export interface Agent {
    * outside the Agent vocabulary or for an intentionally ephemeral event.
    */
   append(...events: AgentEventInput[]): Promise<StreamEvent[]>;
-  /** The agent's web-chat door (what the user sees). */
+  /** The agent's web chat: what the user sees. */
   chat: AgentChat;
   /**
    * Create the generic agent machinery on this stream and wait until the
@@ -553,7 +553,7 @@ export interface Agent {
     },
   ): Promise<Agent>;
   /**
-   * Send a message to this agent — THE inbound door for every caller. The
+   * Send a message to this agent — THE inbound method for every caller. The
    * context item's actor derives from the calling scope: inside an agent script
    * (itx scoped to an agent path), the message is stamped
    * `{ type: "agent", path }` and does NOT refill the receiver's autonomous
