@@ -2888,6 +2888,53 @@ SQLITE_TOOBIG` used to cross the hop from inside the write. Local workerd (4 MiB
   is that one 1006 (named in the assertion message), ≥ 7/8. It is the audit's "least-isolated
   tenant" (item 4/27) made visible; the fix — an edge-side in-flight budget — is on the menu.
 
+### 2026-09-04, evening — the per-context ledger: the budgets add up now
+
+- Jonas: "so are we now safe from durable object out of memory?" — no: every budget so far was per
+  request or per row, and the isolate is shared, so they multiplied (24 readers, 20 stuck rows, one
+  never-answering client, a fan-out to 10 facets all reset the DO on the deployed worker). And: "we
+  don't care about the edge worker dying as the clients can just reconnect. it's just the DO." So
+  the edge's own limits drop off the menu; everything below is inside the DO.
+- THE IN-FLIGHT LEDGER (`subscription-delivery.ts`): ONE counter of serialized event chars handed to
+  calls that have not settled, all rows, all lanes — `DELIVERY_IN_FLIGHT_BUDGET_CHARS` (32 MiB). A
+  facet push and a cursor delivery WAIT for room (`#callWithInFlightRoom`: a FIFO of waiters woken
+  whenever a call settles; a call larger than the whole budget runs alone, never a deadlock); a push
+  to a LIVE CLIENT is dropped past it with the existing `delivery.push.dropped` warn and a
+  `healFromOffset` (fire-and-forget cannot wait, and the client heals by read — every dropped push's
+  contract). Beside it, ONE pending total across rows (`PENDING_PUSHES_TOTAL_BUDGET_CHARS`, 32 MiB):
+  past it the oldest events go from the LARGEST measured queue first; the per-row 8 MiB still holds.
+- THE OUTSTANDING-PAGES LEVEL (`stream.ts`): a page cannot be released explicitly — a plain object
+  leaves with the RPC reply, invisibly — and a RATE cannot bound a reply queue that drains slower
+  than the rate (tried first: 32 MiB/s with shrinking pages; 24 concurrent readers still reset the
+  deployed DO, because each second granted 32 MiB more while the previous seconds' replies were
+  still queued). But a reader PROVES it received a page when it comes back for the next: a read
+  whose `afterOffset` is an outstanding page's end retires that page (one per read, so N readers on
+  one span count N), and a reader that never returns retires after 5 s. That is a LEVEL, exact for
+  every reader that pages on, and the page budget is what is left of
+  `READ_OUTSTANDING_BUDGET_BYTES` (32 MiB), never under 512 KiB — never a refusal: a facet's
+  catch-up (one page in flight, each continuation retiring the last) keeps full pages; 24 readers
+  share 32 MiB. `Stream.read` is the metered DOOR; the constructor's re-reduce and waitForEvent's
+  scan use the private `#readPage`, one page at a time inside one turn, exempt.
+- BUDGETS TIGHTENED after the first deployed round: in-flight and pending totals 32 → 16 MiB each
+  (an in-flight push is held twice — the objects and the RPC-serialized message until sent — and
+  the deployed isolate tolerates ~150 MiB, so 32 + 32 + the append's own batch + copies was still a
+  reset for 30 × 7 MiB ephemerals to 10 facets); and `#pushedEventBatches` is remembered for CURSOR
+  rows only (a push row just retained the batch until its next delivery).
+- EPHEMERALS ARE MEASURED AGAIN at the append door (the same 8 MiB ceiling: they ride every push
+  over the same RPC and sit in the same delivery memory) — and live state no longer needs to send
+  big patches: past `LIVE_STATE_PATCH_MAX_CHARS` (1 MiB) the delta rides with `patch: null`, "the
+  rev moved, re-seed through the door", which both clients (e2e/support/live-client.ts,
+  src/client/live-state-store.ts) treat as a re-seed. The 12 MiB-projection control stays green.
+- PINS FLIPPED (node): 20 stuck facet rows on disjoint types (was 160 MiB) and 20 behind cursor rows
+  - one commit (was a page per row at once; `maxCallsInFlight` now says how many at a time) both
+    survive the 128 MiB budget. DEPLOYED (live-46, the rate policy still in): the never-answering
+    LIVE CLIENT no longer resets the producer — the in-flight ledger drops its pushes past the budget
+    with a warn, the stub stays online; concurrent readers and the facet fan-out still reset there,
+    hence the level policy and the tighter budgets above (proved next deploy). RE-PINNED:
+    push-delivery-no-dropped-warns' stalled-subscriber row — it had pinned "60 MiB into a paused
+    socket, NO warn at all" (the hazard!); now the DO drops past 32 MiB in flight and the row asserts
+    exactly those warns, the stub still online, the close half unchanged.
+
 ## 2026-09-04 — the DO owns both ends of a lent stub's rule: the pager upgrade carries the rule, one round trip
 
 - WHY: a `provide(match, stub)` / `subscribe({ target: fn })` cost THREE edge→DO round trips — the

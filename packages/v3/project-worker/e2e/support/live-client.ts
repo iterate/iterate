@@ -7,7 +7,8 @@ import { applyPatch, type PatchOp } from "../../src/lib/patch.ts";
 
 /** One live-state change frame — the payload of an `events.iterate.com/live-state/changed` event as
  *  delivered inside a subscription batch: apply `patch` iff `from` matches. */
-export type Delta = { key?: string; from: number; to: number; patch: PatchOp[] };
+/** `patch: null` = the change was too large to send — the rev moved, re-seed through the door. */
+export type Delta = { key?: string; from: number; to: number; patch: PatchOp[] | null };
 
 /** The subscription target for one watched `key`: a batch of live-state events (every key's) in,
  *  the watched key's deltas into `client.consume`. Spell it as
@@ -69,7 +70,7 @@ export const liveClient = (readDoor: Door): LiveClient => {
       while (c.queue.length) {
         const u = c.queue.shift()!;
         if (c.rev !== null && u.to <= c.rev) c.dropped++;
-        else if (u.from === c.rev) {
+        else if (u.from === c.rev && u.patch !== null) {
           c.doc = applyPatch(c.doc, u.patch);
           c.rev = u.to;
           c.applied++;

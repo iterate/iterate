@@ -22,9 +22,15 @@
 
 import { diff } from "../lib/patch.ts";
 
+/** A delta whose patch is over this many chars is not sent: a whole-array replace of a large
+ *  projection would cost every watcher the projection per set, and past the event ceiling the door
+ *  would refuse it outright. The delta rides with `patch: null` instead — the rev moved, re-seed. */
+const LIVE_STATE_PATCH_MAX_CHARS = 1024 * 1024;
+
 // THE one live-state change type is the literal "events.iterate.com/live-state/changed" — ephemeral,
 // payload `{key, from, to, patch}`: the delta patch rides the event (LiveView-style), chained by
-// producer-owned revisions (`from` = the previous emission's `to`). HARD RULE: no processor can ever
+// producer-owned revisions (`from` = the previous emission's `to`); `patch: null` means the change
+// was too large to send — the rev still moved, re-seed through the door. HARD RULE: no processor can ever
 // REDUCE it (the engine's `reducesEvent` refuses it before contracts are consulted), so state-change
 // notifications can never feed a reduce — the feedback-loop class is unspellable, not discouraged.
 // A SUBSCRIPTION may name the type to watch live state; that is delivery, not a reduce.
@@ -95,6 +101,7 @@ export class LiveState<S> {
     if (!patch) return;
     const from = this.#liveStateRev;
     this.#liveStateRev = from + 1;
+    const wirePatch = JSON.stringify(patch).length > LIVE_STATE_PATCH_MAX_CHARS ? null : patch;
     // Both a sync throw and a rejection land in the same lossy contract: a dropped change payload
     // is a revision-chain gap the client heals (the rev already advanced above).
     try {
@@ -102,7 +109,7 @@ export class LiveState<S> {
         this.#liveStateSink.append({
           type: "events.iterate.com/live-state/changed",
           ephemeral: true,
-          payload: { key: this.#liveStateKey, from, to: this.#liveStateRev, patch },
+          payload: { key: this.#liveStateKey, from, to: this.#liveStateRev, patch: wirePatch },
         }),
       ).catch(() => {});
     } catch {

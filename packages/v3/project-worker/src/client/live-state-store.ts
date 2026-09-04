@@ -17,7 +17,8 @@ import { applyPatch, type PatchOp } from "../lib/patch.ts";
 
 /** One live-state delta off the wire — the payload of an `events.iterate.com/live-state/changed`
  *  ephemeral event, delivered raw to the subscriber. */
-export type LiveStateDelta = { key: string; from: number; to: number; patch: PatchOp[] };
+/** `patch: null` = the change was too large to send — the rev moved, re-seed through the door. */
+export type LiveStateDelta = { key: string; from: number; to: number; patch: PatchOp[] | null };
 
 /** What the producer's seed door returns: the current revision paired with the current value. */
 export type LiveStateSeed<S> = { rev: number; state: S };
@@ -63,8 +64,9 @@ export function createLiveStateStore<S>(): LiveStateStore<S> {
       // or gapped frame resyncs through the door anyway.)
       if (held.rev !== null && delta.to <= held.rev) return;
       // A gap (its `from` is not the held rev — including "no seed yet") means a missed delta or a
-      // reborn epoch — re-read the door instead of applying onto a diverged base.
-      if (delta.from !== held.rev) {
+      // reborn epoch, and a `null` patch means the change was too large to send — either way re-read
+      // the door instead of applying onto a diverged base.
+      if (delta.from !== held.rev || delta.patch === null) {
         resync();
         return;
       }

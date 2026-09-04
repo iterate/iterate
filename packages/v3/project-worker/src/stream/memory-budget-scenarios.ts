@@ -521,11 +521,11 @@ const scenarios: Record<string, (args: Record<string, number>) => Promise<void>>
 
   /** N CURSOR rows — plain-function targets: a loader entrypoint, a sibling context — all behind
    *  after an eviction (a first cursor is memory-only, so a fresh incarnation's rows are behind by
-   *  everything committed since they were configured), then ONE commit. The COMMIT path drains every
-   *  row at once, each reading a budgeted page and holding it across its awaited call, with no
-   *  concurrency bound — the alarm's pass has one (CURSOR_PASS_CONCURRENCY), the commit path none.
-   *  `calleeCopy` charges the callee's deserialized copy to this heap too (the conservative stand-in
-   *  for a loader isolate or a sibling DO, which pay it in their own). */
+   *  everything committed since they were configured), then ONE commit. The COMMIT path drains
+   *  every row, each reading a budgeted page and holding it across its awaited call (`callMs`, a
+   *  slow callee) — under the in-flight ledger only as many as fit run at once (born red: every
+   *  row at once, a page each). `calleeCopy` charges the callee's deserialized copy to this heap too
+   *  (the conservative stand-in for a loader isolate or a sibling DO, which pay it in their own). */
   async "cursor-rows-behind-one-commit"(args) {
     const storage = nodeSqliteDurableObjectStorage();
     let delivery: SubscriptionDelivery | undefined;
@@ -546,22 +546,35 @@ const scenarios: Record<string, (args: Record<string, number>) => Promise<void>>
     seedLog(stream, { eventCount: args.eventCount, eventChars: args.eventChars });
     // This incarnation: the same rows, cursors born at their configuration offset.
     let callsStarted = 0;
-    const callsInFlight: ((value: unknown) => void)[] = [];
+    let callsInFlightNow = 0;
+    let maxCallsInFlight = 0;
     const calleeCopies: unknown[] = [];
     delivery = new SubscriptionDelivery({
       stream,
       evaluateItxExpression: async () => (events: StreamEvent[], range: unknown) => {
         callsStarted++;
+        callsInFlightNow++;
+        maxCallsInFlight = Math.max(maxCallsInFlight, callsInFlightNow);
         if (args.calleeCopy) calleeCopies.push(deserialize(serialize([events, range])));
-        return new Promise((resolve) => callsInFlight.push(resolve));
+        notePeakHeap();
+        return new Promise((resolve) =>
+          setTimeout(() => {
+            callsInFlightNow--;
+            resolve(undefined);
+          }, args.callMs ?? 250),
+        );
       },
       recordActivityForQuietClock: () => {},
     });
     stream.append({ type: "blob", payload: { n: -1 } }); // ONE commit
-    for (let i = 0; i < 50; i++) await new Promise((r) => setImmediate(r));
+    // Every row gets its first call — how many at once is the ledger's decision, measured.
+    const deadline = Date.now() + 30_000;
+    while (callsStarted < args.rowCount && Date.now() < deadline)
+      await new Promise((r) => setTimeout(r, 25));
     notePeakHeap();
     fact("rows", args.rowCount);
     fact("callsStarted", callsStarted);
+    fact("maxCallsInFlight", maxCallsInFlight);
   },
 
   /** `waitForEvent` with an explicit `afterOffset: 0` and a type the log never carries: the history

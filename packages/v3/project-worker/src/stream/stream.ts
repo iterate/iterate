@@ -64,6 +64,19 @@ const READ_PAGE_BUDGET_BYTES = 8 * 1024 * 1024;
 /** The most rows one page returns whatever `limit` asks — the object overhead of tiny events, which
  *  the byte budget cannot see. */
 const READ_PAGE_MAX_EVENTS = 1000;
+/** THE OUTSTANDING-PAGES BUDGET, per context: the most page bytes that may be on their way to
+ *  readers at once. A page cannot be released explicitly — a plain object leaves with the RPC
+ *  reply, invisibly — but a reader PROVES it received one when it comes back for the next: a read
+ *  whose `afterOffset` is an outstanding page's end retires that page. So the level is known for
+ *  every reader that pages on (a client, a facet's catch-up), and a reader that never returns
+ *  retires after READ_OUTSTANDING_PAGE_TTL_MS. Past the budget pages SHRINK (down to
+ *  READ_PAGE_MIN_BUDGET_BYTES) so a burst of readers shares the isolate — 24 clients paging one
+ *  log at once, 8 MiB each, reset it (e2e/stream-uncontrolled-degradation). Never a refusal. The
+ *  stream's own scans (the constructor's re-reduce, waitForEvent) are exempt: one page at a time
+ *  inside one turn. */
+const READ_OUTSTANDING_BUDGET_BYTES = 32 * 1024 * 1024;
+const READ_PAGE_MIN_BUDGET_BYTES = 512 * 1024;
+const READ_OUTSTANDING_PAGE_TTL_MS = 5_000;
 
 /** The waitForEvent selector: `type` is an exact event-type match (absent = any type); only events
  *  with offset strictly greater than `afterOffset` match (default = the head at call time — "the
@@ -124,6 +137,13 @@ export class Stream {
   #highestDurableOffset: number;
   /** FIFO; resolved from `freshEvents` in append's step 5. */
   readonly #waitForEventWaiters: WaitForEventWaiter[] = [];
+  /** Pages on their way to readers, keyed by the page's end offset — retired by the continuation
+   *  read from that offset (one per read, so N readers on one span count N times) or by age. */
+  readonly #outstandingReadPages = new Map<
+    number,
+    { bytes: number; count: number; issuedAtMs: number }
+  >();
+  #outstandingReadBytes = 0;
   #alarmArmedForMs: number | null = null;
 
   // ── THE CORE REDUCE: the stream's own state (core-processor.ts), event-sourced from its own log.
@@ -181,7 +201,11 @@ export class Stream {
       // Budgeted pages (READ_PAGE_BUDGET_CHARS): this runs in the DO constructor, where a page that
       // did not fit the isolate would be a reboot loop — every wake re-running the same re-reduce.
       while (this.#coreReducedThroughOffset < this.#highestDurableOffset) {
-        const page = this.read(this.#coreReducedThroughOffset, 500);
+        const { page } = this.#readPage(
+          this.#coreReducedThroughOffset,
+          500,
+          READ_PAGE_BUDGET_BYTES,
+        );
         for (const event of page.events)
           this.#coreReducedState = this.#reduceEventIntoCoreReducedState(
             event,
@@ -268,9 +292,21 @@ export class Stream {
     // 1. may this land? — the shape first (this runtime check is the SOLE enforcement; there is no
     //    boundary validator): a non-blank type. (An ephemeral's idempotencyKey is simply never
     //    stored — ephemerals never reach the idempotency column.)
-    for (const event of events)
+    for (const event of events) {
       if (typeof event.type !== "string" || event.type.trim() === "")
         throw new Error("append: every event needs a non-empty type");
+      // An EPHEMERAL is never stored, but it rides every push over the same 32 MiB RPC and sits in
+      // the same delivery memory — the same ceiling, measured here (a durable is measured at its insert).
+      if (event.ephemeral) {
+        const chars = JSON.stringify(event).length;
+        if (chars > EVENT_BODY_MAX_CHARS)
+          throw codedError(
+            "EVENT_TOO_LARGE",
+            `append: an ephemeral ${JSON.stringify(event.type)} serializes to ${chars} chars, over the ${EVENT_BODY_MAX_CHARS / (1024 * 1024)} MiB ceiling — it would ride every push over Workers RPC (32 MiB per message); nothing was appended`,
+            { type: event.type, chars, maxChars: EVENT_BODY_MAX_CHARS },
+          );
+      }
+    }
     //    then the pause: a paused stream refuses everything except the platform's own records and
     //    the pause/resume pair itself (it must always accept its own resume)
     const paused = this.#coreReducedState.paused;
@@ -413,13 +449,56 @@ export class Stream {
   }
 
   /** One page after `afterOffset`: at most `limit` rows AND at most READ_PAGE_BUDGET_BYTES of
-   *  bodies (stream-storage.ts pages the cursor) — the SERVER decides the page; `limit` only shrinks it. */
+   *  bodies (stream-storage.ts pages the cursor) — the SERVER decides the page; `limit` only shrinks
+   *  it. THE DOOR: every reader outside this class comes through here and pays the read rate. */
   read(afterOffset = 0, limit = 500): StreamPage {
+    this.#retireOutstandingReadPage(afterOffset);
+    const budgetBytes = Math.max(
+      READ_PAGE_MIN_BUDGET_BYTES,
+      Math.min(READ_PAGE_BUDGET_BYTES, READ_OUTSTANDING_BUDGET_BYTES - this.#outstandingReadBytes),
+    );
+    const { page, bytes } = this.#readPage(afterOffset, limit, budgetBytes);
+    if (bytes > 0 && page.events.length > 0) {
+      const endOffset = page.events[page.events.length - 1].offset;
+      const outstanding = this.#outstandingReadPages.get(endOffset);
+      if (outstanding) {
+        outstanding.count += 1;
+        outstanding.bytes += bytes;
+        outstanding.issuedAtMs = Date.now();
+      } else this.#outstandingReadPages.set(endOffset, { bytes, count: 1, issuedAtMs: Date.now() });
+      this.#outstandingReadBytes += bytes;
+    }
+    return page;
+  }
+
+  /** A read continuing from `afterOffset` proves the page ending there was received: retire one;
+   *  and retire whatever nobody came back for within the TTL. */
+  #retireOutstandingReadPage(afterOffset: number): void {
+    const now = Date.now();
+    for (const [endOffset, outstanding] of this.#outstandingReadPages) {
+      if (endOffset !== afterOffset && now - outstanding.issuedAtMs < READ_OUTSTANDING_PAGE_TTL_MS)
+        continue;
+      const retiredBytes =
+        endOffset === afterOffset ? outstanding.bytes / outstanding.count : outstanding.bytes;
+      this.#outstandingReadBytes -= retiredBytes;
+      outstanding.bytes -= retiredBytes;
+      outstanding.count -= endOffset === afterOffset ? 1 : outstanding.count;
+      if (outstanding.count <= 0) this.#outstandingReadPages.delete(endOffset);
+    }
+  }
+
+  /** The scan itself — a page of at most `limit` rows and `budgetBytes` of bodies, plus what it
+   *  holds in bytes (the door meters it). */
+  #readPage(
+    afterOffset: number,
+    limit: number,
+    budgetBytes: number,
+  ): { page: StreamPage; bytes: number } {
     limit = Math.min(Math.max(1, limit), READ_PAGE_MAX_EVENTS); // limit 0 crashed the cut check (userspace-reachable)
-    const { rows, nextRowDidNotFit } = this.storage.readEventPage(
+    const { rows, bytes, nextRowDidNotFit } = this.storage.readEventPage(
       afterOffset,
       limit,
-      READ_PAGE_BUDGET_BYTES,
+      budgetBytes,
     );
     // Chunk rows never enter a page, so it counts EVENTS and its scannedThroughOffset is an event
     // offset — never a chunk boundary.
@@ -440,9 +519,8 @@ export class Stream {
     const atHead =
       !nextRowDidNotFit && (events.length < limit || lastOffset >= highestDurableOffset);
     return {
-      events,
-      scannedThroughOffset: atHead ? highestDurableOffset : lastOffset,
-      atHead,
+      page: { events, scannedThroughOffset: atHead ? highestDurableOffset : lastOffset, atHead },
+      bytes,
     };
   }
 
@@ -464,7 +542,7 @@ export class Stream {
     const timeoutMs = Math.min(filter.timeoutMs ?? 30_000, 120_000);
     let cursor = afterOffset;
     for (;;) {
-      const page = this.read(cursor, 500);
+      const { page } = this.#readPage(cursor, 500, READ_PAGE_BUDGET_BYTES);
       for (const event of page.events)
         if (type === undefined || event.type === type) return Promise.resolve(event);
       if (page.atHead) break;

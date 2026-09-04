@@ -123,17 +123,18 @@ function stallableWebSocket(url: string): StallableWebSocket {
   return new WsWebSocket(url) as StallableWebSocket;
 }
 
-test("MEASURED FINDING: a push subscriber that stops reading mid-flood is NOT closed by local workerd (≥60MiB buffers silently) — but a real socket close drops its stub instantly and removes its ROW (a live subscription is session-scoped)", async () => {
+test("MEASURED FINDING: a push subscriber that stops reading mid-flood is NOT closed by local workerd — the DO drops pushes past its in-flight budget instead, the stub stays online, and a real socket close drops its stub instantly and removes the row", async () => {
   // The loop's design comment (subscription-delivery.ts): a push is fire-and-forget; the socket
-  // buffer is the only queue. This ran that claim to ground against local workerd: 60.0MiB of
-  // payload flooded into a TCP-paused subscriber produced NO close, NO delivery.push.dropped warn,
-  // NO RPC_STUB_OFFLINE — workerd buffers the outgoing WebSocket without any local limit we could
-  // reach (the buffering policy is workerd's, not this codebase's). What IS ours (close →
+  // buffer is the only queue. Ran to ground against local workerd: 60.0MiB of payload flooded into
+  // a TCP-paused subscriber produces NO close and NO RPC_STUB_OFFLINE — workerd buffers the outgoing
+  // WebSocket without any local limit we could reach (the buffering policy is workerd's). What IS
+  // ours: every push to that stub is an RPC call whose arguments live in the DO until it settles,
+  // and a stalled reader never settles one — so the DO's in-flight ledger (DELIVERY_IN_FLIGHT_BUDGET_CHARS,
+  // 32 MiB) DROPS the pushes past it with a `delivery.push.dropped` warn naming the budget, keeping
+  // the DO's memory bounded whatever the edge and the socket absorb (BUILD-LOG 2026-09-04; before the
+  // ledger this row pinned "no warn at all" — 60 MiB silently in flight). And the close half (close →
   // onRpcBroken → pager close → the DO drops the transport → `itx.rpcStubs.list()` stops listing the
-  // key; and capnweb disposes the session's SubscriptionHandle → the ROW is removed) is proven live
-  // below. RESIDUAL: real edge sockets have real buffer limits, so the overflow-close half may hold
-  // in production; this pins LOCAL workerd only. If the still-present assertion ever fails, workerd
-  // grew a send-buffer limit — flip this pin to assert the overflow-close instead.
+  // key; capnweb disposes the session's SubscriptionHandle → the ROW is removed) is proven live below.
   const ctx = freshCtx("overflow");
   const itx = await worker.itx(ctx); // connection A: setup, the flood, and observation
   // Connection B — THE VICTIM: its own client socket, because the callback stub it lent lives in
@@ -155,7 +156,9 @@ test("MEASURED FINDING: a push subscriber that stops reading mid-flood is NOT cl
   const victimOnline = async () => (await presence(itx)).includes("subscription:victim");
   expect(await victimOnline()).toBe(true);
   const droppedWarns = () => countMatches(worker.logs(), /delivery\.push\.dropped/g);
+  const budgetDropWarns = () => countMatches(worker.logs(), /in-flight budget is full/g);
   const droppedBefore = droppedWarns(); // logs are worker-global — assert the DELTA, not zero
+  const budgetDropsBefore = budgetDropWarns();
 
   // THE STALL: stop reading the victim's TCP socket. The kernel recv buffer fills, the TCP window
   // closes, and workerd's sends for this socket can only buffer.
@@ -190,13 +193,15 @@ test("MEASURED FINDING: a push subscriber that stops reading mid-flood is NOT cl
     `overflow: flooded ${(floodedBytes / 1024 / 1024).toFixed(1)}MiB into a paused socket; ` +
       `stubDropped=${stubDropped}; dropped-warn delta=${droppedWarns() - droppedBefore}`,
   );
-  // THE FINDING, pinned: the full 60MiB went in and NOTHING happened — no close, no stub drop, no
-  // dropped-delivery warn. workerd absorbed it all in memory.
+  // THE FINDING, pinned: the full 60MiB went in, no close, no stub drop — and past 32 MiB in flight
+  // the DO dropped the rest with the ledger's warn (the socket and the edge absorb what was sent).
   expect(floodedBytes).toBe(120 * 2 * 256 * 1024);
   expect(stubDropped).toBe(false);
   expect(after).toContainEqual(expect.objectContaining(victimRow));
   expect(await victimOnline()).toBe(true);
-  expect(droppedWarns() - droppedBefore).toBe(0);
+  expect(budgetDropWarns() - budgetDropsBefore).toBeGreaterThan(0);
+  expect(droppedWarns() - droppedBefore).toBe(budgetDropWarns() - budgetDropsBefore); // every drop was the ledger's
+  const droppedAfterFlood = droppedWarns();
 
   // THE CHAIN IS SOUND: hard-kill the stalled socket (RST — no close handshake a paused reader
   // could never read) and the stub drop fires end-to-end: relay onRpcBroken → pager close → the
@@ -219,6 +224,6 @@ test("MEASURED FINDING: a push subscriber that stops reading mid-flood is NOT cl
   );
   await append(itx, { type: "flood", ephemeral: true, payload: { afterKill: true } });
   await sleep(300);
-  expect(droppedWarns() - droppedBefore).toBe(0);
+  expect(droppedWarns()).toBe(droppedAfterFlood); // nothing new: no push to a dead stub, no warn
   expect(await subscriptions(itx)).toEqual([]);
 }, 55_000);

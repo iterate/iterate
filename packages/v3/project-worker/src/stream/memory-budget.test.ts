@@ -244,14 +244,15 @@ test(
   () => {
     const run = runScenario("stuck-facet-rows", { ...STUCK_ROWS_20, disjointTypes: 0 });
     expectSurvived(run, "stuck-facet-rows");
-    expect(Number(run.facts.callsStarted)).toBe(20);
+    expect(Number(run.facts.callsStarted)).toBeGreaterThanOrEqual(20); // every row called (a 16 MiB log is two pages a row)
   },
 );
 
-// Dies of: oom. The backlog budget is PER ROW: 20 stuck rows on 20 disjoint event types each keep
-// their own 8 MiB of undelivered pushes — 160 MiB in one isolate (8 rows already peak at 126 MiB).
-test.fails(
-  "delivery backlog × rows: 20 stuck facet rows on DISJOINT event types retain a backlog budget EACH — 20 × 8 MiB",
+// BORN RED (oom): the pending budget was PER ROW — 20 stuck rows on 20 disjoint event types kept
+// 8 MiB of undelivered pushes EACH, 160 MiB in one isolate. Flipped by the per-context ledger
+// (PENDING_PUSHES_TOTAL_BUDGET_CHARS across rows + DELIVERY_IN_FLIGHT_BUDGET_CHARS across calls).
+test(
+  "delivery backlog × rows: 20 stuck facet rows on DISJOINT event types share ONE pending budget and ONE in-flight budget — never 20 × 8 MiB",
   { timeout: 60_000 },
   () => {
     const run = runScenario("stuck-facet-rows", { ...STUCK_ROWS_20, disjointTypes: 1 });
@@ -275,13 +276,13 @@ test(
   },
 );
 
-// Dies of: oom. The alarm's cursor pass is bounded to CURSOR_PASS_CONCURRENCY rows; the COMMIT
-// path is not — one commit drains every behind row at once, each reading a budgeted page and
-// holding it across its awaited call (~8 MiB a row here, WITHOUT charging the callee's copy):
-// 20 rows is 160 MiB. The rows are behind the natural way — a fresh incarnation whose cursors
-// were never acked into kv — and the commit is one small append.
-test.fails(
-  "cursor rows: 20 behind cursor rows and ONE commit — the commit path drains every row at once, a page each, no concurrency bound",
+// BORN RED (oom): one commit drained every behind cursor row at once, each holding a budgeted page
+// across its awaited call — 20 rows was 160 MiB. Flipped by the in-flight ledger: a cursor delivery
+// waits for room, so the rows drain a few at a time (`maxCallsInFlight` says how many; the callees
+// here answer after 250 ms). The rows are behind the natural way — a fresh incarnation whose cursors
+// were never acked — and the commit is one small append.
+test(
+  "cursor rows: 20 behind cursor rows and ONE commit — the commit path drains them under the in-flight budget, never a page per row at once",
   { timeout: 60_000 },
   () => {
     const run = runScenario("cursor-rows-behind-one-commit", {
@@ -289,6 +290,8 @@ test.fails(
       rowCount: 20,
     });
     expectSurvived(run, "cursor-rows-behind-one-commit");
+    expect(Number(run.facts.callsStarted)).toBeGreaterThanOrEqual(20); // every row called (a 16 MiB log is two pages a row)
+    expect(Number(run.facts.maxCallsInFlight)).toBeLessThan(20); // the ledger, not the row count, sets the fan-out
   },
 );
 

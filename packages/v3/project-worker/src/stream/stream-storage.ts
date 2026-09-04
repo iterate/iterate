@@ -160,13 +160,13 @@ export class StreamStorage {
 
   /** The rows after `afterOffset`: at most `limit`, and at most `budgetBytes` of bodies as SQLite
    *  counts them (UTF-8). The cursor is ITERATED and each row's size comes back with it, so no body
-   *  is built and then dropped; a page always carries ≥ 1 row. `nextRowDidNotFit` says the budget,
-   *  not the log, ended the page. */
+   *  is built and then dropped; a page always carries ≥ 1 row. `bytes` is what the page holds;
+   *  `nextRowDidNotFit` says the budget, not the log, ended the page. */
   readEventPage(
     afterOffset: number,
     limit: number,
     budgetBytes: number,
-  ): { rows: StoredEventRow[]; nextRowDidNotFit: boolean } {
+  ): { rows: StoredEventRow[]; bytes: number; nextRowDidNotFit: boolean } {
     const rows: StoredEventRow[] = [];
     let pageBytes = 0;
     for (const row of this.#sql.exec<{ offset: number; body: string; body_bytes: number }>(
@@ -178,12 +178,12 @@ export class StreamStorage {
       limit,
     )) {
       if (rows.length > 0 && pageBytes + Number(row.body_bytes) > budgetBytes)
-        return { rows, nextRowDidNotFit: true }; // the cursor is left undrained (workerd frees the statement with it)
+        return { rows, bytes: pageBytes, nextRowDidNotFit: true }; // the cursor is left undrained (workerd frees the statement with it)
       pageBytes += Number(row.body_bytes);
       const offset = Number(row.offset);
       rows.push({ offset, body: this.#reassembleBody(offset, String(row.body)) });
     }
-    return { rows, nextRowDidNotFit: false };
+    return { rows, bytes: pageBytes, nextRowDidNotFit: false };
   }
 
   listSubscriptionCursors(): [name: string, cursor: SubscriptionCursor][] {

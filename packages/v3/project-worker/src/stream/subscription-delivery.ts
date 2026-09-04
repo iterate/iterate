@@ -49,6 +49,24 @@ const CURSOR_DELIVERY_CALL_WATCHDOG_MS = 20_000;
  *  redeliver an ephemeral); a cursor row never needed them (its lane pages the log). One read page,
  *  so a stuck subscriber costs this actor one page, not every commit since it stalled. */
 const PENDING_PUSH_BUDGET_CHARS = 8 * 1024 * 1024;
+/** THE IN-FLIGHT BUDGET, per context: the most serialized event chars ALL rows together may have
+ *  handed to calls that have not settled — a push's arguments live in this isolate until the RPC
+ *  returns, and the per-row bounds multiply by rows (20 stuck rows × 8 MiB is an isolate). A facet
+ *  push or a cursor delivery WAITS for room (its row's pending push folds meanwhile, bounded); a
+ *  push to a live client is dropped past it — the client heals by read, every dropped push's contract. */
+const DELIVERY_IN_FLIGHT_BUDGET_CHARS = 16 * 1024 * 1024;
+/** The most pending-push chars ALL rows together may hold back — past it the oldest events are
+ *  dropped from the LARGEST queue first (each row's own PENDING_PUSH_BUDGET_CHARS still applies). */
+const PENDING_PUSHES_TOTAL_BUDGET_CHARS = 16 * 1024 * 1024;
+
+/** One row's push waiting behind its in-flight delivery — later commits fold into it; `chars` is
+ *  measured only once something has folded in (a push the closure takes at once costs no stringify). */
+type PendingPush = {
+  events: StreamEvent[];
+  range: ScannedRange;
+  chars?: number;
+  droppedEvents: number;
+};
 
 const serializedChars = (events: StreamEvent[]): number =>
   events.reduce((n, event) => n + JSON.stringify(event).length, 0);
@@ -79,10 +97,11 @@ export class SubscriptionDelivery {
   /** Per row: THE ONE push waiting behind its in-flight delivery. A commit landing while one waits
    *  FOLDS into it (one range, one call, one facet commit) — never a closure per commit — and it is
    *  measured only once something folds in: the keeping-up case pays no stringify. */
-  readonly #pendingPushByRow = new Map<
-    string,
-    { events: StreamEvent[]; range: ScannedRange; chars?: number; droppedEvents: number }
-  >();
+  readonly #pendingPushByRow = new Map<string, PendingPush>();
+  /** Chars handed to calls that have not settled, all rows (DELIVERY_IN_FLIGHT_BUDGET_CHARS). */
+  #deliveryCharsInFlight = 0;
+  /** Deliveries waiting for in-flight room — all woken whenever a call settles, each re-checks. */
+  readonly #deliveryRoomWaiters: (() => void)[] = [];
   readonly #lastDeliveredThroughOffset = new Map<string, number>();
   /** The freshest pushed batch per cursor subscription — how ephemerals reach a caught-up cursor
    *  target (the log has no ephemerals; the push does). Latest wins; a stale one is ignored. */
@@ -178,7 +197,10 @@ export class SubscriptionDelivery {
       if (events.length === 0) continue;
       const after = this.#lastDeliveredThroughOffset.get(name) ?? afterOffset;
       this.#lastDeliveredThroughOffset.set(name, throughOffset);
-      this.#pushedEventBatches.set(name, { events, after, through: throughOffset });
+      // Remembered for the CURSOR lane only (how ephemerals reach a caught-up cursor target); a row
+      // known to own its progress would just retain the batch until its next delivery.
+      if (!this.#pushSubscriptionNames.has(name))
+        this.#pushedEventBatches.set(name, { events, after, through: throughOffset });
       // A delivery is owed from here: arm the alarm (memo'd — one write per window) so an eviction
       // before the cursor lane even evaluates the target leaves something behind to come back.
       if (!this.#pushSubscriptionNames.has(name))
@@ -198,14 +220,8 @@ export class SubscriptionDelivery {
       pending.chars = (pending.chars ?? serializedChars(pending.events)) + serializedChars(events);
       pending.events = pending.events.concat(events); // a fresh array: the old one may be an in-flight call's argument
       pending.range.through = range.through;
-      let dropCount = 0;
-      while (pending.chars > PENDING_PUSH_BUDGET_CHARS && dropCount < pending.events.length - 1)
-        pending.chars -= JSON.stringify(pending.events[dropCount++]).length;
-      if (dropCount > 0) {
-        pending.range.after = pending.events[dropCount - 1].offset;
-        pending.events = pending.events.slice(dropCount);
-        pending.droppedEvents += dropCount;
-      }
+      this.#dropOldestPendingEvents(pending, PENDING_PUSH_BUDGET_CHARS);
+      this.#dropPendingEventsOverTotalBudget();
       return;
     }
     this.#pendingPushByRow.set(name, { events, range, droppedEvents: 0 });
@@ -232,6 +248,58 @@ export class SubscriptionDelivery {
       name,
       chain.catch(() => undefined),
     );
+  }
+
+  /** Drop the OLDEST events of a pending push until it holds at most `keepUnderChars` (never its
+   *  newest): `after` moves up to the last dropped offset — the span a facet heals from the log. */
+  #dropOldestPendingEvents(pending: PendingPush, keepUnderChars: number): void {
+    let dropCount = 0;
+    while (pending.chars! > keepUnderChars && dropCount < pending.events.length - 1)
+      pending.chars! -= JSON.stringify(pending.events[dropCount++]).length;
+    if (dropCount === 0) return;
+    pending.range.after = pending.events[dropCount - 1].offset;
+    pending.events = pending.events.slice(dropCount);
+    pending.droppedEvents += dropCount;
+  }
+
+  /** The cross-row total: past PENDING_PUSHES_TOTAL_BUDGET_CHARS, take from the LARGEST measured
+   *  queue that can still shrink, until under. An unmeasured queue (one push, nothing folded yet)
+   *  counts as nothing — it is at most one commit's batch. */
+  #dropPendingEventsOverTotalBudget(): void {
+    for (;;) {
+      let total = 0;
+      let largest: PendingPush | undefined;
+      for (const pending of this.#pendingPushByRow.values()) {
+        if (pending.chars === undefined) continue;
+        total += pending.chars;
+        if (pending.events.length > 1 && (!largest || pending.chars > largest.chars!))
+          largest = pending;
+      }
+      const excess = total - PENDING_PUSHES_TOTAL_BUDGET_CHARS;
+      if (excess <= 0 || !largest) return;
+      this.#dropOldestPendingEvents(largest, largest.chars! - excess);
+    }
+  }
+
+  /** Run `call` holding `chars` of the in-flight budget, after waiting for room. A call larger than
+   *  the whole budget runs alone — never a deadlock. */
+  async #callWithInFlightRoom<T>(chars: number, call: () => Promise<T>): Promise<T> {
+    while (
+      this.#deliveryCharsInFlight > 0 &&
+      this.#deliveryCharsInFlight + chars > DELIVERY_IN_FLIGHT_BUDGET_CHARS
+    )
+      await new Promise<void>((resolve) => this.#deliveryRoomWaiters.push(resolve));
+    this.#deliveryCharsInFlight += chars;
+    try {
+      return await call();
+    } finally {
+      this.#releaseInFlightRoom(chars);
+    }
+  }
+
+  #releaseInFlightRoom(chars: number): void {
+    this.#deliveryCharsInFlight -= chars;
+    for (const wake of this.#deliveryRoomWaiters.splice(0)) wake();
   }
 
   /** The alarm's half: every cursor subscription — a due retry, or one an eviction left mid-delivery.
@@ -300,17 +368,33 @@ export class SubscriptionDelivery {
         // heal-by-pull case (the stub is not there right now; the row stays until its last pager closes, the client re-lends);
         // anything else is a real drop worth a line — the subscriber sees the range gap and heals.
         this.#pushedEventBatches.delete(name);
-        void call([events, range]).catch((error) => {
-          if (errorCode(error) !== "RPC_STUB_OFFLINE")
-            console.warn({
-              event: "delivery.push.dropped",
-              namespace: "subscription-delivery",
-              message: "push delivery dropped",
-              name,
-              error: String(error),
-              errorStack: error instanceof Error ? error.stack : undefined,
-            });
-        });
+        const chars = serializedChars(events);
+        if (this.#deliveryCharsInFlight + chars > DELIVERY_IN_FLIGHT_BUDGET_CHARS) {
+          console.warn({
+            event: "delivery.push.dropped",
+            namespace: "subscription-delivery",
+            message:
+              "push delivery dropped: the context's in-flight budget is full (the subscriber heals by read)",
+            name,
+            healFromOffset: range.after,
+            inFlightChars: this.#deliveryCharsInFlight,
+          });
+          return;
+        }
+        this.#deliveryCharsInFlight += chars;
+        void call([events, range])
+          .catch((error) => {
+            if (errorCode(error) !== "RPC_STUB_OFFLINE")
+              console.warn({
+                event: "delivery.push.dropped",
+                namespace: "subscription-delivery",
+                message: "push delivery dropped",
+                name,
+                error: String(error),
+                errorStack: error instanceof Error ? error.stack : undefined,
+              });
+          })
+          .finally(() => this.#releaseInFlightRoom(chars));
         return;
       }
       if (head instanceof FacetHandle) {
@@ -318,7 +402,7 @@ export class SubscriptionDelivery {
         // quiesce never aborts it mid-reduce. The DO's facet watchdog (#invokeFacet, 60 s) bounds a
         // hung facet; its own gap repair covers a dropped push.
         this.#pushedEventBatches.delete(name);
-        await call([events, range]);
+        await this.#callWithInFlightRoom(serializedChars(events), () => call([events, range]));
         return;
       }
       // CANNOT own progress: the stream keeps the cursor. The pushed batch was remembered in onCommit;
@@ -470,10 +554,13 @@ export class SubscriptionDelivery {
           }
           // Die mid-call and the alarm survives to re-derive from the rows (memo'd: one write per window).
           this.#stream.armAlarmNoLaterThan(Date.now() + CURSOR_DELIVERY_CALL_WATCHDOG_MS);
-          await withTimeout(
-            evaluatedTarget.call([eventBatch.events, range]),
-            CURSOR_DELIVERY_CALL_WATCHDOG_MS,
-            `subscription "${name}"`,
+          const target = evaluatedTarget;
+          await this.#callWithInFlightRoom(serializedChars(eventBatch.events), () =>
+            withTimeout(
+              target.call([eventBatch.events, range]),
+              CURSOR_DELIVERY_CALL_WATCHDOG_MS,
+              `subscription "${name}"`,
+            ),
           );
           // Removed or replaced while the call was in flight? Its progress belonged to the old row —
           // and so did the evaluation: the identity check above re-evaluates for the replacement.

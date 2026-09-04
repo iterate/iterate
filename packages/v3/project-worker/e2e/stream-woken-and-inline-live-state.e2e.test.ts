@@ -74,7 +74,7 @@ test("the inline reduced state is live under ONE key, `core`: a rewrite rule and
   const ruleDelta = await until("core delta for the rewrite rule", () =>
     coreDeltas
       .slice(seen)
-      .find((d) => d.patch.some((op) => op.path.startsWith("/itxExpressionRewriteRules"))),
+      .find((d) => d.patch?.some((op) => op.path.startsWith("/itxExpressionRewriteRules"))),
   );
   expect(ruleDelta.key).toBe("core");
   expect(ruleDelta.to).toBe(ruleDelta.from + 1); // each emission chains its producer revision
@@ -84,7 +84,7 @@ test("the inline reduced state is live under ONE key, `core`: a rewrite rule and
   const rowDelta = await until("core delta for the row", () =>
     coreDeltas
       .slice(seen)
-      .find((d) => d.patch.some((op) => op.path.startsWith("/subscriptions/bystander"))),
+      .find((d) => d.patch?.some((op) => op.path.startsWith("/subscriptions/bystander"))),
   );
   expect(rowDelta.key).toBe("core");
   expect(rowDelta.to).toBe(rowDelta.from + 1);
