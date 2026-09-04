@@ -45,7 +45,7 @@ describe("budget ladder", () => {
   it("no inline per-test timeout under apps/os/e2e exceeds the heavy-test ceiling", () => {
     // Case-sensitive `timeout:` matches vitest's per-test `{ timeout: N }`
     // options without matching config-level testTimeout/hookTimeout.
-    // `timeoutMs:` is the failing()/createFlake() wrapper deadline, which
+    // `timeoutMs:` is the createFailing()/createFlake() wrapper deadline, which
     // becomes the per-test timeout (+1s) — it must obey the same ceiling.
     const offenders: string[] = [];
     const visit = (dir: string) => {
