@@ -22,7 +22,7 @@
 import { z } from "zod";
 import { defineProcessorContract } from "iterate/processors";
 import { ItxExpression, ItxExpressionStep } from "../../itx/expression.ts";
-import { parseItxSurface } from "../itx/surface.ts";
+import { ITX_SURFACE_MEMBER } from "../itx/surface.ts";
 import type {
   CapabilityProvidedPayload,
   CapabilityRecord,
@@ -590,24 +590,12 @@ function capabilityHostBirthCertificateSchema() {
     config: z
       .strictObject({
         surface: z
-          .array(z.string().min(1))
-          .superRefine((entries, context) => {
-            // The same rules the runtime applies when minting the binding:
-            // a certificate is fixed at birth, so a bad entry must fail here.
-            try {
-              parseItxSurface(entries);
-            } catch (error) {
-              context.addIssue({
-                code: "custom",
-                message: error instanceof Error ? error.message : String(error),
-              });
-            }
-          })
+          .array(z.string().regex(ITX_SURFACE_MEMBER))
           .optional()
           .meta({
             description:
-              "Restrict scripts run in this scope to these itx built-in members (dotted member paths, " +
-              'e.g. ["chat", "agent.message"] — see domains/itx/surface.ts). Present means scripts see ONLY ' +
+              "Restrict scripts run in this scope to these itx built-in members " +
+              '(e.g. ["chat"] — see domains/itx/surface.ts). Present means scripts see ONLY ' +
               "these members plus this scope's mounts, and run with project-confined, non-admin authority. " +
               "Absent is the full surface. Recorded at birth; the same-key-different-body rule keeps it fixed.",
           }),

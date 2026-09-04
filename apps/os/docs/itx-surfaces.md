@@ -1,111 +1,52 @@
 # itx surfaces: restricted scopes and served itx
 
-An itx is one class (`ProjectRpcTarget`) at one scope path, with the full
-built-in surface and, behind a dynamic-worker binding, trusted-internal
-authority. A **surface** is the host-minted allowlist that narrows that:
-which built-in members exist on the itx, with project-confined, non-admin
-authority. Two doors use it.
+> Stopgap. This exists because every itx in `apps/os` starts with the full
+> built-in surface and trusted authority, so restriction can only subtract.
+> When scopes start empty and capabilities are added, delete this.
 
-## The surface
+A **surface** (`src/domains/itx/surface.ts`) is a host-minted allowlist of
+built-in member names on an itx. Present, the itx exposes only those members
+(plus `__describe`) and `ItxEntrypoint` mints it project-confined and
+non-admin (`restrictedScopeAuthContext`, principal `scope:<path>`). Absent is
+today's behaviour.
 
-`ItxSurface` (`src/domains/itx/surface.ts`) is a list of dotted member paths.
-A bare root (`"chat"`) allows the whole subtree; a dotted entry
-(`"agent.message"`) allows one member of a child, and the child narrows to
-its listed members. Narrowing is implemented for `agent`, `chat`, `stream`,
-and `liveState` (the agent-scope chain); a dotted entry under any other
-member is rejected when the surface is parsed — at `scope()`, at the
-binding, and in the certificate schema — because serving that child whole
-would be wider than the entry states. `__describe` always stays.
+**Enforcement.** A restricted instance gets a prototype in front of its class
+prototype that shadows every removed member, deferring it to the
+dynamic-capability hop beneath the class, so a removed built-in fails exactly
+like an unmounted capability (`no capability "repo.readFile"`). `instanceof`
+holds. `ProjectRpcTarget` reaches its own members through private accessors
+(the SURFACE RULE comment in `rpc-targets.ts`) so its logic keeps working
+whatever the surface says; `__describe()` lists only the allowed members and
+says `RESTRICTED scope`.
 
-- **Runtime.** A restricted instance gets a prototype in front of its class
-  prototype that shadows every removed member; a shadow defers to the
-  dynamic-capability hop beneath the class, so a removed built-in fails
-  exactly like an unmounted capability (`no capability "repo.readFile"`).
-  Classes without a hop (streams, chat) answer `"append" is not available in
-this scope`. `instanceof` still holds, and each restrictable class reaches
-  its own members through private accessors, so its logic keeps working
-  whatever the surface says (the SURFACE RULE comment in `rpc-targets.ts`).
-- **Authority.** `ItxEntrypoint.get()` mints a surfaced binding with
-  `restrictedScopeAuthContext` (`auth.ts`): one project, never admin,
-  principal `scope:<path>`.
-- **Typecheck.** The execution gate's `Itx` becomes
-  `Pick<Project, allowed roots> & { removed: ItxMemberRemovedFromThisScope } & mounts`,
-  and a member access on the marker blocks the script before it runs — the
-  one "property does not exist" the gate treats as proof
-  (`src/domains/typecheck/virtual-project.ts`).
-- **Describe.** `__describe()` lists only the allowed roots and says
-  `RESTRICTED scope`.
-
-## Door 1: an agent born with a surface
-
-The capability-host birth certificate carries it:
+**Agents.** The capability-host birth certificate carries it:
 
 ```ts
 await itx.agents.get(path).create(undefined, {
-  capabilityHost: { config: { surface: ["chat.sendMessage", "docs"] }, fallback: null },
+  capabilityHost: { config: { surface: ["chat"] }, fallback: null },
 });
 ```
 
 The host passes the surface to every script run (`ScriptExecutionEntrypoint`
-→ `DynamicWorkerRunner` → binding props) and to the typecheck gate. Because
-the certificate lands once under a fixed idempotency key, the surface is
-decided at birth and cannot be widened. `fallback: null` also stops the
-scope inheriting the project root's mounts. Mount what the agent may use on
-its own host with `provideCapability`.
+→ `DynamicWorkerRunner` → binding props). The certificate lands once under a
+fixed idempotency key, so the surface cannot be widened later; `fallback:
+null` stops the scope inheriting the root host's mounts. Mount what the
+agent may use on its own host with `provideCapability`.
 
-## Door 2: `project.scope()` and `serveItx`
+**Apps.** `itx.scope({ path, surface })` returns a surfaced, project-confined
+itx for a path; it never widens. `serveItx` (`iterate/sdk`) serves it over an
+app's own `/api` with exactly the handshake the SDK session keeper expects,
+so `useItx()`, `useStreamConnection()`, `useLiveState()` work unchanged on
+the app's origin. Its `scope.surface` lists the members served as dotted
+paths down to each method (`agent.liveState.get`, never `agent.liveState`);
+the platform gets the roots, the relay is the member-level allowlist. A
+Cap'n Web session cannot serialize a Workers-RPC stub, so the served project
+is a tree of Cap'n Web targets forwarding onto the scoped stub; anything not
+listed does not exist on it.
 
-`itx.scope({ path, surface })` returns a surfaced, project-confined itx for
-a path — the one way to hand an itx to code that must not hold the
-project's authority. It never widens.
-
-A project worker serves it to a browser with `serveItx` from `iterate/sdk`,
-which speaks exactly the handshake the SDK session keeper expects
-(`authenticate` → session → `projects.get(slug)` → project), so a page on the
-app's own origin needs no configuration and `useItx()`,
-`useStreamConnection()`, `useLiveState()` work as on the dashboard:
-
-```ts
-if (url.pathname === "/api") {
-  return await serveItx(req, {
-    project: await this.env.ITX.get(),
-    scope: {
-      path: `/agents/web/${visitor}`,
-      surface: [
-        "agent.message",
-        "agent.liveState.get",
-        "agent.liveState.subscribe",
-        "agent.stream.openConnection",
-      ],
-    },
-    slug: "garple",
-  });
-}
-```
-
-A Cap'n Web session cannot serialize a Workers-RPC stub, so `serveItx`
-relays: the served project is a tree of Cap'n Web targets built from the
-surface's dotted members, each leaf forwarding onto the scoped stub as a
-genuine member call, browser callbacks retained with `dup()` and re-wrapped
-as plain functions, and returned stubs (connection handles) wrapped so their
-methods stay callable. A leaf is a method call, so an object-valued member
-is listed through to its methods (`agent.liveState.get`, never
-`agent.liveState`). Anything not listed does not exist on the served
-project at all. Bare roots cannot be served; list the members.
-
-## Proof
-
-- `src/domains/itx/surface.test.ts`, `src/domains/typecheck/virtual-project.test.ts`
-  (restricted `Itx`), `packages/iterate/src/serve-itx.test.ts` (the relay
-  over an in-memory Cap'n Web session).
-- `e2e/vitest/itx-restricted-surface.e2e.test.ts`: an agent born with a
-  surface, the gate, the runtime wall, `project.scope()`.
-- `e2e/vitest/itx-served-surface.e2e.test.ts`: a committed project worker
-  serving a scoped itx over `/api` to the stock node client — message,
-  a live connection with replay and a live event, live state, close, a
-  removed member.
-- `e2e/vitest/itx-garple-storefront.e2e.test.ts`: the use case, end to end
-  — a visitor on a website chats with an agent that runs on the REAL agent
-  processor, born with `surface: ["chat.sendMessage"]` and one mounted
-  catalogue tool, sells a domain, and cannot be prompt-injected into the
-  repo (the gate blocks the script; a cast-around attempt dies at runtime).
+**Proof.** `surface.test.ts`, `packages/iterate/src/serve-itx.test.ts` (the
+relay over an in-memory Cap'n Web session), and
+`e2e/vitest/itx-garple-storefront.e2e.test.ts`: a visitor on a website chats,
+through a served itx, with an agent on the real agent processor born with
+`surface: ["chat"]` and one mounted catalogue tool; it sells a domain and
+cannot be prompt-injected into the repo.

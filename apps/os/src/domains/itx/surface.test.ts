@@ -1,54 +1,17 @@
 import { describe, expect, test } from "vitest";
-import {
-  applySurface,
-  parseItxSurface,
-  restrictPrototype,
-  surfaceRoots,
-  surfaceUnder,
-} from "./surface.ts";
+import { applySurface, parseItxSurface, restrictPrototype } from "./surface.ts";
 
 describe("parseItxSurface", () => {
-  test("accepts dotted identifiers, dedupes, and sorts", () => {
-    expect(parseItxSurface(["chat", "agent.message", "chat"])).toEqual(["agent.message", "chat"]);
+  test("accepts member names, dedupes, and sorts", () => {
+    expect(parseItxSurface(["chat", "agent", "chat"])).toEqual(["agent", "chat"]);
   });
 
-  test.each([[undefined], ["chat"], [[1]], [["agent."]], [["a b"]], [["-x"]]])(
+  test.each([[undefined], ["chat"], [[1]], [["agent.message"]], [["a b"]], [["-x"]]])(
     "rejects %j",
     (value) => {
       expect(() => parseItxSurface(value)).toThrow(/itx surface/);
     },
   );
-
-  test("accepts dotted entries only under members that implement narrowing", () => {
-    expect(
-      parseItxSurface(["agent.stream.openConnection", "agent.liveState.get", "chat.sendMessage"]),
-    ).toEqual(["agent.liveState.get", "agent.stream.openConnection", "chat.sendMessage"]);
-    // A child that is served whole would be WIDER than the entry states.
-    expect(() => parseItxSurface(["repo.readFile"])).toThrow(/"repo" cannot be narrowed/);
-    expect(() => parseItxSurface(["agents.get"])).toThrow(/"agents" cannot be narrowed/);
-    expect(() => parseItxSurface(["agent.message.x"])).toThrow(/"message" cannot be narrowed/);
-  });
-});
-
-describe("surfaceRoots / surfaceUnder", () => {
-  const surface = ["agent.message", "agent.stream.openConnection", "chat"];
-
-  test("roots are the first segments", () => {
-    expect([...surfaceRoots(surface)].sort()).toEqual(["agent", "chat"]);
-  });
-
-  test("a bare root means the whole subtree", () => {
-    expect(surfaceUnder(surface, "chat")).toBeUndefined();
-  });
-
-  test("a dotted root narrows the child to its listed members", () => {
-    expect(surfaceUnder(surface, "agent")).toEqual(["message", "stream.openConnection"]);
-    expect(surfaceUnder(surfaceUnder(surface, "agent")!, "stream")).toEqual(["openConnection"]);
-  });
-
-  test("an unlisted root sees nothing", () => {
-    expect(surfaceUnder(surface, "repo")).toEqual([]);
-  });
 });
 
 describe("restrictPrototype", () => {
@@ -82,7 +45,6 @@ describe("restrictPrototype", () => {
     // The class prototype stays in the chain: instanceof holds, and the
     // class's own private-accessor logic keeps working.
     expect(instance instanceof Surface).toBe(true);
-    expect(Object.getPrototypeOf(Object.getPrototypeOf(instance))).toBe(Surface.prototype);
   });
 
   test("without a hop beneath the class, a removed member throws a plain scope error", () => {
@@ -100,15 +62,9 @@ describe("restrictPrototype", () => {
     expect(() => instance.repo).toThrow(/"repo" is not available in this scope/);
   });
 
-  test("dotted entries only need their root at this level", () => {
-    const instance = new Surface();
-    applySurface(instance, ["chat.sendMessage"], Surface.prototype);
-    expect(instance.chat).toBe("chat:kept");
-  });
-
-  test("memoises per prototype and allowed set", () => {
+  test("memoises per prototype and surface", () => {
     expect(restrictPrototype(Surface.prototype, ["chat", "repo"])).toBe(
-      restrictPrototype(Surface.prototype, ["repo", "chat.x"]),
+      restrictPrototype(Surface.prototype, ["repo", "chat"]),
     );
     expect(restrictPrototype(Surface.prototype, ["chat"])).not.toBe(
       restrictPrototype(Surface.prototype, ["repo"]),
@@ -118,7 +74,6 @@ describe("restrictPrototype", () => {
   test("absent surface is a no-op", () => {
     const instance = new Surface();
     applySurface(instance, undefined, Surface.prototype);
-    expect(instance instanceof Surface).toBe(true);
     expect(instance.repo).toBe("repo:kept");
   });
 });

@@ -111,13 +111,7 @@ import {
   rejectBuiltinCollision,
   installPrototypeInvokeCapabilityFallback,
 } from "./domains/itx/utils.ts";
-import {
-  applySurface,
-  parseItxSurface,
-  surfaceRoots,
-  surfaceUnder,
-  type ItxSurface,
-} from "./domains/itx/surface.ts";
+import { applySurface, parseItxSurface, type ItxSurface } from "./domains/itx/surface.ts";
 import { projectStub } from "./domains/projects/egress.ts";
 import { projectCreationEvents } from "./domains/projects/project-defaults.ts";
 import {
@@ -692,10 +686,6 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
   // so a read cannot inherit the surrounding wake connection's lifetime.
   /** Commit events; resolves with the same events carrying offsets and timestamps. */
   async append(...events: StreamEventInput[]): Promise<StreamEvent[]> {
-    return await this.#append(...events);
-  }
-
-  async #append(...events: StreamEventInput[]): Promise<StreamEvent[]> {
     return await this.#appendRetrying(events, () =>
       Promise.resolve(this[STREAM_DURABLE_OBJECT_STUB].append(...events)),
     );
@@ -794,10 +784,6 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
    * shows you the beginning, not the head.
    */
   async getEvents(args?: StreamEventReadInput): Promise<StreamEvent[]> {
-    return await this.#getEvents(args);
-  }
-
-  async #getEvents(args?: StreamEventReadInput): Promise<StreamEvent[]> {
     const result = await this.#read("getEvents", () =>
       Promise.resolve(this[STREAM_DURABLE_OBJECT_STUB].getEvents(args)),
     ).catch(rethrowStreamUnavailable);
@@ -821,7 +807,7 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
    * (`using pager = stream.readEvents(...)`).
    */
   readEvents(args?: StreamEventReadInput): StreamEventPagerRpcTarget {
-    return new StreamEventPagerRpcTarget((pageArgs) => this.#getEvents(pageArgs), args);
+    return new StreamEventPagerRpcTarget((pageArgs) => this.getEvents(pageArgs), args);
   }
 
   /**
@@ -949,10 +935,6 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
    * sampling); live debug surfaces should subscribe through `liveState`.
    */
   async runtimeState(): Promise<StreamRuntimeDebugState> {
-    return await this.#runtimeState();
-  }
-
-  async #runtimeState(): Promise<StreamRuntimeDebugState> {
     const result = await this.#read("runtimeState", async () => {
       const stub = this[STREAM_DURABLE_OBJECT_STUB];
       try {
@@ -994,7 +976,7 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
     return new RelayedLiveStateRpcTarget<StreamRuntimeDebugState>(
       openRelayedLiveState({
         dialPager: () => dialLiveStatePager(this[STREAM_DURABLE_OBJECT_STUB]),
-        readSnapshot: () => this.#runtimeState(),
+        readSnapshot: () => this.runtimeState(),
         pagerFailureDegrade: "snapshot-only",
         label: `stream ${this.props.path}`,
       }),
@@ -1139,7 +1121,7 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
 
   /** Change where one subscription whose cursor this stream stores reads next. An already-started receiver call may finish. */
   async setSubscriptionCursor(args: { name: string; afterOffset: number }): Promise<StreamEvent> {
-    const [event] = await this.#append({
+    const [event] = await this.append({
       type: "events.iterate.com/stream/subscription-cursor-set",
       payload: args,
     });
@@ -1149,7 +1131,7 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
 
   /** Un-halt one subscription without changing its cursor. */
   async resumeSubscription(args: { name: string }): Promise<StreamEvent> {
-    const [event] = await this.#append({
+    const [event] = await this.append({
       type: "events.iterate.com/stream/subscription-delivery-resumed",
       payload: args,
     });
@@ -1162,7 +1144,7 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
     name: string;
     afterOffset: number;
   }): Promise<{ cursorSet: StreamEvent; resumed: StreamEvent }> {
-    const [cursorSet, resumed] = await this.#append(
+    const [cursorSet, resumed] = await this.append(
       {
         type: "events.iterate.com/stream/subscription-cursor-set",
         payload: args,
@@ -4948,10 +4930,6 @@ class AgentChatRpcTarget extends IterateRpcTarget<"AgentChat"> {
 
   /** The agent's own event stream (the chat rides on it). */
   get stream(): StreamRpcTarget {
-    return this.#stream;
-  }
-
-  get #stream(): StreamRpcTarget {
     return new StreamRpcTarget({
       auth: this.props.auth,
       projectId: this.props.projectId,
@@ -4988,7 +4966,7 @@ class AgentChatRpcTarget extends IterateRpcTarget<"AgentChat"> {
             files: options.files,
             projectId: this.props.projectId,
           });
-    const [event] = await this.#stream.append({
+    const [event] = await this.stream.append({
       type: "events.iterate.com/agents/web-message-sent",
       payload: { message: trimmed, ...(files === undefined ? {} : { files }) },
     });
@@ -5044,16 +5022,10 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
     props.auth.assertCanAccessProject(props.projectId);
     parseAgentPath(props.capabilityHost.path);
     this.#props = props;
-    applySurface(this, props.surface, AgentRpcTarget.prototype);
   }
 
   get #path() {
     return this.#props.capabilityHost.path;
-  }
-
-  /** The registry's `invokerFor` — see ProjectRpcTarget.dynamicInvokerOf. */
-  static dynamicInvokerOf(agent: AgentRpcTarget): CapabilityHostRpcTarget {
-    return agent.#props.capabilityHost;
   }
 
   /**
@@ -5081,10 +5053,6 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
 
   /** The agent stream processor (snapshot/state) — facet-hosted on the agent stream. */
   get processor(): StreamProcessorRpc<AgentProcessorState> {
-    return this.#processor;
-  }
-
-  get #processor(): StreamProcessorRpc<AgentProcessorState> {
     return agentProcessorRelay({
       auth: this.#props.auth,
       path: this.#path,
@@ -5094,38 +5062,15 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
 
   /** The agent's transient runtime as a push-driven live-state surface. */
   get liveState(): LiveStateRpc<AgentLiveState> {
-    const liveState = facetProcessorLiveStateRelay<AgentLiveState>({
+    return facetProcessorLiveStateRelay<AgentLiveState>({
       name: AgentProcessorContract.slug,
       path: this.#path,
       projectId: this.#props.projectId,
     });
-    const surface = this.#props.surface;
-    if (surface !== undefined) {
-      applySurface(
-        liveState,
-        surfaceUnder(surface, "liveState"),
-        LiveStateRelayRpcTarget.prototype,
-      );
-    }
-    return liveState;
   }
 
   /** The agent's own event stream. */
   get stream(): StreamRpcTarget {
-    const stream = this.#stream;
-    const surface = this.#props.surface;
-    if (surface !== undefined) {
-      applySurface(stream, surfaceUnder(surface, "stream"), StreamRpcTarget.prototype);
-    }
-    return stream;
-  }
-
-  /**
-   * The unrestricted stream for this handle's OWN operations. A surface
-   * narrows what callers reach through `stream`, never what `message()`,
-   * `create()`, or `ask()` need underneath it.
-   */
-  get #stream(): StreamRpcTarget {
     return new StreamRpcTarget({
       auth: this.#props.auth,
       projectId: this.#props.projectId,
@@ -5146,21 +5091,16 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
   async append(...events: AgentEventInput[]): Promise<StreamEvent[]> {
     await this.#assertCreated();
     const parsed = events.map((event) => AgentProcessorContract.parseConsumedInput(event));
-    return await this.#stream.append(...parsed);
+    return await this.stream.append(...parsed);
   }
 
   /** The agent's web-chat door (what the user sees). */
   get chat(): AgentChatRpcTarget {
-    const chat = new AgentChatRpcTarget({
+    return new AgentChatRpcTarget({
       auth: this.#props.auth,
       path: this.#path,
       projectId: this.#props.projectId,
     });
-    const surface = this.#props.surface;
-    if (surface !== undefined) {
-      applySurface(chat, surfaceUnder(surface, "chat"), AgentChatRpcTarget.prototype);
-    }
-    return chat;
   }
 
   /**
@@ -5209,7 +5149,7 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
     // batches, which dedupe on their idempotency keys.
     const preexisting =
       (
-        await this.#stream.getEvents({
+        await this.stream.getEvents({
           eventTypes: ["events.iterate.com/agent/created"],
           limit: 1,
         })
@@ -5248,7 +5188,7 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
     await collectionStream.append(
       ...agentCollectionCreationEvents({ projectId: this.#props.projectId }),
     );
-    const committed = await this.#stream.append(...creation.events);
+    const committed = await this.stream.append(...creation.events);
     // append() preserves INPUT order, including idempotency hits at their old
     // offsets. A paired capability host may already exist, so the last input
     // is not necessarily the newest event. The create boundary is the maximum
@@ -5257,11 +5197,11 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
     if (birthOffset === 0) throw new Error("agent create committed no events");
 
     await Promise.all([
-      this.#processor.waitUntilProcessed({
+      this.processor.waitUntilProcessed({
         offset: birthOffset,
         timeoutMs: PROCESSOR_BIRTH_WAIT_TIMEOUT_MS,
       }),
-      this.#props.capabilityHost.processor.waitUntilProcessed({
+      this.capabilityHost.processor.waitUntilProcessed({
         offset: birthOffset,
         timeoutMs: PROCESSOR_BIRTH_WAIT_TIMEOUT_MS,
       }),
@@ -5274,7 +5214,7 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
         context: { path: this.#path },
         message: "agent collection confirmation restarting after Durable Object reset",
         operation: () =>
-          this.#stream.subscriptions.get(AGENT_COLLECTION_SUBSCRIPTION_NAME).waitUntilProcessed({
+          this.stream.subscriptions.get(AGENT_COLLECTION_SUBSCRIPTION_NAME).waitUntilProcessed({
             offset: birthOffset,
             timeoutMs: PROCESSOR_BIRTH_WAIT_TIMEOUT_MS,
           }),
@@ -5318,7 +5258,7 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
             files: fileInputs,
             projectId: this.#props.projectId,
           });
-    const [event] = await this.#stream.append({
+    const [event] = await this.stream.append({
       type: "events.iterate.com/agents/context-added",
       payload: {
         role: actor.type === "agent" ? "developer" : "user",
@@ -5364,7 +5304,7 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
   }): Promise<StreamEvent> {
     await this.#assertCreated();
     const actor = this.#contextActor();
-    const [sent] = await this.#stream.append({
+    const [sent] = await this.stream.append({
       type: "events.iterate.com/agents/context-added",
       payload: {
         role: actor.type === "agent" ? "developer" : "user",
@@ -5375,7 +5315,7 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
             : actor,
       },
     });
-    return await this.#stream.waitForEvent({
+    return await this.stream.waitForEvent({
       afterOffset: sent.offset,
       eventTypes: ["events.iterate.com/agents/web-message-sent"],
       timeoutMs: input.timeoutMs ?? 45_000,
@@ -5410,7 +5350,7 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
       projectId: this.#props.projectId,
     });
     const actor = this.#contextActor();
-    const [event] = await this.#stream.append({
+    const [event] = await this.stream.append({
       type: "events.iterate.com/agents/context-added",
       payload: {
         role: actor.type === "agent" ? "developer" : "user",
@@ -5462,7 +5402,7 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
   /** Restart the agent's server-side objects (the stream and its hosted
    * facets die together); the next request boots them fresh. */
   kill(): Promise<void> {
-    return Promise.resolve(this.#stream[STREAM_DURABLE_OBJECT_STUB].kill());
+    return Promise.resolve(this.stream[STREAM_DURABLE_OBJECT_STUB].kill());
   }
 
   async #assertCreated(): Promise<void> {
@@ -6625,7 +6565,7 @@ const PROJECT_BUILTIN_BLIPS: Record<string, string> = {
     'The default project Scheduler (= schedulers.get("/scheduler/primary")): set({ key, recurrence, script }) runs an itx script on a schedule; cancel(key), list(), trigger(key).',
   schedulers: "Scheduler catalog: get(path) for extra /scheduler/** instances.",
   scope:
-    'A narrower itx for a path: scope({ path, surface: ["agent.message", "agent.stream.openConnection"] }) exposes only the listed built-in members (plus that scope\'s mounts) with project-confined, non-admin authority. Never widens.',
+    'A narrower itx for a path: scope({ path, surface: ["agent"] }) exposes only the listed built-in members (plus that scope\'s mounts) with project-confined, non-admin authority. Never widens.',
   secrets: "Secret catalog by path.",
   streams: "Project stream catalog: get(path), list().",
   worker: "The default repo-backed project worker.",
@@ -6654,8 +6594,7 @@ type ExistingProjectRpcTargetProps = {
   ownedDisposables?: Disposable[];
   /**
    * The restricted surface this itx was minted with (domains/itx/surface.ts):
-   * only these built-in members exist on it, and its children narrow to
-   * their listed members. Absent is the full surface.
+   * only these built-in members exist on it. Absent is the full surface.
    */
   surface?: ItxSurface;
 };
@@ -6775,10 +6714,9 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
 
   /**
    * THIS scope's agent handle, built directly — never through the public
-   * `agents` getter, which a surface may have removed — and narrowed to
-   * `surface` (the entries under "agent", already stripped).
+   * `agents` getter, which a surface may have removed.
    */
-  #agentHandle(surface: ItxSurface | undefined): AgentRpcTarget | undefined {
+  #agentHandle(): AgentRpcTarget | undefined {
     const path = this.#capabilityHost.path;
     if (!path.startsWith("/agents/")) return undefined;
     return new AgentRpcTarget({
@@ -6790,7 +6728,6 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
       // actor). A surfaced itx at this path is held by someone else — a
       // visitor's browser session — so it speaks as its own principal.
       ...(this.#surface === undefined && { sourceScopePath: path }),
-      ...(surface === undefined ? {} : { surface }),
     });
   }
 
@@ -7450,18 +7387,12 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
   // On a project-root itx both are undefined.
   /** This scope's agent control handle, when its address is under `/agents/`. */
   get agent(): AgentRpcTarget | undefined {
-    const surface = this.#surface;
-    return this.#agentHandle(surface === undefined ? undefined : surfaceUnder(surface, "agent"));
+    return this.#agentHandle();
   }
 
   /** THIS agent's web-chat door — present only on an agent-scoped itx. */
   get chat(): AgentChatRpcTarget | undefined {
-    const chat = this.#agentHandle(undefined)?.chat;
-    const surface = this.#surface;
-    if (chat !== undefined && surface !== undefined) {
-      applySurface(chat, surfaceUnder(surface, "chat"), AgentChatRpcTarget.prototype);
-    }
-    return chat;
+    return this.#agentHandle()?.chat;
   }
 
   // The scope's own host, plus the catalog that addresses ANY scope in the
@@ -7514,9 +7445,9 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
    * A NARROWER itx for `path` — the one door for handing an itx to code
    * that must not hold this scope's authority (a visitor's browser session,
    * a helper that should only talk). The result exposes ONLY the listed
-   * built-in members (dotted entries narrow children: `"agent.message"`),
-   * keeps `path`'s dynamic mounts, and runs with project-confined, non-admin
-   * authority. Never widens: it is minted from THIS project only.
+   * built-in members, keeps `path`'s dynamic mounts, and runs with
+   * project-confined, non-admin authority. Never widens: it is minted from
+   * THIS project only.
    */
   scope(input: { path: string; surface: string[] }): ProjectRpcTarget {
     const path = normalizePath(input.path);
@@ -7831,14 +7762,13 @@ export function itxForScope(props: {
   });
 }
 
-/** `__describe()` children of a surfaced itx: only its allowed roots. */
+/** `__describe()` children of a surfaced itx: only its allowed members. */
 function surfacedChildren(
   surface: ItxSurface | undefined,
   children: Record<string, string>,
 ): Record<string, string> {
   if (surface === undefined) return children;
-  const roots = surfaceRoots(surface);
-  return Object.fromEntries(Object.entries(children).filter(([name]) => roots.has(name)));
+  return Object.fromEntries(Object.entries(children).filter(([name]) => surface.includes(name)));
 }
 
 /**
@@ -9895,5 +9825,5 @@ installPrototypeInvokeCapabilityFallback(SandboxRpcTarget);
 // resolves identically). #1839 removed the instance Proxy to make handles
 // pipelinable; the hop restores the sugar without giving that back.
 installPrototypeInvokeCapabilityFallback(AgentRpcTarget, {
-  invokerFor: (agent) => AgentRpcTarget.dynamicInvokerOf(agent),
+  invokerFor: (agent) => agent.capabilityHost,
 });

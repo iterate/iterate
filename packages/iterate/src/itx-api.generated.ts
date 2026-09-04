@@ -188,9 +188,9 @@ export interface Project {
    * A NARROWER itx for `path` — the one door for handing an itx to code
    * that must not hold this scope's authority (a visitor's browser session,
    * a helper that should only talk). The result exposes ONLY the listed
-   * built-in members (dotted entries narrow children: `"agent.message"`),
-   * keeps `path`'s dynamic mounts, and runs with project-confined, non-admin
-   * authority. Never widens: it is minted from THIS project only.
+   * built-in members, keeps `path`'s dynamic mounts, and runs with
+   * project-confined, non-admin authority. Never widens: it is minted from
+   * THIS project only.
    */
   scope(input: { path: string; surface: string[] }): Project;
   /** Agent catalog: get(path), list(). */

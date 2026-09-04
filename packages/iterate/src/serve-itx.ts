@@ -2,27 +2,24 @@
 // Durable Object, over the app's own `/api`, speaking exactly the handshake
 // the SDK's session keeper expects (`iterate/client`, `iterate/sdk/itx/react`):
 // a Cap'n Web root whose `authenticate()` returns a Session whose
-// `projects.get(slug)` is the project. A page on the app's own origin then
-// needs no configuration at all — the keeper dials the page's `/api` by
-// default — and `useItx()`, `useStreamConnection()`, `useLiveState()` work
-// as they do on the OS dashboard.
+// `projects.get(slug)` is the project. A page on the app's own origin needs
+// no configuration — the keeper dials the page's `/api` by default — and
+// `useItx()`, `useStreamConnection()`, `useLiveState()` work as on the OS
+// dashboard.
 //
-// The caller decides WHO the visitor is before calling this (its own cookie,
-// its own token, or nobody) and WHAT they may reach: the `scope` — a path and
-// the dotted members served there — which becomes `project.scope(scope)` on
-// the platform (restricted surface, project-confined authority). The
-// credential the browser presents to `authenticate()` is not authority here
-// and is ignored; it exists so the stock client's handshake completes.
+// The caller decides WHO the visitor is before calling this and WHAT they may
+// reach: `scope.surface` lists the members served, as dotted paths down to
+// each method. The platform side is `project.scope({ path, surface: roots })`
+// — a project-confined, non-admin itx exposing only those roots; this module
+// is the member-level allowlist. The credential the browser presents to
+// `authenticate()` is not authority here and is ignored.
 //
-// WHY A RELAY, NOT THE STUB ITSELF: what `project.scope()` returns inside a
-// worker is a Workers-RPC stub, and a Cap'n Web session cannot serialize one
-// ("RPC stub points at a non-serializable type"). So the served project is a
-// tree of small Cap'n Web targets built from the served members: each leaf
-// forwards its call onto the stub, callbacks the browser passes (a stream
-// connection's `processEventBatch`) become plain functions the platform can
-// call back, and a stub a call returns (a connection handle) is wrapped so
-// its methods stay callable. Anything not listed in `scope.surface` does not
-// exist on the served project at all.
+// WHY A RELAY: a Cap'n Web session cannot serialize a Workers-RPC stub, so
+// the served project is a tree of small Cap'n Web targets built from the
+// served members: each leaf forwards its call onto the stub, browser callbacks
+// are retained and re-wrapped as plain functions, and a stub a call returns
+// (a connection handle) is wrapped so its methods stay callable. Anything not
+// listed does not exist on the served project at all.
 import {
   RpcTarget,
   newHttpBatchRpcResponse,
@@ -34,16 +31,13 @@ export type ServeItxOptions = {
   /** The worker's own itx (`this.itx`, `await env.ITX.get()`). Never reaches the browser. */
   project: Project;
   /**
-   * What the browser gets: `project.scope(scope)`. `surface` must list the
-   * members served as DOTTED paths down to each METHOD: a leaf is called,
-   * so an object-valued member is listed through to its methods —
-   * `"agent.liveState.get"` and `"agent.liveState.subscribe"`, never
-   * `"agent.liveState"`. A bare root cannot be relayed because its members
-   * are unknown here.
+   * What the browser gets. `surface` lists the members served as DOTTED
+   * paths down to each METHOD: a leaf is called, so an object-valued member
+   * is listed through to its methods — `"agent.liveState.get"` and
+   * `"agent.liveState.subscribe"`, never `"agent.liveState"`. A bare root
+   * cannot be relayed because its members are unknown here.
    */
   scope: { path: string; surface: string[] };
-  /** When set, `projects.get(slug)` resolves only for this slug. */
-  slug?: string;
 };
 
 /**
@@ -62,7 +56,6 @@ export type ServeItxOptions = {
  *           "agent.stream.openConnection",
  *         ],
  *       },
- *       slug: "garple",
  *     });
  *   }
  *
@@ -70,8 +63,10 @@ export type ServeItxOptions = {
  * state); `POST` answers the client's HTTP-batch lane.
  */
 export async function serveItx(request: Request, options: ServeItxOptions): Promise<Response> {
-  const served = relayServedProject(options.project.scope(options.scope), options.scope.surface);
-  const root = new ServedItxRoot(new ServedItxSession(served, options.slug));
+  const { path, surface } = options.scope;
+  const roots = [...new Set(surface.map((entry) => entry.split(".", 1)[0]!))];
+  const served = relayServedProject(options.project.scope({ path, surface: roots }), surface);
+  const root = new ServedItxRoot(new ServedItxSession(served));
   if (request.method === "POST") return await newHttpBatchRpcResponse(request, root);
   if (request.headers.get("Upgrade")?.toLowerCase() !== "websocket") {
     return new Response("This endpoint accepts WebSocket upgrades and POST batches.", {
@@ -271,36 +266,24 @@ Object.setPrototypeOf(
 
 class ServedItxProjects extends RpcTarget {
   readonly #project: RpcTarget;
-  readonly #slug: string | undefined;
 
-  constructor(project: RpcTarget, slug: string | undefined) {
+  constructor(project: RpcTarget) {
     super();
     this.#project = project;
-    this.#slug = slug;
   }
 
-  /** The served project. When a slug was configured, only that slug resolves. */
-  get(slug: string): RpcTarget {
-    if (this.#slug !== undefined && slug !== this.#slug) {
-      throw new Error(`this /api serves project "${this.#slug}", not "${slug}"`);
-    }
+  /** The served project, whatever slug the page addresses it by. */
+  get(_slug: string): RpcTarget {
     return this.#project;
-  }
-
-  async __describe() {
-    return {
-      instructions: "The projects this app serves: get(slug) returns the served project itx.",
-      children: { get: "The served project itx." },
-    };
   }
 }
 
 class ServedItxSession extends RpcTarget {
   readonly #projects: ServedItxProjects;
 
-  constructor(project: RpcTarget, slug: string | undefined) {
+  constructor(project: RpcTarget) {
     super();
-    this.#projects = new ServedItxProjects(project, slug);
+    this.#projects = new ServedItxProjects(project);
   }
 
   get projects(): ServedItxProjects {
@@ -327,14 +310,5 @@ class ServedItxRoot extends RpcTarget {
   /** The stock client's one door. Identity was decided by the caller of `serveItx`. */
   authenticate(_credentials: ItxAuthCredentials): ServedItxSession {
     return this.#session;
-  }
-
-  async __describe() {
-    return {
-      instructions: "An app's /api: authenticate(credentials) returns the served session.",
-      children: {
-        authenticate: "Returns the served session; the credentials are not authority here.",
-      },
-    };
   }
 }
