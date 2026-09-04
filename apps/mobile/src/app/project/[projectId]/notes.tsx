@@ -376,18 +376,9 @@ function NoteRow({
               onPress={() => chatAboutNote.mutate()}
               style={styles.actionButton}
             >
-              {chatAboutNote.isPending ? (
-                <>
-                  <ActivityIndicator
-                    accessibilityLabel="Loading"
-                    color={colors.textMuted}
-                    size="small"
-                  />
-                  <Text style={styles.actionText}>Opening chat…</Text>
-                </>
-              ) : (
-                <Text style={styles.actionText}>💬 Chat</Text>
-              )}
+              <Text style={styles.actionText}>
+                {chatAboutNote.isPending ? "Opening chat…" : "💬 Chat"}
+              </Text>
             </Pressable>
             <Pressable
               accessibilityRole="button"
