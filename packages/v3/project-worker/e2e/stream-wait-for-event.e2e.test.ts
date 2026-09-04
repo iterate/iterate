@@ -16,7 +16,7 @@ test("waitForEvent round trip: awaited via session A, appended via session B, re
   // Anchor at the CURRENT head explicitly: the wait then resolves whether it registers first or the
   // append lands first (no ordering flake) — while the sleep below makes the waiting path the one
   // actually exercised.
-  const head = (await itxA.invoke("itx.read(0)")).scannedThroughOffset;
+  const head = (await itxA.invoke("itx.readEvents(0)")).scannedThroughOffset;
   const pending = itxA.waitForEvent({ type: "ping", afterOffset: head, timeoutMs: 20_000 });
   await sleep(300);
   await itxB.invoke(`itx.append({ type: 'ping', payload: { n: 1 } })`);
@@ -43,7 +43,7 @@ export default class Waiter extends WorkerEntrypoint {
   }
 }`,
   };
-  const head = (await itxA.invoke("itx.read(0)")).scannedThroughOffset;
+  const head = (await itxA.invoke("itx.readEvents(0)")).scannedThroughOffset;
   const pending = itxA.invoke(
     `itx.workers.get({ source: ${JSON.stringify(SRC_WAITER)} }).run(${head})`,
   );

@@ -1,6 +1,6 @@
 // stream-idempotency-pause-paging.e2e.test.ts — the event log's COMMIT POINT and the core reduce's
 // pause slice that sits at it (`Stream.append` in stream/stream.ts), end to end through
-// `itx.append`/`itx.read`. Proves: the append door's runtime guards (a non-string type, a
+// `itx.append`/`itx.readEvents`. Proves: the append door's runtime guards (a non-string type, a
 // non-literal-true `ephemeral`, ephemeral + idempotencyKey); idempotency dedupe at the commit point
 // (an in-batch hit reduced ONCE by the commit-point reduce, a mid-batch conflict rolling the whole
 // batch back, a hit burning no offset); deep payloads near the codec's depth budget; the bare
@@ -29,7 +29,7 @@ const read = (
   itx.invoke([
     "itx",
     [
-      "read",
+      "readEvents",
       ...(afterOffset === undefined
         ? []
         : limit === undefined
@@ -268,7 +268,7 @@ test("read paging: a full page stops at its last row; a short page proves the du
   expect(across.scannedThroughOffset).toBe(d4.offset);
 });
 
-test("read(afterOffset beyond head) never claims a scan of unassigned offsets", async () => {
+test("readEvents(afterOffset beyond head) never claims a scan of unassigned offsets", async () => {
   // Scanned ranges are the contiguity currency of every consumer (facet cursors, subscription
   // healing, the operator's delivery-resumed seek): a scanned range can only cover offsets that
   // exist, or a cursor seeded from it would sit beyond head and skip every later event forever.

@@ -38,6 +38,16 @@
 //      the proxy's own verbs (`cd`, `invoke`, `provide`, `subscribe`, `enableProcessor`,
 //      `disableProcessor` — the dotted surface never hands those to the table, so such a row could
 //      fire from a string invoke but never from the sugar). A target is rooted at `itx`.
+//   7. `@` IS THE CALLER'S INPUT (expression.ts lexes it; targets only, final step only — the door
+//      refuses it in a match, in a non-final step, and `parse` refuses it in a call). A target whose
+//      final call step holds `@` is a TEMPLATE, and rule 4's fold does not apply to it: as a top-level
+//      argument `@` is the unpinned argument list, SPLICED (`itx.fable ⇒ itx.builtins.ai.run('@cf/x', @)`,
+//      `itx.fable(inputs, opts)` ⇒ `itx.builtins.ai.run('@cf/x', inputs, opts)`; a property access on
+//      the match has no args, so it DROPS); nested inside an object or array literal `@` is THE one
+//      argument, and `...@` as an object entry merges the one argument's fields under the template's
+//      own keys (the template wins: a pinned `model` cannot be talked out of) — two or more args, or
+//      none, where one is required is a refusal at rewrite time. The one reserved literal is the
+//      marker's array-half spelling, `{ "@": true }` (and the entry key `"...@"`).
 //
 // THE PLATFORM NEVER SPELLS A SHORT NAME: every expression the platform itself writes — the proxy's
 // own append, a lent stub's rule (`match ⇒ itx.builtins.rpcStubs.get('<match>')`), a processor's
@@ -53,6 +63,9 @@ import { jsonEqual } from "../lib/patch.ts";
 import type { StreamEventInput } from "../stream/events.ts";
 import { callOn, walkSteps } from "./dispatch.ts";
 import {
+  containsItxExpressionHole,
+  isItxExpressionHole,
+  ITX_EXPRESSION_MERGE_KEY,
   parse,
   parseItxExpressionPrefix,
   print,
@@ -141,14 +154,58 @@ export function pickItxExpressionRewriteRule(
   return best;
 }
 
-/** Rule 4: the call with the matched prefix replaced by the target. */
+/** Rule 7: the template's arguments with `@` filled from the caller's unpinned args. */
+function fillItxExpressionHoles(
+  templateArgs: unknown[],
+  unpinnedArgs: unknown[] | undefined,
+  target: ItxExpression,
+): unknown[] {
+  const theOne = (what: string): unknown => {
+    if (unpinnedArgs?.length !== 1)
+      throw new Error(
+        `${what} in the target ${JSON.stringify(print(target))} takes exactly one argument, got ${unpinnedArgs?.length ?? 0}`,
+      );
+    return unpinnedArgs[0];
+  };
+  const fill = (value: unknown): unknown => {
+    if (isItxExpressionHole(value)) return theOne("a nested `@`");
+    if (Array.isArray(value)) return value.map(fill);
+    if (value !== null && typeof value === "object") {
+      const template = value as Record<string, unknown>;
+      const out: Record<string, unknown> = {};
+      if (Object.hasOwn(template, ITX_EXPRESSION_MERGE_KEY)) {
+        const source = theOne("`...@`");
+        if (source === null || typeof source !== "object" || Array.isArray(source))
+          throw new Error(
+            `\`...@\` in the target ${JSON.stringify(print(target))} merges an object; the argument is ${JSON.stringify(source)}`,
+          );
+        Object.assign(out, source);
+      }
+      for (const [k, v] of Object.entries(template))
+        if (k !== ITX_EXPRESSION_MERGE_KEY) out[k] = fill(v); // the template's own keys win
+      return out;
+    }
+    return value;
+  };
+  return templateArgs.flatMap((arg) =>
+    isItxExpressionHole(arg) ? (unpinnedArgs ?? []) : [fill(arg)],
+  );
+}
+
+/** Rule 4 (and 7): the call with the matched prefix replaced by the target. */
 export function applyItxExpressionRewriteRule(
   target: ItxExpression,
   match: ItxExpressionPrefixMatch,
 ): ItxExpression {
   const { unpinnedArgs, stepsAfterMatch } = match;
-  if (!unpinnedArgs) return [...target, ...stepsAfterMatch];
   const last = target.at(-1);
+  if (Array.isArray(last) && containsItxExpressionHole(last))
+    return [
+      ...target.slice(0, -1),
+      [last[0], ...fillItxExpressionHoles(last.slice(1), unpinnedArgs, target)],
+      ...stepsAfterMatch,
+    ];
+  if (!unpinnedArgs) return [...target, ...stepsAfterMatch];
   return typeof last === "string"
     ? [...target.slice(0, -1), [last, ...unpinnedArgs], ...stepsAfterMatch]
     : [...target, ["", ...unpinnedArgs], ...stepsAfterMatch];
@@ -216,6 +273,10 @@ export function rewriteRuleConfiguredEvent(
     throw new Error(
       `a rewrite rule's match must be rooted at "itx" (every call starts there — ${JSON.stringify(print(matchPrefix))} could never match one)`,
     );
+  if (containsItxExpressionHole(matchPrefix))
+    throw new Error(
+      `\`@\` (the caller's input) is legal only in a rewrite rule's target, not its match (${JSON.stringify(print(matchPrefix))})`,
+    );
   const firstStep = matchPrefix[1];
   const firstName = Array.isArray(firstStep) ? firstStep[0] : firstStep;
   if (firstName === BUILTINS_ROOT)
@@ -226,10 +287,17 @@ export function rewriteRuleConfiguredEvent(
     throw new Error(
       `a rewrite rule's match may not start with the proxy's own verb "${firstName}" (${PROXY_VERBS.join(", ")}): the dotted surface never hands those to the table, so the rule could fire from a string invoke but never from the sugar`,
     );
-  const targetExpression = target === null ? null : parse(print(toItxExpression(target)));
+  const targetExpression =
+    target === null
+      ? null
+      : parse(print(toItxExpression(target, { holes: true })), { holes: true });
   if (targetExpression && targetExpression[0] !== "itx")
     throw new Error(
       `a rewrite rule's target must be rooted at "itx" (a bare built-in root is unspellable — targets resolve through the rules; the physical spelling is "itx.builtins.…")`,
+    );
+  if (targetExpression && targetExpression.slice(0, -1).some(containsItxExpressionHole))
+    throw new Error(
+      `\`@\` (the caller's input) is legal only in the target's FINAL step — ${JSON.stringify(print(targetExpression))} holds it earlier (rule 7)`,
     );
   return {
     type: "events.iterate.com/itx/rewrite-rule-configured",

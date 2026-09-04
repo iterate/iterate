@@ -13,12 +13,12 @@ import { expect, test } from "vitest";
 import { freshCtx, openItx, until } from "./support/client.ts";
 import { deltasFor, LIVE_STATE_CHANGED, type Delta } from "./support/live-client.ts";
 
-test("any door materializes a fresh context: read(0) starts with created then woken; the first append lands past them; core's reduced state carries identity + incarnation", async () => {
+test("any door materializes a fresh context: readEvents(0) starts with created then woken; the first append lands past them; core's reduced state carries identity + incarnation", async () => {
   const ctx = freshCtx("woken");
   const itx = openItx(ctx);
   // A bare READ on a never-touched context already sees the two records — the constructor wrote
   // them before this door opened.
-  const page = await itx.invoke("itx.read(0)");
+  const page = await itx.invoke("itx.readEvents(0)");
   expect(page.events.map((e: { type: string; offset: number }) => [e.type, e.offset])).toEqual([
     ["events.iterate.com/stream/created", 1],
     ["events.iterate.com/stream/woken", 2],
@@ -42,7 +42,7 @@ test("any door materializes a fresh context: read(0) starts with created then wo
 
   // exactly once per incarnation (and born exactly once, ever)
   await itx.invoke(`itx.append({ type: 'again' })`);
-  const types = (await itx.invoke("itx.read(0)")).events.map((e: { type: string }) => e.type);
+  const types = (await itx.invoke("itx.readEvents(0)")).events.map((e: { type: string }) => e.type);
   expect(types.filter((t: string) => t === "events.iterate.com/stream/woken")).toHaveLength(1);
   expect(types.filter((t: string) => t === "events.iterate.com/stream/created")).toHaveLength(1);
 });

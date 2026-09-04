@@ -107,6 +107,8 @@ export interface Env {
   ITERATE_CONTEXT: DurableObjectNamespace<IterateContextDurableObject>;
   LOADER: WorkerLoader;
   ITX_KV: KVNamespace;
+  /** Workers AI — the built-in root `itx.ai`, the binding verbatim (context/built-ins.ts). */
+  AI: Ai;
   SECRETS_KV?: KVNamespace;
   /** Deploy identity — reduced into loader cacheKeys so a redeploy mints fresh isolates. */
   CF_VERSION_METADATA?: { id: string };

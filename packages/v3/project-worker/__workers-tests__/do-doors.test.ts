@@ -49,7 +49,7 @@ const rewriteRulesOf = async (ctx: string): Promise<Record<string, RewriteRuleRo
 /** The `itx/rewrite-rule-configured` rows of the durable log — one per set or un-set, no dedupe. */
 const rewriteRuleEventCount = async (ctx: string): Promise<number> =>
   (
-    (await stub(ctx).invoke(["itx", ["read", 0, 500]])) as { events: { type: string }[] }
+    (await stub(ctx).invoke(["itx", ["readEvents", 0, 500]])) as { events: { type: string }[] }
   ).events.filter((e) => e.type === "events.iterate.com/itx/rewrite-rule-configured").length;
 
 /** The DO's in-memory socket census (a DO-only verb — physical facts, never event-derivable). */

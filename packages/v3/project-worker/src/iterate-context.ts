@@ -14,7 +14,7 @@
 //   • `invoke`  — the landing door of the prototype hop at the bottom (`itx.a.b(x)` reduces to ONE
 //                 expression) plus the one fetch-lane fork; `invoke(call, ...args)` applies LIVE args
 //                 (a Request, a callback) to the value the expression denotes; every built-in root
-//                 (`itx.append(…)`, `itx.read(…)`, `itx.waitForEvent(…)`, `itx.kv.get(…)`,
+//                 (`itx.append(…)`, `itx.readEvents(…)`, `itx.waitForEvent(…)`, `itx.kv.get(…)`,
 //                 `itx.rpcStubs.list()`, `itx.rewriteRules.list()`, …) and the reserved physical root
 //                 `itx.builtins.…` ride it with ZERO code here;
 //   • `provide` — THE ONE FRONT DOOR: make `match` mean `target`. A target that is a client's rpc stub
@@ -113,7 +113,7 @@ export class SubscriptionHandle extends RpcTarget {
   }
 }
 
-/** WHAT RIDES THE HOP, TYPED: every built-in root (`append`, `read`, `waitForEvent`, `kv`, `rpcStubs`,
+/** WHAT RIDES THE HOP, TYPED: every built-in root (`append`, `readEvents`, `waitForEvent`, `kv`, `rpcStubs`,
  *  `facets`, `workers`, …) is a member of this class's TYPE by declaration merging — zero runtime; the
  *  prototype fallback at the bottom of this file is the runtime. So a reader of this file sees the
  *  whole surface, and `env.ITX.get().append(…)` typechecks in loaded code. `cd` is the edge's own
@@ -263,7 +263,7 @@ export class IterateContext extends RpcTarget {
    *  LIVE callback, which is lent to `itx.rpcStubs` under the key `subscription:<name>` and targeted as
    *  `itx.rpcStubs.get('…')`; `null` removes the row. HOW it is served is not declared here: the
    *  context looks at what the target evaluates to — a facet or a lent stub owns its progress and gets
-   *  a push (the client heals a gap with `read`); anything else gets an at-least-once cursor the
+   *  a push (the client heals a gap with `readEvents`); anything else gets an at-least-once cursor the
    *  stream keeps. Same name REPLACES. Literally `append(subscriptionConfiguredEvent(…))` — the handle
    *  removes the row (and recalls the lent callback) when disposed or when the session ends. */
   async subscribe(input: {

@@ -81,7 +81,7 @@ export abstract class StreamProcessorDurableObject<
     return (this.#engineBuiltOnFirstUse ??= new ProcessorEngine(this.processor, {
       stream: {
         append: (...events) => this.env.ITX.get().append(...events),
-        read: (after, limit) => this.env.ITX.get().read(after, limit),
+        read: (after, limit) => this.env.ITX.get().readEvents(after, limit),
       },
       storage: this.ctx.storage.kv,
     }));

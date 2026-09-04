@@ -69,7 +69,7 @@ test("dotted write, expression read: itx.append lands in the ONE log", async () 
   const itx = openItx(freshCtx("stream"));
   const [committed] = await itx.append({ type: "mark", payload: { n: 1 } });
   expect(committed.offset).toBeGreaterThanOrEqual(1);
-  const page: any = await itx.invoke(["itx", ["read"]]);
+  const page: any = await itx.invoke(["itx", ["readEvents"]]);
   expect(page.events.some((e: any) => e.type === "mark")).toBe(true);
 });
 

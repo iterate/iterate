@@ -65,7 +65,8 @@ const snapCounter = (ctx: string, name = "counter") =>
 // ephemeral that consumes an offset, so a durable event's offset exceeds the count of durable
 // events before it.)
 const durableCount = async (ctx: string): Promise<number> =>
-  ((await stub(ctx).invoke(["itx", ["read", 0, 500]])) as { events: unknown[] }).events.length;
+  ((await stub(ctx).invoke(["itx", ["readEvents", 0, 500]])) as { events: unknown[] }).events
+    .length;
 
 /** The edge's `enableProcessor(name, { source, className })`, spelled at the DO door: ONE
  *  subscription-configured event — built by `subscriptionConfiguredEvent`, appended through `append`

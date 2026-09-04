@@ -82,7 +82,7 @@ test("dynamic worker → dynamic worker mid-chain pipelining, both consumer lane
   const got = await until(
     "worker B's callback appended to the stream",
     async () => {
-      const page = await itx.invoke(["itx", ["read", 0, 500]]);
+      const page = await itx.invoke(["itx", ["readEvents", 0, 500]]);
       return page.events.find((e: { type: string }) => e.type === "pinged-from-A-via-B");
     },
     30_000,

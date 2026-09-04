@@ -37,6 +37,8 @@
 
   // The Worker Loader that runs each project's confined config worker / agents.
   "worker_loaders": [{ "binding": "LOADER" }],
+  // Workers AI, exposed VERBATIM as the built-in root `itx.ai` (context/built-ins.ts).
+  "ai": { "binding": "AI" },
 
   // Deploy identity. Loader isolates are cached ACROSS deployments, but a DO is durable and
   // survives redeploys — so a facet built from an isolate minted by a PRIOR deployment can't be

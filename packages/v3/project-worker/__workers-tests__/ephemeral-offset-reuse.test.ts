@@ -39,7 +39,7 @@ export default class Digest extends WorkerEntrypoint {
 `;
 type Page = { events: { type: string; offset: number }[]; scannedThroughOffset: number };
 const page = async (ctx: string): Promise<Page> =>
-  (await stub(ctx).invoke(["itx", ["read", 0, 500]])) as Page;
+  (await stub(ctx).invoke(["itx", ["readEvents", 0, 500]])) as Page;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 /** The DO's scheduled alarm instant, or null. The quiet clock arms ONLY while a facet is live or an
  *  rpc stub is borrowed, so a pin that fires the alarm must first create one of the two and read

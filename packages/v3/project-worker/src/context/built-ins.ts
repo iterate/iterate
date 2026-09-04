@@ -1,6 +1,9 @@
 // built-ins.ts — THE BUILT-INS: a plain record whose KEYS are the physical-layer roots (`whoami`,
-// `kv`, `append`, `read`, `waitForEvent`, `cd`, `fetch`, `rpcStubs`, `rewriteRules`,
+// `kv`, `ai`, `append`, `readEvents`, `waitForEvent`, `cd`, `fetch`, `rpcStubs`, `rewriteRules`,
 // `facets`, `subscriptions`, `workers`, `runScript` — the one list is context/built-in-roots.ts).
+// Two kinds of root, one record: the AXIOMS (the log, the stub registry, the rule table, the hosts,
+// addressing) and the BINDINGS (`kv`, `ai` — a Cloudflare binding only this env holds, exposed
+// verbatim). Code a user could write is neither: it is a class in the library folder, taking `itx`.
 // THE RECORD IS `itx.builtins`, the reserved root: a call `itx.builtins.<root>…` runs against it
 // directly and never reads the rule table; a short `itx.<root>…` reaches it through the IMPLICIT
 // PLATFORM ROW `itx.<root> ⇒ itx.builtins.<root>` unless the context's own table says otherwise
@@ -87,13 +90,19 @@ export interface BuiltInScope {
     delete(key: string): Promise<{ ok: true }>;
     list(prefix?: string): Promise<{ keys: string[] }>;
   };
+  /** THE FIRST BINDINGS ROOT: Cloudflare's Workers AI binding, VERBATIM — `run(model, inputs,
+   *  options?)`, `models()`, `gateway(id).run({ provider, endpoint, headers, query })`, `toMarkdown()`,
+   *  `autorag(id)` — no wrapper, so `itx.ai` reads exactly like `env.AI` and a rewrite rule can pin a
+   *  model with `@` (`itx.fable ⇒ itx.ai.run('@cf/…', @)`). A test shadows it with `provide("itx.ai",
+   *  fake)`; the physical door stays `itx.builtins.ai`. */
+  ai: Ai;
   /** Append to this context's append-only event log (the facets that REDUCE it are
    *  `itx.facets.get(name)`). A top-level root, so the expression surface mirrors the edge
    *  RpcTarget exactly: `itx.append({...})` is one spelling on every hop. */
   append(...events: StreamEventInput[]): Promise<StreamEvent[]>;
-  /** Read a page of the durable log — `itx.read(afterOffset?, limit?)`, the flattened twin of
-   *  `append` (non-minting: a probe never wakes storage). */
-  read(afterOffset?: number, limit?: number): Promise<StreamPage>;
+  /** Read a page of the durable log — `itx.readEvents(afterOffset?, limit?)`, the twin of `append`
+   *  (non-minting: a probe never wakes storage). */
+  readEvents(afterOffset?: number, limit?: number): Promise<StreamPage>;
   /** Wait for the next event matching `filter` (Stream.waitForEvent owns the contract: type filter,
    *  afterOffset default = the head, 30s/120s timeout → WAIT_TIMEOUT). A root, so the edge declares
    *  nothing for it. */
@@ -182,9 +191,14 @@ interface BuildBuiltInsDeps {
   path: string;
   /** The codec name of the context these roots belong to (loader cache keys). */
   iterateContextName: string;
-  /** The bindings the built-ins reach: the loader (+ the deploy id its cacheKey folds in) and the
-   *  project kv (bound in both wrangler configs). */
-  env: { LOADER: WorkerLoader; ITX_KV: KVNamespace; CF_VERSION_METADATA?: { id: string } };
+  /** The bindings the built-ins reach: the loader (+ the deploy id its cacheKey folds in), the
+   *  project kv and the Workers AI binding (all bound in both wrangler configs). */
+  env: {
+    LOADER: WorkerLoader;
+    ITX_KV: KVNamespace;
+    AI: Ai;
+    CF_VERSION_METADATA?: { id: string };
+  };
   /** Evaluate a producer source expression through THIS context's dispatch (inside the loader's
    *  `getCode`, so only on a cold isolate). */
   invoke: (call: ItxExpression) => Promise<unknown>;
@@ -281,9 +295,11 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
         }
       },
     },
+    // The binding object itself — dispatch walks its methods (`run`, `models`, `gateway`, …).
+    ai: env.AI,
     // Own-enumerable closures (NOT prototype methods) — the resolver's `Object.hasOwn` gate is why.
     append: (...e: StreamEventInput[]) => ownContext().append(...e),
-    read: (afterOffset?: number, limit?: number) => ownContext().read(afterOffset, limit),
+    readEvents: (afterOffset?: number, limit?: number) => ownContext().read(afterOffset, limit),
     waitForEvent: deps.waitForEvent,
     // `cd` routes EVERY call through the target context's own table — a sibling's rows apply, its
     // whole-context override included; the physical spelling is `cd(p).builtins.append(…)`, which is

@@ -4,7 +4,7 @@
 // to is a PROP of the stub, not a binding the loaded code could reach around.
 //
 // TWO doors, nothing else: `get()` BUILDS the real `IterateContext` RpcTarget for the one context
-// this stub was minted for (the dotted door — `append`, `read`, `waitForEvent`, `kv`, … all ride
+// this stub was minted for (the dotted door — `append`, `readEvents`, `waitForEvent`, `kv`, … all ride
 // it, the processor engine's included), and `fetch` is `globalOutbound` — a raw Request, handed to
 // the context DO's fetch door, which sorts raw Requests. `env.ITERATE_CONTEXT` is this worker's own
 // binding to the `IterateContextDurableObject` namespace — both doors address the DO through it.

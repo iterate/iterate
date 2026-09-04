@@ -27,6 +27,83 @@ export type ItxExpressionPrefix = ItxExpression;
 const IDENT = /^[A-Za-z_$][A-Za-z0-9_$-]*/;
 const RESERVED = new Set(["__proto__", "constructor", "prototype"]);
 
+// ── `@`, THE CALLER'S INPUT — a rewrite rule's target may hold it, nothing else may ──
+// In the string half a bare `@` outside a string literal is the marker (`'@cf/…'` inside quotes is a
+// string like any other); `...@` as an object-literal entry is the merge form. In the array half the
+// marker is ONE reserved literal, `{ "@": true }`, and the merge entry the key `"...@"` — so the
+// stored form is plain JSON, and those two spellings are unspellable as literals in a target (the
+// codec's one reservation). What `@` MEANS is rule 7 in ./itx-expression-rewriting.ts; here it is
+// only lexed (parse, targets only) and printed back.
+const HOLE_KEY = "@";
+const MERGE_KEY = "...@";
+
+/** THE one lexer for the marker, both directions: walk `text`, mapping each stretch OUTSIDE single-
+ *  or double-quoted string literals through `outside`, and offering each literal (quotes included),
+ *  the text after it and the output so far to `literal`, which answers `[newOutput, charsConsumedAfter]`
+ *  to rewrite around it or null to keep it verbatim. Escapes are honored; nothing inside a literal is
+ *  ever touched. */
+function lexStringLiterals(
+  text: string,
+  outside: (chunk: string) => string,
+  literal: (lit: string, after: string, out: string) => [string, number] | null,
+): string {
+  let out = "";
+  for (let i = 0; i < text.length; ) {
+    const q = text[i];
+    let j = i;
+    if (q !== '"' && q !== "'") {
+      while (j < text.length && text[j] !== '"' && text[j] !== "'") j++;
+      out += outside(text.slice(i, j));
+      i = j;
+    } else {
+      while (++j < text.length && text[j] !== q) if (text[j] === "\\") j++;
+      const lit = text.slice(i, j + 1);
+      const hit = literal(lit, text.slice(j + 1), out);
+      [out, i] = hit ? [hit[0], j + 1 + hit[1]] : [out + lit, j + 1];
+    }
+  }
+  return out;
+}
+
+/** Is `value` the marker literal `{ "@": true }`? */
+export function isItxExpressionHole(value: unknown): boolean {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    Object.keys(value).length === 1 &&
+    (value as Record<string, unknown>)[HOLE_KEY] === true
+  );
+}
+
+/** Does `value` (a step, an arg tree, a whole expression) hold the marker or a merge entry anywhere? */
+export function containsItxExpressionHole(value: unknown): boolean {
+  if (isItxExpressionHole(value)) return true;
+  if (Array.isArray(value)) return value.some(containsItxExpressionHole);
+  if (value !== null && typeof value === "object")
+    return Object.hasOwn(value, MERGE_KEY) || Object.values(value).some(containsItxExpressionHole);
+  return false;
+}
+
+/** The merge entry's key — `...@` — read by rule 7. */
+export const ITX_EXPRESSION_MERGE_KEY = MERGE_KEY;
+
+/** Print's half: in JSON5's output the marker literal is `{'@':true}` and the merge entry
+ *  `'...@':true` — spelled with a string literal, so they are matched on literal BOUNDARIES (the
+ *  literal `'@'` opening an object and closing it as its only key; the literal `'...@'` as a key). A
+ *  user's string that merely contains those characters is a longer literal and never matches. */
+const printMarkers = (text: string): string =>
+  lexStringLiterals(
+    text,
+    (chunk) => chunk,
+    (lit, after, out) =>
+      lit === `'${HOLE_KEY}'` && out.endsWith("{") && after.startsWith(":true}")
+        ? [out.slice(0, -1) + "@", ":true}".length]
+        : lit === `'${MERGE_KEY}'` && after.startsWith(":true")
+          ? [out + "...@", ":true".length]
+          : null,
+  );
+
 /** Index of the `)` closing the `(` at `open`; tracks bracket depth, skipping quoted string args. */
 function matchingParen(s: string, open: number): number {
   let depth = 0;
@@ -40,8 +117,10 @@ function matchingParen(s: string, open: number): number {
   throw new Error(`expression: unbalanced "(" in ${JSON.stringify(s)}`);
 }
 
-/** Parse the STRING half: dotted names + `.method(args)` calls (args JSON5-parsed); rejects reserved names + bare scope calls. */
-export function parse(source: string): ItxExpression {
+/** Parse the STRING half: dotted names + `.method(args)` calls (args JSON5-parsed); rejects reserved
+ *  names + bare scope calls. `holes: true` — a rewrite rule's TARGET only — lexes `@` / `...@` into
+ *  the marker literals; anywhere else a bare `@` is refused. */
+export function parse(source: string, options?: { holes?: boolean }): ItxExpression {
   const s = source.trim();
   const steps: ItxExpression = [];
   let i = 0;
@@ -62,7 +141,18 @@ export function parse(source: string): ItxExpression {
     else if (c === ".") steps.push((i++, readName()));
     else if (c === "(") {
       const end = matchingParen(s, i);
-      const inner = s.slice(i + 1, end).trim();
+      const raw = s.slice(i + 1, end).trim();
+      // `@` outside a string literal: the marker (targets only), a refusal everywhere else.
+      const inner = lexStringLiterals(
+        raw,
+        (chunk) =>
+          chunk.replace(/\.\.\.@|@/g, (m) => {
+            if (!options?.holes)
+              fail("`@` (the caller's input) is legal only in a rewrite rule's target");
+            return m === "@" ? `{"${HOLE_KEY}":true}` : `"${MERGE_KEY}":true`;
+          }),
+        () => null,
+      );
       let args: unknown[] = [];
       try {
         if (inner !== "") args = JSON5.parse(`[${inner}]`) as unknown[];
@@ -85,8 +175,11 @@ export function parse(source: string): ItxExpression {
 }
 
 /** Accept either half of an `ItxExpressionInput`; normalize to the structured form. */
-export function toItxExpression(input: ItxExpressionInput): ItxExpression {
-  return typeof input === "string" ? parse(input) : input;
+export function toItxExpression(
+  input: ItxExpressionInput,
+  options?: { holes?: boolean },
+): ItxExpression {
+  return typeof input === "string" ? parse(input, options) : input;
 }
 
 /** Object args print with their keys SORTED, so two spellings of one object are one canonical string
@@ -101,13 +194,13 @@ const keySortedForPrint = (_key: string, value: unknown): unknown =>
     : value;
 
 /** Canonical stored form: dotted path + `.method(args)` calls (args `JSON5.stringify`d, object keys
- *  sorted); `parse(print(e))` round-trips. */
+ *  sorted; the marker literals print back as `@` / `...@`); `parse(print(e), { holes })` round-trips. */
 export function print(expr: ItxExpression): string {
   return expr
     .map((step, i) => {
       const dot = i ? "." : "";
       if (typeof step === "string") return dot + step;
-      const args = JSON5.stringify(step.slice(1), keySortedForPrint).slice(1, -1);
+      const args = printMarkers(JSON5.stringify(step.slice(1), keySortedForPrint).slice(1, -1));
       return step[0] === "" ? `(${args})` : `${dot}${step[0]}(${args})`;
     })
     .join("");

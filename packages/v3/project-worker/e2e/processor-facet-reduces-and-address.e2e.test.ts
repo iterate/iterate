@@ -61,9 +61,9 @@ test("facet spine: cold catch-up + driven reduces + the subscriptions table list
 test("enable twice, disable once: same name replaces (no shadow stack) — one row, ONE more configured event, off after one disable", async () => {
   const itx = openItx(freshCtx("facet-twice"));
   await enableFixtureProcessor(itx, "tally");
-  const logOnce = await itx.read(0, 500);
+  const logOnce = await itx.readEvents(0, 500);
   await enableFixtureProcessor(itx, "tally"); // the same subscription again ⇒ one more configured event, same row
-  const logTwice = await itx.read(0, 500);
+  const logTwice = await itx.readEvents(0, 500);
   expect(logTwice.events.length).toBe(logOnce.events.length + 1);
   expect(await processorNames(itx)).toEqual(["tally"]);
 

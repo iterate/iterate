@@ -10,8 +10,9 @@
 export const BUILT_IN_ROOTS = [
   "whoami",
   "kv",
+  "ai",
   "append",
-  "read",
+  "readEvents",
   "waitForEvent",
   "cd",
   "fetch",

@@ -558,7 +558,7 @@ reveal — **every rewrite rule is an event**. Notice what is _not_ in the log: 
 lent stubs. A socket is a connection, not data; the directory is physical and
 stays physical. The rule table, on the other hand, is nothing but a reduce of
 the log. (Every real event type is namespaced — `events.iterate.com/<domain>/<name>`
-— so a `read(0)` filter must carry the prefix; every type below is written in
+— so a `readEvents(0)` filter must carry the prefix; every type below is written in
 full.)
 
 ```ts
@@ -618,7 +618,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
 
 There is no `subscribe` method — a subscription **is**
 `provide("itx.subscribers.printer", callback)`, served by `#fanOut`
-over the pager you already built. And `read(0)` shows your rewrite rules were
+over the pager you already built. And `readEvents(0)` shows your rewrite rules were
 events all along — and that your lent stubs never were. The proof's last beat:
 **kill the worker and restart it** — the constructor re-reduces the rule table
 from the persisted log, and the greeter rule still answers; the laptop's stub is
@@ -1066,7 +1066,7 @@ what happened and no way to react to change. The third primitive is a log.
 // runs: any client (or loaded code via env.ITX)
 await itx.append({ type: "message.posted", payload: { text: "hi" } });
 
-const { events, scannedThroughOffset } = await itx.read(0);
+const { events, scannedThroughOffset } = await itx.readEvents(0);
 
 using printer = await itx.subscribe({
   name: "printer",
@@ -1077,7 +1077,7 @@ using printer = await itx.subscribe({
 - **`append`** — the commit point: idempotency keys honored, offsets from one
   monotonic sequence (this is the log every rewrite rule and every subscription
   is itself an event on), ephemeral events allowed.
-- **`read`** — a page of history plus how far the scan reached, so a client can
+- **`readEvents`** — a page of history plus how far the scan reached, so a client can
   chain pages without gaps.
 - **`subscribe`** — appends one event,
   `events.iterate.com/stream/subscription-configured { name, target | null,
@@ -1087,7 +1087,7 @@ consumes? }`; a live callback is first lent to `itx.rpcStubs` (Chapter 1) under
   value. A lent stub or a facet _owns its progress_, so it gets
   a push of `(events, range)`: over the pager, fire-and-forget, for a stub;
   awaited, in-DO, for a facet. No server cursor for either; a client owns its
-  offset and heals any gap with `read`. Anything else (a loaded entrypoint's
+  offset and heals any gap with `readEvents`. Anything else (a loaded entrypoint's
   `processEventBatch`, a sibling context) cannot, so the stream keeps a cursor
   for it and delivers at-least-once, retrying on its own alarm and halting with
   a fact after too many failures. Same name replaces; `target: null` removes.

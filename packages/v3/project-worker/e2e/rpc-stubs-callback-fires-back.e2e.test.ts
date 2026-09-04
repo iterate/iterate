@@ -64,7 +64,7 @@ export default class Consumer extends WorkerEntrypoint {
   // dynamic worker cap ran to completion (its callback resolved it)
   expect(ran?.ran).toBe(true);
   const got = await until("worker callback appended to the stream", async () => {
-    const page = await itx.invoke(["itx", ["read", 0, 500]]);
+    const page = await itx.invoke(["itx", ["readEvents", 0, 500]]);
     return page.events.find((e: { type: string }) => e.type === "pinged-from-worker");
   });
   // dynamic worker: env.ITX.get().demo.timer.callLater(cb) — the callback ran back inside the worker

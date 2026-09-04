@@ -238,7 +238,7 @@ class ProjectCollection extends RpcTarget {
 
 `src/iterate-context.ts`. The edge is A PROXY IN FRONT OF THE DO. The DO owns
 every contract; every DO built-in root rides the dotted hop with zero edge code
-— `itx.append(...)`, `itx.read(...)`, `itx.waitForEvent(...)`, `itx.fetch(request)`,
+— `itx.append(...)`, `itx.readEvents(...)`, `itx.waitForEvent(...)`, `itx.fetch(request)`,
 `itx.kv.get(k)`, `itx.rpcStubs.list()`, `itx.rewriteRules.list()`,
 `itx.subscriptions.list()`, `itx.facets.get('tally').snapshot()`, and every
 rewritten name (`itx.myCap.hello()`). The class declares only what must be edge
@@ -298,8 +298,8 @@ class IterateContext extends RpcTarget {
   disableProcessor(name: string): Promise<void>;
 
   // ── everything else: the DO's built-in roots and every rewrite rule ──
-  /** Any undeclared dotted access reduces into invoke: itx.append({...}), itx.read(0),
-   *  itx.waitForEvent({ type }), itx.fetch(request), itx.kv.get(k), itx.cd('/x').read(),
+  /** Any undeclared dotted access reduces into invoke: itx.append({...}), itx.readEvents(0),
+   *  itx.waitForEvent({ type }), itx.fetch(request), itx.kv.get(k), itx.cd('/x').readEvents(),
    *  itx.facets.get('tally').snapshot(), itx.rpcStubs.list(), itx.rewriteRules.get(m),
    *  itx.myCap.hello(), itx.site.fetch(request). */
   [dotted: string]: unknown;
@@ -339,10 +339,10 @@ await itx.append({
 Processors are the exception on purpose: `enableProcessor` returns `{ name }`,
 not a handle, and `disableProcessor` is the explicit inverse.
 
-The stream verbs `append` / `read` / `waitForEvent` and egress `fetch` are DO
+The stream verbs `append` / `readEvents` / `waitForEvent` and egress `fetch` are DO
 built-ins (section 4.4) reached through the hop — `itx.append({...})` and
 `itx.invoke("itx.append({...})")` are the same call, and a full page of
-`read` chains `scannedThroughOffset` (a full page's last row, a short page's
+`readEvents` chains `scannedThroughOffset` (a full page's last row, a short page's
 DURABLE mark — never the in-memory head). The edge itself writes through that
 door too: every verb above builds its event and calls
 `invoke(["itx", ["append", event]])`; the DO has `append` and no configuration
@@ -1445,7 +1445,7 @@ sequenceDiagram
 ```
 
 `range` is `{ after, through }`; a subscriber whose chain has a hole heals
-with `read(afterOffset)`. A subscriber whose `consumes` skipped a batch still
+with `readEvents(afterOffset)`. A subscriber whose `consumes` skipped a batch still
 sees the skipped span in its next range.
 
 ### 9.4 Ancestry as a default rule
@@ -1472,7 +1472,7 @@ sequenceDiagram
   R-->>C: value
 ```
 
-Built-ins never fall through (`whoami`, `kv`, `append`, `read` stay the
+Built-ins never fall through (`whoami`, `kv`, `append`, `readEvents` stay the
 child's). Nothing appends this rule for you today. The 32-rewrite budget does
 not survive a `cd` hop, so do not configure `itx ⇒ itx.cd('/')` on the root
 itself.

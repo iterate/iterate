@@ -116,6 +116,12 @@ The one codec every door speaks. String half ⇄ structured half.
 - The **anonymous call step** `""` calls the value itself: `itx.builtins.rpcStubs.get('cam')(1)` is
   `["itx","builtins","rpcStubs",["get","cam"],["",1]]`. It is what a rule spells when a lent stub
   is called with args.
+- **`@` is the caller's input** (section 7, rule 7) — legal in a rewrite rule's TARGET only, in its
+  final step's arguments: a bare `@` outside a string literal (`'@cf/…'` in quotes is a string), and
+  `...@` as an object-literal entry. The array half spells them as the one reserved literal
+  `{ "@": true }` and the entry key `"...@"`, so a stored target is plain JSON; `print` spells
+  them back. `parse(source, { holes: true })` is how a target is read; a bare `@` anywhere else is
+  refused in the marker's own words.
 - `invoke(call, ...args)`: the string is the pure part, the args the live part — `args` are applied
   to the value the expression denotes (`invoke("itx.kv.get", "k")` ≡ `itx.kv.get("k")`; the fetch
   lane's Request rides the same door).
@@ -169,21 +175,22 @@ type-checked against `keyof BuiltInScope`. **The platform never spells a short n
 own append, a lent stub's rule, a processor's row are all `itx.builtins.…`, so a user's row at
 `itx.facets` or `itx.rpcStubs` redirects the user's calls and nothing the platform relies on.
 
-| Root                         | Signature                                                                                                                                                                                                                                                                    | Backed by                                                     |
-| ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
-| `whoami()`                   | `→ { projectId, path }`                                                                                                                                                                                                                                                      | the DO name                                                   |
-| `kv`                         | `.get(k)` `.put(k, v)` `.delete(k)` `.list(prefix?)`                                                                                                                                                                                                                         | `ITX_KV`, `${projectId}:` prefixed                            |
-| `append(...events)`          | `→ StreamEvent[]`                                                                                                                                                                                                                                                            | the stream                                                    |
-| `read(afterOffset?, limit?)` | `→ { events, scannedThroughOffset }`                                                                                                                                                                                                                                         | the stream                                                    |
-| `waitForEvent(filter?)`      | `{ type?, afterOffset?, timeoutMs? } → StreamEvent`                                                                                                                                                                                                                          | the stream                                                    |
-| `cd(path)`                   | `→ InvokeHandle` onto a sibling context, every call through ITS table (`cd(p).builtins.append(…)` is its physical door)                                                                                                                                                      | `ITERATE_CONTEXT.getByName`                                   |
-| `fetch(request)`             | egress: `{{secret:project:NAME}}` substituted → `FALLBACK`                                                                                                                                                                                                                   | the control plane                                             |
-| `rpcStubs`                   | `.get(rpcStubKey) → RpcStubHandle` · `.list() → string[]` (presence)                                                                                                                                                                                                         | `RpcStubDirectory`                                            |
-| `rewriteRules`               | `.list() → { match, target, origin }[]` (the EFFECTIVE table: context rows, masks as `target: null`, and the platform rows, `origin: "platform" \| "context"`) · `.get(match)` · `.resolve(call) → string[]` (the pure chain; `invoke(call) ≡ invoke(resolve(call).at(-1))`) | core state + the platform rows                                |
-| `facets`                     | `.get(name) → FacetHandle` (a RUNNING facet) · `.get(name, { source, cacheKey?, className })` (load and host it) · `.delete(name)`                                                                                                                                           | `ctx.facets`; mirrors `ctx.facets.get(name, startupCallback)` |
-| `subscriptions`              | `.list() → SubscriptionListEntry[]` · `.get(name)`                                                                                                                                                                                                                           | core state ⋈ the loop's cursors                               |
-| `workers`                    | `.get({ source, cacheKey?, className?, props? }) → InvokeHandle`, a stateless WorkerEntrypoint; any exported method                                                                                                                                                          | Worker Loader; the stateless twin of `facets.get`             |
-| `runScript(script, ...args)` | sugar: wrap the lambda string → `workers.get({ source }).run(...)`                                                                                                                                                                                                           | same                                                          |
+| Root                               | Signature                                                                                                                                                                                                                                                                    | Backed by                                                     |
+| ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
+| `whoami()`                         | `→ { projectId, path }`                                                                                                                                                                                                                                                      | the DO name                                                   |
+| `kv`                               | `.get(k)` `.put(k, v)` `.delete(k)` `.list(prefix?)`                                                                                                                                                                                                                         | `ITX_KV`, `${projectId}:` prefixed                            |
+| `ai`                               | Cloudflare's Workers AI binding, VERBATIM: `.run(model, inputs, options?)` `.models()` `.gateway(id).run(req)` `.toMarkdown()` `.autorag(id)`                                                                                                                                | `AI` (Workers AI), the binding object itself                  |
+| `append(...events)`                | `→ StreamEvent[]`                                                                                                                                                                                                                                                            | the stream                                                    |
+| `readEvents(afterOffset?, limit?)` | `→ { events, scannedThroughOffset }`                                                                                                                                                                                                                                         | the stream                                                    |
+| `waitForEvent(filter?)`            | `{ type?, afterOffset?, timeoutMs? } → StreamEvent`                                                                                                                                                                                                                          | the stream                                                    |
+| `cd(path)`                         | `→ InvokeHandle` onto a sibling context, every call through ITS table (`cd(p).builtins.append(…)` is its physical door)                                                                                                                                                      | `ITERATE_CONTEXT.getByName`                                   |
+| `fetch(request)`                   | egress: `{{secret:project:NAME}}` substituted → `FALLBACK`                                                                                                                                                                                                                   | the control plane                                             |
+| `rpcStubs`                         | `.get(rpcStubKey) → RpcStubHandle` · `.list() → string[]` (presence)                                                                                                                                                                                                         | `RpcStubDirectory`                                            |
+| `rewriteRules`                     | `.list() → { match, target, origin }[]` (the EFFECTIVE table: context rows, masks as `target: null`, and the platform rows, `origin: "platform" \| "context"`) · `.get(match)` · `.resolve(call) → string[]` (the pure chain; `invoke(call) ≡ invoke(resolve(call).at(-1))`) | core state + the platform rows                                |
+| `facets`                           | `.get(name) → FacetHandle` (a RUNNING facet) · `.get(name, { source, cacheKey?, className })` (load and host it) · `.delete(name)`                                                                                                                                           | `ctx.facets`; mirrors `ctx.facets.get(name, startupCallback)` |
+| `subscriptions`                    | `.list() → SubscriptionListEntry[]` · `.get(name)`                                                                                                                                                                                                                           | core state ⋈ the loop's cursors                               |
+| `workers`                          | `.get({ source, cacheKey?, className?, props? }) → InvokeHandle`, a stateless WorkerEntrypoint; any exported method                                                                                                                                                          | Worker Loader; the stateless twin of `facets.get`             |
+| `runScript(script, ...args)`       | sugar: wrap the lambda string → `workers.get({ source }).run(...)`                                                                                                                                                                                                           | same                                                          |
 
 `WorkerSource` is the worker's modules, literally (`Record<string, string>`, module name → code,
 `"cap.js"` the main module) OR an itx expression that PRODUCES them. A producer needs a `cacheKey`
@@ -273,6 +280,15 @@ ONE file: the rules, the one event, the resolver. Every rule is a row in its tab
    anything else is `NO_ITX_EXPRESSION_MATCH` (default-deny). 32 rewrites is the budget.
 6. THE DOOR: a match is rooted at `itx`, never at `itx.builtins`, never at a proxy verb (`cd`,
    `invoke`, `provide`, `subscribe`, `enableProcessor`, `disableProcessor`); a target is rooted at `itx`.
+7. `@` IS THE CALLER'S INPUT. A target whose final call step holds `@` is a TEMPLATE, and rule 4's
+   fold does not apply to it. As a top-level argument `@` is the unpinned argument list, SPLICED:
+   `itx.fable ⇒ itx.ai.run('@cf/…', @)` makes `itx.fable(inputs, opts)` run
+   `itx.builtins.ai.run('@cf/…', inputs, opts)`, and a property access on the match (no args) DROPS it.
+   Nested inside an object or array literal `@` is THE one argument; `...@` as an object entry
+   merges the one argument's fields under the template's own keys, the template winning
+   (`query: { model: 'claude-x', ...@ }` cannot be talked out of its model). Two or more arguments,
+   or none, where one is required is a refusal at rewrite time. The door refuses `@` in a match and
+   in a non-final step of a target; `parse` refuses it in a call.
 
 **The table** is a plain-object record keyed by canonical match in core state
 (`itxExpressionRewriteRules`, JSON-safe; the values hold the two halves parsed). Set replaces.
@@ -312,7 +328,7 @@ session ending) restores the platform row.
 
 One append-only log per context. Offsets shared by durable and ephemeral events (an
 ephemeral consumes an offset, never a row). Idempotency at the door. `waitForEvent`.
-`read` with a scanned-range proof. The DO's own alarm.
+`readEvents` with a scanned-range proof. The DO's own alarm.
 
 ONE reduce-only processor runs INLINE at the commit point: `CoreStreamProcessor`
 (slug `core`, contract `4.0.0`). Its state is everything the DO needs synchronously:
@@ -349,7 +365,7 @@ door and asks the value what it is:
 | The value evaluates to                           | Owns its progress? | Delivery                                                          |
 | ------------------------------------------------ | ------------------ | ----------------------------------------------------------------- |
 | `FacetHandle` (a facet's `processEventBatch`)    | yes                | PUSH `(events, { after, through })`, awaited, serialized per row  |
-| `RpcStubHandle` (a lent client callback)         | yes                | PUSH, fire-and-forget; the client heals a gap with `read`         |
+| `RpcStubHandle` (a lent client callback)         | yes                | PUSH, fire-and-forget; the client heals a gap with `readEvents`   |
 | anything else (an entrypoint, a sibling context) | no                 | the STREAM keeps a cursor: at-least-once, retry ladder, halt fact |
 
 Nothing is declared on the event. The brand is minted where the built-in mints the handle.
@@ -488,6 +504,20 @@ Record<string, string>`, `"cap.js"` the main module), and the old inline wrapper
 - **`invoke(call, ...args)`** is public on the proxy and the DO with the fetch lane's semantics.
 - Hosting is decided on the RESOLVED target (a user's short spelling hosts like the platform's);
   `hostedFacet` carries the facet's `name`. Core contract 6.0.0.
+
+### Decided on 2026-09-04, done (arc two)
+
+- **`@`, the caller's input** (section 3, section 7 rule 7): the token stolen from the pipeline
+  proposals' topic idea, none of their machinery. One token, three positions (spliced argument,
+  the one argument when nested, `...@` merging fields under the template's keys), legal only in a
+  target's final step. The codec grew by a lexer for targets and a printer for the marker; rule 4
+  gained one branch taken only by templates. No `?`, no ordinals, no `~()`.
+- **`itx.ai`, the first bindings root**: Cloudflare's Workers AI binding VERBATIM (`run`, `models`,
+  `gateway`, `toMarkdown`, `autorag`), bound as `AI` in both wrangler configs; `itx.builtins.ai` is
+  the physical door. Misha's test runs on the real root (`provide("itx.ai", fake)`), the dream is
+  the row `itx.fable ⇒ itx.ai.run('@cf/…', @)`, and the deployed lane runs one real inference.
+- **`read` → `readEvents`** on the surface (`append` and `waitForEvent` unchanged; `Stream.read`
+  and the DO's method keep their names — only the root and its callers renamed).
 
 ### Open
 

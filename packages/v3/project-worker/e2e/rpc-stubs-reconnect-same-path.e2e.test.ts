@@ -92,7 +92,7 @@ test("a provider drops and re-provides at the same key — default-deny in betwe
   expect(codeOf(offline)).toBe("NO_ITX_EXPRESSION_MATCH"); // 2. default-deny, not a lingering offline rule
   expect(await ruleAtP()).toBeUndefined(); // the rule went with the session
   await until("the stub gone from presence", async () => !(await presence(itx)).includes("itx.p"));
-  const logBefore = await itx.invoke("itx.read(0, 500)");
+  const logBefore = await itx.invoke("itx.readEvents(0, 500)");
   // set, then REMOVED (the platform-equivalent spelling `itx.builtins.p` — the DO restores whatever
   // platform row lies beneath a dead stub's match; here there is none, so the row is simply gone)
   expect(ruleTargetsAtP(logBefore)).toEqual([
@@ -114,7 +114,7 @@ test("a provider drops and re-provides at the same key — default-deny in betwe
   expect(after).toBe("echo-v2:c"); // 3. reconnect at the SAME key: callable again
 
   // 5. RECONNECT APPENDS EXACTLY ONE EVENT — the rule's re-set — and the map holds one rule at itx.p.
-  const logAfter = await itx.invoke("itx.read(0, 500)");
+  const logAfter = await itx.invoke("itx.readEvents(0, 500)");
   expect(ruleTargetsAtP(logAfter)).toEqual([
     "itx.builtins.rpcStubs.get('itx.p')",
     "itx.builtins.p",
@@ -168,7 +168,7 @@ test("a live subscriber re-subscribes under the same name — the transport is r
       cb1 += events.length;
     },
   });
-  const logBefore = await itx.read(0, 500);
+  const logBefore = await itx.readEvents(0, 500);
   await itx.subscribe({
     name: "s", // the client's model: this REPLACES cb1
     consumes: ["mark"],
@@ -177,7 +177,7 @@ test("a live subscriber re-subscribes under the same name — the transport is r
     },
   });
   // the replacing row appended ONE event, the table holds ONE row named s, and the key is present
-  const logAfter = await itx.read(0, 500);
+  const logAfter = await itx.readEvents(0, 500);
   expect(logAfter.events.length).toBe(logBefore.events.length + 1);
   expect(await rowsNamed("s")).toHaveLength(1);
   expect(await presence(itx)).toContain("subscription:s");

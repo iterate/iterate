@@ -148,7 +148,7 @@ test("THE WHOLE-CONTEXT OVERRIDE: a bare `itx` row at a context sends every shor
   const [landed] = await root.cd("/x").builtins.append({ type: "t", payload: { n: 2 } });
   expect(landed).toMatchObject({ type: "t", payload: { n: 2 } });
   expect(await root.cd("/x").builtins.whoami()).toEqual({ projectId: ctx, path: "/x" });
-  const log = (await root.cd("/x").builtins.read(0, 500)).events as {
+  const log = (await root.cd("/x").builtins.readEvents(0, 500)).events as {
     type: string;
     payload: unknown;
   }[];

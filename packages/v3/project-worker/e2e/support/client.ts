@@ -105,7 +105,7 @@ export const append = (itx: any, ...events: unknown[]): Promise<any[]> =>
 
 /** The first 500 durable rows of the log. */
 export const readAll = async (itx: any): Promise<any[]> =>
-  (await itx.invoke(["itx", ["read", 0, 500]])).events;
+  (await itx.invoke(["itx", ["readEvents", 0, 500]])).events;
 
 /** The DURABLE head — the last durable row's offset, NOT scannedThroughOffset (ephemerals such as
  *  live-state deltas consume offsets past it; a facet only ever needs to catch up to the durable

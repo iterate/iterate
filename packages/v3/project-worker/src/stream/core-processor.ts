@@ -294,7 +294,7 @@ export class CoreStreamProcessor extends StreamProcessor<CoreState> {
             },
           };
         }
-        const target = parse(payload.target as string);
+        const target = parse(payload.target as string, { holes: true }); // a target may hold `@` (rule 7)
         // THE PLATFORM-EQUIVALENT TARGET (`itx.kv ⇒ itx.builtins.kv`, `itx ⇒ itx.builtins`) is "back to
         // the platform row": the row is deleted, never stored — so an un-mask is one ordinary event and
         // the table never carries a row that only restates the default.

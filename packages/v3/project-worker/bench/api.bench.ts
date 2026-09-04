@@ -97,7 +97,7 @@ describe("latency", () => {
   bench(
     "read 100",
     async () => {
-      await invoke(w.itx, ["itx", ["read", 0, 100]]);
+      await invoke(w.itx, ["itx", ["readEvents", 0, 100]]);
     },
     { ...opts, setup: ready },
   );

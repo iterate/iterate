@@ -51,7 +51,7 @@ test("cd('x') and cd('/x') are the SAME sibling stream", async () => {
   // resolution, so the slash-less spelling cannot mint a shadow twin of the same context.
   const itx = openItx(freshCtx("cd"));
   await itx.invoke("itx.cd('x').append({type:'ping-x'})");
-  const page = await itx.invoke("itx.cd('/x').read(0, 50)");
+  const page = await itx.invoke("itx.cd('/x').readEvents(0, 50)");
   expect(page.events.map((e: any) => e.type)).toContain("ping-x");
 });
 
@@ -72,7 +72,7 @@ test("cd('') resolves to THIS context (self) and answers rather than wedging", a
     ),
   ]);
   expect((raced as any[])[0].type).toBe("self-ping");
-  const page = await itx.invoke(["itx", ["read", 0, 50]]);
+  const page = await itx.invoke(["itx", ["readEvents", 0, 50]]);
   expect(page.events.map((e: any) => e.type)).toContain("self-ping");
 });
 
