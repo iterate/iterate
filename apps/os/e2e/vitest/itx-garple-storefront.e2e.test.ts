@@ -86,12 +86,30 @@ test(
     using project = await itx.projects.get(slug).create({});
     await project.__describe();
 
-    // 1. The sales agent: born with ONLY chat, and no inheritance from the
+    // 1. The website: Garple's project worker replaces the seeded template's
+    //    BEFORE the agent is born, so the template's config worker never
+    //    touches it (it would lower the model debounce and let the deployed
+    //    preview's real provider take turns of its own — this test injects
+    //    every model turn).
+    await project.repo.commitFiles({
+      changes: [
+        { content: serveItxSourceForProjectRepo(), path: "serve-itx.ts" },
+        { content: STOREFRONT_WORKER, path: "worker.ts" },
+      ],
+      message: "Garple storefront chat",
+    });
+
+    // 2. The sales agent: born with ONLY chat, and no inheritance from the
     //    project root's mounts. Fixed at birth — a different certificate over
-    //    the same agent is refused.
+    //    the same agent is refused. The real provider never gets a turn here.
     using agent = project.agents.get(VISITOR_AGENT_PATH);
     await agent.create(undefined, {
       capabilityHost: { config: { surface: ["chat"] }, fallback: null },
+    });
+    await agent.append({
+      type: "events.iterate.com/agent/configured",
+      idempotencyKey: `garple/no-provider-turns:${crypto.randomUUID()}`,
+      payload: { config: { llmRequestDebounceMs: 3_600_000 } },
     });
     await expect(
       (async () => {
@@ -99,7 +117,7 @@ test(
       })(),
     ).rejects.toThrow();
 
-    // 2. Its one tool, mounted on its own host — the only thing beyond chat
+    // 3. Its one tool, mounted on its own host — the only thing beyond chat
     //    its scripts can reach.
     using _catalogue = await agent.provideCapability({
       expression: ["workers", ["get", catalogueWorkerRef]],
@@ -109,7 +127,7 @@ test(
       types: "export type Catalogue = { search(query: string): Promise<string[]> };",
     });
 
-    // 3. The sales instructions (garple's selladomain.md): keyed system
+    // 4. The sales instructions (garple's selladomain.md): keyed system
     //    context, exactly how the config worker injects AGENTS.md.
     await agent.append({
       type: AGENT_CONTEXT_ADDED_TYPE,
@@ -137,15 +155,6 @@ test(
     });
     expect(inside.success()).toMatchObject({ children: ["chat"] });
     expect(inside.success().repoError).toMatch(/no capability "repo\.readFile"/);
-
-    // 4. The website: the project worker serves each visitor a scoped itx.
-    await project.repo.commitFiles({
-      changes: [
-        { content: serveItxSourceForProjectRepo(), path: "serve-itx.ts" },
-        { content: STOREFRONT_WORKER, path: "worker.ts" },
-      ],
-      message: "Garple storefront chat",
-    });
 
     // 5. A visitor arrives, with the stock client, on the site's own origin.
     const base = new URL(buildUrl({ path: "/" }));
@@ -193,12 +202,14 @@ test(
       replayAfterOffset: 0,
     });
     try {
-      // Every model turn settles as one script run; each step below waits
-      // for ITS settlement, so no step reads the previous step's outcome.
+      // Every model turn settles as ONE script run whose execution id is the
+      // assistant item's offset; each step below waits for exactly its own.
       const settlementAfter = (offset: number) =>
         agent.stream.waitForEvent({
           afterOffset: offset,
           eventTypes: [SCRIPT_SETTLED_TYPE],
+          predicate: (event) =>
+            (event.payload as { executionId: string }).executionId === `agent-output:${offset}`,
           timeoutMs: 45_000,
         });
 

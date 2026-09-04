@@ -63,6 +63,8 @@ export function restrictPrototype(prototype: object, surface: ItxSurface): objec
   }
   let restricted = byKey.get(key);
   if (restricted === undefined) {
+    // `Object.create` is typed `any`; what it returns IS an object (the new
+    // prototype), so the assertion only names what the lib type loses.
     restricted = Object.create(prototype) as object;
     for (const name of Object.getOwnPropertyNames(prototype)) {
       if (surface.includes(name) || ALWAYS_ALLOWED.has(name)) continue;
@@ -71,6 +73,8 @@ export function restrictPrototype(prototype: object, surface: ItxSurface): objec
         enumerable: false,
         get() {
           // Read lazily: the hop is installed on the class after module load.
+          // `Object.getPrototypeOf` is typed `any`; a class prototype's parent
+          // is always an object here (never null: every class extends RpcTarget).
           const beyond = Reflect.get(Object.getPrototypeOf(prototype) as object, name, this);
           if (beyond !== undefined) return beyond;
           throw new Error(`"${name}" is not available in this scope (restricted itx surface)`);
