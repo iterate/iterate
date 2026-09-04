@@ -16,6 +16,8 @@ type ConfigRepoFileTarget = AgentConfigRepoFileReferenceTarget;
 export type AgentReferenceReadResult = {
   bytes: Uint8Array;
   commitOid: string;
+  originalBytes: number;
+  truncated: boolean;
 };
 
 type AgentReferenceMaterializationOutcome =
@@ -60,33 +62,33 @@ type UniqueReference = {
  */
 export async function materializeAgentReferences(
   document: AgentRichContentV1,
-  readRepoFile: (target: ConfigRepoFileTarget) => Promise<AgentReferenceReadResult | null>,
+  readRepoFile: (
+    target: ConfigRepoFileTarget,
+    maximumBytes: number,
+  ) => Promise<AgentReferenceReadResult | null>,
 ): Promise<AgentReferenceMaterializationOutcome[]> {
   const references = uniqueConfigRepoReferences(document);
-  const reads = await Promise.all(
-    references.map(async (reference) => {
-      try {
-        return { reference, result: await readRepoFile(reference.target) } as const;
-      } catch (error) {
-        return { reference, error: stringifyError(error) } as const;
-      }
-    }),
-  );
   const outcomes: AgentReferenceMaterializationOutcome[] = [];
   let includedTotalBytes = 0;
 
-  for (const read of reads) {
-    const { occurrenceIds, target } = read.reference;
-    if ("error" in read && read.error !== undefined) {
+  for (const { occurrenceIds, target } of references) {
+    const maximumBytes = Math.min(
+      AGENT_REFERENCE_MAX_FILE_BYTES,
+      AGENT_REFERENCE_MAX_TOTAL_BYTES - includedTotalBytes,
+    );
+    let result: AgentReferenceReadResult | null;
+    try {
+      result = await readRepoFile(target, maximumBytes);
+    } catch (error) {
       outcomes.push({
         status: "read-failed",
         target,
         occurrenceIds,
-        message: read.error,
+        message: stringifyError(error),
       });
       continue;
     }
-    if (read.result === null) {
+    if (result === null) {
       outcomes.push({
         status: "missing",
         target,
@@ -94,33 +96,36 @@ export async function materializeAgentReferences(
       });
       continue;
     }
-    const { bytes, commitOid } = read.result;
-    const decoded = decodeUtf8(bytes);
+    const { bytes, commitOid, originalBytes, truncated } = result;
+    const expectedTruncated = originalBytes > bytes.byteLength;
+    if (
+      bytes.byteLength > maximumBytes ||
+      originalBytes < bytes.byteLength ||
+      truncated !== expectedTruncated
+    ) {
+      throw new Error(`Repo returned inconsistent bounded file metadata for ${target.path}.`);
+    }
+    const decoded = decodeUtf8Prefix(bytes, truncated);
     if (decoded === null) {
       outcomes.push({
         status: "binary",
         target,
         occurrenceIds,
         resolvedCommitOid: commitOid,
-        originalBytes: bytes.byteLength,
+        originalBytes,
       });
       continue;
     }
-    const allowedBytes = Math.min(
-      AGENT_REFERENCE_MAX_FILE_BYTES,
-      AGENT_REFERENCE_MAX_TOTAL_BYTES - includedTotalBytes,
-    );
-    const bounded = truncateUtf8(decoded, allowedBytes);
-    includedTotalBytes += bounded.includedBytes;
+    includedTotalBytes += decoded.includedBytes;
     outcomes.push({
       status: "resolved",
       target,
       occurrenceIds,
       resolvedCommitOid: commitOid,
-      originalBytes: bytes.byteLength,
-      includedBytes: bounded.includedBytes,
-      truncated: bounded.includedBytes < bytes.byteLength,
-      content: bounded.content,
+      originalBytes,
+      includedBytes: decoded.includedBytes,
+      truncated: truncated || decoded.includedBytes < bytes.byteLength,
+      content: decoded.content,
     });
   }
 
@@ -153,35 +158,24 @@ function uniqueConfigRepoReferences(document: AgentRichContentV1): UniqueReferen
   return [...byCoordinate.values()];
 }
 
-function decodeUtf8(bytes: Uint8Array): string | null {
-  try {
-    const decoded = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
-    return decoded.includes("\0") ? null : decoded;
-  } catch {
-    return null;
-  }
-}
-
-function truncateUtf8(
-  content: string,
-  maximumBytes: number,
+function decodeUtf8Prefix(
+  bytes: Uint8Array,
+  truncated: boolean,
 ): {
   content: string;
   includedBytes: number;
-} {
-  if (maximumBytes <= 0) return { content: "", includedBytes: 0 };
-  const bytes = new TextEncoder().encode(content);
-  if (bytes.byteLength <= maximumBytes) return { content, includedBytes: bytes.byteLength };
-  let end = maximumBytes;
+} | null {
+  if (bytes.includes(0)) return null;
+  const minimumEnd = truncated ? Math.max(0, bytes.byteLength - 3) : bytes.byteLength;
   const decoder = new TextDecoder("utf-8", { fatal: true });
-  while (end > 0) {
+  for (let end = bytes.byteLength; end >= minimumEnd; end -= 1) {
     try {
-      return { content: decoder.decode(bytes.slice(0, end)), includedBytes: end };
+      return { content: decoder.decode(bytes.subarray(0, end)), includedBytes: end };
     } catch {
-      end -= 1;
+      // A bounded prefix can end partway through one UTF-8 code point.
     }
   }
-  return { content: "", includedBytes: 0 };
+  return null;
 }
 
 function resolutionMetadata(outcomes: readonly AgentReferenceMaterializationOutcome[]) {

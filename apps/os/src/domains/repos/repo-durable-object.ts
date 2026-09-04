@@ -75,6 +75,7 @@ import { searchRepoFilePaths } from "./repo-file-search.ts";
 
 const ARTIFACT_HEAD_VISIBILITY_RETRIES = 5;
 const REPO_DIR = "/repo";
+const REPO_HEAD_FILE_PREFIX_MAX_BYTES = 64 * 1024;
 // The durable GitHub link record: the mirror-push hot path (every commit)
 // reads it from KV instead of re-folding the stream. The link lifecycle events
 // on the repo stream are the record of TRUTH for inspection; this key is
@@ -1105,6 +1106,77 @@ export class RepoDurableObject extends DurableObject<Env> {
     }
   }
 
+  async #readHeadFileBytes(
+    path: string,
+  ): Promise<{ bytes: Uint8Array; commitOid: string; path: string } | null> {
+    try {
+      await this.#lazyFreshHead();
+      const { bytes, head } = await this.#lazyReader().readHeadPaths([path]);
+      if (bytes[0] === null || bytes[0] === undefined) return null;
+      return { bytes: bytes[0], commitOid: head.commitOid, path };
+    } catch (error) {
+      console.warn(
+        `repo head read via the lazy lane failed; falling back to the tree cache: ${String(error)}`,
+      );
+    }
+    try {
+      return await this.#withHeadTree(async (commitOid) => {
+        const bytes = await this.#readHeadTreeBytesVerified(path);
+        return bytes === null ? null : { bytes, commitOid, path };
+      });
+    } catch (error) {
+      this.ctx.storage.kv.delete(REPO_HEAD_TREE_KEY);
+      console.warn(
+        `repo head read via the head-tree cache failed; falling back to a clone: ${String(error)}`,
+      );
+    }
+    const { filesystem, head } = await this.#checkout({});
+    const absolutePath = `${REPO_DIR}/${path}`;
+    try {
+      await filesystem.lstat(absolutePath);
+    } catch (error) {
+      if ((error as { code?: unknown })?.code === "ENOENT") return null;
+      throw error;
+    }
+    const bytes = await readCheckoutFileBytes(filesystem, absolutePath);
+    return { bytes, commitOid: head.oid, path };
+  }
+
+  /**
+   * A bounded raw prefix of one committed file at HEAD. This internal RPC
+   * keeps callers from transferring or retaining more than the requested
+   * bytes while preserving the full file length for truncation metadata.
+   */
+  async readHeadFilePrefix(input: { path: string; maximumBytes: number }): Promise<{
+    bytes: Uint8Array;
+    commitOid: string;
+    originalBytes: number;
+    path: string;
+    truncated: boolean;
+  } | null> {
+    if (
+      !Number.isSafeInteger(input.maximumBytes) ||
+      input.maximumBytes < 0 ||
+      input.maximumBytes > REPO_HEAD_FILE_PREFIX_MAX_BYTES
+    ) {
+      throw new RangeError(
+        `maximumBytes must be an integer from 0 through ${REPO_HEAD_FILE_PREFIX_MAX_BYTES}.`,
+      );
+    }
+    const path = normalizeRepoFilePath(input.path);
+    const result = await this.#readHeadFileBytes(path);
+    if (result === null) return null;
+    const originalBytes = result.bytes.byteLength;
+    const prefix = result.bytes.slice(0, input.maximumBytes);
+    return {
+      bytes: prefix,
+      commitOid: result.commitOid,
+      originalBytes,
+      path,
+      truncated: prefix.byteLength < originalBytes,
+    };
+  }
+
   /**
    * Committed file contents at HEAD — or, with `commitOid`, pinned to that
    * commit — null when the path does not exist there. `encoding: "base64"`
@@ -1120,39 +1192,13 @@ export class RepoDurableObject extends DurableObject<Env> {
     const path = normalizeRepoFilePath(input.path);
     if (input.commitOid !== undefined) assertCommitOid(input.commitOid);
     if (input.commitOid === undefined) {
-      // HEAD reads serve from the lazy snapshot: manifest lookup + verified
-      // store bytes, no clone anywhere. Failures fall through to the
-      // clone-backed byte-tree lane below, loudly.
-      try {
-        await this.#lazyFreshHead();
-        // Head label and bytes come from ONE reader observation — an
-        // interleaved install can never mix snapshots inside this response.
-        const { bytes, head } = await this.#lazyReader().readHeadPaths([path]);
-        if (bytes[0] === null || bytes[0] === undefined) return null;
-        const content =
-          input.encoding === "base64"
-            ? bytesToBase64(bytes[0])
-            : new TextDecoder().decode(bytes[0]);
-        return { commitOid: head.commitOid, content, path };
-      } catch (error) {
-        console.warn(
-          `repo head read via the lazy lane failed; falling back to the tree cache: ${String(error)}`,
-        );
-      }
-      try {
-        return await this.#withHeadTree(async (commitOid) => {
-          const bytes = await this.#readHeadTreeBytesVerified(path);
-          if (bytes === null) return null;
-          const content =
-            input.encoding === "base64" ? bytesToBase64(bytes) : new TextDecoder().decode(bytes);
-          return { commitOid, content, path };
-        });
-      } catch (error) {
-        this.ctx.storage.kv.delete(REPO_HEAD_TREE_KEY);
-        console.warn(
-          `repo head read via the head-tree cache failed; falling back to a clone: ${String(error)}`,
-        );
-      }
+      const result = await this.#readHeadFileBytes(path);
+      if (result === null) return null;
+      const content =
+        input.encoding === "base64"
+          ? bytesToBase64(result.bytes)
+          : new TextDecoder().decode(result.bytes);
+      return { commitOid: result.commitOid, content, path };
     }
     if (input.encoding === "base64") {
       const { filesystem, head } = await this.#checkout({ commitOid: input.commitOid });

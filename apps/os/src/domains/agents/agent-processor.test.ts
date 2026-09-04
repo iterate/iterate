@@ -28,6 +28,7 @@ import {
   type AgentProcessorDeps,
 } from "./agent-processor-implementation.ts";
 import { buildAgentLlmRequestBody, projectContextAdded } from "./agent-prompt-fold.ts";
+import { AGENT_REFERENCE_MAX_FILE_BYTES } from "./agent-reference-materialization.ts";
 import type { WorkersAiMessage } from "./workers-ai-transport.ts";
 
 type AgentEventInput = ConsumedInput<AgentProcessorContract>;
@@ -228,11 +229,17 @@ describe("AgentProcessor turn lifecycle", () => {
     const readRepoFile = vi.fn(async () => ({
       bytes: new TextEncoder().encode("latest config contents"),
       commitOid: "latest-commit",
+      originalBytes: 22,
+      truncated: false,
     }));
     const h = makeAgentHarness(undefined, { readRepoFile });
     await h.play(["append", ...NEW_AGENT_EVENTS, userMessageWithConfigFileReferences()]);
 
     expect(readRepoFile).toHaveBeenCalledOnce();
+    expect(readRepoFile).toHaveBeenCalledWith(
+      { kind: "config-repo-file", repoPath: "/repos/config", path: "AGENTS.md" },
+      AGENT_REFERENCE_MAX_FILE_BYTES,
+    );
     expect(h.llm.calls).toHaveLength(0);
     const materialized = h
       .events(CONTEXT_ADDED)
@@ -278,6 +285,8 @@ describe("AgentProcessor turn lifecycle", () => {
       readRepoFile: async () => ({
         bytes: new TextEncoder().encode("latest config contents"),
         commitOid: "latest-commit",
+        originalBytes: 22,
+        truncated: false,
       }),
     });
     await h.play([

@@ -31,6 +31,8 @@ describe("agent reference materialization", () => {
     const read = vi.fn(async () => ({
       bytes: new TextEncoder().encode("# Instructions"),
       commitOid: "latest-oid",
+      originalBytes: 14,
+      truncated: false,
     }));
     const outcomes = await materializeAgentReferences(
       referenceDocument(["AGENTS.md", "AGENTS.md"]),
@@ -38,6 +40,10 @@ describe("agent reference materialization", () => {
     );
 
     expect(read).toHaveBeenCalledOnce();
+    expect(read).toHaveBeenCalledWith(
+      { kind: "config-repo-file", repoPath: "/repos/config", path: "AGENTS.md" },
+      AGENT_REFERENCE_MAX_FILE_BYTES,
+    );
     expect(outcomes).toEqual([
       {
         status: "resolved",
@@ -59,7 +65,12 @@ describe("agent reference materialization", () => {
       async (target) => {
         if (target.path === "missing.txt") return null;
         if (target.path === "binary.dat") {
-          return { bytes: Uint8Array.of(0xff), commitOid: "binary-oid" };
+          return {
+            bytes: Uint8Array.of(0xff),
+            commitOid: "binary-oid",
+            originalBytes: 1,
+            truncated: false,
+          };
         }
         throw new Error("repo unavailable");
       },
@@ -69,12 +80,33 @@ describe("agent reference materialization", () => {
   });
 
   test("enforces per-file and total UTF-8 byte budgets", async () => {
-    const content = "x".repeat(AGENT_REFERENCE_MAX_FILE_BYTES + 100);
+    const bytes = new TextEncoder().encode("x".repeat(AGENT_REFERENCE_MAX_FILE_BYTES + 100));
+    const requestedMaximums: number[] = [];
+    let activeReads = 0;
+    let maximumActiveReads = 0;
     const outcomes = await materializeAgentReferences(
       referenceDocument(["one.txt", "two.txt", "three.txt"]),
-      async () => ({ bytes: new TextEncoder().encode(content), commitOid: "latest-oid" }),
+      async (_target, maximumBytes) => {
+        requestedMaximums.push(maximumBytes);
+        activeReads += 1;
+        maximumActiveReads = Math.max(maximumActiveReads, activeReads);
+        await Promise.resolve();
+        activeReads -= 1;
+        return {
+          bytes: bytes.slice(0, maximumBytes),
+          commitOid: "latest-oid",
+          originalBytes: bytes.byteLength,
+          truncated: maximumBytes < bytes.byteLength,
+        };
+      },
     );
     const resolved = outcomes.filter((outcome) => outcome.status === "resolved");
+    expect(requestedMaximums).toEqual([
+      AGENT_REFERENCE_MAX_FILE_BYTES,
+      AGENT_REFERENCE_MAX_FILE_BYTES,
+      0,
+    ]);
+    expect(maximumActiveReads).toBe(1);
     expect(resolved.map((outcome) => outcome.includedBytes)).toEqual([
       AGENT_REFERENCE_MAX_FILE_BYTES,
       AGENT_REFERENCE_MAX_FILE_BYTES,
@@ -84,5 +116,28 @@ describe("agent reference materialization", () => {
       AGENT_REFERENCE_MAX_TOTAL_BYTES,
     );
     expect(resolved.every((outcome) => outcome.truncated)).toBe(true);
+  });
+
+  test("removes an incomplete UTF-8 code point from a bounded prefix", async () => {
+    const fullBytes = new TextEncoder().encode(`${"x".repeat(10)}€ trailing`);
+    const outcomes = await materializeAgentReferences(
+      referenceDocument(["unicode.txt"]),
+      async () => ({
+        bytes: fullBytes.slice(0, 12),
+        commitOid: "latest-oid",
+        originalBytes: fullBytes.byteLength,
+        truncated: true,
+      }),
+    );
+
+    expect(outcomes).toEqual([
+      expect.objectContaining({
+        status: "resolved",
+        content: "x".repeat(10),
+        includedBytes: 10,
+        originalBytes: fullBytes.byteLength,
+        truncated: true,
+      }),
+    ]);
   });
 });
