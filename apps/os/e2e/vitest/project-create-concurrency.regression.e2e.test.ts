@@ -1,8 +1,8 @@
-import { failing } from "@iterate-com/shared/test-support/failing-test";
+import { createFailing } from "@iterate-com/shared/test-support/failing-test";
 import { test } from "vitest";
 import { adminSecret, withItxSession } from "./test-helpers.ts";
 
-failing(test, /CONCURRENT CREATE SPLITS IDENTITY/)(
+createFailing(test, /CONCURRENT CREATE SPLITS IDENTITY/)(
   "DESIRED: concurrent creates of one slug adopt the same project identity",
   { retry: 0 },
   async ({ expect }) => {

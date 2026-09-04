@@ -16,12 +16,22 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { expect } from "@playwright/test";
+import { createFlake } from "@iterate-com/shared/test-support/flake-test";
 import { test } from "../test-support/test.ts";
 
-test("multiple photos share a mosaic row; a lone tall one sits on its blurred backdrop", async ({
-  page,
-  helpers,
-}) => {
+// Known flake, the first real createFlake adoptee (2026-09-03): on preview CI
+// the first photo message sometimes never renders — getByLabel times out on
+// phone-screenshot.png — and it defeated the playwright retry twice in one
+// day (Depot runs rs7dwp1l27, qg40fqp41j). Any other failure still goes red.
+// The wrapper deadline sits well under the 240s spec timeout so a hang goes
+// red instead of vacuously green; the dashboard row tracks the flake rate.
+const flake = createFlake(
+  test,
+  /Timeout \d+ms exceeded[\s\S]*waiting for getByLabel\('phone-screenshot\.png'\)/,
+  { timeoutMs: 120_000 },
+);
+
+flake("photos share a mosaic row; tall solo on a blurred backdrop", async ({ page, helpers }) => {
   await using fixture = await helpers.createMobileFixture("mobile-chat-photos");
 
   const agent = await fixture.createAgent();

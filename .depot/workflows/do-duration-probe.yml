@@ -1,0 +1,100 @@
+# Durable Objects duration alarm — hourly cost-runaway detection for both
+# Cloudflare accounts (dev/preview and prd). Runs the probe from
+# apps/os/scripts/do-duration-probe.ts via scripts/ci/do-duration-alert.ts,
+# which trips on either signature of the DO billable-duration leak class
+# (apps/os/tasks/do-duration-leak/):
+#
+#   1. one invocation pinned for hours of wall-clock (leaked RPC session)
+#   2. account-wide active time above a per-account hourly ceiling (the
+#      2026-09-01 stream-DO wake-loop runaway: ~$300/hour, noticed only on
+#      the bill after 28 hours — this workflow is the "never again")
+#
+# Every run rewrites the headline of the day's thread in Slack #error-pulse
+# (one message per UTC day: latest hour, today's total, hours over the
+# ceiling, per account). A breach in the last two hours or a probe that could
+# not run is a reply in that thread, and the run goes red.
+#
+# Test the Slack hookup end to end (a tiny threshold forces an alert, marked
+# 🧪 TEST RUN in the message):
+#
+#   depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate \
+#     --workflow do-duration-probe.yml \
+#     --ref <branch> \
+#     --input threshold-do-hours=1
+#
+# If dispatch is unavailable for an unmerged branch, push a commit whose
+# message contains the magic word `run_do_duration_probe` — that push trigger
+# runs the same forced-alert test (threshold 1). Beware: MENTIONING the magic
+# word in an ordinary commit message triggers it too (found out the fun way —
+# the commit that added this feature described it verbatim and self-tested).
+#
+# Depot registers automatic triggers when this file is on the default branch —
+# branch-only changes to the `on:` block do not take effect until merged.
+#
+# Secrets (depot ci secrets --org 0p91s0lz49): DOPPLER_TOKEN.
+
+name: DO duration probe (Depot CI)
+
+on:
+  # Hourly. Offset from deploys (top of hour) and the preview GC sweep (:23).
+  schedule:
+    - cron: "41 * * * *"
+  workflow_dispatch:
+    inputs:
+      threshold-do-hours:
+        description: >-
+          Override BOTH accounts' active-time ceiling (DO-hours per hour).
+          Empty uses the per-account defaults (dev/preview 500, prd 600).
+          Set 1 to force an alert and test the Slack hookup.
+        type: string
+        default: ""
+  # Testing hatch for unmerged branches: any push whose commit message
+  # contains `run_do_duration_probe` runs the forced-alert test.
+  push:
+    branches:
+      - "**"
+
+concurrency:
+  group: do-duration-probe
+  cancel-in-progress: false
+
+jobs:
+  probe:
+    name: DO duration / probe
+    if: github.event_name != 'push' || contains(github.event.head_commit.message, 'run_do_duration_probe')
+    runs-on: depot-ubuntu-24.04
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          # Scheduled runs always probe with the default branch's thresholds
+          # and tooling; dispatch/push runs test the triggering ref.
+          ref: ${{ github.event_name == 'schedule' && github.event.repository.default_branch || github.sha }}
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install
+      - name: Install Doppler CLI
+        run: |-
+          for i in 1 2 3; do curl -sfLS https://cli.doppler.com/install.sh | sh -s -- --no-package-manager && break; echo "Attempt $i failed, retrying in 5s..."; sleep 5; done
+          doppler --version || { echo 'Failed to install Doppler CLI after 3 attempts'; exit 1; }
+      - name: Probe both accounts, alert on breach
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          # workflow_dispatch: the input (may be empty = defaults).
+          # push (magic-word test): always the forced-alert threshold.
+          THRESHOLD_DO_HOURS: ${{ github.event_name == 'push' && '1' || inputs.threshold-do-hours }}
+        run: |-
+          set -euo pipefail
+          if [ -n "${THRESHOLD_DO_HOURS}" ]; then
+            pnpm tsx scripts/ci/do-duration-alert.ts run --threshold-do-hours "${THRESHOLD_DO_HOURS}"
+          else
+            pnpm tsx scripts/ci/do-duration-alert.ts run
+          fi

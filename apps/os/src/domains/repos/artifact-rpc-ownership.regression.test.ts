@@ -1,4 +1,4 @@
-import { failing } from "@iterate-com/shared/test-support/failing-test";
+import { createFailing } from "@iterate-com/shared/test-support/failing-test";
 import { expect, test, vi } from "vitest";
 import { replaceArtifactWithEmptyRepo } from "./artifact-replacement.ts";
 
@@ -6,7 +6,7 @@ function artifactsError(code: string): Error & { code: string } {
   return Object.assign(new Error(code), { code });
 }
 
-failing(test, /TEMP REPO HANDLE NOT DISPOSED/)(
+createFailing(test, /TEMP REPO HANDLE NOT DISPOSED/)(
   "DESIRED: deletion polling disposes each temporary repository handle",
   async () => {
     const calls: string[] = [];
@@ -50,7 +50,7 @@ failing(test, /TEMP REPO HANDLE NOT DISPOSED/)(
   },
 );
 
-failing(test, /CLEANUP MASQUERADES AS DELETION BARRIER/)(
+createFailing(test, /CLEANUP MASQUERADES AS DELETION BARRIER/)(
   "DESIRED: cleanup failure does not masquerade as the repository deletion barrier",
   async () => {
     const cleanupError = artifactsError("NOT_FOUND");

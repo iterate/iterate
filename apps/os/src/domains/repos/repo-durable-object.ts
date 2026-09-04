@@ -702,7 +702,12 @@ export class RepoDurableObject extends DurableObject<Env> {
 
   async #commitFiles(input: CommitRepoFilesInput): Promise<CommitRepoFilesResult> {
     await this.#flushPendingCommitCompleted();
-    const parsed = parseCommitFilesInput(input);
+    let parsed = parseCommitFilesInput(input);
+    if (parsed.amendIfHead !== undefined && this.getGithubLink() !== null) {
+      // Never rewrite a GitHub-linked repo: the mirror push cannot force with
+      // a lease, so history stays append-only there and the commit stacks.
+      parsed = { ...parsed, amendIfHead: undefined };
+    }
     const repo = await this.gitAccess();
     const branch = parsed.branch ?? repo.defaultBranch;
     if (branch === REPO_DEFAULT_BRANCH) {
@@ -724,6 +729,8 @@ export class RepoDurableObject extends DurableObject<Env> {
       }
       console.warn(`lazy commit fell back to the clone lane (safe): ${attempt.detail}`);
     }
+    // The clone fallback never amends (its git wrapper cannot re-parent); an
+    // ordinary commit on top is the degraded outcome, reported as such.
     const result = await commitFilesToArtifactRepo({
       author: parsed.author,
       branch,
@@ -755,6 +762,7 @@ export class RepoDurableObject extends DurableObject<Env> {
     await this.#flushPendingCommitCompleted();
 
     return {
+      amended: false,
       branch: result.branch,
       changedPaths: result.changedPaths,
       commitOid: result.commitOid,
@@ -779,6 +787,7 @@ export class RepoDurableObject extends DurableObject<Env> {
     const branch = REPO_DEFAULT_BRANCH;
     const reader = this.#lazyReader();
     const command = {
+      amendIfHead: parsed.amendIfHead,
       author: {
         date: new Date(),
         email: parsed.author?.email ?? ITERATE_GITHUB_BOT_COMMIT_AUTHOR.email,
@@ -847,7 +856,13 @@ export class RepoDurableObject extends DurableObject<Env> {
     if (outcome.changedPaths.length === 0) {
       return {
         kind: "completed",
-        result: { branch, changedPaths: [], commitOid: outcome.commitOid, noChanges: true },
+        result: {
+          amended: false,
+          branch,
+          changedPaths: [],
+          commitOid: outcome.commitOid,
+          noChanges: true,
+        },
       };
     }
 
@@ -877,6 +892,9 @@ export class RepoDurableObject extends DurableObject<Env> {
     return {
       kind: "completed",
       result: {
+        // Amended exactly when the tip this commit superseded is the one the
+        // caller named.
+        amended: outcome.parentCommitOid === parsed.amendIfHead,
         branch,
         changedPaths: outcome.changedPaths,
         commitOid: outcome.commitOid,
@@ -927,6 +945,7 @@ export class RepoDurableObject extends DurableObject<Env> {
     await this.#flushPendingCommitCompleted();
 
     return {
+      amended: false,
       branch: result.branch,
       changedPaths: result.changedPaths,
       commitOid: result.commitOid,
@@ -2142,6 +2161,7 @@ async function mutateArtifactRepo<Extra extends Record<string, unknown>>(input: 
     const [head] = await git.log({ depth: 1 });
     if (!head) throw new Error("Repo has no commits.");
     return {
+      amended: false,
       branch: input.branch,
       changedPaths,
       commitOid: head.oid,
@@ -2173,6 +2193,7 @@ async function mutateArtifactRepo<Extra extends Record<string, unknown>>(input: 
   }
 
   return {
+    amended: false,
     branch: input.branch,
     changedPaths,
     commitOid: commit.oid,
@@ -2313,6 +2334,7 @@ function parseCommitFilesInput(input: CommitRepoFilesInput): CommitRepoFilesInpu
       throw new Error("commitFiles author must include non-empty name and email.");
     }
   }
+  if (input.amendIfHead !== undefined) assertCommitOid(input.amendIfHead);
 
   return {
     ...input,

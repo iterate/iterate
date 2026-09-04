@@ -152,6 +152,9 @@ export async function testTarget(options: TestTargetOptions) {
     (await retakeRecordedSlotIfFree({
       holder,
       leaseMs: defaultPreviewLeaseMs,
+      // Tests only renew — the deployment on a lapsed-but-free slot is this
+      // PR's own, and nothing is deployed after this.
+      onRetaken: async () => true,
       recordedSlug: displaySlot?.slug ?? null,
       semaphore,
     }));
@@ -468,21 +471,35 @@ async function deployPreviewApps({
   // the diff-selected apps: anything left undeployed would keep old-slot URLs
   // and e2e would run against another slot's deployment.
   const previousSlug = current.state.environmentConfigLease?.slug ?? null;
-  const appsToDeploy =
-    previousSlug && previousSlug !== environmentConfigLease.slug
-      ? expandPreviewDependencies([
-          ...new Set([
-            ...selectedApps.map((app) => app.slug),
-            ...Object.keys(current.state.apps).filter(
-              (appSlug): appSlug is CloudflarePreviewAppSlugType =>
-                cloudflarePreviewApps[appSlug as CloudflarePreviewAppSlugType] != null,
-            ),
-          ]),
-        ]).map((appSlug) => cloudflarePreviewApps[appSlug])
-      : selectedApps;
-  if (appsToDeploy.length > selectedApps.length) {
+  const slotMoved = previousSlug !== null && previousSlug !== environmentConfigLease.slug;
+  // Every claim erased the slot (fresh-per-deploy contract), so the apps whose
+  // state that wiped must redeploy regardless of the diff: OS is parked at
+  // 503 by its tombstone deploy, the streams playground lost its DO
+  // namespace, and auth's D1 lost the OS client it re-seeds on deploy.
+  const erasedApps = [...selectPreviewSlotDataOwners().map((app) => app.slug), "auth" as const];
+  const appsToDeploy = expandPreviewDependencies([
+    ...new Set([
+      ...selectedApps.map((app) => app.slug),
+      ...erasedApps,
+      ...(slotMoved
+        ? Object.keys(current.state.apps).filter(
+            // The recorded state can name apps this branch no longer knows;
+            // membership in the fleet map is the narrowing.
+            (appSlug): appSlug is CloudflarePreviewAppSlugType => appSlug in cloudflarePreviewApps,
+          )
+        : []),
+    ]),
+  ]).map((appSlug) => cloudflarePreviewApps[appSlug]);
+  if (slotMoved) {
     logPreview(
       `slot changed from ${previousSlug} to ${environmentConfigLease.slug}: redeploying every previously recorded app (${appsToDeploy.map((app) => app.slug).join(", ")}) so nothing keeps pointing at the old slot`,
+    );
+  } else if (appsToDeploy.length > selectedApps.length) {
+    logPreview(
+      `slot erased before deploy: also redeploying ${appsToDeploy
+        .filter((app) => !selectedApps.includes(app))
+        .map((app) => app.slug)
+        .join(", ")}`,
     );
   }
   // A successful claim clears exhaustion/takeover banners; a slot move
@@ -852,6 +869,9 @@ async function testPreviewApps({
     (await retakeRecordedSlotIfFree({
       holder,
       leaseMs: defaultPreviewLeaseMs,
+      // Tests only renew — the deployment on a lapsed-but-free slot is this
+      // PR's own, and nothing is deployed after this.
+      onRetaken: async () => true,
       recordedSlug: displaySlot?.slug ?? null,
       semaphore,
     }));
@@ -1142,6 +1162,61 @@ export async function cleanup(options: PullRequestCommandOptions = {}) {
   return result;
 }
 
+type EraseOptions = PullRequestCommandOptions & {
+  /** The PR head this run tested. When the PR has moved on since, the erase is skipped: that push's own run erases before it deploys, and erasing now would race its deploy. Omit to erase regardless. */
+  ranHeadSha?: string;
+};
+
+/**
+ * Erase the slot this PR holds and keep the lease. CI runs it right after the e2e, so the test projects a run created stop burning the moment it ends.
+ */
+export async function erase(options: EraseOptions = {}) {
+  const { context, runtime } = await resolvePreviewCommandSetup(options);
+  return await eraseHeldSlotAfterRun({
+    context,
+    eraseSlotData: makePreviewSlotDataEraser(runtime),
+    ranHeadSha: options.ranHeadSha || null,
+    semaphore: runtime.createPreviewSemaphoreResourceClient(),
+  });
+}
+
+async function eraseHeldSlotAfterRun(input: {
+  context: Pick<
+    PullRequestPreviewContext,
+    "pullRequestBody" | "pullRequestHeadSha" | "pullRequestNumber"
+  >;
+  eraseSlotData: EraseSlotData;
+  ranHeadSha: string | null;
+  semaphore: PreviewSemaphoreResourceClient;
+}) {
+  const holder = pullRequestHolder(input.context.pullRequestNumber);
+  if (input.ranHeadSha && input.ranHeadSha !== input.context.pullRequestHeadSha) {
+    logPreview(
+      `erase skipped: PR #${input.context.pullRequestNumber} moved on from ${input.ranHeadSha.slice(0, 7)} to ${input.context.pullRequestHeadSha.slice(0, 7)} — that push's run erases ${holder}'s slot before it deploys`,
+    );
+    return { erased: false, reason: "superseded", slug: null };
+  }
+  // Ownership comes from the semaphore, as everywhere; the PR body's slot is
+  // only the affinity hint for a holder that somehow has two.
+  const lease = await adoptLeaseHeldBySemaphore({
+    holder,
+    leaseMs: defaultPreviewLeaseMs,
+    preferSlug:
+      parseCloudflarePreviewState(input.context.pullRequestBody).environmentConfigLease?.slug ||
+      null,
+    semaphore: input.semaphore,
+  });
+  if (!lease) {
+    logPreview(`erase skipped: the semaphore leases no slot to ${holder} — nothing to erase`);
+    return { erased: false, reason: "no-lease", slug: null };
+  }
+  await input.eraseSlotData({ dopplerConfig: lease.dopplerConfig, slug: lease.slug });
+  logPreview(
+    `erased ${lease.slug} after the run; ${holder} keeps the lease until ${formatUntil(lease.leasedUntil)}`,
+  );
+  return { erased: true, reason: null, slug: lease.slug };
+}
+
 /**
  * Assign a preview slot to a PR — a specific slot or whatever is free — and record it in the PR body's managed preview section.
  */
@@ -1177,32 +1252,30 @@ export async function assign(options: AssignOptions = {}) {
     wantedSlug,
   });
 
-  // Anything but a kept/renewed lease breaks continuous ownership: even a
-  // re-acquisition of the SAME slug means someone else may have deployed over
-  // this PR's apps in the interim, so recorded deployments cannot be trusted.
-  const needsRedeploy = result.outcome !== "kept";
+  // Every outcome needs a redeploy now: taking a slot erases it, and that
+  // includes keeping the one this PR already held (fresh on every acquire).
+  // A changed slug additionally means the recorded apps point at the wrong
+  // hostname.
   const redeployMessage = result.changedFromSlug
     ? `Slot reassigned from ${result.changedFromSlug} to ${result.lease.slug}; run preview deploy to redeploy here.`
-    : `Slot ${result.lease.slug} was re-acquired after this PR's lease lapsed — previous deployments there may have been replaced. Run preview deploy to redeploy.`;
+    : result.outcome === "kept"
+      ? `Slot ${result.lease.slug} kept and erased — taking a slot always erases it. Run preview deploy to redeploy.`
+      : `Slot ${result.lease.slug} was re-acquired after this PR's lease lapsed — previous deployments there may have been replaced. Run preview deploy to redeploy.`;
   const update = await updatePreviewState(context, (state) => ({
     ...state,
     environmentConfigLease: toSlotDisplay(result.lease),
-    notice: needsRedeploy
-      ? `${redeployMessage} (preview assign at ${new Date().toISOString()})`
-      : null,
-    apps: needsRedeploy
-      ? Object.fromEntries(
-          Object.entries(state.apps).map(([appSlug, entry]) => [
-            appSlug,
-            {
-              ...entry,
-              status: "claim-failed" as const,
-              message: redeployMessage,
-              updatedAt: new Date().toISOString(),
-            },
-          ]),
-        )
-      : state.apps,
+    notice: `${redeployMessage} (preview assign at ${new Date().toISOString()})`,
+    apps: Object.fromEntries(
+      Object.entries(state.apps).map(([appSlug, entry]) => [
+        appSlug,
+        {
+          ...entry,
+          status: "claim-failed" as const,
+          message: redeployMessage,
+          updatedAt: new Date().toISOString(),
+        },
+      ]),
+    ),
   }));
   logPreview(
     `PR body updated: PR #${context.pullRequestNumber} now records ${result.lease.slug} (doppler config ${result.lease.dopplerConfig})`,
@@ -1217,7 +1290,7 @@ export async function assign(options: AssignOptions = {}) {
     outcome: result.outcome,
     previousSlot: result.changedFromSlug,
     previousLeaseReleased: result.previousLeaseReleased,
-    appsMarkedForRedeploy: needsRedeploy ? Object.keys(update.state.apps) : [],
+    appsMarkedForRedeploy: Object.keys(update.state.apps),
     nextStep: `doppler run --project _shared --config prd -- pnpm preview deploy --pull-request-number ${context.pullRequestNumber}`,
   };
 }
@@ -1497,7 +1570,10 @@ export async function reclaim(options: ReclaimOptions = {}) {
   if (!taken) {
     throw new Error(`Could not take ${slug} from ${slot.holder ?? "its holder"} — retry.`);
   }
-  await makePreviewSlotDataEraser(runtime)({ dopplerConfig: slot.dopplerConfig, slug });
+  await makePreviewSlotDataEraser(runtime)({
+    dopplerConfig: slot.dopplerConfig,
+    slug,
+  });
   const result = await semaphore.release({
     slug,
     type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
@@ -1614,7 +1690,10 @@ export async function gc(options: GcOptions = {}) {
       logPreview(
         `gc: reclaiming ${slot.slug} — lease from ${slot.holder ?? "unknown"} expired ${formatDurationMs(now - slot.leasedUntil)} ago; erasing`,
       );
-      await eraseSlotData({ dopplerConfig: slot.dopplerConfig, slug: slot.slug });
+      await eraseSlotData({
+        dopplerConfig: slot.dopplerConfig,
+        slug: slot.slug,
+      });
       outcomes.push({ slug: slot.slug, action: "reclaimed", holder: slot.holder });
     } catch (error) {
       logPreview(
@@ -2234,10 +2313,10 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
         `run_logged_lane smoke /tmp/os-preview-smoke.log env TEST_TELEMETRY_LANE=agent-smoke TEST_TELEMETRY_WORKSPACE=iterate-root TEST_TELEMETRY_ARTIFACT_FILE=${osAgentSmokeTelemetryFile} timeout ${OS_AGENT_SMOKE_TIMEOUT_SECS} pnpm exec tsx e2e/vitest/agent-smoke.ts & SMOKE_PID=$!`,
         `run_logged_lane tui /tmp/os-preview-tui.log env TEST_TELEMETRY_LANE=tui TEST_TELEMETRY_WORKSPACE=iterate-root TEST_TELEMETRY_ARTIFACT_FILE=${osTuiRetryTelemetryFile} timeout ${OS_TUI_LANE_TIMEOUT_SECS} pnpm exec tsx e2e/tui-test/run.ts & TUI_PID=$!`,
         'PW_INSTALL_OK=0; wait "$PW_INSTALL_PID" || PW_INSTALL_OK=$?',
-        `SPEC_OK=0; SPEC_PID=""; if [ "$PW_INSTALL_OK" -eq 0 ]; then run_visible_lane playwright env TEST_TELEMETRY_LANE=playwright TEST_TELEMETRY_WORKSPACE=iterate-root PLAYWRIGHT_PREVIEW_SLOW_FIRST=1 timeout ${OS_PREVIEW_LANE_TIMEOUT_SECS} pnpm --dir ../.. spec & SPEC_PID=$!; else cat /tmp/os-preview-pw-install.log; SPEC_OK=$PW_INSTALL_OK; fi`,
+        `SPEC_OK=0; SPEC_PID=""; if [ "$PW_INSTALL_OK" -eq 0 ]; then run_visible_lane playwright env TEST_TELEMETRY_LANE=playwright TEST_TELEMETRY_WORKSPACE=iterate-root FLAKE_RECORD_DIR=test-results/flake-records/specs PLAYWRIGHT_PREVIEW_SLOW_FIRST=1 timeout ${OS_PREVIEW_LANE_TIMEOUT_SECS} pnpm --dir ../.. spec & SPEC_PID=$!; else cat /tmp/os-preview-pw-install.log; SPEC_OK=$PW_INSTALL_OK; fi`,
         'SMOKE_OK=0; wait "$SMOKE_PID" || SMOKE_OK=$?',
         'ROLLOUT_OK=0; wait "$ROLLOUT_PID" || ROLLOUT_OK=$?',
-        `E2E_OK="$SMOKE_OK"; if [ "$E2E_OK" -eq 0 ]; then E2E_OK="$ROLLOUT_OK"; fi; E2E_PID=""; if [ "$E2E_OK" -eq 0 ]; then run_logged_lane vitest /tmp/os-preview-vitest.log env TEST_TELEMETRY_LANE=vitest TEST_TELEMETRY_WORKSPACE=@iterate-com/os TEST_TELEMETRY_ARTIFACT_FILE=${osVitestRetryTelemetryFile} timeout ${OS_PREVIEW_LANE_TIMEOUT_SECS} pnpm e2e --project node & E2E_PID=$!; fi`,
+        `E2E_OK="$SMOKE_OK"; if [ "$E2E_OK" -eq 0 ]; then E2E_OK="$ROLLOUT_OK"; fi; E2E_PID=""; if [ "$E2E_OK" -eq 0 ]; then run_logged_lane vitest /tmp/os-preview-vitest.log env TEST_TELEMETRY_LANE=vitest TEST_TELEMETRY_WORKSPACE=@iterate-com/os FLAKE_RECORD_DIR=test-results/flake-records/preview-e2e TEST_TELEMETRY_ARTIFACT_FILE=${osVitestRetryTelemetryFile} timeout ${OS_PREVIEW_LANE_TIMEOUT_SECS} pnpm e2e --project node & E2E_PID=$!; fi`,
         'if [ -n "$E2E_PID" ]; then wait "$E2E_PID" || E2E_OK=$?; fi',
         'if [ -n "$SPEC_PID" ]; then wait "$SPEC_PID" || SPEC_OK=$?; fi',
         'TUI_OK=0; wait "$TUI_PID" || TUI_OK=$?',
@@ -4062,6 +4141,7 @@ async function cleanupPreviewForPullRequest(
     (await retakeRecordedSlotIfFree({
       holder,
       leaseMs: defaultPreviewLeaseMs,
+      onRetaken: async () => true,
       recordedSlug: displaySlot?.slug ?? null,
       semaphore,
     }));
@@ -4519,13 +4599,16 @@ async function runPreviewDeployCommand(input: {
 }
 
 /**
- * Erase a preview slot's user data before handing the slot to a new holder.
- * Reclaim paths MUST run this: a reclaim only ever happens because the
- * previous holder's cleanup — which normally erases on the way out — failed
- * or never ran, so a reclaimed slot is dirty by definition. Deploying over
- * stale identity data breaks the next tenant (observed 2026-07-07 on
- * preview-5: 208 orphaned project-directory KV keys against an empty auth D1
- * → every itx project lookup answered "KV GET failed: 500").
+ * Erase a preview slot's user data. It runs at both ends of a run: before
+ * every deploy (so a slot is fresh whatever the previous run left, including
+ * one a push SIGKILLed mid-e2e) and after the e2e (so the test projects a run
+ * created stop burning the moment it ends — see `erase`). Reclaim paths MUST
+ * run it too: a reclaim only ever happens because the previous holder's
+ * cleanup — which normally erases on the way out — failed or never ran, so a
+ * reclaimed slot is dirty by definition. Deploying over stale identity data
+ * breaks the next tenant (observed 2026-07-07 on preview-5: 208 orphaned
+ * project-directory KV keys against an empty auth D1 → every itx project
+ * lookup answered "KV GET failed: 500").
  */
 type EraseSlotData = (input: { dopplerConfig: string; slug: string }) => Promise<void>;
 
@@ -4544,7 +4627,7 @@ function makePreviewSlotDataEraser(runtime: {
 }): EraseSlotData {
   return async ({ dopplerConfig, slug }) => {
     const startedAt = Date.now();
-    logPreview(`erasing ${slug} data before handover (doppler config ${dopplerConfig})`);
+    logPreview(`erasing ${slug} data (doppler config ${dopplerConfig})`);
     for (const app of selectPreviewSlotDataOwners()) {
       const result = await runPreviewDeployCommand({
         app,
@@ -4925,9 +5008,14 @@ function parsePullRequestHolder(holder: string | null | undefined) {
  * Erase a just-acquired slot before it is handed to the caller, giving the
  * lease back on failure. Returns true when the slot is clean and ours.
  *
- * This runs on EVERY handover — plain acquire included, not just reclaims —
- * so slot cleanliness is an invariant of entry rather than an assumption
- * about how the previous tenant exited. Every exit path that skips the
+ * This runs on EVERY claim — a renewed lease this PR already held included,
+ * not just handovers and reclaims — so a preview slot is fresh on every
+ * deploy, never just on entry. Within one PR each push otherwise stacks a
+ * new population of abandoned test projects (whose Durable Objects keep
+ * waking, ~$15-25/hour per slot; the 2026-09-01 runaway) on the last push's,
+ * and a push that cancels the running e2e SIGKILLs it, so in-test finalizers
+ * can never be the guarantee — the next deploy is. Cross-push manual QA
+ * state on a preview is gone by design: recreate after pushing. Every exit path that skips the
  * cleanup erase (failed cleanup + 24h lease expiry, `release --force`, a run
  * cancelled mid-claim) becomes harmless: whoever picks the slot up next
  * wipes it first. A failed erase releases the lease rather than handing out
@@ -5106,13 +5194,11 @@ async function claimEnvironmentConfigLease(input: {
     holder: input.holder,
     leaseMs: input.leaseMs,
     onAdopted: (lease) =>
-      lease.slug === input.recordedSlug
-        ? Promise.resolve(true)
-        : eraseAcquiredSlotOrGiveItBack({
-            eraseSlotData: input.eraseSlotData,
-            lease,
-            semaphore: input.semaphore,
-          }),
+      eraseAcquiredSlotOrGiveItBack({
+        eraseSlotData: input.eraseSlotData,
+        lease,
+        semaphore: input.semaphore,
+      }),
     preferSlug: input.recordedSlug,
     semaphore: input.semaphore,
   });
@@ -5123,6 +5209,12 @@ async function claimEnvironmentConfigLease(input: {
   const retaken = await retakeRecordedSlotIfFree({
     holder: input.holder,
     leaseMs: input.leaseMs,
+    onRetaken: (lease) =>
+      eraseAcquiredSlotOrGiveItBack({
+        eraseSlotData: input.eraseSlotData,
+        lease,
+        semaphore: input.semaphore,
+      }),
     recordedSlug: input.recordedSlug,
     semaphore: input.semaphore,
   });
@@ -5169,20 +5261,26 @@ async function assignEnvironmentConfigLease(input: {
     (await adoptLeaseHeldBySemaphore({
       holder: input.holder,
       leaseMs: input.leaseMs,
+      // Every adoption erases — a preview slot is fresh on every deploy (see
+      // claimEnvironmentConfigLease).
       onAdopted: (lease) =>
-        lease.slug === input.recordedSlug
-          ? Promise.resolve(true)
-          : eraseAcquiredSlotOrGiveItBack({
-              eraseSlotData: input.eraseSlotData,
-              lease,
-              semaphore: input.semaphore,
-            }),
+        eraseAcquiredSlotOrGiveItBack({
+          eraseSlotData: input.eraseSlotData,
+          lease,
+          semaphore: input.semaphore,
+        }),
       preferSlug: input.recordedSlug,
       semaphore: input.semaphore,
     })) ??
     (await retakeRecordedSlotIfFree({
       holder: input.holder,
       leaseMs: input.leaseMs,
+      onRetaken: (lease) =>
+        eraseAcquiredSlotOrGiveItBack({
+          eraseSlotData: input.eraseSlotData,
+          lease,
+          semaphore: input.semaphore,
+        }),
       recordedSlug: input.recordedSlug,
       semaphore: input.semaphore,
     }));
@@ -5401,12 +5499,18 @@ async function adoptLeaseHeldBySemaphore(input: {
  * lives on recordedSlug, and if the semaphore says nobody holds that slot,
  * take it back. Non-force, so the semaphore still arbitrates — a slot someone
  * else holds returns null and the caller refuses or moves elsewhere; the
- * recorded slug is only a hint about where to look, never authority. No
- * erase: the deployment on the slot is this PR's own.
+ * recorded slug is only a hint about where to look, never authority.
+ *
+ * onRetaken is the same ready check as adopt's onAdopted: deploy paths erase
+ * there (the slot carries this PR's last population — or a half-finished
+ * erase whose failure just handed the lease back — and a slot is fresh on
+ * every deploy); returning false gives up on the slot so the caller moves on
+ * to any free one. Cleanup passes a no-op: it erases as the teardown itself.
  */
 async function retakeRecordedSlotIfFree(input: {
   holder: string;
   leaseMs: number;
+  onRetaken: (lease: PreviewSemaphoreLease) => Promise<boolean>;
   recordedSlug: string | null;
   semaphore: PreviewSemaphoreResourceClient;
 }): Promise<EnvironmentConfigLease | null> {
@@ -5426,6 +5530,9 @@ async function retakeRecordedSlotIfFree(input: {
   logPreview(
     `lease re-acquired: ${retaken.slug} had lapsed but was still free; ${input.holder} holds it again until ${formatUntil(retaken.expiresAt)}`,
   );
+  if (!(await input.onRetaken(retaken))) {
+    return null;
+  }
   return toEnvironmentConfigLease(retaken);
 }
 
@@ -6210,6 +6317,7 @@ export const previewInternals = {
   classifyLeaseForReclaim,
   describeEnvironmentConfigLeases,
   describeForcePushCompareHazard,
+  eraseHeldSlotAfterRun,
   describeLostSlotOwnership,
   describePreviewSlotChange,
   diagnosePreviewFleetCapacity,

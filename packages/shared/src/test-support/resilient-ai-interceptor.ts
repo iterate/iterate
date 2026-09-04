@@ -1,6 +1,3 @@
-import type { ProjectAiInterceptor } from "iterate/node";
-import { connectAdminItx } from "./forged-session.ts";
-
 /**
  * Install an `intercepted/*` model handler that SURVIVES platform churn, on a
  * connection dedicated to the interception.
@@ -9,21 +6,39 @@ import { connectAdminItx } from "./forged-session.ts";
  * open your interceptor is live; if the platform's half dies (Durable Object
  * restart — common on cold preview deployments), your socket closes with
  * 4901; and the client owns one recovery loop — reconnect on close, install
- * again. This helper IS that loop, so specs don't each hand-roll
+ * again. This helper IS that loop, so tests don't each hand-roll
  * timeout-plus-journal-diagnosis recovery. A turn that loses its interceptor
  * mid-flight recovers on the agent's own retry (3 attempts, 10s/20s backoff)
  * once this loop re-installs — comfortably inside one attempt gap. The same
  * churn can also land BETWEEN connecting and installing, so the initial
  * install runs through the paced retry loop too, not just recoveries.
  *
- * Dedicated connection on purpose: the spec's main admin session dying must
- * not take the interception with it, and vice versa.
+ * Dedicated connection on purpose: the test's main admin session dying must
+ * not take the interception with it, and vice versa. The connection is
+ * injected — the Playwright specs and the os e2e vitest tests each dial their
+ * own admin session (specs/test-support/forged-session.ts,
+ * apps/os/e2e/test-support/os-client.ts); the recovery loop is the same.
+ *
+ * Guide: docs/intercepted-models.md.
  */
-export async function installResilientAiInterceptor(input: {
-  baseUrl: string;
+
+/** The slice of an itx session the loop needs: dial a project, mount a handler, hang up. */
+type InterceptorSession<Handler> = Disposable & {
+  projects: {
+    get(projectId: string): {
+      ai: { intercept(handler: Handler): Promise<{ release(): Promise<void> }> };
+    };
+  };
+};
+
+export async function installResilientAiInterceptor<Handler>(input: {
   /** Project id or slug, as `session.projects.get` accepts. */
   projectId: string;
-  handler: ProjectAiInterceptor;
+  handler: Handler;
+  /** Dial a fresh admin session; the close hook MUST be wired to the socket. */
+  connect(options: {
+    onWebSocketClose: (close: { code: number; reason: string }) => void;
+  }): Promise<InterceptorSession<Handler>> | InterceptorSession<Handler>;
 }): Promise<AsyncDisposable> {
   let disposed = false;
   // A close event triggers recovery only when it belongs to the CURRENT
@@ -51,9 +66,9 @@ export async function installResilientAiInterceptor(input: {
     const previous = current;
     current = undefined;
     if (previous !== undefined) disposeSession(previous.session);
-    let session: Awaited<ReturnType<typeof connectAdminItx>> | undefined;
+    let session: InterceptorSession<Handler> | undefined;
     try {
-      session = await connectAdminItx(input.baseUrl, {
+      session = await input.connect({
         onWebSocketClose: (close) => {
           if (disposed || myGeneration !== generation) return;
           console.warn(
@@ -65,7 +80,7 @@ export async function installResilientAiInterceptor(input: {
       const interception = await session.projects.get(input.projectId).ai.intercept(input.handler);
       if (disposed) {
         // Disposal raced this install: never leave the handler mounted after
-        // the spec tore down.
+        // the test tore down.
         await interception.release().catch(() => {});
         disposeSession(session);
         return;
@@ -82,7 +97,7 @@ export async function installResilientAiInterceptor(input: {
   };
 
   const installWithRetry = async (maxAttempts: number) => {
-    // Paced and capped; when endless (recovery), the spec's own assertions
+    // Paced and capped; when endless (recovery), the test's own assertions
     // time out if the deployment never comes back, so this only must not spin.
     for (let attempt = 1; !disposed; attempt++) {
       try {
@@ -110,7 +125,7 @@ export async function installResilientAiInterceptor(input: {
   };
 
   // The initial install runs through the same loop (bounded: a genuinely
-  // broken deployment should fail the spec's setup loudly, not hang it).
+  // broken deployment should fail the test's setup loudly, not hang it).
   await runInstallLoop(5);
 
   return {

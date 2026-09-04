@@ -3646,6 +3646,13 @@ export type RepoCreateInput =
 
 /** Command object for committing a batch of repo file mutations. */
 export type CommitRepoFilesInput = {
+  /**
+   * When the branch head is exactly this commit oid, the new commit REPLACES
+   * it (same parents, this message) instead of stacking on top. If the head
+   * has moved on — or the repo is GitHub-linked, whose history stays
+   * append-only — an ordinary commit lands; the result's `amended` says which.
+   */
+  amendIfHead?: string;
   author?: { email: string; name: string };
   branch?: string;
   changes: RepoFileChange[];
@@ -3654,6 +3661,8 @@ export type CommitRepoFilesInput = {
 
 /** Result returned after a repo commit attempt, including no-op commits. */
 export type CommitRepoFilesResult = {
+  /** True when `amendIfHead` matched the head and the commit replaced it. */
+  amended: boolean;
   branch: string;
   changedPaths: string[];
   commitOid: string;
@@ -5485,6 +5494,10 @@ export type WorkspaceStatus = {
 
 /** Input to `WorkspaceGit.commit` — one mount's changes become one commit on its repo's main. */
 export type WorkspaceCommitInput = {
+  /** Replace the repo's head commit when it is exactly this oid instead of
+   * stacking on it — see the repo's `commitFiles`. The result's `amended`
+   * says which happened. */
+  amendIfHead?: string;
   author?: { email: string; name: string };
   message: string;
   /** The mount to commit (its mount path). Optional when exactly one mount is dirty. */
@@ -5493,6 +5506,8 @@ export type WorkspaceCommitInput = {
 
 /** Result of `WorkspaceGit.commit` — the commit landed on the scoped mount's repo main. */
 export type WorkspaceCommitResult = {
+  /** True when `amendIfHead` matched the head and the commit replaced it. */
+  amended: boolean;
   branch: string;
   /** Committed paths, spelled as absolute WORKSPACE paths (mount point included). */
   changedPaths: string[];

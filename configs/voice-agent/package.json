@@ -6,7 +6,7 @@
   "description": "The realtime voice agent facet the ESP32 boards and the host CLI talk to.",
   "dependencies": {
     "iterate": "https://pkg.pr.new/iterate/iterate/iterate@main",
-    "zod": "4.3.6"
+    "zod": "4.5.4"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20250620.0",

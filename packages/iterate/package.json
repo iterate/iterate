@@ -226,7 +226,7 @@
     "trpc-cli": "0.15.1",
     "ws": "8.19.0",
     "yaml": "^2.8.3",
-    "zod": "4.3.6"
+    "zod": "4.5.4"
   },
   "optionalDependencies": {
     "@opentui/core": "0.4.5",
@@ -250,6 +250,7 @@
     "@types/react-dom": "^19.2.3",
     "@types/ws": "^8.18.1",
     "esbuild": "^0.27.4",
+    "fflate": "^0.8.3",
     "jsdom": "27.4.0",
     "miniflare": "catalog:cloudflare",
     "octokit": "^5.0.5",
