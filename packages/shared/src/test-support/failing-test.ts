@@ -161,7 +161,18 @@ export function createFailing<TestFn extends (...args: any[]) => any>(
       // reason as the setTimeout call above: the runner must never fire first.
       return failer(args[0], { ...callerOptions, retry: 0, timeout: timeoutMs + 1000 }, wrapped);
     }
-    return failer(...args.slice(0, -1), wrapped);
+    // playwright-like: pin retries structurally via an anonymous describe
+    // scope — same reasoning (and same cast) as createFlake, see
+    // ./flake-test.ts.
+    const playwrightLike = test as unknown as {
+      describe: ((body: () => void) => void) & {
+        configure: (options: { retries: number }) => void;
+      };
+    };
+    return playwrightLike.describe(() => {
+      playwrightLike.describe.configure({ retries: 0 });
+      failer(...args.slice(0, -1), wrapped);
+    });
   };
   // The cast restates the contract the wrapper keeps by construction: it
   // forwards every argument unchanged except the trailing body, which it

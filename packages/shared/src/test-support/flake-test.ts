@@ -128,11 +128,9 @@ export function createFlake<TestFn extends (...args: any[]) => any>(
     Object.defineProperty(wrapped, "toString", { value: () => body.toString() });
     // Same runner-timeout coordination as createFailing(): the runner must never
     // fire before the wrapper's own deadline resolves, or a hang would read
-    // as the expected failure.
-    if ("setTimeout" in test) {
-      // playwright-like, no `timeout` option, we set the timeout manually above
-      return failer(...args.slice(0, -1), wrapped);
-    } else {
+    // as the expected failure (the playwright-like case sets it via
+    // test.setTimeout at the top of `wrapped`).
+    if (!("setTimeout" in test)) {
       // vitest-like: pass the timeout option, and pin per-test retry to zero
       // — a suite-level `retry` re-runs the body whenever the wrapper throws
       // (both green outcomes) because the retry fires before the `.fails`
@@ -144,6 +142,23 @@ export function createFlake<TestFn extends (...args: any[]) => any>(
       });
       return failer(args[0], options, wrapped);
     }
+    // playwright-like: no per-test retry option exists, so pin retries
+    // structurally — an anonymous describe scope (empty title segment,
+    // dropped by titlePath().filter(Boolean), so the test's identity is
+    // unchanged) with retries pinned to zero. The green outcomes already
+    // satisfy test.fail unretried; this also stops the RED path ("passed
+    // unexpectedly") from being retried, which double-recorded the run and
+    // could rescue it into a distorting green. The cast reaches playwright's
+    // describe statics, which the wrapped TestFn type does not carry.
+    const playwrightLike = test as unknown as {
+      describe: ((body: () => void) => void) & {
+        configure: (options: { retries: number }) => void;
+      };
+    };
+    return playwrightLike.describe(() => {
+      playwrightLike.describe.configure({ retries: 0 });
+      failer(...args.slice(0, -1), wrapped);
+    });
   };
   // Same contract-preserving cast as createFailing(): every argument forwards
   // unchanged except the trailing body.
