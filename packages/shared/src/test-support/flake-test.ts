@@ -45,6 +45,11 @@
  */
 import { appendFlakeRecord, type FlakeRecord } from "./flake-record.ts";
 
+/** The playwright statics the wrappers rely on to pin retries per-registration. */
+type PlaywrightLikeDescribe = ((body: () => void) => void) & {
+  configure: (options: { retries: number }) => void;
+};
+
 export function createFlake<TestFn extends (...args: any[]) => any>(
   test: TestFn,
   flake: RegExp,
@@ -136,7 +141,19 @@ export function createFlake<TestFn extends (...args: any[]) => any>(
       const callerOptions = args.length > 2 ? (args[1] as object) : {};
       return failer(args[0], { ...callerOptions, retry: 0 }, wrapped);
     }
-    return failer(...args.slice(0, -1), wrapped);
+    // playwright-like: no per-test retry option exists, so pin retries
+    // structurally — an anonymous describe scope (empty title segment,
+    // dropped by titlePath().filter(Boolean), so the test's identity is
+    // unchanged) with retries pinned to zero. The green outcomes already
+    // satisfy test.fail unretried; this also stops the RED path ("passed
+    // unexpectedly") from being retried, which double-recorded the run and
+    // could rescue it into a distorting green. The cast reaches playwright's
+    // describe statics, which the wrapped TestFn type does not carry.
+    const playwrightLike = test as { describe: PlaywrightLikeDescribe };
+    return playwrightLike.describe(() => {
+      playwrightLike.describe.configure({ retries: 0 });
+      failer(...args.slice(0, -1), wrapped);
+    });
   };
   // Same contract-preserving cast as createFailing(): every argument forwards
   // unchanged except the trailing body.

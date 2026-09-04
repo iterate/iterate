@@ -66,11 +66,21 @@ test("every outcome writes a kind-failing record when FLAKE_RECORD_DIR is set", 
 
 test("a playwright-shaped test object registers through .fail", async () => {
   const registered: unknown[][] = [];
+  const configured: unknown[] = [];
+  // A faithful playwright shape: describe invokes its body synchronously and
+  // carries configure, exactly like the real test object — the wrapper calls
+  // both unconditionally rather than hedging on their presence.
   const fakePlaywright = Object.assign(vi.fn(), {
     fail: (...args: unknown[]) => registered.push(args),
+    setTimeout: vi.fn(),
+    describe: Object.assign((body: () => void) => body(), {
+      configure: (options: unknown) => configured.push(options),
+    }),
   });
   createFailing(fakePlaywright, /pinned/)("name", async () => {});
   expect(registered).toHaveLength(1);
+  // Same zero-retry describe pin as createFlake — see that test for why.
+  expect(configured).toEqual([{ retries: 0 }]);
 });
 
 test("a body failing for a different reason returns success, so the native machinery goes red", async () => {

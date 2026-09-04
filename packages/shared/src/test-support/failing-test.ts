@@ -1,4 +1,9 @@
 import { appendFlakeRecord, type FlakeRecord } from "./flake-record.ts";
+
+/** The playwright statics the wrappers rely on to pin retries per-registration. */
+type PlaywrightLikeDescribe = ((body: () => void) => void) & {
+  configure: (options: { retries: number }) => void;
+};
 /**
  * Pinned-bug tests: the body asserts the DESIRED behavior, and while the bug
  * exists it must fail with an error matching the given pattern.
@@ -150,7 +155,14 @@ export function createFailing<TestFn extends (...args: any[]) => any>(
       const callerOptions = args.length > 2 ? (args[1] as object) : {};
       return failer(args[0], { ...callerOptions, retry: 0 }, wrapped);
     }
-    return failer(...args.slice(0, -1), wrapped);
+    // playwright-like: pin retries structurally via an anonymous describe
+    // scope — same reasoning (and same cast) as createFlake, see
+    // ./flake-test.ts.
+    const playwrightLike = test as { describe: PlaywrightLikeDescribe };
+    return playwrightLike.describe(() => {
+      playwrightLike.describe.configure({ retries: 0 });
+      failer(...args.slice(0, -1), wrapped);
+    });
   };
   // The cast restates the contract the wrapper keeps by construction: it
   // forwards every argument unchanged except the trailing body, which it

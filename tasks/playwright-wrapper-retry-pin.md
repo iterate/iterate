@@ -27,10 +27,10 @@ dashboard row key — and reported fullName are unchanged.
 
 ## Checklist
 
-- [ ] createFlake: playwright branch registers via anonymous describe +
+- [x] createFlake: playwright branch registers via anonymous describe +
       `configure({ retries: 0 })`.
-- [ ] createFailing: same.
-- [ ] Faithful fakes, not production fallbacks (Misha's call): the unit-test
+- [x] createFailing: same.
+- [x] Faithful fakes, not production fallbacks (Misha's call): the unit-test
       fake playwright objects grow `describe`/`describe.configure` (invoking
       the callback synchronously), and the tests assert the configure call —
       no `"describe" in test` hedging in the wrappers.
