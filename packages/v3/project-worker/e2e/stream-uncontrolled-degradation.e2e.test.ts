@@ -24,9 +24,11 @@
 // WHAT WAS OBSERVED (deployed, live-43, 2026-09-04). Every reset arrives as
 // `Durable Object's isolate exceeded its memory limit and was reset.` with `.overloaded` +
 // `.durableObjectReset` stamped, and the ctx recovers on the very next call (the log is durable):
-//   • RED  concurrent readers      — 24 sessions paging one 144 MiB log at once reset the DO (8 hold);
-//   • RED  slow live client        — a subscriber whose callback never resolves resets the PRODUCER DO;
-//   • RED  large ephemeral fan-out  — 30 × 7 MiB ephemerals to 10 facets reset the parent DO (0 hold);
+//   • RED  concurrent readers      — 24 sessions paging one 144 MiB log at once STILL reset the DO: the read
+//              LEVEL bounds pages ISSUED, not the replies queued in workerd's outbound buffer (a reply-queue bound is the remaining piece);
+//   • edge slow live client        — a stalled subscriber's pushes are DROPPED past the DO in-flight budget; the producer floods on, no reset;
+//   • RED  large ephemeral fan-out  — 30 × 7 MiB ephemerals STILL reset the parent: the reset is APPEND INGRESS
+//              (~210 MiB of pipelined append args), which the delivery ledger does not bound — append-side admission is the fix (menu);
 //   • edge concurrent big appends   — 8 × 28 MiB at once: no DO resets; 0–1 sessions lose their socket (1006);
 //   • hold poison facet             — a hoarding reduce wedges on the coded checkpoint ceiling, the parent survives;
 //   • hold loaded-isolate OOM       — a runaway WorkerEntrypoint OOMs its OWN isolate, the parent survives;
@@ -117,8 +119,13 @@ beforeAll(async () => {
 
 // ─────────────────────────────── RED: the reproducible resets ───────────────────────────────
 
+// STILL RED on 7474bb76 despite the read LEVEL (READ_OUTSTANDING_BUDGET_BYTES): the level bounds the
+// page bytes ISSUED and not yet proven-received, so ONE reader paging a huge log is bounded, but 24
+// at once reset the DO — each page's REPLY leaves the isolate for workerd's outbound queue, which
+// drains at the client's pace and no JS-side level can see. The remaining piece is a reply-queue
+// bound (or serialised reads). The WANTED (no reset) is the target.
 deployed.fails(
-  "CONCURRENT READERS: 24 sessions paging one 144 MiB log at once reset the DO — the per-read byte budget bounds ONE read, never N sharing the isolate (`Durable Object's isolate exceeded its memory limit and was reset.`, .overloaded/.durableObjectReset; 8 readers HOLD)",
+  "CONCURRENT READERS: 24 sessions paging one 144 MiB log at once reset the DO — the read level bounds pages ISSUED, not the replies queued in workerd's outbound buffer (`…isolate exceeded its memory limit and was reset.`, .durableObjectReset; 8 readers HOLD)",
   { timeout: 300_000 },
   async () => {
     const readers = Array.from({ length: 24 }, () => openItx(seededCtx));
@@ -133,8 +140,13 @@ deployed.fails(
   },
 );
 
-deployed.fails(
-  "SLOW LIVE CLIENT: a subscriber whose callback never resolves resets the PRODUCER DO — each fire-and-forget push stays in flight, retaining its bytes on the DO until it OOMs at ~125 × 1 MiB (`…isolate exceeded its memory limit and was reset.`, .durableObjectReset). A fast-ack subscriber takes the same flood cleanly",
+// A stalled live subscriber (a callback that never returns) no longer resets the PRODUCER: past the
+// DO's in-flight budget (subscription-delivery.ts DELIVERY_IN_FLIGHT_BUDGET_CHARS) its pushes are
+// DROPPED with a warn (the client heals by read), so the producer floods on. BORN RED: each
+// fire-and-forget push stayed in flight, retaining its bytes on the DO until it reset at ~125 × 1 MiB
+// (flipped 2026-09-04, the per-context ledger).
+deployed(
+  "SLOW LIVE CLIENT: a subscriber whose callback never resolves has its pushes dropped past the DO in-flight budget — the producer floods on, the DO never resets",
   { timeout: 300_000 },
   async () => {
     const ctx = freshCtx("degrade-slow");
@@ -163,6 +175,11 @@ deployed.fails(
   },
 );
 
+// STILL RED on 7474bb76 despite the delivery in-flight ledger: the reset is on the APPEND INGRESS,
+// not delivery — 30 ephemeral appends of 7 MiB fired at once are ~210 MiB of Workers-RPC arguments
+// arriving at the DO before any is reduced, and the append door measures ONE event against the
+// ceiling, not the SUM of concurrent appends. Append-side admission (a per-DO ingress budget) is the
+// fix, on the menu. The WANTED (no reset) is the target.
 deployed.fails(
   "LARGE EPHEMERAL FAN-OUT: a burst of 30 × 7 MiB ephemerals fanned out to 10 facets resets the parent DO — each push to each facet is an in-flight loopback RPC copy (10 × 7 MiB) on top of the burst (`…isolate exceeded its memory limit and was reset.`, .durableObjectReset). The SAME burst to 0 facets is absorbed",
   { timeout: 300_000 },

@@ -2935,6 +2935,28 @@ SQLITE_TOOBIG` used to cross the hop from inside the write. Local workerd (4 MiB
     socket, NO warn at all" (the hazard!); now the DO drops past 32 MiB in flight and the row asserts
     exactly those warns, the stub still online, the close half unchanged.
 
+### 2026-09-04, night — deployed proof of the level + halts, and the two holes that remain
+
+- On live-47 (`7474bb76`, my ledger + halts + arc four's app-config): stream-memory-budget 3/3 on
+  the level-based reads; the degradation file's SLOW LIVE CLIENT flipped GREEN (a never-answering
+  live subscriber's pushes are dropped past the in-flight ledger, the producer floods on, no reset)
+  and is now a control. The halts (workers lane): C2/C3 (coded EVENT_UNREADABLE, the constructor
+  skips it), E2/E3 (halt at once, pause-exempt), E1 on a retryable target — all green.
+- TWO ROWS STILL RESET the DO on the deployed worker, honestly, and stay red pins:
+  (1) CONCURRENT READERS — 24 sessions paging one 144 MiB log at once. The read LEVEL bounds the page
+  bytes ISSUED, so ONE reader is bounded, but each page's REPLY leaves the isolate for workerd's
+  outbound queue, which drains at the client's pace and no JS-side level can see — a reply-queue
+  bound (or serialised reads) is the remaining piece.
+  (2) LARGE EPHEMERAL FAN-OUT — 30 × 7 MiB ephemerals at once. The reset is on the APPEND INGRESS,
+  not delivery: ~210 MiB of Workers-RPC append arguments arrive at the DO before any is reduced, and
+  the append door measures ONE event against the 8 MiB ceiling, not the SUM of concurrent appends.
+  Append-side admission (a per-DO ingress budget) is the fix. Both are on the menu.
+- live-state-chains-client-side flaked 1/3 on the deployed worker (green locally and green on the
+  prior deploy of the same code): the known seed-vs-delta race (the two messages arrive via a
+  re-seed, the doc stays byte-identical) — assertion left strict, not a regression of the re-seed work.
+- GATES: tsc×3 · oxlint 0/0 · knip clean · oxfmt clean · unit 131p/4xf · workers 60p/8xf · e2e local
+  168p/2xf · deployed (live-47): memory 3/3, degradation 5p/2xf (the two above).
+
 ## 2026-09-04 — the DO owns both ends of a lent stub's rule: the pager upgrade carries the rule, one round trip
 
 - WHY: a `provide(match, stub)` / `subscribe({ target: fn })` cost THREE edge→DO round trips — the
