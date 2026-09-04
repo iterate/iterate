@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: done
 size: small
 branch: flake-dashboard-streaks
 ---
