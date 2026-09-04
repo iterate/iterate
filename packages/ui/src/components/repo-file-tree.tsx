@@ -31,8 +31,8 @@ export interface RepoTreeActions {
   remove: (path: string, isFolder: boolean) => void;
   /** Move a file (or every file under a directory) to a new path. */
   rename: (fromPath: string, toPath: string, isFolder: boolean) => void;
-  /** Pick a local file and add it (binary lane) inside a directory. Absent
-   * hides the upload affordances. */
+  /** Pick a local file and add it inside a directory as base64 bytes (the
+   * write path for non-text files). Absent hides the upload affordances. */
   upload?: (directoryPath: string) => void;
   /** Drop the change for one path — back to HEAD. */
   discard: (path: string) => void;
@@ -149,6 +149,10 @@ export function RepoFileTree({
       statusKey === ""
         ? []
         : statusKey.split("\n").map((line) => {
+            // The value after the last colon is exactly the RepoFileStatus this
+            // effect's key was serialized from (paths may contain colons; the
+            // status never does). split() only knows strings, so the round
+            // trip is asserted rather than re-validated.
             const at = line.lastIndexOf(":");
             return { path: line.slice(0, at), status: line.slice(at + 1) as RepoFileStatus };
           }),

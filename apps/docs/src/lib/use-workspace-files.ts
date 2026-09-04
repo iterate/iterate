@@ -30,7 +30,9 @@ export function useWorkspaceFiles({
   const [changes, setChanges] = useState<ReadonlyMap<string, RepoFileStatus>>(new Map());
   const [error, setError] = useState<string | null>(null);
 
-  const lane = useCallback(
+  // Every workspace call goes through the board's workspace capability for
+  // this address (a plain-get lens; nothing here creates a workspace).
+  const withWorkspace = useCallback(
     <T>(operation: (ws: TasksWorkspace) => Promise<T>) =>
       withDocsProject((project) =>
         operation(workspaceFor(project, { boardId: null, workspacePath, repoPath })),
@@ -49,7 +51,7 @@ export function useWorkspaceFiles({
     try {
       [documents, status] = await Promise.all([
         withDocsProject((project) => project.documentsUnder(workspacePath, repoPath)),
-        lane((ws) => ws.status()),
+        withWorkspace((ws) => ws.status()),
       ]);
     } catch (cause) {
       // A superseded refresh's failure is as stale as its data would have been.
@@ -68,7 +70,7 @@ export function useWorkspaceFiles({
     setHeadPaths([...head].sort());
     setChanges(next);
     setError(null);
-  }, [lane, workspacePath, repoPath]);
+  }, [withWorkspace, workspacePath, repoPath]);
 
   useEffect(() => {
     let cancelled = false;
@@ -115,25 +117,29 @@ export function useWorkspaceFiles({
     changes,
     error,
     refresh,
-    createFile: (path: string) => run(() => lane((ws) => ws.write(path, ""))),
+    createFile: (path: string) => run(() => withWorkspace((ws) => ws.write(path, ""))),
     rename: (from: string, to: string, isFolder: boolean) =>
       run(async () => {
         if (isFolder) throw new Error("Renaming folders is not supported yet.");
-        const content = await lane((ws) => ws.read(from));
-        await lane((ws) => ws.write(to, content ?? ""));
-        await lane((ws) => ws.delete(from));
+        const content = await withWorkspace((ws) => ws.read(from));
+        await withWorkspace((ws) => ws.write(to, content ?? ""));
+        await withWorkspace((ws) => ws.delete(from));
       }),
     remove: (path: string, isFolder: boolean) =>
       run(() =>
         Promise.all(
-          (isFolder ? pathsUnder(path) : [path]).map((victim) => lane((ws) => ws.delete(victim))),
+          (isFolder ? pathsUnder(path) : [path]).map((victim) =>
+            withWorkspace((ws) => ws.delete(victim)),
+          ),
         ),
       ),
     /** Back to the mount's version: restore a delete, drop an add, undo edits. */
-    discard: (path: string) => run(() => lane((ws) => ws.revert(path))),
+    discard: (path: string) => run(() => withWorkspace((ws) => ws.revert(path))),
     discardAll: () =>
-      run(() => Promise.all([...changes.keys()].map((path) => lane((ws) => ws.revert(path))))),
+      run(() =>
+        Promise.all([...changes.keys()].map((path) => withWorkspace((ws) => ws.revert(path)))),
+      ),
     /** Owner act: publishes the mount's whole dirty set to the repo's main. */
-    commit: (message: string) => run(() => lane((ws) => ws.commit(message))),
+    commit: (message: string) => run(() => withWorkspace((ws) => ws.commit(message))),
   };
 }

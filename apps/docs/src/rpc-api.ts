@@ -275,6 +275,9 @@ class DocsProjectApi extends RpcTarget implements DocsProject {
     const mount = normalizeRepoPath(repoPath);
     if (mount === null) throw new Error("bad repo path");
     return this.#dial.withProject(async (project) => {
+      // The pinned `iterate` client types predate the workspace surface, so
+      // the one member this method calls is asserted locally; capnweb stubs
+      // are Proxies, so it resolves at runtime (the same caveat as documents()).
       const stub = (
         project as unknown as {
           workspaces: { get(path: string): { glob(pattern: string): Promise<string[]> } };
@@ -295,7 +298,9 @@ class DocsProjectApi extends RpcTarget implements DocsProject {
     const workspacePath = jamWorkspacePath(id);
     const path = jamDocumentPath(id);
     await this.#dial.withProject(async (project) => {
-      // Same create door and pinned-client caveat as createWorkspace.
+      // Creates through the same workspace `create` call as createWorkspace.
+      // The pinned `iterate` client types predate this surface; capnweb stubs
+      // are Proxies, so the locally asserted members resolve at runtime.
       const stub = (
         project as unknown as {
           workspaces: {
@@ -320,8 +325,11 @@ class DocsProjectApi extends RpcTarget implements DocsProject {
     }
     const document = path === undefined ? null : resolveDocumentPath(workspace, path);
     await this.#dial.withProject(async (project) => {
-      // Same birth-if-needed dance as the board's assignAgent; the brief
-      // goes out every time so a re-invite re-points an existing agent.
+      // Same birth-if-needed sequence as the board's assignAgent; the brief
+      // goes out every time so a re-invite re-points an existing agent. The
+      // pinned client types predate the agents surface, so the three members
+      // used here are asserted locally (JamAgentStub); capnweb stubs are
+      // Proxies, so they resolve at runtime.
       const agent = (
         project as unknown as { agents: { get(path: string): JamAgentStub } }
       ).agents.get(agentPath);

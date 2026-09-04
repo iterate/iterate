@@ -67,7 +67,9 @@ export interface DocsProject {
   /**
    * Start a jam: mint and CREATE a scratch workspace seeded with one
    * document inside the config mount (committable later), and return the
-   * deep link's two halves. The same create door as createWorkspace.
+   * deep link's two halves. Creates through the same workspace `create`
+   * call as createWorkspace; these two are the only methods here that
+   * create anything.
    */
   createJam(): Promise<{ workspacePath: string; path: string }>;
   /**
