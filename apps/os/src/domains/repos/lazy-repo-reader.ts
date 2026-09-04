@@ -349,6 +349,7 @@ export function createLazyRepoReader(input: {
      */
     commitFiles: (
       input: {
+        amendIfHead?: string;
         author: { date: Date; email: string; name: string };
         changes: RepoFileChange[];
         message: string;
@@ -363,6 +364,7 @@ export function createLazyRepoReader(input: {
    * head B that slipped in between. */
   async function commitFilesLocked(
     input: {
+      amendIfHead?: string;
       author: { date: Date; email: string; name: string };
       changes: RepoFileChange[];
       message: string;
@@ -372,6 +374,21 @@ export function createLazyRepoReader(input: {
     {
       const head = store.head(branch);
       if (head === null) throw new Error("lazy commit requires a synced head");
+      // Amend: the new commit takes the head's PARENTS, so the head drops out
+      // of history. The push below still CASes head → new, which is what
+      // keeps "unless the head moved" atomic: a competing push rejects ours
+      // and the retry sees a head that no longer matches — an ordinary
+      // commit on top. The head commit object is always in the store (every
+      // sync and every push puts it there); should it be missing, the throw
+      // sends the caller to its clone fallback, which stacks an ordinary
+      // commit.
+      let parents = [head.commitOid];
+      if (input.amendIfHead === head.commitOid) {
+        const headCommit = await store.getObject(head.commitOid);
+        if (headCommit === null)
+          throw new Error(`head commit ${head.commitOid} is not in the store`);
+        parents = parseCommit(headCommit.payload).parents;
+      }
       const manifest = new Map(store.manifest(branch).map((file) => [file.path, file]));
       const oldDirs = new Map(store.dirTrees(branch).map((dir) => [dir.path, dir.treeOid]));
 
@@ -489,7 +506,7 @@ export function createLazyRepoReader(input: {
       const commitPayload = encodeCommit({
         author: input.author,
         message: input.message.endsWith("\n") ? input.message : `${input.message}\n`,
-        parents: [head.commitOid],
+        parents,
         tree: newRootOid,
       });
       const commitOid = await hashObject("commit", commitPayload);
