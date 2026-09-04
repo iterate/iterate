@@ -59,6 +59,19 @@ const DELIVERY_IN_FLIGHT_BUDGET_CHARS = 16 * 1024 * 1024;
  *  dropped from the LARGEST queue first (each row's own PENDING_PUSH_BUDGET_CHARS still applies). */
 const PENDING_PUSHES_TOTAL_BUDGET_CHARS = 16 * 1024 * 1024;
 
+/** A failure that can only repeat — halt the row now, not after the ladder: the flag workerd itself
+ *  stamps (`retryable: false`, reduce-checkpoint.ts stamps it too) or one of OUR codes that a
+ *  retry cannot change (a target that is not callable, nothing matching the target's expression,
+ *  a checkpoint or an event over its ceiling). */
+const deterministicFailure = (error: unknown): boolean =>
+  (error as { retryable?: unknown } | null)?.retryable === false ||
+  [
+    "NOT_A_METHOD",
+    "NO_ITX_EXPRESSION_MATCH",
+    "REDUCE_CHECKPOINT_TOO_LARGE",
+    "EVENT_TOO_LARGE",
+  ].includes(errorCode(error) ?? "");
+
 /** One row's push waiting behind its in-flight delivery — later commits fold into it; `chars` is
  *  measured only once something has folded in (a push the closure takes at once costs no stringify). */
 type PendingPush = {
@@ -153,7 +166,15 @@ export class SubscriptionDelivery {
           // says (the resumed fact is rarely a type the subscriber asked for, and a halted row has no
           // retry armed — without this it would wait for the next matching commit or the quiet clock).
           const name = (event.payload as { name: string }).name;
-          if (rows[name])
+          const row = rows[name];
+          if (!row) break;
+          // A halted PUSH row (a facet) resumes by catching up from the log itself; a cursor row by
+          // its lane. (A live client's row never halts — its pushes are dropped, never retried.)
+          if (this.#pushSubscriptionNames.has(name))
+            void this.#catchUpFacetRow(name, row).catch((error) =>
+              reportIssue("subscription-delivery.resume", error, { name }),
+            );
+          else
             void this.#deliverFromCursor(name).catch((error) =>
               reportIssue("subscription-delivery.resume", error, { name }),
             );
@@ -173,14 +194,7 @@ export class SubscriptionDelivery {
           if (row)
             this.#deliveryChainBySubscription.set(
               name,
-              (async () => {
-                const { head } = await this.#evaluateItxExpressionTargetHead(row.target);
-                if (
-                  head instanceof FacetHandle &&
-                  this.#stream.coreReducedState.subscriptions[name]
-                )
-                  await head.invoke([["catchUpFromLog"]]);
-              })().catch((error) => {
+              this.#catchUpFacetRow(name, row).catch((error) => {
                 // NO_FACET here is a disable that landed during the load — nothing to report.
                 if (errorCode(error) !== "NO_FACET")
                   reportIssue("subscription-delivery.configured", error, { name });
@@ -191,6 +205,7 @@ export class SubscriptionDelivery {
       }
     }
     for (const [name, row] of Object.entries(rows)) {
+      if (row.halted) continue; // an operator's resume is the only way back (the case above)
       const events = freshEvents.filter((event) => consumesEvent(row.consumes, event));
       // A batch the filter skipped is NOT handed over — the watermark stays put and the skipped span
       // rides inside the NEXT delivered range (the subscriber's chain stays contiguous).
@@ -207,6 +222,14 @@ export class SubscriptionDelivery {
         this.#stream.armAlarmNoLaterThan(Date.now() + CURSOR_DELIVERY_CALL_WATCHDOG_MS);
       this.#queuePushBehindInFlightDelivery(name, events, { after, through: throughOffset });
     }
+  }
+
+  /** Evaluate a row's target and, when it is a facet, have it catch up from the log — a
+   *  materialization (at configure) or a resume; the row must still exist once the load returns. */
+  async #catchUpFacetRow(name: string, row: Subscription): Promise<void> {
+    const { head } = await this.#evaluateItxExpressionTargetHead(row.target);
+    if (head instanceof FacetHandle && this.#stream.coreReducedState.subscriptions[name])
+      await head.invoke([["catchUpFromLog"]]);
   }
 
   /** Queue a push behind the row's in-flight delivery — or FOLD it into the one already waiting.
@@ -402,7 +425,24 @@ export class SubscriptionDelivery {
         // quiesce never aborts it mid-reduce. The DO's facet watchdog (#invokeFacet, 60 s) bounds a
         // hung facet; its own gap repair covers a dropped push.
         this.#pushedEventBatches.delete(name);
-        await this.#callWithInFlightRoom(serializedChars(events), () => call([events, range]));
+        try {
+          await this.#callWithInFlightRoom(serializedChars(events), () => call([events, range]));
+        } catch (error) {
+          // A refusal that can only repeat HALTS the row — the same fact the cursor lane's ladder
+          // ends in — instead of being re-pushed into on every commit; an operator's resume is the
+          // way back. Anything else is the facet's own gap repair to heal on its next push.
+          if (deterministicFailure(error))
+            await this.#stream.append({
+              type: "events.iterate.com/stream/subscription-delivery-halted",
+              payload: {
+                name,
+                afterOffset: range.after,
+                attempts: 1,
+                error: (error instanceof Error ? error.message : String(error)).slice(0, 1024),
+              },
+            });
+          throw error;
+        }
         return;
       }
       // CANNOT own progress: the stream keeps the cursor. The pushed batch was remembered in onCommit;
@@ -585,10 +625,9 @@ export class SubscriptionDelivery {
           // Clipped: the message lands in the halted event AND the core state's row (one kv cell) — a
           // target that throws a response body must not bloat either.
           const message = (error instanceof Error ? error.message : String(error)).slice(0, 1024);
-          // Honor stamped flags over an invented taxonomy: `retryable: false` (workerd stamps these;
-          // providers may too) will never succeed — halt now, not in half an hour.
-          const neverRetryable = (error as { retryable?: unknown } | null)?.retryable === false;
-          if (neverRetryable || attempt >= 15) {
+          // A failure that can only repeat (deterministicFailure: the stamped `retryable: false`, or
+          // one of our own codes a retry cannot change) halts now, not in half an hour.
+          if (deterministicFailure(error) || attempt >= 15) {
             this.#adoptCursor(name, { ...cursor, attempt: 0 }, true);
             await this.#stream.append({
               type: "events.iterate.com/stream/subscription-delivery-halted",

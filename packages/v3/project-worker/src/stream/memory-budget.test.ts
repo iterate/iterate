@@ -173,15 +173,15 @@ test.fails(
 
 // ── the checkpoint cell: a reduce whose state outgrows it ──
 
-// Dies of: the `wakeRetriesFailed` fact. 64 × 64 KiB events into a reduce that keeps every payload:
-// the 32nd batch's state no longer fits the checkpoint cell and is refused CODED
-// (REDUCE_CHECKPOINT_TOO_LARGE) before any write — the checkpoint stays consistent (BORN RED as a
-// TORN checkpoint: the cursor landed, the state did not, and the next incarnation silently skipped
-// 33 events; fixed by the one-row checkpoint, BUILD-LOG 2026-09-04). What remains: every later push
-// gap-repairs into the same refusal, and so does every wake, forever — a wedge that costs a page
-// read and a reduce per attempt and never halts.
-test.fails(
-  "accumulating reducer: a state past the checkpoint cell ceiling is refused coded, the checkpoint stays consistent — and the batch is retried on every push and every wake, forever",
+// 64 × 64 KiB events into a reduce that keeps every payload: the 32nd batch's state no longer fits
+// the checkpoint cell and is refused CODED (REDUCE_CHECKPOINT_TOO_LARGE, stamped `retryable: false`)
+// before any write — the checkpoint stays consistent — and the engine LATCHES it: every later push
+// and wake rejects at once, without re-reading the log (the parent's delivery loop halts the row on
+// the same stamp). BORN RED twice: first as a TORN checkpoint (the cursor landed, the state did not,
+// the next incarnation silently skipped 33 events — the one-row checkpoint), then as a wedge that
+// re-read and re-reduced on every push and wake (the latch). BUILD-LOG 2026-09-04.
+test(
+  "accumulating reducer: a state past the checkpoint cell ceiling is refused coded, the checkpoint stays consistent, and the refusal is latched — no re-read per wake",
   { timeout: 60_000 },
   () => {
     const run = runScenario("accumulating-reducer", {
@@ -191,9 +191,9 @@ test.fails(
     expectSurvived(run, "accumulating-reducer");
     expect(run.facts.firstPushErrorCode, run.tail).toBe("REDUCE_CHECKPOINT_TOO_LARGE");
     expect(Number(run.facts.persistedItems), run.tail).toBe(
-      Number(run.facts.persistedReducedThroughOffset),
-    ); // one row: cursor and state agree
-    expect(run.facts.wakeRetriesFailed, run.tail).toBe("0/3"); // WANTED: a halt, not a retry per wake
+      Number(run.facts.persistedBlobsThrough),
+    ); // one row: the state holds exactly the durables its cursor claims
+    expect(Number(run.facts.readsDuringWakes), run.tail).toBe(0); // the refusal is LATCHED: a wake rejects without re-reading the log
   },
 );
 

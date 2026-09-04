@@ -332,6 +332,7 @@ const scenarios: Record<string, (args: Record<string, number>) => Promise<void>>
     let pushInFlight: Promise<void> = Promise.resolve();
     const pushErrors: string[] = [];
     const pushErrorCodes: string[] = [];
+    let readCalls = 0;
     const stream = bareStream(storage, (fresh, after, through) => {
       // The push crosses Workers RPC into the facet: the facet's own copy of the batch.
       const copy = deserialize(serialize(fresh)) as StreamEvent[];
@@ -343,7 +344,10 @@ const scenarios: Record<string, (args: Record<string, number>) => Promise<void>>
     engine = new ProcessorEngine(new Hoarder(), {
       stream: {
         append: (...events) => stream.append(...events),
-        read: async (after, limit) => deserialize(serialize(stream.read(after, limit))),
+        read: async (after, limit) => {
+          readCalls++;
+          return deserialize(serialize(stream.read(after, limit)));
+        },
       },
       storage: facetCheckpoints,
     });
@@ -367,6 +371,7 @@ const scenarios: Record<string, (args: Record<string, number>) => Promise<void>>
     // The next wakes: each re-reads from the checkpoint, re-reduces, re-throws.
     let wakeRetriesFailed = 0;
     let wakeRetryMs = 0;
+    const readsBeforeWakes = readCalls;
     for (let i = 0; i < 3; i++) {
       const t0 = performance.now();
       await engine.catchUpFromLog().catch(() => wakeRetriesFailed++);
@@ -375,6 +380,7 @@ const scenarios: Record<string, (args: Record<string, number>) => Promise<void>>
     }
     fact("wakeRetriesFailed", `${wakeRetriesFailed}/3`);
     fact("wakeRetryMsEach", Math.round(wakeRetryMs / 3));
+    fact("readsDuringWakes", readCalls - readsBeforeWakes);
     fact("reducedThroughOffsetAfterWakes", reducedThroughOffset());
     fact("heapAfterWakesMB", Math.round(memoryUsage().heapUsed / MiB));
     // What the NEXT incarnation would read: the checkpoint as persisted — ONE row, so the cursor and
@@ -382,6 +388,18 @@ const scenarios: Record<string, (args: Record<string, number>) => Promise<void>>
     const persisted = facetCheckpoints.read<Hoard>("hoarder");
     fact("persistedReducedThroughOffset", persisted?.reducedThroughOffset ?? "none");
     fact("persistedItems", persisted?.state?.items.length ?? "none");
+    // The durable blobs at or below the persisted offset (ephemeral live-state deltas take offsets
+    // too, so offsets are not item counts): what a consistent checkpoint must hold, exactly.
+    let persistedBlobsThrough = 0;
+    for (let after = 0; ; ) {
+      const page = stream.read(after, 500);
+      for (const event of page.events)
+        if (event.type === "blob" && event.offset <= (persisted?.reducedThroughOffset ?? 0))
+          persistedBlobsThrough++;
+      if (page.atHead) break;
+      after = page.scannedThroughOffset;
+    }
+    fact("persistedBlobsThrough", persistedBlobsThrough);
     notePeakHeap();
   },
 

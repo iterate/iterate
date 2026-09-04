@@ -16,6 +16,7 @@ type ErrorCode =
   | "OFFSET_CONFLICT" // an input's expected `offset` is not the offset it would land at
   | "EVENT_TOO_LARGE" // one event's serialized body is over the append ceiling (stream.ts EVENT_BODY_MAX_CHARS)
   | "REDUCE_CHECKPOINT_TOO_LARGE" // a reduce's state would not fit one storage cell (reduce-checkpoint.ts)
+  | "EVENT_UNREADABLE" // a stored row's body is not JSON — `data.offset` names it (stream.ts read)
   | "STREAM_PAUSED"
   | "RPC_STUB_OFFLINE" // the rpc stub a row names is neither borrowed nor pager-backed right now
   | "NOT_A_METHOD" // the dotted path's terminal segment is not callable on the target

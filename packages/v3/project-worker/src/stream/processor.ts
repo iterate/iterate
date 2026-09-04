@@ -174,6 +174,11 @@ export class ProcessorEngine<State> {
   #staleCheckpoint?: { reducedThroughOffset: number; state: State };
   /** The highest `range.through` ever SHOWN to this processor (see processEventBatch). */
   #pushedThroughOffset?: number;
+  /** A refusal that can only repeat — the checkpoint over its cell (stamped `retryable: false`):
+   *  LATCHED for this incarnation, so every later batch, catch-up and read verb rejects with it at
+   *  once instead of re-reading the log and re-reducing into the same wall on every push and wake.
+   *  A fresh incarnation (the host's quiesce, an eviction) tries once more. */
+  #latchedRefusal?: Error;
   /** waitUntilProcessed's waiting callers, resolved as the cursor advances. */
   readonly #waitUntilProcessedWaiters: { offset: number; resolve: () => void }[] = [];
   /** ONE LiveState holder (stream/live-state.ts) — the revision chain and the diff→emit dance. Born
@@ -369,7 +374,10 @@ export class ProcessorEngine<State> {
    *  processor that appends during its batch would deadlock, which is why every append→drive
    *  caller is fire-and-forget. */
   #runOnSerialChain(work: () => Promise<void>): Promise<void> {
-    const run = this.#serialBatchChain.then(work);
+    const run = this.#serialBatchChain.then(() => {
+      if (this.#latchedRefusal) throw this.#latchedRefusal;
+      return work();
+    });
     this.#serialBatchChain = run.catch(() => {}); // a failed batch never wedges the chain; retry via wake
     return run;
   }
@@ -392,7 +400,7 @@ export class ProcessorEngine<State> {
       if (page.scannedThroughOffset <= reducedThroughOffset) break; // nothing left below the target
       reducedThroughOffset = Math.min(page.scannedThroughOffset, target);
     }
-    this.#storage.write(
+    this.#writeCheckpointOrLatch(
       this.#contract.slug,
       { reducerVersion: this.#contract.version, reducedThroughOffset: target },
       state,
@@ -444,7 +452,7 @@ export class ProcessorEngine<State> {
     const advanced = reducedThroughOffset > reducedThroughOffsetBefore;
     const sawDurable = events.some((event) => !event.ephemeral);
     if (sawDurable && advanced)
-      this.#storage.write(
+      this.#writeCheckpointOrLatch(
         this.#contract.slug,
         { reducerVersion: this.#contract.version, reducedThroughOffset },
         state,
@@ -523,6 +531,22 @@ export class ProcessorEngine<State> {
       await awaited;
     }
     return state;
+  }
+
+  /** The checkpoint write, with the latch: a refusal stamped `retryable: false` can only repeat. */
+  #writeCheckpointOrLatch(
+    slug: string,
+    cursor: { reducerVersion: string; reducedThroughOffset: number },
+    state: State,
+    stateChanged: boolean,
+  ): void {
+    try {
+      this.#storage.write(slug, cursor, state, stateChanged);
+    } catch (error) {
+      if ((error as { retryable?: unknown } | null)?.retryable === false)
+        this.#latchedRefusal = error instanceof Error ? error : new Error(String(error));
+      throw error;
+    }
   }
 
   /** Resolve the waiters a cursor advance satisfies; keep the rest. */

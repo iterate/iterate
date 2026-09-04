@@ -28,7 +28,7 @@
 // The CONTEXT seam (`interface ReachableContext` + `localContext`) lives at the bottom: what one context
 // reaches another THROUGH, uniform-async and REAL-typed.
 
-import { codedError, reportIssue } from "../lib/errors.ts";
+import { codedError, errorCode, reportIssue } from "../lib/errors.ts";
 import type { ItxExpressionInput } from "../context/expression.ts";
 import { CoreStreamProcessor, type CoreState } from "./core-processor.ts";
 import {
@@ -201,11 +201,17 @@ export class Stream {
       // Budgeted pages (READ_PAGE_BUDGET_CHARS): this runs in the DO constructor, where a page that
       // did not fit the isolate would be a reboot loop — every wake re-running the same re-reduce.
       while (this.#coreReducedThroughOffset < this.#highestDurableOffset) {
-        const { page } = this.#readPage(
-          this.#coreReducedThroughOffset,
-          500,
-          READ_PAGE_BUDGET_BYTES,
-        );
+        let page: StreamPage;
+        try {
+          ({ page } = this.#readPage(this.#coreReducedThroughOffset, 500, READ_PAGE_BUDGET_BYTES));
+        } catch (error) {
+          // An unreadable row must not brick the context on every wake: report it, skip it, go on.
+          if (errorCode(error) !== "EVENT_UNREADABLE") throw error;
+          const { offset } = (error as { data: { offset: number } }).data;
+          reportIssue("stream.core-rereduce", error, { offset });
+          this.#coreReducedThroughOffset = offset;
+          continue;
+        }
         for (const event of page.events)
           this.#coreReducedState = this.#reduceEventIntoCoreReducedState(
             event,
@@ -316,6 +322,8 @@ export class Stream {
         "events.iterate.com/stream/woken",
         "events.iterate.com/stream/paused",
         "events.iterate.com/stream/resumed",
+        // the delivery loop's own record of a halted row — a paused stream's ladder must still end
+        "events.iterate.com/stream/subscription-delivery-halted",
       ];
       if (events.some((event) => !exempt.includes(event.type)))
         throw codedError("STREAM_PAUSED", `stream paused: ${paused.reason}`);
@@ -502,11 +510,21 @@ export class Stream {
     );
     // Chunk rows never enter a page, so it counts EVENTS and its scannedThroughOffset is an event
     // offset — never a chunk boundary.
-    const events: StreamEvent[] = rows.map((row) => ({
-      ...(JSON.parse(row.body) as StreamEventInput & { createdAt: string }),
-      offset: row.offset,
-      path: this.#path,
-    }));
+    const events: StreamEvent[] = rows.map((row) => {
+      let body: StreamEventInput & { createdAt: string };
+      try {
+        body = JSON.parse(row.body) as StreamEventInput & { createdAt: string };
+      } catch (error) {
+        // A stored body that is not JSON is storage corruption; name the offset so a reader can
+        // skip past it (`read(offset)`), instead of the platform's parse error naming nothing.
+        throw codedError(
+          "EVENT_UNREADABLE",
+          `read: the stored body at offset ${row.offset} is not JSON (${error instanceof Error ? error.message : String(error)}) — read on from that offset to skip it`,
+          { offset: row.offset },
+        );
+      }
+      return { ...body, offset: row.offset, path: this.#path };
+    });
     // The scanned-offset-range proof: a CUT page (by `limit` or by the budget) is only contiguously
     // known through its last row; a complete page proves the read scanned the whole DURABLE log —
     // through the durable mark, never the in-memory head (ephemeral offsets die with the

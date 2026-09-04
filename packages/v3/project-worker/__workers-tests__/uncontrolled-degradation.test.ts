@@ -37,6 +37,7 @@ import { afterAll, expect, test, vi } from "vitest";
 import { print, type ItxExpression } from "../src/context/expression.ts";
 import { rewriteRuleConfiguredEvent } from "../src/context/itx-expression-rewriting.ts";
 import { errorCode } from "../src/lib/errors.ts";
+const codeOf = errorCode;
 import { subscriptionConfiguredEvent } from "../src/stream/subscriptions.ts";
 import { stub } from "./support.ts";
 
@@ -465,7 +466,10 @@ const corruptRow = (ctx: string, offset: number) =>
 // `read`: the client's own `read`, `waitForEvent`'s history scan, every facet's catch-up and gap
 // repair, the cursor lane's pages, the M1 memo recovery. One bad cell, every reader dead, no way to
 // tell WHICH row from the message.
-test.fails("C2 — one unparseable row body poisons every reader: read() and waitForEvent's history scan die of V8's `is not valid JSON`, naming no offset", async () => {
+// An unparseable stored body is coded EVENT_UNREADABLE naming its offset, so a reader can read on
+// past it — BORN RED as V8's raw `is not valid JSON` from `read()` / waitForEvent's scan, naming
+// nothing (flipped 2026-09-04, the typed storage read).
+test("C2 — one unparseable row body is a coded EVENT_UNREADABLE naming its offset, from read() and from waitForEvent's history scan", async () => {
   const ctx = "prj_ud_corrupt_row";
   const s = stub(ctx);
   const seed = offsetOf(await s.append({ type: "seed" }));
@@ -474,13 +478,11 @@ test.fails("C2 — one unparseable row body poisons every reader: read() and wai
   const waitErr = await rejectionOf(() =>
     s.waitForEvent({ type: "never", afterOffset: 0, timeoutMs: 100 }),
   );
-  if (
-    !stillDiesOf(readErr, /^Unexpected token 'o', "not json" is not valid JSON$/) ||
-    !stillDiesOf(waitErr, /^Unexpected token 'o', "not json" is not valid JSON$/)
-  )
-    return; // the pin MOVED
-  // WANTED: a coded error that names the offset of the row that cannot be read.
-  expect(readErr?.message).toContain(String(seed));
+  expect(codeOf(readErr)).toBe("EVENT_UNREADABLE");
+  expect(codeOf(waitErr)).toBe("EVENT_UNREADABLE");
+  expect(readErr?.message).toContain(String(seed)); // it names the offset to read on from
+  // …and read(seed) skips it: the seed row is the only durable, so the next page is empty and at head.
+  expect(((await s.read(seed)) as { events: unknown[] }).events).toEqual([]);
 });
 
 // WHAT IT DIES OF: the same SyntaxError — from the CONSTRUCTOR. A core contract version bump
@@ -489,7 +491,11 @@ test.fails("C2 — one unparseable row body poisons every reader: read() and wai
 // bad cell, the constructor throws, and it throws again on every wake — `runInDurableObject`
 // included, so there is no door left to repair the row through. Staged here by writing a foreign
 // `reducerVersion` into the cursor cell (what a deploy with a bumped `CoreContract.version` does).
-test.fails("C3 — that row under a core version bump: the constructor's re-reduce dies at the cell on EVERY wake — the context is bricked, runInDurableObject included", async () => {
+// The constructor's re-reduce (a core version bump discards the checkpoint and re-reduces from 0)
+// SKIPS an unreadable row and reports it, so the context wakes — BORN RED as the raw SyntaxError
+// from `new Stream(…)` on EVERY wake, bricking the context, runInDurableObject included (flipped
+// 2026-09-04, the typed storage read skips it in the re-reduce loop).
+test("C3 — that row under a core version bump: the constructor's re-reduce skips the unreadable row and reports it, and the context wakes", async () => {
   const ctx = "prj_ud_corrupt_row_rereduce";
   const s = stub(ctx);
   const seed = offsetOf(await s.append({ type: "seed" }));
@@ -501,15 +507,9 @@ test.fails("C3 — that row under a core version bump: the constructor's re-redu
     return Promise.resolve();
   });
   await evictDurableObject(s);
-  const wakeErr = await rejectionOf(() => s.invoke("itx.facets.get('core').snapshot()"));
-  const doorErr = await rejectionOf(() => runInDurableObject(s, () => Promise.resolve()));
-  if (
-    !stillDiesOf(wakeErr, /^Unexpected token 'o', "not json" is not valid JSON$/) ||
-    !stillDiesOf(doorErr, /^Unexpected token 'o', "not json" is not valid JSON$/)
-  )
-    return; // the pin MOVED
-  // WANTED: the constructor survives an unreadable row (report, skip) and the context answers.
-  expect(wakeErr).toBeUndefined();
+  const snapshot = (await s.invoke("itx.facets.get('core').snapshot()")) as { offset: number };
+  expect(snapshot.offset).toBeGreaterThanOrEqual(seed); // re-reduced past the skipped row
+  expect(offsetOf(await s.append({ type: "after" }))).toBeGreaterThan(seed); // and the log goes on
 });
 
 // ═══════════════════════════ D. THE CONSTRUCTOR ═══════════════════════════
@@ -543,13 +543,37 @@ test("D1 — the core checkpoint row lost: the constructor re-derives the mark f
 /** A CURSOR row whose target can never be called: `itx.kv` is a two-step target, root-called whole
  *  (subscription-delivery.ts `#evaluateItxExpressionTargetHead`), and the kv root is a plain object
  *  — `callOn` refuses it, deterministically, every time. */
+/** A cursor row (a stateless worker's `processEventBatch`, which cannot own its progress) whose
+ *  every delivery throws a PLAIN Error — retryable, so it climbs the ladder (E1). */
+const RETRYING_WORKER_SRC = /* js */ `import { WorkerEntrypoint } from "cloudflare:workers";
+export default class extends WorkerEntrypoint { processEventBatch() { throw new Error("flaky sink: try again"); } }`;
+async function retryingCursorRow(ctx: string): Promise<SubscriptionRow> {
+  const s = stub(ctx);
+  await s.append(
+    subscriptionConfiguredEvent({
+      name: "u",
+      target: [
+        "itx",
+        "workers",
+        ["get", { source: { "cap.js": RETRYING_WORKER_SRC } }],
+        "processEventBatch",
+      ],
+      consumes: ["mark"],
+    }),
+  );
+  await s.append({ type: "mark" });
+  return until("the first ladder attempt", async () => {
+    const row = await subscriptionRow(ctx, "u");
+    return (row?.cursor?.attempt ?? 0) >= 1 ? row : undefined;
+  });
+}
 async function uncallableCursorRow(ctx: string): Promise<SubscriptionRow> {
   const s = stub(ctx);
   await s.append(subscriptionConfiguredEvent({ name: "u", target: "itx.kv", consumes: ["mark"] }));
   await s.append({ type: "mark" });
-  return until("the first failure", async () => {
+  return until("the first failure (a halt or a ladder attempt)", async () => {
     const row = await subscriptionRow(ctx, "u");
-    return (row?.cursor?.attempt ?? 0) >= 1 ? row : undefined;
+    return row?.halted !== undefined || (row?.cursor?.attempt ?? 0) >= 1 ? row : undefined;
   });
 }
 /** Fire the DO's alarm up to `fires` times with Date faked 40 minutes further each time (past the
@@ -579,9 +603,9 @@ async function walkLadder(
 // CONTROL: the ladder is finite and the halt is OURS — 1 failure + 14 alarm wakes (1s·2ⁿ capped at
 // 30 min: ~7 hours of ladder clock, each rung a billed wake) then `subscription-delivery-halted` with
 // the message the loop threw, clipped, in the row.
-test("E1 — CONTROL: a target that is never callable walks the whole ladder — 14 alarm wakes after the first failure — then halts with our message", async () => {
+test("E1 — CONTROL: a RETRYABLE failure (a sink that throws a plain error) walks the whole ladder — 14 alarm wakes after the first failure — then halts with our message", async () => {
   const ctx = "prj_ud_ladder_live";
-  const first = await uncallableCursorRow(ctx);
+  const first = await retryingCursorRow(ctx);
   expect(first?.cursor).toMatchObject({ attempt: 1 });
   expect(first?.halted).toBeUndefined();
   const { fired, row } = await walkLadder(ctx, 20);
@@ -589,40 +613,29 @@ test("E1 — CONTROL: a target that is never callable walks the whole ladder —
   expect(row?.halted).toEqual({
     afterOffset: first!.cursor!.confirmedOffset,
     attempts: 15,
-    error: "target is not callable but 2 arg(s) were passed",
+    error: "flaky sink: try again",
   });
   // The ladder is not an issue line; the halt is a fact in the log. (Scoped to this row: an earlier
   // row's wedged facet may still be reporting in the background.)
   expect(drainIssues().filter((i) => (i as { name?: string }).name === "u")).toEqual([]);
 });
 
-// WHAT IT DIES OF: nothing a caller sees — the row sits on the ladder (`attempt: 1`, a
-// `nextAttemptAtMs`), not halted, after a failure that can never succeed: "not callable" is a
-// property of the target, not of the moment. The loop honors ONLY stamped `retryable: false`
-// ("honor stamped flags over an invented taxonomy"), so its own deterministic refusals — this one,
-// NOT_A_METHOD, NO_ITX_EXPRESSION_MATCH — buy 14 more wakes and ~7 hours before the halt lands.
-test.fails("E2 — a deterministic failure (`target is not callable`) is retried 14 more times over ~7 h of ladder instead of halting at once", async () => {
+// A deterministic failure — an uncallable target throws coded NOT_A_METHOD (callOn, both the dotted
+// and the root-apply case), which a retry cannot change — HALTS the row at its FIRST failure, not
+// after 14 more rungs over ~7 h. BORN RED as the full ladder (flipped 2026-09-04: deterministicFailure
+// in the delivery loop, and callOn root-apply coded).
+test("E2 — a deterministic failure (an uncallable target, NOT_A_METHOD) halts the row at once, no ladder", async () => {
   const first = await uncallableCursorRow("prj_ud_ladder_deterministic");
-  if (
-    !stillRed(
-      "on the ladder after a deterministic failure",
-      first?.halted === undefined && first?.cursor?.attempt === 1,
-      JSON.stringify(first),
-    )
-  )
-    return; // the pin MOVED
-  // WANTED: halted at once.
-  expect(first?.halted).toBeDefined();
+  expect(first?.halted).toBeDefined(); // halted at the first failure
+  expect(first?.halted?.attempts).toBe(1);
 });
 
-// WHAT IT DIES OF: `subscription-delivery.cursor [STREAM_PAUSED]: stream paused: breaker` — the
-// ladder's terminal `subscription-delivery-halted` append is refused by the pause check (only
-// created/woken/paused/resumed are exempt), thrown out of the ladder's own catch AFTER the cursor was
-// already reset to `attempt: 0`. The pre-call alarm arm (`CURSOR_DELIVERY_CALL_WATCHDOG_MS`) is still
-// standing, so the alarm fires again, finds attempt 0, and starts the ladder over: 15 failures,
-// refused halt, 15 more — forever, ~7 hours a cycle, with the row reading `attempt: n` and never
-// `halted`. A breaker that trips the stream while any cursor row is failing buys exactly this.
-test.fails("E3 — on a PAUSED stream the ladder's halt is REFUSED (STREAM_PAUSED) and the ladder restarts from attempt 0: the 15 failures are forgotten, the alarm keeps re-arming, the row never halts", async () => {
+// On a PAUSED stream the halt fact STILL LANDS — `subscription-delivery-halted` is pause-exempt
+// (like created/woken/paused/resumed) — so a cursor row failing while a breaker holds the stream
+// reaches `halted` and stops, instead of the halt being refused (STREAM_PAUSED) and the ladder
+// restarting from attempt 0 forever. BORN RED as that restart loop (flipped 2026-09-04: the exempt
+// list + halt-at-once; the uncallable target here halts at its first failure, NOT_A_METHOD).
+test("E3 — on a PAUSED stream the halt fact still lands (pause-exempt) and the row halts, no restart loop", async () => {
   const ctx = "prj_ud_ladder_paused";
   await uncallableCursorRow(ctx);
   await stub(ctx).append({
@@ -630,27 +643,13 @@ test.fails("E3 — on a PAUSED stream the ladder's halt is REFUSED (STREAM_PAUSE
     payload: { reason: "breaker" },
   });
   drainIssues();
-  const { row } = await walkLadder(ctx, 17); // 14 rungs to the refused halt, 3 more to watch it restart
+  const { row } = await walkLadder(ctx, 3); // it halts at once; a couple of alarm passes confirm no restart
   const refused = issues.find(
     (i) => i.failureSite === "subscription-delivery.cursor" && i.code === "STREAM_PAUSED",
   );
-  const alarmAt = await runInDurableObject(stub(ctx), (_instance, state) =>
-    state.storage.getAlarm(),
-  );
-  if (
-    !stillRed(
-      "the halt refused with STREAM_PAUSED, the ladder restarted, the alarm re-armed",
-      refused !== undefined &&
-        row?.halted === undefined &&
-        (row?.cursor?.attempt ?? 0) >= 1 &&
-        alarmAt !== null,
-      JSON.stringify({ refused, row, alarmAt }),
-    )
-  )
-    return; // the pin MOVED
-  // WANTED: the halt is the platform's own record and lands on a paused stream too (pause-exempt,
-  // like created/woken), so the row reads `halted` after its 15th failure.
-  expect(row?.halted).toBeDefined();
+  expect(refused).toBeUndefined(); // the halt append was NOT refused by the pause (pause-exempt)
+  expect(row?.halted).toBeDefined(); // the row halted on a paused stream…
+  expect(row?.cursor?.attempt ?? 0).toBe(0); // …and did not restart the ladder from attempt 0
 });
 
 // ═══════════════════ F. STORAGE UNDER A LIVE INCARNATION ═══════════════════

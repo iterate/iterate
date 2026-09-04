@@ -91,11 +91,16 @@ export class ReduceCheckpointTable implements ReduceCheckpointStore {
     stateChanged: boolean,
   ): void {
     const serializedState = stateChanged ? (JSON.stringify(state) ?? null) : null;
+    // Stamped `retryable: false` (the flag workerd itself uses): the same state serializes to the
+    // same size on every retry — a delivery loop halts on it instead of climbing its ladder.
     if (serializedState !== null && serializedState.length > REDUCE_CHECKPOINT_STATE_MAX_CHARS)
-      throw codedError(
-        "REDUCE_CHECKPOINT_TOO_LARGE",
-        `checkpoint "${slug}": the reduced state serializes to ${serializedState.length} chars, over the ${REDUCE_CHECKPOINT_STATE_MAX_CHARS}-char ceiling of one storage cell (2 MB) — a reduce must keep a summary, not the events; nothing was written`,
-        { slug, chars: serializedState.length, maxChars: REDUCE_CHECKPOINT_STATE_MAX_CHARS },
+      throw Object.assign(
+        codedError(
+          "REDUCE_CHECKPOINT_TOO_LARGE",
+          `checkpoint "${slug}": the reduced state serializes to ${serializedState.length} chars, over the ${REDUCE_CHECKPOINT_STATE_MAX_CHARS}-char ceiling of one storage cell (2 MB) — a reduce must keep a summary, not the events; nothing was written`,
+          { slug, chars: serializedState.length, maxChars: REDUCE_CHECKPOINT_STATE_MAX_CHARS },
+        ),
+        { retryable: false },
       );
     this.#sql.exec(
       `INSERT INTO reduce_checkpoints (slug, reducer_version, reduced_through_offset, state)
