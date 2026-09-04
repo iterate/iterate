@@ -232,6 +232,21 @@ export function trustedInternalAuthContext(): ItxAuthContext {
   return new ItxAuthContext({ isAdmin: true, origin: "internal", principal: "trusted-internal" });
 }
 
+/**
+ * Authority for a RESTRICTED itx scope (one minted with a surface — see
+ * domains/itx/surface.ts): confined to exactly one project, never admin. The
+ * principal names what was scoped (an agent path, a visitor) so appended
+ * provenance and audit trails say who acted.
+ */
+export function restrictedScopeAuthContext(projectId: string, principal: string): ItxAuthContext {
+  return new ItxAuthContext({
+    isAdmin: false,
+    origin: "internal",
+    principal,
+    projectIds: [projectId],
+  });
+}
+
 const streamDeliveryAuthContexts = new WeakSet<ItxAuthContext>();
 
 /** Authority minted only while one source stream resolves and calls a receiver.

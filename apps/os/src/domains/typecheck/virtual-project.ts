@@ -6,6 +6,7 @@
 // compiles whatever this module assembles; the split keeps "what a scope
 // looks like" and "how to run tsc" independently testable.
 import { ITX_API_DECLARATIONS } from "../../itx-api-graph.generated.ts";
+import { surfaceRoots } from "../itx/surface.ts";
 import type { CapabilityDescription } from "../itx/describe.ts";
 import { firstExportedTypeName } from "../itx/capability-type-declarations.ts";
 import { declarationsByName, referencedPlatformTypeNames } from "../itx/itx-api-graph.ts";
@@ -341,6 +342,48 @@ export async function checkPreamble(input: {
   return problems.length > 0 ? [...problems, ...checked.notes] : [];
 }
 
+/**
+ * A surfaced scope types every REMOVED built-in as this marker, so a member
+ * access on one (`itx.repo.readFile`) is a diagnostic naming the marker —
+ * proof the script reached for a built-in this scope does not have. An
+ * unknown root stays untyped-but-allowed, because it may be a dynamic
+ * capability; only the marker is provable. `Extract`/`Exclude` over
+ * `keyof Project` keep a non-member root from bricking the check.
+ */
+const REMOVED_BUILTIN_MARKER = "ItxMemberRemovedFromThisScope";
+
+/** Prelude lines a restricted surface adds above the `Itx` alias. */
+function surfacePreludeLines(surface: readonly string[] | undefined): string[] {
+  if (surface === undefined) return [];
+  // `__describe` is always kept at runtime (surface.ts ALWAYS_ALLOWED), so the
+  // type keeps it too.
+  const roots = [...new Set([...surfaceRoots(surface), "__describe"])].map((name) =>
+    JSON.stringify(name),
+  );
+  return [
+    `type ${REMOVED_BUILTIN_MARKER} = { readonly __removedFromThisScope: true };`,
+    `type ItxAllowedRoots = ${roots.join(" | ")};`,
+  ];
+}
+
+/** The `Project` term of a scope's `Itx`: the whole surface, or the allowed
+ * roots plus the marker on every removed one. */
+function itxProjectType(surface: readonly string[] | undefined): string {
+  if (surface === undefined) return "Project";
+  return (
+    "Pick<Project, Extract<keyof Project, ItxAllowedRoots>> & " +
+    `{ readonly [K in Exclude<keyof Project, ItxAllowedRoots>]: ${REMOVED_BUILTIN_MARKER} }`
+  );
+}
+
+/** A member access on a removed built-in's marker (see itxProjectType). */
+function isRemovedBuiltinAccess(diagnostic: TypecheckDiagnostic): boolean {
+  return (
+    (diagnostic.code === TS_PROPERTY_MISSING || diagnostic.code === TS_PROPERTY_NEAR_MISS) &&
+    diagnostic.message.includes(`'${REMOVED_BUILTIN_MARKER}'`)
+  );
+}
+
 /** The virtual project for one script check — shared by the advisory door
  * (checkItxScript) and the execution gate (checkItxScriptForExecution).
  * `preambleLineRange` (1-based, inclusive, in script.ts coordinates) is where
@@ -350,6 +393,7 @@ function assembleScriptProject(
   capabilities: CapabilityDescription[],
   code: string,
   preamble: string | undefined,
+  surface?: readonly string[],
 ): {
   files: Record<string, string>;
   preludeLineCount: number;
@@ -381,9 +425,16 @@ function assembleScriptProject(
   // and BEFORE the script const, at module scope: the emitted module then
   // carries the preamble for free and the script closes over its names.
   const preambleLines = preamble === undefined || preamble === "" ? [] : preamble.split("\n");
-  const prelude = [
+  // Everything above the preamble; its length positions the preamble range.
+  const head = [
     `import type { Project } from "./itx-types";`,
-    `type Itx = ${["Project", ...mountTerms].join(" & ")};`,
+    // A restricted scope's Itx keeps its allowed roots and marks the removed
+    // ones, so reaching for a removed built-in fails the gate before it runs.
+    ...surfacePreludeLines(surface),
+    `type Itx = ${[itxProjectType(surface), ...mountTerms].join(" & ")};`,
+  ];
+  const prelude = [
+    ...head,
     ...preambleLines,
     // Rest params so a script declaring extra parameters (the runtime calls
     // fn(itx), extras just stay undefined) stays assignable.
@@ -397,7 +448,9 @@ function assembleScriptProject(
     files,
     preludeLineCount: prelude.length,
     preambleLineRange:
-      preambleLines.length === 0 ? null : { start: 3, end: 2 + preambleLines.length },
+      preambleLines.length === 0
+        ? null
+        : { start: head.length + 1, end: head.length + preambleLines.length },
   };
 }
 
@@ -438,6 +491,8 @@ const EXECUTION_CHECK_DEADLINE_MS = 10_000;
  * still reports everything.
  */
 const TS_PROPERTY_NEAR_MISS = 2551; // Property 'X' does not exist on type 'T'. Did you mean 'Y'?
+/** "Property 'x' does not exist on type 'Y'" — the plain form, no suggestion. */
+const TS_PROPERTY_MISSING = 2339;
 const TS_NAME_NEAR_MISS = 2552; // Cannot find name 'X'. Did you mean 'Y'?
 
 /** TS grammar diagnostics live in the 1xxx range. Unparseable code is the one
@@ -512,6 +567,8 @@ export async function checkItxScriptForExecution(input: {
   capabilities: CapabilityDescription[];
   code: string;
   preamble?: string;
+  /** Restrict the checked `Itx` type to these built-in roots (domains/itx/surface.ts). */
+  surface?: readonly string[];
   typechecker: Typechecker;
   deadlineMs?: number;
 }): Promise<ScriptExecutionCheck> {
@@ -530,7 +587,12 @@ export async function checkItxScriptForExecution(input: {
   if (exceedsNestingDepth(input.code, MAX_NESTING_DEPTH)) {
     return { verdict: "unchecked", reason: `nesting deeper than ${MAX_NESTING_DEPTH}` };
   }
-  const project = assembleScriptProject(input.capabilities, input.code, input.preamble);
+  const project = assembleScriptProject(
+    input.capabilities,
+    input.code,
+    input.preamble,
+    input.surface,
+  );
   let checked: TypecheckResult;
   try {
     checked = await withDeadline(
@@ -568,7 +630,7 @@ export async function checkItxScriptForExecution(input: {
     (diagnostic) =>
       diagnostic.category === "error" &&
       diagnostic.fileName === "script.ts" &&
-      isProvableBlocker(diagnostic),
+      (isProvableBlocker(diagnostic) || isRemovedBuiltinAccess(diagnostic)),
   );
   if (blocking.length === 0) {
     // `js` can come back EMPTY when the program has errors anywhere (broken
@@ -607,6 +669,11 @@ export async function checkItxScriptForExecution(input: {
     lineOffset: -project.preludeLineCount,
     preambleLineRange: range,
   });
+  if (input.surface !== undefined && blocking.some(isRemovedBuiltinAccess)) {
+    problems.push(
+      `This scope's itx exposes only: ${[...surfaceRoots(input.surface)].join(", ") || "(no built-ins)"} — plus its own mounted capabilities. Members typed ${REMOVED_BUILTIN_MARKER} do not exist here.`,
+    );
+  }
   return { verdict: "problems", problems: [...problems, ...checked.notes] };
 }
 

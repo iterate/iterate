@@ -184,6 +184,15 @@ export interface Project {
   revokeCapability(input: RevokeCapabilityInput): Promise<void>;
   /** Project stream catalog: get(path), list(). */
   streams: ProjectStreamCollection;
+  /**
+   * A NARROWER itx for `path` — the one door for handing an itx to code
+   * that must not hold this scope's authority (a visitor's browser session,
+   * a helper that should only talk). The result exposes ONLY the listed
+   * built-in members (dotted entries narrow children: `"agent.message"`),
+   * keeps `path`'s dynamic mounts, and runs with project-confined, non-admin
+   * authority. Never widens: it is minted from THIS project only.
+   */
+  scope(input: { path: string; surface: string[] }): Project;
   /** Agent catalog: get(path), list(). */
   agents: AgentCollection;
   /** Connected clients: the project processor's catalog plus each scope's capability host. */
@@ -530,7 +539,19 @@ export interface Agent {
    * Identical-payload retries dedupe on the birth idempotency keys; a create
    * over an existing agent with a different payload fails loudly.
    */
-  create(payload?: AgentCreateInput): Promise<Agent>;
+  create(
+    payload?: AgentCreateInput,
+    options?: {
+      /**
+       * The agent scope's capability-host birth certificate — how a
+       * RESTRICTED agent is born: `{ config: { surface: ["chat"] }, fallback: null }`
+       * gives its scripts only `itx.chat` plus this scope's own mounts, with
+       * project-confined authority and no inheritance from the root host.
+       * Fixed at birth: the certificate lands once under a fixed key.
+       */
+      capabilityHost?: CapabilityHostCreateInput;
+    },
+  ): Promise<Agent>;
   /**
    * Send a message to this agent — THE inbound door for every caller. The
    * context item's actor derives from the calling scope: inside an agent script
@@ -3092,6 +3113,12 @@ export type StreamEvent = {
  * object of caller-authored birth facts; `{}` is the norm). */
 export type AgentCreateInput = { [x: string]: unknown };
 
+/** The `capability-host/created` payload — the scope's birth certificate. */
+export type CapabilityHostCreateInput = {
+  config: { surface?: string[] | undefined };
+  fallback?: unknown;
+};
+
 /**
  * Bytes accepted by every file-writing surface. Strings are ALWAYS treated as
  * base64 (optionally a full `data:` URL) — that is what Workers AI image
@@ -3104,9 +3131,6 @@ export type FileData = string | ArrayBuffer | Uint8Array | Blob | ReadableStream
  * file-storage path, size, and the signed public URL minted at attach time
  * (stored, not re-minted — it expires with its signature). */
 export type AgentFileAttachment = NonNullable<AgentContextAddedPayload["files"]>[number];
-
-/** The `capability-host/created` payload — the scope's birth certificate. */
-export type CapabilityHostCreateInput = { config: Record<string, never>; fallback?: unknown };
 
 /**
  * `setPreamble` recipe: one keyed entry of TypeScript injected above every

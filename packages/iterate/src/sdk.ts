@@ -43,6 +43,7 @@ import {
 // rewriteRelativeImportExtensions keeps the declaration emit for the published
 // dist/sdk.d.ts, where it must resolve to dist/itx-api.generated.d.ts.
 export type * from "./itx-api.generated.ts";
+export { serveItx } from "./serve-itx.ts";
 
 /**
  * What the platform supplies to every dynamic worker: the `ITX` binding

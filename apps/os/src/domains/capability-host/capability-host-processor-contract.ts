@@ -586,7 +586,20 @@ export type CapabilityHostProcessorContract = typeof CapabilityHostProcessorCont
  */
 function capabilityHostBirthCertificateSchema() {
   return z.strictObject({
-    config: z.strictObject({}).meta({ description: "Reserved. Every host is born with {} today." }),
+    config: z
+      .strictObject({
+        surface: z
+          .array(z.string().min(1))
+          .optional()
+          .meta({
+            description:
+              "Restrict scripts run in this scope to these itx built-in members (dotted member paths, " +
+              'e.g. ["chat", "agent.message"] — see domains/itx/surface.ts). Present means scripts see ONLY ' +
+              "these members plus this scope's mounts, and run with project-confined, non-admin authority. " +
+              "Absent is the full surface. Recorded at birth; the same-key-different-body rule keeps it fixed.",
+          }),
+      })
+      .meta({ description: "Scope policy. `{}` is the default: full surface, trusted authority." }),
     fallback: ItxExpression.nullish().meta({
       description:
         "Where capability reads go on a local miss: an itx expression naming ONE other host " +

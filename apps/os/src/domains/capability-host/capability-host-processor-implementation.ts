@@ -200,6 +200,7 @@ export class CapabilityHostProcessor extends StreamProcessor<
         // visible to the script this delivery starts.
         const capabilities = args.state.capabilities;
         const fallback = args.state.birthCertificate?.fallback ?? null;
+        const surface = args.state.birthCertificate?.config.surface;
         const preamble = assemblePreamble({
           entries: args.state.preamble,
           results: args.state.settledScriptResults,
@@ -213,6 +214,7 @@ export class CapabilityHostProcessor extends StreamProcessor<
             fallback,
             preamble,
             requestedAtOffset: execution.requestedAtOffset,
+            ...(surface === undefined ? {} : { surface }),
           }),
         );
         continue;
@@ -905,12 +907,18 @@ export class CapabilityHostProcessor extends StreamProcessor<
     records: CapabilityRecord[],
     fallback: ItxExpression | null,
     preamble: AssembledPreamble | null,
+    surface: readonly string[] | undefined,
   ): Promise<{ rejection: string | null; emittedJs?: string }> {
     const typecheckScript = this.deps.typecheckScript;
     if (typecheckScript === undefined) return { rejection: null };
     try {
       const capabilities = await this.#describeCapabilitiesFrom(records, fallback);
-      const checked = await typecheckScript({ capabilities, code, preamble: preamble?.ts });
+      const checked = await typecheckScript({
+        capabilities,
+        code,
+        preamble: preamble?.ts,
+        ...(surface === undefined ? {} : { surface }),
+      });
       if (checked.verdict === "clean") {
         // Check and emit are one compile: what runs IS the compiler's
         // type-stripped output, so scripts are genuinely TypeScript.
@@ -946,6 +954,8 @@ export class CapabilityHostProcessor extends StreamProcessor<
     fallback: ItxExpression | null;
     preamble: AssembledPreamble | null;
     requestedAtOffset: number;
+    /** The scope's restricted surface from its birth certificate, when set. */
+    surface?: readonly string[];
   }) {
     const now = () => this.#now();
     const executionExpiresAt = input.expiresAt - SCRIPT_EXECUTION_SETTLEMENT_GRACE_MS;
@@ -954,7 +964,13 @@ export class CapabilityHostProcessor extends StreamProcessor<
       // effects, so a rejected script provably never ran (requested →
       // settled, no started event) and the orphan policy is untouched.
       const checkedOutcome = await settleByDeadline(
-        this.#typecheckScriptForRun(input.code, input.capabilities, input.fallback, input.preamble),
+        this.#typecheckScriptForRun(
+          input.code,
+          input.capabilities,
+          input.fallback,
+          input.preamble,
+          input.surface,
+        ),
         executionExpiresAt,
         now,
       );
@@ -1039,6 +1055,7 @@ export class CapabilityHostProcessor extends StreamProcessor<
         emittedJs: checked.emittedJs,
         expiresAt: executionExpiresAt,
         preambleJs: input.preamble?.js,
+        ...(input.surface === undefined ? {} : { surface: input.surface }),
         streamContext: {
           kind: "script-execution",
           streamPath: this.#scopePath,
@@ -1201,6 +1218,7 @@ type ScriptExecutionEntrypoint = {
       expiresAt: number;
       preambleJs?: string;
       streamContext: Extract<StreamContext, { kind: "script-execution" }>;
+      surface?: readonly string[];
     },
   ): Promise<unknown>;
 };
@@ -1269,6 +1287,8 @@ export type CapabilityHostProcessorDeps = {
     capabilities: CapabilityDescription[];
     code: string;
     preamble?: string;
+    /** Restrict the checked `Itx` type to these built-in roots (domains/itx/surface.ts). */
+    surface?: readonly string[];
   }) => Promise<ScriptExecutionCheck>;
   /**
    * Set-time compile of a would-be assembled preamble (checkPreamble in
