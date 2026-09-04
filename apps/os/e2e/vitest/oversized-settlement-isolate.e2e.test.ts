@@ -10,8 +10,7 @@
 // stream's processor facets, materializing every event, and exceeds the
 // isolate's memory. Every platform retry boots into the same replay. A stream
 // in that state cannot even be wiped: the wipe RPC needs an incarnation that
-// boots. (src/domains/streams/oversized-settlement-crash.test.ts pins the same
-// fold re-materialization under a node heap proxy, via the settlement path.)
+// boots.
 //
 // MEASURED 2026-09-04 on main (zod 4.5.4):
 //   - six ~14MB events append fine, ~3s each, zero reboots

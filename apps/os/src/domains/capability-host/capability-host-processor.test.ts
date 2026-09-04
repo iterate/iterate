@@ -164,13 +164,6 @@ describe("CapabilityHostProcessor script runs", () => {
     expect(h.state().scriptExecutions).toEqual({});
   });
 
-  // The prod incident this file's stream-run lifecycle underpins — a ~7MB
-  // script settlement journaled verbatim, then OOMing the stream DO's isolate
-  // when its readers re-materialized it — is reproduced as an ACTUAL crash in
-  // domains/streams/oversized-settlement-crash.test.ts (a subprocess run under
-  // the isolate memory budget). That is the pinned regression; nothing to
-  // duplicate here.
-
   it("script obligations wait for the birth certificate; birth at head starts them", async () => {
     const h = makeHostHarness();
     await h.play(["append", scriptRunRequested("exec-early", h.clock.now + 60_000)]);
