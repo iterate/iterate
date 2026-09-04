@@ -76,6 +76,13 @@ import { searchRepoFilePaths } from "./repo-file-search.ts";
 const ARTIFACT_HEAD_VISIBILITY_RETRIES = 5;
 const REPO_DIR = "/repo";
 const REPO_HEAD_FILE_PREFIX_MAX_BYTES = 64 * 1024;
+
+function isFilesystemErrorCode(error: unknown, expectedCode: string): boolean {
+  return (
+    typeof error === "object" && error !== null && "code" in error && error.code === expectedCode
+  );
+}
+
 // The durable GitHub link record: the mirror-push hot path (every commit)
 // reads it from KV instead of re-folding the stream. The link lifecycle events
 // on the repo stream are the record of TRUTH for inspection; this key is
@@ -1116,7 +1123,7 @@ export class RepoDurableObject extends DurableObject<Env> {
       return { bytes: bytes[0], commitOid: head.commitOid, path };
     } catch (error) {
       console.warn(
-        `repo head read via the lazy lane failed; falling back to the tree cache: ${String(error)}`,
+        `repo head read through the lazy reader failed; falling back to the tree cache: ${String(error)}`,
       );
     }
     try {
@@ -1135,7 +1142,7 @@ export class RepoDurableObject extends DurableObject<Env> {
     try {
       await filesystem.lstat(absolutePath);
     } catch (error) {
-      if ((error as { code?: unknown })?.code === "ENOENT") return null;
+      if (isFilesystemErrorCode(error, "ENOENT")) return null;
       throw error;
     }
     const bytes = await readCheckoutFileBytes(filesystem, absolutePath);
@@ -1206,7 +1213,7 @@ export class RepoDurableObject extends DurableObject<Env> {
       try {
         await filesystem.lstat(absolutePath);
       } catch (error) {
-        if ((error as { code?: unknown })?.code === "ENOENT") return null;
+        if (isFilesystemErrorCode(error, "ENOENT")) return null;
         throw error;
       }
       const bytes = await readCheckoutFileBytes(filesystem, absolutePath);
