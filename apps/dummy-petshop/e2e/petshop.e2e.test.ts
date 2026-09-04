@@ -16,7 +16,9 @@
  */
 import { createHmac } from "node:crypto";
 import { mergeCloudflareWorkerVersionOverrideHeaders } from "@iterate-com/shared/test-support/cloudflare-worker-version-overrides";
+import { newHttpBatchRpcSession, newWebSocketRpcSession } from "capnweb";
 import { describe, expect, test } from "vitest";
+import WebSocket from "ws";
 
 function requirePetshopBaseUrl(): string {
   const value = process.env.PETSHOP_BASE_URL?.trim();
@@ -195,5 +197,88 @@ describe("deployed dummy-petshop", () => {
     expect(first.status).toBe(500);
     const second = await exchange(client, { grant_type: "refresh_token", refresh_token: "junk" });
     expect(second.status).toBe(400); // the real endpoint again, failing on the junk token
+  });
+});
+
+/** The pet shop's capnweb API as a client sees it (src/capnweb.ts's PetshopCapnwebApi). */
+type PetshopCapnwebApi = {
+  listPets(): Promise<{ owner: string; pets: { id: string; name: string; species: string }[] }>;
+  getPet(id: string): Promise<{ id: string; name: string; species: string }>;
+  createPet(input: {
+    name: string;
+    species: string;
+  }): Promise<{ id: string; name: string; species: string }>;
+};
+
+/** A legacy-login bearer — the cheapest live token the shop mints (any email, the fixture password). */
+async function legacyLoginToken(email: string): Promise<string> {
+  const response = await shop("/api/legacy-login", postJson({ email, password: "correct-horse" }));
+  expect(response.status).toBe(200);
+  return (await response.json<{ accessToken: string }>()).accessToken;
+}
+
+describe("capnweb door (/capnweb)", () => {
+  test("HTTP batch: the bearer in the Authorization header opens the pets API; a whole chain rides one POST", async () => {
+    const token = await legacyLoginToken("capnweb-batch@example.com");
+    // capnweb's batch client POSTs the Request it is given (headers kept), through Node's fetch.
+    const api = newHttpBatchRpcSession(
+      new Request(`${baseUrl}/capnweb`, {
+        headers: mergeCloudflareWorkerVersionOverrideHeaders(bearer(token).headers, process.env),
+      }),
+    ) as unknown as PetshopCapnwebApi;
+    const [listed, created, fetched] = await Promise.all([
+      api.listPets(),
+      api.createPet({ name: "Rex", species: "terrier" }),
+      api.getPet("pet-1"),
+    ]);
+    expect(listed.owner).toBe("capnweb-batch@example.com");
+    expect(listed.pets.map((pet) => pet.name)).toContain("Biscuit");
+    expect(created).toMatchObject({ name: "Rex", species: "terrier" });
+    expect(fetched).toMatchObject({ id: "pet-1", name: "Biscuit", species: "beagle" });
+  });
+
+  test("HTTP batch: no bearer is a 401 the client sees", async () => {
+    const api = newHttpBatchRpcSession(
+      new Request(`${baseUrl}/capnweb`, {
+        headers: mergeCloudflareWorkerVersionOverrideHeaders(undefined, process.env),
+      }),
+    ) as unknown as PetshopCapnwebApi;
+    await expect(api.listPets()).rejects.toThrow(/401/);
+  });
+
+  test("WebSocket: the bearer rides the Authorization UPGRADE header; the session serves calls until closed", async () => {
+    const token = await legacyLoginToken("capnweb-ws@example.com");
+    const socket = new WebSocket(`${baseUrl.replace(/^http/, "ws")}/capnweb`, {
+      headers: Object.fromEntries(
+        mergeCloudflareWorkerVersionOverrideHeaders(bearer(token).headers, process.env),
+      ),
+    });
+    const api = newWebSocketRpcSession(
+      socket as unknown as globalThis.WebSocket,
+    ) as unknown as PetshopCapnwebApi & Disposable;
+    try {
+      expect(await api.getPet("pet-2")).toMatchObject({ name: "Goldie", species: "goldfish" });
+      const created = await api.createPet({ name: "Ace", species: "parrot" });
+      expect(await api.getPet(created.id)).toMatchObject({ name: "Ace" });
+      expect((await api.listPets()).owner).toBe("capnweb-ws@example.com");
+    } finally {
+      api[Symbol.dispose]();
+      socket.close();
+    }
+  });
+
+  test("WebSocket: no bearer — the upgrade is refused with 401", async () => {
+    const socket = new WebSocket(`${baseUrl.replace(/^http/, "ws")}/capnweb`, {
+      headers: Object.fromEntries(
+        mergeCloudflareWorkerVersionOverrideHeaders(undefined, process.env),
+      ),
+    });
+    const status = await new Promise<number | "opened">((resolve) => {
+      socket.once("unexpected-response", (_request, response) => resolve(response.statusCode ?? 0));
+      socket.once("open", () => resolve("opened"));
+      socket.once("error", () => undefined); // the unexpected-response above is the answer
+    });
+    socket.close();
+    expect(status).toBe(401);
   });
 });

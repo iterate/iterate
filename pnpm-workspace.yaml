@@ -92,6 +92,9 @@ overrides:
   # rest of the graph) runs ahead on 0.12.0: arg-disposal-on-broken, exact binary serialization,
   # the batch-latency fix. The monorepo-wide pin above stays 0.10.0 until each consumer is verified.
   'project-worker>capnweb': npm:@iterate-com/capnweb@0.12.2
+  # dummy-petshop's /capnweb door is the pet shop the clean-room's `itx.connectToCapnweb` connector is
+  # proved against, so its server speaks the same 0.12 wire as that client.
+  '@iterate-com/dummy-petshop>capnweb': npm:@iterate-com/capnweb@0.12.2
   quicktype-core>readable-stream: npm:vite-compatible-readable-stream@3.6.1
   srvx: 0.11.12
   wrangler: 4.107.0

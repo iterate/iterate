@@ -3188,3 +3188,31 @@ exists as a probe (its harness lane went in the test-hygiene sweep). The 300-rul
   CLIENT); the library file 7/7 deployed INCLUDING the two WebSocket tests — a capnweb WebSocket session
   through the control plane's egress works (the local lane's Node-proxied fetch is the only place it
   cannot), and the WebSocket self-dial of this worker's own `/api` too.
+
+## 2026-09-04 — arc 3b: the connectors are proved against the REAL pet shop; `apps/dummy-petshop` grew a bearer-authed capnweb door
+
+- WHAT: apps/dummy-petshop gained `/capnweb` (src/capnweb.ts): capnweb's `newWorkersRpcResponse` serves the
+  pets API — `listPets()`, `getPet(id)`, `createPet({ name, species })` — as ONE RpcTarget over a batch POST or
+  a WebSocket upgrade. Auth, for now, is the shop's ordinary bearer in the Authorization header — on the POST
+  or on the upgrade request — resolved by the SAME `accessGrant` as /mcp and /api/v2 (401 `{ error:
+  "invalid_token" }` otherwise; no in-band capnweb auth yet). The app pins capnweb 0.12.2 (pnpm override
+  `'@iterate-com/dummy-petshop>capnweb'`) so its server speaks the connector's wire. Deployed to prd as
+  version 6a3738e6 (dummy-petshop.iterate.com, smoke ok).
+- TESTS, pet shop: unit `src/capnweb.test.ts` (6 — a batch round trip whose writes /api/pets then sees, ONE
+  POST per chain, the unknown-id message, 401 at the door and as the client sees it, GET without Upgrade is
+  capnweb's 400, the index documents the door); e2e `petshop.e2e.test.ts` +4 (batch with the bearer, batch
+  401, WebSocket with the bearer on the upgrade header via `ws`, WebSocket 401 as `unexpected-response`).
+- THE CONNECTOR E2E (`e2e/library-connectors-mcp-openapi-capnweb.e2e.test.ts`) now DEPENDS ON THE DEPLOYED
+  PET SHOP (`PETSHOP_BASE_URL`, default https://dummy-petshop.iterate.com). The bearer is a legacy-login
+  token the test mints and hands to the connectors' `headers` option, the way a user would. MCP → /mcp
+  (list_pets / get_pet / create_pet, an isError call throws, held across calls), the rules composition on
+  `itx.tools`; OpenAPI → /openapi.json (bearer-protected, fetched over egress, its `servers` → /api/v2;
+  listPets / getPet / createPet, 404 → error, and the dotted spelling); capnweb → /capnweb over a WebSocket
+  through egress (deployed-only) and over the batch transport; 401 without the bearer on every door; the two
+  self-dials kept. The three loaded-worker fixtures (`mcpServer`, `openapiServer`, `capnwebServer`) are
+  DELETED from e2e/support/sources.ts; the lane's path suffix and the SDK's `newWorkersRpcResponse` export
+  stay (platform features).
+- BOARD: dummy-petshop tsc ok · unit 98p (9 files) · e2e against prd 10/10. project-worker tsc×3 ok ·
+  oxlint 0/0 · the connector file LOCAL 7p/3sk (the WebSocket tests; DummyControlPlane cannot upgrade) ·
+  DEPLOYED (project-worker.iterate.workers.dev, the arc-three build) 10/10 including both WebSocket tests
+  against the pet shop. Nothing else run here (arc four owns the full suite).

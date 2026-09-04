@@ -540,6 +540,21 @@ Record<string, string>`, `"cap.js"` the main module), and the old inline wrapper
   accepts a path suffix (`/expression/<path>?context=&itx=`) so a service served behind it sees real
   paths; the SDK bundle is capnweb's workerd build and exports `newWorkersRpcResponse`, so a loaded
   worker can serve a capnweb API; capnweb's own promises register as pipelinable in the step walk.
+  Proved (arc 3b) against the REAL pet shop, `apps/dummy-petshop`, which grew a bearer-authed
+  `/capnweb` door for it (the same `accessGrant` as its `/mcp` and `/api/v2`): the connector e2e
+  depends on the deployed shop (`PETSHOP_BASE_URL`, default `https://dummy-petshop.iterate.com`),
+  mints a legacy-login bearer and passes it as the connectors' `headers` option; the loaded-worker
+  MCP/OpenAPI/capnweb fixtures are gone.
+
+### Decided on 2026-09-04, done (arc four)
+
+- **Configuration is ONE typed object** (`src/app-config.ts`, section 10): `APP_CONFIG_*` vars parsed once
+  per isolate by a row table, loud on a bad or unknown variable, plus the deploy identity from the
+  version-metadata binding. Two fields exist because two things read them (`environmentName`,
+  `deployId`); constants stay constants (the inventory is the module header). `/version` answers
+  `<label> <environmentName> <deployId>`.
+- **A root-applied non-callable is the coded `NOT_A_METHOD`**, like the dotted case (dispatch.ts): the
+  delivery loop treats it as deterministic and halts an uncallable cursor target at the first failure.
 
 ### Open
 

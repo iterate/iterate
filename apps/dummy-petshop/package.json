@@ -17,6 +17,7 @@
     "@orpc/openapi": "1.13.14",
     "@orpc/server": "1.13.14",
     "@orpc/zod": "1.13.14",
+    "capnweb": "npm:@iterate-com/capnweb@^0.12.2",
     "dedent": "^1.7.0",
     "zod": "4.3.6"
   },
@@ -24,10 +25,12 @@
     "@cloudflare/workers-types": "catalog:cloudflare",
     "@iterate-com/shared": "workspace:*",
     "@orpc/client": "1.13.14",
+    "@types/ws": "^8.18.1",
     "trpc-cli": "0.15.1",
     "tsx": "^4.20.6",
     "typescript": "^5.9.3",
     "vitest": "4.0.15",
-    "wrangler": "catalog:cloudflare"
+    "wrangler": "catalog:cloudflare",
+    "ws": "8.19.0"
   }
 }
