@@ -44,10 +44,18 @@ export function useWorkspaceFiles({
   const generation = useRef(0);
   const refresh = useCallback(async () => {
     const mine = ++generation.current;
-    const [documents, status] = await Promise.all([
-      withDocsProject((project) => project.documentsUnder(workspacePath, repoPath)),
-      lane((ws) => ws.status()),
-    ]);
+    let documents: string[];
+    let status: unknown;
+    try {
+      [documents, status] = await Promise.all([
+        withDocsProject((project) => project.documentsUnder(workspacePath, repoPath)),
+        lane((ws) => ws.status()),
+      ]);
+    } catch (cause) {
+      // A superseded refresh's failure is as stale as its data would have been.
+      if (generation.current !== mine) return;
+      throw cause;
+    }
     if (generation.current !== mine) return;
     const next = changeMap(status, repoPath, isDocumentPath);
     // The listing is the MERGED view (overlay over HEAD); HEAD itself is
