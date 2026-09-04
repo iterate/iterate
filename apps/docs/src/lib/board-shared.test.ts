@@ -50,6 +50,9 @@ describe("board workspace stream paths", () => {
     // A board lens pointed at a DIFFERENT mount must not publish it.
     expect(isGuestWorkspacePath(board, "/repos/other")).toBe(true);
     expect(isGuestWorkspacePath("/workspaces/agents/you", "/repos/config")).toBe(true);
+    expect(isGuestWorkspacePath("/workspaces/scratch/20260904-1757-2522", "/repos/config")).toBe(
+      false,
+    );
     // Foreign names under the tasks namespace are not this app's boards.
     expect(isGuestWorkspacePath("/workspaces/tasks/plain-no-separator", "/repos/config")).toBe(
       true,

@@ -887,7 +887,7 @@ importers:
         version: 1.28.4(@tanstack/react-start@1.168.25(crossws@0.4.4(srvx@0.11.12))(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(vite@8.0.9(@types/node@25.6.0)(esbuild@0.27.4)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)))(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       '@tanstack/react-form-devtools':
         specifier: ^0.2.19
-        version: 0.2.19(@types/react@19.2.17)(csstype@3.2.3)(preact@11.0.0-beta.0)(react@19.2.7)(solid-js@1.9.11)(vue@3.5.30(typescript@5.9.3))
+        version: 0.2.19(@types/react@19.2.17)(csstype@3.2.3)(preact@10.29.7)(react@19.2.7)(solid-js@1.9.11)(vue@3.5.30(typescript@5.9.3))
       '@tanstack/react-query':
         specifier: 5.101.2
         version: 5.101.2(react@19.2.7)
@@ -1574,6 +1574,9 @@ importers:
       '@iterate-com/shared':
         specifier: workspace:*
         version: link:../shared
+      '@pierre/trees':
+        specifier: 1.0.0-beta.5
+        version: 1.0.0-beta.5(@shikijs/themes@3.23.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(shiki@3.23.0)
       '@tailwindcss/postcss':
         specifier: ^4.3.2
         version: 4.3.2
@@ -19151,10 +19154,10 @@ snapshots:
     transitivePeerDependencies:
       - csstype
 
-  '@tanstack/devtools-utils@0.4.0(@types/react@19.2.17)(preact@11.0.0-beta.0)(react@19.2.7)(solid-js@1.9.11)(vue@3.5.30(typescript@5.9.3))':
+  '@tanstack/devtools-utils@0.4.0(@types/react@19.2.17)(preact@10.29.7)(react@19.2.7)(solid-js@1.9.11)(vue@3.5.30(typescript@5.9.3))':
     optionalDependencies:
       '@types/react': 19.2.17
-      preact: 11.0.0-beta.0
+      preact: 10.29.7(preact-render-to-string@6.6.5)
       react: 19.2.7
       solid-js: 1.9.11
       vue: 3.5.30(typescript@5.9.3)
@@ -19231,10 +19234,10 @@ snapshots:
       '@tanstack/pacer-lite': 0.1.1
       '@tanstack/store': 0.9.3
 
-  '@tanstack/form-devtools@0.2.19(@types/react@19.2.17)(csstype@3.2.3)(preact@11.0.0-beta.0)(react@19.2.7)(solid-js@1.9.11)(vue@3.5.30(typescript@5.9.3))':
+  '@tanstack/form-devtools@0.2.19(@types/react@19.2.17)(csstype@3.2.3)(preact@10.29.7)(react@19.2.7)(solid-js@1.9.11)(vue@3.5.30(typescript@5.9.3))':
     dependencies:
       '@tanstack/devtools-ui': 0.5.1(csstype@3.2.3)(solid-js@1.9.11)
-      '@tanstack/devtools-utils': 0.4.0(@types/react@19.2.17)(preact@11.0.0-beta.0)(react@19.2.7)(solid-js@1.9.11)(vue@3.5.30(typescript@5.9.3))
+      '@tanstack/devtools-utils': 0.4.0(@types/react@19.2.17)(preact@10.29.7)(react@19.2.7)(solid-js@1.9.11)(vue@3.5.30(typescript@5.9.3))
       '@tanstack/form-core': 1.28.5
       clsx: 2.1.1
       dayjs: 1.11.19
@@ -19270,10 +19273,10 @@ snapshots:
       - solid-js
       - utf-8-validate
 
-  '@tanstack/react-form-devtools@0.2.19(@types/react@19.2.17)(csstype@3.2.3)(preact@11.0.0-beta.0)(react@19.2.7)(solid-js@1.9.11)(vue@3.5.30(typescript@5.9.3))':
+  '@tanstack/react-form-devtools@0.2.19(@types/react@19.2.17)(csstype@3.2.3)(preact@10.29.7)(react@19.2.7)(solid-js@1.9.11)(vue@3.5.30(typescript@5.9.3))':
     dependencies:
-      '@tanstack/devtools-utils': 0.4.0(@types/react@19.2.17)(preact@11.0.0-beta.0)(react@19.2.7)(solid-js@1.9.11)(vue@3.5.30(typescript@5.9.3))
-      '@tanstack/form-devtools': 0.2.19(@types/react@19.2.17)(csstype@3.2.3)(preact@11.0.0-beta.0)(react@19.2.7)(solid-js@1.9.11)(vue@3.5.30(typescript@5.9.3))
+      '@tanstack/devtools-utils': 0.4.0(@types/react@19.2.17)(preact@10.29.7)(react@19.2.7)(solid-js@1.9.11)(vue@3.5.30(typescript@5.9.3))
+      '@tanstack/form-devtools': 0.2.19(@types/react@19.2.17)(csstype@3.2.3)(preact@10.29.7)(react@19.2.7)(solid-js@1.9.11)(vue@3.5.30(typescript@5.9.3))
       react: 19.2.7
     transitivePeerDependencies:
       - '@types/react'
@@ -27089,6 +27092,11 @@ snapshots:
     dependencies:
       '@posthog/core': 1.43.1
 
+  preact-render-to-string@6.6.5(preact@10.29.7):
+    dependencies:
+      preact: 10.29.7(preact-render-to-string@6.6.5)
+    optional: true
+
   preact-render-to-string@6.6.5(preact@11.0.0-beta.0):
     dependencies:
       preact: 11.0.0-beta.0
@@ -27096,6 +27104,11 @@ snapshots:
   preact@10.29.7(preact-render-to-string@6.6.5(preact@11.0.0-beta.0)):
     optionalDependencies:
       preact-render-to-string: 6.6.5(preact@11.0.0-beta.0)
+
+  preact@10.29.7(preact-render-to-string@6.6.5):
+    optionalDependencies:
+      preact-render-to-string: 6.6.5(preact@10.29.7)
+    optional: true
 
   preact@11.0.0-beta.0: {}
 

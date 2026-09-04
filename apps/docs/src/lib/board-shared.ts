@@ -85,9 +85,16 @@ export type BoardAddress = {
  * Commit or Discard-all.
  */
 export function isGuestWorkspacePath(workspacePath: string, repoPath: string): boolean {
+  // Scratch workspaces (the sidebar's "New workspace", /jam) are this app's
+  // own creation too; they are not repo-bound, and commit scope pins the
+  // mount anyway.
+  if (workspacePath.startsWith(SCRATCH_WORKSPACE_PREFIX)) return false;
   const boardId = boardIdOf(workspacePath);
   return boardId === null || boardWorkspacePath(boardId, repoPath) !== workspacePath;
 }
+
+/** The app-neutral namespace "New workspace" and /jam mint under. */
+export const SCRATCH_WORKSPACE_PREFIX = "/workspaces/scratch/";
 
 /** 32-bit FNV-1a as 8 lowercase hex chars. */
 function fnv1a32Hex(value: string): string {
