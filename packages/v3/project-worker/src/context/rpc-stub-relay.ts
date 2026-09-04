@@ -146,15 +146,23 @@ export async function lendRpcStubOverPager(
   // THE PAGER WEBSOCKET, opened through the DO's fetch door: the header is the attach request.
   // Nothing but pages ever ride the socket (fetch-upgrade traffic has its own leg,
   // fetch/rpc-stub-fetch.ts).
-  const response = await durableObject.fetch("https://rpc-stub-pager.internal/", {
-    headers: {
-      Upgrade: "websocket",
-      [RPC_STUB_PAGER_WEBSOCKET_HEADER]: encodeRpcStubPagerAttachRequest({
-        rpcStubKey,
-        appendEvents,
-      }),
-    },
-  });
+  let response: Response;
+  try {
+    response = await durableObject.fetch("https://rpc-stub-pager.internal/", {
+      headers: {
+        Upgrade: "websocket",
+        [RPC_STUB_PAGER_WEBSOCKET_HEADER]: encodeRpcStubPagerAttachRequest({
+          rpcStubKey,
+          appendEvents,
+        }),
+      },
+    });
+  } catch (error) {
+    // The DO never answered (its constructor threw on a bad APP_CONFIG_* var, a reset mid-call):
+    // nothing is lent, and the session's dup must not outlive the attempt.
+    disposeRpcStub(sessionRpcStub);
+    throw error;
+  }
   const pagerWebSocket = response.webSocket;
   if (response.status !== 101 || !pagerWebSocket) {
     // The DO refused (a paused stream, a row the reduce rejects) or something is wrong with the

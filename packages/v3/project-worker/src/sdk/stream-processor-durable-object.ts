@@ -80,9 +80,12 @@ export abstract class StreamProcessorDurableObject<
   #engineBuiltOnFirstUse?: ProcessorEngine<State>;
   get #engine(): ProcessorEngine<State> {
     return (this.#engineBuiltOnFirstUse ??= new ProcessorEngine(this.processor, {
+      // THE PLATFORM NEVER SPELLS A SHORT NAME: the engine's own emits, catch-up and gap repair go to
+      // the fixed point, `itx.builtins.…` — a context's rows (a whole-context override, a mask at
+      // `itx.append`) redirect the processor's calls to `itx.…`, never its log traffic.
       stream: {
-        append: (...events) => this.env.ITX.get().append(...events),
-        read: (after, limit) => this.env.ITX.get().readEvents(after, limit),
+        append: (...events) => this.env.ITX.get().builtins.append(...events),
+        read: (after, limit) => this.env.ITX.get().builtins.readEvents(after, limit),
       },
       storage: new ReduceCheckpointTable(this.ctx.storage.sql),
     }));

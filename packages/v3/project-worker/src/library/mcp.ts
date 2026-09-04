@@ -35,12 +35,7 @@ export async function connectToMcp(
   options: McpConnectOptions = {},
 ): Promise<McpConnection> {
   const client = new McpJsonRpcClient(itx, url, options.headers ?? {});
-  const serverInfo = (await client.request("initialize", {
-    protocolVersion: MCP_PROTOCOL_VERSION,
-    capabilities: {},
-    clientInfo: CLIENT_INFO,
-  })) as McpServerInfo;
-  await client.notify("notifications/initialized");
+  const serverInfo = await client.initialize();
   const { tools } = (await client.request("tools/list", {})) as { tools: McpTool[] };
   const Connection = withToolMethods(tools);
   return new Connection(client, tools, serverInfo);
@@ -107,15 +102,16 @@ function mcpResultToValue(name: string, result: McpToolResult): unknown {
   }
 }
 
+// `then` is reserved so a tool so named can never make the connection THENABLE: an async function
+// returning it, or any await of it, would adopt it as a promise, call the tool, and never settle.
 const RESERVED_MEMBERS = new Set([
   "constructor",
+  "then",
   "serverInfo",
   "tools",
   "listTools",
   "callTool",
   "close",
-  "invoke",
-  "applyRoot",
 ]);
 
 /** A per-connection subclass whose PROTOTYPE carries one method per tool — prototype methods are what
@@ -138,19 +134,35 @@ function withToolMethods(tools: McpTool[]): typeof McpConnection {
 
 type JsonRpcResponse = { id?: unknown; result?: unknown; error?: { message?: string } };
 
-/** The JSON-RPC half: one endpoint, an id counter, the session id the server may hand out. */
+/** The JSON-RPC half: one endpoint, an id counter, the session id the server may hand out. A client
+ *  closed by a holder (the context's idle quiesce releases the library's memoized connections,
+ *  index.ts) re-runs the handshake on its next request, so a held or memoized connection is never
+ *  a dead session. */
 class McpJsonRpcClient {
   readonly #itx: LibraryItx;
   readonly #url: string;
   readonly #headers: Record<string, string>;
   #nextId = 1;
   #sessionId: string | null = null;
+  #closed = false;
   constructor(itx: LibraryItx, url: string, headers: Record<string, string>) {
     this.#itx = itx;
     this.#url = url;
     this.#headers = headers;
   }
+  /** The handshake: `initialize` → `notifications/initialized`. */
+  async initialize(): Promise<McpServerInfo> {
+    this.#closed = false;
+    const serverInfo = (await this.request("initialize", {
+      protocolVersion: MCP_PROTOCOL_VERSION,
+      capabilities: {},
+      clientInfo: CLIENT_INFO,
+    })) as McpServerInfo;
+    await this.notify("notifications/initialized");
+    return serverInfo;
+  }
   async request(method: string, params: unknown): Promise<unknown> {
+    if (this.#closed) await this.initialize();
     const id = this.#nextId++;
     const response = await this.#post({ jsonrpc: "2.0", id, method, params });
     const message = await readJsonRpcResponse(response, id);
@@ -163,6 +175,7 @@ class McpJsonRpcClient {
     await response.body?.cancel();
   }
   async close(): Promise<void> {
+    this.#closed = true;
     if (this.#sessionId === null) return;
     const headers = new Headers(this.#headers);
     headers.set("mcp-session-id", this.#sessionId);
@@ -193,33 +206,43 @@ class McpJsonRpcClient {
 }
 
 /** The JSON-RPC response with `id` — from a JSON body (one message or a batch array) or from a
- *  `text/event-stream` body (the first `data:` event carrying that id). */
+ *  `text/event-stream` body, read AS IT ARRIVES and left the moment the event carrying that id is
+ *  in (the stream is cancelled then): a server may keep the POST's stream open for later traffic
+ *  (the spec says it SHOULD close it, not MUST), and waiting for its end would wait forever. */
 async function readJsonRpcResponse(response: Response, id: number): Promise<JsonRpcResponse> {
   const contentType = response.headers.get("content-type") ?? "";
-  const text = await response.text();
-  const candidates: JsonRpcResponse[] = contentType.includes("text/event-stream")
-    ? text
-        .split(/\r?\n\r?\n/)
-        .map((block) =>
-          block
-            .split(/\r?\n/)
-            .filter((line) => line.startsWith("data:"))
-            .map((line) => line.slice(5).trim())
-            .join("\n"),
-        )
-        .filter((data) => data !== "")
-        .flatMap((data) => {
-          const parsed = JSON.parse(data) as JsonRpcResponse | JsonRpcResponse[];
-          return Array.isArray(parsed) ? parsed : [parsed];
-        })
-    : (() => {
-        const parsed = JSON.parse(text) as JsonRpcResponse | JsonRpcResponse[];
-        return Array.isArray(parsed) ? parsed : [parsed];
-      })();
-  const message = candidates.find((m) => m.id === id);
-  if (!message)
-    throw new Error(
-      `MCP: no JSON-RPC response with id ${id} (${contentType || "no content-type"})`,
-    );
-  return message;
+  const messagesOf = (data: string): JsonRpcResponse[] => {
+    const parsed = JSON.parse(data) as JsonRpcResponse | JsonRpcResponse[];
+    return Array.isArray(parsed) ? parsed : [parsed];
+  };
+  if (!contentType.includes("text/event-stream")) {
+    const message = messagesOf(await response.text()).find((m) => m.id === id);
+    if (!message) throw new Error(`MCP: no JSON-RPC response with id ${id} (${contentType})`);
+    return message;
+  }
+  const reader = response.body?.getReader();
+  if (!reader) throw new Error(`MCP: no JSON-RPC response with id ${id} (empty event stream)`);
+  const decoder = new TextDecoder();
+  let buffered = "";
+  for (;;) {
+    const { value, done } = await reader.read();
+    buffered += done ? "" : decoder.decode(value, { stream: true });
+    // every complete event is a block ending in a blank line; the tail may be a partial one
+    const blocks = buffered.split(/\r?\n\r?\n/);
+    buffered = done ? "" : (blocks.pop() ?? "");
+    for (const block of blocks) {
+      const data = block
+        .split(/\r?\n/)
+        .filter((line) => line.startsWith("data:"))
+        .map((line) => line.slice(5).trim())
+        .join("\n");
+      if (data === "") continue;
+      const message = messagesOf(data).find((m) => m.id === id);
+      if (message) {
+        await reader.cancel().catch(() => undefined);
+        return message;
+      }
+    }
+    if (done) throw new Error(`MCP: no JSON-RPC response with id ${id} (text/event-stream ended)`);
+  }
 }

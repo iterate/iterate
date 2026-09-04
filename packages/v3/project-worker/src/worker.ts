@@ -16,6 +16,11 @@ import { DurableObjectNameCodec } from "./context/durable-object-names.ts";
 import { UnauthenticatedSession } from "./session.ts";
 import { appConfigOf } from "./app-config.ts";
 
+/** The fetch lane's re-entry count: `/expression?itx=itx.fetch` egresses to its own URL and lands
+ *  here again with the same query; the header counts the passes and the lane refuses past a few. */
+const ITX_EXPRESSION_LANE_HOPS_HEADER = "x-itx-expression-hops";
+const ITX_EXPRESSION_LANE_MAX_HOPS = 4;
+
 // Native workerd RPC promises pipeline exactly like capnweb ones — thread them unawaited through
 // the step walk too (dispatch.ts can't import cloudflare:workers itself: the unit lane runs it in
 // Node). A call step yields an RpcPromise; a PROPERTY step on one yields an RpcProperty — both
@@ -86,8 +91,17 @@ export default {
           "/expression needs ?context=<project id | context name>&itx=<itx expression>\n",
           { status: 400 },
         );
+      // THE HOP COUNT: an expression that fetches THIS lane's own URL (`?itx=itx.fetch`) re-enters
+      // here through egress with the same query, unbounded; each pass counts, a few is a loop.
+      const hops = Number(request.headers.get(ITX_EXPRESSION_LANE_HOPS_HEADER) ?? "0") + 1;
+      if (hops > ITX_EXPRESSION_LANE_MAX_HOPS)
+        return new Response(
+          `/expression: the lane re-entered itself ${hops} times (an expression fetching its own lane)\n`,
+          { status: 508 },
+        );
       const headers = new Headers(request.headers);
       headers.set(ITX_EXPRESSION_FETCH_HEADER, itxExpression);
+      headers.set(ITX_EXPRESSION_LANE_HOPS_HEADER, String(hops));
       return env.ITERATE_CONTEXT.getByName(DurableObjectNameCodec.parse(context).name).fetch(
         new Request(request, { headers }),
       );

@@ -52,14 +52,21 @@ import {
 import { codedError, errorCode } from "./lib/errors.ts";
 import { withTimeout } from "./lib/timeout.ts";
 import type { StreamEvent, StreamEventInput } from "./stream/events.ts";
-import { parse, print, type ItxExpression, type ItxExpressionInput } from "./context/expression.ts";
+import {
+  canonicalItxExpressionPrefix,
+  parse,
+  print,
+  type ItxExpression,
+  type ItxExpressionInput,
+} from "./context/expression.ts";
 import {
   ITX_EXPRESSION_FETCH_HEADER,
   itxExpressionEndingInFetch,
   RpcStubFetchServer,
 } from "./fetch/rpc-stub-fetch.ts";
 import { walkSteps } from "./context/dispatch.ts";
-import { FacetHandle, RpcStubHandle } from "./context/invoke-handle.ts";
+import { FacetHandle, InvokeHandle, RpcStubHandle } from "./context/invoke-handle.ts";
+import { buildLibrary, type LibraryItx } from "./library/index.ts";
 import {
   localReachableContext,
   Stream,
@@ -78,8 +85,11 @@ import { appConfigOf, type AppConfigEnv } from "./app-config.ts";
 import {
   ItxExpressionResolver,
   rewriteRuleRemovedEvent,
+  rowsNamingRpcStub,
+  rpcStubKeysNamed,
+  type ItxExpressionRewriteRule,
 } from "./context/itx-expression-rewriting.ts";
-import { BUILT_IN_ROOTS } from "./context/built-in-roots.ts";
+import { BUILT_IN_ROOTS, isBuiltInRoot } from "./context/built-in-roots.ts";
 import { subscriptionConfiguredEvent } from "./stream/subscriptions.ts";
 import {
   buildBuiltIns,
@@ -168,28 +178,55 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   });
 
   #unsetWhatNamesRpcStub(rpcStubKey: string): void {
-    // Compared RESOLVED: a caller's short spelling (`itx.rpcStubs.get('k')`, or a rule of their own
-    // naming the registry) names the key exactly as the platform's `itx.builtins.rpcStubs.get('k')`.
-    // A rule is REMOVED (back to the platform row beneath, if any — a dead fake `itx.ai` restores the
-    // real one), never masked: `null` is the caller's deliberate deny.
-    const physical = print(["itx", "builtins", "rpcStubs", ["get", rpcStubKey]]);
-    const namesTheKey = (target: ItxExpression | null): boolean => {
-      if (target === null) return false;
+    // Decided against ONE frozen table BEFORE any append (`rowsNamingRpcStub`,
+    // itx-expression-rewriting.ts): a caller's short spelling names the key exactly as the platform's
+    // `itx.builtins.rpcStubs.get('k')`, an alias to a shadowed root resolves to the platform row
+    // beneath and is kept, and the answer never depends on the order the rows were configured in or
+    // on a row removed a moment earlier. Then appended one by one, each on its own, so a row the
+    // removal spelling cannot express (a raw-appended match at `itx.builtins.…`) stops none of the
+    // others. A rule is REMOVED (back to the platform row beneath, if any — a dead fake `itx.ai`
+    // restores the real one), never masked: `null` is the caller's deliberate deny.
+    const { ruleMatches, subscriptionNames } = rowsNamingRpcStub({
+      rpcStubKey,
+      ...this.#rowsForRpcStubCensus(),
+    });
+    for (const match of ruleMatches) {
       try {
-        return print(this.#itxExpressionResolver.resolve(target).at(-1)!) === physical;
+        void this.append(rewriteRuleRemovedEvent(match)).catch(() => undefined);
       } catch {
-        return false;
+        /* a match the removal spelling cannot express — the other rows still go */
       }
-    };
+    }
+    for (const name of subscriptionNames)
+      void this.append(subscriptionConfiguredEvent({ name, target: null })).catch(() => undefined);
+  }
+
+  /** The two tables as the pure census functions read them: every rule, every subscription's target. */
+  #rowsForRpcStubCensus(): {
+    rules: ItxExpressionRewriteRule[];
+    subscriptionTargets: Record<string, ItxExpression>;
+    isBuiltInRoot: (root: string) => boolean;
+  } {
     const { itxExpressionRewriteRules, subscriptions } = this.#stream.coreReducedState;
-    for (const rule of Object.values(itxExpressionRewriteRules))
-      if (namesTheKey(rule.target))
-        void this.append(rewriteRuleRemovedEvent(rule.match)).catch(() => undefined);
-    for (const [name, subscription] of Object.entries(subscriptions))
-      if (namesTheKey(subscription.target))
-        void this.append(subscriptionConfiguredEvent({ name, target: null })).catch(
-          () => undefined,
-        );
+    return {
+      rules: Object.values(itxExpressionRewriteRules),
+      subscriptionTargets: Object.fromEntries(
+        Object.entries(subscriptions).map(([name, row]) => [name, row.target]),
+      ),
+      isBuiltInRoot,
+    };
+  }
+
+  /** A stub whose LAST pager closed DURING a pause had its un-set refused — the un-set is an ordinary
+   *  append and `stream/paused` refuses ordinary appends — so on the `resumed` commit every key a row
+   *  still names that has NO transport right now (neither borrowed nor pager-backed) is un-set then.
+   *  Scheduled off the commit's own turn: the un-sets are appends of their own. */
+  #unsetWhatNamesDeadRpcStubsOnResume(committedEvents: StreamEvent[]): void {
+    if (!committedEvents.some((event) => event.type === "events.iterate.com/stream/resumed"))
+      return;
+    const present = new Set(this.#rpcStubs.listRpcStubKeys());
+    for (const rpcStubKey of rpcStubKeysNamed(this.#rowsForRpcStubCensus()))
+      if (!present.has(rpcStubKey)) queueMicrotask(() => this.#unsetWhatNamesRpcStub(rpcStubKey));
   }
 
   constructor(ctx: DurableObjectState, env: Env) {
@@ -247,6 +284,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       committedEvents,
       subscriptionsBeforeCommit,
     );
+    this.#unsetWhatNamesDeadRpcStubsOnResume(committedEvents);
     return committedEvents;
   }
 
@@ -293,26 +331,39 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     return this.#stream.read(afterOffset, limit);
   }
 
-  /** THE EFFECTIVE rule table, read: the context's own rows (masks as `target: null`) plus the
-   *  implicit platform row for every built-in root the context has not re-set. */
+  /** THE EFFECTIVE rule table, read: the context's own rows (masks as `target: null`, a template's
+   *  `@` spelled) plus the implicit platform row for every built-in root the context has not re-set —
+   *  none at all under a bare `itx` row, which claims every call before a platform row could. */
   #rewriteRuleList(): RewriteRuleListEntry[] {
     const contextRows = Object.values(this.#stream.coreReducedState.itxExpressionRewriteRules).map(
       (rule): RewriteRuleListEntry => ({
         match: print(rule.match),
-        target: rule.target && print(rule.target),
+        target: rule.target && print(rule.target, { holes: true }),
         origin: "context",
       }),
     );
     const reset = new Set(contextRows.map((row) => row.match));
-    const platformRows = BUILT_IN_ROOTS.filter((root) => !reset.has(`itx.${root}`)).map(
-      (root): RewriteRuleListEntry => ({
-        match: `itx.${root}`,
-        target: `itx.builtins.${root}`,
-        origin: "platform",
-      }),
-    );
+    const shadowedRoots = reset.has("itx") ? [] : BUILT_IN_ROOTS;
+    const platformRows = shadowedRoots
+      .filter((root) => !reset.has(`itx.${root}`))
+      .map(
+        (root): RewriteRuleListEntry => ({
+          match: `itx.${root}`,
+          target: `itx.builtins.${root}`,
+          origin: "platform",
+        }),
+      );
     return [...contextRows, ...platformRows];
   }
+
+  /** THE LIBRARY (library/index.ts), owned here: its verbs closed over this context's own `itx` — a
+   *  genuine InvokeHandle over `invoke`, so a library call's `itx.fetch(...)` resolves through THIS
+   *  context's rules (a test may shadow `itx.fetch`) and lands on egress with zero hops, the same
+   *  shape a loaded worker holds after `env.ITX.get()` — and the live connections it opened, which
+   *  the idle quiesce releases beside the borrowed stubs (a held connection pins this actor awake). */
+  readonly #library = buildLibrary(
+    new InvokeHandle((steps) => this.invoke(["itx", ...steps])) as unknown as LibraryItx,
+  );
 
   /** `itx.builtins` — the physical scope this context resolves against (context/built-ins.ts). */
   readonly #builtIns: Record<string, unknown> = buildBuiltIns({
@@ -361,12 +412,23 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     },
     rewriteRules: {
       list: () => this.#rewriteRuleList(),
-      get: (match) => this.#rewriteRuleList().find((row) => row.match === match) ?? null,
+      // The table is keyed by the CANONICAL spelling; a caller's spelling (`get('itx.ai.run("x")')`)
+      // is canonicalized the same way `provide` canonicalized the match. An unparseable one is no row.
+      get: (match) => {
+        let key: string;
+        try {
+          key = canonicalItxExpressionPrefix(match);
+        } catch {
+          return null;
+        }
+        return this.#rewriteRuleList().find((row) => row.match === key) ?? null;
+      },
       // PURE: the chain of rewrites, printed — nothing dispatched, nothing noted as activity.
-      resolve: (call) => this.#itxExpressionResolver.resolve(call).map(print),
+      resolve: (call) => this.#itxExpressionResolver.resolve(call).map((step) => print(step)),
     },
     waitForEvent: (filter) => this.#stream.waitForEvent(filter),
     itxEntrypoint: this.#itxEntrypoint,
+    library: this.#library.roots,
   });
 
   /** THE DISPATCHER (context/itx-expression-rewriting.ts), built once over the physical built-ins —
@@ -460,8 +522,10 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       }
       this.#liveFacetNames.clear(); // aborted facets re-materialize on their next call
       // Same doctrine for the borrowed stubs: holding one pins this actor awake, and a page
-      // always borrows it back — return them with the idle facets.
+      // always borrows it back — return them with the idle facets. And for the library's live
+      // connections (an MCP session, an open capnweb WebSocket): released here, reopened on use.
       this.#rpcStubs.returnBorrowedRpcStubs();
+      this.#library.releaseConnections();
     } else {
       // Not quiet yet — look again when the quiet period would end; but never in the PAST (work in
       // flight for over a minute would otherwise re-fire this alarm in a tight, billed loop).

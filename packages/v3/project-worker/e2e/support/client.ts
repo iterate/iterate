@@ -103,9 +103,17 @@ export const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeou
 export const append = (itx: any, ...events: unknown[]): Promise<any[]> =>
   itx.invoke(["itx", ["append", ...events]]);
 
-/** The first 500 durable rows of the log. */
-export const readAll = async (itx: any): Promise<any[]> =>
-  (await itx.invoke(["itx", ["readEvents", 0, 500]])).events;
+/** EVERY durable row of the log — paged on `scannedThroughOffset` until the page says it reached the
+ *  head (a page is bounded by rows AND by bytes, so one page is not the log). */
+export const readAll = async (itx: any): Promise<any[]> => {
+  const all: any[] = [];
+  for (let after = 0; ; ) {
+    const page = await itx.invoke(["itx", ["readEvents", after, 500]]);
+    all.push(...page.events);
+    if (page.atHead === true || page.scannedThroughOffset <= after) return all;
+    after = page.scannedThroughOffset;
+  }
+};
 
 /** The DURABLE head — the last durable row's offset, NOT scannedThroughOffset (ephemerals such as
  *  live-state deltas consume offsets past it; a facet only ever needs to catch up to the durable
@@ -160,11 +168,17 @@ export const until = async <T>(
   timeoutMs = 20_000,
 ): Promise<T> => {
   const t0 = Date.now();
+  let lastError: unknown;
   for (;;) {
-    const v = await Promise.resolve(fn()).catch(() => undefined);
+    const v = await Promise.resolve(fn()).catch((error: unknown) => {
+      lastError = error;
+      return undefined;
+    });
     if (v !== undefined && v !== false) return v as T;
     if (Date.now() - t0 > timeoutMs)
-      throw new Error(`until(${label}): timed out after ${timeoutMs}ms`);
+      throw new Error(
+        `until(${label}): timed out after ${timeoutMs}ms${lastError !== undefined ? ` — last error: ${lastError instanceof Error ? lastError.message : String(lastError)}` : ""}`,
+      );
     await sleep(50);
   }
 };

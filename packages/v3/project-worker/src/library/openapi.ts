@@ -102,6 +102,9 @@ export class OpenApiConnection extends RpcTarget {
         if (value != null) url.searchParams.set(parameter.name, String(value));
       } else if (parameter.in === "header") {
         if (value != null) headers.set(parameter.name, String(value));
+      } else if (parameter.in === "cookie") {
+        if (value != null)
+          headers.append("cookie", `${parameter.name}=${encodeURIComponent(String(value))}`);
       } else continue;
       delete fields[parameter.name];
     }
@@ -132,7 +135,8 @@ export class OpenApiConnection extends RpcTarget {
   }
 }
 
-const RESERVED_MEMBERS = new Set(["constructor", "operations", "call", "invoke", "applyRoot"]);
+// `then` is reserved so an operation so named can never make the connection THENABLE (see mcp.ts).
+const RESERVED_MEMBERS = new Set(["constructor", "then", "operations", "call"]);
 
 /** A per-connection subclass whose PROTOTYPE carries one method per operation (prototype methods are
  *  what Workers RPC and capnweb traverse — see mcp.ts). */
@@ -174,8 +178,18 @@ function requestBase(
 ): URL {
   if (options.baseUrl) return new URL(options.baseUrl);
   const serverUrl = spec.servers?.[0]?.url;
-  if (serverUrl) return new URL(serverUrl, specUrl);
-  if (!specUrl) throw new Error("connectToOpenApi: a document without servers needs { baseUrl }");
+  const relative = serverUrl !== undefined && !/^[a-z][a-z0-9+.-]*:/i.test(serverUrl);
+  if (serverUrl && !(relative && !specUrl)) {
+    const base = new URL(serverUrl, specUrl);
+    // a RELATIVE server (`/api`, the common spelling) resolved against a fetch-lane spec URL keeps
+    // the lane's `?context=&itx=` — dropping it would send every operation to the worker's banner
+    if (relative && specUrl) base.search = new URL(specUrl).search;
+    return base;
+  }
+  if (!specUrl)
+    throw new Error(
+      `connectToOpenApi: a document ${serverUrl ? `whose server is the relative ${JSON.stringify(serverUrl)}` : "without servers"} needs { baseUrl }`,
+    );
   const base = new URL(specUrl);
   base.pathname = base.pathname.replace(/\/[^/]*$/, "");
   return base;

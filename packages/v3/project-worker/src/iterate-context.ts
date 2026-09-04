@@ -73,7 +73,7 @@ import {
   type IterateContextDurableObjectStub,
 } from "./context/rpc-stub-relay.ts";
 import type { SessionTeardown } from "./session.ts";
-import type { StreamEventInput } from "./stream/events.ts";
+import type { StreamEvent, StreamEventInput } from "./stream/events.ts";
 import { subscriptionConfiguredEvent } from "./stream/subscriptions.ts";
 
 export type IterateContextNamespace = DurableObjectNamespace<IterateContextDurableObject>;
@@ -224,6 +224,7 @@ export class IterateContext extends RpcTarget {
       // A pure rewrite: whatever THIS session lent under the match stops meaning the stub — recall it.
       this.#sessionTeardown.dispose(sessionTeardownKey);
       const event = rewriteRuleConfiguredEvent(matchString, target);
+      this.#refuseAnOverrideNamingItsOwnContext(matchString, event);
       await this.#append(event);
       const targetString = (event.payload as { target: string }).target;
       return new RewriteRuleHandle(() => this.#removeRuleInBackground(matchString, targetString));
@@ -300,11 +301,14 @@ export class IterateContext extends RpcTarget {
     // An expression (or a removal): whatever THIS session lent under the name stops meaning it.
     this.#sessionTeardown.dispose(sessionTeardownKey);
     const target = input.target as ItxExpressionInput | null;
-    await this.#append(subscriptionConfiguredEvent({ name, target, ...consumes }));
+    const [committed] = (await this.#append(
+      subscriptionConfiguredEvent({ name, target, ...consumes }),
+    )) as StreamEvent[];
     return new SubscriptionHandle(name, () => {
-      // An expression target has no pager, so the handle un-sets the row itself.
-      if (target !== null)
-        this.#appendInBackground(subscriptionConfiguredEvent({ name, target: null }));
+      // An expression target has no pager, so the handle un-sets the row itself — ONLY the row this
+      // call wrote (same name REPLACES: a later subscribe under the name, this session's or another's,
+      // owns the row now, and a stale undo must never take it — nor the facet it may host).
+      if (target !== null) this.#removeSubscriptionInBackground(name, committed.offset);
     });
   }
 
@@ -383,10 +387,39 @@ export class IterateContext extends RpcTarget {
     );
   }
 
-  /** An undo's append: fire-and-forget under waitUntil (a disposer cannot await), a refusal ignored
-   *  (a paused stream keeps the row; the next explicit call will say so). */
-  #appendInBackground(event: StreamEventInput): void {
-    this.#waitUntil(this.#append(event).catch(() => undefined));
+  /** An undo's REMOVAL of a subscription row: un-set ONLY the row this handle wrote — its
+   *  `configuredAtOffset` is the offset of the event the handle's call committed; a later same-name
+   *  subscribe replaced it and owns the name now. Fire-and-forget under waitUntil, a refusal ignored. */
+  #removeSubscriptionInBackground(name: string, configuredAtOffset: number): void {
+    this.#waitUntil(
+      (async () => {
+        const row = (await this.#durableObject.invoke([
+          "itx",
+          "builtins",
+          "subscriptions",
+          ["get", name],
+        ])) as { configuredAtOffset: number } | null;
+        if (row?.configuredAtOffset === configuredAtOffset)
+          await this.#append(subscriptionConfiguredEvent({ name, target: null }));
+      })().catch(() => undefined),
+    );
+  }
+
+  /** A whole-context override (a bare `itx` row) whose target is `cd` of THIS context is a loop no
+   *  depth budget can see — every hop is a fresh resolve — so it is refused here, where the path is
+   *  known. Two contexts overriding each other stays a trusted-client misconfiguration. */
+  #refuseAnOverrideNamingItsOwnContext(matchString: string, event: StreamEventInput): void {
+    if (matchString !== "itx") return;
+    const target = (event.payload as { target: string | null }).target;
+    if (target === null) return;
+    const steps = toItxExpression(target);
+    const cdStep = steps[1] === "builtins" ? steps[2] : steps[1];
+    if (!Array.isArray(cdStep) || cdStep[0] !== "cd" || typeof cdStep[1] !== "string") return;
+    const ownPath = this.#durableObjectAddress.path;
+    if (resolveContextPath(ownPath, cdStep[1]) === ownPath)
+      throw new Error(
+        `a whole-context override may not name its own context: "itx ⇒ ${target}" at ${JSON.stringify(ownPath)} would route every call back into itself`,
+      );
   }
 
   /** The SessionTeardown key for a lent stub: `"<iterateContextName> <rpcStubKey>"`. The teardown is

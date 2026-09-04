@@ -9,7 +9,7 @@
 // `null` target REMOVES it. The one function here BUILDS that event; the caller appends it. The
 // halted fact is appended by the delivery loop; the resumed fact by an operator's plain `itx.append`.
 
-import { print, toItxExpression, type ItxExpressionInput } from "../context/expression.ts";
+import { parse, print, toItxExpression, type ItxExpressionInput } from "../context/expression.ts";
 import { CoreContract, parseSubscriptionName } from "./core-processor.ts";
 import type { StreamEventInput } from "./events.ts";
 
@@ -26,7 +26,10 @@ export function subscriptionConfiguredEvent(input: {
   // (`itx.facets.get('core')`) is taken. Refused at the door, never at delivery.
   if (name === CoreContract.slug)
     throw new Error(`"${name}" is the core reduce's name — reserved; pick another`);
-  const target = input.target === null ? null : toItxExpression(input.target);
+  // BOTH halves through the codec: the array half re-parses from its printed form, so a target the
+  // reduce could not parse (the reserved literal `{ "@": true }` carried as data, a name step that is
+  // not an identifier) fails LOUD here, in the parser's words — never a row that silently never exists.
+  const target = input.target === null ? null : parse(print(toItxExpression(input.target)));
   if (target && target[0] !== "itx")
     throw new Error(
       `a subscription target must be rooted at "itx" (got ${JSON.stringify(print(target))})`,

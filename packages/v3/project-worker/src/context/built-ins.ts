@@ -26,10 +26,9 @@
 import type { ReachableContext, StreamPage, WaitForEventFilter } from "../stream/stream.ts";
 import type { StreamEvent, StreamEventInput } from "../stream/events.ts";
 import {
-  buildLibrary,
   type CapnwebConnection,
   type CapnwebConnectOptions,
-  type LibraryItx,
+  type LibraryRoots,
   type McpConnection,
   type McpConnectOptions,
   type OpenApiConnection,
@@ -92,6 +91,11 @@ export default class RunScript extends WorkerEntrypoint {
  *  root unreachable. Exported for ONE reader: the edge `IterateContext`'s TYPE merges it in
  *  (iterate-context.ts), so what rides the dotted hop is typed where a client holds it. */
 export interface BuiltInScope {
+  /** THE RESERVED ROOT, typed: `itx.builtins.<root>` is the physical spelling of every root below —
+   *  the fixed point of rewriting, never shadowed by a context's rows (itx-expression-rewriting.ts
+   *  rule 5). Not a key of the record (the resolver strips it); here so a strongly typed holder — the
+   *  SDK host's engine port, a loaded worker's `env.ITX.get()` — can spell `itx.builtins.append(…)`. */
+  builtins: Omit<BuiltInScope, "builtins">;
   /** Identify this context. */
   whoami(): { projectId: string; path: string };
   /** Project-prefixed durable key/value (the `${projectId}:` prefix IS the isolation). */
@@ -202,10 +206,11 @@ export interface BuiltInScope {
   connectToCapnweb(url: string, options?: CapnwebConnectOptions): Promise<CapnwebConnection>;
 }
 
-// THE ONE LIST: `keyof BuiltInScope` and context/built-in-roots.ts's `BUILT_IN_ROOTS` are the same
-// set — a root added to either without the other fails to typecheck right here.
-type RootsAreTheSameSet = [keyof BuiltInScope] extends [BuiltInRoot]
-  ? [BuiltInRoot] extends [keyof BuiltInScope]
+// THE ONE LIST: `keyof BuiltInScope` (minus the reserved root itself, which names the record, not a
+// key of it) and context/built-in-roots.ts's `BUILT_IN_ROOTS` are the same set — a root added to
+// either without the other fails to typecheck right here.
+type RootsAreTheSameSet = [Exclude<keyof BuiltInScope, "builtins">] extends [BuiltInRoot]
+  ? [BuiltInRoot] extends [Exclude<keyof BuiltInScope, "builtins">]
     ? true
     : never
   : never;
@@ -251,6 +256,10 @@ interface BuildBuiltInsDeps {
    *  minted once for this context (the DO's `#itxEntrypoint`; itx-entrypoint.ts for why it is never a
    *  raw getByName stub). */
   itxEntrypoint: Fetcher;
+  /** THE LIBRARY's roots (library/index.ts `buildLibrary(itx).roots`): built by the DO over its own
+   *  `itx` handle, so a library call's `itx.fetch(...)` resolves through THIS context's rules (a test
+   *  may shadow `itx.fetch`) and lands on egress with zero hops. */
+  library: LibraryRoots;
 }
 
 /** Assemble the built-in scope for one context. Every entry closes over the context's identity —
@@ -294,14 +303,6 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
 
   const kvPrefix = `${projectId}:`;
   const ownContext = () => deps.context(path);
-
-  // THE LIBRARY's one dependency: `itx` — this context's own dotted handle, a genuine InvokeHandle
-  // over the DO's `invoke`, so a library call's `itx.fetch(...)` resolves through THIS context's
-  // rules (a test may shadow `itx.fetch`) and lands on egress with zero hops. The same shape a
-  // loaded worker holds after `env.ITX.get()`, which is what makes the tier movable.
-  const libraryItx = new InvokeHandle((steps) =>
-    deps.invoke(["itx", ...steps]),
-  ) as unknown as LibraryItx;
 
   // Each root implements one member of the BuiltInScope interface above (the canonical doc of the
   // kernel surface); the comments here add only what the interface can't say — the WHY of a code branch.
@@ -382,7 +383,8 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
     // this bare-lambda door bottoms out at `workers.get({ source }).run(...)`.
     runScript: (script: string, ...args: unknown[]) =>
       callEntrypoint({ source: { "cap.js": RUN_SCRIPT_ENTRYPOINT(script) } }, "run", args),
-    // THE LIBRARY: three verbs closed over `libraryItx` (library/index.ts).
-    ...buildLibrary(libraryItx),
-  } satisfies BuiltInScope;
+    // THE LIBRARY: three verbs closed over the context's own `itx` handle, built and owned by the DO
+    // (library/index.ts — it also owns the live connections' release at the idle quiesce).
+    ...deps.library,
+  } satisfies Omit<BuiltInScope, "builtins">;
 }

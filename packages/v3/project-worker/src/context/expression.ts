@@ -76,12 +76,17 @@ export function isItxExpressionHole(value: unknown): boolean {
   );
 }
 
-/** Does `value` (a step, an arg tree, a whole expression) hold the marker or a merge entry anywhere? */
+/** Does `value` (a step, an arg tree, a whole expression) hold the marker or a merge entry anywhere?
+ *  A merge entry is the key `"...@"` with the value `true` — exactly what `print` spells back as
+ *  `...@`, so this predicate and the printer agree on what the marker is. */
 export function containsItxExpressionHole(value: unknown): boolean {
   if (isItxExpressionHole(value)) return true;
   if (Array.isArray(value)) return value.some(containsItxExpressionHole);
   if (value !== null && typeof value === "object")
-    return Object.hasOwn(value, MERGE_KEY) || Object.values(value).some(containsItxExpressionHole);
+    return (
+      (value as Record<string, unknown>)[MERGE_KEY] === true ||
+      Object.values(value).some(containsItxExpressionHole)
+    );
   return false;
 }
 
@@ -194,13 +199,17 @@ const keySortedForPrint = (_key: string, value: unknown): unknown =>
     : value;
 
 /** Canonical stored form: dotted path + `.method(args)` calls (args `JSON5.stringify`d, object keys
- *  sorted; the marker literals print back as `@` / `...@`); `parse(print(e), { holes })` round-trips. */
-export function print(expr: ItxExpression): string {
+ *  sorted). `holes: true` — a rewrite rule's TARGET only — spells the marker literals back as `@` /
+ *  `...@`, and `parse(print(e, { holes: true }), { holes: true })` round-trips; without it the
+ *  reserved literals print as the plain JSON5 they are, so a CALL that happens to carry `{ "@": true }`
+ *  as data round-trips through `parse` (no holes) unchanged — the resolve/invoke law holds for it. */
+export function print(expr: ItxExpression, options?: { holes?: boolean }): string {
   return expr
     .map((step, i) => {
       const dot = i ? "." : "";
       if (typeof step === "string") return dot + step;
-      const args = printMarkers(JSON5.stringify(step.slice(1), keySortedForPrint).slice(1, -1));
+      const json = JSON5.stringify(step.slice(1), keySortedForPrint).slice(1, -1);
+      const args = options?.holes ? printMarkers(json) : json;
       return step[0] === "" ? `(${args})` : `${dot}${step[0]}(${args})`;
     })
     .join("");
@@ -213,8 +222,20 @@ export function parseItxExpressionPrefix(source: ItxExpressionInput): ItxExpress
   const expr = toItxExpression(source);
   const spelled = typeof source === "string" ? source : print(expr);
   for (const step of expr) {
-    if (Array.isArray(step) && step[0] === "")
+    // The ARRAY half enters here un-lexed: a name step must be ONE identifier, exactly what the
+    // string half's `readName` accepts — `["itx", "builtins.kv"]` or `["itx", "a b"]` is not a prefix
+    // (it would print as a dotted name the door never saw, or as one the reduce cannot parse).
+    const name = Array.isArray(step) ? step[0] : step;
+    if (name === "")
       throw new Error(`an itx-expression prefix cannot call a result — ${JSON.stringify(spelled)}`);
+    if (typeof name !== "string" || !IDENT.test(name) || IDENT.exec(name)![0] !== name)
+      throw new Error(
+        `an itx-expression prefix's steps are identifiers — ${JSON.stringify(spelled)} has ${JSON.stringify(name)}`,
+      );
+    if (RESERVED.has(name))
+      throw new Error(
+        `expression: reserved name ${JSON.stringify(name)} in ${JSON.stringify(spelled)}`,
+      );
     if (Array.isArray(step) && step.length === 1)
       throw new Error(
         `an itx-expression prefix pins literal args with a call step — ${JSON.stringify(spelled)} has "${step[0]}()" with none; spell "${step[0]}"`,

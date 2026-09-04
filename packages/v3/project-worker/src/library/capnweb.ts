@@ -37,21 +37,46 @@ export async function connectToCapnweb(
       () => batchSessionOverEgress(itx, url, headers),
       () => undefined,
     );
-  const stub = await webSocketSessionOverEgress(itx, url, headers);
+  // The WebSocket session is opened NOW (a connect that cannot reach the far side fails here) and
+  // REOPENED on the next call after it is gone — disposed (the context's idle quiesce releases every
+  // library connection, index.ts) or broken by the far side — so a held or memoized connection is
+  // never a dead socket.
+  type SessionStub = RemoteMain & { onRpcBroken?: (cb: () => void) => void };
+  let session: SessionStub | undefined;
+  const open = async (): Promise<SessionStub> => {
+    const stub = (await webSocketSessionOverEgress(itx, url, headers)) as SessionStub;
+    stub.onRpcBroken?.(() => {
+      if (session === stub) session = undefined;
+    });
+    return stub;
+  };
+  session = await open();
   return new CapnwebConnection(
-    () => stub,
-    () => (stub as unknown as { [Symbol.dispose]?: () => void })[Symbol.dispose]?.(),
+    () => session ?? open().then((opened) => (session = opened)),
+    () => {
+      const gone = session;
+      session = undefined;
+      (gone as unknown as { [Symbol.dispose]?: () => void } | undefined)?.[Symbol.dispose]?.();
+    },
   );
 }
 
 /** A remote capnweb API held across calls: an InvokeHandle, so `conn.a.b(x)` reduces into one dispatch
  *  that walks the capnweb stub step by step — capnweb pipelines property access and calls, so the
  *  chain is one round trip (one WebSocket exchange, or exactly one batch POST). Disposing closes the
- *  WebSocket session; a batch connection holds nothing. */
+ *  WebSocket session (the next call reopens it); a batch connection holds nothing. */
 export class CapnwebConnection extends InvokeHandle {
   readonly #dispose: () => void;
-  constructor(remoteMain: () => RemoteMain, dispose: () => void) {
-    super((steps) => walkCapnwebStub(remoteMain(), steps));
+  /** `remoteMain` answers the stub SYNCHRONOUSLY while a session is open — the walk then queues the
+   *  whole chain before any batch fires or any await yields — and a promise only while a session is
+   *  being (re)opened. */
+  constructor(remoteMain: () => RemoteMain | Promise<RemoteMain>, dispose: () => void) {
+    super((steps) => {
+      const main = remoteMain();
+      return main instanceof Promise
+        ? main.then((stub) => walkCapnwebStub(stub, steps))
+        : walkCapnwebStub(main, steps);
+    });
     this.#dispose = dispose;
   }
   [Symbol.dispose](): void {

@@ -160,10 +160,11 @@ function fillItxExpressionHoles(
   unpinnedArgs: unknown[] | undefined,
   target: ItxExpression,
 ): unknown[] {
+  const spelled = print(target, { holes: true });
   const theOne = (what: string): unknown => {
     if (unpinnedArgs?.length !== 1)
       throw new Error(
-        `${what} in the target ${JSON.stringify(print(target))} takes exactly one argument, got ${unpinnedArgs?.length ?? 0}`,
+        `${what} in the target ${JSON.stringify(spelled)} takes exactly one argument, got ${unpinnedArgs?.length ?? 0}`,
       );
     return unpinnedArgs[0];
   };
@@ -177,7 +178,7 @@ function fillItxExpressionHoles(
         const source = theOne("`...@`");
         if (source === null || typeof source !== "object" || Array.isArray(source))
           throw new Error(
-            `\`...@\` in the target ${JSON.stringify(print(target))} merges an object; the argument is ${JSON.stringify(source)}`,
+            `\`...@\` in the target ${JSON.stringify(spelled)} merges an object; the argument is ${JSON.stringify(source)}`,
           );
         Object.assign(out, source);
       }
@@ -290,22 +291,106 @@ export function rewriteRuleConfiguredEvent(
   const targetExpression =
     target === null
       ? null
-      : parse(print(toItxExpression(target, { holes: true })), { holes: true });
+      : parse(print(toItxExpression(target, { holes: true }), { holes: true }), { holes: true });
   if (targetExpression && targetExpression[0] !== "itx")
     throw new Error(
       `a rewrite rule's target must be rooted at "itx" (a bare built-in root is unspellable — targets resolve through the rules; the physical spelling is "itx.builtins.…")`,
     );
   if (targetExpression && targetExpression.slice(0, -1).some(containsItxExpressionHole))
     throw new Error(
-      `\`@\` (the caller's input) is legal only in the target's FINAL step — ${JSON.stringify(print(targetExpression))} holds it earlier (rule 7)`,
+      `\`@\` (the caller's input) is legal only in the target's FINAL step — ${JSON.stringify(print(targetExpression, { holes: true }))} holds it earlier (rule 7)`,
     );
   return {
     type: "events.iterate.com/itx/rewrite-rule-configured",
     payload: {
       match: print(matchPrefix),
-      target: targetExpression && print(targetExpression),
+      target: targetExpression && print(targetExpression, { holes: true }),
     },
   };
+}
+
+// ── WHAT NAMES A LENT STUB (pure; the DO appends the removals it decides) ──
+
+/** The physical spelling of a lent stub: `itx.builtins.rpcStubs.get('<key>')`, possibly with steps
+ *  after it. */
+function namesRpcStubDirectly(target: ItxExpression, rpcStubKey: string): boolean {
+  return (
+    target.length >= 4 &&
+    jsonEqual(target.slice(0, 4), ["itx", BUILTINS_ROOT, "rpcStubs", ["get", rpcStubKey]])
+  );
+}
+
+/** THE ROWS THAT NAME A LENT STUB — decided against ONE frozen table, so the answer never depends on
+ *  the order the rows were configured in. A row names `rpcStubKey` DIRECTLY when its target IS the
+ *  physical spelling (the row `provide(stub)` writes, or a caller's own); every other row is resolved
+ *  through the table MINUS the direct namers — the table as it will stand once they are gone — and
+ *  names the key only if it still ends at the physical spelling then (a user's own `itx.reg ⇒
+ *  itx.builtins.rpcStubs` + `itx.reg.get('k')`). So an alias to a shadowed root (`itx.llm ⇒ itx.ai`
+ *  while `itx.ai` is a lent fake) resolves to the platform row beneath and is KEPT; a row that only
+ *  dangles once the stub is gone (`itx.x ⇒ itx.cam`, `cam` no built-in) is kept too — it errors like
+ *  any unconfigured name and revives with the next provide. Subscriptions are read the same way. */
+export function rowsNamingRpcStub(args: {
+  rpcStubKey: string;
+  rules: readonly ItxExpressionRewriteRule[];
+  subscriptionTargets: Record<string, ItxExpression>;
+  isBuiltInRoot: (root: string) => boolean;
+}): { ruleMatches: ItxExpressionPrefix[]; subscriptionNames: string[] } {
+  const { rpcStubKey, rules, subscriptionTargets, isBuiltInRoot } = args;
+  const direct = rules.filter(
+    (rule) => rule.target !== null && namesRpcStubDirectly(rule.target, rpcStubKey),
+  );
+  const remaining = rules.filter((rule) => !direct.includes(rule));
+  const namesThroughRemaining = (target: ItxExpression): boolean => {
+    try {
+      return namesRpcStubDirectly(
+        resolveItxExpression(() => remaining, target, isBuiltInRoot).at(-1)!,
+        rpcStubKey,
+      );
+    } catch {
+      return false;
+    }
+  };
+  const indirect = remaining.filter(
+    (rule) => rule.target !== null && namesThroughRemaining(rule.target),
+  );
+  return {
+    ruleMatches: [...direct, ...indirect].map((rule) => rule.match),
+    subscriptionNames: Object.entries(subscriptionTargets)
+      .filter(([, target]) => namesThroughRemaining(target))
+      .map(([name]) => name),
+  };
+}
+
+/** Every rpc-stub key some row (a rule, a subscription) currently names, resolved through the
+ *  whole table — the census a `stream/resumed` commit compares against the registry's presence. */
+export function rpcStubKeysNamed(args: {
+  rules: readonly ItxExpressionRewriteRule[];
+  subscriptionTargets: Record<string, ItxExpression>;
+  isBuiltInRoot: (root: string) => boolean;
+}): Set<string> {
+  const { rules, subscriptionTargets, isBuiltInRoot } = args;
+  const keys = new Set<string>();
+  const targets = [
+    ...rules.flatMap((rule) => (rule.target === null ? [] : [rule.target])),
+    ...Object.values(subscriptionTargets),
+  ];
+  for (const target of targets) {
+    try {
+      const resolved = resolveItxExpression(() => rules, target, isBuiltInRoot).at(-1)!;
+      const getStep = resolved[3];
+      if (
+        resolved[1] === BUILTINS_ROOT &&
+        resolved[2] === "rpcStubs" &&
+        Array.isArray(getStep) &&
+        getStep[0] === "get" &&
+        typeof getStep[1] === "string"
+      )
+        keys.add(getStep[1]);
+    } catch {
+      /* an unresolvable target names no key */
+    }
+  }
+  return keys;
 }
 
 /** The REMOVAL spelling of the same event: the row at `match` is gone — back to the platform row when
@@ -344,11 +429,19 @@ export class ItxExpressionResolver {
 
   /** Resolve + run one call: the chain's last element, evaluated against the physical scope — the
    *  root after `builtins`, its args if that step is a call, the remaining steps (dispatch.ts
-   *  walkSteps), and finally any runtime `extraArgs`, applied to the value the expression denotes
-   *  (the fetch lane hands the live Request in here — a Request is not expression data; the public
-   *  `invoke(call, ...args)` is the same door). */
+   *  walkSteps). Runtime `extraArgs` are LIVE args (a Request, a callback — not expression data; the
+   *  fetch lane and the public `invoke(call, ...args)` hand them in): when the call ends in a NAME
+   *  they are FOLDED INTO it BEFORE resolving — `invoke("itx.kv.get", "k")` IS `itx.kv.get("k")`, so a
+   *  template fills, a pinned row matches and a mask refuses exactly as the dotted call would; when
+   *  it ends in a call they apply to the value the expression denotes. */
   async invoke(call: ItxExpressionInput, extraArgs?: unknown[]): Promise<unknown> {
-    const rewritten = this.resolve(call).at(-1)!;
+    let expression = toItxExpression(call);
+    const last = expression.at(-1);
+    if (extraArgs && typeof last === "string" && expression.length > 1) {
+      expression = [...expression.slice(0, -1), [last, ...extraArgs]];
+      extraArgs = undefined;
+    }
+    const rewritten = this.resolve(expression).at(-1)!;
     const rootStep = rewritten[2] as string | [string, ...unknown[]] | undefined;
     if (rootStep === undefined)
       throw new Error(

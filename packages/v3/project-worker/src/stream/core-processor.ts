@@ -33,6 +33,7 @@ import {
 import { isBuiltInRoot } from "../context/built-in-roots.ts";
 import {
   BUILTINS_ROOT,
+  isBuiltInsRooted,
   resolveItxExpression,
   type ItxExpressionRewriteRule,
 } from "../context/itx-expression-rewriting.ts";
@@ -135,6 +136,52 @@ function elideHostedFacetSource(
       ...(spec.cacheKey !== undefined && { cacheKey: spec.cacheKey }),
     },
   };
+}
+
+/** The facet a resolved target merely ADDRESSES (`itx.builtins.facets.get(name)…`, no spec) — or
+ *  undefined when it is not the facets door at all. */
+function facetAddressedBy(resolvedTarget: ItxExpression): string | undefined {
+  const getStep = resolvedTarget[3];
+  return resolvedTarget[1] === BUILTINS_ROOT &&
+    resolvedTarget[2] === "facets" &&
+    Array.isArray(getStep) &&
+    getStep[0] === "get" &&
+    typeof getStep[1] === "string"
+    ? getStep[1]
+    : undefined;
+}
+
+/** THE MARKERS FOLLOW THE RULES: after the table changed, a row whose target is NOT builtins-rooted
+ *  may host a different facet than its `hostedFacet` says — the rule that makes it host landed
+ *  AFTER the row, or was re-pointed at another facet — while the delivery loop re-resolves at every
+ *  push and the removal effect trusts the marker; they must agree. So every rule commit re-derives
+ *  the marker of every such row through the NEW table: a target that resolves to a hosting spelling
+ *  marks that facet; one that resolves to an ADDRESS of the facet it is marked with keeps its marker
+ *  (its own spec was elided, M1); anything else drops it. A builtins-rooted row's marker is final
+ *  (no rule can move it); an unresolvable row (a mask, a prefix nothing names yet) keeps what it has. */
+function withHostedFacetMarkersFollowingRules(state: CoreState): CoreState {
+  let changed = false;
+  const subscriptions = { ...state.subscriptions };
+  for (const [name, row] of Object.entries(state.subscriptions)) {
+    if (isBuiltInsRooted(row.target)) continue;
+    const resolved = resolveThroughState(state, row.target);
+    if (!resolved) continue;
+    const spec = facetSpecFromHostingTarget(resolved);
+    const next = spec
+      ? {
+          name: spec.name,
+          className: spec.className,
+          ...(spec.cacheKey !== undefined && { cacheKey: spec.cacheKey }),
+        }
+      : facetAddressedBy(resolved) === row.hostedFacet?.name
+        ? row.hostedFacet
+        : undefined;
+    if (jsonEqual(next ?? null, row.hostedFacet ?? null)) continue;
+    changed = true;
+    const { hostedFacet: _previous, ...rest } = row;
+    subscriptions[name] = next ? { ...rest, hostedFacet: next } : rest;
+  }
+  return changed ? { ...state, subscriptions } : state;
 }
 
 /** Does a `null` at `match` MASK a platform row (kept as a row) or merely delete (nothing beneath)?
@@ -277,22 +324,22 @@ export class CoreStreamProcessor extends StreamProcessor<CoreState> {
         const matchString = payload.match as string;
         const matchPrefix = parseItxExpressionPrefix(matchString);
         const existing = state.itxExpressionRewriteRules[matchString];
+        // every change to the table re-derives the subscriptions' hosting markers through it
+        const withTable = (rules: CoreState["itxExpressionRewriteRules"]): CoreState =>
+          withHostedFacetMarkersFollowingRules({ ...state, itxExpressionRewriteRules: rules });
         const without = () => {
           const { [matchString]: _gone, ...rest } = state.itxExpressionRewriteRules;
-          return { ...state, itxExpressionRewriteRules: rest };
+          return withTable(rest);
         };
         if (payload.target === null) {
           // A MASK where a platform row lies beneath (rule 5: the call is refused, not defaulted);
           // a plain deletion anywhere else (a mask there would equal a deletion and only grow the table).
           if (!matchShadowsAPlatformRow(matchPrefix)) return existing ? without() : undefined;
           if (existing && existing.target === null) return undefined;
-          return {
-            ...state,
-            itxExpressionRewriteRules: {
-              ...state.itxExpressionRewriteRules,
-              [matchString]: { match: matchPrefix, target: null },
-            },
-          };
+          return withTable({
+            ...state.itxExpressionRewriteRules,
+            [matchString]: { match: matchPrefix, target: null },
+          });
         }
         const target = parse(payload.target as string, { holes: true }); // a target may hold `@` (rule 7)
         // THE PLATFORM-EQUIVALENT TARGET (`itx.kv ⇒ itx.builtins.kv`, `itx ⇒ itx.builtins`) is "back to
@@ -300,13 +347,10 @@ export class CoreStreamProcessor extends StreamProcessor<CoreState> {
         // the table never carries a row that only restates the default.
         if (jsonEqual(target, ["itx", BUILTINS_ROOT, ...matchPrefix.slice(1)]))
           return existing ? without() : undefined;
-        return {
-          ...state,
-          itxExpressionRewriteRules: {
-            ...state.itxExpressionRewriteRules,
-            [matchString]: { match: matchPrefix, target },
-          },
-        };
+        return withTable({
+          ...state.itxExpressionRewriteRules,
+          [matchString]: { match: matchPrefix, target },
+        });
       }
 
       case "events.iterate.com/stream/subscription-configured": {

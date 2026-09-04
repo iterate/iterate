@@ -13,6 +13,15 @@
 // `{{secret:project:NAME}}` placeholders in headers substitute for free; a user rule shadowing
 // `itx.fetch` redirects the library too, which is how a test fakes a remote). `connectToGraphql` is the
 // obvious next member of the family and does not exist yet.
+//
+// LIVE CONNECTIONS ARE MEMOIZED per context: a connector reached THROUGH a rewrite rule
+// (`provide('itx.tools', "itx.connectToMcp(url)")`, the documented composition) is a connect per
+// call as an expression — a fresh MCP session, an open WebSocket, that no intermediate holder ever
+// disposes. So `buildLibrary` keeps every connection it opened, by (verb, url, options), hands the
+// same one back while it lives, and `releaseConnections()` closes them all — the context's idle
+// quiesce calls it beside returning its borrowed stubs, since a held connection pins the context
+// awake exactly like a borrowed stub. A connection closed by a holder or broken by the far side
+// reopens itself on its next use (mcp.ts, capnweb.ts), so a memoized one is never dead.
 
 import type { IterateContext } from "../iterate-context.ts";
 import { connectToCapnweb, type CapnwebConnection, type CapnwebConnectOptions } from "./capnweb.ts";
@@ -45,15 +54,54 @@ export interface LibraryRoots {
   connectToCapnweb(url: string, options?: CapnwebConnectOptions): Promise<CapnwebConnection>;
 }
 
-/** Close the three verbs over one `itx`. Nothing is constructed here: a DO wake pays nothing for the
- *  library until a verb runs. */
-export function buildLibrary(itx: LibraryItx): LibraryRoots {
+/** The library, built once per context: the three verbs closed over one `itx`, memoizing the live
+ *  connections they open, and the one release door. Nothing is constructed here: a wake pays nothing
+ *  for the library until a verb runs. */
+export function buildLibrary(itx: LibraryItx): {
+  roots: LibraryRoots;
+  /** Close every connection the library holds (the idle quiesce's call); the next use reopens. */
+  releaseConnections(): void;
+} {
+  const liveConnections = new Map<string, Promise<unknown>>();
+  const memoized = <T>(key: unknown[], open: () => Promise<T>): Promise<T> => {
+    const memoKey = JSON.stringify(key, keySorted);
+    let connection = liveConnections.get(memoKey) as Promise<T> | undefined;
+    if (!connection) {
+      connection = open();
+      liveConnections.set(memoKey, connection);
+      // a connect that FAILS is not kept — the next call retries (the caller sees the rejection)
+      connection.catch(() => liveConnections.delete(memoKey));
+    }
+    return connection;
+  };
   return {
-    connectToMcp: (url, options) => connectToMcp(itx, url, options),
-    connectToOpenApi: (specOrUrl, options) => connectToOpenApi(itx, specOrUrl, options),
-    connectToCapnweb: (url, options) => connectToCapnweb(itx, url, options),
+    roots: {
+      connectToMcp: (url, options) =>
+        memoized(["mcp", url, options], () => connectToMcp(itx, url, options)),
+      connectToOpenApi: (specOrUrl, options) =>
+        memoized(["openapi", specOrUrl, options], () => connectToOpenApi(itx, specOrUrl, options)),
+      connectToCapnweb: (url, options) =>
+        memoized(["capnweb", url, options], () => connectToCapnweb(itx, url, options)),
+    },
+    releaseConnections: () => {
+      for (const connection of liveConnections.values())
+        void connection
+          .then((c) => (c as { [Symbol.dispose]?: () => void })[Symbol.dispose]?.())
+          .catch(() => undefined);
+      liveConnections.clear();
+    },
   };
 }
+
+/** Object keys sorted, so two spellings of one options object are one memo key. */
+const keySorted = (_key: string, value: unknown): unknown =>
+  value !== null && typeof value === "object" && !Array.isArray(value)
+    ? Object.fromEntries(
+        Object.keys(value as Record<string, unknown>)
+          .sort()
+          .map((k) => [k, (value as Record<string, unknown>)[k]]),
+      )
+    : value;
 
 export type {
   CapnwebConnection,

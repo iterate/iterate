@@ -34,7 +34,9 @@ const table = (rows: string[]): ItxExpressionRewriteRule[] =>
 /** The chain of rewrites, printed — or the refusal. */
 const chain = (rules: string[], call: string): string[] | string => {
   try {
-    return resolveItxExpression(() => table(rules), parse(call), isBuiltInRoot).map(print);
+    return resolveItxExpression(() => table(rules), parse(call), isBuiltInRoot).map((step) =>
+      print(step),
+    );
   } catch (error) {
     return `THROWS ${(error as Error).message}`;
   }
@@ -417,12 +419,20 @@ describe("`@` round-trips the codec (targets only): parse → print → parse; t
         "a@b",
       ],
     ]);
-    expect(print(parsed)).toBe(
+    expect(print(parsed, { holes: true })).toBe(
       "itx.ai.gateway('g').run({provider:'anthropic',query:{...@,model:'claude-x'}},@,[@],'a@b')",
     );
-    expect(parse(print(parsed), { holes: true })).toEqual(parsed);
+    expect(parse(print(parsed, { holes: true }), { holes: true })).toEqual(parsed);
+    // without `holes` the reserved literals print as the plain JSON5 they are — a CALL that carries
+    // `{ "@": true }` as data round-trips through `parse` (no holes) unchanged
+    expect(print(parsed)).toBe(
+      "itx.ai.gateway('g').run({provider:'anthropic',query:{'...@':true,model:'claude-x'}},{'@':true},[{'@':true}],'a@b')",
+    );
+    expect(parse(print(["itx", ["x", { "@": true }]]))).toEqual(["itx", ["x", { "@": true }]]);
     // a string VALUE that spells the marker's printed form is a string — print skips string literals
-    expect(print(["itx", "kv", ["put", "k", "{'@':true}"]])).toBe(`itx.kv.put('k',"{'@':true}")`);
+    expect(print(["itx", "kv", ["put", "k", "{'@':true}"]], { holes: true })).toBe(
+      `itx.kv.put('k',"{'@':true}")`,
+    );
     expect(parse(`itx.kv.put('k',"{'@':true}")`)).toEqual([
       "itx",
       "kv",
@@ -656,7 +666,7 @@ const setup = () => {
     rewriteRules,
     invoke: (call: ItxExpressionInput, ...args: unknown[]) =>
       resolver.invoke(call, args.length ? args : undefined),
-    resolve: (call: ItxExpressionInput) => resolver.resolve(call).map(print),
+    resolve: (call: ItxExpressionInput) => resolver.resolve(call).map((step) => print(step)),
     rewrite,
     remove: (match: ItxExpressionInput) =>
       (stream.append(rewriteRuleRemovedEvent(match)) as StreamEvent[])[0],
