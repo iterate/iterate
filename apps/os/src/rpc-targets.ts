@@ -60,6 +60,7 @@ import type {
   ValidateProjectAppSessionInput,
   ValidatedProjectAppSession,
 } from "@iterate-com/auth-contract/worker";
+import { decodeAgentMessageAttachments } from "@iterate-com/shared/agent-message-attachments";
 import type { AppConfig } from "./config.ts";
 import { parseConfig } from "./config.ts";
 import { closeItxSessionTransport } from "./session-transport.ts";
@@ -267,6 +268,8 @@ import type {
   LinkGithubResult,
   RepoCommitDetails,
   RepoLogResult,
+  SearchRepoFilesInput,
+  SearchRepoFilesResult,
 } from "./domains/repos/types.ts";
 import type {
   BuiltinIntegrationSlug,
@@ -1620,6 +1623,8 @@ class RepoRpcTarget extends IterateRpcTarget<"Repo"> {
         linkGithub:
           "Back this repo with a GitHub repository via a named GitHub connection ({ connection, owner, repo }); commits mirror out, fast-forward default-branch pushes import in, and webhooks arrive on this repo's stream.",
         listFiles: "List file paths.",
+        searchFiles:
+          "Fuzzy-search committed file paths without returning the full manifest ({ query, limit? }).",
         log: "Commit history, newest first ({ limit?, branch? }); per-commit file stats live on commitDetails.",
         pushToGithub:
           "Push the branch head to the linked GitHub repository now (repair verb; { force } to overwrite GitHub).",
@@ -1792,6 +1797,11 @@ class RepoRpcTarget extends IterateRpcTarget<"Repo"> {
   /** All committed file paths at HEAD. */
   listFiles(): Promise<{ commitOid: string; paths: string[] }> {
     return this.#durableObjectStub.listFiles();
+  }
+
+  /** Fuzzy-search committed paths at HEAD without returning the full manifest. */
+  searchFiles(input: SearchRepoFilesInput): Promise<SearchRepoFilesResult> {
+    return this.#durableObjectStub.searchFiles(input);
   }
 
   /**
@@ -5026,7 +5036,7 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
 
   /**
    * The agent scope's own capability host (provide/revoke/runScript/
-   * __describe) — and the explicit dotted door to the scope's DYNAMIC
+   * __describe) — and the explicit dotted access point for the scope's DYNAMIC
    * capabilities: `agents.get(path).capabilityHost.someTool(args)`. The
    * shorthand `agents.get(path).someTool(args)` resolves through the same
    * host via the handle's prototype-chain fallback; both pipeline over
@@ -5090,7 +5100,7 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
     return await this.stream.append(...parsed);
   }
 
-  /** The agent's web-chat door (what the user sees). */
+  /** The agent's web-chat output surface (what the user sees). */
   get chat(): AgentChatRpcTarget {
     return new AgentChatRpcTarget({
       auth: this.#props.auth,
@@ -5208,15 +5218,17 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
   }
 
   /**
-   * Send a message to this agent — THE inbound door for every caller. The
+   * Send a message to this agent — the canonical entry point for every caller. The
    * context item's actor derives from the calling scope: inside an agent script
    * (itx scoped to an agent path), the message is stamped
    * `{ type: "agent", path }` and does NOT refill the receiver's autonomous
    * turn budget, so agent↔agent reply loops stay bounded; from anywhere else
    * (web UI, CLI, MCP session) it is a user message. The agent must already
-   * have been created explicitly. Optional files
-   * are stored in project file storage and ride the message as attachments
-   * (images stay visible to vision-capable models).
+   * have been created explicitly. `attachments` are typed resources addressed
+   * from `message` with Markdown-like links such as
+   * `[@AGENTS.md](attachment:config-repo/AGENTS.md)`. Optional files are stored
+   * in project file storage and ride the same event (images stay visible to
+   * vision-capable models).
    */
   async message(
     input:
@@ -5224,13 +5236,32 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
       | {
           message: string;
           files?: Array<{ contentType: string; data: FileData; filename: string }>;
+          attachments?: Array<{
+            id: string;
+            type: "repo-file";
+            repoPath: "/repos/config";
+            path: string;
+          }>;
         },
   ): Promise<StreamEvent> {
     await this.#assertCreated();
-    const { message, files: fileInputs } =
-      typeof input === "string"
-        ? { message: input, files: undefined }
-        : { message: input.message, files: input.files };
+    const {
+      message,
+      files: fileInputs,
+      attachments: attachmentInputs,
+    } = typeof input === "string"
+      ? { message: input, files: undefined, attachments: undefined }
+      : { message: input.message, files: input.files, attachments: input.attachments };
+    const decodedMessage =
+      attachmentInputs === undefined
+        ? undefined
+        : decodeAgentMessageAttachments(message, attachmentInputs);
+    if (decodedMessage === null) {
+      throw new Error(
+        "agent.message attachments must each have a unique id and a matching inline attachment link.",
+      );
+    }
+    const attachments = decodedMessage?.attachments;
     const actor = this.#contextActor();
     const files =
       fileInputs === undefined || fileInputs.length === 0
@@ -5248,6 +5279,10 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
         content: message,
         actor,
         ...(files === undefined ? {} : { files }),
+        ...(attachments === undefined ? {} : { attachments }),
+        ...(attachments === undefined
+          ? {}
+          : { llmRequestPolicy: { behaviour: "dont-trigger-request" as const } }),
       },
     });
     return event;

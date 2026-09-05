@@ -1,4 +1,10 @@
 import { AgentLlmRequestCancelReason, type AgentRuntime } from "@iterate-com/shared/agent-events";
+import {
+  AgentMessageAttachments,
+  decodeAgentMessageAttachments,
+  hasAgentConfigRepoFileAttachments,
+  type AgentMessageAttachment,
+} from "@iterate-com/shared/agent-message-attachments";
 import { ScriptExecutionSettlement } from "@iterate-com/shared/script-execution";
 import { z } from "zod";
 import type { Event } from "./types.ts";
@@ -318,12 +324,19 @@ export type AgentUiMessageVia = {
   sender?: string;
 };
 
+export type AgentUiReferenceResolution = {
+  status: "resolved" | "missing" | "binary" | "read-failed";
+  truncated?: boolean;
+};
+
 export type AgentUiMessageItem = {
   kind: "user" | "assistant";
   id: string;
   text: string;
   timestampMs: number;
   files?: AgentUiFileAttachment[];
+  attachments?: AgentMessageAttachment[];
+  referenceResolutions?: Record<string, AgentUiReferenceResolution>;
   via?: AgentUiMessageVia;
 };
 
@@ -426,6 +439,8 @@ export type AgentUiState = {
   deferredAssistantMessages: AgentUiMessageItem[];
   /** User messages that landed while the current request was already running. */
   queuedUserMessages: AgentUiMessageItem[];
+  /** Rich user messages waiting for their durable reference-resolution event. */
+  pendingReferenceMessages: Record<string, AgentUiMessageItem>;
   eventCount: number;
   /** Connection roster reduced from connection-opened/connection-closed facts. */
   presence: AgentUiPresenceEntry[];
@@ -512,14 +527,32 @@ const AgentUiMessageViaSchema = z.strictObject({
   sender: z.string().optional(),
 }) satisfies z.ZodType<AgentUiMessageVia>;
 
+const AgentUiReferenceResolutionSchema = z.strictObject({
+  status: z.enum(["resolved", "missing", "binary", "read-failed"]),
+  truncated: z.boolean().optional(),
+}) satisfies z.ZodType<AgentUiReferenceResolution>;
+
 const AgentUiMessageItemSchema = z.strictObject({
   kind: z.enum(["user", "assistant"]),
   id: z.string(),
   text: z.string(),
   timestampMs: z.number().finite(),
   files: z.array(AgentUiFileAttachmentSchema).optional(),
+  attachments: AgentMessageAttachments.optional(),
+  referenceResolutions: z.record(z.string(), AgentUiReferenceResolutionSchema).optional(),
   via: AgentUiMessageViaSchema.optional(),
 }) satisfies z.ZodType<AgentUiMessageItem>;
+
+const AgentReferenceResolutionEvent = z.object({
+  sourceOffset: z.number().int().nonnegative(),
+  outcomes: z.array(
+    z.object({
+      status: z.enum(["resolved", "missing", "binary", "read-failed"]),
+      attachmentIds: z.array(z.string().min(1)),
+      truncated: z.boolean().optional(),
+    }),
+  ),
+});
 
 const AgentUiProcessorAnnouncementSchema = z.strictObject({
   slug: z.string(),
@@ -566,6 +599,7 @@ export const AgentUiStateSchema = z
     live: AgentUiActivitySchema.nullable(),
     deferredAssistantMessages: z.array(AgentUiMessageItemSchema),
     queuedUserMessages: z.array(AgentUiMessageItemSchema),
+    pendingReferenceMessages: z.record(z.string(), AgentUiMessageItemSchema),
     eventCount: z.number().int().nonnegative(),
     presence: z.array(AgentUiPresenceEntrySchema),
     tokenUsage: AgentUiTokenUsageSchema,
@@ -581,6 +615,15 @@ export const AgentUiStateSchema = z
           code: "custom",
           message: `provisional activity key ${JSON.stringify(id)} does not match its id`,
           path: ["provisionalActivities", id, "id"],
+        });
+      }
+    }
+    for (const [sourceOffset, message] of Object.entries(state.pendingReferenceMessages)) {
+      if (message.id !== `user-${sourceOffset}`) {
+        context.addIssue({
+          code: "custom",
+          message: `pending reference message ${JSON.stringify(sourceOffset)} does not match its id`,
+          path: ["pendingReferenceMessages", sourceOffset, "id"],
         });
       }
     }
@@ -601,12 +644,14 @@ export function isCurrentAgentUiState(value: unknown): value is AgentUiState {
  * bound.
  */
 export const AGENT_UI_PROVISIONAL_ACTIVITY_LIMIT = 32;
+export const AGENT_UI_PENDING_REFERENCE_LIMIT = 32;
 
 export function initialAgentUiState(): AgentUiState {
   return {
     live: null,
     deferredAssistantMessages: [],
     queuedUserMessages: [],
+    pendingReferenceMessages: {},
     eventCount: 0,
     presence: [],
     tokenUsage: initialAgentUiTokenUsage(),
@@ -745,6 +790,20 @@ function reduceAgentUiEvent(
           tokenUsage: { ...state.tokenUsage, lastReport: null },
         };
       }
+      const actor = readRecord(event, "actor");
+      const actorType = typeof actor?.type === "string" ? actor.type : undefined;
+      if (
+        role === "developer" &&
+        actorType === "integration" &&
+        actor?.name === "agent-reference-resolver"
+      ) {
+        const resolution = AgentReferenceResolutionEvent.safeParse(
+          readPayloadRecord(event)?.referenceResolution,
+        );
+        return resolution.success
+          ? applyAgentReferenceResolution(contextState, items, resolution.data)
+          : contextState;
+      }
 
       if (role === "assistant") {
         const llmRequestOffset = readLlmRequestOffset(event);
@@ -772,17 +831,25 @@ function reduceAgentUiEvent(
       }
       if (role === "system") return contextState;
 
-      const actor = readRecord(event, "actor");
-      const actorType = typeof actor?.type === "string" ? actor.type : undefined;
       const files = readFileAttachments(event);
       if (role === "user") {
-        return emitUserMessageItem(contextState, items, {
+        const decodedMessage = decodeAgentMessageAttachments(
+          text,
+          readPayloadRecord(event)?.attachments,
+        );
+        const item: AgentUiMessageItem = {
           kind: "user",
           id: `user-${event.offset}`,
           text,
           ...(files.length === 0 ? {} : { files }),
+          ...(decodedMessage === null ? {} : { attachments: decodedMessage.attachments }),
           timestampMs,
-        });
+        };
+        const pendingState =
+          decodedMessage !== null && hasAgentConfigRepoFileAttachments(decodedMessage.attachments)
+            ? rememberPendingReferenceMessage(contextState, event.offset, item)
+            : contextState;
+        return emitUserMessageItem(pendingState, items, item);
       }
       if (
         actorType === "agent" ||
@@ -1391,6 +1458,53 @@ function flushDeferredMessages(state: AgentUiState, items: AgentUiItem[]): Agent
     next = emitItem(next, items, item);
   }
   return flushQueuedUserMessages(next, items);
+}
+
+function rememberPendingReferenceMessage(
+  state: AgentUiState,
+  sourceOffset: number,
+  item: AgentUiMessageItem,
+): AgentUiState {
+  const pendingReferenceMessages = {
+    ...state.pendingReferenceMessages,
+    [String(sourceOffset)]: item,
+  };
+  while (Object.keys(pendingReferenceMessages).length > AGENT_UI_PENDING_REFERENCE_LIMIT) {
+    const oldestOffset = Object.keys(pendingReferenceMessages)[0];
+    if (oldestOffset === undefined) break;
+    delete pendingReferenceMessages[oldestOffset];
+  }
+  return { ...state, pendingReferenceMessages };
+}
+
+function applyAgentReferenceResolution(
+  state: AgentUiState,
+  items: AgentUiItem[],
+  resolution: z.infer<typeof AgentReferenceResolutionEvent>,
+): AgentUiState {
+  const sourceOffset = String(resolution.sourceOffset);
+  const pending = state.pendingReferenceMessages[sourceOffset];
+  if (pending === undefined) return state;
+
+  const referenceResolutions: Record<string, AgentUiReferenceResolution> = {};
+  for (const outcome of resolution.outcomes) {
+    for (const attachmentId of outcome.attachmentIds) {
+      referenceResolutions[attachmentId] = {
+        status: outcome.status,
+        ...(outcome.truncated === undefined ? {} : { truncated: outcome.truncated }),
+      };
+    }
+  }
+  const corrected = { ...pending, referenceResolutions };
+  const pendingReferenceMessages = { ...state.pendingReferenceMessages };
+  delete pendingReferenceMessages[sourceOffset];
+  const queuedIndex = state.queuedUserMessages.findIndex((message) => message.id === pending.id);
+  if (queuedIndex !== -1) {
+    const queuedUserMessages = [...state.queuedUserMessages];
+    queuedUserMessages[queuedIndex] = corrected;
+    return { ...state, pendingReferenceMessages, queuedUserMessages };
+  }
+  return emitItem({ ...state, pendingReferenceMessages }, items, corrected);
 }
 
 // A user message while steps are still running must not archive those steps

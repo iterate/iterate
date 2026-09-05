@@ -33,13 +33,20 @@ function ProjectStreamDetailContent() {
   const { project } = Route.useLoaderData();
   const { _splat: streamPath } = Route.useParams();
 
-  async function submitMessage(message: string) {
+  async function submitMessage({
+    content,
+    attachments,
+  }: {
+    content: string;
+    attachments: import("@iterate-com/shared/agent-message-attachments").AgentMessageAttachment[];
+  }) {
     const itx = await connectItx(project.id);
     const [event] = await itx.streams.get(streamPath).append({
       type: "events.iterate.com/agents/context-added",
       payload: {
         role: "user",
-        content: message,
+        content,
+        ...(attachments.length === 0 ? {} : { attachments }),
         actor: { type: "user", origin: "web" },
       },
     });

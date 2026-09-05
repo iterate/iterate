@@ -270,7 +270,52 @@ describe("browser-feed projector — one interleaved order", () => {
       event(2, WEB_MESSAGE_SENT, { message: "hi" }),
     ]);
 
-    expect(projected.endState.provisionalAgentItemIndexes).toEqual({});
+    expect(projected.endState.replaceableAgentItemIndexes).toEqual({});
+  });
+
+  it("replaces a linked-attachment message when its durable outcome arrives", () => {
+    const attachments = [
+      {
+        id: "config-repo/AGENTS.md",
+        type: "repo-file",
+        repoPath: "/repos/config",
+        path: "AGENTS.md",
+      },
+    ];
+    const source = event(1, CONTEXT_ADDED, {
+      role: "user",
+      actor: { type: "user", origin: "web" },
+      content: "[@AGENTS.md](attachment:config-repo/AGENTS.md)",
+      attachments,
+    });
+    const resolution = event(2, CONTEXT_ADDED, {
+      role: "developer",
+      actor: { type: "integration", name: "agent-reference-resolver" },
+      content: "resolution details",
+      referenceResolution: {
+        sourceOffset: 1,
+        outcomes: [{ status: "binary", attachmentIds: ["config-repo/AGENTS.md"] }],
+      },
+    });
+
+    const projected = planBrowserFeedOps(START, [source, resolution]);
+    const agentOps = projected.ops.filter(
+      (op) => op.kind === "replace" || (op.kind === "insert" && op.itemKind === "agent.user"),
+    );
+    expect(agentOps).toMatchObject([
+      { kind: "insert", localIndex: 0, data: { id: "user-1", attachments } },
+      {
+        kind: "replace",
+        localIndex: 0,
+        data: {
+          id: "user-1",
+          attachments,
+          referenceResolutions: { "config-repo/AGENTS.md": { status: "binary" } },
+        },
+      },
+    ]);
+    expect(projected.endState.agent.pendingReferenceMessages).toEqual({});
+    expect(projected.endState.replaceableAgentItemIndexes).toEqual({});
   });
 
   it("is deterministic and folds identically event-by-event and whole-batch", () => {

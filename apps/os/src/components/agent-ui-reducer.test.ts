@@ -62,6 +62,85 @@ function projectRuntime(
 }
 
 describe("agent-ui reducer", () => {
+  test("preserves valid linked attachments and falls back to plain text on mismatch", () => {
+    const attachments = [
+      {
+        id: "config-repo/AGENTS.md",
+        type: "repo-file",
+        repoPath: "/repos/config",
+        path: "AGENTS.md",
+      },
+    ];
+    const state = reduceAll([
+      {
+        type: "events.iterate.com/agents/context-added",
+        payload: {
+          role: "user",
+          actor: { type: "user", origin: "web" },
+          content: "Read [@AGENTS.md](attachment:config-repo/AGENTS.md)",
+          attachments,
+        },
+      },
+      {
+        type: "events.iterate.com/agents/context-added",
+        payload: {
+          role: "user",
+          actor: { type: "user", origin: "web" },
+          content: "plain fallback",
+          attachments,
+        },
+      },
+    ]);
+
+    expect(state.items[0]).toMatchObject({ kind: "user", attachments });
+    expect(state.items[1]).toMatchObject({ kind: "user", text: "plain fallback" });
+    expect(state.items[1]).not.toHaveProperty("attachments");
+  });
+
+  test("projects durable reference outcomes onto their original occurrences", () => {
+    const attachments = [
+      {
+        id: "config-repo/AGENTS.md",
+        type: "repo-file",
+        repoPath: "/repos/config",
+        path: "AGENTS.md",
+      },
+    ];
+    const state = reduceAll([
+      {
+        type: "events.iterate.com/agents/context-added",
+        payload: {
+          role: "user",
+          actor: { type: "user", origin: "web" },
+          content: "[@AGENTS.md](attachment:config-repo/AGENTS.md)",
+          attachments,
+        },
+      },
+      {
+        type: "events.iterate.com/agents/context-added",
+        payload: {
+          role: "developer",
+          actor: { type: "integration", name: "agent-reference-resolver" },
+          content: "resolution details",
+          referenceResolution: {
+            sourceOffset: 1,
+            outcomes: [{ status: "missing", attachmentIds: ["config-repo/AGENTS.md"] }],
+          },
+        },
+      },
+    ]);
+
+    expect(state.items).toMatchObject([
+      { id: "user-1", attachments },
+      {
+        id: "user-1",
+        attachments,
+        referenceResolutions: { "config-repo/AGENTS.md": { status: "missing" } },
+      },
+    ]);
+    expect(state.pendingReferenceMessages).toEqual({});
+  });
+
   test("streams thinking and response deltas into the live llm step", () => {
     const state = reduceAll([
       {
@@ -1293,6 +1372,65 @@ describe("agent-ui reducer", () => {
       text: "also, one more thing",
     });
     expect(state.live?.steps[0]).toMatchObject({ kind: "llm", status: "running" });
+  });
+
+  test("updates a queued file mention when its resolution arrives mid-turn", () => {
+    const attachments = [
+      {
+        id: "config-repo/AGENTS.md",
+        type: "repo-file",
+        repoPath: "/repos/config",
+        path: "AGENTS.md",
+      },
+    ];
+    const state = reduceAll([
+      {
+        type: "events.iterate.com/agent/llm-request-requested",
+        offset: 7,
+        payload: { model: "gpt-test" },
+      },
+      {
+        type: "events.iterate.com/agents/context-added",
+        offset: 8,
+        payload: {
+          role: "user",
+          actor: { type: "user", origin: "web" },
+          content: "[@AGENTS.md](attachment:config-repo/AGENTS.md)",
+          attachments,
+        },
+      },
+      {
+        type: "events.iterate.com/agents/context-added",
+        offset: 9,
+        payload: {
+          role: "developer",
+          actor: { type: "integration", name: "agent-reference-resolver" },
+          content: "resolution details",
+          referenceResolution: {
+            sourceOffset: 8,
+            outcomes: [
+              {
+                status: "resolved",
+                truncated: true,
+                attachmentIds: ["config-repo/AGENTS.md"],
+              },
+            ],
+          },
+        },
+      },
+    ]);
+
+    expect(state.items).toHaveLength(0);
+    expect(state.queuedUserMessages).toMatchObject([
+      {
+        id: "user-8",
+        attachments,
+        referenceResolutions: {
+          "config-repo/AGENTS.md": { status: "resolved", truncated: true },
+        },
+      },
+    ]);
+    expect(state.pendingReferenceMessages).toEqual({});
   });
 
   test("settles queued user messages before the next LLM request starts", () => {

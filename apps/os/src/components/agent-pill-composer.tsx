@@ -1,4 +1,8 @@
-import { useEffect, useRef, useState, type DragEvent, type ReactNode } from "react";
+import { useState, type DragEvent, type ReactNode } from "react";
+import {
+  agentMessageToEditorDocument,
+  type AgentMessageDraft,
+} from "@iterate-com/shared/agent-message-attachments";
 import {
   ArrowUpIcon,
   FileCode2Icon,
@@ -21,12 +25,14 @@ import {
 } from "@iterate-com/ui/components/dropdown-menu";
 import { Spinner } from "@iterate-com/ui/components/spinner";
 import { cn } from "@iterate-com/ui/lib/utils";
+import { ComposerTextarea } from "~/components/composer-textarea.tsx";
+import type { ComposerSuggestionProvider } from "~/components/composer-suggestions.ts";
 
 export type AgentComposerMode = "message" | "raw" | "examples";
 
 type AgentComposerMessageConfig = {
-  value: string;
-  onValueChange: (value: string) => void;
+  value: AgentMessageDraft;
+  onValueChange: (value: AgentMessageDraft) => void;
   onSubmit: () => Promise<void> | void;
   attachments?: ReactNode;
   canSubmit?: boolean;
@@ -35,6 +41,7 @@ type AgentComposerMessageConfig = {
   /** Accept dropped/selected files (same path as the file picker). */
   onAddFiles?: (files: FileList | null) => void;
   placeholder?: string;
+  suggestionProviders?: readonly ComposerSuggestionProvider[];
 };
 
 type AgentComposerRawConfig = {
@@ -78,7 +85,6 @@ export function AgentPillComposer({
   isInterrupting?: boolean;
   onInterrupt?: () => Promise<void> | void;
 }) {
-  const messageRef = useRef<HTMLTextAreaElement>(null);
   const [isDragging, setIsDragging] = useState(false);
   // Clamp to a mode the supplied configs can actually render.
   const activeMode: AgentComposerMode =
@@ -93,14 +99,13 @@ export function AgentPillComposer({
     !isSubmitting &&
     !isExamples &&
     (activeMode === "message"
-      ? (message?.canSubmit ?? (message?.value.trim() ?? "") !== "")
+      ? (message?.canSubmit ??
+        (message === undefined
+          ? false
+          : agentMessageToEditorDocument(message.value).text.trim() !== ""))
       : (raw?.value.trim() ?? "") !== "");
   const showInterrupt = activeMode === "message" && onInterrupt != null;
   const acceptsFileDrop = message?.onAddFiles != null && !isSubmitting;
-
-  useEffect(() => {
-    if (autoFocusMessage && activeMode === "message") messageRef.current?.focus();
-  }, [activeMode, autoFocusMessage]);
 
   function submit() {
     if (!canSubmit) return;
@@ -260,20 +265,13 @@ export function AgentPillComposer({
             {message?.attachments == null ? null : (
               <div className="px-1 pb-1">{message.attachments}</div>
             )}
-            <textarea
-              ref={messageRef}
-              value={message?.value ?? ""}
-              onChange={(event) => message?.onValueChange(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
-                  event.preventDefault();
-                  submit();
-                }
-              }}
-              rows={1}
-              aria-label={message?.placeholder ?? "Message this stream"}
+            <ComposerTextarea
+              value={message?.value ?? { content: "", attachments: [] }}
+              onValueChange={(value) => message?.onValueChange(value)}
+              onSubmit={submit}
+              focusOnMount={autoFocusMessage}
               placeholder={message?.placeholder ?? "Message this stream"}
-              className="field-sizing-content max-h-32 min-w-0 flex-1 resize-none bg-transparent px-2 py-2 text-base leading-snug outline-none"
+              providers={message?.suggestionProviders}
             />
           </div>
         )}

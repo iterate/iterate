@@ -10,6 +10,7 @@ import {
 } from "~/lib/route-breadcrumbs.ts";
 import { streamPathFromSplat, streamPathToSplat } from "~/lib/stream-links.ts";
 import { StreamViewSearch } from "~/lib/stream-view-search.ts";
+import { configRepoFileMentionProvider } from "~/components/config-repo-file-mentions.tsx";
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/agents/streams/$")({
   staticData: streamPageStaticData(),
@@ -34,6 +35,7 @@ export const Route = createFileRoute("/_app/projects/$projectSlug/agents/streams
 function ProjectAgentDetailContent() {
   const { project } = Route.useLoaderData();
   const { _splat: streamPath } = Route.useParams();
+  const fileMentions = configRepoFileMentionProvider(project.id);
   const agents =
     useLiveState(
       (itx) => itx.agents.liveState,
@@ -53,22 +55,39 @@ function ProjectAgentDetailContent() {
   // input fact.
   // The socket is keyed by project ID (the provider pre-warmed it), and agents
   // are addressed by their stream path.
-  async function submitAgentMessage(message: string) {
+  async function submitAgentMessage({
+    content,
+    attachments,
+  }: {
+    content: string;
+    attachments: import("@iterate-com/shared/agent-message-attachments").AgentMessageAttachment[];
+  }) {
     const itx = await connectItx(project.id);
     // Returned so the composer can feed the committed offset into the
     // store's consume-own-append metric (real append→observed latency).
-    return await itx.agents.get(streamPath).message(message);
+    return await itx.agents.get(streamPath).message({
+      message: content,
+      ...(attachments.length === 0 ? {} : { attachments }),
+    });
   }
 
-  async function submitAgentFiles({ files, message }: { files: File[]; message: string }) {
+  async function submitAgentFiles({
+    files,
+    content,
+    attachments,
+  }: {
+    files: File[];
+    content: string;
+    attachments: import("@iterate-com/shared/agent-message-attachments").AgentMessageAttachment[];
+  }) {
     const itx = await connectItx(project.id);
-    // One addFiles call → ONE input event carrying every attachment, so the
-    // feed shows a single message and the agent gets one turn trigger.
-    const { event } = await itx.agents.get(streamPath).addFiles({
+    // The unified message call commits text, linked resources, and uploaded
+    // files as one input event, so resolution can gate exactly one turn.
+    return await itx.agents.get(streamPath).message({
       files: await filesToAgentPayload(files),
-      ...(message && { message }),
+      message: content,
+      ...(attachments.length === 0 ? {} : { attachments }),
     });
-    return event;
   }
 
   async function interruptAgentMessage() {
@@ -116,6 +135,7 @@ function ProjectAgentDetailContent() {
             onSubmit: submitAgentMessage,
             onSubmitFiles: submitAgentFiles,
             placeholder: "Message this agent",
+            suggestionProviders: [fileMentions],
           }}
           projectId={project.id}
           projectSlug={project.slug}

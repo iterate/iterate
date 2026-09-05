@@ -1,5 +1,10 @@
 import { useState } from "react";
 import { parse as parseYaml } from "yaml";
+import {
+  agentMessageToEditorDocument,
+  emptyAgentMessageDraft,
+  type AgentMessageAttachment,
+} from "@iterate-com/shared/agent-message-attachments";
 import type { AgentUiPresenceEntry } from "@iterate-com/ui/components/events/agent-ui-reducer";
 import { StreamEventInput, type StreamEvent } from "iterate/processors";
 import type { StreamBrowserStore } from "~/domains/streams/client-libraries/browser/stream-browser-store.ts";
@@ -7,6 +12,7 @@ import { AgentPillComposer, type AgentComposerMode } from "~/components/agent-pi
 import { AttachmentChips, AttachmentFileInput } from "~/components/composer-attachments.tsx";
 import { useComposerAttachments } from "~/components/use-composer-attachments.ts";
 import { ExampleEventsPanel } from "~/components/example-events-panel.tsx";
+import type { ComposerSuggestionProvider } from "~/components/composer-suggestions.ts";
 
 const DEFAULT_RAW_EVENT_YAML =
   "type: events.iterate.com/os/manual-event\npayload:\n  message: Hello from OS\n";
@@ -20,9 +26,17 @@ const DEFAULT_RAW_EVENT_YAML =
  */
 export type StreamMessageComposer = {
   placeholder?: string;
+  suggestionProviders?: readonly ComposerSuggestionProvider[];
   onInterrupt?: (llmRequestOffset: number) => Promise<void>;
-  onSubmit: (message: string) => Promise<StreamEvent>;
-  onSubmitFiles?: (input: { files: File[]; message: string }) => Promise<StreamEvent>;
+  onSubmit: (input: {
+    content: string;
+    attachments: AgentMessageAttachment[];
+  }) => Promise<StreamEvent>;
+  onSubmitFiles?: (input: {
+    files: File[];
+    content: string;
+    attachments: AgentMessageAttachment[];
+  }) => Promise<StreamEvent>;
 };
 
 /**
@@ -69,26 +83,28 @@ export function StreamViewComposer({
   const [mode, setMode] = useState<AgentComposerMode>(
     defaultMode ?? (messageComposer ? "message" : "raw"),
   );
-  const [messageText, setMessageText] = useState("");
+  const [message, setMessage] = useState(() => emptyAgentMessageDraft());
   const attachments = useComposerAttachments();
   const [rawText, setRawText] = useState(DEFAULT_RAW_EVENT_YAML);
   const [submitError, setSubmitError] = useState<string | undefined>();
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  async function runSubmit(action: () => Promise<void>) {
+  async function runSubmit(action: () => Promise<void>): Promise<boolean> {
     setIsSubmitting(true);
     setSubmitError(undefined);
     try {
       await action();
+      return true;
     } catch (error) {
       setSubmitError(error instanceof Error ? error.message : String(error));
+      return false;
     } finally {
       setIsSubmitting(false);
     }
   }
 
   async function submitMessage() {
-    const trimmed = messageText.trim();
+    const visibleText = agentMessageToEditorDocument(message).text;
     if (messageComposer == null) return;
     const { onSubmit, onSubmitFiles } = messageComposer;
     // Time the whole submit: this is the real consume-own-append t0, and the
@@ -100,33 +116,37 @@ export function StreamViewComposer({
       store.noteExternalAppend({ maxCommittedOffset: committed.offset, t0 });
     };
     if (attachments.files.length > 0 && onSubmitFiles != null) {
-      await runSubmit(async () => {
-        await measured(() => onSubmitFiles({ files: attachments.files, message: trimmed }));
-        setMessageText("");
+      const didSubmit = await runSubmit(() =>
+        measured(() => onSubmitFiles({ files: attachments.files, ...message })),
+      );
+      if (didSubmit) {
+        setMessage(emptyAgentMessageDraft());
         attachments.clearFiles();
         onNudgeDeliveries();
-      });
+      }
       return;
     }
-    if (!trimmed) return;
-    await runSubmit(async () => {
-      await measured(() => onSubmit(trimmed));
-      setMessageText("");
+    if (visibleText.trim() === "") return;
+    const didSubmit = await runSubmit(() => measured(() => onSubmit(message)));
+    if (didSubmit) {
+      setMessage(emptyAgentMessageDraft());
       onNudgeDeliveries();
-    });
+    }
   }
 
   async function submitRawEvents() {
     const trimmed = rawText.trim();
     if (!trimmed) return;
-    await runSubmit(async () => {
+    const didSubmit = await runSubmit(async () => {
       const parsed = parseYaml(trimmed) as unknown;
       const events = (Array.isArray(parsed) ? parsed : [parsed]).map((event) =>
         StreamEventInput.parse(event),
       );
       await store.appendBatch({ events });
-      onNudgeDeliveries();
     });
+    if (didSubmit) {
+      onNudgeDeliveries();
+    }
   }
 
   // Picking an example drops the user into the raw editor with the YAML loaded.
@@ -158,11 +178,11 @@ export function StreamViewComposer({
           ? {}
           : {
               message: {
-                value: messageText,
-                onValueChange: setMessageText,
+                value: message,
+                onValueChange: setMessage,
                 onSubmit: submitMessage,
                 canSubmit:
-                  messageText.trim() !== "" ||
+                  agentMessageToEditorDocument(message).text.trim() !== "" ||
                   (attachments.files.length > 0 && messageComposer.onSubmitFiles != null),
                 ...(attachmentChips == null ? {} : { attachments: attachmentChips }),
                 ...(messageComposer.onSubmitFiles == null
@@ -174,6 +194,9 @@ export function StreamViewComposer({
                 ...(messageComposer.placeholder == null
                   ? {}
                   : { placeholder: messageComposer.placeholder }),
+                ...(messageComposer.suggestionProviders == null
+                  ? {}
+                  : { suggestionProviders: messageComposer.suggestionProviders }),
               },
               ...(interrupt == null
                 ? {}

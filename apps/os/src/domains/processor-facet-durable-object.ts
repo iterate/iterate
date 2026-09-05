@@ -569,6 +569,26 @@ export class ProcessorFacet extends ProcessorFacetBase<Env> {
           path: file.path,
           projectId,
         }),
+      readRepoFile: async (
+        target: {
+          type: "repo-file";
+          repoPath: "/repos/config";
+          path: string;
+        },
+        maximumBytes: number,
+      ) => {
+        const result = await this.env.REPO.getByName(
+          DurableObjectNameCodec.stringify({ projectId, path: target.repoPath }),
+        ).readHeadFilePrefix({ path: target.path, maximumBytes });
+        return result === null
+          ? null
+          : {
+              bytes: result.bytes,
+              commitOid: result.commitOid,
+              originalBytes: result.originalBytes,
+              truncated: result.truncated,
+            };
+      },
       // Oversized script results spill into the agent's OWN workspace
       // directory (private scratch under its stream path — never
       // committable), so the model can page through the file instead of

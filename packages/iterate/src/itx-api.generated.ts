@@ -487,7 +487,7 @@ export interface CfBrowserCapability {
 export interface Agent {
   /**
    * The agent scope's own capability host (provide/revoke/runScript/
-   * __describe) — and the explicit dotted door to the scope's DYNAMIC
+   * __describe) — and the explicit dotted access point for the scope's DYNAMIC
    * capabilities: `agents.get(path).capabilityHost.someTool(args)`. The
    * shorthand `agents.get(path).someTool(args)` resolves through the same
    * host via the handle's prototype-chain fallback; both pipeline over
@@ -516,7 +516,7 @@ export interface Agent {
    * outside the Agent vocabulary or for an intentionally ephemeral event.
    */
   append(...events: AgentEventInput[]): Promise<StreamEvent[]>;
-  /** The agent's web-chat door (what the user sees). */
+  /** The agent's web-chat output surface (what the user sees). */
   chat: AgentChat;
   /**
    * Create the generic agent machinery on this stream and wait until the
@@ -532,15 +532,17 @@ export interface Agent {
    */
   create(payload?: AgentCreateInput): Promise<Agent>;
   /**
-   * Send a message to this agent — THE inbound door for every caller. The
+   * Send a message to this agent — the canonical entry point for every caller. The
    * context item's actor derives from the calling scope: inside an agent script
    * (itx scoped to an agent path), the message is stamped
    * `{ type: "agent", path }` and does NOT refill the receiver's autonomous
    * turn budget, so agent↔agent reply loops stay bounded; from anywhere else
    * (web UI, CLI, MCP session) it is a user message. The agent must already
-   * have been created explicitly. Optional files
-   * are stored in project file storage and ride the message as attachments
-   * (images stay visible to vision-capable models).
+   * have been created explicitly. `attachments` are typed resources addressed
+   * from `message` with Markdown-like links such as
+   * `[@AGENTS.md](attachment:config-repo/AGENTS.md)`. Optional files are stored
+   * in project file storage and ride the same event (images stay visible to
+   * vision-capable models).
    */
   message(
     input:
@@ -548,6 +550,12 @@ export interface Agent {
       | {
           message: string;
           files?: Array<{ contentType: string; data: FileData; filename: string }>;
+          attachments?: Array<{
+            id: string;
+            type: "repo-file";
+            repoPath: "/repos/config";
+            path: string;
+          }>;
         },
   ): Promise<StreamEvent>;
   /**
@@ -1243,6 +1251,8 @@ export interface Repo {
   edit(input: EditRepoFileInput): Promise<EditRepoFileResult>;
   /** All committed file paths at HEAD. */
   listFiles(): Promise<{ commitOid: string; paths: string[] }>;
+  /** Fuzzy-search committed paths at HEAD without returning the full manifest. */
+  searchFiles(input: SearchRepoFilesInput): Promise<SearchRepoFilesResult>;
   /**
    * Commit history of a branch, newest first — oid, message, author,
    * timestamp (epoch ms), parent oids. Deliberately without per-commit file
@@ -2703,6 +2713,10 @@ export type AgentProcessorState = {
         payload: {
           role: "assistant" | "developer" | "system" | "user";
           content: string;
+          attachments?:
+            | { type: "repo-file"; repoPath: "/repos/config"; path: string; id: string }[]
+            | undefined;
+          referenceResolution?: unknown;
           key?: string | undefined;
           files?:
             | { contentType: string; filename: string; path: string; size: number; url: string }[]
@@ -2718,6 +2732,7 @@ export type AgentProcessorState = {
                 | { type: "user"; userId: string }
                 | { type: "file"; path: string }
                 | { type: "git-commit"; repoPath: string; commitOid: string }
+                | { type: "repo-file"; repoPath: string; path: string }
               )[]
             | undefined;
           actor?:
@@ -2756,6 +2771,10 @@ export type AgentProcessorState = {
         payload: {
           role: "assistant" | "developer" | "system" | "user";
           content: string;
+          attachments?:
+            | { type: "repo-file"; repoPath: "/repos/config"; path: string; id: string }[]
+            | undefined;
+          referenceResolution?: unknown;
           key?: string | undefined;
           files?:
             | { contentType: string; filename: string; path: string; size: number; url: string }[]
@@ -2771,6 +2790,7 @@ export type AgentProcessorState = {
                 | { type: "user"; userId: string }
                 | { type: "file"; path: string }
                 | { type: "git-commit"; repoPath: string; commitOid: string }
+                | { type: "repo-file"; repoPath: string; path: string }
               )[]
             | undefined;
           actor?:
@@ -2946,6 +2966,10 @@ export type AgentEventInput =
       {
         role: "assistant" | "developer" | "system" | "user";
         content: string;
+        attachments?:
+          | { type: "repo-file"; repoPath: "/repos/config"; path: string; id: string }[]
+          | undefined;
+        referenceResolution?: unknown;
         key?: string | undefined;
         files?:
           | { contentType: string; filename: string; path: string; size: number; url: string }[]
@@ -2961,6 +2985,7 @@ export type AgentEventInput =
               | { type: "user"; userId: string }
               | { type: "file"; path: string }
               | { type: "git-commit"; repoPath: string; commitOid: string }
+              | { type: "repo-file"; repoPath: string; path: string }
             )[]
           | undefined;
         actor?:
@@ -3657,6 +3682,19 @@ export type EditRepoFileInput = {
 export type EditRepoFileResult = CommitRepoFilesResult & {
   occurrenceCount: number;
   path: string;
+};
+
+/** Query for fuzzy matching committed paths without returning the full repo manifest. */
+export type SearchRepoFilesInput = {
+  query: string;
+  /** Defaults to 50 and is capped at 100. */
+  limit?: number;
+};
+
+/** Bounded fuzzy file matches at one committed repo head. */
+export type SearchRepoFilesResult = {
+  commitOid: string;
+  paths: string[];
 };
 
 /** What `repo.log` returns: newest-first commits on one branch. */
@@ -4612,6 +4650,10 @@ export type JsonValue =
 export type AgentContextAddedPayload = {
   role: "assistant" | "developer" | "system" | "user";
   content: string;
+  attachments?:
+    | { type: "repo-file"; repoPath: "/repos/config"; path: string; id: string }[]
+    | undefined;
+  referenceResolution?: unknown;
   key?: string | undefined;
   files?:
     | { contentType: string; filename: string; path: string; size: number; url: string }[]
@@ -4622,6 +4664,7 @@ export type AgentContextAddedPayload = {
         | { type: "user"; userId: string }
         | { type: "file"; path: string }
         | { type: "git-commit"; repoPath: string; commitOid: string }
+        | { type: "repo-file"; repoPath: string; path: string }
       )[]
     | undefined;
   actor?:

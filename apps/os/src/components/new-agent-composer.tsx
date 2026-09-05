@@ -1,4 +1,9 @@
 import { useState } from "react";
+import {
+  agentMessageToEditorDocument,
+  emptyAgentMessageDraft,
+  type AgentMessageAttachment,
+} from "@iterate-com/shared/agent-message-attachments";
 import { useMutation } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { toast } from "@iterate-com/ui/components/sonner";
@@ -6,6 +11,7 @@ import { connectItx } from "iterate/sdk/itx/react";
 import { AgentPillComposer } from "~/components/agent-pill-composer.tsx";
 import { AttachmentChips, AttachmentFileInput } from "~/components/composer-attachments.tsx";
 import { useComposerAttachments } from "~/components/use-composer-attachments.ts";
+import { configRepoFileMentionProvider } from "~/components/config-repo-file-mentions.tsx";
 import { newWebAgentPath, sendAgentFirstTurn } from "~/lib/web-agent.ts";
 
 /**
@@ -22,16 +28,22 @@ export function NewAgentComposer({
 }) {
   const navigate = useNavigate();
   const attachments = useComposerAttachments();
-  const [message, setMessage] = useState("");
+  const fileMentions = configRepoFileMentionProvider(projectId);
+  const [message, setMessage] = useState(() => emptyAgentMessageDraft());
 
   const createAgent = useMutation({
-    mutationFn: async (input: { content: string; files: File[] }) => {
+    mutationFn: async (input: {
+      content: string;
+      inlineAttachments: AgentMessageAttachment[];
+      files: File[];
+    }) => {
       const agentPath = newWebAgentPath(new Date());
       // connectItx (imperative, not the suspending hook) narrows the one
       // session socket to this project.
       const itx = await connectItx(projectId);
       await sendAgentFirstTurn(itx.agents.get(agentPath), {
         message: input.content,
+        attachments: input.inlineAttachments,
         files: input.files,
       });
       return agentPath;
@@ -52,8 +64,13 @@ export function NewAgentComposer({
   const busy = createAgent.isPending || createAgent.isSuccess;
 
   function submit() {
-    if (busy || (message.trim() === "" && attachments.files.length === 0)) return;
-    createAgent.mutate({ content: message.trim(), files: attachments.files });
+    const visibleText = agentMessageToEditorDocument(message).text;
+    if (busy || (visibleText.trim() === "" && attachments.files.length === 0)) return;
+    createAgent.mutate({
+      content: message.content,
+      files: attachments.files,
+      inlineAttachments: message.attachments,
+    });
   }
 
   return (
@@ -69,8 +86,11 @@ export function NewAgentComposer({
           value: message,
           onValueChange: setMessage,
           onSubmit: submit,
-          canSubmit: message.trim() !== "" || attachments.files.length > 0,
+          canSubmit:
+            agentMessageToEditorDocument(message).text.trim() !== "" ||
+            attachments.files.length > 0,
           placeholder: "Message a new agent",
+          suggestionProviders: [fileMentions],
           onAttach: attachments.openFilePicker,
           onAddFiles: attachments.addFiles,
           ...(attachments.entries.length === 0

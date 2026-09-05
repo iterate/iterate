@@ -1,6 +1,7 @@
 import { memo, useCallback, useLayoutEffect, useRef, useState } from "react";
 import { Link } from "@tanstack/react-router";
 import type { AgentRuntime } from "@iterate-com/shared/agent-events";
+import { decodeAgentMessageAttachments } from "@iterate-com/shared/agent-message-attachments";
 import {
   BanIcon,
   ChevronRightIcon,
@@ -9,6 +10,7 @@ import {
   CodeIcon,
   GitBranchIcon,
   PaperclipIcon,
+  FileIcon,
   PauseIcon,
   PlayIcon,
 } from "lucide-react";
@@ -23,6 +25,7 @@ import {
   type AgentUiItem,
   type AgentUiMessageItem,
   type AgentUiMessageVia,
+  type AgentUiReferenceResolution,
   type AgentUiStep,
 } from "@iterate-com/ui/components/events/agent-ui-reducer";
 import {
@@ -31,6 +34,7 @@ import {
   MessageResponse,
 } from "@iterate-com/ui/components/ai-elements/message";
 import { Button } from "@iterate-com/ui/components/button";
+import { Badge } from "@iterate-com/ui/components/badge";
 import { Spinner } from "@iterate-com/ui/components/spinner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@iterate-com/ui/components/tooltip";
 import { cn } from "@iterate-com/ui/lib/utils";
@@ -487,11 +491,56 @@ export function QueuedMessagesPanel({
 }
 
 function UserMessageBody({ item }: { item: AgentUiMessageItem }) {
+  const decodedMessage =
+    item.attachments === undefined
+      ? null
+      : decodeAgentMessageAttachments(item.text, item.attachments);
   return (
     <>
       {item.via == null ? null : <MessageViaLabel via={item.via} className="opacity-70" />}
       {item.text === "" ? null : item.via == null ? (
-        <div className="whitespace-pre-wrap leading-6">{item.text}</div>
+        decodedMessage === null ? (
+          <div className="whitespace-pre-wrap leading-6">{item.text}</div>
+        ) : (
+          <div className="whitespace-pre-wrap leading-6">
+            {decodedMessage.references.flatMap((reference, index) => {
+              const previousEnd = decodedMessage.references[index - 1]?.to ?? 0;
+              const warning = referenceResolutionWarning(
+                item.referenceResolutions?.[reference.attachment.id],
+              );
+              return [
+                <span key={`text-${reference.from}`}>
+                  {decodedMessage.text.slice(previousEnd, reference.from)}
+                </span>,
+                <Badge
+                  key={`${reference.attachment.id}-${reference.from}`}
+                  variant="outline"
+                  className={cn(
+                    "mx-0.5 inline-flex max-w-full align-middle font-mono font-normal",
+                    warning !== null &&
+                      "border-amber-500/50 bg-amber-500/10 text-amber-800 dark:text-amber-300",
+                  )}
+                  title={warning ?? reference.attachment.path}
+                  aria-label={warning === null ? undefined : `${reference.display}: ${warning}`}
+                  data-attachment-type={reference.attachment.type}
+                  data-reference-resolution={
+                    item.referenceResolutions?.[reference.attachment.id]?.status
+                  }
+                >
+                  {warning === null ? (
+                    <FileIcon className="size-3" aria-hidden="true" />
+                  ) : (
+                    <CircleAlertIcon className="size-3" aria-hidden="true" />
+                  )}
+                  <span className="truncate">{reference.display}</span>
+                </Badge>,
+                ...(index === decodedMessage.references.length - 1
+                  ? [<span key="text-tail">{decodedMessage.text.slice(reference.to)}</span>]
+                  : []),
+              ];
+            })}
+          </div>
+        )
       ) : (
         // Slack text is converted to markdown-ish (mentions, [label](url)
         // links) by the reducer — render it through the markdown path so
@@ -510,6 +559,16 @@ function UserMessageBody({ item }: { item: AgentUiMessageItem }) {
       <MessageAttachments files={item.files} hasText={item.text !== ""} />
     </>
   );
+}
+
+function referenceResolutionWarning(
+  resolution: AgentUiReferenceResolution | undefined,
+): string | null {
+  if (resolution === undefined) return null;
+  if (resolution.status === "missing") return "File was not found when this message was processed";
+  if (resolution.status === "binary") return "Binary file content was not included";
+  if (resolution.status === "read-failed") return "File could not be read";
+  return resolution.truncated === true ? "Only the beginning of this file was included" : null;
 }
 
 /** Small "slack · U0123ABC" marker on messages from external chat integrations. */

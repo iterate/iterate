@@ -13,7 +13,14 @@ test("project home hydrates the dashboard and REPL still server-renders", async 
   // hydrates after load rather than embedding the composer in the initial HTML.
   await page.goto(`/projects/${fixture.project.slug}`);
   await page.getByTestId("project-dashboard").waitFor();
-  await page.getByRole("textbox", { name: "Message a new agent" }).fill("Hello from dashboard");
+  const composer = page.getByRole("combobox", { name: "Message a new agent" });
+  await composer.fill("@onb");
+  await page.getByRole("option", { name: "ONBOARDING.md" }).click();
+  expect(await composer.textContent()).toBe("@ONBOARDING.md ");
+  expect(await composer.locator('[data-attachment-type="repo-file"]').getAttribute("title")).toBe(
+    "ONBOARDING.md",
+  );
+  await composer.fill("Hello from dashboard");
 
   // The legacy new-agent URL is a router redirect (server-side 3xx on a
   // direct hit) to the project home.
