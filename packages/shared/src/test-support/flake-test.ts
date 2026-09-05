@@ -66,6 +66,7 @@ export function createFlake<TestFn extends (...args: any[]) => any>(
     // The body's own arguments pass through untouched — playwright fixtures,
     // vitest context — whatever the wrapped test function provides.
     const wrapped = async (...bodyArgs: any[]) => {
+      (test as any).setTimeout?.(timeoutMs + 1000);
       const startedAt = Date.now();
       let timer: ReturnType<typeof setTimeout> | undefined;
       // `as const` keeps the outcome union discriminated (same reasoning as
@@ -125,16 +126,21 @@ export function createFlake<TestFn extends (...args: any[]) => any>(
     // Present the body's own source when the runner parses for destructured
     // fixture names — same trick, and same reasoning, as failing-test.ts.
     Object.defineProperty(wrapped, "toString", { value: () => body.toString() });
-    if ("fails" in test) {
-      // vitest: pin per-test retry to zero. A suite-level `retry` re-runs the
-      // body whenever the wrapper throws (both green outcomes) because the
-      // retry fires before the `.fails` inversion — one run would execute and
-      // record the body twice. Caller options (e.g. timeout) pass through.
-      // The cast states vitest's three-argument shape: with more than two
-      // arguments the middle one is the per-test options object (the trailing
-      // argument was already checked to be the body function above).
-      const callerOptions = args.length > 2 ? (args[1] as object) : {};
-      return failer(args[0], { ...callerOptions, retry: 0 }, wrapped);
+    // Same runner-timeout coordination as createFailing(): the runner must never
+    // fire before the wrapper's own deadline resolves, or a hang would read
+    // as the expected failure (the playwright-like case sets it via
+    // test.setTimeout at the top of `wrapped`).
+    if (!("setTimeout" in test)) {
+      // vitest-like: pass the timeout option, and pin per-test retry to zero
+      // — a suite-level `retry` re-runs the body whenever the wrapper throws
+      // (both green outcomes) because the retry fires before the `.fails`
+      // inversion, so one run would execute and record the body twice.
+      // args.slice(1, -1) is either `[]` or `[{ ...otherOptions }]`
+      const options = Object.assign({}, ...args.slice(1, -1), {
+        timeout: timeoutMs + 1000,
+        retry: 0,
+      });
+      return failer(args[0], options, wrapped);
     }
     // playwright-like: no per-test retry option exists, so pin retries
     // structurally — an anonymous describe scope (empty title segment,

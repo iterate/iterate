@@ -8,7 +8,9 @@ import { appendFlakeRecord, type FlakeRecord } from "./flake-record.ts";
  * native as far as reporting goes: it shows up in the "expected fail" summary
  * count, telemetry classifies it as expected-to-fail, and nothing downstream
  * needs to know the wrapper exists. The wrapper's only job is filtering WHICH
- * failure is allowed to satisfy that machinery:
+ * failure is allowed to satisfy that machinery.
+ *
+ * To use it, write a *normal* test body, and use a regex that you know the test (unfortunately) will fail with.
  *
  * ```ts
  * const fail = createFailing(test, /SAME-BOOT STALENESS/);
@@ -16,6 +18,10 @@ import { appendFlakeRecord, type FlakeRecord } from "./flake-record.ts";
  *   // asserts the DESIRED behavior; today it throws the matched error
  * });
  * ```
+ *
+ * Try to write normal-looking assertions - `expect` lets you pass in a custom message if you want to
+ * tip the scales for a single assertion. Use "should" so you can write a truthful statement that remains
+ * true even when the test *stops* failing (the system really should not run out of memory!).
  *
  * Three outcomes:
  * - body fails matching the pattern → the error is rethrown, the runner's
@@ -69,6 +75,9 @@ export function createFailing<TestFn extends (...args: any[]) => any>(
     // ({ page, ... }, testInfo), vitest context — whatever the wrapped test
     // function provides.
     const wrapped = async (...bodyArgs: any[]) => {
+      // playwright-like runners have no per-test `timeout` option; set the
+      // runner timeout here so it never fires before the wrapper's own deadline.
+      (test as any).setTimeout?.(timeoutMs + 1000);
       const startedAt = Date.now();
       // Race the body against the wrapper's own deadline: a hung body must
       // fail as NOT-the-pinned-failure rather than letting the runner's test
@@ -148,7 +157,9 @@ export function createFailing<TestFn extends (...args: any[]) => any>(
       // three-argument shape: with more than two arguments the middle one is
       // the per-test options object.
       const callerOptions = args.length > 2 ? (args[1] as object) : {};
-      return failer(args[0], { ...callerOptions, retry: 0 }, wrapped);
+      // `timeout` is forced to the wrapper's own deadline + 1s for the same
+      // reason as the setTimeout call above: the runner must never fire first.
+      return failer(args[0], { ...callerOptions, retry: 0, timeout: timeoutMs + 1000 }, wrapped);
     }
     // playwright-like: pin retries structurally via an anonymous describe
     // scope — same reasoning (and same cast) as createFlake, see

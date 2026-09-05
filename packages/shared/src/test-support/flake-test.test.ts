@@ -103,9 +103,11 @@ test("registration lands on the runner's own expected-fail variant", async () =>
   });
 
   expect(plain).not.toHaveBeenCalled();
-  // Caller options forward, with the wrapper's retry pin merged in (see the
-  // retry note in flake-test.ts — suite-level retry would double-run greens).
-  expect(registered).toMatchObject([{ args: ["name", { timeout: 123, retry: 0 }] }]);
+  // The registrar timeout is forced to the wrapper's deadline + 1s (a caller
+  // timeout of 123 is overridden) so the runner never fires before the
+  // wrapper's race resolves, and retry is pinned to zero — suite-level retry
+  // would double-run and double-record every green outcome.
+  expect(registered).toMatchObject([{ args: ["name", { timeout: 31_000, retry: 0 }] }]);
   // A matching throw passes through to satisfy the expected-fail machinery,
   // with playwright-style fixtures forwarded.
   await expect(registered[0]!.body({ page: "fake-page" })).rejects.toThrow(/flaked/);
