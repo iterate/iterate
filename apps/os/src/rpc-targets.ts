@@ -448,7 +448,10 @@ import { SecretProcessorContract } from "./domains/secrets/secret-processor-cont
 import { describeSecretState } from "./domains/secrets/secret-durable-object.ts";
 import { SlackProcessorContract } from "./domains/integrations/slack-processor-contract.ts";
 import { WorkspaceProcessorContract } from "./domains/workspaces/workspace-processor-contract.ts";
-import { normalizeConfigRepoTemplateReference } from "./lib/config-repo-template-reference.ts";
+import {
+  normalizeConfigRepoTemplateReference,
+  pinConfigRepoTemplateReferenceToDeployment,
+} from "./lib/config-repo-template-reference.ts";
 import {
   AI_INTERCEPTOR_CAPABILITY_NAME,
   isInterceptedModel,
@@ -6693,7 +6696,10 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     const explicitConfigRepoTemplate =
       args.configRepoTemplate === undefined
         ? undefined
-        : normalizeConfigRepoTemplateReference(args.configRepoTemplate);
+        : pinConfigRepoTemplateReferenceToDeployment(
+            normalizeConfigRepoTemplateReference(args.configRepoTemplate),
+            env.APP_CONFIG_ITERATE_REPO_PKG_REF?.trim() || undefined,
+          );
     if ("projectId" in this.#props && this.#capabilityHost.path !== "/") {
       throw new Error("project create() is only available on the project-root handle");
     }

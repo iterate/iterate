@@ -1,12 +1,189 @@
 ---
-status: ready
-size: medium
+status: in-progress
+size: large
+branch: codemode-tag-rendering
 ---
 
 # Render codemode-tag agent messages properly (mobile + web)
 
-(Also bundles: move message attachment parts to an HTML vocabulary — see
-the last section. Same parsing seam, decide together.)
+**Status summary (2026-09-02):** design settled via plannotator grill (16
+decisions below, one implementation amendment — see "Amendment" under the
+design section); PR 1 (kernel + derivation + web) is functionally complete on
+branch `codemode-tag-rendering` with unit/harness coverage and an e2e spec;
+PR 2 (media cutover) and follow-ups queued.
+
+## Design of record (settled 2026-09-02, plannotator grill)
+
+1. **HTML vocabulary for message parts** — `<img width height alt>`,
+   `<audio data-duration data-transcript>`, `<video poster width height>`,
+   `<a type data-size>`, `<a href="geo:…">`. This is the AUTHORING/WIRE format
+   (LLM-visible, portable); derived facts are the render model.
+2. **`src` hydrates at the edge, not in storage** — stored parts reference by
+   `data-path`; export mints fresh signed URLs; `files[]` stays durable truth.
+3. **One parser, one seam** — the seam is the PROJECT'S DERIVATION PROCESSOR:
+   the same parse that executes `<codemode>` emits the render-facts. Renderers
+   never parse formats.
+4. **No backcompat — one-shot cutover** ("as aggressively anti-backcompat as we
+   can possibly get away with, even if it means old threads being hideous").
+   The processor parses the NEW vocabulary only; old xml parts
+   (`<attachment-dimensions>`, `<voice-note>`, `<user-location>`) get no
+   derivation and fall to decision 9's raw fallback — old threads render raw
+   and ugly, accepted. Client-side parsers for old parts are deleted as each
+   surface moves onto facts. No dual-vocabulary period anywhere.
+5. **Classification = fact derivation in project-space processors** — events
+   are facts; processors parse facts and emit more factual events; renderers
+   consume facts. The kernel's only schema opinion is the derived RENDERING
+   vocabulary + the `source` link semantics — never any format. New format →
+   new processor, zero renderer changes. Symmetric for user messages.
+6. **Live streaming = incremental derivation over ephemeral events** — the
+   derivation processor consumes ephemeral `agent/llm-response-chunks`
+   (~150ms batches, memory-only, `includeEphemeral` opt-in) and emits
+   ephemeral derived deltas (prose-delta vs script-delta + live status).
+   Line-buffered streaming parser (tags sit on their own lines): flush
+   complete lines, hold back at most one partial line.
+7. **Script|Result|Meta tabs event-ified as light index facts** —
+   render-critical fields + `source` only; heavy payloads (script text,
+   results, prompts) are NOT copied — tab bodies dereference the raw events.
+   Facts describe; raw carries.
+8. **Liquid/post-`</codemode>` templated messages: out of scope** — parked in
+   [codemode-liquid-templated-messages](codemode-liquid-templated-messages.md).
+9. **The render vocabulary IS the feed — nothing "replaces" anything.**
+   `render/message-said` is *the* event for an assistant message; raw
+   `context-added` was never a feed item — it's derivation input + tab
+   dereference target. Renderers fold `render/*` only. Raw renders solely as
+   FALLBACK: a raw context-added that no render fact `source`s (legacy chat,
+   no processor, failed derivation) renders as-is — this is also where
+   decision 4 sends old-format threads. `source: {offset}` is a TOP-LEVEL
+   event field — kernel envelope, so the kernel owns the link semantics
+   generically.
+10. **Settled render facts are DURABLE; ephemeral covers only the live
+    window.** Ephemeral events never reach late subscribers — a freshly-opened
+    chat replays durable history. `message-said` copies its prose text (small;
+    makes the render vocabulary self-sufficient — feed renderers never fetch
+    raw); heavy payloads stay dereferenced. Computed read-time views
+    (retroactive parser fixes) noted as a future primitive, not a blocker.
+11. **Feed ordering: render facts sort by `(source.offset ?? own offset, own
+    offset)`** — facts anchor where their raw input sits, so
+    backfill/re-derivation of old history lands in place instead of at the
+    feed's bottom; siblings keep emission order.
+12. **Vocabulary shape: structured typed fields per fact, not html-ish
+    payloads** — `message-said {text}`, `script-requested {status, language}`,
+    etc. HTML stays the authoring/wire format only; html payloads in facts
+    would put a parser back inside renderers (violates decision 3).
+13. **`<codemode>` stays a custom element** — the dump-principle governs
+    message parts, not action syntax; raw code showing as text on the fallback
+    path is honest. No format churn / re-prompting.
+14. **Web first — including attachment parity** ("make sure web catches up to
+    mobile on attachment-related features that we added recently"). The
+    shared fold (`packages/ui` agent-ui-reducer) speaks the render vocabulary
+    once; the dashboard grows rendering for the mobile-era attachment
+    features: media mosaic, inline audio player + transcript, video
+    thumbnails/fullscreen, location cards, file rows — driven by the same
+    attachment facts. Mobile follows reusing the fixtures.
+15. **Split PRs, hard cutover in the second** — "one go" means no dual-parse
+    period, not one PR. PR 1 (kernel + codemode rendering + web) is
+    reviewable alone; PR 2 stacks the media cutover.
+16. **Prompting fixes are a prompt-only follow-up — with a barebones eval**:
+    replay the captured failure scenarios against the template prompt and
+    assert the output parses (codemode block present when work is intended,
+    `return` present, no LaTeX/head-math, no pasted signed URLs, non-empty
+    message).
+
+### Reference example
+
+```yaml
+# offset 41 — raw model output (derivation input, tab dereference target — not a feed item)
+type: events.iterate.com/agent/context-added
+payload:
+  role: assistant
+  content: |
+    Let me compute that.
+    <codemode status="factorizing">
+    return primeFactors(484214)
+    </codemode>
+
+# offset 57 — THE feed event for the message
+type: events.iterate.com/render/message-said
+source: { offset: 41 }
+payload:
+  text: "Let me compute that."
+
+# offset 58 — THE feed event for the script card
+type: events.iterate.com/render/script-requested
+source: { offset: 41 }
+payload:
+  status: factorizing
+  language: ts   # body not copied — Script tab dereferences offset 41
+```
+
+### Amendment discovered during implementation (2026-09-02)
+
+The durable half of the approved render vocabulary ALREADY EXISTS as platform
+events: `agents/web-message-sent` is the assistant-message fact (push
+notifications, the turn loop, mobile chat, and read receipts all key off it),
+`capability-host/script-run-requested`/`-settled` are the script facts, and
+`agent/summary-updated` the live label. Emitting `render/message-said` etc.
+alongside them would double-append every message. So the implementation keeps
+the platform vocabulary for durable facts and adds the `source: {offset}`
+envelope link to them (decision 9's mechanics, existing names); the only NEW
+event types are the ephemeral live-window deltas (`render/message-delta`,
+`render/script-delta`). `source` also turned out to already exist as a
+top-level envelope object (`{processor?, copiedFrom?}`) — `offset` joined it
+as a third member. Decisions 7/9/12 are satisfied in spirit; their letter
+("new render/* durable types") is amended.
+
+## Checklist
+
+### PR 1 — kernel + codemode rendering + web (this branch)
+
+- [x] Kernel: top-level `source: {offset}` envelope field on events.
+      _Third member of the existing source envelope (packages/iterate
+      processors/schemas.ts); mirrored in packages/ui stream-event.ts._
+- [x] ~~Render vocabulary types (`render/message-said`, …)~~ _amended: durable
+      facts ride existing platform events + source.offset; only the ephemeral
+      deltas are new types (iterate/processors render-events.ts)._
+- [x] Derivation processor in the codemode-tag template: line-buffered
+      streaming parse of assistant output; ephemeral deltas while live;
+      durable facts at settlement.
+      _configs/codemode-tag/codemode-interpreter.ts — a hosted facet
+      processor (at-least-once + keepalive, receives ephemeral chunks),
+      replacing worker.ts's observation-grade push-lane interpretation.
+      Harness tests incl. full replay in apps/os codemode-interpreter.test.ts._
+- [x] agent-ui-reducer folds `render/*` deltas + marks steps interpreted via
+      source.offset, raw stays as fallback for unsourced turns.
+      _liveProse/liveScript on the llm step (volatile overlay only);
+      markStepInterpretedBySource covers script-only turns._
+- [x] Web dashboard: derived live window streams prose as prose and script
+      as code with its status label; interpreted raw text no longer renders
+      in the round body (Full trace keeps it reachable); bubbles/cards keep
+      coming from web-message-sent / script-run events (amendment).
+      _agent-feed.tsx LiveStepStream, agent-activity-rounds.tsx LlmOnlyRound._
+- [x] Prose-only turns render as plain bubbles (the motivating mis-render).
+      _Interpreted steps hide raw text; the web-message-sent bubble is the
+      story. Covered by the e2e spec._
+- [x] Empty assistant messages tolerated/skipped (session capture #2 item 5).
+      _The interpreter emits nothing for an empty `none` outcome._
+- [x] Specs (playwright).
+      _specs/agent-codemode-tag-rendering.spec.ts — seeds a codemode-tag
+      project (create door now pins canonical template refs to the
+      deployment SHA, so previews test THIS branch's template) and asserts
+      derived rendering with no raw tags. Preview-only until merge._
+
+### PR 2 — media cutover (stacked)
+
+- [ ] Mobile composer emits html vocabulary (decision 1) from
+      composer-attachments.ts; old xml part emission deleted.
+- [ ] Processor derives attachment facts (new vocabulary only).
+- [ ] Web attachment parity: mosaic, audio player + transcript, video
+      thumbnails/fullscreen, location cards, file rows.
+- [ ] Mobile presentation from facts; old client-side xml parsers deleted.
+- [ ] Export transform: mint fresh signed `src` at the edge (decision 2).
+
+### Follow-ups
+
+- [ ] Template prompting fixes + barebones eval (decision 16; failures
+      documented in session capture #2 below).
+- [ ] Liquid-templated messages — separate task, needs grilling.
 
 ## Context
 
@@ -28,8 +205,8 @@ The renderers don't understand it. Observed on the mobile feed
 
 Misha's caveat, verbatim: "The codemode-tag messages don't render properly
 (which suggests to me we're handling things wrong but that's another
-story)" — i.e. treat this as a possible architecture smell in how the
-reducer classifies assistant output, not just a missing parser.
+story)" — confirmed by the grill: classification moves out of client
+reducers into fact derivation (decision 5).
 
 ## The format (full system-prompt section, captured from offset 902)
 
@@ -74,32 +251,14 @@ Old-format contrast (offset 874 in the same thread): assistant content is a
 bare ` ```ts async (itx) => {…} ``` ` fence — what the current reducer
 expects and renders as activity/code.
 
-## Checklist
-
-- [ ] Decide the classification seam: should the reducer
-      (packages/ui agent-ui-reducer, shared by web + mobile via
-      lib/feed.ts) parse `<codemode>` out of assistant context items, or
-      should the platform split prose/tag into separate events upstream so
-      renderers never see the tag? (Misha suspects current handling is
-      wrong — consider the second.)
-- [ ] Prose outside the tag → normal assistant bubble (markdown).
-- [ ] Tag contents → the activity/code affordance, with the `status`
-      attribute as the live activity label (replacing manual
-      summary-updated appends).
-- [ ] Prose-only responses (turn-ending) must render as plain bubbles —
-      the current mis-render puts them in the activity card as code.
-- [ ] Both renderers: web dashboard + mobile feed.
-- [ ] Note: the format itself is project-configurable (worker.ts parses the
-      tags per-project) — whatever the renderer does must degrade sanely
-      for projects still on the old bare-script format.
-
 ## Session capture #2 — prompting failures (thread 2026-08-31t07-41-39-965z)
 
 Mostly UNRELATED to rendering: these are prompt-shaping gaps in the
 codemode-tag format itself, captured verbatim before preview-14 tears the
 thread down. Conversation: prime-factorise 484828, then voice-note
 follow-ups ("put two sevens at the end", "add one more seven", "send me a
-voice note back").
+voice note back"). Now scoped as the decision-16 follow-up (prompt fixes +
+barebones eval).
 
 1. **Head-math with broken LaTeX, twice wrong** (offset 46): the model
    answered arithmetic from its head with mangled LaTeX (`\(484828 = 2^2
@@ -141,16 +300,13 @@ What went RIGHT, for balance: `<voice-note transcript>` user messages
 transcripts ("add one more seven") without any transcription turn — and
 the multi-step search→generate→send TTS chain worked once returns flowed.
 
-## Bundled: message parts as (nearly) valid HTML
+## HTML vocabulary details (from the original decision sketch)
 
-Decision sketch from discussion (2026-08-31). Principle, as Misha put it:
-"you could dump this html in a normal webpage and it would render sanely."
-Agreed direction, with one amendment (below).
-
-Replace the invented part vocabulary with real HTML elements — the invented
-one already converged on HTML by accident (`<attachment width height>` is
-`<img width height>`, whose whole ancient purpose is layout reservation
-before bytes arrive, i.e. our no-reflow mosaic fix):
+Principle, as Misha put it: "you could dump this html in a normal webpage and
+it would render sanely." The invented part vocabulary already converged on
+HTML by accident (`<attachment width height>` is `<img width height>`, whose
+whole ancient purpose is layout reservation before bytes arrive, i.e. our
+no-reflow mosaic fix):
 
 | Kind       | Element                                            | Metadata home                                  |
 | ---------- | -------------------------------------------------- | ---------------------------------------------- |
@@ -163,26 +319,13 @@ before bytes arrive, i.e. our no-reflow mosaic fix):
 LLMs parse this vocabulary natively, and markdown legally embeds inline
 HTML, so it composes with the codemode-tag format.
 
-**The amendment — src hydrates at the edge, not in storage.** Attachment
-URLs are signed and expiring (7d public, 15min model-facing, re-minted per
-use — deliberately). Baking a signed URL into durable message text rots in
-a week; a permanent public URL abandons the security model; and `files[]`
-on the event is already the durable reference (HTML-with-src would be a
-second copy of truth that drifts). So stored text uses the real elements
-but references by `data-path`/filename with NO src; anything that wants an
-actually-dumpable webpage (export, share, email) runs one transform that
-mints fresh signed urls into `src` at that moment. The principle in
-practice: "one trivial transform away from a sane webpage."
+**Sanitization**: the web dashboard must never innerHTML message text —
+user-typed `<img onerror=…>` lives in the same field. The derivation
+processor allowlist-parses the tiny vocabulary into structured facts
+(decision 12); renderers never touch html.
 
-Other notes:
-- **Sanitization**: the web dashboard must never innerHTML message text —
-  user-typed `<img onerror=…>` lives in the same field. Renderers
-  allowlist-parse the tiny vocabulary either way; the win is semantics +
-  portability, not a free renderer.
-- **Same seam as codemode-tag**: whoever owns parsing `<codemode>` out of
-  assistant text should own parsing `<audio>`/`<img>`/`<a>` parts — once,
-  shared by web + mobile. Do not build two parsers.
-- **Migration**: mobile's composing/parsing is centralized in
-  apps/mobile/src/lib/composer-attachments.ts — swap vocabulary there, have
-  renderers accept both old (`<attachment>`, `<voice-note>`,
-  `<user-location>`) and new during transition; old messages age out.
+## Implementation log
+
+- 2026-09-02: design grilled + approved via plannotator (12 revisions).
+  Worktree `codemode-tag-rendering` created off origin/main (post-Cloudflare
+  fixes #2566/#2567). Liquid templating split to its own task file.
