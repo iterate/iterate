@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import http from "node:http";
 import { RpcTarget } from "capnweb";
 import { isStreamOffsetConflictError } from "iterate/processors";
@@ -262,4 +263,25 @@ export function egressProbeWorker(project: { workers: { get(ref: DynamicWorkerRe
 
 export function fencedAgentScript(code: string): string {
   return ["The faux LLM produced this codemode block.", "```ts", code.trim(), "```"].join("\n");
+}
+
+/**
+ * The REAL `serveItx` (packages/iterate/src/serve-itx.ts) as a file a seeded
+ * project can commit next to its worker. The seeded project installs the
+ * published `iterate` package, which predates the helper, so its relative
+ * imports are rewritten to the published entry points and the one new
+ * platform member (`Project.scope`) is reached through a cast. Tests that
+ * commit it exercise the helper's actual code, not a copy.
+ */
+export function serveItxSourceForProjectRepo(): string {
+  return readFileSync(
+    new URL("../../../../packages/iterate/src/serve-itx.ts", import.meta.url),
+    "utf8",
+  )
+    .replace('from "./sdk/capnweb/index.ts"', 'from "iterate/sdk/capnweb"')
+    .replace('from "./itx-api.generated.ts"', 'from "iterate/sdk"')
+    .replace(
+      "const scoped = options.project.scope(options.scope);",
+      "const scoped = (options.project as unknown as { scope(input: unknown): unknown }).scope(options.scope);",
+    );
 }

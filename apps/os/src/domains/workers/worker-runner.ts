@@ -2,6 +2,7 @@ import { tracing } from "cloudflare:workers";
 import { disposeIgnoredRpcResult } from "iterate/sdk/capnweb";
 import { itxEnv as env } from "../../env.ts";
 import { itxEntrypointBinding, itxEntrypointProps } from "../itx/utils.ts";
+import type { ItxSurface } from "../itx/surface.ts";
 import type { StreamContext } from "../projects/stream-context.ts";
 import { projectEgressFetcher } from "../projects/utils.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
@@ -108,12 +109,15 @@ export class DynamicWorkerRunner {
     projectId: string;
     /** The itx scope the loaded code runs in (its `env.ITX` answers here). */
     scopePath: string;
+    /** Restrict the isolate's itx to these built-in members (domains/itx/surface.ts). */
+    surface?: ItxSurface;
   }) {
     const itxScope = itxEntrypointProps({
       streamContext: props.streamContext,
       path: props.scopePath,
       projectId: props.projectId,
       purpose: "userspace",
+      ...(props.surface === undefined ? {} : { surface: props.surface }),
     });
     this.#bindings = { ITX: itxEntrypointBinding(props.exports, itxScope) };
     this.#globalOutbound = projectEgressFetcher(
