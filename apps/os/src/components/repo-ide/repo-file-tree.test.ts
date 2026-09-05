@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { FileTree } from "@pierre/trees";
 import { expect, test } from "vitest";
-import { untitledPath } from "./repo-file-tree-paths.ts";
+import { untitledPath } from "@iterate-com/ui/lib/repo-file-tree-paths";
 
 test("a new file inside a folder gets one path separator", () => {
   const tree = new FileTree({ paths: ["agents/github-review.md"] });

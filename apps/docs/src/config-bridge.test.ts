@@ -49,6 +49,34 @@ describe("DocsApp", () => {
     expect(dispose).toHaveBeenCalledOnce();
   });
 
+  test("drops the project host's own port when the origin names none", async () => {
+    const fetchMock = vi.fn(async (request: Request) => new Response(request.url));
+    vi.stubGlobal("fetch", fetchMock);
+    const app = DocsApp.create(
+      {
+        ITX: {
+          get: async () => ({
+            [Symbol.dispose]: () => undefined,
+            appUrl: async () => "http://docs--demo.localhost:50209",
+            auth: { get: () => ({ fetch: async () => null }) },
+            kv: { get: async () => "https://jonas-docs.tunnels.iterate.com" },
+          }),
+        },
+      },
+      {
+        auth: { policy: "project-member" },
+        proxy: {
+          origin: "https://docs.iterate.workers.dev",
+          originOverrideKvKey: "docs-app-origin",
+        },
+      },
+    );
+
+    const response = await app.fetch(new Request("http://docs--demo.localhost:50209/jam"));
+
+    await expect(response.text()).resolves.toBe("https://jonas-docs.tunnels.iterate.com/jam");
+  });
+
   test("returns the member gate response without contacting the vessel", async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);

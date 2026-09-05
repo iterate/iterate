@@ -22,8 +22,16 @@ import {
   boardAddressFor,
   boardWorkspacePath,
   isBoardId,
+  newBoardId,
   normalizeRepoPath,
 } from "./lib/board-shared.ts";
+import {
+  isDocumentPath,
+  jamAgentPath,
+  jamDocumentPath,
+  jamInvitation,
+  jamWorkspacePath,
+} from "./lib/jam.ts";
 import type { TasksWorkspace, WorkspaceListEntry } from "./lib/tasks-api.ts";
 import type {
   DocsApi,
@@ -34,6 +42,14 @@ import type {
 } from "./lib/docs-api.ts";
 
 const AUTH_COOKIE = "iterate-project-auth";
+
+/** The agent surface inviteAgent touches (the pinned `iterate` client types
+ * predate it; capnweb stubs are Proxies, so the members resolve at runtime). */
+type JamAgentStub = {
+  create(): Promise<unknown>;
+  message(text: string): Promise<unknown>;
+  processor: { snapshot(): Promise<{ state?: { birthCertificate?: unknown } }> };
+};
 
 export class DocsApiRoot extends RpcTarget implements DocsApi {
   readonly #env: AppEnv;
@@ -252,6 +268,76 @@ class DocsProjectApi extends RpcTarget implements DocsProject {
       await stub.writeFile(`${workspacePath}/${path}`, "# Notes\n\n");
     });
     return { workspacePath, path };
+  }
+
+  async documentsUnder(workspacePath: string, repoPath: string): Promise<string[]> {
+    const workspace = requireWorkspacePath(workspacePath);
+    const mount = normalizeRepoPath(repoPath);
+    if (mount === null) throw new Error("bad repo path");
+    return this.#dial.withProject(async (project) => {
+      // The pinned `iterate` client types predate the workspace surface, so
+      // the one member this method calls is asserted locally; capnweb stubs
+      // are Proxies, so it resolves at runtime (the same caveat as documents()).
+      const stub = (
+        project as unknown as {
+          workspaces: { get(path: string): { glob(pattern: string): Promise<string[]> } };
+        }
+      ).workspaces.get(workspace);
+      // One tree walk of the mount (the merged view: overlay over the repo
+      // at HEAD), filtered here to what the editor can open.
+      const everything = await stub.glob(`${mount}/**/*`);
+      return everything
+        .filter(isDocumentPath)
+        .sort((left, right) => left.localeCompare(right))
+        .slice(0, 500);
+    });
+  }
+
+  async createJam(): Promise<{ workspacePath: string; path: string }> {
+    const id = newBoardId();
+    const workspacePath = jamWorkspacePath(id);
+    const path = jamDocumentPath(id);
+    await this.#dial.withProject(async (project) => {
+      // Creates through the same workspace `create` call as createWorkspace.
+      // The pinned `iterate` client types predate this surface; capnweb stubs
+      // are Proxies, so the locally asserted members resolve at runtime.
+      const stub = (
+        project as unknown as {
+          workspaces: {
+            get(path: string): {
+              create(input: object): Promise<unknown>;
+              writeFile(path: string, content: string): Promise<void>;
+            };
+          };
+        }
+      ).workspaces.get(workspacePath);
+      await stub.create({});
+      await stub.writeFile(path, `# Jam ${id}\n\n`);
+    });
+    return { workspacePath, path };
+  }
+
+  async inviteAgent(workspacePath: string, path?: string): Promise<{ agentPath: string }> {
+    const workspace = requireWorkspacePath(workspacePath);
+    const agentPath = jamAgentPath(workspace);
+    if (agentPath === null) {
+      throw new Error(`only a jam workspace can invite an agent; ${workspace} is not one`);
+    }
+    const document = path === undefined ? null : resolveDocumentPath(workspace, path);
+    await this.#dial.withProject(async (project) => {
+      // Same birth-if-needed sequence as the board's assignAgent; the brief
+      // goes out every time so a re-invite re-points an existing agent. The
+      // pinned client types predate the agents surface, so the three members
+      // used here are asserted locally (JamAgentStub); capnweb stubs are
+      // Proxies, so they resolve at runtime.
+      const agent = (
+        project as unknown as { agents: { get(path: string): JamAgentStub } }
+      ).agents.get(agentPath);
+      const snapshot = await agent.processor.snapshot();
+      if ((snapshot.state?.birthCertificate ?? null) === null) await agent.create();
+      await agent.message(jamInvitation(workspace, document));
+    });
+    return { agentPath };
   }
 
   /** Release the downstream OS session when Cap'n Web drops this project capability. */
