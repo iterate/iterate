@@ -158,8 +158,23 @@ is durable**.
 a bare `async function` and an `RpcTarget` subclass both work.
 
 How a client reaches one (`src/session.ts`):
-`UnauthenticatedSession.authenticate(credentials?)` (a no-op gate today) → `Session.projects`
+`UnauthenticatedSession.authenticate(credentials?)` → `Session.projects`
 → `ProjectCollection.get(projectId)` → the root `IterateContext`. Nothing here touches a DO.
+
+**Who** (`src/principal.ts`). `authenticate()` with no credentials is the ANONYMOUS session — the one
+intra-project code has always held; identity is attribution, not authority (the trusted-client
+doctrine). `authenticate({ projectToken })` verifies a PROJECT TOKEN — `{ projectId, actor, email?,
+expiresAt }` signed HMAC-SHA256 with `APP_CONFIG_PROJECT_TOKEN_SECRET` (the control plane's own
+session-cookie shape), minted by whoever fronts the users after their membership check — and
+answers a session that knows who it is: `session.whoami()` → `{ projectId, actor, email? }`, and
+`projects.get(id)` refuses any other project (`FORBIDDEN`). A token that does not verify is
+`INVALID_CREDENTIALS`, whatever is wrong with it. The principal rides every dispatch the session
+makes (`IterateContextDurableObject.invokeAs`, a DO-only Workers-RPC verb, or the `x-itx-principal`
+header on a terminal fetch), and the built-in append root stamps it as `source.principal` on every
+event — the DO's field: a client's own `source.principal` is overwritten, an anonymous session's is
+stripped, a loaded worker's `env.ITX` (the entrypoint stub) has no such door. The platform's own rows
+(a `provide`, a `subscribe`) carry it too. On a project host the same token becomes the host-scoped
+cookie through `/.itx/session` (section 10).
 
 ---
 
@@ -455,11 +470,32 @@ initializer is one line over the scope:
 | anything spelled as an event | `itx.append(event)`                     | its `null` event                                                                                                                            |
 
 **Fetch** (`src/fetch/rpc-stub-fetch.ts`, parked). A fetch-shaped capability is
-always called through a terminal `.fetch(request)`. Two doors: the plain-HTTP lane
+always called through a terminal `.fetch(request)`. Three doors: the plain-HTTP lane
 `/expression?context=<id>&itx=<expression>` (the worker copies the expression into
-`x-itx-expression`), and a terminal `.fetch` inside a session, which `invoke` forks onto the DO's
-fetch channel. Everything unusual in the file is fenced WORKAROUND for the day workerd and
-capnweb serialize sockets over plain RPC.
+`x-itx-expression`), a terminal `.fetch` inside a session, which `invoke` forks onto the DO's
+fetch channel, and the PROJECT HOST (below). Everything unusual in the file is fenced WORKAROUND for
+the day workerd and capnweb serialize sockets over plain RPC.
+
+**Project hosts** (`src/project-host.ts`, the pure half; `worker.ts`, the edge branch). A label is
+the address (`docs/plan-one-fetch-rules.md` D1): a request on `<label>--<projectId>.<base>` IS the
+app `itx.apps.<label>` of that project's root context, and the apex `<projectId>.<base>` is the label
+`default` (`itx.apps.default` — never a bare `itx.apps`, whose row would be a prefix of every label
+without a row of its own). The edge strips inbound `x-itx-*`, sets `x-itx-expression` to that
+spelling, and rides the Request VERBATIM into the fetch lane: the URL, host-scoped cookies and
+WebSocket upgrades survive, so a served page's relative links resolve on the same host. The app is
+one rule row (`provide("itx.apps.site", "itx.workers.get({ source })")`, a live stub, a facet) and the
+log never names a hostname; a label with no row is the lane's 404. `<base>` is
+`APP_CONFIG_PROJECT_HOSTNAME_BASE` (blank ⇒ no project-host ingress); the deployed base is
+`project-worker.iterate.com` (a wildcard DNS record and the route in wrangler.jsonc). Only a project
+id that is a DNS label is a host by convention; a pretty slug or a custom domain is a directory row,
+the control plane's, later. Everything on a project host is the app's; the platform's own doors stay
+on the worker's hostname. WHO, on a project host: `/.itx/session?token=<projectToken>&next=<path>`
+turns a token for THIS project into the host-scoped `itx-project-session` cookie (HttpOnly, Secure,
+SameSite=Lax, until the token expires) and redirects; `?logout` clears it. Every request carrying a
+valid cookie reaches the app with `x-itx-principal` (the JSON principal) and the lane's call runs under
+it; a visitor's own `x-itx-principal` is stripped with every inbound `x-itx-*`; a token for another
+project is a 401 at the door. Who logs in and mints the token is the control plane's; the platform
+only verifies.
 
 **Configuration** (`src/app-config.ts`). ONE typed object per isolate, parsed once from the
 `APP_CONFIG_*` wrangler vars (the apps/os shape, without its schema library) plus the version-metadata
@@ -493,7 +529,7 @@ files (the deployed-only ones run against the deployed worker).
 
 | Layer                    | Files (raw lines, comments included)                                                                                                                                |         Lines |
 | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------: |
-| the edge                 | `worker.ts` · `session.ts` · `iterate-context.ts` · `itx-entrypoint.ts`                                                                                             |           661 |
+| the edge                 | `worker.ts` · `session.ts` · `iterate-context.ts` · `itx-entrypoint.ts` · `project-host.ts`                                                                         |           697 |
 | the DO                   | `iterate-context-durable-object.ts`                                                                                                                                 |           694 |
 | expressions + dispatch   | `context/expression.ts` · `dispatch.ts` · `dotted-path-proxy.ts` · `invoke-handle.ts`                                                                               |           459 |
 | built-ins + loader       | `context/built-ins.ts` · `worker-loader.ts` · `durable-object-names.ts`                                                                                             |           542 |
@@ -622,6 +658,38 @@ LibraryRoots`, the resolver walks from the record with one built-in predicate, t
   `<label> <environmentName> <deployId>`.
 - **A root-applied non-callable is the coded `NOT_A_METHOD`**, like the dotted case (dispatch.ts): the
   delivery loop treats it as deterministic and halts an uncallable cursor target at the first failure.
+
+### Decided on 2026-09-06, done (project-host ingress — the assessment's Gap 1)
+
+- **A label is the address** (section 10, "Project hosts"; `src/project-host.ts` + the edge branch in
+  `worker.ts`): `<label>--<projectId>.<base>` serves `itx.apps.<label>` of the project's root context
+  with the Request verbatim; the apex is the label `default`. The DO is untouched — the fetch lane
+  already resolves the expression, appends the terminal `.fetch`, maps `NO_ITX_EXPRESSION_MATCH` to
+  404 and carries 101s. Deployed under `*.project-worker.iterate.com` (the wildcard DNS record, the
+  route, `APP_CONFIG_PROJECT_HOSTNAME_BASE`); the solo lane hangs its hosts under `localhost` and
+  reaches them with a Host header (`e2e/support/project-host.ts`). Proof:
+  `e2e/ingress-project-host.e2e.test.ts` — the page at `/w?repo=x` with the URL verbatim, its relative
+  `app.js` from the same host, a visitor's `x-itx-*` stripped, the apex, a 404 for a label without a
+  row, and (deployed) a WebSocket upgrade through the host.
+- Deferred with it, on purpose: a slug directory and custom domains (the control plane's rows), and
+  the `/api` door on a project host (an app proxies the project API itself if it wants same-origin).
+
+### Decided on 2026-09-06, done (identity — the assessment's Gap 2)
+
+- **The principal is an event `source`**, the platform's own field (`source.principal`, section 4
+  "Who"): set by the DO's append root from the session's verified project token, never taken from a
+  client. The two questions the assessment left open are answered minimally: a loaded worker's
+  `env.ITX` carries NO principal (it speaks for the project; the request's principal reaches the app
+  as `x-itx-principal` and the app attributes what it appends itself), and membership stays the
+  control plane's — the token names one project, minted after the check, so the worker calls no
+  directory. `authenticate()` bare stays anonymous: attribution, not authority.
+- Proofs: `e2e/session-identity.e2e.test.ts` (whoami; `source.principal` on a note and on the
+  session's own rule row; a forged one overwritten, an anonymous one stripped; `FORBIDDEN`;
+  `INVALID_CREDENTIALS` for a bad and an expired token) and the session-door test in
+  `e2e/ingress-project-host.e2e.test.ts` (the cookie, the header the app sees, a forged header
+  stripped, a foreign token's 401, logout). `src/principal.test.ts` is the token table.
+- Deferred: a machine lane (a born project credential — Gap 7), and a login page (the control
+  plane's).
 
 ### Open
 

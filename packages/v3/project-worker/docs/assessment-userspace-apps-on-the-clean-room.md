@@ -108,6 +108,12 @@ each is what the equivalent lane costs in `apps/os` today (section 8).
 
 ### Gap 1 — no project-host ingress: an app cannot be served at `/` on a hostname
 
+> **Closed 2026-09-06** by convention, no directory: `<label>--<projectId>.<base>` serves
+> `itx.apps.<label>` of the project's root context, the apex `<projectId>.<base>` the label `default`,
+> the Request verbatim through the fetch lane (`src/project-host.ts`, `worker.ts`; as-built §10
+> "Project hosts", §12). Deployed under `*.project-worker.iterate.com`. Still missing from this gap
+> as written: pretty slugs and custom domains (directory rows, the control plane's).
+
 **Docs needs:** `https://docs--<slug>.iterate.app/w?repo=…` reaches the app with the URL verbatim,
 relative asset links intact, cookies scoped to the host, WebSocket upgrades passing through.
 
@@ -134,6 +140,14 @@ RPC for slug and custom-domain resolution, plus a wildcard DNS + route on a real
 the TanStack app cannot load its own assets.
 
 ### Gap 2 — no identity: `authenticate()` is a no-op and nothing carries a user into a context
+
+> **Closed 2026-09-06**, minimally: `authenticate({ projectToken })` verifies a signed project token
+> (`src/principal.ts`; the control plane mints after its membership check), `session.whoami()` is the
+> principal, `projects.get` is bound to the token's project, and the DO stamps `source.principal` on
+> every event the session appends — its own field, a client's dropped. On a project host
+> `/.itx/session` turns the token into the cookie and the app sees `x-itx-principal` (as-built §4
+> "Who", §10, §12). Still open inside the gap as written: the login page and the born project
+> credential (the control plane's and Gap 7's).
 
 **Docs needs:** a member-only gate at ingress; a per-user session lane into the project API so the
 vessel (or the browser directly) acts as that person; `whoami` claims for the UI; every commit and

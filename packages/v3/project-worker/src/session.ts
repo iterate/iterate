@@ -17,6 +17,11 @@
 import { RpcTarget } from "capnweb";
 import { DurableObjectNameCodec } from "./context/durable-object-names.ts";
 import { IterateContext, type IterateContextNamespace, type WaitUntil } from "./iterate-context.ts";
+import { codedError } from "./lib/errors.ts";
+import { verifyProjectToken, type Principal } from "./principal.ts";
+
+/** What a session knows about its holder: the principal, bound to ONE project by the token. */
+export type SessionPrincipal = Principal & { projectId: string };
 
 /** WHAT THIS SESSION MUST UNDO AT ITS END — ONE entry per key: a lend relay (the session's copy of
  *  a client stub plus its pager socket, held so neither is GC'd) and anything else scoped to the
@@ -52,11 +57,26 @@ export class SessionTeardown {
  *  presence list). */
 export class UnauthenticatedSession extends RpcTarget {
   readonly #sessionTeardown = new SessionTeardown(); // held for the session so lent stubs + pager sockets aren't GC'd
-  readonly #session: Session;
+  readonly #contextNamespace: IterateContextNamespace;
+  readonly #waitUntil: WaitUntil;
+  readonly #projectTokenSecret: string;
+  readonly #anonymousSession: Session;
 
-  constructor(contextNamespace: IterateContextNamespace, ctx: ExecutionContext) {
+  constructor(
+    contextNamespace: IterateContextNamespace,
+    ctx: ExecutionContext,
+    projectTokenSecret: string,
+  ) {
     super();
-    this.#session = new Session(contextNamespace, this.#sessionTeardown, (p) => ctx.waitUntil(p));
+    this.#contextNamespace = contextNamespace;
+    this.#waitUntil = (p) => ctx.waitUntil(p);
+    this.#projectTokenSecret = projectTokenSecret;
+    this.#anonymousSession = new Session(
+      contextNamespace,
+      this.#sessionTeardown,
+      this.#waitUntil,
+      null,
+    );
   }
 
   [Symbol.dispose](): void {
@@ -64,11 +84,21 @@ export class UnauthenticatedSession extends RpcTarget {
   }
 
   /** THE introduction door (the `authenticate()` pattern: the only way to hold authority is to be
-   *  handed it by a gate that checked something). Deliberately a NO-OP today — this is where the
-   *  real credential check lands without changing any caller: clients already spell
-   *  `api.authenticate(credentials).projects.get(id)`. */
-  authenticate(_credentials?: unknown): Session {
-    return this.#session;
+   *  handed it by a gate that checked something). No credentials ⇒ the ANONYMOUS session — the one
+   *  intra-project code has always held (identity is attribution, not authority). A project token
+   *  (src/principal.ts, minted by whoever fronts the users) ⇒ a session that knows who it is,
+   *  bound to the token's one project; a token that does not verify is refused, coded, the same way
+   *  whatever is wrong with it. */
+  async authenticate(credentials?: { projectToken?: string }): Promise<Session> {
+    if (!credentials?.projectToken) return this.#anonymousSession;
+    const claims = await verifyProjectToken(credentials.projectToken, this.#projectTokenSecret);
+    if (!claims) throw codedError("INVALID_CREDENTIALS", "the project token did not verify");
+    const { projectId, actor, email } = claims;
+    return new Session(this.#contextNamespace, this.#sessionTeardown, this.#waitUntil, {
+      projectId,
+      actor,
+      ...(email && { email }),
+    });
   }
 }
 
@@ -76,14 +106,22 @@ export class UnauthenticatedSession extends RpcTarget {
  *  the directory you reach one through (apps/os: "a session is what authenticate() returns"). */
 class Session extends RpcTarget {
   readonly #projects: ProjectCollection;
+  readonly #principal: SessionPrincipal | null;
 
   constructor(
     contextNamespace: IterateContextNamespace,
     sessionTeardown: SessionTeardown,
     waitUntil: WaitUntil,
+    principal: SessionPrincipal | null,
   ) {
     super();
-    this.#projects = new ProjectCollection(contextNamespace, sessionTeardown, waitUntil);
+    this.#principal = principal;
+    this.#projects = new ProjectCollection(contextNamespace, sessionTeardown, waitUntil, principal);
+  }
+
+  /** Who this session is: the token's principal and its project, or null for the anonymous one. */
+  whoami(): SessionPrincipal | null {
+    return this.#principal;
   }
 
   /** The project catalog. A GETTER, not a field: capnweb (like Workers RPC) exposes prototype
@@ -99,31 +137,42 @@ class ProjectCollection extends RpcTarget {
   readonly #contextNamespace: IterateContextNamespace;
   readonly #sessionTeardown: SessionTeardown;
   readonly #waitUntil: WaitUntil;
+  readonly #principal: SessionPrincipal | null;
 
   constructor(
     contextNamespace: IterateContextNamespace,
     sessionTeardown: SessionTeardown,
     waitUntil: WaitUntil,
+    principal: SessionPrincipal | null,
   ) {
     super();
     this.#contextNamespace = contextNamespace;
     this.#sessionTeardown = sessionTeardown;
     this.#waitUntil = waitUntil;
+    this.#principal = principal;
   }
 
   /** The project's root context ("/") — pure addressing, no DO is reached. A project ID only — a
-   *  context name belongs to `cd`. */
+   *  context name belongs to `cd`. A session with a principal holds the token's ONE project; any
+   *  other is refused, coded. */
   get(projectId: string): IterateContext {
     const address = DurableObjectNameCodec.parse(projectId);
     if (address.path !== "/")
       throw new Error(
         `projects.get(projectId): got a context name ${JSON.stringify(projectId)} — pass the project id and cd(path) from its root`,
       );
+    if (this.#principal && this.#principal.projectId !== address.projectId)
+      throw codedError(
+        "FORBIDDEN",
+        `projects.get(${JSON.stringify(projectId)}): this session's token names project ${JSON.stringify(this.#principal.projectId)}`,
+      );
+    const { projectId: _boundProject, ...principal } = this.#principal ?? { projectId: "" };
     return new IterateContext(
       this.#contextNamespace,
       address,
       this.#sessionTeardown,
       this.#waitUntil,
+      this.#principal ? (principal as Principal) : null,
     );
   }
 }

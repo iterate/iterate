@@ -3469,3 +3469,91 @@ exists as a probe (its harness lane went in the test-hygiene sweep). The 300-rul
   (gone); big appends 6/8 committed under the full suite (floor 7; alone: green, twice alone); live-state the
   reorder above. Both rows are d3's; the worker is d3's next.
 - LOC: 3 files changed, 27 insertions(+), 20 deletions(-) (source +/− before this entry); expression.ts 143 → 144 code lines.
+
+## 2026-09-06 — project-host ingress: a label is the address (the assessment's Gap 1, closed by convention)
+
+- WHAT: an app is served at `/` on a hostname. `<label>--<projectId>.<base>` IS the app
+  `itx.apps.<label>` of that project's root context; the apex `<projectId>.<base>` is the label
+  `default` (`itx.apps.default`). The edge (worker.ts) strips inbound `x-itx-*`, sets
+  `x-itx-expression` to that spelling and rides the Request VERBATIM into the fetch lane the DO
+  already has — so the URL, host-scoped cookies and WebSocket upgrades survive and a served page's
+  relative links resolve on the same host. The DO is untouched: the lane resolves the expression,
+  appends the terminal `.fetch`, maps `NO_ITX_EXPRESSION_MATCH` to 404 and carries 101s. The app is one
+  rule row and the log never names a hostname (docs/plan-one-fetch-rules.md D1, as-built §10 "Project
+  hosts", §12).
+- DECIDED on the way: the apex is the LABEL `default`, never a bare `itx.apps` row — a row at the bare
+  prefix is a prefix of every label without a row of its own, and the first local run showed exactly
+  that: `other--<id>` fell into the apex app as `<apex>.other.fetch(…)`, a 500 ("a WorkerEntrypoint
+  exposes flat methods") instead of the 404. With `default` every host is exactly one row. And: only a
+  project id that is a DNS label is a host by convention; a pretty slug or a custom domain is a
+  directory row (the control plane's, later); everything on a project host is the app's — `/api`,
+  `/expression`, `/version` stay on the worker's hostname (an app proxies the project API itself if
+  it wants same-origin).
+- THE PIECES: `src/project-host.ts` (18 code lines, the pure half: `projectHostOf(hostname, base)`)
+  with a 15-row `{ hostname, base, becomes }` table (`project-host.test.ts`); the edge branch in
+  `worker.ts` (+16); the config row `APP_CONFIG_PROJECT_HOSTNAME_BASE` (blank ⇒ no ingress, the
+  workers lane; `localhost` in the solo lane; `project-worker.iterate.com` deployed); wrangler.jsonc's
+  route `*.project-worker.iterate.com/*` (zone iterate.com) and the wildcard DNS record
+  (`*.project-worker.iterate.com` AAAA `100::`, proxied, originless — created through the zone's API
+  with the os deploy token, the same shape `scripts/lib/deploy-helpers.ts` writes); the lane's 404
+  now carries the message alone (a project host makes the lane public; a visitor's "no such app" gets
+  no stack — 500s keep theirs). `e2e/support/project-host.ts`: Node's fetch refuses a Host override
+  and `*.localhost` does not resolve on macOS, so the local lane speaks raw node:http with the Host
+  header; deployed, the wildcard DNS is real and plain fetch does — one test runs both ways.
+- PROOF (`e2e/ingress-project-host.e2e.test.ts`): the page at `/w?repo=x` answers with the URL it was
+  asked for; its relative `app.js` loads from the same host; a visitor's `x-itx-expression: itx.kv` and
+  `x-itx-visitor` never reach the app; the apex serves through one more row; `other--<id>` is a 404;
+  deployed only, a WebSocket upgrade on `wss://site--<id>.project-worker.iterate.com/ws` echoes
+  through the app. Local 1p/1sk · deployed 2/2 on f9422c24 (the second, after the 404 trim: 2/2 on e415e0f6, the redeploy with the trimmed 404).
+- BOARD: tsc×3 · oxlint 0/0 · unit+workers 447p/13xf (39 files; the new table, and d3's concurrent-
+  reader red pin `76e7baa70`) · DEPLOYED as f9422c24 (`pnpm run deploy`, upload 766 KiB, startup 6 ms,
+  the route created with it; `/version` = `live-48 poc f9422c24-…`) · deployed e2e 181p/0f/2xf/9sk on 47 files (6 min) with ONE file failing at setup — `stream-uncontrolled-degradation`, "Durable Object reset because its code was updated": the DO half of this very deploy landing mid-run (the known lag); re-run alone against e415e0f6: 5p/2xf, the two by-design resets
+- LOC: the pure half 34 lines (18 code) + its 15-row table; the edge branch +16 in worker.ts; e2e support 70 lines, the proof 102 (before the identity door was added to it); docs +~50 across the as-built, the assessment and the brief. The combined +/− with the identity entry below.
+
+## 2026-09-06 — identity: a project token, the principal on every append (the assessment's Gap 2, closed minimally)
+
+- WHAT: `authenticate({ projectToken })` verifies a signed project token — `{ projectId, actor,
+  email?, expiresAt }`, HMAC-SHA256 with `APP_CONFIG_PROJECT_TOKEN_SECRET`, the control plane's own
+  session-cookie shape (`src/principal.ts`, 10-row table test) — and answers a session that knows
+  who it is: `session.whoami()`, `projects.get` bound to the token's one project (`FORBIDDEN`
+  otherwise), a token that does not verify `INVALID_CREDENTIALS` whatever is wrong with it. Bare
+  `authenticate()` stays the anonymous session intra-project code has always held: identity is
+  ATTRIBUTION, not authority (the trusted-client doctrine). The principal rides every dispatch the
+  session makes — `IterateContextDurableObject.invokeAs(principal, call, …)`, a DO-only Workers-RPC
+  verb run under an `AsyncLocalStorage`, or the `x-itx-principal` header on a terminal fetch — and the
+  built-in append root stamps `source.principal` on every event: the DO's field, a client's own
+  overwritten, an anonymous session's stripped, and a loaded worker's `env.ITX` (the entrypoint stub,
+  which strips the header on its way in) has no door to it. The platform's own rows carry it too.
+  On a project host, `/.itx/session?token=&next=` turns the token into the host-scoped cookie and
+  every request with it reaches the app as `x-itx-principal` (ingress verifies; a foreign project's
+  token is a 401; `?logout` clears).
+- THE TWO QUESTIONS the assessment left open, answered minimally: the principal IS an event `source`
+  (never `metadata`, which is the client's); a loaded worker's `env.ITX` carries NO principal — the
+  app reads `x-itx-principal` and attributes what it appends itself. Membership stays the control
+  plane's: the token is minted after the check, so the worker calls no directory. Deferred: the login
+  page (the control plane's) and the machine credential (Gap 7).
+- THE PIECES: `src/principal.ts` (sign/verify/stamp, 86 code lines), `session.ts`
+  (the door, `Session.whoami`, the project bound), `iterate-context.ts` (`#principal`, ONE
+  `#invokeOnDurableObject`), the DO (`invokeAs`, the lane's header), `context/built-ins.ts` (the
+  stamp at the append root, a `principal` dep), `worker.ts` (the cookie check, the session door, the
+  `/expression` strip), `itx-entrypoint.ts` (the strip), `stream/events.ts` (one optional field on
+  `source`, by agreement with d3), `lib/errors.ts` (two codes), the config row (a wrangler SECRET on
+  the deployment — kept in `~/.config/iterate/project-worker-poc.env`, never in the tree; the solo
+  lane's is a var), `e2e/support/principal.ts` (mints with the lane's secret).
+- PROOFS: `e2e/session-identity.e2e.test.ts` and the session-door test in
+  `e2e/ingress-project-host.e2e.test.ts` — local identity 1/1, ingress 2p/1sk (the WebSocket half is deployed-only) · deployed 4/4 on 19cbb4bb (the identity proof; the ingress trio — the page, the session door, the WebSocket through the host — with `PROJECT_TOKEN_SECRET` in the run's env).
+- BOARD: tsc×3 · oxlint 0/0 · unit+workers 457p/13xf (the token table, the host table, the config rows) · DEPLOYED as 19cbb4bb (`pnpm run deploy` after `wrangler secret put APP_CONFIG_PROJECT_TOKEN_SECRET`; upload 774 KiB, startup 8 ms; `/version` = `live-48 poc 19cbb4bb-…`) · deployed e2e
+  188p/0f/4xf/2sk on 47 files (14 min), exit 0 — the whole board green bar the four by-design expected fails
+- LOC: both entries together: +354/−38 over 15 tracked files (the generated SDK bundle among them — the envelope type moved) plus eight new files — `principal.ts` 112 lines (86 code) and its 55-line table, `project-host.ts` 55 (29) and its 51-line table, e2e support 70 + 24, the two proofs 145 + 47 — and the 245-line brief for Misha (`docs/brief-for-misha-2026-09-06.md`, its own entry below).
+
+## 2026-09-06 — the brief for Misha (`docs/brief-for-misha-2026-09-06.md`)
+
+- WHAT: the two-page read before the conversation the 2026-09-04 jam prepared — the kernel in five
+  sentences, the seven axioms with their itx spelling and the "could it be userspace?" litmus test,
+  the jam's decisions as a table (decision · why · where it lives), nine things that work today each
+  naming the e2e file that proves it, a table of measured numbers only, what is open (the surface's
+  own list, the assessment's eight gaps with two now closed, the review round's menu), and eight
+  questions for Misha plus one about the `@` marker's cost. Written from the as-built doc, the
+  assessment, this log's 2026-09-04/06 entries and the jam notes; every claim cites its source and
+  nothing is presented as decided that a source does not record. Its Gap 1/Gap 2 rows and the
+  ingress/identity questions were updated once those landed (the two entries above).

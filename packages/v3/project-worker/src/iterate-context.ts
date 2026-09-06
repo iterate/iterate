@@ -53,6 +53,7 @@ import { ITX_EXPRESSION_FETCH_HEADER } from "./fetch/rpc-stub-fetch.ts";
 import {
   canonicalItxExpressionPrefix,
   toItxExpression,
+  type ItxExpression,
   type ItxExpressionInput,
 } from "./context/expression.ts";
 import {
@@ -73,6 +74,7 @@ import {
   type IterateContextDurableObjectStub,
 } from "./context/rpc-stub-relay.ts";
 import type { SessionTeardown } from "./session.ts";
+import { ITX_PRINCIPAL_HEADER, type Principal } from "./principal.ts";
 import type { StreamEvent, StreamEventInput } from "./stream/events.ts";
 import { subscriptionConfiguredEvent } from "./stream/subscriptions.ts";
 
@@ -128,12 +130,17 @@ export class IterateContext extends RpcTarget {
   readonly #durableObject: IterateContextDurableObjectStub;
   readonly #sessionTeardown: SessionTeardown;
   readonly #waitUntil: WaitUntil;
+  /** WHO holds this context: the session's verified principal (session.ts), or null for the
+   *  anonymous session, a loaded worker's `env.ITX`. Every dispatch runs under it (`invokeAs`, the
+   *  fetch fork's header), so every event it appends carries `source.principal`. */
+  readonly #principal: Principal | null;
 
   constructor(
     contextNamespace: IterateContextNamespace,
     durableObjectAddress: DurableObjectAddress,
     sessionTeardown: SessionTeardown,
     waitUntil: WaitUntil,
+    principal: Principal | null = null,
   ) {
     super();
     this.#contextNamespace = contextNamespace;
@@ -141,6 +148,16 @@ export class IterateContext extends RpcTarget {
     this.#durableObject = contextNamespace.getByName(durableObjectAddress.name);
     this.#sessionTeardown = sessionTeardown;
     this.#waitUntil = waitUntil;
+    this.#principal = principal;
+  }
+
+  /** Dispatch on the DO under this context's principal — the one place the edge chooses the door. */
+  #invokeOnDurableObject(itxExpression: ItxExpression, args: unknown[] = []): Promise<unknown> {
+    return (
+      this.#principal
+        ? this.#durableObject.invokeAs(this.#principal, itxExpression, ...args)
+        : this.#durableObject.invoke(itxExpression, ...args)
+    ) as Promise<unknown>;
   }
 
   /** Another context of THIS project. Absolute by convention (`cd("/agents/support")`); relative
@@ -159,6 +176,7 @@ export class IterateContext extends RpcTarget {
       durableObjectAddress,
       this.#sessionTeardown,
       this.#waitUntil,
+      this.#principal,
     );
   }
 
@@ -188,9 +206,11 @@ export class IterateContext extends RpcTarget {
     ) {
       const headers = new Headers(last[1].headers);
       headers.set(ITX_EXPRESSION_FETCH_HEADER, JSON.stringify(itxExpression.slice(0, -1))); // the lane parses a JSON ItxExpression
+      headers.delete(ITX_PRINCIPAL_HEADER); // the stamp is this session's, never the Request's own
+      if (this.#principal) headers.set(ITX_PRINCIPAL_HEADER, JSON.stringify(this.#principal));
       return this.#durableObject.fetch(new Request(last[1], { headers }));
     }
-    return this.#durableObject.invoke(itxExpression, ...args) as Promise<unknown>;
+    return this.#invokeOnDurableObject(itxExpression, args);
   }
 
   // ── THE ONE FRONT DOOR: make `match` mean `target` — (a) a lent rpc stub or (b) a pure rewrite ──
@@ -354,7 +374,7 @@ export class IterateContext extends RpcTarget {
   #append(event: StreamEventInput): Promise<unknown> {
     // THE PLATFORM NEVER SPELLS A SHORT NAME: `itx.builtins.append` is the fixed point — a context's
     // own rows (a whole-context override, a mask at `itx.append`) redirect the user's calls, never this.
-    return this.#durableObject.invoke(["itx", "builtins", ["append", event]]) as Promise<unknown>;
+    return this.#invokeOnDurableObject(["itx", "builtins", ["append", event]]);
   }
 
   /** An undo's REMOVAL of a rule: un-set ONLY the row this handle wrote (its target still

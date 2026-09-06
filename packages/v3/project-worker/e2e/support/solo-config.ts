@@ -25,7 +25,14 @@ export function soloWorkerConfig(): Unstable_RawConfig {
     services: [
       { binding: "FALLBACK", service: String(rawConfig.name), entrypoint: "DummyControlPlane" },
     ],
-    // Configuration (src/app-config.ts): the e2e lane is its own deployment name.
-    vars: { ...rawConfig.vars, APP_CONFIG_ENVIRONMENT_NAME: "solo" },
+    // Configuration (src/app-config.ts): the e2e lane is its own deployment name, and its project
+    // hosts hang under `localhost` (support/project-host.ts reaches them with a Host header).
+    vars: {
+      ...rawConfig.vars,
+      APP_CONFIG_ENVIRONMENT_NAME: "solo",
+      APP_CONFIG_PROJECT_HOSTNAME_BASE: "localhost",
+      // Identity (src/principal.ts): the solo lane's token secret, the one e2e/support/principal.ts mints with.
+      APP_CONFIG_PROJECT_TOKEN_SECRET: "solo-project-token-secret",
+    },
   };
 }

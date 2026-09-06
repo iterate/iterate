@@ -23,6 +23,7 @@
 // `workers.get({ source }).run`).
 
 import type { ReachableContext, StreamPage, WaitForEventFilter } from "../stream/stream.ts";
+import { stampPrincipal, type Principal } from "../principal.ts";
 import type { StreamEvent, StreamEventInput } from "../stream/events.ts";
 import type { LibraryRoots } from "../library/index.ts";
 import {
@@ -218,6 +219,9 @@ interface BuildBuiltInsDeps {
   context: (path: string) => ReachableContext;
   /** The context's egress terminal (secret substitution → FALLBACK). */
   egress: (request: Request) => Promise<Response>;
+  /** WHO is calling right now — the principal the DO runs this call under (`invokeAs`, the fetch
+   *  lane's header), null for an anonymous session, a processor, a loaded worker. */
+  principal: () => Principal | null;
   /** The rpcStubs view — PARENT-LOCAL closures over the context's transport table (the pager
    *  sockets live in the DO and can never move). */
   rpcStubs: BuiltInScope["rpcStubs"];
@@ -314,7 +318,10 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
     // The binding object itself — dispatch walks its methods (`run`, `models`, `gateway`, …).
     ai: env.AI,
     // Own-enumerable closures (NOT prototype methods) — the resolver's `Object.hasOwn` gate is why.
-    append: (...e: StreamEventInput[]) => ownContext().append(...e),
+    // Every event appended through the scope carries WHO appended it — the DO's own stamp, never a
+    // client's (src/principal.ts): the session's verified principal, or none.
+    append: (...e: StreamEventInput[]) =>
+      ownContext().append(...e.map((event) => stampPrincipal(event, deps.principal()))),
     readEvents: (afterOffset?: number, limit?: number) => ownContext().read(afterOffset, limit),
     waitForEvent: deps.waitForEvent,
     // `cd` routes EVERY call through the target context's own table — a sibling's rows apply, its

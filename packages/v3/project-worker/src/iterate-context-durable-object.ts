@@ -40,6 +40,7 @@
 // pager closed (onPresence); the ONE effect it runs off a committed event is deleting the facet a
 // removed subscription hosted.
 
+import { AsyncLocalStorage } from "node:async_hooks";
 import { DurableObject } from "cloudflare:workers";
 import { substituteHeaderSecrets } from "@v3/shared/egress";
 import {
@@ -96,6 +97,7 @@ import {
 } from "./context/itx-expression-rewriting.ts";
 import { BUILT_IN_ROOTS } from "./context/built-in-roots.ts";
 import { subscriptionConfiguredEvent } from "./stream/subscriptions.ts";
+import { ITX_PRINCIPAL_HEADER, type Principal } from "./principal.ts";
 import {
   buildBuiltIns,
   type RewriteRuleListEntry,
@@ -385,6 +387,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
             }),
           ),
     egress: (request) => this.#egress(request),
+    principal: () => this.#principalStorage.getStore() ?? null,
     // THE LIVE-STUB REGISTRY, DO half: `get(key)` is the transport's pipelinable handle (a GENUINE
     // RpcTarget so `itx.rpcStubs.get('k').hello()` pipelines the mid-chain `.hello()` on every lane
     // — workerd's classifier rejects a Proxy, #6873), branded RpcStubHandle for the delivery loop.
@@ -732,6 +735,20 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     return this.#itxExpressionResolver.invoke(call, ...args);
   }
 
+  /** WHO IS CALLING, for the duration of one call: the edge's `IterateContext` of a session that
+   *  authenticated with a project token dispatches through here, and every append the call makes
+   *  carries `source.principal` (the built-in append root reads the store). A DO-only Workers-RPC
+   *  verb — a loaded worker's `env.ITX` is the entrypoint stub, which has no such door — so the
+   *  stamp is the platform's and a client cannot forge it. */
+  async invokeAs(
+    principal: Principal,
+    call: ItxExpressionInput,
+    ...args: unknown[]
+  ): Promise<unknown> {
+    return this.#principalStorage.run(principal, () => this.invoke(call, ...args));
+  }
+  readonly #principalStorage = new AsyncLocalStorage<Principal>();
+
   // ── native fetch: the rpc-stub pager door, the fetch lane, egress ──
 
   async fetch(request: Request): Promise<Response> {
@@ -756,16 +773,28 @@ export class IterateContextDurableObject extends DurableObject<Env> {
           : parse(itxExpressionHeader);
         const headers = new Headers(request.headers);
         headers.delete(ITX_EXPRESSION_FETCH_HEADER);
-        const result = await this.#itxExpressionResolver.invoke(
-          itxExpressionEndingInFetch(itxExpression),
-          new Request(request, { headers }),
-        );
+        // The edge's stamp (ingress after the cookie check, a session's terminal fetch): the call runs
+        // under that principal, and the header stays on the Request the app receives.
+        const principal = JSON.parse(
+          headers.get(ITX_PRINCIPAL_HEADER) ?? "null",
+        ) as Principal | null;
+        const forwarded = new Request(request, { headers });
+        const invoke = () =>
+          this.#itxExpressionResolver.invoke(itxExpressionEndingInFetch(itxExpression), forwarded);
+        const result = await (principal ? this.#principalStorage.run(principal, invoke) : invoke());
         return result instanceof Response
           ? result
           : new Response(`fetch lane: ${JSON.stringify(result)}\n`);
       } catch (error) {
-        const message = error instanceof Error ? (error.stack ?? error.message) : String(error);
+        // Default-deny is a 404 with the message alone — a project host makes this lane public, and a
+        // visitor's "no such app" carries no stack; anything else is a 500 with the stack for the log.
         const status = errorCode(error) === "NO_ITX_EXPRESSION_MATCH" ? 404 : 500;
+        const message =
+          error instanceof Error
+            ? status === 404
+              ? error.message
+              : (error.stack ?? error.message)
+            : String(error);
         return new Response(`fetch lane error: ${message}\n`, { status });
       }
     }

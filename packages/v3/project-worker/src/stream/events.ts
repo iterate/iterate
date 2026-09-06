@@ -16,13 +16,16 @@ export type StreamEventInput = {
   type: string;
   payload?: Record<string, unknown>;
   metadata?: Record<string, unknown>;
-  /** Provenance: which processor (while processing what) appended this. Stamped by the engine's `append`. */
+  /** Provenance: which processor (while processing what) appended this — stamped by the engine's
+   *  `append` — and WHO: the session's verified principal (src/principal.ts), set by the DO's append
+   *  root from the session's project token and never taken from a client. */
   source?: {
     processor?: {
       slug: string;
       version: string;
       whileProcessing?: { offset: number; type: string };
     };
+    principal?: { actor: string; email?: string };
   };
   /** Same key + same body = dedupe (the existing event is returned); different body = loud error. */
   idempotencyKey?: string;

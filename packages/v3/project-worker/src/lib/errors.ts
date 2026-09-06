@@ -18,6 +18,8 @@ type ErrorCode =
   | "REDUCE_CHECKPOINT_TOO_LARGE" // a reduce's state would not fit one storage cell (reduce-checkpoint.ts)
   | "EVENT_UNREADABLE" // a stored row's body is not JSON — `data.offset` names it (stream.ts read)
   | "STREAM_PAUSED"
+  | "INVALID_CREDENTIALS" // authenticate(): the project token did not verify (bad signature, expired, no secret)
+  | "FORBIDDEN" // projects.get(id): the session's project token names another project
   | "RPC_STUB_OFFLINE" // the rpc stub a row names is neither borrowed nor pager-backed right now — or its lend ended mid-call (recalled, returned, broken; the relay re-codes)
   | "NOT_A_METHOD" // the dotted path's terminal segment is not callable on the target
   | "NO_FACET" // no facet of that name has been loaded into this context

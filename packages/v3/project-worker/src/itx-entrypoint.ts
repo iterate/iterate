@@ -14,6 +14,7 @@ import { IterateContext } from "./iterate-context.ts";
 import { SessionTeardown } from "./session.ts";
 import { DurableObjectNameCodec } from "./context/durable-object-names.ts";
 import type { Env } from "./iterate-context-durable-object.ts";
+import { ITX_PRINCIPAL_HEADER } from "./principal.ts";
 
 export class ItxEntrypoint extends WorkerEntrypoint<Env, { iterateContextName: string }> {
   /** THE handoff: the genuine itx scope — the SAME `IterateContext` RpcTarget a capnweb client gets
@@ -41,7 +42,13 @@ export class ItxEntrypoint extends WorkerEntrypoint<Env, { iterateContextName: s
    *  the edge's terminal-fetch fork would overwrite a lane header the loaded worker already set.
    *  This method exists because Cloudflare calls `fetch` on the globalOutbound binding. */
   override fetch(request: Request): Promise<Response> {
-    return this.env.ITERATE_CONTEXT.getByName(this.ctx.props.iterateContextName).fetch(request);
+    // A loaded worker speaks for the project, never for a person: the principal header is the
+    // edge's stamp (worker.ts, iterate-context.ts), stripped here so loaded code cannot forge one.
+    const headers = new Headers(request.headers);
+    headers.delete(ITX_PRINCIPAL_HEADER);
+    return this.env.ITERATE_CONTEXT.getByName(this.ctx.props.iterateContextName).fetch(
+      new Request(request, { headers }),
+    );
   }
 }
 

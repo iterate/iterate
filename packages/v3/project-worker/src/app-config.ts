@@ -95,6 +95,16 @@ export const APP_CONFIG_VAR_ROWS = {
     parse: appConfigVarParsers.string,
     required: true,
   },
+  projectHostnameBase: {
+    name: "APP_CONFIG_PROJECT_HOSTNAME_BASE",
+    parse: appConfigVarParsers.string,
+    default: "",
+  },
+  projectTokenSecret: {
+    name: "APP_CONFIG_PROJECT_TOKEN_SECRET",
+    parse: appConfigVarParsers.string,
+    default: "",
+  },
 } as const satisfies Record<string, AppConfigVarRow<unknown>>;
 
 /** The project worker's configuration — the rows above, plus the deploy identity. */
@@ -102,6 +112,14 @@ export interface AppConfig {
   /** Which deployment this is, as a word a human reads at `/version`: "poc" (workers.dev), "test"
    *  (the workers lane), "solo" (the e2e lane). `APP_CONFIG_ENVIRONMENT_NAME`. */
   readonly environmentName: string;
+  /** The base every project host hangs under — `<label>--<projectId>.<base>` is the app
+   *  `itx.apps.<label>` of that project (project-host.ts); blank ⇒ no project-host ingress (the
+   *  workers lane). `APP_CONFIG_PROJECT_HOSTNAME_BASE`. */
+  readonly projectHostnameBase: string;
+  /** The HMAC secret project tokens are signed with (src/principal.ts) — a wrangler SECRET on a
+   *  deployment, a var in the solo lane; blank ⇒ no token verifies, sessions stay anonymous.
+   *  `APP_CONFIG_PROJECT_TOKEN_SECRET`. */
+  readonly projectTokenSecret: string;
   /** Cloudflare's version id of the running deployment (`CF_VERSION_METADATA.id`; local workerd
    *  mints one too); "unversioned" where the binding is absent or blank. In every loader cacheKey
    *  and at `/version`. */

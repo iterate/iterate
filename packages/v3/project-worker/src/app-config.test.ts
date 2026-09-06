@@ -53,13 +53,25 @@ describe("parseAppConfigVars — the engine", () => {
 
 describe("parseAppConfig — this worker's table", () => {
   test("the table has exactly the rows the worker reads", () => {
-    expect(Object.keys(APP_CONFIG_VAR_ROWS)).toEqual(["environmentName"]);
+    expect(Object.keys(APP_CONFIG_VAR_ROWS)).toEqual([
+      "environmentName",
+      "projectHostnameBase",
+      "projectTokenSecret",
+    ]);
   });
   test("a deployment's config: the environment name from its var, the deploy id handed in", () => {
     expect(parseAppConfig({ APP_CONFIG_ENVIRONMENT_NAME: "poc" }, "v-123")).toEqual({
       environmentName: "poc",
+      projectHostnameBase: "",
+      projectTokenSecret: "",
       deployId: "v-123",
     });
+    expect(
+      parseAppConfig(
+        { APP_CONFIG_ENVIRONMENT_NAME: "poc", APP_CONFIG_PROJECT_HOSTNAME_BASE: "iterate.app" },
+        "v-123",
+      ).projectHostnameBase,
+    ).toBe("iterate.app");
   });
   test("no deploy id ⇒ unversioned; no environment name ⇒ refused by name", () => {
     expect(parseAppConfig({ APP_CONFIG_ENVIRONMENT_NAME: "solo" }).deployId).toBe("unversioned");
@@ -72,9 +84,18 @@ describe("appConfigOf — once per env object", () => {
     const deployed = { APP_CONFIG_ENVIRONMENT_NAME: "poc", CF_VERSION_METADATA: { id: "v-9" } };
     const local = { APP_CONFIG_ENVIRONMENT_NAME: "test", CF_VERSION_METADATA: { id: "" } };
     const bare = { APP_CONFIG_ENVIRONMENT_NAME: "solo" };
-    expect(appConfigOf(deployed)).toEqual({ environmentName: "poc", deployId: "v-9" });
-    expect(appConfigOf(local)).toEqual({ environmentName: "test", deployId: "unversioned" });
-    expect(appConfigOf(bare)).toEqual({ environmentName: "solo", deployId: "unversioned" });
+    const noBase = { projectHostnameBase: "", projectTokenSecret: "" };
+    expect(appConfigOf(deployed)).toEqual({ environmentName: "poc", ...noBase, deployId: "v-9" });
+    expect(appConfigOf(local)).toEqual({
+      environmentName: "test",
+      ...noBase,
+      deployId: "unversioned",
+    });
+    expect(appConfigOf(bare)).toEqual({
+      environmentName: "solo",
+      ...noBase,
+      deployId: "unversioned",
+    });
     expect(appConfigOf(deployed)).toBe(appConfigOf(deployed)); // the same object, parsed once
     expect(appConfigOf(deployed)).not.toBe(appConfigOf(local));
   });
