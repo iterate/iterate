@@ -3013,6 +3013,34 @@ SQLITE_TOOBIG` used to cross the hop from inside the write. Local workerd (4 MiB
   the repo (oxfmt formats md and html too, not just JS/TS). All reverted (mine + peer's sweep). ONLY
   ever `oxfmt <specific files>` in this shared worktree, never repo-wide.
 
+### 2026-09-07 — the large-ephemeral fan-out reset: a FINDING (not cleanly DO-fixable), two hygiene bounds landed
+
+- The second of the two by-design resets: 30 × 7 MiB ephemerals fanned out to N facets resets the
+  parent DO. Two DO-side attempts landed but did NOT close it:
+  - live-50 (ef7c1c883): delivery budgets 16 → 8 MiB (in-flight + pending-total). More conservative;
+    a FACET push is a loopback RPC (~2× the charged chars in flight). Did not close it alone.
+  - live-51 (4147f60fc): `#catchUpFacetRow` classifies a facet as a push row at materialize/resume,
+    so onCommit never retains its batch in `#pushedEventBatches` (the cursor-lane path — one batch
+    per row, latest-wins, UNBOUNDED by the delivery budgets; a burst to freshly-enabled facets pinned
+    10 × 7 MiB there). A real latent-OOM fix on its own. Still did not close the fan-out.
+- DEPLOYED DIAGNOSIS (the useful result): 30 × 7 MiB to 0 facets is ABSORBED (workerd paces the arg
+  deserialization — the raw args are not the term); even 3 facets RESET (not facet-count-linear); and
+  bounding parent-side delivery does not help. So the dominant term is OUTSIDE the parent's delivery
+  accounting: a facet is a same-worker facet that SHARES the parent's 128 MiB isolate
+  ([[reference_do_isolate_memory_ceiling_facts]]), so each pushed 7 MiB event deserializes INTO the
+  facet's context in the shared isolate, plus the loaded facet script's base memory — memory the
+  parent's JS cannot bound. The fan-out also pins arg payloads (delivery holds the events), defeating
+  workerd's pacing that absorbs the 0-facet case.
+- LEVERS LEFT (platform-shaped, need a decision — reported to Jonas via simplification-52): a
+  facet-push gate that serialises to one AND waits on the facet's own turn; a smaller ephemeral
+  ceiling for fan-out; or accept it as a client-behaviour limit per the trusted-client doctrine
+  ([[feedback_trusted_clients_radical_simplicity]] — 30 concurrent 7 MiB ephemerals to N co-located
+  facets is an extreme burst; the per-event 8 MiB ceiling is the defence).
+- The pin stays RED (`deployed.fails`) with this diagnosis in its comment. RECOVERY was repointed to
+  the fan-out (concurrent readers no longer reset) and made SERVICEABILITY-based (e5a187d13) — the
+  fan-out reset is probabilistic, so asserting a reset occurred flaked; it now asserts the ctx is
+  serviceable after the burst whether or not this run reset. Degradation file stable at 6p/1xf.
+
 ## 2026-09-04 — the DO owns both ends of a lent stub's rule: the pager upgrade carries the rule, one round trip
 
 - WHY: a `provide(match, stub)` / `subscribe({ target: fn })` cost THREE edge→DO round trips — the
