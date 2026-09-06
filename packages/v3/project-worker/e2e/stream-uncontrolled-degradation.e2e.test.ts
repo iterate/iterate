@@ -24,8 +24,8 @@
 // WHAT WAS OBSERVED (deployed, live-43, 2026-09-04). Every reset arrives as
 // `Durable Object's isolate exceeded its memory limit and was reset.` with `.overloaded` +
 // `.durableObjectReset` stamped, and the ctx recovers on the very next call (the log is durable):
-//   • RED  concurrent readers      — 24 sessions paging one 144 MiB log at once STILL reset the DO: the read
-//              LEVEL bounds pages ISSUED, not the replies queued in workerd's outbound buffer (a reply-queue bound is the remaining piece);
+//   • FIXED concurrent readers     — (live-49) 24 sessions paging one 144 MiB log at once now all reach head, no reset:
+//              the metered `read` door AWAITS room under the 16 MiB outstanding ceiling instead of materializing 24 pages at once;
 //   • edge slow live client        — a stalled subscriber's pushes are DROPPED past the DO in-flight budget; the producer floods on, no reset;
 //   • RED  large ephemeral fan-out  — 30 × 7 MiB ephemerals STILL reset the parent: the reset is APPEND INGRESS
 //              (~210 MiB of pipelined append args), which the delivery ledger does not bound — append-side admission is the fix (menu);
@@ -119,24 +119,25 @@ beforeAll(async () => {
 
 // ─────────────────────────────── RED: the reproducible resets ───────────────────────────────
 
-// STILL RED on 7474bb76 despite the read LEVEL (READ_OUTSTANDING_BUDGET_BYTES): the level bounds the
-// page bytes ISSUED and not yet proven-received, so ONE reader paging a huge log is bounded, but 24
-// at once reset the DO — each page's REPLY leaves the isolate for workerd's outbound queue, which
-// drains at the client's pace and no JS-side level can see. The remaining piece is a reply-queue
-// bound (or serialised reads). The WANTED (no reset) is the target.
-deployed.fails(
-  "CONCURRENT READERS: 24 sessions paging one 144 MiB log at once reset the DO — the read level bounds pages ISSUED, not the replies queued in workerd's outbound buffer (`…isolate exceeded its memory limit and was reset.`, .durableObjectReset; 8 readers HOLD)",
+// FIXED (live-49, the read-admission ceiling): born red — the read LEVEL bounded page bytes ISSUED
+// but shrinks a page no lower than ONE row, so 24 readers each grabbed a ~6 MiB first page in the
+// same tick and 24 × 6 MiB coexisted as replies in flight, resetting the DO. The metered `read` door
+// now AWAITS room under the 16 MiB outstanding ceiling (a continuation read or the TTL sweep retires
+// an outstanding page) instead of issuing past it, so only a handful of replies are ever in flight —
+// all 24 readers page to head, none resets. Heap-capped twin: concurrent-readers in memory-budget.
+deployed(
+  "CONCURRENT READERS: 24 sessions paging one 144 MiB log at once all reach head with no reset — the read door awaits room under the outstanding-bytes ceiling instead of materializing 24 pages in the isolate at once",
   { timeout: 300_000 },
   async () => {
     const readers = Array.from({ length: 24 }, () => openItx(seededCtx));
     const results = await Promise.all(readers.map((itx) => settle(pageToHead(itx))));
     const resetErrors = results.flatMap((r) => (!r.ok && isDurableObjectReset(r.e) ? [r.e] : []));
-    // HEALTHY expectation: every page fits the 8 MiB budget, so all 24 readers finish and none resets.
-    // Deployed: ~all 24 reset (24 × ~6 MiB pages materialize in the one DO isolate at once).
+    // The ceiling holds: every reader pages to head and none resets (24 × ~6 MiB never coexist).
     expect(
       resetErrors.length,
       `${resetErrors.length}/24 concurrent readers reset the DO: ${String(resetErrors[0]?.message ?? "")}`,
     ).toBe(0);
+    expect(results.every((r) => r.ok)).toBe(true); // all 24 finished paging
   },
 );
 
@@ -306,21 +307,36 @@ deployed(
 );
 
 deployed(
-  "RECOVERY: a reset is TRANSIENT, never a poison loop — after 24 concurrent readers reset the seeded ctx, the next call re-materializes it from the durable log (core snapshot + a small append both land)",
+  "RECOVERY: a reset is TRANSIENT, never a poison loop — the large-ephemeral fan-out (the one client-reachable DO reset left) resets the ctx, and the next call re-materializes it from the durable log (core snapshot + a small append both land)",
   { timeout: 300_000 },
   async () => {
-    // Provoke the reset (reuses the 144 MiB seed — no extra upload).
-    const readers = Array.from({ length: 24 }, () => openItx(seededCtx));
-    const results = await Promise.all(readers.map((itx) => settle(pageToHead(itx))));
+    // Provoke the reset via the still-open path — the append-ingress fan-out (concurrent readers no
+    // longer reset since live-49). WHEN that is admission-bounded too (the menu) this row needs a new
+    // provoker, or it simply stops resetting and the `expect(reset).toBe(true)` below must go.
+    const ctx = freshCtx("degrade-recovery");
+    const itx = openItx(ctx);
+    for (let i = 0; i < 10; i++)
+      await itx.enableProcessor(`sink${i}`, {
+        source: SINK_SOURCE,
+        className: "SinkDurableObject",
+        consumes: ["blob"],
+      });
+    const results = await Promise.all(
+      Array.from({ length: 30 }, (_, i) =>
+        settle(append(itx, { type: "blob", ephemeral: true, payload: { i, blob: blob(7 * MiB) } })),
+      ),
+    );
     expect(
       results.some((r) => !r.ok && isDurableObjectReset(r.e)),
       "expected a reset to provoke",
     ).toBe(true);
-    // Recovery: a fresh session serves the core snapshot and commits an append.
-    const itx = openItx(seededCtx);
-    const snapshot = (await itx.invoke("itx.facets.get('core').snapshot()")) as { offset: number };
+    // Recovery: a fresh session serves the core snapshot and commits an append (the durable log survived).
+    const recovered = openItx(ctx);
+    const snapshot = (await recovered.invoke("itx.facets.get('core').snapshot()")) as {
+      offset: number;
+    };
     expect(snapshot.offset).toBeGreaterThan(0);
-    const [ev] = await append(itx, { type: "recovery-marker" });
+    const [ev] = await append(recovered, { type: "recovery-marker" });
     expect(ev.offset).toBeGreaterThan(0);
   },
 );
