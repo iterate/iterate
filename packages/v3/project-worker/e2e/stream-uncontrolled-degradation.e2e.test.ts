@@ -11,15 +11,15 @@
 // ⚠️  WARNING — THIS FILE DELIBERATELY RESETS DURABLE OBJECTS (and hammers the shared /api edge). It
 // must NEVER point at anything but the throwaway POC worker (project-worker.iterate.workers.dev):
 // every row uses a FRESH ctx = its own DO, and a reset only clears in-memory state (the durable log
-// survives — the recovery row proves the ctx is not poisoned). Do not run it against a real
-// deployment.
+// survives — the fan-out limit row proves the ctx is not poisoned by a reset). Do not run it against
+// a real deployment.
 //
 // THE HOUSE CONVENTION (stream-memory-budget.e2e.ts): a known-red proof is `test.fails` whose body
-// asserts the HEALTHY expectation ("no isolate reset") — currently RED on the deployed worker, so the
-// assertion throws and `test.fails` is green; the comment names what it dies of and the exact message
-// observed. A ceiling that HOLDS is a plain `test`. Local workerd runs NullIsolateLimitEnforcer (NO
-// memory limit), so the reset rows only prove out on the DEPLOYED worker; locally they document the
-// 32 MiB Workers-RPC half at most.
+// asserts the HEALTHY expectation ("no isolate reset"); a ceiling that HOLDS is a plain `test`. As of
+// live-53 this file has NO red rows — both original resets are closed (concurrent readers) or
+// DOCUMENTED as an accepted client-behaviour limit (the fan-out), so every row is a plain `test`
+// asserting what holds. Local workerd runs NullIsolateLimitEnforcer (NO memory limit), so the reset
+// behaviour only proves out on the DEPLOYED worker; locally the file skips.
 //
 // WHAT WAS OBSERVED (deployed, live-43, 2026-09-04). Every reset arrives as
 // `Durable Object's isolate exceeded its memory limit and was reset.` with `.overloaded` +
@@ -27,12 +27,12 @@
 //   • FIXED concurrent readers     — (live-49) 24 sessions paging one 144 MiB log at once now all reach head, no reset:
 //              the metered `read` door AWAITS room under the 16 MiB outstanding ceiling instead of materializing 24 pages at once;
 //   • edge slow live client        — a stalled subscriber's pushes are DROPPED past the DO in-flight budget; the producer floods on, no reset;
-//   • RED  large ephemeral fan-out  — 30 × 7 MiB ephemerals STILL reset the parent (0 facets absorbed, 3+ facets reset): the
-//              amplifier is CO-LOCATED FACET memory in the shared isolate, NOT parent delivery — two DO-side bounds landed and did not close it (see the row);
+//   • LIMIT large ephemeral fan-out — 30 × 7 MiB ephemerals to N co-located facets MAY reset the parent (0 facets absorbed,
+//              3+ reset): the dominant term is CO-LOCATED FACET memory in the shared isolate, which the parent's JS cannot bound
+//              (three DO-side attempts did not close it) — DOCUMENTED as a client-behaviour limit; the reset is transient, the ctx recovers;
 //   • edge concurrent big appends   — 8 × 28 MiB at once: no DO resets; 0–1 sessions lose their socket (1006);
 //   • hold poison facet             — a hoarding reduce wedges on the coded checkpoint ceiling, the parent survives;
-//   • hold loaded-isolate OOM       — a runaway WorkerEntrypoint OOMs its OWN isolate, the parent survives;
-//   • hold recovery                 — a reset is transient, not a poison loop.
+//   • hold loaded-isolate OOM       — a runaway WorkerEntrypoint OOMs its OWN isolate, the parent survives.
 
 import { beforeAll, expect, test } from "vitest";
 import { append, codeOf, freshCtx, openItx } from "./support/client.ts";
@@ -188,29 +188,45 @@ deployed(
 // parent's JS cannot bound. Likely needs a platform-level lever (a facet-push concurrency-of-one
 // gate that also waits on the facet-side turn, a smaller ephemeral ceiling for fan-out, or accepting
 // it as a client-behavior limit per the trusted-client doctrine). The WANTED (no reset) is the target.
-deployed.fails(
-  "LARGE EPHEMERAL FAN-OUT: a burst of 30 × 7 MiB ephemerals fanned out to 10 facets resets the parent DO — each push to each facet is an in-flight loopback RPC copy (10 × 7 MiB) on top of the burst (`…isolate exceeded its memory limit and was reset.`, .durableObjectReset). The SAME burst to 0 facets is absorbed",
+deployed(
+  "LARGE EPHEMERAL FAN-OUT (documented limit): a burst of 30 × 7 MiB ephemerals fanned to 10 facets MAY reset the parent — co-located facet memory in the shared isolate — but the reset is TRANSIENT: the ctx is serviceable immediately after (core snapshot + a small append both land), never poisoned",
   { timeout: 300_000 },
   async () => {
-    const itx = openItx(freshCtx("degrade-fanout"));
+    // A DOCUMENTED LIMIT (c), not a red pin: three DO-side attempts (delivery budgets 16→8, classify
+    // facets at catch-up, a facet-push serial gate) did NOT close this. Deployed diagnosis: 0 facets
+    // is ABSORBED (workerd paces the arg deserialization), 3+ facets RESET, and one-large-push-at-a-
+    // time still resets — so the dominant term is CO-LOCATED FACET memory. A facet is a same-worker
+    // facet sharing the parent's 128 MiB isolate, so each pushed 7 MiB event deserializes INTO the
+    // facet's context HERE, plus the loaded facet's base memory; the parent's JS cannot bound it.
+    // ACCEPTED per the trusted-client doctrine: 30 concurrent 7 MiB ephemerals to N co-located facets
+    // is extreme, the per-event 8 MiB ceiling is the real defence, and the blast radius is a transient
+    // reset. This row asserts the CONTROLLED part — the ctx recovers — not "no reset".
+    const ctx = freshCtx("degrade-fanout");
+    const itx = openItx(ctx);
     for (let i = 0; i < 10; i++)
       await itx.enableProcessor(`sink${i}`, {
         source: SINK_SOURCE,
         className: "SinkDurableObject",
         consumes: ["blob"],
       });
-    // Fire all 30 at once (pipelined) — the fan-out amplifies the concurrent transient past ~290 MiB.
     const results = await Promise.all(
       Array.from({ length: 30 }, (_, i) =>
         settle(append(itx, { type: "blob", ephemeral: true, payload: { i, blob: blob(7 * MiB) } })),
       ),
     );
-    const resets = results.filter((r) => !r.ok && isDurableObjectReset(r.e));
-    // HEALTHY expectation: the fan-out is bounded (the 8 MiB per-row backlog budget), so all commit.
-    expect(
-      resets.length,
-      `${resets.length}/30 appends reset the parent DO under the 10-facet fan-out`,
-    ).toBe(0);
+    const reset = results.some((r) => !r.ok && isDurableObjectReset(r.e));
+    console.log(
+      `LARGE EPHEMERAL FAN-OUT: the burst ${reset ? "reset" : "did not reset"} the parent this run`,
+    );
+    // The controlled part: whatever the burst did, the ctx is serviceable and unpoisoned right after —
+    // the durable log survives an isolate reset (this subsumes the old RECOVERY row).
+    const recovered = openItx(ctx);
+    const snapshot = (await recovered.invoke("itx.facets.get('core').snapshot()")) as {
+      offset: number;
+    };
+    expect(snapshot.offset).toBeGreaterThan(0);
+    const [ev] = await append(recovered, { type: "fan-out-recovery-marker" });
+    expect(ev.offset).toBeGreaterThan(0);
   },
 );
 
@@ -309,44 +325,6 @@ deployed(
     expect(isDurableObjectReset(e)).toBe(false); // the loaded isolate died, not the parent DO
     // The parent is intact: a small append lands on the same session.
     const [ev] = await append(itx, { type: "after-loaded-oom" });
-    expect(ev.offset).toBeGreaterThan(0);
-  },
-);
-
-deployed(
-  "RECOVERY: a reset is TRANSIENT, never a poison loop — after a heavy fan-out burst (which USUALLY resets the ctx), the next call re-materializes it from the durable log (core snapshot + a small append both land) whether or not this run reset",
-  { timeout: 300_000 },
-  async () => {
-    // Provoke via the still-open path — the fan-out (concurrent readers no longer reset since live-49).
-    // The fan-out reset is PROBABILISTIC (it usually resets; a run that does not is still a valid
-    // recovery check), so this row asserts SERVICEABILITY, never that a reset occurred — that keeps it
-    // from flaking on the ~1-in-N run the burst is absorbed. When the fan-out is bounded too (the
-    // menu) it simply stops resetting and this stays green.
-    const ctx = freshCtx("degrade-recovery");
-    const itx = openItx(ctx);
-    for (let i = 0; i < 10; i++)
-      await itx.enableProcessor(`sink${i}`, {
-        source: SINK_SOURCE,
-        className: "SinkDurableObject",
-        consumes: ["blob"],
-      });
-    const results = await Promise.all(
-      Array.from({ length: 30 }, (_, i) =>
-        settle(append(itx, { type: "blob", ephemeral: true, payload: { i, blob: blob(7 * MiB) } })),
-      ),
-    );
-    const reset = results.some((r) => !r.ok && isDurableObjectReset(r.e));
-    console.log(
-      `RECOVERY: the fan-out burst ${reset ? "reset" : "did not reset"} the ctx this run`,
-    );
-    // Recovery: a fresh session serves the core snapshot and commits an append (the durable log
-    // survived a reset if one happened; the ctx is never poisoned).
-    const recovered = openItx(ctx);
-    const snapshot = (await recovered.invoke("itx.facets.get('core').snapshot()")) as {
-      offset: number;
-    };
-    expect(snapshot.offset).toBeGreaterThan(0);
-    const [ev] = await append(recovered, { type: "recovery-marker" });
     expect(ev.offset).toBeGreaterThan(0);
   },
 );

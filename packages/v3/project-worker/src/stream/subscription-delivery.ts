@@ -63,15 +63,6 @@ const DELIVERY_IN_FLIGHT_BUDGET_CHARS = 8 * 1024 * 1024;
  *  dropped from the LARGEST queue first (each row's own PENDING_PUSH_BUDGET_CHARS still applies).
  *  8 MiB, not 16: the pending queue pins ephemeral arg payloads the same way (see above). */
 const PENDING_PUSHES_TOTAL_BUDGET_CHARS = 8 * 1024 * 1024;
-/** THE FACET-PUSH GATE THRESHOLD. A facet is a SAME-WORKER facet sharing this DO's 128 MiB isolate,
- *  so a pushed event is DESERIALIZED into the facet's context HERE — a burst fanned out to N facets
- *  holds N copies of the event in the shared isolate at once (the large-ephemeral fan-out reset:
- *  0 facets is absorbed because workerd paces the arrivals, N facets is not, and parent-side delivery
- *  budgets cannot see facet-side memory). A push AT/OVER this size serialises through the per-DO
- *  facet-push chain — one large event in a facet at a time — while smaller pushes stay fully parallel,
- *  so the flood of tiny events (a 900-event 256 B commit fanned to 50 facets, push-delivery-throughput.e2e)
- *  pays nothing and only the events that actually threaten the isolate cost fan-out latency. */
-const FACET_PUSH_GATE_CHARS = 1024 * 1024;
 
 /** A failure that can only repeat — halt the row now, not after the ladder: the flag workerd itself
  *  stamps (`retryable: false`, reduce-checkpoint.ts stamps it too) or one of OUR codes that a
@@ -327,24 +318,6 @@ export class SubscriptionDelivery {
     }
   }
 
-  /** THE FACET-PUSH GATE — a per-DO serial chain for LARGE facet pushes (FACET_PUSH_GATE_CHARS). A
-   *  push at/over the threshold waits for the previous large facet push to SETTLE (the RPC returns
-   *  once the facet reduced the event), so at most one large event is deserialized into a facet's
-   *  context in the shared isolate at a time — the fan-out reset's dominant term, which the byte
-   *  budgets can't reach. Below the threshold a push does not touch the chain: it runs immediately,
-   *  fully parallel. The chain never rejects (each link swallows), so one facet's failure or watchdog
-   *  does not wedge the next. */
-  #facetPushChain: Promise<unknown> = Promise.resolve();
-  #serializeLargeFacetPush<T>(chars: number, push: () => Promise<T>): Promise<T> {
-    if (chars < FACET_PUSH_GATE_CHARS) return push();
-    const run = this.#facetPushChain.then(push, push);
-    this.#facetPushChain = run.then(
-      () => {},
-      () => {},
-    );
-    return run;
-  }
-
   /** Run `call` holding `chars` of the in-flight budget, after waiting for room. A call larger than
    *  the whole budget runs alone — never a deadlock. */
   async #callWithInFlightRoom<T>(chars: number, call: () => Promise<T>): Promise<T> {
@@ -466,13 +439,8 @@ export class SubscriptionDelivery {
         // quiesce never aborts it mid-reduce. The DO's facet watchdog (#invokeFacet, 60 s) bounds a
         // hung facet; its own gap repair covers a dropped push.
         this.#pushedEventBatches.delete(name);
-        const chars = serializedChars(events);
         try {
-          // A large fan-out serialises through the facet-push gate (one big event in a facet at a
-          // time, the co-located-isolate bound); a small one runs parallel under the in-flight budget.
-          await this.#serializeLargeFacetPush(chars, () =>
-            this.#callWithInFlightRoom(chars, () => call([events, range])),
-          );
+          await this.#callWithInFlightRoom(serializedChars(events), () => call([events, range]));
         } catch (error) {
           // A refusal that can only repeat HALTS the row — the same fact the cursor lane's ladder
           // ends in — instead of being re-pushed into on every commit; an operator's resume is the
