@@ -2957,6 +2957,28 @@ SQLITE_TOOBIG` used to cross the hop from inside the write. Local workerd (4 MiB
 - GATES: tsc×3 · oxlint 0/0 · knip clean · oxfmt clean · unit 131p/4xf · workers 60p/8xf · e2e local
   168p/2xf · deployed (live-47): memory 3/3, degradation 5p/2xf (the two above).
 
+### 2026-09-06 — the live-state flake was a delta commit REORDER; deltas are ordered per holder
+
+- The live-state-chains e2e flaked ~14% on the deployed edge (green locally, green some deploys) —
+  diagnosed by simplification-52 over 104 deployed rounds as a delta-vs-delta COMMIT REORDER, not a
+  seed race. `LiveState.set` mints from/to synchronously but appends fire-and-forget through
+  `env.ITX.get().append(e)`, a FRESH capability per call (itx-entrypoint.ts), so two deltas issued in
+  different turns race across the hop and the second commits first (15/104; 0 when ordered). The
+  client then correctly re-seeds — the cost is wrong (a full door re-read of the projection the
+  deltas exist to avoid), not the correctness (convergence held every round).
+- FIX (63c9474ad): `LiveState` orders its own delta appends — a lone delta emits SYNCHRONOUSLY, a
+  racing pair queues behind the one in flight, so commit order = mint order. Default ON, so the
+  chatroom (SDK `LiveState`, userspace) gets it without opting in. The CORE reduce opts OUT
+  (`orderDeltaAppends: false`): its sink is the stream's own same-isolate synchronous `append`, where
+  no reorder is possible and the delta must land DENSELY inside its commit — uniform chaining broke
+  that (3 workers-lane tests: created@1/woken@2/core-delta@3, the paused-then-resumed offsets). `to`
+  is a local so a later set cannot bump the rev the closure reads.
+- PROVEN on the deployed worker (live-48): live-state-chains 10/10 alone (the flake was ~14%). Local:
+  workers 65p/8xf, unit live-state+processor 62p. The reseeds===0 / applied===2 assertions were kept
+  STRICT — ordering the appends is the fix; relaxing them would bless an out-of-order chain.
+- GATES: tsc x3 - oxlint 0/0 - knip clean - oxfmt clean - deployed live-48: live-state 10/10,
+  degradation alone 5p/2xf (the two known resets remain: reply-queue + append-ingress, on the menu).
+
 ## 2026-09-04 — the DO owns both ends of a lent stub's rule: the pager upgrade carries the rule, one round trip
 
 - WHY: a `provide(match, stub)` / `subscribe({ target: fn })` cost THREE edge→DO round trips — the
