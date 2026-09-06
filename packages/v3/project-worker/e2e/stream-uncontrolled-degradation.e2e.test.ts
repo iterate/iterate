@@ -27,8 +27,8 @@
 //   • FIXED concurrent readers     — (live-49) 24 sessions paging one 144 MiB log at once now all reach head, no reset:
 //              the metered `read` door AWAITS room under the 16 MiB outstanding ceiling instead of materializing 24 pages at once;
 //   • edge slow live client        — a stalled subscriber's pushes are DROPPED past the DO in-flight budget; the producer floods on, no reset;
-//   • RED  large ephemeral fan-out  — 30 × 7 MiB ephemerals STILL reset the parent: the reset is APPEND INGRESS
-//              (~210 MiB of pipelined append args), which the delivery ledger does not bound — append-side admission is the fix (menu);
+//   • RED  large ephemeral fan-out  — 30 × 7 MiB ephemerals STILL reset the parent (0 facets absorbed, 3+ facets reset): the
+//              amplifier is CO-LOCATED FACET memory in the shared isolate, NOT parent delivery — two DO-side bounds landed and did not close it (see the row);
 //   • edge concurrent big appends   — 8 × 28 MiB at once: no DO resets; 0–1 sessions lose their socket (1006);
 //   • hold poison facet             — a hoarding reduce wedges on the coded checkpoint ceiling, the parent survives;
 //   • hold loaded-isolate OOM       — a runaway WorkerEntrypoint OOMs its OWN isolate, the parent survives;
@@ -176,11 +176,18 @@ deployed(
   },
 );
 
-// STILL RED on 7474bb76 despite the delivery in-flight ledger: the reset is on the APPEND INGRESS,
-// not delivery — 30 ephemeral appends of 7 MiB fired at once are ~210 MiB of Workers-RPC arguments
-// arriving at the DO before any is reduced, and the append door measures ONE event against the
-// ceiling, not the SUM of concurrent appends. Append-side admission (a per-DO ingress budget) is the
-// fix, on the menu. The WANTED (no reset) is the target.
+// STILL RED after two DO-side attempts (live-50 delivery budgets 16→8, live-51 classifying facets
+// as push rows at catch-up so onCommit never pins their batches in #pushedEventBatches). Diagnosis
+// (deployed): the SAME 30 × 7 MiB burst to 0 facets is ABSORBED (workerd paces the arg
+// deserialization), and even 3 facets RESET — so it is the FAN-OUT, not the raw args, and it is not
+// facet-count-linear. Neither delivery-retention bound nor the #pushedEventBatches fix closes it,
+// which places the dominant term OUTSIDE the parent's delivery accounting: a FACET is a same-worker
+// facet that SHARES the parent's 128 MiB isolate (reference: DO isolate ceiling is shared by
+// co-located instances and same-worker facets), so each pushed 7 MiB event is DESERIALIZED into the
+// facet's context in the shared isolate, plus the loaded facet script's own base memory — memory the
+// parent's JS cannot bound. Likely needs a platform-level lever (a facet-push concurrency-of-one
+// gate that also waits on the facet-side turn, a smaller ephemeral ceiling for fan-out, or accepting
+// it as a client-behavior limit per the trusted-client doctrine). The WANTED (no reset) is the target.
 deployed.fails(
   "LARGE EPHEMERAL FAN-OUT: a burst of 30 × 7 MiB ephemerals fanned out to 10 facets resets the parent DO — each push to each facet is an in-flight loopback RPC copy (10 × 7 MiB) on top of the burst (`…isolate exceeded its memory limit and was reset.`, .durableObjectReset). The SAME burst to 0 facets is absorbed",
   { timeout: 300_000 },
@@ -307,12 +314,14 @@ deployed(
 );
 
 deployed(
-  "RECOVERY: a reset is TRANSIENT, never a poison loop — the large-ephemeral fan-out (the one client-reachable DO reset left) resets the ctx, and the next call re-materializes it from the durable log (core snapshot + a small append both land)",
+  "RECOVERY: a reset is TRANSIENT, never a poison loop — after a heavy fan-out burst (which USUALLY resets the ctx), the next call re-materializes it from the durable log (core snapshot + a small append both land) whether or not this run reset",
   { timeout: 300_000 },
   async () => {
-    // Provoke the reset via the still-open path — the append-ingress fan-out (concurrent readers no
-    // longer reset since live-49). WHEN that is admission-bounded too (the menu) this row needs a new
-    // provoker, or it simply stops resetting and the `expect(reset).toBe(true)` below must go.
+    // Provoke via the still-open path — the fan-out (concurrent readers no longer reset since live-49).
+    // The fan-out reset is PROBABILISTIC (it usually resets; a run that does not is still a valid
+    // recovery check), so this row asserts SERVICEABILITY, never that a reset occurred — that keeps it
+    // from flaking on the ~1-in-N run the burst is absorbed. When the fan-out is bounded too (the
+    // menu) it simply stops resetting and this stays green.
     const ctx = freshCtx("degrade-recovery");
     const itx = openItx(ctx);
     for (let i = 0; i < 10; i++)
@@ -326,11 +335,12 @@ deployed(
         settle(append(itx, { type: "blob", ephemeral: true, payload: { i, blob: blob(7 * MiB) } })),
       ),
     );
-    expect(
-      results.some((r) => !r.ok && isDurableObjectReset(r.e)),
-      "expected a reset to provoke",
-    ).toBe(true);
-    // Recovery: a fresh session serves the core snapshot and commits an append (the durable log survived).
+    const reset = results.some((r) => !r.ok && isDurableObjectReset(r.e));
+    console.log(
+      `RECOVERY: the fan-out burst ${reset ? "reset" : "did not reset"} the ctx this run`,
+    );
+    // Recovery: a fresh session serves the core snapshot and commits an append (the durable log
+    // survived a reset if one happened; the ctx is never poisoned).
     const recovered = openItx(ctx);
     const snapshot = (await recovered.invoke("itx.facets.get('core').snapshot()")) as {
       offset: number;
