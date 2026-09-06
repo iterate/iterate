@@ -53,11 +53,16 @@ const PENDING_PUSH_BUDGET_CHARS = 8 * 1024 * 1024;
  *  handed to calls that have not settled — a push's arguments live in this isolate until the RPC
  *  returns, and the per-row bounds multiply by rows (20 stuck rows × 8 MiB is an isolate). A facet
  *  push or a cursor delivery WAITS for room (its row's pending push folds meanwhile, bounded); a
- *  push to a live client is dropped past it — the client heals by read, every dropped push's contract. */
-const DELIVERY_IN_FLIGHT_BUDGET_CHARS = 16 * 1024 * 1024;
+ *  push to a live client is dropped past it — the client heals by read, every dropped push's contract.
+ *  8 MiB, not 16: a FACET push is a LOOPBACK RPC, so each in-flight push holds the event AND its
+ *  serialize copy (~2× the charged chars), and the fan-out pins those arg payloads across a burst of
+ *  concurrent appends (30 × 7 MiB ephemerals to 10 facets reset the parent at 16 — this budget is
+ *  what the fan-out retains on top of the args workerd is deserializing; e2e LARGE EPHEMERAL FAN-OUT). */
+const DELIVERY_IN_FLIGHT_BUDGET_CHARS = 8 * 1024 * 1024;
 /** The most pending-push chars ALL rows together may hold back — past it the oldest events are
- *  dropped from the LARGEST queue first (each row's own PENDING_PUSH_BUDGET_CHARS still applies). */
-const PENDING_PUSHES_TOTAL_BUDGET_CHARS = 16 * 1024 * 1024;
+ *  dropped from the LARGEST queue first (each row's own PENDING_PUSH_BUDGET_CHARS still applies).
+ *  8 MiB, not 16: the pending queue pins ephemeral arg payloads the same way (see above). */
+const PENDING_PUSHES_TOTAL_BUDGET_CHARS = 8 * 1024 * 1024;
 
 /** A failure that can only repeat — halt the row now, not after the ladder: the flag workerd itself
  *  stamps (`retryable: false`, reduce-checkpoint.ts stamps it too) or one of OUR codes that a
