@@ -8,7 +8,7 @@
 
 import { RpcTarget } from "capnweb";
 import { expect, test } from "vitest";
-import { codeOf, freshCtx, openItx, until } from "./support/client.ts";
+import { codeOf, freshCtx, openItx, rejection, until } from "./support/client.ts";
 import { SlackReplayTarget } from "./support/targets.ts";
 
 /** THE ZERO-DECLARATION SHAPE (the apps/os replayPathCall idea, pushed to the client): a Proxy
@@ -91,16 +91,16 @@ test("itx.slack — a live bridge replays the natural dotted spelling onto the S
   expect(sdkCalls).toEqual([{ channel: "#zero", text: "no rpctarget declared" }]);
   slack2Provided[Symbol.dispose]();
 
-  // 5. the PROVIDER disposes its handle → the stub is recalled AND the rule is un-set (default-deny
-  //    answers: NO_ITX_EXPRESSION_MATCH, never "offline" — the un-set removes the rule).
+  // 5. the PROVIDER disposes its handle → the stub is recalled AND the rule is un-set. The un-set
+  //    lands one append after the pager's close, so a call in that window is refused CODED
+  //    (RPC_STUB_OFFLINE: the rule still names a stub that is gone — review round 2, edge#13); once it
+  //    lands, default-deny answers NO_ITX_EXPRESSION_MATCH — the un-set REMOVES the rule.
   slackProvided[Symbol.dispose]();
   const denied = await until("the dispose propagated", async () => {
-    try {
-      await itx.invoke(["itx", "slack", "chat", ["postMessage", { channel: "#x", text: "y" }]]);
-      return undefined; // still routed — keep waiting
-    } catch (e) {
-      return e as Error;
-    }
+    const e = await rejection(
+      itx.invoke(["itx", "slack", "chat", ["postMessage", { channel: "#x", text: "y" }]]),
+    );
+    return codeOf(e) === "RPC_STUB_OFFLINE" ? undefined : e; // the window — keep waiting
   });
   expect(codeOf(denied)).toBe("NO_ITX_EXPRESSION_MATCH");
 });

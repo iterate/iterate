@@ -47,7 +47,7 @@
 ```mermaid
 flowchart TB
   subgraph L0["Layer 0 — axioms (built-ins, physical or platform)"]
-    stream["stream: append · read · waitForEvent"]
+    stream["stream: append · readEvents · waitForEvent"]
     stubs["rpcStubs: get(rpcStubKey) · list — lent by the edge's provide<br/>+ ephemeral attached/detached { rpcStubKey } events"]
     facets["facets · workers (Worker Loader)"]
     misc["kv · whoami · cd · fetch (egress)"]
@@ -83,7 +83,7 @@ const agent = itx.cd("/agents/support"); // absolute by convention; relative and
 
 const greetSource = { "cap.js": GREET_SRC };
 using greet = await itx.provide("itx.greet", ["itx", "workers", ["get", { source: greetSource }]]); // a rewrite rule
-using robot = await itx.provide("itx.robot", robotObject); // SUGAR: lends to rpcStubs under the key = the canonical match + rule itx.robot ⇒ itx.rpcStubs.get('itx.robot')
+using robot = await itx.provide("itx.robot", robotObject); // SUGAR: lends to rpcStubs under the key = the canonical match + rule itx.robot ⇒ itx.builtins.rpcStubs.get('itx.robot')
 await itx.rpcStubs.list(); // presence, physical
 await itx.rewriteRules.list(); // the rules, printed
 
@@ -105,7 +105,7 @@ await itx.subscriptions.list(); // config rows joined with cursors and halts
 the offset window this batch covers (`after` exclusive, `through` inclusive). Consecutive deliveries
 chain: this batch's `after` equals the last batch's `through`. A subscriber keeps the last `through`;
 when the next `range.after` differs, a batch was missed (a socket blip, a dropped push) and one
-`read(through)` fills the hole. That is the entire client-side protocol for a push target, it is
+`readEvents(through)` fills the hole. That is the entire client-side protocol for a push target, it is
 what the live-state client already does, and it is why a browser tab needs no server-side cursor.
 
 ## 2. Layer 0 — the axioms
@@ -126,7 +126,11 @@ interface BuiltInScope {
     list(prefix?): Promise<{ keys: string[] }>;
   };
   append(...events: StreamEventInput[]): Promise<StreamEvent[]>;
-  read(afterOffset?: number, limit?: number): Promise<StreamPage>;
+  readEvents(afterOffset?: number, limit?: number): Promise<StreamPage>;
+  ai: Ai; // Workers AI, the binding verbatim
+  connectToMcp(url, options?): Promise<McpConnection>; // THE LIBRARY: first-party code that takes only itx
+  connectToOpenApi(specOrUrl, options?): Promise<OpenApiConnection>;
+  connectToCapnweb(url, options?): Promise<CapnwebConnection>;
   waitForEvent(filter?: WaitForEventFilter): Promise<StreamEvent>;
   /** Absolute by convention ("/agents/x"); relative and ".." also resolve. Same resolver as the edge `cd`. */
   cd(path: string): InvokeHandle;
@@ -134,7 +138,7 @@ interface BuiltInScope {
   fetch(request: Request): Promise<Response>;
   /** THE physical registry. The key is OPAQUE to the directory, which never parses it — but the two
    *  lenders spell it by contract: `provide` uses the canonical match, `subscribe` uses
-   *  `subscription:<name>`. A rewrite rule names one as itx.rpcStubs.get('<rpcStubKey>'). */
+   *  `subscription:<name>`. A rewrite rule names one as itx.builtins.rpcStubs.get('<rpcStubKey>'). */
   rpcStubs: { get(rpcStubKey: string): RpcStubHandle; list(): string[] };
   /** The rewrite-rule table, READ (a slice of core, printed). Written only by the ONE event. */
   rewriteRules: {
@@ -218,16 +222,23 @@ that starts with `match` runs as the same call with `match` replaced by `target`
 `target` an `itx.…` expression. ONE event, `itx/rewrite-rule-configured { match, target | null }`
 (`rewriteRuleConfiguredEvent`, both halves canonicalized through the codec, string at rest), reduced
 by the core reduce into `state.itxExpressionRewriteRules`, a MAP by canonical match: a configured
-target REPLACES the entry, `null` DELETES it — no shadow stack, no removal by identity, no offset on
-a row. Built-ins first; then the most SPECIFIC matching rule (longest match, then most pinned args)
-rewrites the call, repeating until the root is a built-in (32-rewrite budget; no match ⇒
-`NO_ITX_EXPRESSION_MATCH`, default-deny). The `delivery`, `processor` and `lane` fields of the old
+target REPLACES the entry; `null` MASKS it where a platform row lies beneath (kept as a row, the
+call refused) and deletes it elsewhere; the platform-equivalent target `itx.builtins.<match…>`
+deletes — no shadow stack, no removal by identity, no offset on a row. SINCE 2026-09-04 (the
+builtins root, rule 5): RULES FIRST. The fixed point is `itx.builtins`, the reserved root — a call
+rooted there runs as is and never reads the table; any other `itx.…` call is matched against the
+context's rows (the most SPECIFIC wins: longest match, then most pinned args), a matching mask
+refuses, a matching target rewrites and the loop repeats; with no matching row, a root that is a
+built-in is THE IMPLICIT PLATFORM ROW `itx.<root> ⇒ itx.builtins.<root>` (never stored — `list()`
+and `resolve()` spell it out); anything else is refused (32-rewrite budget; `NO_ITX_EXPRESSION_MATCH`,
+default-deny). A match may not be rooted at `itx.builtins` nor start with a proxy verb; the
+platform never spells a short name in an event it writes. The `delivery`, `processor` and `lane` fields of the old
 row are gone; `itx.subscribers.*` stops being a convention; a rewrite rule is a name for a target
 and nothing else. The edge verb is ONE: `provide(match, stub | expression | null)` → a disposable
 `RewriteRuleHandle`; a live stub is lent under the key = the canonical match and the rule
-`match ⇒ itx.rpcStubs.get('<match>')` is written with it; an expression is the rule alone.
-The rule dies with the stub: the handle's dispose un-sets it from the edge, and when the key's LAST
-pager closes the DO un-sets every rule and subscription whose target is that stub (a reconnect
+`match ⇒ itx.builtins.rpcStubs.get('<match>')` is written with it; an expression is the rule alone.
+The rule dies with the stub: the handle's dispose recalls the stub, and when the key's LAST pager
+closes the DO un-sets every rule and subscription whose target resolves to that stub (a reconnect
 replaces the pager and is not a close).
 
 ## 4. Layer 2 — subscriptions
@@ -235,7 +246,7 @@ replaces the pager and is not a close).
 ### 4.1 Events and reduce
 
 Three events of the layer's own, reduced by the ONE core reduce (`stream/core-processor.ts`,
-`CoreStreamProcessor`, slug `core`, contract 4.0.0 — the `subscriptions` slice beside
+`CoreStreamProcessor`, slug `core`, contract 6.0.0 — the `subscriptions` slice beside
 `itxExpressionRewriteRules`). DECIDED 2026-09-02, reversing this doc's earlier "own inline reduce
 beside `core` and a separate rule reduce" (§8): the layering lives in the EVENTS, and one reduce
 serves every synchronous reader — the append door, the dispatcher, the delivery loop. Jonas: "a core
@@ -325,7 +336,7 @@ processor: that shape needed an alarm proxy facets do not have (workerd#6810, st
 
 ```ts
 /** A LIVE target is lent under key `subscription:<name>` and configures target
- *  "itx.rpcStubs.get('subscription:<name>')"; an expression is stored as written; `null`
+ *  "itx.builtins.rpcStubs.get('subscription:<name>')"; an expression is stored as written; `null`
  *  removes the row. Same name replaces. Literally `append(subscriptionConfiguredEvent(…))` — the
  *  returned handle removes the row (and recalls the lent callback) when disposed or when the
  *  session ends. */
@@ -512,14 +523,14 @@ class ProjectCollection extends RpcTarget {
 } // the ROOT context; pure addressing
 
 // iterate-context.ts — A PROXY IN FRONT OF THE DO. Declares only what must be edge code, in the order the tutorial builds them;
-// every DO built-in root (append · read · waitForEvent · fetch · whoami · kv · rpcStubs.get/list · rewriteRules · facets · subscriptions · workers · runScript)
+// every DO built-in root (append · readEvents · waitForEvent · fetch · whoami · kv · ai · rpcStubs.get/list · rewriteRules · facets · subscriptions · workers · runScript · connectToMcp · connectToOpenApi · connectToCapnweb)
 // and every rewrite rule ride the prototype hop into ONE invoke(expression) with ZERO code here.
 class IterateContext extends RpcTarget {
   cd(path: string): IterateContext; // pure addressing, zero DO hops; returns an EDGE context
-  invoke(call: ItxExpressionInput): Promise<unknown>; // THE dispatch door; a terminal .fetch(Request) rides the fetch lane (x-itx-expression; root egress included)
+  invoke(call: ItxExpressionInput, ...args: unknown[]): Promise<unknown>; // THE dispatch door; a terminal .fetch(Request) rides the fetch lane (x-itx-expression; root egress included)
   // THE ONE FRONT DOOR: make `match` mean `target`. A live stub is THE ONE PHYSICAL ACT (the client's
   // capnweb stub must live in this stateless worker, never in the DO): lent under the key = the canonical
-  // match, plus the rule match ⇒ itx.rpcStubs.get('<match>'); an expression is the rule alone; null un-sets.
+  // match, plus the rule match ⇒ itx.builtins.rpcStubs.get('<match>'); an expression is the rule alone; null masks or deletes.
   provide(
     match: ItxExpressionInput,
     target: ClientRpcStub | ItxExpressionInput | null,
@@ -578,7 +589,7 @@ sub-contexts via `cd` in the expression), `fetchCap`, `resumeSubscription`, `pro
 | the 4 subscription events (reduced by the core reduce) + their two commands + the `subscriptions` built-in view                            | `stream/core-processor.ts`, `stream/subscriptions.ts`           | ~80           |
 | the delivery loop + cursor lane over kv + alarm                                                                                            | `stream/subscription-delivery.ts`                               | ~140          |
 | `ProcessorEngine` (the engine, split from the pure `StreamProcessor`) + the `StreamProcessorDurableObject` host                            | `stream/`, `sdk/`                                               | ~30 net + ~60 |
-| `FacetHandle` / `RpcStubHandle` brands; `facet:<name>` startup memo; `facets.delete`                                                       | `invoke-handle.ts`, the DO, `built-ins.ts`                      | ~40           |
+| `FacetHandle` / `RpcStubHandle` brands; `facet:<name>` startup memo; `facets.delete` (later deleted — a facet leaves with its row)         | `invoke-handle.ts`, the DO, `built-ins.ts`                      | ~40           |
 | presence events on attach/final close; tally as a test-fixture source                                                                      | `rpc-stub-directory.ts`, `e2e/support/sources.ts`               | ~30           |
 
 Net roughly −950 lines. Concepts dead: lane, delivery policy, processor policy, facet identity,

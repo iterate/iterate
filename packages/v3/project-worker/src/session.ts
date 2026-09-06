@@ -74,7 +74,7 @@ export class UnauthenticatedSession extends RpcTarget {
 
 /** What you authenticate into: a catalog that vends contexts. A session is NOT a context — it is
  *  the directory you reach one through (apps/os: "a session is what authenticate() returns"). */
-export class Session extends RpcTarget {
+class Session extends RpcTarget {
   readonly #projects: ProjectCollection;
 
   constructor(
@@ -95,7 +95,7 @@ export class Session extends RpcTarget {
 
 /** The project catalog. `get(projectId)` is pure addressing → that project's ROOT context. No
  *  `list`/`create` yet (owner: not now); when they come they ride a deployment context's events. */
-export class ProjectCollection extends RpcTarget {
+class ProjectCollection extends RpcTarget {
   readonly #contextNamespace: IterateContextNamespace;
   readonly #sessionTeardown: SessionTeardown;
   readonly #waitUntil: WaitUntil;

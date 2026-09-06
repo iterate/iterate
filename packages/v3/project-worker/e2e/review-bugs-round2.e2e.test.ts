@@ -4,9 +4,11 @@
 // `<report>#<n>`; `test.fails` is the house convention for a known-red proof, and flipping it back to
 // `test` is how a fix is proved. Each was run RED first.
 
+import { RpcTarget } from "capnweb";
 import { expect, test } from "vitest";
 import {
   append,
+  codeOf,
   expressionUrl,
   freshCtx,
   openItx,
@@ -104,4 +106,52 @@ test("edge#12: the lane refuses to re-enter itself", async () => {
   });
   expect(response.status).toBe(508);
   expect(await response.text()).toMatch(/re-entered itself/);
+});
+
+// edge#13 — BUG (fixed): the DO owns a lent stub's rule and un-sets it one append AFTER the key's last
+// pager closes (the un-set is an ordinary append), while the lender's recall disposes the session's
+// dup at once. A call landing in that window — the rule still there, the dup gone — walked the
+// disposed dup, and capnweb's raw "Attempted to use RPC stub after it has been disposed." escaped
+// UNCODED to the caller: the relay re-coded only a BROKEN client session. Seen in 5 of 15 rounds
+// against live-47 (fc58a49b). FIX: the relay re-codes every ended lend — recalled, returned, broken —
+// to RPC_STUB_OFFLINE; once the un-set lands, default-deny answers NO_ITX_EXPRESSION_MATCH.
+test("edge#13: a call in the window between a lender's recall and the DO's un-set is refused coded, never with capnweb's raw disposed error", async () => {
+  // The window is a few ms wide, tens of ms after the dispose: six rounds of eight calls 1 ms apart
+  // straddle it wherever it falls (a single call hit it in 5 of 15 rounds). The first calls of a
+  // burst may still answer (the recall not yet at the edge), the last see the un-set.
+  const answers: string[] = [];
+  for (let round = 0; round < 6; round++) {
+    const ctx = freshCtx(`recall-window-${round}`);
+    const lender = openItx(ctx);
+    const provided = await lender.provide(
+      "itx.tool",
+      new (class extends RpcTarget {
+        ping() {
+          return "pong";
+        }
+      })(),
+    );
+    const itx = openItx(ctx);
+    expect(await itx.invoke("itx.tool.ping()")).toBe("pong");
+    provided[Symbol.dispose]();
+    const calls: Promise<unknown>[] = [];
+    for (let i = 0; i < 8; i++) {
+      calls.push(itx.invoke("itx.tool.ping()"));
+      await sleep(1);
+    }
+    for (const s of await Promise.allSettled(calls))
+      answers.push(
+        s.status === "fulfilled"
+          ? String(s.value)
+          : (codeOf(s.reason) ?? `UNCODED: ${(s.reason as Error).message}`),
+      );
+    const denied = await until("the un-set landed", async () => {
+      const e = await rejection(itx.invoke("itx.tool.ping()"));
+      return codeOf(e) === "RPC_STUB_OFFLINE" ? undefined : e; // the window — keep waiting
+    });
+    expect(codeOf(denied)).toBe("NO_ITX_EXPRESSION_MATCH");
+  }
+  expect(answers.filter((a) => a.startsWith("UNCODED"))).toEqual([]);
+  for (const a of answers)
+    expect(["pong", "RPC_STUB_OFFLINE", "NO_ITX_EXPRESSION_MATCH"]).toContain(a);
 });

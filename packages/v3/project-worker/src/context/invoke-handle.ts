@@ -44,11 +44,34 @@ export class InvokeHandle extends RpcTarget {
 }
 installPrototypeInvokeFallback(InvokeHandle, []);
 
+/** Walk itx-expression steps off a capnweb stub (a session's lent client stub, a remote API's main
+ *  object): a property step reads through the stub, a call step calls the method, the ANONYMOUS call
+ *  step (`""`) calls the value itself (a bare function lent as a capability). NO await inside the
+ *  loop: on a capnweb stub every step is a PIPELINED path — a property read yields a stub for the
+ *  property, a call yields a promise that is itself a stub — so an n-step chain costs ONE round trip,
+ *  flushed by the caller's single await; a rejection anywhere in the chain lands there too. A DIRECT
+ *  call on the stub, never `.apply`: reading `.apply` off a capnweb stub's method is itself a
+ *  pipelined remote path (dispatch.ts's DataCloneError learning). */
+export function walkStepsOnRpcStub(stub: unknown, steps: ItxExpression): unknown {
+  let value: unknown = stub;
+  for (const step of steps) {
+    if (typeof step === "string") value = (value as Record<string, unknown>)[step];
+    else {
+      const [method, ...args] = step;
+      value =
+        method === ""
+          ? (value as (...a: unknown[]) => unknown)(...args)
+          : (value as Record<string, (...a: unknown[]) => unknown>)[method](...args);
+    }
+  }
+  return value;
+}
+
 // ── the two BRANDS the subscription delivery loop reads ──
 // A subscription's target evaluates to SOMETHING; the loop asks the value what it is. These two
 // kinds OWN THEIR PROGRESS, so a push needs no cursor on the stream side: a facet keeps its own
 // checkpoint and gap-repairs from the log (stream/processor.ts), a live client owns its offset (it
-// chains delivered ranges and heals with read). Anything else — a Worker-Loader entrypoint, a
+// chains delivered ranges and heals with readEvents). Anything else — a Worker-Loader entrypoint, a
 // sibling context, a remote — cannot, and the stream keeps a cursor for it (subscription-delivery.ts).
 // Nothing is declared on any event; the brand is minted where the built-in mints the handle.
 

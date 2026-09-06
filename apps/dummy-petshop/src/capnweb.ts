@@ -20,22 +20,15 @@
  */
 import { RpcTarget, newWorkersRpcResponse } from "capnweb";
 import type { Pet } from "./pets.ts";
+import type { PetsContext } from "./rpc.ts";
 
-/**
- * The authenticated principal + request-scoped catalogue the API object is
- * built over — the same pair the MCP tools and the oRPC procedures receive.
- */
-export interface CapnwebApiContext {
-  owner: string;
-  pets: Pet[];
-}
 
 /** The remote main object a capnweb client holds: the pets API for one authenticated owner. */
 export class PetshopCapnwebApi extends RpcTarget {
   readonly #owner: string;
   readonly #pets: Pet[];
 
-  constructor(context: CapnwebApiContext) {
+  constructor(context: PetsContext) {
     super();
     this.#owner = context.owner;
     this.#pets = context.pets;
@@ -71,7 +64,7 @@ export class PetshopCapnwebApi extends RpcTarget {
  */
 export function handleCapnwebRequest(
   request: Request,
-  context: CapnwebApiContext,
+  context: PetsContext,
 ): Promise<Response> {
   return newWorkersRpcResponse(request, new PetshopCapnwebApi(context));
 }

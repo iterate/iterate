@@ -1,6 +1,6 @@
 # The clean-room itx surface, as built
 
-> `packages/v3/project-worker`, the review commit of 2026-09-02 (after the first Plannotator
+> `packages/v3/project-worker`, as of 2026-09-04, round two of the review (after the first Plannotator
 > round on this document). Every signature below is transcribed from source; the file is named so
 > you can check. Sections 1–11 are what exists. Section 12 records what the review decided and
 > what is still open, each open item with a concrete proposal. The long-form walkthrough is
@@ -60,7 +60,7 @@ using laptop = await itx.provide("itx.laptop", {
     return "pong";
   },
 });
-await itx.invoke("itx.rpcStubs.get('itx.laptop').ping()"); // "pong" — the physical door
+await itx.invoke("itx.builtins.rpcStubs.get('itx.laptop').ping()"); // "pong" — the physical door
 await itx.invoke("itx.laptop.ping()"); // "pong" — through the rule provide wrote
 
 // ── 2. itx expressions: the dotted sugar IS invoke ──
@@ -139,14 +139,14 @@ review the class's TYPE also carries every built-in root (section 5) by declarat
 (`export interface IterateContext extends Omit<BuiltInScope, "cd"> {}`): zero runtime, but a
 reader of the file sees the whole surface, and `env.ITX.get().append(…)` typechecks in loaded code.
 
-| Method                                                                                 | Returns                           | What physically happens                                                                                                                                                                                                                                                                                                                                               |
-| -------------------------------------------------------------------------------------- | --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `cd(path)`                                                                             | `IterateContext`                  | Pure addressing. Absolute by convention, relative resolves. Returns an EDGE context so a later `provide` lends in this session.                                                                                                                                                                                                                                       |
-| `invoke(call: ItxExpressionInput)`                                                     | `Promise<unknown>`                | THE door. `durableObject.invoke(expression)`. One fork: a terminal `fetch(Request)` rides `durableObject.fetch` with the expression in `x-itx-expression`.                                                                                                                                                                                                            |
-| `provide(match, target: ClientRpcStub \| ItxExpressionInput \| null)`                  | `RewriteRuleHandle`               | THE ONE FRONT DOOR: make `match` mean `target`. A live stub is lent to the DO through a pager owned here (DON'T-PIN) under the key = the canonical match; the rule `match ⇒ itx.rpcStubs.get('<match>')` RIDES the pager upgrade and the DO appends it as it accepts the pager (one round trip); an expression is the rule alone, appended from here; `null` un-sets. |
-| `subscribe({ name?, target: ItxExpressionInput \| ClientRpcStub \| null, consumes? })` | `SubscriptionHandle` (has `name`) | A live target is lent under the key `subscription:<name>`, its row (target `itx.rpcStubs.get('subscription:<name>')`) riding the same pager upgrade; an expression target is `append(subscriptionConfiguredEvent(…))` from here.                                                                                                                                      |
-| `enableProcessor(name, { source, className, consumes? })`                              | `{ name }`                        | `append(subscriptionConfiguredEvent)` with target `itx.facets.get(name, { source, className }).processEventBatch`. DURABLE, no handle.                                                                                                                                                                                                                                |
-| `disableProcessor(name)`                                                               | `void`                            | ONE append: `{ name, target: null }`. The DO deletes the facet the row hosted before the append returns (section 9).                                                                                                                                                                                                                                                  |
+| Method                                                                                 | Returns                           | What physically happens                                                                                                                                                                                                                                                                                                                                                        |
+| -------------------------------------------------------------------------------------- | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `cd(path)`                                                                             | `IterateContext`                  | Pure addressing. Absolute by convention, relative resolves. Returns an EDGE context so a later `provide` lends in this session.                                                                                                                                                                                                                                                |
+| `invoke(call: ItxExpressionInput, ...args)`                                            | `Promise<unknown>`                | THE door (live args fold into a name-final call BEFORE the rules). `durableObject.invoke(expression)`. One fork: a terminal `fetch(Request)` rides `durableObject.fetch` with the expression in `x-itx-expression`.                                                                                                                                                            |
+| `provide(match, target: ClientRpcStub \| ItxExpressionInput \| null)`                  | `RewriteRuleHandle`               | THE ONE FRONT DOOR: make `match` mean `target`. A live stub is lent to the DO through a pager owned here (DON'T-PIN) under the key = the canonical match; the rule `match ⇒ itx.builtins.rpcStubs.get('<match>')` RIDES the pager upgrade and the DO appends it as it accepts the pager (one round trip); an expression is the rule alone, appended from here; `null` un-sets. |
+| `subscribe({ name?, target: ItxExpressionInput \| ClientRpcStub \| null, consumes? })` | `SubscriptionHandle` (has `name`) | A live target is lent under the key `subscription:<name>`, its row (target `itx.builtins.rpcStubs.get('subscription:<name>')`) riding the same pager upgrade; an expression target is `append(subscriptionConfiguredEvent(…))` from here.                                                                                                                                      |
+| `enableProcessor(name, { source, className, consumes? })`                              | `{ name }`                        | `append(subscriptionConfiguredEvent)` with target `itx.builtins.facets.get(name, { source, className }).processEventBatch`. DURABLE, no handle.                                                                                                                                                                                                                                |
+| `disableProcessor(name)`                                                               | `void`                            | ONE append: `{ name, target: null }`. The DO deletes the facet the row hosted before the append returns (section 9).                                                                                                                                                                                                                                                           |
 
 The two handles (`RewriteRuleHandle`, `SubscriptionHandle`) are server-side RpcTargets with one
 member, `[Symbol.dispose]`, plus a `name` getter on `SubscriptionHandle`. Disposing undoes the act. capnweb disposes every
@@ -181,13 +181,13 @@ own append, a lent stub's rule, a processor's row are all `itx.builtins.…`, so
 | `kv`                                                  | `.get(k)` `.put(k, v)` `.delete(k)` `.list(prefix?)`                                                                                                                                                                                                                         | `ITX_KV`, `${projectId}:` prefixed                            |
 | `ai`                                                  | Cloudflare's Workers AI binding, VERBATIM: `.run(model, inputs, options?)` `.models()` `.gateway(id).run(req)` `.toMarkdown()` `.autorag(id)`                                                                                                                                | `AI` (Workers AI), the binding object itself                  |
 | `append(...events)`                                   | `→ StreamEvent[]`                                                                                                                                                                                                                                                            | the stream                                                    |
-| `readEvents(afterOffset?, limit?)`                    | `→ { events, scannedThroughOffset }`                                                                                                                                                                                                                                         | the stream                                                    |
+| `readEvents(afterOffset?, limit?)`                    | `→ { events, scannedThroughOffset, atHead }` — a page is cut by the server's byte budget (8 MiB, less while other readers are outstanding) or by `limit`; `atHead` says the durable mark was reached                                                                         | the stream                                                    |
 | `waitForEvent(filter?)`                               | `{ type?, afterOffset?, timeoutMs? } → StreamEvent`                                                                                                                                                                                                                          | the stream                                                    |
 | `cd(path)`                                            | `→ InvokeHandle` onto a sibling context, every call through ITS table (`cd(p).builtins.append(…)` is its physical door)                                                                                                                                                      | `ITERATE_CONTEXT.getByName`                                   |
 | `fetch(request)`                                      | egress: `{{secret:project:NAME}}` substituted → `FALLBACK`                                                                                                                                                                                                                   | the control plane                                             |
 | `rpcStubs`                                            | `.get(rpcStubKey) → RpcStubHandle` · `.list() → string[]` (presence)                                                                                                                                                                                                         | `RpcStubDirectory`                                            |
 | `rewriteRules`                                        | `.list() → { match, target, origin }[]` (the EFFECTIVE table: context rows, masks as `target: null`, and the platform rows, `origin: "platform" \| "context"`) · `.get(match)` · `.resolve(call) → string[]` (the pure chain; `invoke(call) ≡ invoke(resolve(call).at(-1))`) | core state + the platform rows                                |
-| `facets`                                              | `.get(name) → FacetHandle` (a RUNNING facet) · `.get(name, { source, cacheKey?, className })` (load and host it) · `.delete(name)`                                                                                                                                           | `ctx.facets`; mirrors `ctx.facets.get(name, startupCallback)` |
+| `facets`                                              | `.get(name) → FacetHandle` (a RUNNING facet) · `.get(name, { source, cacheKey?, className })` (load and host it) — no delete: a facet leaves with the row that hosted it (section 9)                                                                                         | `ctx.facets`; mirrors `ctx.facets.get(name, startupCallback)` |
 | `subscriptions`                                       | `.list() → SubscriptionListEntry[]` · `.get(name)`                                                                                                                                                                                                                           | core state ⋈ the loop's cursors                               |
 | `workers`                                             | `.get({ source, cacheKey?, className?, props? }) → InvokeHandle`, a stateless WorkerEntrypoint; any exported method                                                                                                                                                          | Worker Loader; the stateless twin of `facets.get`             |
 | `runScript(script, ...args)`                          | sugar: wrap the lambda string → `workers.get({ source }).run(...)`                                                                                                                                                                                                           | same                                                          |
@@ -228,7 +228,7 @@ Same resolver (`resolveContextPath`), two evaluation sites. Deleting either brea
 
 ---
 
-## 6. Vocabulary (a): rpc stubs (`rpc-stub-directory.ts` 350 · `rpc-stub-relay.ts` 201)
+## 6. Vocabulary (a): rpc stubs (`src/context/rpc-stub-directory.ts` · `rpc-stub-relay.ts`)
 
 Two layers, in the order the tutorial builds them.
 
@@ -251,6 +251,11 @@ invokeRpcStub(rpcStubKey, steps):
   else           → RPC_STUB_OFFLINE
 ```
 
+A lend that ends MID-CALL is `RPC_STUB_OFFLINE` too, re-coded at the relay (rpc-stub-relay.ts): the
+lender's recall disposes the session's dup at once, while the DO's un-set of what named the key lands
+one append after the pager's close — a call in that window walks the disposed dup, and the code (never
+capnweb's raw "disposed" message) is what crosses back. Once the un-set lands, `NO_ITX_EXPRESSION_MATCH`.
+
 - **Key**: opaque to the directory, which never parses it. `provide` uses the canonical match
   (`"itx.laptop"`, `"itx.ai.run('gpt-5')"`); `subscribe` uses `subscription:<name>`.
 - **Reconnect**: a new pager under an existing key REPLACES the old one (newest wins). Not a
@@ -260,9 +265,14 @@ invokeRpcStub(rpcStubKey, steps):
   socket is open.
 - **The DO owns both ends.** The rule (or row) that names a lent key is SET by the DO as it
   accepts the key's pager — the edge built the event and sent it inside the upgrade — and UN-SET
-  by the DO on the key's LAST pager close: `rewrite-rule-configured { match, null }` for every
-  rule and `subscription-configured { name, null }` for every subscription whose target is
-  `itx.rpcStubs.get('<key>')`. The edge's teardown only closes the pager. On the log the set has
+  by the DO on the key's LAST pager close: `rewrite-rule-configured { match, target: 'itx.builtins.<match…>' }`
+  (the REMOVAL spelling — never `null`, which would mask a platform row) for every rule and
+  `subscription-configured { name, null }` for every subscription whose target RESOLVES to
+  `itx.builtins.rpcStubs.get('<key>')` — decided against one frozen table (`rowsNamingRpcStub`), so an
+  alias to a shadowed root survives the shadow's stub dying whatever order the rows were configured
+  in, and a row that names the key only through the user's own registry rule goes. The edge's
+  teardown only closes the pager. A last close DURING a pause has its un-set refused; the `resumed`
+  commit un-sets every key a row still names that has no transport then. On the log the set has
   a lower offset than the key's `rpc-stub/attached`. Accepted: an expression rule's handle
   disposed after another session re-set the same match deletes it (last writer wins).
 - **DON'T-PIN**: the client's capnweb stub lives in the stateless worker for the session. The
@@ -302,7 +312,7 @@ ONE file: the rules, the one event, the resolver. Every rule is a row in its tab
    `itx.builtins.ai.run('@cf/…', inputs, opts)`, and a property access on the match (no args) DROPS it.
    Nested inside an object or array literal `@` is THE one argument; `...@` as an object entry
    merges the one argument's fields under the template's own keys, the template winning
-   (`query: { model: 'claude-x', ...@ }` cannot be talked out of its model). Two or more arguments,
+   (`query: { ...@, model: 'claude-x' }` — the stored, key-sorted spelling — cannot be talked out of its model). Two or more arguments,
    or none, where one is required is a refusal at rewrite time. The door refuses `@` in a match and
    in a non-final step of a target; `parse` refuses it in a call.
 
@@ -318,11 +328,13 @@ No stack, no offset, no identity beyond the match.
 string | null }`. Both halves are canonicalized through the codec at build time, so a bad
 spelling fails at the door, never silently in the reduce.
 
-**A live stub behind a pinned match** (`rewrite-rules-argument-pinned.e2e`):
-`provide("itx.ai.run('gpt-5')", fn)`, then `itx.ai.run('gpt-5', inputs)` runs as
-`itx.builtins.rpcStubs.get("itx.ai.run('gpt-5')")(inputs)`, so `fn(inputs)`. No key to invent: the key is the match.
+**A live stub behind a pinned match** (`rewrite-rules-argument-pinned.e2e`, spelled on `itx.llm` because
+`itx.ai` is a root whose `null` would mask): `provide("itx.llm.run('special')", fn)`, then
+`itx.llm.run('special', inputs)` runs as `itx.builtins.rpcStubs.get("itx.llm.run('special')")(inputs)`,
+so `fn(inputs)`. No key to invent: the key is the match.
 
-**A chain** (`rewriteRules.resolve("itx.greeter.hello()")` returns exactly these four lines):
+**A chain** (`rewriteRules.resolve("itx.greeter.hello()")` returns exactly these four lines — for a
+HAND-WRITTEN short rule; a `provide(stub)` rule is already `itx.builtins.…` and its chain is three lines):
 
 ```
 itx.greeter.hello()
@@ -334,20 +346,34 @@ itx.rpcStubs.get('greeterA').hello()
 itx.builtins.rpcStubs.get('greeterA').hello()   ← the fixed point: runs
 ```
 
-**Misha's test** (`rewrite-rules-builtins-root.e2e`): `provide("itx.ai", fake)` shadows `itx.ai` for
+**Misha's test** (`ai-root-shadow-and-fable.e2e`; `rewrite-rules-builtins-root.e2e` runs it on `whoami`):
+`provide("itx.ai", fake)` shadows `itx.ai` for
 the context, `itx.builtins.ai` is the real one throughout, and disposing the handle (or the test
 session ending) restores the platform row.
 
 ---
 
-## 8. The stream and the core reduce (`stream.ts` 598 · `core-processor.ts` 267)
+## 8. The stream and the core reduce (`src/stream/stream.ts` · `core-processor.ts` · `stream-storage.ts`)
 
 One append-only log per context. Offsets shared by durable and ephemeral events (an
 ephemeral consumes an offset, never a row). Idempotency at the door. `waitForEvent`.
 `readEvents` with a scanned-range proof. The DO's own alarm.
 
+**Memory hygiene (the 2026-09-04 memory-budget arc, three commits).** The isolate must never run out
+of memory: one event's body is capped at 8 MiB (`EVENT_BODY_MAX_CHARS`, coded `EVENT_TOO_LARGE` at the
+door); a `readEvents` page is BUDGETED by bytes (8 MiB, down to 512 KiB while other reads are
+outstanding, `READ_OUTSTANDING_BUDGET_BYTES`) and rows (1000), `limit` only shrinks it, and the page
+carries `atHead`; a reduce's checkpoint that would not fit one storage cell is refused BEFORE the
+write (`REDUCE_CHECKPOINT_TOO_LARGE`); a stored row whose body is not JSON surfaces coded
+(`EVENT_UNREADABLE`, `data.offset` names it); the delivery loop keeps a per-context ledger of
+in-flight and pending push bytes (16 MiB totals, 8 MiB per row) and drops a stalled client's pushes
+rather than buffer them; a deterministic refusal (a coded `NOT_A_METHOD`, a `NO_ITX_EXPRESSION_MATCH`)
+HALTS a cursor row at its first attempt instead of climbing the retry ladder. Every SQL statement
+the stream runs lives in ONE typed module, `src/stream/stream-storage.ts`, over `ctx.storage.sql`
+(`node-sqlite-durable-object-storage.ts` is its 41-line node shim for the unit lane).
+
 ONE reduce-only processor runs INLINE at the commit point: `CoreStreamProcessor`
-(slug `core`, contract `4.0.0`). Its state is everything the DO needs synchronously:
+(slug `core`, contract `6.0.0`). Its state is everything the DO needs synchronously:
 
 | Event                                                       | Payload                               | Reduces into                                               |
 | ----------------------------------------------------------- | ------------------------------------- | ---------------------------------------------------------- |
@@ -360,7 +386,7 @@ ONE reduce-only processor runs INLINE at the commit point: `CoreStreamProcessor`
 
 All prefixed `events.iterate.com/`. Control is ORDINARY events: a breaker processor pauses
 the stream by appending `stream/paused`. Runtime state IS reduced state:
-`itx.facets.get('core').snapshot()`. The whole state is plain JSON (zod `record`s and arrays),
+`itx.facets.get('core').snapshot()`. The whole state is plain JSON (hand-written types — no zod on this script — records and arrays),
 so the checkpoint and the live-state snapshot carry it as is.
 
 Event envelope (`src/stream/events.ts`, plain TS types):
@@ -369,7 +395,7 @@ Event envelope (`src/stream/events.ts`, plain TS types):
 
 ---
 
-## 9. Subscriptions and delivery (`subscriptions.ts` 42 · `subscription-delivery.ts` 379)
+## 9. Subscriptions and delivery (`src/stream/subscriptions.ts` · `subscription-delivery.ts`)
 
 A subscription is pure data: a name, a target expression whose terminal is callable with
 `(events, range)`, an optional `consumes` filter. `subscriptionConfiguredEvent(input)` is the
@@ -387,8 +413,9 @@ door and asks the value what it is:
 Nothing is declared on the event. The brand is minted where the built-in mints the handle.
 
 **The one effect of a removal.** When `subscription-configured { name, target: null }` commits
-and the removed row's target HOSTED a facet (`itx.facets.get(name, { source, className })…`, the
-shape `enableProcessor` writes), the DO deletes that facet, storage included, before the
+and the removed row's target HOSTED a facet (a target that RESOLVES to
+`itx.builtins.facets.get(name, spec)…` — the platform's spelling from `enableProcessor`, or a user's
+short one), the DO deletes that facet, storage included, before the
 append returns (`#deleteFacetsWhoseHostingSubscriptionWasRemoved`). A row that only ADDRESSED a
 running facet (`itx.facets.get(name)…`, no spec) deletes nothing. So the raw event is the disablement.
 
@@ -418,14 +445,14 @@ initializer is one line over the scope:
 
 **Lifetimes.**
 
-| Thing                        | Made by                                 | Dies when                                                              |
-| ---------------------------- | --------------------------------------- | ---------------------------------------------------------------------- |
-| a lent rpc stub              | `provide(match, stub)`, `subscribe(fn)` | handle disposed, or the session ends                                   |
-| a rule for a live stub       | `provide(match, stub)`                  | the stub's last pager closes (the DO un-sets it)                       |
-| a rule for an expression     | `provide(match, expression)`            | handle disposed, or the session ends (the handle appends `null`)       |
-| a subscription (expression)  | `subscribe`                             | same as above                                                          |
-| a processor                  | `enableProcessor`                       | its `null` event (verb or raw), which also deletes the facet it hosted |
-| anything spelled as an event | `itx.append(event)`                     | its `null` event                                                       |
+| Thing                        | Made by                                 | Dies when                                                                                                                                   |
+| ---------------------------- | --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| a lent rpc stub              | `provide(match, stub)`, `subscribe(fn)` | handle disposed, or the session ends                                                                                                        |
+| a rule for a live stub       | `provide(match, stub)`                  | the stub's last pager closes (the DO un-sets it)                                                                                            |
+| a rule for an expression     | `provide(match, expression)`            | handle disposed, or the session ends (the handle appends the removal spelling `itx.builtins.<match…>`, only while the row is still its own) |
+| a subscription (expression)  | `subscribe`                             | same as above                                                                                                                               |
+| a processor                  | `enableProcessor`                       | its `null` event (verb or raw), which also deletes the facet it hosted                                                                      |
+| anything spelled as an event | `itx.append(event)`                     | its `null` event                                                                                                                            |
 
 **Fetch** (`src/fetch/rpc-stub-fetch.ts`, parked). A fetch-shaped capability is
 always called through a terminal `.fetch(request)`. Two doors: the plain-HTTP lane
@@ -444,43 +471,45 @@ code; a constant is a property of the code — the inventory is the module's hea
 have consumers, so two exist: `environmentName` (`APP_CONFIG_ENVIRONMENT_NAME`: "poc" on
 workers.dev, "test" in the workers lane, "solo" in the e2e lane) and `deployId`
 (`CF_VERSION_METADATA.id`, "unversioned" where the binding is absent), folded into every loader cacheKey and both served
-at `/version` after the hand-bumped `CODE_VERSION` label: `live-46 poc <version id>`.
+at `/version` after the hand-bumped `CODE_VERSION` label: `<label> poc <version id>`, e.g. `live-47 poc 7474bb76-…`.
 
 ---
 
 ## 11. Code structure
 
-Two ways to count, both honest. **Code lines** (non-blank, non-comment) in non-test `src/`:
-4,481 on the morning of 2026-09-01 → 3,879 at `fe8168c13` → 3,903 after this review's six
-commits (the entrypoint verbs, the `rewrite` verb, the `getDurableObjectClass` chain and the
-`load`/`getEntrypoint` two-step went; the facet-delete effect, the typed interface and the
-cacheKey-gated producer source came). **Raw lines** including comments and blanks: 6,186 in 34
-files. About 38 percent of the source is comment. The first review figure of 6,234 was the raw
-count; it was never a thousand added lines of code.
+Two ways to count, both honest. **Code lines** (non-blank, non-comment) in non-test `src/`,
+the generated bundles excluded: 4,481 on the morning of 2026-09-01 → 3,903 after the 09-02 review
+→ 6,004 on 2026-09-04 after round two (the builtins root, `@`, `itx.ai`, the library tier with three
+connectors, the app config, the memory-hygiene arc's storage module and ledger, and the two review
+rounds' fixes). **Raw lines** including comments and blanks: 9,394 in 42 files. About a third of the
+source is comment.
 
-Every number in this section is a COUNT OF A MOMENT (recounted 2026-09-03) and drifts with the next
-commit — it is kept in one place, the table below, and nowhere else in this document. Recount rather
-than trust it. The rows sum to 6,180; the remaining six lines are the two generated bundles.
+Every number in this section is a COUNT OF A MOMENT (recounted 2026-09-04, round two) and drifts
+with the next commit — it is kept in one place, this section, and nowhere else in this document.
+Recount rather than trust it.
 
-Tests: unit + workers 252; e2e 141 passed and 2 expected fails on 36 files.
+Tests: unit + workers 431 (13 expected fails); e2e 176 passed, 2 expected fails, 11 skipped on 45
+files (the deployed-only ones run against the deployed worker).
 
-| Layer                    | Files (raw lines, comments included)                                                                | Lines |
-| ------------------------ | --------------------------------------------------------------------------------------------------- | ----: |
-| the edge                 | `worker.ts` · `session.ts` · `iterate-context.ts` · `itx-entrypoint.ts`                             |   661 |
-| the DO                   | `iterate-context-durable-object.ts`                                                                 |   694 |
-| expressions + dispatch   | `context/expression.ts` · `dispatch.ts` · `dotted-path-proxy.ts` · `invoke-handle.ts`               |   459 |
-| built-ins + loader       | `context/built-ins.ts` · `worker-loader.ts` · `durable-object-names.ts`                             |   542 |
-| (a) rpc stubs            | `context/rpc-stub-directory.ts` · `rpc-stub-relay.ts`                                               |   557 |
-| (b) rewrite rules        | `context/itx-expression-rewriting.ts`                                                               |   206 |
-| the stream + core        | `stream/stream.ts` · `core-processor.ts` · `events.ts` · `reduce-checkpoint.ts` · `test-support.ts` | 1,141 |
-| subscriptions + delivery | `stream/subscriptions.ts` · `subscription-delivery.ts`                                              |   429 |
-| processors + live state  | `stream/processor.ts` · `live-state.ts` · `sdk/*`                                                   |   801 |
-| fetch (parked)           | `fetch/rpc-stub-fetch.ts`                                                                           |   279 |
-| lib, client demo         | `lib/*` · `client/*` (the generated bundles excluded)                                               |   411 |
+| Layer                    | Files (raw lines, comments included)                                                                                                                                |         Lines |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------: |
+| the edge                 | `worker.ts` · `session.ts` · `iterate-context.ts` · `itx-entrypoint.ts`                                                                                             |           661 |
+| the DO                   | `iterate-context-durable-object.ts`                                                                                                                                 |           694 |
+| expressions + dispatch   | `context/expression.ts` · `dispatch.ts` · `dotted-path-proxy.ts` · `invoke-handle.ts`                                                                               |           459 |
+| built-ins + loader       | `context/built-ins.ts` · `worker-loader.ts` · `durable-object-names.ts`                                                                                             |           542 |
+| (a) rpc stubs            | `context/rpc-stub-directory.ts` · `rpc-stub-relay.ts`                                                                                                               |           557 |
+| (b) rewrite rules        | `context/itx-expression-rewriting.ts` · `built-in-roots.ts`                                                                                                         |           495 |
+| the stream + core        | `stream/stream.ts` · `stream-storage.ts` · `node-sqlite-durable-object-storage.ts` · `core-processor.ts` · `events.ts` · `reduce-checkpoint.ts` · `test-support.ts` | see the files |
+| the library              | `library/index.ts` · `mcp.ts` · `openapi.ts` · `capnweb.ts`                                                                                                         |           715 |
+| configuration            | `app-config.ts`                                                                                                                                                     |           141 |
+| subscriptions + delivery | `stream/subscriptions.ts` · `subscription-delivery.ts`                                                                                                              |           429 |
+| processors + live state  | `stream/processor.ts` · `live-state.ts` · `sdk/*`                                                                                                                   |           801 |
+| fetch (parked)           | `fetch/rpc-stub-fetch.ts`                                                                                                                                           |           279 |
+| lib, client demo         | `lib/*` · `client/*` (the generated bundles excluded)                                                                                                               |           411 |
 
 Error codes (`src/lib/errors.ts`): `NO_ITX_EXPRESSION_MATCH`, `RPC_STUB_OFFLINE`,
 `IDEMPOTENCY_CONFLICT`, `OFFSET_CONFLICT`, `STREAM_PAUSED`, `NOT_A_METHOD`, `NO_FACET`,
-`WAIT_TIMEOUT`, `TIMEOUT`.
+`WAIT_TIMEOUT`, `TIMEOUT`, `EVENT_TOO_LARGE`, `REDUCE_CHECKPOINT_TOO_LARGE`, `EVENT_UNREADABLE`.
 
 ---
 
@@ -504,7 +533,7 @@ Error codes (`src/lib/errors.ts`): `NO_ITX_EXPRESSION_MATCH`, `RPC_STUB_OFFLINE`
   at `itx` (refused at the door). The bare-key question dissolved with the key.
 - **C, done:** ONE facet door `itx.facets.get(name, { source, className })` hosts; `itx.facets.get(name)`
   addresses. `enableProcessor`'s target is
-  `itx.facets.get(name, spec).processEventBatch`; the hosting check in the DO is "a `facets.get` with a spec".
+  `itx.facets.get(name, spec).processEventBatch` (spelled `itx.builtins.facets…` since 09-04); the hosting check in the DO is "a `facets.get` with a spec".
 - **E, done (your follow-up):** `itx.workers.get({ source, className?, props? })` is the stateless twin of
   `facets.get`; `load` and the `getEntrypoint` step are deleted. One door per host kind, named for the
   host; a stateless worker has no name because it has no identity beyond its spec.
@@ -531,7 +560,33 @@ Record<string, string>`, `"cap.js"` the main module), and the old inline wrapper
   `invoke(call) ≡ invoke(resolve(call).at(-1))` is pinned in the unit table and end to end.
 - **`invoke(call, ...args)`** is public on the proxy and the DO with the fetch lane's semantics.
 - Hosting is decided on the RESOLVED target (a user's short spelling hosts like the platform's);
-  `hostedFacet` carries the facet's `name`. Core contract 6.0.0.
+  `hostedFacet` carries the facet's `name`, and the marker FOLLOWS THE RULES: every rule commit
+  re-derives it for every row whose target is not builtins-rooted, so the delivery loop (which
+  re-resolves per push), the removal effect and the M1 recovery always agree on which facet a row
+  owns. Core contract 6.0.0.
+
+### Decided on 2026-09-04, done (memory hygiene — three commits, `94f315ae6` · `ce503fdc1` · `8b99eb39e`)
+
+- An 8 MiB append ceiling (`EVENT_TOO_LARGE`), byte-budgeted `readEvents` pages carrying `atHead`,
+  a checkpoint-size refusal before the write (`REDUCE_CHECKPOINT_TOO_LARGE`), unreadable rows coded
+  (`EVENT_UNREADABLE`), ONE typed SQL storage module (`stream-storage.ts`), a per-context byte ledger
+  for pushes, deterministic-failure halts in the delivery loop. Section 8 has the shapes.
+
+### Decided on 2026-09-04, done (review round two)
+
+- Twenty-one red proofs, twenty fixed live (`src/review-bugs-round2.test.ts`, the workers and e2e
+  files of the same name): what names a dead stub is decided against a frozen table; live args obey
+  the rules; connections are memoized per context and released at the quiesce; hosting markers
+  follow the rules; a stub dying under a pause is un-set on resume; a whole-context override may
+  not name its own context; the subscribe undo is compare-and-set; MCP reads SSE as it arrives;
+  the array half of a match goes through the door. One stays red: JSON5 comments inside call args.
+- The SDK processor host spells `itx.builtins.append` / `.readEvents`: the platform never spells a
+  short name, and `builtins` is a typed member of the context.
+- Reduce and clean: ONE string-literal regex for the whole codec (measured equivalent on 40,000
+  expressions), ONE prototype-method subclass and ONE refusal spelling for the three connectors,
+  ONE pipelined stub walk for the relay and the capnweb connector, `BuiltInScope extends
+LibraryRoots`, the resolver walks from the record with one built-in predicate, the config parsers
+  are exactly the kinds the rows name, knip covers the package.
 
 ### Decided on 2026-09-04, done (arc two)
 

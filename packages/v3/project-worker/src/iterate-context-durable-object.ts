@@ -42,7 +42,12 @@
 
 import { DurableObject } from "cloudflare:workers";
 import { substituteHeaderSecrets } from "@v3/shared/egress";
-import { facetLoaderOwner, loadConfinedWorker, type FacetSpec } from "./context/worker-loader.ts";
+import {
+  facetLoaderOwner,
+  facetSpecOf,
+  loadConfinedWorker,
+  type FacetSpec,
+} from "./context/worker-loader.ts";
 import {
   CoreContract,
   facetSpecFromHostingTarget,
@@ -89,7 +94,7 @@ import {
   rpcStubKeysNamed,
   type ItxExpressionRewriteRule,
 } from "./context/itx-expression-rewriting.ts";
-import { BUILT_IN_ROOTS, isBuiltInRoot } from "./context/built-in-roots.ts";
+import { BUILT_IN_ROOTS } from "./context/built-in-roots.ts";
 import { subscriptionConfiguredEvent } from "./stream/subscriptions.ts";
 import {
   buildBuiltIns,
@@ -118,7 +123,8 @@ const FACET_CALL_WATCHDOG_MS = 60_000;
 const CORE_SLUG = CoreContract.slug;
 
 /** The context worker's bindings (wrangler.jsonc): the DO namespace, the Worker Loader, the two kv
- *  namespaces, the deploy id, the egress terminal — and the `APP_CONFIG_*` vars app-config.ts parses. */
+ *  namespaces, the egress terminal — and, from `AppConfigEnv`, the version-metadata binding and the
+ *  `APP_CONFIG_*` vars app-config.ts parses. */
 export interface Env extends AppConfigEnv {
   ITERATE_CONTEXT: DurableObjectNamespace<IterateContextDurableObject>;
   LOADER: WorkerLoader;
@@ -126,9 +132,6 @@ export interface Env extends AppConfigEnv {
   /** Workers AI — the built-in root `itx.ai`, the binding verbatim (context/built-ins.ts). */
   AI: Ai;
   SECRETS_KV?: KVNamespace;
-  /** Deploy identity — app-config.ts reads it into `deployId`, which every loader cacheKey folds in
-   *  so a redeploy mints fresh isolates. */
-  CF_VERSION_METADATA?: { id: string };
   /** The egress terminal this context's `fetch` bottoms out at (secret-substituted, then sent). */
   FALLBACK: Fetcher;
 }
@@ -168,7 +171,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         payload: { rpcStubKey },
       }).catch(() => undefined);
       // THE STUB IS GONE, SO IS WHAT NAMED IT: when a key's LAST pager closes, every rewrite rule and
-      // every subscription whose target is `itx.rpcStubs.get('<key>')` is un-set — the durable half
+      // every subscription whose target RESOLVES to `itx.builtins.rpcStubs.get('<key>')` is un-set — the durable half
       // of "a provided stub's rule dies with the stub". Decided HERE and not in the lender's session
       // teardown because only this side knows the truth: a reconnect REPLACES the pager (never a
       // detach), so the reconnected session's rule survives a late-dying old session, while a
@@ -205,7 +208,6 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   #rowsForRpcStubCensus(): {
     rules: ItxExpressionRewriteRule[];
     subscriptionTargets: Record<string, ItxExpression>;
-    isBuiltInRoot: (root: string) => boolean;
   } {
     const { itxExpressionRewriteRules, subscriptions } = this.#stream.coreReducedState;
     return {
@@ -213,7 +215,6 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       subscriptionTargets: Object.fromEntries(
         Object.entries(subscriptions).map(([name, row]) => [name, row.target]),
       ),
-      isBuiltInRoot,
     };
   }
 
@@ -288,9 +289,9 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     return committedEvents;
   }
 
-  /** THE ONE EFFECT of a subscription removal: a row whose target HOSTED a facet —
-   *  `itx.facets.get(name, { source, className })…`, the shape `enableProcessor` writes — takes the
-   *  facet with it, storage included, so `subscription-configured { name, target: null }` IS the
+  /** THE ONE EFFECT of a subscription removal: a row whose target HOSTED a facet — one that RESOLVED
+   *  to `itx.builtins.facets.get(name, spec)…` (the platform's spelling from `enableProcessor`, or a
+   *  user's short one; the reduce marks it `hostedFacet`) — takes the facet with it, storage included, so `subscription-configured { name, target: null }` IS the
    *  disablement (raw event or verb alike) and a re-enable rebuilds from the log. A row that only
    *  ADDRESSED a running facet (`itx.facets.get(name)…`, no spec) deletes nothing: it never owned it.
    *  Done here, after the commit and before the append returns, because only the pre-commit state
@@ -513,13 +514,8 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       Date.now() - this.#lastActivityMs >= IDLE_QUIESCE_AFTER_MS &&
       this.#facetWorkInFlight === 0
     ) {
-      for (const facetName of this.#liveFacetNames) {
-        try {
-          this.ctx.facets.abort(facetName, "idle quiesce");
-        } catch {
-          /* facet not running — already quiesced */
-        }
-      }
+      for (const facetName of this.#liveFacetNames)
+        this.#abortFacetIfRunning(facetName, "idle quiesce");
       this.#liveFacetNames.clear(); // aborted facets re-materialize on their next call
       // Same doctrine for the borrowed stubs: holding one pins this actor awake, and a page
       // always borrows it back — return them with the idle facets. And for the library's live
@@ -547,6 +543,10 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     spec: FacetSpec | undefined,
     itxExpressionSteps: ItxExpression,
   ): Promise<unknown> {
+    if (typeof name !== "string")
+      throw new Error(
+        "itx.facets.get(name, spec?): name the facet; pass { source, className } to load and host it",
+      );
     if (itxExpressionSteps.length === 0) throw new Error(`facet: name a method`);
     // The core reduce answers at its facet-shaped address with a synthesized view — it is not a
     // facet, pins nothing, needs no watchdog, and can never be hosted.
@@ -572,11 +572,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     // eviction; a bare name reads it — an unknown name is NO_FACET.
     let facetStartupMemo = this.ctx.storage.kv.get(`facet:${name}`) as FacetSpec | undefined;
     if (spec) {
-      const storedSpec: FacetSpec = {
-        source: spec.source,
-        ...(spec.cacheKey !== undefined && { cacheKey: spec.cacheKey }),
-        className: spec.className,
-      };
+      const storedSpec = facetSpecOf(spec);
       if (!facetStartupMemo || JSON.stringify(facetStartupMemo) !== JSON.stringify(storedSpec))
         this.ctx.storage.kv.put(`facet:${name}`, storedSpec);
       facetStartupMemo = storedSpec;
@@ -600,11 +596,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
             )
           : undefined;
         if (spec) {
-          const recovered: FacetSpec = {
-            source: spec.source as FacetSpec["source"],
-            ...(spec.cacheKey !== undefined && { cacheKey: spec.cacheKey }),
-            className: spec.className,
-          };
+          const recovered = facetSpecOf(spec as FacetSpec);
           this.ctx.storage.kv.put(`facet:${name}`, recovered);
           facetStartupMemo = recovered;
         }
@@ -647,13 +639,8 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       const previousLoaderId = this.ctx.storage.kv.get(`facet:${name}:loader-id`) as
         | string
         | undefined;
-      if (previousLoaderId !== undefined && previousLoaderId !== loaderId) {
-        try {
-          this.ctx.facets.abort(name, "loaded identity changed");
-        } catch {
-          /* facet not running */
-        }
-      }
+      if (previousLoaderId !== undefined && previousLoaderId !== loaderId)
+        this.#abortFacetIfRunning(name, "loaded identity changed");
       if (previousLoaderId !== loaderId)
         this.ctx.storage.kv.put(`facet:${name}:loader-id`, loaderId);
       const facet = this.ctx.facets.get(name, () => ({ class: klass }));
@@ -682,11 +669,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         );
       } catch (error) {
         if (errorCode(error) === "TIMEOUT") {
-          try {
-            this.ctx.facets.abort(name, "call timed out");
-          } catch {
-            /* not running */
-          }
+          this.#abortFacetIfRunning(name, "call timed out");
           this.#liveFacetNames.delete(name);
         }
         throw error;
@@ -718,6 +701,15 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   /** Delete a facet, storage included — the removal effect of `subscription-configured { target: null }`
    *  (`disableProcessor` ends here; there is no delete verb). A
    *  re-load into the same name is a clean rebuild, never a resume from orphaned state. */
+  /** Abort a facet that is running; one that is not (already quiesced, never started) is nothing. */
+  #abortFacetIfRunning(name: string, reason: string): void {
+    try {
+      this.ctx.facets.abort(name, reason);
+    } catch {
+      /* facet not running */
+    }
+  }
+
   #deleteFacet(name: string): void {
     if (name === CORE_SLUG)
       throw new Error(`"${name}" is the core reduce — always on, never a facet`);
@@ -737,7 +729,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
    *  Request is the same door). */
   async invoke(call: ItxExpressionInput, ...args: unknown[]): Promise<unknown> {
     this.#recordActivityForQuietClock();
-    return this.#itxExpressionResolver.invoke(call, args.length > 0 ? args : undefined);
+    return this.#itxExpressionResolver.invoke(call, ...args);
   }
 
   // ── native fetch: the rpc-stub pager door, the fetch lane, egress ──
@@ -766,7 +758,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         headers.delete(ITX_EXPRESSION_FETCH_HEADER);
         const result = await this.#itxExpressionResolver.invoke(
           itxExpressionEndingInFetch(itxExpression),
-          [new Request(request, { headers })],
+          new Request(request, { headers }),
         );
         return result instanceof Response
           ? result

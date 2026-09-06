@@ -66,7 +66,7 @@ describe("connectToCapnweb, batch transport", () => {
     } as unknown as LibraryItx;
     const conn = await connectToCapnweb(itx, "https://api.example/rpc", { transport: "batch" });
     await expect((conn as any).hello("x")).rejects.toThrow(
-      /batch to https:\/\/api.example\/rpc failed: 502/,
+      /batch to https:\/\/api.example\/rpc returned 502/,
     );
   });
 });

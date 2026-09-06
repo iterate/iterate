@@ -9,7 +9,7 @@
 // (`/expression/<path>?context=…&itx=…`) works like any other.
 
 import { RpcTarget } from "capnweb";
-import type { LibraryItx } from "./index.ts";
+import { refuseUnlessOk, subclassWithMethods, type LibraryItx } from "./index.ts";
 
 /** Options for `connectToOpenApi`: `baseUrl` overrides the document's first server; `headers` ride on
  *  every operation call (and on the spec fetch only when the spec shares the API's host). */
@@ -47,7 +47,11 @@ export async function connectToOpenApi(
   if (typeof spec?.openapi !== "string")
     throw new Error(`connectToOpenApi: ${specUrl ?? "the document"} is not an OpenAPI 3 document`);
   const operations = listOperations(spec);
-  const Connection = withOperationMethods(operations);
+  const Connection = subclassWithMethods(
+    OpenApiConnection,
+    operations.map((operation) => operation.operationId),
+    (self, name, input) => self.call(name, input as Record<string, unknown> | undefined),
+  );
   return new Connection(
     itx,
     operations,
@@ -61,7 +65,7 @@ export async function connectToOpenApi(
 export class OpenApiConnection extends RpcTarget {
   readonly #itx: LibraryItx;
   readonly #operations: Map<string, OpenApiOperation>;
-  readonly #base: URL;
+  readonly #requestBaseUrl: URL;
   readonly #headers: Record<string, string>;
   constructor(
     itx: LibraryItx,
@@ -72,7 +76,7 @@ export class OpenApiConnection extends RpcTarget {
     super();
     this.#itx = itx;
     this.#operations = new Map(operations.map((operation) => [operation.operationId, operation]));
-    this.#base = base;
+    this.#requestBaseUrl = base;
     this.#headers = headers;
   }
   /** Every operation the document declares with an `operationId`. */
@@ -86,7 +90,7 @@ export class OpenApiConnection extends RpcTarget {
     if (!operation) throw new Error(`connectToOpenApi: no operation "${operationId}"`);
     const fields = { ...(input ?? {}) };
     let resolvedPath = operation.path;
-    const url = new URL(this.#base);
+    const url = new URL(this.#requestBaseUrl);
     const headers = new Headers(this.#headers);
     for (const parameter of operation.parameters) {
       const value = fields[parameter.name];
@@ -124,35 +128,13 @@ export class OpenApiConnection extends RpcTarget {
     const response = await this.#itx.fetch(
       new Request(url, { method: operation.method.toUpperCase(), headers, body }),
     );
-    if (!response.ok) {
-      const snippet = (await response.text().catch(() => "")).slice(0, 300);
-      throw new Error(
-        `${operation.method.toUpperCase()} ${url.pathname} (${operationId}) returned ${response.status}${snippet ? `: ${snippet}` : ""}`,
-      );
-    }
+    await refuseUnlessOk(
+      response,
+      `${operation.method.toUpperCase()} ${url.pathname} (${operationId})`,
+    );
     const contentType = response.headers.get("content-type") ?? "";
     return contentType.includes("json") ? await response.json() : await response.text();
   }
-}
-
-// `then` is reserved so an operation so named can never make the connection THENABLE (see mcp.ts).
-const RESERVED_MEMBERS = new Set(["constructor", "then", "operations", "call"]);
-
-/** A per-connection subclass whose PROTOTYPE carries one method per operation (prototype methods are
- *  what Workers RPC and capnweb traverse — see mcp.ts). */
-function withOperationMethods(operations: OpenApiOperation[]): typeof OpenApiConnection {
-  const Connection = class extends OpenApiConnection {};
-  for (const { operationId } of operations) {
-    if (RESERVED_MEMBERS.has(operationId) || !/^[A-Za-z_$][\w$]*$/.test(operationId)) continue;
-    Object.defineProperty(Connection.prototype, operationId, {
-      value(this: OpenApiConnection, input?: Record<string, unknown>) {
-        return this.call(operationId, input);
-      },
-      writable: true,
-      configurable: true,
-    });
-  }
-  return Connection;
 }
 
 async function fetchDocument(
@@ -161,11 +143,12 @@ async function fetchDocument(
   options: OpenApiConnectOptions,
 ): Promise<OpenApiDocument> {
   // auth headers reach the spec only when it lives on the API's host (apps/os `specFetchHeaders`)
-  const apiHost = options.baseUrl ? new URL(options.baseUrl).host : new URL(specUrl).host;
-  const headers = new URL(specUrl).host === apiHost ? (options.headers ?? {}) : {};
-  const response = await itx.fetch(new Request(specUrl, { headers }));
-  if (!response.ok)
-    throw new Error(`connectToOpenApi: fetching ${specUrl} returned ${response.status}`);
+  const sameHost = !options.baseUrl || new URL(options.baseUrl).host === new URL(specUrl).host;
+  const headers = sameHost ? (options.headers ?? {}) : {};
+  const response = await refuseUnlessOk(
+    await itx.fetch(new Request(specUrl, { headers })),
+    `connectToOpenApi: fetching ${specUrl}`,
+  );
   return (await response.json()) as OpenApiDocument;
 }
 
@@ -213,10 +196,10 @@ function listOperations(spec: OpenApiDocument): OpenApiOperation[] {
         operationId: op.operationId,
         method,
         path,
-        parameters: [...pathParameters, ...own].map((p) => ({
-          name: p.name,
-          in: p.in,
-          ...(p.required !== undefined && { required: p.required }),
+        parameters: [...pathParameters, ...own].map(({ name, in: location, required }) => ({
+          name,
+          in: location,
+          required,
         })),
         hasRequestBody: op.requestBody != null,
         ...(typeof op.summary === "string" && { summary: op.summary }),

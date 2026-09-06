@@ -19,6 +19,7 @@ import { dialRpcStubFetch } from "../fetch/rpc-stub-fetch.ts";
 import { codedError } from "../lib/errors.ts";
 import type { StreamEventInput } from "../stream/events.ts";
 import type { ItxExpression } from "./expression.ts";
+import { walkStepsOnRpcStub } from "./invoke-handle.ts";
 import {
   disposeRpcStub,
   encodeRpcStubPagerAttachRequest,
@@ -40,54 +41,42 @@ export type ClientRpcStub = { dup(): ClientRpcStub; [k: string]: unknown };
  *  WebSocket. Minted fresh per page and returned at the DO's idle quiesce. */
 class LentRpcStub extends WorkersRpcTarget {
   #clientRpcStub: ClientRpcStub;
-  /** SHARED across every page of one pager (a `{ value }` holder), flipped by the ONE `onRpcBroken`
-   *  registration in `lendRpcStubOverPager`. capnweb has no `offRpcBroken`, so registering per lent
-   *  stub would accumulate a listener per page for the session's life — the leak
-   *  rpc-stub-relay.test.ts pins. capnweb fires onRpcBroken BEFORE it rejects the in-flight import,
-   *  so a call caught below sees this already true — no race. */
-  #clientSessionBroken: { value: boolean };
+  /** SHARED across every page of one pager (a `{ reason }` holder), set ONCE by whatever ends the
+   *  lend first — the ONE `onRpcBroken` registration in `lendRpcStubOverPager` (the client's session
+   *  broke) or the pager's close (the lender recalled the stub; the DO returned it) — always BEFORE
+   *  the session's dup is disposed, so a call already walking the dup re-codes below. capnweb has no
+   *  `offRpcBroken`, so registering per lent stub would accumulate a listener per page for the
+   *  session's life — the leak rpc-stub-relay.test.ts pins. capnweb fires onRpcBroken BEFORE it
+   *  rejects the in-flight import, so a call caught below sees the reason already set — no race. */
+  #lendEnded: { reason: string | null };
   #durableObject: IterateContextDurableObjectStub;
   constructor(
     clientRpcStub: ClientRpcStub,
-    clientSessionBroken: { value: boolean },
+    lendEnded: { reason: string | null },
     durableObject: IterateContextDurableObjectStub,
   ) {
     super();
     this.#clientRpcStub = clientRpcStub;
-    this.#clientSessionBroken = clientSessionBroken;
+    this.#lendEnded = lendEnded;
     this.#durableObject = durableObject;
   }
 
-  /** Walk itx-expression steps off the session's capnweb stub: a property step pipelines through
-   *  the stub; a call step calls the method; the ANONYMOUS call step (`""`) calls the value itself
-   *  (a bare function lent as a capability). */
+  /** Walk itx-expression steps off the session's capnweb stub — the ONE pipelined walk
+   *  (invoke-handle.ts `walkStepsOnRpcStub`), awaited once at the end so a rejection anywhere in the
+   *  chain lands where the callers' catch → #recodeIfLendEnded sees it. */
   async #walkItxExpressionSteps(itxExpressionSteps: ItxExpression): Promise<unknown> {
-    // NO await inside the loop: on a capnweb stub every step is a PIPELINED path — a property read
-    // yields a stub for the property, a call yields a promise that is itself a stub — so an n-step
-    // chain costs the client ONE round trip, flushed by the single await at the end. A rejection
-    // anywhere in the chain lands there too, where the callers' catch → #recodeIfBroken sees it.
-    let value: unknown = this.#clientRpcStub;
-    for (const step of itxExpressionSteps) {
-      if (typeof step === "string") value = (value as Record<string, unknown>)[step];
-      else {
-        // A DIRECT call on the stub — never `.apply`: reading `.apply` off a capnweb stub's method
-        // is itself a pipelined remote path (dispatch.ts's DataCloneError learning).
-        const [method, ...args] = step;
-        value =
-          method === ""
-            ? (value as (...a: unknown[]) => unknown)(...args)
-            : (value as Record<string, (...a: unknown[]) => unknown>)[method](...args);
-      }
-    }
-    return await value;
+    return await walkStepsOnRpcStub(this.#clientRpcStub, itxExpressionSteps);
   }
 
-  /** The client died mid-call: capnweb throws its raw, UNCODED close error. Re-code LOCALLY to
-   *  RPC_STUB_OFFLINE so the CODE (never a message) crosses the Workers-RPC hop back to the caller
-   *  (lib/errors.ts: classify by code across a hop). A genuine app error propagates untouched. */
-  #recodeIfBroken(e: unknown, what: string): never {
-    if (this.#clientSessionBroken.value)
-      throw codedError("RPC_STUB_OFFLINE", `the lent rpc stub's client went offline ${what}`);
+  /** The lend ended mid-call — the client died (capnweb throws its raw, UNCODED close error), or the
+   *  lender recalled the stub while the DO still held the rule naming it (the DO's un-set lands one
+   *  append AFTER the pager's close; a call in that window walks the disposed dup and capnweb throws
+   *  its raw "disposed" error — review round 2, edge#13). Re-code LOCALLY to RPC_STUB_OFFLINE so the
+   *  CODE (never a message) crosses the Workers-RPC hop back to the caller (lib/errors.ts: classify
+   *  by code across a hop). A genuine app error propagates untouched. */
+  #recodeIfLendEnded(e: unknown, what: string): never {
+    if (this.#lendEnded.reason)
+      throw codedError("RPC_STUB_OFFLINE", `the lent rpc stub ${this.#lendEnded.reason} ${what}`);
     throw e;
   }
 
@@ -109,7 +98,7 @@ class LentRpcStub extends WorkersRpcTarget {
         this.#durableObject,
       );
     } catch (e) {
-      this.#recodeIfBroken(e, "mid-fetch");
+      this.#recodeIfLendEnded(e, "mid-fetch");
     }
   }
 
@@ -117,7 +106,7 @@ class LentRpcStub extends WorkersRpcTarget {
     try {
       return await this.#walkItxExpressionSteps(itxExpressionSteps);
     } catch (e) {
-      this.#recodeIfBroken(e, "mid-invoke");
+      this.#recodeIfLendEnded(e, "mid-invoke");
     }
   }
 }
@@ -139,10 +128,11 @@ export async function lendRpcStubOverPager(
   waitUntil: (p: Promise<unknown>) => void,
 ): Promise<{ dispose(): void }> {
   const sessionRpcStub = clientRpcStub.dup(); // dup FIRST: a value that is not a stub fails here, before any socket
-  // ONE shared broken flag for the whole pager — every lent stub reads it; the single onRpcBroken
-  // registration below flips it. (Registering per page would leak a listener per page: capnweb has
-  // no offRpcBroken. rpc-stub-relay.test.ts pins it.)
-  const clientSessionBroken = { value: false };
+  // ONE shared "the lend ended" reason for the whole pager — every lent stub reads it; set by the
+  // single onRpcBroken registration below or by the one place the dup is disposed. (Registering
+  // onRpcBroken per page would leak a listener per page: capnweb has no offRpcBroken.
+  // rpc-stub-relay.test.ts pins it.)
+  const lendEnded: { reason: string | null } = { reason: null };
   // THE PAGER WEBSOCKET, opened through the DO's fetch door: the header is the attach request.
   // Nothing but pages ever ride the socket (fetch-upgrade traffic has its own leg,
   // fetch/rpc-stub-fetch.ts).
@@ -208,25 +198,33 @@ export async function lendRpcStubOverPager(
       durableObject
         .lendRpcStub({
           rpcStubKey,
-          stub: new LentRpcStub(sessionRpcStub, clientSessionBroken, durableObject),
+          stub: new LentRpcStub(sessionRpcStub, lendEnded, durableObject),
         })
         .catch(() => undefined), // offline throws — ignore; the DO's page times out on its own
     );
   });
-  const disposeSessionRpcStub = () => disposeRpcStub(sessionRpcStub);
+  // THE ONE PLACE the session's dup is disposed, the reason set FIRST (the first reason wins): a call
+  // already walking the dup — the DO's un-set of what names the key lands one append after the
+  // pager's close — re-codes to RPC_STUB_OFFLINE instead of surfacing capnweb's raw "disposed" error.
+  const disposeSessionRpcStub = (reason: string) => {
+    lendEnded.reason ??= reason;
+    disposeRpcStub(sessionRpcStub);
+  };
   // The library's own death signal, registered ONCE: the client's capnweb session broke → the
-  // session's stub can never answer again. Flip the shared flag (so in-flight invokes re-code to
+  // session's stub can never answer again. Set the shared reason (so in-flight invokes re-code to
   // RPC_STUB_OFFLINE) AND close the pager NOW so the DO returns the stub immediately — without this
   // the presence list lies until a page times out (10s).
   (sessionRpcStub as { onRpcBroken?: (cb: () => void) => void }).onRpcBroken?.(() => {
-    clientSessionBroken.value = true;
+    lendEnded.reason = "went offline (its client session broke)";
     try {
       pagerWebSocket.close(1000, "client session broke");
     } catch {
       /* already closing */
     }
   });
-  pagerWebSocket.addEventListener("close", disposeSessionRpcStub);
+  pagerWebSocket.addEventListener("close", () =>
+    disposeSessionRpcStub("was returned (its pager closed)"),
+  );
   return {
     dispose: () => {
       try {
@@ -234,7 +232,7 @@ export async function lendRpcStubOverPager(
       } catch {
         /* already closing */
       }
-      disposeSessionRpcStub();
+      disposeSessionRpcStub("was recalled by its lender");
     },
   };
 }

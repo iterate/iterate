@@ -61,11 +61,13 @@
 import { codedError } from "../lib/errors.ts";
 import { jsonEqual } from "../lib/patch.ts";
 import type { StreamEventInput } from "../stream/events.ts";
+import { isBuiltInRoot } from "./built-in-roots.ts";
 import { callOn, walkSteps } from "./dispatch.ts";
 import {
   containsItxExpressionHole,
   isItxExpressionHole,
   ITX_EXPRESSION_MERGE_KEY,
+  itxExpressionStepName,
   parse,
   parseItxExpressionPrefix,
   print,
@@ -84,7 +86,7 @@ export type ItxExpressionRewriteRule = { match: ItxExpressionPrefix; target: Itx
 export const BUILTINS_ROOT = "builtins";
 
 /** The proxy's own verbs — a match may not start with one (rule 6). */
-export const PROXY_VERBS: readonly string[] = [
+const PROXY_VERBS: readonly string[] = [
   "cd",
   "invoke",
   "provide",
@@ -102,7 +104,7 @@ export function isBuiltInsRooted(call: ItxExpression): boolean {
 
 /** What `matchItxExpressionPrefix` claims: the final step's unpinned args (present when the final
  *  prefix step matched a call step) and the call's steps after the match. */
-export type ItxExpressionPrefixMatch = { unpinnedArgs?: unknown[]; stepsAfterMatch: ItxExpression };
+type ItxExpressionPrefixMatch = { unpinnedArgs?: unknown[]; stepsAfterMatch: ItxExpression };
 
 /** Rule 2: claim `call` with `match`, step by step from the start — or null. */
 export function matchItxExpressionPrefix(
@@ -161,7 +163,7 @@ function fillItxExpressionHoles(
   target: ItxExpression,
 ): unknown[] {
   const spelled = print(target, { holes: true });
-  const theOne = (what: string): unknown => {
+  const theOneUnpinnedArg = (what: string): unknown => {
     if (unpinnedArgs?.length !== 1)
       throw new Error(
         `${what} in the target ${JSON.stringify(spelled)} takes exactly one argument, got ${unpinnedArgs?.length ?? 0}`,
@@ -169,13 +171,13 @@ function fillItxExpressionHoles(
     return unpinnedArgs[0];
   };
   const fill = (value: unknown): unknown => {
-    if (isItxExpressionHole(value)) return theOne("a nested `@`");
+    if (isItxExpressionHole(value)) return theOneUnpinnedArg("a nested `@`");
     if (Array.isArray(value)) return value.map(fill);
     if (value !== null && typeof value === "object") {
       const template = value as Record<string, unknown>;
       const out: Record<string, unknown> = {};
-      if (Object.hasOwn(template, ITX_EXPRESSION_MERGE_KEY)) {
-        const source = theOne("`...@`");
+      if (template[ITX_EXPRESSION_MERGE_KEY] === true) {
+        const source = theOneUnpinnedArg("`...@`");
         if (source === null || typeof source !== "object" || Array.isArray(source))
           throw new Error(
             `\`...@\` in the target ${JSON.stringify(spelled)} merges an object; the argument is ${JSON.stringify(source)}`,
@@ -194,7 +196,7 @@ function fillItxExpressionHoles(
 }
 
 /** Rule 4 (and 7): the call with the matched prefix replaced by the target. */
-export function applyItxExpressionRewriteRule(
+function applyItxExpressionRewriteRule(
   target: ItxExpression,
   match: ItxExpressionPrefixMatch,
 ): ItxExpression {
@@ -217,11 +219,11 @@ export function applyItxExpressionRewriteRule(
  *  NO_ITX_EXPRESSION_MATCH when no row matches and the root is no built-in, or when the winning row is
  *  a mask (default-deny), and a depth error after 32 rewrites. `rules` is a THUNK read at most once,
  *  and NOT AT ALL when the call is already builtins-rooted: a fixed-point dispatch never materializes
- *  the table. The implicit platform row is applied here, never stored. */
+ *  the table. The implicit platform row is applied here, never stored; "is this root built in" is the
+ *  leaf list's one predicate (context/built-in-roots.ts). */
 export function resolveItxExpression(
   rules: () => readonly ItxExpressionRewriteRule[],
   call: ItxExpression,
-  isBuiltInRoot: (root: string) => boolean,
 ): ItxExpression[] {
   const chain: ItxExpression[] = [call];
   let current = call;
@@ -242,9 +244,8 @@ export function resolveItxExpression(
       chain.push(current);
       continue;
     }
-    const rootStep = current[1];
-    const root = Array.isArray(rootStep) ? rootStep[0] : rootStep;
-    if (current[0] === "itx" && typeof root === "string" && isBuiltInRoot(root)) {
+    const root = itxExpressionStepName(current[1]);
+    if (current[0] === "itx" && isBuiltInRoot(root)) {
       // THE IMPLICIT PLATFORM ROW: `itx.<root> ⇒ itx.builtins.<root>` — the fixed point, done.
       current = ["itx", BUILTINS_ROOT, ...current.slice(1)];
       chain.push(current);
@@ -259,9 +260,11 @@ export function resolveItxExpression(
 
 // ── THE ONE EVENT: build it, the caller appends it ──
 
-/** `itx/rewrite-rule-configured`, STRING at rest — both halves canonicalized through the codec now, so
- *  a spelling the parser refuses fails LOUD here, in the parser's own words (the reduce would skip a
- *  target that does not parse — a rule that silently never exists). `target: null` un-sets the rule at
+/** `itx/rewrite-rule-configured`, STRING at rest — both halves canonicalized through the codec (for
+ *  the ARRAY half that round trip is the only validation: reserved names, an anonymous call at the
+ *  root, an argless pinned step), so a spelling the parser refuses fails LOUD here, in the parser's own
+ *  words (the reduce would skip a target that does not parse — a rule that silently never exists).
+ *  `target: null` un-sets the rule at
  *  `match` (a MASK when a platform row lies beneath, a deletion otherwise); the platform-equivalent
  *  target `itx.builtins.<match…>` restores the platform row (the reduce deletes the row). Rule 6 is
  *  enforced here, at the door. */
@@ -278,8 +281,7 @@ export function rewriteRuleConfiguredEvent(
     throw new Error(
       `\`@\` (the caller's input) is legal only in a rewrite rule's target, not its match (${JSON.stringify(print(matchPrefix))})`,
     );
-  const firstStep = matchPrefix[1];
-  const firstName = Array.isArray(firstStep) ? firstStep[0] : firstStep;
+  const firstName = itxExpressionStepName(matchPrefix[1]);
   if (firstName === BUILTINS_ROOT)
     throw new Error(
       `a rewrite rule's match may not be rooted at "itx.builtins" — the reserved root is the fixed point every call rewrites TO, never a name a rule claims (${JSON.stringify(print(matchPrefix))})`,
@@ -333,9 +335,8 @@ export function rowsNamingRpcStub(args: {
   rpcStubKey: string;
   rules: readonly ItxExpressionRewriteRule[];
   subscriptionTargets: Record<string, ItxExpression>;
-  isBuiltInRoot: (root: string) => boolean;
 }): { ruleMatches: ItxExpressionPrefix[]; subscriptionNames: string[] } {
-  const { rpcStubKey, rules, subscriptionTargets, isBuiltInRoot } = args;
+  const { rpcStubKey, rules, subscriptionTargets } = args;
   const direct = rules.filter(
     (rule) => rule.target !== null && namesRpcStubDirectly(rule.target, rpcStubKey),
   );
@@ -343,7 +344,7 @@ export function rowsNamingRpcStub(args: {
   const namesThroughRemaining = (target: ItxExpression): boolean => {
     try {
       return namesRpcStubDirectly(
-        resolveItxExpression(() => remaining, target, isBuiltInRoot).at(-1)!,
+        resolveItxExpression(() => remaining, target).at(-1)!,
         rpcStubKey,
       );
     } catch {
@@ -366,9 +367,8 @@ export function rowsNamingRpcStub(args: {
 export function rpcStubKeysNamed(args: {
   rules: readonly ItxExpressionRewriteRule[];
   subscriptionTargets: Record<string, ItxExpression>;
-  isBuiltInRoot: (root: string) => boolean;
 }): Set<string> {
-  const { rules, subscriptionTargets, isBuiltInRoot } = args;
+  const { rules, subscriptionTargets } = args;
   const keys = new Set<string>();
   const targets = [
     ...rules.flatMap((rule) => (rule.target === null ? [] : [rule.target])),
@@ -376,7 +376,7 @@ export function rpcStubKeysNamed(args: {
   ];
   for (const target of targets) {
     try {
-      const resolved = resolveItxExpression(() => rules, target, isBuiltInRoot).at(-1)!;
+      const resolved = resolveItxExpression(() => rules, target).at(-1)!;
       const getStep = resolved[3];
       if (
         resolved[1] === BUILTINS_ROOT &&
@@ -405,9 +405,11 @@ export function rewriteRuleRemovedEvent(match: ItxExpressionInput): StreamEventI
 // ── THE RESOLVER (parent-constructed over the physical built-ins and a reader of the CURRENT rules) ──
 
 export class ItxExpressionResolver {
-  /** The built-ins: a plain record whose keys (kv, append, read, cd, …) are the physical-layer roots
-   *  — `itx.builtins.<root>` reaches them directly; `itx.<root>` reaches them through the implicit
-   *  platform row unless the context's table says otherwise (rule 5). */
+  /** The built-ins: a plain record whose keys (kv, append, readEvents, cd, …) are the physical-layer
+   *  roots — `itx.builtins.<root>` reaches them directly; `itx.<root>` reaches them through the
+   *  implicit platform row unless the context's table says otherwise (rule 5). The record's keys and
+   *  the leaf list `resolveItxExpression` consults are one set (built-ins.ts asserts it at the type
+   *  level); the record is walked here, the list decides there. */
   readonly #builtIns: Record<string, unknown>;
   readonly #rewriteRules: () => readonly ItxExpressionRewriteRule[];
 
@@ -422,42 +424,39 @@ export class ItxExpressionResolver {
   /** PURE: the chain of rewrites from `call` to the builtins-rooted call that would run (rules 3–5).
    *  Nothing is dispatched. The one law: `invoke(call)` ≡ `invoke(resolve(call).at(-1))`. */
   resolve(call: ItxExpressionInput): ItxExpression[] {
-    return resolveItxExpression(this.#rewriteRules, toItxExpression(call), (root) =>
-      Object.hasOwn(this.#builtIns, root),
-    );
+    return resolveItxExpression(this.#rewriteRules, toItxExpression(call));
   }
 
-  /** Resolve + run one call: the chain's last element, evaluated against the physical scope — the
-   *  root after `builtins`, its args if that step is a call, the remaining steps (dispatch.ts
-   *  walkSteps). Runtime `extraArgs` are LIVE args (a Request, a callback — not expression data; the
-   *  fetch lane and the public `invoke(call, ...args)` hand them in): when the call ends in a NAME
-   *  they are FOLDED INTO it BEFORE resolving — `invoke("itx.kv.get", "k")` IS `itx.kv.get("k")`, so a
-   *  template fills, a pinned row matches and a mask refuses exactly as the dotted call would; when
-   *  it ends in a call they apply to the value the expression denotes. */
-  async invoke(call: ItxExpressionInput, extraArgs?: unknown[]): Promise<unknown> {
+  /** Resolve + run one call: the chain's last element, walked against the physical scope from the
+   *  record (dispatch.ts walkSteps — the root after `builtins` is the first step). Runtime `extraArgs`
+   *  are LIVE args (a Request, a callback — not expression data; the fetch lane and the public
+   *  `invoke(call, ...args)` hand them in): when the call ends in a NAME they are FOLDED INTO it BEFORE
+   *  resolving — `invoke("itx.kv.get", "k")` IS `itx.kv.get("k")`, so a template fills, a pinned row
+   *  matches and a mask refuses exactly as the dotted call would; when it ends in a call they apply to
+   *  the value the expression denotes. */
+  async invoke(call: ItxExpressionInput, ...extraArgs: unknown[]): Promise<unknown> {
     let expression = toItxExpression(call);
     const last = expression.at(-1);
-    if (extraArgs && typeof last === "string" && expression.length > 1) {
+    if (extraArgs.length > 0 && typeof last === "string" && expression.length > 1) {
       expression = [...expression.slice(0, -1), [last, ...extraArgs]];
-      extraArgs = undefined;
+      extraArgs = [];
     }
     const rewritten = this.resolve(expression).at(-1)!;
-    const rootStep = rewritten[2] as string | [string, ...unknown[]] | undefined;
-    if (rootStep === undefined)
+    const rootName = itxExpressionStepName(rewritten[2]);
+    const roots = () => Object.keys(this.#builtIns).join(", ");
+    if (rootName === undefined)
       throw new Error(
-        `"itx.builtins" names the reserved root — name a built-in under it (${Object.keys(this.#builtIns).join(", ")})`,
+        `"itx.builtins" names the reserved root — name a built-in under it (${roots()})`,
       );
-    const rootName = Array.isArray(rootStep) ? rootStep[0] : rootStep;
     if (!Object.hasOwn(this.#builtIns, rootName))
       throw codedError(
         "NO_ITX_EXPRESSION_MATCH",
-        `no built-in ${JSON.stringify(rootName)} under itx.builtins (${Object.keys(this.#builtIns).join(", ")})`,
+        `no built-in ${JSON.stringify(rootName)} under itx.builtins (${roots()})`,
       );
-    let value: unknown = this.#builtIns[rootName];
-    let receiver: unknown = undefined;
-    if (Array.isArray(rootStep)) value = await callOn(value, receiver, rootStep.slice(1));
-    ({ value, receiver } = await walkSteps({ value, receiver }, rewritten.slice(3)));
-    if (extraArgs) value = await callOn(value, receiver, extraArgs);
-    return await value;
+    const { value, receiver } = await walkSteps(
+      { value: this.#builtIns, receiver: undefined },
+      rewritten.slice(2),
+    );
+    return extraArgs.length > 0 ? await callOn(value, receiver, extraArgs) : value;
   }
 }

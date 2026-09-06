@@ -2,11 +2,12 @@
 // groups: ROOTS, implemented against ctx/env (the log, the stub registry, the rule table, the two
 // hosts, the bindings), and THIS FOLDER — plain compiled-in first-party code whose ONLY dependency is
 // `itx`, the same dotted handle a loaded worker gets from `env.ITX.get()`. That signature IS the
-// layering (the owner's litmus test, 2026-09-04: "could this be written in a userspace worker?"): a
-// library module takes `itx` and nothing else, so it could move to a userspace worker unchanged; the
-// surface shows no level — `itx.connectToMcp(url)` reads like `itx.ai.run(...)` — the folder and the
-// signature do. boundary.test.ts pins the rule (no runtime import from the stream, the DO, the fetch
-// module or the context folder, except invoke-handle.ts, the pipelinable-handle primitive).
+// layering (the owner's litmus test: "could this be written in a userspace worker?"): a library module
+// takes `itx` and nothing else, so it could move to a userspace worker unchanged (capnweb.ts once the
+// SDK exports `InvokeHandle`); the surface shows no level — `itx.connectToMcp(url)` reads like
+// `itx.ai.run(...)` — the folder and the signature do. boundary.test.ts pins the rule (no runtime
+// import from the stream, the DO, the fetch module or the context folder, except invoke-handle.ts,
+// the pipelinable-handle primitive).
 //
 // The verbs: `connectToMcp` · `connectToOpenApi` · `connectToCapnweb`. Each returns a connection
 // RpcTarget a caller can hold across calls, and each does ALL its HTTP through `itx.fetch` (egress:
@@ -23,7 +24,7 @@
 // awake exactly like a borrowed stub. A connection closed by a holder or broken by the far side
 // reopens itself on its next use (mcp.ts, capnweb.ts), so a memoized one is never dead.
 
-import type { IterateContext } from "../iterate-context.ts";
+import type { BuiltInScope } from "../context/built-ins.ts";
 import { connectToCapnweb, type CapnwebConnection, type CapnwebConnectOptions } from "./capnweb.ts";
 import { connectToMcp, type McpConnection, type McpConnectOptions } from "./mcp.ts";
 import {
@@ -33,24 +34,26 @@ import {
   type OpenApiDocument,
 } from "./openapi.ts";
 
-/** What a library module is handed: the itx handle, narrowed to what the library uses today
- *  (`fetch`). Widen it HERE when a module needs more of itx — never by importing something else. */
-export type LibraryItx = Pick<IterateContext, "fetch">;
+/** What a library module is handed: the itx handle (the record's own dotted surface), narrowed to
+ *  what the library uses today (`fetch`). Widen it HERE when a module needs more of itx — never by
+ *  importing something else. */
+export type LibraryItx = Pick<BuiltInScope, "fetch">;
 
 /** The library's roots, exactly as the built-ins record spreads them in: each verb closed over ONE
- *  `itx`. `BuiltInScope` (context/built-ins.ts) restates these three signatures for the typed surface. */
+ *  `itx`. `BuiltInScope` (context/built-ins.ts) extends this, so the typed surface has them once. */
 export interface LibraryRoots {
-  /** Connect to an MCP server over Streamable HTTP; the connection's tools are `callTool(name, args)`
-   *  and, for every tool whose name is a legal identifier, a method of that name. */
+  /** An MCP server over Streamable HTTP: `callTool(name, args)`, `listTools()`, and one method per
+   *  tool whose name is a legal identifier. */
   connectToMcp(url: string, options?: McpConnectOptions): Promise<McpConnection>;
-  /** Connect to an OpenAPI 3 service from its document or the URL of one; every `operationId` is a
-   *  method taking one input object (path, query and body fields together). */
+  /** An OpenAPI 3 service from its document or the URL of one: one method per `operationId`, taking
+   *  one input object (path, query, header and body fields together); `call(operationId, input)` too. */
   connectToOpenApi(
     specOrUrl: string | OpenApiDocument,
     options?: OpenApiConnectOptions,
   ): Promise<OpenApiConnection>;
-  /** Connect to a remote capnweb API: its main object as a pipelinable handle — dotted calls chain
-   *  with no round trip per step. */
+  /** A remote capnweb API's main object as a pipelinable handle — a WebSocket session through egress
+   *  (default) or one HTTP batch per chain (`{ transport: "batch" }`); dotted calls chain with no round
+   *  trip per step. */
   connectToCapnweb(url: string, options?: CapnwebConnectOptions): Promise<CapnwebConnection>;
 }
 
@@ -103,12 +106,41 @@ const keySorted = (_key: string, value: unknown): unknown =>
       )
     : value;
 
-export type {
-  CapnwebConnection,
-  CapnwebConnectOptions,
-  McpConnection,
-  McpConnectOptions,
-  OpenApiConnection,
-  OpenApiConnectOptions,
-  OpenApiDocument,
-};
+// ── what the three connectors share ──
+
+/** A per-connection subclass whose PROTOTYPE carries one method per name — prototype members are what
+ *  Workers RPC and capnweb traverse, so `conn.echo({ … })` works held across calls, not only inside
+ *  one dotted expression. A name the base already declares (its own methods, `constructor`, whatever
+ *  `RpcTarget` adds) stays reachable through the generic door only; so does a name that is not an
+ *  identifier, and `then` — a thenable connection would be adopted as a promise by any await and
+ *  never settle. */
+export function subclassWithMethods<Base extends abstract new (...args: never[]) => object>(
+  base: Base,
+  names: string[],
+  call: (self: InstanceType<Base>, name: string, input: unknown) => unknown,
+): Base {
+  const Subclass = class extends (base as abstract new (...args: never[]) => object) {};
+  for (const name of names) {
+    if (name === "then" || name in Subclass.prototype || !/^[A-Za-z_$][\w$]*$/.test(name)) continue;
+    Object.defineProperty(Subclass.prototype, name, {
+      value(this: InstanceType<Base>, input?: unknown) {
+        return call(this, name, input);
+      },
+      writable: true,
+      configurable: true,
+    });
+  }
+  return Subclass as unknown as Base;
+}
+
+/** The error for a response that refused: `<what> returned <status>: <the first 300 characters>`. */
+export async function responseRefusal(response: Response, what: string): Promise<Error> {
+  const snippet = (await response.text().catch(() => "")).slice(0, 300);
+  return new Error(`${what} returned ${response.status}${snippet ? `: ${snippet}` : ""}`);
+}
+
+/** The response, or the refusal thrown — ONE spelling for every non-2xx the connectors meet. */
+export async function refuseUnlessOk(response: Response, what: string): Promise<Response> {
+  if (response.ok) return response;
+  throw await responseRefusal(response, what);
+}

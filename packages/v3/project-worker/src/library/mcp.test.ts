@@ -160,7 +160,7 @@ describe("connectToMcp", () => {
   test("a non-2xx answer throws with the status and the body", async () => {
     const { itx } = fakeItx(() => new Response("nope", { status: 503 }));
     await expect(connectToMcp(itx, "https://mcp.example/rpc")).rejects.toThrow(
-      /MCP initialize: 503 nope/,
+      /MCP initialize returned 503: nope/,
     );
   });
 });

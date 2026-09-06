@@ -67,7 +67,7 @@ test("itx tour: built-in roots, lent stubs, the rule map, dynamic-worker rules, 
   expect(echoed).toBe("echo-A:hello");
   // THE TWO VIEWS of the three lent stubs (proverA, proverB, tools): PRESENCE is the registry —
   // `itx.rpcStubs.list()` names every key with an open transport; the TABLE holds their rules —
-  // ordinary rows whose target is `itx.rpcStubs.get('<rpcStubKey>')`. The echoed call above already
+  // ordinary rows whose target is `itx.builtins.rpcStubs.get('<rpcStubKey>')`. The echoed call above already
   // proved a paged-in stub SERVES; the raw socket counters are the DO-only transportState(), off this
   // capnweb lane.
   const online = await presence(itxA);

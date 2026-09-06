@@ -463,7 +463,7 @@ lives beside the directory:
 equals a rule's match wins while connected — reconnect-friendly by accident of
 ordering. The real platform has ONE table to consult, because a lent stub is
 reached through a rule too, under the key that IS its match:
-`itx.shell ⇒ itx.rpcStubs.get('itx.shell')`.)
+`itx.shell ⇒ itx.builtins.rpcStubs.get('itx.shell')`.)
 
 The proof is the beat that teaches live-vs-durable in ten seconds: configure a
 greeter as a rule, provide `itx.double` live, then **kill the providing
@@ -604,7 +604,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     return committed;
   }
 
-  read(afterOffset = 0) { return this.#stream.read(afterOffset); }
+  readEvents(afterOffset = 0) { return this.#stream.read(afterOffset); } // the platform's root name; the stream keeps `read`
 
   // the refactor-reveal — configuring a rule IS an append:
   provide(match: string, target: string | null) {
@@ -632,7 +632,7 @@ is atomically exact with the batch. Same pieces, inverted wiring, one reason.
 Second, the toy's walker checks two tables — the directory, then the rules. The
 real platform has one: the directory is a **built-in** named `itx.rpcStubs`, and
 a live `provide(match, stub)` _also_ appends an ordinary rule whose target is the
-expression `itx.rpcStubs.get('<match>')`. So the log says where every name
+expression `itx.builtins.rpcStubs.get('<match>')`. So the log says where every name
 points, live ones included, while never claiming a socket
 is open. The toy's stub-before-rule check at each prefix is that rule, reduced by
 hand. Third, the toy makes a subscription a name at `itx.subscribers.*`. The real
@@ -740,12 +740,12 @@ Two things happened there, and one verb made both. The function itself is
 _physical_ — a socket and a capnweb reference your session holds — so it is LENT
 to a built-in registry, `itx.rpcStubs`, under a key; for `provide` that key IS
 the canonical match, so the function is callable as
-`itx.rpcStubs.get('itx.runOnMyComputer')(cmd, args)`. (`subscribe` is the only
+`itx.builtins.rpcStubs.get('itx.runOnMyComputer')(cmd, args)`. (`subscribe` is the only
 other verb that takes a live value, and it lends under `subscription:<name>`.)
 The rule is _data_: the same
 `events.iterate.com/itx/rewrite-rule-configured` event any rule appends, with
 `match: "itx.runOnMyComputer"` and
-`target: "itx.rpcStubs.get('itx.runOnMyComputer')"`. Read the log and that is
+`target: "itx.builtins.rpcStubs.get('itx.runOnMyComputer')"`. Read the log and that is
 exactly what you'll see; the rule step is spellable on its own —
 `itx.provide("itx.shell", "itx.rpcStubs.get('itx.runOnMyComputer')")` points
 another name at an already-lent stub. The handle you get back is DISPOSABLE:
@@ -866,7 +866,7 @@ That is the one mechanic underneath both faces: a rewrite rule replaces the
 matched prefix with its target, and the steps after the match — `add("x")` —
 ride along onto whatever the rewritten call evaluates to, here the facet across
 the Workers-RPC hop. Lending a live stub is that same rule with the target
-`itx.rpcStubs.get('<match>')` — one verb, two kinds of target. A rule made
+`itx.builtins.rpcStubs.get('<match>')` — one verb, two kinds of target. A rule made
 through `provide` is session-scoped by its handle; the durable spelling is the
 raw event — in a worker, `itx.append(rewriteRuleConfiguredEvent(match, target))`;
 from a client, the same event written out as a literal.

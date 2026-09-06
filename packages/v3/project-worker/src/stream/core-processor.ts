@@ -25,6 +25,7 @@
 // from pause — a paused stream must always accept its own resume.
 
 import {
+  itxExpressionStepName,
   parse,
   parseItxExpressionPrefix,
   type ItxExpression,
@@ -87,11 +88,9 @@ export function facetSpecFromHostingTarget(
  *  as given and hosts nothing until it can. */
 function resolveThroughState(state: CoreState, target: ItxExpression): ItxExpression | undefined {
   try {
-    return resolveItxExpression(
-      () => Object.values(state.itxExpressionRewriteRules),
-      target,
-      isBuiltInRoot,
-    ).at(-1);
+    return resolveItxExpression(() => Object.values(state.itxExpressionRewriteRules), target).at(
+      -1,
+    );
   } catch {
     return undefined;
   }
@@ -189,7 +188,7 @@ function withHostedFacetMarkersFollowingRules(state: CoreState): CoreState {
 function matchShadowsAPlatformRow(match: ItxExpressionPrefix): boolean {
   if (match.length === 1) return true;
   const step = match[1];
-  return isBuiltInRoot(Array.isArray(step) ? step[0] : step);
+  return isBuiltInRoot(itxExpressionStepName(step));
 }
 
 /** One subscription row (by name; a same-named configure REPLACES). */

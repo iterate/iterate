@@ -4,11 +4,12 @@
 // revocation. The rewrite rules (match, rank, rewrite) are ./itx-expression-rewriting.ts; the evaluator
 // is ./dispatch.ts.
 import JSON5 from "json5";
+import { jsonEqual } from "../lib/patch.ts";
 
 /** One step: a property read (string) or a call (`[method, ...args]`). Args are plain JSON. The
- *  method `""` is the ANONYMOUS call — call the value itself: `itx.rpcStubs.get('cam')(1, 2)` is
- *  `["itx","rpcStubs",["get","cam"],["",1,2]]` — what a rewrite rule spells when a lent stub is
- *  called with args. */
+ *  method `""` is the ANONYMOUS call — call the value itself: `itx.builtins.rpcStubs.get('cam')(1, 2)`
+ *  is `["itx","builtins","rpcStubs",["get","cam"],["",1,2]]` — what a `provide(stub)` rule spells when
+ *  the lent stub is called with args. */
 export type ItxExpressionStep = string | [method: string, ...args: unknown[]];
 /** An itx expression as data: the scope root (`itx`) then get/call steps. THE parsed form every door
  *  works on. */
@@ -24,102 +25,68 @@ export type ItxExpressionInput = string | ItxExpression;
  *  the match (partial application): `itx.ai.run('gpt-5') ⇒ itx.openai.chat` makes
  *  `itx.ai.run('gpt-5', inputs)` into `itx.openai.chat(inputs)`. */
 export type ItxExpressionPrefix = ItxExpression;
+/** The name a step carries: the property itself, or a call step's method. */
+export const itxExpressionStepName = (step: ItxExpressionStep | undefined): string | undefined =>
+  Array.isArray(step) ? step[0] : step;
+
 const IDENT = /^[A-Za-z_$][A-Za-z0-9_$-]*/;
 const RESERVED = new Set(["__proto__", "constructor", "prototype"]);
 
 // ── `@`, THE CALLER'S INPUT — a rewrite rule's target may hold it, nothing else may ──
 // In the string half a bare `@` outside a string literal is the marker (`'@cf/…'` inside quotes is a
 // string like any other); `...@` as an object-literal entry is the merge form. In the array half the
-// marker is ONE reserved literal, `{ "@": true }`, and the merge entry the key `"...@"` — so the
-// stored form is plain JSON, and those two spellings are unspellable as literals in a target (the
-// codec's one reservation). What `@` MEANS is rule 7 in ./itx-expression-rewriting.ts; here it is
-// only lexed (parse, targets only) and printed back.
-const HOLE_KEY = "@";
-const MERGE_KEY = "...@";
+// marker is ONE reserved literal, `{ "@": true }`, and the merge entry the key `"...@"` with the value
+// `true` — so the stored form is plain JSON, and those two spellings are unspellable as literals in a
+// target (the codec's one reservation). What `@` MEANS is rule 7 in ./itx-expression-rewriting.ts; here
+// it is only lexed (parse, targets only) and printed back (print, targets only).
+/** The marker's array-half spelling, the one reserved literal. */
+const ITX_EXPRESSION_HOLE = { "@": true } as const;
+/** The merge entry's key — `...@` — read by rule 7. */
+export const ITX_EXPRESSION_MERGE_KEY = "...@";
 
-/** THE one lexer for the marker, both directions: walk `text`, mapping each stretch OUTSIDE single-
- *  or double-quoted string literals through `outside`, and offering each literal (quotes included),
- *  the text after it and the output so far to `literal`, which answers `[newOutput, charsConsumedAfter]`
- *  to rewrite around it or null to keep it verbatim. Escapes are honored; nothing inside a literal is
- *  ever touched. */
-function lexStringLiterals(
-  text: string,
-  outside: (chunk: string) => string,
-  literal: (lit: string, after: string, out: string) => [string, number] | null,
-): string {
-  let out = "";
-  for (let i = 0; i < text.length; ) {
-    const q = text[i];
-    let j = i;
-    if (q !== '"' && q !== "'") {
-      while (j < text.length && text[j] !== '"' && text[j] !== "'") j++;
-      out += outside(text.slice(i, j));
-      i = j;
-    } else {
-      while (++j < text.length && text[j] !== q) if (text[j] === "\\") j++;
-      const lit = text.slice(i, j + 1);
-      const hit = literal(lit, text.slice(j + 1), out);
-      [out, i] = hit ? [hit[0], j + 1 + hit[1]] : [out + lit, j + 1];
-    }
-  }
-  return out;
-}
+/** A single- or double-quoted string literal, escapes honored: THE one pattern every walk that must
+ *  skip what is inside quotes is built from — the marker lex, the marker print, the paren matcher.
+ *  In an alternation a literal is consumed whole, so nothing inside one is ever seen by the other
+ *  alternatives. */
+const STRING_LITERAL = String.raw`"(?:[^"\\]|\\[\s\S])*"|'(?:[^'\\]|\\[\s\S])*'`;
+const isStringLiteral = (match: string): boolean => match[0] === '"' || match[0] === "'";
+/** In call args: a literal (kept verbatim) or a marker — `...@` before `@`, so the merge form wins. */
+const MARKERS_IN_ARGS = new RegExp(`${STRING_LITERAL}|\\.\\.\\.@|@`, "g");
+/** In JSON5's printed output: the marker literal `{'@':true}` and the merge entry `'...@':true` are
+ *  spelled with a single-quoted key and matched on those exact boundaries — listed BEFORE the literal
+ *  alternative so the entry's `'...@'` is read as the entry, not as a string. A user's string that
+ *  merely contains those characters is emitted by JSON5 as a longer (double-quoted) literal and is
+ *  consumed whole. */
+const MARKERS_IN_PRINT = new RegExp(`\\{'@':true\\}|'\\.\\.\\.@':true|${STRING_LITERAL}`, "g");
+/** A bracket outside a literal. */
+const BRACKETS = new RegExp(`${STRING_LITERAL}|[()[\\]{}]`, "g");
 
 /** Is `value` the marker literal `{ "@": true }`? */
-export function isItxExpressionHole(value: unknown): boolean {
-  return (
-    value !== null &&
-    typeof value === "object" &&
-    !Array.isArray(value) &&
-    Object.keys(value).length === 1 &&
-    (value as Record<string, unknown>)[HOLE_KEY] === true
-  );
-}
+export const isItxExpressionHole = (value: unknown): boolean =>
+  jsonEqual(value, ITX_EXPRESSION_HOLE);
 
-/** Does `value` (a step, an arg tree, a whole expression) hold the marker or a merge entry anywhere?
- *  A merge entry is the key `"...@"` with the value `true` — exactly what `print` spells back as
- *  `...@`, so this predicate and the printer agree on what the marker is. */
+/** Does `value` (a step, an arg tree, a whole expression) hold the marker or a merge entry anywhere? */
 export function containsItxExpressionHole(value: unknown): boolean {
   if (isItxExpressionHole(value)) return true;
   if (Array.isArray(value)) return value.some(containsItxExpressionHole);
   if (value !== null && typeof value === "object")
     return (
-      (value as Record<string, unknown>)[MERGE_KEY] === true ||
+      (value as Record<string, unknown>)[ITX_EXPRESSION_MERGE_KEY] === true ||
       Object.values(value).some(containsItxExpressionHole)
     );
   return false;
 }
 
-/** The merge entry's key — `...@` — read by rule 7. */
-export const ITX_EXPRESSION_MERGE_KEY = MERGE_KEY;
-
-/** Print's half: in JSON5's output the marker literal is `{'@':true}` and the merge entry
- *  `'...@':true` — spelled with a string literal, so they are matched on literal BOUNDARIES (the
- *  literal `'@'` opening an object and closing it as its only key; the literal `'...@'` as a key). A
- *  user's string that merely contains those characters is a longer literal and never matches. */
-const printMarkers = (text: string): string =>
-  lexStringLiterals(
-    text,
-    (chunk) => chunk,
-    (lit, after, out) =>
-      lit === `'${HOLE_KEY}'` && out.endsWith("{") && after.startsWith(":true}")
-        ? [out.slice(0, -1) + "@", ":true}".length]
-        : lit === `'${MERGE_KEY}'` && after.startsWith(":true")
-          ? [out + "...@", ":true".length]
-          : null,
-  );
-
 /** Index of the `)` closing the `(` at `open`; tracks bracket depth, skipping quoted string args. */
-function matchingParen(s: string, open: number): number {
+function matchingParen(source: string, open: number): number {
   let depth = 0;
-  for (let j = open; j < s.length; j++) {
-    const c = s[j];
-    if (c === '"' || c === "'") {
-      for (const q = c; ++j < s.length && s[j] !== q; ) if (s[j] === "\\") j++;
-    } else if (c === "(" || c === "[" || c === "{") depth++;
-    else if ((c === ")" || c === "]" || c === "}") && --depth === 0) return j;
+  BRACKETS.lastIndex = open;
+  for (let bracket = BRACKETS.exec(source); bracket; bracket = BRACKETS.exec(source)) {
+    if (isStringLiteral(bracket[0])) continue;
+    if ("([{".includes(bracket[0])) depth++;
+    else if (--depth === 0) return bracket.index;
   }
-  throw new Error(`expression: unbalanced "(" in ${JSON.stringify(s)}`);
+  throw new Error(`expression: unbalanced "(" in ${JSON.stringify(source)}`);
 }
 
 /** Parse the STRING half: dotted names + `.method(args)` calls (args JSON5-parsed); rejects reserved
@@ -148,16 +115,14 @@ export function parse(source: string, options?: { holes?: boolean }): ItxExpress
       const end = matchingParen(s, i);
       const raw = s.slice(i + 1, end).trim();
       // `@` outside a string literal: the marker (targets only), a refusal everywhere else.
-      const inner = lexStringLiterals(
-        raw,
-        (chunk) =>
-          chunk.replace(/\.\.\.@|@/g, (m) => {
-            if (!options?.holes)
-              fail("`@` (the caller's input) is legal only in a rewrite rule's target");
-            return m === "@" ? `{"${HOLE_KEY}":true}` : `"${MERGE_KEY}":true`;
-          }),
-        () => null,
-      );
+      const inner = raw.replace(MARKERS_IN_ARGS, (match) => {
+        if (isStringLiteral(match)) return match;
+        if (!options?.holes)
+          fail("`@` (the caller's input) is legal only in a rewrite rule's target");
+        return match === "@"
+          ? JSON.stringify(ITX_EXPRESSION_HOLE)
+          : `${JSON.stringify(ITX_EXPRESSION_MERGE_KEY)}:true`;
+      });
       let args: unknown[] = [];
       try {
         if (inner !== "") args = JSON5.parse(`[${inner}]`) as unknown[];
@@ -209,7 +174,11 @@ export function print(expr: ItxExpression, options?: { holes?: boolean }): strin
       const dot = i ? "." : "";
       if (typeof step === "string") return dot + step;
       const json = JSON5.stringify(step.slice(1), keySortedForPrint).slice(1, -1);
-      const args = options?.holes ? printMarkers(json) : json;
+      const args = options?.holes
+        ? json.replace(MARKERS_IN_PRINT, (match) =>
+            match === "{'@':true}" ? "@" : match === "'...@':true" ? "...@" : match,
+          )
+        : json;
       return step[0] === "" ? `(${args})` : `${dot}${step[0]}(${args})`;
     })
     .join("");
@@ -225,10 +194,10 @@ export function parseItxExpressionPrefix(source: ItxExpressionInput): ItxExpress
     // The ARRAY half enters here un-lexed: a name step must be ONE identifier, exactly what the
     // string half's `readName` accepts — `["itx", "builtins.kv"]` or `["itx", "a b"]` is not a prefix
     // (it would print as a dotted name the door never saw, or as one the reduce cannot parse).
-    const name = Array.isArray(step) ? step[0] : step;
+    const name = itxExpressionStepName(step);
     if (name === "")
       throw new Error(`an itx-expression prefix cannot call a result — ${JSON.stringify(spelled)}`);
-    if (typeof name !== "string" || !IDENT.test(name) || IDENT.exec(name)![0] !== name)
+    if (typeof name !== "string" || IDENT.exec(name)?.[0] !== name)
       throw new Error(
         `an itx-expression prefix's steps are identifiers — ${JSON.stringify(spelled)} has ${JSON.stringify(name)}`,
       );

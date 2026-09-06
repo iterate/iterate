@@ -8,7 +8,7 @@
 // parses) without the MCP SDK: the whole client is the few requests below.
 
 import { RpcTarget } from "capnweb";
-import type { LibraryItx } from "./index.ts";
+import { refuseUnlessOk, subclassWithMethods, type LibraryItx } from "./index.ts";
 
 /** Options for `connectToMcp`: extra headers sent with every request (auth). */
 export type McpConnectOptions = { headers?: Record<string, string> };
@@ -27,8 +27,8 @@ const MCP_PROTOCOL_VERSION = "2025-03-26";
 const CLIENT_INFO = { name: "iterate-context", version: "1" };
 
 /** Connect: initialize, announce, list the tools, and hand back a connection whose prototype carries
- *  one method per tool (a tool named like a reserved member — `callTool`, `close`… — is reachable
- *  through `callTool` only). */
+ *  one method per tool (a tool named like one of the connection's own members — `callTool`, `close`,
+ *  `then`… — is reachable through `callTool` only; index.ts `subclassWithMethods`). */
 export async function connectToMcp(
   itx: LibraryItx,
   url: string,
@@ -37,18 +37,22 @@ export async function connectToMcp(
   const client = new McpJsonRpcClient(itx, url, options.headers ?? {});
   const serverInfo = await client.initialize();
   const { tools } = (await client.request("tools/list", {})) as { tools: McpTool[] };
-  const Connection = withToolMethods(tools);
+  const Connection = subclassWithMethods(
+    McpConnection,
+    tools.map((tool) => tool.name),
+    (self, name, args) => self.callTool(name, args as Record<string, unknown> | undefined),
+  );
   return new Connection(client, tools, serverInfo);
 }
 
 /** A connected MCP server. Held across calls it is an RpcTarget; disposed, it DELETEs its session. */
 export class McpConnection extends RpcTarget {
-  readonly #client: McpJsonRpcClient;
+  readonly #jsonRpcClient: McpJsonRpcClient;
   readonly #tools: McpTool[];
   readonly #serverInfo: McpServerInfo;
   constructor(client: McpJsonRpcClient, tools: McpTool[], serverInfo: McpServerInfo) {
     super();
-    this.#client = client;
+    this.#jsonRpcClient = client;
     this.#tools = tools;
     this.#serverInfo = serverInfo;
   }
@@ -62,20 +66,20 @@ export class McpConnection extends RpcTarget {
   }
   /** Ask the server again — `tools/list` now. */
   async listTools(): Promise<McpTool[]> {
-    const { tools } = (await this.#client.request("tools/list", {})) as { tools: McpTool[] };
+    const { tools } = (await this.#jsonRpcClient.request("tools/list", {})) as { tools: McpTool[] };
     return tools;
   }
   /** `tools/call`: the result's `structuredContent`, else its text content JSON-parsed when it
    *  parses, else the text; an `isError` result throws with that text. */
   async callTool(name: string, args?: Record<string, unknown>): Promise<unknown> {
-    const result = (await this.#client.request("tools/call", {
+    const result = (await this.#jsonRpcClient.request("tools/call", {
       name,
       arguments: args ?? {},
     })) as McpToolResult;
     return mcpResultToValue(name, result);
   }
   async close(): Promise<void> {
-    await this.#client.close();
+    await this.#jsonRpcClient.close();
   }
   [Symbol.dispose](): void {
     void this.close();
@@ -100,36 +104,6 @@ function mcpResultToValue(name: string, result: McpToolResult): unknown {
   } catch {
     return text;
   }
-}
-
-// `then` is reserved so a tool so named can never make the connection THENABLE: an async function
-// returning it, or any await of it, would adopt it as a promise, call the tool, and never settle.
-const RESERVED_MEMBERS = new Set([
-  "constructor",
-  "then",
-  "serverInfo",
-  "tools",
-  "listTools",
-  "callTool",
-  "close",
-]);
-
-/** A per-connection subclass whose PROTOTYPE carries one method per tool — prototype methods are what
- *  Workers RPC and capnweb traverse, so `conn.echo({ text })` works held across calls, not only inside
- *  one dotted expression. */
-function withToolMethods(tools: McpTool[]): typeof McpConnection {
-  const Connection = class extends McpConnection {};
-  for (const tool of tools) {
-    if (RESERVED_MEMBERS.has(tool.name) || !/^[A-Za-z_$][\w$]*$/.test(tool.name)) continue;
-    Object.defineProperty(Connection.prototype, tool.name, {
-      value(this: McpConnection, args?: Record<string, unknown>) {
-        return this.callTool(tool.name, args);
-      },
-      writable: true,
-      configurable: true,
-    });
-  }
-  return Connection;
 }
 
 type JsonRpcResponse = { id?: unknown; result?: unknown; error?: { message?: string } };
@@ -195,13 +169,7 @@ class McpJsonRpcClient {
     );
     const sessionId = response.headers.get("mcp-session-id");
     if (sessionId) this.#sessionId = sessionId;
-    if (!response.ok) {
-      const text = await response.text().catch(() => "");
-      throw new Error(
-        `MCP ${body.method}: ${response.status}${text ? ` ${text.slice(0, 300)}` : ""}`,
-      );
-    }
-    return response;
+    return refuseUnlessOk(response, `MCP ${body.method}`);
   }
 }
 

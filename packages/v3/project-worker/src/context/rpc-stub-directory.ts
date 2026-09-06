@@ -221,7 +221,7 @@ export class RpcStubDirectory {
     const pair = new WebSocketPair();
     this.#ctx.acceptWebSocket(pair[1], [RPC_STUB_PAGER_WEBSOCKET_TAG]);
     pair[1].serializeAttachment({ transportId, rpcStubKey } satisfies RpcStubPagerRecord);
-    // THE SET HALF: the events that name this key (`match ⇒ itx.rpcStubs.get('<key>')`, a
+    // THE SET HALF: the events that name this key (`match ⇒ itx.builtins.rpcStubs.get('<key>')`, a
     // subscription row) land now, with the pager already accepted — so a push the commit fans out
     // finds the pager to page, exactly as when the edge appended after the upgrade. Still the same
     // turn: the fan-out's first await is after this function returns.

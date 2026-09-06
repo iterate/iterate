@@ -1,14 +1,13 @@
-// built-ins.ts — THE BUILT-INS: a plain record whose KEYS are the physical-layer roots (`whoami`,
-// `kv`, `ai`, `append`, `readEvents`, `waitForEvent`, `cd`, `fetch`, `rpcStubs`, `rewriteRules`,
-// `facets`, `subscriptions`, `workers`, `runScript` — the one list is context/built-in-roots.ts).
-// Two kinds of root, one record: the AXIOMS (the log, the stub registry, the rule table, the hosts,
-// addressing) and the BINDINGS (`kv`, `ai` — a Cloudflare binding only this env holds, exposed
-// verbatim). Code a user could write is neither: it is a class in the library folder, taking `itx`.
-// THE RECORD IS `itx.builtins`, the reserved root: a call `itx.builtins.<root>…` runs against it
-// directly and never reads the rule table; a short `itx.<root>…` reaches it through the IMPLICIT
-// PLATFORM ROW `itx.<root> ⇒ itx.builtins.<root>` unless the context's own table says otherwise
-// (itx-expression-rewriting.ts, rule 5) — so a test may shadow `itx.ai`, a context may mask
-// `itx.kv`, and `itx.builtins.…` is always the physical door. The platform never spells a short name.
+// built-ins.ts — THE BUILT-INS: a plain record whose KEYS are the physical-layer roots (the one list
+// is context/built-in-roots.ts). Three kinds of key, one record: the AXIOMS (the log, the stub
+// registry, the rule table, the two hosts, addressing), the BINDINGS (`kv`, `ai` — a Cloudflare
+// binding only this env holds, exposed verbatim) and THE LIBRARY (`connectTo*`, src/library/ — code a
+// user could write, taking only `itx`). THE RECORD IS `itx.builtins`, the reserved root: a call
+// `itx.builtins.<root>…` runs against it directly and never reads the rule table; a short
+// `itx.<root>…` reaches it through the IMPLICIT PLATFORM ROW `itx.<root> ⇒ itx.builtins.<root>` unless
+// the context's own table says otherwise (itx-expression-rewriting.ts, rule 5) — so a test may shadow
+// `itx.ai`, a context may mask `itx.kv`, and `itx.builtins.…` is always the physical door. The
+// platform never spells a short name.
 //
 // LOADING DYNAMIC CODE — two doors, ONE PER HOST KIND, each a `get` on a noun:
 //   • `itx.workers.get({ source, className?, props? }).method(...)` — a STATELESS `WorkerEntrypoint`
@@ -20,21 +19,12 @@
 //     running (a processor, a named instance) — same door, no source.
 // Both bottom out in Cloudflare's Worker Loader (`env.LOADER.get(cacheKey, …)` then
 // `worker.getEntrypoint()` / `worker.getDurableObjectClass()`); the two-step is folded into one door
-// per host on purpose (BUILD-LOG 2026-09-02). `itx.runScript(lambda)` is sugar for the one bare-lambda
-// case (wrap → `workers.get({ source }).run`).
+// per host on purpose. `itx.runScript(lambda)` is sugar for the one bare-lambda case (wrap →
+// `workers.get({ source }).run`).
 
 import type { ReachableContext, StreamPage, WaitForEventFilter } from "../stream/stream.ts";
 import type { StreamEvent, StreamEventInput } from "../stream/events.ts";
-import {
-  type CapnwebConnection,
-  type CapnwebConnectOptions,
-  type LibraryRoots,
-  type McpConnection,
-  type McpConnectOptions,
-  type OpenApiConnection,
-  type OpenApiConnectOptions,
-  type OpenApiDocument,
-} from "../library/index.ts";
+import type { LibraryRoots } from "../library/index.ts";
 import {
   loadConfinedWorker,
   type FacetSpec,
@@ -84,13 +74,15 @@ export default class RunScript extends WorkerEntrypoint {
 }
 `;
 
-/** THE built-in scope, as ONE interface — the physical-layer roots a context resolves `itx.<root>…`
- *  against DIRECTLY (itx-expression-rewriting.ts, built-in first; no rule).
+/** THE built-in scope, as ONE interface — the physical-layer roots: `itx.builtins.<root>` runs
+ *  against them directly; `itx.<root>` reaches them through the implicit platform row unless the
+ *  context's table says otherwise (itx-expression-rewriting.ts, rule 5: rules FIRST). The library's
+ *  three verbs come in by `extends` (library/index.ts).
  *  This is the clean-room's whole kernel surface. It is a PLAIN OBJECT, not an RpcTarget class, on
  *  purpose: the resolver gates on `Object.hasOwn`, so a prototype-method class would leave every
  *  root unreachable. Exported for ONE reader: the edge `IterateContext`'s TYPE merges it in
  *  (iterate-context.ts), so what rides the dotted hop is typed where a client holds it. */
-export interface BuiltInScope {
+export interface BuiltInScope extends LibraryRoots {
   /** THE RESERVED ROOT, typed: `itx.builtins.<root>` is the physical spelling of every root below —
    *  the fixed point of rewriting, never shadowed by a context's rows (itx-expression-rewriting.ts
    *  rule 5). Not a key of the record (the resolver strips it); here so a strongly typed holder — the
@@ -133,7 +125,7 @@ export interface BuiltInScope {
    *  an OPAQUE key by its session (relay-side, DON'T-PIN — the edge owns it, this side borrows).
    *  `get(rpcStubKey)` is how a REWRITE RULE names one: `itx.provide(match, stub)` lends the stub
    *  under the key = the canonical match and configures the pure-data rule `match ⇒
-   *  itx.rpcStubs.get('<match>')`. */
+   *  itx.builtins.rpcStubs.get('<match>')`. */
   rpcStubs: {
     /** One stub by key: a pipelinable handle over its transport (borrowed, or paged then borrowed).
      *  Deep dots walk; a root call reaches the bare lent callable; offline ⇒ RPC_STUB_OFFLINE at call
@@ -188,22 +180,8 @@ export interface BuiltInScope {
   /** Run a stateless lambda STRING — sugar: wrap into a `WorkerEntrypoint`, then
    *  `workers.get({ source }).run(...)`. The one bare-lambda ergonomic (same as apps/os). */
   runScript(script: string, ...args: unknown[]): Promise<unknown>;
-  // ── THE LIBRARY (src/library/): the second group of built-ins — first-party code that takes ONLY
-  // `itx`, so each verb could move to a userspace worker unchanged (library/index.ts says why; its
-  // boundary.test.ts pins it). All their HTTP goes through `itx.fetch`. `connectToGraphql` is the
-  // obvious next member and does not exist yet. ──
-  /** An MCP server over Streamable HTTP: `callTool(name, args)`, `listTools()`, and one method per
-   *  tool whose name is a legal identifier. */
-  connectToMcp(url: string, options?: McpConnectOptions): Promise<McpConnection>;
-  /** An OpenAPI 3 service from its document or the URL of one: one method per `operationId`, taking
-   *  one input object (path, query, header and body fields together); `call(operationId, input)` too. */
-  connectToOpenApi(
-    specOrUrl: string | OpenApiDocument,
-    options?: OpenApiConnectOptions,
-  ): Promise<OpenApiConnection>;
-  /** A remote capnweb API's main object as a pipelinable handle — a WebSocket session through egress
-   *  (default) or one HTTP batch per chain (`{ transport: "batch" }`). */
-  connectToCapnweb(url: string, options?: CapnwebConnectOptions): Promise<CapnwebConnection>;
+  // ── THE LIBRARY (src/library/) — `connectToMcp`, `connectToOpenApi`, `connectToCapnweb` — is
+  // the `extends LibraryRoots` above: first-party code that takes ONLY `itx`. ──
 }
 
 // THE ONE LIST: `keyof BuiltInScope` (minus the reserved root itself, which names the record, not a
@@ -251,7 +229,7 @@ interface BuildBuiltInsDeps {
   waitForEvent: BuiltInScope["waitForEvent"];
   /** `facets.get(name, spec?)` — the public door, verbatim: address a running facet by name, or host
    *  `spec` as the facet `name` (accepted trade: a busy stateful facet pins its stream). */
-  facets: { get(name: string, spec?: FacetSpec): FacetHandle };
+  facets: BuiltInScope["facets"];
   /** The `ItxEntrypoint` stub a loaded worker gets as `env.ITX` and `globalOutbound` — the loopback
    *  minted once for this context (the DO's `#itxEntrypoint`; itx-entrypoint.ts for why it is never a
    *  raw getByName stub). */
@@ -351,15 +329,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
       ),
     fetch: (request: Request) => deps.egress(request),
     rpcStubs: deps.rpcStubs,
-    facets: {
-      get: (name: string, spec?: FacetSpec) => {
-        if (typeof name !== "string")
-          throw new Error(
-            "itx.facets.get(name, spec?): name the facet; pass { source, className } to load and host it",
-          );
-        return deps.facets.get(name, spec);
-      },
-    },
+    facets: deps.facets,
     subscriptions: deps.subscriptions,
     rewriteRules: deps.rewriteRules,
     // A genuine InvokeHandle, so `workers.get(spec).run()` pipelines on every lane (workerd#6873).

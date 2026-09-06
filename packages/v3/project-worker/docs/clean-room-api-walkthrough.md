@@ -98,16 +98,16 @@ packages/v3/project-worker/
                                  cd · invoke · provide · subscribe · enableProcessor · disableProcessor;
                                  RewriteRuleHandle / SubscriptionHandle (disposable)
     iterate-context-durable-object.ts  THE CONTEXT DO: stream + the core reduce + delivery + facets +
-                                 rpc stubs + the fetch doors. One class, ~675 lines. First line:
+                                 rpc stubs + the fetch doors. One class. First line:
                                  #name = parseIterateContextDurableObjectName(ctx.id.name)
     itx-entrypoint.ts            ItxEntrypoint: what a loaded worker's env.ITX is
     context/                     chapter 1 — the context: rpc stubs, expressions, rewrite rules
-      built-ins.ts               the kernel roots: whoami, kv, append, read, waitForEvent, cd, fetch,
+      built-ins.ts               the kernel roots: whoami, kv, ai, append, readEvents, waitForEvent, cd, fetch,
                                  rpcStubs, rewriteRules, facets, subscriptions, workers, runScript,
                                  connectToMcp, connectToOpenApi, connectToCapnweb (src/library/: the LIBRARY tier)
       expression.ts              the codec: "itx.a.b(1)" ⇄ ["itx","a",["b",1]]; ItxExpression /
                                  ItxExpressionInput / ItxExpressionPrefix; canonicalItxExpressionPrefix
-      itx-expression-rewriting.ts  THE RULES 1–5 (match / pick / apply / rewrite-to-built-in), the ONE
+      itx-expression-rewriting.ts  THE RULES 1–7 (match / pick / apply / rules-first to the fixed point `itx.builtins` / the door / `@`), the ONE
                                  event (rewriteRuleConfiguredEvent), the reader (ItxExpressionResolver)
       dispatch.ts                walkSteps / callOn — execute a rewritten call's steps on a live object graph
       dotted-path-proxy.ts       the prototype hop: unknown dotted members reduce into ONE invoke(expression)
@@ -256,15 +256,15 @@ class IterateContext extends RpcTarget {
    *  parsed array. ONE routing fork: a call whose terminal step is `fetch(request)` with a live
    *  Request rides the DO's fetch channel with the expression in `x-itx-expression` (so a 101
    *  comes back; the root `itx.fetch(request)` — egress — takes it too); everything else is the
-   *  DO's `invoke`. */
-  invoke(call: ItxExpressionInput): Promise<unknown>;
+   *  DO's `invoke`; `...args` are LIVE args, folded into a name-final call before the rules. */
+  invoke(call: ItxExpressionInput, ...args: unknown[]): Promise<unknown>;
 
   // ── THE ONE FRONT DOOR: make `match` mean `target` ──
   /** A call starting with `match` runs as the same call with `match` replaced by `target` (`match`
    *  may pin literal args: `itx.ai.run('gpt-5')`). `target` is EITHER a client's rpc stub (a function,
    *  an RpcTarget) — THE ONE PHYSICAL ACT: lent to the DO's `itx.rpcStubs` registry through a pager
    *  owned HERE (DON'T-PIN) under the key = the canonical match, plus the rule
-   *  `match ⇒ itx.rpcStubs.get('<match>')`, un-set by the DO when the stub's last pager closes;
+   *  `match ⇒ itx.builtins.rpcStubs.get('<match>')`, un-set by the DO when the stub's last pager closes;
    *  re-providing the same match re-lends (reconnect — the pager is replaced) — OR an itx EXPRESSION,
    *  a pure rewrite: literally `append(rewriteRuleConfiguredEvent(match, target))` — OR `null`, which
    *  un-sets the rule at `match`. */
@@ -276,7 +276,7 @@ class IterateContext extends RpcTarget {
   // ── subscriptions: ONE event, over (a) when the target is live ──
   /** Have each committed batch — filtered by `consumes` — delivered to `target` as
    *  `(events, range)`. `target` is an itx expression whose terminal is callable that way, OR a
-   *  live callback (lent under `subscription:<name>`, targeted as `itx.rpcStubs.get('…')`),
+   *  live callback (lent under `subscription:<name>`, targeted as `itx.builtins.rpcStubs.get('subscription:<name>')`),
    *  OR `null` to remove the row. No name ⇒ `sub-<8hex>`. Same name REPLACES. Literally
    *  `append(subscriptionConfiguredEvent({ name, target, consumes }))`. */
   subscribe(input: {
@@ -352,15 +352,16 @@ verbs.
 Semantics worth knowing:
 
 - `provide` with a live stub builds the rule event **first** (a spelling the
-  codec refuses throws with nothing lent), lends the stub, then appends the
-  rule, so the event records a name that can already serve. If the DO refuses
-  the rule (a paused stream), the lend is recalled and the refusal propagates.
+  codec refuses throws with nothing lent), then opens the pager with the event
+  INSIDE the upgrade; the DO accepts the socket and appends the rule in one turn.
+  A refusal (a paused stream) is the upgrade's 409 + code: nothing was lent, no
+  socket, no row.
 - `provide` and `subscribe` always append; the reduce treats a `null` on a
   match or name that has no row as a no-op (no state change, no live-state
   delta), and a same-valued set simply replaces the entry.
 - A lent stub's rule and subscriptions die with the stub: when a key's last
-  pager closes, the DO un-sets every rule and subscription whose target is
-  `itx.rpcStubs.get('<rpcStubKey>')` (section 9.2). A reconnect replaces the
+  pager closes, the DO un-sets every rule and subscription whose target RESOLVES to
+  `itx.builtins.rpcStubs.get('<rpcStubKey>')` (section 9.2). A reconnect replaces the
   pager and is not a close.
 - Presence (which keys have a borrowed stub or an open pager) is
   `itx.rpcStubs.list()`, never the rewrite-rule table. The table is pure data.
@@ -374,7 +375,7 @@ Semantics worth knowing:
 
 ```ts
 /** One step: a property read (string) or a call (`[method, ...args]`). The method `""` is the
- *  ANONYMOUS call — call the value itself: `itx.rpcStubs.get('cam')(1, 2)` is
+ *  ANONYMOUS call — call the value itself: `itx.builtins.rpcStubs.get('cam')(1, 2)` is
  *  `["itx","rpcStubs",["get","cam"],["",1,2]]`. */
 type ItxExpressionStep = string | [method: string, ...args: unknown[]];
 /** A call written as data: the scope root ("itx") then steps. THE parsed form every door works on. */
@@ -432,12 +433,21 @@ type StreamEvent = StreamEventInput & { offset: number; createdAt: string; path:
 
 ```ts
 type WaitForEventFilter = { type?: string; afterOffset?: number; timeoutMs?: number };
-/** What read() returns on every hop. */
+/** What readEvents() returns on every hop. */
 interface StreamPage {
   events: StreamEvent[];
   scannedThroughOffset: number;
+  atHead: boolean; // the scan reached the durable mark (a page is cut by bytes or by `limit`)
 }
 ```
+
+Memory hygiene, since 2026-09-04: one event's body is capped at 8 MiB (`EVENT_TOO_LARGE`); a page
+is budgeted by bytes (8 MiB, less while other reads are outstanding) and rows (1000), and `atHead`
+says whether the durable mark was reached; a checkpoint that would not fit one storage cell is
+refused before the write (`REDUCE_CHECKPOINT_TOO_LARGE`); an unreadable row surfaces coded
+(`EVENT_UNREADABLE`); the delivery loop keeps a per-context ledger of in-flight and pending push
+bytes and drops a stalled client's pushes; every SQL statement the stream runs lives in ONE typed
+module, `src/stream/stream-storage.ts`.
 
 `src/stream/processor.ts`
 
@@ -477,10 +487,7 @@ interface BuiltInScope {
 
   /** This context's log — the same commit pipeline the edge's verbs write through. */
   append(...events: StreamEventInput[]): Promise<StreamEvent[]>;
-  read(
-    afterOffset?: number,
-    limit?: number,
-  ): Promise<{ events: StreamEvent[]; scannedThroughOffset: number }>;
+  readEvents(afterOffset?: number, limit?: number): Promise<StreamPage>;
   /** Next matching event (default afterOffset = head at call time). 30s default timeout, 120s cap,
    *  rejects with code WAIT_TIMEOUT. A root, so the edge declares nothing for it. */
   waitForEvent(filter?: WaitForEventFilter): Promise<StreamEvent>;
@@ -597,7 +604,7 @@ fetch channel (so a 101 works).
 
 One reduce-only processor is always on and runs **inline** in the commit
 transaction: `CoreStreamProcessor` (`src/stream/core-processor.ts`, slug `core`,
-contract 4.0.0), owned by the `Stream` itself (`stream.coreReducedState`). It reduces the context's own control
+contract 6.0.0), owned by the `Stream` itself (`stream.coreReducedState`). It reduces the context's own control
 events — and nothing else — into everything the DO needs synchronously at its
 doors: who it is, which incarnation runs, whether appends are paused, the
 rewrite rules every call goes through, the subscriptions every commit is sent
@@ -615,12 +622,13 @@ type CoreState = {
   createdAt?: string;
   incarnation?: number; // from stream/woken — grows across hibernation wakes
   paused: { reason: string } | null; // stream/paused / stream/resumed
-  // THE REWRITE-RULE TABLE: a MAP by canonical match — a configured target REPLACES, null DELETES
+  // THE REWRITE-RULE TABLE: a MAP by canonical match — a configured target REPLACES; `null` MASKS
+  // under a built-in root (kept as a row) and deletes elsewhere; the target `itx.builtins.<match…>` deletes
   itxExpressionRewriteRules: Record<
     string, // canonicalItxExpressionPrefix(match), e.g. "itx.greet" or "itx.ai.run('gpt-5')"
     {
       match: ItxExpressionPrefix; // parsed once from the event's string
-      target: ItxExpression; // a lent stub's is itx.rpcStubs.get('<rpcStubKey>')
+      target: ItxExpression | null; // a lent stub's is itx.builtins.rpcStubs.get('<rpcStubKey>'); null = a mask
     }
   >;
   // THE SUBSCRIPTIONS TABLE: by name; a same-named configure REPLACES
@@ -1125,7 +1133,7 @@ stream's post-commit hook. For every subscription it filters the batch by
 
 - A `FacetHandle` or an `RpcStubHandle` **owns its progress**: a facet keeps its
   own checkpoint and gap-repairs from the log; a live client owns its offset and
-  heals a range gap with `read(through)`. It gets a push of
+  heals a range gap with `readEvents(through)`. It gets a push of
   `(events, { after, through })`, serialized per subscription: fire-and-forget
   for a lent stub (a stalled tab never blocks the chain; `RPC_STUB_OFFLINE`
   is swallowed), awaited for a facet (its batches stay in order and the idle
@@ -1226,16 +1234,14 @@ NO configuration verbs here: the edge's `provide` / `subscribe` /
 class IterateContextDurableObject extends DurableObject<Env> {
   // ── the stream ──
   append(...events: StreamEventInput[]): Promise<StreamEvent[]>;
-  read(
-    afterOffset?: number,
-    limit?: number,
-  ): { events: StreamEvent[]; scannedThroughOffset: number };
+  read(afterOffset?: number, limit?: number): StreamPage; // { events, scannedThroughOffset, atHead }
   waitForEvent(filter?: WaitForEventFilter): Promise<StreamEvent>;
 
   // ── dispatch: ONE door ──
-  /** parse → rewrite through the current rules until the root is a built-in (most specific
-   *  match wins; default-deny; 32-rewrite budget) → the root, its args, the remaining steps. */
-  invoke(call: ItxExpressionInput): Promise<unknown>;
+  /** parse → RULES FIRST, until the call is rooted at `itx.builtins` (a bare built-in root is the
+   *  implicit platform row; most specific match wins; default-deny; 32-rewrite budget) → walk the
+   *  record. `...args` are LIVE args, folded into a name-final call before the rules. */
+  invoke(call: ItxExpressionInput, ...args: unknown[]): Promise<unknown>;
 
   // (facets have no public verb: they are reached through `invoke` → the `facets` built-in and
   //  the load chain; the resolve-walk-apply door behind both, #invokeFacet, is private)
@@ -1280,11 +1286,8 @@ What one context reaches another through, `src/stream/stream.ts`:
  *  is wrapped by localContext(). */
 interface Context {
   append(...events: StreamEventInput[]): Promise<StreamEvent[]>;
-  read(
-    afterOffset?: number,
-    limit?: number,
-  ): Promise<{ events: StreamEvent[]; scannedThroughOffset: number }>;
-  invoke(call: ItxExpressionInput): Promise<unknown>;
+  read(afterOffset?: number, limit?: number): Promise<StreamPage>; // { events, scannedThroughOffset, atHead }
+  invoke(call: ItxExpressionInput, ...args: unknown[]): Promise<unknown>;
 }
 ```
 
@@ -1383,13 +1386,13 @@ sequenceDiagram
   participant E as edge relay (owns the stub)
   participant D as context DO
   C->>E: itx.provide("itx.robot", robotObject)
-  E->>D: open the pager WebSocket — ONE request: x-itx-rpc-stub-pager = { rpcStubKey: "itx.robot", appendEvents: [rewrite-rule-configured { match: "itx.robot", target: "itx.rpcStubs.get('itx.robot')" }] }
+  E->>D: open the pager WebSocket — ONE request: x-itx-rpc-stub-pager = { rpcStubKey: "itx.robot", appendEvents: [rewrite-rule-configured { match: "itx.robot", target: "itx.builtins.rpcStubs.get('itx.robot')" }] }
   Note over D: accept the socket, append the rule (pure data; the log never records the socket), then rpc-stub/attached { rpcStubKey: "itx.robot" } (ephemeral) — one synchronous turn; a paused stream answers 409 + STREAM_PAUSED and no socket
   D-->>E: 101
   E-->>C: RewriteRuleHandle
   Note over D: ... idle: DO hibernates, the pager socket survives ...
   C->>D: itx.robot.move(10)   (via edge, invoke)
-  Note over D: rewrite → itx.rpcStubs.get('itx.robot').move(10)
+  Note over D: rewrite → itx.builtins.rpcStubs.get('itx.robot').move(10)   (ONE rewrite lands at the fixed point)
   D->>E: { type: "page" } down the pager socket
   E->>D: lendRpcStub({ rpcStubKey: "itx.robot", stub })   a fresh Workers-RPC LentRpcStub
   D->>E: stub.invoke([["move", 10]])
@@ -1410,13 +1413,16 @@ appends `rpc-stub/attached`, losing its last appends `rpc-stub/detached` (both
 ephemeral; a replaced pager emits neither). A provided stub's rule dies with
 the stub, and the un-set is the DO's: disposing the handle (or the session
 ending) recalls the stub — the DO appends the un-set when the key's last pager
-closes, `rewrite-rule-configured { match, target: null }` for every rewrite
-rule and every subscription whose target is `itx.rpcStubs.get('<rpcStubKey>')`
+closes, `rewrite-rule-configured { match, target: 'itx.builtins.<match…>' }` (the removal
+spelling — a `null` would MASK a platform row) for every rewrite rule and
+`subscription-configured { name, null }` for every subscription whose target RESOLVES to
+`itx.builtins.rpcStubs.get('<rpcStubKey>')`, decided against one frozen table
 (`#unsetWhatNamesRpcStub`, run from the directory's `onPresence("detached")`)
 — decided DO-side because only the DO knows the truth: a reconnect REPLACES
 the pager and is never a detach, so a reconnected session's rule survives a
 late-dying old session, while a genuine last close un-sets it exactly once.
-Only an EXPRESSION rule's handle appends the `null` itself; an un-set on a
+Only an EXPRESSION rule's handle appends the removal spelling itself (and only while the row is
+still its own); an un-set on a
 match with no row is a no-op in the reduce. `RPC_STUB_OFFLINE` is what a call
 answers when a rule names a key nobody has lent right now — a rule appended
 raw by hand, or the window before the un-set lands (a paused stream refuses
@@ -1490,31 +1496,31 @@ itself.
 
 ## 10. Vocabulary
 
-| Word                  | Meaning here                                                                                                                                                                                                                              |
-| --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| context               | one `IterateContextDurableObject`, named `{projectId}.iterate{path}`; a stream + a rewrite-rule table + a subscriptions table + the rpc-stub directory                                                                                    |
-| session               | what `/api` hands you: `UnauthenticatedSession → authenticate() → Session → projects.get(id)`; a session is not a context, it is how you reach one                                                                                        |
-| itx expression        | `["itx", ...steps]` (`ItxExpression`) or its string form; either half is an `ItxExpressionInput`; the persisted currency of every target                                                                                                  |
-| itx-expression prefix | a rewrite rule's `match`: dotted names, any step may pin literal args — `itx.greet`, `itx.ai.run('gpt-5')`; `canonicalItxExpressionPrefix` is its one spelling, the table's key                                                           |
-| rewrite rule          | `{ match, target }`: a call starting with `match` runs as the same call with `match` replaced by `target`; one map entry per canonical match, written by `itx/rewrite-rule-configured { match, target \| null }`; nothing else rides it   |
-| default rule          | a rule at the bare prefix `itx`; claims any non-built-in call                                                                                                                                                                             |
-| built-in              | a root of `BuiltInScope`, reached as `itx.builtins.<root>` (the reserved root, the fixed point — never a rule's match) or as the implicit platform row `itx.<root>`, which the context's own rows come before (shadowable, maskable)      |
-| InvokeHandle          | a pipelinable `RpcTarget` returned mid-chain (`cd`, `workers.get(...)`); `FacetHandle` and `RpcStubHandle` are its two brands                                                                                                             |
-| rpc stub              | a live capnweb value a session LENDS under an opaque `rpcStubKey`; the edge owns it, the DO BORROWS it per page and RETURNS it at idle; `itx.rpcStubs.get(rpcStubKey)` is how a rule or a subscription names it; presence is `list()`     |
-| pager                 | the hibernatable WebSocket from the edge relay to the DO, one per key, carrying `{ transportId, rpcStubKey }`; the DO sends `{ type: "page" }` to get a fresh stub lent                                                                   |
-| session-scoped handle | what `provide` / `subscribe` return (`RewriteRuleHandle`, `SubscriptionHandle`): disposable; disposing — or the session ending — undoes the act; the durable spelling is the raw event                                                    |
-| subscription          | a named row `{ target, consumes? }` in the subscriptions table; delivered every commit by the one loop                                                                                                                                    |
-| push                  | delivery to a target that owns its progress: `(events, range)`, fire-and-forget to a lent stub, awaited to a facet                                                                                                                        |
-| stream-kept cursor    | delivery to a target that cannot own progress: at-least-once from a kv cursor, retry ladder, halt fact                                                                                                                                    |
-| processor             | a pure `StreamProcessor` (contract + reduce, optional effects) inside a `StreamProcessorDurableObject` host, hosted as a facet and subscribed to `processEventBatch`; durable configuration; the core reduce is one hosted inline instead |
-| core reduce           | the ONE reduce-only processor run inside the commit transaction: `core` (identity, wake, pause, rewrite rules, subscriptions), owned by the `Stream`                                                                                      |
-| facet                 | a workerd `ctx.facets` child of the DO with its own storage; hosts loaded `DurableObject` classes, processors included                                                                                                                    |
-| scanned range         | `{ after, through }` delivered with each batch; the contiguity proof subscribers chain                                                                                                                                                    |
-| ephemeral             | an event that takes an offset but is never stored and costs no write; delivered only to subscribers that name its type                                                                                                                    |
-| incarnation           | one life of the DO between evictions; the constructor's `stream/woken` opens each (offset 1 is the first one's `stream/created`); ephemeral offsets are unique within one                                                                 |
-| live state            | a `LiveState` holder's `{ rev, state }` plus `live-state/changed` deltas; clients chain revs and re-seed on a gap                                                                                                                         |
-| egress                | any fetch leaving project code: `{{secret:project:NAME}}` substituted in the DO, then `FALLBACK.fetch`                                                                                                                                    |
-| fetch lane            | reaching something fetch-shaped: `/expression?context=&itx=` from outside (`x-itx-expression` to the DO), a terminal `itx.x.fetch(request)` from inside a session                                                                         |
+| Word                  | Meaning here                                                                                                                                                                                                                                                                          |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| context               | one `IterateContextDurableObject`, named `{projectId}.iterate{path}`; a stream + a rewrite-rule table + a subscriptions table + the rpc-stub directory                                                                                                                                |
+| session               | what `/api` hands you: `UnauthenticatedSession → authenticate() → Session → projects.get(id)`; a session is not a context, it is how you reach one                                                                                                                                    |
+| itx expression        | `["itx", ...steps]` (`ItxExpression`) or its string form; either half is an `ItxExpressionInput`; the persisted currency of every target                                                                                                                                              |
+| itx-expression prefix | a rewrite rule's `match`: dotted names, any step may pin literal args — `itx.greet`, `itx.ai.run('gpt-5')`; `canonicalItxExpressionPrefix` is its one spelling, the table's key                                                                                                       |
+| rewrite rule          | `{ match, target }`: a call starting with `match` runs as the same call with `match` replaced by `target`; one map entry per canonical match, written by `itx/rewrite-rule-configured { match, target \| null }`; nothing else rides it                                               |
+| default rule          | a rule at the bare prefix `itx`; claims any non-built-in call                                                                                                                                                                                                                         |
+| built-in              | a root of `BuiltInScope`, reached as `itx.builtins.<root>` (the reserved root, the fixed point — never a rule's match) or as the implicit platform row `itx.<root>`, which the context's own rows come before (shadowable, maskable)                                                  |
+| InvokeHandle          | a pipelinable `RpcTarget` returned mid-chain (`cd`, `workers.get(...)`); `FacetHandle` and `RpcStubHandle` are its two brands                                                                                                                                                         |
+| rpc stub              | a live capnweb value a session LENDS under an opaque `rpcStubKey`; the edge owns it, the DO BORROWS it per page and RETURNS it at idle; `itx.builtins.rpcStubs.get(rpcStubKey)` is how the platform's rows name it, and any spelling that resolves there counts; presence is `list()` |
+| pager                 | the hibernatable WebSocket from the edge relay to the DO, one per key, carrying `{ transportId, rpcStubKey }`; the DO sends `{ type: "page" }` to get a fresh stub lent                                                                                                               |
+| session-scoped handle | what `provide` / `subscribe` return (`RewriteRuleHandle`, `SubscriptionHandle`): disposable; disposing — or the session ending — undoes the act; the durable spelling is the raw event                                                                                                |
+| subscription          | a named row `{ target, consumes? }` in the subscriptions table; delivered every commit by the one loop                                                                                                                                                                                |
+| push                  | delivery to a target that owns its progress: `(events, range)`, fire-and-forget to a lent stub, awaited to a facet                                                                                                                                                                    |
+| stream-kept cursor    | delivery to a target that cannot own progress: at-least-once from a kv cursor, retry ladder, halt fact                                                                                                                                                                                |
+| processor             | a pure `StreamProcessor` (contract + reduce, optional effects) inside a `StreamProcessorDurableObject` host, hosted as a facet and subscribed to `processEventBatch`; durable configuration; the core reduce is one hosted inline instead                                             |
+| core reduce           | the ONE reduce-only processor run inside the commit transaction: `core` (identity, wake, pause, rewrite rules, subscriptions), owned by the `Stream`                                                                                                                                  |
+| facet                 | a workerd `ctx.facets` child of the DO with its own storage; hosts loaded `DurableObject` classes, processors included                                                                                                                                                                |
+| scanned range         | `{ after, through }` delivered with each batch; the contiguity proof subscribers chain                                                                                                                                                                                                |
+| ephemeral             | an event that takes an offset but is never stored and costs no write; delivered only to subscribers that name its type                                                                                                                                                                |
+| incarnation           | one life of the DO between evictions; the constructor's `stream/woken` opens each (offset 1 is the first one's `stream/created`); ephemeral offsets are unique within one                                                                                                             |
+| live state            | a `LiveState` holder's `{ rev, state }` plus `live-state/changed` deltas; clients chain revs and re-seed on a gap                                                                                                                                                                     |
+| egress                | any fetch leaving project code: `{{secret:project:NAME}}` substituted in the DO, then `FALLBACK.fetch`                                                                                                                                                                                |
+| fetch lane            | reaching something fetch-shaped: `/expression?context=&itx=` from outside (`x-itx-expression` to the DO), a terminal `itx.x.fetch(request)` from inside a session                                                                                                                     |
 
 ---
 

@@ -1,7 +1,7 @@
 // context/itx-expression-rewriting.test.ts — THE TABLE: given these rewrite rules and this call, this
 // is the call that runs. Every rule in itx-expression-rewriting.ts is a row here; read the rows, not
 // the code. Rules are written `"match ⇒ target"`; `null` is a MASK. Built-in roots for the table: kv,
-// whoami, rpcStubs, load, ai — reached as `itx.builtins.<root>` (the fixed point) or through the implicit
+// whoami, rpcStubs, ai — reached as `itx.builtins.<root>` (the fixed point) or through the implicit
 // platform row `itx.<root> ⇒ itx.builtins.<root>`. Below the table: the ONE door
 // (`rewriteRuleConfiguredEvent` and its removal spelling), the resolver over a fake physical scope
 // (rules first, masks, the fixed point, default-deny, depth 32, lent stubs through a fake
@@ -21,8 +21,6 @@ import {
   rewriteRuleRemovedEvent,
 } from "./itx-expression-rewriting.ts";
 
-const BUILT_IN_ROOTS = new Set(["kv", "whoami", "rpcStubs", "load", "ai"]);
-const isBuiltInRoot = (root: string) => BUILT_IN_ROOTS.has(root);
 const table = (rows: string[]): ItxExpressionRewriteRule[] =>
   rows.map((row) => {
     const [match, target] = row.split(" ⇒ ");
@@ -34,9 +32,7 @@ const table = (rows: string[]): ItxExpressionRewriteRule[] =>
 /** The chain of rewrites, printed — or the refusal. */
 const chain = (rules: string[], call: string): string[] | string => {
   try {
-    return resolveItxExpression(() => table(rules), parse(call), isBuiltInRoot).map((step) =>
-      print(step),
-    );
+    return resolveItxExpression(() => table(rules), parse(call)).map((step) => print(step));
   } catch (error) {
     return `THROWS ${(error as Error).message}`;
   }
@@ -300,7 +296,7 @@ describe("resolveItxExpression — the call that runs", () => {
       expect(runs(rules, call)).toMatch(throws);
     });
 
-  test("the depth budget: a chain of 32 rules naming rules resolves, 33 trips", () => {
+  test("the depth budget: 32 REWRITES resolve (31 rules + the platform row), 33 trip", () => {
     const chainOf = (n: number) =>
       Array.from(
         { length: n },
@@ -329,13 +325,11 @@ describe("resolveItxExpression — the call that runs", () => {
     const neverRead = () => {
       throw new Error("the table was read");
     };
-    expect(
-      print(
-        resolveItxExpression(neverRead, parse("itx.builtins.kv.get('k')"), isBuiltInRoot).at(-1)!,
-      ),
-    ).toBe("itx.builtins.kv.get('k')");
+    expect(print(resolveItxExpression(neverRead, parse("itx.builtins.kv.get('k')")).at(-1)!)).toBe(
+      "itx.builtins.kv.get('k')",
+    );
     // …while a short name does (and the read happens once)
-    expect(() => resolveItxExpression(neverRead, parse("itx.kv.get('k')"), isBuiltInRoot)).toThrow(
+    expect(() => resolveItxExpression(neverRead, parse("itx.kv.get('k')"))).toThrow(
       /the table was read/,
     );
   });
@@ -484,90 +478,72 @@ describe("rewriteRuleConfiguredEvent — ONE event, both halves canonical, loud 
     });
   });
 
-  test("the target must be rooted at itx (a bare built-in root is unspellable)", () => {
-    expect(() => rewriteRuleConfiguredEvent("itx.evil", "kv")).toThrow(/must be rooted at "itx"/);
-    expect(() => rewriteRuleConfiguredEvent("itx.x", ["kv", "get"])).toThrow(
-      /must be rooted at "itx"/,
-    );
-  });
-
-  test("the match may not be rooted at the reserved root `itx.builtins` (the fixed point is never a name a rule claims)", () => {
-    expect(() => rewriteRuleConfiguredEvent("itx.builtins", "itx.kv")).toThrow(/itx\.builtins/);
-    expect(() => rewriteRuleConfiguredEvent("itx.builtins.kv", "itx.whoami")).toThrow(
-      /may not be rooted at "itx\.builtins"/,
-    );
-    // a target may (it is the physical spelling)
-    expect(rewriteRuleConfiguredEvent("itx.db", "itx.builtins.kv").payload).toEqual({
-      match: "itx.db",
-      target: "itx.builtins.kv",
+  // THE DOOR'S REFUSALS, one row each: `{ match, target, throws }` — rule 6 (rooting, the reserved
+  // root, the proxy's verbs), rule 7 (`@` in a match, in a non-final step, in a call), and the
+  // prefix grammar (an argless pinned step, an anonymous step, an unbalanced paren, a non-identifier
+  // step in the ARRAY half).
+  const doorRefusals: {
+    match: ItxExpressionInput;
+    target: ItxExpressionInput | null;
+    throws: RegExp;
+  }[] = [
+    { match: "itx.evil", target: "kv", throws: /must be rooted at "itx"/ }, // a bare built-in root is unspellable
+    { match: "itx.x", target: ["kv", "get"], throws: /must be rooted at "itx"/ },
+    { match: "itx.builtins", target: "itx.kv", throws: /itx\.builtins/ }, // the fixed point is never a name a rule claims
+    {
+      match: "itx.builtins.kv",
+      target: "itx.whoami",
+      throws: /may not be rooted at "itx\.builtins"/,
+    },
+    ...["cd", "invoke", "provide", "subscribe", "enableProcessor", "disableProcessor"].map(
+      (verb) => ({
+        match: `itx.${verb}`,
+        target: "itx.kv",
+        throws: new RegExp(`may not start with the proxy's own verb "${verb}"`),
+      }),
+    ),
+    { match: "itx.cd('/x')", target: "itx.kv", throws: /proxy's own verb "cd"/ },
+    { match: "itx.a(@)", target: "itx.kv", throws: /legal only in a rewrite rule's target/ }, // rule 7: never in a match…
+    { match: ["itx", ["a", { "@": true }]], target: "itx.kv", throws: /not its match/ }, // …in either half
+    {
+      match: "itx.x",
+      target: "itx.ai.run(@).then",
+      throws: /legal only in the target's FINAL step/,
+    },
+    { match: "itx.a()", target: "itx.kv", throws: /pins literal args.*spell "a"/ }, // an argless pinned step pins nothing
+    { match: "itx.a('x')(1)", target: "itx.kv", throws: /cannot call a result/ },
+    { match: "itx.broken(", target: "itx.kv", throws: /unbalanced/ },
+    { match: ["itx", "builtins.kv"], target: "itx.kv", throws: /identifiers/ }, // the ARRAY half reads like the string half
+    { match: ["itx", "a b"], target: "itx.kv", throws: /identifiers/ },
+  ];
+  for (const { match, target, throws } of doorRefusals)
+    test(`REFUSED: ${JSON.stringify(match)} ⇒ ${JSON.stringify(target)}  ${throws}`, () => {
+      expect(() => rewriteRuleConfiguredEvent(match, target)).toThrow(throws);
     });
-  });
 
-  test("the match may not start with one of the proxy's own verbs (the sugar never hands those to the table)", () => {
-    for (const verb of [
-      "cd",
-      "invoke",
-      "provide",
-      "subscribe",
-      "enableProcessor",
-      "disableProcessor",
-    ])
-      expect(() => rewriteRuleConfiguredEvent(`itx.${verb}`, "itx.kv")).toThrow(
-        new RegExp(`may not start with the proxy's own verb "${verb}"`),
-      );
-    expect(() => rewriteRuleConfiguredEvent("itx.cd('/x')", "itx.kv")).toThrow(
-      /proxy's own verb "cd"/,
-    );
-    // a target may name them (`itx.cd('/x')` is a built-in root in an expression)
-    expect(rewriteRuleConfiguredEvent("itx.archive", "itx.cd('/archive')").payload).toEqual({
-      match: "itx.archive",
-      target: "itx.cd('/archive')",
+  // …and what the door ACCEPTS, stored canonical: `{ match, target, payload }`.
+  const doorAccepts: { match: ItxExpressionInput; target: ItxExpressionInput; payload: unknown }[] =
+    [
+      {
+        match: "itx.db",
+        target: "itx.builtins.kv",
+        payload: { match: "itx.db", target: "itx.builtins.kv" },
+      }, // a target may name the physical spelling
+      {
+        match: "itx.archive",
+        target: "itx.cd('/archive')",
+        payload: { match: "itx.archive", target: "itx.cd('/archive')" },
+      }, // …and a proxy verb (a built-in root in an expression)
+      {
+        match: "itx.ai.run('gpt-5')",
+        target: "itx.kv",
+        payload: { match: "itx.ai.run('gpt-5')", target: "itx.kv" },
+      }, // pinned args, stored canonical
+    ];
+  for (const { match, target, payload } of doorAccepts)
+    test(`ACCEPTED: ${match} ⇒ ${target}`, () => {
+      expect(rewriteRuleConfiguredEvent(match, target).payload).toEqual(payload);
     });
-  });
-
-  test("RULE 7 at the door: `@` is lexed in a target only — refused in a match (either half), in a non-final step of a target, and in a call", () => {
-    expect(rewriteRuleConfiguredEvent("itx.fable", "itx.ai.run('@cf/x', @)").payload).toEqual({
-      match: "itx.fable",
-      target: "itx.ai.run('@cf/x',@)",
-    });
-    expect(
-      rewriteRuleConfiguredEvent(
-        "itx.claude",
-        "itx.ai.gateway('g').run({ query: { model: 'm', ...@ } })",
-      ).payload,
-    ).toEqual({
-      match: "itx.claude",
-      target: "itx.ai.gateway('g').run({query:{...@,model:'m'}})",
-    });
-    // the array half spells the marker as the reserved literal
-    expect(
-      rewriteRuleConfiguredEvent("itx.fable", ["itx", "ai", ["run", "@cf/x", { "@": true }]])
-        .payload,
-    ).toEqual({ match: "itx.fable", target: "itx.ai.run('@cf/x',@)" });
-    expect(() => rewriteRuleConfiguredEvent("itx.a(@)", "itx.kv")).toThrow(
-      /legal only in a rewrite rule's target/,
-    );
-    expect(() => rewriteRuleConfiguredEvent(["itx", ["a", { "@": true }]], "itx.kv")).toThrow(
-      /not its match/,
-    );
-    expect(() => rewriteRuleConfiguredEvent("itx.x", "itx.ai.run(@).then")).toThrow(
-      /legal only in the target's FINAL step/,
-    );
-  });
-
-  test("the match may PIN literal args on a call step (stored canonical); an argless call step, an anonymous step and an unbalanced paren are refused", () => {
-    expect(
-      (rewriteRuleConfiguredEvent("itx.ai.run('gpt-5')", "itx.kv").payload as { match: string })
-        .match,
-    ).toBe("itx.ai.run('gpt-5')");
-    expect(() => rewriteRuleConfiguredEvent("itx.a()", "itx.kv")).toThrow(
-      /pins literal args.*spell "a"/,
-    );
-    expect(() => rewriteRuleConfiguredEvent("itx.a('x')(1)", "itx.kv")).toThrow(
-      /cannot call a result/,
-    );
-    expect(() => rewriteRuleConfiguredEvent("itx.broken(", "itx.kv")).toThrow(/unbalanced/);
-  });
 });
 
 // ───────────────────────────── the resolver, over the reduce as the DO runs it ─────────────────────────────
@@ -575,7 +551,7 @@ describe("rewriteRuleConfiguredEvent — ONE event, both halves canonical, loud 
 /** A tiny fake built-ins record — enough physical layer to rewrite into. */
 const fakeBuiltIns = () => {
   const kv = new Map<string, string>();
-  const openaiCalls: unknown[] = [];
+  const aiCalls: unknown[] = [];
   return {
     kv: {
       get: (k: string) => kv.get(k) ?? null,
@@ -585,18 +561,18 @@ const fakeBuiltIns = () => {
       },
     },
     whoami: () => ({ projectId: "prj_t", path: "/" }),
-    openai: {
-      chat: (o: { model: string }) => {
-        openaiCalls.push(o);
-        return `chat:${o.model}`;
-      },
-    },
     // the Workers AI binding's shape, verbatim: run(model, inputs, options?) and gateway(id).run(req)
+    // — plus a `chat` the rows alias to (a REAL root name: the resolver's platform rows come from the
+    // leaf list, context/built-in-roots.ts)
     ai: {
       run: (model: string, inputs?: unknown, options?: unknown) => ({ model, inputs, options }),
       gateway: (id: string) => ({ run: (request: unknown) => ({ gateway: id, request }) }),
+      chat: (o: { model: string }) => {
+        aiCalls.push(o);
+        return `chat:${o.model}`;
+      },
     },
-    openaiCalls,
+    aiCalls,
   };
 };
 
@@ -664,8 +640,7 @@ const setup = () => {
     events,
     builtIns,
     rewriteRules,
-    invoke: (call: ItxExpressionInput, ...args: unknown[]) =>
-      resolver.invoke(call, args.length ? args : undefined),
+    invoke: (call: ItxExpressionInput, ...args: unknown[]) => resolver.invoke(call, ...args),
     resolve: (call: ItxExpressionInput) => resolver.resolve(call).map((step) => print(step)),
     rewrite,
     remove: (match: ItxExpressionInput) =>
@@ -869,9 +844,9 @@ describe("the rule table — a MAP by match: set replaces, null masks or deletes
 
   test("args at the match: a call at the match itself applies the rewritten target", async () => {
     const { rewrite, invoke, builtIns } = setup();
-    rewrite("itx.grok", "itx.openai.chat");
+    rewrite("itx.grok", "itx.ai.chat");
     expect(await invoke("itx.grok({ model: 'grok-4' })")).toBe("chat:grok-4");
-    expect(builtIns.openaiCalls[0]).toEqual({ model: "grok-4" });
+    expect(builtIns.aiCalls[0]).toEqual({ model: "grok-4" });
   });
 
   test("THE DREAM, through the reduce: `itx.fable ⇒ itx.ai.run('@cf/…', @)` is one string-at-rest row; the caller's inputs fill `@`; `...@` pins a gateway model", async () => {
@@ -956,8 +931,8 @@ describe("targets round-trip the codec: rewrite → print → reduce → parse",
 
   test("a target with a non-identifier object key rewrites (print QUOTES the key; the parser re-reads it)", async () => {
     const { rewrite, invoke } = setup();
-    rewrite("itx.chat", ["itx", "openai", ["chat", { "a b": "grok-4" }]]);
-    // openai.chat reads o.model (absent here) → "chat:undefined"; the point is it REWRITES at all.
+    rewrite("itx.chat", ["itx", "ai", ["chat", { "a b": "grok-4" }]]);
+    // ai.chat reads o.model (absent here) → "chat:undefined"; the point is it REWRITES at all.
     expect(await invoke("itx.chat")).toBe("chat:undefined");
   });
 });

@@ -9,7 +9,8 @@ import { ItxExpressionResolver } from "./itx-expression-rewriting.ts";
 
 // ───────────────────────────── the step walk + a rewrite rule, end to end ─────────────────────────────
 
-/** A fake built-ins scope: enough physical layer to walk into. `kv` is `this`-dependent on purpose
+/** A fake built-ins scope: enough physical layer to walk into — under REAL root names, since the
+ *  resolver's platform rows come from the leaf list (context/built-in-roots.ts). `kv` is `this`-dependent on purpose
  *  (a method detached from its receiver would lose its store). */
 const scope = () => {
   const log: string[] = [];
@@ -26,10 +27,10 @@ const scope = () => {
           return { ok: true };
         },
       },
-      openai: {
+      ai: {
         chat: (o: { model: string; messages?: unknown[] }) => `chat(${o.model})`,
       },
-      robots: {
+      workers: {
         get: (key: string) => ({
           ping: () => `pong:${key}`,
           arm: {
@@ -70,14 +71,14 @@ describe("walkSteps + resolve", () => {
 
   test("a rule targeting a call, end to end — the steps after the match replay on the value", async () => {
     const s = scope();
-    const resolver = resolverOver(s, rewriteRule("itx.robot", "itx.robots.get('robot-arm-1')"));
+    const resolver = resolverOver(s, rewriteRule("itx.robot", "itx.workers.get('robot-arm-1')"));
     expect(await resolver.invoke("itx.robot.arm.move(10)")).toBe("moved");
     expect(s.log).toEqual(["move 10 @robot-arm-1"]);
   });
 
   test("args at the match apply the rewritten target as a call", async () => {
     const s = scope();
-    const resolver = resolverOver(s, rewriteRule("itx.grok", "itx.openai.chat"));
+    const resolver = resolverOver(s, rewriteRule("itx.grok", "itx.ai.chat"));
     expect(await resolver.invoke("itx.grok({ model: 'grok-4', messages: ['hi'] })")).toBe(
       "chat(grok-4)",
     );
@@ -86,7 +87,7 @@ describe("walkSteps + resolve", () => {
   test("args at the match on a non-callable target error LOUDLY (no silent drop)", async () => {
     const s = scope();
     const resolver = resolverOver(s, rewriteRule("itx.db", "itx.kv"));
-    await expect(resolver.invoke("itx.db('oops')")).rejects.toThrow(/not callable/);
+    await expect(resolver.invoke("itx.db('oops')")).rejects.toThrow(/not a method|not callable/);
     // CODED, like the dotted sibling (NOT_A_METHOD): the delivery loop treats it as deterministic
     // and halts an uncallable cursor target at the first failure instead of climbing the ladder.
     await expect(resolver.invoke("itx.db('oops')")).rejects.toMatchObject({ code: "NOT_A_METHOD" });

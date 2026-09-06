@@ -202,10 +202,49 @@ function makeWorkspaceDocumentsWorkspace(): WorkspaceConfig {
   };
 }
 
+function makeProjectWorkerWorkspace(): WorkspaceConfig {
+  // The clean-room context worker (wip/kernel-wayfinder). Entries: the worker, the SDK bundle's
+  // source (build-sdk.mjs bundles src/sdk/index.ts + src/client/demo.tsx into src/generated and
+  // public/), the three vitest lanes, the bench, and the Playwright specs.
+  return {
+    entry: [
+      "src/worker.ts!",
+      "src/sdk/index.ts",
+      "src/client/**/*.{ts,tsx}",
+      "build-sdk.mjs",
+      "vitest.config.ts",
+      "e2e/vitest.config.ts",
+      "e2e/**/*.ts",
+      "__workers-tests__/**/*.ts",
+      "bench/**/*.ts",
+      "playwright.config.ts",
+      "specs/**/*.ts",
+      "src/**/*.test.ts",
+    ],
+    project: [
+      "src/**/*.{ts,tsx}!",
+      "e2e/**/*.ts",
+      "__workers-tests__/**/*.ts",
+      "bench/**/*.ts",
+      "specs/**/*.ts",
+      "!src/generated/**",
+    ],
+    ignore: ["src/generated/**"],
+    // vitest resolves `globalSetup` against the package root, knip against the config's own dir.
+    ignoreUnresolved: ["./e2e/support/global-setup.ts"],
+    // `cloudflare:workers` parses as the "cloudflare" package; wrangler backs the deploy script.
+    ignoreDependencies: ["cloudflare", "wrangler"],
+    ignoreBinaries: ["playwright"],
+  };
+}
+
 const config: KnipConfig = {
   // Keep the config honest in CI/local runs: if Knip thinks our patterns or
   // workspace setup drifted, fail instead of silently warning.
   treatConfigHintsAsErrors: true,
+  // A TYPE exported for a holder's benefit and used in its own file (a connector's option or result
+  // type, a config shape) is not dead; a VALUE export still needs an importer.
+  ignoreExportsUsedInFile: { interface: true, type: true },
   include: [
     "files",
     "dependencies",
@@ -238,6 +277,10 @@ const config: KnipConfig = {
     "!packages/ui",
     "!packages/iterate",
     "!packages/workspace-documents",
+    // The clean room: only the context worker is wired; its siblings (shared, the untracked
+    // project-core packages) stay out until they have a config of their own.
+    "packages/v3/*",
+    "!packages/v3/project-worker",
   ],
   ignoreIssues: {
     "apps/os/e2e/test-support/app-config-env.ts": ["files", "exports"],
@@ -266,6 +309,7 @@ const config: KnipConfig = {
     "packages/ui": makeUiWorkspace(),
     "packages/iterate": makeIterateCliWorkspace(),
     "packages/workspace-documents": makeWorkspaceDocumentsWorkspace(),
+    "packages/v3/project-worker": makeProjectWorkerWorkspace(),
   },
 };
 

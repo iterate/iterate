@@ -28,7 +28,6 @@ import { CoreStreamProcessor, type CoreState } from "./stream/core-processor.ts"
 import type { StreamEvent, StreamEventInput } from "./stream/events.ts";
 import { subscriptionConfiguredEvent } from "./stream/subscriptions.ts";
 
-const ROOTS = new Set(["kv", "whoami", "rpcStubs", "ai", "facets", "fetch"]);
 const rule = (match: string, target: string | null): ItxExpressionRewriteRule => ({
   match: parseItxExpressionPrefix(match),
   target: target === null ? null : parse(target, { holes: true }),
@@ -79,7 +78,6 @@ describe("do-side#1: what names a dead stub is decided against a frozen table, w
           viaShortSpelling: parse("itx.rpcStubs.get('itx.ai')"),
           viaAlias: parse("itx.llm.notify"),
         },
-        isBuiltInRoot: (root) => ROOTS.has(root),
       });
       expect(ruleMatches.map((m) => print(m)).sort()).toEqual(["itx.ai", "itx.cam"]);
       // the short spelling names the registry through the platform row and goes; the alias-spelled
@@ -367,23 +365,23 @@ describe("edge#1: invoke(call, ...args) resolves the call WITH its live args", (
   const resolver = new ItxExpressionResolver({ builtIns, rewriteRules: rules });
   test("a template fills from the live args, exactly as the dotted call would", async () => {
     calls.length = 0;
-    expect(await resolver.invoke("itx.fable", [{ prompt: "hi" }])).toBe("ran");
+    expect(await resolver.invoke("itx.fable", { prompt: "hi" })).toBe("ran");
     expect(calls).toEqual([["@cf/x", { prompt: "hi" }]]);
   });
   test("a pinned row matches the live args", async () => {
-    expect(await resolver.invoke("itx.ai.run", ["gpt-5", { q: 1 }])).toEqual([
+    expect(await resolver.invoke("itx.ai.run", "gpt-5", { q: 1 })).toEqual([
       "stubbed",
       [["", { q: 1 }]],
     ]);
   });
   test("a pinned mask refuses the live args (default-deny)", async () => {
-    await expect(resolver.invoke("itx.kv.get", ["secret"])).rejects.toMatchObject({
+    await expect(resolver.invoke("itx.kv.get", "secret")).rejects.toMatchObject({
       code: "NO_ITX_EXPRESSION_MATCH",
     });
-    expect(await resolver.invoke("itx.kv.get", ["public"])).toBe("kv:public");
+    expect(await resolver.invoke("itx.kv.get", "public")).toBe("kv:public");
   });
   test("a call-final expression keeps the old shape: the args apply to the value it denotes", async () => {
-    const handle = await resolver.invoke("itx.builtins.rpcStubs.get('s')", [1, 2]);
+    const handle = await resolver.invoke("itx.builtins.rpcStubs.get('s')", 1, 2);
     expect(handle).toEqual(["stubbed", [["", 1, 2]]]);
   });
 });

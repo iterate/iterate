@@ -59,7 +59,7 @@ import {
   rewriteRuleConfiguredEvent,
   rewriteRuleRemovedEvent,
 } from "./context/itx-expression-rewriting.ts";
-import type { FacetSpec } from "./context/worker-loader.ts";
+import { facetSpecOf, type FacetSpec } from "./context/worker-loader.ts";
 import { installPrototypeInvokeFallback } from "./context/dotted-path-proxy.ts";
 import type { BuiltInScope, RewriteRuleListEntry } from "./context/built-ins.ts";
 import {
@@ -81,9 +81,10 @@ export type WaitUntil = (p: Promise<unknown>) => void;
 
 /** What `provide` hands back: dispose it — or let the session end; capnweb disposes every exported
  *  handle then — and the rule at `match` is un-set: for a lent stub, by recalling the stub (the DO
- *  un-sets what named it when its last pager closes); for an expression, by appending `null`. The
- *  caller already holds the match it passed, so the handle carries nothing else. */
-export class RewriteRuleHandle extends RpcTarget {
+ *  un-sets what named it when its last pager closes); for an expression or a deny, by appending the
+ *  removal spelling (`itx.builtins.<match…>`, never `null`) when the row is still its own. The caller
+ *  already holds the match it passed, so the handle carries nothing else. */
+class RewriteRuleHandle extends RpcTarget {
   readonly #undo: () => void;
   constructor(undo: () => void) {
     super();
@@ -97,7 +98,7 @@ export class RewriteRuleHandle extends RpcTarget {
 /** What `subscribe` hands back: dispose it — or let the session end — and the subscription is removed
  *  (a lent callback is recalled with it). `name` is a GETTER (capnweb exposes prototype members only)
  *  — the generated one when none was given. */
-export class SubscriptionHandle extends RpcTarget {
+class SubscriptionHandle extends RpcTarget {
   readonly #name: string;
   readonly #undo: () => void;
   constructor(name: string, undo: () => void) {
@@ -199,7 +200,7 @@ export class IterateContext extends RpcTarget {
    *  `target` is EITHER
    *    • a client's rpc stub (a function, an RpcTarget) — THE ONE PHYSICAL ACT: it is lent to the DO's
    *      `itx.rpcStubs` registry through a pager owned HERE (DON'T-PIN) under the key = the canonical
-   *      `match`, and the pure-data rule `match ⇒ itx.rpcStubs.get('<match>')` is appended. The DO
+   *      `match`, and the pure-data rule `match ⇒ itx.builtins.rpcStubs.get('<match>')` is appended. The DO
    *      un-sets that rule when the stub's LAST pager closes. Re-providing the same match re-lends
    *      (reconnect — the pager is replaced);
    *    • an itx EXPRESSION — a pure rewrite: literally `append(rewriteRuleConfiguredEvent(match, target))`;
@@ -212,22 +213,19 @@ export class IterateContext extends RpcTarget {
   ): Promise<RewriteRuleHandle> {
     const matchString = canonicalItxExpressionPrefix(match);
     const sessionTeardownKey = this.#sessionTeardownKey(matchString);
-    if (target === null) {
-      // A deliberate DENY: a MASK where a platform row lies beneath (`itx.kv` refuses, `itx.builtins.kv`
-      // still answers), a deletion elsewhere. Disposing the handle LIFTS the deny — back to the
-      // platform row — while the row is still this mask.
-      await this.#append(rewriteRuleConfiguredEvent(matchString, null));
-      this.#sessionTeardown.dispose(sessionTeardownKey);
-      return new RewriteRuleHandle(() => this.#removeRuleInBackground(matchString, null));
-    }
-    if (typeof target === "string" || Array.isArray(target)) {
-      // A pure rewrite: whatever THIS session lent under the match stops meaning the stub — recall it.
-      this.#sessionTeardown.dispose(sessionTeardownKey);
+    if (target === null || typeof target === "string" || Array.isArray(target)) {
+      // Pure data: `null` is a deliberate DENY (a MASK where a platform row lies beneath — `itx.kv`
+      // refuses, `itx.builtins.kv` still answers — a deletion elsewhere); an expression is a rewrite.
+      // Appended FIRST, then whatever THIS session lent under the match is recalled: the DO's un-set
+      // on the pager close finds a row that no longer names the stub and removes nothing, so it can
+      // never take the fresh mask or rule with it.
       const event = rewriteRuleConfiguredEvent(matchString, target);
       this.#refuseAnOverrideNamingItsOwnContext(matchString, event);
       await this.#append(event);
-      const targetString = (event.payload as { target: string }).target;
-      return new RewriteRuleHandle(() => this.#removeRuleInBackground(matchString, targetString));
+      this.#sessionTeardown.dispose(sessionTeardownKey);
+      // Disposing LIFTS the deny or REMOVES the rewrite — while the row is still this handle's own.
+      const expectedTarget = (event.payload as { target: string | null }).target;
+      return new RewriteRuleHandle(() => this.#removeRuleInBackground(matchString, expectedTarget));
     }
     // Built BEFORE the lend so a match the codec refuses throws with nothing lent. The rule rides the
     // pager upgrade: the DO appends it in the turn it accepts the pager — ONE round trip, and the DO
@@ -261,8 +259,8 @@ export class IterateContext extends RpcTarget {
   /** SUBSCRIBE: have each committed batch — filtered by `consumes` — delivered to `target` as
    *  `(events, range)`. `target` is EITHER an itx EXPRESSION whose terminal is callable that way (a
    *  facet's `.processEventBatch`, a loaded entrypoint's method, a sibling context's `.append`) OR a
-   *  LIVE callback, which is lent to `itx.rpcStubs` under the key `subscription:<name>` and targeted as
-   *  `itx.rpcStubs.get('…')`; `null` removes the row. HOW it is served is not declared here: the
+   *  LIVE callback, which is lent to the registry under the key `subscription:<name>` and targeted as
+   *  `itx.builtins.rpcStubs.get('subscription:<name>')`; `null` removes the row. HOW it is served is not declared here: the
    *  context looks at what the target evaluates to — a facet or a lent stub owns its progress and gets
    *  a push (the client heals a gap with `readEvents`); anything else gets an at-least-once cursor the
    *  stream keeps. Same name REPLACES. Literally `append(subscriptionConfiguredEvent(…))` — the handle
@@ -317,7 +315,7 @@ export class IterateContext extends RpcTarget {
   /** Enable a processor: host `className` (the `StreamProcessorDurableObject` subclass exported by
    *  the loaded `source` — the host whose `processor` field holds the pure `StreamProcessor`) as the
    *  facet named `name`, and subscribe its `processEventBatch` to every commit. Literally the
-   *  subscription event with the target `itx.facets.get(name, spec).processEventBatch` — a processor
+   *  subscription event with the target `itx.builtins.facets.get(name, spec).processEventBatch` — a processor
    *  is a named facet that is pushed the log; `spec` is the `FacetSpec` `itx.facets.get` takes
    *  (`source`, `cacheKey?`, `className`). DURABLE (no handle): a processor outlives the session that
    *  enabled it; `disableProcessor` is the explicit inverse. `consumes` is the SUBSCRIPTION's filter
@@ -333,15 +331,7 @@ export class IterateContext extends RpcTarget {
           "itx",
           "builtins",
           "facets",
-          [
-            "get",
-            name,
-            {
-              source: spec.source,
-              ...(spec.cacheKey !== undefined && { cacheKey: spec.cacheKey }),
-              className: spec.className,
-            },
-          ],
+          ["get", name, facetSpecOf(spec)],
           "processEventBatch",
         ],
         ...(spec.consumes && { consumes: spec.consumes }),

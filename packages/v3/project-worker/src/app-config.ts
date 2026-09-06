@@ -1,11 +1,11 @@
 // app-config.ts — THE PROJECT WORKER'S CONFIGURATION: one typed object, parsed ONCE per isolate from
 // the `APP_CONFIG_*` wrangler vars (the apps/os shape — apps/os/src/config.ts + env.ts — minus its
-// schema library: zod is off this script for startup time, BUILD-LOG 2026-09-03 W3(b)) plus the one
-// platform-supplied identity, the version-metadata binding. Loud on anything malformed: an error
-// names the variable and the shape it wanted, at first use, never a silent default.
+// schema library: zod is off this script for startup time) plus the one platform-supplied identity,
+// the version-metadata binding. Loud on anything malformed: an error names the variable and the shape
+// it wanted, at first use, never a silent default.
 //
-// WHAT IS CONFIGURATION AND WHAT IS A CONSTANT (the inventory of 2026-09-04). Configuration is what
-// differs between deployments of the SAME code; a constant is a property of the code.
+// WHAT IS CONFIGURATION AND WHAT IS A CONSTANT. Configuration is what differs between deployments
+// of the SAME code; a constant is a property of the code.
 //   • environmentName — configuration: "poc" on workers.dev (wrangler.jsonc), "test" in the workers
 //     lane (wrangler.test.jsonc), "solo" in the e2e lane (e2e/support/solo-config.ts). Served at
 //     `/version` so a human and a smoke can tell deployments apart. The apps/os field of the same name.
@@ -23,9 +23,10 @@
 //     reads does not exist.
 //
 // SHAPE: `APP_CONFIG_VAR_ROWS` is the table — one row per variable (its name, its parser, required
-// or a default); `parseAppConfigVars` is the engine any row table runs through (the test exercises
-// every parser kind with its own rows); `parseAppConfig` is THIS worker's table plus the deploy id;
-// `appConfigOf(env)` memoizes per env object, i.e. per isolate.
+// or a default); `parseAppConfigVars` is the engine any row table runs through; `parseAppConfig` is
+// THIS worker's table plus the deploy id; `appConfigOf(env)` memoizes per env object, i.e. per
+// isolate. The parsers are exactly the kinds the table names — a parser no row names is the same
+// speculation one level down (an integer arrives with its row and its consumer).
 
 /** A parser from a variable's raw string to its value; on refusal it throws with `name` in the message. */
 export type AppConfigVarParser<T> = (raw: string, name: string) => T;
@@ -33,38 +34,12 @@ export type AppConfigVarParser<T> = (raw: string, name: string) => T;
 const appConfigVarError = (name: string, expected: string, raw: string): Error =>
   new Error(`${name}: expected ${expected}, got ${JSON.stringify(raw)}`);
 
-/** The whole parser toolkit — the kinds a row may name. Each trims, and each refusal says what it
- *  wanted. `json` hands back `unknown`: the consumer narrows it (a row's `parse` may wrap it). */
+/** The parser kinds the rows name. Each trims, and each refusal says what it wanted. */
 export const appConfigVarParsers = {
   string: (raw: string, name: string): string => {
     const value = raw.trim();
     if (!value) throw appConfigVarError(name, "a non-empty string", raw);
     return value;
-  },
-  integer: (raw: string, name: string): number => {
-    const value = raw.trim();
-    if (!/^-?\d+$/.test(value)) throw appConfigVarError(name, "an integer", raw);
-    return Number(value);
-  },
-  boolean: (raw: string, name: string): boolean => {
-    const value = raw.trim();
-    if (value === "true") return true;
-    if (value === "false") return false;
-    throw appConfigVarError(name, '"true" or "false"', raw);
-  },
-  url: (raw: string, name: string): string => {
-    try {
-      return new URL(raw.trim()).toString();
-    } catch {
-      throw appConfigVarError(name, "an absolute URL", raw);
-    }
-  },
-  json: (raw: string, name: string): unknown => {
-    try {
-      return JSON.parse(raw) as unknown;
-    } catch {
-      throw appConfigVarError(name, "JSON", raw);
-    }
   },
 } satisfies Record<string, AppConfigVarParser<unknown>>;
 

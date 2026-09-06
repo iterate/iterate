@@ -9,9 +9,8 @@
 // each chain is its own batch session, so it never pins anything.
 
 import { RpcSession, newWebSocketRpcSession, type RpcStub, type RpcTransport } from "capnweb";
-import type { ItxExpression } from "../context/expression.ts";
-import { InvokeHandle } from "../context/invoke-handle.ts";
-import type { LibraryItx } from "./index.ts";
+import { InvokeHandle, walkStepsOnRpcStub } from "../context/invoke-handle.ts";
+import { refuseUnlessOk, responseRefusal, type LibraryItx } from "./index.ts";
 
 /** The remote main object: unknown by construction — the caller's dotted calls are its contract. */
 type RemoteMain = RpcStub<any>;
@@ -66,34 +65,22 @@ export async function connectToCapnweb(
  *  chain is one round trip (one WebSocket exchange, or exactly one batch POST). Disposing closes the
  *  WebSocket session (the next call reopens it); a batch connection holds nothing. */
 export class CapnwebConnection extends InvokeHandle {
-  readonly #dispose: () => void;
+  readonly #closeSession: () => void;
   /** `remoteMain` answers the stub SYNCHRONOUSLY while a session is open — the walk then queues the
    *  whole chain before any batch fires or any await yields — and a promise only while a session is
    *  being (re)opened. */
-  constructor(remoteMain: () => RemoteMain | Promise<RemoteMain>, dispose: () => void) {
+  constructor(remoteMain: () => RemoteMain | Promise<RemoteMain>, closeSession: () => void) {
     super((steps) => {
       const main = remoteMain();
       return main instanceof Promise
-        ? main.then((stub) => walkCapnwebStub(stub, steps))
-        : walkCapnwebStub(main, steps);
+        ? main.then((stub) => walkStepsOnRpcStub(stub, steps))
+        : walkStepsOnRpcStub(main, steps);
     });
-    this.#dispose = dispose;
+    this.#closeSession = closeSession;
   }
   [Symbol.dispose](): void {
-    this.#dispose();
+    this.#closeSession();
   }
-}
-
-function walkCapnwebStub(stub: RemoteMain, steps: ItxExpression): unknown {
-  let value: any = stub;
-  for (const step of steps) {
-    if (typeof step === "string") value = value[step];
-    else {
-      const [method, ...args] = step;
-      value = method === "" ? value(...args) : value[method](...args);
-    }
-  }
-  return value;
 }
 
 async function webSocketSessionOverEgress(
@@ -106,12 +93,8 @@ async function webSocketSessionOverEgress(
     new Request(httpUrl, { headers: { ...headers, upgrade: "websocket" } }),
   );
   const webSocket = response.webSocket;
-  if (response.status !== 101 || !webSocket) {
-    const text = await response.text().catch(() => "");
-    throw new Error(
-      `connectToCapnweb: ${url} answered ${response.status} without a WebSocket${text ? `: ${text.slice(0, 200)}` : ""}`,
-    );
-  }
+  if (response.status !== 101 || !webSocket)
+    throw await responseRefusal(response, `connectToCapnweb: ${url} (no WebSocket)`);
   webSocket.accept();
   return newWebSocketRpcSession(webSocket as unknown as WebSocket);
 }
@@ -125,12 +108,7 @@ function batchSessionOverEgress(
     const response = await itx.fetch(
       new Request(url, { method: "POST", headers, body: batch.join("\n") }),
     );
-    if (!response.ok) {
-      await response.body?.cancel();
-      throw new Error(
-        `connectToCapnweb: batch to ${url} failed: ${response.status} ${response.statusText}`,
-      );
-    }
+    await refuseUnlessOk(response, `connectToCapnweb: batch to ${url}`);
     const text = await response.text();
     return text === "" ? [] : text.split("\n");
   });
@@ -140,30 +118,30 @@ function batchSessionOverEgress(
 /** capnweb's own HTTP batch client transport, over an injected send: every message sent before the
  *  microtask queue drains rides in ONE POST; the answers are received back in order. */
 class EgressBatchTransport implements RpcTransport {
-  #toSend: string[] | null = [];
-  #aborted: unknown;
+  #messagesToSend: string[] | null = [];
+  #abortReason: unknown;
   /** The one POST's answers, in order — settled once the macrotask after construction has run. */
-  readonly #received: Promise<string[]>;
+  readonly #answersReceived: Promise<string[]>;
   constructor(sendBatch: (batch: string[]) => Promise<string[]>) {
-    this.#received = (async () => {
+    this.#answersReceived = (async () => {
       // one macrotask, so every `.then()` on the pipelined promises registers before the batch goes
       await new Promise((resolve) => setTimeout(resolve, 0));
-      if (this.#aborted !== undefined) throw this.#aborted;
-      const batch = this.#toSend!;
-      this.#toSend = null;
+      if (this.#abortReason !== undefined) throw this.#abortReason;
+      const batch = this.#messagesToSend!;
+      this.#messagesToSend = null;
       return sendBatch(batch);
     })();
   }
   async send(message: string): Promise<void> {
-    if (this.#toSend !== null) this.#toSend.push(message);
+    if (this.#messagesToSend !== null) this.#messagesToSend.push(message);
   }
   async receive(): Promise<string> {
-    const received = await this.#received;
+    const received = await this.#answersReceived;
     const message = received.shift();
     if (message === undefined) throw new Error("Batch RPC request ended.");
     return message;
   }
   abort(reason: unknown): void {
-    this.#aborted = reason;
+    this.#abortReason = reason;
   }
 }

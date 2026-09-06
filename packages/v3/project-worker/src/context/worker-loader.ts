@@ -58,6 +58,13 @@ export type WorkerCacheKey = string;
 /** What hosts a class as a durable FACET — `itx.facets.get(name, spec)`, `enableProcessor(name, spec)`:
  *  the source (modules, or a producer expression with its `cacheKey`) and the exported class. */
 export type FacetSpec = { source: WorkerSource; cacheKey?: WorkerCacheKey; className: string };
+/** The same spec with an absent `cacheKey` left OUT (never `cacheKey: undefined`) — the one shape a
+ *  memo, an event or a compare sees. */
+export const facetSpecOf = ({ source, cacheKey, className }: FacetSpec): FacetSpec => ({
+  source,
+  ...(cacheKey !== undefined && { cacheKey }),
+  className,
+});
 
 const isWorkerModules = (source: unknown): source is WorkerModules =>
   typeof source === "object" && source !== null && !Array.isArray(source);
