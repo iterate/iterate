@@ -330,7 +330,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
 
   /** One BUDGETED page of the log (Stream.read: at most `limit` rows and at most the server's byte
    *  budget of bodies; the page says whether it was cut). */
-  read(afterOffset = 0, limit = 500): StreamPage {
+  read(afterOffset = 0, limit = 500): Promise<StreamPage> {
     return this.#stream.read(afterOffset, limit);
   }
 
@@ -589,7 +589,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         (candidate) => candidate.hostedFacet?.name === name,
       );
       if (row?.hostedFacet) {
-        const [configuredEvent] = this.#stream.read(row.configuredAtOffset - 1, 1).events;
+        const [configuredEvent] = this.#stream.readInternal(row.configuredAtOffset - 1, 1).events;
         const configuredTarget = (configuredEvent?.payload as { target?: string } | undefined)
           ?.target;
         // RESOLVED before reading the spec off it, as the reduce did when it marked the row.

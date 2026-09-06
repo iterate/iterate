@@ -77,13 +77,15 @@ function seedLog(stream: Stream, args: { eventCount: number; eventChars: number 
 /** Page the whole log through `read` the way a client does — chaining `scannedThroughOffset` —
  *  paying the RPC result serialization per page, and report the largest page. Returns the number
  *  of events read and the largest serialized page in bytes. */
-function pageThroughLog(read: (afterOffset: number, limit: number) => ReturnType<Stream["read"]>) {
+async function pageThroughLog(
+  read: (afterOffset: number, limit: number) => ReturnType<Stream["read"]>,
+) {
   let after = 0;
   let eventsRead = 0;
   let maxPageBytes = 0;
   let pages = 0;
   for (;;) {
-    const page = read(after, 500);
+    const page = await read(after, 500);
     const bytes = serialize(page).byteLength; // what the DO→edge hop would carry
     maxPageBytes = Math.max(maxPageBytes, bytes);
     notePeakHeap();
@@ -104,7 +106,7 @@ const scenarios: Record<string, (args: Record<string, number>) => Promise<void>>
     const storage = nodeSqliteDurableObjectStorage();
     const stream = bareStream(storage);
     seedLog(stream, { eventCount: args.eventCount, eventChars: args.eventChars });
-    const { eventsRead, maxPageBytes } = pageThroughLog((after, limit) =>
+    const { eventsRead, maxPageBytes } = await pageThroughLog((after, limit) =>
       stream.read(after, limit),
     );
     if (eventsRead !== args.eventCount)
@@ -113,41 +115,56 @@ const scenarios: Record<string, (args: Record<string, number>) => Promise<void>>
       throw new Error(`RPC_RESULT_TOO_LARGE: a page serialized to ${maxPageBytes} bytes`);
   },
 
-  /** N clients page the SAME 144 MiB log at once — the concurrent-reader reset. Each reader keeps
-   *  its CURRENT serialized reply alive (the copy sitting in workerd's outbound queue) until it
-   *  fetches the next, so at any instant the live reply bytes are the SUM across readers of their
-   *  in-flight page. Without the read door's outstanding-bytes ceiling every reader grabs a ≥1-row
-   *  (~6 MiB) first page in the same tick: N × 6 MiB coexist and the isolate resets (deployed: 24
-   *  readers; here: the 128 MiB child). With the ceiling the door admits only a few reads at once
-   *  (the rest await room a continuation or the TTL frees), so a handful of replies coexist. */
+  /** N clients page the SAME 144 MiB log at once — the concurrent-reader reset. Two heaps are kept
+   *  apart the way the platform keeps them: the SERVER produces a page and serializes it, then GCs
+   *  its own copy (`readOnePage` returns only the size — the page never outlives the read); the
+   *  reply it minted then sits in the OUTBOUND QUEUE (heap-resident here, off-heap C++ on workerd,
+   *  both counted against the isolate) until this reader asks again, which is when the door retires
+   *  its outstanding bytes. So the live reply bytes are the SUM across readers of their undelivered
+   *  page — what the door's outstanding-bytes ceiling must bound. Without it every reader grabs a
+   *  ≥ 1-row (~6 MiB) first page in the same tick before any drains: N × 6 MiB coexist and the
+   *  isolate resets (deployed: 24 readers; here: the 128 MiB child). With it the door admits only a
+   *  few reads at once (the rest await a continuation or the TTL), so a handful of replies coexist. */
   async "concurrent-readers"(args) {
     const storage = nodeSqliteDurableObjectStorage();
     const stream = bareStream(storage);
     seedLog(stream, { eventCount: args.eventCount, eventChars: args.eventChars });
     const readerCount = args.readerCount;
-    // Each reader's current reply, held (as the outbound queue holds it) until its next read — the
-    // sum of the non-null slots is the live reply bytes the door must keep under its ceiling.
-    const inFlightReply: (Uint8Array | null)[] = Array.from({ length: readerCount }, () => null);
+    // Read one page, serialize it (the transient the server pays), RELEASE the page, and report the
+    // reply size — the page object never outlives the read, exactly as on the server.
+    async function readOnePage(after: number): Promise<{ end: number; replyBytes: number }> {
+      const page = await stream.read(after, 500);
+      const replyBytes = serialize(page).byteLength;
+      if (replyBytes > WORKERS_RPC_MESSAGE_MAX_BYTES)
+        throw new Error(`RPC_RESULT_TOO_LARGE: a page serialized to ${replyBytes} bytes`);
+      notePeakHeap();
+      return { end: page.scannedThroughOffset, replyBytes };
+    }
+    // Each reader's undelivered reply, held (as the outbound queue holds it) until the next read —
+    // the count of non-null slots is the replies in flight the door must keep under its ceiling.
+    const inFlightReply: (string | null)[] = Array.from({ length: readerCount }, () => null);
     let maxConcurrentReplies = 0;
-    async function pageToHeadDraining(i: number): Promise<void> {
+    async function reader(i: number): Promise<void> {
       let after = 0;
       for (;;) {
-        const page = await stream.read(after, 500);
-        inFlightReply[i] = serialize(page); // this reply now "in the outbound queue", retained
+        const { end, replyBytes } = await readOnePage(after);
+        inFlightReply[i] = flatHeapString(replyBytes); // reply now in the outbound queue, retained
         maxConcurrentReplies = Math.max(
           maxConcurrentReplies,
-          inFlightReply.filter((r) => r !== null).length,
+          inFlightReply.reduce((n, r) => n + (r !== null ? 1 : 0), 0),
         );
         notePeakHeap();
-        if (page.scannedThroughOffset <= after) {
+        if (end <= after) {
           inFlightReply[i] = null; // caught up: the client drained its last reply
           return;
         }
-        after = page.scannedThroughOffset;
-        await new Promise((r) => setTimeout(r, 0)); // the client's round trip: let the others run
+        after = end;
+        await new Promise((r) => setTimeout(r, 0)); // the client's round trip: the reply is delivered
+        inFlightReply[i] = null; // ...and DRAINS from the outbound queue — a client holds its own copy,
+        // which is that client's isolate, not the server's; only replies still in flight are server heap.
       }
     }
-    await Promise.all(Array.from({ length: readerCount }, (_, i) => pageToHeadDraining(i)));
+    await Promise.all(Array.from({ length: readerCount }, (_, i) => reader(i)));
     fact("readerCount", readerCount);
     fact("maxConcurrentReplies", maxConcurrentReplies);
   },
@@ -175,7 +192,7 @@ const scenarios: Record<string, (args: Record<string, number>) => Promise<void>>
       stream: {
         append: (...events) => stream.append(...events),
         read: async (after, limit) => {
-          const page = stream.read(after, limit);
+          const page = await stream.read(after, limit);
           const bytes = serialize(page);
           if (bytes.byteLength > WORKERS_RPC_MESSAGE_MAX_BYTES)
             throw new Error(`RPC_RESULT_TOO_LARGE: the loopback page is ${bytes.byteLength} bytes`);
@@ -385,7 +402,7 @@ const scenarios: Record<string, (args: Record<string, number>) => Promise<void>>
         append: (...events) => stream.append(...events),
         read: async (after, limit) => {
           readCalls++;
-          return deserialize(serialize(stream.read(after, limit)));
+          return deserialize(serialize(await stream.read(after, limit)));
         },
       },
       storage: facetCheckpoints,
@@ -431,7 +448,7 @@ const scenarios: Record<string, (args: Record<string, number>) => Promise<void>>
     // too, so offsets are not item counts): what a consistent checkpoint must hold, exactly.
     let persistedBlobsThrough = 0;
     for (let after = 0; ; ) {
-      const page = stream.read(after, 500);
+      const page = await stream.read(after, 500);
       for (const event of page.events)
         if (event.type === "blob" && event.offset <= (persisted?.reducedThroughOffset ?? 0))
           persistedBlobsThrough++;
@@ -731,7 +748,7 @@ const scenarios: Record<string, (args: Record<string, number>) => Promise<void>>
       notePeakHeap();
     };
     for (let i = 0; i < args.eventCount; i++) appendDenseEvent(i);
-    const page = stream.read(0, 500);
+    const page = await stream.read(0, 500);
     notePeakHeap();
     fact("pageEvents", page.events.length);
     fact("pageBytes", serialize(page).byteLength);

@@ -113,7 +113,7 @@ test("a core-snapshot probe on a NEVER-TOUCHED ctx materializes it (created@1 + 
     expect(typeof snap.state.createdAt).toBe("string");
     expect(snap.offset).toBe(2); // reduced through the wake record
     expect(await state.storage.getAlarm()).toBeNull(); // THE pin: no quiet-clock arm
-    expect(instance.read(0).events.map((e) => [e.type, e.offset])).toEqual([
+    expect((await instance.read(0)).events.map((e) => [e.type, e.offset])).toEqual([
       ["events.iterate.com/stream/created", 1],
       ["events.iterate.com/stream/woken", 2],
     ]);

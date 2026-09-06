@@ -90,19 +90,21 @@ test(
   },
 );
 
-// Dies of: oom. 24 clients page the SAME 144 MiB log at once; the read door's outstanding-bytes
-// LEVEL shrinks a page but cannot go below ONE row, so every reader grabs a >=1-row (~6 MiB) first
-// page in the same tick — 24 x 6 MiB coexist as replies in flight and the isolate resets. The fix
-// is a TRUE ceiling: the door AWAITS room (a continuation read or the TTL retires an outstanding
-// page) instead of issuing past the budget. Deployed twin: CONCURRENT READERS in
+// FLIPPED by the read-admission ceiling. Born red (oom): 24 clients page the SAME 144 MiB log at
+// once; the outstanding-bytes LEVEL shrinks a page but cannot go below ONE row, so every reader
+// grabbed a >=1-row (~6 MiB) first page in the same tick and 24 x 6 MiB coexisted as replies in
+// flight (144 MiB, a reset). The metered `read` door now AWAITS room under the 16 MiB outstanding
+// ceiling (a continuation read or the TTL sweep retires an outstanding page) instead of issuing past
+// it, so only a handful of replies are ever in flight. Deployed twin: CONCURRENT READERS in
 // stream-uncontrolled-degradation.e2e.
-test.fails(
-  "concurrent readers: 24 clients paging one 144 MiB log at once reset the isolate — the read level shrinks a page but cannot bound below one row per reader (24 x 6 MiB coexist as in-flight replies)",
+test(
+  "concurrent readers: 24 clients paging one 144 MiB log at once stay within the isolate — the read door awaits room under the outstanding-bytes ceiling, so only a handful of replies are ever in flight",
   { timeout: 110_000 },
   () => {
     const run = runScenario("concurrent-readers", { ...LOG_144_MIB, readerCount: 24 });
     expectSurvived(run, "concurrent-readers");
     expect(Number(run.facts.readerCount)).toBe(24);
+    expect(Number(run.facts.maxConcurrentReplies), run.tail).toBeLessThanOrEqual(6); // the ceiling, not the reader count
   },
 );
 
@@ -298,7 +300,7 @@ test(
       rowCount: 4,
     });
     expectSurvived(run, "cursor-rows-behind-one-commit");
-    expect(Number(run.facts.callsStarted)).toBe(4);
+    expect(Number(run.facts.callsStarted)).toBeGreaterThanOrEqual(4); // every row called (a page may split under the read budget)
   },
 );
 

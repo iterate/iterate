@@ -561,7 +561,7 @@ export class SubscriptionDelivery {
           this.#pushedEventBatches.delete(name);
           eventBatch = { events: pushedEventBatch.events, through: pushedEventBatch.through };
         } else {
-          const page = this.#stream.read(cursor.confirmedOffset, 100);
+          const page = this.#stream.readInternal(cursor.confirmedOffset, 100);
           const ceiling = pushedEventBatch
             ? Math.min(page.scannedThroughOffset, pushedEventBatch.after)
             : page.scannedThroughOffset;

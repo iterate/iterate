@@ -155,7 +155,7 @@ test("waitForEvent: an EPHEMERAL event resolves a waiting caller (and never hits
     expect(got.offset).toBe(receipt.offset);
     expect(got.ephemeral).toBe(true);
     // catchable only while waiting: the body never reached a row
-    expect(stream.read(0).events.some((e) => e.type === "blip")).toBe(false);
+    expect((await stream.read(0)).events.some((e) => e.type === "blip")).toBe(false);
   });
 });
 
@@ -222,7 +222,7 @@ test("append with ZERO events is a pure no-op — no rows, no offsets, no fan-ou
     // first real append is the log's first row, and the fan-out sees exactly that one event.
     const [receipt] = stream.append({ type: "hello" });
     expect(receipt.offset).toBe(1);
-    expect(stream.read(0).events.map((e) => [e.type, e.offset])).toEqual([["hello", 1]]);
+    expect((await stream.read(0)).events.map((e) => [e.type, e.offset])).toEqual([["hello", 1]]);
     expect(batches).toHaveLength(1);
     expect(batches[0].map((e) => e.type)).toEqual(["hello"]);
   });
@@ -236,7 +236,7 @@ test("appendCreatedAndWokenEvents(): a fresh store gets created@1 + woken@2 in O
     const first = bareStream(await virgin(state), { batches });
     first.appendCreatedAndWokenEvents();
     // the birth certificate + the wake record, one durable batch, both fanned out
-    const page = first.read(0);
+    const page = await first.read(0);
     expect(page.events.map((e) => [e.type, e.offset])).toEqual([
       ["events.iterate.com/stream/created", 1],
       ["events.iterate.com/stream/woken", 2],
@@ -265,7 +265,7 @@ test("appendCreatedAndWokenEvents(): a fresh store gets created@1 + woken@2 in O
     const second = bareStream(state.storage, { batches }); // the SAME store, NOT wiped
     second.appendCreatedAndWokenEvents();
     expect(second.currentIncarnation()).toBe(2);
-    const all = second.read(0).events;
+    const all = (await second.read(0)).events;
     expect(all.map((e) => e.type)).toEqual([
       "events.iterate.com/stream/created",
       "events.iterate.com/stream/woken",
@@ -284,7 +284,7 @@ test("a stream/paused event pauses the stream through its own core reduce: every
     stream.appendCreatedAndWokenEvents(); // created@1, woken@2, core's delta@3
     stream.append({ type: "events.iterate.com/stream/paused", payload: { reason: "x" } }); // @4
     expect(stream.coreReducedState.paused).toEqual({ reason: "x" });
-    expect(stream.read(0).events.map((e) => e.type)).toEqual([
+    expect((await stream.read(0)).events.map((e) => e.type)).toEqual([
       "events.iterate.com/stream/created",
       "events.iterate.com/stream/woken",
       "events.iterate.com/stream/paused",
@@ -298,7 +298,7 @@ test("a stream/paused event pauses the stream through its own core reduce: every
     }
     expect(errorCode(err)).toBe("STREAM_PAUSED");
     expect((err as Error).message).toContain("stream paused: x");
-    expect(stream.read(0).events).toHaveLength(3);
+    expect((await stream.read(0)).events).toHaveLength(3);
     expect(stream.highestAssignedOffset()).toBe(4); // the pause's own delta was refused (paused) — no offset burnt
     // a batch MIXING the resume with a non-control event is refused WHOLESALE…
     expect(() =>
@@ -324,7 +324,7 @@ test("a malformed itx/rewrite-rule-configured (a match with an argless call step
       type: "events.iterate.com/itx/rewrite-rule-configured",
       payload: { match: "itx.call()", target: "itx.kv" },
     });
-    expect(stream.read(0).events.map((e) => e.offset)).toEqual([bad.offset]); // the log is the log
+    expect((await stream.read(0)).events.map((e) => e.offset)).toEqual([bad.offset]); // the log is the log
     expect(stream.coreReducedState.itxExpressionRewriteRules).toEqual({}); // …but no rule was configured
     const [good] = stream.append({
       type: "events.iterate.com/itx/rewrite-rule-configured",
@@ -415,12 +415,12 @@ test("read()'s short-page proof is the DURABLE mark, never the in-memory head (a
     expect(stream.highestDurableOffset()).toBe(1);
     // A reader must never learn an offset a later incarnation could hand to a durable: the proof
     // stops at the mark. (A persisted checkpoint or cursor built from this read is therefore safe.)
-    expect(stream.read(0).scannedThroughOffset).toBe(1);
-    expect(stream.read(1).scannedThroughOffset).toBe(1);
+    expect((await stream.read(0)).scannedThroughOffset).toBe(1);
+    expect((await stream.read(1)).scannedThroughOffset).toBe(1);
     // The next durable batch moves both.
     stream.append({ type: "tick" }); // @4
     expect(stream.highestDurableOffset()).toBe(4);
-    expect(stream.read(0).scannedThroughOffset).toBe(4);
+    expect((await stream.read(0)).scannedThroughOffset).toBe(4);
   });
 });
 
@@ -483,7 +483,7 @@ test("idempotency: same key + same body echoes the EXISTING event (no row, no of
       err = e;
     }
     expect(errorCode(err)).toBe("IDEMPOTENCY_CONFLICT");
-    expect(stream.read(0).events).toHaveLength(1);
+    expect((await stream.read(0)).events).toHaveLength(1);
     expect(stream.highestAssignedOffset()).toBe(1);
     // a retry riding beside its original in ONE batch: one row, and both receipts name it
     const receipts = stream.append(
@@ -491,7 +491,7 @@ test("idempotency: same key + same body echoes the EXISTING event (no row, no of
       { type: "order", payload: { n: 3 }, idempotencyKey: "k3" },
     );
     expect(receipts.map((e) => e.offset)).toEqual([2, 2]);
-    expect(stream.read(0).events.map((e) => e.offset)).toEqual([1, 2]);
+    expect((await stream.read(0)).events.map((e) => e.offset)).toEqual([1, 2]);
   });
 });
 
@@ -502,7 +502,7 @@ test("expected offset: an input carrying `offset` lands exactly there or the who
     // "nothing has happened since I looked": the head is 1, so 2 is what the next event gets
     const [ok] = stream.append({ type: "next", offset: 2 });
     expect(ok.offset).toBe(2);
-    expect("offset" in (stream.read(1).events[0] as object)).toBe(true); // the receipt's offset — not a stored precondition
+    expect("offset" in ((await stream.read(1)).events[0] as object)).toBe(true); // the receipt's offset — not a stored precondition
     // a stale expectation refuses the whole batch, coded, nothing written
     let err: unknown;
     try {
@@ -513,7 +513,7 @@ test("expected offset: an input carrying `offset` lands exactly there or the who
     expect(errorCode(err)).toBe("OFFSET_CONFLICT");
     expect((err as { data?: unknown }).data).toEqual({ expected: 2, actual: 4 });
     expect(stream.highestAssignedOffset()).toBe(2);
-    expect(stream.read(0).events).toHaveLength(2);
+    expect((await stream.read(0)).events).toHaveLength(2);
     // sequential expectations inside one batch hold together
     const two = stream.append({ type: "a", offset: 3 }, { type: "b", offset: 4 });
     expect(two.map((e) => e.offset)).toEqual([3, 4]);

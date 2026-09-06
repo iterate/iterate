@@ -65,16 +65,18 @@ const READ_PAGE_BUDGET_BYTES = 8 * 1024 * 1024;
  *  the byte budget cannot see. */
 const READ_PAGE_MAX_EVENTS = 1000;
 /** THE OUTSTANDING-PAGES BUDGET, per context: the most page bytes that may be on their way to
- *  readers at once. A page cannot be released explicitly — a plain object leaves with the RPC
- *  reply, invisibly — but a reader PROVES it received one when it comes back for the next: a read
- *  whose `afterOffset` is an outstanding page's end retires that page. So the level is known for
- *  every reader that pages on (a client, a facet's catch-up), and a reader that never returns
- *  retires after READ_OUTSTANDING_PAGE_TTL_MS. Past the budget pages SHRINK (down to
- *  READ_PAGE_MIN_BUDGET_BYTES) so a burst of readers shares the isolate — 24 clients paging one
- *  log at once, 8 MiB each, reset it (e2e/stream-uncontrolled-degradation). Never a refusal. The
- *  stream's own scans (the constructor's re-reduce, waitForEvent) are exempt: one page at a time
- *  inside one turn. */
-const READ_OUTSTANDING_BUDGET_BYTES = 32 * 1024 * 1024;
+ *  readers at once — the CEILING the metered `read` door awaits room under. A page cannot be
+ *  released explicitly — a plain object leaves with the RPC reply, invisibly — but a reader PROVES
+ *  it received one when it comes back for the next: a read whose `afterOffset` is an outstanding
+ *  page's end retires that page. So the level is known for every reader that pages on (a client, a
+ *  Loader-loaded facet), and a reader that never returns retires after READ_OUTSTANDING_PAGE_TTL_MS.
+ *  16 MiB, not 32: past this the door WAITS (see `read`), and while it waits it holds each in-flight
+ *  read's page + its serialize copy, so the read path's whole transient is a small multiple of this
+ *  — a third of the 128 MiB isolate at most, leaving room for the core state, delivery and the DB
+ *  working set (24 clients paging one 144 MiB log at once reset the DO at 32 MiB and hold at 16 —
+ *  e2e/stream-uncontrolled-degradation, and the heap-capped concurrent-readers harness). The
+ *  stream's own single-turn scans go through `readInternal`, exempt. */
+const READ_OUTSTANDING_BUDGET_BYTES = 16 * 1024 * 1024;
 const READ_PAGE_MIN_BUDGET_BYTES = 512 * 1024;
 const READ_OUTSTANDING_PAGE_TTL_MS = 5_000;
 
@@ -144,6 +146,17 @@ export class Stream {
     { bytes: number; count: number; issuedAtMs: number }
   >();
   #outstandingReadBytes = 0;
+  /** Read admission — the TRUE ceiling the outstanding-bytes LEVEL alone cannot give. A page always
+   *  carries ≥ 1 row, so page-shrinking cannot bound N readers below N × one row: 24 clients paging
+   *  a 6 MiB-row log each grab a 6 MiB first page = 144 MiB of replies in flight at once, and the
+   *  isolate resets (e2e CONCURRENT READERS). The metered DOOR (`read`) instead AWAITS room. Each
+   *  admitted-but-not-yet-metered read reserves a worst-case page in `#readBytesReserved`, so waking
+   *  a batch of waiters (whose reads run later, as microtasks) cannot over-admit before their real
+   *  bytes land in `#outstandingReadBytes`. A stalled reader (its page never retired by a
+   *  continuation read) is retired by the TTL sweep the waiters arm, so a blocked queue never wedges. */
+  #readBytesReserved = 0;
+  readonly #readAdmissionWaiters: Array<() => void> = [];
+  #readAdmissionSweepTimer?: ReturnType<typeof setTimeout>;
   #alarmArmedForMs: number | null = null;
 
   // ── THE CORE REDUCE: the stream's own state (core-processor.ts), event-sourced from its own log.
@@ -462,9 +475,36 @@ export class Stream {
 
   /** One page after `afterOffset`: at most `limit` rows AND at most READ_PAGE_BUDGET_BYTES of
    *  bodies (stream-storage.ts pages the cursor) — the SERVER decides the page; `limit` only shrinks
-   *  it. THE DOOR: every reader outside this class comes through here and pays the read rate. */
-  read(afterOffset = 0, limit = 500): StreamPage {
+   *  it. THE METERED DOOR: every CROSS-HOP reader (a client, a Loader-loaded facet) comes through
+   *  here, and it AWAITS room when the replies in flight are at the outstanding-bytes ceiling — a
+   *  true bound the page-shrink alone cannot give (a page is always ≥ 1 row). The stream's own
+   *  single-turn scans use `readInternal` (unmetered). */
+  async read(afterOffset = 0, limit = 500): Promise<StreamPage> {
+    this.#retireOutstandingReadPage(afterOffset); // free THIS reader's own prior page first
+    this.#wakeReadAdmission(); // the freed room may admit a queued waiter ahead of us
+    await this.#awaitReadAdmission(); // then wait our turn if the replies in flight are at budget
+    try {
+      return this.#readMeteredPage(afterOffset, limit);
+    } finally {
+      this.#readBytesReserved -= READ_PAGE_BUDGET_BYTES; // release the slot reserved at admission
+      this.#wakeReadAdmission(); // the freed slot + now-known page bytes may admit the next
+    }
+  }
+
+  /** The read for the stream's OWN single-turn scans (the delivery catch-up, the configured-event
+   *  lookup): same isolate, one page inside one turn. It SHARES the outstanding-bytes budget — so
+   *  its page shrinks under memory pressure like any read, and 20 behind rows drained in one turn
+   *  stay bounded — but it never BLOCKS on the admission gate, which the delivery loop must not (it
+   *  has to make progress to retire the very pages the gate waits on). Synchronous, like `#readPage`. */
+  readInternal(afterOffset = 0, limit = 500): StreamPage {
     this.#retireOutstandingReadPage(afterOffset);
+    return this.#readMeteredPage(afterOffset, limit);
+  }
+
+  /** Read a page under the outstanding-bytes budget (the page shrinks toward READ_PAGE_MIN_BUDGET_BYTES
+   *  as replies pile up) and track it as outstanding until a continuation read or the TTL retires it.
+   *  The shared core of `read` and `readInternal`; only `read` wraps it in the admission wait. */
+  #readMeteredPage(afterOffset: number, limit: number): StreamPage {
     const budgetBytes = Math.max(
       READ_PAGE_MIN_BUDGET_BYTES,
       Math.min(READ_PAGE_BUDGET_BYTES, READ_OUTSTANDING_BUDGET_BYTES - this.#outstandingReadBytes),
@@ -481,6 +521,52 @@ export class Stream {
       this.#outstandingReadBytes += bytes;
     }
     return page;
+  }
+
+  /** Admit a read: pass (reserving a worst-case slot) only when NOBODY is queued and the outstanding
+   *  replies plus reservations are under budget; else queue behind the pages in flight. Yielding to
+   *  waiters keeps a fast-looping reader from starving the queue. Single-threaded ⇒ check-and-reserve
+   *  is atomic (no await between them). */
+  #awaitReadAdmission(): Promise<void> {
+    if (
+      this.#readAdmissionWaiters.length === 0 &&
+      this.#outstandingReadBytes + this.#readBytesReserved < READ_OUTSTANDING_BUDGET_BYTES
+    ) {
+      this.#readBytesReserved += READ_PAGE_BUDGET_BYTES;
+      return Promise.resolve();
+    }
+    return new Promise<void>((resolve) => {
+      this.#readAdmissionWaiters.push(resolve);
+      this.#armReadAdmissionSweep();
+    });
+  }
+
+  /** Wake waiters while there is room, reserving each woken read's slot AT WAKE so the loop cannot
+   *  over-admit (the woken reads run later, as microtasks, and only then add their real bytes). */
+  #wakeReadAdmission(): void {
+    while (
+      this.#readAdmissionWaiters.length > 0 &&
+      this.#outstandingReadBytes + this.#readBytesReserved < READ_OUTSTANDING_BUDGET_BYTES
+    ) {
+      this.#readBytesReserved += READ_PAGE_BUDGET_BYTES;
+      this.#readAdmissionWaiters.shift()!();
+    }
+    if (this.#readAdmissionWaiters.length === 0 && this.#readAdmissionSweepTimer !== undefined) {
+      clearTimeout(this.#readAdmissionSweepTimer);
+      this.#readAdmissionSweepTimer = undefined;
+    }
+  }
+
+  /** While reads are blocked, drive the TTL retire so a stalled reader's page (never retired by a
+   *  continuation read) cannot wedge the queue past READ_OUTSTANDING_PAGE_TTL_MS. */
+  #armReadAdmissionSweep(): void {
+    if (this.#readAdmissionSweepTimer !== undefined) return;
+    this.#readAdmissionSweepTimer = setTimeout(() => {
+      this.#readAdmissionSweepTimer = undefined;
+      this.#retireOutstandingReadPage(-1); // -1 matches no end offset: only the TTL branch retires
+      this.#wakeReadAdmission();
+      if (this.#readAdmissionWaiters.length > 0) this.#armReadAdmissionSweep();
+    }, READ_OUTSTANDING_PAGE_TTL_MS);
   }
 
   /** A read continuing from `afterOffset` proves the page ending there was received: retire one;
@@ -644,17 +730,17 @@ export interface ReachableContext {
   invoke(call: ItxExpressionInput): Promise<unknown>;
 }
 
-/** The own IterateContextDurableObject (same isolate) as a uniform-async ReachableContext. The ONLY wrap is `read`
- *  (sync on the class, async on the seam); `append` and `invoke` are already async. Built once per
- *  DO, never per call. */
+/** The own IterateContextDurableObject (same isolate) as a uniform-async ReachableContext — a
+ *  straight pass-through now that `read`, `append` and `invoke` are all async on the class. Built
+ *  once per DO, never per call. */
 export function localReachableContext(self: {
   append(...events: StreamEventInput[]): Promise<StreamEvent[]>;
-  read(afterOffset?: number, limit?: number): StreamPage;
+  read(afterOffset?: number, limit?: number): Promise<StreamPage>;
   invoke(call: ItxExpressionInput): Promise<unknown>;
 }): ReachableContext {
   return {
     append: (...events) => self.append(...events),
-    read: async (afterOffset, limit) => self.read(afterOffset, limit),
+    read: (afterOffset, limit) => self.read(afterOffset, limit),
     invoke: (call) => self.invoke(call),
   };
 }
