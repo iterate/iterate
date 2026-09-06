@@ -2979,6 +2979,40 @@ SQLITE_TOOBIG` used to cross the hop from inside the write. Local workerd (4 MiB
 - GATES: tsc x3 - oxlint 0/0 - knip clean - oxfmt clean - deployed live-48: live-state 10/10,
   degradation alone 5p/2xf (the two known resets remain: reply-queue + append-ingress, on the menu).
 
+### 2026-09-06 — the concurrent-reader DO reset: a read-admission CEILING (first of the two resets)
+
+- 24 clients paging one 144 MiB log at once reset the DO. The outstanding-bytes LEVEL bounded page
+  bytes ISSUED but shrinks a page no lower than ONE row — so every reader grabbed a ~6 MiB first
+  page in the same tick and 24 x 6 MiB coexisted as replies in flight (144 MiB, past the isolate). A
+  level that only SHRINKS cannot bound N readers below N x one row; the fix is a level that WAITS.
+- FIX (674a5704a): the metered `Stream.read()` door is ASYNC and AWAITS room under the
+  outstanding-bytes ceiling before issuing a page — a continuation read (afterOffset = an outstanding
+  page's end) or the TTL sweep retires a page and wakes a waiter. Each admitted-but-not-yet-metered
+  read RESERVES a worst-case page (`#readBytesReserved`), so waking a batch of waiters (their reads
+  run later, as microtasks) cannot over-admit before their real bytes land. A blocked queue cannot
+  wedge: the waiters arm a TTL sweep that retires a stalled reader's page. The door yields to waiters
+  so a fast-looping reader cannot starve the queue. `read`/`readInternal` share `#readMeteredPage`.
+- The stream's OWN single-turn scans (the delivery catch-up, the configured-event lookup) moved to a
+  new SYNC `readInternal()`: it shares the outstanding-bytes budget (its page still shrinks under
+  pressure — 20 drained cursor rows stay bounded) but never BLOCKS on the gate, because the delivery
+  loop must make progress to retire the very pages the gate waits on. `IterateContextDurableObject.read`
+  is async now; the localReachableContext seam is a straight pass-through; the workers-lane tests await it.
+- OUTSTANDING budget 32 -> 16 MiB: the read path's whole transient is a small multiple of it (each
+  in-flight read holds its page + its serialize copy), so a THIRD of the 128 MiB isolate at most,
+  leaving room for the core state, delivery and the DB working set. At 32 MiB the read path alone
+  claimed ~125 of 128 MiB in the heap-capped harness — one GC tick from the edge.
+- PROVEN. Heap-capped harness (128 MiB child): `concurrent-readers` flips green — 24 readers x
+  144 MiB survives at ~108 MiB, maxConcurrentReplies 3 (it OOMs with the gate disabled, so the pin
+  discriminates). DEPLOYED (live-49): CONCURRENT READERS holds (all 24 page to head, no reset); full
+  degradation file 6 passed / 1 expected fail (was 5/2). The one red left is LARGE EPHEMERAL FAN-OUT
+  (append-ingress admission — next). RECOVERY repointed to the fan-out (the last client-reachable
+  reset) since concurrent readers no longer reset.
+- GATES: tsc x3 - oxlint 0/0 - oxfmt clean - unit 393p/4xf - workers 65p/8xf - deployed live-49
+  (674a5704a logic, 5800270ab e2e, 2bb4a65e2 version).
+- MISHAP (fully reverted): a repo-wide `pnpm format` re-wrapped many tracked md/html/ts files across
+  the repo (oxfmt formats md and html too, not just JS/TS). All reverted (mine + peer's sweep). ONLY
+  ever `oxfmt <specific files>` in this shared worktree, never repo-wide.
+
 ## 2026-09-04 — the DO owns both ends of a lent stub's rule: the pager upgrade carries the rule, one round trip
 
 - WHY: a `provide(match, stub)` / `subscribe({ target: fn })` cost THREE edge→DO round trips — the
