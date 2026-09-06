@@ -113,6 +113,45 @@ const scenarios: Record<string, (args: Record<string, number>) => Promise<void>>
       throw new Error(`RPC_RESULT_TOO_LARGE: a page serialized to ${maxPageBytes} bytes`);
   },
 
+  /** N clients page the SAME 144 MiB log at once — the concurrent-reader reset. Each reader keeps
+   *  its CURRENT serialized reply alive (the copy sitting in workerd's outbound queue) until it
+   *  fetches the next, so at any instant the live reply bytes are the SUM across readers of their
+   *  in-flight page. Without the read door's outstanding-bytes ceiling every reader grabs a ≥1-row
+   *  (~6 MiB) first page in the same tick: N × 6 MiB coexist and the isolate resets (deployed: 24
+   *  readers; here: the 128 MiB child). With the ceiling the door admits only a few reads at once
+   *  (the rest await room a continuation or the TTL frees), so a handful of replies coexist. */
+  async "concurrent-readers"(args) {
+    const storage = nodeSqliteDurableObjectStorage();
+    const stream = bareStream(storage);
+    seedLog(stream, { eventCount: args.eventCount, eventChars: args.eventChars });
+    const readerCount = args.readerCount;
+    // Each reader's current reply, held (as the outbound queue holds it) until its next read — the
+    // sum of the non-null slots is the live reply bytes the door must keep under its ceiling.
+    const inFlightReply: (Uint8Array | null)[] = Array.from({ length: readerCount }, () => null);
+    let maxConcurrentReplies = 0;
+    async function pageToHeadDraining(i: number): Promise<void> {
+      let after = 0;
+      for (;;) {
+        const page = await stream.read(after, 500);
+        inFlightReply[i] = serialize(page); // this reply now "in the outbound queue", retained
+        maxConcurrentReplies = Math.max(
+          maxConcurrentReplies,
+          inFlightReply.filter((r) => r !== null).length,
+        );
+        notePeakHeap();
+        if (page.scannedThroughOffset <= after) {
+          inFlightReply[i] = null; // caught up: the client drained its last reply
+          return;
+        }
+        after = page.scannedThroughOffset;
+        await new Promise((r) => setTimeout(r, 0)); // the client's round trip: let the others run
+      }
+    }
+    await Promise.all(Array.from({ length: readerCount }, (_, i) => pageToHeadDraining(i)));
+    fact("readerCount", readerCount);
+    fact("maxConcurrentReplies", maxConcurrentReplies);
+  },
+
   /** A facet catches up from the log over its loopback read — the page crosses Workers RPC into the
    *  same heap (serialize + deserialize), then the engine reduces it. */
   async "facet-catch-up"(args) {

@@ -80,6 +80,32 @@ test(
   },
 );
 
+test(
+  "control: 4 clients page a 12 x 64 KiB log at once — a handful of replies, within the budget",
+  { timeout: 60_000 },
+  () => {
+    const run = runScenario("concurrent-readers", { ...CONTROL, readerCount: 4 });
+    expectSurvived(run, "concurrent-readers");
+    expect(Number(run.facts.maxConcurrentReplies)).toBeLessThanOrEqual(4);
+  },
+);
+
+// Dies of: oom. 24 clients page the SAME 144 MiB log at once; the read door's outstanding-bytes
+// LEVEL shrinks a page but cannot go below ONE row, so every reader grabs a >=1-row (~6 MiB) first
+// page in the same tick — 24 x 6 MiB coexist as replies in flight and the isolate resets. The fix
+// is a TRUE ceiling: the door AWAITS room (a continuation read or the TTL retires an outstanding
+// page) instead of issuing past the budget. Deployed twin: CONCURRENT READERS in
+// stream-uncontrolled-degradation.e2e.
+test.fails(
+  "concurrent readers: 24 clients paging one 144 MiB log at once reset the isolate — the read level shrinks a page but cannot bound below one row per reader (24 x 6 MiB coexist as in-flight replies)",
+  { timeout: 110_000 },
+  () => {
+    const run = runScenario("concurrent-readers", { ...LOG_144_MIB, readerCount: 24 });
+    expectSurvived(run, "concurrent-readers");
+    expect(Number(run.facts.readerCount)).toBe(24);
+  },
+);
+
 // ── the replay loops: a facet's loopback catch-up, the core re-reduce in the DO constructor ──
 
 test("control: a facet catches up over a 12 × 64 KiB log", { timeout: 60_000 }, () => {
