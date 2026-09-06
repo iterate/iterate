@@ -1,7 +1,7 @@
 // context/expression.ts — THE expression codec: the STRING half (itx.facets.get("core")) ⇄ the
-// STRUCTURED half (["itx", "facets", ["get", "core"]]). Args are ONE JSON5 grammar (no hand-rolled
-// number/object parser; __proto__-safe); expressions are persisted NAMES, so deleting one IS
-// revocation. The rewrite rules (match, rank, rewrite) are ./itx-expression-rewriting.ts; the evaluator
+// STRUCTURED half (["itx", "facets", ["get", "core"]]). Args are ONE JSON5 grammar, comments included
+// (no hand-rolled number/object parser; __proto__-safe); expressions are persisted NAMES, so deleting
+// one IS revocation. The rewrite rules (match, rank, rewrite) are ./itx-expression-rewriting.ts; the evaluator
 // is ./dispatch.ts.
 import JSON5 from "json5";
 import { jsonEqual } from "../lib/patch.ts";
@@ -44,22 +44,23 @@ const ITX_EXPRESSION_HOLE = { "@": true } as const;
 /** The merge entry's key — `...@` — read by rule 7. */
 export const ITX_EXPRESSION_MERGE_KEY = "...@";
 
-/** A single- or double-quoted string literal, escapes honored: THE one pattern every walk that must
- *  skip what is inside quotes is built from — the marker lex, the marker print, the paren matcher.
- *  In an alternation a literal is consumed whole, so nothing inside one is ever seen by the other
- *  alternatives. */
-const STRING_LITERAL = String.raw`"(?:[^"\\]|\\[\s\S])*"|'(?:[^'\\]|\\[\s\S])*'`;
-const isStringLiteral = (match: string): boolean => match[0] === '"' || match[0] === "'";
+/** A single- or double-quoted string literal (escapes honored) or a JSON5 comment (block or line):
+ *  THE one pattern every walk that must skip what is inside them is built from — the marker lex, the
+ *  marker print, the paren matcher. In an alternation a span is consumed whole, so nothing inside one
+ *  (a quote in a comment, an `@` in a string) is ever seen by the other alternatives. */
+const STRING_OR_COMMENT = String.raw`"(?:[^"\\]|\\[\s\S])*"|'(?:[^'\\]|\\[\s\S])*'|/\*[\s\S]*?\*/|//[^\n]*`;
+const isStringOrComment = (match: string): boolean =>
+  match[0] === '"' || match[0] === "'" || match[0] === "/";
 /** In call args: a literal (kept verbatim) or a marker — `...@` before `@`, so the merge form wins. */
-const MARKERS_IN_ARGS = new RegExp(`${STRING_LITERAL}|\\.\\.\\.@|@`, "g");
+const MARKERS_IN_ARGS = new RegExp(`${STRING_OR_COMMENT}|\\.\\.\\.@|@`, "g");
 /** In JSON5's printed output: the marker literal `{'@':true}` and the merge entry `'...@':true` are
  *  spelled with a single-quoted key and matched on those exact boundaries — listed BEFORE the literal
  *  alternative so the entry's `'...@'` is read as the entry, not as a string. A user's string that
  *  merely contains those characters is emitted by JSON5 as a longer (double-quoted) literal and is
  *  consumed whole. */
-const MARKERS_IN_PRINT = new RegExp(`\\{'@':true\\}|'\\.\\.\\.@':true|${STRING_LITERAL}`, "g");
+const MARKERS_IN_PRINT = new RegExp(`\\{'@':true\\}|'\\.\\.\\.@':true|${STRING_OR_COMMENT}`, "g");
 /** A bracket outside a literal. */
-const BRACKETS = new RegExp(`${STRING_LITERAL}|[()[\\]{}]`, "g");
+const BRACKETS = new RegExp(`${STRING_OR_COMMENT}|[()[\\]{}]`, "g");
 
 /** Is `value` the marker literal `{ "@": true }`? */
 export const isItxExpressionHole = (value: unknown): boolean =>
@@ -82,7 +83,7 @@ function matchingParen(source: string, open: number): number {
   let depth = 0;
   BRACKETS.lastIndex = open;
   for (let bracket = BRACKETS.exec(source); bracket; bracket = BRACKETS.exec(source)) {
-    if (isStringLiteral(bracket[0])) continue;
+    if (isStringOrComment(bracket[0])) continue;
     if ("([{".includes(bracket[0])) depth++;
     else if (--depth === 0) return bracket.index;
   }
@@ -116,7 +117,7 @@ export function parse(source: string, options?: { holes?: boolean }): ItxExpress
       const raw = s.slice(i + 1, end).trim();
       // `@` outside a string literal: the marker (targets only), a refusal everywhere else.
       const inner = raw.replace(MARKERS_IN_ARGS, (match) => {
-        if (isStringLiteral(match)) return match;
+        if (isStringOrComment(match)) return match;
         if (!options?.holes)
           fail("`@` (the caller's input) is legal only in a rewrite rule's target");
         return match === "@"

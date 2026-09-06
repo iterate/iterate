@@ -244,7 +244,9 @@ deployed(
       results.filter((r) => !r.ok && isDurableObjectReset(r.e)).length,
       failures.join("\n"),
     ).toBe(0);
-    for (const failure of failures) expect(failure).toMatch(/1006/); // only ever the edge's socket close
+    // only ever the edge losing the session: a mid-flight `1006` close, or — when the isolate dies while
+    // a session's upgrade is still in flight — the connect itself failing (observed 2026-09-06, twice)
+    for (const failure of failures) expect(failure).toMatch(/1006|WebSocket connection failed/);
     const committed = results.filter((r) => r.ok).length;
     expect(
       committed,

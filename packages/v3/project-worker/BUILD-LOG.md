@@ -3399,3 +3399,51 @@ exists as a probe (its harness lane went in the test-hygiene sweep). The 300-rul
   (`live-state-chains-client-side` — `chat.applied` 0, the same flake the app-config entry saw on 7474bb76; `stream-uncontrolled-degradation` CONCURRENT BIG APPENDS, 102 s) ran while a probe of mine was loading the same edge ("WebSocket connection failed" on the probe's side); each re-run ALONE against 8fd49a2f: `live-state-chains-client-side` red once (`chat.applied` 0) and green once — the flake the app-config entry recorded on 7474bb76, green on fc58a49b; `stream-uncontrolled-degradation` CONCURRENT BIG APPENDS red TWICE alone (43–49 s): the lost session's error is now `WebSocket connection failed. [code=undefined …]` (failed at the upgrade) where the test's assertion wants a 1006 close — d3's memory-hygiene test (`ce089f083`), green on fc58a49b two nights earlier; the only difference between the two deploys is the relay's re-code and one comment, neither on the append path — handed to d3 with the log. The window measured on 8fd49a2f: a single call right after the dispose never hit it in 8 rounds; eight calls 1 ms apart hit it in 3 of 8 rounds — 6 calls in the window, every one `RPC_STUB_OFFLINE`, 0 uncoded (scratchpad probe-window-deployed2.txt)
 - LOC: +860/−870 across 34 tracked files (docs +222/−155 of that) plus the new e2e
   (`library-connectors-behind-the-lane`, 24 lines).
+## 2026-09-06 — review round two, closing: the deployed board's two reds and the last codec menu item
+
+- WHAT: the two reds the phase-2 deployed board left in d3's files, taken by agreement with d3 (its
+  ownership split: the tests and `e2e/support/live-client.ts` free to change; `src/stream/live-state.ts`
+  stays d3's — a `patch: null` past `LIVE_STATE_PATCH_MAX_CHARS` is a memory-hygiene contract), and
+  edge#10 from the finders' menu.
+- edge#10 FIXED (was the round's one red left on purpose): the `@` lexer and the paren matcher did not
+  know JSON5 comments — `@` in a comment was refused, a quote in a comment unbalanced the parens. The
+  one span pattern every walker skips is now "a string literal OR a comment" (`STRING_OR_COMMENT`:
+  the two literal alternatives plus `/* … */` and `// …`), so a comment is opaque exactly as a string
+  is; JSON5 parses the comment itself. `expression.ts` 143 → 144 code lines. The proof
+  (`src/review-bugs-round2.test.ts` edge#10) flipped from `test.fails` to `test` and grew two rows: a
+  `)` inside a line comment, and `//` / `/* */` INSIDE strings staying strings. The codec header now
+  says "comments included".
+- CONCURRENT BIG APPENDS (`e2e/stream-uncontrolled-degradation`, d3's boundary control): red twice
+  alone against 8fd49a2f because the lost session's error is now `WebSocket connection failed.
+  [code=undefined reset=false]` — the /api edge isolate dying under 8 × 28 MiB while that session's
+  upgrade is still in flight — where the row's assertion wanted the mid-flight `1006` close it saw on
+  2026-09-04. Both are the same edge-side loss, so the assertion accepts either; the row's two
+  invariants are untouched (no DO reset on any failure; ≥7/8 committed and every landed batch whole).
+  Green alone with the widened assertion (7 skipped siblings, 1 passed). The real fix — an edge-side
+  in-flight budget — stays on the menu.
+- live-state chains client-side (`e2e/live-state-chains-client-side`, `chat.applied` 0 — the two
+  messages arrive by a re-seed instead of two applied deltas; red alone on 7474bb76 and once on
+  8fd49a2f, green alone otherwise; never locally): DIAGNOSED, not fixed here (a subagent; 104 deployed rounds, probe + logs in the session scratchpad
+  `live-state/`). Not a seed race — a delta-vs-delta COMMIT REORDER. `set()` mints `from`/`to`
+  synchronously (live-state.ts:102) but appends fire-and-forget through the documented sink
+  `env.ITX.get().append(e)`, a FRESH capability per call (itx-entrypoint.ts:27, re-resolved per call), so
+  two appends in flight on two capabilities have no ordering and the second commits first in ~14% of
+  rapid pairs on the edge (15/104 as shipped; 0/85 with one capability reused; 0/45 with the appends
+  chained; never locally — the hop is sub-ms, so delta 1 commits before `post#1` returns). Commit order
+  is arrival order (the append door is synchronous end to end), delivery pushes commits in order, and
+  the client does exactly what an out-of-order frame tells it: re-seed (live-client.ts:72-81). The
+  test's expectation is RIGHT — convergence held every time, the COST was wrong (a full door re-read
+  of the projection the deltas exist to avoid), and relaxing `reseeds === 0` would bless an out-of-order
+  chain as the contract. First-party carries the hazard too (stream-processor-durable-object.ts:87,
+  the same fresh-get-per-append spelling). FIX A, handed to d3 as an exact diff (its file, its
+  memory-hygiene contract): one `#liveStateDeltaAppendChain` promise inside `LiveState` so deltas
+  reach the log in the order they were minted, `to` captured locally, +13/−9 plus a microtask flush in
+  live-state.test.ts. Reusing one capability per sink (0/85) rejected: a scope stub held across calls
+  (the back-channel rule) that pins the DO. Baseline alone on 8fd49a2f: 9 of 10 green.
+- BOARD: tsc×3 · oxlint 0/0 · oxfmt clean on touched files · unit+workers 431p/12xf (38 files; edge#10's
+  row moved from xfail to pass) · DEPLOYED as 63ec05bc (`pnpm run deploy`, upload 762 KiB, Worker
+  Startup Time 6 ms; `/version` = `live-47 poc 63ec05bc-9d4b-4e26-93a4-1ea4cf134e88`) · deployed e2e
+  182p/3f/4xf/2sk on 47 files (13 min) — the third file was the subagent's transient probe
+  (gone); big appends 6/8 committed under the full suite (floor 7; alone: green, twice alone); live-state the
+  reorder above. Both rows are d3's; the worker is d3's next.
+- LOC: 3 files changed, 27 insertions(+), 20 deletions(-) (source +/− before this entry); expression.ts 143 → 144 code lines.

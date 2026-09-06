@@ -487,11 +487,15 @@ test("edge#7: the door reads the ARRAY half of a match exactly as the string hal
   });
 });
 
-// edge#10 — BUG (open): the `@` lexer and `matchingParen` do not know JSON5 comments: `@` in a comment
-// is refused (or, with holes, markered) and a quote in a comment unbalances the parens. Exotic;
-// either "no comments in expression args" gets stated in the header or both walkers learn `//` and
-// `/* */`. Left red as the menu says.
-test.fails("edge#10: a JSON5 comment inside call args is a comment, not a marker and not a quote", () => {
+// edge#10 — BUG (fixed): the `@` lexer and `matchingParen` did not know JSON5 comments: `@` in a comment
+// was refused (or, with holes, markered) and a quote in a comment unbalanced the parens. FIX: the one
+// span pattern the walkers skip is "a string literal OR a comment" (`STRING_OR_COMMENT`).
+test("edge#10: a JSON5 comment inside call args is a comment, not a marker and not a quote", () => {
   expect(parse("itx.x(/* @ */ 1)")).toEqual(["itx", ["x", 1]]);
   expect(parse("itx.x(1 /* it's */, 2)")).toEqual(["itx", ["x", 1, 2]]);
+  expect(parse("itx.x(1, // a ')' here\n 2)")).toEqual(["itx", ["x", 1, 2]]);
+  expect(parse("itx.x('// not a comment', '/* nor this */')")).toEqual([
+    "itx",
+    ["x", "// not a comment", "/* nor this */"],
+  ]);
 });
