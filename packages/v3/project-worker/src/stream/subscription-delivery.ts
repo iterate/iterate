@@ -233,8 +233,17 @@ export class SubscriptionDelivery {
    *  materialization (at configure) or a resume; the row must still exist once the load returns. */
   async #catchUpFacetRow(name: string, row: Subscription): Promise<void> {
     const { head } = await this.#evaluateItxExpressionTargetHead(row.target);
-    if (head instanceof FacetHandle && this.#stream.coreReducedState.subscriptions[name])
-      await head.invoke([["catchUpFromLog"]]);
+    if (!(head instanceof FacetHandle)) return;
+    // Classify it as a PUSH row NOW (a facet owns its progress), so onCommit never retains its
+    // batches in #pushedEventBatches — the cursor-lane path, one batch per row, latest-wins and
+    // UNBOUNDED by the delivery budgets. A burst to freshly-enabled facets would otherwise pin one
+    // ephemeral per facet there (10 × 7 MiB) on top of the args workerd is deserializing, and reset
+    // the parent (the large-ephemeral fan-out: 0 facets is absorbed, 10 facets was not). Classifying
+    // at materialize/resume closes the window between enable and the first push; the push path still
+    // classifies too (a fresh incarnation, a live-client row).
+    this.#pushSubscriptionNames.add(name);
+    this.#pushedEventBatches.delete(name);
+    if (this.#stream.coreReducedState.subscriptions[name]) await head.invoke([["catchUpFromLog"]]);
   }
 
   /** Queue a push behind the row's in-flight delivery — or FOLD it into the one already waiting.
