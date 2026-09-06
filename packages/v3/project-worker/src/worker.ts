@@ -50,7 +50,7 @@ export class DummyControlPlane extends WorkerEntrypoint {
 }
 
 // Bumped every deploy so a smoke test can wait for THIS build to propagate (workers.dev lags ~1-2min/colo).
-const CODE_VERSION = "live-47";
+const CODE_VERSION = "live-48";
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {

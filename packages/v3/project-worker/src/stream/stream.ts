@@ -225,6 +225,10 @@ export class Stream {
       { append: (event) => this.append(event) },
       contract.slug,
       this.#coreReducedState,
+      // The sink is this stream's OWN synchronous append (same isolate): no cross-hop reorder is
+      // possible, and the core delta must land densely inside the commit that triggered it — so it
+      // emits synchronously, never deferred through the ordering chain (live-state.ts).
+      { orderDeltaAppends: false },
     );
   }
 

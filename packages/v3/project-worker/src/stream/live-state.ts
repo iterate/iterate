@@ -51,13 +51,36 @@ export class LiveState<S> {
    *  becomes the base every later diff would throw against. */
   #lastSerializedState: S;
   #liveStateRev: number;
+  /** THE DELTA APPEND CHAIN — at most one delta append in flight, so commit order = mint order for a
+   *  CROSS-HOP sink. `set` mints `from`/`to` synchronously but appends WITHOUT awaiting; an async
+   *  sink (`env.ITX.get().append(e)`) mints a FRESH capability per call (itx-entrypoint.ts), so two
+   *  deltas issued in different turns race across the hop and the second can commit first — ~14% of
+   *  rapid pairs on the deployed edge (never locally, the hop is sub-ms). An out-of-order pair is not
+   *  the lossy clause: nothing is dropped, but it costs every watcher a full door re-read of the
+   *  projection the deltas exist to avoid. A lone delta (the chain idle) is issued synchronously;
+   *  only when an append is already in flight does the next queue behind it. Nobody waits on this —
+   *  the append was always fire-and-forget. Unused when `#orderDeltaAppends` is false (below). */
+  #liveStateDeltaAppendChain: Promise<unknown> = Promise.resolve();
+  #liveStateDeltaAppendInFlight = false;
+  /** Whether to order delta appends across turns (above). TRUE by default — a cross-hop sink needs
+   *  it, and a mini-app holder (the SDK `LiveState`, userspace) gets it without opting in. FALSE for
+   *  the core reduce, whose sink is the stream's OWN synchronous `append` (same isolate, no reorder
+   *  possible): there the delta must land densely inside the commit that triggered it, so it is
+   *  emitted synchronously every time, never deferred a microtask. */
+  readonly #orderDeltaAppends: boolean;
 
-  constructor(sink: LiveStateSink, key: string, initial: S) {
+  constructor(
+    sink: LiveStateSink,
+    key: string,
+    initial: S,
+    options?: { orderDeltaAppends?: boolean },
+  ) {
     this.#liveStateSink = sink;
     this.#liveStateKey = key;
     this.#state = initial;
     this.#lastSerializedState = initial;
     this.#liveStateRev = Date.now() * 4096 + Math.floor(Math.random() * 4096);
+    this.#orderDeltaAppends = options?.orderDeltaAppends ?? true;
   }
 
   /** The current value (reflects every `set`). */
@@ -100,20 +123,52 @@ export class LiveState<S> {
     this.#lastSerializedState = next;
     if (!patch) return;
     const from = this.#liveStateRev;
-    this.#liveStateRev = from + 1;
+    const to = from + 1; // a LOCAL: a later set's rev must not be read into this delta's payload
+    this.#liveStateRev = to;
     const wirePatch = JSON.stringify(patch).length > LIVE_STATE_PATCH_MAX_CHARS ? null : patch;
-    // Both a sync throw and a rejection land in the same lossy contract: a dropped change payload
-    // is a revision-chain gap the client heals (the rev already advanced above).
-    try {
-      void Promise.resolve(
-        this.#liveStateSink.append({
-          type: "events.iterate.com/live-state/changed",
-          ephemeral: true,
-          payload: { key: this.#liveStateKey, from, to: this.#liveStateRev, patch: wirePatch },
-        }),
-      ).catch(() => {});
-    } catch {
-      /* same gap */
+    const emitDelta = () =>
+      this.#liveStateSink.append({
+        type: "events.iterate.com/live-state/changed",
+        ephemeral: true,
+        payload: { key: this.#liveStateKey, from, to, patch: wirePatch },
+      });
+    // A dropped change payload — a sync throw or a rejection — is a revision-chain gap the client
+    // heals (the rev already advanced); it must never reach the caller.
+    if (!this.#orderDeltaAppends) {
+      // The core reduce (same-isolate sink): emit synchronously and densely, every time. No chain,
+      // no deferral — a same-isolate append cannot reorder, so ordering machinery would only break
+      // the dense offset the delta must take inside its triggering commit.
+      try {
+        void Promise.resolve(emitDelta()).catch(() => {});
+      } catch {
+        /* the gap, contained */
+      }
+      return;
     }
+    if (this.#liveStateDeltaAppendInFlight) {
+      // An append is already in flight (a rapid cross-hop pair): queue behind it, in mint order.
+      this.#liveStateDeltaAppendChain = this.#liveStateDeltaAppendChain
+        .then(emitDelta)
+        .catch(() => {});
+      return;
+    }
+    // The chain is idle: emit SYNCHRONOUSLY (a same-isolate sink stays dense; a cross-hop sink
+    // returns a pending promise the flag tracks until it settles).
+    this.#liveStateDeltaAppendInFlight = true;
+    this.#liveStateDeltaAppendChain = (() => {
+      try {
+        return Promise.resolve(emitDelta()).catch(() => {});
+      } catch {
+        return Promise.resolve(); // a synchronously-throwing sink: the gap, contained
+      }
+    })().finally(() => {
+      this.#liveStateDeltaAppendInFlight = false;
+    });
+  }
+
+  /** Every delta minted so far has reached the sink (or failed into the chain gap) — the test seam
+   *  for LiveState's now-asynchronous append (the delta append chain). Production never awaits it. */
+  deltasSettled(): Promise<unknown> {
+    return this.#liveStateDeltaAppendChain;
   }
 }
