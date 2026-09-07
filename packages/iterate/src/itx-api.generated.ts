@@ -4672,6 +4672,7 @@ export type JsonValue =
   | JsonValue[]
   | { [key: string]: JsonValue };
 
+/** A typed resource identified by a ref:// link in message content. */
 export type Reference = { type: "repo-file"; repoPath: "/repos/config"; path: string; id: string };
 
 /** One model-visible context item's payload — the wire contract for every

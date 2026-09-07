@@ -2279,8 +2279,8 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "Reference",
     kind: "typeAlias",
     sourceText:
-      'export type Reference = { type: "repo-file"; repoPath: "/repos/config"; path: string; id: string };',
-    summary: "",
+      '/** A typed resource identified by a ref:// link in message content. */\nexport type Reference = { type: "repo-file"; repoPath: "/repos/config"; path: string; id: string };',
+    summary: "A typed resource identified by a ref:// link in message content.",
     memberSummaries: {},
     referencedTypeNames: [],
   },

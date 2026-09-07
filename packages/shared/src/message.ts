@@ -46,6 +46,7 @@ export const Reference = z
       });
     }
   });
+/** A typed resource identified by a ref:// link in message content. */
 export type Reference = z.infer<typeof Reference>;
 
 export const MessageReferences = z
