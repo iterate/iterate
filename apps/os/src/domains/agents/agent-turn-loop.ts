@@ -201,7 +201,11 @@ export class AgentTurnLoop {
     // until external input happened to resume the loop). A live incarnation
     // already drains such a request — the background attempt keeps running
     // through the pause — so a revived one must adopt it the same way.
-    if (state.paused !== null && state.pendingLlmRequestTrigger?.source === "external") {
+    if (
+      state.paused !== null &&
+      !state.paused.budget &&
+      state.pendingLlmRequestTrigger?.source === "external"
+    ) {
       const trigger = state.pendingLlmRequestTrigger;
       runInBackground(() =>
         append({

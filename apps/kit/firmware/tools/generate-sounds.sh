@@ -6,7 +6,8 @@
 # ESPHome project, Apache-2.0). Everything else is OpenAI TTS in marin — the
 # same voice the assistant answers in — and regenerates from the texts below.
 #
-#   OPENAI_API_KEY=... apps/kit/firmware/tools/generate-sounds.sh
+#   Set OPENAI_API_KEY, OPENAI_GATEWAY_URL, CF_AIG_AUTH_TOKEN, and AI_GATEWAY_METADATA.
+#   OPENAI_GATEWAY_URL is the company gateway URL ending in /openai.
 #
 # Requires: curl, ffmpeg (16 kHz mono PCM16 conversion), python3.
 set -euo pipefail
@@ -17,11 +18,22 @@ if [ -z "${OPENAI_API_KEY:-}" ]; then
   exit 1
 fi
 
+# These are operator-owned inputs; never accept them from a model or project request.
+: "${CF_AIG_AUTH_TOKEN:?Authenticated company gateway token is required}"
+: "${AI_GATEWAY_METADATA:?Set environment, projectId and projectSlug metadata}"
+case "${OPENAI_GATEWAY_URL:-}" in
+  https://gateway.ai.cloudflare.com/v1/*/*/openai) ;;
+  *) echo "OPENAI_GATEWAY_URL must name the company Cloudflare gateway (/v1/account/gateway/openai)" >&2; exit 1 ;;
+esac
+python3 -c 'import json, os; m=json.loads(os.environ["AI_GATEWAY_METADATA"]); assert all(isinstance(m.get(k),str) and m[k] for k in ["environment","projectId","projectSlug"]); assert len(m)<=5'
+
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
 tts() { # tts <text> <out.wav>  — marin, 16 kHz mono PCM16
-  curl -sf https://api.openai.com/v1/audio/speech \
+  curl -sf "$OPENAI_GATEWAY_URL/audio/speech" \
+    -H "cf-aig-authorization: Bearer $CF_AIG_AUTH_TOKEN" \
+    -H "cf-aig-metadata: $AI_GATEWAY_METADATA" \
     -H "Authorization: Bearer $OPENAI_API_KEY" -H "Content-Type: application/json" \
     -d "{\"model\":\"gpt-4o-mini-tts\",\"voice\":\"marin\",\"input\":\"$1\",\"response_format\":\"wav\"}" \
     -o "$WORK/raw.wav"

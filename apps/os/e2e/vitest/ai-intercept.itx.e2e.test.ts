@@ -13,8 +13,10 @@ test("itx.ai.run('intercepted/…') is served by the live interceptor; releasing
   });
   using project = await itx.projects.get(`ai-intercept-${crypto.randomUUID()}`).create({});
 
-  using interception = await project.ai.intercept(async ({ source, model, body }) => {
-    return { served: { source, model, body } };
+  using interception = await project.ai.intercept(async (input) => {
+    if (input.source !== "ai-run")
+      throw new Error(`Unexpected interceptor source: ${input.source}`);
+    return { served: input };
   });
 
   const result = await project.ai.run("intercepted/echo-args", { prompt: "ping" });

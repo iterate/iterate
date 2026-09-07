@@ -114,3 +114,15 @@ async function keepIntercepting(handler) {
 [ai-intercept.itx.e2e.test.ts](../apps/os/e2e/vitest/ai-intercept.itx.e2e.test.ts)
 exercises install, release, the 4901 close on a real DO restart, and
 supersession.
+
+## Gateway response fixtures
+
+Use `intercepted/gateway/<model>` to exercise the real gateway header builder
+and response decoder without a provider call. The `ai.intercept` handler
+receives `source: "gateway-request"`, `agentPath`, `model`, and a prepared
+`request` (`provider`, `endpoint`, `headers`, `query`). Authorization is removed.
+Return `{ status, headers, body }`, with an HTTP body string (SSE for streamed
+success). Metadata comes from the host, exactly as for a real model.
+
+`specs/agent-budget.spec.ts` uses the captured Cloudflare 2041 response to prove
+budget pause and Retry. Real `openai/*` models remain non-interceptable.

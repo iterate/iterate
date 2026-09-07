@@ -27,6 +27,7 @@
  *   shortcuts onto it); `itx.capabilityHosts.get(path)` addresses any other
  *   scope's host, including the project root at `"/"`.
  */
+import { z } from "zod";
 import { RpcTarget } from "cloudflare:workers";
 import type { StreamEvent, StreamEventInput, StreamListItem } from "iterate/processors";
 import type { ProcessorReads } from "iterate/processors";
@@ -87,7 +88,13 @@ import { timedStep } from "./lib/step-timing.ts";
 import { buildCollectSecretUrl } from "./lib/collect-secret-link.ts";
 import { buildProjectStreamViewerUrl } from "./lib/stream-viewer-url.ts";
 import { buildProjectWorkerUrl } from "./lib/project-host-routing.ts";
-import type { Env } from "./env.ts";
+import {
+  readAiBudgetStop,
+  readAiRateLimitStop,
+  type AiCallStop,
+} from "./domains/agents/ai-budget.ts";
+import { aiGatewayMetadata } from "./domains/agents/ai-cost-attribution.ts";
+import { withOpenAiStreamUsage } from "./domains/agents/workers-ai-transport.ts";
 import {
   canonicalizeStreamPath,
   DurableObjectNameCodec,
@@ -2901,7 +2908,14 @@ class SecretCollectionRpcTarget extends IterateRpcTarget<"SecretCollection"> {
     });
   }
 
-  constructor(readonly props: { auth: ItxAuth; projectId: string; scopePath: string }) {
+  constructor(
+    readonly props: {
+      auth: ItxAuth;
+      projectId: string;
+      scopePath: string;
+      streamContext: StreamContext;
+    },
+  ) {
     super();
     props.auth.assertCanAccessProject(props.projectId);
   }
@@ -2912,6 +2926,7 @@ class SecretCollectionRpcTarget extends IterateRpcTarget<"SecretCollection"> {
       auth: this.props.auth,
       path: normalizeSecretPath(path),
       projectId: this.props.projectId,
+      streamContext: this.props.streamContext,
     });
   }
 
@@ -3023,7 +3038,14 @@ class SecretRpcTarget extends IterateRpcTarget<"Secret"> {
     });
   }
 
-  constructor(readonly props: { auth: ItxAuth; path: string; projectId: string }) {
+  constructor(
+    readonly props: {
+      auth: ItxAuth;
+      path: string;
+      projectId: string;
+      streamContext: StreamContext;
+    },
+  ) {
     super();
     props.auth.assertCanAccessProject(props.projectId);
   }
@@ -3041,7 +3063,9 @@ class SecretRpcTarget extends IterateRpcTarget<"Secret"> {
   /** Egress fetch with this secret's placeholders substituted server-side —
    * the standard fetch signature: a Request, or a URL plus optional init. */
   fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
-    return this.durableObjectStub.fetch(new Request(input, init));
+    return this.durableObjectStub.fetch(
+      withStreamContext(new Request(input, init), this.props.streamContext),
+    );
   }
 
   /** Admin-only recovery read of the current encrypted cell. */
@@ -3248,8 +3272,6 @@ function assertDeviceId(deviceId: string): void {
   }
 }
 
-type AiRunOptions = NonNullable<Parameters<Env["AI"]["run"]>[2]>;
-
 /** One project file, addressed by path. */
 class FileHandleRpcTarget extends IterateRpcTarget<"FileHandle"> {
   constructor(readonly props: { auth: ItxAuth; path: string; projectId: string }) {
@@ -3360,7 +3382,7 @@ class AiRpcTarget extends IterateRpcTarget<"Ai"> {
       auth: ItxAuth;
       ctx: CfExecutionContext;
       projectId: string;
-      gateway?: AiRunOptions["gateway"];
+      streamContext: StreamContext;
     },
   ) {
     super();
@@ -3379,12 +3401,17 @@ class AiRpcTarget extends IterateRpcTarget<"Ai"> {
    * Outputs are model-shaped: instantiate `run<T>` with the response shape you
    * read (`run<{ response?: string }>(…)`); uninstantiated it stays the honest
    * `unknown`. The optional third argument is the binding's own options object
-   * — e.g. `{ gateway: { id: "default", skipCache: true } }` — passed through
-   * to `env.AI.run`; its `gateway` wins over any constructor-provided one.
+   * — cache preferences are honored, but the host always owns the gateway
+   * ID and billing metadata. Callers cannot bypass company spending limits.
    * An `intercepted/*` model never reaches Cloudflare: the live interceptor installed
    * with `intercept(handler)` serves it, and its return value comes back
-   * verbatim (no handler installed → a loud error). */
-  run<T = unknown>(model: string, body: unknown, options?: CfAiRunOptions): Promise<T> {
+   * verbatim (no handler installed → a loud error). Expected refusals return
+   * `{ status: "budget-exhausted", budget }` or `{ status: "rate-limited", retryAfterMs }`. */
+  async run<T = unknown>(
+    model: string,
+    body: unknown,
+    options?: CfAiRunOptions,
+  ): Promise<T | AiCallStop> {
     if (isInterceptedModel(model)) {
       // Same contract as the env.AI.run cast below: `run<T>` is
       // caller-instantiated by design — the caller names the shape it will
@@ -3397,13 +3424,58 @@ class AiRpcTarget extends IterateRpcTarget<"Ai"> {
         body,
       }) as Promise<T>;
     }
-    const gateway = options?.gateway ?? this.props.gateway;
-    const merged = gateway === undefined ? options : { ...options, gateway };
-    return env.AI.run(
+    // Keep the provider response in this call's context; an extra DO RPC hop
+    // can disconnect streaming bodies after returning their headers.
+    const callOptions = options || {};
+    const streamContext = this.props.streamContext;
+    const config = parseConfig(env);
+    const metadata = aiGatewayMetadata(
+      {
+        ...(await projectStub(env.PROJECT, this.props.projectId).readAiCostIdentity()),
+        stream:
+          streamContext.kind === "script-execution"
+            ? {
+                path: streamContext.streamPath,
+                eventOffset: streamContext.scriptRunRequestedEventOffset,
+              }
+            : streamContext.kind === "scope"
+              ? { path: streamContext.scopePath }
+              : null,
+      },
+      config.cloudflareAiGateway.includeEventOffset,
+    );
+    const response = await env.AI.run(
       model,
-      body as Record<string, unknown>,
-      merged as AiRunOptions | undefined,
-    ) as Promise<T>;
+      model.startsWith("openai/")
+        ? withOpenAiStreamUsage(body)
+        : z.record(z.string(), z.unknown()).parse(body),
+      {
+        ...callOptions,
+        returnRawResponse: true,
+        gateway: {
+          ...callOptions.gateway,
+          id: config.cloudflareAiGateway.id,
+          metadata: Object.fromEntries(
+            Object.entries(metadata).filter(
+              (entry): entry is [string, string | number] => entry[1] !== undefined,
+            ),
+          ),
+        },
+      },
+    );
+    if (!(response instanceof Response))
+      throw new Error("Workers AI did not return the requested raw response");
+    const stop =
+      (await readAiBudgetStop(response, model.split("/")[0]!)) || readAiRateLimitStop(response);
+    if (stop) {
+      await response.body?.cancel();
+      return stop;
+    }
+    if (callOptions.returnRawResponse) return response as T;
+    if (!response.ok) throw new Error(`Workers AI request failed with status ${response.status}`);
+    if (response.headers.get("content-type")?.includes("application/json"))
+      return response.json() as Promise<T>;
+    return response.body as T;
   }
 
   /** Install a live handler for `intercepted/*` models (last writer wins); returns a
@@ -3631,7 +3703,14 @@ class CfVideosCapabilityRpcTarget extends IterateRpcTarget<"CfVideosCapability">
 
 /** Grouped first-party Cloudflare platform bindings under integrations.cf. */
 class CloudflareIntegrationsRpcTarget extends IterateRpcTarget<"CloudflareIntegrations"> {
-  constructor(readonly props: { auth: ItxAuth; ctx: CfExecutionContext; projectId: string }) {
+  constructor(
+    readonly props: {
+      auth: ItxAuth;
+      ctx: CfExecutionContext;
+      projectId: string;
+      streamContext: StreamContext;
+    },
+  ) {
     super();
   }
 
@@ -3655,6 +3734,7 @@ class CloudflareIntegrationsRpcTarget extends IterateRpcTarget<"CloudflareIntegr
       auth: this.props.auth,
       ctx: this.props.ctx,
       projectId: this.props.projectId,
+      streamContext: this.props.streamContext,
     });
   }
 
@@ -3903,6 +3983,7 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
       auth: this.props.auth,
       ctx: this.props.ctx,
       projectId: this.props.projectId,
+      streamContext: this.props.streamContext,
     });
   }
 
@@ -7363,6 +7444,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
       auth: this.#props.auth,
       ctx: this.#props.ctx,
       projectId: this.#projectId,
+      streamContext: this.#streamContext,
     });
   }
 
@@ -7606,6 +7688,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
       // The scope path makes collectFromUser's links notify the calling
       // agent when the user submits; non-agent scopes mint plain links.
       scopePath: this.#capabilityHost.path,
+      streamContext: this.#streamContext,
     });
   }
 

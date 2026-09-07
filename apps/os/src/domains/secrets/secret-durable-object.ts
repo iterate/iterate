@@ -2,6 +2,7 @@ import { DurableObject } from "cloudflare:workers";
 import { isStreamOffsetConflictError } from "iterate/processors";
 import type { StreamEventInput } from "iterate/processors";
 import type { ProcessorState } from "iterate/processors";
+import { createAiCostIdentityReader } from "../agents/ai-cost-attribution.ts";
 import { workerVersion, type Env } from "../../env.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
 import { StreamRpcTarget } from "../../rpc-targets.ts";
@@ -13,6 +14,11 @@ import {
 } from "../integrations/github-app.ts";
 import { assertPushTokenSecretRevision } from "../devices/push-token-consistency.ts";
 import { isUnconfiguredSubscriptionError } from "../streams/utils.ts";
+import {
+  isOpenAiPublicApiRequest,
+  routeCompanyOpenAi,
+} from "../projects/openai-ai-gateway-egress.ts";
+import { takeStreamContext, type StreamContext } from "../projects/stream-context.ts";
 import { secretCreationEvents } from "./secret-defaults.ts";
 import type {
   SecretCreateInput,
@@ -73,6 +79,11 @@ export class SecretDurableObject extends DurableObject<Env> {
   }
 
   readonly #name = DurableObjectNameCodec.parse(this.ctx.id.name!);
+  readonly #readCostIdentity = createAiCostIdentityReader({
+    environment: () => parseConfig(this.env).environmentName,
+    projectId: this.#name.projectId!,
+    directory: this.env.PROJECT_DIRECTORY,
+  });
   readonly #stream = new StreamRpcTarget({
     auth: trustedInternalAuthContext(),
     path: this.#name.path,
@@ -378,22 +389,28 @@ export class SecretDurableObject extends DurableObject<Env> {
     // The secret's liveState is facet-hosted (it rides the secret STREAM
     // Durable Object's keyed pager lane), so this fetch only ever serves
     // secret substitution requests.
-    return await this.#fetch(request, { kind: "any-revision" });
+    const taken = takeStreamContext(request);
+    return this.#fetch(taken.request, { kind: "any-revision" }, taken.streamContext);
   }
 
   async fetchAtUpdatedOffset(
     request: Request,
     input: { expectedUpdatedOffset: number },
   ): Promise<Response> {
-    return await this.#fetch(request, {
-      kind: "exact-revision",
-      updatedOffset: input.expectedUpdatedOffset,
-    });
+    return await this.#fetch(
+      request,
+      {
+        kind: "exact-revision",
+        updatedOffset: input.expectedUpdatedOffset,
+      },
+      { kind: "scope", scopePath: "/" },
+    );
   }
 
   async #fetch(
     request: Request,
     revision: { kind: "any-revision" } | { kind: "exact-revision"; updatedOffset: number },
+    streamContext: StreamContext,
   ): Promise<Response> {
     const { problems, references } = await secretReferencesFromRequest(request);
     if (problems[0] !== undefined) return secretErrorResponse(problems[0].code);
@@ -436,6 +453,16 @@ export class SecretDurableObject extends DurableObject<Env> {
 
       await this.#appendUsed(request.url);
       await this.#assertGithubInstallationUseAuthorized(state.refresh);
+      if (isOpenAiPublicApiRequest(substituted)) {
+        const routed = await routeCompanyOpenAi({
+          request: substituted,
+          config: parseConfig(this.env),
+          ai: this.env.AI,
+          readIdentity: this.#readCostIdentity,
+          streamContext,
+        });
+        if (routed !== null) return routed;
+      }
       const response = await fetchWithCredentialRedirects(substituted, {
         assertUrlAllowed: (url) => assertOriginPinned(url, state),
       });
@@ -453,6 +480,16 @@ export class SecretDurableObject extends DurableObject<Env> {
       const retriedState = await this.#snapshot();
       assertSecretRevision(retriedState, revision);
       const retried = await this.#substitute(retry.source, retriedState);
+      if (isOpenAiPublicApiRequest(retried)) {
+        const routed = await routeCompanyOpenAi({
+          request: retried,
+          config: parseConfig(this.env),
+          ai: this.env.AI,
+          readIdentity: this.#readCostIdentity,
+          streamContext,
+        });
+        if (routed !== null) return routed;
+      }
       await this.#appendUsed(request.url);
       await this.#assertGithubInstallationUseAuthorized(retriedState.refresh);
       return await withWebSocketHandshakeHeaders(

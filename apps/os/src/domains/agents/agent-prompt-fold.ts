@@ -147,6 +147,7 @@ function reduceAgentEventCore(input: {
           offset: event.offset,
           atMs: Date.parse(event.createdAt),
           source: trigger,
+          costEventOffset: null,
         },
         // Fresh external input is a fresh start: the autonomous-turn budget
         // and the failure streak both reset.
@@ -176,6 +177,10 @@ function reduceAgentEventCore(input: {
         pendingLlmRequestTrigger: null,
         openRequest: {
           requestedAtOffset: event.offset,
+          costEventOffset:
+            state.pendingLlmRequestTrigger.costEventOffset === null
+              ? event.offset
+              : state.pendingLlmRequestTrigger.costEventOffset,
           expiresAt: event.payload.expiresAt,
           model: event.payload.model,
         },
@@ -209,6 +214,18 @@ function reduceAgentEventCore(input: {
       const result = event.payload.result;
       if (result.status === "succeeded") return { ...settled, consecutiveLlmFailures: 0 };
       if (result.status === "cancelled") return settled;
+      if (result.status === "budget-exhausted") {
+        return {
+          ...settled,
+          paused: { reason: "Budget exhausted", budget: result.budget, atOffset: event.offset },
+          pendingLlmRequestTrigger: state.pendingLlmRequestTrigger || {
+            offset: event.offset,
+            atMs: Date.parse(event.createdAt),
+            source: "external" as const,
+            costEventOffset: null,
+          },
+        };
+      }
       const failures = state.consecutiveLlmFailures + 1;
       return {
         ...settled,
@@ -219,10 +236,13 @@ function reduceAgentEventCore(input: {
         ...(failures < state.config.llmRequestRetryPolicy.maxAttempts && {
           pendingLlmRequestTrigger: {
             offset: event.offset,
-            atMs: Date.parse(event.createdAt),
+            atMs:
+              Date.parse(event.createdAt) +
+              (result.status === "rate-limited" ? result.retryAfterMs : 0),
             // as const: inside the conditional spread the literal would
             // widen to string and fall out of the trigger-source union.
             source: "agent-loop" as const,
+            costEventOffset: state.openRequest!.costEventOffset,
           },
         }),
       };
@@ -250,6 +270,7 @@ function reduceAgentEventCore(input: {
       return projection === undefined ? state : { ...state, ...projection };
     }
     case "events.iterate.com/agent/paused":
+      if (state.paused?.budget && !event.payload.budget) return state;
       // The breaker consequence is appended in the background. If external
       // input landed after its causal trigger but before the pause fact, that
       // input already started a fresh budget and the delayed pause is stale.
@@ -269,13 +290,17 @@ function reduceAgentEventCore(input: {
         paused: {
           ...(event.payload.reason === undefined ? {} : { reason: event.payload.reason }),
           atOffset: event.offset,
+          ...(event.payload.budget && { budget: event.payload.budget }),
         },
         pendingLlmRequestTrigger:
-          state.pendingLlmRequestTrigger?.source === "agent-loop"
+          !event.payload.budget && state.pendingLlmRequestTrigger?.source === "agent-loop"
             ? null
             : state.pendingLlmRequestTrigger,
       };
     case "events.iterate.com/agent/resumed":
+      if (event.payload.budgetPauseOffset !== undefined && !state.paused?.budget) return state;
+      if (state.paused?.budget && event.payload.budgetPauseOffset !== state.paused.atOffset)
+        return state;
       return {
         ...state,
         paused: null,
@@ -290,12 +315,13 @@ function reduceAgentEventCore(input: {
         // pause longer than llmRequestExpiryMs would otherwise open a
         // request that instantly settles expired).
         pendingLlmRequestTrigger:
-          state.pendingLlmRequestTrigger === null
+          state.pendingLlmRequestTrigger === null && !state.paused?.budget
             ? null
             : {
                 offset: event.offset,
                 atMs: Date.parse(event.createdAt),
-                source: state.pendingLlmRequestTrigger.source,
+                source: state.pendingLlmRequestTrigger?.source || "external",
+                costEventOffset: null,
               },
       };
     case "events.iterate.com/capability-host/script-run-requested": {

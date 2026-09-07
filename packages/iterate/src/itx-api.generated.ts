@@ -397,12 +397,13 @@ export interface Ai {
    * Outputs are model-shaped: instantiate `run<T>` with the response shape you
    * read (`run<{ response?: string }>(…)`); uninstantiated it stays the honest
    * `unknown`. The optional third argument is the binding's own options object
-   * — e.g. `{ gateway: { id: "default", skipCache: true } }` — passed through
-   * to `env.AI.run`; its `gateway` wins over any constructor-provided one.
+   * — cache preferences are honored, but the host always owns the gateway
+   * ID and billing metadata. Callers cannot bypass company spending limits.
    * An `intercepted/*` model never reaches Cloudflare: the live interceptor installed
    * with `intercept(handler)` serves it, and its return value comes back
-   * verbatim (no handler installed → a loud error). */
-  run<T = unknown>(model: string, body: unknown, options?: CfAiRunOptions): Promise<T>;
+   * verbatim (no handler installed → a loud error). Expected refusals return
+   * `{ status: "budget-exhausted", budget }` or `{ status: "rate-limited", retryAfterMs }`. */
+  run<T = unknown>(model: string, body: unknown, options?: CfAiRunOptions): Promise<T | AiCallStop>;
   /** Install a live handler for `intercepted/*` models (last writer wins); returns a
    * release handle. For deterministic testing: an agent configured with
    * `model: "intercepted/<x>"` and every `run("intercepted/<x>", …)` call are served by your
@@ -2594,8 +2595,8 @@ export type StreamIndexRow = {
 };
 
 /** The Workers AI binding's per-call options (`env.AI.run`'s third argument),
- * published structurally so itx callers can route a call through a specific
- * AI Gateway configuration — e.g. `{ gateway: { id: "default", skipCache: true } }`. */
+ * published structurally for cache preferences. The host replaces gateway id
+ * and metadata with its trusted cost identity; caller values cannot change billing. */
 export type CfAiRunOptions = {
   gateway?: {
     id: string;
@@ -2607,6 +2608,9 @@ export type CfAiRunOptions = {
   };
   returnRawResponse?: boolean;
 };
+
+/** Expected refusal of an AI call: a spending pause or a bounded temporary rate limit. */
+export type AiCallStop = AiBudgetStop | AiRateLimitStop;
 
 /**
  * Live replacement for intercepted/* model calls. For `source: "agent-turn"` the
@@ -2828,13 +2832,23 @@ export type AgentProcessorState = {
   lastLlmRequestOffset: number;
   latestExternalTriggerOffset: number;
   pendingLlmRequestTrigger: {
+    costEventOffset: number | null;
     offset: number;
     atMs: number;
     source: "agent-loop" | "external";
   } | null;
-  openRequest: { requestedAtOffset: number; expiresAt: number; model: string } | null;
+  openRequest: {
+    costEventOffset: number;
+    requestedAtOffset: number;
+    expiresAt: number;
+    model: string;
+  } | null;
   consecutiveLlmFailures: number;
-  paused: { reason?: string | undefined; atOffset: number } | null;
+  paused: {
+    reason?: string | undefined;
+    budget?: { provider: string; ruleId: string | null; resetsAt: string | null } | undefined;
+    atOffset: number;
+  } | null;
   autonomousTurnCount: number;
   activeScriptExecutions: { executionId: string; requestedAt: string }[];
   summary: {
@@ -2914,6 +2928,11 @@ export type AgentEventInput =
         durationMs?: number | undefined;
         result:
           | {
+              status: "budget-exhausted";
+              budget: { provider: string; ruleId: string | null; resetsAt: string | null };
+            }
+          | { status: "rate-limited"; retryAfterMs: number }
+          | {
               status: "succeeded";
               text: string;
               usage?:
@@ -2936,9 +2955,16 @@ export type AgentEventInput =
     >
   | TypedConsumedEventInput<
       "events.iterate.com/agent/paused",
-      { reason?: string | undefined; triggerOffset?: number | undefined }
+      {
+        reason?: string | undefined;
+        budget?: { provider: string; ruleId: string | null; resetsAt: string | null } | undefined;
+        triggerOffset?: number | undefined;
+      }
     >
-  | TypedConsumedEventInput<"events.iterate.com/agent/resumed", { reason?: string | undefined }>
+  | TypedConsumedEventInput<
+      "events.iterate.com/agent/resumed",
+      { reason?: string | undefined; budgetPauseOffset?: number | undefined }
+    >
   | TypedConsumedEventInput<
       "events.iterate.com/agent/summary-updated",
       | {
@@ -4592,6 +4618,15 @@ export type LiveStatePatch =
   | { set: unknown }
   | { fields?: Record<string, LiveStatePatch>; drop?: string[] };
 
+/** A confirmed spending-limit refusal, with provider evidence for the pause UI. */
+export type AiBudgetStop = {
+  status: "budget-exhausted";
+  budget: { provider: string; ruleId: string | null; resetsAt: string | null };
+};
+
+/** A temporary rate refusal whose delay is bounded before journal persistence. */
+export type AiRateLimitStop = { status: "rate-limited"; retryAfterMs: number };
+
 /**
  * One intercepted/* invocation as the interceptor sees it. `source` discriminates the
  * two egress paths: an agent conversation turn carries the provider-neutral
@@ -4599,6 +4634,17 @@ export type LiveStatePatch =
  * argument verbatim (honestly `unknown` — the caller chose its shape).
  */
 export type ProjectAiInterceptorInput =
+  | {
+      source: "gateway-request";
+      agentPath: string;
+      model: string;
+      request: {
+        provider: string;
+        endpoint: string;
+        headers: Record<string, string>;
+        query: unknown;
+      };
+    }
   | {
       source: "agent-turn";
       agentPath: string;

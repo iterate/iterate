@@ -27,6 +27,13 @@ export function isInterceptedModel(model: string): boolean {
   return model.startsWith(INTERCEPTED_MODEL_PREFIX);
 }
 
+/** Serializable HTTP fixture; decoded through the production gateway response parser. */
+export const InterceptedGatewayResponse = z.object({
+  status: z.number().int().min(100).max(599),
+  headers: z.record(z.string(), z.string()),
+  body: z.string(),
+});
+
 /**
  * One intercepted/* invocation as the interceptor sees it. `source` discriminates the
  * two egress paths: an agent conversation turn carries the provider-neutral
@@ -34,6 +41,17 @@ export function isInterceptedModel(model: string): boolean {
  * argument verbatim (honestly `unknown` — the caller chose its shape).
  */
 export type ProjectAiInterceptorInput =
+  | {
+      source: "gateway-request";
+      agentPath: string;
+      model: string;
+      request: {
+        provider: string;
+        endpoint: string;
+        headers: Record<string, string>;
+        query: unknown;
+      };
+    }
   | {
       source: "agent-turn";
       agentPath: string;

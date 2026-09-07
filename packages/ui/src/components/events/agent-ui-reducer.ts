@@ -47,7 +47,7 @@ export type AgentUiLlmStep = {
   inputTokens?: number;
   outputTokens?: number;
   durationMs?: number;
-  outcome?: "completed" | "failed" | "cancelled";
+  outcome?: "completed" | "failed" | "cancelled" | "budget-exhausted" | "rate-limited";
   /** Why a cancelled request stopped, when the UI recognizes the reason. */
   cancelReason?: AgentLlmRequestCancelReason;
   errorMessage?: string;
@@ -344,6 +344,7 @@ export type AgentUiChildStreamItem = {
 };
 
 export type AgentUiStreamPauseItem = {
+  budgetPauseOffset?: number;
   kind: "stream-paused" | "stream-resumed";
   id: string;
   text: string;
@@ -447,6 +448,7 @@ export type AgentUiState = {
    * a resume). A paused loop owes no follow-up round, so the "processing"
    * inference must not claim one. */
   paused: boolean;
+  budgetPauseOffset: number | null;
 };
 
 const AgentUiLlmStepSchema = z
@@ -464,7 +466,9 @@ const AgentUiLlmStepSchema = z
     inputTokens: z.number().int().nonnegative().optional(),
     outputTokens: z.number().int().nonnegative().optional(),
     durationMs: z.number().finite().nonnegative().optional(),
-    outcome: z.enum(["completed", "failed", "cancelled"]).optional(),
+    outcome: z
+      .enum(["completed", "failed", "cancelled", "budget-exhausted", "rate-limited"])
+      .optional(),
     cancelReason: AgentLlmRequestCancelReason.optional(),
     errorMessage: z.string().optional(),
     startedAtMs: z.number().finite(),
@@ -573,6 +577,7 @@ export const AgentUiStateSchema = z
     summaryActivity: z.string().nullable(),
     summaryActivityUpdatedAtMs: z.number().finite().nullable(),
     paused: z.boolean(),
+    budgetPauseOffset: z.number().int().nonnegative().nullable(),
   })
   .superRefine((state, context) => {
     for (const [id, activity] of Object.entries(state.provisionalActivities)) {
@@ -614,6 +619,7 @@ export function initialAgentUiState(): AgentUiState {
     summaryActivity: null,
     summaryActivityUpdatedAtMs: null,
     paused: false,
+    budgetPauseOffset: null,
   };
 }
 
@@ -906,14 +912,20 @@ function reduceAgentUiEvent(
       // ephemeral, so a rebuild from the journal (refresh, TUI/mobile) has an
       // empty responseText — the settled fact fills it in.
       const partialText = typeof result?.partialText === "string" ? result.partialText : null;
-      return updateLlmStep(state, requestOffset, (step) =>
+      const settledRequest = updateLlmStep(state, requestOffset, (step) =>
         step.outcome != null
           ? step
           : {
               ...step,
               status: "done",
               outcome:
-                status === "succeeded" ? "completed" : status === "failed" ? "failed" : "cancelled",
+                status === "budget-exhausted" || status === "rate-limited"
+                  ? status
+                  : status === "succeeded"
+                    ? "completed"
+                    : status === "failed"
+                      ? "failed"
+                      : "cancelled",
               // partialText is the authoritative superset: it accrued per
               // provider chunk, while responseText only holds FLUSHED windows
               // — an interrupt can strand up to one coalescing window's tail
@@ -939,6 +951,19 @@ function reduceAgentUiEvent(
               ...(cancelReason == null ? {} : { cancelReason }),
             },
       );
+      if (status !== "budget-exhausted") return settledRequest;
+      const settled = settleActivityAtBoundary(
+        { ...settledRequest, paused: true, budgetPauseOffset: event.offset },
+        timestampMs,
+        items,
+      );
+      return emitItem(flushDeferredMessages(settled, items), items, {
+        kind: "stream-paused",
+        id: `budget-paused-${event.offset}`,
+        text: "Budget exhausted",
+        budgetPauseOffset: event.offset,
+        timestampMs,
+      });
     }
 
     case SCRIPT_EXECUTION_REQUESTED: {
@@ -1227,12 +1252,20 @@ function reduceAgentUiEvent(
     // open, and that request settles normally.
     case STREAM_PAUSED:
     case AGENT_PAUSED: {
-      const settled = settleActivityAtBoundary({ ...state, paused: true }, timestampMs, items);
+      const budget = isRecord(readPayloadRecord(event)?.budget);
+      if (state.budgetPauseOffset !== null && !budget) return state;
+      const budgetPauseOffset = budget ? event.offset : null;
+      const settled = settleActivityAtBoundary(
+        { ...state, paused: true, budgetPauseOffset },
+        timestampMs,
+        items,
+      );
       const flushed = settled.live === null ? flushDeferredMessages(settled, items) : settled;
       return emitItem(flushed, items, {
         kind: "stream-paused",
         id: `stream-paused-${event.offset}`,
-        text: "Agent paused",
+        text: budget ? "Budget exhausted" : "Agent paused",
+        ...(budget && { budgetPauseOffset: event.offset }),
         ...readOptionalReason(event),
         timestampMs,
       });
@@ -1240,7 +1273,17 @@ function reduceAgentUiEvent(
 
     case STREAM_RESUMED:
     case AGENT_RESUMED:
-      return emitItem({ ...state, paused: false }, items, {
+      if (
+        state.budgetPauseOffset !== null &&
+        readPayloadRecord(event)?.budgetPauseOffset !== state.budgetPauseOffset
+      )
+        return state;
+      if (
+        readPayloadRecord(event)?.budgetPauseOffset !== undefined &&
+        state.budgetPauseOffset === null
+      )
+        return state;
+      return emitItem({ ...state, paused: false, budgetPauseOffset: null }, items, {
         kind: "stream-resumed",
         id: `stream-resumed-${event.offset}`,
         text: "Agent resumed",

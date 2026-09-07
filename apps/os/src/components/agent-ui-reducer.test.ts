@@ -21,6 +21,45 @@ import {
   telegramMessageWebhookPayload,
 } from "../domains/integrations/webhook-fixtures.ts";
 
+test("budget exhaustion is a visible pause and only its explicit Retry clears it", () => {
+  const events = [
+    { type: "events.iterate.com/agent/llm-request-requested", payload: { model: "openai/test" } },
+    {
+      type: "events.iterate.com/agent/llm-request-settled",
+      payload: {
+        requestOffset: 1,
+        result: {
+          status: "budget-exhausted",
+          budget: { provider: "openai", ruleId: "daily", resetsAt: null },
+        },
+      },
+    },
+  ];
+  const stopped = reduceAll(events);
+  expect(stopped).toMatchObject({ paused: true, budgetPauseOffset: 2, live: null });
+  expect(stopped.items).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        kind: "stream-paused",
+        text: "Budget exhausted",
+        budgetPauseOffset: 2,
+      }),
+    ]),
+  );
+  expect(
+    reduceAll([
+      ...events,
+      { type: "events.iterate.com/agent/resumed", payload: { budgetPauseOffset: 1 } },
+    ]),
+  ).toMatchObject({ paused: true });
+  expect(
+    reduceAll([
+      ...events,
+      { type: "events.iterate.com/agent/resumed", payload: { budgetPauseOffset: 2 } },
+    ]),
+  ).toMatchObject({ paused: false, budgetPauseOffset: null });
+});
+
 const SCRIPT_EXPIRES_AT = Date.parse("2026-06-11T00:15:00.000Z");
 
 function reduceAll(events: Array<Partial<Event> & { type: string; payload?: unknown }>) {

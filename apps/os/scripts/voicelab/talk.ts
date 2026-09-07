@@ -658,11 +658,11 @@ export async function ensureXaiSecret(itx: unknown): Promise<string> {
   });
 }
 
-/** The OpenAI twin of the xAI secret, for the voice provider comparison. */
+/** Customer-funded OpenAI voice key. Company credentials must not be copied into a project secret. */
 export async function ensureOpenaiSecret(itx: unknown): Promise<string> {
   return await ensureProviderSecret(itx, {
     path: "/secrets/openai",
-    envNames: ["OPENAI_API_KEY", "APP_CONFIG_OPENAI_API_KEY"],
+    envNames: ["OPENAI_CUSTOMER_API_KEY"],
     egress: ["https://api.openai.com"],
   });
 }

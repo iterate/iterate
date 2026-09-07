@@ -1,24 +1,36 @@
-/**
- * Route project-egress OpenAI JSON API calls through Cloudflare AI Gateway via
- * the Workers AI binding (`env.AI.gateway(id).run`) — same door agent BYOK uses.
- *
- * Scope: **all** project egress (sandbox MITM, project worker `egress.fetch`,
- * etc.), not a sandbox-only branch. JSON POST/PUT to `api.openai.com` only;
- * other methods fall through to normal project egress (GET /models with a
- * dummy key will still 401).
- *
- * The platform OpenAI key is always injected in trusted Project DO code (same
- * key agent BYOK uses). Callers should plant a dummy/placeholder
- * `OPENAI_API_KEY`; customer keys in Authorization are replaced. The key is
- * not available via `getSecret({ platform: "openAiApiKey" })` — only via this
- * rewrite path.
- *
- * Binding-only: no REST AI Gateway rewrite and no direct-OpenAI platform-key
- * ladder (those paths 401'd under Authenticated Gateway without a Run token).
- */
+import {
+  aiGatewayMetadata,
+  type AiGatewayMetadata,
+  type createAiCostIdentityReader,
+} from "../agents/ai-cost-attribution.ts";
+import type { Env } from "../../env.ts";
+/** Company-funded JSON requests use AI Gateway. Customer credentials retain
+ * their provider billing; an unsupported company transport must fail closed. */
 
 import type { AppConfig } from "../../config.ts";
-import { cloudflareAiGatewayResponseCacheKey } from "../agents/workers-ai-transport.ts";
+import {
+  cloudflareAiGatewayResponseCacheKey,
+  withOpenAiStreamUsage,
+} from "../agents/workers-ai-transport.ts";
+import type { StreamContext } from "./stream-context.ts";
+
+/** The host compares actual credentials, never a caller's billing-owner header.
+ * The literal iterate-platform opts into the company credential without copying it.
+ * Recognize copies in WebSocket subprotocols/URLs as well as Authorization. */
+export function openAiCredentialOwner(
+  request: Request,
+  companyKey: string,
+): "iterate" | "customer" {
+  if (
+    companyKey.length > 0 &&
+    (request.url.includes(companyKey) ||
+      [...request.headers.values()].some((value) => value.includes(companyKey)))
+  )
+    return "iterate";
+  const authorization = request.headers.get("authorization");
+  if (!authorization && !request.headers.has("sec-websocket-protocol")) return "iterate";
+  return authorization === "Bearer iterate-platform" ? "iterate" : "customer";
+}
 
 /** True when the request targets OpenAI's public API host (http or https). */
 export function isOpenAiPublicApiRequest(request: Request): boolean {
@@ -65,24 +77,16 @@ export async function applyOpenAiAiGatewayCacheHeaders(input: {
  */
 export function openAiAiGatewayBindingHeaders(input: {
   openaiApiKey: string;
-  projectId: string;
+  metadata: AiGatewayMetadata;
   requestHeaders: Headers;
 }): Record<string, string> {
-  const caller =
-    input.requestHeaders.get("x-iterate-sandbox") ??
-    input.requestHeaders.get("x-iterate-agent") ??
-    undefined;
   const headers: Record<string, string> = {
     authorization: `Bearer ${input.openaiApiKey}`,
     "content-type": "application/json",
     // Same collect-log posture as agent BYOK in workers-ai-transport.ts.
     "cf-aig-collect-log": "true",
     "cf-aig-collect-log-payload": "true",
-    "cf-aig-metadata": JSON.stringify({
-      projectId: input.projectId,
-      source: "project-egress",
-      ...(caller !== undefined && { caller }),
-    }),
+    "cf-aig-metadata": JSON.stringify(input.metadata),
   };
   for (const [name, value] of input.requestHeaders.entries()) {
     const lower = name.toLowerCase();
@@ -123,4 +127,81 @@ export function openAiGatewayBindingEndpoint(openAiUrl: string): string {
   const url = new URL(openAiUrl);
   const rest = url.pathname.replace(/^\/v1\/?/, "");
   return `${rest}${url.search}`;
+}
+
+/** Route in the calling fetch context: returning a response through an extra
+ * cross-DO RPC hop can disconnect its body after headers have arrived. */
+export async function routeCompanyOpenAi(input: {
+  request: Request;
+  config: AppConfig;
+  ai: Env["AI"];
+  readIdentity: ReturnType<typeof createAiCostIdentityReader>;
+  streamContext: StreamContext;
+}): Promise<Response | null> {
+  const { request, config, streamContext } = input;
+  if (openAiCredentialOwner(request, config.openAiApiKey.exposeSecret()) === "customer")
+    return null;
+  const unsupported = () =>
+    Response.json(
+      {
+        error: {
+          code: "company_ai_transport_unsupported",
+          message:
+            "Company-funded OpenAI calls require the configured JSON AI Gateway transport. This transport is unsupported; no direct provider request was sent.",
+        },
+      },
+      { status: 400 },
+    );
+  if (
+    (request.method !== "POST" && request.method !== "PUT") ||
+    request.headers.get("upgrade")?.toLowerCase() === "websocket"
+  )
+    return unsupported();
+  const routing = openAiAiGatewayRoutingFromConfig(config);
+  if (routing === null) throw new Error("Company AI Gateway has no account configuration");
+
+  const gateway = input.ai?.gateway?.(routing.gatewayId);
+  if (gateway === undefined) throw new Error("Company AI Gateway binding is unavailable");
+
+  const endpoint = openAiGatewayBindingEndpoint(request.url);
+  if (endpoint.replace(/\?.*$/, "").length === 0) return unsupported();
+
+  let body: unknown;
+  try {
+    body = await request.clone().json();
+    if (endpoint.split("?")[0] === "chat/completions") body = withOpenAiStreamUsage(body);
+  } catch {
+    return unsupported();
+  }
+
+  const headers = openAiAiGatewayBindingHeaders({
+    openaiApiKey: routing.openaiApiKey,
+    metadata: aiGatewayMetadata(
+      {
+        ...(await input.readIdentity()),
+        stream:
+          streamContext.kind === "script-execution"
+            ? {
+                path: streamContext.streamPath,
+                eventOffset: streamContext.scriptRunRequestedEventOffset,
+              }
+            : streamContext.kind === "scope"
+              ? { path: streamContext.scopePath }
+              : null,
+      },
+      config.cloudflareAiGateway.includeEventOffset,
+    ),
+    requestHeaders: request.headers,
+  });
+  await applyOpenAiAiGatewayCacheHeaders({
+    headers,
+    body,
+    responseCacheTtlSeconds: routing.responseCacheTtlSeconds,
+  });
+  return gateway.run({
+    provider: "openai",
+    endpoint,
+    headers,
+    query: body,
+  });
 }

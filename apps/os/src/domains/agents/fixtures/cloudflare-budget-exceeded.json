@@ -1,0 +1,7 @@
+{
+  "status": 429,
+  "headers": {
+    "content-type": "application/json"
+  },
+  "body": "{\"success\":false,\"result\":[],\"messages\":[],\"error\":[{\"code\":2041,\"message\":\"Spend limit exceeded: rule 'probe' (cost limit 0.000001 per 3600s, sliding) for openai openai/gpt-4.1-nano\"}],\"name\":\"AiGatewayError\",\"httpCode\":429,\"internalCode\":2041,\"message\":\"Spend limit exceeded: rule 'probe' (cost limit 0.000001 per 3600s, sliding) for openai openai/gpt-4.1-nano\",\"description\":\"Spend limit exceeded: rule 'probe' (cost limit 0.000001 per 3600s, sliding) for openai openai/gpt-4.1-nano\"}"
+}

@@ -1,20 +1,20 @@
 ---
-status: ready
+status: implementation-review
 size: large
 ---
 
 # AI cost controls and attribution
 
-Design and code sketch approved in Plannotator rev 8 on 2026-09-07. Implementation has not started. Agreed: one OpenAI project, account-level CF rules in TypeScript, trusted attribution, explicit credential ownership, and durable budget pauses. Remaining: implementation, interception tests, gateway validation, credential migration, and rollout.
+Design approved in Plannotator rev 8 on 2026-09-07. Code and account-rule tooling are implemented on `codex/ai-cost-controls`; preview validation and review are complete. Production rules and credentials remain unchanged. Remaining after implementation review: company credential migration, rule adoption, and provider backstop verification.
 
 - [x] Agree scope, limits, attribution, and proposed code changes. *Approved in Plannotator rev 8; source feedback in `tmp.ignoreme/ai-cost-grill/decisions/`.*
-- [ ] Add typed production/development rule lists and serialized account-level application with diff/readback.
-- [ ] Thread trusted attribution through agents, compaction, egress, and approved/released calls; keep retry attribution stable.
-- [ ] Confirm eventOffset cardinality suitability before enabling it; ship other fields if unresolved.
-- [ ] Model budget responses as typed results and durable settlement events; add explicit retry and visible UI state.
-- [ ] Model credential ownership and keep customer-paid provider calls outside company budgets.
-- [ ] Extend interception to exercise prepared headers and real response decoding; prove attribution, pause/recovery, and UI behavior.
-- [ ] Run a small live preview proof of actual CF counters, response shape, windows, and rule-update behavior; remove temporary rules.
+- [x] Add typed production/development rule lists and serialized account-level application with diff/readback. *`ai-gateway-budget-rules.ts`, reconciler, and separate serialized Depot workflow; no-op and readback tests.*
+- [x] Thread trusted attribution through agents, compaction, egress, and approved/released calls; keep retry attribution stable. *Host-derived identity and stream context; automatic retries retain the original operation offset.*
+- [x] Confirm eventOffset cardinality suitability before enabling it; ship other fields if unresolved. *Numeric zero and all five fields verified live; cardinality guarantee unresolved, so eventOffset remains off.*
+- [x] Model budget responses as typed results and durable settlement events; add explicit retry and visible UI state. *`AiCallStop`, durable pause/compaction stop, and offset-fenced feed Retry.*
+- [x] Model credential ownership and keep customer-paid provider calls outside company budgets. *Current company-key copies route through the gateway; customer credentials retain their provider.*
+- [x] Extend interception to exercise prepared headers and real response decoding; prove attribution, pause/recovery, and UI behavior. *`intercepted/gateway/*`, raw vendor fixture, restart tests, and preview browser spec.*
+- [x] Run a small live preview proof of actual CF counters, response shape, windows, and rule-update behavior; remove temporary rules. *Isolated live gateways verified partitions, 2041, reset windows, and rule-edit counter reset; gateways deleted.*
 - [ ] Migrate company-key copies/direct callers, introduce company-owned credentials, and retire the old key once covered routes are verified.
 - [ ] Roll out production enforcement and verify the OpenAI org backstop.
 
@@ -23,7 +23,7 @@ Related PR: [#2553 — source.script provenance](https://github.com/iterate/iter
 
 ## Proposed code changes
 
-Approved implementation sketch. New names below are proposed; existing files and call paths were inspected. The snippets are illustrative and have not been applied or typechecked.
+Approved implementation sketch. New names below are proposed; existing files and call paths were inspected. The snippets preserve the approved design; implementation details and verified behavior are in `docs/ai-cost-controls.md`.
 
 ### 1. A small TypeScript rule file
 
@@ -341,3 +341,55 @@ The small live preview smoke is then only for what an interceptor cannot establi
 8. Implementation refinements: separate pure-data production/development rule functions with CF SDK types; expected budget responses use a result union; explicit credential ownership selects the company-budget boundary; interception drives deterministic e2e/spec proof and a small live smoke validates CF itself.
 9. Future customer usage billing can reuse stable attribution and usage evidence, but needs its own durable per-attempt ledger and reconciliation; retry-shared event offsets are not invoice deduplication IDs.
 
+
+## Implementation log — 2026-09-07
+
+- Branch `codex/ai-cost-controls`, root worktree; no PR opened, as requested.
+- Full repository checks passed: frozen install, typecheck, lint, format, knip,
+  and tests (4,436 passing, 13 expected failures, one skipped). Subsequent native
+  secret-fetch correction passed OS typecheck, lint, and 67 focused tests.
+- Independent review fixed raw SSE deadline lifetime, compaction replay after a
+  committed stop, and the public `AiCallStop` result signature. Final trust review
+  verified host-stamped secret context and customer credential separation.
+- Preview browser proof passed: real feed, reload, new message remains paused,
+  exact Retry resumes; 41.7s. Video is under
+  `test-results/playwright-output/agent-budget-budget-stop-s-f4040-then-explicit-Retry-resumes-web/`.
+- Isolated vendor proof at 14:18–14:20 UTC verified separate environment/project/
+  stream buckets, rename resistance, all five fields including numeric zero,
+  2041 responses, sliding recovery, and unchanged-vs-edited rule counters. Logged
+  request cost was $0.0000104; all temporary gateways were deleted.
+- Preview real calls at 14:34 UTC verified OpenAI and Workers AI use host identity,
+  replacing caller `projectId: forged`. Their logged costs were $0.0000013 and
+  $0.0000018456688895821571. Live defaults were not modified.
+- Telemetry found a response-lifetime regression in a newly introduced Secret DO
+  RPC hop. The strengthened test reproduced failure while consuming the customer
+  response body. Restored native fetch using the existing trusted context carrier;
+  final proof consumes customer JSON, company SSE, and Workers AI SSE through their end.
+  Removed the company response RPC hop too: routing runs locally inside each
+  native fetch. `itx.ai.run` calls the binding locally and fetches only plain
+  identity data over RPC.
+- Production rollout remains gated on implementation review. This branch does
+  not claim that the proposed $30/$10/$3 rules or $1,000 OpenAI cap are active.
+
+- Native full-body proof passed at 14:45 UTC on Worker
+  `570784d8-2202-42d1-b1bb-907a133bacc9`: company/customer HTTP bodies and
+  Workers AI SSE completed, with zero error-level events in the bounded
+  all-dataset service query. Gateway records preserved host identity.
+- That audit exposed missing usage totals on caller-created OpenAI streams.
+  The host now forces `stream_options.include_usage: true` on all current
+  OpenAI chat paths, even when callers pass false. Red/green routing regression
+  and independent transport/egress review passed (31 tests).
+
+- Final preview version `d650f6a7-b4fb-4317-9882-48a5c35ee702` passed the
+  strengthened live test in 24.7s at 14:50 UTC. The caller sent
+  `include_usage: false`; SSE still included usage and gateway log
+  `01M1Y5JXH9YDZ3CVHREYTBCTZA` recorded **$0.0000174**, HTTP 200.
+  Workers AI JSON and SSE also completed and recorded positive costs.
+- The final all-dataset query for service `os-preview-9`, error level, from
+  `2026-09-07T14:50:09Z` to `2026-09-07T14:50:39.796Z` returned no events.
+  The onboarding log's zero cost was explicitly checked: it was a cache hit
+  with zero input/output tokens, not missing usage on a paid request.
+- Full suite rerun after the usage fix: **4,436 passing**, 13 expected failures,
+  one skipped. All temporary company/customer secret material was cleared by
+  test cleanup. Account-rule dry runs remain read-only.
+- Preview lease: `preview_9`, expires `2026-09-07T17:12:17Z`.

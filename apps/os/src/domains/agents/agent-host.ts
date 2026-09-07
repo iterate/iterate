@@ -8,6 +8,9 @@
 
 import { isIdempotencyConflict } from "iterate/processors";
 import type { EmittedInput, ProcessEventArgs, StreamEvent } from "iterate/processors";
+import type { ProjectAiInterceptorInput } from "../../lib/model-interception.ts";
+import type { AiCostAttribution } from "./ai-cost-attribution.ts";
+import type { AiBudgetStop, AiRateLimitStop } from "./ai-budget.ts";
 import type { AgentFileAttachment, AgentProcessorContract } from "./agent-processor-contract.ts";
 import type {
   WorkersAiBinding,
@@ -25,16 +28,20 @@ export type AgentLlmTransport = (args: {
   signal: AbortSignal;
   /** The transport awaits each result before delivering the next chunk. */
   onChunk?: (text: string) => Promise<void>;
-}) => Promise<{
-  text: string;
-  usage?: {
-    inputTokens: number;
-    outputTokens: number;
-    cachedInputTokens?: number;
-    reasoningOutputTokens?: number;
-  };
-  rawResponse?: unknown;
-}>;
+}) => Promise<
+  | {
+      text: string;
+      usage?: {
+        inputTokens: number;
+        outputTokens: number;
+        cachedInputTokens?: number;
+        reasoningOutputTokens?: number;
+      };
+      rawResponse?: unknown;
+    }
+  | AiBudgetStop
+  | AiRateLimitStop
+>;
 
 /**
  * Host-provided deps beyond the stream plumbing.
@@ -68,12 +75,10 @@ export type AgentLlmTransport = (args: {
 export type AgentProcessorDeps = {
   ai?: WorkersAiBinding;
   cloudflareAiGatewayTransport?: () => CloudflareAiGatewayTransport;
-  consultAiInterceptor?: (input: {
-    source: "agent-turn";
-    agentPath: string;
-    model: string;
-    body: { messages: WorkersAiMessage[] };
-  }) => Promise<unknown>;
+  aiCostAttribution?: (
+    eventOffset: number,
+  ) => Promise<{ attribution: AiCostAttribution; includeEventOffset: boolean }>;
+  consultAiInterceptor?: (input: ProjectAiInterceptorInput) => Promise<unknown>;
   resolveModelFileUrl?: (file: AgentFileAttachment) => Promise<string>;
   writeWorkspaceFile?: (input: {
     content: string;

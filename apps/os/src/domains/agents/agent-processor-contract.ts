@@ -29,11 +29,12 @@ import {
 } from "iterate/processors";
 import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
 import { CapabilityHostProcessorContract } from "../capability-host/capability-host-processor-contract.ts";
+import { AiBudgetStop, AiRateLimitStop } from "./ai-budget.ts";
 import { AgentBinding, AgentSummary, AgentSummaryUpdated } from "./agent-presence.ts";
 
 export const AgentProcessorContract = defineProcessorContract({
   slug: "agent",
-  version: "7.0.0",
+  version: "8.0.0",
   description:
     "Maintains model-visible history, schedules debounced offset-identified LLM turns, runs " +
     "them through the Workers AI transport, and executes scripts through the capability host. " +
@@ -284,6 +285,7 @@ export const AgentProcessorContract = defineProcessorContract({
       }),
     pendingLlmRequestTrigger: z
       .object({
+        costEventOffset: z.number().int().nonnegative().nullable(),
         offset: z.number().int().positive().meta({
           description: "Offset of the triggering event; derives the intent's idempotency key.",
         }),
@@ -306,6 +308,7 @@ export const AgentProcessorContract = defineProcessorContract({
       }),
     openRequest: z
       .object({
+        costEventOffset: z.number().int().nonnegative(),
         requestedAtOffset: z.number().int().positive().meta({
           description: "The request's identity: the offset of its llm-request-requested event.",
         }),
@@ -337,6 +340,7 @@ export const AgentProcessorContract = defineProcessorContract({
     paused: z
       .object({
         reason: z.string().optional().meta({ description: "Why the loop paused." }),
+        budget: AiBudgetStop.shape.budget.optional(),
         atOffset: z
           .number()
           .int()
@@ -562,7 +566,7 @@ export const AgentProcessorContract = defineProcessorContract({
     },
     "events.iterate.com/agent/llm-request-settled": {
       description:
-        "The ONE terminal fact for an LLM request (succeeded | failed | cancelled), pointing back " +
+        "The ONE terminal fact for an LLM request (succeeded | failed | cancelled | budget-exhausted | rate-limited), pointing back " +
         "at the requested event's offset. Idempotency-keyed on that offset, so a zombie driver " +
         "racing a fresh incarnation or an interrupt collapses to one settlement.",
       payloadSchema: z.object({
@@ -577,6 +581,8 @@ export const AgentProcessorContract = defineProcessorContract({
           .meta({ description: "Wall-clock duration of the settling attempt." }),
         result: z
           .discriminatedUnion("status", [
+            AiBudgetStop,
+            AiRateLimitStop,
             z.object({
               status: z.literal("succeeded"),
               text: z.string().meta({
@@ -704,6 +710,14 @@ export const AgentProcessorContract = defineProcessorContract({
         "paths. Contract-owned but reduced by integration processors, not by the agent.",
       payloadSchema: AgentBinding,
     },
+    "events.iterate.com/agent/compaction-stopped": {
+      description:
+        "A refused compaction attempt, fenced by its initiating usage-report offset so eviction cannot repeat spending without a new operation.",
+      payloadSchema: z.object({
+        triggerOffset: z.number().int().positive(),
+        result: z.discriminatedUnion("status", [AiBudgetStop, AiRateLimitStop]),
+      }),
+    },
     "events.iterate.com/agent/paused": {
       description:
         "The agent stopped scheduling turns (autonomous-loop breaker, or an operator). Mirrors " +
@@ -712,6 +726,7 @@ export const AgentProcessorContract = defineProcessorContract({
         "self-driven triggers stay parked.",
       payloadSchema: z.object({
         reason: z.string().trim().min(1).optional().meta({ description: "Why the loop paused." }),
+        budget: AiBudgetStop.shape.budget.optional(),
         triggerOffset: z
           .number()
           .int()
@@ -728,6 +743,7 @@ export const AgentProcessorContract = defineProcessorContract({
       description: "The agent resumed scheduling turns. Mirrors stream/resumed.",
       payloadSchema: z.object({
         reason: z.string().trim().min(1).optional().meta({ description: "Why the loop resumed." }),
+        budgetPauseOffset: z.number().int().nonnegative().optional(),
       }),
     },
   },
@@ -756,6 +772,7 @@ export const AgentProcessorContract = defineProcessorContract({
     // platform revival fact, to find and re-run orphaned work after eviction.
   ],
   emits: [
+    "events.iterate.com/agent/compaction-stopped",
     "events.iterate.com/agents/context-added",
     // Emitted by userland response interpreters through this vocabulary (the
     // platform components never emit it themselves today); listed so variant

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { FilterIcon, XIcon } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
 import { useAuthClient } from "@iterate-com/auth/client";
@@ -306,6 +306,17 @@ function BrowserDatabaseProjectStreamView({
     onNudgeDeliveries: nudgeDeliveries,
   });
 
+  const retryBudget = useMutation({
+    mutationFn: async (budgetPauseOffset: number) => {
+      const stream = await resolvedStreamSource(streamPath);
+      await stream.append({
+        type: "events.iterate.com/agent/resumed",
+        payload: { budgetPauseOffset, reason: "Budget retry requested by operator." },
+      });
+      nudgeDeliveries();
+    },
+  });
+
   const filterRow =
     search.filter !== true ? null : (
       <StreamFeedFilterRow
@@ -324,6 +335,9 @@ function BrowserDatabaseProjectStreamView({
       // Fresh virtualizer state per stream database + mode (see StreamFeedView docs).
       key={`${store.streamDatabase.databasePath}:${activeMode}`}
       database={store.streamDatabase}
+      onRetryBudget={retryBudget.mutateAsync}
+      retryBudgetPending={retryBudget.isPending}
+      retryBudgetError={retryBudget.error?.message}
       filter={{
         agent: caps.agentFeed
           ? { showDebug: caps.agentShowDebug, searchQuery: feedSearch === "" ? null : feedSearch }

@@ -1,3 +1,11 @@
+import { z } from "zod";
+import {
+  readAiBudgetStop,
+  readAiRateLimitStop,
+  type AiBudgetStop,
+  type AiRateLimitStop,
+} from "./ai-budget.ts";
+import type { AiGatewayMetadata } from "./ai-cost-attribution.ts";
 // =============================================================================
 // Workers AI transport: how one LLM attempt talks to `env.AI`.
 // =============================================================================
@@ -6,13 +14,18 @@
 // SSE response, guessing assistant text/usage out of the shapes Workers AI
 // models actually return, and capping the whole attempt's lifetime.
 
-import { z } from "zod";
-
 /** The `env.AI` surface one attempt needs. `gateway` is optional so bare test
  * fakes stay two-line objects; the BYOK lane requires it and fails the attempt
  * loudly when the host's binding lacks it. */
 export type WorkersAiBinding = {
-  run(model: string, body: unknown): Promise<unknown>;
+  run(
+    model: string,
+    body: unknown,
+    options?: {
+      returnRawResponse?: boolean;
+      gateway: { id: string; metadata: Record<string, string | number> };
+    },
+  ): Promise<unknown>;
   gateway?(gatewayId: string): CloudflareAiGatewayBinding;
 };
 
@@ -40,7 +53,7 @@ export type CloudflareAiGatewayBinding = {
  *   synthetic (e2e/preview), never prd.
  */
 export type CloudflareAiGatewayTransport =
-  | { kind: "unified" }
+  | { kind: "unified"; gatewayId?: string }
   | {
       kind: "byok";
       gatewayId: string;
@@ -104,32 +117,82 @@ export function adaptMessagesForModel(
  */
 export async function runWorkersAiAttempt(input: {
   ai: WorkersAiBinding;
+  metadata: AiGatewayMetadata;
+  interceptGateway?: (request: {
+    provider: string;
+    endpoint: string;
+    headers: Record<string, string>;
+    query: unknown;
+  }) => Promise<Response>;
   deadlineMs: number;
   messages: WorkersAiMessage[];
   model: string;
   onChunk: (chunk: unknown, index: number) => Promise<void>;
   /** Defaults to unified billing when omitted (bare test hosts, non-OpenAI models). */
   transport?: CloudflareAiGatewayTransport;
-}): Promise<WorkersAiCompletion> {
+}): Promise<WorkersAiCompletion | AiBudgetStop | AiRateLimitStop> {
   const deadline = startDeadline({
     deadlineMs: input.deadlineMs,
     message: `LLM attempt timed out after ${input.deadlineMs / 60_000} minutes.`,
   });
   try {
     const transport = input.transport ?? { kind: "unified" };
+    if (input.model.startsWith("intercepted/gateway/")) {
+      if (!input.interceptGateway)
+        throw new Error("Gateway-format intercepted model has no interceptor");
+      return await runByokAttempt({
+        ...input,
+        deadline,
+        transport: {
+          kind: "byok",
+          gatewayId: "intercepted",
+          openaiApiKey: "intercepted-placeholder",
+        },
+      });
+    }
+    if (input.interceptGateway)
+      throw new Error("Only intercepted/gateway/* models may use a gateway interceptor");
     // BYOK carries an OpenAI key, so only OpenAI models can ride it; other
     // vendors' models fall back to unified billing rather than failing.
     if (transport.kind === "byok" && input.model.startsWith("openai/")) {
       return await runByokAttempt({ ...input, deadline, transport });
     }
     const messages = adaptMessagesForModel(input.messages, { supportsDeveloperRole: false });
+    const requestBody = { messages, stream: true, ...openAiReasoningExtras(input.model) };
     const raw = await deadline.race(
-      input.ai.run(input.model, {
-        messages,
-        stream: true,
-        ...openAiReasoningExtras(input.model),
-      }),
+      input.ai.run(
+        input.model,
+        input.model.startsWith("openai/") ? withOpenAiStreamUsage(requestBody) : requestBody,
+        {
+          returnRawResponse: true,
+          gateway: {
+            id: transport.gatewayId || "default",
+            metadata: Object.fromEntries(
+              Object.entries(input.metadata).filter(
+                (entry): entry is [string, string | number] => entry[1] !== undefined,
+              ),
+            ),
+          },
+        },
+      ),
     );
+    if (raw instanceof Response) {
+      const stop =
+        (await deadline.race(readAiBudgetStop(raw, input.model.split("/")[0]!))) ||
+        readAiRateLimitStop(raw);
+      if (stop) {
+        await deadline.race(raw.body?.cancel() || Promise.resolve());
+        return stop;
+      }
+      if (!raw.ok)
+        throw new Error(
+          `Workers AI request failed with status ${raw.status}: ${(await deadline.race(raw.text())).slice(0, 500)}`,
+        );
+      if (raw.headers.get("content-type")?.includes("text/event-stream") && raw.body)
+        return await drainSseResponse({ body: raw.body, deadline, onChunk: input.onChunk });
+      const value = await deadline.race(raw.json());
+      return { text: extractAssistantText(value), rawResponse: value, usage: extractUsage(value) };
+    }
     if (raw instanceof ReadableStream) {
       return await drainSseResponse({ body: raw, deadline, onChunk: input.onChunk });
     }
@@ -157,24 +220,32 @@ async function runByokAttempt(input: {
   model: string;
   onChunk: (chunk: unknown, index: number) => Promise<void>;
   transport: Extract<CloudflareAiGatewayTransport, { kind: "byok" }>;
-}): Promise<WorkersAiCompletion> {
+  metadata: AiGatewayMetadata;
+  interceptGateway?: (request: {
+    provider: string;
+    endpoint: string;
+    headers: Record<string, string>;
+    query: unknown;
+  }) => Promise<Response>;
+}): Promise<WorkersAiCompletion | AiBudgetStop | AiRateLimitStop> {
   const { transport } = input;
   const gateway = input.ai.gateway?.(transport.gatewayId);
-  if (gateway === undefined) {
+  if (gateway === undefined && !input.interceptGateway) {
     throw new Error("AI binding does not expose gateway(); BYOK transport unavailable.");
   }
   const containsFiles = input.messages.some((message) => message.containsFiles === true);
-  const body = {
-    model: input.model.replace(/^openai\//, ""),
+  const body = withOpenAiStreamUsage({
+    model: input.model.replace(/^(openai\/|intercepted\/gateway\/)/, ""),
     messages: adaptMessagesForModel(input.messages, { supportsDeveloperRole: true }),
     stream: true,
     ...openAiReasoningExtras(input.model),
     ...(transport.openaiPromptCacheKey === undefined
       ? {}
       : { prompt_cache_key: transport.openaiPromptCacheKey }),
-  };
+  });
   const headers: Record<string, string> = {
     authorization: `Bearer ${transport.openaiApiKey}`,
+    "cf-aig-metadata": JSON.stringify(input.metadata),
     "cf-aig-collect-log": "true",
     "cf-aig-collect-log-payload": "true",
     "content-type": "application/json",
@@ -190,9 +261,25 @@ async function runByokAttempt(input: {
     // cache setting is account state this code cannot see.
     headers["cf-aig-skip-cache"] = "true";
   }
+  const request = { provider: "openai", endpoint: "chat/completions", headers, query: body };
+  // The intercepted namespace cannot send real credentials or dial a vendor.
+  // Both responses rejoin below, before classification and SSE decoding.
+  const { authorization: _authorization, ...interceptedHeaders } = headers;
   const response = await input.deadline.race(
-    gateway.run({ provider: "openai", endpoint: "chat/completions", headers, query: body }),
+    input.interceptGateway
+      ? input.interceptGateway({ ...request, headers: interceptedHeaders })
+      : gateway!.run(request),
   );
+  const budgetStop = await input.deadline.race(readAiBudgetStop(response, "openai"));
+  if (budgetStop) {
+    await input.deadline.race(response.body?.cancel() || Promise.resolve());
+    return budgetStop;
+  }
+  const rateLimit = readAiRateLimitStop(response);
+  if (rateLimit) {
+    await input.deadline.race(response.body?.cancel() || Promise.resolve());
+    return rateLimit;
+  }
   if (!response.ok || response.body === null) {
     const detail = await input.deadline.race(response.text()).catch(() => "");
     throw new Error(
@@ -274,6 +361,19 @@ export function maskCloudflareAiGatewayResponseCacheEntropy(serialized: string):
 function openAiReasoningExtras(model: string): Record<string, unknown> {
   if (!/(^|\/)(gpt-5|o[1-9]|codex)/.test(model)) return {};
   return { reasoning_effort: "medium", stream_options: { include_usage: true } };
+}
+
+/** OpenAI SSE must include usage for the gateway to price completed requests. */
+export function withOpenAiStreamUsage(body: unknown): Record<string, unknown> {
+  const input = z.record(z.string(), z.unknown()).parse(body);
+  if (input.stream !== true) return input;
+  return {
+    ...input,
+    stream_options: {
+      ...z.record(z.string(), z.unknown()).parse(input.stream_options || {}),
+      include_usage: true,
+    },
+  };
 }
 
 /** One armed timer raced against every phase of an attempt, so dial + drain
