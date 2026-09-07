@@ -25,10 +25,11 @@ test("facet spine: cold catch-up + driven reduces + the subscriptions table list
 
   await enableFixtureProcessor(itx, "tally");
   const s1 = await itx.invoke("itx.facets.get('tally').snapshot()");
-  // cold catch-up: the pre-enable rule is counted, and so is tally's own enablement — which is a
-  // subscription-configured event, NOT a rewrite rule (an enablement is a subscription)
+  // cold catch-up: the pre-enable rule is counted, and so are TWO subscription-configured events —
+  // the birth `config` funnel (auto-subscribed in the DO constructor) and tally's own enablement.
+  // Both are subscriptions, NOT rewrite rules (an enablement is a subscription).
   expect(s1.state?.counts?.[RULE_CONFIGURED]).toBe(1);
-  expect(s1.state?.counts?.[CONFIGURED]).toBe(1);
+  expect(s1.state?.counts?.[CONFIGURED]).toBe(2);
 
   // two more rules + one un-set AFTER enabling — the push path
   await itx.provide("itx.a", "itx.kv");
@@ -37,11 +38,11 @@ test("facet spine: cold catch-up + driven reduces + the subscriptions table list
 
   const s2 = await itx.invoke("itx.facets.get('tally').snapshot()");
   // the facet reduces the pushed events (3 sets + 1 un-set, all rewrite-rule-configured). Its
-  // checkpoint sits at or past the 7 durable events (created, woken, before, configured, a, b,
-  // a-unset) — live-state deltas are ephemerals in the SAME offset space, so the exact position
+  // checkpoint sits at or past the 8 durable events (created, woken, config, before, configured, a,
+  // b, a-unset) — live-state deltas are ephemerals in the SAME offset space, so the exact position
   // depends on how many the core reduce emitted; the counts pin the real reduce.
   expect(s2.state?.counts?.[RULE_CONFIGURED]).toBe(4);
-  expect(s2.offset).toBeGreaterThanOrEqual(7);
+  expect(s2.offset).toBeGreaterThanOrEqual(8);
 
   // the subscriptions table lists the processor: ONE row whose target is the facet's
   // processEventBatch, and NO cursor — the facet keeps its own checkpoint. M1: the SOURCE is elided
@@ -120,16 +121,17 @@ test("two userspace facet processors reduce side-by-side — user-tally and tall
   await itx.provide("itx.b", "itx.kv");
   await itx.provide("itx.a", null);
 
-  // Both reduce the same 7 durable events (created, woken, 2 configured, 3 rewrite-rule-configured):
-  // an enablement is a subscription-configured event, not a rewrite rule, so rule events = 3.
-  // Checkpoints sit at or past offset 7 (live-state deltas share the offset space).
+  // Both reduce the same 8 durable events (created, woken, 3 configured, 3 rewrite-rule-configured):
+  // an enablement is a subscription-configured event, not a rewrite rule, so rule events = 3. The 3
+  // configured are the birth `config` funnel plus each processor's own enablement.
+  // Checkpoints sit at or past offset 8 (live-state deltas share the offset space).
   const su = await itx.invoke("itx.facets.get('user-tally').snapshot()");
   expect(su.state?.counts?.[RULE_CONFIGURED]).toBe(3);
-  expect(su.offset).toBeGreaterThanOrEqual(7);
+  expect(su.offset).toBeGreaterThanOrEqual(8);
 
   const sb = await itx.invoke("itx.facets.get('tally').snapshot()");
   expect(sb.state?.counts?.[RULE_CONFIGURED]).toBe(3);
-  expect(sb.offset).toBeGreaterThanOrEqual(7);
+  expect(sb.offset).toBeGreaterThanOrEqual(8);
   expect(sb.state.counts).toEqual(su.state.counts); // the same reduce over the same log
 
   // the subscriptions table lists both processors (rows whose target is a facet's processEventBatch)

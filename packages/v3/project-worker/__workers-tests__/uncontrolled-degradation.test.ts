@@ -231,7 +231,7 @@ test("A2 — CONTROL: the refused configure leaves memory and the log consistent
   const page = (await s.invoke(["itx", ["readEvents", 0, 500]])) as {
     events: { offset: number }[];
   };
-  expect(page.events.map((e) => e.offset)).toEqual([1, 2, a, c]);
+  expect(page.events.map((e) => e.offset)).toEqual([1, 2, 4, a, c]); // 4 = the config subscription (birth)
   expect(drainIssues()).toEqual([]);
 });
 

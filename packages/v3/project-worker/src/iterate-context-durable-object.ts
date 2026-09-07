@@ -256,6 +256,23 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     // so the core reduce knows who it is and which incarnation runs before the first append, read
     // or facet call, and the wake fan-out re-establishes deliveries after hibernation.
     this.#stream.appendCreatedAndWokenEvents();
+    // EVERY STREAM SUBSCRIBES THE "/" CONTEXT'S CONFIG WORKER (the apps/os project-worker shape): the
+    // root's `itx.worker.processEventBatch` is delivered every committed event, cross-context, at-least-
+    // once. `consumes: ["*"]` is honest — the config worker sees everything, `woken` included, so a
+    // fresh context's first batch arms the delivery alarm. A DOWN config worker cannot wake-loop
+    // forever: the self-wake breaker (stream.ts SELF_WAKE_HALT_STREAK) halts alarm-arming after a few
+    // no-public-door wakes, and the retry ladder halts a failing delivery on its own. `itx.worker`
+    // always resolves (a bundled no-op default until a project writes its source to KV —
+    // itx-expression-rewriting.ts), so this never halts on a config-less project. Idempotent — one row
+    // per context whatever the incarnation.
+    this.#stream.append({
+      ...subscriptionConfiguredEvent({
+        name: "config",
+        target: "itx.cd('/').worker.processEventBatch",
+        consumes: ["*"],
+      }),
+      idempotencyKey: "config-subscription",
+    });
   }
 
   /** THE STREAM — the commit point AND the core reduce (stream/stream.ts: `append` is the pipeline

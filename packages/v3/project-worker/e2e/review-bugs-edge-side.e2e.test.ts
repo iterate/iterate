@@ -39,10 +39,11 @@ test("subscribe: disposing the handle of a row whose target is the ARRAY spellin
     name: "viaString",
     target: "itx.rpcStubs.get('cam')",
   });
-  expect((await subscriptions(control)).map((r: any) => r.name)).toEqual(["viaString"]);
+  // (every context carries the config-worker funnel's birth subscription, so it rides along here)
+  expect((await subscriptions(control)).map((r: any) => r.name)).toEqual(["config", "viaString"]);
   controlHandle[Symbol.dispose]();
   await sleep(800);
-  expect(await subscriptions(control)).toEqual([]);
+  expect((await subscriptions(control)).map((r: any) => r.name)).toEqual(["config"]); // viaString removed
 
   // THE BUG — the STRUCTURED half of the same target: dispose is a no-op, the row stays forever.
   const itx = openItx(freshCtx("subrow-array"));
@@ -50,10 +51,10 @@ test("subscribe: disposing the handle of a row whose target is the ARRAY spellin
     name: "viaArray",
     target: ["itx", "rpcStubs", ["get", "cam"]],
   });
-  expect((await subscriptions(itx)).map((r: any) => r.name)).toEqual(["viaArray"]);
+  expect((await subscriptions(itx)).map((r: any) => r.name)).toEqual(["config", "viaArray"]);
   handle[Symbol.dispose]();
   await sleep(800);
-  expect(await subscriptions(itx)).toEqual([]);
+  expect((await subscriptions(itx)).map((r: any) => r.name)).toEqual(["config"]); // viaArray removed
 });
 
 // BUG: a `subscribe` whose append the DO REFUSES (a paused stream) still leaves the client's
@@ -88,7 +89,8 @@ test("subscribe: an append the DO refuses (paused stream) leaves the callback le
   expect(codeOf(subscribeError)).toBe("STREAM_PAUSED");
   await sleep(600);
   expect(await presence(itx)).toEqual([]);
-  expect(await subscriptions(itx)).toEqual([]); // the row rode the refused attach: never set
+  // the leaky row rode the refused attach: never set — only the config funnel's birth row remains
+  expect((await subscriptions(itx)).map((r: any) => r.name)).toEqual(["config"]);
 });
 
 // BUG: an EXPRESSION rule's session-scoped undo clobbers a LIVE provider's rule configured LATER at

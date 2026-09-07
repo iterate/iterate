@@ -206,8 +206,9 @@ test("pipelining: subscribe({ target: fn }) + subscribe({ name: <its UNRESOLVED 
     "in:release": 1,
   });
   // Correctness under pipelining: the subscribe really lent the callback AND appended its row; the
-  // removal (delivered after it) dropped THE row and recalled the stub — nothing left in either table.
-  expect(await subscriptions(itx)).toEqual([]);
+  // removal (delivered after it) dropped THE row and recalled the stub — nothing left in either table
+  // beyond the config-worker funnel row (auto-subscribed at birth, always present).
+  expect((await subscriptions(itx)).map((r: { name: string }) => r.name)).toEqual(["config"]);
   await until("the callback recalled", async () => (await presence(itx)).length === 0);
 });
 

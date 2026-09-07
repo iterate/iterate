@@ -94,13 +94,12 @@ class Alive extends RpcTarget {
   }
 }
 
-test("a core-snapshot probe on a NEVER-TOUCHED ctx materializes it (created@1 + woken@2, incarnation 1) yet arms NO alarm — no facet, no stub, nothing to quiesce; a plain append arms none either", async () => {
+test("a core-snapshot probe on a NEVER-TOUCHED ctx materializes it (created, woken, config subscription) and arms the config-worker delivery alarm — EVERY stream subscribes itx.cd('/').worker", async () => {
   await runInDurableObject(stub("prj_doors_virginprobe"), async (instance, state) => {
-    // ANY door materializes a context: the constructor's `Stream.appendCreatedAndWokenEvents()` wrote the birth certificate
-    // and the wake record before this probe could run (the apps/os shape). What the probe must NOT
-    // do is arm the quiet clock: #recordActivityForQuietClock arms only when there is something to quiesce — a
-    // live facet or a borrowed rpc stub — and this ctx has neither (a durable alarm write + a billed
-    // wake for nothing was the arc review's catch).
+    // ANY door materializes a context: the constructor writes the birth certificate, the wake record,
+    // AND the `config` subscription — every stream subscribes the "/" context's config worker (the
+    // apps/os funnel). That subscription is a cursor delivery, so it arms an alarm from birth; a DOWN
+    // config worker cannot wake-loop forever (the self-wake breaker halts it — stream.ts).
     const snap = (await instance.invoke("itx.facets.get('core').snapshot()")) as {
       offset: number;
       state: { projectId?: string; path?: string; createdAt?: string; incarnation?: number };
@@ -111,11 +110,12 @@ test("a core-snapshot probe on a NEVER-TOUCHED ctx materializes it (created@1 + 
       incarnation: 1,
     });
     expect(typeof snap.state.createdAt).toBe("string");
-    expect(snap.offset).toBe(2); // reduced through the wake record
-    expect(await state.storage.getAlarm()).toBeNull(); // THE pin: no quiet-clock arm
+    expect(snap.offset).toBe(4); // reduced through created, woken and the config subscription
+    expect(await state.storage.getAlarm()).not.toBeNull(); // the config subscription's delivery arms it
     expect((await instance.read(0)).events.map((e) => [e.type, e.offset])).toEqual([
       ["events.iterate.com/stream/created", 1],
       ["events.iterate.com/stream/woken", 2],
+      ["events.iterate.com/stream/subscription-configured", 4], // the config subscription
     ]);
     expect(
       Number(
@@ -123,11 +123,11 @@ test("a core-snapshot probe on a NEVER-TOUCHED ctx materializes it (created@1 + 
           .value,
       ),
     ).toBe(1);
-    // A plain append is activity — but still nothing to quiesce, so still no alarm. (Offset 4: past
-    // created, woken and core's ephemeral live-state delta for the wake commit at 3.)
+    // A plain append rides past the config subscription's own commit and the two live-state deltas
+    // (the wake commit at 3, the config commit at 5) — offset 6.
     const [mark] = (await instance.append({ type: "mark" })) as unknown as { offset: number }[];
-    expect(mark.offset).toBe(4);
-    expect(await state.storage.getAlarm()).toBeNull();
+    expect(mark.offset).toBe(6);
+    expect(await state.storage.getAlarm()).not.toBeNull(); // still armed — the config delivery
   });
 });
 
@@ -141,8 +141,11 @@ test("the quiet clock arms as soon as there IS something to quiesce: the invoke 
     // the rule `itx.armcap ⇒ itx.rpcStubs.get('itx.armcap')`…
     const itx = await (await openSession()).authenticate().projects.get(ctx);
     await itx.provide("itx.armcap", new Alive());
-    expect(await state.storage.getAlarm()).toBeNull(); // a lent stub alone quiesces nothing
-    // …then a call borrows it: a BORROWED stub pins this actor, so the clock must arm NOW.
+    // The config subscription (every stream subscribes the "/" worker) already arms the alarm from
+    // birth, so it is non-null even before the borrow — the borrow-arms-the-quiet-clock isolation this
+    // test once showed is now dominated by that config-delivery alarm.
+    expect(await state.storage.getAlarm()).not.toBeNull();
+    // …then a call borrows the stub: a BORROWED stub pins this actor, and the alarm stays armed.
     expect(await itx.invoke("itx.armcap.ping()")).toBe("alive");
     expect(await state.storage.getAlarm()).not.toBeNull();
   });

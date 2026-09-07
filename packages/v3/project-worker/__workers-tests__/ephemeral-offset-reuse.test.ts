@@ -214,10 +214,10 @@ test("processor: a read-driven catch-up (snapshot after quiesce) with ephemerals
     offset: number;
     state: { n: number };
   };
-  // n = created + woken + configured + tick + note: the configured push's gap repair read the log
-  // from 0 (so the filter's unsent created@1 + woken@2 were reduced too), the push reduced tick, this
-  // wake read note.
-  expect(mid.state.n).toBe(5);
+  // n = created + woken + config-subscription + configured + tick + note: the configured push's gap
+  // repair read the log from 0 (so the filter's unsent created@1, woken@2 and the config subscription
+  // were reduced too), the push reduced tick, this wake read note.
+  expect(mid.state.n).toBe(6);
   expect(p0.scannedThroughOffset).toBe(highestDurableOffset); // read() proves the durable log only
   expect(mid.offset).toBe(highestDurableOffset); // so the checkpoint the wake persisted is the mark, not the head
   await sleep(400);

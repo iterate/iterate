@@ -3861,3 +3861,38 @@ no head-of-line block on a slow cursor call, small cursor deliveries stay concur
     reset on the real DO). Together with the live-54 run (push-delivery-ranges-chain, stream-idempotency-
     pause-paging, stream-memory-budget all green deployed) the read rollback + the fan-out fix are proven
     on the worker. `--no-file-parallelism` (the deployed lane). read() sync end to end.
+
+## 2026-09-07 — the config-worker FUNNEL: every stream subscribes the "/" context's worker.processEventBatch
+
+Building on the config-worker convention (359e67f34, deployed live-56), the apps/os project-worker
+shape, MINIMAL. Jonas: "we definitely want every stream to have this '/' context's worker.processEvent
+subscribed"; "I do like stuff being explicit via subscription"; "system vs non-system events is a mega
+leaky abstraction" — so consumes stays `["*"]` (honest — `woken`/the first batch arm the alarm), and a
+DOWN config worker cannot wake-loop forever because the EXISTING self-wake breaker (stream.ts
+SELF_WAKE_HALT_STREAK, wave-0 3b) halts it — the config subscription IS the exact self-wake case 3b was
+built for. No new mechanism, no leaky filter.
+
+- THE DEFAULT (itx-expression-rewriting.ts, inline in `resolveItxExpression` beside the built-in-root
+  fallback): `itx.worker ⇒ itx.workers.get({ source: <bundled no-op ConfigWorker>, cacheKey })` — reached
+  only when NO context rule matched, so `itx.worker` ALWAYS resolves (a config-less project never halts
+  its config subscription). A userspace `itx.provide("itx.worker", …)` overrides it with its KV source.
+- THE FUNNEL (the DO constructor): auto-appends (idempotent, idempotencyKey "config-subscription") a
+  `config` subscription of `itx.cd('/').worker.processEventBatch`, consumes `["*"]`. Every stream now
+  delivers every event cross-context (cursor lane, at-least-once — the lane hardened earlier) to the "/"
+  context's config worker.
+- BIRTH-SHAPE CHANGE, accepted (the honest cost): every context's birth is `created@1, woken@2, [delta],
+subscription-configured("config")@4, [delta]` — the first user event at offset 6 (+2), every
+  subscriptions view lists "config" first, and a bare context arms the config-delivery alarm (3b-bounded).
+  The "inert bare context / no alarm" invariant is gone BY DESIGN. Per-commit funnel tax accepted (every
+  project's every commit → a cross-context delivery to its root worker, apps/os-style).
+- PROOF: `e2e/config-worker-funnel.e2e` — a fresh CHILD context's event reaches the root config worker
+  with NO manual subscribe (auto-subscribe + `itx.cd('/').worker`). `e2e/config-worker.e2e` (v1) still
+  green.
+- CHURN (all mechanical birth-shape updates, no behaviour breaks — the unit project is UNTOUCHED, 403p):
+  5 **workers-tests** (do-doors virgin-probe rewritten to the new birth shape + quiet-clock, review-bugs-
+  do-side, ephemeral-offset-reuse, uncontrolled-degradation) + 21 e2e across 10 files (subscription lists
+  +config, +2 offsets, "baseline []"→"[config]"; "changes nothing" scoped to real rows since config's
+  '\*'-cursor legitimately advances). Fixed empirically (three parallel subagents for the e2e batch), no
+  assertion weakened/skipped.
+- GATES: tsc×3 · unit+workers 468p/12xf · e2e 183p/2xf/2sk (full local suite). LOC: 16 files, 175(+)/72(-).
+  Deploy-proof as live-57 to follow.

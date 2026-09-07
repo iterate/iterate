@@ -93,7 +93,11 @@ test("edge#2: a stale subscribe handle's dispose leaves a later same-name row, a
 
   stale[Symbol.dispose]();
   await sleep(800);
-  expect((await subscriptions(b)).map((row: { name: string }) => row.name)).toEqual(["p"]);
+  // config = the config-worker funnel's birth subscription, present on every context; "p" survives
+  expect((await subscriptions(b)).map((row: { name: string }) => row.name)).toEqual([
+    "config",
+    "p",
+  ]);
   expect(await b.facets.get("p").snapshot()).toBeDefined();
 });
 

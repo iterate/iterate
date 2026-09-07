@@ -270,7 +270,7 @@ test("removing one hosting subscription keeps the facet another row still hosts"
   const core = (await context.invoke("itx.facets.get('core').snapshot()")) as {
     state: { subscriptions: Record<string, unknown> };
   };
-  expect(Object.keys(core.state.subscriptions)).toEqual(["b"]);
+  expect(Object.keys(core.state.subscriptions)).toEqual(["config", "b"]); // "config" = the funnel auto-subscribe
 
   // The startup memo row "b" depends on, and the facet's own storage, must both still be there.
   const memo = await runInDurableObject(context, (_instance, state) =>

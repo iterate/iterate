@@ -25,6 +25,17 @@ import { enableFixtureProcessor, SOURCES } from "./support/sources.ts";
 
 const tallySnapshot = async (itx: any): Promise<any> =>
   itx.invoke("itx.facets.get('tally').snapshot()");
+/** The config-worker funnel auto-subscribes `config` in the DO constructor, so EVERY context is born
+ *  holding exactly this subscription row (`configuredAtOffset` 4 — offsets 3 and 5 are ephemeral core
+ *  live-state deltas). Its `cursor.confirmedOffset` floats with live delivery, so it is not pinned; a
+ *  "nothing the test left behind" table now holds this one birth row, never []. */
+const BIRTH_CONFIG_SUBSCRIPTION = {
+  name: "config",
+  target: "itx.cd('/').worker.processEventBatch",
+  consumes: ["*"],
+  configuredAtOffset: 4,
+  cursor: expect.objectContaining({ attempt: 0 }),
+};
 /** Expected tally counts = groupBy(type) over the DURABLE log (tally consumes "*", durable only). */
 const durableCountsByType = (events: any[]): Record<string, number> => {
   const counts: Record<string, number> = {};
@@ -47,7 +58,7 @@ test("enableProcessor rejects a name that is not ONE segment (a dotted name)", a
       });
     })(),
   ).rejects.toThrow(/one segment/);
-  expect(await subscriptions(itx)).toEqual([]); // nothing landed
+  expect(await subscriptions(itx)).toEqual([BIRTH_CONFIG_SUBSCRIPTION]); // nothing landed beyond the birth config
 });
 
 test("enableProcessor REQUIRES a source ref — there are no built-in processors to name", async () => {
@@ -57,7 +68,7 @@ test("enableProcessor REQUIRES a source ref — there are no built-in processors
       await itx.enableProcessor("no-such-builtin");
     })(),
   ).rejects.toThrow();
-  expect(await subscriptions(itx)).toEqual([]);
+  expect(await subscriptions(itx)).toEqual([BIRTH_CONFIG_SUBSCRIPTION]); // only the birth config
 });
 
 test("the core reduce's name is refused at BOTH doors — never a facet to enable or disable; the names of core's slices (rewrite-rules, subscriptions) are ordinary facet names", async () => {
@@ -92,7 +103,7 @@ test("the core reduce's name is refused at BOTH doors — never a facet to enabl
     await itx.disableProcessor(name);
     await expect(itx.invoke(`itx.facets.get('${name}').snapshot()`)).rejects.toThrow(/no facet/);
   }
-  expect(await subscriptions(itx)).toEqual([]);
+  expect(await subscriptions(itx)).toEqual([BIRTH_CONFIG_SUBSCRIPTION]); // only the birth config remains
 });
 
 // ── the row IS the enablement ──
@@ -133,7 +144,7 @@ test("enableProcessor('tally') from two sessions concurrently: one effective lin
   for (let i = 0; i < 3; i++) await append(itxA, { type: "seen", payload: { i } });
   const head = await readHead(itxA);
   const expected = durableCountsByType(await readAll(itxA));
-  expect(expected["events.iterate.com/stream/subscription-configured"]).toBe(2); // one per enable — the verb is literally "append the event"
+  expect(expected["events.iterate.com/stream/subscription-configured"]).toBe(3); // one per enable (2) + the birth config subscription — the verb is literally "append the event"
   const snap = await until("tally reduced the whole log exactly once", async () => {
     const s: any = await tallySnapshot(itxA);
     return s.offset >= head && s;
@@ -186,7 +197,7 @@ test("double-enable then ONE disableProcessor disables it (same name REPLACES �
   await itx.disableProcessor("tally"); // ONE disable
 
   expect(await processorNames(itx)).not.toContain("tally");
-  expect(await subscriptions(itx)).toEqual([]);
+  expect(await subscriptions(itx)).toEqual([BIRTH_CONFIG_SUBSCRIPTION]); // only the birth config remains
   await expect(tallySnapshot(itx)).rejects.toThrow(/no facet.*"tally"/);
 });
 

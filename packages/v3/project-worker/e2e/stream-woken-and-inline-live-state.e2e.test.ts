@@ -2,8 +2,10 @@
 // context DO's CONSTRUCTOR appends the platform's own records before any door opens (the apps/os
 // shape): the first-ever incarnation writes events.iterate.com/stream/created { projectId, path } at
 // offset 1 and events.iterate.com/stream/woken { incarnation } at offset 2; every later incarnation
-// writes woken as its first event. So ANY door on a never-touched context materializes it — a bare
-// read, a probe, an append — and the first user append lands past both records. The core reduce
+// writes woken as its first event. The config-worker funnel then auto-subscribes `config` at birth,
+// so a durable subscription-configured record lands at offset 4. So ANY door on a never-touched
+// context materializes it — a bare read, a probe, an append — and the first user append lands past
+// all three durable birth records (offset 6). The core reduce
 // reduces them into `state.projectId / path / createdAt / incarnation`, and the ONE inline reduced
 // state (key `core`: identity, pause, rewrite rules, subscriptions) emits the standard ephemeral
 // live-state/changed deltas on change, delivered to a subscriber that names the one live-state
@@ -16,24 +18,29 @@ import { deltasFor, LIVE_STATE_CHANGED, type Delta } from "./support/live-client
 test("any door materializes a fresh context: readEvents(0) starts with created then woken; the first append lands past them; core's reduced state carries identity + incarnation", async () => {
   const ctx = freshCtx("woken");
   const itx = openItx(ctx);
-  // A bare READ on a never-touched context already sees the two records — the constructor wrote
-  // them before this door opened.
+  // A bare READ on a never-touched context already sees the birth records — the constructor wrote
+  // them before this door opened. The config-worker funnel auto-subscribes `config` at birth, so a
+  // durable subscription-configured record lands at offset 4 (offsets 3 and 5 are ephemeral core
+  // live-state deltas, which durable readEvents never returns).
   const page = await itx.invoke("itx.readEvents(0)");
   expect(page.events.map((e: { type: string; offset: number }) => [e.type, e.offset])).toEqual([
     ["events.iterate.com/stream/created", 1],
     ["events.iterate.com/stream/woken", 2],
+    ["events.iterate.com/stream/subscription-configured", 4],
   ]);
   expect(page.events[0].payload).toEqual({ projectId: ctx, path: "/" });
+  expect(page.events[2].payload.name).toBe("config"); // the auto-subscribed config-worker funnel
   const incarnation = page.events[1].payload.incarnation;
   expect(incarnation).toBeGreaterThanOrEqual(1);
 
   // one receipt per INPUT — the platform's records are never echoed as receipts — and the first
-  // user append lands at offset 4: past created (1), woken (2) and core's ephemeral live-state
-  // delta for the wake commit (3; ephemerals share the offset sequence).
+  // user append lands at offset 6: past created (1), woken (2), the wake commit's ephemeral
+  // live-state delta (3), the config subscription-configured record (4) and its ephemeral
+  // live-state delta (5; ephemerals share the offset sequence but are not durable).
   const receipts = await itx.invoke(`itx.append({ type: 'hello' })`);
   expect(receipts).toHaveLength(1);
   expect(receipts[0].type).toBe("hello");
-  expect(receipts[0].offset).toBe(4);
+  expect(receipts[0].offset).toBe(6);
 
   // the core reduce reduced both records — runtime state IS reduced state
   const snap = await itx.invoke("itx.facets.get('core').snapshot()");

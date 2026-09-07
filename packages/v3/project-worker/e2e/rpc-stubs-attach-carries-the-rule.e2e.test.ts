@@ -107,7 +107,8 @@ test("a paused stream refuses provide AND subscribe as a whole — nothing lent,
   expect(codeOf(subscribeError)).toBe("STREAM_PAUSED");
   expect(await presence(itx)).toEqual([]);
   expect(await rpcStubRewriteRuleMatches(itx)).toEqual([]);
-  expect(await subscriptions(itx)).toEqual([]);
+  // the refused subscribe added no row — only the config-worker funnel row (auto-subscribed at birth) remains
+  expect((await subscriptions(itx)).map((row) => row.name)).toEqual(["config"]);
   expect((await readAll(itx)).filter((e) => e.type === RULE_CONFIGURED)).toEqual([]);
 
   await append(itx, { type: "events.iterate.com/stream/resumed" });
@@ -118,7 +119,8 @@ test("a paused stream refuses provide AND subscribe as a whole — nothing lent,
     expect.arrayContaining(["itx.refused", "subscription:refused"]),
   );
   expect(await rpcStubRewriteRuleMatches(itx)).toEqual(["itx.refused"]);
-  expect((await subscriptions(itx)).map((row) => row.name)).toEqual(["refused"]);
+  // the config-funnel row (birth) sorts first; the resumed subscribe added "refused" after it
+  expect((await subscriptions(itx)).map((row) => row.name)).toEqual(["config", "refused"]);
   expect(await itx.invoke("itx.refused.hello()")).toBe("hello-from-resumed");
   await append(itx, { type: "mark", payload: { n: 1 } });
   await until("the mark delivered after resume", () => marks.types().includes("mark"));
