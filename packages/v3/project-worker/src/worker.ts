@@ -73,7 +73,7 @@ async function projectIsKnown(env: Env, projectId: string): Promise<boolean> {
 }
 
 // Bumped every deploy so a smoke test can wait for THIS build to propagate (workers.dev lags ~1-2min/colo).
-const CODE_VERSION = "live-55";
+const CODE_VERSION = "live-56";
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
