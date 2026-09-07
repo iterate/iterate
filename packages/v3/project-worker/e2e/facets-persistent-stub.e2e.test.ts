@@ -13,10 +13,11 @@ test("persistent stub: stash a live itx handle in DO storage, use the restored h
   const ctx = freshCtx("rest");
   const itx = openItx(ctx);
 
-  await itx.provide(
-    "itx.keeper",
-    `itx.facets.get('keeper', { source: ${JSON.stringify(SOURCES.keeper)}, className: 'KeeperDurableObject' })`,
-  );
+  await itx.provide("itx.keeper", [
+    "itx",
+    "facets",
+    ["get", "keeper", { source: SOURCES.keeper, className: "KeeperDurableObject" }],
+  ]);
 
   // 1. stash: storage.put(env.ITX) — throws unless the whole chain is restore-eligible
   const stashed = await itx.invoke(["itx", "keeper", ["stash"]]);

@@ -4,7 +4,14 @@
 // one IS revocation. The rewrite rules (match, rank, rewrite) are ./itx-expression-rewriting.ts; the evaluator
 // is ./dispatch.ts.
 import JSON5 from "json5";
+import { codedError } from "../lib/errors.ts";
 import { jsonEqual } from "../lib/patch.ts";
+
+/** A STRING expression is for what a person types: short. Anything bigger — a worker's source, a large
+ *  literal — rides the PARSED form (`["itx","workers",["get",{ source }]]`), which is plain data and never
+ *  meets json5. The cap is O(1), before any parsing (stock json5 allocates per character and a
+ *  multi-megabyte literal kills a 128 MiB isolate — the 2026-09-07 wave-0 plan, issue 2). */
+export const ITX_EXPRESSION_STRING_MAX_CHARS = 2048;
 
 /** One step: a property read (string) or a call (`[method, ...args]`). Args are plain JSON. The
  *  method `""` is the ANONYMOUS call — call the value itself: `itx.builtins.rpcStubs.get('cam')(1, 2)`
@@ -94,6 +101,11 @@ function matchingParen(source: string, open: number): number {
  *  names + bare scope calls. `holes: true` — a rewrite rule's TARGET only — lexes `@` / `...@` into
  *  the marker literals; anywhere else a bare `@` is refused. */
 export function parse(source: string, options?: { holes?: boolean }): ItxExpression {
+  if (source.length > ITX_EXPRESSION_STRING_MAX_CHARS)
+    throw codedError(
+      "EXPRESSION_TOO_LONG",
+      `itx expression: ${source.length} chars is over the ${ITX_EXPRESSION_STRING_MAX_CHARS}-char limit for the string form — a string expression is for what a person types; pass the parsed form instead: ["itx","workers",["get",{ source: … }]]`,
+    );
   const s = source.trim();
   const steps: ItxExpression = [];
   let i = 0;
@@ -151,6 +163,51 @@ export function toItxExpression(
   options?: { holes?: boolean },
 ): ItxExpression {
   return typeof input === "string" ? parse(input, options) : input;
+}
+
+/** The array half, checked the way the parser checks the string half — every name step an identifier
+ *  that is not reserved, every call step `[method, ...args]` with an identifier method (or `""`, the
+ *  anonymous call, only right after a call) — WITHOUT printing and re-parsing: a stored target carries a worker's whole source as
+ *  data, and that data must never meet the string codec (the 2 KiB cap, json5). Throws in the
+ *  parser's words. */
+export function assertItxExpressionShape(expression: ItxExpression): void {
+  const fail = (m: string): never => {
+    throw new Error(`expression: ${m} in ${JSON.stringify(expression).slice(0, 200)}`);
+  };
+  if (!Array.isArray(expression) || expression.length === 0)
+    fail("an expression is a non-empty array");
+  const name = (step: string, what: string) => {
+    if (!IDENT.test(step) || IDENT.exec(step)![0] !== step)
+      fail(`${what} ${JSON.stringify(step)} is not an identifier`);
+    if (RESERVED.has(step)) fail(`reserved name "${step}"`);
+  };
+  expression.forEach((step, i) => {
+    if (typeof step === "string") {
+      name(step, i === 0 ? "the root" : "a name step");
+      return;
+    }
+    if (!Array.isArray(step) || typeof step[0] !== "string")
+      fail(`step ${i} is neither a name nor [method, ...args]`);
+    const [method, ...args] = step;
+    if (method === "") {
+      if (i === 0 || !Array.isArray(expression[i - 1]))
+        fail("the anonymous call `f(x)(y)` follows a call");
+    } else name(method, "a method");
+    if (i === 0) fail("a call on the root itself");
+  });
+  // No hole check on the array half: `{ "@": true }` carried as DATA is data (edge#6) — only the
+  // STRING form lexes a bare `@` into the marker, and only for a rule's target.
+}
+
+/** Either half, normalized to the array half and checked: a string is parsed (short by rule), an
+ *  array is shape-checked in place. THE one door the event builders use for a configured target. */
+export function normalizedItxExpression(
+  input: ItxExpressionInput,
+  options?: { holes?: boolean },
+): ItxExpression {
+  if (typeof input === "string") return parse(input, options);
+  assertItxExpressionShape(input);
+  return input;
 }
 
 /** Object args print with their keys SORTED, so two spellings of one object are one canonical string

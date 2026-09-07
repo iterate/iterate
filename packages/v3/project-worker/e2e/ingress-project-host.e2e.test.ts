@@ -13,6 +13,7 @@ import {
   freshDnsSafeProjectId,
   projectHostnameBase,
   projectHostsAreLocal,
+  registerProject,
 } from "./support/project-host.ts";
 
 /** A site: HTML at `/` with a RELATIVE script, the script at `/app.js`, an echo of what it was handed
@@ -45,10 +46,11 @@ export default class Site extends WorkerEntrypoint {
 }`,
 };
 
-const siteRule = (): string => `itx.workers.get({ source: ${JSON.stringify(SRC_SITE)} })`;
+const siteRule = () => ["itx", "workers", ["get", { source: SRC_SITE }]];
 
 test("an app is served at / on its project host — URL verbatim, relative asset intact, x-itx-* stripped, apex and 404", async () => {
   const projectId = freshDnsSafeProjectId("ingress");
+  await registerProject(projectId);
   const base = projectHostnameBase();
   const itx = openItx(projectId);
   await itx.provide("itx.apps.site", siteRule());
@@ -88,6 +90,7 @@ test("an app is served at / on its project host — URL verbatim, relative asset
 // clears the cookie.
 test("the session door on a project host: a token becomes the cookie, the cookie becomes the principal the app sees", async () => {
   const projectId = freshDnsSafeProjectId("ingress-who");
+  await registerProject(projectId);
   const base = projectHostnameBase();
   const itx = openItx(projectId);
   await itx.provide("itx.apps.site", siteRule());
@@ -127,6 +130,7 @@ test.skipIf(projectHostsAreLocal())(
   "deployed: a WebSocket upgrade on the project host reaches the app",
   async () => {
     const projectId = freshDnsSafeProjectId("ingress-ws");
+    await registerProject(projectId);
     const itx = openItx(projectId);
     await itx.provide("itx.apps.site", siteRule());
     const ws = new WebSocket(`wss://site--${projectId}.${projectHostnameBase()}/ws`);
@@ -141,5 +145,18 @@ test.skipIf(projectHostsAreLocal())(
     });
     ws.close(1000, "done");
     expect(echo).toBe("site-echo:hi");
+  },
+);
+
+// ADMISSION (wave 0, issue 1): a hostname for a project the control plane does not know is 421 at the
+// edge, before any Durable Object is dialled — a stranger's label under the wildcard mints nothing.
+// Deployed only: the solo lane has no directory (its stand-in says yes to everything).
+test.skipIf(projectHostsAreLocal())(
+  "deployed: a host for a project the control plane does not know is 421, and its label is never an app",
+  async () => {
+    const unknown = freshDnsSafeProjectId("ingress-unknown"); // never registered
+    const answer = await fetchProjectHost(`site--${unknown}.${projectHostnameBase()}`, "/");
+    expect(answer.status, answer.text).toBe(421);
+    expect(answer.text).toContain(unknown);
   },
 );

@@ -9,7 +9,13 @@
 // `null` target REMOVES it. The one function here BUILDS that event; the caller appends it. The
 // halted fact is appended by the delivery loop; the resumed fact by an operator's plain `itx.append`.
 
-import { parse, print, toItxExpression, type ItxExpressionInput } from "../context/expression.ts";
+import {
+  normalizedItxExpression,
+  parse,
+  print,
+  toItxExpression,
+  type ItxExpressionInput,
+} from "../context/expression.ts";
 import { CoreContract, parseSubscriptionName } from "./core-processor.ts";
 import type { StreamEventInput } from "./events.ts";
 
@@ -26,10 +32,12 @@ export function subscriptionConfiguredEvent(input: {
   // (`itx.facets.get('core')`) is taken. Refused at the door, never at delivery.
   if (name === CoreContract.slug)
     throw new Error(`"${name}" is the core reduce's name — reserved; pick another`);
-  // BOTH halves through the codec: the array half re-parses from its printed form, so a target the
-  // reduce could not parse (the reserved literal `{ "@": true }` carried as data, a name step that is
-  // not an identifier) fails LOUD here, in the parser's words — never a row that silently never exists.
-  const target = input.target === null ? null : parse(print(toItxExpression(input.target)));
+  // BOTH halves through the codec's one door: a string is parsed (short by rule — the 2 KiB cap), an
+  // array is shape-checked in place, so a target the reduce could not read (the reserved literal
+  // `{ "@": true }` carried as data, a name step that is not an identifier) fails LOUD here, in the
+  // parser's words. STORED AS THE PARSED FORM: a target carries a facet's whole source as data, and
+  // the reduce must never re-parse that through the string codec (wave 0, issue 2).
+  const target = input.target === null ? null : normalizedItxExpression(input.target);
   if (target && target[0] !== "itx")
     throw new Error(
       `a subscription target must be rooted at "itx" (got ${JSON.stringify(print(target))})`,
@@ -38,7 +46,7 @@ export function subscriptionConfiguredEvent(input: {
     type: "events.iterate.com/stream/subscription-configured",
     payload: {
       name,
-      target: target && print(target),
+      target,
       ...(target && input.consumes && { consumes: input.consumes }),
     },
   });

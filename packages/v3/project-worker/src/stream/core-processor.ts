@@ -25,6 +25,8 @@
 // from pause — a paused stream must always accept its own resume.
 
 import {
+  toItxExpression,
+  type ItxExpressionInput,
   itxExpressionStepName,
   parse,
   parseItxExpressionPrefix,
@@ -340,7 +342,7 @@ export class CoreStreamProcessor extends StreamProcessor<CoreState> {
             [matchString]: { match: matchPrefix, target: null },
           });
         }
-        const target = parse(payload.target as string, { holes: true }); // a target may hold `@` (rule 7)
+        const target = toItxExpression(payload.target as ItxExpressionInput, { holes: true }); // a target may hold `@` (rule 7); stored as the parsed form
         // THE PLATFORM-EQUIVALENT TARGET (`itx.kv ⇒ itx.builtins.kv`, `itx ⇒ itx.builtins`) is "back to
         // the platform row": the row is deleted, never stored — so an un-mask is one ordinary event and
         // the table never carries a row that only restates the default.
@@ -364,7 +366,7 @@ export class CoreStreamProcessor extends StreamProcessor<CoreState> {
         // spelling but sheds its SOURCE here — the source is durable in this very event (and the
         // facet's kv memo), so the reduced state, and the checkpoint blob it is written into on every
         // core change, stay small.
-        const configuredTarget = parse(payload.target as string);
+        const configuredTarget = toItxExpression(payload.target as ItxExpressionInput); // stored as the parsed form
         const { target, hostedFacet } = elideHostedFacetSource(
           configuredTarget,
           resolveThroughState(state, configuredTarget),

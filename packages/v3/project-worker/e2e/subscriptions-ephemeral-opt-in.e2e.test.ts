@@ -15,7 +15,12 @@ test("ephemeral lane: a named-type subscription reduces ephemeral chunks, '*' ne
   //    the "*" tally: every durable event, never an ephemeral.
   await itx.subscribe({
     name: "chunky",
-    target: `itx.facets.get('chunky', { source: ${JSON.stringify(SOURCES.chunky)}, className: 'ChunkyDurableObject' }).processEventBatch`,
+    target: [
+      "itx",
+      "facets",
+      ["get", "chunky", { source: SOURCES.chunky, className: "ChunkyDurableObject" }],
+      "processEventBatch",
+    ],
     consumes: ["chunk", "mark"],
   });
   await enableFixtureProcessor(itx, "tally");

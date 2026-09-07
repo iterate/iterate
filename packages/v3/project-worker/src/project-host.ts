@@ -42,7 +42,8 @@ export function projectHostOf(
   base: string,
 ): { projectId: string; itxExpression: string } | null {
   if (!base) return null;
-  const host = hostname.toLowerCase();
+  // A fully-qualified Host (`site--p.base.`) and a wildcard spelling (`*.base`) name the same thing.
+  const host = hostname.toLowerCase().replace(/\.$/, "").replace(/^\*\./, "");
   const suffix = `.${base.toLowerCase()}`;
   if (!host.endsWith(suffix)) return null;
   const label = host.slice(0, -suffix.length);

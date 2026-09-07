@@ -444,15 +444,15 @@ describe("`@` round-trips the codec (targets only): parse → print → parse; t
 // ───────────────────────────── the door ─────────────────────────────
 
 describe("rewriteRuleConfiguredEvent — ONE event, both halves canonical, loud at the door", () => {
-  test("STRING AT REST: the event stores both halves as strings — the target print-canonicalized, human-readable in the log", () => {
+  test("AT REST: the match is the printed prefix (a short canonical key), the target THE PARSED FORM (it may carry a whole source as data)", () => {
     expect(rewriteRuleConfiguredEvent("itx.db", ["itx", "facets", ["get", "tab-1"]])).toEqual({
       type: "events.iterate.com/itx/rewrite-rule-configured",
-      payload: { match: "itx.db", target: "itx.facets.get('tab-1')" },
+      payload: { match: "itx.db", target: ["itx", "facets", ["get", "tab-1"]] },
     });
     // either codec half on either side
     expect(rewriteRuleConfiguredEvent(["itx", "db"], "itx.facets.get('tab-1')").payload).toEqual({
       match: "itx.db",
-      target: "itx.facets.get('tab-1')",
+      target: ["itx", "facets", ["get", "tab-1"]], // a string target is parsed once, at the door
     });
   });
 
@@ -466,15 +466,15 @@ describe("rewriteRuleConfiguredEvent — ONE event, both halves canonical, loud 
   test("the REMOVAL spelling is the platform-equivalent target `itx.builtins.<match…>` (the reduce deletes the row)", () => {
     expect(rewriteRuleRemovedEvent("itx.kv").payload).toEqual({
       match: "itx.kv",
-      target: "itx.builtins.kv",
+      target: ["itx", "builtins", "kv"], // the parsed form at rest
     });
     expect(rewriteRuleRemovedEvent("itx.ai.run('gpt-5')").payload).toEqual({
       match: "itx.ai.run('gpt-5')",
-      target: "itx.builtins.ai.run('gpt-5')",
+      target: ["itx", "builtins", "ai", ["run", "gpt-5"]],
     });
     expect(rewriteRuleRemovedEvent("itx").payload).toEqual({
       match: "itx",
-      target: "itx.builtins",
+      target: ["itx", "builtins"],
     });
   });
 
@@ -527,18 +527,18 @@ describe("rewriteRuleConfiguredEvent — ONE event, both halves canonical, loud 
       {
         match: "itx.db",
         target: "itx.builtins.kv",
-        payload: { match: "itx.db", target: "itx.builtins.kv" },
+        payload: { match: "itx.db", target: ["itx", "builtins", "kv"] },
       }, // a target may name the physical spelling
       {
         match: "itx.archive",
         target: "itx.cd('/archive')",
-        payload: { match: "itx.archive", target: "itx.cd('/archive')" },
+        payload: { match: "itx.archive", target: ["itx", ["cd", "/archive"]] },
       }, // …and a proxy verb (a built-in root in an expression)
       {
         match: "itx.ai.run('gpt-5')",
         target: "itx.kv",
-        payload: { match: "itx.ai.run('gpt-5')", target: "itx.kv" },
-      }, // pinned args, stored canonical
+        payload: { match: "itx.ai.run('gpt-5')", target: ["itx", "kv"] },
+      }, // pinned args in the match, stored canonical; the target the parsed form
     ];
   for (const { match, target, payload } of doorAccepts)
     test(`ACCEPTED: ${match} ⇒ ${target}`, () => {
@@ -798,7 +798,7 @@ describe("the rule table — a MAP by match: set replaces, null masks or deletes
     provide("itx.cam", { shot: () => "frame" });
     expect(events.at(-1)!.payload).toEqual({
       match: "itx.cam",
-      target: "itx.builtins.rpcStubs.get('itx.cam')",
+      target: ["itx", "builtins", "rpcStubs", ["get", "itx.cam"]],
     });
   });
 
@@ -849,12 +849,12 @@ describe("the rule table — a MAP by match: set replaces, null masks or deletes
     expect(builtIns.aiCalls[0]).toEqual({ model: "grok-4" });
   });
 
-  test("THE DREAM, through the reduce: `itx.fable ⇒ itx.ai.run('@cf/…', @)` is one string-at-rest row; the caller's inputs fill `@`; `...@` pins a gateway model", async () => {
+  test("THE DREAM, through the reduce: `itx.fable ⇒ itx.ai.run('@cf/…', @)` is one row at rest; the caller's inputs fill `@`; `...@` pins a gateway model", async () => {
     const { rewrite, invoke, resolve, events } = setup();
     rewrite("itx.fable", "itx.ai.run('@cf/meta/llama-3.2-1b-instruct', @)");
     expect(events.at(-1)!.payload).toEqual({
       match: "itx.fable",
-      target: "itx.ai.run('@cf/meta/llama-3.2-1b-instruct',@)",
+      target: ["itx", "ai", ["run", "@cf/meta/llama-3.2-1b-instruct", { "@": true }]], // `@` at rest is the reserved literal
     });
     expect(await invoke("itx.fable({ prompt: 'hi' })")).toEqual({
       model: "@cf/meta/llama-3.2-1b-instruct",

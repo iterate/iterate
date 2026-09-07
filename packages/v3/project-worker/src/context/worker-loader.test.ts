@@ -11,7 +11,12 @@
 // next attempt produces outside the loader and loads literally under the id's next generation.
 import { expect, test } from "vitest";
 import { DurableObjectNameCodec } from "./durable-object-names.ts";
-import { facetLoaderOwner, loadConfinedWorker } from "./worker-loader.ts";
+import {
+  assertFacetSourceWithinCeiling,
+  FACET_SOURCE_MAX_CHARS,
+  facetLoaderOwner,
+  loadConfinedWorker,
+} from "./worker-loader.ts";
 
 /** A fake `env.LOADER` that records every key and — like workerd — runs `getCode` once per NEW key
  *  and keeps whatever came of it under the key, a rejection included (a handler is attached so a
@@ -212,4 +217,20 @@ test("WORKAROUND: a producer that threw marks its id dead; the next attempt prod
   await load();
   expect(produced).toBe(4);
   expect(new Set(keys).size).toBe(2); // the dead id and its one recovered generation
+});
+
+test("a facet's literal source over the ceiling is refused, coded; a producer expression is never measured", () => {
+  const big = { "cap.js": "x".repeat(FACET_SOURCE_MAX_CHARS + 1) };
+  expect(() =>
+    assertFacetSourceWithinCeiling({ source: big, className: "W" }, 'facet "w"'),
+  ).toThrowError(/FACET_SOURCE_TOO_LARGE|over the/);
+  expect(() =>
+    assertFacetSourceWithinCeiling({ source: { "cap.js": "ok" }, className: "W" }, 'facet "w"'),
+  ).not.toThrow();
+  expect(() =>
+    assertFacetSourceWithinCeiling(
+      { source: "itx.kv.get('src')", cacheKey: "v1", className: "W" },
+      'facet "w"',
+    ),
+  ).not.toThrow();
 });

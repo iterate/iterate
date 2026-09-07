@@ -95,7 +95,7 @@ export default class Consumer extends WorkerEntrypoint {
 };
 
 const runProvider = (itx: ReturnType<typeof openItx>, mode: string): Promise<unknown> =>
-  itx.invoke(`itx.workers.get({ source: ${JSON.stringify(SRC_PROVIDER)} }).run('${mode}')`);
+  itx.invoke(["itx", "workers", ["get", { source: SRC_PROVIDER }], ["run", mode]]);
 
 test("within the provider's invocation: a dyn-provided lent stub serves PLAIN fetch", async () => {
   const itx = openItx(freshCtx("dynliveself"));
@@ -144,9 +144,12 @@ test.fails("within the provider's invocation: WEBSOCKET fetch of the dyn-provide
 test.fails("ACROSS invocations: worker B fetches the stub A provided (the detached-provider question)", async () => {
   const itx = openItx(freshCtx("dynlivex"));
   expect(await runProvider(itx, "provide")).toBe("provided");
-  const out = (await itx.invoke(
-    `itx.workers.get({ source: ${JSON.stringify(SRC_CONSUMER)} }).run('plain')`,
-  )) as { status: number; body: string };
+  const out = (await itx.invoke([
+    "itx",
+    "workers",
+    ["get", { source: SRC_CONSUMER }],
+    ["run", "plain"],
+  ])) as { status: number; body: string };
   expect(out.status).toBe(200);
   expect(out.body).toBe("dyn live site");
 });

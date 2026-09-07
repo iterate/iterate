@@ -11,10 +11,11 @@ import { SOURCES } from "./support/sources.ts";
 test("a loaded worker serves capnweb behind /expression/<path>, dialed with connectToCapnweb over the batch transport", async () => {
   const ctx = freshCtx("capnweb-behind-lane");
   const itx = openItx(ctx);
-  await itx.provide(
-    "itx.rpcService",
-    `itx.workers.get({ source: ${JSON.stringify(SOURCES.capnwebServer)} })`,
-  );
+  await itx.provide("itx.rpcService", [
+    "itx",
+    "workers",
+    ["get", { source: SOURCES.capnwebServer }],
+  ]);
   const url = new URL(expressionUrl(ctx, "itx.rpcService.fetch"));
   url.pathname = "/expression/rpc/v1";
   const connection = await itx.connectToCapnweb(url.toString(), { transport: "batch" });

@@ -78,7 +78,7 @@ test("same-key re-provide replaces the transport while online and appends ONE mo
   );
   expect(await observer.invoke(["itx", "dupTool", ["hello"]])).toBe("hello-from-one");
   expect(await ruleEventsAt(observer, "itx.dupTool")).toEqual([
-    { target: "itx.builtins.rpcStubs.get('itx.dupTool')" },
+    { target: ["itx", "builtins", "rpcStubs", ["get", "itx.dupTool"]] },
   ]);
 
   // Second LIVE session, same key → the newest transport wins (when its pager opens,
@@ -94,8 +94,8 @@ test("same-key re-provide replaces the transport while online and appends ONE mo
       : undefined;
   });
   expect(await ruleEventsAt(observer, "itx.dupTool")).toEqual([
-    { target: "itx.builtins.rpcStubs.get('itx.dupTool')" },
-    { target: "itx.builtins.rpcStubs.get('itx.dupTool')" },
+    { target: ["itx", "builtins", "rpcStubs", ["get", "itx.dupTool"]] },
+    { target: ["itx", "builtins", "rpcStubs", ["get", "itx.dupTool"]] },
   ]);
   expect((await rpcStubRewriteRuleMatches(observer)).filter((m) => m === "itx.dupTool")).toEqual([
     "itx.dupTool",
@@ -139,8 +139,8 @@ test("disposing a client session recalls its stubs (presence) AND un-sets their 
     expect(codeOf(err)).toBe("NO_ITX_EXPRESSION_MATCH");
   }
   expect(await ruleEventsAt(observer, "itx.ghosttool")).toEqual([
-    { target: "itx.builtins.rpcStubs.get('itx.ghosttool')" },
-    { target: "itx.builtins.ghosttool" }, // the REMOVAL spelling: back to the platform row beneath (none here)
+    { target: ["itx", "builtins", "rpcStubs", ["get", "itx.ghosttool"]] },
+    { target: ["itx", "builtins", "ghosttool"] }, // the REMOVAL spelling: back to the platform row beneath (none here)
   ]);
 });
 

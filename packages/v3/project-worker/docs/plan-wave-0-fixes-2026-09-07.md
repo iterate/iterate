@@ -6,7 +6,7 @@
 > `docs/reviews/2026-09-07-v4-*.md`; the surface of record points at both from its §12 Open list. Nothing in this
 > file adds a feature. Each issue: what it is exactly, why it matters, how it is proved, the fix, its size, and who.
 
-## Issue 1 — the open wildcard: anyone on the internet can create Durable Objects
+## Issue 1 — the open wildcard: anyone on the internet can create Durable Objects — DONE (design B, the minimal control plane)
 
 **What happens, step by step.** Tonight's ingress (773978230) deployed a wildcard DNS record and route,
 `*.project-worker.iterate.com`. The edge (`src/worker.ts`, the `projectHostOf` branch) parses any hostname
@@ -56,7 +56,7 @@ platform doors instead of the app.
 
 **Effort:** ~3 h with the deployed proof. **Owner:** this session (the control plane, worker.ts, project-host.ts, app-config).
 
-## Issue 2 — the clean room only works because of a patch that is not in the repo
+## Issue 2 — the clean room only works because of a patch that is not in the repo — DONE (the 2 KiB cap, the parsed form at rest, the facet source ceiling; the json5 patch is dropped and the unit lane is green on stock json5)
 
 **What happens.** The expression codec (`src/context/expression.ts`) hands call arguments to `JSON5.parse`. A large
 literal — the case that exists today is a processor's source inlined into a rewrite target or a `configureProcessor`
@@ -92,7 +92,7 @@ d3 or by agreement).
 
 ## Issue 3 — two things to MEASURE before anyone writes a fix
 
-**3a. Loaded isolates may be emitting native failure telemetry on every WebSocket and every outbound fetch.**
+**3a. Loaded isolates may be emitting native failure telemetry on every WebSocket and every outbound fetch. — MEASURED (see the result below the probe).**
 _To be clear, because the sentence reads worse than it is:_ a dynamic worker CAN serve WebSocket upgrades and CAN
 fetch out — `e2e/fetch-door-dynamic-live-ws` and tonight's ingress WebSocket row prove it end to end, bytes correct,
 clean close. The finding is only that Cloudflare's own trace for such a request may record an `exception` /
@@ -110,6 +110,14 @@ it. No user-visible harm was shown: the bytes are right. The risk is what those 
 for that request chain (`wrangler tail` or the dashboard's Workers Logs; observability is on), and count
 `exception`/`canceled` outcomes; then repeat with the probe's mitigation (dispose the settled call promise) if the
 rows are there. Decides whether the cacheKey strategy everything sits on must change. ~1 h. **Owner:** this session.
+**Result (2026-09-07, `wrangler tail` on the deployed worker during `fetch-door-dynamic-live-ws` + the ingress
+proof, 3,159 trace rows):** 53 `canceled` rows on `ItxEntrypoint` rpc `get` — every loaded worker's
+`env.ITX.get()`, whose returned capability is never disposed (the SDK host's `using` release, kernel backport
+4A, is the mitigation; test fixtures that hold the handle on `globalThis` will keep showing it); 3 `canceled`
+DO `invoke` rows and 7 `canceled` alarm rows (handed to d3 beside 3b — a canceled alarm outcome means the
+alarm handler's promise was abandoned); ONE `exception` row with an empty exception list on the ingress
+WebSocket request's parent span (the v4 repro signature). Every client assertion passed. The cacheKey
+strategy stays: the rows are lifetime telemetry, not failures; the `using` fix removes the bulk.
 
 **3b. An evicted context with a cursor subscription may be waking, and billing, every 60 seconds forever.**
 _Evicted context:_ a Durable Object whose isolate Cloudflare has unloaded from memory after inactivity (the

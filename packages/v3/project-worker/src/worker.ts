@@ -54,6 +54,22 @@ export class DummyControlPlane extends WorkerEntrypoint {
   async fetch(request: Request): Promise<Response> {
     return fetch(request);
   }
+  /** The solo lane has no directory: every project exists (the deployed control plane says which do). */
+  async projectExists(_projectId: string): Promise<boolean> {
+    return true;
+  }
+}
+
+/** Project hosts the control plane has confirmed, per isolate, for a minute — one directory read per
+ *  project per isolate-minute, never per request. Only a YES is remembered: a project registered a
+ *  moment ago must serve at once. */
+const knownProjectHostsUntil = new Map<string, number>();
+async function projectIsKnown(env: Env, projectId: string): Promise<boolean> {
+  const now = Date.now();
+  if ((knownProjectHostsUntil.get(projectId) ?? 0) > now) return true;
+  const exists = await env.FALLBACK.projectExists(projectId);
+  if (exists) knownProjectHostsUntil.set(projectId, now + 60_000);
+  return exists;
 }
 
 // Bumped every deploy so a smoke test can wait for THIS build to propagate (workers.dev lags ~1-2min/colo).
@@ -72,6 +88,17 @@ export default {
     const { projectHostnameBase, projectTokenSecret } = appConfigOf(env);
     const projectHost = projectHostOf(url.hostname, projectHostnameBase);
     if (projectHost) {
+      // ADMISSION, before any Durable Object is dialled: a context is created on first touch, so a
+      // hostname for a project the control plane does not know must never reach one — else any label
+      // under the wildcard would mint durable storage from the public internet (wave 0, issue 1). The
+      // directory is the control plane's D1 over the FALLBACK binding; an unknown project is 421.
+      if (!(await projectIsKnown(env, projectHost.projectId)))
+        return new Response(
+          `421: no project ${JSON.stringify(projectHost.projectId)} is served here\n`,
+          {
+            status: 421,
+          },
+        );
       // THE SESSION DOOR on a project host: a project token (src/principal.ts) for THIS project
       // becomes the host-scoped cookie, and the browser goes on to `next`; `?logout` clears it.
       if (url.pathname === PROJECT_SESSION_PATH) {

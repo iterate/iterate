@@ -190,5 +190,5 @@ test("the door: a match rooted at itx.builtins, or at a proxy verb, is refused; 
   const ruleTargets = events
     .filter((e) => e.type === "events.iterate.com/itx/rewrite-rule-configured" && e.payload.target)
     .map((e) => e.payload.target as string);
-  expect(ruleTargets).toContain("itx.builtins.rpcStubs.get('itx.tool')");
+  expect(ruleTargets).toContainEqual(["itx", "builtins", "rpcStubs", ["get", "itx.tool"]]);
 });

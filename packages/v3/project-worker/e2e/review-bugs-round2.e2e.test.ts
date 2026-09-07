@@ -81,7 +81,12 @@ test("edge#2: a stale subscribe handle's dispose leaves a later same-name row, a
   const stale = await a.subscribe({ name: "p", target: "itx.kv.get" });
   await b.subscribe({
     name: "p",
-    target: `itx.facets.get('p', { source: ${JSON.stringify(SOURCES.tally)}, className: 'TallyDurableObject' }).processEventBatch`,
+    target: [
+      "itx",
+      "facets",
+      ["get", "p", { source: SOURCES.tally, className: "TallyDurableObject" }],
+      "processEventBatch",
+    ],
   });
   await append(b, { type: "events.iterate.com/chat/message", payload: { text: "hi" } });
   await until("the facet reduced the log", () => b.facets.get("p").snapshot());

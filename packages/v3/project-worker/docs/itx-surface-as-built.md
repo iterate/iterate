@@ -340,8 +340,15 @@ and deletes otherwise. The platform-equivalent target `itx.builtins.<match…>` 
 No stack, no offset, no identity beyond the match.
 
 **The one event** `events.iterate.com/itx/rewrite-rule-configured { match: string, target:
-string | null }`. Both halves are canonicalized through the codec at build time, so a bad
-spelling fails at the door, never silently in the reduce.
+ItxExpression | null }`. The match is the printed prefix — a short canonical key; the target is AT REST
+IN THE PARSED FORM (the array half), because a target may carry a facet's whole source as data and the
+reduce must never push that through the string codec again (wave 0, 2026-09-07: stock json5 allocates per
+character and a multi-megabyte literal kills a 128 MiB isolate). Both halves go through the codec's one
+door at build time — a string is parsed once (and a STRING expression is capped at
+`ITX_EXPRESSION_STRING_MAX_CHARS`, 2 KiB: it is for what a person types; anything bigger rides the parsed
+form, `EXPRESSION_TOO_LONG` says so), an array is shape-checked in place (`assertItxExpressionShape`) — so
+a bad spelling fails at the door, never silently in the reduce. `subscription-configured`'s target is
+stored the same way. `rewriteRules.list()` still PRINTS targets for the reader.
 
 **A live stub behind a pinned match** (`rewrite-rules-argument-pinned.e2e`, spelled on `itx.llm` because
 `itx.ai` is a root whose `null` would mask): `provide("itx.llm.run('special')", fn)`, then
@@ -486,7 +493,13 @@ WebSocket upgrades survive, so a served page's relative links resolve on the sam
 one rule row (`provide("itx.apps.site", "itx.workers.get({ source })")`, a live stub, a facet) and the
 log never names a hostname; a label with no row is the lane's 404. `<base>` is
 `APP_CONFIG_PROJECT_HOSTNAME_BASE` (blank ⇒ no project-host ingress); the deployed base is
-`project-worker.iterate.com` (a wildcard DNS record and the route in wrangler.jsonc). Only a project
+`project-worker.iterate.com` (a wildcard DNS record and the route in wrangler.jsonc). ADMISSION comes
+first: a context is created on first touch, so before the edge dials a Durable Object for a project
+host it asks the control plane whether the project exists — `FALLBACK.projectExists(projectId)` over the
+service binding, a YES remembered per isolate for a minute — and an unknown project is 421 (a
+stranger's label under the wildcard mints nothing). The control plane is "super mega simple" on purpose
+(`packages/v3/control-plane-shell`): one Worker, one D1 table of project ids through sqlfu, an admin door
+`POST /projects` behind a bearer; the solo lane's stand-in says yes to everything. Only a project
 id that is a DNS label is a host by convention; a pretty slug or a custom domain is a directory row,
 the control plane's, later. Everything on a project host is the app's; the platform's own doors stay
 on the worker's hostname. WHO, on a project host: `/.itx/session?token=<projectToken>&next=<path>`
@@ -673,6 +686,25 @@ LibraryRoots`, the resolver walks from the record with one built-in predicate, t
   row, and (deployed) a WebSocket upgrade through the host.
 - Deferred with it, on purpose: a slug directory and custom domains (the control plane's rows), and
   the `/api` door on a project host (an app proxies the project API itself if it wants same-origin).
+
+### Decided on 2026-09-07, done (wave 0 of the v4 review — what v4 found wrong in shipped v3)
+
+- **Admission before the dial** (section 10): a project host is served only for a project the control
+  plane knows; 421 otherwise. The control plane is one Worker + one D1 table (which projects exist) over
+  Workers RPC — Jonas's choice over an opt-in KV index. Closes the open wildcard.
+- **The parsed form at rest, a 2 KiB cap on the string form** (section 7): a configured target is stored
+  as the array; a string expression over 2 KiB is `EXPRESSION_TOO_LONG` with the parsed form named in the
+  message; a facet's literal source over 1 MiB is `FACET_SOURCE_TOO_LARGE` at the door (edge and DO),
+  never a late failure at materialization. Together they make v4's json5 workspace patch unnecessary
+  for this package.
+- **The loader**: the content hash is two independent hashes plus the length; the loader id a JSON array
+  (b5e31c7c0).
+- **Measured, not fixed** (`docs/plan-wave-0-fixes-2026-09-07.md` issue 3a): on the deployed worker the
+  loaded isolates' `env.ITX.get()` calls show as `canceled` telemetry rows (the returned capability is
+  never disposed — the SDK host's `using` release is the mitigation) and an ingress WebSocket request's
+  parent span shows an `exception` with no exception listed; bytes and closes are correct. The wake-loop
+  probe and the runaway-wake control are d3's (issue 3b), in flight.
+- Not taken: v4's opt-in KV serving index; classifying platform DO resets as expected in the logs.
 
 ### Decided on 2026-09-06, done (identity — the assessment's Gap 2)
 

@@ -64,6 +64,7 @@ import type { StreamEventInput } from "../stream/events.ts";
 import { isBuiltInRoot } from "./built-in-roots.ts";
 import { callOn, walkSteps } from "./dispatch.ts";
 import {
+  normalizedItxExpression,
   containsItxExpressionHole,
   isItxExpressionHole,
   ITX_EXPRESSION_MERGE_KEY,
@@ -290,10 +291,10 @@ export function rewriteRuleConfiguredEvent(
     throw new Error(
       `a rewrite rule's match may not start with the proxy's own verb "${firstName}" (${PROXY_VERBS.join(", ")}): the dotted surface never hands those to the table, so the rule could fire from a string invoke but never from the sugar`,
     );
+  // Stored as the PARSED form (a target may carry a whole source as data — never through the string
+  // codec again); a string target is parsed once here, an array shape-checked in place.
   const targetExpression =
-    target === null
-      ? null
-      : parse(print(toItxExpression(target, { holes: true }), { holes: true }), { holes: true });
+    target === null ? null : normalizedItxExpression(target, { holes: true });
   if (targetExpression && targetExpression[0] !== "itx")
     throw new Error(
       `a rewrite rule's target must be rooted at "itx" (a bare built-in root is unspellable — targets resolve through the rules; the physical spelling is "itx.builtins.…")`,
@@ -306,7 +307,7 @@ export function rewriteRuleConfiguredEvent(
     type: "events.iterate.com/itx/rewrite-rule-configured",
     payload: {
       match: print(matchPrefix),
-      target: targetExpression && print(targetExpression, { holes: true }),
+      target: targetExpression,
     },
   };
 }

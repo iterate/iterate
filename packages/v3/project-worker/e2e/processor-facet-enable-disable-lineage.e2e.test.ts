@@ -103,7 +103,12 @@ test("the raw event-sourced door agrees with the verb — a hand-appended subscr
     type: "events.iterate.com/stream/subscription-configured",
     payload: {
       name: "tally",
-      target: `itx.facets.get('tally', { source: ${JSON.stringify(SOURCES.tally)}, className: 'TallyDurableObject' }).processEventBatch`,
+      target: [
+        "itx",
+        "facets",
+        ["get", "tally", { source: SOURCES.tally, className: "TallyDurableObject" }],
+        "processEventBatch",
+      ],
     },
   });
   expect(await processorNames(itx)).toEqual(["tally"]); // listed as enabled — and it is

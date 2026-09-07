@@ -3699,3 +3699,46 @@ exists as a probe (its harness lane went in the test-hygiene sweep). The 300-rul
 - BOARD: tsc×3 · oxlint 0/0 · unit+workers 460p/12xf (39 files) · DEPLOYED as e0b21345 · deployed e2e 189p/0f/2xf/2sk on 47 files (13 min), exit 0 — every facet restarted once under its new loader id and every processor row stayed green
 - LOC: worker-loader.ts +16/−6 (two hashes, the JSON id, the WHY), its test +48, the walkthrough one line; the plan
   409 lines; the ten reviews ≈2,400 lines of report.
+## 2026-09-07 — wave 0, the first three: admission before the dial, the parsed form at rest, the loader telemetry measured
+
+- ISSUE 1, the open wildcard — FIXED (Jonas: design B). A context is created on first touch, and tonight's
+  wildcard made every label under `*.project-worker.iterate.com` an address — `curl` from anyone minted a
+  durable, storage-backed DO. Now the edge asks the control plane before it dials: `FALLBACK.projectExists`
+  over the service binding, a YES remembered per isolate for a minute (never a NO — a project registered a
+  moment ago serves at once), 421 for an unknown project (`worker.ts`). The control plane is "super mega
+  simple" as decided: `packages/v3/control-plane-shell` gained one D1 (`iterate-control-plane-projects`,
+  created tonight), one table (`definitions.sql`: `projects(id, created_at)`), three sqlfu-typed queries
+  (`sql/queries.sql` → `sql/.generated/`, `sqlfu generate` against the desired schema), two Workers-RPC verbs
+  (`projectExists`, `createProject`) and an admin door (`POST /projects`, `GET /projects[/<id>]`) behind a
+  bearer (`CONTROL_PLANE_ADMIN_TOKEN`, a wrangler secret; the value sits beside the token secret in
+  `~/.config/iterate/project-worker-poc.env` with `CONTROL_PLANE_URL`). Deployed as c79cc76a at
+  `iterate-control-plane.iterate.workers.dev`. The solo lane's stand-in (`DummyControlPlane.projectExists`)
+  says yes to everything — the local lane has no directory. Also from v4: a fully-qualified Host (`…base.`)
+  and a `*.` spelling normalize (`project-host.ts`, +1 table row).
+- ISSUE 2, the json5 dependency — FIXED (Jonas: a much lower cap; big arguments ride the parsed form). Three
+  pieces. (a) `ITX_EXPRESSION_STRING_MAX_CHARS = 2048`: a STRING itx expression over it is
+  `EXPRESSION_TOO_LONG`, O(1), before json5 sees a character, with the parsed form named in the message. (b)
+  THE PARSED FORM AT REST: `rewrite-rule-configured` and `subscription-configured` now store `target` as the
+  array (the match stays the printed prefix — a short canonical key). Until tonight the builders printed the
+  target to a string and the core reduce RE-PARSED it on every reduce (`core-processor.ts`), and the DO's
+  recovery parsed it again — exactly the path where a 4.5 MiB inlined source met stock json5. The builders go
+  through the codec's one door (`normalizedItxExpression`: a string parsed once, an array shape-checked in
+  place by `assertItxExpressionShape` — identifiers, reserved names, the anonymous call, the `@` literal only
+  where holes are legal — with no print/parse round trip); the reduce and the DO read either half
+  (`toItxExpression`). Every test that inlined a worker source into a string target moved to the array form
+  (15 e2e files, 20 sites); the unit rows that pinned "string at rest" now pin the parsed form;
+  `rewriteRules.list()` still prints for the reader. (c) `FACET_SOURCE_MAX_CHARS = 1 MiB`
+  (`worker-loader.ts`): a facet's LITERAL source over it is `FACET_SOURCE_TOO_LARGE` at the edge's
+  `enableProcessor` (nothing appended) and at the DO's facet door (no memo) — never a late failure at
+  materialization re-parsed on every wake; a producer expression is not measured. With (a)–(c) the clean
+  room no longer needs `patches/json5@2.2.3.patch`; dropping it from `pnpm-workspace.yaml` is the last step
+  (Jonas: "def drop that").
+- ISSUE 3a, the loader telemetry — MEASURED, cacheKey strategy unchanged (the result is in the wave-0 plan):
+  53 `canceled` rows on `ItxEntrypoint.get` (the undisposed returned capability — the SDK host's `using`
+  release, 4A, is the mitigation), 7 canceled alarms and 3 canceled invokes handed to d3, one `exception`
+  row with no exception on an ingress WebSocket span; every assertion green.
+- PROOFS: `src/project-host.test.ts` (+1), `src/context/expression.test.ts` (the cap), `worker-loader.test.ts`
+  (the ceiling), the rewriting/subscriptions tables re-pinned; `e2e/ingress-project-host.e2e.test.ts`
+  registers each project with the deployed control plane first and adds the deployed-only 421 row.
+- BOARD: tsc×3 · oxlint 0/0 · unit+workers 463p/12xf on STOCK json5 (the patch dropped) · the shell deployed c79cc76a · the worker DEPLOYED as e3ef2f05: the targeted proofs 11/11 (ingress with the 421 row and the session door, identity, the builtins root) · the full sequential board is running and lands in the next entry
+- LOC: 18 files changed, 265 insertions(+), 49 deletions(-) across the worker and the shell sources (the parsed-form change is the bulk: the codec's shape check +60, the control plane +90, the edge admission +30); tests and docs beside.

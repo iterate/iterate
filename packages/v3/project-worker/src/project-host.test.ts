@@ -34,6 +34,11 @@ const rows: { hostname: string; base: string; becomes: ReturnType<typeof project
     base: "localhost",
     becomes: { projectId: "prj-1", itxExpression: "itx.apps.site" },
   },
+  {
+    hostname: "site--prj-1.iterate.app.", // a fully-qualified Host
+    base: "iterate.app",
+    becomes: { projectId: "prj-1", itxExpression: "itx.apps.site" },
+  },
   // not a project host
   { hostname: "project-worker.iterate.workers.dev", base: "iterate.app", becomes: null },
   { hostname: "iterate.app", base: "iterate.app", becomes: null },

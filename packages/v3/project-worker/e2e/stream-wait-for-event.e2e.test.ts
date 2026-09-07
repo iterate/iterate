@@ -44,9 +44,7 @@ export default class Waiter extends WorkerEntrypoint {
 }`,
   };
   const head = (await itxA.invoke("itx.readEvents(0)")).scannedThroughOffset;
-  const pending = itxA.invoke(
-    `itx.workers.get({ source: ${JSON.stringify(SRC_WAITER)} }).run(${head})`,
-  );
+  const pending = itxA.invoke(["itx", "workers", ["get", { source: SRC_WAITER }], ["run", head]]);
   await sleep(500); // let the loaded worker start waiting before the append (the anchored afterOffset makes either order correct)
   await itxB.invoke(`itx.append({ type: 'ping', payload: { via: 'entrypoint' } })`);
   const got = await pending;

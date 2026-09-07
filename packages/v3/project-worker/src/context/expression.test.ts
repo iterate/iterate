@@ -1,6 +1,6 @@
 // Executable spec for the expression codec — two directions over one table.
 import { describe, expect, test } from "vitest";
-import { parse, print, type ItxExpression } from "./expression.ts";
+import { parse, print, toItxExpression, type ItxExpression } from "./expression.ts";
 
 // Plausible itx expressions in CANONICAL form — exactly what `print` emits (single-quoted strings,
 // unquoted identifier keys, no spaces). Each row is checked BOTH directions.
@@ -30,4 +30,12 @@ describe("expression codec", () => {
   test.each(TABLE)("print: %s", (str, expr) => {
     expect(print(expr)).toBe(str);
   });
+});
+
+test("a string expression over the char limit is refused, coded, before any parsing; the parsed form carries the same thing", () => {
+  const big = `itx.workers.get({ source: { "cap.js": ${JSON.stringify("x".repeat(3000))} } })`;
+  expect(() => parse(big)).toThrowError(/EXPRESSION_TOO_LONG|over the 2048-char limit/);
+  expect(
+    toItxExpression(["itx", "workers", ["get", { source: { "cap.js": "x".repeat(3000) } }]]),
+  ).toHaveLength(3);
 });

@@ -60,7 +60,11 @@ import {
   rewriteRuleConfiguredEvent,
   rewriteRuleRemovedEvent,
 } from "./context/itx-expression-rewriting.ts";
-import { facetSpecOf, type FacetSpec } from "./context/worker-loader.ts";
+import {
+  assertFacetSourceWithinCeiling,
+  facetSpecOf,
+  type FacetSpec,
+} from "./context/worker-loader.ts";
 import { installPrototypeInvokeFallback } from "./context/dotted-path-proxy.ts";
 import type { BuiltInScope, RewriteRuleListEntry } from "./context/built-ins.ts";
 import {
@@ -344,6 +348,7 @@ export class IterateContext extends RpcTarget {
     name: string,
     spec: FacetSpec & { consumes?: string[] },
   ): Promise<{ name: string }> {
+    assertFacetSourceWithinCeiling(spec, `enableProcessor("${name}")`); // refused HERE: nothing appended
     await this.#append(
       subscriptionConfiguredEvent({
         name,

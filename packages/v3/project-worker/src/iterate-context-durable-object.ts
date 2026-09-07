@@ -44,6 +44,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { DurableObject } from "cloudflare:workers";
 import { substituteHeaderSecrets } from "@v3/shared/egress";
 import {
+  assertFacetSourceWithinCeiling,
   facetLoaderOwner,
   facetSpecOf,
   loadConfinedWorker,
@@ -59,6 +60,7 @@ import { codedError, errorCode } from "./lib/errors.ts";
 import { withTimeout } from "./lib/timeout.ts";
 import type { StreamEvent, StreamEventInput } from "./stream/events.ts";
 import {
+  toItxExpression,
   canonicalItxExpressionPrefix,
   parse,
   print,
@@ -135,7 +137,10 @@ export interface Env extends AppConfigEnv {
   AI: Ai;
   SECRETS_KV?: KVNamespace;
   /** The egress terminal this context's `fetch` bottoms out at (secret-substituted, then sent). */
-  FALLBACK: Fetcher;
+  /** The control plane, over a service binding: the egress terminal (`fetch`) and the directory —
+   *  `projectExists`, the one question the edge asks before it dials a context for a project host
+   *  (worker.ts; the solo lane's `DummyControlPlane` answers yes to everything). */
+  FALLBACK: Fetcher & { projectExists(projectId: string): Promise<boolean> };
 }
 
 export class IterateContextDurableObject extends DurableObject<Env> {
@@ -575,6 +580,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     // eviction; a bare name reads it — an unknown name is NO_FACET.
     let facetStartupMemo = this.ctx.storage.kv.get(`facet:${name}`) as FacetSpec | undefined;
     if (spec) {
+      assertFacetSourceWithinCeiling(spec, `facet "${name}"`);
       const storedSpec = facetSpecOf(spec);
       if (!facetStartupMemo || JSON.stringify(facetStartupMemo) !== JSON.stringify(storedSpec))
         this.ctx.storage.kv.put(`facet:${name}`, storedSpec);
@@ -590,12 +596,13 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       );
       if (row?.hostedFacet) {
         const [configuredEvent] = this.#stream.readInternal(row.configuredAtOffset - 1, 1).events;
-        const configuredTarget = (configuredEvent?.payload as { target?: string } | undefined)
-          ?.target;
+        const configuredTarget = (
+          configuredEvent?.payload as { target?: ItxExpressionInput } | undefined
+        )?.target;
         // RESOLVED before reading the spec off it, as the reduce did when it marked the row.
         const spec = configuredTarget
           ? facetSpecFromHostingTarget(
-              this.#itxExpressionResolver.resolve(parse(configuredTarget)).at(-1)!,
+              this.#itxExpressionResolver.resolve(toItxExpression(configuredTarget)).at(-1)!,
             )
           : undefined;
         if (spec) {

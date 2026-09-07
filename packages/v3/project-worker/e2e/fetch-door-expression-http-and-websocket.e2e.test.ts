@@ -24,7 +24,7 @@ test("/expression serves a LOADED WORKER behind a rewrite rule: GET → 200 HTML
   // A rule whose target is a stateless dynamic worker (its .fetch serves /expression) — the target
   // is an itx EXPRESSION (workers.get({ source })), same as every other rule.
   const itx = openItx(ctx);
-  await itx.provide("itx.site", `itx.workers.get({ source: ${JSON.stringify(SOURCES.site)} })`);
+  await itx.provide("itx.site", ["itx", "workers", ["get", { source: SOURCES.site }]]);
 
   const page = await fetch(expressionUrl(ctx, "itx.site", "http"));
   expect(page.status).toBe(200);

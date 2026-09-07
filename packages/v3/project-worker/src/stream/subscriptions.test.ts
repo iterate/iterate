@@ -7,7 +7,7 @@
 // `CoreStreamProcessor` exactly as the DO does; the reduce's own pins (replace / drop / halted /
 // resumed) live in core-processor.test.ts.
 import { describe, expect, test } from "vitest";
-import { print, type ItxExpressionInput } from "../context/expression.ts";
+import { print, type ItxExpression, type ItxExpressionInput } from "../context/expression.ts";
 import { CoreStreamProcessor, type Subscription } from "./core-processor.ts";
 import type { StreamEvent } from "./events.ts";
 import { subscriptionConfiguredEvent } from "./subscriptions.ts";
@@ -40,7 +40,7 @@ const setup = () => {
 };
 
 describe("configure — ONE event: set, replace, or remove", () => {
-  test("builds ONE subscription-configured with the target PRINTED (string at rest); appended, the row's identity is that event's offset", () => {
+  test("builds ONE subscription-configured with the target STORED AS THE PARSED FORM; appended, the row's identity is that event's offset", () => {
     const { configure, events, rows } = setup();
     const event = configure({
       name: "tally",
@@ -51,7 +51,7 @@ describe("configure — ONE event: set, replace, or remove", () => {
       type: "events.iterate.com/stream/subscription-configured",
       payload: {
         name: "tally",
-        target: "itx.facets.get('tally').processEventBatch", // print-canonicalized, human-readable in the log
+        target: ["itx", "facets", ["get", "tally"], "processEventBatch"], // the parsed form at rest — a target may carry a whole source as data
         consumes: ["mark", "tick"],
       },
     });
@@ -63,7 +63,7 @@ describe("configure — ONE event: set, replace, or remove", () => {
     const { configure } = setup();
     expect(configure({ name: "all", target: "itx.digest.processEventBatch" }).payload).toEqual({
       name: "all",
-      target: "itx.digest.processEventBatch",
+      target: ["itx", "digest", "processEventBatch"], // a string target is parsed ONCE, at the door
     });
   });
 
@@ -131,12 +131,11 @@ describe("configure — ONE event: set, replace, or remove", () => {
     expect(events.map((e) => (e.payload as { name: string }).name)).toEqual(["subscriptions"]);
   });
 
-  test("the stored target round-trips the codec: a quoted key and an exponent literal reduce back to the string that was stored", () => {
+  test("the stored target IS the parsed form: an array target is stored as given (shape-checked, never printed), and the row reduces to it", () => {
     const { configure, rows } = setup();
-    const event = configure({
-      name: "odd",
-      target: ["itx", "facets", ["get", { "a b": 1e21 }], "processEventBatch"],
-    });
-    expect(print(rows().odd.target)).toBe((event.payload as { target: string }).target);
+    const target: ItxExpression = ["itx", "facets", ["get", { "a b": 1e21 }], "processEventBatch"];
+    const event = configure({ name: "odd", target });
+    expect((event.payload as { target: unknown }).target).toEqual(target);
+    expect(rows().odd.target).toEqual(target);
   });
 });

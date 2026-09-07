@@ -33,10 +33,14 @@ export class Remote extends WorkerEntrypoint {
 };
 
 const rewriteRemoteApi = async (itx: any): Promise<void> => {
-  await itx.provide(
-    "itx.remoteApi",
-    `itx.workers.get({ source: ${JSON.stringify(SRC_REMOTE)}, className: 'Remote', props: { url: ${JSON.stringify(process.env.DUMMY_CAPNWEB_URL)} } })`,
-  );
+  await itx.provide("itx.remoteApi", [
+    "itx",
+    "workers",
+    [
+      "get",
+      { source: SRC_REMOTE, className: "Remote", props: { url: process.env.DUMMY_CAPNWEB_URL } },
+    ],
+  ]);
 };
 
 test("a userspace worker dials a remote capnweb API with the url in ctx.props, behind a rewrite rule by name", async () => {

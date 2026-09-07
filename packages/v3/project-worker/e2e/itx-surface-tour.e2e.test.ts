@@ -107,7 +107,7 @@ test("itx tour: built-in roots, lent stubs, the rule map, dynamic-worker rules, 
   expect(String(denied)).toMatch(/no rewrite rule matches/);
 
   // 5. EXPRESSION RULE running a stateless dynamic worker (the fetch lane end-to-end)
-  await itxA.provide("itx.site", `itx.workers.get({ source: ${JSON.stringify(SOURCES.site)} })`);
+  await itxA.provide("itx.site", ["itx", "workers", ["get", { source: SOURCES.site }]]);
   const page = await fetch(expressionUrl(ctx, "itx.site", "http"));
   const html = await page.text();
   // the loaded worker serves HTML via /expression
@@ -131,10 +131,11 @@ test("itx tour: built-in roots, lent stubs, the rule map, dynamic-worker rules, 
   expect(wsEcho).toBe("site-echo:hello-from-eyeball");
 
   // 6. EXPRESSION RULE running a STATEFUL worker — deep dotted call + callback into the host
-  await itxA.provide(
-    "itx.counter",
-    `itx.facets.get('counter', { source: ${JSON.stringify(SOURCES.counter)}, className: 'CounterDurableObject' })`,
-  );
+  await itxA.provide("itx.counter", [
+    "itx",
+    "facets",
+    ["get", "counter", { source: SOURCES.counter, className: "CounterDurableObject" }],
+  ]);
   const inc = await itxA.invoke(["itx", "counter", ["increment", 2]]);
   // stateful worker: increment(2)
   expect(inc).toBe(2);

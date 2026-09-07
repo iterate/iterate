@@ -11,6 +11,16 @@
   // plane with no first-party keys.
   "kv_namespaces": [{ "binding": "PLATFORM_SECRETS_KV", "id": "34af8f4b5e49447f9b7bd63039a39ce3" }],
 
+  // THE DIRECTORY, minimal: which projects exist (definitions.sql, one table). A project worker asks
+  // `projectExists` over Workers RPC before it dials a context for a project host; an unknown host is 421.
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "iterate-control-plane-projects",
+      "database_id": "78df8e5d-86e6-4eba-a1e0-d59f125264c1",
+    },
+  ],
+
   // CROSS-SCRIPT binding (D27): the context namespace is DEFINED in project-worker; the control
   // plane binds it here (script_name → no migration) so it can write into a project's context.
   "durable_objects": {

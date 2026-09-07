@@ -31,6 +31,7 @@
 // site (built-ins.ts `RUN_SCRIPT_ENTRYPOINT`), so even that bottoms out at an EXPORTED entrypoint.
 
 import { PROCESSOR_SDK_MODULE } from "../generated/processor-sdk.ts";
+import { codedError } from "../lib/errors.ts";
 import { toItxExpression, type ItxExpression, type ItxExpressionInput } from "./expression.ts";
 
 /** Compose the loader cacheKey `owner` (context + a discriminator: a processor slug or a stateful
@@ -58,6 +59,23 @@ export type WorkerCacheKey = string;
 /** What hosts a class as a durable FACET — `itx.facets.get(name, spec)`, `enableProcessor(name, spec)`:
  *  the source (modules, or a producer expression with its `cacheKey`) and the exported class. */
 export type FacetSpec = { source: WorkerSource; cacheKey?: WorkerCacheKey; className: string };
+/** The most a facet's LITERAL source may be, serialized — the startup memo is one kv cell in the DO
+ *  (re-read on every post-eviction wake) and the hosting event one log row under the 8 MiB event
+ *  ceiling; an oversize source must fail at the door, coded, not late at materialization (the 2026-09-07
+ *  wave-0 plan, issue 2). A producer EXPRESSION is small by nature and is not measured. */
+export const FACET_SOURCE_MAX_CHARS = 1 << 20;
+/** Refuse a spec whose literal source is over the ceiling — the one check both doors (the edge's
+ *  `enableProcessor`, the DO's facet door) make, so the refusal is atomic: nothing appended, no memo. */
+export function assertFacetSourceWithinCeiling(spec: FacetSpec, where: string): void {
+  if (typeof spec.source === "string" || Array.isArray(spec.source)) return; // a producer expression
+  const chars = JSON.stringify(spec.source).length;
+  if (chars > FACET_SOURCE_MAX_CHARS)
+    throw codedError(
+      "FACET_SOURCE_TOO_LARGE",
+      `${where}: the facet's source is ${chars} chars, over the ${FACET_SOURCE_MAX_CHARS}-char ceiling — build it smaller, or load it from a producer expression with a cacheKey`,
+    );
+}
+
 /** The same spec with an absent `cacheKey` left OUT (never `cacheKey: undefined`) — the one shape a
  *  memo, an event or a compare sees. */
 export const facetSpecOf = ({ source, cacheKey, className }: FacetSpec): FacetSpec => ({

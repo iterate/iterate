@@ -452,7 +452,11 @@ describe("edge#6: the reserved literal is data everywhere but a rule's target", 
       name: "s",
       target: ["itx", "x", ["y", { "@": true }]],
     });
-    expect((event.payload as { target: string }).target).toBe("itx.x.y({'@':true})");
+    expect((event.payload as { target: unknown }).target).toEqual([
+      "itx",
+      "x",
+      ["y", { "@": true }],
+    ]); // the parsed form at rest, the literal as data
     const state = reduced([event]);
     expect(state.subscriptions.s?.target).toEqual(["itx", "x", ["y", { "@": true }]]);
   });
@@ -460,14 +464,19 @@ describe("edge#6: the reserved literal is data everywhere but a rule's target", 
     const call: ItxExpression = ["itx", ["a", { "@": true }, { "...@": true }]];
     expect(parse(print(call))).toEqual(call);
   });
-  test("a rule's target still prints and stores the markers as `@` / `...@`", () => {
+  test("a rule's target stores the markers as the reserved literals and prints them back as `@` / `...@`", () => {
     const event = rewriteRuleConfiguredEvent(
       "itx.fable",
       "itx.builtins.ai.run('@cf/x', @, { ...@ })",
     );
-    expect((event.payload as { target: string }).target).toBe(
-      "itx.builtins.ai.run('@cf/x',@,{...@})",
-    );
+    const target = (event.payload as { target: ItxExpression }).target;
+    expect(target).toEqual([
+      "itx",
+      "builtins",
+      "ai",
+      ["run", "@cf/x", { "@": true }, { "...@": true }],
+    ]);
+    expect(print(target, { holes: true })).toBe("itx.builtins.ai.run('@cf/x',@,{...@})");
   });
 });
 
