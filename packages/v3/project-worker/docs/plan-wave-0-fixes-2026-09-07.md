@@ -135,7 +135,7 @@ minutes, count `stream/woken` rows with `readEvents`. If the count climbs, v4's 
 constructor's own commits until a real public door arrives) is the shape, ~20-35 lines in delivery. ~1 h to probe.
 **Owner:** d3 (subscription-delivery.ts is its file).
 
-## Issue 4 — ten kernel fixes v4 made that v3 lacks
+## Issue 4 — ten kernel fixes v4 made that v3 lacks — 2.6 DONE (5cf32771e), 2.9 DONE (b5e31c7c0), 2.10 three of four DONE (5cf32771e); A and B with d3, in flight
 
 Verified against v3's CURRENT files by the kernel-diff review (v4 forked at b1cd35934, so every later v3 commit was
 checked). Three small commits, in this order:
