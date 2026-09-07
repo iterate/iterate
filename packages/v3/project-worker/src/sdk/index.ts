@@ -18,6 +18,7 @@ export {
   type ReduceArgs,
   type ScannedRange,
 } from "../stream/processor.ts";
+export { ConfigWorker, type ConfigEventArgs, type ConfigWorkerItx } from "./config-worker.ts";
 export { defineProcessorContract } from "./processor-contract.ts";
 export { jsonEqual, type StreamEvent, type StreamEventInput } from "../stream/events.ts";
 export { z } from "zod";
