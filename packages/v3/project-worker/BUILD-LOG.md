@@ -3841,3 +3841,16 @@ callers, which is the whole point.
   row is verified-on-deploy (pending a worker-free slot); the local board is green.
 - LOC: 6 files, 165 insertions(+), 332 deletions(-) — net −167. stream.ts −130 (the admission subsystem
   gone); subscription-delivery.ts the hold-through-call restructure; the heap harness + its pins removed.
+
+### fix: the delivery fan-out reserve gets its OWN budget (deployed live-54 regressed cursor reentrancy)
+
+The first cut of the fan-out fix reserved the delivery IN-FLIGHT budget for the cursor read. Deployed
+(live-54) that regressed `cursor-delivery-halts-ladders-and-resumes` — reentrancy + one other row: a
+cursor read holding the whole push budget made a RACING live-client push see a full budget and DROP
+(the control subscriber never got its seed). FIX: a SEPARATE `CURSOR_READ_BUDGET_CHARS` (8 MiB) with
+its own counter/waiters for the cursor lane's read-through-call, kept apart from `#deliveryCharsInFlight`
+so a cursor reserve never trips a push drop; plus the reserve is TRIMMED to the batch's real size right
+after the (synchronous) read, so a full catch-up page serializes but a small batch frees the reserve —
+no head-of-line block on a slow cursor call, small cursor deliveries stay concurrent. Measured fan-out
+39 MiB at rowCount 20 (was 227 baseline). Local: cursor-delivery e2e 14/14, unit 403p/4xf, memory-budget
+17p/4xf. Re-deploy as live-55 for the deployed re-verify.

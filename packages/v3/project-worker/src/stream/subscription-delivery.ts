@@ -59,6 +59,15 @@ const PENDING_PUSH_BUDGET_CHARS = 8 * 1024 * 1024;
  *  concurrent appends (30 × 7 MiB ephemerals to 10 facets reset the parent at 16 — this budget is
  *  what the fan-out retains on top of the args workerd is deserializing; e2e LARGE EPHEMERAL FAN-OUT). */
 const DELIVERY_IN_FLIGHT_BUDGET_CHARS = 8 * 1024 * 1024;
+/** THE CURSOR-READ BUDGET: the most chars the CURSOR lane may hold across its read-through-call at
+ *  once — a SEPARATE ceiling from the push budget so a cursor reserving a worst-case page never trips
+ *  a live-client push drop. N cursor rows firing on one commit each read a page and hold the batch
+ *  across the awaited call; without this they coexist (20 × an 8 MiB page = 160 MiB, a reset). A
+ *  worst-case page (READ_PAGE_BUDGET_BYTES, and a lone oversized event up to EVENT_BODY_MAX_CHARS) is
+ *  8 MiB, so a full catch-up page fills it and the next cursor read WAITS — big catch-up serializes;
+ *  a small batch is trimmed to its real size and frees the reserve so small cursor deliveries stay
+ *  concurrent and no call head-of-line-blocks the lane. */
+const CURSOR_READ_BUDGET_CHARS = 8 * 1024 * 1024;
 /** The most pending-push chars ALL rows together may hold back — past it the oldest events are
  *  dropped from the LARGEST queue first (each row's own PENDING_PUSH_BUDGET_CHARS still applies).
  *  8 MiB, not 16: the pending queue pins ephemeral arg payloads the same way (see above). */
@@ -120,6 +129,12 @@ export class SubscriptionDelivery {
   #deliveryCharsInFlight = 0;
   /** Deliveries waiting for in-flight room — all woken whenever a call settles, each re-checks. */
   readonly #deliveryRoomWaiters: (() => void)[] = [];
+  /** A SEPARATE budget for the CURSOR lane's read-through-call (CURSOR_READ_BUDGET_CHARS) — kept apart
+   *  from `#deliveryCharsInFlight` on purpose: a cursor delivery reserving a worst-case page must NOT
+   *  count against the push budget, or it would spuriously DROP a racing live-client push (whose drop
+   *  test reads that counter). This bounds only the cursor lane's own catch-up reads. */
+  #cursorReadCharsInFlight = 0;
+  readonly #cursorReadRoomWaiters: (() => void)[] = [];
   readonly #lastDeliveredThroughOffset = new Map<string, number>();
   /** The freshest pushed batch per cursor subscription — how ephemerals reach a caught-up cursor
    *  target (the log has no ephemerals; the push does). Latest wins; a stale one is ignored. */
@@ -341,6 +356,21 @@ export class SubscriptionDelivery {
   #releaseInFlightRoom(chars: number): void {
     this.#deliveryCharsInFlight -= chars;
     for (const wake of this.#deliveryRoomWaiters.splice(0)) wake();
+  }
+
+  /** The cursor lane's own room (CURSOR_READ_BUDGET_CHARS), separate from the push budget. */
+  async #acquireCursorReadRoom(chars: number): Promise<void> {
+    while (
+      this.#cursorReadCharsInFlight > 0 &&
+      this.#cursorReadCharsInFlight + chars > CURSOR_READ_BUDGET_CHARS
+    )
+      await new Promise<void>((resolve) => this.#cursorReadRoomWaiters.push(resolve));
+    this.#cursorReadCharsInFlight += chars;
+  }
+
+  #releaseCursorReadRoom(chars: number): void {
+    this.#cursorReadCharsInFlight -= chars;
+    for (const wake of this.#cursorReadRoomWaiters.splice(0)) wake();
   }
 
   /** The alarm's half: every cursor subscription — a due retry, or one an eviction left mid-delivery.
@@ -587,8 +617,8 @@ export class SubscriptionDelivery {
             this.#pushedEventBatches.delete(name);
             eventBatch = { events: pushedEventBatch.events, through: pushedEventBatch.through };
           } else {
-            await this.#acquireInFlightRoom(DELIVERY_IN_FLIGHT_BUDGET_CHARS);
-            inFlightRoomHeld = DELIVERY_IN_FLIGHT_BUDGET_CHARS;
+            await this.#acquireCursorReadRoom(CURSOR_READ_BUDGET_CHARS);
+            inFlightRoomHeld = CURSOR_READ_BUDGET_CHARS;
             const page = this.#stream.read(cursor.confirmedOffset, 100);
             const ceiling = pushedEventBatch
               ? Math.min(page.scannedThroughOffset, pushedEventBatch.after)
@@ -606,6 +636,18 @@ export class SubscriptionDelivery {
             through: eventBatch.through,
           };
           const durable = eventBatch.events.some((event) => !event.ephemeral);
+          // Adjust the held room to the batch's REAL size. A full catch-up page keeps holding (so
+          // concurrent catch-up reads stay serialized and bounded); a SMALL batch frees the worst-case
+          // reserve so a racing PUSH is not dropped for a full budget and other reads get room. The
+          // read branch (held a worst-case page) only ever RELEASES here — synchronous with the read,
+          // no yield, so it never lets a second read pile a page on. The pushed branch (held 0) acquires
+          // its batch's worth, which may wait.
+          const batchChars = serializedChars(eventBatch.events);
+          if (batchChars > inFlightRoomHeld)
+            await this.#acquireCursorReadRoom(batchChars - inFlightRoomHeld);
+          else if (batchChars < inFlightRoomHeld)
+            this.#releaseCursorReadRoom(inFlightRoomHeld - batchChars);
+          inFlightRoomHeld = batchChars;
           if (eventBatch.events.length === 0) {
             this.#adoptCursor(name, { ...cursor, confirmedOffset: range.through }, true); // a log page: durable ground
             continue;
@@ -626,11 +668,7 @@ export class SubscriptionDelivery {
             // Die mid-call and the alarm survives to re-derive from the rows (memo'd: one write per window).
             this.#stream.armAlarmNoLaterThan(Date.now() + CURSOR_DELIVERY_CALL_WATCHDOG_MS);
             const target = evaluatedTarget;
-            // The read branch already holds the room through this call; the pushed branch takes its own.
-            if (inFlightRoomHeld === 0) {
-              inFlightRoomHeld = serializedChars(eventBatch.events);
-              await this.#acquireInFlightRoom(inFlightRoomHeld);
-            }
+            // Room for this call is already held (batchChars), reserved above before the read.
             await withTimeout(
               target.call([eventBatch.events, range]),
               CURSOR_DELIVERY_CALL_WATCHDOG_MS,
@@ -683,7 +721,7 @@ export class SubscriptionDelivery {
             return;
           }
         } finally {
-          if (inFlightRoomHeld > 0) this.#releaseInFlightRoom(inFlightRoomHeld);
+          if (inFlightRoomHeld > 0) this.#releaseCursorReadRoom(inFlightRoomHeld);
         }
       }
     } finally {
