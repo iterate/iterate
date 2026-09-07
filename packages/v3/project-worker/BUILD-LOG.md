@@ -3655,3 +3655,47 @@ exists as a probe (its harness lane went in the test-hygiene sweep). The 300-rul
   assessment, this log's 2026-09-04/06 entries and the jam notes; every claim cites its source and
   nothing is presented as decided that a source does not record. Its Gap 1/Gap 2 rows and the
   ingress/identity questions were updated once those landed (the two entries above).
+## 2026-09-07 — v4 reviewed against the clean room: the plan to layer its features on v3, and two loader bugs it found
+
+- WHAT: on Jonas's ask, eleven read-only reviewers (one per feature, one for the 34 shared files' diff, one for
+  the project-core experiments, one for the layering philosophy against the human-blessed skeleton in
+  `iterate-context-tutorial`) went over `packages/v4/project-worker` — "the clean room, extended": v3's working
+  tree forked at `b1cd35934` plus 3,245 code lines (9,660 vs v3's 6,415) in 17 new files — and produced
+  `docs/plan-v4-features-layered-on-v3.md`: each feature as a discrete item with what v4 has (measured), what v3
+  has, the layering and API on v3, a sketch, an effort estimate and its dependencies; the tech tree; four waves;
+  the decisions only Jonas can make. The raw reviews are `docs/reviews/2026-09-07-v4-*.md`. Nothing in v4 was
+  edited, built, tested or deployed.
+- THE VERDICT, in the three sources' own words: v3's litmus test, v4's reading guide and the skeleton's
+  NARRATION ("exactly THREE primitives — the context, fetch, and the stream — and everything else is composition
+  on top") agree that repos, build/check, secrets, approvals, provenance and a served MCP endpoint are
+  COMPOSITION; v4's disagreement is only whether composition may be spelled as a flat root. The plan keeps v3's
+  rule and takes v4's capability where it is real: a secrets write door + origin binding (~70 lines), the MCP
+  server as a library member with the project token as the bearer (~230), a hand-written types export (~15),
+  files as a userspace facet (~260; a root only on Jonas's word), the bundler as a sidecar behind two binding
+  roots (~500; no `workers.load`), four memory budgets (~130; then the json5 workspace patch goes), the ingress
+  directory + 421 (~50), the Docs app in userspace (~630), and signed events LAST and conditional (~170). Rejected:
+  approval receipts (speculative: v4's own test shows an unsigned append removes the gate), `workers.load`, a login
+  page and OAuth AS in the project worker, ingress through `itx.fetch`, edge RPC admission, the halt table, the
+  `Itx` alias. ≈2,400 code lines / ≈58 hours for the whole tree, vs v4's +3,245 for the same ground plus the
+  rejected items.
+- WHAT v4 FOUND IN SHIPPED v3 (wave 0 of the plan): (a) the open wildcard mints Durable Objects from the public
+  internet — every DNS label under `*.project-worker.iterate.com` is an address and a context's DO appends
+  `stream/created` on first touch; v4's 421 for an unknown host closes it before any DO is dialled; (b) v3 survives
+  a 4.5 MiB expression literal only because v4's uncommitted `patches/json5@2.2.3.patch` is installed in this
+  worktree (stock json5 OOMs at 128 MiB) — tonight's deployed bundles carry it; an O(1) length cap before
+  `JSON5.parse` makes the patch unnecessary; (c) ten kernel fixes v3 lacks, the first a 32-line `reduceBatch` that
+  flips v3's own red pin on the O(rows²) core re-reduce; (d) two loader bugs, FIXED HERE.
+- THE LOADER FIX (`src/context/worker-loader.ts`): the content hash of a literal module map was one 32-bit djb2,
+  which collides on two-character differences — `"Aa"` and `"B@"` hash alike (verified: 5,862,151 both), and one
+  shared hash is one shared isolate, its whole world (the owning context's `env.ITX`) baked in; now two independent
+  32-bit hashes (djb2 and FNV-1a) plus the length, still synchronous because it runs in the commit path where
+  `crypto.subtle` cannot — a guard against an accidental collision, not a crafted one (the trusted-client doctrine).
+  And the loader id was the `:`-joined `${kind}:${deployId}:${owner}:${sourceVersion}` — an owner or a caller's
+  cacheKey may itself contain `:`, so two different (owner, key) pairs could name ONE isolate, the cross-context
+  authority transfer `facetLoaderOwner` exists to prevent, reopened one field over; now the JSON array
+  `[kind, deployId, owner, sourceVersion]`. Changing the spelling restarts every facet once on its next wake (a
+  new restart marker), storage surviving — as a deploy does. Two new pins in `worker-loader.test.ts` (the colliding
+  pair; an owner and a key that concatenate alike); the four existing rows re-spelled.
+- BOARD: tsc×3 · oxlint 0/0 · unit+workers 460p/12xf (39 files) · DEPLOYED as e0b21345 · deployed e2e 189p/0f/2xf/2sk on 47 files (13 min), exit 0 — every facet restarted once under its new loader id and every processor row stayed green
+- LOC: worker-loader.ts +16/−6 (two hashes, the JSON id, the WHY), its test +48, the walkthrough one line; the plan
+  409 lines; the ten reviews ≈2,400 lines of report.

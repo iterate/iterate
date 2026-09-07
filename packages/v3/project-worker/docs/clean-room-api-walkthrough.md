@@ -1332,7 +1332,7 @@ Bindings (`wrangler.jsonc`):
 | `APP_CONFIG_*` vars   | configuration (`src/app-config.ts`)                 | parsed once per isolate into one typed object; today `APP_CONFIG_ENVIRONMENT_NAME` |
 | `FALLBACK`            | service → `iterate-control-plane#ControlPlaneShell` | the egress terminal                                                                |
 
-The loader cacheKey is `${kind}:${deploy}:${owner}:${cacheKey ?? contentHash}`: the caller's
+The loader cacheKey is the JSON array `[kind, deploy, owner, cacheKey ?? contentHash]` (never a `:`-joined string — an owner or a key may contain `:`): the caller's
 `cacheKey` when the source is a producer expression (required there — the producer runs only
 inside Cloudflare's `getCode`, on a cold isolate), else the modules' content hash. Every
 distinct key is a billed dynamic worker, so nothing per request may ever enter it. Loaded isolates run under one compatibility block (inline in `loadConfinedWorker`): the same

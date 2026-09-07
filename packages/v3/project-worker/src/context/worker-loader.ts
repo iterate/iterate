@@ -84,17 +84,26 @@ const loaderIdGenerations = new Map<string, { generation: number; dead: boolean 
 
 /** The content hash of a literal module map, memoized by the map's IDENTITY. A warm facet push
  *  evaluates `itx.facets.get(name, spec).processEventBatch` with the SAME `spec.source` object every
- *  commit (the row's parsed target in core state), so the per-character djb2 (≈7 µs per KB, on the
- *  producer's append RTT in workerd) runs ONCE per source per incarnation instead of once per push.
- *  A bare-name call reads a fresh kv memo, so it misses — rare, and correct. */
+ *  commit (the row's parsed target in core state), so the per-character hash (on the producer's
+ *  append RTT in workerd) runs ONCE per source per incarnation instead of once per push. A bare-name
+ *  call reads a fresh kv memo, so it misses — rare, and correct. SYNCHRONOUS on purpose (it runs in
+ *  the commit path, where `crypto.subtle` cannot), so it is two independent 32-bit hashes (djb2 and
+ *  FNV-1a) plus the length: djb2 alone collides on two-character differences (`"Aa"` and `"B@"` hash
+ *  alike), and one shared hash is one shared isolate — the v4 review's finding. Not a defence against
+ *  a crafted collision (the trusted-client doctrine); a guard against an accidental one. */
 const contentHashByWorkerModules = new WeakMap<WorkerModules, string>();
 function contentHashOfWorkerModules(modules: WorkerModules): string {
   let hash = contentHashByWorkerModules.get(modules);
   if (hash === undefined) {
     const serialized = JSON.stringify(modules);
-    let h = 5381;
-    for (let i = 0; i < serialized.length; i++) h = ((h << 5) + h + serialized.charCodeAt(i)) | 0;
-    hash = (h >>> 0).toString(36);
+    let djb2 = 5381;
+    let fnv1a = 0x811c9dc5;
+    for (let i = 0; i < serialized.length; i++) {
+      const code = serialized.charCodeAt(i);
+      djb2 = ((djb2 << 5) + djb2 + code) | 0;
+      fnv1a = Math.imul(fnv1a ^ code, 0x01000193);
+    }
+    hash = `${(djb2 >>> 0).toString(36)}-${(fnv1a >>> 0).toString(36)}-${serialized.length.toString(36)}`;
     contentHashByWorkerModules.set(modules, hash);
   }
   return hash;
@@ -177,7 +186,12 @@ export async function loadConfinedWorker(
   //    isolate only — a producer expression is evaluated exactly there, unless the id is DEAD
   //    (`loaderIdGenerations`): then the modules are produced here, outside the loader, and loaded
   //    literally under the next generation of the id.
-  const loaderIdBase = `${opts.kind}:${opts.deployId}:${opts.owner}:${sourceVersion}`;
+  // A JSON array, never `a:b:c`: an owner or a caller's cacheKey may itself contain ":" (a context
+  // path is any string; a build id can be anything), and a joined string would let two different
+  // (owner, key) pairs name ONE isolate — the cross-context authority transfer `facetLoaderOwner`
+  // exists to prevent, reopened one field over. Changing the spelling restarts every facet once on
+  // its next wake (a new restart marker), storage surviving — the same as a deploy does.
+  const loaderIdBase = JSON.stringify([opts.kind, opts.deployId, opts.owner, sourceVersion]);
   let { generation, dead } = loaderIdGenerations.get(loaderIdBase) ?? {
     generation: 0,
     dead: false,
