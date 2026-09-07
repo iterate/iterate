@@ -200,6 +200,7 @@ export class CapabilityHostProcessor extends StreamProcessor<
         // visible to the script this delivery starts.
         const capabilities = args.state.capabilities;
         const fallback = args.state.birthCertificate?.fallback ?? null;
+        const surface = args.state.birthCertificate?.config.surface;
         const preamble = assemblePreamble({
           entries: args.state.preamble,
           results: args.state.settledScriptResults,
@@ -213,6 +214,7 @@ export class CapabilityHostProcessor extends StreamProcessor<
             fallback,
             preamble,
             requestedAtOffset: execution.requestedAtOffset,
+            ...(surface === undefined ? {} : { surface }),
           }),
         );
         continue;
@@ -946,6 +948,8 @@ export class CapabilityHostProcessor extends StreamProcessor<
     fallback: ItxExpression | null;
     preamble: AssembledPreamble | null;
     requestedAtOffset: number;
+    /** The scope's restricted surface from its birth certificate, when set. */
+    surface?: readonly string[];
   }) {
     const now = () => this.#now();
     const executionExpiresAt = input.expiresAt - SCRIPT_EXECUTION_SETTLEMENT_GRACE_MS;
@@ -1039,6 +1043,7 @@ export class CapabilityHostProcessor extends StreamProcessor<
         emittedJs: checked.emittedJs,
         expiresAt: executionExpiresAt,
         preambleJs: input.preamble?.js,
+        ...(input.surface === undefined ? {} : { surface: input.surface }),
         streamContext: {
           kind: "script-execution",
           streamPath: this.#scopePath,
@@ -1201,6 +1206,7 @@ type ScriptExecutionEntrypoint = {
       expiresAt: number;
       preambleJs?: string;
       streamContext: Extract<StreamContext, { kind: "script-execution" }>;
+      surface?: readonly string[];
     },
   ): Promise<unknown>;
 };

@@ -11,7 +11,10 @@ import { buildFacetProcessorSubscriptionConfiguredEvent } from "../streams/utils
 import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
 import { agentWorkspacePath } from "../workspaces/utils.ts";
 import { CapabilityHostProcessorContract } from "../capability-host/capability-host-processor-contract.ts";
-import { capabilityHostCreationEvents } from "../capability-host/capability-host-defaults.ts";
+import {
+  capabilityHostCreationEvents,
+  type CapabilityHostCreateInput,
+} from "../capability-host/capability-host-defaults.ts";
 import {
   AGENT_COLLECTION_CREATED_EVENT_TYPE,
   AGENT_COLLECTION_PATH,
@@ -294,6 +297,14 @@ export function agentCreationForPath<
   projectId: string;
   /** The `agent/created` birth certificate payload. Defaults to `{}`. */
   payload?: AgentCreateInput;
+  /**
+   * The agent scope's capability-host birth certificate. Absent is the
+   * default: `{}` config with the one-hop fallback to the project root. A
+   * restricted agent is born here — `{ config: { surface: ["chat"] }, fallback: null }`
+   * — and, because the certificate lands once under a fixed idempotency
+   * key, cannot be widened afterwards.
+   */
+  capabilityHost?: CapabilityHostCreateInput;
   /** Events that must commit in the same creation batch. */
   initialEvents?: readonly InitialEvent[];
   /**
@@ -344,6 +355,7 @@ export function agentCreationForPath<
     {
       path: agentPath,
       projectId,
+      ...(input.capabilityHost === undefined ? {} : { payload: input.capabilityHost }),
     },
   );
   const workspaceProvided = CapabilityHostProcessorContract.buildEvent({

@@ -116,7 +116,12 @@ type ParentStreamStub = ProcessorFacetAlarmProxy & {
 type ScriptExecutionEntrypointHandle = {
   run(
     code: string,
-    options: { emittedJs?: string; expiresAt: number; preambleJs?: string },
+    options: {
+      emittedJs?: string;
+      expiresAt: number;
+      preambleJs?: string;
+      surface?: readonly string[];
+    },
   ): Promise<ScriptExecutionSettlement>;
 };
 

@@ -4,6 +4,7 @@ import {
   StreamContext as StreamContextSchema,
   type StreamContext,
 } from "../projects/stream-context.ts";
+import { parseItxSurface, type ItxSurface } from "./surface.ts";
 
 /**
  * Minimal ExecutionContext shape the RPC adapter layer needs.
@@ -62,6 +63,12 @@ export type ItxEntrypointScope = {
    * `projectId: string` upstream, so `null` never reaches a worker binding.
    */
   projectId: string | null;
+  /**
+   * Host-minted allowlist of built-in members (see ./surface.ts). Present
+   * means the binding's itx exposes ONLY these members and runs with
+   * project-confined, non-admin authority; absent is the full surface.
+   */
+  surface?: ItxSurface;
 };
 
 export type ItxEntrypointProps = ItxEntrypointScope;
@@ -81,6 +88,7 @@ export function itxEntrypointProps(input: ItxEntrypointScope): ItxEntrypointProp
     path: normalizePath(input.path),
     projectId: input.projectId,
     purpose: input.purpose,
+    ...(input.surface === undefined ? {} : { surface: parseItxSurface(input.surface) }),
   };
 }
 
@@ -101,11 +109,15 @@ export function scopeFromItxEntrypointProps(
   if (props.purpose !== "stream-delivery" && props.purpose !== "userspace") {
     throw new Error("env.ITX.get() requires purpose to be userspace or stream-delivery");
   }
+  if (props.surface !== undefined && props.projectId === null) {
+    throw new Error("env.ITX.get() cannot mint a restricted surface for the global scope");
+  }
   return {
     streamContext: StreamContextSchema.parse(props.streamContext),
     path: normalizePath(props.path),
     projectId: props.projectId,
     purpose: props.purpose,
+    ...(props.surface === undefined ? {} : { surface: parseItxSurface(props.surface) }),
   };
 }
 

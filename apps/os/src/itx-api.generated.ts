@@ -93,7 +93,7 @@ export interface Project {
    * The durable-delivery subscriptions committed in the birth batch are what
    * guarantee the saga runs; create also nudges both root processors AFTER
    * this response, and a failed nudge is telemetry, not a create failure —
-   * the checklist's stall detector covers the rest. Either lane returns this
+   * the checklist's stall detector covers the rest. Either path returns this
    * same handle, and addressing an unknown slug is side-effect free.
    */
   create(
@@ -164,7 +164,7 @@ export interface Project {
   browser: CfBrowserCapability;
   /** This scope's agent control handle, when its address is under `/agents/`. */
   agent?: Agent;
-  /** THIS agent's web-chat door — present only on an agent-scoped itx. */
+  /** THIS agent's web chat — present only on an agent-scoped itx. */
   chat?: AgentChat;
   /**
    * This scope's own capability host: the durable capability table behind
@@ -184,6 +184,15 @@ export interface Project {
   revokeCapability(input: RevokeCapabilityInput): Promise<void>;
   /** Project stream catalog: get(path), list(). */
   streams: ProjectStreamCollection;
+  /**
+   * A NARROWER itx for `path` — the one way to hand an itx to code that
+   * must not hold this scope's authority (a visitor's browser session, a
+   * helper that should only talk). The result exposes ONLY the listed
+   * built-in members, keeps `path`'s dynamic mounts, and runs with
+   * project-confined, non-admin authority. Never widens: it is minted from
+   * THIS project only.
+   */
+  scope(input: { path: string; surface: string[] }): Project;
   /** Agent catalog: get(path), list(). */
   agents: AgentCollection;
   /** Connected clients: the project processor's catalog plus each scope's capability host. */
@@ -192,7 +201,7 @@ export interface Project {
   egress: ProjectEgress;
   /** Project email: send(...) and the connection-scoped inbound address. */
   email: EmailCapability;
-  /** The docs door: `search({ q })` finds e2e-tested example scripts, type
+  /** The docs: `search({ q })` finds e2e-tested example scripts, type
    * declarations, and this scope's mounted capabilities; `get({ name })`
    * fetches one. Pass search MANY related words — matching is dumb word
    * overlap. */
@@ -487,7 +496,7 @@ export interface CfBrowserCapability {
 export interface Agent {
   /**
    * The agent scope's own capability host (provide/revoke/runScript/
-   * __describe) — and the explicit dotted door to the scope's DYNAMIC
+   * __describe) — and the explicit dotted path to the scope's DYNAMIC
    * capabilities: `agents.get(path).capabilityHost.someTool(args)`. The
    * shorthand `agents.get(path).someTool(args)` resolves through the same
    * host via the handle's prototype-chain fallback; both pipeline over
@@ -516,7 +525,7 @@ export interface Agent {
    * outside the Agent vocabulary or for an intentionally ephemeral event.
    */
   append(...events: AgentEventInput[]): Promise<StreamEvent[]>;
-  /** The agent's web-chat door (what the user sees). */
+  /** The agent's web chat: what the user sees. */
   chat: AgentChat;
   /**
    * Create the generic agent machinery on this stream and wait until the
@@ -530,9 +539,21 @@ export interface Agent {
    * Identical-payload retries dedupe on the birth idempotency keys; a create
    * over an existing agent with a different payload fails loudly.
    */
-  create(payload?: AgentCreateInput): Promise<Agent>;
+  create(
+    payload?: AgentCreateInput,
+    options?: {
+      /**
+       * The agent scope's capability-host birth certificate — how a
+       * RESTRICTED agent is born: `{ config: { surface: ["chat"] }, fallback: null }`
+       * gives its scripts only `itx.chat` plus this scope's own mounts, with
+       * project-confined authority and no inheritance from the root host.
+       * Fixed at birth: the certificate lands once under a fixed key.
+       */
+      capabilityHost?: CapabilityHostCreateInput;
+    },
+  ): Promise<Agent>;
   /**
-   * Send a message to this agent — THE inbound door for every caller. The
+   * Send a message to this agent — THE inbound method for every caller. The
    * context item's actor derives from the calling scope: inside an agent script
    * (itx scoped to an agent path), the message is stamped
    * `{ type: "agent", path }` and does NOT refill the receiver's autonomous
@@ -3092,6 +3113,12 @@ export type StreamEvent = {
  * object of caller-authored birth facts; `{}` is the norm). */
 export type AgentCreateInput = { [x: string]: unknown };
 
+/** The `capability-host/created` payload — the scope's birth certificate. */
+export type CapabilityHostCreateInput = {
+  config: { surface?: string[] | undefined };
+  fallback?: unknown;
+};
+
 /**
  * Bytes accepted by every file-writing surface. Strings are ALWAYS treated as
  * base64 (optionally a full `data:` URL) — that is what Workers AI image
@@ -3104,9 +3131,6 @@ export type FileData = string | ArrayBuffer | Uint8Array | Blob | ReadableStream
  * file-storage path, size, and the signed public URL minted at attach time
  * (stored, not re-minted — it expires with its signature). */
 export type AgentFileAttachment = NonNullable<AgentContextAddedPayload["files"]>[number];
-
-/** The `capability-host/created` payload — the scope's birth certificate. */
-export type CapabilityHostCreateInput = { config: Record<string, never>; fallback?: unknown };
 
 /**
  * `setPreamble` recipe: one keyed entry of TypeScript injected above every
