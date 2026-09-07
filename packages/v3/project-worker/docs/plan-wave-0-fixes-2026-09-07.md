@@ -47,14 +47,14 @@ hosts" without touching the DO. Two designs; pick one:
   `invokeCapability` answers `{ ok: true }` unconditionally), so this is ~50 lines in the worker plus the shell's
   first real state, and a project that wants a host has to be registered somewhere other than its own log.
 
-**Recommendation:** A now — it is the smaller change, it needs nothing outside this package, and it keeps the
-doctrine that the log is the interface. B is the directory that 1.7 of the parked plan builds later for pretty slugs
-and custom domains; A's index becomes one input to it. **Also take from v4, 2 lines:** normalize the Host (strip a
-trailing `.`, a leading `*.`) — a fully-qualified `Host: site--p.project-worker.iterate.com.` misses
-`projectHostOf`'s `endsWith` today and falls through to the platform doors instead of the app.
+**DECIDED (Jonas, Plannotator 2026-09-07): B.** The control plane is "super mega simple": one Worker reached over
+Workers RPC, a D1 database through sqlfu (as the sqlfu GitHub examples do it) that knows which projects exist —
+and that is it. Design A is dropped. The edge asks that control plane before it dials a DO; an unknown host is 421.
+**Also take from v4, 2 lines:** normalize the Host (strip a trailing `.`, a leading `*.`) — a fully-qualified
+`Host: site--p.project-worker.iterate.com.` misses `projectHostOf`'s `endsWith` today and falls through to the
+platform doors instead of the app.
 
-**Effort:** ~1.5 h with the deployed proof. **Owner:** this session (worker.ts, project-host.ts, the DO's commit effects,
-app-config).
+**Effort:** ~3 h with the deployed proof. **Owner:** this session (the control plane, worker.ts, project-host.ts, app-config).
 
 ## Issue 2 — the clean room only works because of a patch that is not in the repo
 
@@ -73,9 +73,13 @@ partly an accident of this worktree.
 **Proof (red on a clean checkout):** `expression-memory`-style child test: parse a 4.5 MiB literal under
 `--max-old-space-size=128` with stock json5 → OOM. Today's tree cannot show it red without reverting the patch.
 
-**The fix: refuse the oversize argument before json5 ever sees it, O(1).** A length check on the argument text in
-`expression.ts` before `JSON5.parse` (~8 lines, coded `EXPRESSION_TOO_LARGE`), at a ceiling that keeps a legitimate
-inlined source (the 2 MB checkpoint cell is the neighbouring constant) and refuses the absurd in milliseconds. And
+**DECIDED (Jonas): a MUCH lower cap, and the parsed form for anything big.** A string itx expression is for what
+a person types; it is refused above a couple of kilobytes with a descriptive error that says to pass the parsed
+form (the array) instead — the array form carries any argument as plain data and never meets json5. So the cap in
+`expression.ts` before `JSON5.parse` is ~2 KiB, coded `EXPRESSION_TOO_LARGE`, and the tests that inline a worker
+source into a string target move to the array form. Two notes for the Misha conversation: whether the parsed form
+should be the canonical wire shape everywhere; and whether built-in targets should be strongly typed (the shape of
+a worker loader's args known to the codec) rather than parsed text. And
 the thing that lets a source that large in at all: the facet startup memo (`kv.put('facet:<name>')`) has no ceiling,
 so an oversize source fails LATE at materialization and is re-parsed from the log on every post-eviction wake — a
 ceiling on the memo (~20 lines in `core-processor.ts`, one error code, a `CoreContract.version` bump so every context
@@ -89,6 +93,11 @@ d3 or by agreement).
 ## Issue 3 — two things to MEASURE before anyone writes a fix
 
 **3a. Loaded isolates may be emitting native failure telemetry on every WebSocket and every outbound fetch.**
+_To be clear, because the sentence reads worse than it is:_ a dynamic worker CAN serve WebSocket upgrades and CAN
+fetch out — `e2e/fetch-door-dynamic-live-ws` and tonight's ingress WebSocket row prove it end to end, bytes correct,
+clean close. The finding is only that Cloudflare's own trace for such a request may record an `exception` /
+`canceled` outcome on the parent span although the request succeeded — a telemetry (and possibly billing or
+error-rate) artefact of the named-loader + `globalOutbound` shape, not a functional limit.
 `packages/v3/project-core-ws-probe` (a sibling experiment, read-only) has dated, deployed A/B traces: a NAMED
 `LOADER.get(id, getCode)` whose loaded child either returns a 101 upgrade or fetches through an injected
 `globalOutbound` produces native `exception` / `canceled` telemetry rows although every client assertion passes;
@@ -103,6 +112,12 @@ for that request chain (`wrangler tail` or the dashboard's Workers Logs; observa
 rows are there. Decides whether the cacheKey strategy everything sits on must change. ~1 h. **Owner:** this session.
 
 **3b. An evicted context with a cursor subscription may be waking, and billing, every 60 seconds forever.**
+_Evicted context:_ a Durable Object whose isolate Cloudflare has unloaded from memory after inactivity (the
+hibernation / quiesce path); its storage persists, and the next request or the next alarm re-creates the instance —
+the constructor runs again, which is where `stream/woken` is appended. **DECIDED (Jonas): this must not be able to
+happen — "we need runaway billing controls."** So beyond the probe and v4's fix, wave 0 adds a control: a context
+that has woken itself N times in a row from its own alarm with no public door touched in between stops re-arming
+the alarm and records why (one durable fact, one log line) until a real request arrives. Pinned deployed.
 Read from the code, not run: the alarm fires → the constructor appends `stream/woken` → `onCommit` arms the cursor
 alarm and delivers → delivery records activity → `alarm()`'s quiesce branch is skipped and it re-arms at
 `lastActivity + 60 s` (`iterate-context-durable-object.ts:531-533`) → the isolate is evicted → repeat. One billed
@@ -145,9 +160,7 @@ checked). Three small commits, in this order:
 
 **C — hygiene (~35 lines).** A bounded 300-char error-body read instead of buffering a whole body; `close()` over
 `Symbol.dispose` in `releaseConnections`, reporting failures; a coded `INVALID_CONTEXT` (a bare `Error` loses its
-class across the hop); report instead of swallow in `#unsetWhatNamesRpcStub`. Optional and a decision: classify a
-platform DO reset (`retryable && durableObjectReset && !overloaded`) as an expected interruption in the logs — it
-de-noises them and it hides the resets.
+class across the hop); report instead of swallow in `#unsetWhatNamesRpcStub`. NOT taken (Jonas): classifying platform DO resets as expected interruptions in the logs — they stay visible.
 
 **Not taken:** v4's drift — `stream/processor.ts` 191 → 10 comment lines and `subscription-delivery.ts` 181 → 12
 with no behaviour change, 21 abbreviated names, a new noun `ContextLeaseBook`, an uncached SHA-256 content hash that
@@ -175,24 +188,26 @@ itself, and an oddity a router-shaped app will hit. v4 refuses it with a coded e
 
 ## Sequence and totals
 
-| #   | item                                                                               | owner                                 | hours   |
-| --- | ---------------------------------------------------------------------------------- | ------------------------------------- | ------- |
-| 1   | the open wildcard: opt-in serving index + 421 + Host normalization, deployed proof | this session                          | 1.5     |
-| 2   | the expression length cap + the memo ceiling, then drop the json5 patch            | this session (+ d3 for the memo hunk) | 1.5     |
-| 3a  | the loader-telemetry probe                                                         | this session                          | 1       |
-| 3b  | the wake-loop probe                                                                | d3                                    | 1       |
-| 4A  | core re-reduce, `using` release, `core` reserved at the door                       | d3                                    | 3       |
-| 4B  | halt-once, lease-is-the-handle, poisoned stub                                      | d3                                    | 4.5     |
-| 4C  | hygiene                                                                            | this session                          | 1.5     |
-|     | **total**                                                                          |                                       | **~14** |
+| #   | item                                                                                                                                                                       | owner                                 | hours   |
+| --- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------- | ------- |
+| 1   | the open wildcard: the minimal control plane (Workers RPC + D1 via sqlfu, "which projects exist"), the edge asks before dialling, 421 + Host normalization, deployed proof | this session                          | 3       |
+| 2   | the ~2 KiB string-expression cap (tests move to the array form) + the memo ceiling, then drop the json5 patch                                                              | this session (+ d3 for the memo hunk) | 1.5     |
+| 3a  | the loader-telemetry probe                                                                                                                                                 | this session                          | 1       |
+| 3b  | the wake-loop probe, then the fix AND the runaway-wake control, pinned deployed                                                                                            | d3                                    | 3       |
+| 4A  | core re-reduce, `using` release, `core` reserved at the door                                                                                                               | d3                                    | 3       |
+| 4B  | halt-once, lease-is-the-handle, poisoned stub                                                                                                                              | d3                                    | 4.5     |
+| 4C  | hygiene                                                                                                                                                                    | this session                          | 1.5     |
+|     | **total**                                                                                                                                                                  |                                       | **~18** |
 
 Deploy discipline as always: one deployer at a time, every fix proved against the deployed worker in the sequential
 lane, a BUILD-LOG entry per commit, nothing outside the clean room touched.
 
-## Decisions for Jonas
+## Decisions (Jonas, Plannotator, 2026-09-07)
 
-1. Issue 1: design A (opt-in serving index in KV, eventual) or B (control-plane directory, strongly consistent)?
-2. Issue 2: who drops the json5 patch from `pnpm-workspace.yaml` — it is another session's uncommitted change and
-   other workspace consumers are unaudited.
-3. Issue 4C: classify platform DO resets as expected interruptions in the logs (quieter, but hides them)?
-4. Issue 3: run both probes before 4A/4B, or let d3 start 4A in parallel (it does not depend on either probe)?
+1. Issue 1: **B** — the minimal control plane (Workers RPC, D1 via sqlfu, which projects exist, nothing else).
+2. Issue 2: **a cap of a couple of kilobytes on string expressions; big arguments ride the parsed form.** And
+   **drop the json5 patch.**
+3. Issue 4C: **keep the reset logs visible.**
+4. Issue 3: order is the implementer's call — d3 starts 4A in parallel with the 3b probe; the runaway-wake control is
+   mandatory, not optional.
+5. For Misha: the parsed form as the canonical wire shape; strongly typed built-in targets.
