@@ -111,7 +111,7 @@ test("an hour over the ceiling earlier today is in the table without a fresh rep
     "We're spending $0.40/day on durable objects based on current usage ($0.40 dev/preview)",
   );
   expect(thread.details).toContain(
-    "dev/preview  04:00 → 3 (~$0.02/h)  2,268 ≈ $13  1/3 over 500  —",
+    "dev/preview  04:00 → 3 (~$0.02/h)  2,268 ≈ $13       1/3 over 500        —",
   );
 });
 
