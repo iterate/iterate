@@ -149,3 +149,25 @@ export function formatConfigRepoTemplateReference(reference: ConfigRepoTemplateR
 export function normalizeConfigRepoTemplateReference(input: string): string {
   return formatConfigRepoTemplateReference(parseConfigRepoTemplateReference(input));
 }
+
+/**
+ * Pin an UNPINNED canonical-repo (iterate/iterate) template reference to the
+ * deployment's own source ref — the same pinning the new-project picker's
+ * options get (configRepoTemplateOptionsForDeployment). Without this, an
+ * explicit unpinned reference on a preview seeds MAIN's template folder, so a
+ * template content change is unreachable until merge (the exact trap the
+ * preview workflow documents for the picker path). References that already
+ * carry a ref, target another repo, or run on a deployment with no source
+ * ref pass through unchanged.
+ */
+export function pinConfigRepoTemplateReferenceToDeployment(
+  reference: string,
+  deploymentSourceRef: string | undefined,
+): string {
+  if (deploymentSourceRef === undefined) return reference;
+  const parsed = parseConfigRepoTemplateReference(reference);
+  if (parsed.ref !== undefined || parsed.owner !== "iterate" || parsed.repo !== "iterate") {
+    return reference;
+  }
+  return formatConfigRepoTemplateReference({ ...parsed, ref: deploymentSourceRef });
+}

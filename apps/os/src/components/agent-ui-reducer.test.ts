@@ -2163,3 +2163,91 @@ describe("live status derivation", () => {
     expect(resumed.paused).toBe(false);
   });
 });
+
+describe("derived render facts (project derivation processors)", () => {
+  test("ephemeral message/script deltas stream classified prose and code onto the live step", () => {
+    const reduced = reduceAll([
+      { type: "events.iterate.com/agent/llm-request-requested", payload: { model: "m" } },
+      {
+        type: "events.iterate.com/render/message-delta",
+        ephemeral: true,
+        payload: { llmRequestOffset: 1, text: "Let me" },
+      },
+      {
+        type: "events.iterate.com/render/message-delta",
+        ephemeral: true,
+        payload: { llmRequestOffset: 1, text: "Let me compute that." },
+      },
+      {
+        type: "events.iterate.com/render/script-delta",
+        ephemeral: true,
+        payload: { llmRequestOffset: 1, code: "return primeF", status: "factorizing" },
+      },
+      {
+        type: "events.iterate.com/render/script-delta",
+        ephemeral: true,
+        payload: {
+          llmRequestOffset: 1,
+          code: "return primeFactors(484214)",
+          status: "factorizing",
+        },
+      },
+    ]);
+    expect(reduced.live?.steps[0]).toMatchObject({
+      kind: "llm",
+      status: "running",
+      liveProse: "Let me compute that.",
+      // Windows extend with each delta's fresh suffix so only new text animates.
+      liveProseWindows: ["Let me", " compute that."],
+      liveScript: { code: "return primeFactors(484214)", status: "factorizing" },
+    });
+  });
+
+  test("a derived event's source.offset marks the raw assistant step interpreted — no prose message needed", () => {
+    const reduced = reduceAll([
+      { type: "events.iterate.com/agent/llm-request-requested", payload: { model: "m" } },
+      {
+        type: "events.iterate.com/agents/context-added",
+        payload: {
+          role: "assistant",
+          content: '<codemode status="Working">\nreturn 1\n</codemode>',
+          llmRequestOffset: 1,
+        },
+      },
+      // A script-only turn: the derivation processor emits the execution
+      // request sourced to the raw assistant event, and never a chat message.
+      {
+        type: "events.iterate.com/capability-host/script-run-requested",
+        source: { offset: 2 },
+        payload: {
+          code: "async (itx) => 1",
+          executionId: "agent-output:2",
+          expiresAt: SCRIPT_EXPIRES_AT,
+        },
+      },
+    ] as Parameters<typeof reduceAll>[0]);
+    expect(reduced.live?.steps[0]).toMatchObject({
+      kind: "llm",
+      assistantEventOffset: 2,
+      interpreted: true,
+    });
+  });
+
+  test("deltas after the step settles are ignored", () => {
+    const reduced = reduceAll([
+      { type: "events.iterate.com/agent/llm-request-requested", payload: { model: "m" } },
+      {
+        type: "events.iterate.com/agent/llm-request-settled",
+        payload: { requestOffset: 1, result: { status: "succeeded", text: "done" } },
+      },
+      {
+        type: "events.iterate.com/render/message-delta",
+        ephemeral: true,
+        payload: { llmRequestOffset: 1, text: "stale" },
+      },
+    ]);
+    const llmStep = reduced.live?.steps[0];
+    expect(llmStep).toMatchObject({ kind: "llm", status: "done" });
+    expect((llmStep as { liveProse?: string } | undefined)?.liveProse).toBeUndefined();
+  });
+});

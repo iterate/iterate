@@ -224,21 +224,16 @@ function LlmOnlyRound({
           {llm.thinkingText}
         </div>
       )}
-      {llm.responseText === "" ? null : looksLikeCode(llm.responseText) ? (
-        <div
-          className={cn("w-full max-w-2xl", llm.interpreted && "opacity-75")}
-          data-testid={llm.interpreted ? "agent-feed-raw-response" : undefined}
-        >
+      {/* An interpreted response is not shown here at all: its derived views
+          (the chat bubble, the script card) are the story, and the raw text
+          stays reachable through Full trace. Raw renders only as fallback
+          when nothing derived from the response. */}
+      {llm.responseText === "" || llm.interpreted ? null : looksLikeCode(llm.responseText) ? (
+        <div className="w-full max-w-2xl">
           <SourceCodeBlock code={llm.responseText} language="typescript" showLineNumbers={false} />
         </div>
       ) : (
-        <div
-          className={cn(
-            "max-w-2xl whitespace-pre-wrap px-1.5 text-sm leading-relaxed",
-            llm.interpreted && "text-muted-foreground",
-          )}
-          data-testid={llm.interpreted ? "agent-feed-raw-response" : undefined}
-        >
+        <div className="max-w-2xl whitespace-pre-wrap px-1.5 text-sm leading-relaxed">
           {llm.responseText}
         </div>
       )}

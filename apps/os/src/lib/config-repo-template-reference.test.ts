@@ -1,8 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, test } from "vitest";
 import {
   formatConfigRepoTemplateReference,
   normalizeConfigRepoTemplateReference,
   parseConfigRepoTemplateReference,
+  pinConfigRepoTemplateReferenceToDeployment,
 } from "./config-repo-template-reference.ts";
 
 describe("config repo template references", () => {
@@ -69,5 +70,34 @@ describe("config repo template references", () => {
     "git+https://github.com/iterate/iterate.git?token=nope",
   ])("rejects %s", (input) => {
     expect(() => parseConfigRepoTemplateReference(input)).toThrow();
+  });
+});
+
+describe("pinConfigRepoTemplateReferenceToDeployment", () => {
+  test("pins an unpinned canonical-repo reference to the deployment's source ref", () => {
+    expect(
+      pinConfigRepoTemplateReferenceToDeployment(
+        "github:iterate/iterate#path:configs/codemode-tag",
+        "abc123",
+      ),
+    ).toBe("github:iterate/iterate#abc123&path:configs/codemode-tag");
+  });
+
+  test("leaves already-pinned, foreign-repo, and no-deployment-ref references alone", () => {
+    expect(
+      pinConfigRepoTemplateReferenceToDeployment(
+        "github:iterate/iterate#main&path:configs/codemode-tag",
+        "abc123",
+      ),
+    ).toBe("github:iterate/iterate#main&path:configs/codemode-tag");
+    expect(
+      pinConfigRepoTemplateReferenceToDeployment("github:someone/else#path:configs/x", "abc123"),
+    ).toBe("github:someone/else#path:configs/x");
+    expect(
+      pinConfigRepoTemplateReferenceToDeployment(
+        "github:iterate/iterate#path:configs/codemode-tag",
+        undefined,
+      ),
+    ).toBe("github:iterate/iterate#path:configs/codemode-tag");
   });
 });

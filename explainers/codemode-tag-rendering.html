@@ -1,0 +1,1310 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>How a codemode-tag message becomes pixels</title>
+    <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/npm/codemirror@5.65.18/lib/codemirror.min.css"
+    />
+    <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.18/lib/codemirror.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.18/mode/yaml/yaml.min.js"></script>
+    <style>
+      :root {
+        --fg: #1a1a1a;
+        --muted: #666;
+        --line: #e5e5e5;
+        --code: #fafafa;
+        --accent: #0e7490;
+        --sel: #e0f2fe;
+        --add: #dcfce7;
+        --eph: #a855f7;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --fg: #e5e5e5;
+          --muted: #999;
+          --line: #333;
+          --code: #191919;
+          --accent: #22d3ee;
+          --sel: #0c2f3a;
+          --add: #14331f;
+          --eph: #c084fc;
+        }
+        body {
+          background: #111;
+        }
+        .CodeMirror {
+          background: var(--code);
+          color: var(--fg);
+        }
+        .CodeMirror .cm-comment {
+          color: #8a8a5c;
+        }
+        .CodeMirror .cm-atom,
+        .CodeMirror .cm-number {
+          color: #7fb4d8;
+        }
+        .CodeMirror .cm-meta {
+          color: #999;
+        }
+        .CodeMirror .cm-string {
+          color: #a8c98a;
+        }
+        .CodeMirror .cm-keyword {
+          color: #c586c0;
+        }
+        .CodeMirror-gutters {
+          background: var(--code);
+          border-color: var(--line);
+        }
+      }
+      body {
+        font:
+          14px/1.5 ui-sans-serif,
+          system-ui,
+          sans-serif;
+        color: var(--fg);
+        margin: 0;
+      }
+      header {
+        padding: 1rem 1.5rem 0.5rem;
+      }
+      header h1 {
+        margin: 0;
+        font-size: 1.3rem;
+      }
+      header p {
+        color: var(--muted);
+        margin: 0.3rem 0 0;
+        max-width: 62rem;
+      }
+      .opinion {
+        margin: 0 1.5rem;
+        border: 2px solid var(--accent);
+        border-radius: 8px;
+        padding: 0.7rem 1rem;
+        max-width: 60rem;
+      }
+      .opinion ol {
+        margin: 0.4rem 0 0.2rem 1.2rem;
+        padding: 0;
+      }
+      .layout {
+        display: grid;
+        grid-template-columns: minmax(26rem, 48rem) minmax(26rem, 1fr);
+        gap: 1.5rem;
+        padding: 1rem 1.5rem 4rem;
+        align-items: start;
+      }
+      @media (max-width: 980px) {
+        .layout {
+          grid-template-columns: 1fr;
+        }
+        .rendered {
+          position: static !important;
+          max-height: none !important;
+        }
+      }
+      h2 {
+        font-size: 1.05rem;
+        border-bottom: 1px solid var(--line);
+        padding-bottom: 0.3rem;
+        margin: 2rem 0 0.5rem;
+      }
+      .scenario p {
+        max-width: 46rem;
+      }
+      .ev {
+        border: 1px solid var(--line);
+        border-left: 4px solid var(--line);
+        border-radius: 6px;
+        margin: 0.45rem 0;
+        cursor: pointer;
+      }
+      .ev:hover {
+        border-color: var(--accent);
+      }
+      .ev.selected {
+        background: var(--sel);
+        border-left-color: var(--accent);
+      }
+      .ev.ephemeral {
+        border-style: dashed;
+      }
+      .ev.ephemeral .off {
+        color: var(--eph);
+      }
+      .ev .row {
+        display: flex;
+        align-items: baseline;
+        gap: 0.5em;
+        padding: 0.45rem 0.7rem 0.1rem;
+        font:
+          12.5px/1.45 ui-monospace,
+          monospace;
+      }
+      .ev .off {
+        color: var(--accent);
+        font-weight: 700;
+        white-space: nowrap;
+      }
+      .ev .type {
+        color: var(--fg);
+      }
+      .ev .t {
+        color: var(--muted);
+        font-size: 11px;
+        white-space: nowrap;
+        margin-left: auto;
+      }
+      .ev .badge {
+        color: var(--accent);
+        font-size: 11px;
+        background: var(--code);
+        border: 1px solid var(--line);
+        border-radius: 4px;
+        padding: 0 0.35em;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        max-width: 18em;
+      }
+      .ev .badge.src {
+        color: var(--eph);
+      }
+      .ev .note {
+        font:
+          12px/1.4 ui-sans-serif,
+          system-ui,
+          sans-serif;
+        color: var(--muted);
+        padding: 0 0.7rem 0.45rem;
+      }
+      .ev .yaml {
+        display: none;
+        border-top: 1px solid var(--line);
+      }
+      .ev.expanded .yaml {
+        display: block;
+      }
+      .rendered {
+        position: sticky;
+        top: 0;
+        max-height: 100vh;
+        overflow: auto;
+        padding: 0.5rem 0;
+        display: flex;
+        flex-direction: column;
+      }
+      .rendered h3 {
+        margin: 0.2rem 0 0.5rem;
+        font-size: 1rem;
+      }
+      .rendered h3 .off {
+        color: var(--accent);
+      }
+      .rendered .cmhost {
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        overflow: hidden;
+      }
+      .CodeMirror {
+        height: auto;
+        font-size: 12px;
+      }
+      .rendered .CodeMirror {
+        height: calc(100vh - 6.5rem);
+      }
+      .line-added {
+        background: var(--add);
+      }
+      code {
+        background: var(--code);
+        padding: 0.1em 0.35em;
+        border-radius: 4px;
+        font-size: 0.92em;
+      }
+      .vocab {
+        margin: 1rem 1.5rem 0;
+        max-width: 60rem;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 0.2rem 1rem 0.6rem;
+      }
+      .vocab summary {
+        cursor: pointer;
+        font-weight: 600;
+        padding: 0.5rem 0;
+      }
+      .vocab table {
+        border-collapse: collapse;
+        font-size: 12.5px;
+        width: 100%;
+        margin: 0.3rem 0 0.8rem;
+      }
+      .vocab th,
+      .vocab td {
+        border: 1px solid var(--line);
+        padding: 0.35rem 0.55rem;
+        text-align: left;
+        vertical-align: top;
+      }
+      .vocab th {
+        color: var(--muted);
+        font-weight: 600;
+      }
+      .vocab td:first-child {
+        white-space: nowrap;
+        font-family: ui-monospace, monospace;
+        font-size: 12px;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>How a codemode-tag message becomes pixels</h1>
+      <p>
+        Click any event card: it expands to the full event (YAML), and the right pane shows
+        <strong>what the chat feed renders as of that offset</strong> — computed live by a miniature
+        of the real fold. Dashed purple cards are <strong>ephemeral</strong> events: real offsets,
+        bodies never stored, delivered only to live subscribers. The <code>src=@N</code> badge is
+        the derivation link: this event was computed from the raw event at offset N.
+      </p>
+    </header>
+    <div class="opinion">
+      <strong>The opinion — renderers never parse formats; they fold facts.</strong> A model's raw
+      output is a fact (exact bytes, prompt-cache identity, replay truth) — but it is written in a
+      <em>format</em> (markdown + one <code>&lt;codemode&gt;</code> tag) that only the project owns.
+      So:
+      <ol>
+        <li>
+          <strong>The project's derivation processor is the one parser.</strong> The same code that
+          executes a <code>&lt;codemode&gt;</code> block also emits the events renderers show: the
+          prose as <code>web-message-sent</code>, the script as <code>script-run-requested</code>,
+          the status as <code>summary-updated</code> — each stamped with
+          <code>source: {offset}</code>, a top-level envelope field pointing at the raw event it
+          derives from. New format → new processor; zero renderer changes.
+        </li>
+        <li>
+          <strong>Derived events ARE the feed; raw is the fallback.</strong> A raw assistant event
+          that something derived from stops rendering as content (its step is "interpreted"; the
+          bubble and script card are the story, Full trace keeps raw reachable). A raw event nothing
+          derives from renders as today — which is also, deliberately, the whole no-backcompat story
+          for old threads and processor-less projects.
+        </li>
+        <li>
+          <strong>The live window derives incrementally over ephemeral events.</strong> The token
+          stream already rides ephemeral <code>llm-response-chunks</code>; the processor consumes
+          them (naming the type in <code>consumes</code> — a wildcard never receives ephemeral
+          events) and re-emits ephemeral <code>render/message-delta</code> +
+          <code>render/script-delta</code>. Prose streams as prose, code as code, mid-stream — the
+          tags-on-their-own-line grammar makes the streaming parse a line walk. Nothing durable ever
+          depends on these: the durable facts land at settlement.
+        </li>
+      </ol>
+    </div>
+    <details class="vocab" open>
+      <summary>Reference — the events, and who writes them</summary>
+      <table>
+        <tr>
+          <th>event</th>
+          <th>what it is</th>
+        </tr>
+        <tr>
+          <td>agents/context-added</td>
+          <td>
+            <strong>Raw model-visible context.</strong> The assistant's exact output (the codemode
+            dialect lives in its <code>content</code>), user messages, and developer items (rendered
+            script results, corrective feedback). Written by the platform's agent processor
+            (assistant), members (user), or the derivation processor (developer renders).
+          </td>
+        </tr>
+        <tr>
+          <td>agent/llm-response-chunks</td>
+          <td>
+            <strong>Ephemeral token stream</strong>, ~150ms coalesced flushes, memory-only.
+            Delivered only to subscribers/processors that name it explicitly. The durable truth for
+            its content is the assistant context-added that follows.
+          </td>
+        </tr>
+        <tr>
+          <td>render/message-delta · render/script-delta</td>
+          <td>
+            <strong>Ephemeral derived deltas</strong> from the interpreter's line-buffered partial
+            parse of the chunk stream: cumulative prose-so-far and script-so-far (+ the status label
+            once its opening tag streamed). A dropped delta costs latency, never content. The only
+            new durable-vocabulary opinion the kernel took was… none: durable derived facts reuse
+            platform vocabulary + <code>source</code>.
+          </td>
+        </tr>
+        <tr>
+          <td>
+            agents/web-message-sent · agent/summary-updated ·
+            capability-host/script-run-requested/-settled
+          </td>
+          <td>
+            <strong>The durable derived facts</strong> (pre-existing platform vocabulary, now
+            carrying <code>source: {offset}</code> when a derivation processor emits them): the
+            assistant chat bubble, the live activity label, the script execution request and its
+            settlement. The heavy payloads (script body, result) live exactly once — the
+            Script/Result tabs dereference these raw events instead of copying.
+          </td>
+        </tr>
+        <tr>
+          <td>render/user-message-described</td>
+          <td>
+            <strong>The one new durable derived type</strong> (stacked PR): a user message's html
+            attachment parts
+            (<code>&lt;img&gt;</code>/<code>&lt;audio&gt;</code>/<code>&lt;video&gt;</code>/<code>&lt;a&gt;</code>)
+            parsed into <code>{text, attachments}</code> by the reusable user-message-describer
+            facet. The feed re-emits the bubble under its original id; both renderers replace it in
+            place.
+          </td>
+        </tr>
+        <tr>
+          <td>source: {offset}</td>
+          <td>
+            <strong>The derivation link</strong> — third member of the pre-existing top-level source
+            envelope (next to the processor stamp and copiedFrom). A claim, not authentication, like
+            idempotency keys. The reducer marks the step at that offset "interpreted"; feeds sort
+            derived facts where their source sits, so late re-derivation lands in place.
+          </td>
+        </tr>
+        <tr>
+          <td>the interpreter facet</td>
+          <td>
+            The codemode-tag template's derivation processor, hosted as a
+            <strong>facet of the agent stream's own Durable Object</strong> (at-least-once delivery
+            + keepalive — the old project-worker push lane was observation-grade and could silently
+            drop a turn). Same raw idempotency keys as the platform's parser, so birth races dedupe
+            instead of double-executing.
+          </td>
+        </tr>
+      </table>
+    </details>
+    <div class="layout">
+      <main id="scenarios"></main>
+      <aside class="rendered" id="rendered">
+        <h3 id="rtitle">Feed as of…</h3>
+        <div class="cmhost" id="cmhost"></div>
+      </aside>
+    </div>
+    <script>
+      // ---------- a miniature of the real fold (agent-ui-reducer, hand-waved) ----------
+      const T = "events.iterate.com/";
+      function freshState() {
+        return { items: [], live: null, deferred: [], liveByRequest: {} };
+      }
+      function step(state, off) {
+        if (!state.live) return null;
+        return state.live.steps.find((s) => s.req === off) || null;
+      }
+      function settleLive(state) {
+        if (state.live) {
+          state.items.push({ kind: "activity", ...state.live, status: "done" });
+          state.live = null;
+        }
+        for (const m of state.deferred) state.items.push(m);
+        state.deferred = [];
+      }
+      function upsertItem(state, item) {
+        const i = state.items.findIndex((x) => x.id === item.id);
+        if (i === -1) state.items.push(item);
+        else state.items[i] = item;
+      }
+      function applyEvent(state, ev) {
+        const p = ev.payload || {};
+        switch (ev.kind) {
+          case "user":
+            settleLive(state);
+            upsertItem(state, {
+              kind: "user",
+              id: "user-" + ev.off,
+              text: p.content,
+              files: p.files,
+            });
+            break;
+          case "request":
+            if (!state.live) state.live = { id: "act-" + ev.off, steps: [] };
+            state.live.steps.push({
+              kind: "llm",
+              req: ev.off,
+              status: "running",
+              raw: "",
+              liveProse: null,
+              liveScript: null,
+              interpreted: false,
+            });
+            break;
+          case "chunks": {
+            const s = step(state, p.llmRequestOffset);
+            if (s && s.status === "running") s.raw += p.delta;
+            break;
+          }
+          case "mdelta": {
+            const s = step(state, p.llmRequestOffset);
+            if (s && s.status === "running") s.liveProse = p.text;
+            break;
+          }
+          case "sdelta": {
+            const s = step(state, p.llmRequestOffset);
+            if (s && s.status === "running") s.liveScript = { code: p.code, status: p.status };
+            break;
+          }
+          case "assistant": {
+            const s = step(state, p.llmRequestOffset);
+            if (s) {
+              s.raw = p.content;
+              s.assistantOff = ev.off;
+              s.liveProse = null;
+              s.liveScript = null;
+            }
+            break;
+          }
+          case "settled": {
+            const s = step(state, p.requestOffset);
+            if (s) s.status = "done";
+            break;
+          }
+          case "summary":
+            if (state.live) state.live.label = p.activity;
+            break;
+          case "scriptreq": {
+            if (ev.source) {
+              const s = (state.live ? state.live.steps : []).find(
+                (x) => x.assistantOff === ev.source,
+              );
+              if (s) s.interpreted = true;
+            }
+            if (!state.live) state.live = { id: "act-" + ev.off, steps: [] };
+            state.live.steps.push({
+              kind: "code",
+              id: p.executionId,
+              status: "running",
+              label: state.live.label,
+            });
+            break;
+          }
+          case "scriptsettled": {
+            const c = state.live && state.live.steps.find((x) => x.id === p.executionId);
+            if (c) {
+              c.status = "done";
+              c.result = JSON.stringify(p.settlement.result);
+            }
+            break;
+          }
+          case "devctx":
+            break; // model input, not another bubble
+          case "wms": {
+            if (ev.source) {
+              const s = (state.live ? state.live.steps : []).find(
+                (x) => x.assistantOff === ev.source,
+              );
+              if (s) s.interpreted = true;
+            }
+            const msg = { kind: "assistant", id: "assistant-" + ev.off, text: p.message };
+            if (state.live) state.deferred.push(msg);
+            else state.items.push(msg);
+            break;
+          }
+          case "described": {
+            upsertItem(state, {
+              kind: "user",
+              id: "user-" + ev.source,
+              text: p.text,
+              attachments: p.attachments,
+              described: true,
+            });
+            break;
+          }
+          case "revived":
+            break;
+          case "idle":
+            settleLive(state);
+            break;
+        }
+      }
+      // ---------- render: state -> what the feed shows ----------
+      function feedLines(state) {
+        const lines = [];
+        const push = (text, key) => lines.push({ text, key });
+        push("feed:", "head");
+        const emitItem = (item) => {
+          if (item.kind === "user") {
+            const key =
+              "u:" +
+              item.id +
+              ":" +
+              item.text +
+              ":" +
+              (item.attachments ? JSON.stringify(item.attachments) : "");
+            push(
+              "  - user bubble" +
+                (item.described
+                  ? "            # ← re-emitted by the described fact, row replaced in place"
+                  : ""),
+              key,
+            );
+            for (const l of String(item.text).split("\n"))
+              push("      " + JSON.stringify(l).slice(1, -1), key);
+            if (item.attachments)
+              for (const a of item.attachments)
+                push(
+                  "      [" +
+                    a.kind +
+                    " " +
+                    (a.filename || a.latitude + "," + a.longitude) +
+                    (a.width ? " " + a.width + "×" + a.height : "") +
+                    "]",
+                  key,
+                );
+            if (item.files && !item.attachments)
+              for (const f of item.files) push("      [file " + f + "]", key);
+            return;
+          }
+          if (item.kind === "assistant") {
+            const key = "a:" + item.id + ":" + item.text;
+            push("  - assistant bubble        # from web-message-sent — THE message fact", key);
+            for (const l of String(item.text).split("\n"))
+              push("      " + JSON.stringify(l).slice(1, -1), key);
+            return;
+          }
+          emitActivity(item, "done");
+        };
+        const emitActivity = (act, status) => {
+          const reqs = act.steps.filter((s) => s.kind === "llm").length;
+          const codes = act.steps.filter((s) => s.kind === "code").length;
+          const head =
+            "  - activity (" +
+            reqs +
+            " request" +
+            (reqs === 1 ? "" : "s") +
+            (codes ? " · ran code" : "") +
+            ") — " +
+            status;
+          push(head, "act:" + act.id + ":" + status + ":" + act.steps.length);
+          for (const s of act.steps) {
+            if (s.kind === "llm") {
+              const key =
+                "llm:" +
+                s.req +
+                ":" +
+                s.status +
+                ":" +
+                (s.liveProse || "") +
+                ":" +
+                JSON.stringify(s.liveScript) +
+                ":" +
+                s.interpreted +
+                ":" +
+                s.raw;
+              push(
+                "      llm @" +
+                  s.req +
+                  ": " +
+                  s.status +
+                  (s.interpreted
+                    ? "   # interpreted — raw text hidden; bubble + script card are the story"
+                    : ""),
+                key,
+              );
+              if (s.liveProse !== null) {
+                push(
+                  "        liveProse:   " +
+                    JSON.stringify(s.liveProse) +
+                    "   # ← streams as prose (derived delta)",
+                  key,
+                );
+                if (s.liveScript) {
+                  if (s.liveScript.status)
+                    push("        liveStatus:  " + JSON.stringify(s.liveScript.status), key);
+                  push(
+                    "        liveScript:  " +
+                      JSON.stringify(s.liveScript.code) +
+                      "   # ← streams as code",
+                    key,
+                  );
+                }
+              } else if (!s.interpreted && s.raw) {
+                push(
+                  "        rawText:     " +
+                    JSON.stringify(s.raw.length > 70 ? s.raw.slice(0, 70) + "…" : s.raw) +
+                    (s.status === "running"
+                      ? "   # fallback live view: raw, tags and all"
+                      : "   # fallback settled view: raw, tag soup visible"),
+                  key,
+                );
+              }
+            } else {
+              const key = "code:" + s.id + ":" + s.status + ":" + (s.result || "");
+              push(
+                "      code " +
+                  s.id +
+                  ": " +
+                  s.status +
+                  (s.label ? "   # label: " + JSON.stringify(s.label) : ""),
+                key,
+              );
+              if (s.result !== undefined)
+                push(
+                  "        result: " +
+                    s.result +
+                    "   # Result tab dereferences the raw settlement event",
+                  key,
+                );
+            }
+          }
+        };
+        for (const item of state.items) emitItem(item);
+        if (state.live) emitActivity(state.live, "LIVE");
+        if (state.deferred.length) {
+          for (const m of state.deferred) {
+            const key = "d:" + m.id;
+            push("deferred:                     # bubbles wait for the activity to settle", key);
+            push("  - assistant: " + JSON.stringify(m.text), key);
+          }
+        }
+        if (lines.length === 1) push("  (empty)", "empty");
+        return lines;
+      }
+      function feedYaml(state, beforeState) {
+        const lines = feedLines(state);
+        const beforeKeys = beforeState ? new Set(feedLines(beforeState).map((l) => l.key)) : null;
+        const out = [];
+        const marks = [];
+        for (const l of lines) {
+          out.push(l.text);
+          if (beforeKeys && !beforeKeys.has(l.key))
+            marks.push({ line: out.length - 1, cls: "added" });
+        }
+        return { text: out.join("\n"), marks };
+      }
+      // ---------- scenario data ----------
+      const ev = (off, t, kind, type, payload, note, extra) => ({
+        off,
+        t,
+        kind,
+        type,
+        payload,
+        note,
+        ...(extra || {}),
+      });
+      const CODE = "return primeFactors(484214)";
+      const FULL =
+        'Let me compute that.\n<codemode status="factorizing">\n' + CODE + "\n</codemode>";
+      const LIVE_EVENTS = [
+        ev(
+          41,
+          "0ms",
+          "user",
+          T + "agents/context-added",
+          { role: "user", content: "what are the prime factors of 484214?" },
+          "a plain user message — no attachment parts, nothing to derive; the raw event is the bubble",
+        ),
+        ev(
+          42,
+          "250ms",
+          "request",
+          T + "agent/llm-request-requested",
+          { model: "openai/gpt-5.6-terra" },
+          "debounce fired; the live activity opens",
+        ),
+        ev(
+          43,
+          "0.9s",
+          "chunks",
+          T + "agent/llm-response-chunks",
+          { llmRequestOffset: 42, sequence: 0, delta: "Let me compute" },
+          "ephemeral raw flush #0 (~150ms coalescing window)",
+          { ephemeral: true },
+        ),
+        ev(
+          44,
+          "0.95s",
+          "mdelta",
+          T + "render/message-delta",
+          { llmRequestOffset: 42, text: "Let me compute" },
+          "the interpreter's derived delta: everything so far is prose — the live card streams it AS PROSE",
+          { ephemeral: true },
+        ),
+        ev(
+          45,
+          "1.4s",
+          "chunks",
+          T + "agent/llm-response-chunks",
+          {
+            llmRequestOffset: 42,
+            sequence: 1,
+            delta: ' that.\n<codemode status="factorizing">\nreturn primeF',
+          },
+          "flush #1 crosses the tag boundary mid-line",
+          { ephemeral: true },
+        ),
+        ev(
+          46,
+          "1.45s",
+          "mdelta",
+          T + "render/message-delta",
+          { llmRequestOffset: 42, text: "Let me compute that." },
+          'prose CLOSES at the tag line — the line-buffered parse withholds the partial "<codemode…" line, so tag syntax never flashes as text',
+          { ephemeral: true },
+        ),
+        ev(
+          47,
+          "1.45s",
+          "sdelta",
+          T + "render/script-delta",
+          { llmRequestOffset: 42, code: "return primeF", status: "factorizing" },
+          "…and the script delta opens, status attribute included: the label shows WHILE the model is still typing the code",
+          { ephemeral: true },
+        ),
+        ev(
+          48,
+          "2.1s",
+          "chunks",
+          T + "agent/llm-response-chunks",
+          { llmRequestOffset: 42, sequence: 2, delta: "actors(484214)\n</codemode>" },
+          "flush #2 closes the tag",
+          { ephemeral: true },
+        ),
+        ev(
+          49,
+          "2.15s",
+          "sdelta",
+          T + "render/script-delta",
+          { llmRequestOffset: 42, code: CODE, status: "factorizing" },
+          "cumulative, not a diff: a dropped frame costs latency, never content",
+          { ephemeral: true },
+        ),
+        ev(
+          50,
+          "2.6s",
+          "assistant",
+          T + "agents/context-added",
+          { role: "assistant", content: FULL, llmRequestOffset: 42 },
+          "the DURABLE truth of the whole response — exact bytes, prompt-cache identity. The live accumulator clears; nothing durable ever depended on the deltas",
+        ),
+        ev(
+          51,
+          "2.6s",
+          "settled",
+          T + "agent/llm-request-settled",
+          { requestOffset: 42, result: { status: "succeeded" } },
+          "",
+        ),
+        ev(
+          52,
+          "2.8s",
+          "summary",
+          T + "agent/summary-updated",
+          { activity: "factorizing" },
+          "the interpreter's settlement batch, 1/3: the status attribute becomes the activity label",
+          { source: 50 },
+        ),
+        ev(
+          53,
+          "2.8s",
+          "scriptreq",
+          T + "capability-host/script-run-requested",
+          { executionId: "agent-output:50", code: "async (itx) => {\n" + CODE + "\n}" },
+          "2/3: the extracted script. src=@50 marks the raw step interpreted — its tag-soup text stops rendering",
+          { source: 50 },
+        ),
+        ev(
+          54,
+          "2.8s",
+          "wms",
+          T + "agents/web-message-sent",
+          { message: "Let me compute that.", llmRequestOffset: 42 },
+          "3/3: the prose as THE message fact — deferred below the running activity, exactly like a mid-script sendMessage",
+          { source: 50 },
+        ),
+        ev(
+          55,
+          "3.4s",
+          "scriptsettled",
+          T + "capability-host/script-run-settled",
+          {
+            executionId: "agent-output:50",
+            settlement: { status: "succeeded", result: [2, 61, 3967], durationMs: 220 },
+          },
+          "the capability host settles; the result payload lives HERE, once — the Result tab dereferences it",
+        ),
+        ev(
+          56,
+          "3.4s",
+          "devctx",
+          T + "agents/context-added",
+          {
+            role: "developer",
+            content: "Your script returned (in 0.2s):\n```json\n[2, 61, 3967]\n```",
+          },
+          "the interpreter renders the result back as model input (after-current-request) — a turn driver, not a bubble",
+          { source: 55 },
+        ),
+        ev(
+          57,
+          "3.7s",
+          "request",
+          T + "agent/llm-request-requested",
+          { model: "openai/gpt-5.6-terra" },
+          "the rendered result triggers the closing turn",
+        ),
+        ev(
+          58,
+          "4.9s",
+          "assistant",
+          T + "agents/context-added",
+          { role: "assistant", content: "484214 = 2 × 61 × 3967.", llmRequestOffset: 57 },
+          "prose alone — the format's way of ending a turn",
+        ),
+        ev(
+          59,
+          "4.9s",
+          "settled",
+          T + "agent/llm-request-settled",
+          { requestOffset: 57, result: { status: "succeeded" } },
+          "",
+        ),
+        ev(
+          60,
+          "5.0s",
+          "wms",
+          T + "agents/web-message-sent",
+          { message: "484214 = 2 × 61 × 3967.", llmRequestOffset: 57 },
+          "the closing bubble",
+          { source: 58 },
+        ),
+        ev(
+          61,
+          "5.0s",
+          "idle",
+          "(activity settles)",
+          {},
+          "no more work owed: the activity archives, deferred bubbles flush — final feed: user, activity, two clean bubbles, zero tag soup",
+        ),
+      ];
+      const scenarios = [
+        {
+          id: "live",
+          title: "Scenario 1 — a codemode round trip, streamed and derived",
+          intro:
+            "The whole pipeline in one exchange. Watch the right pane at @44–@49: while the model is mid-emission the feed streams prose as prose and code as code, with the status label live — because the interpreter consumes the ephemeral chunk stream and re-emits classified ephemeral deltas. Then the durable half at @52–@54: the same parse, at settlement, emits the platform facts with src=@50, and the raw step flips to interpreted.",
+          events: LIVE_EVENTS,
+        },
+        {
+          id: "fallback",
+          title: "Scenario 2 — no derivation processor: raw is the fallback",
+          intro:
+            "The same raw events on a project with no interpreter (or a legacy thread predating one). Nothing derives, so nothing supersedes: the live card streams the RAW text — half-open tags and all — and the settled step keeps its tag soup. Ugly, honest, and exactly what every thread did before this design. This fallback is also the entire no-backcompat story: old formats aren't migrated, they just render raw.",
+          events: [
+            ev(
+              41,
+              "0ms",
+              "user",
+              T + "agents/context-added",
+              { role: "user", content: "what are the prime factors of 484214?" },
+              "",
+            ),
+            ev(
+              42,
+              "250ms",
+              "request",
+              T + "agent/llm-request-requested",
+              { model: "openai/gpt-5.6-terra" },
+              "",
+            ),
+            ev(
+              43,
+              "0.9s",
+              "chunks",
+              T + "agent/llm-response-chunks",
+              {
+                llmRequestOffset: 42,
+                sequence: 0,
+                delta: 'Let me compute that.\n<codemode status="factoriz',
+              },
+              "no interpreter → no deltas → the live view falls back to raw streaming (the mid-stream half-open tag is the cosmetic cost)",
+              { ephemeral: true },
+            ),
+            ev(
+              50,
+              "2.6s",
+              "assistant",
+              T + "agents/context-added",
+              { role: "assistant", content: FULL, llmRequestOffset: 42 },
+              "nothing will ever source this event…",
+            ),
+            ev(
+              51,
+              "2.6s",
+              "settled",
+              T + "agent/llm-request-settled",
+              { requestOffset: 42, result: { status: "succeeded" } },
+              "…so it renders as-is, forever: no bubble, no script card, the raw text in the activity card",
+            ),
+            ev(61, "8s", "idle", "(activity settles)", {}, ""),
+          ],
+        },
+        {
+          id: "retro",
+          title: "Scenario 3 — retroactive derivation: a late processor catches up",
+          intro:
+            "The interpreter facet was down when the turn settled (this exact shape happened on preview-9 during the build: the facet had the wrong base class and consumed nothing). The turn strands raw. When the fixed facet boots it catches up FROM OFFSET ZERO and derives the stranded turn — src=@50 links land minutes later, and because the fold keys everything by source, the bubble and script card appear and the raw text hides, in place. Late derivation is indistinguishable from fast derivation.",
+          events: [
+            ev(
+              41,
+              "0ms",
+              "user",
+              T + "agents/context-added",
+              { role: "user", content: "what are the prime factors of 484214?" },
+              "",
+            ),
+            ev(
+              42,
+              "250ms",
+              "request",
+              T + "agent/llm-request-requested",
+              { model: "openai/gpt-5.6-terra" },
+              "",
+            ),
+            ev(
+              50,
+              "2.6s",
+              "assistant",
+              T + "agents/context-added",
+              { role: "assistant", content: FULL, llmRequestOffset: 42 },
+              "settles raw — the facet is down; the feed shows scenario 2's fallback",
+            ),
+            ev(
+              51,
+              "2.6s",
+              "settled",
+              T + "agent/llm-request-settled",
+              { requestOffset: 42, result: { status: "succeeded" } },
+              "",
+            ),
+            ev(
+              70,
+              "3m 10s",
+              "revived",
+              T + "stream/processor-revived",
+              { processor: "codemode-interpreter" },
+              "the fixed facet boots and catches up from offset 0 (at-least-once delivery + keepalive — the upgrade over the old observation-grade lane)",
+            ),
+            ev(
+              71,
+              "3m 10s",
+              "summary",
+              T + "agent/summary-updated",
+              { activity: "factorizing" },
+              "",
+              { source: 50 },
+            ),
+            ev(
+              72,
+              "3m 10s",
+              "scriptreq",
+              T + "capability-host/script-run-requested",
+              { executionId: "agent-output:50", code: "async (itx) => {\n" + CODE + "\n}" },
+              "the raw idempotency keys mean a replay can never double-execute",
+              { source: 50 },
+            ),
+            ev(
+              73,
+              "3m 10s",
+              "wms",
+              T + "agents/web-message-sent",
+              { message: "Let me compute that.", llmRequestOffset: 42 },
+              "the bubble appears three minutes late — and in the right place",
+              { source: 50 },
+            ),
+            ev(
+              74,
+              "3m 11s",
+              "scriptsettled",
+              T + "capability-host/script-run-settled",
+              {
+                executionId: "agent-output:50",
+                settlement: { status: "succeeded", result: [2, 61, 3967], durationMs: 240 },
+              },
+              "the adopted script runs to completion — the turn the outage stranded finishes itself",
+            ),
+            ev(
+              75,
+              "3m 11s",
+              "idle",
+              "(activity settles)",
+              {},
+              "final feed: identical shape to a turn that was never stranded",
+            ),
+          ],
+        },
+        {
+          id: "evict",
+          title: "Scenario 4 — eviction mid-stream: deltas silenced, truth unharmed",
+          intro:
+            "Ephemeral events are never redelivered, so a facet incarnation that dies mid-stream has lost the early chunks forever. The fresh incarnation sees a sequence GAP and poisons its accumulator for that request — emitting wrong prose parsed from half a text would be worse than emitting nothing. The live view degrades to raw streaming; the durable settlement derivation (from the durable assistant event, not the chunks) is untouched.",
+          events: [
+            ev(
+              41,
+              "0ms",
+              "user",
+              T + "agents/context-added",
+              { role: "user", content: "what are the prime factors of 484214?" },
+              "",
+            ),
+            ev(
+              42,
+              "250ms",
+              "request",
+              T + "agent/llm-request-requested",
+              { model: "openai/gpt-5.6-terra" },
+              "",
+            ),
+            ev(
+              43,
+              "0.9s",
+              "chunks",
+              T + "agent/llm-response-chunks",
+              { llmRequestOffset: 42, sequence: 0, delta: "Let me compute" },
+              "flush #0 → the OLD incarnation derived a delta… then the deploy evicted it",
+              { ephemeral: true },
+            ),
+            ev(
+              44,
+              "0.95s",
+              "mdelta",
+              T + "render/message-delta",
+              { llmRequestOffset: 42, text: "Let me compute" },
+              "",
+              { ephemeral: true },
+            ),
+            ev(
+              48,
+              "2.1s",
+              "chunks",
+              T + "agent/llm-response-chunks",
+              { llmRequestOffset: 42, sequence: 2, delta: "actors(484214)\n</codemode>" },
+              "the fresh incarnation's first sight is sequence 2 — the gap poisons the accumulator; no delta follows",
+              { ephemeral: true },
+            ),
+            ev(
+              50,
+              "2.6s",
+              "assistant",
+              T + "agents/context-added",
+              { role: "assistant", content: FULL, llmRequestOffset: 42 },
+              "the durable event carries the FULL text — settlement derivation needs nothing from the lost chunks",
+            ),
+            ev(
+              52,
+              "2.8s",
+              "summary",
+              T + "agent/summary-updated",
+              { activity: "factorizing" },
+              "",
+              { source: 50 },
+            ),
+            ev(
+              53,
+              "2.8s",
+              "scriptreq",
+              T + "capability-host/script-run-requested",
+              { executionId: "agent-output:50", code: "async (itx) => {\n" + CODE + "\n}" },
+              "",
+              { source: 50 },
+            ),
+            ev(
+              54,
+              "2.8s",
+              "wms",
+              T + "agents/web-message-sent",
+              { message: "Let me compute that.", llmRequestOffset: 42 },
+              "the settled feed is identical to scenario 1's — only the live window degraded",
+              { source: 50 },
+            ),
+          ],
+        },
+        {
+          id: "userattach",
+          title: "Scenario 5 — the symmetric half: a user message's attachments (stacked PR)",
+          intro:
+            "User messages are derived the same way. The mobile composer writes html attachment parts (one per line, filenames keying into the event's files[] — never a src, signed urls mint at the edge); the reusable user-message-describer facet parses them into ONE durable fact; the feed re-emits the bubble under its original id and both renderers replace the row in place. Until the fact lands (or forever, on an old thread) the bubble shows the raw part lines — the same fallback rule as everything else.",
+          events: [
+            ev(
+              80,
+              "0ms",
+              "user",
+              T + "agents/context-added",
+              {
+                role: "user",
+                content:
+                  'three from the trip\n<img alt="beach.jpg" width="1200" height="900">\n<img alt="cliff.jpg" width="900" height="1200">\n<a href="geo:51.5074,-0.1278" data-accuracy-m="15">Shared location</a>',
+                files: ["beach.jpg", "cliff.jpg"],
+              },
+              "raw first: the bubble briefly shows the part lines as text",
+            ),
+            ev(
+              81,
+              "0.3s",
+              "described",
+              T + "render/user-message-described",
+              {
+                text: "three from the trip",
+                attachments: [
+                  { kind: "image", filename: "beach.jpg", width: 1200, height: 900 },
+                  { kind: "image", filename: "cliff.jpg", width: 900, height: 1200 },
+                  { kind: "location", latitude: 51.5074, longitude: -0.1278 },
+                ],
+              },
+              "one durable fact: cleaned caption + typed attachments (the mosaic's exact dimensions, the map card's coordinates). src=@80 → the bubble re-emits under its original id and the row is replaced",
+              { source: 80 },
+            ),
+          ],
+        },
+      ];
+      // ---------- event-card yaml ----------
+      function y(str) {
+        return JSON.stringify(String(str));
+      }
+      function eventYaml(evnt) {
+        const lines = ["offset: " + evnt.off, "type: " + evnt.type];
+        if (evnt.ephemeral)
+          lines.push("ephemeral: true      # body never stored; live subscribers only");
+        if (evnt.source)
+          lines.push(
+            "source:",
+            "  offset: " + evnt.source + "      # derived from the raw event at this offset",
+          );
+        lines.push("payload:");
+        const emit = (obj, indent) => {
+          for (const [k, v] of Object.entries(obj)) {
+            if (Array.isArray(v)) {
+              lines.push(indent + k + ": " + JSON.stringify(v));
+            } else if (v && typeof v === "object") {
+              lines.push(indent + k + ":");
+              emit(v, indent + "  ");
+            } else
+              lines.push(
+                indent + k + ": " + (typeof v === "number" || typeof v === "boolean" ? v : y(v)),
+              );
+          }
+        };
+        emit(evnt.payload || {}, "  ");
+        return lines.join("\n");
+      }
+      function cardBadges(evnt) {
+        const b = [];
+        if (evnt.ephemeral) b.push({ text: "ephemeral", cls: "src" });
+        if (evnt.source) b.push({ text: "src=@" + evnt.source, cls: "src" });
+        const p = evnt.payload || {};
+        if (p.role) b.push({ text: p.role });
+        if (p.executionId) b.push({ text: p.executionId });
+        if (typeof p.sequence === "number") b.push({ text: "seq=" + p.sequence });
+        if (p.activity) b.push({ text: "activity=" + p.activity });
+        return b;
+      }
+      // ---------- wiring ----------
+      let selectedEl = null,
+        feedCm = null;
+      const cmhost = document.getElementById("cmhost");
+      function show(scenario, evnt) {
+        const all = scenario.events;
+        const idx = all.indexOf(evnt);
+        const upTo = (list) => {
+          const st = freshState();
+          for (const e of list) applyEvent(st, e);
+          return st;
+        };
+        const now = upTo(all.slice(0, idx + 1));
+        const before = idx > 0 ? upTo(all.slice(0, idx)) : null;
+        const { text, marks } = feedYaml(now, before);
+        document.getElementById("rtitle").innerHTML =
+          'Feed as of <span class="off">@' +
+          evnt.off +
+          '</span> <span style="font-weight:400;color:var(--muted)">(' +
+          scenario.title.split(" — ")[0] +
+          " · t=" +
+          evnt.t +
+          ")</span>";
+        if (!feedCm)
+          feedCm = CodeMirror(cmhost, {
+            value: text,
+            mode: "yaml",
+            readOnly: true,
+            lineWrapping: true,
+            viewportMargin: Infinity,
+          });
+        else feedCm.setValue(text);
+        feedCm.operation(() => {
+          for (let i = 0; i < feedCm.lineCount(); i++) feedCm.removeLineClass(i, "background");
+          for (const m of marks) feedCm.addLineClass(m.line, "background", "line-" + m.cls);
+        });
+        if (marks[0]) feedCm.scrollIntoView({ line: Math.max(0, marks[0].line - 3), ch: 0 }, 120);
+        history.replaceState(null, "", "#" + scenario.id + "@" + evnt.off);
+      }
+      function makeCard(scenario, evnt) {
+        const d = document.createElement("div");
+        d.className = "ev" + (evnt.ephemeral ? " ephemeral" : "");
+        d.id = "ev-" + scenario.id + "-" + evnt.off;
+        const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;");
+        const badges = cardBadges(evnt)
+          .map((b) => '<span class="badge ' + (b.cls || "") + '">' + esc(b.text) + "</span>")
+          .join("");
+        d.innerHTML =
+          '<div class="row"><span class="off">@' +
+          evnt.off +
+          '</span><span class="type">' +
+          esc(evnt.type.replace(T, "")) +
+          "</span>" +
+          badges +
+          '<span class="t">' +
+          esc(evnt.t) +
+          "</span></div>" +
+          (evnt.note ? '<div class="note">' + esc(evnt.note) + "</div>" : "") +
+          '<div class="yaml"></div>';
+        let cm = null;
+        d.addEventListener("click", () => {
+          if (selectedEl === d) {
+            d.classList.toggle("expanded");
+            return;
+          }
+          if (selectedEl) {
+            selectedEl.classList.remove("selected");
+            selectedEl.classList.remove("expanded");
+          }
+          selectedEl = d;
+          d.classList.add("selected");
+          d.classList.add("expanded");
+          if (!cm)
+            cm = CodeMirror(d.querySelector(".yaml"), {
+              value: eventYaml(evnt),
+              mode: "yaml",
+              readOnly: true,
+              lineWrapping: true,
+              viewportMargin: Infinity,
+            });
+          else cm.refresh();
+          show(scenario, evnt);
+        });
+        return d;
+      }
+      const main = document.getElementById("scenarios");
+      for (const sc of scenarios) {
+        const h = document.createElement("section");
+        h.className = "scenario";
+        h.innerHTML = "<h2>" + sc.title + "</h2><p>" + sc.intro + "</p>";
+        for (const evnt of sc.events) h.appendChild(makeCard(sc, evnt));
+        main.appendChild(h);
+      }
+      const dl = location.hash.match(/^#(\w+)@(\d+)$/);
+      const dlTarget = dl && document.getElementById("ev-" + dl[1] + "-" + dl[2]);
+      if (dlTarget) {
+        dlTarget.click();
+        dlTarget.scrollIntoView({ block: "center" });
+      } else document.getElementById("ev-live-47").click();
+    </script>
+  </body>
+</html>
