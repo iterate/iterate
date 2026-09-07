@@ -3036,10 +3036,20 @@ SQLITE_TOOBIG` used to cross the hop from inside the write. Local workerd (4 MiB
   ceiling for fan-out; or accept it as a client-behaviour limit per the trusted-client doctrine
   ([[feedback_trusted_clients_radical_simplicity]] — 30 concurrent 7 MiB ephemerals to N co-located
   facets is an extreme burst; the per-event 8 MiB ceiling is the defence).
-- The pin stays RED (`deployed.fails`) with this diagnosis in its comment. RECOVERY was repointed to
-  the fan-out (concurrent readers no longer reset) and made SERVICEABILITY-based (e5a187d13) — the
-  fan-out reset is probabilistic, so asserting a reset occurred flaked; it now asserts the ctx is
-  serviceable after the burst whether or not this run reset. Degradation file stable at 6p/1xf.
+- RESOLUTION (live-53, e38f787e4): lever (a), a per-DO facet-push SERIAL GATE (large pushes one at a
+  time, live-52), was the third attempt and also did NOT close it — one large facet push at a time
+  PLUS the concurrent args still resets, which confirms the dominant term is the co-located facet's
+  own memory, not anything the parent serialises. Per the peer's direction ("one cycle on (a), else
+  document (c)") and `no speculative machinery`, the gate was REVERTED. The fan-out is now an ACCEPTED
+  CLIENT-BEHAVIOUR LIMIT (c): 30 concurrent 7 MiB ephemerals to N co-located facets is extreme, the
+  per-event 8 MiB ceiling is the real defence, and the blast radius is a TRANSIENT reset. The e2e row
+  flipped from `deployed.fails` (no-reset) to a plain `deployed` DOCUMENTED-LIMIT test that fires the
+  burst and asserts the ctx RECOVERS (core snapshot + a small append land) — folding in the old
+  RECOVERY row. KEPT as memory hygiene (proven not to regress): classify facets at catch-up (4147f60fc,
+  bounds #pushedEventBatches for freshly-enabled facets) and the 16→8 MiB delivery budgets (ef7c1c883).
+- PROVEN (live-53): degradation file 6 passed / 0 expected fail (every row a passing assertion — the
+  fan-out row recovers); push-delivery-throughput soak 4 passed (>1000 ev/s, p95 < 1500 ms — the
+  256 B flood to 50 facets is unaffected by the kept changes). tsc x3, oxfmt/oxlint clean.
 
 ## 2026-09-04 — the DO owns both ends of a lent stub's rule: the pager upgrade carries the rule, one round trip
 
