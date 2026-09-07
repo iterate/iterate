@@ -80,6 +80,19 @@ const READ_OUTSTANDING_BUDGET_BYTES = 16 * 1024 * 1024;
 const READ_PAGE_MIN_BUDGET_BYTES = 512 * 1024;
 const READ_OUTSTANDING_PAGE_TTL_MS = 5_000;
 
+/** THE SELF-WAKE HALT STREAK — the billing circuit-breaker (wave-0 3b, Jonas: "we need runaway
+ *  billing controls"). A context that fires its alarm this many times IN A ROW with NO public door
+ *  touched in between has woken itself for nothing — a cursor subscription on `stream/woken`
+ *  re-waking the context every minute (the constructor appends `woken`, the cursor row arms the
+ *  alarm to deliver it, the delivery records activity so the quiesce is skipped and the alarm
+ *  re-arms, the isolate is evicted, the alarm re-creates it), or a retry ladder grinding on a
+ *  context no one is using. Past this, `armAlarmNoLaterThan` stops arming (below) — one billed wake
+ *  per minute becomes zero — until a real request clears the streak. Low, because each self-wake is
+ *  a billed wake and a durable row: five is a few minutes of a loop, not hours. A live retry ladder
+ *  is self-limiting anyway (≤ 15 attempts, then it halts on its own); this bounds the UNBOUNDED
+ *  case. The durable count lives in stream-storage's `stream_meta`. */
+const SELF_WAKE_HALT_STREAK = 5;
+
 /** The waitForEvent selector: `type` is an exact event-type match (absent = any type); only events
  *  with offset strictly greater than `afterOffset` match (default = the head at call time — "the
  *  next occurrence"; history-inclusive waits pass an explicit afterOffset); `timeoutMs` defaults to
@@ -158,6 +171,11 @@ export class Stream {
   readonly #readAdmissionWaiters: Array<() => void> = [];
   #readAdmissionSweepTimer?: ReturnType<typeof setTimeout>;
   #alarmArmedForMs: number | null = null;
+  /** Consecutive self-wakes (alarm-only incarnations, no public door) — the billing circuit-breaker
+   *  (SELF_WAKE_HALT_STREAK). Durable in `stream_meta`, loaded once at construction so
+   *  `armAlarmNoLaterThan` can gate on it synchronously; the host DO drives it (`noteSelfWake` on an
+   *  alarm-only pass, `notePublicDoor` on a real request). */
+  #selfWakeStreak = 0;
 
   // ── THE CORE REDUCE: the stream's own state (core-processor.ts), event-sourced from its own log.
   // The processor is a pure reduce; the REDUCED STATE lives here — rehydrated by the constructor from
@@ -174,6 +192,7 @@ export class Stream {
 
   constructor(deps: StreamDeps) {
     this.storage = new StreamStorage(deps.storage);
+    this.#selfWakeStreak = this.storage.readSelfWakeStreak(); // durable across incarnations
     this.#path = deps.path;
     this.#projectId = deps.projectId;
     this.#onCommit = deps.onCommit;
@@ -698,6 +717,11 @@ export class Stream {
    *  an earlier one, which is safe because every alarm() pass re-derives its obligations and
    *  re-arms. */
   armAlarmNoLaterThan(atMs: number): void {
+    // THE BILLING CIRCUIT-BREAKER: a context halted for self-waking (below) stops arming its alarm
+    // entirely — the single chokepoint every arm site (this class, subscription-delivery.ts) goes
+    // through, so the loop cannot re-arm from anywhere. A real request clears the streak first (the
+    // host calls notePublicDoor before its work), so this only ever suppresses an ALARM-driven arm.
+    if (this.selfWakeHalted()) return;
     if (this.#alarmArmedForMs !== null && this.#alarmArmedForMs <= atMs) return;
     this.#alarmArmedForMs = atMs;
     // Not awaited: the native output gate owns the write and turns an async failure into an
@@ -707,6 +731,33 @@ export class Stream {
 
   noteAlarmFired(): void {
     this.#alarmArmedForMs = null;
+  }
+
+  /** True once the self-wake streak has hit its ceiling — `armAlarmNoLaterThan` is a no-op until a
+   *  public door clears it. */
+  selfWakeHalted(): boolean {
+    return this.#selfWakeStreak >= SELF_WAKE_HALT_STREAK;
+  }
+
+  /** THE HOST calls this at the end of an alarm-only pass (no public door touched this incarnation):
+   *  one more self-wake. Returns the new streak, whether it is now halted, and whether THIS call is
+   *  the one that crossed the ceiling (so the host records the durable fact + log line exactly once,
+   *  even if a pre-armed alarm fires once more after the halt). Durable. */
+  noteSelfWake(): { streak: number; halted: boolean; justHalted: boolean } {
+    const before = this.#selfWakeStreak;
+    this.#selfWakeStreak += 1;
+    this.storage.writeSelfWakeStreak(this.#selfWakeStreak);
+    const halted = this.selfWakeHalted();
+    return { streak: this.#selfWakeStreak, halted, justHalted: halted && before < SELF_WAKE_HALT_STREAK };
+  }
+
+  /** THE HOST calls this when a real public door is touched: the loop is broken, so reset the streak
+   *  (and lift the halt). A no-op — and NO write — when already zero, so the common request path
+   *  pays nothing. */
+  notePublicDoor(): void {
+    if (this.#selfWakeStreak === 0) return;
+    this.#selfWakeStreak = 0;
+    this.storage.writeSelfWakeStreak(0);
   }
 }
 

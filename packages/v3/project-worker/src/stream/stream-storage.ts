@@ -101,6 +101,23 @@ export class StreamStorage {
     return this.#storage.setAlarm(atMs);
   }
 
+  /** THE SELF-WAKE STREAK — a durable count of consecutive alarm-only incarnations with no public
+   *  door touched (the billing circuit-breaker; stream.ts gates its alarm arming on it). One
+   *  `stream_meta` row, read once at construction and written only when it MOVES, so normal request
+   *  operation (streak always 0) pays no extra write. */
+  readSelfWakeStreak(): number {
+    const row = this.#sql
+      .exec<{ value: string }>("SELECT value FROM stream_meta WHERE key = 'selfWakeStreak'")
+      .toArray()[0];
+    return row ? Number(row.value) : 0;
+  }
+  writeSelfWakeStreak(streak: number): void {
+    this.#sql.exec(
+      "INSERT OR REPLACE INTO stream_meta (key, value) VALUES ('selfWakeStreak', ?)",
+      String(streak),
+    );
+  }
+
   /** The highest offset in the log — 0 on an empty one. The stream's constructor reads it once: a
    *  log with rows but no core checkpoint is not a store this code wrote. */
   highestEventOffset(): number {
