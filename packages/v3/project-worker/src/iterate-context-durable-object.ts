@@ -278,6 +278,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
    *  (a REFUSED one doesn't: arming the quiet-clock alarm is a storage write a rejected probe must
    *  not pay). */
   async append(...events: StreamEventInput[]): Promise<StreamEvent[]> {
+    this.#notePublicDoor();
     return this.#appendAndRunCommittedEffects(events);
   }
 
@@ -330,12 +331,14 @@ export class IterateContextDurableObject extends DurableObject<Env> {
    *  Deliberately not counted as activity: the caller's own open RPC keeps this DO awake for the
    *  wait's duration, and a wait quiesces nothing. */
   waitForEvent(filter?: WaitForEventFilter): Promise<StreamEvent> {
+    this.#notePublicDoor();
     return this.#stream.waitForEvent(filter);
   }
 
   /** One BUDGETED page of the log (Stream.read: at most `limit` rows and at most the server's byte
    *  budget of bodies; the page says whether it was cut). */
   read(afterOffset = 0, limit = 500): Promise<StreamPage> {
+    this.#notePublicDoor();
     return this.#stream.read(afterOffset, limit);
   }
 
@@ -499,6 +502,16 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     this.#stream.armAlarmNoLaterThan(this.#lastActivityMs + IDLE_QUIESCE_AFTER_MS);
   }
 
+  /** THE BILLING CIRCUIT-BREAKER's other half (stream.ts holds the durable streak). Set the moment a
+   *  REAL public door is touched this incarnation (append/read/invoke/waitForEvent/fetch) — as
+   *  opposed to an alarm-only pass (delivery, quiesce). `#notePublicDoor` clears the self-wake streak
+   *  (Stream.notePublicDoor), so a context in use never halts and one that halted resumes at once. */
+  #publicDoorTouched = false;
+  #notePublicDoor(): void {
+    this.#publicDoorTouched = true;
+    this.#stream.notePublicDoor();
+  }
+
   /** EVERY facet materialized this incarnation, by name. The quiesce alarm aborts the whole set in
    *  one loop so no LIVE facet pins this actor awake. In memory on purpose: facets die with the
    *  incarnation, and a fresh call re-materializes from the durable startup memo (the facet's own
@@ -518,6 +531,39 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     // while a delivery is owed (subscription-delivery.ts); the quiet clock below arms it for facets
     // and borrowed stubs.
     await this.#subscriptionDelivery.deliverEveryCursorSubscription();
+    // THE BILLING CIRCUIT-BREAKER (wave-0 3b, Jonas: "we need runaway billing controls"): an alarm
+    // pass with NO public door touched this incarnation is a SELF-WAKE. N in a row — a cursor sub on
+    // stream/woken re-waking the context, or a retry grinding on a context no one is using — halts
+    // the alarm (Stream.armAlarmNoLaterThan then no-ops) until a real request clears the streak, so
+    // the loop bills at most N. Recorded once, when it first crosses: one durable fact + one log line.
+    if (!this.#publicDoorTouched) {
+      const { streak, halted, justHalted } = this.#stream.noteSelfWake();
+      if (halted) {
+        if (justHalted) {
+          console.warn({
+            event: "self-wake-halted",
+            namespace: "iterate-context",
+            message: `context self-woke ${streak} times with no public door — halting the alarm (runaway billing control) until a real request arrives`,
+            name: this.#durableObjectAddress.name,
+            streak,
+          });
+          try {
+            this.#stream.append({
+              type: "events.iterate.com/stream/self-wake-halted",
+              payload: { streak },
+            });
+          } catch (error) {
+            console.warn({
+              event: "self-wake-halted.fact-failed",
+              namespace: "iterate-context",
+              message: "could not append the self-wake-halted fact (the halt still holds)",
+              error: String(error),
+            });
+          }
+        }
+        return; // do not re-arm — the loop stops here until a public door clears the streak
+      }
+    }
     if (
       Date.now() - this.#lastActivityMs >= IDLE_QUIESCE_AFTER_MS &&
       this.#facetWorkInFlight === 0
@@ -738,6 +784,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
    *  the args the live part (`invoke("itx.kv.get", "k")` ≡ `itx.kv.get("k")`; the fetch lane's
    *  Request is the same door). */
   async invoke(call: ItxExpressionInput, ...args: unknown[]): Promise<unknown> {
+    this.#notePublicDoor();
     this.#recordActivityForQuietClock();
     return this.#itxExpressionResolver.invoke(call, ...args);
   }
@@ -759,6 +806,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   // ── native fetch: the rpc-stub pager door, the fetch lane, egress ──
 
   async fetch(request: Request): Promise<Response> {
+    this.#notePublicDoor();
     // The doors, in order — each answers or declines:
     //   1. the rpc-stub pager and the rpc-stub fetch upgrade leg (the rpc-stub machinery);
     //   2. THE ITX-EXPRESSION FETCH LANE — `x-itx-expression` names an itx expression (JSON from a
