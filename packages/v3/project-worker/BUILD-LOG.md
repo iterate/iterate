@@ -3073,8 +3073,9 @@ SQLITE_TOOBIG` used to cross the hop from inside the write. Local workerd (4 MiB
   own tests (`ingress-project-host`, `session-identity`), failing solely on an unset LOCAL
   `PROJECT_TOKEN_SECRET` (their secret to mint tokens against the deployed worker's
   `APP_CONFIG_PROJECT_TOKEN_SECRET`; not in this shell) — a local env gap, not a regression, and not a
-  memory-budget-arc file. Every file in this arc passes. With the secret set it matches the prior
-  ingress/identity board (188p/0f on 19cbb4bb, now 189 runnable as this arc + identity added tests).
+  memory-budget-arc file. Every file in this arc passes. CONFIRMED by simplification-52: with
+  `PROJECT_TOKEN_SECRET` set those two are 4/4 against live-53 (the deployed secret survived these
+  deploys), so the board reads 189/189 bar the by-design expected-fail rows.
 
 ## 2026-09-04 — the DO owns both ends of a lent stub's rule: the pager upgrade carries the rule, one round trip
 
