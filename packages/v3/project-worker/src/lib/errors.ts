@@ -17,6 +17,7 @@ type ErrorCode =
   | "EVENT_TOO_LARGE" // one event's serialized body is over the append ceiling (stream.ts EVENT_BODY_MAX_CHARS)
   | "REDUCE_CHECKPOINT_TOO_LARGE" // a reduce's state would not fit one storage cell (reduce-checkpoint.ts)
   | "EVENT_UNREADABLE" // a stored row's body is not JSON — `data.offset` names it (stream.ts read)
+  | "RESERVED_SUBSCRIPTION_NAME" // a raw subscription-configured named `core` (the always-on reduce) — refused at the append door
   | "STREAM_PAUSED"
   | "INVALID_CONTEXT" // a context name / project id the codec refuses (durable-object-names.ts) — coded, so it survives the hop
   | "EXPRESSION_TOO_LONG" // a STRING itx expression over ITX_EXPRESSION_STRING_MAX_CHARS — pass the parsed form

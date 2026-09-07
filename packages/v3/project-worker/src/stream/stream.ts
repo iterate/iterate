@@ -337,6 +337,20 @@ export class Stream {
     for (const event of events) {
       if (typeof event.type !== "string" || event.type.trim() === "")
         throw new Error("append: every event needs a non-empty type");
+      // §2.4 — RESERVE `core`: the always-on core reduce is addressable as a facet but never a
+      // configurable subscription. A raw `subscription-configured { name: "core" }` (bypassing the
+      // facet doors that guard it) would otherwise install an undeliverable row that climbs the
+      // retry ladder to a halt. Refuse it here, at the one append door, before it lands.
+      if (
+        event.type === "events.iterate.com/stream/subscription-configured" &&
+        (event.payload as { name?: unknown } | undefined)?.name ===
+          this.#coreProcessor.contract.slug
+      )
+        throw codedError(
+          "RESERVED_SUBSCRIPTION_NAME",
+          `"${this.#coreProcessor.contract.slug}" is the core reduce, not a configurable subscription`,
+          { name: this.#coreProcessor.contract.slug },
+        );
       // An EPHEMERAL is never stored, but it rides every push over the same 32 MiB RPC and sits in
       // the same delivery memory — the same ceiling, measured here (a durable is measured at its insert).
       if (event.ephemeral) {
