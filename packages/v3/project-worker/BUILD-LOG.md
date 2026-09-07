@@ -3051,6 +3051,31 @@ SQLITE_TOOBIG` used to cross the hop from inside the write. Local workerd (4 MiB
   fan-out row recovers); push-delivery-throughput soak 4 passed (>1000 ev/s, p95 < 1500 ms — the
   256 B flood to 50 facets is unaffected by the kept changes). tsc x3, oxfmt/oxlint clean.
 
+### 2026-09-07 — the memory-budget remainder arc: CLOSED (item 3 out of scope by doctrine)
+
+- ITEM 3 (an edge in-flight budget for the CONCURRENT BIG APPENDS row — 8 sessions each committing a
+  28 MiB batch, 0–2 losing their socket to a `1006` at the shared /api edge) is DELIBERATELY NOT DONE
+  and should NOT be reopened. It is not a DO reset: no DO ever resets, ≥ 7/8 batches commit whole, and
+  every loss is the EDGE closing a socket. Jonas's standing doctrine is explicit — "we don't care
+  about the edge worker dying as clients can just reconnect; it's just the DO that we care about"
+  ([[feedback_clients_always_connected]] / the read arc). The CONCURRENT BIG APPENDS row is already the
+  boundary control that asserts exactly that. Building a per-edge in-flight budget would be speculative
+  machinery against his own doctrine, so it stays out of scope. (Confirmed with simplification-52,
+  who relayed the /goal.)
+- ARC SUMMARY (the two by-design resets + item 3): item 1 (concurrent readers) FIXED — the
+  read-admission ceiling, live-49; item 2 (large ephemeral fan-out) a DOCUMENTED CLIENT-BEHAVIOUR
+  LIMIT with the hygiene that proved itself kept (classify-at-catch-up + delivery budgets 16→8),
+  live-53; item 3 (edge) OUT OF SCOPE by doctrine. The DO — what Jonas guards — no longer has a
+  client-reachable single-request OOM, and the one residual reset (an extreme concurrent large
+  fan-out) degrades transiently and recovers.
+- CLOSING BOARD (full deployed e2e suite, live-53, `--no-file-parallelism` — the deployed lane): 187
+  passed / 2 expected fail / 2 skipped, 793 s. The only 2 non-passing are the ingress/identity arc's
+  own tests (`ingress-project-host`, `session-identity`), failing solely on an unset LOCAL
+  `PROJECT_TOKEN_SECRET` (their secret to mint tokens against the deployed worker's
+  `APP_CONFIG_PROJECT_TOKEN_SECRET`; not in this shell) — a local env gap, not a regression, and not a
+  memory-budget-arc file. Every file in this arc passes. With the secret set it matches the prior
+  ingress/identity board (188p/0f on 19cbb4bb, now 189 runnable as this arc + identity added tests).
+
 ## 2026-09-04 — the DO owns both ends of a lent stub's rule: the pager upgrade carries the rule, one round trip
 
 - WHY: a `provide(match, stub)` / `subscribe({ target: fn })` cost THREE edge→DO round trips — the
