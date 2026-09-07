@@ -80,34 +80,14 @@ test(
   },
 );
 
-test(
-  "control: 4 clients page a 12 x 64 KiB log at once — a handful of replies, within the budget",
-  { timeout: 60_000 },
-  () => {
-    const run = runScenario("concurrent-readers", { ...CONTROL, readerCount: 4 });
-    expectSurvived(run, "concurrent-readers");
-    expect(Number(run.facts.maxConcurrentReplies)).toBeLessThanOrEqual(4);
-  },
-);
-
-// FLIPPED by the read-admission ceiling. Born red (oom): 24 clients page the SAME 144 MiB log at
-// once; the outstanding-bytes LEVEL shrinks a page but cannot go below ONE row, so every reader
-// grabbed a >=1-row (~6 MiB) first page in the same tick and 24 x 6 MiB coexisted as replies in
-// flight (144 MiB, a reset). The metered `read` door now AWAITS room under the 16 MiB outstanding
-// ceiling (a continuation read or the TTL sweep retires an outstanding page) instead of issuing past
-// it, so only a handful of replies are ever in flight. Deployed twin: CONCURRENT READERS in
-// stream-uncontrolled-degradation.e2e.
-test(
-  "concurrent readers: 24 clients paging one 144 MiB log at once stay within the isolate — the read door awaits room under the outstanding-bytes ceiling, so only a handful of replies are ever in flight",
-  { timeout: 110_000 },
-  () => {
-    const run = runScenario("concurrent-readers", { ...LOG_144_MIB, readerCount: 24 });
-    expectSurvived(run, "concurrent-readers");
-    expect(Number(run.facts.readerCount)).toBe(24);
-    expect(Number(run.facts.maxConcurrentReplies), run.tail).toBeLessThanOrEqual(6); // the ceiling, not the reader count
-  },
-);
-
+// Concurrent readers — N clients paging one big log at once — can reset the DO: each read
+// returns a >=1-row page, so N readers coexist as N pages in flight, and the per-read byte
+// budget (the whole read-memory defense) bounds ONE read, not their sum. That is an ACCEPTED
+// client-behaviour limit (a client only resets its OWN DO; the durable log survives; it
+// reconnects) — deliberately not defended, to keep `read()` synchronous. The reproduction and
+// the full rationale (why okay, how it would be fixed) live in the deployed e2e:
+// stream-uncontrolled-degradation CONCURRENT READERS (test.fails). The local heap-harness twin
+// was removed with the read-admission ceiling it existed to prove.
 // ── the replay loops: a facet's loopback catch-up, the core re-reduce in the DO constructor ──
 
 test("control: a facet catches up over a 12 × 64 KiB log", { timeout: 60_000 }, () => {

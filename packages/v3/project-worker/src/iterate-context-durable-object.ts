@@ -337,9 +337,9 @@ export class IterateContextDurableObject extends DurableObject<Env> {
 
   /** One BUDGETED page of the log (Stream.read: at most `limit` rows and at most the server's byte
    *  budget of bodies; the page says whether it was cut). */
-  read(afterOffset = 0, limit = 500): Promise<StreamPage> {
+  async read(afterOffset = 0, limit = 500): Promise<StreamPage> {
     this.#notePublicDoor();
-    return this.#stream.read(afterOffset, limit);
+    return this.#stream.read(afterOffset, limit); // sync on the Stream, async at this cross-hop door
   }
 
   /** THE EFFECTIVE rule table, read: the context's own rows (masks as `target: null`, a template's
@@ -641,7 +641,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         (candidate) => candidate.hostedFacet?.name === name,
       );
       if (row?.hostedFacet) {
-        const [configuredEvent] = this.#stream.readInternal(row.configuredAtOffset - 1, 1).events;
+        const [configuredEvent] = this.#stream.read(row.configuredAtOffset - 1, 1).events;
         const configuredTarget = (
           configuredEvent?.payload as { target?: ItxExpressionInput } | undefined
         )?.target;

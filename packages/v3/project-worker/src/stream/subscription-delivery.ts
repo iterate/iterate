@@ -320,13 +320,17 @@ export class SubscriptionDelivery {
 
   /** Run `call` holding `chars` of the in-flight budget, after waiting for room. A call larger than
    *  the whole budget runs alone — never a deadlock. */
-  async #callWithInFlightRoom<T>(chars: number, call: () => Promise<T>): Promise<T> {
+  async #acquireInFlightRoom(chars: number): Promise<void> {
     while (
       this.#deliveryCharsInFlight > 0 &&
       this.#deliveryCharsInFlight + chars > DELIVERY_IN_FLIGHT_BUDGET_CHARS
     )
       await new Promise<void>((resolve) => this.#deliveryRoomWaiters.push(resolve));
     this.#deliveryCharsInFlight += chars;
+  }
+
+  async #callWithInFlightRoom<T>(chars: number, call: () => Promise<T>): Promise<T> {
+    await this.#acquireInFlightRoom(chars);
     try {
       return await call();
     } finally {
@@ -565,101 +569,121 @@ export class SubscriptionDelivery {
         // only UP TO the pushed batch's start, so that once the durables before it are delivered the
         // cursor IS contiguous with it and takes it, ephemerals included. A pushed batch the cursor has
         // already passed is stale and forgotten.
-        let pushedEventBatch = this.#pushedEventBatches.get(name);
-        if (pushedEventBatch && pushedEventBatch.after < cursor.confirmedOffset) {
-          this.#pushedEventBatches.delete(name);
-          pushedEventBatch = undefined;
-        }
-        let eventBatch: { events: StreamEvent[]; through: number };
-        if (pushedEventBatch && pushedEventBatch.after === cursor.confirmedOffset) {
-          this.#pushedEventBatches.delete(name);
-          eventBatch = { events: pushedEventBatch.events, through: pushedEventBatch.through };
-        } else {
-          const page = this.#stream.readInternal(cursor.confirmedOffset, 100);
-          const ceiling = pushedEventBatch
-            ? Math.min(page.scannedThroughOffset, pushedEventBatch.after)
-            : page.scannedThroughOffset;
-          if (ceiling <= cursor.confirmedOffset) return; // caught up
-          eventBatch = {
-            events: page.events.filter(
-              (event) => event.offset <= ceiling && consumesEvent(row.consumes, event),
-            ),
-            through: ceiling,
-          };
-        }
-        const range: ScannedRange = { after: cursor.confirmedOffset, through: eventBatch.through };
-        const durable = eventBatch.events.some((event) => !event.ephemeral);
-        if (eventBatch.events.length === 0) {
-          this.#adoptCursor(name, { ...cursor, confirmedOffset: range.through }, true); // a log page: durable ground
-          continue;
-        }
+        // In-flight room for THIS iteration's read + call, released once in the finally below. Held
+        // from BEFORE the read (where the page is allocated) THROUGH the awaited call, so N cursor
+        // rows firing on one commit read ONE AT A TIME — their pages and batches never coexist (else
+        // 20 rows x an 8 MiB page = 160 MiB, an isolate reset). The read branch reserves a worst-case
+        // page; the pushed branch (already in memory, no read) reserves just its batch at the call.
+        // This is the same budget the call needs — taken early because the READ is what allocates.
+        let inFlightRoomHeld = 0;
         try {
-          if (evaluatedTarget?.forRowConfiguredAtOffset !== row.configuredAtOffset) {
-            const { head, call } = await this.#evaluateItxExpressionTargetHead(row.target);
-            if (head instanceof FacetHandle || head instanceof RpcStubHandle) {
-              // Reached by the alarm's row-driven pass: a target that owns its progress is never this
-              // lane's — remember that, and drop the birth cursor above (this lane's guess).
-              this.#pushSubscriptionNames.add(name);
-              this.#dropCursor(name);
-              return;
-            }
-            evaluatedTarget = { call, forRowConfiguredAtOffset: row.configuredAtOffset };
-            if (!this.#cursors.has(name)) continue; // replaced while the target was evaluated
+          let pushedEventBatch = this.#pushedEventBatches.get(name);
+          if (pushedEventBatch && pushedEventBatch.after < cursor.confirmedOffset) {
+            this.#pushedEventBatches.delete(name);
+            pushedEventBatch = undefined;
           }
-          // Die mid-call and the alarm survives to re-derive from the rows (memo'd: one write per window).
-          this.#stream.armAlarmNoLaterThan(Date.now() + CURSOR_DELIVERY_CALL_WATCHDOG_MS);
-          const target = evaluatedTarget;
-          await this.#callWithInFlightRoom(serializedChars(eventBatch.events), () =>
-            withTimeout(
+          let eventBatch: { events: StreamEvent[]; through: number };
+          if (pushedEventBatch && pushedEventBatch.after === cursor.confirmedOffset) {
+            this.#pushedEventBatches.delete(name);
+            eventBatch = { events: pushedEventBatch.events, through: pushedEventBatch.through };
+          } else {
+            await this.#acquireInFlightRoom(DELIVERY_IN_FLIGHT_BUDGET_CHARS);
+            inFlightRoomHeld = DELIVERY_IN_FLIGHT_BUDGET_CHARS;
+            const page = this.#stream.read(cursor.confirmedOffset, 100);
+            const ceiling = pushedEventBatch
+              ? Math.min(page.scannedThroughOffset, pushedEventBatch.after)
+              : page.scannedThroughOffset;
+            if (ceiling <= cursor.confirmedOffset) return; // caught up (the finally releases the room)
+            eventBatch = {
+              events: page.events.filter(
+                (event) => event.offset <= ceiling && consumesEvent(row.consumes, event),
+              ),
+              through: ceiling,
+            };
+          }
+          const range: ScannedRange = {
+            after: cursor.confirmedOffset,
+            through: eventBatch.through,
+          };
+          const durable = eventBatch.events.some((event) => !event.ephemeral);
+          if (eventBatch.events.length === 0) {
+            this.#adoptCursor(name, { ...cursor, confirmedOffset: range.through }, true); // a log page: durable ground
+            continue;
+          }
+          try {
+            if (evaluatedTarget?.forRowConfiguredAtOffset !== row.configuredAtOffset) {
+              const { head, call } = await this.#evaluateItxExpressionTargetHead(row.target);
+              if (head instanceof FacetHandle || head instanceof RpcStubHandle) {
+                // Reached by the alarm's row-driven pass: a target that owns its progress is never this
+                // lane's — remember that, and drop the birth cursor above (this lane's guess).
+                this.#pushSubscriptionNames.add(name);
+                this.#dropCursor(name);
+                return;
+              }
+              evaluatedTarget = { call, forRowConfiguredAtOffset: row.configuredAtOffset };
+              if (!this.#cursors.has(name)) continue; // replaced while the target was evaluated
+            }
+            // Die mid-call and the alarm survives to re-derive from the rows (memo'd: one write per window).
+            this.#stream.armAlarmNoLaterThan(Date.now() + CURSOR_DELIVERY_CALL_WATCHDOG_MS);
+            const target = evaluatedTarget;
+            // The read branch already holds the room through this call; the pushed branch takes its own.
+            if (inFlightRoomHeld === 0) {
+              inFlightRoomHeld = serializedChars(eventBatch.events);
+              await this.#acquireInFlightRoom(inFlightRoomHeld);
+            }
+            await withTimeout(
               target.call([eventBatch.events, range]),
               CURSOR_DELIVERY_CALL_WATCHDOG_MS,
               `subscription "${name}"`,
-            ),
-          );
-          // Removed or replaced while the call was in flight? Its progress belonged to the old row —
-          // and so did the evaluation: the identity check above re-evaluates for the replacement.
-          if (!this.#cursors.has(name)) continue;
-          this.#adoptCursor(
-            name,
-            {
-              confirmedOffset: range.through,
-              attempt: 0,
-              resumeAppliedAtOffset: cursor.resumeAppliedAtOffset,
-            },
-            durable, // an ephemeral-only batch never touches storage
-          );
-          this.#recordActivityForQuietClock();
-        } catch (error) {
-          if (!this.#cursors.has(name)) continue; // replaced mid-flight: re-evaluated for the new row
-          // A delivery-resumed that landed DURING this attempt is not yet applied: loop back and apply
-          // it instead of arming the old ladder or, worse, appending a halt on top of the operator's resume.
-          const latest = this.#stream.coreReducedState.subscriptions[name];
-          if (latest?.resumed && latest.resumed.atOffset !== cursor.resumeAppliedAtOffset) continue;
-          const attempt = cursor.attempt + 1;
-          // Clipped: the message lands in the halted event AND the core state's row (one kv cell) — a
-          // target that throws a response body must not bloat either.
-          const message = (error instanceof Error ? error.message : String(error)).slice(0, 1024);
-          // A failure that can only repeat (deterministicFailure: the stamped `retryable: false`, or
-          // one of our own codes a retry cannot change) halts now, not in half an hour.
-          if (deterministicFailure(error) || attempt >= 15) {
-            this.#adoptCursor(name, { ...cursor, attempt: 0 }, true);
-            await this.#stream.append({
-              type: "events.iterate.com/stream/subscription-delivery-halted",
-              payload: {
-                name,
-                afterOffset: cursor.confirmedOffset,
-                attempts: attempt,
-                error: message,
+            );
+            // Removed or replaced while the call was in flight? Its progress belonged to the old row —
+            // and so did the evaluation: the identity check above re-evaluates for the replacement.
+            if (!this.#cursors.has(name)) continue;
+            this.#adoptCursor(
+              name,
+              {
+                confirmedOffset: range.through,
+                attempt: 0,
+                resumeAppliedAtOffset: cursor.resumeAppliedAtOffset,
               },
-            });
+              durable, // an ephemeral-only batch never touches storage
+            );
+            this.#recordActivityForQuietClock();
+          } catch (error) {
+            if (!this.#cursors.has(name)) continue; // replaced mid-flight: re-evaluated for the new row
+            // A delivery-resumed that landed DURING this attempt is not yet applied: loop back and apply
+            // it instead of arming the old ladder or, worse, appending a halt on top of the operator's resume.
+            const latest = this.#stream.coreReducedState.subscriptions[name];
+            if (latest?.resumed && latest.resumed.atOffset !== cursor.resumeAppliedAtOffset)
+              continue;
+            const attempt = cursor.attempt + 1;
+            // Clipped: the message lands in the halted event AND the core state's row (one kv cell) — a
+            // target that throws a response body must not bloat either.
+            const message = (error instanceof Error ? error.message : String(error)).slice(0, 1024);
+            // A failure that can only repeat (deterministicFailure: the stamped `retryable: false`, or
+            // one of our own codes a retry cannot change) halts now, not in half an hour.
+            if (deterministicFailure(error) || attempt >= 15) {
+              this.#adoptCursor(name, { ...cursor, attempt: 0 }, true);
+              await this.#stream.append({
+                type: "events.iterate.com/stream/subscription-delivery-halted",
+                payload: {
+                  name,
+                  afterOffset: cursor.confirmedOffset,
+                  attempts: attempt,
+                  error: message,
+                },
+              });
+              return;
+            }
+            const backoff =
+              Math.min(1000 * 2 ** (attempt - 1), 1_800_000) * (0.8 + Math.random() * 0.4);
+            const nextAttemptAtMs = Date.now() + Math.round(backoff);
+            this.#adoptCursor(name, { ...cursor, attempt, nextAttemptAtMs }, true);
+            this.#stream.armAlarmNoLaterThan(nextAttemptAtMs);
             return;
           }
-          const backoff =
-            Math.min(1000 * 2 ** (attempt - 1), 1_800_000) * (0.8 + Math.random() * 0.4);
-          const nextAttemptAtMs = Date.now() + Math.round(backoff);
-          this.#adoptCursor(name, { ...cursor, attempt, nextAttemptAtMs }, true);
-          this.#stream.armAlarmNoLaterThan(nextAttemptAtMs);
-          return;
+        } finally {
+          if (inFlightRoomHeld > 0) this.#releaseInFlightRoom(inFlightRoomHeld);
         }
       }
     } finally {

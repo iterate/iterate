@@ -3379,7 +3379,7 @@ exists as a probe (its harness lane went in the test-hygiene sweep). The 300-rul
   pets API — `listPets()`, `getPet(id)`, `createPet({ name, species })` — as ONE RpcTarget over a batch POST or
   a WebSocket upgrade. Auth, for now, is the shop's ordinary bearer in the Authorization header — on the POST
   or on the upgrade request — resolved by the SAME `accessGrant` as /mcp and /api/v2 (401 `{ error:
-  "invalid_token" }` otherwise; no in-band capnweb auth yet). The app pins capnweb 0.12.2 (pnpm override
+"invalid_token" }` otherwise; no in-band capnweb auth yet). The app pins capnweb 0.12.2 (pnpm override
   `'@iterate-com/dummy-petshop>capnweb'`) so its server speaks the connector's wire. Deployed to prd as
   version 6a3738e6 (dummy-petshop.iterate.com, smoke ok).
 - TESTS, pet shop: unit `src/capnweb.test.ts` (6 — a batch round trip whose writes /api/pets then sees, ONE
@@ -3416,25 +3416,26 @@ exists as a probe (its harness lane went in the test-hygiene sweep). The 300-rul
   `APP_CONFIG_*` variable no row names ⇒ refused with the known names, because a typo would otherwise
   configure nothing silently); `appConfigVarParsers` — string, integer, boolean, url, json — each
   refusal says what it wanted (`APP_CONFIG_LIMIT: expected an integer, got "abc"`); `parseAppConfig(vars,
-  deployId)` = this worker's table + the deploy identity; `appConfigOf(env)` memoized in a WeakMap on
+deployId)` = this worker's table + the deploy identity; `appConfigOf(env)` memoized in a WeakMap on
   the env object (= once per isolate). `AppConfigEnv` types the table's variable names onto `env`
   (`Env extends AppConfigEnv`), so a new row types itself.
 - THE INVENTORY — configuration is what differs between deployments of the same code; a constant is a
   property of the code. Decided per item, the reasons in the module header:
 
-  | item | verdict | consumer |
-  | --- | --- | --- |
-  | `APP_CONFIG_ENVIRONMENT_NAME` → `environmentName` ("poc" workers.dev · "test" workers lane · "solo" e2e lane) | configuration | `/version` |
-  | `CF_VERSION_METADATA.id` → `deployId` ("unversioned" where absent/blank) | configuration, platform-supplied | every loader cacheKey (was read off env inside the loader; now handed in), `/version` |
-  | `CODE_VERSION` (src/worker.ts) | the code's own stamp, a hand-bumped smoke label | `/version`, first |
-  | `IDLE_QUIESCE_AFTER_MS`, `FACET_CALL_WATCHDOG_MS`, the retry ladder, the memory budgets, the `secret:<projectId>:<name>` convention, the loaded-worker compatibility flags | constants | — |
+  | item                                                                                                                                                                       | verdict                                         | consumer                                                                              |
+  | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------- | ------------------------------------------------------------------------------------- |
+  | `APP_CONFIG_ENVIRONMENT_NAME` → `environmentName` ("poc" workers.dev · "test" workers lane · "solo" e2e lane)                                                              | configuration                                   | `/version`                                                                            |
+  | `CF_VERSION_METADATA.id` → `deployId` ("unversioned" where absent/blank)                                                                                                   | configuration, platform-supplied                | every loader cacheKey (was read off env inside the loader; now handed in), `/version` |
+  | `CODE_VERSION` (src/worker.ts)                                                                                                                                             | the code's own stamp, a hand-bumped smoke label | `/version`, first                                                                     |
+  | `IDLE_QUIESCE_AFTER_MS`, `FACET_CALL_WATCHDOG_MS`, the retry ladder, the memory budgets, the `secret:<projectId>:<name>` convention, the loaded-worker compatibility flags | constants                                       | —                                                                                     |
 
   Two fields exist because two things read them. A row nothing reads does not exist.
+
 - WIRED: the DO owns `#appConfig = appConfigOf(this.env)` (a malformed var throws in the constructor,
   naming it) and hands `deployId` to `buildBuiltIns` and to the facet `loadConfinedWorker`;
   `LoadConfinedWorkerOptions` and `BuildBuiltInsDeps` take `deployId: string` instead of the
   version-metadata binding; the stateless worker's `/version` answers `<CODE_VERSION> <environmentName>
-  <deployId>` (the label first — the memory-budget arc's smoke greps it; d3's call). Declared:
+<deployId>` (the label first — the memory-budget arc's smoke greps it; d3's call). Declared:
   wrangler.jsonc `vars: { APP_CONFIG_ENVIRONMENT_NAME: "poc" }`, wrangler.test.jsonc `"test"`, the
   e2e solo topology overrides `"solo"` (e2e/support/solo-config.ts). Learned: local workerd MINTS a
   version id too (a uuid), so "unversioned" is only ever a bare test env.
@@ -3464,6 +3465,7 @@ exists as a probe (its harness lane went in the test-hygiene sweep). The 300-rul
   live-state work, and the run shows no NOT_A_METHOD and no halt, so this arc's one hunk on the delivery
   path (the coded root-apply) is not implicated by the evidence — flagged to d3 as its file.
 - LOC: +100/−46 across 13 tracked files plus `src/app-config.ts` (166 lines, 97 code) and its test (130).
+
 ## 2026-09-04 — review round two applied: 21 red proofs (20 fixed live), the smells report, and 70 doc mismatches
 
 - WHAT: the four finder reports of `fa055b429` (two bug reports, one smells, one narrative) applied in two
@@ -3475,27 +3477,27 @@ exists as a probe (its harness lane went in the test-hygiene sweep). The 300-rul
   before its fix (`src/review-bugs-round2.test.ts`, `__workers-tests__/review-bugs-round2.test.ts`,
   `e2e/review-bugs-round2.e2e.test.ts`):
 
-  | finding | proof | outcome |
-  | --- | --- | --- |
-  | do-side#1 MAJOR: a dead stub's un-set was decided against the LIVE table, deleting `itx.llm ⇒ itx.ai` as collateral in one configure order | unit: both orders; the alias stays, the fake's row and a row naming the key through the user's own registry go | fixed: `rowsNamingRpcStub` decides against a frozen table |
-  | do-side#2 MAJOR: a connector reached through a rule opened one session per call | unit: two connects = ONE handshake; `releaseConnections` DELETEs; a failed connect is not memoized; options are part of the key | fixed: `buildLibrary(itx)` memoizes per (verb, url, options); released at the DO's idle quiesce |
-  | edge#1 MAJOR: `invoke(call, ...args)` resolved WITHOUT its live args — masks and pinned rules bypassed, a template's drop branch run | unit: template fills from live args; a pinned row matches; a pinned mask refuses; call-final keeps its shape | fixed: live args fold into a name-final call BEFORE the rules |
-  | edge#2 MAJOR: a stale `subscribe` handle's undo appended `{ name, null }` unconditionally | workers: the later same-name row and the facet it hosts survive the stale dispose | fixed: compare-and-set on `configuredAtOffset` |
-  | edge#3 MAJOR: `connectToMcp` hung on a server that keeps its SSE stream open | unit: an open SSE answer still connects | fixed: incremental read, cancelled at the matching id |
-  | do-side#4: `hostedFacet` markers went stale when a rule moved | unit: a rule configured after / re-pointed / removed moves the marker; an M1 row keeps its own; a builtins-rooted row is untouched | fixed: markers follow the rules on every rule commit |
-  | do-side#5: an un-set refused under `stream/paused` was lost | e2e: a last pager close DURING a pause is un-set once the stream resumes | fixed: the `resumed` commit re-runs it for every named key with no transport |
-  | do-side#6: a whole-context override could name its own context | workers: refused at `provide` | fixed |
-  | do-side#7: the relay leaked the session's dup when the DO's fetch itself rejected | e2e | fixed |
-  | do-side#3: `then` as a tool/operation name made the connection thenable | unit: connect settles, no `tools/call`, no `GET /then` | fixed: reserved |
-  | do-side#8 / edge#4: OpenAPI relative server URLs and cookie parameters | unit + e2e (`?context=&itx=` kept on the fetch lane) | fixed |
-  | do-side#9 = edge#11: `rewriteRules.get` took only the canonical spelling | e2e | fixed: canonicalizes |
-  | edge#5: `list()` under a bare `itx` row showed platform rows | e2e | fixed |
-  | edge#6: `print` spelled `@` for a CALL carrying the literal as data | unit: stored as data, listed, never dropped; round-trips | fixed: `print(expr, { holes })`, targets only |
-  | edge#7: a prefix's array half took non-identifier steps; one bad raw row stopped the others' un-set | unit (17-row door table) + e2e | fixed: identifiers only; one removal per row in its own try |
-  | edge#12: the fetch lane could re-enter itself | workers | fixed: a hop-count header, 508 past 4 |
-  | edge#9: `until` swallowed its last error; `readAll` stopped short of `atHead` | unit | fixed |
-  | edge#10: a JSON5 comment inside call args is read by the `@` lexer | unit `test.fails` | RED on purpose (menu) |
-  | edge#8: a non-Latin1 `x-itx-expression` header | reverted | not a bug on workerd — the finder's repro was Node's Headers |
+  | finding                                                                                                                                                                                                                                                                                                                                                                                  | proof                                                                                                                                      | outcome                                                                                                                                                                       |
+  | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+  | do-side#1 MAJOR: a dead stub's un-set was decided against the LIVE table, deleting `itx.llm ⇒ itx.ai` as collateral in one configure order                                                                                                                                                                                                                                               | unit: both orders; the alias stays, the fake's row and a row naming the key through the user's own registry go                             | fixed: `rowsNamingRpcStub` decides against a frozen table                                                                                                                     |
+  | do-side#2 MAJOR: a connector reached through a rule opened one session per call                                                                                                                                                                                                                                                                                                          | unit: two connects = ONE handshake; `releaseConnections` DELETEs; a failed connect is not memoized; options are part of the key            | fixed: `buildLibrary(itx)` memoizes per (verb, url, options); released at the DO's idle quiesce                                                                               |
+  | edge#1 MAJOR: `invoke(call, ...args)` resolved WITHOUT its live args — masks and pinned rules bypassed, a template's drop branch run                                                                                                                                                                                                                                                     | unit: template fills from live args; a pinned row matches; a pinned mask refuses; call-final keeps its shape                               | fixed: live args fold into a name-final call BEFORE the rules                                                                                                                 |
+  | edge#2 MAJOR: a stale `subscribe` handle's undo appended `{ name, null }` unconditionally                                                                                                                                                                                                                                                                                                | workers: the later same-name row and the facet it hosts survive the stale dispose                                                          | fixed: compare-and-set on `configuredAtOffset`                                                                                                                                |
+  | edge#3 MAJOR: `connectToMcp` hung on a server that keeps its SSE stream open                                                                                                                                                                                                                                                                                                             | unit: an open SSE answer still connects                                                                                                    | fixed: incremental read, cancelled at the matching id                                                                                                                         |
+  | do-side#4: `hostedFacet` markers went stale when a rule moved                                                                                                                                                                                                                                                                                                                            | unit: a rule configured after / re-pointed / removed moves the marker; an M1 row keeps its own; a builtins-rooted row is untouched         | fixed: markers follow the rules on every rule commit                                                                                                                          |
+  | do-side#5: an un-set refused under `stream/paused` was lost                                                                                                                                                                                                                                                                                                                              | e2e: a last pager close DURING a pause is un-set once the stream resumes                                                                   | fixed: the `resumed` commit re-runs it for every named key with no transport                                                                                                  |
+  | do-side#6: a whole-context override could name its own context                                                                                                                                                                                                                                                                                                                           | workers: refused at `provide`                                                                                                              | fixed                                                                                                                                                                         |
+  | do-side#7: the relay leaked the session's dup when the DO's fetch itself rejected                                                                                                                                                                                                                                                                                                        | e2e                                                                                                                                        | fixed                                                                                                                                                                         |
+  | do-side#3: `then` as a tool/operation name made the connection thenable                                                                                                                                                                                                                                                                                                                  | unit: connect settles, no `tools/call`, no `GET /then`                                                                                     | fixed: reserved                                                                                                                                                               |
+  | do-side#8 / edge#4: OpenAPI relative server URLs and cookie parameters                                                                                                                                                                                                                                                                                                                   | unit + e2e (`?context=&itx=` kept on the fetch lane)                                                                                       | fixed                                                                                                                                                                         |
+  | do-side#9 = edge#11: `rewriteRules.get` took only the canonical spelling                                                                                                                                                                                                                                                                                                                 | e2e                                                                                                                                        | fixed: canonicalizes                                                                                                                                                          |
+  | edge#5: `list()` under a bare `itx` row showed platform rows                                                                                                                                                                                                                                                                                                                             | e2e                                                                                                                                        | fixed                                                                                                                                                                         |
+  | edge#6: `print` spelled `@` for a CALL carrying the literal as data                                                                                                                                                                                                                                                                                                                      | unit: stored as data, listed, never dropped; round-trips                                                                                   | fixed: `print(expr, { holes })`, targets only                                                                                                                                 |
+  | edge#7: a prefix's array half took non-identifier steps; one bad raw row stopped the others' un-set                                                                                                                                                                                                                                                                                      | unit (17-row door table) + e2e                                                                                                             | fixed: identifiers only; one removal per row in its own try                                                                                                                   |
+  | edge#12: the fetch lane could re-enter itself                                                                                                                                                                                                                                                                                                                                            | workers                                                                                                                                    | fixed: a hop-count header, 508 past 4                                                                                                                                         |
+  | edge#9: `until` swallowed its last error; `readAll` stopped short of `atHead`                                                                                                                                                                                                                                                                                                            | unit                                                                                                                                       | fixed                                                                                                                                                                         |
+  | edge#10: a JSON5 comment inside call args is read by the `@` lexer                                                                                                                                                                                                                                                                                                                       | unit `test.fails`                                                                                                                          | RED on purpose (menu)                                                                                                                                                         |
+  | edge#8: a non-Latin1 `x-itx-expression` header                                                                                                                                                                                                                                                                                                                                           | reverted                                                                                                                                   | not a bug on workerd — the finder's repro was Node's Headers                                                                                                                  |
   | edge#13 (found by the deployed lane, 2026-09-06): a call in the window between a lender's recall and the DO's un-set walked the disposed dup — capnweb's raw "Attempted to use RPC stub after it has been disposed." escaped UNCODED (the relay re-coded only a BROKEN session); 5 of 15 probe rounds against fc58a49b, and `rpc-stubs-slack-bridge` red once in the full deployed suite | e2e: 40 calls 5 ms apart across the window — every answer is `pong`, `RPC_STUB_OFFLINE` or `NO_ITX_EXPRESSION_MATCH`; red against fc58a49b | fixed: ONE shared "the lend ended" reason set before the dup is disposed (recalled · returned · broken), re-coded `RPC_STUB_OFFLINE`; the slack test waits THROUGH the window |
 
 - THE SMELLS REPORT, applied (LOC are +/− in this tree):
@@ -3511,11 +3513,11 @@ exists as a probe (its harness lane went in the test-hygiene sweep). The 300-rul
     walks from the built-ins RECORD (`walkSteps`) after folding live args, `resolve` stays pure.
   - S3/S5/S6 — the three connectors share ONE prototype-method subclass (`subclassWithMethods`: skips
     `then`, existing members and non-identifiers), ONE refusal spelling (`refuseUnlessOk(response,
-    what)` → `"<what> returned <status>: <300-char snippet>"`) and ONE pipelined stub walk
+what)` → `"<what> returned <status>: <300-char snippet>"`) and ONE pipelined stub walk
     (`walkStepsOnRpcStub` in `invoke-handle.ts`, also the relay's). `mcp.ts` +14/−46, `openapi.ts`
     +23/−40, `capnweb.ts` +21/−43, `library/index.ts` +57/−25, `rpc-stub-relay.ts` +5/−21.
   - S4 — `BuiltInScope extends LibraryRoots`; the three restated members are gone; `LibraryItx =
-    Pick<BuiltInScope, "fetch">` (`built-ins.ts` +23/−53).
+Pick<BuiltInScope, "fetch">` (`built-ins.ts` +23/−53).
   - S1 — the app config's parser table is exactly the kinds the rows name (`string`); "a parser no
     row names is the same speculation one level down" (`app-config.ts` +10/−35, its test a two-row
     table, +14/−58).
@@ -3534,7 +3536,7 @@ exists as a probe (its harness lane went in the test-hygiene sweep). The 300-rul
   - S22 — KEPT and PINNED, not deleted: the lane's path suffix and the SDK's `newWorkersRpcResponse`
     export. `e2e/library-connectors-behind-the-lane.e2e.test.ts` (24 lines) loads a worker serving
     capnweb behind `/expression/rpc/v1` and dials it through `connectToCapnweb(url, { transport:
-    "batch" })`; `path()` answers `/expression/rpc/v1`.
+"batch" })`; `path()` answers `/expression/rpc/v1`.
   - K (knip) — the package is in the root config (`knip.ts` +44: `makeProjectWorkerWorkspace()`,
     `ignoreWorkspaces` narrowed to this one under `packages/v3/*`, root-level `ignoreExportsUsedInFile`
     for interfaces and types, `ignoreUnresolved` for vitest's package-root-relative global setup) and
@@ -3561,6 +3563,7 @@ exists as a probe (its harness lane went in the test-hygiene sweep). The 300-rul
   (`live-state-chains-client-side` — `chat.applied` 0, the same flake the app-config entry saw on 7474bb76; `stream-uncontrolled-degradation` CONCURRENT BIG APPENDS, 102 s) ran while a probe of mine was loading the same edge ("WebSocket connection failed" on the probe's side); each re-run ALONE against 8fd49a2f: `live-state-chains-client-side` red once (`chat.applied` 0) and green once — the flake the app-config entry recorded on 7474bb76, green on fc58a49b; `stream-uncontrolled-degradation` CONCURRENT BIG APPENDS red TWICE alone (43–49 s): the lost session's error is now `WebSocket connection failed. [code=undefined …]` (failed at the upgrade) where the test's assertion wants a 1006 close — d3's memory-hygiene test (`ce089f083`), green on fc58a49b two nights earlier; the only difference between the two deploys is the relay's re-code and one comment, neither on the append path — handed to d3 with the log. The window measured on 8fd49a2f: a single call right after the dispose never hit it in 8 rounds; eight calls 1 ms apart hit it in 3 of 8 rounds — 6 calls in the window, every one `RPC_STUB_OFFLINE`, 0 uncoded (scratchpad probe-window-deployed2.txt)
 - LOC: +860/−870 across 34 tracked files (docs +222/−155 of that) plus the new e2e
   (`library-connectors-behind-the-lane`, 24 lines).
+
 ## 2026-09-06 — review round two, closing: the deployed board's two reds and the last codec menu item
 
 - WHAT: the two reds the phase-2 deployed board left in d3's files, taken by agreement with d3 (its
@@ -3577,7 +3580,7 @@ exists as a probe (its harness lane went in the test-hygiene sweep). The 300-rul
   says "comments included".
 - CONCURRENT BIG APPENDS (`e2e/stream-uncontrolled-degradation`, d3's boundary control): red twice
   alone against 8fd49a2f because the lost session's error is now `WebSocket connection failed.
-  [code=undefined reset=false]` — the /api edge isolate dying under 8 × 28 MiB while that session's
+[code=undefined reset=false]` — the /api edge isolate dying under 8 × 28 MiB while that session's
   upgrade is still in flight — where the row's assertion wanted the mid-flight `1006` close it saw on
   2026-09-04. Both are the same edge-side loss, so the assertion accepts either; the row's two
   invariants are untouched (no DO reset on any failure; ≥7/8 committed and every landed batch whole).
@@ -3653,7 +3656,7 @@ exists as a probe (its harness lane went in the test-hygiene sweep). The 300-rul
 ## 2026-09-06 — identity: a project token, the principal on every append (the assessment's Gap 2, closed minimally)
 
 - WHAT: `authenticate({ projectToken })` verifies a signed project token — `{ projectId, actor,
-  email?, expiresAt }`, HMAC-SHA256 with `APP_CONFIG_PROJECT_TOKEN_SECRET`, the control plane's own
+email?, expiresAt }`, HMAC-SHA256 with `APP_CONFIG_PROJECT_TOKEN_SECRET`, the control plane's own
   session-cookie shape (`src/principal.ts`, 10-row table test) — and answers a session that knows
   who it is: `session.whoami()`, `projects.get` bound to the token's one project (`FORBIDDEN`
   otherwise), a token that does not verify `INVALID_CREDENTIALS` whatever is wrong with it. Bare
@@ -3697,6 +3700,7 @@ exists as a probe (its harness lane went in the test-hygiene sweep). The 300-rul
   assessment, this log's 2026-09-04/06 entries and the jam notes; every claim cites its source and
   nothing is presented as decided that a source does not record. Its Gap 1/Gap 2 rows and the
   ingress/identity questions were updated once those landed (the two entries above).
+
 ## 2026-09-07 — v4 reviewed against the clean room: the plan to layer its features on v3, and two loader bugs it found
 
 - WHAT: on Jonas's ask, eleven read-only reviewers (one per feature, one for the 34 shared files' diff, one for
@@ -3741,6 +3745,7 @@ exists as a probe (its harness lane went in the test-hygiene sweep). The 300-rul
 - BOARD: tsc×3 · oxlint 0/0 · unit+workers 460p/12xf (39 files) · DEPLOYED as e0b21345 · deployed e2e 189p/0f/2xf/2sk on 47 files (13 min), exit 0 — every facet restarted once under its new loader id and every processor row stayed green
 - LOC: worker-loader.ts +16/−6 (two hashes, the JSON id, the WHY), its test +48, the walkthrough one line; the plan
   409 lines; the ten reviews ≈2,400 lines of report.
+
 ## 2026-09-07 — wave 0, the first three: admission before the dial, the parsed form at rest, the loader telemetry measured
 
 - ISSUE 1, the open wildcard — FIXED (Jonas: design B). A context is created on first touch, and tonight's
@@ -3784,6 +3789,7 @@ exists as a probe (its harness lane went in the test-hygiene sweep). The 300-rul
   registers each project with the deployed control plane first and adds the deployed-only 421 row.
 - BOARD: tsc×3 · oxlint 0/0 · unit+workers 463p/12xf on STOCK json5 (the patch dropped) · the shell deployed c79cc76a · the worker DEPLOYED as e3ef2f05: the targeted proofs 11/11 (ingress with the 421 row and the session door, identity, the builtins root) · the full sequential board is running and lands in the next entry
 - LOC: 18 files changed, 265 insertions(+), 49 deletions(-) across the worker and the shell sources (the parsed-form change is the bulk: the codec's shape check +60, the control plane +90, the edge admission +30); tests and docs beside.
+
 ## 2026-09-07 — wave 0, part two: the board for part one, a stale lease is inert, and the hygiene items
 
 - THE BOARD for e577c8d47 (deployed e3ef2f05): the six reds on e3ef2f05 were d3's uncommitted probe, FOUR raw-event expectations in files the local batch had not covered (`rpc-stubs-attach-carries-the-rule` ×2, `rpc-stubs-reconnect-same-path`, `rewrite-rules-map-and-chains` — moved to the parsed form here; the rule of thumb the re-pin taught: a raw event's `target` is the array, while a `rewriteRules.get()` / `subscriptions.list()` / `resolve()` answer and every `match` stay printed strings), and this entry's own kernel#2.6 row, red against a build that predated its fix.
@@ -3801,3 +3807,37 @@ exists as a probe (its harness lane went in the test-hygiene sweep). The 300-rul
   report instead of swallow in `#unsetWhatNamesRpcStub` — waits for d3's 3b wiring to settle in the DO file.
   NOT taken (Jonas): classifying platform DO resets as expected in the logs.
 - GATES: tsc×3 · oxlint 0/0 · unit+workers 468p/12xf · local e2e (the lease rows) 21/21 · DEPLOYED as b34e641a (the tree at d3's 7e5bbd336 + this part): the seven touched files 41/41; the full sequential board 191p/2xf/2sk with ONE red — `stream-wake-loop.e2e.test.ts`, d3's in-flight circuit-breaker pin, not in this commit
+
+## 2026-09-07 — roll back async read + the read-admission ceiling; the coarse per-read bound is the whole read defense
+
+Jonas: "reading going from sync to async is not really acceptable — roll it back"; "the reply-budget thing
+[is] too fanciful — the problem is just that large reads crash the DO." So the concurrent-reader ceiling
+(the async `read`, the outstanding-bytes budget with reservations, the waiter queue, the TTL sweep — ~140
+lines, 5 fields, 5 methods) is DELETED, and `read()` is SYNCHRONOUS again — ONE door, no `read`/`readInternal`
+split. The whole read-memory defense is now the coarse per-read byte budget already in `#readPage`
+(READ_PAGE_BUDGET_BYTES, 8 MiB, ≥ 1 row): a SINGLE read cannot OOM the DO. Cross-hop callers still get a
+promise from Workers RPC regardless — the sync/async choice only ever affected the DO's own in-isolate
+callers, which is the whole point.
+
+- ACCEPTED LIMIT, documented not defended (Jonas: "if many concurrent readers can crash the DO and we can
+  reliably create that, have it as a FAILING test with the docs on why it's okay and how we'd fix it, and
+  that we chose not to"): CONCURRENT READERS in `e2e/stream-uncontrolled-degradation` is a `test.fails`
+  asserting the healthy expectation (no reset) — red-by-design over the deployed reset, carrying why it
+  resets (N readers each grab a ≥1-row ~6 MiB page → N × 6 MiB coexist), why it's acceptable (a client
+  resets only its OWN DO; the log is durable; it reconnects — the body proves recovery), and how it'd be
+  fixed (the ceiling we just removed). The local heap-harness twin (`concurrent-readers` in
+  memory-budget-scenarios + its two pins) is DELETED — it only existed to prove the removed ceiling; a
+  breadcrumb in memory-budget.test.ts points at the deployed reproduction.
+- THE DELIVERY FAN-OUT, the one internal path the rollback regressed (it had leaned on `readInternal`'s
+  byte-shrink incidentally): N behind cursor rows firing on ONE commit each read a page and hold the batch
+  across the awaited call, so the batches coexist — 20 rows × an 8 MiB page = 160 MiB, a reset (measured:
+  227 MiB at rowCount 20). FIX, in the delivery layer where the read+call lifecycle lives, no new
+  machinery: hold the EXISTING in-flight budget from BEFORE the read THROUGH the call (one reserve per
+  iteration, released once). Catch-up reads (the read branch) reserve a worst-case page and serialize;
+  steady-state small pushes take only their batch and stay concurrent. Measured after: 67 MiB at rowCount
+  20 (was 227), row-count-independent in the page term. `cursor-rows-behind-one-commit` (both variants) green.
+- GATES: tsc×3 · oxlint 0/0 · unit+workers 403p/4xf (full unit project) + do-doors · memory-budget 17p/4xf
+  (concurrent-readers pins removed, delivery rows green). The deployed CONCURRENT READERS `test.fails`
+  row is verified-on-deploy (pending a worker-free slot); the local board is green.
+- LOC: 6 files, 165 insertions(+), 332 deletions(-) — net −167. stream.ts −130 (the admission subsystem
+  gone); subscription-delivery.ts the hold-through-call restructure; the heap harness + its pins removed.

@@ -15,17 +15,18 @@
 // a real deployment.
 //
 // THE HOUSE CONVENTION (stream-memory-budget.e2e.ts): a known-red proof is `test.fails` whose body
-// asserts the HEALTHY expectation ("no isolate reset"); a ceiling that HOLDS is a plain `test`. As of
-// live-53 this file has NO red rows — both original resets are closed (concurrent readers) or
-// DOCUMENTED as an accepted client-behaviour limit (the fan-out), so every row is a plain `test`
-// asserting what holds. Local workerd runs NullIsolateLimitEnforcer (NO memory limit), so the reset
-// behaviour only proves out on the DEPLOYED worker; locally the file skips.
+// asserts the HEALTHY expectation ("no isolate reset"); a ceiling that HOLDS is a plain `test`. Two
+// resets are RED BY DESIGN — accepted client-behaviour limits deliberately not defended: CONCURRENT
+// READERS (`.fails`, since 2026-09-07 — the read-admission ceiling was removed to keep `read()`
+// synchronous) and, documented as a plain reset-tolerant `test`, the large-ephemeral FAN-OUT. Local
+// workerd runs NullIsolateLimitEnforcer (NO memory limit), so the reset behaviour only proves out on
+// the DEPLOYED worker; locally the file skips.
 //
 // WHAT WAS OBSERVED (deployed, live-43, 2026-09-04). Every reset arrives as
 // `Durable Object's isolate exceeded its memory limit and was reset.` with `.overloaded` +
 // `.durableObjectReset` stamped, and the ctx recovers on the very next call (the log is durable):
-//   • FIXED concurrent readers     — (live-49) 24 sessions paging one 144 MiB log at once now all reach head, no reset:
-//              the metered `read` door AWAITS room under the 16 MiB outstanding ceiling instead of materializing 24 pages at once;
+//   • LIMIT concurrent readers      — 24 sessions paging one 144 MiB log at once reset the parent (24 × ~6 MiB pages coexist):
+//              the per-read byte budget bounds ONE read, not their sum — an accepted limit (`.fails`), the ctx recovers next call;
 //   • edge slow live client        — a stalled subscriber's pushes are DROPPED past the DO in-flight budget; the producer floods on, no reset;
 //   • LIMIT large ephemeral fan-out — 30 × 7 MiB ephemerals to N co-located facets MAY reset the parent (0 facets absorbed,
 //              3+ reset): the dominant term is CO-LOCATED FACET memory in the shared isolate, which the parent's JS cannot bound
@@ -119,25 +120,42 @@ beforeAll(async () => {
 
 // ─────────────────────────────── RED: the reproducible resets ───────────────────────────────
 
-// FIXED (live-49, the read-admission ceiling): born red — the read LEVEL bounded page bytes ISSUED
-// but shrinks a page no lower than ONE row, so 24 readers each grabbed a ~6 MiB first page in the
-// same tick and 24 × 6 MiB coexisted as replies in flight, resetting the DO. The metered `read` door
-// now AWAITS room under the 16 MiB outstanding ceiling (a continuation read or the TTL sweep retires
-// an outstanding page) instead of issuing past it, so only a handful of replies are ever in flight —
-// all 24 readers page to head, none resets. Heap-capped twin: concurrent-readers in memory-budget.
-deployed(
-  "CONCURRENT READERS: 24 sessions paging one 144 MiB log at once all reach head with no reset — the read door awaits room under the outstanding-bytes ceiling instead of materializing 24 pages in the isolate at once",
+// RED BY DESIGN — an ACCEPTED client-behaviour limit, deliberately NOT defended (2026-09-07). WHY
+// IT RESETS: 24 sessions page one 144 MiB log at once; each read returns a byte-budgeted page that
+// still carries >= 1 row, so 24 readers each grab a ~6 MiB first page in the same tick and 24 x
+// 6 MiB coexist as replies in flight (~144 MiB) — the isolate resets. The per-read byte budget
+// (stream.ts READ_PAGE_BUDGET_BYTES) is the WHOLE read-memory defense now: it bounds ONE read, never
+// the SUM across concurrent readers. WHY THAT IS OK: a client can only reset ITS OWN context's DO;
+// the durable log survives and the very next call re-materializes the context (the recovery read in
+// the body proves it), so the blast radius is one client's own transient state and it reconnects.
+// HOW IT WOULD BE FIXED, and why we didn't: bound the bytes IN FLIGHT across reads — an admission
+// gate that awaits room, serialised reads, or a coarse in-flight byte counter. We REMOVED exactly
+// that ceiling on 2026-09-07 because it forced `read()` async — rippling an await through every
+// same-isolate caller and splitting the door into read/readInternal — to defend a case no real
+// workload hits (one client fanning out 24 six-MiB reads at once). If a real workload ever does,
+// restore the ceiling and promote this back to a plain `test`.
+//
+// HOUSE CONVENTION: `.fails` over a body asserting the HEALTHY expectation (no reset). Green while
+// the reset stands; it flips the row RED the day the ceiling holds — the signal to promote it.
+deployed.fails(
+  "CONCURRENT READERS (accepted limit): 24 sessions paging one 144 MiB log at once reset the DO — the per-read byte budget bounds one read, not their sum; the ctx recovers on the next call",
   { timeout: 300_000 },
   async () => {
     const readers = Array.from({ length: 24 }, () => openItx(seededCtx));
     const results = await Promise.all(readers.map((itx) => settle(pageToHead(itx))));
     const resetErrors = results.flatMap((r) => (!r.ok && isDurableObjectReset(r.e) ? [r.e] : []));
-    // The ceiling holds: every reader pages to head and none resets (24 × ~6 MiB never coexist).
+    // RECOVERY (runs first, every time): the durable log survives the reset — a single fresh reader
+    // still pages the seeded ctx to head. This is why the limit is acceptable, and it must hold.
+    const recovered = await settle(pageToHead(openItx(seededCtx)));
+    expect(recovered.ok, "the seeded ctx must recover after the storm and still page to head").toBe(
+      true,
+    );
+    // THE HEALTHY EXPECTATION, asserted last so `.fails` stays green while the reset stands: no
+    // reader resets the DO. It DOES reset today — accepted; see the block above.
     expect(
       resetErrors.length,
       `${resetErrors.length}/24 concurrent readers reset the DO: ${String(resetErrors[0]?.message ?? "")}`,
     ).toBe(0);
-    expect(results.every((r) => r.ok)).toBe(true); // all 24 finished paging
   },
 );
 
