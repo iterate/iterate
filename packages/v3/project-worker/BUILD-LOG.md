@@ -3077,6 +3077,48 @@ SQLITE_TOOBIG` used to cross the hop from inside the write. Local workerd (4 MiB
   `PROJECT_TOKEN_SECRET` set those two are 4/4 against live-53 (the deployed secret survived these
   deploys), so the board reads 189/189 bar the by-design expected-fail rows.
 
+### 2026-09-07 — wave-0 3b: the self-wake billing circuit-breaker, and what the loop actually is
+
+- WHAT JONAS ASKED (wave-0 plan): a runaway-wake billing control — "this must not be able to happen".
+  The plan's fear: an evicted context with a cursor subscription consuming `stream/woken` re-wakes
+  itself and bills ONE wake + one durable row PER MINUTE, forever.
+- THE CONTROL (49503d514 Stream side, 7e5bbd336 DO wiring): a DURABLE self-wake streak in
+  `stream_meta`, loaded once at construction, gating the single alarm-arm chokepoint
+  `Stream.armAlarmNoLaterThan`. An `alarm()` pass with NO public door touched this incarnation is a
+  self-wake → `noteSelfWake` (durable ++). At `SELF_WAKE_HALT_STREAK` (5) arming becomes a no-op — the
+  loop cannot re-arm from anywhere — and one durable `stream/self-wake-halted` fact + one warn line are
+  recorded. The five public doors (append/read/invoke/waitForEvent/fetch) call `#notePublicDoor` →
+  `Stream.notePublicDoor`, clearing the streak (no write when already 0), so a context in use never
+  halts and a halted one resumes the instant a real request arrives.
+- PROVEN deterministically (ab22aa5c0, unit, no DO/eviction needed): halts at N, resumes on a public
+  door, DURABLE across incarnations (a reborn Stream over the same store stays halted). This is the
+  authoritative proof of the control's logic.
+- MEASURED (deployed, per "measure before believing a number") — the loop is NOT the 1/min runaway the
+  plan feared, it is a SLOW DRIP: the streak advances only on an EVICTED, no-public-door incarnation
+  (the incarnation that handled a request holds `#publicDoorTouched` for its whole life, so its warm
+  retries don't count — correct per Jonas's "no public door IN BETWEEN"), and evictions are
+  Cloudflare-timed. A cursor-sub-on-`stream/woken` dripped ~+2 `woken` in 8 min; a stuck-retry cursor
+  got 3 in 90 s. So reaching N takes MINUTES and varies run to run — the exposure was a slow drip, and
+  the control bounds it. Jonas's requirement is met BY THE CONTROL, not by watching it trip.
+- DEPLOYED OBSERVATION (opt-in, never in the board): `e2e/stream-wake-loop.e2e.test.ts`, gated behind
+  `RUN_WAKE_LOOP_PROBE=1` like the degradation probes so it can't flake the sequential board — a
+  stuck-retry cursor on a dormant context, eviction-rate-dependent. RAN (2026-09-07, b34e641a): 5-min
+  run `woken=3, self-wake-halted=0, streak stayed < 5`; 11-min run serviceable throughout, no halt.
+  So the drip is TOO SLOW to even reach the ceiling in 11 minutes — a STRONGER form of the finding
+  than "slow drip": there is no client-reachable runaway to trip the breaker in a bounded window. The
+  context stayed serviceable throughout (the append after the run landed — never poisoned). The
+  breaker remains the correct guard, proven to halt at N by the deterministic UNIT test; the deployed
+  side confirms the exposure it guards against does not actually run away. (If a real runaway ever
+  arises — a future alarm-driven mechanism — the breaker bounds it; this pin is left in the tree to
+  re-observe when the alarm changes.)
+- FOR JONAS TO DECIDE (surfaced, not decided here):
+  1. N = 5 is POLICY. A legitimate background job with no public traffic (were one ever built on the
+     alarm) would be halted at N too — the control cannot tell "billing for nothing" from "quietly
+     working". Today nothing self-schedules on the alarm except delivery/retry, so 5 is safe; revisit
+     if that changes.
+  2. The halt is a durable fact + a log line. Whether it should also PAGE someone (an alert on
+     `stream/self-wake-halted`) is an ops decision — the signal is emitted, the routing is not wired.
+
 ## 2026-09-04 — the DO owns both ends of a lent stub's rule: the pager upgrade carries the rule, one round trip
 
 - WHY: a `provide(match, stub)` / `subscribe({ target: fn })` cost THREE edge→DO round trips — the
