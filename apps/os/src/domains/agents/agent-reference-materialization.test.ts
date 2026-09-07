@@ -1,5 +1,5 @@
 import { describe, expect, test, vi } from "vitest";
-import type { AgentMessageAttachment } from "@iterate-com/shared/agent-message-attachments";
+import type { Reference } from "@iterate-com/shared/message";
 import {
   AGENT_REFERENCE_MAX_FILE_BYTES,
   AGENT_REFERENCE_MAX_TOTAL_BYTES,
@@ -7,7 +7,7 @@ import {
   renderAgentReferenceMaterialization,
 } from "./agent-reference-materialization.ts";
 
-function referenceAttachments(paths: string[]): AgentMessageAttachment[] {
+function referenceAttachments(paths: string[]): Reference[] {
   return paths.map((path) => ({
     id: `config-repo/${path}`,
     type: "repo-file",
@@ -35,7 +35,7 @@ describe("agent reference materialization", () => {
       {
         status: "resolved",
         target: { type: "repo-file", repoPath: "/repos/config", path: "AGENTS.md" },
-        attachmentIds: ["config-repo/AGENTS.md"],
+        referenceIds: ["config-repo/AGENTS.md"],
         resolvedCommitOid: "latest-oid",
         originalBytes: 14,
         includedBytes: 14,

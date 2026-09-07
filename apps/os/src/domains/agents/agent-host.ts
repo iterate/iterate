@@ -8,7 +8,7 @@
 
 import { isIdempotencyConflict } from "iterate/processors";
 import type { EmittedInput, ProcessEventArgs, StreamEvent } from "iterate/processors";
-import type { AgentConfigRepoFileAttachmentTarget } from "@iterate-com/shared/agent-message-attachments";
+import type { ConfigRepoFileReferenceTarget } from "@iterate-com/shared/message";
 import type { AgentFileAttachment, AgentProcessorContract } from "./agent-processor-contract.ts";
 import type { AgentReferenceReadResult } from "./agent-reference-materialization.ts";
 import type {
@@ -51,7 +51,7 @@ export type AgentLlmTransport = (args: {
  *   ATTEMPT (recorded, retried) rather than DO construction.
  * - `resolveModelFileUrl` remints a short-lived, immutable URL for a project
  *   file immediately before a model request. Production hosts provide it;
- *   bare tests without it retain the stored attachment URL.
+ *   bare tests without it retain the stored reference URL.
  * - `readRepoFile` resolves a bounded prefix of one semantic config-repo
  *   reference at latest HEAD. The processor commits that source material
  *   before scheduling a turn.
@@ -81,7 +81,7 @@ export type AgentProcessorDeps = {
   }) => Promise<unknown>;
   resolveModelFileUrl?: (file: AgentFileAttachment) => Promise<string>;
   readRepoFile?: (
-    target: AgentConfigRepoFileAttachmentTarget,
+    target: ConfigRepoFileReferenceTarget,
     maximumBytes: number,
   ) => Promise<AgentReferenceReadResult | null>;
   writeWorkspaceFile?: (input: {

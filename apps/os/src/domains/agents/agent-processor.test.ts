@@ -79,9 +79,9 @@ function userMessageWithConfigFileReferences(): AgentEventInput {
     payload: {
       role: "user",
       content:
-        "Read [@AGENTS.md](attachment:config-repo/AGENTS.md) and [@AGENTS.md](attachment:config-repo/AGENTS.md)",
+        "Read [@AGENTS.md](ref://config-repo/AGENTS.md) and [@AGENTS.md](ref://config-repo/AGENTS.md)",
       actor: { type: "user", origin: "web" },
-      attachments: [
+      references: [
         {
           id: "config-repo/AGENTS.md",
           type: "repo-file",
@@ -89,7 +89,7 @@ function userMessageWithConfigFileReferences(): AgentEventInput {
           path: "AGENTS.md",
         },
       ],
-      // `agent.message()` stages linked attachments without scheduling; the
+      // `agent.message()` stages linked references without scheduling; the
       // resolver event restores this user actor's external trigger.
       llmRequestPolicy: { behaviour: "dont-trigger-request" },
     },
@@ -101,9 +101,9 @@ function agentMessageWithConfigFileReference(): AgentEventInput {
     type: "events.iterate.com/agents/context-added",
     payload: {
       role: "developer",
-      content: "Read [@AGENTS.md](attachment:config-repo/AGENTS.md)",
+      content: "Read [@AGENTS.md](ref://config-repo/AGENTS.md)",
       actor: { type: "agent", path: "/agents/sender" },
-      attachments: [
+      references: [
         {
           id: "config-repo/AGENTS.md",
           type: "repo-file",
@@ -228,7 +228,7 @@ describe("AgentProcessor turn lifecycle", () => {
           outcomes: [
             {
               status: "resolved",
-              attachmentIds: ["config-repo/AGENTS.md"],
+              referenceIds: ["config-repo/AGENTS.md"],
               resolvedCommitOid: "latest-commit",
             },
           ],

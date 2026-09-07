@@ -426,7 +426,7 @@ function hasPendingReferenceResolution(item: AgentUiItem): boolean {
   return (
     item.kind === "user" &&
     item.referenceResolutions === undefined &&
-    item.attachments?.some((attachment) => attachment.type === "repo-file") === true
+    item.references?.some((reference) => reference.type === "repo-file") === true
   );
 }
 

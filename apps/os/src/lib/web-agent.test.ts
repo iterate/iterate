@@ -21,16 +21,16 @@ test("newWebAgentPath is a stable slug of the creation time", () => {
 describe("sendAgentFirstTurn", () => {
   test("text-only: create then one structured message", async () => {
     const agent = fakeAgent();
-    await sendAgentFirstTurn(agent, { message: "  hello  " });
+    await sendAgentFirstTurn(agent, { content: "  hello  " });
     expect(agent.create).toHaveBeenCalledOnce();
-    expect(agent.message).toHaveBeenCalledWith({ message: "  hello  " });
+    expect(agent.message).toHaveBeenCalledWith({ content: "  hello  " });
   });
 
-  test("inline attachment: forwards readable content and typed metadata together", async () => {
+  test("inline reference: forwards readable content and typed metadata together", async () => {
     const agent = fakeAgent();
     await sendAgentFirstTurn(agent, {
-      message: "Read [@AGENTS.md](attachment:config-repo/AGENTS.md)",
-      attachments: [
+      content: "Read [@AGENTS.md](ref://config-repo/AGENTS.md)",
+      references: [
         {
           id: "config-repo/AGENTS.md",
           type: "repo-file",
@@ -40,8 +40,8 @@ describe("sendAgentFirstTurn", () => {
       ],
     });
     expect(agent.message).toHaveBeenCalledWith({
-      message: "Read [@AGENTS.md](attachment:config-repo/AGENTS.md)",
-      attachments: [
+      content: "Read [@AGENTS.md](ref://config-repo/AGENTS.md)",
+      references: [
         {
           id: "config-repo/AGENTS.md",
           type: "repo-file",
@@ -54,14 +54,14 @@ describe("sendAgentFirstTurn", () => {
 
   test("with files: one message call carries text and encoded files", async () => {
     const agent = fakeAgent();
-    await sendAgentFirstTurn(agent, { message: "with file", files: [fakeFile("note.txt", 4)] });
+    await sendAgentFirstTurn(agent, { content: "with file", files: [fakeFile("note.txt", 4)] });
     expect(agent.create).toHaveBeenCalledOnce();
     expect(agent.message).toHaveBeenCalledOnce();
     const payload = agent.message.mock.calls[0]![0] as {
-      message?: string;
+      content?: string;
       files: { filename: string; contentType: string; data: Uint8Array }[];
     };
-    expect(payload.message).toBe("with file");
+    expect(payload.content).toBe("with file");
     expect(payload.files).toHaveLength(1);
     expect(payload.files[0]!.filename).toBe("note.txt");
     expect(payload.files[0]!.contentType).toBe("text/plain");
@@ -71,10 +71,10 @@ describe("sendAgentFirstTurn", () => {
   test("files-only first turn preserves its whitespace message", async () => {
     const agent = fakeAgent();
     await sendAgentFirstTurn(agent, {
-      message: "   ",
+      content: "   ",
       files: [fakeFile("pic.png", 8, "image/png")],
     });
     expect(agent.message).toHaveBeenCalledOnce();
-    expect(agent.message.mock.calls[0]![0]).toMatchObject({ message: "   " });
+    expect(agent.message.mock.calls[0]![0]).toMatchObject({ content: "   " });
   });
 });

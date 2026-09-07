@@ -22,10 +22,7 @@
 
 import { z } from "zod";
 import { AgentRuntime } from "@iterate-com/shared/agent-events";
-import {
-  AgentMessageAttachments,
-  decodeAgentMessageAttachments,
-} from "@iterate-com/shared/agent-message-attachments";
+import { MessageReferences, decodeMessageReferences } from "@iterate-com/shared/message";
 import {
   defineProcessorContract,
   type ConsumedInput,
@@ -839,12 +836,12 @@ function agentContextItemSchema() {
         .enum(["system", "developer", "user", "assistant"])
         .meta({ description: "The LLM message role this item renders as." }),
       content: z.string().meta({ description: "The model-visible text." }),
-      attachments: AgentMessageAttachments.optional().meta({
-        description: "Typed resources addressed by Markdown-like attachment links in content.",
+      references: MessageReferences.optional().meta({
+        description: "Typed resources addressed by Markdown-like ref:// links in content.",
       }),
       referenceResolution: z.unknown().optional().meta({
         description:
-          "Processor-authored, bounded resolution metadata for a prior message's attachments.",
+          "Processor-authored, bounded resolution metadata for a prior message's references.",
       }),
       key: z
         .string()
@@ -1020,13 +1017,13 @@ function agentContextItemSchema() {
     })
     .superRefine((payload, ctx) => {
       if (
-        payload.attachments !== undefined &&
-        decodeAgentMessageAttachments(payload.content, payload.attachments) === null
+        payload.references !== undefined &&
+        decodeMessageReferences(payload.content, payload.references) === null
       ) {
         ctx.addIssue({
           code: "custom",
-          path: ["attachments"],
-          message: "each attachment must have a unique id and a matching inline attachment link",
+          path: ["references"],
+          message: "each reference must have a unique id and a matching inline ref:// link",
         });
       }
       if (payload.role !== "developer" || payload.compaction === undefined) return;

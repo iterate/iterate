@@ -7,8 +7,8 @@ import { EditorView, keymap, placeholder as placeholderExtension } from "@codemi
 import {
   agentMessageFromEditorDocument,
   agentMessageToEditorDocument,
-  type AgentMessageDraft,
-} from "@iterate-com/shared/agent-message-attachments";
+  type Message,
+} from "@iterate-com/shared/message";
 import { useQueryClient } from "@tanstack/react-query";
 import { composerCompletionSource } from "~/components/composer-completions.ts";
 import {
@@ -21,8 +21,8 @@ import {
 import type { ComposerSuggestionProvider } from "~/components/composer-suggestions.ts";
 
 export type ComposerTextareaProps = {
-  value: AgentMessageDraft;
-  onValueChange: (value: AgentMessageDraft) => void;
+  value: Message;
+  onValueChange: (value: Message) => void;
   onSubmit: () => void;
   placeholder: string;
   providers?: readonly ComposerSuggestionProvider[];

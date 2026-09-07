@@ -1,4 +1,4 @@
-import type { AgentMessageAttachmentTarget } from "@iterate-com/shared/agent-message-attachments";
+import type { ReferenceTarget } from "@iterate-com/shared/message";
 
 export type ComposerSuggestion = {
   id: string;
@@ -7,7 +7,7 @@ export type ComposerSuggestion = {
   /** Semantic completion inserted in place of the active trigger and query. */
   completion:
     | { type: "text"; text: string }
-    | { type: "attachment"; display: string; target: AgentMessageAttachmentTarget };
+    | { type: "reference"; display: string; target: ReferenceTarget };
   description?: string;
   /** CodeMirror completion icon class; providers may define their own type. */
   type?: string;
@@ -72,10 +72,10 @@ export function composerSuggestionEdit(
 ): {
   insert: string;
   caret: number;
-  attachment?: {
+  reference?: {
     display: string;
     from: number;
-    target: AgentMessageAttachmentTarget;
+    target: ReferenceTarget;
     to: number;
   };
 } {
@@ -89,8 +89,8 @@ export function composerSuggestionEdit(
   return {
     insert: `${inserted}${separator}`,
     caret: from + inserted.length + separator.length + existingSeparatorLength,
-    ...(suggestion.completion.type === "attachment" && {
-      attachment: {
+    ...(suggestion.completion.type === "reference" && {
+      reference: {
         display: suggestion.completion.display,
         from,
         target: suggestion.completion.target,

@@ -77,13 +77,25 @@ function renderMessage(item: AgentUiMessageItem): HTMLDivElement {
   return container;
 }
 
+test("an empty reference list preserves the visible message text", () => {
+  const container = renderMessage({
+    kind: "user",
+    id: "user-1",
+    text: "Hello with no references",
+    references: [],
+    timestampMs: 0,
+  });
+  expect(container.textContent).toContain("Hello with no references");
+  expect(container.querySelector("[data-reference-type]")).toBeNull();
+});
+
 test("a failed reference resolution marks the exact sent pill", () => {
   const container = renderMessage({
     kind: "user",
     id: "user-1",
-    text: "Use [@AGENTS.md](attachment:config-repo/AGENTS.md)",
+    text: "Use [@AGENTS.md](ref://config-repo/AGENTS.md)",
     timestampMs: 0,
-    attachments: [
+    references: [
       {
         id: "config-repo/AGENTS.md",
         type: "repo-file",
@@ -93,7 +105,7 @@ test("a failed reference resolution marks the exact sent pill", () => {
     ],
     referenceResolutions: { "config-repo/AGENTS.md": { status: "missing" } },
   });
-  const pill = container.querySelector('[data-attachment-type="repo-file"]');
+  const pill = container.querySelector('[data-reference-type="repo-file"]');
 
   expect(pill?.getAttribute("data-reference-resolution")).toBe("missing");
   expect(pill?.getAttribute("aria-label")).toBe(

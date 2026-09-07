@@ -1,8 +1,8 @@
 import {
-  decodeAgentMessageAttachments,
-  type AgentConfigRepoFileAttachmentTarget,
-  type AgentMessageAttachment,
-} from "@iterate-com/shared/agent-message-attachments";
+  decodeMessageReferences,
+  type ConfigRepoFileReferenceTarget,
+  type Reference,
+} from "@iterate-com/shared/message";
 import type { ProcessEventArgs } from "iterate/processors";
 import { appendUnlessLostIdempotencyRace, stringifyError, type AgentHost } from "./agent-host.ts";
 import type { AgentProcessorContract } from "./agent-processor-contract.ts";
@@ -11,7 +11,7 @@ import { contextSchedulingSemanticsForReferenceResolution } from "./agent-prompt
 export const AGENT_REFERENCE_MAX_FILE_BYTES = 64 * 1024;
 export const AGENT_REFERENCE_MAX_TOTAL_BYTES = 128 * 1024;
 
-type ConfigRepoFileTarget = AgentConfigRepoFileAttachmentTarget;
+type ConfigRepoFileTarget = ConfigRepoFileReferenceTarget;
 
 export type AgentReferenceReadResult = {
   bytes: Uint8Array;
@@ -24,7 +24,7 @@ type AgentReferenceMaterializationOutcome =
   | {
       status: "resolved";
       target: ConfigRepoFileTarget;
-      attachmentIds: string[];
+      referenceIds: string[];
       resolvedCommitOid: string;
       originalBytes: number;
       includedBytes: number;
@@ -34,25 +34,25 @@ type AgentReferenceMaterializationOutcome =
   | {
       status: "missing";
       target: ConfigRepoFileTarget;
-      attachmentIds: string[];
+      referenceIds: string[];
     }
   | {
       status: "binary";
       target: ConfigRepoFileTarget;
-      attachmentIds: string[];
+      referenceIds: string[];
       resolvedCommitOid: string;
       originalBytes: number;
     }
   | {
       status: "read-failed";
       target: ConfigRepoFileTarget;
-      attachmentIds: string[];
+      referenceIds: string[];
       message: string;
     };
 
 type UniqueReference = {
   target: ConfigRepoFileTarget;
-  attachmentIds: string[];
+  referenceIds: string[];
 };
 
 /**
@@ -61,17 +61,17 @@ type UniqueReference = {
  * exists, which makes all retries fold the same source material.
  */
 export async function materializeAgentReferences(
-  attachments: readonly AgentMessageAttachment[],
+  references: readonly Reference[],
   readRepoFile: (
     target: ConfigRepoFileTarget,
     maximumBytes: number,
   ) => Promise<AgentReferenceReadResult | null>,
 ): Promise<AgentReferenceMaterializationOutcome[]> {
-  const references = uniqueConfigRepoReferences(attachments);
+  const uniqueReferences = uniqueConfigRepoReferences(references);
   const outcomes: AgentReferenceMaterializationOutcome[] = [];
   let includedTotalBytes = 0;
 
-  for (const { attachmentIds, target } of references) {
+  for (const { referenceIds, target } of uniqueReferences) {
     const maximumBytes = Math.min(
       AGENT_REFERENCE_MAX_FILE_BYTES,
       AGENT_REFERENCE_MAX_TOTAL_BYTES - includedTotalBytes,
@@ -83,7 +83,7 @@ export async function materializeAgentReferences(
       outcomes.push({
         status: "read-failed",
         target,
-        attachmentIds,
+        referenceIds,
         message: stringifyError(error),
       });
       continue;
@@ -92,7 +92,7 @@ export async function materializeAgentReferences(
       outcomes.push({
         status: "missing",
         target,
-        attachmentIds,
+        referenceIds,
       });
       continue;
     }
@@ -110,7 +110,7 @@ export async function materializeAgentReferences(
       outcomes.push({
         status: "binary",
         target,
-        attachmentIds,
+        referenceIds,
         resolvedCommitOid: commitOid,
         originalBytes,
       });
@@ -120,7 +120,7 @@ export async function materializeAgentReferences(
     outcomes.push({
       status: "resolved",
       target,
-      attachmentIds,
+      referenceIds,
       resolvedCommitOid: commitOid,
       originalBytes,
       includedBytes: decoded.includedBytes,
@@ -143,19 +143,17 @@ export function renderAgentReferenceMaterialization(
   ].join("\n\n");
 }
 
-function uniqueConfigRepoReferences(
-  attachments: readonly AgentMessageAttachment[],
-): UniqueReference[] {
+function uniqueConfigRepoReferences(references: readonly Reference[]): UniqueReference[] {
   const byCoordinate = new Map<string, UniqueReference>();
-  for (const attachment of attachments) {
-    if (attachment.type !== "repo-file") continue;
-    const { id, ...target } = attachment;
+  for (const reference of references) {
+    if (reference.type !== "repo-file") continue;
+    const { id, ...target } = reference;
     const key = `${target.repoPath}\0${target.path}`;
     const existing = byCoordinate.get(key);
     if (existing === undefined) {
-      byCoordinate.set(key, { target, attachmentIds: [id] });
+      byCoordinate.set(key, { target, referenceIds: [id] });
     } else {
-      existing.attachmentIds.push(id);
+      existing.referenceIds.push(id);
     }
   }
   return [...byCoordinate.values()];
@@ -200,10 +198,10 @@ export class AgentReferenceMaterializer {
   processEvent(args: ProcessEventArgs<AgentProcessorContract>): boolean {
     const event = args.event;
     if (event?.type !== "events.iterate.com/agents/context-added") return false;
-    const attachments = event.payload.attachments;
-    if (attachments === undefined) return false;
-    const message = decodeAgentMessageAttachments(event.payload.content, attachments);
-    if (message === null || uniqueConfigRepoReferences(message.attachments).length === 0)
+    const references = event.payload.references;
+    if (references === undefined) return false;
+    const message = decodeMessageReferences(event.payload.content, references);
+    if (message === null || uniqueConfigRepoReferences(message.references).length === 0)
       return false;
 
     args.blockProcessorWhile(async () => {
@@ -211,7 +209,7 @@ export class AgentReferenceMaterializer {
       if (readRepoFile === undefined) {
         throw new Error("Agent reference materialization requires the readRepoFile dependency.");
       }
-      const outcomes = await materializeAgentReferences(message.attachments, readRepoFile);
+      const outcomes = await materializeAgentReferences(message.references, readRepoFile);
       const sourceScheduling = contextSchedulingSemanticsForReferenceResolution(event.payload);
       await appendUnlessLostIdempotencyRace(args.append, [
         {

@@ -1,8 +1,5 @@
 import { useState, type DragEvent, type ReactNode } from "react";
-import {
-  agentMessageToEditorDocument,
-  type AgentMessageDraft,
-} from "@iterate-com/shared/agent-message-attachments";
+import { agentMessageToEditorDocument, type Message } from "@iterate-com/shared/message";
 import {
   ArrowUpIcon,
   FileCode2Icon,
@@ -31,8 +28,8 @@ import type { ComposerSuggestionProvider } from "~/components/composer-suggestio
 export type AgentComposerMode = "message" | "raw" | "examples";
 
 type AgentComposerMessageConfig = {
-  value: AgentMessageDraft;
-  onValueChange: (value: AgentMessageDraft) => void;
+  value: Message;
+  onValueChange: (value: Message) => void;
   onSubmit: () => Promise<void> | void;
   attachments?: ReactNode;
   canSubmit?: boolean;
@@ -266,7 +263,7 @@ export function AgentPillComposer({
               <div className="px-1 pb-1">{message.attachments}</div>
             )}
             <ComposerTextarea
-              value={message?.value ?? { content: "", attachments: [] }}
+              value={message?.value ?? { content: "" }}
               onValueChange={(value) => message?.onValueChange(value)}
               onSubmit={submit}
               focusOnMount={autoFocusMessage}

@@ -4,6 +4,13 @@ OS is an authenticated app where users manage organization-owned projects and ru
 
 ## Language
 
+**Message Reference**:
+A resource identified within a message's readable content, with metadata describing its target. The target may be a repository file, user, agent, or stream.
+_Avoid_: attachment (for references to existing resources), rich-text document
+
+**Reference Resolution**:
+The recorded outcome of retrieving a Message Reference's target, including the source identity and any content included for the agent.
+
 > **Historical note (itx-v4 cutover 2026-07 + single-worker cutover
 > PR #1636):** entries below that describe the legacy stacks — the Ingress
 > Route Table machinery, `__null__` Durable Object name encoding,

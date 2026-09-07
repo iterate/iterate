@@ -1,9 +1,9 @@
 import { useState } from "react";
 import {
   agentMessageToEditorDocument,
-  emptyAgentMessageDraft,
-  type AgentMessageAttachment,
-} from "@iterate-com/shared/agent-message-attachments";
+  emptyMessage,
+  type Message,
+} from "@iterate-com/shared/message";
 import { useMutation } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { toast } from "@iterate-com/ui/components/sonner";
@@ -29,21 +29,21 @@ export function NewAgentComposer({
   const navigate = useNavigate();
   const attachments = useComposerAttachments();
   const fileMentions = configRepoFileMentionProvider(projectId);
-  const [message, setMessage] = useState(() => emptyAgentMessageDraft());
+  const [message, setMessage] = useState(() => emptyMessage());
 
   const createAgent = useMutation({
-    mutationFn: async (input: {
-      content: string;
-      inlineAttachments: AgentMessageAttachment[];
-      files: File[];
-    }) => {
+    mutationFn: async (
+      input: Message & {
+        files: File[];
+      },
+    ) => {
       const agentPath = newWebAgentPath(new Date());
       // connectItx (imperative, not the suspending hook) narrows the one
       // session socket to this project.
       const itx = await connectItx(projectId);
       await sendAgentFirstTurn(itx.agents.get(agentPath), {
-        message: input.content,
-        attachments: input.inlineAttachments,
+        content: input.content,
+        references: input.references,
         files: input.files,
       });
       return agentPath;
@@ -69,7 +69,7 @@ export function NewAgentComposer({
     createAgent.mutate({
       content: message.content,
       files: attachments.files,
-      inlineAttachments: message.attachments,
+      references: message.references,
     });
   }
 

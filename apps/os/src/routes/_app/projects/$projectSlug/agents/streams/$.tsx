@@ -57,36 +57,29 @@ function ProjectAgentDetailContent() {
   // are addressed by their stream path.
   async function submitAgentMessage({
     content,
-    attachments,
-  }: {
-    content: string;
-    attachments: import("@iterate-com/shared/agent-message-attachments").AgentMessageAttachment[];
-  }) {
+    references,
+  }: import("@iterate-com/shared/message").Message) {
     const itx = await connectItx(project.id);
     // Returned so the composer can feed the committed offset into the
     // store's consume-own-append metric (real append→observed latency).
     return await itx.agents.get(streamPath).message({
-      message: content,
-      ...(attachments.length === 0 ? {} : { attachments }),
+      content,
+      ...(!references?.length ? {} : { references }),
     });
   }
 
   async function submitAgentFiles({
     files,
     content,
-    attachments,
-  }: {
-    files: File[];
-    content: string;
-    attachments: import("@iterate-com/shared/agent-message-attachments").AgentMessageAttachment[];
-  }) {
+    references,
+  }: import("@iterate-com/shared/message").Message & { files: File[] }) {
     const itx = await connectItx(project.id);
     // The unified message call commits text, linked resources, and uploaded
     // files as one input event, so resolution can gate exactly one turn.
     return await itx.agents.get(streamPath).message({
       files: await filesToAgentPayload(files),
-      message: content,
-      ...(attachments.length === 0 ? {} : { attachments }),
+      content,
+      ...(!references?.length ? {} : { references }),
     });
   }
 

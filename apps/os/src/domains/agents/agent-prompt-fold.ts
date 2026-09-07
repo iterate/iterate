@@ -12,10 +12,7 @@ import {
   isAgentRuntimeZero,
   type AgentRuntime,
 } from "@iterate-com/shared/agent-events";
-import {
-  decodeAgentMessageAttachments,
-  hasAgentConfigRepoFileAttachments,
-} from "@iterate-com/shared/agent-message-attachments";
+import { decodeMessageReferences, hasConfigRepoFileReferences } from "@iterate-com/shared/message";
 import {
   cachedEventSchema,
   getConsumedEventDefinition,
@@ -489,9 +486,9 @@ function isUnknownRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function contextNeedsReferenceMaterialization(payload: AgentContextAddedPayload): boolean {
-  if (payload.attachments === undefined) return false;
-  const message = decodeAgentMessageAttachments(payload.content, payload.attachments);
-  return message !== null && hasAgentConfigRepoFileAttachments(message.attachments);
+  if (payload.references === undefined) return false;
+  const message = decodeMessageReferences(payload.content, payload.references);
+  return message !== null && hasConfigRepoFileReferences(message.references);
 }
 
 type AgentContextItems = AgentProcessorState["contextItems"];

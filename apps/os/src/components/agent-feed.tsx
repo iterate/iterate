@@ -1,7 +1,7 @@
 import { memo, useCallback, useLayoutEffect, useRef, useState } from "react";
 import { Link } from "@tanstack/react-router";
 import type { AgentRuntime } from "@iterate-com/shared/agent-events";
-import { decodeAgentMessageAttachments } from "@iterate-com/shared/agent-message-attachments";
+import { decodeMessageReferences } from "@iterate-com/shared/message";
 import {
   BanIcon,
   ChevronRightIcon,
@@ -492,39 +492,37 @@ export function QueuedMessagesPanel({
 
 function UserMessageBody({ item }: { item: AgentUiMessageItem }) {
   const decodedMessage =
-    item.attachments === undefined
-      ? null
-      : decodeAgentMessageAttachments(item.text, item.attachments);
+    item.references === undefined ? null : decodeMessageReferences(item.text, item.references);
   return (
     <>
       {item.via == null ? null : <MessageViaLabel via={item.via} className="opacity-70" />}
       {item.text === "" ? null : item.via == null ? (
-        decodedMessage === null ? (
+        decodedMessage === null || decodedMessage.ranges.length === 0 ? (
           <div className="whitespace-pre-wrap leading-6">{item.text}</div>
         ) : (
           <div className="whitespace-pre-wrap leading-6">
-            {decodedMessage.references.flatMap((reference, index) => {
-              const previousEnd = decodedMessage.references[index - 1]?.to ?? 0;
+            {decodedMessage.ranges.flatMap((reference, index) => {
+              const previousEnd = decodedMessage.ranges[index - 1]?.to ?? 0;
               const warning = referenceResolutionWarning(
-                item.referenceResolutions?.[reference.attachment.id],
+                item.referenceResolutions?.[reference.reference.id],
               );
               return [
                 <span key={`text-${reference.from}`}>
                   {decodedMessage.text.slice(previousEnd, reference.from)}
                 </span>,
                 <Badge
-                  key={`${reference.attachment.id}-${reference.from}`}
+                  key={`${reference.reference.id}-${reference.from}`}
                   variant="outline"
                   className={cn(
                     "mx-0.5 inline-flex max-w-full align-middle font-mono font-normal",
                     warning !== null &&
                       "border-amber-500/50 bg-amber-500/10 text-amber-800 dark:text-amber-300",
                   )}
-                  title={warning ?? reference.attachment.path}
+                  title={warning ?? reference.reference.path}
                   aria-label={warning === null ? undefined : `${reference.display}: ${warning}`}
-                  data-attachment-type={reference.attachment.type}
+                  data-reference-type={reference.reference.type}
                   data-reference-resolution={
-                    item.referenceResolutions?.[reference.attachment.id]?.status
+                    item.referenceResolutions?.[reference.reference.id]?.status
                   }
                 >
                   {warning === null ? (
@@ -534,7 +532,7 @@ function UserMessageBody({ item }: { item: AgentUiMessageItem }) {
                   )}
                   <span className="truncate">{reference.display}</span>
                 </Badge>,
-                ...(index === decodedMessage.references.length - 1
+                ...(index === decodedMessage.ranges.length - 1
                   ? [<span key="text-tail">{decodedMessage.text.slice(reference.to)}</span>]
                   : []),
               ];

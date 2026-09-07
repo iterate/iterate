@@ -35,18 +35,15 @@ function ProjectStreamDetailContent() {
 
   async function submitMessage({
     content,
-    attachments,
-  }: {
-    content: string;
-    attachments: import("@iterate-com/shared/agent-message-attachments").AgentMessageAttachment[];
-  }) {
+    references,
+  }: import("@iterate-com/shared/message").Message) {
     const itx = await connectItx(project.id);
     const [event] = await itx.streams.get(streamPath).append({
       type: "events.iterate.com/agents/context-added",
       payload: {
         role: "user",
         content,
-        ...(attachments.length === 0 ? {} : { attachments }),
+        ...(!references?.length ? {} : { references }),
         actor: { type: "user", origin: "web" },
       },
     });

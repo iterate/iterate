@@ -62,8 +62,8 @@ function projectRuntime(
 }
 
 describe("agent-ui reducer", () => {
-  test("preserves valid linked attachments and falls back to plain text on mismatch", () => {
-    const attachments = [
+  test("preserves valid linked references and falls back to plain text on mismatch", () => {
+    const references = [
       {
         id: "config-repo/AGENTS.md",
         type: "repo-file",
@@ -77,8 +77,8 @@ describe("agent-ui reducer", () => {
         payload: {
           role: "user",
           actor: { type: "user", origin: "web" },
-          content: "Read [@AGENTS.md](attachment:config-repo/AGENTS.md)",
-          attachments,
+          content: "Read [@AGENTS.md](ref://config-repo/AGENTS.md)",
+          references,
         },
       },
       {
@@ -87,18 +87,18 @@ describe("agent-ui reducer", () => {
           role: "user",
           actor: { type: "user", origin: "web" },
           content: "plain fallback",
-          attachments,
+          references,
         },
       },
     ]);
 
-    expect(state.items[0]).toMatchObject({ kind: "user", attachments });
+    expect(state.items[0]).toMatchObject({ kind: "user", references });
     expect(state.items[1]).toMatchObject({ kind: "user", text: "plain fallback" });
-    expect(state.items[1]).not.toHaveProperty("attachments");
+    expect(state.items[1]).not.toHaveProperty("references");
   });
 
   test("projects durable reference outcomes onto their original occurrences", () => {
-    const attachments = [
+    const references = [
       {
         id: "config-repo/AGENTS.md",
         type: "repo-file",
@@ -112,8 +112,8 @@ describe("agent-ui reducer", () => {
         payload: {
           role: "user",
           actor: { type: "user", origin: "web" },
-          content: "[@AGENTS.md](attachment:config-repo/AGENTS.md)",
-          attachments,
+          content: "[@AGENTS.md](ref://config-repo/AGENTS.md)",
+          references,
         },
       },
       {
@@ -124,17 +124,17 @@ describe("agent-ui reducer", () => {
           content: "resolution details",
           referenceResolution: {
             sourceOffset: 1,
-            outcomes: [{ status: "missing", attachmentIds: ["config-repo/AGENTS.md"] }],
+            outcomes: [{ status: "missing", referenceIds: ["config-repo/AGENTS.md"] }],
           },
         },
       },
     ]);
 
     expect(state.items).toMatchObject([
-      { id: "user-1", attachments },
+      { id: "user-1", references },
       {
         id: "user-1",
-        attachments,
+        references,
         referenceResolutions: { "config-repo/AGENTS.md": { status: "missing" } },
       },
     ]);
@@ -1375,7 +1375,7 @@ describe("agent-ui reducer", () => {
   });
 
   test("updates a queued file mention when its resolution arrives mid-turn", () => {
-    const attachments = [
+    const references = [
       {
         id: "config-repo/AGENTS.md",
         type: "repo-file",
@@ -1395,8 +1395,8 @@ describe("agent-ui reducer", () => {
         payload: {
           role: "user",
           actor: { type: "user", origin: "web" },
-          content: "[@AGENTS.md](attachment:config-repo/AGENTS.md)",
-          attachments,
+          content: "[@AGENTS.md](ref://config-repo/AGENTS.md)",
+          references,
         },
       },
       {
@@ -1412,7 +1412,7 @@ describe("agent-ui reducer", () => {
               {
                 status: "resolved",
                 truncated: true,
-                attachmentIds: ["config-repo/AGENTS.md"],
+                referenceIds: ["config-repo/AGENTS.md"],
               },
             ],
           },
@@ -1424,7 +1424,7 @@ describe("agent-ui reducer", () => {
     expect(state.queuedUserMessages).toMatchObject([
       {
         id: "user-8",
-        attachments,
+        references,
         referenceResolutions: {
           "config-repo/AGENTS.md": { status: "resolved", truncated: true },
         },

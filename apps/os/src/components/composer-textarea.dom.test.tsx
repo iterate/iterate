@@ -8,9 +8,9 @@ import { Transaction } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import {
   agentMessageToEditorDocument,
-  emptyAgentMessageDraft,
-  type AgentMessageDraft,
-} from "@iterate-com/shared/agent-message-attachments";
+  emptyMessage,
+  type Message,
+} from "@iterate-com/shared/message";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { ComposerTextareaClient as ComposerTextarea } from "./composer-textarea.client.tsx";
 import type { ComposerSuggestionProvider } from "./composer-suggestions.ts";
@@ -40,7 +40,7 @@ function fileSuggestion(path: string) {
     id: path,
     label: path,
     completion: {
-      type: "attachment" as const,
+      type: "reference" as const,
       display: `@${path}`,
       target: {
         type: "repo-file" as const,
@@ -69,9 +69,9 @@ function Harness({
 }: {
   source?: ComposerSuggestionProvider;
   submit?: () => void;
-  onDocumentChange?: (message: AgentMessageDraft) => void;
+  onDocumentChange?: (message: Message) => void;
 }) {
-  const [value, setValue] = useState(() => emptyAgentMessageDraft());
+  const [value, setValue] = useState(() => emptyMessage());
   const [queryClient] = useState(
     () =>
       new QueryClient({
@@ -141,10 +141,10 @@ test("typing a trigger keeps editor focus and Enter inserts an atomic reference"
   );
   expect(view.state.doc.toString()).toBe("@AGENTS.md ");
   expect(document.querySelector(".cm-agent-reference")?.textContent).toBe("@AGENTS.md");
-  const message = onDocumentChange.mock.calls.at(-1)?.[0] as AgentMessageDraft;
+  const message = onDocumentChange.mock.calls.at(-1)?.[0] as Message;
   expect(agentMessageToEditorDocument(message).text).toBe("@AGENTS.md ");
-  expect(message.content).toBe("[@AGENTS.md](attachment:config-repo/AGENTS.md) ");
-  expect(message.attachments).toHaveLength(1);
+  expect(message.content).toBe("[@AGENTS.md](ref://config-repo/AGENTS.md) ");
+  expect(message.references).toHaveLength(1);
 
   await act(async () => {
     view.dispatch({ changes: { from: 10, to: 11 }, selection: { anchor: 10 } });

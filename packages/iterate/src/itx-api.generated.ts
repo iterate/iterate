@@ -538,24 +538,21 @@ export interface Agent {
    * `{ type: "agent", path }` and does NOT refill the receiver's autonomous
    * turn budget, so agent↔agent reply loops stay bounded; from anywhere else
    * (web UI, CLI, MCP session) it is a user message. The agent must already
-   * have been created explicitly. `attachments` are typed resources addressed
-   * from `message` with Markdown-like links such as
-   * `[@AGENTS.md](attachment:config-repo/AGENTS.md)`. Optional files are stored
+   * have been created explicitly. `references` are typed resources addressed
+   * from `content` with Markdown-like links such as
+   * `[@AGENTS.md](ref://config-repo/AGENTS.md)`. Optional files are stored
    * in project file storage and ride the same event (images stay visible to
    * vision-capable models).
    */
   message(
     input:
       | string
+      | (Message & {
+          files?: Array<{ contentType: string; data: FileData; filename: string }>;
+        })
       | {
           message: string;
           files?: Array<{ contentType: string; data: FileData; filename: string }>;
-          attachments?: Array<{
-            id: string;
-            type: "repo-file";
-            repoPath: "/repos/config";
-            path: string;
-          }>;
         },
   ): Promise<StreamEvent>;
   /**
@@ -2713,7 +2710,7 @@ export type AgentProcessorState = {
         payload: {
           role: "assistant" | "developer" | "system" | "user";
           content: string;
-          attachments?:
+          references?:
             | { type: "repo-file"; repoPath: "/repos/config"; path: string; id: string }[]
             | undefined;
           referenceResolution?: unknown;
@@ -2771,7 +2768,7 @@ export type AgentProcessorState = {
         payload: {
           role: "assistant" | "developer" | "system" | "user";
           content: string;
-          attachments?:
+          references?:
             | { type: "repo-file"; repoPath: "/repos/config"; path: string; id: string }[]
             | undefined;
           referenceResolution?: unknown;
@@ -2966,7 +2963,7 @@ export type AgentEventInput =
       {
         role: "assistant" | "developer" | "system" | "user";
         content: string;
-        attachments?:
+        references?:
           | { type: "repo-file"; repoPath: "/repos/config"; path: string; id: string }[]
           | undefined;
         referenceResolution?: unknown;
@@ -3116,6 +3113,12 @@ export type StreamEvent = {
 /** The `agent/created` payload — the agent's birth certificate (a loose
  * object of caller-authored birth facts; `{}` is the norm). */
 export type AgentCreateInput = { [x: string]: unknown };
+
+/** Readable message content with optional resources addressed by inline ref:// links. */
+export type Message = {
+  content: string;
+  references?: Reference[];
+};
 
 /**
  * Bytes accepted by every file-writing surface. Strings are ALWAYS treated as
@@ -4645,12 +4648,14 @@ export type JsonValue =
   | JsonValue[]
   | { [key: string]: JsonValue };
 
+export type Reference = { type: "repo-file"; repoPath: "/repos/config"; path: string; id: string };
+
 /** One model-visible context item's payload — the wire contract for every
  * committed `agents/context-added` event. */
 export type AgentContextAddedPayload = {
   role: "assistant" | "developer" | "system" | "user";
   content: string;
-  attachments?:
+  references?:
     | { type: "repo-file"; repoPath: "/repos/config"; path: string; id: string }[]
     | undefined;
   referenceResolution?: unknown;

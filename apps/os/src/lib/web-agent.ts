@@ -1,6 +1,6 @@
 /** Web-agent creation: fresh agent paths and the first conversational turn. */
 
-import type { AgentMessageAttachment } from "@iterate-com/shared/agent-message-attachments";
+import type { Message } from "@iterate-com/shared/message";
 
 export function newWebAgentPath(date: Date) {
   const slug = date
@@ -25,32 +25,30 @@ export async function filesToAgentPayload(files: readonly File[]) {
 /** The slice of an itx agent handle the first turn touches. */
 type WebAgentHandle = {
   create: () => Promise<unknown>;
-  message: (input: {
-    message: string;
-    attachments?: AgentMessageAttachment[];
-    files?: Awaited<ReturnType<typeof filesToAgentPayload>>;
-  }) => Promise<unknown>;
+  message: (
+    input: Message & {
+      files?: Awaited<ReturnType<typeof filesToAgentPayload>>;
+    },
+  ) => Promise<unknown>;
 };
 
 /**
  * Create the agent and send the first turn as one message event. The unified
- * input keeps text, semantic references, and attachments atomic.
+ * input keeps text, references, and uploaded files atomic.
  */
 export async function sendAgentFirstTurn(
   agent: WebAgentHandle,
-  input: {
-    message: string;
-    attachments?: AgentMessageAttachment[];
+  input: Message & {
     files?: readonly File[];
   },
 ) {
   await agent.create();
   const files = input.files || [];
   await agent.message({
-    message: input.message,
-    ...(input.attachments === undefined || input.attachments.length === 0
+    content: input.content,
+    ...(input.references === undefined || input.references.length === 0
       ? {}
-      : { attachments: input.attachments }),
+      : { references: input.references }),
     ...(files.length === 0 ? {} : { files: await filesToAgentPayload(files) }),
   });
 }

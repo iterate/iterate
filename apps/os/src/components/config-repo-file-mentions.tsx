@@ -15,7 +15,7 @@ export function configRepoFileMentionProvider(projectId: string): ComposerSugges
         label: path,
         type: "file",
         completion: {
-          type: "attachment" as const,
+          type: "reference" as const,
           display: `@${path}`,
           target: {
             type: "repo-file" as const,

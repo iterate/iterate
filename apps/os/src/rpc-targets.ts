@@ -60,7 +60,7 @@ import type {
   ValidateProjectAppSessionInput,
   ValidatedProjectAppSession,
 } from "@iterate-com/auth-contract/worker";
-import { decodeAgentMessageAttachments } from "@iterate-com/shared/agent-message-attachments";
+import { decodeMessageReferences, type Message } from "@iterate-com/shared/message";
 import type { AppConfig } from "./config.ts";
 import { parseConfig } from "./config.ts";
 import { closeItxSessionTransport } from "./session-transport.ts";
@@ -5224,44 +5224,41 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
    * `{ type: "agent", path }` and does NOT refill the receiver's autonomous
    * turn budget, so agent↔agent reply loops stay bounded; from anywhere else
    * (web UI, CLI, MCP session) it is a user message. The agent must already
-   * have been created explicitly. `attachments` are typed resources addressed
-   * from `message` with Markdown-like links such as
-   * `[@AGENTS.md](attachment:config-repo/AGENTS.md)`. Optional files are stored
+   * have been created explicitly. `references` are typed resources addressed
+   * from `content` with Markdown-like links such as
+   * `[@AGENTS.md](ref://config-repo/AGENTS.md)`. Optional files are stored
    * in project file storage and ride the same event (images stay visible to
    * vision-capable models).
    */
   async message(
     input:
       | string
+      | (Message & {
+          files?: Array<{ contentType: string; data: FileData; filename: string }>;
+        })
       | {
           message: string;
           files?: Array<{ contentType: string; data: FileData; filename: string }>;
-          attachments?: Array<{
-            id: string;
-            type: "repo-file";
-            repoPath: "/repos/config";
-            path: string;
-          }>;
         },
   ): Promise<StreamEvent> {
     await this.#assertCreated();
     const {
       message,
       files: fileInputs,
-      attachments: attachmentInputs,
+      references: referenceInputs,
     } = typeof input === "string"
-      ? { message: input, files: undefined, attachments: undefined }
-      : { message: input.message, files: input.files, attachments: input.attachments };
+      ? { message: input, files: undefined, references: undefined }
+      : "content" in input
+        ? { message: input.content, files: input.files, references: input.references }
+        : { message: input.message, files: input.files, references: undefined };
     const decodedMessage =
-      attachmentInputs === undefined
-        ? undefined
-        : decodeAgentMessageAttachments(message, attachmentInputs);
+      referenceInputs === undefined ? undefined : decodeMessageReferences(message, referenceInputs);
     if (decodedMessage === null) {
       throw new Error(
-        "agent.message attachments must each have a unique id and a matching inline attachment link.",
+        "agent.message references must each have a unique id and a matching inline reference link.",
       );
     }
-    const attachments = decodedMessage?.attachments;
+    const references = decodedMessage?.references.length ? decodedMessage.references : undefined;
     const actor = this.#contextActor();
     const files =
       fileInputs === undefined || fileInputs.length === 0
@@ -5279,8 +5276,8 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
         content: message,
         actor,
         ...(files === undefined ? {} : { files }),
-        ...(attachments === undefined ? {} : { attachments }),
-        ...(attachments === undefined
+        ...(references === undefined ? {} : { references }),
+        ...(references === undefined
           ? {}
           : { llmRequestPolicy: { behaviour: "dont-trigger-request" as const } }),
       },

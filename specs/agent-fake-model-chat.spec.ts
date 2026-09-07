@@ -32,7 +32,7 @@ test("a config file mention is materialized before the model sees the turn", asy
   await page
     .locator('[data-testid="agent-feed-message"][data-kind="user"]')
     .locator(
-      '[data-attachment-type="repo-file"][data-reference-resolution="resolved"][title="ONBOARDING.md"]',
+      '[data-reference-type="repo-file"][data-reference-resolution="resolved"][title="ONBOARDING.md"]',
     )
     .waitFor();
   expect(modelCalls).toBe(1);

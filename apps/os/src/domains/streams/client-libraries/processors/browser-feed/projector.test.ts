@@ -273,8 +273,8 @@ describe("browser-feed projector — one interleaved order", () => {
     expect(projected.endState.replaceableAgentItemIndexes).toEqual({});
   });
 
-  it("replaces a linked-attachment message when its durable outcome arrives", () => {
-    const attachments = [
+  it("replaces a linked-reference message when its durable outcome arrives", () => {
+    const references = [
       {
         id: "config-repo/AGENTS.md",
         type: "repo-file",
@@ -285,8 +285,8 @@ describe("browser-feed projector — one interleaved order", () => {
     const source = event(1, CONTEXT_ADDED, {
       role: "user",
       actor: { type: "user", origin: "web" },
-      content: "[@AGENTS.md](attachment:config-repo/AGENTS.md)",
-      attachments,
+      content: "[@AGENTS.md](ref://config-repo/AGENTS.md)",
+      references,
     });
     const resolution = event(2, CONTEXT_ADDED, {
       role: "developer",
@@ -294,7 +294,7 @@ describe("browser-feed projector — one interleaved order", () => {
       content: "resolution details",
       referenceResolution: {
         sourceOffset: 1,
-        outcomes: [{ status: "binary", attachmentIds: ["config-repo/AGENTS.md"] }],
+        outcomes: [{ status: "binary", referenceIds: ["config-repo/AGENTS.md"] }],
       },
     });
 
@@ -303,13 +303,13 @@ describe("browser-feed projector — one interleaved order", () => {
       (op) => op.kind === "replace" || (op.kind === "insert" && op.itemKind === "agent.user"),
     );
     expect(agentOps).toMatchObject([
-      { kind: "insert", localIndex: 0, data: { id: "user-1", attachments } },
+      { kind: "insert", localIndex: 0, data: { id: "user-1", references } },
       {
         kind: "replace",
         localIndex: 0,
         data: {
           id: "user-1",
-          attachments,
+          references,
           referenceResolutions: { "config-repo/AGENTS.md": { status: "binary" } },
         },
       },

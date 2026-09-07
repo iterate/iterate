@@ -2,9 +2,9 @@ import { useState } from "react";
 import { parse as parseYaml } from "yaml";
 import {
   agentMessageToEditorDocument,
-  emptyAgentMessageDraft,
-  type AgentMessageAttachment,
-} from "@iterate-com/shared/agent-message-attachments";
+  emptyMessage,
+  type Message,
+} from "@iterate-com/shared/message";
 import type { AgentUiPresenceEntry } from "@iterate-com/ui/components/events/agent-ui-reducer";
 import { StreamEventInput, type StreamEvent } from "iterate/processors";
 import type { StreamBrowserStore } from "~/domains/streams/client-libraries/browser/stream-browser-store.ts";
@@ -28,15 +28,12 @@ export type StreamMessageComposer = {
   placeholder?: string;
   suggestionProviders?: readonly ComposerSuggestionProvider[];
   onInterrupt?: (llmRequestOffset: number) => Promise<void>;
-  onSubmit: (input: {
-    content: string;
-    attachments: AgentMessageAttachment[];
-  }) => Promise<StreamEvent>;
-  onSubmitFiles?: (input: {
-    files: File[];
-    content: string;
-    attachments: AgentMessageAttachment[];
-  }) => Promise<StreamEvent>;
+  onSubmit: (input: Message) => Promise<StreamEvent>;
+  onSubmitFiles?: (
+    input: Message & {
+      files: File[];
+    },
+  ) => Promise<StreamEvent>;
 };
 
 /**
@@ -83,7 +80,7 @@ export function StreamViewComposer({
   const [mode, setMode] = useState<AgentComposerMode>(
     defaultMode ?? (messageComposer ? "message" : "raw"),
   );
-  const [message, setMessage] = useState(() => emptyAgentMessageDraft());
+  const [message, setMessage] = useState(() => emptyMessage());
   const attachments = useComposerAttachments();
   const [rawText, setRawText] = useState(DEFAULT_RAW_EVENT_YAML);
   const [submitError, setSubmitError] = useState<string | undefined>();
@@ -120,7 +117,7 @@ export function StreamViewComposer({
         measured(() => onSubmitFiles({ files: attachments.files, ...message })),
       );
       if (didSubmit) {
-        setMessage(emptyAgentMessageDraft());
+        setMessage(emptyMessage());
         attachments.clearFiles();
         onNudgeDeliveries();
       }
@@ -129,7 +126,7 @@ export function StreamViewComposer({
     if (visibleText.trim() === "") return;
     const didSubmit = await runSubmit(() => measured(() => onSubmit(message)));
     if (didSubmit) {
-      setMessage(emptyAgentMessageDraft());
+      setMessage(emptyMessage());
       onNudgeDeliveries();
     }
   }
