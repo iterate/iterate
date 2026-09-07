@@ -23,7 +23,11 @@ test("a project token: whoami, source.principal on every append (unforgeable), t
   await itx.provide("itx.demo", "itx.builtins.kv"); // the platform's own row, appended by the edge for this session
   // an anonymous session's client-supplied principal is stripped
   const anonymous = openItx(projectId);
-  await anonymous.append({ type: "note", payload: { n: 2 }, source: { principal: { actor: "forged" } } });
+  await anonymous.append({
+    type: "note",
+    payload: { n: 2 },
+    source: { principal: { actor: "forged" } },
+  });
   const events = await readAll(anonymous);
   const note1 = events.find((e) => e.type === "note" && e.payload?.n === 1);
   const rule = events.find((e) => e.type === "events.iterate.com/itx/rewrite-rule-configured");

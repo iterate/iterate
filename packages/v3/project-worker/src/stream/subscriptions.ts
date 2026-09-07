@@ -9,13 +9,7 @@
 // `null` target REMOVES it. The one function here BUILDS that event; the caller appends it. The
 // halted fact is appended by the delivery loop; the resumed fact by an operator's plain `itx.append`.
 
-import {
-  normalizedItxExpression,
-  parse,
-  print,
-  toItxExpression,
-  type ItxExpressionInput,
-} from "../context/expression.ts";
+import { normalizedItxExpression, print, type ItxExpressionInput } from "../context/expression.ts";
 import { CoreContract, parseSubscriptionName } from "./core-processor.ts";
 import type { StreamEventInput } from "./events.ts";
 

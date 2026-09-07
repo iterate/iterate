@@ -19,37 +19,12 @@ import { DurableObjectNameCodec } from "./context/durable-object-names.ts";
 import { IterateContext, type IterateContextNamespace, type WaitUntil } from "./iterate-context.ts";
 import { codedError } from "./lib/errors.ts";
 import { verifyProjectToken, type Principal } from "./principal.ts";
+import { SessionTeardown } from "./session-teardown.ts";
+
+export { SessionTeardown };
 
 /** What a session knows about its holder: the principal, bound to ONE project by the token. */
 export type SessionPrincipal = Principal & { projectId: string };
-
-/** WHAT THIS SESSION MUST UNDO AT ITS END — ONE entry per key: a lend relay (the session's copy of
- *  a client stub plus its pager socket, held so neither is GC'd) and anything else scoped to the
- *  session (an anonymous subscription's removal). THE CALLER OWNS THE KEY: one session spans every
- *  IterateContext it hands out, and an rpc stub key is only unique PER CONTEXT, so IterateContext
- *  keys by the composite `"<iterateContextName> <rpcStubKey>"` (see #sessionTeardownKey) — the bare key would
- *  let two contexts lending at the same path recall each other's stub. Re-adding the SAME key is a
- *  TRANSPORT REPLACEMENT (a re-lend at the same context + path — a reconnect): by the time the new
- *  relay's pager is open, the DO has already dropped the old transport as "replaced", so disposing
- *  the incumbent here is a harmless double-close that just keeps this map from accumulating dead
- *  relays. */
-export class SessionTeardown {
-  readonly #undoByKey = new Map<string, { dispose(): void }>();
-  add(key: string, undo: { dispose(): void }): void {
-    this.#undoByKey.get(key)?.dispose();
-    this.#undoByKey.set(key, undo);
-  }
-  dispose(key: string): void {
-    const undo = this.#undoByKey.get(key);
-    if (!undo) return;
-    this.#undoByKey.delete(key);
-    undo.dispose();
-  }
-  disposeAll(): void {
-    for (const undo of this.#undoByKey.values()) undo.dispose();
-    this.#undoByKey.clear();
-  }
-}
 
 /** What `/api` serves: nothing but the gate. The ROOT capnweb target, so its lifetime IS the
  *  socket's — capnweb disposes it when the client's session ends, and that is when every stub this

@@ -188,7 +188,7 @@ export function assertItxExpressionShape(expression: ItxExpression): void {
     }
     if (!Array.isArray(step) || typeof step[0] !== "string")
       fail(`step ${i} is neither a name nor [method, ...args]`);
-    const [method, ...args] = step;
+    const [method] = step;
     if (method === "") {
       if (i === 0 || !Array.isArray(expression[i - 1]))
         fail("the anonymous call `f(x)(y)` follows a call");

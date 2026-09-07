@@ -7,6 +7,7 @@
 //
 // The projectId is always the host prefix, so a name alone says which project the context
 // belongs to — the basis of isolation.
+import { codedError } from "../lib/errors.ts";
 
 const DURABLE_OBJECT_HOST_SUFFIX = ".iterate";
 // The projectId is the kv/secret prefix AND a loader-cacheKey component — a ":" (or worse) in it
@@ -54,7 +55,8 @@ export const DurableObjectNameCodec = {
             path: normalizePath(name.slice(i + DURABLE_OBJECT_HOST_SUFFIX.length)),
           };
     if (!PROJECT_ID.test(parts.projectId))
-      throw new Error(
+      throw codedError(
+        "INVALID_CONTEXT",
         `invalid projectId ${JSON.stringify(parts.projectId)}: only [A-Za-z0-9_-] (a ":" would breach the kv/secret isolation wall)`,
       );
     return { ...parts, name: DurableObjectNameCodec.stringify(parts) };

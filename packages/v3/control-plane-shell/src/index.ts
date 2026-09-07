@@ -10,10 +10,10 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { createD1Client } from "sqlfu";
 import { substituteHeaderSecrets } from "@v3/shared/egress";
-import { createProject, listProjects, projectExists } from "../sql/.generated/index.ts";
 // Type-only: the class lives in (and stays deployed with) the project-worker script — see the
 // cross-script ITERATE_CONTEXT binding in wrangler.jsonc.
 import type { IterateContextDurableObject } from "project-worker";
+import { createProject, listProjects, projectExists } from "../sql/.generated/index.ts";
 
 interface Env {
   PLATFORM_SECRETS_KV?: KVNamespace; // first-party keys (hosted only); keyed by bare name (not project-prefixed)
@@ -47,7 +47,9 @@ export class ControlPlaneShell extends WorkerEntrypoint<Env> {
    *  `POST /projects` with the admin bearer for a CLI or a test. */
   async createProject(projectId: string): Promise<{ id: string; created: boolean }> {
     if (!/^[A-Za-z0-9_-]+$/.test(projectId))
-      throw new Error(`createProject: ${JSON.stringify(projectId)} is not a project id ([A-Za-z0-9_-]+)`);
+      throw new Error(
+        `createProject: ${JSON.stringify(projectId)} is not a project id ([A-Za-z0-9_-]+)`,
+      );
     const row = await createProject(createD1Client(this.env.DB), { id: projectId });
     return { id: projectId, created: row !== null };
   }
@@ -86,7 +88,8 @@ export default {
     if (url.pathname === "/projects" || url.pathname.startsWith("/projects/")) {
       const token = env.CONTROL_PLANE_ADMIN_TOKEN;
       const presented = request.headers.get("authorization")?.replace(/^Bearer\s+/i, "") ?? "";
-      if (!token || presented !== token) return new Response("admin bearer required\n", { status: 401 });
+      if (!token || presented !== token)
+        return new Response("admin bearer required\n", { status: 401 });
       const shell = new ControlPlaneShell({} as ExecutionContext, env);
       const client = createD1Client(env.DB);
       if (request.method === "POST" && url.pathname === "/projects") {

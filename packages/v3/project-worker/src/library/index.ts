@@ -87,10 +87,17 @@ export function buildLibrary(itx: LibraryItx): {
         memoized(["capnweb", url, options], () => connectToCapnweb(itx, url, options)),
     },
     releaseConnections: () => {
-      for (const connection of liveConnections.values())
+      // `close()` where a connection has one (the graceful half-close), else its dispose; a release
+      // that throws is REPORTED — a connection that will not close is a fact worth a log line.
+      for (const [memoKey, connection] of liveConnections)
         void connection
-          .then((c) => (c as { [Symbol.dispose]?: () => void })[Symbol.dispose]?.())
-          .catch(() => undefined);
+          .then((c) => {
+            const held = c as { close?: () => unknown; [Symbol.dispose]?: () => void };
+            return held.close ? held.close() : held[Symbol.dispose]?.();
+          })
+          .catch((error: unknown) =>
+            console.warn(`releaseConnections: ${memoKey} did not close: ${String(error)}`),
+          );
       liveConnections.clear();
     },
   };
@@ -135,8 +142,29 @@ export function subclassWithMethods<Base extends abstract new (...args: never[])
 
 /** The error for a response that refused: `<what> returned <status>: <the first 300 characters>`. */
 export async function responseRefusal(response: Response, what: string): Promise<Error> {
-  const snippet = (await response.text().catch(() => "")).slice(0, 300);
+  const snippet = await responseTextPrefix(response, 300);
   return new Error(`${what} returned ${response.status}${snippet ? `: ${snippet}` : ""}`);
+}
+
+/** The first `maxChars` of a body, then the stream is CANCELLED — a refusal's snippet must never buffer
+ *  a whole error page (the v4 review's hygiene item). */
+async function responseTextPrefix(response: Response, maxChars: number): Promise<string> {
+  const reader = response.body?.getReader();
+  if (!reader) return "";
+  const decoder = new TextDecoder();
+  let text = "";
+  try {
+    while (text.length < maxChars) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      text += decoder.decode(value, { stream: true });
+    }
+  } catch {
+    /* a body that cannot be read adds nothing to the refusal */
+  } finally {
+    reader.cancel().catch(() => undefined);
+  }
+  return text.slice(0, maxChars);
 }
 
 /** The response, or the refusal thrown — ONE spelling for every non-2xx the connectors meet. */

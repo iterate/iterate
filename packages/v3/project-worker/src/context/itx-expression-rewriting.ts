@@ -69,7 +69,6 @@ import {
   isItxExpressionHole,
   ITX_EXPRESSION_MERGE_KEY,
   itxExpressionStepName,
-  parse,
   parseItxExpressionPrefix,
   print,
   toItxExpression,

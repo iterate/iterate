@@ -96,8 +96,8 @@ test("a provider drops and re-provides at the same key — default-deny in betwe
   // set, then REMOVED (the platform-equivalent spelling `itx.builtins.p` — the DO restores whatever
   // platform row lies beneath a dead stub's match; here there is none, so the row is simply gone)
   expect(ruleTargetsAtP(logBefore)).toEqual([
-    "itx.builtins.rpcStubs.get('itx.p')",
-    "itx.builtins.p",
+    ["itx", "builtins", "rpcStubs", ["get", "itx.p"]],
+    ["itx", "builtins", "p"],
   ]);
 
   // 3. provider RE-PROVIDES at the SAME key with a fresh instance — this re-lends under the same
@@ -116,9 +116,9 @@ test("a provider drops and re-provides at the same key — default-deny in betwe
   // 5. RECONNECT APPENDS EXACTLY ONE EVENT — the rule's re-set — and the map holds one rule at itx.p.
   const logAfter = await itx.invoke("itx.readEvents(0, 500)");
   expect(ruleTargetsAtP(logAfter)).toEqual([
-    "itx.builtins.rpcStubs.get('itx.p')",
-    "itx.builtins.p",
-    "itx.builtins.rpcStubs.get('itx.p')",
+    ["itx", "builtins", "rpcStubs", ["get", "itx.p"]],
+    ["itx", "builtins", "p"],
+    ["itx", "builtins", "rpcStubs", ["get", "itx.p"]],
   ]);
   expect(logAfter.events.length).toBe(logBefore.events.length + 1);
   expect(await ruleAtP()).toEqual({

@@ -274,8 +274,8 @@ export class IterateContext extends RpcTarget {
     // The rule is NOT un-set by this session: the DO un-sets whatever names the key when its LAST
     // pager closes (a reconnect replaces the pager, so a late-dying old session cannot clobber the
     // new one's rule).
-    this.#sessionTeardown.add(sessionTeardownKey, pager);
-    return new RewriteRuleHandle(() => this.#sessionTeardown.dispose(sessionTeardownKey));
+    const lease = this.#sessionTeardown.add(sessionTeardownKey, pager);
+    return new RewriteRuleHandle(() => lease.dispose()); // the lease IS the handle: a stale one is inert
   }
 
   // ── subscriptions: ONE event, over (a) when the target is live ──
@@ -315,10 +315,10 @@ export class IterateContext extends RpcTarget {
         [row],
         this.#waitUntil,
       );
-      this.#sessionTeardown.add(sessionTeardownKey, pager);
+      const lease = this.#sessionTeardown.add(sessionTeardownKey, pager);
       // The row is un-set by the DO when the key's last pager closes (see provide): the handle
-      // only recalls the lend.
-      return new SubscriptionHandle(name, () => this.#sessionTeardown.dispose(sessionTeardownKey));
+      // only recalls the lend — and only its OWN (the lease is the handle; a stale one is inert).
+      return new SubscriptionHandle(name, () => lease.dispose());
     }
     // An expression (or a removal): whatever THIS session lent under the name stops meaning it.
     this.#sessionTeardown.dispose(sessionTeardownKey);

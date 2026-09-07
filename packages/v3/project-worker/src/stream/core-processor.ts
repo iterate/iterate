@@ -28,7 +28,6 @@ import {
   toItxExpression,
   type ItxExpressionInput,
   itxExpressionStepName,
-  parse,
   parseItxExpressionPrefix,
   type ItxExpression,
   type ItxExpressionPrefix,

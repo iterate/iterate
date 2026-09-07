@@ -160,3 +160,42 @@ test("edge#13: a call in the window between a lender's recall and the DO's un-se
   for (const a of answers)
     expect(["pong", "RPC_STUB_OFFLINE", "NO_ITX_EXPRESSION_MATCH"]).toContain(a);
 });
+
+// kernel#2.6 (the v4 review) — BUG (fixed): a provide handle's dispose tore down WHATEVER sat under its
+// key at the time, so re-provide at the same match (a reconnect) and then dispose the OLD handle killed
+// the NEW pager. FIX: the lease is the handle — a stale one is inert.
+test("kernel#2.6: disposing a STALE provide handle leaves its replacement serving", async () => {
+  const ctx = freshCtx("stale-lease");
+  const itx = openItx(ctx);
+  const first = await itx.provide(
+    "itx.tool",
+    new (class extends RpcTarget {
+      ping() {
+        return "first";
+      }
+    })(),
+  );
+  const second = await itx.provide(
+    "itx.tool",
+    new (class extends RpcTarget {
+      ping() {
+        return "second";
+      }
+    })(),
+  );
+  expect(
+    await until(
+      "the reconnect serves",
+      async () => (await itx.invoke("itx.tool.ping()")) === "second" || undefined,
+    ),
+  ).toBe(true);
+  first[Symbol.dispose](); // stale — must touch nothing
+  await sleep(300);
+  expect(await itx.invoke("itx.tool.ping()")).toBe("second");
+  second[Symbol.dispose]();
+  const denied = await until("the un-set landed", async () => {
+    const e = await rejection(itx.invoke("itx.tool.ping()"));
+    return codeOf(e) === "RPC_STUB_OFFLINE" ? undefined : e;
+  });
+  expect(codeOf(denied)).toBe("NO_ITX_EXPRESSION_MATCH");
+});

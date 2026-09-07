@@ -41,7 +41,7 @@ test("MISHA'S TEST: a provided stub at a built-in's name shadows it; the physica
   expect(await itx.builtins.whoami()).toEqual(real); // the physical door is never shadowed
   expect(await itx.rewriteRules.get("itx.whoami")).toEqual({
     match: "itx.whoami",
-    target: "itx.builtins.rpcStubs.get('itx.whoami')",
+    target: "itx.builtins.rpcStubs.get('itx.whoami')", // rewriteRules.get() PRINTS
     origin: "context",
   });
 

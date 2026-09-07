@@ -59,7 +59,7 @@ test("MISHA'S TEST on the real root: provide('itx.ai', fake) shadows the binding
   expect(fake.calls).toEqual([{ model: "@cf/x", inputs: { prompt: "hi" }, options: undefined }]);
   expect(await itx.ai.models()).toEqual([{ name: "@cf/fake/model" }]);
   expect(await itx.rewriteRules.resolve("itx.ai.run")).toEqual([
-    "itx.ai.run",
+    "itx.ai.run", // resolve() PRINTS
     "itx.builtins.rpcStubs.get('itx.ai').run",
   ]);
   handle[Symbol.dispose]();

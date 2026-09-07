@@ -23,7 +23,7 @@ test("the table is a MAP: 5 concurrent re-sets of ONE match leave exactly the la
     (e) => e.type === REWRITE_RULE_CONFIGURED && e.payload?.match === "itx.race",
   );
   expect(configured).toHaveLength(5); // every re-set appended exactly one event
-  const lastTarget = configured.at(-1)!.payload.target as string;
+  const lastTarget = (configured.at(-1)!.payload.target as string[]).join("."); // at rest the parsed form; `get()` prints
   expect(await itx.rewriteRules.get("itx.race")).toEqual({
     match: "itx.race",
     target: lastTarget,
@@ -72,7 +72,7 @@ test("300 rules: invoking the NEWEST rule and a built-in root both stay under 15
   // Rules are event-sourced — append all 300 rewrite-rule-configured events in ONE commit.
   const rules = Array.from({ length: 300 }, (_, i) => ({
     type: REWRITE_RULE_CONFIGURED,
-    payload: { match: `itx.m${i}`, target: "itx.whoami" },
+    payload: { match: `itx.m${i}`, target: ["itx", "whoami"] },
   }));
   const committed = await append(itx, ...rules);
   expect(committed).toHaveLength(300);

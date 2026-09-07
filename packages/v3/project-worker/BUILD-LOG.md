@@ -3742,3 +3742,20 @@ exists as a probe (its harness lane went in the test-hygiene sweep). The 300-rul
   registers each project with the deployed control plane first and adds the deployed-only 421 row.
 - BOARD: tsc×3 · oxlint 0/0 · unit+workers 463p/12xf on STOCK json5 (the patch dropped) · the shell deployed c79cc76a · the worker DEPLOYED as e3ef2f05: the targeted proofs 11/11 (ingress with the 421 row and the session door, identity, the builtins root) · the full sequential board is running and lands in the next entry
 - LOC: 18 files changed, 265 insertions(+), 49 deletions(-) across the worker and the shell sources (the parsed-form change is the bulk: the codec's shape check +60, the control plane +90, the edge admission +30); tests and docs beside.
+## 2026-09-07 — wave 0, part two: the board for part one, a stale lease is inert, and the hygiene items
+
+- THE BOARD for e577c8d47 (deployed e3ef2f05): the six reds on e3ef2f05 were d3's uncommitted probe, FOUR raw-event expectations in files the local batch had not covered (`rpc-stubs-attach-carries-the-rule` ×2, `rpc-stubs-reconnect-same-path`, `rewrite-rules-map-and-chains` — moved to the parsed form here; the rule of thumb the re-pin taught: a raw event's `target` is the array, while a `rewriteRules.get()` / `subscriptions.list()` / `resolve()` answer and every `match` stay printed strings), and this entry's own kernel#2.6 row, red against a build that predated its fix.
+- KERNEL 2.6 (the v4 review), FIXED: a provide/subscribe handle's dispose tore down WHATEVER sat under its key
+  at the time, so re-provide at the same match (a reconnect) and then dispose the OLD handle killed the NEW
+  pager. The lease is the handle now: `SessionTeardown.add` returns it, and its dispose runs only while its
+  own entry is current (`src/session-teardown.ts` — the register moved to a leaf so its table runs in the
+  node lane; `session.ts` re-exports it). Pinned: `src/session-teardown.test.ts` (two rows) and
+  `e2e/review-bugs-round2.e2e.test.ts` kernel#2.6 (two live stubs under one match; the stale handle's
+  dispose leaves the second serving; the second's dispose un-sets).
+- HYGIENE 2.10, three of four: a refusal's snippet reads the first 300 chars of the body and CANCELS the
+  stream instead of buffering a whole error page (`library/index.ts` `responseTextPrefix`);
+  `releaseConnections` prefers a connection's `close()` and REPORTS a release that throws; an invalid
+  project id is the coded `INVALID_CONTEXT` (a bare Error lost its class across the hop). The fourth —
+  report instead of swallow in `#unsetWhatNamesRpcStub` — waits for d3's 3b wiring to settle in the DO file.
+  NOT taken (Jonas): classifying platform DO resets as expected in the logs.
+- GATES: tsc×3 · oxlint 0/0 · unit+workers 468p/12xf · local e2e (the lease rows) 21/21 · DEPLOYED as b34e641a (the tree at d3's 7e5bbd336 + this part): the seven touched files 41/41; the full sequential board 191p/2xf/2sk with ONE red — `stream-wake-loop.e2e.test.ts`, d3's in-flight circuit-breaker pin, not in this commit
