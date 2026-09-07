@@ -22,6 +22,7 @@
 import { z } from "zod";
 import { defineProcessorContract } from "iterate/processors";
 import { ItxExpression, ItxExpressionStep } from "../../itx/expression.ts";
+import { ITX_SURFACE_MEMBER } from "../itx/surface.ts";
 import type {
   CapabilityProvidedPayload,
   CapabilityRecord,
@@ -586,7 +587,20 @@ export type CapabilityHostProcessorContract = typeof CapabilityHostProcessorCont
  */
 function capabilityHostBirthCertificateSchema() {
   return z.strictObject({
-    config: z.strictObject({}).meta({ description: "Reserved. Every host is born with {} today." }),
+    config: z
+      .strictObject({
+        surface: z
+          .array(z.string().regex(ITX_SURFACE_MEMBER))
+          .optional()
+          .meta({
+            description:
+              "Restrict scripts run in this scope to these itx built-in members " +
+              '(e.g. ["chat"] — see domains/itx/surface.ts). Present means scripts see ONLY ' +
+              "these members plus this scope's mounts, and run with project-confined, non-admin authority. " +
+              "Absent is the full surface. Recorded at birth; the same-key-different-body rule keeps it fixed.",
+          }),
+      })
+      .meta({ description: "Scope policy. `{}` is the default: full surface, trusted authority." }),
     fallback: ItxExpression.nullish().meta({
       description:
         "Where capability reads go on a local miss: an itx expression naming ONE other host " +

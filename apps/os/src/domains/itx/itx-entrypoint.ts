@@ -1,6 +1,10 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { ZodError } from "zod";
-import { streamDeliveryAuthContext, trustedInternalAuthContext } from "../../auth.ts";
+import {
+  restrictedScopeAuthContext,
+  streamDeliveryAuthContext,
+  trustedInternalAuthContext,
+} from "../../auth.ts";
 import type { Env } from "../../env.ts";
 import { deploymentItxForInternal, itxForScope } from "../../rpc-targets.ts";
 import {
@@ -24,11 +28,19 @@ import { scopeFromItxEntrypointProps, type ItxEntrypointProps } from "./utils.ts
  */
 export class ItxEntrypoint extends WorkerEntrypoint<Env, ItxEntrypointProps> {
   async get() {
-    const { path, projectId, purpose, streamContext } = scopeFromItxEntrypointProps(this.ctx.props);
+    const { path, projectId, purpose, streamContext, surface } = scopeFromItxEntrypointProps(
+      this.ctx.props,
+    );
+    // A surfaced binding is a RESTRICTED scope: the isolate sees only the
+    // listed members, and its authority is confined to this project with no
+    // admin — the surface and the authority are one decision, made by the
+    // host that minted the props, never by the code running behind them.
     const auth =
-      purpose === "stream-delivery"
-        ? streamDeliveryAuthContext(projectId)
-        : trustedInternalAuthContext();
+      surface !== undefined && projectId !== null
+        ? restrictedScopeAuthContext(projectId, `scope:${path}`)
+        : purpose === "stream-delivery"
+          ? streamDeliveryAuthContext(projectId)
+          : trustedInternalAuthContext();
     if (projectId === null) {
       // The deployment-global scope: what a GLOBAL (projectId: null) stream's
       // delivery dial evaluates expressions against. It is the same root a
@@ -37,7 +49,14 @@ export class ItxEntrypoint extends WorkerEntrypoint<Env, ItxEntrypointProps> {
       // project stream's does.
       return deploymentItxForInternal({ auth, ctx: this.ctx });
     }
-    return itxForScope({ auth, ctx: this.ctx, path, projectId, streamContext });
+    return itxForScope({
+      auth,
+      ctx: this.ctx,
+      path,
+      projectId,
+      streamContext,
+      ...(surface === undefined ? {} : { surface }),
+    });
   }
 
   /**
