@@ -3854,3 +3854,10 @@ after the (synchronous) read, so a full catch-up page serializes but a small bat
 no head-of-line block on a slow cursor call, small cursor deliveries stay concurrent. Measured fan-out
 39 MiB at rowCount 20 (was 227 baseline). Local: cursor-delivery e2e 14/14, unit 403p/4xf, memory-budget
 17p/4xf. Re-deploy as live-55 for the deployed re-verify.
+
+- DEPLOYED VERIFY as live-55 (fbdf7777): `cursor-delivery-halts-ladders-and-resumes` 14/14 (reentrancy
+  - the row that regressed on live-54 both green — no push drops, no deadlock) and
+    `stream-uncontrolled-degradation` 5p/1xf (the 1xf = CONCURRENT READERS `test.fails`, the accepted-limit
+    reset on the real DO). Together with the live-54 run (push-delivery-ranges-chain, stream-idempotency-
+    pause-paging, stream-memory-budget all green deployed) the read rollback + the fan-out fix are proven
+    on the worker. `--no-file-parallelism` (the deployed lane). read() sync end to end.
