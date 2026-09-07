@@ -3896,3 +3896,10 @@ subscription-configured("config")@4, [delta]` — the first user event at offset
   assertion weakened/skipped.
 - GATES: tsc×3 · unit+workers 468p/12xf · e2e 183p/2xf/2sk (full local suite). LOC: 16 files, 175(+)/72(-).
   Deploy-proof as live-57 to follow.
+
+- DEPLOYED VERIFY as live-57 (12fc7dd4): the targeted spread (config-worker, config-worker-funnel,
+  cursor-delivery, processor-facet-reduces, rpc-stubs-lend-recall) 33/33; the FULL deployed suite
+  188 passed / 3 expected-fail, with the ONLY failures the 4 secret-gated identity rows
+  (ingress-project-host ×2, session-identity ×2) that fail at setup on `CONTROL_PLANE_ADMIN_TOKEN` /
+  `PROJECT_TOKEN_SECRET` unset in this local env — unrelated to the funnel (simplification-52 confirms
+  them 4/4 with the secrets). The funnel behaves on the real DO: every stream funnels to the "/" worker.
