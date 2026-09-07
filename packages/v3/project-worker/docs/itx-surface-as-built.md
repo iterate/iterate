@@ -693,5 +693,10 @@ LibraryRoots`, the resolver walks from the record with one built-in predicate, t
 
 ### Open
 
+**E. The v4 review (2026-09-07).** `packages/v4/project-worker` reviewed against this surface: the plan to layer
+its features on v3 — items, tech tree, waves, decisions — is PARKED in `docs/plan-v4-features-layered-on-v3.md`
+(raw reviews: `docs/reviews/2026-09-07-v4-*.md`); the defects it found in shipped v3 are
+`docs/plan-wave-0-fixes-2026-09-07.md`, the one plan in motion.
+
 **D. `cd` on the edge and in the built-ins.** Explained in section 5; both are needed as long as
 expressions evaluated inside the DO may name a sibling context. Recommendation: keep both.
