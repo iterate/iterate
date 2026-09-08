@@ -270,7 +270,52 @@ describe("browser-feed projector — one interleaved order", () => {
       event(2, WEB_MESSAGE_SENT, { message: "hi" }),
     ]);
 
-    expect(projected.endState.provisionalAgentItemIndexes).toEqual({});
+    expect(projected.endState.replaceableAgentItemIndexes).toEqual({});
+  });
+
+  it("replaces a linked-mention message when its durable outcome arrives", () => {
+    const mentions = [
+      {
+        id: "config-repo/AGENTS.md",
+        type: "repo-file",
+        repoPath: "/repos/config",
+        path: "AGENTS.md",
+      },
+    ];
+    const source = event(1, CONTEXT_ADDED, {
+      role: "user",
+      actor: { type: "user", origin: "web" },
+      content: "[@AGENTS.md](mention://config-repo/AGENTS.md)",
+      mentions,
+    });
+    const resolution = event(2, CONTEXT_ADDED, {
+      role: "developer",
+      actor: { type: "integration", name: "agent-mention-resolver" },
+      content: "resolution details",
+      mentionResolution: {
+        sourceOffset: 1,
+        outcomes: [{ status: "binary", mentionIds: ["config-repo/AGENTS.md"] }],
+      },
+    });
+
+    const projected = planBrowserFeedOps(START, [source, resolution]);
+    const agentOps = projected.ops.filter(
+      (op) => op.kind === "replace" || (op.kind === "insert" && op.itemKind === "agent.user"),
+    );
+    expect(agentOps).toMatchObject([
+      { kind: "insert", localIndex: 0, data: { id: "user-1", mentions } },
+      {
+        kind: "replace",
+        localIndex: 0,
+        data: {
+          id: "user-1",
+          mentions,
+          mentionResolutions: { "config-repo/AGENTS.md": { status: "binary" } },
+        },
+      },
+    ]);
+    expect(projected.endState.agent.pendingMentionMessages).toEqual({});
+    expect(projected.endState.replaceableAgentItemIndexes).toEqual({});
   });
 
   it("is deterministic and folds identically event-by-event and whole-batch", () => {

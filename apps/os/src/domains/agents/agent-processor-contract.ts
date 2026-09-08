@@ -22,6 +22,7 @@
 
 import { z } from "zod";
 import { AgentRuntime } from "@iterate-com/shared/agent-events";
+import { MessageMentions, decodeMessageMentions } from "@iterate-com/shared/message";
 import {
   defineProcessorContract,
   type ConsumedInput,
@@ -835,6 +836,13 @@ function agentContextItemSchema() {
         .enum(["system", "developer", "user", "assistant"])
         .meta({ description: "The LLM message role this item renders as." }),
       content: z.string().meta({ description: "The model-visible text." }),
+      mentions: MessageMentions.optional().meta({
+        description: "Typed resources addressed by Markdown-like mention:// links in content.",
+      }),
+      mentionResolution: z.unknown().optional().meta({
+        description:
+          "Processor-authored, bounded resolution metadata for a prior message's mentions.",
+      }),
       key: z
         .string()
         .min(1)
@@ -880,6 +888,11 @@ function agentContextItemSchema() {
                 type: z.literal("git-commit"),
                 repoPath: z.string().meta({ description: "The repo's mount path." }),
                 commitOid: z.string().meta({ description: "The commit id." }),
+              }),
+              z.object({
+                type: z.literal("repo-file"),
+                repoPath: z.string().meta({ description: "The repo's mount path." }),
+                path: z.string().meta({ description: "The committed file path at latest HEAD." }),
               }),
             ])
             .meta({ description: "One coordinate for richer source material." }),
@@ -1003,6 +1016,16 @@ function agentContextItemSchema() {
         }),
     })
     .superRefine((payload, ctx) => {
+      if (
+        payload.mentions !== undefined &&
+        decodeMessageMentions(payload.content, payload.mentions) === null
+      ) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["mentions"],
+          message: "each mention must have a unique id and a matching inline mention:// link",
+        });
+      }
       if (payload.role !== "developer" || payload.compaction === undefined) return;
       if (payload.key !== undefined) {
         ctx.addIssue({

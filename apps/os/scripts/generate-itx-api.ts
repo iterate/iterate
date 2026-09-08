@@ -290,6 +290,7 @@ export function generateItxApi(): string {
   // if the program does not carry them under their real path (a resolution
   // change would otherwise silently drop types from the contract).
   for (const fileName of [
+    path.resolve(projectDir, "../../packages/shared/src/message.ts"),
     path.resolve(projectDir, "../../packages/iterate/src/sdk/capnweb/live-state/protocol.ts"),
     path.resolve(projectDir, "../../packages/iterate/src/sdk/capnweb/live-state/types.ts"),
     path.resolve(projectDir, "../../packages/iterate/src/processors/schemas.ts"),

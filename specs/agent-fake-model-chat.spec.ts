@@ -1,4 +1,48 @@
+import { expect } from "@playwright/test";
 import { test } from "./test-support/test.ts";
+
+test("a config file mention is materialized before the model sees the turn", async ({
+  helpers,
+  page,
+}) => {
+  await using fixture = await helpers.createFixture("agent-file-mention");
+  const agent = await fixture.createAgent();
+  let modelCalls = 0;
+  let materializedContext: string | undefined;
+  agent.responses.set(async (call) => {
+    modelCalls += 1;
+    materializedContext = call.body.messages.find((message) =>
+      message.content.includes('<mention type="file" repo="/repos/config" path="ONBOARDING.md">'),
+    )?.content;
+    return [
+      "```ts",
+      'async (itx) => { await itx.chat.sendMessage("Mention resolved") }',
+      "```",
+    ].join("\n");
+  });
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto(agent.webUrl);
+  const composer = page.getByRole("combobox", { name: "Message this agent" });
+  await composer.fill("@onb");
+  await page.getByRole("option", { name: "ONBOARDING.md" }).click();
+  await composer.press("Enter");
+
+  await page.getByText("Mention resolved").waitFor();
+  await page
+    .locator('[data-testid="agent-feed-message"][data-kind="user"]')
+    .locator(
+      '[data-mention-type="repo-file"][data-mention-resolution="resolved"][title="ONBOARDING.md"]',
+    )
+    .waitFor();
+  expect(modelCalls).toBe(1);
+  expect(materializedContext).toContain(
+    '<mention type="file" repo="/repos/config" path="ONBOARDING.md">\n',
+  );
+  expect(materializedContext).toContain("</mention>");
+  expect(materializedContext).not.toContain("resolvedCommitOid");
+  expect(materializedContext).not.toContain("includedBytes");
+});
 
 // The deterministic sibling of agent-chat.spec.ts: same UI journey (composer →
 // feed), but the "model" is this spec's own interceptor serving intercepted/* —

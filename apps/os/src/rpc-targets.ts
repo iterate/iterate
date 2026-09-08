@@ -60,6 +60,7 @@ import type {
   ValidateProjectAppSessionInput,
   ValidatedProjectAppSession,
 } from "@iterate-com/auth-contract/worker";
+import { decodeMessageMentions, type Message } from "@iterate-com/shared/message";
 import type { AppConfig } from "./config.ts";
 import { parseConfig } from "./config.ts";
 import { closeItxSessionTransport } from "./session-transport.ts";
@@ -67,6 +68,7 @@ import {
   isStreamDeliveryAuth,
   resolveItxAuth,
   resolveOrganizationSlugForCreate,
+  restrictedScopeAuthContext,
   userPrincipalOf,
   widenProjectAccess,
 } from "./auth.ts";
@@ -110,6 +112,7 @@ import {
   rejectBuiltinCollision,
   installPrototypeInvokeCapabilityFallback,
 } from "./domains/itx/utils.ts";
+import { applySurface, parseItxSurface, type ItxSurface } from "./domains/itx/surface.ts";
 import { projectStub } from "./domains/projects/egress.ts";
 import { projectCreationEvents } from "./domains/projects/project-defaults.ts";
 import {
@@ -267,6 +270,8 @@ import type {
   LinkGithubResult,
   RepoCommitDetails,
   RepoLogResult,
+  SearchRepoFilesInput,
+  SearchRepoFilesResult,
 } from "./domains/repos/types.ts";
 import type {
   BuiltinIntegrationSlug,
@@ -1620,6 +1625,8 @@ class RepoRpcTarget extends IterateRpcTarget<"Repo"> {
         linkGithub:
           "Back this repo with a GitHub repository via a named GitHub connection ({ connection, owner, repo }); commits mirror out, fast-forward default-branch pushes import in, and webhooks arrive on this repo's stream.",
         listFiles: "List file paths.",
+        searchFiles:
+          "Fuzzy-search committed file paths without returning the full manifest ({ query, limit? }).",
         log: "Commit history, newest first ({ limit?, branch? }); per-commit file stats live on commitDetails.",
         pushToGithub:
           "Push the branch head to the linked GitHub repository now (repair verb; { force } to overwrite GitHub).",
@@ -1792,6 +1799,11 @@ class RepoRpcTarget extends IterateRpcTarget<"Repo"> {
   /** All committed file paths at HEAD. */
   listFiles(): Promise<{ commitOid: string; paths: string[] }> {
     return this.#durableObjectStub.listFiles();
+  }
+
+  /** Fuzzy-search committed paths at HEAD without returning the full manifest. */
+  searchFiles(input: SearchRepoFilesInput): Promise<SearchRepoFilesResult> {
+    return this.#durableObjectStub.searchFiles(input);
   }
 
   /**
@@ -4982,6 +4994,8 @@ type AgentRpcTargetProps = {
   projectId: string;
   /** The calling scope's path ("current actor") — see AgentCollectionRpcTarget. */
   sourceScopePath?: string;
+  /** Narrow this handle to these members (entries under "agent", stripped — domains/itx/surface.ts). */
+  surface?: ItxSurface;
 };
 
 /**
@@ -5026,7 +5040,7 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
 
   /**
    * The agent scope's own capability host (provide/revoke/runScript/
-   * __describe) — and the explicit dotted door to the scope's DYNAMIC
+   * __describe) — and the explicit dotted path to the scope's DYNAMIC
    * capabilities: `agents.get(path).capabilityHost.someTool(args)`. The
    * shorthand `agents.get(path).someTool(args)` resolves through the same
    * host via the handle's prototype-chain fallback; both pipeline over
@@ -5090,7 +5104,7 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
     return await this.stream.append(...parsed);
   }
 
-  /** The agent's web-chat door (what the user sees). */
+  /** The agent's web chat: what the user sees. */
   get chat(): AgentChatRpcTarget {
     return new AgentChatRpcTarget({
       auth: this.#props.auth,
@@ -5111,7 +5125,19 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
    * Identical-payload retries dedupe on the birth idempotency keys; a create
    * over an existing agent with a different payload fails loudly.
    */
-  async create(payload?: AgentCreateInput): Promise<AgentRpcTarget> {
+  async create(
+    payload?: AgentCreateInput,
+    options?: {
+      /**
+       * The agent scope's capability-host birth certificate — how a
+       * RESTRICTED agent is born: `{ config: { surface: ["chat"] }, fallback: null }`
+       * gives its scripts only `itx.chat` plus this scope's own mounts, with
+       * project-confined authority and no inheritance from the root host.
+       * Fixed at birth: the certificate lands once under a fixed key.
+       */
+      capabilityHost?: CapabilityHostCreateInput;
+    },
+  ): Promise<AgentRpcTarget> {
     const workspace = new WorkspaceRpcTarget({
       auth: this.#props.auth,
       path: agentWorkspacePath(this.#path),
@@ -5143,6 +5169,7 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
       projectId: this.#props.projectId,
       highInitialDebounce: !preexisting,
       ...(payload === undefined ? {} : { payload }),
+      ...(options?.capabilityHost === undefined ? {} : { capabilityHost: options.capabilityHost }),
       ...(await agentBootProjectFacts(this.#props.projectId)),
       // Plain chat threads (mobile + web — everything born through this
       // generic door) get the chat-reply push producer as their sibling.
@@ -5208,29 +5235,47 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
   }
 
   /**
-   * Send a message to this agent — THE inbound door for every caller. The
+   * Send a message to this agent — the canonical entry point for every caller. The
    * context item's actor derives from the calling scope: inside an agent script
    * (itx scoped to an agent path), the message is stamped
    * `{ type: "agent", path }` and does NOT refill the receiver's autonomous
    * turn budget, so agent↔agent reply loops stay bounded; from anywhere else
    * (web UI, CLI, MCP session) it is a user message. The agent must already
-   * have been created explicitly. Optional files
-   * are stored in project file storage and ride the message as attachments
-   * (images stay visible to vision-capable models).
+   * have been created explicitly. `mentions` are typed resources addressed
+   * from `content` with Markdown-like links such as
+   * `[@AGENTS.md](mention://config-repo/AGENTS.md)`. Optional files are stored
+   * in project file storage and ride the same event (images stay visible to
+   * vision-capable models).
    */
   async message(
     input:
       | string
+      | (Message & {
+          files?: Array<{ contentType: string; data: FileData; filename: string }>;
+        })
       | {
           message: string;
           files?: Array<{ contentType: string; data: FileData; filename: string }>;
         },
   ): Promise<StreamEvent> {
     await this.#assertCreated();
-    const { message, files: fileInputs } =
-      typeof input === "string"
-        ? { message: input, files: undefined }
-        : { message: input.message, files: input.files };
+    const {
+      message,
+      files: fileInputs,
+      mentions: mentionInputs,
+    } = typeof input === "string"
+      ? { message: input, files: undefined, mentions: undefined }
+      : "content" in input
+        ? { message: input.content, files: input.files, mentions: input.mentions }
+        : { message: input.message, files: input.files, mentions: undefined };
+    const decodedMessage =
+      mentionInputs === undefined ? undefined : decodeMessageMentions(message, mentionInputs);
+    if (decodedMessage === null) {
+      throw new Error(
+        "agent.message mentions must each have a unique id and a matching inline mention link.",
+      );
+    }
+    const mentions = decodedMessage?.mentions.length ? decodedMessage.mentions : undefined;
     const actor = this.#contextActor();
     const files =
       fileInputs === undefined || fileInputs.length === 0
@@ -5248,6 +5293,10 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
         content: message,
         actor,
         ...(files === undefined ? {} : { files }),
+        ...(mentions === undefined ? {} : { mentions }),
+        ...(mentions === undefined
+          ? {}
+          : { llmRequestPolicy: { behaviour: "dont-trigger-request" as const } }),
       },
     });
     return event;
@@ -5366,7 +5415,7 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
           "This agent scope's durable capability table — also the dotted door to its dynamic capabilities (capabilityHost.<name>(args)).",
         chat: "The agent's web-chat door (sendMessage).",
         create:
-          "Create this agent (optional payload = the agent/created birth certificate), wait for its processors to consume the birth batch, and return this same agent handle.",
+          'Create this agent (optional payload = the agent/created birth certificate; optional { capabilityHost } = a restricted scope, e.g. { config: { surface: ["chat"] }, fallback: null }), wait for its processors to consume the birth batch, and return this same agent handle.',
         kill: "Restart the agent's server-side object; the next request boots it fresh.",
         message:
           "Send this agent a message (string, or { message, files? }); the sender is derived from the calling scope.",
@@ -6547,6 +6596,8 @@ const PROJECT_BUILTIN_BLIPS: Record<string, string> = {
   scheduler:
     'The default project Scheduler (= schedulers.get("/scheduler/primary")): set({ key, recurrence, script }) runs an itx script on a schedule; cancel(key), list(), trigger(key).',
   schedulers: "Scheduler catalog: get(path) for extra /scheduler/** instances.",
+  scope:
+    'A narrower itx for a path: scope({ path, surface: ["agent"] }) exposes only the listed built-in members (plus that scope\'s mounts) with project-confined, non-admin authority. Never widens.',
   secrets: "Secret catalog by path.",
   streams: "Project stream catalog: get(path), list().",
   worker: "The default repo-backed project worker.",
@@ -6573,6 +6624,11 @@ type ExistingProjectRpcTargetProps = {
    * provider's Pager, journaling the disconnect the clients catalog reduces.
    */
   ownedDisposables?: Disposable[];
+  /**
+   * The restricted surface this itx was minted with (domains/itx/surface.ts):
+   * only these built-in members exist on it. Absent is the full surface.
+   */
+  surface?: ItxSurface;
 };
 
 type ProspectiveProjectRpcTargetProps = {
@@ -6583,6 +6639,11 @@ type ProspectiveProjectRpcTargetProps = {
 
 type ProjectRpcTargetProps = ExistingProjectRpcTargetProps | ProspectiveProjectRpcTargetProps;
 
+// SURFACE RULE for every class below that can be restricted (surface.ts): a
+// member the class itself relies on is reached through a PRIVATE accessor
+// (`this.#processor`, `this.#append(...)`) and the public member delegates to
+// it. A restricted prototype removes public members for CALLERS; the class's
+// own logic must keep working whatever the surface says.
 /**
  * The server-side **itx** — the object an `async (itx) => { … }` script holds and
  * what `env.ITX.get()` returns. One class serves the project root and every nested
@@ -6629,6 +6690,9 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     super();
     if ("projectId" in props) props.auth.assertCanAccessProject(props.projectId);
     this.#props = props;
+    // A surfaced itx swaps in a prototype carrying only its allowed members
+    // (the instance keeps its native RpcTarget brand — see surface.ts).
+    if ("projectId" in props) applySurface(this, props.surface, ProjectRpcTarget.prototype);
   }
 
   [Symbol.dispose](): void {
@@ -6657,12 +6721,46 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     return this.#existingProps.capabilityHost;
   }
 
+  /**
+   * The dynamic-capability dispatcher for `project` — the registry's
+   * `invokerFor`. Reaches the host through the private field, never the
+   * public `capabilityHost` getter: a restricted surface shadows that getter
+   * and defers it to the very hop that is asking (an infinite loop).
+   */
+  static dynamicInvokerOf(project: ProjectRpcTarget): CapabilityHostRpcTarget {
+    return project.#capabilityHost;
+  }
+
   get #projectId(): string {
     return this.#existingProps.projectId;
   }
 
   get #streamContext(): StreamContext {
     return this.#existingProps.streamContext;
+  }
+
+  /** The restricted surface this itx was minted with, if any (domains/itx/surface.ts). */
+  get #surface(): ItxSurface | undefined {
+    return this.#existingProps.surface;
+  }
+
+  /**
+   * THIS scope's agent handle, built directly — never through the public
+   * `agents` getter, which a surface may have removed.
+   */
+  #agentHandle(): AgentRpcTarget | undefined {
+    const path = this.#capabilityHost.path;
+    if (!path.startsWith("/agents/")) return undefined;
+    return new AgentRpcTarget({
+      auth: this.#existingProps.auth,
+      capabilityHost: this.#capabilityHost,
+      ctx: this.#existingProps.ctx,
+      projectId: this.#projectId,
+      // The agent's own itx speaks AS the agent (message() stamps an agent
+      // actor). A surfaced itx at this path is held by someone else — a
+      // visitor's browser session — so it speaks as its own principal.
+      ...(this.#surface === undefined && { sourceScopePath: path }),
+    });
   }
 
   /** The project this itx is scoped into. */
@@ -6682,7 +6780,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
    * The durable-delivery subscriptions committed in the birth batch are what
    * guarantee the saga runs; create also nudges both root processors AFTER
    * this response, and a failed nudge is telemetry, not a create failure —
-   * the checklist's stall detector covers the rest. Either lane returns this
+   * the checklist's stall detector covers the rest. Either path returns this
    * same handle, and addressing an unknown slug is side-effect free.
    */
   async create(
@@ -6744,7 +6842,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
           `project create() received id "${args.projectId}" for handle "${this.#projectId}"`,
         );
       }
-      const identity = await this.identity();
+      const identity = await this.#identity();
       registered = {
         organizationId: identity.organizationId,
         projectId: identity.projectId,
@@ -6820,11 +6918,11 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     const driveBirth = (step: string) =>
       timedStep("create-timing", timing, step, () =>
         Promise.all([
-          this.processor.waitUntilProcessed({
+          this.#processor.waitUntilProcessed({
             offset: maxOffset,
             timeoutMs: PROJECT_PROCESSOR_BIRTH_WAIT_TIMEOUT_MS,
           }),
-          this.notificationProcessor.waitUntilProcessed({
+          this.#notificationProcessor.waitUntilProcessed({
             offset: maxOffset,
             timeoutMs: PROJECT_PROCESSOR_BIRTH_WAIT_TIMEOUT_MS,
           }),
@@ -6852,7 +6950,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
       timedStep("create-timing", timing, "seed-project-api-key", seedProjectApiKey),
       driveBirth("wait-project-birth"),
       timedStep("create-timing", timing, "wait-project-created", () =>
-        this.waitUntilCreated({ timeoutMs: remainingCreateTimeoutMs }),
+        this.#waitUntilCreated({ timeoutMs: remainingCreateTimeoutMs }),
       ),
     ]);
     return this;
@@ -6915,6 +7013,10 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
    * `projects.get(slug).create()`.
    */
   async identity(): Promise<ProjectIdentity> {
+    return await this.#identity();
+  }
+
+  async #identity(): Promise<ProjectIdentity> {
     // readProjectById folds transient KV read errors into null; one retry
     // keeps a blip from reporting a just-created project as missing.
     const record =
@@ -6937,7 +7039,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
    * or localhost environment.
    */
   async appUrl(appSlug: string): Promise<string> {
-    const identity = await this.identity();
+    const identity = await this.#identity();
     const config = parseConfig(env);
     const projectUrl = buildProjectWorkerUrl({
       projectSlug: identity.slug,
@@ -6963,7 +7065,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     if (!this.#props.auth.isAdmin()) {
       throw new Error("Restoring a direct project hostname requires an admin principal.");
     }
-    const identity = await this.identity();
+    const identity = await this.#identity();
     const hostname = await primeDirectProjectCustomDomain({
       directory: env.PROJECT_DIRECTORY,
       hostname: input.hostname,
@@ -6986,8 +7088,8 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     if (observed === undefined) {
       throw new Error(`Direct hostname "${hostname}" append returned no event.`);
     }
-    await this.processor.waitUntilProcessed({ offset: observed.offset });
-    const { state } = await this.processor.snapshot();
+    await this.#processor.waitUntilProcessed({ offset: observed.offset });
+    const { state } = await this.#processor.snapshot();
     if (
       !state.customDomains.some(
         (domain) => domain.hostname === hostname && domain.kind === "direct",
@@ -7012,7 +7114,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
       hostname: input.hostname,
       projectHostnameBases: parseConfig(env).projectHostnameBases,
     });
-    const existing = (await this.processor.snapshot()).state.customDomains.find(
+    const existing = (await this.#processor.snapshot()).state.customDomains.find(
       (domain) => domain.hostname === hostname,
     );
     if (existing?.kind === "direct") {
@@ -7047,8 +7149,8 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
         `Cloudflare hostname "${hostname}" could not be restored: ${String(terminal.payload?.error)}`,
       );
     }
-    await this.processor.waitUntilProcessed({ offset: terminal.offset });
-    const after = await this.processor.snapshot();
+    await this.#processor.waitUntilProcessed({ offset: terminal.offset });
+    const after = await this.#processor.snapshot();
     const restored = after.state.customDomains.find((domain) => domain.hostname === hostname);
     if (restored?.kind !== "cloudflare") {
       throw new Error(`Cloudflare hostname "${hostname}" is missing after its provision command.`);
@@ -7066,6 +7168,10 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
    * bootstrap is in flight.
    */
   async waitUntilCreated(args?: { timeoutMs?: number }): Promise<void> {
+    return await this.#waitUntilCreated(args);
+  }
+
+  async #waitUntilCreated(args?: { timeoutMs?: number }): Promise<void> {
     const timeoutMs = args?.timeoutMs ?? PROJECT_CREATE_TIMEOUT_MS;
     const deadline = Date.now() + timeoutMs;
     const timeoutError = () => new Error(`Project creation timed out after ${timeoutMs}ms.`);
@@ -7100,7 +7206,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     // work (waitUntil), never awaited: a wedged DO dial must not burn the
     // caller's timeout budget before the timed waiter below even opens.
     this.#props.ctx.waitUntil(
-      this.processor.snapshot().then(
+      this.#processor.snapshot().then(
         () => undefined,
         () => undefined,
       ),
@@ -7127,7 +7233,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
 
     const remainingMs = deadline - Date.now();
     if (remainingMs <= 0) throw timeoutError();
-    await this.processor.waitUntilProcessed({
+    await this.#processor.waitUntilProcessed({
       offset: terminal.offset,
       timeoutMs: remainingMs,
     });
@@ -7147,6 +7253,10 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
 
   /** @internal */
   get durableObjectStub() {
+    return this.#durableObjectStub;
+  }
+
+  get #durableObjectStub() {
     return env.PROJECT.getByName(
       DurableObjectNameCodec.stringify({ path: "/", projectId: this.#projectId }),
     );
@@ -7164,13 +7274,15 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
       context: { projectId: this.#projectId, scopePath },
       message: "project description retrying after Durable Object reset",
       operation: () =>
-        Promise.all([this.durableObjectStub.describe(), this.#capabilityHost.__describe()]),
+        Promise.all([this.#durableObjectStub.describe(), this.#capabilityHost.__describe()]),
     });
     const mountedCapabilities = hostDescription.capabilities;
     return describeNode({
       instructions:
         `An itx: project "${project.name}" (${project.projectId}) at scope "${scopePath}". ` +
-        "Built-ins are project-global and identical at every scope — `children` below lists them; `capabilities` lists this scope's dynamic mounts. " +
+        (this.#surface === undefined
+          ? "Built-ins are project-global and identical at every scope — `children` below lists them; `capabilities` lists this scope's dynamic mounts. "
+          : "RESTRICTED scope: only the members in `children` below and this scope's own `capabilities` exist here; nothing else on Project is reachable. ") +
         "Unknown dotted members dispatch dynamically against this scope's capability host, chaining up to the project root. " +
         'To find anything — e2e-tested example scripts, type declarations, mounted capabilities — use itx.docs.search({ q: "several related words" }) then itx.docs.get({ name }); __describe() works on every child.',
       // The Project declaration alone is ~1.4k tokens; 2000 fits it plus a
@@ -7180,13 +7292,13 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
         rootName: "Project",
         maxTokens: 2000,
       }).sourceText,
-      children: {
+      children: surfacedChildren(this.#surface, {
         ...PROJECT_BUILTIN_BLIPS,
         ...(scopePath.startsWith("/agents/") && {
           agent: "THIS agent's control surface (present because this is an agent scope).",
           chat: "THIS agent's web-chat door.",
         }),
-      },
+      }),
       parent: scopePath === "/" ? "session.projects" : `the project-root itx (scope "/")`,
       // Dynamic mounts only: the builtins are already the `children` map, and
       // repeating their rows (and their types) turned the identity card into
@@ -7222,11 +7334,15 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
 
   /** Restart the project's server-side object; the next request boots it fresh. */
   kill(): Promise<void> {
-    return Promise.resolve(this.durableObjectStub.kill());
+    return Promise.resolve(this.#durableObjectStub.kill());
   }
 
   /** The project stream processor (snapshot/state; `birthCertificate` records terminal creation). */
   get processor(): WakeableStreamProcessorRpc<ProjectProcessorState> {
+    return this.#processor;
+  }
+
+  get #processor(): WakeableStreamProcessorRpc<ProjectProcessorState> {
     return facetProcessorRelay<ProjectProcessorState>({
       auth: this.#props.auth,
       name: ProjectProcessorContract.slug,
@@ -7239,6 +7355,10 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
    * project processor (both facets of the root stream). Generated user APIs
    * must not expose processor-host plumbing as a product capability. */
   get notificationProcessor(): StreamProcessorRpc {
+    return this.#notificationProcessor;
+  }
+
+  get #notificationProcessor(): StreamProcessorRpc {
     return facetProcessorRelay({
       auth: this.#props.auth,
       name: NotificationProcessorContract.slug,
@@ -7249,7 +7369,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
 
   /** The project DO's methods this isolate reaches — typed once (see {@link ProjectDurableObjectRpc}). */
   get #projectDo(): ProjectDurableObjectRpc {
-    return this.durableObjectStub as unknown as ProjectDurableObjectRpc;
+    return this.#durableObjectStub as unknown as ProjectDurableObjectRpc;
   }
 
   /** The project's live state — reduced processor state plus non-folded slices. See {@link LiveStateRpc}. */
@@ -7299,13 +7419,12 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
   // On a project-root itx both are undefined.
   /** This scope's agent control handle, when its address is under `/agents/`. */
   get agent(): AgentRpcTarget | undefined {
-    const path = this.#capabilityHost.path;
-    return path.startsWith("/agents/") ? this.agents.get(path) : undefined;
+    return this.#agentHandle();
   }
 
-  /** THIS agent's web-chat door — present only on an agent-scoped itx. */
+  /** THIS agent's web chat — present only on an agent-scoped itx. */
   get chat(): AgentChatRpcTarget | undefined {
-    return this.agent?.chat;
+    return this.#agentHandle()?.chat;
   }
 
   // The scope's own host, plus the catalog that addresses ANY scope in the
@@ -7354,6 +7473,27 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     });
   }
 
+  /**
+   * A NARROWER itx for `path` — the one way to hand an itx to code that
+   * must not hold this scope's authority (a visitor's browser session, a
+   * helper that should only talk). The result exposes ONLY the listed
+   * built-in members, keeps `path`'s dynamic mounts, and runs with
+   * project-confined, non-admin authority. Never widens: it is minted from
+   * THIS project only.
+   */
+  scope(input: { path: string; surface: string[] }): ProjectRpcTarget {
+    const path = normalizePath(input.path);
+    const surface = parseItxSurface(input.surface);
+    return itxForScope({
+      auth: restrictedScopeAuthContext(this.#projectId, `scope:${path}`),
+      ctx: this.#existingProps.ctx,
+      streamContext: this.#streamContext,
+      path,
+      projectId: this.#projectId,
+      surface,
+    });
+  }
+
   /** Agent catalog: get(path), list(). */
   get agents(): AgentCollectionRpcTarget {
     return new AgentCollectionRpcTarget({
@@ -7395,7 +7535,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     });
   }
 
-  /** The docs door: `search({ q })` finds e2e-tested example scripts, type
+  /** The docs: `search({ q })` finds e2e-tested example scripts, type
    * declarations, and this scope's mounted capabilities; `get({ name })`
    * fetches one. Pass search MANY related words — matching is dumb word
    * overlap. */
@@ -7475,11 +7615,15 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
 
   /** The default project Scheduler — shorthand for `schedulers.get("/scheduler/primary")`. */
   get scheduler(): SchedulerRpcTarget {
-    return this.schedulers.get(SCHEDULER_PRIMARY_PATH);
+    return this.#schedulers.get(SCHEDULER_PRIMARY_PATH);
   }
 
   /** Path-addressed Schedulers; the default at `/scheduler/primary` covers almost every use. */
   get schedulers(): SchedulerCollectionRpcTarget {
+    return this.#schedulers;
+  }
+
+  get #schedulers(): SchedulerCollectionRpcTarget {
     return new SchedulerCollectionRpcTarget({
       auth: this.#props.auth,
       projectId: this.#projectId,
@@ -7545,7 +7689,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     }
     await this.#indexCommittedBatchFacts(batch);
     try {
-      await this.worker.processEventBatch(batch);
+      await this.#worker.processEventBatch(batch);
     } catch (error) {
       // The bootstrap window: the worker cannot be MATERIALIZED yet (config
       // repo unseeded, or its first build still in flight). That is this
@@ -7587,6 +7731,10 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
    * worker adds (`itx.worker.<getter>.<method>(...)`) is one RPC end to end.
    */
   get worker(): DynamicWorkerCapability<ProjectWorker> {
+    return this.#worker;
+  }
+
+  get #worker(): DynamicWorkerCapability<ProjectWorker> {
     return new DynamicWorkerRpcTarget({
       buildBudgetMs: streamDeliveryBuildBudget(this.#props.auth),
       ctx: this.#props.ctx,
@@ -7632,6 +7780,8 @@ export function itxForScope(props: {
   projectId: string;
   /** See {@link ExistingProjectRpcTargetProps.ownedDisposables}. */
   ownedDisposables?: Disposable[];
+  /** See {@link ExistingProjectRpcTargetProps.surface}. */
+  surface?: ItxSurface;
 }): ProjectRpcTarget {
   return new ProjectRpcTarget({
     auth: props.auth,
@@ -7640,7 +7790,17 @@ export function itxForScope(props: {
     streamContext: props.streamContext,
     projectId: props.projectId,
     ...(props.ownedDisposables === undefined ? {} : { ownedDisposables: props.ownedDisposables }),
+    ...(props.surface === undefined ? {} : { surface: props.surface }),
   });
+}
+
+/** `__describe()` children of a surfaced itx: only its allowed members. */
+function surfacedChildren(
+  surface: ItxSurface | undefined,
+  children: Record<string, string>,
+): Record<string, string> {
+  if (surface === undefined) return children;
+  return Object.fromEntries(Object.entries(children).filter(([name]) => surface.includes(name)));
 }
 
 /**
@@ -9667,7 +9827,7 @@ function ensureTrailingSlash(url: string): string {
 // The root itx / `projects.get(id)`: unknown roots dispatch via the scope's
 // capability host (mounted capabilities, `itx.someTool(...)`).
 installPrototypeInvokeCapabilityFallback(ProjectRpcTarget, {
-  invokerFor: (project) => project.capabilityHost,
+  invokerFor: (project) => ProjectRpcTarget.dynamicInvokerOf(project),
 });
 // `capabilityHosts.get(path)` and every `capabilityHost` getter: the host IS
 // the invoker — `host.foo.bar(x)` is `host.invokeCapability({ path: ["foo",

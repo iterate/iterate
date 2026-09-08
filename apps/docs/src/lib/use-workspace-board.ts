@@ -31,14 +31,19 @@ type WorkspaceStatusShape = {
 
 /** status() is workspace-wide — every project repo is a mount — but this
  * board is ONE repo: only the matching mount's changes count, and their
- * fully qualified paths become repo-relative board keys. */
-export function changeMap(status: unknown, repoPath: string): Map<string, TaskChangeStatus> {
+ * fully qualified paths become repo-relative board keys. `include` picks
+ * the files a lens cares about (task files here; documents for the tree). */
+export function changeMap(
+  status: unknown,
+  repoPath: string,
+  include: (key: string) => boolean = isTaskFilePath,
+): Map<string, TaskChangeStatus> {
   const map = new Map<string, TaskChangeStatus>();
   for (const mount of (status as WorkspaceStatusShape).mounts ?? []) {
     if (mount.path !== repoPath) continue;
     for (const entry of mount.changes ?? []) {
       const key = boardKey(entry.path.slice(repoPath.length));
-      if (!isTaskFilePath(key)) continue;
+      if (!include(key)) continue;
       const kind =
         entry.change === "added" ? "added" : entry.change === "deleted" ? "deleted" : "modified";
       map.set(key, kind);
