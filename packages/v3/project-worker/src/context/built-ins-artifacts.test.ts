@@ -1,11 +1,12 @@
 // built-ins-artifacts.test.ts — `itx.cfArtifacts`, the RAW Cloudflare Artifacts binding, project-
-// scoped. Two isolation properties are what matter, and both are enforced HERE, not by the binding:
+// scoped and SHAPED like the real binding (create/get/list return the real shapes). Two isolation
+// properties are what matter, and both are enforced HERE, not by the binding:
 //   1. NAMES are forced under the caller's `${projectId}.` prefix — a `.` delimiter, because project
 //      IDs are `[A-Za-z0-9_-]` (no `.`), so it cannot collide even when IDs contain `-` (a `--`
 //      delimiter would: `a`+`b--x` == `a--b`+`x`). `list` is filtered to that prefix LOCALLY (the
 //      binding returns EVERY project's repos).
-//   2. The scope returns ONLY plain data — never the repo HANDLE, whose runtime `fork(name)` (walked
-//      by the itx dispatcher regardless of the narrowed type) would escape the prefix.
+//   2. `get` returns the real handle's shape MINUS `fork` — whose runtime `fork(name)` (walked by the
+//      itx dispatcher regardless of the narrowed type) takes an unprefixed name and escapes the wall.
 // Pure over an injected namespace: no DO, no bindings, no network.
 
 import { expect, test } from "vitest";
@@ -25,8 +26,10 @@ function recordingNamespace(allRepos: string[] = []) {
     },
     get: async (name) => {
       calls.push({ method: "get", name });
-      // A handle that ALSO carries the UNSAFE `fork(dest)` — the escape hatch must never hand it out.
+      // A real-shaped handle that ALSO carries the UNSAFE `fork(dest)` — `get` must re-expose the
+      // safe fields (`lastPushAt`, `createToken`) but NEVER this method.
       return {
+        lastPushAt: `pushed-${name}`,
         createToken: async (scope: "read" | "write", ttlSeconds: number) => ({
           plaintext: `${scope}-${name}-${ttlSeconds}`,
         }),
@@ -44,20 +47,22 @@ function recordingNamespace(allRepos: string[] = []) {
   return { namespace, calls, forkCalled: () => forkCalled };
 }
 
-test("cfArtifacts prefixes with a '.' delimiter and mints tokens WITHOUT exposing the repo handle", async () => {
+test("cfArtifacts prefixes with a '.' delimiter and re-exposes the handle WITHOUT fork", async () => {
   const { namespace, calls, forkCalled } = recordingNamespace();
   const a = projectScopedArtifacts(namespace, "prj_a");
 
   expect((await a.create("config")).token).toBe("tok-prj_a.config");
   expect(calls.at(-1)).toEqual({ method: "create", name: "prj_a.config" }); // prefixed on the way in
 
-  const minted = await a.token("config", "read", 60);
-  expect(calls.at(-1)).toEqual({ method: "get", name: "prj_a.config" });
-  expect(minted).toEqual({ token: "read-prj_a.config-60" }); // ONLY the token string leaves…
-  expect(Object.keys(minted)).toEqual(["token"]); // …not the handle, so its fork() cannot be reached
+  const repo = await a.get("config");
+  expect(calls.at(-1)).toEqual({ method: "get", name: "prj_a.config" }); // prefixed on the way in
+  // The handle is re-exposed SHAPED like the real one — the safe fields, and ONLY those.
+  expect(Object.keys(repo).sort()).toEqual(["createToken", "lastPushAt"]);
+  expect(repo.lastPushAt).toBe("pushed-prj_a.config"); // passes through
+  expect((await repo.createToken("read", 60)).plaintext).toBe("read-prj_a.config-60");
+  // fork is NOT on the returned handle, so it can never be reached (its unprefixed name would escape).
+  expect((repo as unknown as Record<string, unknown>).fork).toBeUndefined();
   expect(forkCalled()).toBe(false);
-  // There is no handle-returning door on the surface at all.
-  expect((a as Record<string, unknown>).get).toBeUndefined();
 });
 
 test("the '.' delimiter is collision-free for hyphenated project IDs; list filters locally", async () => {

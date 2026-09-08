@@ -86,18 +86,34 @@ export default class RunScript extends WorkerEntrypoint {
 /** Cloudflare Artifacts ("git for agents", beta) — the per-namespace binding, CONTROL PLANE ONLY, and
  *  typed minimally here (not in `@cloudflare/workers-types` yet; reconcile against `wrangler types`
  *  when the namespace is provisioned). `create` returns the repo's initial git credential; `get`
- *  returns a HANDLE (mint a credential with `createToken`); `list` is UNFILTERED. A repo's file BYTES
- *  ride git over the remote — the nicer `itx.repos` layer's job, later, not this raw escape hatch. */
+ *  returns a repo HANDLE (mint a credential with `createToken`); `list` is UNFILTERED. A repo's file
+ *  BYTES ride git over the remote — the `itx.repos` layer's job, later, not this raw escape hatch. */
 export interface ArtifactsNamespace {
-  create(name: string, options?: { setDefaultBranch?: string }): Promise<{ token: string }>;
+  create(name: string, options?: { setDefaultBranch?: string }): Promise<ArtifactCreateResult>;
   get(name: string): Promise<ArtifactRepoHandle>;
   list(options?: { limit?: number; cursor?: string }): Promise<ArtifactListResult>;
 }
-/** A repo handle from `get()`. Held ONLY inside this module — never handed to a caller, because its
- *  runtime `fork(name, …)` (which the itx dispatcher would walk even though this type omits it) takes
- *  an UNPREFIXED name and would escape the project's isolation wall. */
+/** `create`/`import`'s result: the repo's initial git credential (typed minimally — there may be more). */
+export interface ArtifactCreateResult {
+  token: string;
+}
+/** The REAL repo handle `get()` yields. `createToken`/`lastPushAt` are scoped to this one repo and
+ *  safe; `fork(name, …)` is NOT — its name is unprefixed and would escape the project — so the scoped
+ *  handle `itx.cfArtifacts.get` returns (`ScopedArtifactRepo`) mirrors this shape MINUS `fork`. */
 export interface ArtifactRepoHandle {
-  createToken(scope: "read" | "write", ttlSeconds: number): Promise<{ plaintext: string }>;
+  lastPushAt: string | null;
+  createToken(scope: "read" | "write", ttlSeconds: number): Promise<ArtifactToken>;
+  fork(name: string, options?: { setDefaultBranch?: string }): Promise<ArtifactCreateResult>;
+}
+/** `createToken`'s result — `plaintext` is the git credential string. */
+export interface ArtifactToken {
+  plaintext: string;
+  expiresAt?: string;
+}
+/** What `itx.cfArtifacts.get` returns — the real handle's shape MINUS `fork` (the one escape). */
+export interface ScopedArtifactRepo {
+  lastPushAt: string | null;
+  createToken(scope: "read" | "write", ttlSeconds: number): Promise<ArtifactToken>;
 }
 /** `list`'s result: repos in the WHOLE namespace (the binding does NOT filter by name), one page. */
 export interface ArtifactListResult {
@@ -105,13 +121,14 @@ export interface ArtifactListResult {
   cursor?: string;
 }
 
-/** `itx.cfArtifacts` — the RAW Artifacts binding, project-scoped, returning ONLY plain data (never a
- *  repo handle — see `ArtifactRepoHandle`). Every repo name is forced under this project's
- *  `${projectId}.` prefix (the isolation wall, like `itx.kv`'s `${projectId}:`). The delimiter is `.`
- *  ON PURPOSE: project IDs are `[A-Za-z0-9_-]` (no `.`) so `${projectId}.` cannot collide even when IDs
- *  contain `-` (a `--` delimiter could: `a` + `b--x` == `a--b` + `x`), and repo names allow `.`.
- *  `list` is the one place the binding cannot be trusted — it returns EVERY project's repos — so it is
- *  filtered to this prefix LOCALLY and the prefix stripped. Pure and namespace-injected: unit-tests alone. */
+/** `itx.cfArtifacts` — the RAW Artifacts binding, project-scoped, and shaped like the real binding.
+ *  Every repo name is forced under this project's `${projectId}.` prefix (the isolation wall, like
+ *  `itx.kv`'s `${projectId}:`). The delimiter is `.` ON PURPOSE: project IDs are `[A-Za-z0-9_-]` (no
+ *  `.`), so `${projectId}.` cannot collide even when IDs contain `-` (a `--` delimiter could: `a` +
+ *  `b--x` == `a--b` + `x`), and repo names allow `.`. `create` and `list` return the real shapes
+ *  (`list` filtered to this prefix LOCALLY — the binding returns EVERY project's repos). `get` returns
+ *  the real handle's shape MINUS `fork` (its unprefixed name is the one method that escapes the wall).
+ *  Pure and namespace-injected: unit-tests alone. */
 export function projectScopedArtifacts(
   namespace: ArtifactsNamespace,
   projectId: string,
@@ -119,12 +136,14 @@ export function projectScopedArtifacts(
   const prefix = `${projectId}.`;
   return {
     create: (name, options) => namespace.create(prefix + name, options),
-    // Mint a git credential for an existing repo. The handle has UNSAFE methods (`fork` escapes the
-    // prefix), so it is used here and NEVER returned — only the token string leaves.
-    token: async (name, scope = "write", ttlSeconds = 3600) => {
+    get: async (name): Promise<ScopedArtifactRepo> => {
       const handle = await namespace.get(prefix + name);
-      const { plaintext } = await handle.createToken(scope, ttlSeconds);
-      return { token: plaintext };
+      // Re-expose the handle SHAPED like the real one, minus `fork` (whose unprefixed name escapes the
+      // project). `createToken`/`lastPushAt` act on this already-prefixed repo, so they pass through.
+      return {
+        lastPushAt: handle.lastPushAt,
+        createToken: (scope, ttlSeconds) => handle.createToken(scope, ttlSeconds),
+      };
     },
     list: async (options) => {
       const page = await namespace.list(options);
@@ -160,14 +179,15 @@ export interface BuiltInScope extends LibraryRoots {
    *  fake)`; the physical door stays `itx.builtins.ai`. */
   ai: Ai;
   /** THE ESCAPE HATCH: Cloudflare Artifacts, project-scoped. `itx.cfArtifacts` proxies the ONE bound
-   *  namespace, forcing every repo name under this project's `${projectId}--` prefix (the isolation
+   *  namespace, forcing every repo name under this project's `${projectId}.` prefix (the isolation
    *  wall, exactly like `itx.kv`). The nicer `itx.repos` API is built ON TOP of this; anyone who wants
-   *  raw Artifacts falls back here — same shape as `itx.ai` proxying `env.AI`. Control plane only, and
-   *  returns ONLY plain data: `create` a repo (→ its initial git token), mint a `token` for one, or
+   *  raw Artifacts falls back here — same shape as `itx.ai` proxying `env.AI`, and its methods return
+   *  the SAME SHAPES as the real binding: `create` a repo (→ its initial git token), `get` a repo's
+   *  handle (mint a git credential with `createToken`; NO `fork` — its name escapes the wall), or
    *  `list` this project's repos. A repo's bytes are git-over-HTTPS (the `itx.repos` layer's job). */
   cfArtifacts: {
-    create(name: string, options?: { setDefaultBranch?: string }): Promise<{ token: string }>;
-    token(name: string, scope?: "read" | "write", ttlSeconds?: number): Promise<{ token: string }>;
+    create(name: string, options?: { setDefaultBranch?: string }): Promise<ArtifactCreateResult>;
+    get(name: string): Promise<ScopedArtifactRepo>;
     list(options?: { limit?: number; cursor?: string }): Promise<ArtifactListResult>;
   };
   /** Append to this context's append-only event log (the facets that REDUCE it are
