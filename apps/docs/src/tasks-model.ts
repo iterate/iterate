@@ -34,7 +34,7 @@ export function parseTaskCard(path: string, source: string): TaskCard {
     // the UI surfaces the breakage instead of guessing.
     return {
       path,
-      title: firstHeadingTitle(readReview(source).body.source) ?? path,
+      title: firstHeadingTitle(readReview(source).projection.markdown) ?? path,
       state: normalizeTaskState(undefined),
       labels: [],
       agent: null,
@@ -48,7 +48,7 @@ export function parseTaskCard(path: string, source: string): TaskCard {
   const review = readReview(source);
   return {
     path,
-    title: stringValue(metadata.title) ?? firstHeadingTitle(review.body.source) ?? path,
+    title: stringValue(metadata.title) ?? firstHeadingTitle(review.projection.markdown) ?? path,
     state: normalizeTaskState(stringValue(metadata.state)),
     labels: uniqueStrings([...stringArray(metadata.tags), ...stringArray(metadata.labels)]),
     agent: stringValue(metadata.agent) ?? null,

@@ -59,6 +59,14 @@ describe("parseTaskCard with RFM review markup", () => {
     expect(parseTaskCard("tasks/quiet.md", source).title).toBe("tasks/quiet.md");
   });
 
+  it.each([
+    "# {==Prevent stale search results==}{>>Clarify this.<<}{#c_title}",
+    "{==# Prevent stale search results==}{>>Clarify this.<<}{#c_title}",
+    "---\nstate: [unclosed\n---\n\n# {==Prevent stale search results==}{>>Clarify this.<<}{#c_title}",
+  ])("infers a clean title from an annotated heading: %s", (source) => {
+    expect(parseTaskCard("tasks/a.md", source).title).toBe("Prevent stale search results");
+  });
+
   it("still flags broken YAML as a frontmatter error", () => {
     const card = parseTaskCard(
       "tasks/broken.md",
