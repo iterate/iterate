@@ -21,8 +21,31 @@ That is the whole install. The agent runs as a guest worker beside the
 project's own `worker.ts`: the platform's dynamic worker host installs the
 config repo's dependencies and builds the guest from
 `node_modules/@iterate-com/voice-agent/dist/configured-worker.mjs` on the
-first call into it. `voiceAgentEntrypointRef` and `voiceAgentFacetRef`
-(from the package's root entry) are the worker refs that address it.
+first call into it. The boards, the voicelab CLI and the mobile app address
+the guest directly. A project's own worker gets the guest's methods, typed,
+from `VoiceAgentApp`:
+
+```ts
+import { VoiceAgentApp } from "@iterate-com/voice-agent";
+import { IterateWorkerEntrypoint } from "iterate/sdk";
+
+export default class extends IterateWorkerEntrypoint {
+  #voice = VoiceAgentApp.create(this.env);
+
+  async fetch(req: Request) {
+    if (new URL(req.url).pathname === "/voice/health") {
+      return Response.json(await this.#voice.health()); // builds the guest on first call
+    }
+    // this.#voice.setup({ streamPath, instructions, provider: "openai", ... })
+    // this.#voice.remove({ streamPath })
+    return new Response("voice project");
+  }
+}
+```
+
+`voiceAgentEntrypointRef` and `voiceAgentFacetRef` are the worker refs
+underneath, for code that dials the guest through a project handle of its
+own (the CLI and the phone do).
 
 `pnpm cli voicelab deploy --project <slug>` writes the dependency for you, and
 `installVoiceAgent` from the root entry does the same from any code that
@@ -51,10 +74,11 @@ platform resolves.
   built file carries its whole runtime graph (the SDK's processor machinery
   included), because the platform installs only what a config repo's own
   package.json declares.
-- `src/ref.ts`, `src/install.ts`, `src/setup-options.ts` — the worker refs,
-  the installer, and the guest's RPC surface as plain types: everything the
-  root entry exports. It imports nothing, so a phone or a browser can hold
-  the refs and call the installer.
+- `src/app.ts`, `src/ref.ts`, `src/install.ts`, `src/setup-options.ts` —
+  `VoiceAgentApp` for project workers, the worker refs, the installer, and
+  the guest's RPC surface as plain types: everything the root entry exports.
+  It imports nothing but zod (bundled), so a phone or a browser can hold the
+  refs and call the installer.
 
 The agent's behavioural tests live with the lab tooling in
 `apps/os/scripts/voicelab/` and import these sources directly.

@@ -11,7 +11,7 @@
     "module": "ESNext",
     "moduleResolution": "bundler",
     "rewriteRelativeImportExtensions": true,
-    "lib": ["ES2024"],
+    "lib": ["ES2024", "ESNext.Disposable"],
     "types": [],
     "strict": true,
     "declaration": true,

@@ -56,9 +56,13 @@ package next to `@iterate-com/docs`.
   Which build a project runs is now the platform's pin rather than the app's
   own copy — a deliberate change, recorded in the code.
 - **`configs/voice-agent`** is a two-file template: `package.json` declaring
-  the package, and a minimal `worker.ts` with a `/voice/health` route that
-  builds and probes the guest (it also proves the package's types resolve
-  from a config repo, via the template typecheck).
+  the package, and a minimal `worker.ts` that holds `VoiceAgentApp.create(this.env)`
+  and offers `/voice/health`, which builds and probes the guest (it also
+  proves the package's types resolve from a config repo, via the template
+  typecheck). `VoiceAgentApp` is how a project worker reaches the guest:
+  typed `health`, `setup`, `remove`, with the handle plumbing and the one
+  cast inside the package. A hosted web voice chat behind it is
+  `tasks/2026-09-08-voice-web-chat-app.md`.
 
 ## Not done here, deliberately
 

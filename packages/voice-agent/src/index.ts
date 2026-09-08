@@ -1,3 +1,4 @@
+export { VoiceAgentApp, type VoiceAgentEnv } from "./app.ts";
 export {
   VOICE_AGENT_WORKER_ENTRYPOINT,
   voiceAgentEntrypointRef,
