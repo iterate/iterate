@@ -8,6 +8,7 @@ import {
   FileTextIcon,
   Plus,
   SquareKanbanIcon,
+  ZapIcon,
 } from "lucide-react";
 import { IterateLogo } from "@iterate-com/ui/components/iterate-logo";
 import {
@@ -126,6 +127,15 @@ export function AppSidebar() {
                   >
                     <SquareKanbanIcon aria-hidden />
                     <span>Tasks</span>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+                <SidebarMenuItem>
+                  <SidebarMenuButton
+                    tooltip="Jam — a fresh workspace on the config repo, edited live with people and AI"
+                    render={<Link to="/jam" />}
+                  >
+                    <ZapIcon aria-hidden />
+                    <span>New jam</span>
                   </SidebarMenuButton>
                 </SidebarMenuItem>
               </SidebarMenu>

@@ -119,7 +119,11 @@ export const DocsApp = {
               : parseOverride(override, options.proxy.originOverrideKvKey);
           const target = new URL(request.url);
           target.protocol = origin.protocol;
-          target.host = origin.host;
+          // hostname + port, never `host`: the URL host setter keeps the
+          // project host's own port when the origin names none, so a local
+          // `docs--x.localhost:50209` would dial the origin on :50209.
+          target.hostname = origin.hostname;
+          target.port = origin.port;
           return fetch(new Request(new Request(target, request), { redirect: "manual" }));
         } finally {
           itx[Symbol.dispose]();

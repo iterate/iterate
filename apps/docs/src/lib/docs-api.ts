@@ -61,6 +61,22 @@ export interface DocsProject {
    * posture, and the only door here that creates anything.
    */
   createWorkspace(): Promise<{ workspacePath: string; path: string }>;
+  /** The documents (.md/.html) under one /repos/** mount of a workspace's
+   * merged view, as fully qualified paths — the file tree's listing. */
+  documentsUnder(workspacePath: string, repoPath: string): Promise<string[]>;
+  /**
+   * Start a jam: mint and CREATE a scratch workspace seeded with one
+   * document inside the config mount (committable later), and return the
+   * deep link's two halves. Creates through the same workspace `create`
+   * call as createWorkspace; these two are the only methods here that
+   * create anything.
+   */
+  createJam(): Promise<{ workspacePath: string; path: string }>;
+  /**
+   * Put an agent into a jam: birth the jam's own agent if needed and brief
+   * it with the workspace path and the open file. Jam workspaces only.
+   */
+  inviteAgent(workspacePath: string, path?: string): Promise<{ agentPath: string }>;
 }
 
 export interface DocsWorkspace extends WorkspaceDocumentLane {

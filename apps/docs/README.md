@@ -4,10 +4,13 @@ Docs is a direct workspace-document viewer, review surface, and Markdown/HTML
 source editor. It is a normal Cloudflare TanStack Start app styled with
 Tailwind and the shared Iterate UI package.
 
-There is deliberately no file browser and no task or commit workflow. A URL
-addresses one existing workspace and one existing file. A relative `path`
-resolves against the workspace's own stream path; an absolute `path` must be a
-fully qualified stream path (e.g. `/repos/config/docs/plan.md`):
+A URL addresses one existing workspace and one existing file; beside the
+editor sits the same file tree as the apps/os repo IDE, over the workspace's
+config-repo documents: git-status badges for the workspace's uncommitted
+changes, new/rename/delete/discard, and a Commit button that publishes the
+mount's dirty set to the repo's main. A relative
+`path` resolves against the workspace's own stream path; an absolute `path`
+must be a fully qualified stream path (e.g. `/repos/config/docs/plan.md`):
 
 ```text
 https://docs--<project>.iterate.app/?workspace=/workspaces/agents/<agent>&path=review.md
@@ -43,6 +46,42 @@ The document editor, Markdown annotation surface, comments rail, collaboration
 client, redlines, cursors, attribution, identity, and server dial are shared
 with Tasks through `@iterate-com/workspace-documents`. Tasks adds its board and
 task model around that common document backbone; Docs does not.
+
+## Jam
+
+`/jam` mints a fresh scratch workspace on the config repo, seeds one document
+under `jams/`, and opens it with the file tree beside the editor. The URL you
+land on IS the jam: share it, and everyone on it edits the same live files.
+**Invite AI** in the tree column births an agent at `/agents/jams/<id>` and
+briefs it with the workspace path. Its edits show up in the open editor as
+they land, and it reads your keystrokes through the same workspace. Nothing
+commits by itself unless you switch on auto-commit in the Commit popover: the
+workspace holds the jam until someone presses Commit.
+
+## Install into a project
+
+Docs runs behind your project's config worker, which authenticates project
+members and proxies to the app. The default template already installs it. If
+a project lacks it, hand this to the project's iterate agent (or commit it
+yourself to `worker.ts` in `/repos/config`); these lines are the whole
+integration:
+
+```ts
+import { DocsApp } from "@iterate-com/docs";
+
+const docsApp = DocsApp.create(this.env, {
+  auth: { policy: "project-member" },
+  proxy: {
+    origin: "https://docs.iterate.workers.dev",
+    originOverrideKvKey: "docs-app-origin",
+  },
+});
+
+if (app === "docs") return docsApp.fetch(request);
+```
+
+`https://docs--<project>.iterate.app` then works, `/jam` included. More in
+[Remote apps](../../docs/remote-apps.md).
 
 ## Development
 
