@@ -6531,6 +6531,9 @@ class ProjectAuthRpcTarget extends IterateRpcTarget<"ProjectAuth"> {
    */
   async fetch(request: Request): Promise<Response | null> {
     return await handleProjectAuthFetch({
+      // Renewal mints through the auth worker like login does; validation
+      // stays on the local lane.
+      mintSession: (input) => env.AUTH.mintProjectAppSession(input),
       osBaseUrl: parseConfig(env).baseUrl,
       projectId: this.props.projectId,
       request,

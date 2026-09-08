@@ -189,6 +189,19 @@ test("review a workspace document in the seeded Docs app", async ({ baseURL, pag
   const docsUrl = new URL(appUrl("docs", slug, baseURL!));
   docsUrl.searchParams.set("workspace", workspacePath);
   docsUrl.searchParams.set("path", documentPath);
+  // Every WebSocket the page opens is kept in reach so the test can cut the
+  // live session under the editor later and watch it come back.
+  await page.addInitScript(() => {
+    const sockets: WebSocket[] = [];
+    const Native = window.WebSocket;
+    window.WebSocket = class extends Native {
+      constructor(...args: ConstructorParameters<typeof WebSocket>) {
+        super(...args);
+        sockets.push(this);
+      }
+    } as typeof WebSocket;
+    (window as unknown as { __sockets: WebSocket[] }).__sockets = sockets;
+  });
   await page.goto(docsUrl.toString());
   // Same cold-build lane as the todo app above: the building page's spinner
   // carries the wait, ceiling raised to match.
@@ -270,6 +283,39 @@ test("review a workspace document in the seeded Docs app", async ({ baseURL, pag
     .getByText("Can we make this promise more concrete?", { exact: true })
     .waitFor();
   await commentsPanel.getByText("Selected text", { exact: true }).waitFor();
+
+  // The 15-minute project session renews from the page itself (the request
+  // the app's keepalive makes), through the config worker's gate, for the
+  // same member: a fresh expiry, no sign-in page.
+  const renewal = await page.evaluate(async () => {
+    const response = await fetch("/_iterate/auth/refresh?return_to=%2F", {
+      credentials: "same-origin",
+      method: "POST",
+    });
+    return { body: (await response.json()) as { expiresAt?: number }, status: response.status };
+  });
+  expect(renewal).toMatchObject({ status: 200 });
+  expect(renewal.body.expiresAt! * 1000).toBeGreaterThan(Date.now() + 14 * 60_000);
+
+  // A live session that dies under the editor (a laptop waking, a colo
+  // hiccup) comes back by itself, and edits made after it landed sync
+  // through the replacement session.
+  await page.evaluate(() => {
+    for (const socket of (window as unknown as { __sockets: WebSocket[] }).__sockets) {
+      socket.close();
+    }
+  });
+  await page.getByRole("button", { name: "Source" }).click();
+  await editor.click();
+  await page.keyboard.press("ControlOrMeta+a");
+  await page.keyboard.press("ArrowRight");
+  await page.keyboard.type("\n\nStill here after the socket dropped.");
+  await page.getByText(/^live · v\d+$/).waitFor({ timeout: 30_000 }); // timeout: the pull loop's backoff before its re-dial — the a11y-only badge gives the spinner-waiter nothing to watch
+  await expect
+    .poll(async () => String(await workspace.readFile(documentPath)), {
+      timeout: 30_000, // timeout: a workspace read over RPC — no loading UI for the spinner-waiter
+    })
+    .toContain("Still here after the socket dropped.");
 });
 
 /**
