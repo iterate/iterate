@@ -199,6 +199,32 @@ describe("createDocsClient", () => {
     expect(disposed).not.toContain(4);
   });
 
+  test("a renewal that failed covers nobody: the next caller renews again", async () => {
+    const refresh = vi
+      .fn<() => Promise<RefreshOutcome>>()
+      .mockResolvedValueOnce({ outcome: "unavailable" })
+      .mockResolvedValue({ outcome: "renewed", expiresAt: 0 });
+    const { client, dial } = fakeClient({ refresh });
+    // A: 1 and 2 fail, the gate is briefly unavailable, A still tries 3 and succeeds.
+    await expect(
+      client.withDocsProject(async (project) => {
+        if (project < 3) throw transportFailure();
+        return `a on ${project}`;
+      }),
+    ).resolves.toBe("a on 3");
+    expect(refresh).toHaveBeenCalledTimes(1);
+    // B loses 3 and 4: the failed renewal must not count as coverage —
+    // B renews for real instead of retrying on the old cookie.
+    await expect(
+      client.withDocsProject(async (project) => {
+        if (project < 5) throw transportFailure();
+        return `b on ${project}`;
+      }),
+    ).resolves.toBe("b on 5");
+    expect(refresh).toHaveBeenCalledTimes(2);
+    expect(dial).toHaveBeenCalledTimes(5);
+  });
+
   test("concurrent callers share one renewal and one post-renewal dial", async () => {
     const refresh = vi.fn(async () => ({ outcome: "renewed" as const, expiresAt: 0 }));
     const { client, dial } = fakeClient({ refresh });

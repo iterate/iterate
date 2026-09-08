@@ -60,6 +60,8 @@ export function createDocsClient<Project>(deps: {
   };
   let live: Session | null = null;
   let generation = 0;
+  /** Renewals that actually produced a fresh cookie — an outage or a dead
+   * session renews nothing, so neither counts as coverage for anyone. */
   let renewalsCompleted = 0;
   let renewing: Promise<RefreshOutcome> | null = null;
   /** The generation counter when the last renewal completed: every session
@@ -70,8 +72,10 @@ export function createDocsClient<Project>(deps: {
     renewing ??= deps
       .refresh()
       .then((outcome) => {
-        renewalsCompleted++;
-        renewedAtGeneration = generation;
+        if (outcome.outcome === "renewed") {
+          renewalsCompleted++;
+          renewedAtGeneration = generation;
+        }
         return outcome;
       })
       .finally(() => {
