@@ -159,6 +159,9 @@ export interface Env extends AppConfigEnv {
   ACCESS_EMAIL_HEADER?: string;
   /** This deployment's own origin (for login redirects from a private app). */
   CONTROL_PLANE_ORIGIN?: string;
+  /** Injected by the in-process OAuth AS wrapper at request time (control-plane/index.ts) — not a
+   *  wrangler binding; declared so the worker's env satisfies the control-plane handler's env. */
+  OAUTH_PROVIDER: import("@cloudflare/workers-oauth-provider").OAuthHelpers;
 }
 
 export class IterateContextDurableObject extends DurableObject<Env> {

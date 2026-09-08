@@ -11,6 +11,7 @@ import {
 } from "capnweb";
 import { IterateContextDurableObject, type Env } from "./iterate-context-durable-object.ts";
 import { directory } from "./control-plane/directory.ts";
+import controlPlane from "./control-plane/index.ts";
 import { registerPipelinedRpcBrand } from "./context/dispatch.ts";
 import { ITX_EXPRESSION_FETCH_HEADER } from "./fetch/rpc-stub-fetch.ts";
 import { DurableObjectNameCodec } from "./context/durable-object-names.ts";
@@ -185,11 +186,10 @@ export default {
       );
     }
 
-    return new Response(
-      "project-worker — /api (capnweb), /expression, /demo, /version; apps at <label>--<projectId>.<base>\n",
-      {
-        headers: { "content-type": "text/plain" },
-      },
-    );
+    // Everything else on the platform host is the CONTROL PLANE, in-process (src/control-plane): login
+    // + session, the OAuth AS (/authorize, /token, /.well-known, /register), /mcp, project creation
+    // (/projects), and the console at /. The project-worker's own doors (/api, /expression, /version,
+    // /demo) took precedence above. One worker, one front door.
+    return controlPlane.fetch(request, env, ctx);
   },
 };
