@@ -346,7 +346,7 @@ export function peerExtension(connection: CollabConnection, startVersion: number
                     epoch: connection.epoch,
                     version: reopened.version,
                   },
-                  lost === "" ? null : lost,
+                  lost || null,
                 );
                 return;
               } catch {
