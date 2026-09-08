@@ -1,0 +1,22 @@
+{
+  // Declaration emit for the root entry. tsdown's dts pipeline
+  // (rolldown-plugin-dts → @babel/generator) crashes on function types inside
+  // interfaces, the same printer that cannot handle iterate's sdk entry, so
+  // declarations are emitted with plain tsc instead (see tsdown.config.ts and
+  // the build script). The emitted d.ts keeps `.ts` relative specifiers,
+  // which consumers resolve to the sibling .d.ts.
+  "files": ["src/index.ts"],
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "rewriteRelativeImportExtensions": true,
+    "lib": ["ES2024"],
+    "types": [],
+    "strict": true,
+    "declaration": true,
+    "emitDeclarationOnly": true,
+    "outDir": "dist",
+    "skipLibCheck": true
+  }
+}

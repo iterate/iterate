@@ -242,6 +242,7 @@ const config: KnipConfig = {
     "!packages/shared",
     "!packages/ui",
     "!packages/iterate",
+    "!packages/voice-agent",
     "!packages/workspace-documents",
   ],
   ignoreIssues: {
@@ -270,6 +271,17 @@ const config: KnipConfig = {
     "packages/shared": makeSharedWorkspace(),
     "packages/ui": makeUiWorkspace(),
     "packages/iterate": makeIterateCliWorkspace(),
+    "packages/voice-agent": {
+      entry: [
+        "src/index.ts",
+        "src/configured-worker.ts",
+        "tsdown.config.ts",
+        // The codegen preset behind viseme-model.generated.ts; lint runs it.
+        "src/viseme-model.codegen.cjs",
+        "src/**/*.test.ts",
+      ],
+      project: ["src/**/*.ts", "src/**/*.cjs", "tsdown.config.ts"],
+    },
     "packages/workspace-documents": makeWorkspaceDocumentsWorkspace(),
   },
 };

@@ -29,16 +29,20 @@ import { fileURLToPath } from "node:url";
 import type { DynamicWorkerCapability } from "iterate/sdk";
 import { disposeIgnoredRpcResult } from "iterate/sdk/capnweb";
 
-import type VoiceAgentEntrypoint from "../../../../configs/voice-agent/voice-agent.ts";
+import {
+  installVoiceAgent,
+  voiceAgentEntrypointRef,
+  voiceAgentFacetRef,
+  type VoiceAgentRpc,
+} from "@iterate-com/voice-agent";
 import {
   connectProject,
   ensureProjectExists,
   resolveVoicelabBaseUrl,
   type VoicelabConnectOptions,
 } from "./connect.ts";
-import { installVoiceAgent } from "./deploy.ts";
+import { voiceAgentConfigRepo } from "./deploy.ts";
 import { discardRpcResult, withRpcResult } from "./rpc-ownership.ts";
-import { voiceAgentEntrypointRef, voiceAgentFacetRef } from "./voice-agent-ref.ts";
 
 /*
  * PRODUCTION, AND A PROJECT THAT EXISTS TOMORROW.
@@ -220,7 +224,7 @@ export interface TalkOptions extends Partial<VoicelabConnectOptions> {
  * before any resolution (proven both ways), where a VALUE import from
  * config-repo dies at load with ERR_UNSUPPORTED_ESM_URL_SCHEME (F4).
  */
-type VoiceAgentSetup = Pick<VoiceAgentEntrypoint, "health" | "setupVoiceAgent">;
+type VoiceAgentSetup = Pick<VoiceAgentRpc, "health" | "setupVoiceAgent">;
 
 /**
  * How long to keep waiting for the guest worker to build.
@@ -256,16 +260,18 @@ export async function talk(options: TalkOptions = {}) {
   await ensureProjectExists(connection);
   using itx = await connectProject(connection);
 
-  /* Install the guest BEFORE calling into it: `setupVoiceAgent` lives inside
-   * voice-agent.ts, so the file has to be in the repo before there is
-   * anything to call — a talk command that only ran setup would work on the
-   * machine that had already deployed by hand and fail against a fresh
-   * project. Committing identical content is a no-op the platform reports. */
-  const install = await installVoiceAgent(itx);
+  /* Declare the guest BEFORE calling into it: `setupVoiceAgent` lives inside
+   * @iterate-com/voice-agent, so package.json has to name the package before
+   * there is anything to call — a talk command that only ran setup would
+   * work on a project somebody had already set up and fail against a fresh
+   * one. Present is enough: a spec somebody pinned on purpose stays as it
+   * is (`voicelab deploy` is the upgrade path), and a repo that already
+   * declares the package is left untouched. */
+  const install = await installVoiceAgent(voiceAgentConfigRepo(itx), { existing: "keep" });
   console.log(
     install.changed
-      ? `installed voice-agent.ts (${install.commitOid.slice(0, 8)})`
-      : `voice-agent.ts already current (${install.commitOid.slice(0, 8)})`,
+      ? `package.json now depends on ${install.spec} (${install.commitOid.slice(0, 8)})`
+      : `package.json already depends on ${install.spec} (${install.commitOid.slice(0, 8)})`,
   );
 
   /* Only the secret the chosen provider's dial will spend — setup's gate is

@@ -1,0 +1,53 @@
+{
+  "name": "@iterate-com/voice-agent",
+  "version": "0.1.0",
+  "description": "The realtime voice agent for iterate projects: a guest worker a config repo pulls in from its package.json.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/iterate/iterate",
+    "directory": "packages/voice-agent"
+  },
+  "homepage": "https://github.com/iterate/iterate/tree/main/packages/voice-agent#readme",
+  "bugs": {
+    "url": "https://github.com/iterate/iterate/issues"
+  },
+  "exports": {
+    ".": "./src/index.ts",
+    "./configured-worker": "./src/configured-worker.ts"
+  },
+  "publishConfig": {
+    "access": "public",
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "import": "./dist/index.mjs",
+        "default": "./dist/index.mjs"
+      },
+      "./configured-worker": {
+        "import": "./dist/configured-worker.mjs",
+        "default": "./dist/configured-worker.mjs"
+      }
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "HEAD_AUDIO_LICENSE.txt"
+  ],
+  "scripts": {
+    "build": "rm -rf dist && tsdown && tsc -p tsconfig.dts.json",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --reporter=default --reporter=../shared/src/test-support/e2e-policy/retry-telemetry-reporter.ts",
+    "prepack": "pnpm build"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "catalog:cloudflare",
+    "iterate": "workspace:*",
+    "tsdown": "0.22.2",
+    "typescript": "^5.9.3",
+    "vitest": "4.0.15",
+    "zod": "4.5.4"
+  }
+}

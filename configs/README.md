@@ -6,6 +6,9 @@ Each child directory is a complete project config repository:
   as the fallback for API callers that omit a template reference.
 - `with-voice/` is a small alternate template used to prove public GitHub
   template creation end to end.
+- `voice-agent/` runs the realtime voice agent as a guest worker, pulled in
+  from the `@iterate-com/voice-agent` package rather than committed (see its
+  README).
 - `codemode-tag/` is the `<codemode status="...">` response-format
   experiment: its worker retargets agents to the platform's headless
   processor and interprets assistant output itself (see its README).

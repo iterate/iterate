@@ -150,6 +150,13 @@ import {
 import { z } from "zod";
 import { Pcm16Resampler } from "./pcm.ts";
 import { createFace } from "./face.ts";
+import type {
+  SetupVoiceAgentOptions,
+  SetupVoiceAgentResult,
+  VoiceAgentHealth,
+  VoiceAgentRpc,
+  VoiceProvider,
+} from "./setup-options.ts";
 
 /* ========================================================================== */
 /* CONSTANTS                                                                  */
@@ -157,9 +164,6 @@ import { createFace } from "./face.ts";
 
 const XAI_SECRET = "/secrets/xai";
 const OPENAI_SECRET = "/secrets/openai";
-
-/** A realtime voice provider this agent can dial. */
-export type VoiceProvider = "grok" | "openai";
 
 /**
  * EVERYTHING PROVIDER-SPECIFIC, IN ONE TABLE. Grok's realtime API is a
@@ -422,7 +426,7 @@ const COLLEAGUE_LINK_DEADLINE_MS = 25_000;
  * that quotes the current call back at itself is noise. Null when the chat
  * has said nothing yet.
  */
-export function chatRecapFromEvents(
+function chatRecapFromEvents(
   events: { type: string; payload?: Record<string, unknown> }[],
 ): string | null {
   const clip = (text: string) =>
@@ -586,7 +590,7 @@ function colleagueTranscriptSubscription(streamPath: string, colleaguePath: stri
  * the facet (notes, the colleague-side link) and setup (the transcript
  * subscription's target).
  */
-export function colleaguePathForStream(streamPath: string, certificatePath: string | null): string {
+function colleaguePathForStream(streamPath: string, certificatePath: string | null): string {
   if (certificatePath !== null) return certificatePath;
   const suffix = streamPath.startsWith("/agents/")
     ? streamPath.slice("/agents/".length)
@@ -4987,64 +4991,7 @@ function voiceAgentFacetRef(streamPath: string) {
 const WARMUP_DEADLINE_MS = 90_000;
 
 /** What setup needs to know to put this agent on a stream. */
-export interface SetupVoiceAgentOptions {
-  /** The conversation stream. A fresh /agents/voice/* path is generated when omitted. */
-  streamPath?: string;
-  /**
-   * Dial THIS instead of x.ai, for a deterministic test.
-   *
-   * NO CREDENTIAL FOLLOWS IT — see {@link secretForHost}: a host that is no
-   * known provider's gets no Authorization header and no setup gate.
-   */
-  providerBaseUrl?: string;
-  /** Which realtime voice provider the birth certificate names. Default grok. */
-  provider?: VoiceProvider;
-  /** Model and voice overrides for that provider. */
-  providerModel?: string;
-  providerVoice?: string;
-  /** What to tell the model it is. Empty leaves the provider's own default. */
-  instructions?: string;
-  /**
-   * This client segments its own turns with the push-to-talk verbs.
-   *
-   * Omitted means Grok listens, which is what every board wants. Say true only
-   * for a client that really does own its turns — a terminal holding the space
-   * bar — because on an open microphone it means Grok is never told a turn
-   * ended, and the call goes silent with nothing logged.
-   */
-  clientTakesTurns?: boolean;
-  /** The provider's own turn_detection object, verbatim, for open-mic VAD
-   * tuning per stream. Omitted takes the measured defaults. */
-  turnDetection?: Record<string, unknown> & { type: string };
-  /** Classify the answer into mouth shapes for a face-rendering client. */
-  visemes?: boolean;
-  /** Speak first when a call connects (contract 17.0.0). */
-  greeting?: boolean;
-  /** `note_to_self` writes to the stream's one colleague agent (per stream,
-   * not per conversation — contract 12.0.0) and its chat replies are read
-   * back into whichever call is live. ON unless explicitly false — every
-   * stream is born with its colleague (contract 10.0.0). */
-  colleague?: boolean;
-  /** Make an EXISTING agent (a chat) the colleague instead of the derived
-   * `/agents/voice-notes/...` desk — contract 18.0.0's "call any chat"
-   * mode. The call's transcript lands on that agent's stream and its every
-   * chat message is spoken into the live call. */
-  colleaguePath?: string;
-  /** Tools the model may call: name/description/parameters go to the
-   * provider; the itx expression is the run. No expression = hang_up. */
-  tools?: z.input<typeof VoiceTool>[];
-  /** Install the subscription under a fresh key even if an identical one exists. */
-  reinstall?: boolean;
-}
-
-/** What setup did, in enough detail for a caller to print it. */
-export interface SetupVoiceAgentResult {
-  streamPath: string;
-  /** Setup's own clock: batch appended to fold-through proven. Cold build included. */
-  warmMs: number;
-}
-
-export default class VoiceAgentEntrypoint extends IterateWorkerEntrypoint {
+export default class VoiceAgentEntrypoint extends IterateWorkerEntrypoint implements VoiceAgentRpc {
   /**
    * Prove this guest is built, running, and can reach its own project.
    *
@@ -5059,7 +5006,7 @@ export default class VoiceAgentEntrypoint extends IterateWorkerEntrypoint {
    * the projectId), and the wrong secret besides for an openai stream.
    * Setup is where the right secret is demanded, per provider.
    */
-  async health(): Promise<{ ok: true; projectId: string; buildCacheKey: string }> {
+  async health(): Promise<VoiceAgentHealth> {
     const project = await this.itx;
     return {
       ok: true,

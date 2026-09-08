@@ -604,6 +604,9 @@ importers:
       '@iterate-com/ui':
         specifier: workspace:*
         version: link:../../packages/ui
+      '@iterate-com/voice-agent':
+        specifier: workspace:*
+        version: link:../../packages/voice-agent
       '@noble/curves':
         specifier: ^2.2.0
         version: 2.2.0
@@ -887,7 +890,7 @@ importers:
         version: 1.28.4(@tanstack/react-start@1.168.25(crossws@0.4.4(srvx@0.11.12))(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(vite@8.0.9(@types/node@25.6.0)(esbuild@0.27.4)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)))(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       '@tanstack/react-form-devtools':
         specifier: ^0.2.19
-        version: 0.2.19(@types/react@19.2.17)(csstype@3.2.3)(preact@10.29.7)(react@19.2.7)(solid-js@1.9.11)(vue@3.5.30(typescript@5.9.3))
+        version: 0.2.19(@types/react@19.2.17)(csstype@3.2.3)(preact@11.0.0-beta.0)(react@19.2.7)(solid-js@1.9.11)(vue@3.5.30(typescript@5.9.3))
       '@tanstack/react-query':
         specifier: 5.101.2
         version: 5.101.2(react@19.2.7)
@@ -1006,6 +1009,9 @@ importers:
       '@iterate-com/docs':
         specifier: workspace:*
         version: link:../docs
+      '@iterate-com/voice-agent':
+        specifier: workspace:*
+        version: link:../../packages/voice-agent
       '@microsoft/tui-test':
         specifier: 0.0.4
         version: 0.0.4(@swc/helpers@0.5.19)
@@ -1686,6 +1692,27 @@ importers:
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
+
+  packages/voice-agent:
+    devDependencies:
+      '@cloudflare/workers-types':
+        specifier: catalog:cloudflare
+        version: 4.20260621.1(patch_hash=ae8908e1d45f2ea02ffeabf1230701598cc2878240ef700403ff76df72677af2)
+      iterate:
+        specifier: workspace:*
+        version: link:../iterate
+      tsdown:
+        specifier: 0.22.2
+        version: 0.22.2(@typescript/native-preview@7.0.0-dev.20260624.1)(oxc-resolver@11.19.1)(tsx@4.21.0)(typescript@5.9.3)
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: 4.0.15
+        version: 4.0.15(@opentelemetry/api@1.9.0)(@types/node@26.1.1)(@vitest/browser-playwright@4.0.15)(@vitest/ui@4.0.15)(jiti@2.7.0)(jsdom@27.4.0(@noble/hashes@2.2.0))(lightningcss@1.32.0)(msw@2.13.3(@types/node@26.1.1)(typescript@5.9.3))(terser@5.46.0)(tsx@4.21.0)(yaml@2.9.0)
+      zod:
+        specifier: 4.5.4
+        version: 4.5.4(patch_hash=bf04bb1ec1f0b9f31a7416bf98f83d3451e5011852877ca0ac19c12fcb3129b5)
 
   packages/workspace-documents:
     dependencies:
@@ -19154,10 +19181,10 @@ snapshots:
     transitivePeerDependencies:
       - csstype
 
-  '@tanstack/devtools-utils@0.4.0(@types/react@19.2.17)(preact@10.29.7)(react@19.2.7)(solid-js@1.9.11)(vue@3.5.30(typescript@5.9.3))':
+  '@tanstack/devtools-utils@0.4.0(@types/react@19.2.17)(preact@11.0.0-beta.0)(react@19.2.7)(solid-js@1.9.11)(vue@3.5.30(typescript@5.9.3))':
     optionalDependencies:
       '@types/react': 19.2.17
-      preact: 10.29.7(preact-render-to-string@6.6.5)
+      preact: 11.0.0-beta.0
       react: 19.2.7
       solid-js: 1.9.11
       vue: 3.5.30(typescript@5.9.3)
@@ -19234,10 +19261,10 @@ snapshots:
       '@tanstack/pacer-lite': 0.1.1
       '@tanstack/store': 0.9.3
 
-  '@tanstack/form-devtools@0.2.19(@types/react@19.2.17)(csstype@3.2.3)(preact@10.29.7)(react@19.2.7)(solid-js@1.9.11)(vue@3.5.30(typescript@5.9.3))':
+  '@tanstack/form-devtools@0.2.19(@types/react@19.2.17)(csstype@3.2.3)(preact@11.0.0-beta.0)(react@19.2.7)(solid-js@1.9.11)(vue@3.5.30(typescript@5.9.3))':
     dependencies:
       '@tanstack/devtools-ui': 0.5.1(csstype@3.2.3)(solid-js@1.9.11)
-      '@tanstack/devtools-utils': 0.4.0(@types/react@19.2.17)(preact@10.29.7)(react@19.2.7)(solid-js@1.9.11)(vue@3.5.30(typescript@5.9.3))
+      '@tanstack/devtools-utils': 0.4.0(@types/react@19.2.17)(preact@11.0.0-beta.0)(react@19.2.7)(solid-js@1.9.11)(vue@3.5.30(typescript@5.9.3))
       '@tanstack/form-core': 1.28.5
       clsx: 2.1.1
       dayjs: 1.11.19
@@ -19273,10 +19300,10 @@ snapshots:
       - solid-js
       - utf-8-validate
 
-  '@tanstack/react-form-devtools@0.2.19(@types/react@19.2.17)(csstype@3.2.3)(preact@10.29.7)(react@19.2.7)(solid-js@1.9.11)(vue@3.5.30(typescript@5.9.3))':
+  '@tanstack/react-form-devtools@0.2.19(@types/react@19.2.17)(csstype@3.2.3)(preact@11.0.0-beta.0)(react@19.2.7)(solid-js@1.9.11)(vue@3.5.30(typescript@5.9.3))':
     dependencies:
-      '@tanstack/devtools-utils': 0.4.0(@types/react@19.2.17)(preact@10.29.7)(react@19.2.7)(solid-js@1.9.11)(vue@3.5.30(typescript@5.9.3))
-      '@tanstack/form-devtools': 0.2.19(@types/react@19.2.17)(csstype@3.2.3)(preact@10.29.7)(react@19.2.7)(solid-js@1.9.11)(vue@3.5.30(typescript@5.9.3))
+      '@tanstack/devtools-utils': 0.4.0(@types/react@19.2.17)(preact@11.0.0-beta.0)(react@19.2.7)(solid-js@1.9.11)(vue@3.5.30(typescript@5.9.3))
+      '@tanstack/form-devtools': 0.2.19(@types/react@19.2.17)(csstype@3.2.3)(preact@11.0.0-beta.0)(react@19.2.7)(solid-js@1.9.11)(vue@3.5.30(typescript@5.9.3))
       react: 19.2.7
     transitivePeerDependencies:
       - '@types/react'
@@ -27092,11 +27119,6 @@ snapshots:
     dependencies:
       '@posthog/core': 1.43.1
 
-  preact-render-to-string@6.6.5(preact@10.29.7):
-    dependencies:
-      preact: 10.29.7(preact-render-to-string@6.6.5)
-    optional: true
-
   preact-render-to-string@6.6.5(preact@11.0.0-beta.0):
     dependencies:
       preact: 11.0.0-beta.0
@@ -27104,11 +27126,6 @@ snapshots:
   preact@10.29.7(preact-render-to-string@6.6.5(preact@11.0.0-beta.0)):
     optionalDependencies:
       preact-render-to-string: 6.6.5(preact@11.0.0-beta.0)
-
-  preact@10.29.7(preact-render-to-string@6.6.5):
-    optionalDependencies:
-      preact-render-to-string: 6.6.5(preact@10.29.7)
-    optional: true
 
   preact@11.0.0-beta.0: {}
 
@@ -27793,7 +27810,7 @@ snapshots:
     dependencies:
       '@babel/generator': 8.0.0-rc.6
       '@babel/helper-validator-identifier': 8.0.0-rc.6
-      '@babel/parser': 7.29.0
+      '@babel/parser': 7.29.7
       ast-kit: 3.0.0-beta.1
       birpc: 4.0.0
       dts-resolver: 3.0.0(oxc-resolver@11.19.1)

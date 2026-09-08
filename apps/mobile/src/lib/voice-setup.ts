@@ -6,12 +6,18 @@
 // every tap if repeated; a content-hash marker is the cheap idempotence).
 //
 // No posture-flip guard, deliberately: each line owns its path and only
-// ever sends one posture. The template DOES auto-install now (absent only
-// — see ensureVoiceAgentInstalled): a project that has never seen voice
-// gets the embedded guest worker committed during the ring, instead of an
-// eternal ring ending in a "needs setup" caption.
+// ever sends one posture. The agent DOES auto-install now (absent only —
+// see ensureVoiceAgentInstalled): a project that has never seen voice gets
+// @iterate-com/voice-agent declared in its config repo during the ring,
+// instead of an eternal ring ending in a "needs setup" caption.
 
-import { VOICE_AGENT_TEMPLATE_FILES } from "./voice-template.generated.ts";
+import {
+  installVoiceAgent,
+  type VoiceAgentConfigRepo,
+  voiceAgentEntrypointRef,
+} from "@iterate-com/voice-agent";
+
+export { voiceAgentEntrypointRef };
 
 /**
  * Where a CHAT's calls live: one line per chat, shared by every device —
@@ -26,19 +32,6 @@ export function chatVoiceStreamPath(chatPath: string): string {
     : chatPath.replace(/^\//, "");
   return `/agents/voice/chat/${suffix}`;
 }
-
-/** Mirrors apps/os/scripts/voicelab/voice-agent-ref.ts — the guest
- * entrypoint committed by `voicelab deploy`/`talk`, never worker.ts. */
-export const voiceAgentEntrypointRef = {
-  path: "/",
-  source: {
-    createWorker: {
-      entryPoint: "voice-agent.ts",
-      files: { repoPath: "/repos/config", type: "repo" },
-    },
-  },
-  type: "stateless",
-};
 
 /**
  * The birth certificate this app asserts. Push-to-talk (clientTakesTurns:
@@ -109,31 +102,23 @@ export interface VoiceSetupWorkers {
   };
 }
 
-/** The slice of the config-repo handle the auto-install dials — the same
- * two calls apps/os/scripts/voicelab/deploy.ts makes. */
-export interface VoiceSetupRepo {
-  readFile(input: { path: string }): Promise<{ content?: string } | string | null>;
-  commitFiles(input: {
-    changes: { content: string; path: string }[];
-    message: string;
-  }): Promise<unknown>;
-}
+/** The slice of the config-repo handle the auto-install dials. */
+export type VoiceSetupRepo = VoiceAgentConfigRepo;
 
 /**
- * Put the embedded voice-agent template into the project's config repo when
- * it has none — the fresh/recycled-project case that used to be an eternal
+ * Declare @iterate-com/voice-agent in the project's config repo when it is
+ * not there — the fresh/recycled-project case that used to be an eternal
  * ring ending in "the project may need voice set up" (Misha, on-device,
- * 2026-08-28). ABSENT ONLY: a present voice-agent.ts is left alone whatever
- * its version — `voicelab deploy` owns upgrades, and an app must never
- * downgrade a project's template to the one it happened to ship with.
+ * 2026-08-28). ABSENT ONLY: a declaration that is already there is left
+ * alone whatever it pins — `voicelab deploy` owns upgrades, and an app must
+ * never move a project off a version somebody chose. Which build then runs
+ * is the platform's: it pins every such spec to the ref it deployed with,
+ * so the app no longer ships (or chooses) a copy of the agent.
  */
 export async function ensureVoiceAgentInstalled(repo: VoiceSetupRepo): Promise<void> {
-  const existing = await repo.readFile({ path: "voice-agent.ts" }).catch(() => null);
-  const content = typeof existing === "string" ? existing : existing?.content;
-  if (typeof content === "string" && content !== "") return;
-  await repo.commitFiles({
-    changes: VOICE_AGENT_TEMPLATE_FILES,
-    message: "mobile: auto-install the voice-agent template (first call)",
+  await installVoiceAgent(repo, {
+    existing: "keep",
+    message: "mobile: depend on @iterate-com/voice-agent (first call)",
   });
 }
 
