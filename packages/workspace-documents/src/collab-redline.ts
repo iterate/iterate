@@ -191,7 +191,7 @@ export function redlineExtension(connection: CollabConnection) {
       message = "Loading changes…";
       /** Version-mismatch retries since the last edit: when the peer is stuck
        * (too-large, prolonged recovery) the layer must not poll changes()
-       * forever — it goes quiet until the next docChanged. */
+       * forever — it goes quiet until the next edit or delivery. */
       futile = 0;
 
       constructor(readonly view: EditorView) {
@@ -229,7 +229,7 @@ export function redlineExtension(connection: CollabConnection) {
           this.render(update.state);
         }
         this.futile = 0;
-        if (update.docChanged) {
+        if (update.docChanged || this.message) {
           if (this.timer) clearTimeout(this.timer);
           this.timer = setTimeout(() => void this.refresh(), REFRESH_DEBOUNCE_MS);
         }

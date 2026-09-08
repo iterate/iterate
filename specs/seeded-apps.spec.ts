@@ -275,6 +275,11 @@ test("review a workspace document in the seeded Docs app", async ({ baseURL, pag
     .waitFor();
   await commentsPanel.getByRole("heading", { name: "Selected text", exact: true }).waitFor();
 
+  // Comments render optimistically, just like typing. Wait for the shared
+  // editor protocol to persist both edits before checking durable source.
+  await expect
+    .poll(async () => readReview((await workspace.readFile(documentPath))!).threads.length)
+    .toBe(2);
   const saved = await workspace.readFile(documentPath);
   expect(saved).not.toBeNull();
   const review = readReview(saved!);

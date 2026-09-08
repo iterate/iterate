@@ -2,7 +2,7 @@
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { EditorView } from "@codemirror/view";
-import { collab } from "@codemirror/collab";
+import { collab, receiveUpdates, sendableUpdates } from "@codemirror/collab";
 import type { Extension } from "@codemirror/state";
 import {
   CollabConnection,
@@ -17,6 +17,48 @@ import type {
   WorkspaceDocumentTransport,
 } from "@iterate-com/workspace-documents/types";
 import { expect, test, vi } from "vitest";
+
+test("an acknowledgement retries redline loading after version mismatches exhaust retries", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  const connection = new CollabConnection({ run: vi.fn(), runOnce: vi.fn() }, "/notes.md");
+  const changes = vi.spyOn(connection, "changes").mockResolvedValue({
+    baseContent: "a",
+    baseVersion: 0,
+    headVersion: 1,
+    deleted: [],
+    inserted: [{ from: 1, to: 2, clientId: "mine" }],
+  });
+  const host = document.createElement("div");
+  document.body.appendChild(host);
+  const view = new EditorView({
+    parent: host,
+    doc: "a",
+    extensions: [collab({ clientID: "mine" }), redlineExtension(connection)],
+  });
+  try {
+    view.dispatch({ changes: { from: 1, insert: "b" } });
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(host.querySelector('[role="status"]')?.textContent).toContain("has not caught up");
+    const sent = sendableUpdates(view.state)[0]!;
+    connection.stageDeliveredOps([{ changes: sent.changes.toJSON(), clientId: "mine" }]);
+    const acknowledgement = receiveUpdates(view.state, [
+      { changes: sent.changes, clientID: "mine" },
+    ]);
+    expect(acknowledgement.docChanged).toBe(false);
+    const requestsBeforeAck = changes.mock.calls.length;
+    view.dispatch(acknowledgement);
+    connection.takeDeliveredOps();
+    await vi.advanceTimersByTimeAsync(500);
+    expect(changes.mock.calls.length).toBe(requestsBeforeAck + 1);
+    expect(host.querySelector<HTMLElement>('[role="status"]')?.hidden).toBe(true);
+    expect(host.querySelector(".cm-redline-ins")?.textContent).toBe("b");
+  } finally {
+    view.destroy();
+    host.remove();
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  }
+});
 
 test.for(["loaded", "failed"])("redlines expose their loading and %s state", async (outcome) => {
   const response = Promise.withResolvers<CollabChanges>();
