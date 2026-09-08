@@ -185,6 +185,14 @@ export class CollabConnection {
 
 const MAX_BACKOFF_MS = 10_000;
 const backoff = (attempt: number) => Math.min(500 * 2 ** attempt, MAX_BACKOFF_MS);
+/**
+ * How many consecutive failed polls before the pull loop stops re-polling the
+ * same version and re-opens the session from scratch. A short drop (a deploy,
+ * a sleep) is ridden out by the next wait(); past this the session itself may
+ * be gone server-side (idle-swept, evicted), and only a fresh open() recovers
+ * it — re-polling a stale version would fail forever.
+ */
+const REOPEN_AFTER_FAILURES = 3;
 
 /** The peer extension: collab state + the push/pull loops (official CM6
  * collab example shape, with capnweb long-poll as the transport). */
@@ -235,7 +243,9 @@ export function peerExtension(connection: CollabConnection, startVersion: number
           }
         } catch (error) {
           this.failures++;
-          connection.onStatus(`push retry ${this.failures}: ${message(error)}`);
+          connection.onStatus(
+            `push retry ${this.failures}: ${error instanceof Error ? error.message : String(error)}`,
+          );
           await sleep(backoff(this.failures));
         }
         this.pushing = false;
@@ -301,18 +311,48 @@ export function peerExtension(connection: CollabConnection, startVersion: number
               this.recovering = false;
               void this.push();
             }
-          } catch (error) {
+          } catch {
             if (this.done) break;
             // Reconnect for as long as the editor is open. A multi-hour
             // multiplayer session outlives deploys, evictions, and laptop
-            // sleeps; the pull long-poll must ride every one of them out
-            // rather than declaring the session dead after a fixed count.
-            // The genuinely terminal cases end the loop elsewhere: a deleted
-            // or replaced file ("ended" above), and a signed-out re-dial,
-            // which navigates to sign-in. Backoff is capped, so a sustained
-            // outage settles into one quiet retry every MAX_BACKOFF_MS.
+            // sleeps; the pull long-poll rides every one of them out rather
+            // than declaring the session dead after a fixed count. A deleted
+            // or replaced file ("ended" above) and a signed-out re-dial (which
+            // navigates to sign-in) are the only terminals.
             this.failures++;
             connection.onStatus(`reconnecting (${this.failures})…`);
+            // Past a few failed polls the session may be gone server-side, so
+            // re-open it: a fresh snapshot recovers a swept session where
+            // re-polling the old version fails forever. Unsynced local edits
+            // cannot be rebased onto a snapshot that never saw them, so they
+            // are surfaced, never guessed into other people's document. A
+            // reopen that also fails is a real outage — fall through and keep
+            // retrying with capped backoff.
+            if (this.failures >= REOPEN_AFTER_FAILURES) {
+              try {
+                const reopened = await connection.open();
+                if (this.done) break;
+                let lost = "";
+                for (const update of sendableUpdates(this.view.state)) {
+                  update.changes.iterChanges((_fromA, _toA, _fromB, _toB, text) => {
+                    if (text.length > 0) lost += (lost === "" ? "" : "\n") + text.toString();
+                  });
+                }
+                this.done = true;
+                connection.onReseed(
+                  {
+                    ackedSeq: 0,
+                    content: reopened.content,
+                    epoch: connection.epoch,
+                    version: reopened.version,
+                  },
+                  lost === "" ? null : lost,
+                );
+                return;
+              } catch {
+                // Reopen failed too — a real outage; keep retrying below.
+              }
+            }
             await sleep(backoff(this.failures));
           }
         }
@@ -344,4 +384,3 @@ export function peerExtension(connection: CollabConnection, startVersion: number
 }
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-const message = (error: unknown) => (error instanceof Error ? error.message : String(error));
