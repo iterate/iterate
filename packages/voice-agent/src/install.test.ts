@@ -52,8 +52,14 @@ describe("withVoiceAgentDependency", () => {
       devDependencies: { typescript: "^5" },
     });
     /* The layout the platform itself writes, so a later platform rewrite
-     * produces no spurious diff. */
+     * produces no spurious diff — and the keys stay in the file's own order. */
     expect(after.content.endsWith("}\n")).toBe(true);
+    expect(Object.keys(JSON.parse(after.content))).toEqual([
+      "name",
+      "private",
+      "dependencies",
+      "devDependencies",
+    ]);
   });
 
   it("creates the dependencies field when there is none", () => {
@@ -91,7 +97,10 @@ describe("withVoiceAgentDependency", () => {
     expect(() => withVoiceAgentDependency("[]", { existing: "keep" })).toThrow(/JSON object/);
     expect(() =>
       withVoiceAgentDependency(`{"dependencies":["iterate"]}`, { existing: "keep" }),
-    ).toThrow(/dependencies must be an object/);
+    ).toThrow(/dependencies must map names to specs/);
+    expect(() =>
+      withVoiceAgentDependency(`{"dependencies":{"iterate":1}}`, { existing: "keep" }),
+    ).toThrow(/dependencies must map names to specs/);
   });
 });
 

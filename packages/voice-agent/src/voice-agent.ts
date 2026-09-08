@@ -134,12 +134,7 @@
  * rather than half-moved. `grok-event` still carries every provider stamp an
  * instrument needs, minus the mic-frame gap histogram, which did not survive.)
  */
-import {
-  IterateWorkerEntrypoint,
-  StreamProcessorFacet,
-  type ProcessorHostDeps,
-  type StatefulDynamicWorkerRef,
-} from "iterate/sdk";
+import { IterateWorkerEntrypoint, StreamProcessorFacet, type ProcessorHostDeps } from "iterate/sdk";
 import { disposeIgnoredRpcResult } from "iterate/sdk/capnweb";
 import {
   defineProcessorContract,
@@ -150,6 +145,11 @@ import {
 import { z } from "zod";
 import { Pcm16Resampler } from "./pcm.ts";
 import { createFace } from "./face.ts";
+/* Where the loader finds this facet — the ONE spelling, shared with every
+ * caller that addresses it: the package build inside node_modules, never a
+ * file in the config repo. The key names the durable worker, so it is
+ * load-bearing rather than cosmetic. */
+import { voiceAgentFacetRef } from "./ref.ts";
 import type {
   SetupVoiceAgentOptions,
   SetupVoiceAgentResult,
@@ -4963,28 +4963,6 @@ function disposeRpcStub(value: unknown, label: string): void {
   } catch (error) {
     console.error("voice-agent RPC stub disposal failed", { error, label });
   }
-}
-
-/**
- * Where the loader finds this facet: this file, in the project's config repo.
- *
- * The key names the durable worker, so it is load-bearing rather than
- * cosmetic: a second class claiming the same key would be two classes
- * claiming one identity.
- */
-function voiceAgentFacetRef(streamPath: string) {
-  return {
-    className: "VoiceAgentFacet",
-    durableWorkerKey: "voice-agent-facet",
-    path: streamPath,
-    source: {
-      createWorker: {
-        entryPoint: "voice-agent.ts",
-        files: { repoPath: "/repos/config", type: "repo" },
-      },
-    },
-    type: "stateful",
-  } satisfies StatefulDynamicWorkerRef;
 }
 
 /** How long setup's fold-through barrier waits. A cold facet build is most of it. */

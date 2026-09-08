@@ -9,6 +9,8 @@
  * copy then aged on its own.
  */
 
+import { z } from "zod";
+
 export const VOICE_AGENT_PACKAGE_NAME = "@iterate-com/voice-agent";
 
 /**
@@ -58,32 +60,33 @@ export interface InstallVoiceAgentResult {
   spec: string;
 }
 
-interface Manifest extends Record<string, unknown> {
-  dependencies?: Record<string, string>;
-}
+/** A package.json as JSON.parse hands it over: an object, keys in file order. */
+const PackageManifest = z.record(z.string(), z.unknown());
+/** The dependencies map: package names to specs. */
+const DependencySpecs = z.record(z.string(), z.string());
 
-/** package.json as an object, or an error that says what is wrong with it. */
-function parseManifest(content: string): Manifest {
-  let parsed: unknown;
+/** package.json checked at the boundary, or an error that says what is wrong with it. */
+function parseManifest(content: string): {
+  manifest: Record<string, unknown>;
+  dependencies: Record<string, string>;
+} {
+  let json: unknown;
   try {
-    parsed = JSON.parse(content);
+    json = JSON.parse(content);
   } catch (error) {
     throw new Error(`package.json is not valid JSON: ${String(error)}`);
   }
-  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error("package.json must hold a JSON object");
+  const manifest = PackageManifest.safeParse(json);
+  if (!manifest.success) {
+    throw new Error(`package.json must hold a JSON object: ${z.prettifyError(manifest.error)}`);
   }
-  /* Narrowed to a plain object just above; only `dependencies` is read, and
-   * it gets its own check next. */
-  const manifest = parsed as Manifest;
-  const { dependencies } = manifest;
-  if (
-    dependencies !== undefined &&
-    (dependencies === null || typeof dependencies !== "object" || Array.isArray(dependencies))
-  ) {
-    throw new Error("package.json dependencies must be an object");
+  const dependencies = DependencySpecs.optional().safeParse(manifest.data.dependencies);
+  if (!dependencies.success) {
+    throw new Error(
+      `package.json dependencies must map names to specs: ${z.prettifyError(dependencies.error)}`,
+    );
   }
-  return manifest;
+  return { manifest: manifest.data, dependencies: dependencies.data ?? {} };
 }
 
 /**
@@ -95,17 +98,14 @@ export function withVoiceAgentDependency(
   packageJson: string,
   options: InstallVoiceAgentOptions,
 ): { content: string; spec: string; changed: boolean } {
-  const manifest = parseManifest(packageJson);
+  const { manifest, dependencies } = parseManifest(packageJson);
   const wanted = options.spec ?? VOICE_AGENT_PACKAGE_SPEC;
-  const declared = manifest.dependencies?.[VOICE_AGENT_PACKAGE_NAME];
+  const declared = dependencies[VOICE_AGENT_PACKAGE_NAME];
   if (declared !== undefined && (declared === wanted || options.existing === "keep")) {
     return { content: packageJson, spec: declared, changed: false };
   }
   const content = JSON.stringify(
-    {
-      ...manifest,
-      dependencies: { ...manifest.dependencies, [VOICE_AGENT_PACKAGE_NAME]: wanted },
-    },
+    { ...manifest, dependencies: { ...dependencies, [VOICE_AGENT_PACKAGE_NAME]: wanted } },
     null,
     2,
   );
