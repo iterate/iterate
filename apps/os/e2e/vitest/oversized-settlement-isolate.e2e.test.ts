@@ -39,8 +39,17 @@ failReset("a stream survives being evicted after journaling oversized events", a
     });
   }
 
-  // .kill() aborts like a platform eviction (abort reported through the call and touches no storage.
-  await expect(stream.kill(), "kill() reports its own abort").rejects.toThrow(/kill requested/);
+  // kill() aborts like a platform eviction, without touching storage. The isolate
+  // can already be out of memory when this call arrives. Preserve that original
+  // error for failReset: rejects.toThrow wraps and truncates it, hiding the pin.
+  await stream.kill().then(
+    () => {
+      throw new Error("kill() should reject with its own abort");
+    },
+    (error: unknown) => {
+      if (!/kill requested/i.test(String(error))) throw error;
+    },
+  );
 
   // Read a few times. Each read filtered to small wake events, so the cost is the boot, not the response.
   // A boot that dies replaying the journal throws the ooom+reset instead - a bad bug, at least on 2026-09-04.
