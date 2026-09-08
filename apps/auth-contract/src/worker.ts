@@ -55,6 +55,10 @@ export type MintProjectAppSessionInput = {
   email?: string;
   /** Avatar URL, same display-only status as email/name. */
   image?: string;
+  /** When this member last signed in through the platform, in seconds. A
+   * renewal carries the original forward so a session's total age is
+   * bounded however often it renews; a fresh login leaves it unset. */
+  loginAt?: number;
   name?: string;
   projectId: string;
   userId: string;
@@ -66,9 +70,16 @@ export type ValidateProjectAppSessionInput = {
   token: string;
 };
 
-/** The actor proven by a project-app session after its live membership check. */
+/** The actor proven by a project-app session after its live membership check.
+ * The display identity rides along so a renewing gate can re-mint the same
+ * claims without decoding the token itself. */
 export type ValidatedProjectAppSession = {
+  email?: string;
   expiresAt: number;
+  image?: string;
+  /** The sign-in this session descends from, in seconds (see MintProjectAppSessionInput). */
+  loginAt: number;
+  name?: string;
   userId: string;
 };
 
@@ -108,7 +119,7 @@ export abstract class AuthWorker<Env = unknown> extends WorkerEntrypoint<Env> {
   }>;
   abstract mintProjectAppSession(
     input: MintProjectAppSessionInput,
-  ): Promise<{ token: string } | null>;
+  ): Promise<{ expiresAt: number; token: string } | null>;
   abstract validateProjectAppSession(
     input: ValidateProjectAppSessionInput,
   ): Promise<ValidatedProjectAppSession | null>;

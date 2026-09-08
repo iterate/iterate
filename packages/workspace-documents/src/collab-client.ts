@@ -254,7 +254,12 @@ export function peerExtension(connection: CollabConnection, startVersion: number
             // react-doctor-disable-next-line react-doctor/js-cache-property-access
             const result = await connection.wait(getSyncedVersion(this.view.state));
             if (this.done) break;
-            this.failures = 0;
+            if (this.failures > 0) {
+              // Back after "reconnecting (n)…": say so, or the badge would
+              // report a dead session that is in fact syncing again.
+              this.failures = 0;
+              connection.onStatus(`live · v${getSyncedVersion(this.view.state)}`);
+            }
             if (result.status === "ended") {
               // The file was deleted/replaced/reset: the session is gone for
               // everyone. Surface it and stop — reopening is a page decision.
@@ -315,8 +320,12 @@ export function peerExtension(connection: CollabConnection, startVersion: number
         // Best-effort final flush: unpushed edits still in the doc would die
         // with the view (the board may already show them via the live
         // reflector). Safe to fire even beside an in-flight push — the
-        // server dedupes by (clientId, clientSeq).
-        if (!this.done && !this.recovering) {
+        // server dedupes by (clientId, clientSeq). Deliberately also after
+        // the loops gave up (`done`): a Reconnect remount is exactly when
+        // those edits are worth one more try over the shared session, which
+        // may have been re-dialed since. Only a reseed in flight is skipped —
+        // its pending edits are positionally meaningless.
+        if (!this.recovering) {
           const pending = sendableUpdates(this.view.state);
           if (pending.length > 0) {
             // ONE quiet try on the live session: a failure here must never

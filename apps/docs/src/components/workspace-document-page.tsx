@@ -23,7 +23,12 @@ import { authorColor, authorLabel } from "@iterate-com/workspace-documents/colla
 import { commentIdentityFor } from "@iterate-com/workspace-documents/identity";
 import { MarkdownDocumentPreview } from "@iterate-com/workspace-documents/preview";
 import type { WorkspaceDocumentTransport } from "@iterate-com/workspace-documents/types";
-import { withDocsProject, withDocsProjectOnce } from "../lib/docs-client.ts";
+import {
+  isSessionTransportError,
+  withDocsProject,
+  withDocsProjectOnce,
+} from "../lib/docs-client.ts";
+import { withRetries } from "../lib/retry.ts";
 import type { DocsUser, WorkspaceDocumentSnapshot } from "../lib/docs-api.ts";
 import { DocumentError } from "./document-error.tsx";
 import { HtmlDocumentPreview } from "./html-document-preview.tsx";
@@ -46,6 +51,12 @@ export function WorkspaceDocumentPage({
     user: DocsUser;
   } | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  // Bumped by the error page's Try again: the load effect runs once more.
+  const [loadAttempt, setLoadAttempt] = useState(0);
+  // Bumped by Reconnect: the editor remounts (its teardown flushes what it
+  // still holds; the new one reopens the session) — never a page reload,
+  // which would drop unsent edits on the floor.
+  const [editorEpoch, setEditorEpoch] = useState(0);
   const [source, setSource] = useState("");
   const [view, setView] = useState<"preview" | "source">("preview");
   const [status, setStatus] = useState("connecting…");
@@ -64,11 +75,19 @@ export function WorkspaceDocumentPage({
     setLoaded(null);
     setLoadError(null);
     setSelectedThreadId(null);
-    void withDocsProject(async (project) => {
-      const workspace = project.workspace(workspacePath);
-      const [snapshot, user] = await Promise.all([workspace.inspect(path), project.whoami()]);
-      return { snapshot, user };
-    })
+    // A transport failure here is a socket that died under us (a laptop
+    // waking, a colo hiccup): the shared client re-dials, and this waits
+    // out a network that is still coming back. An application error (no
+    // such document) is final at once.
+    void withRetries(
+      () =>
+        withDocsProject(async (project) => {
+          const workspace = project.workspace(workspacePath);
+          const [snapshot, user] = await Promise.all([workspace.inspect(path), project.whoami()]);
+          return { snapshot, user };
+        }),
+      { attempts: 3, delayMs: (attempt) => attempt * 1_500, shouldRetry: isSessionTransportError },
+    )
       .then((result) => {
         if (cancelled) return;
         setSource(result.snapshot.content);
@@ -82,7 +101,7 @@ export function WorkspaceDocumentPage({
     return () => {
       cancelled = true;
     };
-  }, [path, workspacePath]);
+  }, [path, workspacePath, loadAttempt]);
 
   const transport = useMemo<WorkspaceDocumentTransport>(
     () => ({
@@ -125,7 +144,14 @@ export function WorkspaceDocumentPage({
   };
 
   if (loadError !== null) {
-    return <DocumentError workspacePath={workspacePath} path={path} message={loadError} />;
+    return (
+      <DocumentError
+        workspacePath={workspacePath}
+        path={path}
+        message={loadError}
+        onRetry={() => setLoadAttempt((attempt) => attempt + 1)}
+      />
+    );
   }
   if (loaded === null) {
     return (
@@ -173,6 +199,23 @@ export function WorkspaceDocumentPage({
           >
             {status}
           </span>
+          {/* The editor could not open, or its sync loop gave up (a long
+              outage): remount it. Its teardown pushes whatever it still
+              holds over the shared session (which may have been re-dialed
+              since), and the fresh editor reopens from the server. */}
+          {status.startsWith("disconnected") || status.startsWith("failed") ? (
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-8 text-xs"
+              onClick={() => {
+                setStatus("connecting…");
+                setEditorEpoch((epoch) => epoch + 1);
+              }}
+            >
+              Reconnect
+            </Button>
+          ) : null}
           <WithTooltip label="Comment on document">
             <Button
               size="sm"
@@ -264,6 +307,7 @@ export function WorkspaceDocumentPage({
               }
             >
               <WorkspaceDocumentEditor
+                key={editorEpoch}
                 transport={transport}
                 displayName={displayName}
                 path={path}
