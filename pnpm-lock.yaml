@@ -1694,7 +1694,7 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
 
-  packages/v3/control-plane:
+  packages/v3/project-worker:
     dependencies:
       '@cloudflare/workers-oauth-provider':
         specifier: ^0.8.3
@@ -1702,68 +1702,18 @@ importers:
       '@modelcontextprotocol/server':
         specifier: 2.0.0
         version: 2.0.0
-      '@v3/shared':
-        specifier: workspace:*
-        version: link:../shared
-      capnweb:
-        specifier: npm:@iterate-com/capnweb@0.10.0
-        version: '@iterate-com/capnweb@0.10.0'
-      sqlfu:
-        specifier: 0.1.1
-        version: 0.1.1(@opentelemetry/api@1.9.0)(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(better-auth@1.6.9(@cloudflare/workers-types@4.20260621.1(patch_hash=ae8908e1d45f2ea02ffeabf1230701598cc2878240ef700403ff76df72677af2))(@opentelemetry/api@1.9.0)(@tanstack/react-start@1.168.25(crossws@0.4.4(srvx@0.11.12))(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(vite@7.3.1(@types/node@26.1.1)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.9.0)))(mysql2@3.18.2(@types/node@26.1.1))(pg@8.19.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(solid-js@1.9.11)(vitest@4.0.15)(vue@3.5.30(typescript@5.9.3)))(crossws@0.4.4(srvx@0.11.12))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(ws@8.19.0)
-    devDependencies:
-      '@cloudflare/workers-types':
-        specifier: ^4.20260621.1
-        version: 4.20260621.1(patch_hash=ae8908e1d45f2ea02ffeabf1230701598cc2878240ef700403ff76df72677af2)
-      miniflare:
-        specifier: catalog:cloudflare
-        version: 4.20260701.0
-      typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
-      vitest:
-        specifier: 4.0.15
-        version: 4.0.15(@opentelemetry/api@1.9.0)(@types/node@26.1.1)(@vitest/browser-playwright@4.0.15)(@vitest/ui@4.0.15)(jiti@2.7.0)(jsdom@27.4.0(@noble/hashes@2.2.0))(lightningcss@1.32.0)(msw@2.13.3(@types/node@26.1.1)(typescript@5.9.3))(terser@5.46.0)(tsx@4.21.0)(yaml@2.9.0)
-      wrangler:
-        specifier: 4.107.0
-        version: 4.107.0(@cloudflare/workers-types@4.20260621.1(patch_hash=ae8908e1d45f2ea02ffeabf1230701598cc2878240ef700403ff76df72677af2))
-
-  packages/v3/control-plane-shell:
-    dependencies:
-      '@v3/shared':
-        specifier: workspace:*
-        version: link:../shared
-      sqlfu:
-        specifier: 0.1.1
-        version: 0.1.1(@opentelemetry/api@1.9.0)(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(better-auth@1.6.9(@cloudflare/workers-types@4.20260621.1(patch_hash=ae8908e1d45f2ea02ffeabf1230701598cc2878240ef700403ff76df72677af2))(@opentelemetry/api@1.9.0)(@tanstack/react-start@1.168.25(crossws@0.4.4(srvx@0.11.12))(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(vite@7.3.1(@types/node@26.1.1)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.9.0)))(mysql2@3.18.2(@types/node@26.1.1))(pg@8.19.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(solid-js@1.9.11)(vitest@4.0.15)(vue@3.5.30(typescript@5.9.3)))(crossws@0.4.4(srvx@0.11.12))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(ws@8.19.0)
-    devDependencies:
-      '@cloudflare/workers-types':
-        specifier: ^5.20260831.1
-        version: 5.20260901.1
-      '@types/node':
-        specifier: ^24.0.0
-        version: 24.12.4
-      project-worker:
-        specifier: workspace:*
-        version: link:../project-worker
-      typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
-      wrangler:
-        specifier: 4.107.0
-        version: 4.107.0(@cloudflare/workers-types@5.20260901.1)
-
-  packages/v3/project-worker:
-    dependencies:
-      '@v3/shared':
-        specifier: workspace:*
-        version: link:../shared
       capnweb:
         specifier: npm:@iterate-com/capnweb@0.12.2
         version: '@iterate-com/capnweb@0.12.2'
       json5:
         specifier: ^2.2.3
         version: 2.2.3
+      pako:
+        specifier: ^3.0.1
+        version: 3.0.1
+      sqlfu:
+        specifier: 0.1.1
+        version: 0.1.1(@opentelemetry/api@1.9.0)(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(better-auth@1.6.9(@cloudflare/workers-types@4.20260621.1(patch_hash=ae8908e1d45f2ea02ffeabf1230701598cc2878240ef700403ff76df72677af2))(@opentelemetry/api@1.9.0)(@tanstack/react-start@1.168.25(crossws@0.4.4(srvx@0.11.12))(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(vite@7.3.1(@types/node@26.1.1)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.9.0)))(mysql2@3.18.2(@types/node@26.1.1))(pg@8.19.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(solid-js@1.9.11)(vitest@4.0.15)(vue@3.5.30(typescript@5.9.3)))(crossws@0.4.4(srvx@0.11.12))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(ws@8.19.0)
       zod:
         specifier: ^4.1.5
         version: 4.3.6
@@ -1774,6 +1724,9 @@ importers:
       '@cloudflare/workers-types':
         specifier: ^5.20260831.1
         version: 5.20260901.1
+      '@types/pako':
+        specifier: ^2.0.4
+        version: 2.0.4
       '@types/react':
         specifier: ^19.2.17
         version: 19.2.17
@@ -1783,6 +1736,9 @@ importers:
       esbuild:
         specifier: ^0.27.4
         version: 0.27.4
+      miniflare:
+        specifier: catalog:cloudflare
+        version: 4.20260701.0
       react:
         specifier: ^19.2.7
         version: 19.2.7
@@ -1798,22 +1754,6 @@ importers:
       wrangler:
         specifier: 4.127.1
         version: 4.127.1(@cloudflare/workers-types@5.20260901.1)
-
-  packages/v3/shared:
-    dependencies:
-      pako:
-        specifier: ^3.0.1
-        version: 3.0.1
-    devDependencies:
-      '@cloudflare/workers-types':
-        specifier: ^5.20260831.1
-        version: 5.20260901.1
-      '@types/pako':
-        specifier: ^2.0.4
-        version: 2.0.4
-      typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
 
   packages/workspace-documents:
     dependencies:
