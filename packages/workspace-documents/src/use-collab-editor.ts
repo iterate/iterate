@@ -162,6 +162,24 @@ export function useCollabEditor(input: {
         if (apiRef !== undefined) {
           const live = view;
           apiRef.current = {
+            applyExactTransform: async (transform) => {
+              if (connection.dead) return "unavailable";
+              if (sendableUpdates(live.state).length > 0) return "pending";
+              const current = live.state.doc.toString();
+              const next = transform(current);
+              if (next === current) return "accepted";
+              const result = await transport.runOnce((collab) =>
+                collab.applyIfUnchanged(
+                  workspacePath,
+                  current,
+                  next,
+                  `${connection.clientId}-review`,
+                ),
+              );
+              if (result.status === "accepted") return "accepted";
+              if (result.status === "conflict") return "conflict";
+              return "too-large";
+            },
             applyTransform: (transform) => {
               const current = live.state.doc.toString();
               const next = transform(current);

@@ -11,6 +11,7 @@ import {
 import type {
   CollabAcceptResult,
   CollabChanges,
+  CollabExactApplyResult,
   CollabOpened,
   CollabWaitResult,
 } from "@iterate-com/workspace-documents/types";
@@ -382,6 +383,18 @@ class DocsWorkspaceApi extends RpcTarget implements DocsWorkspace {
     return this.#withWorkspace((workspace) => workspace.collab.changes(path));
   }
 
+  async applyIfUnchanged(
+    rawPath: string,
+    expectedContent: string,
+    nextContent: string,
+    author?: string,
+  ): Promise<CollabExactApplyResult> {
+    const path = resolveDocumentPath(this.#workspacePath, rawPath);
+    return this.#withExistingDocument(path, (workspace) =>
+      workspace.collab.applyIfUnchanged(path, expectedContent, nextContent, author),
+    );
+  }
+
   async push(input: {
     baseVersion: number;
     clientId: string;
@@ -447,6 +460,12 @@ type WorkspaceDocumentStub = {
   collab: {
     open(path: string): Promise<CollabOpened>;
     changes(path: string): Promise<CollabChanges>;
+    applyIfUnchanged(
+      path: string,
+      expectedContent: string,
+      nextContent: string,
+      author?: string,
+    ): Promise<CollabExactApplyResult>;
     push(input: {
       baseVersion: number;
       clientId: string;

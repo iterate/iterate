@@ -12,8 +12,8 @@ import { Button } from "@iterate-com/ui/components/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@iterate-com/ui/components/tooltip";
 import { SidebarTrigger } from "@iterate-com/ui/components/sidebar";
 import { Spinner } from "@iterate-com/ui/components/spinner";
-import { DocumentComments } from "@iterate-com/workspace-documents/comments";
-import type { DocumentCommentsHandle } from "@iterate-com/workspace-documents/comments";
+import { DocumentComments } from "@iterate-com/ui/components/document-comments";
+import type { DocumentCommentsHandle } from "@iterate-com/ui/components/document-comments";
 import type { CollabEditorApi } from "@iterate-com/workspace-documents/editor-api";
 import {
   annotationsSourceForHtmlDocument,
@@ -21,7 +21,14 @@ import {
 } from "@iterate-com/workspace-documents/html-annotations";
 import { authorColor, authorLabel } from "@iterate-com/workspace-documents/collab";
 import { commentIdentityFor } from "@iterate-com/workspace-documents/identity";
-import { MarkdownDocumentPreview } from "@iterate-com/workspace-documents/preview";
+import { DocumentPreview } from "@iterate-com/ui/components/document-preview";
+import { useDocumentReview } from "@iterate-com/workspace-documents/review";
+import {
+  Drawer,
+  DrawerContent,
+  DrawerHeader,
+  DrawerTitle,
+} from "@iterate-com/ui/components/drawer";
 import type { WorkspaceDocumentTransport } from "@iterate-com/workspace-documents/types";
 import { withDocsProject, withDocsProjectOnce } from "../lib/docs-client.ts";
 import type { DocsUser, WorkspaceDocumentSnapshot } from "../lib/docs-api.ts";
@@ -50,7 +57,7 @@ export function WorkspaceDocumentPage({
   const [view, setView] = useState<"preview" | "source">("preview");
   const [status, setStatus] = useState("connecting…");
   const [showChanges, setShowChanges] = useState(false);
-  const [selectedThreadId, setSelectedThreadId] = useState<string | null>(null);
+  const [commentsOpen, setCommentsOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   // Everyone with a live caret on this document, self first — delivered by
   // the editor's collab session whenever the presence generation advances
@@ -58,12 +65,14 @@ export function WorkspaceDocumentPage({
   const [peers, setPeers] = useState<{ self: string; clientIds: string[] } | null>(null);
   const editorApiRef = useRef<CollabEditorApi | null>(null);
   const commentsRef = useRef<DocumentCommentsHandle | null>(null);
+  const mobileCommentsRef = useRef<DocumentCommentsHandle | null>(null);
+  const focusMobileComposer = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
     setLoaded(null);
     setLoadError(null);
-    setSelectedThreadId(null);
+    setCommentsOpen(false);
     void withDocsProject(async (project) => {
       const workspace = project.workspace(workspacePath);
       const [snapshot, user] = await Promise.all([workspace.inspect(path), project.whoami()]);
@@ -101,8 +110,10 @@ export function WorkspaceDocumentPage({
     async (transform: (current: string) => string): Promise<boolean> => {
       const editor = editorApiRef.current;
       if (editor === null || !editor.isLive()) return false;
-      editor.applyTransform(transform);
-      return true;
+      const result = await editor.applyExactTransform(transform);
+      if (result === "too-large")
+        throw new Error("This document is too large for live review edits.");
+      return result === "accepted";
     },
     [],
   );
@@ -116,6 +127,35 @@ export function WorkspaceDocumentPage({
       ),
     [format, onTransform],
   );
+
+  const identity = loaded ? commentIdentityFor(loaded.user) : null;
+  const busy = status === "connecting…";
+  const reviewSource = useMemo(() => {
+    try {
+      return {
+        source: format === "html" ? annotationsSourceForHtmlDocument(source) : source,
+        error: null,
+      };
+    } catch (error) {
+      return { source: "", error: error instanceof Error ? error.message : String(error) };
+    }
+  }, [source, format]);
+  const review = useDocumentReview({
+    source: reviewSource.source,
+    identity: reviewSource.error ? null : identity,
+    busy,
+    onTransform: onCommentTransform,
+  });
+  if (reviewSource.error)
+    review.comments.notice = (
+      <p role="alert" className="p-3 text-sm text-destructive">
+        {reviewSource.error}
+      </p>
+    );
+  const selectAnnotations = (ids: string[]) => {
+    review.preview.onSelectAnnotations?.(ids);
+    if (ids.length && window.matchMedia("(max-width: 1023px)").matches) setCommentsOpen(true);
+  };
 
   const copyLink = () => {
     void navigator.clipboard.writeText(window.location.href).then(() => {
@@ -139,12 +179,8 @@ export function WorkspaceDocumentPage({
     );
   }
 
-  const identity = commentIdentityFor(loaded.user);
   const displayName =
-    loaded.user.name ?? loaded.user.email ?? loaded.user.userId ?? identity.authorDisplay;
-  const busy = status === "connecting…";
-  const commentsSource =
-    loaded.snapshot.format === "html" ? annotationsSourceForHtmlDocument(source) : source;
+    loaded.user.name ?? loaded.user.email ?? loaded.user.userId ?? identity?.authorDisplay;
 
   // div, not main: SidebarInset already renders the main landmark.
   return (
@@ -173,28 +209,39 @@ export function WorkspaceDocumentPage({
           >
             {status}
           </span>
-          <WithTooltip label="Comment on document">
+          <WithTooltip
+            label={
+              review.comments.onAction ? "Comment on document" : "Comments are currently read-only"
+            }
+          >
             <Button
               size="sm"
               className="h-8 w-8 px-0"
               aria-label="Comment on document"
-              onClick={() => commentsRef.current?.focusDocumentComment()}
+              disabled={!review.comments.onAction}
+              onClick={() => {
+                if (window.matchMedia("(max-width: 1023px)").matches) {
+                  focusMobileComposer.current = true;
+                  setCommentsOpen(true);
+                } else commentsRef.current?.focusDocumentComment();
+              }}
             >
               <MessageSquarePlusIcon aria-hidden className="size-3.5" />
             </Button>
           </WithTooltip>
-          <WithTooltip label={showChanges ? "Hide changes" : "Track changes"}>
-            <Button
-              variant={showChanges ? "secondary" : "outline"}
-              size="sm"
-              className="h-8 w-8 px-0"
-              aria-label="Track changes"
-              aria-pressed={showChanges}
-              onClick={() => setShowChanges((value) => !value)}
-            >
-              <SparklesIcon aria-hidden className="size-3.5" />
-            </Button>
-          </WithTooltip>
+          {view === "source" ? (
+            <WithTooltip label="Show recent edits">
+              <Button
+                variant={showChanges ? "secondary" : "outline"}
+                size="icon-sm"
+                aria-label="Show recent edits"
+                aria-pressed={showChanges}
+                onClick={() => setShowChanges((value) => !value)}
+              >
+                <SparklesIcon />
+              </Button>
+            </WithTooltip>
+          ) : null}
           <WithTooltip label={copied ? "Copied!" : "Copy share link"}>
             <Button
               variant="outline"
@@ -237,14 +284,7 @@ export function WorkspaceDocumentPage({
         <section className="relative flex min-h-[60svh] min-w-0 flex-col bg-background lg:min-h-0">
           <div className={view === "preview" ? "flex min-h-0 flex-1" : "hidden"}>
             {loaded.snapshot.format === "markdown" ? (
-              <MarkdownDocumentPreview
-                source={source}
-                identity={identity}
-                busy={busy}
-                onTransform={onTransform}
-                selectedThreadId={selectedThreadId}
-                onSelectThread={setSelectedThreadId}
-              />
+              <DocumentPreview {...review.preview} onSelectAnnotations={selectAnnotations} />
             ) : (
               <HtmlDocumentPreview source={source} />
             )}
@@ -281,17 +321,25 @@ export function WorkspaceDocumentPage({
           </div>
         </section>
 
-        <aside className="min-h-0 border-t bg-muted/5 lg:border-t-0 lg:border-l">
-          <DocumentComments
-            ref={commentsRef}
-            source={commentsSource}
-            identity={identity}
-            busy={busy}
-            onTransform={onCommentTransform}
-            selectedThreadId={selectedThreadId}
-            onSelectThread={setSelectedThreadId}
-          />
+        <aside className="hidden min-h-0 border-l bg-muted/5 lg:block">
+          <DocumentComments ref={commentsRef} {...review.comments} />
         </aside>
+        <Drawer open={commentsOpen} onOpenChange={setCommentsOpen}>
+          <DrawerContent
+            className="h-[80svh]"
+            onOpenAutoFocus={(event) => {
+              if (!focusMobileComposer.current) return;
+              event.preventDefault();
+              focusMobileComposer.current = false;
+              mobileCommentsRef.current?.focusDocumentComment();
+            }}
+          >
+            <DrawerHeader>
+              <DrawerTitle>Comments</DrawerTitle>
+            </DrawerHeader>
+            <DocumentComments ref={mobileCommentsRef} {...review.comments} />
+          </DrawerContent>
+        </Drawer>
       </div>
     </div>
   );

@@ -60,6 +60,7 @@ onlyBuiltDependencies:
   - workerd
 
 overrides:
+  roughdraft>@roughdraft/rfm: '-'
   '@babel/parser': ^7.28.0
   # CodeMirror resolves StateFields by module identity: two copies of
   # state/view in one graph break typecheck AND runtime ("Field is not
@@ -92,6 +93,9 @@ overrides:
   ws: 8.19.0
 
 packageExtensions:
+  roughdraft@0.1.10:
+    dependencies:
+      yaml: 2.9.0
   '@valtown/codemirror-ts':
     peerDependencies:
       '@typescript/vfs': '*'

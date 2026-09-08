@@ -4,7 +4,7 @@
 // lock screen.
 //
 // Parsing is the same mdast/micromark stack the repo already renders markdown
-// with (packages/iterate annotated-markdown) — hand-rolled regexes get
+// with (packages/ui document preview) — hand-rolled regexes get
 // CommonMark's edge cases wrong (code spans, intraword emphasis, `__dunders__`).
 // This module only decides how each node LOOKS as plain text: formatting
 // unwraps to its content, links and images reduce to their text, code is kept

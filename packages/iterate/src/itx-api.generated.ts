@@ -1958,6 +1958,25 @@ export interface WorkspaceCollab {
         Pick<{ status: Promise<"history-miss"> }, "status">)
     | (Promise<{ status: "too-large"; maxBytes: number } & Disposable> &
         Pick<{ status: Promise<"too-large">; maxBytes: Promise<number> }, "maxBytes" | "status">);
+  /** Apply a structured whole-file replacement only at its exact source head. */
+  applyIfUnchanged(
+    path: string,
+    expectedContent: string,
+    nextContent: string,
+    author?: string,
+  ):
+    | (Promise<{ content: string; status: "accepted"; version: number } & Disposable> &
+        Pick<
+          { content: Promise<string>; status: Promise<"accepted">; version: Promise<number> },
+          "content" | "status" | "version"
+        >)
+    | (Promise<{ content: string; status: "conflict"; version: number } & Disposable> &
+        Pick<
+          { content: Promise<string>; status: Promise<"conflict">; version: Promise<number> },
+          "content" | "status" | "version"
+        >)
+    | (Promise<{ maxBytes: number; status: "too-large" } & Disposable> &
+        Pick<{ maxBytes: Promise<number>; status: Promise<"too-large"> }, "maxBytes" | "status">);
   /** Long-poll catch-up: ops after a version (parking ~20s for new ones), a
    * snapshot when past the retained floor, or ended after a destructive op.
    * With afterPresence given, also resolves when cursors moved past that

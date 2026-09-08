@@ -6,14 +6,13 @@
   "exports": {
     "./attribution": "./src/collab-attribution.ts",
     "./collab": "./src/collab.ts",
-    "./comments": "./src/document-comments.tsx",
     "./editor": "./src/workspace-document-editor.tsx",
     "./editor-api": "./src/collab-editor-api.ts",
     "./html-annotations": "./src/html-document-annotations.ts",
     "./identity": "./src/comment-identity.ts",
-    "./preview": "./src/markdown-document-preview.tsx",
     "./server": "./src/server.ts",
-    "./types": "./src/types.ts"
+    "./types": "./src/types.ts",
+    "./review": "./src/use-document-review.tsx"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
@@ -29,7 +28,6 @@
     "@iterate-com/ui": "workspace:*",
     "capnweb": "npm:@iterate-com/capnweb@^0.10.0",
     "iterate": "workspace:*",
-    "lucide-react": "^0.553.0",
     "react": "^19.2.7"
   },
   "devDependencies": {

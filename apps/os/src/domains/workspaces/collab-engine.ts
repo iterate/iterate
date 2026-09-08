@@ -68,6 +68,14 @@ export type CollabPushResult =
   /** Batch or resulting document exceeds the size policy. */
   | { status: "too-large"; maxBytes: number };
 
+/** A whole-document mutation that is permitted only against its exact source.
+ * Review metadata rewrites use this instead of the normal rebase protocol: a
+ * stale footer must surface a conflict, never be positionally merged. */
+export type CollabExactApplyResult =
+  | { content: string; status: "accepted"; version: number }
+  | { content: string; status: "conflict"; version: number }
+  | { maxBytes: number; status: "too-large" };
+
 /** Ephemeral cursor presence for one session: who has a caret where, in the
  * sender's head coordinates. In-memory only — an eviction loses it and
  * clients re-announce on their next throttle tick — delivered on the wait()
@@ -256,6 +264,44 @@ export class CollabEngine {
         throw new Error(`external write rejected: ${result.status}`);
       }
       return { version: result.version };
+    });
+    file.writeChain = run.catch(() => {});
+    return await run;
+  }
+
+  /**
+   * Apply a whole-document replacement only when `expectedContent` is still
+   * the authoritative head. The equality check is inside `writeChain`, so
+   * concurrent review-footer rewrites cannot be rebased into malformed YAML.
+   */
+  async applyIfUnchanged(
+    path: string,
+    expectedContent: string,
+    nextContent: string,
+    author = "external",
+  ): Promise<CollabExactApplyResult> {
+    const file = await this.#live(path);
+    const run = file.writeChain.then(async () => {
+      const content = file.doc.toString();
+      if (content !== expectedContent) {
+        return { content, status: "conflict" as const, version: file.version };
+      }
+      const changes = minimalSplice(file.doc, nextContent);
+      if (changes === null) {
+        return { content, status: "accepted" as const, version: file.version };
+      }
+      const result = await this.#accept(path, file, [
+        {
+          changes,
+          clientId: author,
+          clientSeq: file.version,
+        },
+      ]);
+      if (result.status === "accepted") {
+        return { content: nextContent, status: "accepted" as const, version: result.version };
+      }
+      if (result.status === "too-large") return result;
+      throw new Error(`exact write rejected: ${result.status}`);
     });
     file.writeChain = run.catch(() => {});
     return await run;

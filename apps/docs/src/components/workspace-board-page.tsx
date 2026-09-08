@@ -157,14 +157,14 @@ export function WorkspaceBoardPage({
   // sheet-open's critical path.
   // Durable attribution for cards created here: "Name <email>".
   const createdByRef = useRef<string | undefined>(undefined);
-  // Discussion-comment identity (sentinel author token + display name).
+  // Review-comment identity and optional display name.
   const [commentIdentity, setCommentIdentity] = useState<{
     author: string;
     authorDisplay?: string;
   } | null>(null);
   useEffect(() => {
     void import("@iterate-com/workspace-documents/editor");
-    void import("./workspace-task-preview.tsx");
+    void import("@iterate-com/ui/components/document-preview");
     void whoami()
       .then((me) => {
         createdByRef.current =
@@ -651,9 +651,14 @@ export function WorkspaceBoardPage({
         redline={trackChanges}
         editorApiRef={editorApiRef}
         commentIdentity={commentIdentity}
-        onApplyTransform={(transform) =>
-          openTask === null ? Promise.resolve(false) : mutateTask(openTask, transform)
-        }
+        onApplyTransform={async (transform) => {
+          const api = openTask ? liveApi(openTask.path) : null;
+          if (!api) return false;
+          const result = await api.applyExactTransform(transform);
+          if (result === "too-large")
+            throw new Error("This document is too large for live review edits.");
+          return result === "accepted";
+        }}
         onAssignAgent={
           guest
             ? undefined

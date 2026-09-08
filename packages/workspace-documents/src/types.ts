@@ -10,6 +10,11 @@ export type CollabAcceptResult =
   | { status: "history-miss" }
   | { status: "too-large"; maxBytes: number };
 
+export type CollabExactApplyResult =
+  | { content: string; status: "accepted"; version: number }
+  | { content: string; status: "conflict"; version: number }
+  | { maxBytes: number; status: "too-large" };
+
 export type CollabPresence = {
   clients: { anchor: number; at: number; clientId: string; head: number }[];
   generation: number;
@@ -38,6 +43,12 @@ export type CollabChanges = {
 export interface WorkspaceDocumentLane {
   open(path: string): Promise<CollabOpened>;
   changes(path: string): Promise<CollabChanges>;
+  applyIfUnchanged(
+    path: string,
+    expectedContent: string,
+    nextContent: string,
+    author?: string,
+  ): Promise<CollabExactApplyResult>;
   push(input: {
     baseVersion: number;
     clientId: string;

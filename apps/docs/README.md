@@ -39,13 +39,20 @@ commit.
 - Source opens the shared CodeMirror collaborative editor.
 - The comments rail always ends with **Comment on the whole document**.
 - Selecting rendered Markdown text creates a passage-anchored thread.
-- Threads and replies are stored in the file's neutral
-  `iterate-annotations:v1` EOF annotation store.
+- Threads and replies use Roughdraft Flavored Markdown (RFM): CriticMarkup
+  passage anchors and YAML endmatter. Source is interoperable with Roughdraft.
+- Suggestions render in the preview and can be accepted or rejected.
+- Review writes are applied atomically against the source used to create them;
+  conflicting edits preserve the comment draft for retry.
+- The old Iterate annotation format is no longer interpreted; existing source
+  files remain editable without a compatibility parser or automatic migration.
 
-The document editor, Markdown annotation surface, comments rail, collaboration
-client, redlines, cursors, attribution, identity, and server dial are shared
-with Tasks through `@iterate-com/workspace-documents`. Tasks adds its board and
-task model around that common document backbone; Docs does not.
+`@iterate-com/ui` provides format-independent `DocumentPreview`,
+`DocumentComments`, and `ReviewComposer` components. `iterate/document-review`
+reads and edits RFM; `useDocumentReview` in `@iterate-com/workspace-documents/review`
+connects that source model to the UI. Docs and Tasks share this experience and
+its collaborative Source editor. HTML document comments use an inert JSON
+script containing RFM, separate from the HTML body.
 
 ## Jam
 

@@ -63,7 +63,7 @@ export function jamInvitation(workspacePath: string, path: string | null): strin
     path === null
       ? '- Nobody has a file open yet; list the workspace with ws.glob("/repos/config/**/*.md") and wait for instructions.'
       : `- The file open right now is ${path}. Say hello: append one short line to it saying you have joined, then wait for instructions in that file or here.`,
-    "- Comments are stored at the end of a file as <!-- iterate-annotations:v1 --> sentinel lines. Read them; keep them intact when you edit.",
+    "- Comments use Roughdraft Flavored Markdown: inline CriticMarkup anchors and YAML endmatter under comments/suggestions after a final --- divider. Read them and preserve review IDs and metadata when editing.",
     "- Nothing is committed automatically and you must not commit; the people in the jam decide when it lands on main.",
   ].join("\n");
 }

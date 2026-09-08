@@ -1,4 +1,5 @@
 import { expect } from "@playwright/test";
+import { readReview } from "iterate/document-review";
 import { spinnerWaiter } from "middlewright";
 import { E2E_HEAVY_TEST_TIMEOUT_MS } from "@iterate-com/shared/test-support/e2e-policy";
 import { uniqueFixtureSlug } from "@iterate-com/shared/test-support/fixture-slug";
@@ -145,9 +146,8 @@ test("review a workspace document in the seeded Docs app", async ({ baseURL, pag
     projectSlug: slug,
     testInfo,
   });
-  await spinnerWaiter.settings.run({ disabled: true }, async () => {
-    await page.getByPlaceholder("Message this agent").waitFor({ timeout: 60_000 }); // timeout: manual — spinner-waiter is disabled for this unmarked skeleton
-  });
+  // Review needs the authenticated project, independently of the chat composer.
+  await page.getByRole("link", { name: "New agent", exact: true }).waitFor();
 
   const workspacePath = "/workspaces/agents/reviewer";
   // Relative on purpose, twice over: workspace writes resolve relative paths
@@ -252,16 +252,13 @@ test("review a workspace document in the seeded Docs app", async ({ baseURL, pag
   await commentsPanel
     .getByText("Please add a short owner summary before sharing.", { exact: true })
     .waitFor();
-  await commentsPanel.getByText("Whole document", { exact: true }).waitFor();
+  await commentsPanel.getByRole("heading", { name: "Document", exact: true }).waitFor();
 
   const reviewSentence = page
     .locator("div.cursor-text")
     .getByText("Make review decisions directly in the workspace file.", { exact: true });
   await reviewSentence.selectText();
-  await reviewSentence.dispatchEvent("mouseup");
-  const selectionCommentButton = page.getByRole("button", { name: "Comment", exact: true });
-  await selectionCommentButton.waitFor({ timeout: 10_000 }); // timeout: the selection toolbar appears on mouseup with no loading UI for the spinner-waiter
-  await selectionCommentButton.click();
+  await reviewSentence.dispatchEvent("pointerup");
   await page
     .getByPlaceholder("Comment on the selection…")
     .fill("Can we make this promise more concrete?");
@@ -269,7 +266,40 @@ test("review a workspace document in the seeded Docs app", async ({ baseURL, pag
   await commentsPanel
     .getByText("Can we make this promise more concrete?", { exact: true })
     .waitFor();
-  await commentsPanel.getByText("Selected text", { exact: true }).waitFor();
+  await commentsPanel.getByRole("heading", { name: "Selected text", exact: true }).waitFor();
+
+  const saved = await workspace.readFile(documentPath);
+  expect(saved).not.toBeNull();
+  const review = readReview(saved!);
+  expect(review).toMatchObject({ diagnostics: [] });
+  expect(review.threads).toHaveLength(2);
+  expect(review.threads.find((thread) => thread.anchor)?.comments[0]?.body).toBe(
+    "Can we make this promise more concrete?",
+  );
+  expect(saved).toContain("{==Make review decisions directly in the workspace file.==}");
+  expect(saved).toContain("\ncomments:");
+
+  await page.reload();
+  await page.getByText(/^live · v\d+$/).waitFor();
+  const headingFontSize = await page
+    .getByRole("heading", { name: "Docs review walkthrough" })
+    .evaluate((element) => getComputedStyle(element).fontSize);
+  expect(headingFontSize).toBe("24px");
+  await page.getByText("Can we make this promise more concrete?", { exact: true }).waitFor();
+  await testInfo.attach("roughdraft-desktop", {
+    body: await page.screenshot({ animations: "disabled" }),
+    contentType: "image/png",
+  });
+  await page.setViewportSize({ width: 375, height: 812 });
+  await page.getByRole("button", { name: "Comment on document" }).click();
+  await page
+    .getByRole("dialog")
+    .getByText("Can we make this promise more concrete?", { exact: true })
+    .waitFor();
+  await testInfo.attach("roughdraft-mobile", {
+    body: await page.screenshot({ animations: "disabled" }),
+    contentType: "image/png",
+  });
 });
 
 /**
