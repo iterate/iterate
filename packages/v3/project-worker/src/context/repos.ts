@@ -32,6 +32,12 @@ const AUTHOR = { email: "config@iterate.com", name: "iterate" };
 const textDecoder = new TextDecoder();
 const textEncoder = new TextEncoder();
 
+/** The Artifacts "repo does not exist" signal (API error 10200, "Repository not found") — the ONLY
+ *  read failure that legitimately means "no file". An outage or auth error must SURFACE, never
+ *  masquerade as an absent file (that would silently blank the config worker's source). */
+const isRepoNotFound = (error: unknown): boolean =>
+  /not found|10200/i.test(String((error as { message?: unknown })?.message ?? error));
+
 /** `itx.repos` — a project's git repos, one file at a time. Data in, data out (no handles cross /api). */
 export interface ReposScope {
   /** The bytes of `path` at the tip of `main`, or null if the repo is unborn / the file is absent. */
@@ -89,8 +95,9 @@ export function projectScopedRepos(input: {
       let transport: Awaited<ReturnType<typeof transportFor>>;
       try {
         transport = await transportFor(repo, "read");
-      } catch {
-        return null; // no such repo → no file
+      } catch (error) {
+        if (isRepoNotFound(error)) return null; // no such repo → no file
+        throw error; // an outage / auth failure must surface, not read as an absent file
       }
       const tip = tipOid(await transport.lsRefs([REF]));
       if (tip === undefined) return null; // unborn repo (no commit on main)

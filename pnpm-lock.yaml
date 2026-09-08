@@ -1800,10 +1800,17 @@ importers:
         version: 4.127.1(@cloudflare/workers-types@5.20260901.1)
 
   packages/v3/shared:
+    dependencies:
+      pako:
+        specifier: ^3.0.1
+        version: 3.0.1
     devDependencies:
       '@cloudflare/workers-types':
         specifier: ^5.20260831.1
         version: 5.20260901.1
+      '@types/pako':
+        specifier: ^2.0.4
+        version: 2.0.4
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
@@ -11632,6 +11639,9 @@ packages:
 
   pako@3.0.1:
     resolution: {integrity: sha512-GupotUUI0mlhugKjUs4bjOwLt3nrehy9Ys2dxC0GtgVef5cnKggkDMmf2bq2poCCuVXopWPmqsc9VDT2iJUy+w==}
+
+  '@types/pako@2.0.4':
+    resolution: {integrity: sha512-VWDCbrLeVXJM9fihYodcLiIv0ku+AlOa/TQ1SvYOaBuyrSKgEcro95LJyIsJ4vSo6BXIxOKxiJAat04CmST9Fw==}
 
   parent-module@1.0.1:
     resolution: {integrity: sha512-GQ2EWRpQV8/o+Aw8YqtfZZPfNRWZYkbidE9k5rpl/hC3vtHHBfGm2Ifi6qWV+coDGkrUKZAxE3Lot5kcsRlh+g==}
@@ -27104,6 +27114,8 @@ snapshots:
   pako@2.2.0: {}
 
   pako@3.0.1: {}
+
+  '@types/pako@2.0.4': {}
 
   parent-module@1.0.1:
     dependencies:
