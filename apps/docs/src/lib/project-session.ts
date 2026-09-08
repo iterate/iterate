@@ -9,6 +9,8 @@
  * rules are table-testable.
  */
 
+import { z } from "zod";
+
 const PROJECT_AUTH_LOGIN_PATH = "/_iterate/auth/login";
 const PROJECT_AUTH_REFRESH_PATH = "/_iterate/auth/refresh";
 
@@ -26,6 +28,20 @@ export type RefreshOutcome =
   | { outcome: "renewed"; expiresAt: number }
   | { outcome: "signed-out"; login: string }
   | { outcome: "unavailable" };
+
+/** The gate's 200 body: the renewed token's expiry, in seconds. */
+const RenewedBody = z.object({ expiresAt: z.number() }).loose();
+/** The gate's 401 body: where to sign in again (an absolute path on this origin). */
+const SignedOutBody = z.object({ login: z.string().startsWith("/") }).loose();
+
+/** The response body as JSON, or null when there is none worth reading. */
+async function jsonOf(response: Response): Promise<unknown> {
+  try {
+    return await response.json();
+  } catch {
+    return null;
+  }
+}
 
 /** The gate's login start for one page (the same link its sign-in page carries). */
 export function loginPathFor(returnTo: string): string {
@@ -49,30 +65,18 @@ export async function refreshProjectSession(input: {
     return { outcome: "unavailable" };
   }
   if (response.status === 401) {
-    let login = loginPathFor(input.returnTo);
-    try {
-      const body: unknown = await response.json();
-      if (typeof body === "object" && body !== null && "login" in body) {
-        const pointer = (body as { login: unknown }).login;
-        if (typeof pointer === "string" && pointer.startsWith("/")) login = pointer;
-      }
-    } catch {
-      // A bare 401 still means signed out; the pointer is a courtesy.
-    }
-    return { outcome: "signed-out", login };
+    // A bare 401 still means signed out; the login pointer is a courtesy.
+    const body = SignedOutBody.safeParse(await jsonOf(response));
+    return {
+      outcome: "signed-out",
+      login: body.success ? body.data.login : loginPathFor(input.returnTo),
+    };
   }
   if (!response.ok) return { outcome: "unavailable" };
-  try {
-    const body: unknown = await response.json();
-    const expiresAt =
-      typeof body === "object" && body !== null && "expiresAt" in body
-        ? (body as { expiresAt: unknown }).expiresAt
-        : undefined;
-    if (typeof expiresAt !== "number") return { outcome: "unavailable" };
-    return { outcome: "renewed", expiresAt };
-  } catch {
-    return { outcome: "unavailable" };
-  }
+  const body = RenewedBody.safeParse(await jsonOf(response));
+  return body.success
+    ? { outcome: "renewed", expiresAt: body.data.expiresAt }
+    : { outcome: "unavailable" };
 }
 
 /**
@@ -92,14 +96,14 @@ export function nextRefreshDelayMs(expiresAt: number, now: number): number {
  * when a tab comes back to the foreground with a stale renewal; hand a dead
  * session to sign-in exactly once and stop. Returns the stop function.
  */
-export function startProjectSessionKeepalive(input: {
+export function startProjectSessionKeepalive<TimerId>(input: {
   refresh: () => Promise<RefreshOutcome>;
   now: () => number;
-  timers: { set: (fn: () => void, ms: number) => unknown; clear: (id: unknown) => void };
+  timers: { set: (fn: () => void, ms: number) => TimerId; clear: (id: TimerId) => void };
   onSignedOut: (login: string) => void;
   visibility?: { isVisible: () => boolean; onVisible: (fn: () => void) => () => void };
 }): () => void {
-  let timer: unknown = null;
+  let timer: TimerId | null = null;
   let stopped = false;
   let inFlight = false;
   let lastRenewedAt = Number.NEGATIVE_INFINITY;
@@ -160,7 +164,7 @@ export function startBrowserProjectSessionKeepalive(): () => void {
     now: () => Date.now(),
     timers: {
       set: (fn, ms) => window.setTimeout(fn, ms),
-      clear: (id) => window.clearTimeout(id as number),
+      clear: (id) => window.clearTimeout(id),
     },
     onSignedOut: (login) => location.assign(login),
     visibility: {

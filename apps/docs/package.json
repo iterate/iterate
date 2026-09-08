@@ -69,5 +69,8 @@
     "vitest": "^4.1.10",
     "wrangler": "catalog:cloudflare",
     "yaml": "^2.8.0"
+  },
+  "dependencies": {
+    "zod": "4.5.4"
   }
 }

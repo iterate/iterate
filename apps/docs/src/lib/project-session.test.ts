@@ -91,7 +91,7 @@ describe("startProjectSessionKeepalive", () => {
           timers.set(id, { fn, ms });
           return id;
         },
-        clear: (id) => void timers.delete(id as number),
+        clear: (id) => void timers.delete(id),
       },
       onSignedOut,
       visibility: {
