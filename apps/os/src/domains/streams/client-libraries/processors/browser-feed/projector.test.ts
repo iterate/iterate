@@ -273,8 +273,8 @@ describe("browser-feed projector — one interleaved order", () => {
     expect(projected.endState.replaceableAgentItemIndexes).toEqual({});
   });
 
-  it("replaces a linked-reference message when its durable outcome arrives", () => {
-    const references = [
+  it("replaces a linked-mention message when its durable outcome arrives", () => {
+    const mentions = [
       {
         id: "config-repo/AGENTS.md",
         type: "repo-file",
@@ -285,16 +285,16 @@ describe("browser-feed projector — one interleaved order", () => {
     const source = event(1, CONTEXT_ADDED, {
       role: "user",
       actor: { type: "user", origin: "web" },
-      content: "[@AGENTS.md](ref://config-repo/AGENTS.md)",
-      references,
+      content: "[@AGENTS.md](mention://config-repo/AGENTS.md)",
+      mentions,
     });
     const resolution = event(2, CONTEXT_ADDED, {
       role: "developer",
-      actor: { type: "integration", name: "agent-reference-resolver" },
+      actor: { type: "integration", name: "agent-mention-resolver" },
       content: "resolution details",
-      referenceResolution: {
+      mentionResolution: {
         sourceOffset: 1,
-        outcomes: [{ status: "binary", referenceIds: ["config-repo/AGENTS.md"] }],
+        outcomes: [{ status: "binary", mentionIds: ["config-repo/AGENTS.md"] }],
       },
     });
 
@@ -303,18 +303,18 @@ describe("browser-feed projector — one interleaved order", () => {
       (op) => op.kind === "replace" || (op.kind === "insert" && op.itemKind === "agent.user"),
     );
     expect(agentOps).toMatchObject([
-      { kind: "insert", localIndex: 0, data: { id: "user-1", references } },
+      { kind: "insert", localIndex: 0, data: { id: "user-1", mentions } },
       {
         kind: "replace",
         localIndex: 0,
         data: {
           id: "user-1",
-          references,
-          referenceResolutions: { "config-repo/AGENTS.md": { status: "binary" } },
+          mentions,
+          mentionResolutions: { "config-repo/AGENTS.md": { status: "binary" } },
         },
       },
     ]);
-    expect(projected.endState.agent.pendingReferenceMessages).toEqual({});
+    expect(projected.endState.agent.pendingMentionMessages).toEqual({});
     expect(projected.endState.replaceableAgentItemIndexes).toEqual({});
   });
 

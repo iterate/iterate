@@ -43,7 +43,7 @@ export function NewAgentComposer({
       const itx = await connectItx(projectId);
       await sendAgentFirstTurn(itx.agents.get(agentPath), {
         content: input.content,
-        references: input.references,
+        mentions: input.mentions,
         files: input.files,
       });
       return agentPath;
@@ -69,7 +69,7 @@ export function NewAgentComposer({
     createAgent.mutate({
       content: message.content,
       files: attachments.files,
-      references: message.references,
+      mentions: message.mentions,
     });
   }
 

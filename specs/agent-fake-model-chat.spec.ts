@@ -12,11 +12,11 @@ test("a config file mention is materialized before the model sees the turn", asy
   agent.responses.set(async (call) => {
     modelCalls += 1;
     materializedContext = call.body.messages.find((message) =>
-      message.content.includes('<reference type="file" repo="/repos/config" path="ONBOARDING.md">'),
+      message.content.includes('<mention type="file" repo="/repos/config" path="ONBOARDING.md">'),
     )?.content;
     return [
       "```ts",
-      'async (itx) => { await itx.chat.sendMessage("Reference resolved") }',
+      'async (itx) => { await itx.chat.sendMessage("Mention resolved") }',
       "```",
     ].join("\n");
   });
@@ -28,18 +28,18 @@ test("a config file mention is materialized before the model sees the turn", asy
   await page.getByRole("option", { name: "ONBOARDING.md" }).click();
   await composer.press("Enter");
 
-  await page.getByText("Reference resolved").waitFor();
+  await page.getByText("Mention resolved").waitFor();
   await page
     .locator('[data-testid="agent-feed-message"][data-kind="user"]')
     .locator(
-      '[data-reference-type="repo-file"][data-reference-resolution="resolved"][title="ONBOARDING.md"]',
+      '[data-mention-type="repo-file"][data-mention-resolution="resolved"][title="ONBOARDING.md"]',
     )
     .waitFor();
   expect(modelCalls).toBe(1);
   expect(materializedContext).toContain(
-    '<reference type="file" repo="/repos/config" path="ONBOARDING.md">\n',
+    '<mention type="file" repo="/repos/config" path="ONBOARDING.md">\n',
   );
-  expect(materializedContext).toContain("</reference>");
+  expect(materializedContext).toContain("</mention>");
   expect(materializedContext).not.toContain("resolvedCommitOid");
   expect(materializedContext).not.toContain("includedBytes");
 });

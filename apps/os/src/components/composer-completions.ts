@@ -7,9 +7,9 @@ import {
   type CompletionSource,
 } from "@codemirror/autocomplete";
 import type { QueryClient } from "@tanstack/react-query";
-import { messageReferenceId } from "@iterate-com/shared/message";
+import { messageMentionId } from "@iterate-com/shared/message";
 import { isItxTransportError } from "iterate/sdk/itx/react";
-import { addComposerReference } from "~/components/composer-references.ts";
+import { addComposerMention } from "~/components/composer-mentions.ts";
 import {
   activeComposerSuggestion,
   composerSuggestionEdit,
@@ -67,14 +67,14 @@ function completion(active: ActiveComposerSuggestion, suggestion: ComposerSugges
         selection: { anchor: edit.caret },
         annotations: pickedCompletion.of(picked),
         effects:
-          edit.reference === undefined
+          edit.mention === undefined
             ? []
             : [
-                addComposerReference.of({
-                  ...edit.reference,
-                  reference: {
-                    id: messageReferenceId(edit.reference.target),
-                    ...edit.reference.target,
+                addComposerMention.of({
+                  ...edit.mention,
+                  mention: {
+                    id: messageMentionId(edit.mention.target),
+                    ...edit.mention.target,
                   },
                 }),
               ],

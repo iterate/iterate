@@ -10,7 +10,7 @@ const suggestions = [
     id: "agents",
     label: "AGENTS.md",
     completion: {
-      type: "reference" as const,
+      type: "mention" as const,
       display: "@AGENTS.md",
       target: {
         type: "repo-file" as const,
@@ -66,7 +66,7 @@ test("composerSuggestionEdit replaces the whole token and restores a useful care
   expect(composerSuggestionEdit(value, active.from, active.to, suggestions[0]!)).toEqual({
     insert: "@AGENTS.md",
     caret: 16,
-    reference: {
+    mention: {
       display: "@AGENTS.md",
       from: 5,
       target: { type: "repo-file", repoPath: "/repos/config", path: "AGENTS.md" },
