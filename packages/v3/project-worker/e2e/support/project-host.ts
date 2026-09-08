@@ -21,21 +21,15 @@ export function projectHostnameBase(): string {
   return String((rawConfig.vars as Record<string, unknown>).APP_CONFIG_PROJECT_HOSTNAME_BASE);
 }
 
-/** Make the deployed control plane know `projectId` (its admin door, `POST /projects`, with the bearer
- *  from the run's env — `CONTROL_PLANE_URL` / `CONTROL_PLANE_ADMIN_TOKEN`); the solo lane has no
- *  directory and its stand-in says yes to everything, so this is a no-op there. */
+/** Register `projectId` with the IN-PROCESS control plane — `POST /projects { slug, id }` on the worker
+ *  itself (open login mode: the anonymous identity may create projects) — so its host serves. The id IS
+ *  the slug here (a DNS label), so one name addresses both the DO (`openItx(projectId)`) and the host
+ *  (`site--<projectId>.<base>`). Idempotent; identical against the local and the deployed worker. */
 export async function registerProject(projectId: string): Promise<void> {
-  if (projectHostsAreLocal()) return;
-  const url = process.env.CONTROL_PLANE_URL;
-  const token = process.env.CONTROL_PLANE_ADMIN_TOKEN;
-  if (!url || !token)
-    throw new Error(
-      "CONTROL_PLANE_URL / CONTROL_PLANE_ADMIN_TOKEN unset — needed to register a project with the deployed control plane before its host can serve",
-    );
-  const res = await fetch(new URL("/projects", url), {
+  const res = await fetch(workerUrl("/projects"), {
     method: "POST",
-    headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-    body: JSON.stringify({ id: projectId }),
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ slug: projectId, id: projectId }),
   });
   if (!res.ok) throw new Error(`registerProject(${projectId}): ${res.status} ${await res.text()}`);
 }

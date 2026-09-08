@@ -75,12 +75,14 @@ export function directory(db: D1Database) {
      * unique (mirrors apps/auth) — a slug already taken in ANY org throws "already taken". Idempotent
      * within the same org.
      */
-    async createProject(orgId: string, slug: string): Promise<Project> {
+    async createProject(orgId: string, slug: string, id?: string): Promise<Project> {
       const s = slugify(slug);
       if (!s) throw new Error("project slug is empty or invalid");
+      // The id is minted here unless the caller brings its own (apps/os hands the auth worker its own
+      // TypeID; an e2e uses the slug as the id so one name addresses both the DO and the host).
       // ON CONFLICT(slug) DO NOTHING (no RETURNING — a conflict yields 0 rows, so we re-select to cover
       // both "just created" and "already existed" without a throw).
-      await createProject(client, { id: newProjectId(), slug: s, orgId });
+      await createProject(client, { id: id ?? newProjectId(), slug: s, orgId });
       const p = (await getProjectBySlug(client, { slug: s }))[0];
       if (!p) throw new Error(`failed to create project '${s}'`);
       if (p.orgId !== orgId) throw new Error(`project slug '${s}' is already taken`);

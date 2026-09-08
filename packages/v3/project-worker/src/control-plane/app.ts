@@ -56,12 +56,16 @@ ${body}`;
   });
 }
 
-const loginMode = (env: Env): LoginMode => env.LOGIN_MODE ?? "email";
-
 /** Resolve identity WITHOUT a cookie — for `access` (header) and `open` (anonymous) modes. */
 async function ambientIdentity(request: Request, env: Env): Promise<Session | null> {
-  const mode = loginMode(env);
-  if (mode === "open") return { sub: "user_anonymous", email: "anonymous", iat: 0 };
+  const mode: LoginMode = env.LOGIN_MODE ?? "email";
+  if (mode === "open") {
+    // The one anonymous identity IS a directory user (as access mode's is) — `user_anonymous`, the same
+    // sub /mcp's open-mode short-circuit uses — so its org membership's FOREIGN KEY holds the moment it
+    // creates a project.
+    const user = await directory(env.DB).upsertUser("anonymous");
+    return { sub: user.id, email: user.email, iat: 0 };
+  }
   if (mode === "access") {
     const email = request.headers.get(
       env.ACCESS_EMAIL_HEADER ?? "cf-access-authenticated-user-email",
@@ -240,13 +244,19 @@ export const app: Handler = {
 
     if (url.pathname === "/projects" && request.method === "POST") {
       if (!session) return new Response(null, { status: 302, headers: { location: "/" } });
-      const form = await request.formData();
-      const slug = slugify(String(form.get("slug") ?? ""));
-      if (slug) {
-        const org = await dir.ensureOrg(session.sub, session.email);
-        await dir.createProject(org.id, slug);
-      }
-      return new Response(null, { status: 302, headers: { location: "/" } });
+      // JSON `{ slug, id? }` — an API caller or an e2e registering a project (the id is the caller's,
+      // like apps/os handing the auth worker its own TypeID) — or the console form's `slug`.
+      const json = request.headers.get("content-type")?.includes("application/json") ?? false;
+      const body = json
+        ? ((await request.json()) as { slug?: string; id?: string })
+        : { slug: String((await request.formData()).get("slug") ?? "") };
+      const slug = slugify(body.slug ?? "");
+      const back = new Response(null, { status: 302, headers: { location: "/" } });
+      if (!slug)
+        return json ? Response.json({ error: "a slug is required" }, { status: 400 }) : back;
+      const org = await dir.ensureOrg(session.sub, session.email);
+      const project = await dir.createProject(org.id, slug, body.id);
+      return json ? Response.json(project) : back;
     }
 
     // The capnweb /api — the control plane's typed API (sibling of /mcp). Session-or-API-key auth (design

@@ -104,13 +104,14 @@ test("lent stub WebSocket fetch: a plain eyeball WebSocket opens (101), echoes, 
 // .test.ts (the dedicated fetch-upgrade leg; the DO mints the eyeball pair natively). The tunnel
 // (proxy-to-localhost) shape of this lent stub is fetch-door-tunnel-to-localhost.e2e.test.ts.
 
-test("deleted routes fall through to the help text — /call, /ws and /cap answer text, a WebSocket upgrade to /ws gets no 101", async () => {
+test("deleted routes fall through to the control plane's 404 — /call, /ws and /cap answer Not found, a WebSocket upgrade to /ws gets no 101", async () => {
   // The fetch door is /expression and nothing else: the old /call, /ws and /cap routes are gone and
-  // land on the worker's one-line help, and an upgrade attempt at /ws is refused (no 101).
+  // land on the in-process control plane's catch-all (a plain 404 — never a 500), and an upgrade
+  // attempt at /ws is refused (no 101).
   for (const path of ["/call?path=itx.whoami", "/ws", "/cap?context=prj_x&cap=itx.whoami"]) {
     const res = await fetch(workerUrl(path));
-    expect(res.status).toBe(200);
-    expect(await res.text()).toContain("project-worker —");
+    expect(res.status).toBe(404);
+    expect(await res.text()).toContain("Not found");
   }
   const outcome = await new Promise<string>((resolve) => {
     const ws = new WebSocket(workerUrl("/ws").replace(/^http/, "ws"));

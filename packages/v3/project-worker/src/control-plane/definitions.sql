@@ -6,13 +6,13 @@
 -- This is what makes "create an org + project during MCP /authorize" (ADR 0029, emerge-with-a-project)
 -- a first-class flow rather than a bolt-on.
 
-create table users (
+create table if not exists users (
   id text primary key,            -- user_<lowercased-email> (colon-free: OAuth tokens split on ':')
   email text not null unique,
   created_at text not null default current_timestamp
 );
 
-create table orgs (
+create table if not exists orgs (
   id text primary key,            -- org_<hex>  (minted, distinct from slug — mirrors apps/auth)
   name text not null,
   slug text not null unique,      -- globally-unique org slug
@@ -21,7 +21,7 @@ create table orgs (
 
 -- Who belongs to which org, and as what. THIS is "who can access what" — access to a project is
 -- membership in its org.
-create table org_members (
+create table if not exists org_members (
   org_id text not null references orgs(id),
   user_id text not null references users(id),
   role text not null default 'member',   -- 'owner' | 'member'
@@ -29,7 +29,7 @@ create table org_members (
   primary key (org_id, user_id)
 );
 
-create table projects (
+create table if not exists projects (
   id text primary key,            -- prj_<hex>  (minted, distinct from slug — mirrors apps/auth)
   slug text not null unique,      -- GLOBALLY unique (not per-org) — a slug taken in any org is taken
   org_id text not null references orgs(id),
@@ -38,14 +38,14 @@ create table projects (
 
 -- Ingress routes are a PROPERTY OF A PROJECT: a project owns 0..n hostnames. Hostname -> project routing
 -- is a reverse lookup here (replacing the kernel's routing.ts). Custom domains = just more rows.
-create table routes (
+create table if not exists routes (
   host text primary key,          -- e.g. myproj.example.com  (the ingress hostname)
   project_id text not null references projects(id),
   app text not null default ''    -- which app within the project ('' = the default app)
 );
 
 -- API keys / PATs: bearer credentials scoped to projects (design §2a). Store the HASH, never the raw key.
-create table api_keys (
+create table if not exists api_keys (
   hash text primary key,          -- sha256(raw key)
   user_id text not null references users(id),
   label text,
@@ -53,7 +53,7 @@ create table api_keys (
   created_at text not null default current_timestamp
 );
 
-create index idx_org_members_user on org_members (user_id, org_id);
-create index idx_projects_org on projects (org_id);
-create index idx_routes_project on routes (project_id);
-create index idx_api_keys_user on api_keys (user_id, created_at);
+create index if not exists idx_org_members_user on org_members (user_id, org_id);
+create index if not exists idx_projects_org on projects (org_id);
+create index if not exists idx_routes_project on routes (project_id);
+create index if not exists idx_api_keys_user on api_keys (user_id, created_at);
