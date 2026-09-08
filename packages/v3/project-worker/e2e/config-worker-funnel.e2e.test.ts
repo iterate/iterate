@@ -3,7 +3,7 @@
 // reach the root's config worker with NO manual wiring. Proves the apps/os project-worker shape end
 // to end.
 
-import { expect, test } from "vitest";
+import { test } from "vitest";
 import { append, freshCtx, openItx, readAll, until } from "./support/client.ts";
 
 const PING = "events.iterate.com/funnel-ping";

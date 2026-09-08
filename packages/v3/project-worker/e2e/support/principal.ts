@@ -1,14 +1,12 @@
-// principal.ts — mint project tokens for the worker under test. The solo worker's secret is the one
-// solo-config.ts sets; a deployed worker's is a wrangler secret, handed to the run as
+// principal.ts — mint project tokens for the worker under test. The local e2e worker's secret is the
+// one worker-config.ts sets; a deployed worker's is a wrangler secret, handed to the run as
 // PROJECT_TOKEN_SECRET (never in the tree).
 import { signProjectToken, type ProjectTokenClaims } from "../../src/principal.ts";
 import { projectHostsAreLocal } from "./project-host.ts";
-
-/** The secret the solo lane configures (e2e/support/solo-config.ts). */
-export const SOLO_PROJECT_TOKEN_SECRET = "solo-project-token-secret";
+import { E2E_PROJECT_TOKEN_SECRET } from "./worker-config.ts";
 
 export function projectTokenSecret(): string {
-  if (projectHostsAreLocal()) return SOLO_PROJECT_TOKEN_SECRET;
+  if (projectHostsAreLocal()) return E2E_PROJECT_TOKEN_SECRET;
   const secret = process.env.PROJECT_TOKEN_SECRET;
   if (!secret)
     throw new Error(

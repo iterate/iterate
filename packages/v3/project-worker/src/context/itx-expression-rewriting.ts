@@ -90,7 +90,7 @@ export const BUILTINS_ROOT = "builtins";
  *  that subscription would halt on a project that never set one up. The default loads a bundled NO-OP;
  *  a context OVERRIDES it with its own rule (picked before this fallback) pointing at its source in KV
  *  — `itx.provide("itx.worker", "itx.workers.get({ source: itx.kv.get('/repos/config/worker.ts'), cacheKey })")`. */
-export const CONFIG_WORKER_MATCH = "worker";
+const CONFIG_WORKER_MATCH = "worker";
 /** The bundled no-op ConfigWorker the `itx.worker` default loads — its processEventBatch does nothing,
  *  so a project with no config worker set up delivers quietly (its config subscription never halts).
  *  Overridden the moment userspace provides its own `itx.worker`. */

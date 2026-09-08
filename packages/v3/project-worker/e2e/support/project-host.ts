@@ -4,32 +4,38 @@
 // real and plain fetch does — one test runs both ways.
 import http from "node:http";
 import { join } from "node:path";
+import { test } from "vitest";
 import { experimental_readRawConfig } from "wrangler";
 import { workerUrl } from "./client.ts";
-import { PACKAGE_DIR } from "./solo-config.ts";
+import { PACKAGE_DIR } from "./worker-config.ts";
 
 const LOCAL_HOSTNAMES = new Set(["localhost", "127.0.0.1"]);
 const worker = (): URL => new URL(workerUrl("/"));
-/** Is the worker under test the local solo one (its project hosts hang under `localhost`)? */
+/** Is the worker under test the LOCAL one global-setup booted (its project hosts hang under
+ *  `localhost`)? The deployed proof sets WORKER_BASE_URL to a real hostname. */
 export const projectHostsAreLocal = (): boolean => LOCAL_HOSTNAMES.has(worker().hostname);
+/** `test`, skipped against the local worker — for what only a real deployment can prove (Artifacts,
+ *  the real AI binding, a Host-carrying WebSocket upgrade). The ONE gate; never copy the regex. */
+export const deployedOnly = test.skipIf(projectHostsAreLocal());
 
-/** The base project hosts hang under: `localhost` for the solo worker (solo-config.ts), the deployed
- *  worker's `APP_CONFIG_PROJECT_HOSTNAME_BASE` (wrangler.jsonc) otherwise. */
+/** The base project hosts hang under: `localhost` for the local worker (worker-config.ts), the
+ *  deployed worker's `APP_CONFIG_PROJECT_HOSTNAME_BASE` (wrangler.jsonc) otherwise. */
 export function projectHostnameBase(): string {
   if (projectHostsAreLocal()) return "localhost";
   const { rawConfig } = experimental_readRawConfig({ config: join(PACKAGE_DIR, "wrangler.jsonc") });
   return String((rawConfig.vars as Record<string, unknown>).APP_CONFIG_PROJECT_HOSTNAME_BASE);
 }
 
-/** Register `projectId` with the IN-PROCESS control plane — `POST /projects { slug, id }` on the worker
- *  itself (open login mode: the anonymous identity may create projects) — so its host serves. The id IS
- *  the slug here (a DNS label), so one name addresses both the DO (`openItx(projectId)`) and the host
- *  (`site--<projectId>.<base>`). Idempotent; identical against the local and the deployed worker. */
+/** Register `projectId` with the IN-PROCESS control plane — `POST /projects { slug }` on the worker
+ *  itself (open login mode: the anonymous identity may create projects) — so its host serves. A
+ *  project's id IS its slug (a DNS label), so one name addresses both the DO (`openItx(projectId)`)
+ *  and the host (`site--<projectId>.<base>`). Idempotent; identical against the local and the
+ *  deployed worker. */
 export async function registerProject(projectId: string): Promise<void> {
   const res = await fetch(workerUrl("/projects"), {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ slug: projectId, id: projectId }),
+    body: JSON.stringify({ slug: projectId }),
   });
   if (!res.ok) throw new Error(`registerProject(${projectId}): ${res.status} ${await res.text()}`);
 }

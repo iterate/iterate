@@ -12,12 +12,10 @@
 // does not filter by name), so membership is asserted over ALL pages (`allRepoNames`), never page one
 // alone. Every repo created here is deleted in a `finally` (the project-teardown path).
 
-import { expect, test } from "vitest";
+import { expect } from "vitest";
 import { freshCtx, openItx } from "./support/client.ts";
+import { deployedOnly } from "./support/project-host.ts";
 
-const LOCAL_TARGET = /^https?:\/\/(127\.0\.0\.1|localhost)\b/.test(
-  process.env.WORKER_BASE_URL ?? "",
-);
 const rnd = (): string => Math.random().toString(36).slice(2, 8);
 
 /** Every repo name this project can see, following the namespace-wide cursor to exhaustion — the
@@ -34,7 +32,7 @@ async function allRepoNames(itx: ReturnType<typeof openItx>): Promise<string[]> 
   return names;
 }
 
-test.skipIf(LOCAL_TARGET)(
+deployedOnly(
   "cfArtifacts create/get/list/delete against the real binding, project-scoped",
   async () => {
     const a = openItx(freshCtx("cfa"));
@@ -62,19 +60,16 @@ test.skipIf(LOCAL_TARGET)(
   },
 );
 
-test.skipIf(LOCAL_TARGET)(
-  "cfArtifacts isolation: one project never sees another's repos",
-  async () => {
-    const a = openItx(freshCtx("cfaIsoA"));
-    const b = openItx(freshCtx("cfaIsoB"));
-    const repo = `iso-${rnd()}`;
+deployedOnly("cfArtifacts isolation: one project never sees another's repos", async () => {
+  const a = openItx(freshCtx("cfaIsoA"));
+  const b = openItx(freshCtx("cfaIsoB"));
+  const repo = `iso-${rnd()}`;
 
-    await a.cfArtifacts.create(repo);
-    try {
-      // b lists its OWN repos (all pages) — a's repo lives under a's prefix and is filtered out.
-      expect(await allRepoNames(b)).not.toContain(repo);
-    } finally {
-      await a.cfArtifacts.delete(repo);
-    }
-  },
-);
+  await a.cfArtifacts.create(repo);
+  try {
+    // b lists its OWN repos (all pages) — a's repo lives under a's prefix and is filtered out.
+    expect(await allRepoNames(b)).not.toContain(repo);
+  } finally {
+    await a.cfArtifacts.delete(repo);
+  }
+});

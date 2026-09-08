@@ -11,7 +11,7 @@ import { jsonEqual } from "../lib/patch.ts";
  *  literal — rides the PARSED form (`["itx","workers",["get",{ source }]]`), which is plain data and never
  *  meets json5. The cap is O(1), before any parsing (stock json5 allocates per character and a
  *  multi-megabyte literal kills a 128 MiB isolate — the 2026-09-07 wave-0 plan, issue 2). */
-export const ITX_EXPRESSION_STRING_MAX_CHARS = 2048;
+const ITX_EXPRESSION_STRING_MAX_CHARS = 2048;
 
 /** One step: a property read (string) or a call (`[method, ...args]`). Args are plain JSON. The
  *  method `""` is the ANONYMOUS call — call the value itself: `itx.builtins.rpcStubs.get('cam')(1, 2)`
@@ -170,7 +170,7 @@ export function toItxExpression(
  *  anonymous call, only right after a call) — WITHOUT printing and re-parsing: a stored target carries a worker's whole source as
  *  data, and that data must never meet the string codec (the 2 KiB cap, json5). Throws in the
  *  parser's words. */
-export function assertItxExpressionShape(expression: ItxExpression): void {
+function assertItxExpressionShape(expression: ItxExpression): void {
   const fail = (m: string): never => {
     throw new Error(`expression: ${m} in ${JSON.stringify(expression).slice(0, 200)}`);
   };

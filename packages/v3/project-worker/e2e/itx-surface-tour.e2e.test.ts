@@ -17,6 +17,7 @@ import {
   session,
   workerUrl,
 } from "./support/client.ts";
+import { projectHostsAreLocal } from "./support/project-host.ts";
 import { SOURCES } from "./support/sources.ts";
 
 test("itx tour: built-in roots, lent stubs, the rule map, dynamic-worker rules, the two views", async () => {
@@ -175,7 +176,7 @@ test("itx tour: built-in roots, lent stubs, the rule map, dynamic-worker rules, 
 
   // 8. /version — `<label> <environmentName> <deployId>`: the deploy stamp a smoke waits for
   // (CODE_VERSION in worker.ts, first), then the configuration (src/app-config.ts): the e2e lane names
-  // itself "solo"; a deployed worker names its environment. The deploy id is Cloudflare's version id
+  // itself "e2e"; a deployed worker names its environment. The deploy id is Cloudflare's version id
   // of the deploy — local workerd mints one too — or "unversioned" where the binding is absent.
   const versionRes = await fetch(workerUrl("/version"));
   expect(versionRes.status).toBe(200);
@@ -183,7 +184,6 @@ test("itx tour: built-in roots, lent stubs, the rule map, dynamic-worker rules, 
   expect(label).toMatch(/^live-\d+$/);
   expect(rest).toEqual([]);
   expect(deployId).toMatch(/^(?:[0-9a-f-]{36}|unversioned)$/);
-  if (/^https?:\/\/(127\.0\.0\.1|localhost)\b/.test(process.env.WORKER_BASE_URL ?? ""))
-    expect(environmentName).toBe("solo");
+  if (projectHostsAreLocal()) expect(environmentName).toBe("e2e");
   else expect(environmentName).toMatch(/^[a-z][a-z0-9_-]*$/);
 });

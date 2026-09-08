@@ -6,7 +6,7 @@
 // laptop's network flakes under parallel files):
 //
 //   WORKER_BASE_URL=https://project-worker.iterate.workers.dev \
-//     npx vitest run --config e2e/vitest.config.ts stream-uncontrolled-degradation
+//     pnpm e2e stream-uncontrolled-degradation
 //
 // ⚠️  WARNING — THIS FILE DELIBERATELY RESETS DURABLE OBJECTS (and hammers the shared /api edge). It
 // must NEVER point at anything but the throwaway POC worker (project-worker.iterate.workers.dev):
@@ -35,13 +35,13 @@
 //   • hold poison facet             — a hoarding reduce wedges on the coded checkpoint ceiling, the parent survives;
 //   • hold loaded-isolate OOM       — a runaway WorkerEntrypoint OOMs its OWN isolate, the parent survives.
 
-import { beforeAll, expect, test } from "vitest";
+import { beforeAll, expect } from "vitest";
 import { append, codeOf, freshCtx, openItx } from "./support/client.ts";
+import { deployedOnly, projectHostsAreLocal } from "./support/project-host.ts";
 
 /** Local workerd enforces no memory limit, so every row here is DEPLOYED-ONLY: locally the file
  *  skips (and its 300 MiB of uploads would only starve the parallel lane's other files). */
-const LOCAL = /^https?:\/\/(127\.0\.0\.1|localhost)\b/.test(process.env.WORKER_BASE_URL ?? "");
-const deployed = test.skipIf(LOCAL);
+const deployed = deployedOnly;
 
 const MiB = 1024 * 1024;
 /** A blob of `chars` code units — the payload that fills a body toward the 8 MiB append ceiling. */
@@ -111,7 +111,7 @@ const SEED_EVENT_CHARS = 6 * MiB;
 let seededCtx: string;
 
 beforeAll(async () => {
-  if (LOCAL) return;
+  if (projectHostsAreLocal()) return;
   seededCtx = freshCtx("degrade-seed");
   const itx = openItx(seededCtx);
   for (let n = 0; n < SEED_EVENT_COUNT; n++)

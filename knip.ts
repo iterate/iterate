@@ -203,9 +203,10 @@ function makeWorkspaceDocumentsWorkspace(): WorkspaceConfig {
 }
 
 function makeProjectWorkerWorkspace(): WorkspaceConfig {
-  // The clean-room context worker (wip/kernel-wayfinder). Entries: the worker, the SDK bundle's
+  // The clean-room platform worker (wip/kernel-wayfinder). Entries: the worker, the SDK bundle's
   // source (build-sdk.mjs bundles src/sdk/index.ts + src/client/demo.tsx into src/generated and
-  // public/), the three vitest lanes, the bench, and the Playwright specs.
+  // public/), the ONE vitest config (four projects) + its global setup, the sqlfu config, and the
+  // Playwright specs.
   return {
     entry: [
       "src/worker.ts!",
@@ -213,7 +214,8 @@ function makeProjectWorkerWorkspace(): WorkspaceConfig {
       "src/client/**/*.{ts,tsx}",
       "build-sdk.mjs",
       "vitest.config.ts",
-      "e2e/vitest.config.ts",
+      "vitest.global-setup.ts",
+      "sqlfu.config.ts",
       "e2e/**/*.ts",
       "__workers-tests__/**/*.ts",
       "bench/**/*.ts",
@@ -229,11 +231,12 @@ function makeProjectWorkerWorkspace(): WorkspaceConfig {
       "specs/**/*.ts",
       "!src/generated/**",
     ],
-    ignore: ["src/generated/**"],
-    // vitest resolves `globalSetup` against the package root, knip against the config's own dir.
-    ignoreUnresolved: ["./e2e/support/global-setup.ts"],
-    // `cloudflare:workers` parses as the "cloudflare" package; wrangler backs the deploy script.
-    ignoreDependencies: ["cloudflare", "wrangler"],
+    // src/generated is the SDK bundle (gitignored); sql/.generated is sqlfu's typed-query output,
+    // whose exports are its own catalogue (row types, the query sources).
+    ignore: ["src/generated/**", "src/control-plane/sql/.generated/**"],
+    // `cloudflare:workers` parses as the "cloudflare" package; wrangler backs the deploy script;
+    // miniflare is what wrangler's createTestHarness runs the e2e worker on (a catalog pin, no import).
+    ignoreDependencies: ["cloudflare", "wrangler", "miniflare"],
     ignoreBinaries: ["playwright"],
   };
 }

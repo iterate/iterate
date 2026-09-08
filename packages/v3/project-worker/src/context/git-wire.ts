@@ -45,7 +45,7 @@ const textDecoder = new TextDecoder();
 
 // -- pkt-line ----------------------------------------------------------------
 
-export function pktLine(line: string): Uint8Array {
+function pktLine(line: string): Uint8Array {
   const payload = textEncoder.encode(`${line}\n`);
   return concat([textEncoder.encode((payload.length + 4).toString(16).padStart(4, "0")), payload]);
 }
@@ -287,7 +287,7 @@ function applyDelta(base: Uint8Array, program: Uint8Array): Uint8Array {
  * ref-deltas against in-pack bases. Every returned oid is recomputed from
  * the payload, and the trailing SHA-1 is checked first.
  */
-export async function parsePack(pack: Uint8Array): Promise<RawGitObject[]> {
+async function parsePack(pack: Uint8Array): Promise<RawGitObject[]> {
   if (pack.length < 32 || textDecoder.decode(pack.subarray(0, 4)) !== "PACK") {
     throw new Error("not a pack stream");
   }
@@ -457,7 +457,7 @@ export async function buildPack(
 
 // -- protocol v2 requests --------------------------------------------------------
 
-export function encodeFetchRequest(input: {
+function encodeFetchRequest(input: {
   deepen?: number;
   haves?: string[];
   wants: string[];
@@ -472,7 +472,7 @@ export function encodeFetchRequest(input: {
   return concat(parts);
 }
 
-export function encodeLsRefsRequest(input: { prefixes: string[] }): Uint8Array {
+function encodeLsRefsRequest(input: { prefixes: string[] }): Uint8Array {
   const parts = [pktLine("command=ls-refs"), DELIM, pktLine("peel")];
   for (const prefix of input.prefixes) parts.push(pktLine(`ref-prefix ${prefix}`));
   parts.push(FLUSH);
@@ -485,7 +485,7 @@ export interface LsRefsEntry {
   symrefTarget?: string;
 }
 
-export function parseLsRefs(body: Uint8Array): LsRefsEntry[] {
+function parseLsRefs(body: Uint8Array): LsRefsEntry[] {
   const refs: LsRefsEntry[] = [];
   for (const frame of pktFrames(body)) {
     if (frame.kind !== "line") continue;
@@ -506,7 +506,7 @@ interface FetchResponse {
   shallow: string[];
 }
 
-export function demuxFetchResponse(body: Uint8Array): FetchResponse {
+function demuxFetchResponse(body: Uint8Array): FetchResponse {
   const acks: string[] = [];
   const shallow: string[] = [];
   const packChunks: Uint8Array[] = [];
@@ -531,7 +531,7 @@ export function demuxFetchResponse(body: Uint8Array): FetchResponse {
 
 // -- receive-pack (push) ----------------------------------------------------------
 
-export function encodeReceivePackRequest(input: {
+function encodeReceivePackRequest(input: {
   newOid: string;
   oldOid: string;
   pack: Uint8Array;
@@ -546,7 +546,7 @@ export type PushReport =
   | { detail: string; kind: "rejected" }
   | { detail: string; kind: "indeterminate" };
 
-export function parseReceivePackResponse(body: Uint8Array, expectedRef: string): PushReport {
+function parseReceivePackResponse(body: Uint8Array, expectedRef: string): PushReport {
   // The report may arrive sidebanded (channel 1 wraps an inner pkt stream) or
   // plain; sniff the first frame. Channel 3 carries fatal detail.
   const frames = [...pktFrames(body)].filter((frame) => frame.kind === "line");

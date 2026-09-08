@@ -1,81 +1,61 @@
-// app-config.test.ts — THE TABLE for app-config.ts: the engine over a row table (a required row and
-// a defaulted one), this worker's own table, and the per-env memo. Each row is `{ vars, becomes |
-// throws }`.
+// app-config.test.ts — THE TABLE for app-config.ts: what the three vars become, what is refused (by
+// name), and the per-env memo. Each row is `{ vars, becomes | throws }`.
 import { describe, expect, test } from "vitest";
-import {
-  APP_CONFIG_VAR_ROWS,
-  appConfigOf,
-  appConfigVarParsers,
-  parseAppConfig,
-  parseAppConfigVars,
-  type AppConfigVarRow,
-} from "./app-config.ts";
+import { appConfigOf, parseAppConfig } from "./app-config.ts";
 
-/** A row table with one required row and one defaulted row. */
-const TWO_ROWS = {
-  name: { name: "APP_CONFIG_NAME", parse: appConfigVarParsers.string, required: true },
-  region: { name: "APP_CONFIG_REGION", parse: appConfigVarParsers.string, default: "anywhere" },
-} as const satisfies Record<string, AppConfigVarRow<unknown>>;
-
-describe("parseAppConfigVars — the engine", () => {
+describe("parseAppConfig", () => {
   const rows: { vars: Record<string, unknown>; becomes?: unknown; throws?: RegExp }[] = [
-    // parses, and trims
+    // parses, and trims; the unset vars are blank, the deploy id defaults
     {
-      vars: { APP_CONFIG_NAME: " poc ", APP_CONFIG_REGION: " eu " },
-      becomes: { name: "poc", region: "eu" },
+      vars: { APP_CONFIG_ENVIRONMENT_NAME: " poc " },
+      becomes: {
+        environmentName: "poc",
+        projectHostnameBase: "",
+        projectTokenSecret: "",
+        deployId: "unversioned",
+      },
     },
-    // defaults apply when unset AND when blank; bindings and unrelated vars are ignored
+    // every var read; bindings and unrelated vars are ignored
     {
-      vars: { APP_CONFIG_NAME: "x", APP_CONFIG_REGION: "  ", LOADER: {}, OTHER: "ignored" },
-      becomes: { name: "x", region: "anywhere" },
+      vars: {
+        APP_CONFIG_ENVIRONMENT_NAME: "poc",
+        APP_CONFIG_PROJECT_HOSTNAME_BASE: "iterate.app",
+        APP_CONFIG_PROJECT_TOKEN_SECRET: "s3",
+        LOADER: {},
+        OTHER: "ignored",
+      },
+      becomes: {
+        environmentName: "poc",
+        projectHostnameBase: "iterate.app",
+        projectTokenSecret: "s3",
+        deployId: "unversioned",
+      },
     },
     // refusals, each naming the variable and the shape
-    { vars: {}, throws: /^APP_CONFIG_NAME: required, but unset$/ },
-    { vars: { APP_CONFIG_NAME: "   " }, throws: /^APP_CONFIG_NAME: required, but blank$/ },
-    // a wrangler var may be a JSON object; a row wants a string
+    { vars: {}, throws: /^APP_CONFIG_ENVIRONMENT_NAME: required, but unset or blank$/ },
     {
-      vars: { APP_CONFIG_NAME: { not: "a string" } },
-      throws: /^APP_CONFIG_NAME: expected a string variable/,
+      vars: { APP_CONFIG_ENVIRONMENT_NAME: "   " },
+      throws: /^APP_CONFIG_ENVIRONMENT_NAME: required, but unset or blank$/,
     },
-    // an APP_CONFIG_* variable no row names is a typo, refused with the known names
+    // a wrangler var may be a JSON object; a var wants a string
     {
-      vars: { APP_CONFIG_NAME: "x", APP_CONFIG_NAEM: "typo" },
+      vars: { APP_CONFIG_ENVIRONMENT_NAME: { not: "a string" } },
+      throws: /^APP_CONFIG_ENVIRONMENT_NAME: expected a string variable/,
+    },
+    // an APP_CONFIG_* variable this worker does not name is a typo, refused with the known names
+    {
+      vars: { APP_CONFIG_ENVIRONMENT_NAME: "x", APP_CONFIG_ENVIRONMENT_NAEM: "typo" },
       throws:
-        /^APP_CONFIG_NAEM: unknown configuration variable \(known: APP_CONFIG_NAME, APP_CONFIG_REGION\)$/,
+        /^APP_CONFIG_ENVIRONMENT_NAEM: unknown configuration variable \(known: APP_CONFIG_ENVIRONMENT_NAME, APP_CONFIG_PROJECT_HOSTNAME_BASE, APP_CONFIG_PROJECT_TOKEN_SECRET\)$/,
     },
   ];
   for (const { vars, becomes, throws } of rows)
     test(`${JSON.stringify(vars)} → ${throws ? `throws ${throws}` : JSON.stringify(becomes)}`, () => {
-      if (throws) expect(() => parseAppConfigVars(TWO_ROWS, vars)).toThrow(throws);
-      else expect(parseAppConfigVars(TWO_ROWS, vars)).toEqual(becomes);
+      if (throws) expect(() => parseAppConfig(vars)).toThrow(throws);
+      else expect(parseAppConfig(vars)).toEqual(becomes);
     });
-});
-
-describe("parseAppConfig — this worker's table", () => {
-  test("the table has exactly the rows the worker reads", () => {
-    expect(Object.keys(APP_CONFIG_VAR_ROWS)).toEqual([
-      "environmentName",
-      "projectHostnameBase",
-      "projectTokenSecret",
-    ]);
-  });
-  test("a deployment's config: the environment name from its var, the deploy id handed in", () => {
-    expect(parseAppConfig({ APP_CONFIG_ENVIRONMENT_NAME: "poc" }, "v-123")).toEqual({
-      environmentName: "poc",
-      projectHostnameBase: "",
-      projectTokenSecret: "",
-      deployId: "v-123",
-    });
-    expect(
-      parseAppConfig(
-        { APP_CONFIG_ENVIRONMENT_NAME: "poc", APP_CONFIG_PROJECT_HOSTNAME_BASE: "iterate.app" },
-        "v-123",
-      ).projectHostnameBase,
-    ).toBe("iterate.app");
-  });
-  test("no deploy id ⇒ unversioned; no environment name ⇒ refused by name", () => {
-    expect(parseAppConfig({ APP_CONFIG_ENVIRONMENT_NAME: "solo" }).deployId).toBe("unversioned");
-    expect(() => parseAppConfig({})).toThrow(/^APP_CONFIG_ENVIRONMENT_NAME: required, but unset$/);
+  test("the deploy id is handed in", () => {
+    expect(parseAppConfig({ APP_CONFIG_ENVIRONMENT_NAME: "poc" }, "v-123").deployId).toBe("v-123");
   });
 });
 
@@ -83,7 +63,7 @@ describe("appConfigOf — once per env object", () => {
   test("reads the version-metadata binding, blank ⇒ unversioned, and memoizes on the env", () => {
     const deployed = { APP_CONFIG_ENVIRONMENT_NAME: "poc", CF_VERSION_METADATA: { id: "v-9" } };
     const local = { APP_CONFIG_ENVIRONMENT_NAME: "test", CF_VERSION_METADATA: { id: "" } };
-    const bare = { APP_CONFIG_ENVIRONMENT_NAME: "solo" };
+    const bare = { APP_CONFIG_ENVIRONMENT_NAME: "e2e" };
     const noBase = { projectHostnameBase: "", projectTokenSecret: "" };
     expect(appConfigOf(deployed)).toEqual({ environmentName: "poc", ...noBase, deployId: "v-9" });
     expect(appConfigOf(local)).toEqual({
@@ -92,7 +72,7 @@ describe("appConfigOf — once per env object", () => {
       deployId: "unversioned",
     });
     expect(appConfigOf(bare)).toEqual({
-      environmentName: "solo",
+      environmentName: "e2e",
       ...noBase,
       deployId: "unversioned",
     });
@@ -101,7 +81,7 @@ describe("appConfigOf — once per env object", () => {
   });
   test("a malformed variable throws at first use, naming it", () => {
     expect(() => appConfigOf({ APP_CONFIG_ENVIRONMENT_NAME: "" })).toThrow(
-      /^APP_CONFIG_ENVIRONMENT_NAME: required, but blank$/,
+      /^APP_CONFIG_ENVIRONMENT_NAME: required, but unset or blank$/,
     );
   });
 });

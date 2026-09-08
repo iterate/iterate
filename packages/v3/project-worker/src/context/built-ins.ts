@@ -201,7 +201,7 @@ export interface BuiltInScope extends LibraryRoots {
     delete(name: string): Promise<boolean>;
   };
   /** THE PRIMARY REPO DOOR — `itx.repos` (repos.ts): a repo's file BYTES, git-over-HTTPS, built ON TOP
-   *  of `cfArtifacts` + `../shared/git-wire`. `cfArtifacts` is the raw control-plane escape hatch
+   *  of `cfArtifacts` + `context/git-wire`. `cfArtifacts` is the raw control-plane escape hatch
    *  beneath it. Minimal today: `readFile`/`writeFile` one root-level path on `main` — enough to move
    *  the config worker's source out of KV (`itx.provide("itx.worker", "…itx.repos.readFile(…)")`). */
   repos: ReposScope;
@@ -220,8 +220,9 @@ export interface BuiltInScope extends LibraryRoots {
    *  convention ("/agents/x"); relative ("agents/x", "../inbox") resolves against this context's
    *  path — the same resolver the edge `cd` uses (resolveContextPath). */
   cd(path: string): InvokeHandle;
-  /** Egress: `{{secret:project:NAME}}` placeholders substituted, then the FALLBACK terminal — the
-   *  same door a loaded worker's `globalOutbound` and the edge `itx.fetch(request)` land on. */
+  /** Egress: `{{secret:project:NAME}}` (then platform) placeholders substituted, then the terminal
+   *  `fetch` — the same door a loaded worker's `globalOutbound` and the edge `itx.fetch(request)`
+   *  land on. */
   fetch(request: Request): Promise<Response>;
   /** The rpc-stub REGISTRY — physical, never event-sourced: a client's live capnweb value lent under
    *  an OPAQUE key by its session (relay-side, DON'T-PIN — the edge owns it, this side borrows).
@@ -323,7 +324,7 @@ interface BuildBuiltInsDeps {
   /** A context stream by CANONICAL path — the own-path parent adapter same-isolate, by-name DO
    *  stubs otherwise. Both satisfy ReachableContext (uniform-async, real-typed — see stream/stream.ts). */
   context: (path: string) => ReachableContext;
-  /** The context's egress terminal (secret substitution → FALLBACK). */
+  /** The context's egress terminal (secret substitution → `fetch`). */
   egress: (request: Request) => Promise<Response>;
   /** WHO is calling right now — the principal the DO runs this call under (`invokeAs`, the fetch
    *  lane's header), null for an anonymous session, a processor, a loaded worker. */

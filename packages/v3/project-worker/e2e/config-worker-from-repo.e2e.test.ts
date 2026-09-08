@@ -7,12 +7,10 @@
 // DEPLOYED-TARGET ONLY (Artifacts has no local impl). Run with
 // `WORKER_BASE_URL=https://project-worker.iterate.workers.dev pnpm e2e config-worker-from-repo`.
 
-import { expect, test } from "vitest";
+import { expect } from "vitest";
 import { append, freshCtx, openItx, readAll, until } from "./support/client.ts";
+import { deployedOnly } from "./support/project-host.ts";
 
-const LOCAL_TARGET = /^https?:\/\/(127\.0\.0\.1|localhost)\b/.test(
-  process.env.WORKER_BASE_URL ?? "",
-);
 const PING = "repo-config-ping";
 const PONG = "repo-config-pong";
 
@@ -30,7 +28,7 @@ export default class Config extends ConfigWorker {
   }
 }`;
 
-test.skipIf(LOCAL_TARGET)(
+deployedOnly(
   "config worker: source in a REPO (not KV), loaded via itx.worker → itx.repos.readFile",
   async () => {
     const itx = openItx(freshCtx("cfgrepo"));

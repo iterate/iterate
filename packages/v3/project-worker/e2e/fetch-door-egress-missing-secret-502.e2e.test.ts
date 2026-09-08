@@ -3,10 +3,10 @@
 // terminal is the LAST door that owns the project scope — a `{{secret:project:NAME}}` token that
 // survives substitution means no such secret is stored, and forwarding it would leak the secret's
 // NAME to the destination and send a garbage credential in its place. The door scans the
-// substituted request (URL first, then every header) and answers 502 BEFORE the FALLBACK terminal.
-// `platform`-scope tokens are not this door's business — the next door down owns those. In solo,
-// FALLBACK=DummyControlPlane does a bare `fetch(request)`, so a request that PASSES the door goes
-// out to the network; the 502 cases never reach it, which is exactly what makes them observable.
+// substituted request (URL first, then every header) and answers 502 BEFORE the terminal `fetch`.
+// `platform`-scope tokens are substituted next (PLATFORM_SECRETS_KV), not this scan's business. A
+// request that PASSES the door goes out to the network; the 502 cases never reach it, which is
+// exactly what makes them observable.
 
 import { expect, test } from "vitest";
 import { freshCtx, openItx } from "./support/client.ts";
@@ -40,8 +40,8 @@ test("a missing project secret in the URL query is a loud 502 naming the URL", a
 });
 
 test("a platform-scope token does NOT trip our door (the next door owns platform scope)", async () => {
-  // A platform-only request would pass the door into the solo self-loop, so "forwarded untouched"
-  // is not observable here. What IS observable: the door checks the URL BEFORE the headers, so a
+  // A platform-only request would pass the door out to the network, so "forwarded untouched" is
+  // not observable here. What IS observable: the door checks the URL BEFORE the headers, so a
   // platform token in the URL alongside an unresolved project token in a header is a discriminator —
   // if the door wrongly matched platform scope, the 502 would name the URL token; instead it names
   // the header's project token, proving the platform token sailed past.

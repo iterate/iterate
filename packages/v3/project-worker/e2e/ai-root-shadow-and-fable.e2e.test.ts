@@ -12,6 +12,7 @@
 import { RpcTarget } from "capnweb";
 import { expect, test } from "vitest";
 import { codeOf, freshCtx, openItx, rejection, until } from "./support/client.ts";
+import { deployedOnly } from "./support/project-host.ts";
 
 const MODEL = "@cf/meta/llama-3.2-1b-instruct";
 
@@ -157,7 +158,7 @@ test("the door end to end: `@` is refused in a match, in a call, and outside a t
 });
 
 // DEPLOYED-TARGET MODE only (support/global-setup.ts): a local boot never calls the real binding.
-test.skipIf(/^https?:\/\/(127\.0\.0\.1|localhost)\b/.test(process.env.WORKER_BASE_URL ?? ""))(
+deployedOnly(
   "DEPLOYED: the real binding answers models(); the dream runs ONE real inference through `itx.fable`",
   async () => {
     const ctx = freshCtx("ai-real");

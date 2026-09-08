@@ -1,10 +1,10 @@
-// fetch/egress.test.ts — `substituteHeaderSecrets` (@v3/shared/egress), the substitution the DO's
-// egress terminal runs before FALLBACK: every `{{secret:<scope>:NAME}}` token of THIS door's scope
+// fetch/egress.test.ts — `substituteHeaderSecrets` (fetch/egress.ts), the substitution the DO's
+// egress terminal runs before `fetch`: every `{{secret:<scope>:NAME}}` token of THIS door's scope
 // in the URL and the headers is replaced by its value; other scopes and unresolved names are left
 // intact for the next door down; substituted values are never rescanned; a NEW Request only when
 // something changed (the rebuild is WS-safe — method, Upgrade and body survive it).
 import { expect, test } from "vitest";
-import { substituteHeaderSecrets } from "../shared/egress.ts";
+import { substituteHeaderSecrets } from "./egress.ts";
 
 test("resolved, missing, and other-scope tokens in ONE header substitute exactly the resolvable ones", async () => {
   // The splice arithmetic: an unresolved token BETWEEN two resolved ones survives with the

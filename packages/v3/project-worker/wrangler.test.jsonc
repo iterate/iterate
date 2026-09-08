@@ -21,7 +21,7 @@
   "worker_loaders": [{ "binding": "LOADER" }],
   // NO `ai` binding here, on purpose: Workers AI is REMOTE-ONLY in local dev, and vitest-pool-workers
   // starts a remote proxy session for it at boot (an account to pick, a network to reach). The
-  // workers lane never calls `itx.ai`; the e2e lane boots from wrangler.jsonc (support/solo-config.ts)
+  // workers lane never calls `itx.ai`; the e2e lane boots from wrangler.jsonc (support/worker-config.ts)
   // and carries the binding, and its AI tests shadow it locally / call it only against the deployed
   // worker (e2e/ai-root-shadow-and-fable.e2e.test.ts). `env.AI` is undefined in this lane.
   "version_metadata": { "binding": "CF_VERSION_METADATA" },
@@ -29,8 +29,8 @@
     "bindings": [{ "name": "ITERATE_CONTEXT", "class_name": "IterateContextDurableObject" }],
   },
   "exports": { "IterateContextDurableObject": { "type": "durable-object", "storage": "sqlite" } },
-  // The control plane is in-process — no FALLBACK service. A local (empty) D1 + OAuth KV so the worker
-  // loads; the e2e lane migrates the schema (support/global-setup.ts). ids are meaningless locally.
+  // The control plane is in-process: a local (empty) D1 + OAuth KV so the worker loads; the e2e lane
+  // applies the schema (support/global-setup.ts). ids are meaningless locally.
   "d1_databases": [
     { "binding": "DB", "database_name": "control-plane-directory", "database_id": "test" },
   ],

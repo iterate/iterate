@@ -9,10 +9,10 @@ import { expect, test } from "vitest";
 import { openItx } from "./support/client.ts";
 import { mintProjectToken } from "./support/principal.ts";
 import {
+  deployedOnly,
   fetchProjectHost,
   freshDnsSafeProjectId,
   projectHostnameBase,
-  projectHostsAreLocal,
   registerProject,
 } from "./support/project-host.ts";
 
@@ -126,37 +126,30 @@ test("the session door on a project host: a token becomes the cookie, the cookie
   expect(out.headers["set-cookie"]).toContain("Max-Age=0");
 });
 
-test.skipIf(projectHostsAreLocal())(
-  "deployed: a WebSocket upgrade on the project host reaches the app",
-  async () => {
-    const projectId = freshDnsSafeProjectId("ingress-ws");
-    await registerProject(projectId);
-    const itx = openItx(projectId);
-    await itx.provide("itx.apps.site", siteRule());
-    const ws = new WebSocket(`wss://site--${projectId}.${projectHostnameBase()}/ws`);
-    const echo = await new Promise<string>((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error("no echo within 10 s")), 10_000);
-      ws.addEventListener("open", () => ws.send("hi"));
-      ws.addEventListener("message", (event) => {
-        clearTimeout(timer);
-        resolve(String(event.data));
-      });
-      ws.addEventListener("error", () => reject(new Error("WebSocket error")));
+deployedOnly("deployed: a WebSocket upgrade on the project host reaches the app", async () => {
+  const projectId = freshDnsSafeProjectId("ingress-ws");
+  await registerProject(projectId);
+  const itx = openItx(projectId);
+  await itx.provide("itx.apps.site", siteRule());
+  const ws = new WebSocket(`wss://site--${projectId}.${projectHostnameBase()}/ws`);
+  const echo = await new Promise<string>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("no echo within 10 s")), 10_000);
+    ws.addEventListener("open", () => ws.send("hi"));
+    ws.addEventListener("message", (event) => {
+      clearTimeout(timer);
+      resolve(String(event.data));
     });
-    ws.close(1000, "done");
-    expect(echo).toBe("site-echo:hi");
-  },
-);
+    ws.addEventListener("error", () => reject(new Error("WebSocket error")));
+  });
+  ws.close(1000, "done");
+  expect(echo).toBe("site-echo:hi");
+});
 
-// ADMISSION (wave 0, issue 1): a hostname for a project the control plane does not know is 421 at the
+// ADMISSION (wave 0, issue 1): a hostname for a project the directory does not know is 421 at the
 // edge, before any Durable Object is dialled — a stranger's label under the wildcard mints nothing.
-// Deployed only: the solo lane has no directory (its stand-in says yes to everything).
-test.skipIf(projectHostsAreLocal())(
-  "deployed: a host for a project the control plane does not know is 421, and its label is never an app",
-  async () => {
-    const unknown = freshDnsSafeProjectId("ingress-unknown"); // never registered
-    const answer = await fetchProjectHost(`site--${unknown}.${projectHostnameBase()}`, "/");
-    expect(answer.status, answer.text).toBe(421);
-    expect(answer.text).toContain(unknown);
-  },
-);
+test("a host for a project the directory does not know is 421, and its label is never an app", async () => {
+  const unknown = freshDnsSafeProjectId("ingress-unknown"); // never registered
+  const answer = await fetchProjectHost(`site--${unknown}.${projectHostnameBase()}`, "/");
+  expect(answer.status, answer.text).toBe(421);
+  expect(answer.text).toContain(unknown);
+});

@@ -1,8 +1,9 @@
 // build-sdk.mjs — bundle src/sdk/index.ts (the pure StreamProcessor author class, the
 // StreamProcessorDurableObject host, the contract helper, zod, capnweb's client) into a generated TS
 // module the host injects as `processor.js` into EVERY loaded isolate. Single source of truth: the
-// SAME stream/processor.ts the host tests is what userspace extends. Run by the test and deploy scripts; the generated file is committed so typecheck works
-// without a build.
+// SAME stream/processor.ts the host tests is what userspace extends. The output (src/generated/*) is
+// gitignored: every script that needs it (typecheck, dev, deploy, spec) and the vitest global-setup
+// build it first.
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { build } from "esbuild";

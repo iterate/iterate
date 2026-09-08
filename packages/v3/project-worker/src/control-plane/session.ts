@@ -42,14 +42,14 @@ async function hmacKey(secret: string): Promise<CryptoKey> {
 }
 
 /** `<payload>.<sig>`, payload = base64url(JSON(session)), sig = base64url(HMAC-SHA256(payload)). */
-export async function signSession(session: Session, secret: string): Promise<string> {
+async function signSession(session: Session, secret: string): Promise<string> {
   const payload = b64url(enc.encode(JSON.stringify(session)));
   const sig = await crypto.subtle.sign("HMAC", await hmacKey(secret), enc.encode(payload));
   return `${payload}.${b64url(new Uint8Array(sig))}`;
 }
 
 /** Verify + decode a token; null if malformed or the signature doesn't check out. */
-export async function verifySession(token: string, secret: string): Promise<Session | null> {
+async function verifySession(token: string, secret: string): Promise<Session | null> {
   const dot = token.indexOf(".");
   if (dot < 1) return null;
   const payload = token.slice(0, dot);

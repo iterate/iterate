@@ -12,14 +12,14 @@
 // probes, so it never runs in the sequential board; run it by hand and record `streak reached k`.
 //
 //   RUN_WAKE_LOOP_PROBE=1 WORKER_BASE_URL=https://project-worker.iterate.workers.dev \
-//     npx vitest run --config e2e/vitest.config.ts stream-wake-loop
+//     pnpm e2e stream-wake-loop
 
 import { expect, test } from "vitest";
 import { append, disposeSessions, freshCtx, openItx, readAll, sleep } from "./support/client.ts";
+import { projectHostsAreLocal } from "./support/project-host.ts";
 
-const LOCAL = /^https?:\/\/(127\.0\.0\.1|localhost)\b/.test(process.env.WORKER_BASE_URL ?? "");
 const OPT_IN = process.env.RUN_WAKE_LOOP_PROBE === "1";
-const probe = test.skipIf(LOCAL || !OPT_IN);
+const probe = test.skipIf(projectHostsAreLocal() || !OPT_IN);
 const WOKEN = "events.iterate.com/stream/woken";
 const HALTED = "events.iterate.com/stream/self-wake-halted";
 
@@ -53,7 +53,10 @@ probe(
     const events = await readAll(openItx(ctx)); // one read at the end (the halt, if any, already happened)
     const selfWakeHalts = events.filter((e) => e.type === HALTED).length;
     const woken = events.filter((e) => e.type === WOKEN).length;
-    const streakReached = Number((events.find((e) => e.type === HALTED)?.payload as { streak?: number } | undefined)?.streak ?? 0);
+    const streakReached = Number(
+      (events.find((e) => e.type === HALTED)?.payload as { streak?: number } | undefined)?.streak ??
+        0,
+    );
     console.log(
       `wake-loop OBSERVE: over ${IDLE_MS / 60000}min — woken=${woken}, self-wake-halted=${selfWakeHalts}, streak reached=${streakReached || "<N (drip too slow this run)"}`,
     );

@@ -10,7 +10,7 @@
 // verbatim into the fetch lane, so relative links, host-scoped cookies and WebSocket upgrades all work.
 
 /** The cookie a project host holds a project token in (a browser's lane; `/.itx/session` sets it). */
-export const PROJECT_SESSION_COOKIE = "itx-project-session";
+const PROJECT_SESSION_COOKIE = "itx-project-session";
 /** The one path the platform answers on a project host — `?token=<projectToken>&next=<path>` sets
  *  the cookie and redirects to `next`; `?logout` clears it. Everything else is the app's. */
 export const PROJECT_SESSION_PATH = "/.itx/session";

@@ -42,7 +42,7 @@
 
 import { AsyncLocalStorage } from "node:async_hooks";
 import { DurableObject } from "cloudflare:workers";
-import { substituteHeaderSecrets } from "./shared/egress.ts";
+import { substituteHeaderSecrets } from "./fetch/egress.ts";
 import {
   assertFacetSourceWithinCeiling,
   facetLoaderOwner,

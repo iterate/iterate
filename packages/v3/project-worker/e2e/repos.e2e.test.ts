@@ -1,17 +1,15 @@
 // repos.e2e.test.ts — `itx.repos` against REAL Cloudflare Artifacts on the DEPLOYED worker: the whole
-// git-over-HTTPS round-trip (write a commit, read the blob back) through @v3/shared/git-wire, proving
+// git-over-HTTPS round-trip (write a commit, read the blob back) through context/git-wire, proving
 // the layer that will hold the config worker's source. DEPLOYED-TARGET ONLY (Artifacts has no local
 // impl); run with `WORKER_BASE_URL=https://project-worker.iterate.workers.dev pnpm e2e repos`.
 
-import { expect, test } from "vitest";
+import { expect } from "vitest";
 import { freshCtx, openItx } from "./support/client.ts";
+import { deployedOnly } from "./support/project-host.ts";
 
-const LOCAL_TARGET = /^https?:\/\/(127\.0\.0\.1|localhost)\b/.test(
-  process.env.WORKER_BASE_URL ?? "",
-);
 const rnd = (): string => Math.random().toString(36).slice(2, 8);
 
-test.skipIf(LOCAL_TARGET)(
+deployedOnly(
   "itx.repos writeFile → readFile round-trips a file through real git-over-HTTPS",
   async () => {
     const itx = openItx(freshCtx("repos"));

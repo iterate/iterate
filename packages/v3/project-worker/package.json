@@ -6,12 +6,11 @@
   "scripts": {
     "dev": "node build-sdk.mjs && wrangler dev",
     "deploy": "node build-sdk.mjs && wrangler deploy",
-    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.client.json && tsc --noEmit -p tsconfig.tests.json",
-    "test": "node build-sdk.mjs && vitest run",
-    "test:unit": "vitest run --project unit",
-    "e2e": "node build-sdk.mjs && vitest run --config e2e/vitest.config.ts",
+    "typecheck": "node build-sdk.mjs && tsc --noEmit && tsc --noEmit -p tsconfig.client.json && tsc --noEmit -p tsconfig.tests.json",
+    "test": "vitest run",
+    "e2e": "vitest run --project e2e",
     "spec": "node build-sdk.mjs && playwright test",
-    "bench": "node build-sdk.mjs && vitest bench --run --config bench/vitest.config.ts",
+    "bench": "vitest bench --run --project bench",
     "sqlfu:generate": "sqlfu generate",
     "sqlfu:check": "sqlfu check all",
     "db:schema:remote": "wrangler d1 execute control-plane-directory --remote --file src/control-plane/definitions.sql"

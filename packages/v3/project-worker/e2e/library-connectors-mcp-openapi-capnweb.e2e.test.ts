@@ -5,14 +5,14 @@
 // under /api/v2), and its capnweb door at /capnweb (batch and WebSocket). Every door takes the shop's
 // ordinary bearer token in the Authorization header, minted here the cheapest way the shop offers
 // (legacy login, any email + the fixture password) and passed as the connector's `headers` option —
-// exactly what a user would write. THIS FILE DEPENDS ON THE DEPLOYED PET SHOP. Locally egress is the
-// DummyControlPlane (Node's fetch, which reaches the internet but cannot upgrade to a WebSocket, so the
-// WebSocket transport is proved against the deployed worker only); deployed it is the control plane. The
-// last two tests dial THIS worker's own /api through the library: a context calling another project.
+// exactly what a user would write. THIS FILE DEPENDS ON THE DEPLOYED PET SHOP; egress is the DO's own
+// fetch (local workerd reaches the internet too, but its outbound fetch cannot upgrade to a
+// WebSocket, so the WebSocket transports are proved against the deployed worker only). The last two
+// tests dial THIS worker's own /api through the library: a context calling another project.
 import { afterAll, beforeAll, expect, test } from "vitest";
 import { disposeSessions, freshCtx, openItx, workerUrl } from "./support/client.ts";
+import { deployedOnly } from "./support/project-host.ts";
 
-const LOCAL = /^https?:\/\/(127\.0\.0\.1|localhost)\b/.test(process.env.WORKER_BASE_URL ?? "");
 const PETSHOP = (process.env.PETSHOP_BASE_URL ?? "https://dummy-petshop.iterate.com").replace(
   /\/+$/,
   "",
@@ -135,7 +135,7 @@ test("connectToOpenApi: without the bearer the document itself is a 401", async 
   ).rejects.toThrow(/returned 401/);
 });
 
-test.skipIf(LOCAL)(
+deployedOnly(
   "connectToCapnweb: the shop's /capnweb over a WebSocket session THROUGH EGRESS — the bearer rides the upgrade header; a chain pipelines; held; disposed on close",
   async () => {
     const headers = await bearerFor("capnweb-ws@example.com");
@@ -154,7 +154,7 @@ test.skipIf(LOCAL)(
   },
 );
 
-test.skipIf(LOCAL)(
+deployedOnly(
   "connectToCapnweb, WebSocket: without the bearer the upgrade is refused (401, no socket)",
   async () => {
     const itx = openItx(freshCtx("lib-capnweb-401"));
@@ -192,7 +192,7 @@ test("self-dial, batch: a context calls ANOTHER project through this worker's ow
   expect(whoami).toEqual({ projectId: other, path: "/" });
 });
 
-test.skipIf(LOCAL)(
+deployedOnly(
   "self-dial, WebSocket: the same call over a WebSocket session through the deployed egress",
   async () => {
     const other = freshCtx("lib-other-ws");

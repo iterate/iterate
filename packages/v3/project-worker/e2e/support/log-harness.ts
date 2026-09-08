@@ -2,11 +2,11 @@
 // worker's console (wrangler's `getLogs()`): the delivery loop's "no dropped-push warn / no dispatch
 // error" pins (push-delivery-no-dropped-warns.e2e). Logs are worker-global, so those tests need a
 // worker nobody else drives — everything else in the lane speaks to the shared worker through
-// support/client.ts. Same SOLO topology (support/solo-config.ts), same capnweb-over-WebSocket door.
+// support/client.ts. Same config (support/worker-config.ts), same capnweb-over-WebSocket door.
 
 import { newWebSocketRpcSession } from "capnweb";
 import { createTestHarness } from "wrangler";
-import { PACKAGE_DIR, soloWorkerConfig } from "./solo-config.ts";
+import { e2eWorkerConfig, PACKAGE_DIR } from "./worker-config.ts";
 
 export type LoggedWorker = {
   /** Base URL of this worker, e.g. http://127.0.0.1:1234. */
@@ -24,7 +24,7 @@ export type LoggedWorker = {
 export async function startLoggedWorker(): Promise<LoggedWorker> {
   const server = createTestHarness({
     root: PACKAGE_DIR,
-    workers: [{ config: soloWorkerConfig() }],
+    workers: [{ config: e2eWorkerConfig() }],
   });
   const { url } = await server.listen();
   const sessions: unknown[] = [];

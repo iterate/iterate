@@ -7,6 +7,5 @@ import { afterEach, inject } from "vitest";
 import { disposeSessions } from "./client.ts";
 
 process.env.WORKER_BASE_URL = inject("workerBaseUrl");
-process.env.DUMMY_CAPNWEB_URL = inject("dummyCapnwebUrl");
 
 afterEach(() => disposeSessions());
