@@ -16,7 +16,7 @@ test("a recovery snapshot updates the preview and cancels stale debounced text",
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   const delivery = Promise.withResolvers<CollabWaitResult>();
-  const lane: WorkspaceDocumentLane = {
+  const documentSession: WorkspaceDocumentLane = {
     open: async () => ({ content: "# Before", epoch: "first", version: 0 }),
     wait: vi
       .fn()
@@ -33,8 +33,8 @@ test("a recovery snapshot updates the preview and cancels stale debounced text",
     }),
   };
   const transport: WorkspaceDocumentTransport = {
-    run: async (operation) => await operation(lane),
-    runOnce: async (operation) => await operation(lane),
+    run: async (operation) => await operation(documentSession),
+    runOnce: async (operation) => await operation(documentSession),
   };
   const apiRef: { current: CollabEditorApi | null } = { current: null };
   const onLiveContent = vi.fn();
