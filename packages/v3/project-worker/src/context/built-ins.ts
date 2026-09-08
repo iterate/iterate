@@ -201,7 +201,7 @@ export interface BuiltInScope extends LibraryRoots {
     delete(name: string): Promise<boolean>;
   };
   /** THE PRIMARY REPO DOOR — `itx.repos` (repos.ts): a repo's file BYTES, git-over-HTTPS, built ON TOP
-   *  of `cfArtifacts` + `@v3/shared/git-wire`. `cfArtifacts` is the raw control-plane escape hatch
+   *  of `cfArtifacts` + `../shared/git-wire`. `cfArtifacts` is the raw control-plane escape hatch
    *  beneath it. Minimal today: `readFile`/`writeFile` one root-level path on `main` — enough to move
    *  the config worker's source out of KV (`itx.provide("itx.worker", "…itx.repos.readFile(…)")`). */
   repos: ReposScope;

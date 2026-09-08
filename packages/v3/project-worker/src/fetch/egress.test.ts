@@ -4,7 +4,7 @@
 // intact for the next door down; substituted values are never rescanned; a NEW Request only when
 // something changed (the rebuild is WS-safe — method, Upgrade and body survive it).
 import { expect, test } from "vitest";
-import { substituteHeaderSecrets } from "@v3/shared/egress";
+import { substituteHeaderSecrets } from "../shared/egress.ts";
 
 test("resolved, missing, and other-scope tokens in ONE header substitute exactly the resolvable ones", async () => {
   // The splice arithmetic: an unresolved token BETWEEN two resolved ones survives with the

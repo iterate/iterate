@@ -1,5 +1,5 @@
 // repos.ts — `itx.repos`: the MINIMAL git-backed repo layer, one file at a time, built ON TOP of the
-// Artifacts binding (`itx.cfArtifacts`) + `@v3/shared/git-wire` (the copied git-over-HTTPS engine).
+// Artifacts binding (`itx.cfArtifacts`) + `../shared/git-wire` (the copied git-over-HTTPS engine).
 // Just enough to move the config worker's source out of KV and into a real repo:
 //   • readFile(repo, path)  — the tip commit's tree → the path's blob (the `itx.worker` source producer).
 //   • writeFile(repo, path, content) — one commit on `main` (create the repo on first write; seeding).
@@ -21,7 +21,7 @@ import {
   type GitObjectType,
   type RawGitObject,
   type TreeEntry,
-} from "@v3/shared/git-wire";
+} from "../shared/git-wire.ts";
 import type { ArtifactsNamespace } from "./built-ins.ts";
 
 const BRANCH = "main";

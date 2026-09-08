@@ -2,7 +2,7 @@
   "name": "project-worker",
   "private": true,
   "type": "module",
-  "description": "The clean-room capability host — ONE worker, one package: worker.ts (the stateless capnweb edge) + IterateContextDurableObject (iterate-context-durable-object.ts) + context/ fetch/ stream/ sdk/ lib/",
+  "description": "The clean-room platform — ONE worker, one package: worker.ts (the stateless capnweb edge + ingress router) + IterateContextDurableObject (iterate-context-durable-object.ts) + control-plane/ (OAuth AS + D1/sqlfu directory + /mcp, always in-process) + context/ fetch/ stream/ sdk/ lib/ shared/",
   "scripts": {
     "dev": "node build-sdk.mjs && wrangler dev",
     "deploy": "node build-sdk.mjs && wrangler deploy",
@@ -11,23 +11,31 @@
     "test:unit": "vitest run --project unit",
     "e2e": "node build-sdk.mjs && vitest run --config e2e/vitest.config.ts",
     "spec": "node build-sdk.mjs && playwright test",
-    "bench": "node build-sdk.mjs && vitest bench --run --config bench/vitest.config.ts"
+    "bench": "node build-sdk.mjs && vitest bench --run --config bench/vitest.config.ts",
+    "sqlfu:generate": "sqlfu generate",
+    "sqlfu:migrate": "sqlfu migrate",
+    "sqlfu:check": "sqlfu check all"
   },
   "exports": {
     ".": "./src/worker.ts"
   },
   "dependencies": {
-    "@v3/shared": "workspace:*",
+    "@cloudflare/workers-oauth-provider": "^0.8.3",
+    "@modelcontextprotocol/server": "2.0.0",
     "capnweb": "npm:@iterate-com/capnweb@^0.12.2",
     "json5": "^2.2.3",
+    "pako": "^3.0.1",
+    "sqlfu": "0.1.1",
     "zod": "^4.1.5"
   },
   "devDependencies": {
     "@cloudflare/vitest-plugin": "^1.1.2",
     "@cloudflare/workers-types": "^5.20260831.1",
+    "@types/pako": "^2.0.4",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
     "esbuild": "^0.27.4",
+    "miniflare": "catalog:cloudflare",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
     "typescript": "^5.9.3",

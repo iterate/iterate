@@ -17,7 +17,7 @@ import {
   resolveRoute,
   upsertRoute,
   upsertUser,
-} from "../sql/.generated/index.ts";
+} from "./sql/.generated/index.ts";
 import { newOrgId, newProjectId, slugify } from "./ids.ts";
 
 export interface User {
