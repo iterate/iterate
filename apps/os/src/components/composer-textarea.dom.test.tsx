@@ -40,7 +40,7 @@ function fileSuggestion(path: string) {
     id: path,
     label: path,
     completion: {
-      type: "reference" as const,
+      type: "mention" as const,
       display: `@${path}`,
       target: {
         type: "repo-file" as const,
@@ -123,7 +123,7 @@ async function settleSuggestionSearch(delayMs = 10) {
   await act(async () => new Promise((resolve) => setTimeout(resolve, delayMs)));
 }
 
-test("typing a trigger keeps editor focus and Enter inserts an atomic reference", async () => {
+test("typing a trigger keeps editor focus and Enter inserts an atomic mention", async () => {
   const onDocumentChange = vi.fn();
   const { content, root, view } = await mountHarness({ onDocumentChange });
   expect(content.getAttribute("aria-placeholder")).toBe("Message this agent");
@@ -140,11 +140,11 @@ test("typing a trigger keeps editor focus and Enter inserts an atomic reference"
     ),
   );
   expect(view.state.doc.toString()).toBe("@AGENTS.md ");
-  expect(document.querySelector(".cm-agent-reference")?.textContent).toBe("@AGENTS.md");
+  expect(document.querySelector(".cm-agent-mention")?.textContent).toBe("@AGENTS.md");
   const message = onDocumentChange.mock.calls.at(-1)?.[0] as Message;
   expect(agentMessageToEditorDocument(message).text).toBe("@AGENTS.md ");
-  expect(message.content).toBe("[@AGENTS.md](ref://config-repo/AGENTS.md) ");
-  expect(message.references).toHaveLength(1);
+  expect(message.content).toBe("[@AGENTS.md](mention://config-repo/AGENTS.md) ");
+  expect(message.mentions).toHaveLength(1);
 
   await act(async () => {
     view.dispatch({ changes: { from: 10, to: 11 }, selection: { anchor: 10 } });
@@ -155,7 +155,7 @@ test("typing a trigger keeps editor focus and Enter inserts an atomic reference"
     ),
   );
   expect(view.state.doc.toString()).toBe("");
-  expect(document.querySelector(".cm-agent-reference")).toBeNull();
+  expect(document.querySelector(".cm-agent-mention")).toBeNull();
 
   await act(async () => root.unmount());
 });
@@ -225,7 +225,7 @@ test("choosing a mention before an existing pill preserves document order and th
   expect(view.state.doc.toString()).toBe("@AGENTS.md @worker.ts ");
   expect(view.state.selection.main.head).toBe(11);
   expect(
-    [...document.querySelectorAll(".cm-agent-reference")].map((pill) => pill.textContent),
+    [...document.querySelectorAll(".cm-agent-mention")].map((pill) => pill.textContent),
   ).toEqual(["@AGENTS.md", "@worker.ts"]);
 
   await act(async () => root.unmount());

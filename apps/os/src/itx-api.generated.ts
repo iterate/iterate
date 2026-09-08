@@ -559,9 +559,9 @@ export interface Agent {
    * `{ type: "agent", path }` and does NOT refill the receiver's autonomous
    * turn budget, so agent↔agent reply loops stay bounded; from anywhere else
    * (web UI, CLI, MCP session) it is a user message. The agent must already
-   * have been created explicitly. `references` are typed resources addressed
+   * have been created explicitly. `mentions` are typed resources addressed
    * from `content` with Markdown-like links such as
-   * `[@AGENTS.md](ref://config-repo/AGENTS.md)`. Optional files are stored
+   * `[@AGENTS.md](mention://config-repo/AGENTS.md)`. Optional files are stored
    * in project file storage and ride the same event (images stay visible to
    * vision-capable models).
    */
@@ -2731,10 +2731,10 @@ export type AgentProcessorState = {
         payload: {
           role: "assistant" | "developer" | "system" | "user";
           content: string;
-          references?:
+          mentions?:
             | { type: "repo-file"; repoPath: "/repos/config"; path: string; id: string }[]
             | undefined;
-          referenceResolution?: unknown;
+          mentionResolution?: unknown;
           key?: string | undefined;
           files?:
             | { contentType: string; filename: string; path: string; size: number; url: string }[]
@@ -2789,10 +2789,10 @@ export type AgentProcessorState = {
         payload: {
           role: "assistant" | "developer" | "system" | "user";
           content: string;
-          references?:
+          mentions?:
             | { type: "repo-file"; repoPath: "/repos/config"; path: string; id: string }[]
             | undefined;
-          referenceResolution?: unknown;
+          mentionResolution?: unknown;
           key?: string | undefined;
           files?:
             | { contentType: string; filename: string; path: string; size: number; url: string }[]
@@ -2984,10 +2984,10 @@ export type AgentEventInput =
       {
         role: "assistant" | "developer" | "system" | "user";
         content: string;
-        references?:
+        mentions?:
           | { type: "repo-file"; repoPath: "/repos/config"; path: string; id: string }[]
           | undefined;
-        referenceResolution?: unknown;
+        mentionResolution?: unknown;
         key?: string | undefined;
         files?:
           | { contentType: string; filename: string; path: string; size: number; url: string }[]
@@ -3141,10 +3141,10 @@ export type CapabilityHostCreateInput = {
   fallback?: unknown;
 };
 
-/** Readable message content with optional resources addressed by inline ref:// links. */
+/** Readable message content with optional resources addressed by inline mention:// links. */
 export type Message = {
   content: string;
-  references?: Reference[];
+  mentions?: Mention[];
 };
 
 /**
@@ -4672,18 +4672,18 @@ export type JsonValue =
   | JsonValue[]
   | { [key: string]: JsonValue };
 
-/** A typed resource identified by a ref:// link in message content. */
-export type Reference = { type: "repo-file"; repoPath: "/repos/config"; path: string; id: string };
+/** A typed resource identified by a mention:// link in message content. */
+export type Mention = { type: "repo-file"; repoPath: "/repos/config"; path: string; id: string };
 
 /** One model-visible context item's payload — the wire contract for every
  * committed `agents/context-added` event. */
 export type AgentContextAddedPayload = {
   role: "assistant" | "developer" | "system" | "user";
   content: string;
-  references?:
+  mentions?:
     | { type: "repo-file"; repoPath: "/repos/config"; path: string; id: string }[]
     | undefined;
-  referenceResolution?: unknown;
+  mentionResolution?: unknown;
   key?: string | undefined;
   files?:
     | { contentType: string; filename: string; path: string; size: number; url: string }[]

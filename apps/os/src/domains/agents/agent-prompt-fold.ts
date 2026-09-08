@@ -12,7 +12,7 @@ import {
   isAgentRuntimeZero,
   type AgentRuntime,
 } from "@iterate-com/shared/agent-events";
-import { decodeMessageReferences, hasConfigRepoFileReferences } from "@iterate-com/shared/message";
+import { decodeMessageMentions, hasConfigRepoFileMentions } from "@iterate-com/shared/message";
 import {
   cachedEventSchema,
   getConsumedEventDefinition,
@@ -381,13 +381,13 @@ type AgentContextSchedulingSemantics = {
   clearsWaitingFor: boolean;
 };
 
-/** Capture the source item's scheduling meaning before reference resolution
+/** Capture the source item's scheduling meaning before mention resolution
  * replaces it as the event that actually drives the turn loop. */
-export function contextSchedulingSemanticsForReferenceResolution(
+export function contextSchedulingSemanticsForMentionResolution(
   payload: AgentContextAddedPayload,
 ): AgentContextSchedulingSemantics {
   return {
-    // `agent.message()` stages a reference-bearing source with
+    // `agent.message()` stages a mention-bearing source with
     // dont-trigger-request. Resolution replaces that gate, so derive the
     // source's actual actor/role meaning without carrying the staging policy
     // onto the resolver event.
@@ -403,8 +403,8 @@ export function contextSchedulingSemanticsForReferenceResolution(
  * named outside author — a user, slack/telegram/email/github, any
  * integration — is an external trigger that refills the loop budget. */
 function contextTriggerSource(payload: AgentContextAddedPayload): "external" | "agent-loop" | null {
-  if (contextNeedsReferenceMaterialization(payload)) return null;
-  const sourceScheduling = referenceResolutionSourceScheduling(payload);
+  if (contextNeedsMentionMaterialization(payload)) return null;
+  const sourceScheduling = mentionResolutionSourceScheduling(payload);
   return sourceScheduling === undefined
     ? intrinsicContextTriggerSource(payload)
     : sourceScheduling.triggerSource;
@@ -435,9 +435,9 @@ function intrinsicContextTriggerSource(
  * input" summary. Script results and platform feedback (no actor) are
  * continuations of the same turn, so they deliberately do not clear it. */
 export function contextClearsWaitingFor(payload: AgentContextAddedPayload): boolean {
-  if (contextNeedsReferenceMaterialization(payload)) return false;
+  if (contextNeedsMentionMaterialization(payload)) return false;
   return (
-    referenceResolutionSourceScheduling(payload)?.clearsWaitingFor ??
+    mentionResolutionSourceScheduling(payload)?.clearsWaitingFor ??
     intrinsicContextClearsWaitingFor(payload)
   );
 }
@@ -457,17 +457,17 @@ function intrinsicContextClearsWaitingFor(
   return payload.actor !== undefined && payload.actor.type !== "script";
 }
 
-function referenceResolutionSourceScheduling(
+function mentionResolutionSourceScheduling(
   payload: AgentContextAddedPayload,
 ): AgentContextSchedulingSemantics | undefined {
   if (
     payload.role !== "developer" ||
     payload.actor?.type !== "integration" ||
-    payload.actor.name !== "agent-reference-resolver"
+    payload.actor.name !== "agent-mention-resolver"
   ) {
     return undefined;
   }
-  const resolution = payload.referenceResolution;
+  const resolution = payload.mentionResolution;
   if (!isUnknownRecord(resolution)) return undefined;
   const scheduling = resolution.sourceScheduling;
   if (!isUnknownRecord(scheduling)) return undefined;
@@ -485,10 +485,10 @@ function isUnknownRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-function contextNeedsReferenceMaterialization(payload: AgentContextAddedPayload): boolean {
-  if (payload.references === undefined) return false;
-  const message = decodeMessageReferences(payload.content, payload.references);
-  return message !== null && hasConfigRepoFileReferences(message.references);
+function contextNeedsMentionMaterialization(payload: AgentContextAddedPayload): boolean {
+  if (payload.mentions === undefined) return false;
+  const message = decodeMessageMentions(payload.content, payload.mentions);
+  return message !== null && hasConfigRepoFileMentions(message.mentions);
 }
 
 type AgentContextItems = AgentProcessorState["contextItems"];

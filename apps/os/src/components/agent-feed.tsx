@@ -1,7 +1,7 @@
 import { memo, useCallback, useLayoutEffect, useRef, useState } from "react";
 import { Link } from "@tanstack/react-router";
 import type { AgentRuntime } from "@iterate-com/shared/agent-events";
-import { decodeMessageReferences } from "@iterate-com/shared/message";
+import { decodeMessageMentions } from "@iterate-com/shared/message";
 import {
   BanIcon,
   ChevronRightIcon,
@@ -25,7 +25,7 @@ import {
   type AgentUiItem,
   type AgentUiMessageItem,
   type AgentUiMessageVia,
-  type AgentUiReferenceResolution,
+  type AgentUiMentionResolution,
   type AgentUiStep,
 } from "@iterate-com/ui/components/events/agent-ui-reducer";
 import {
@@ -492,7 +492,7 @@ export function QueuedMessagesPanel({
 
 function UserMessageBody({ item }: { item: AgentUiMessageItem }) {
   const decodedMessage =
-    item.references === undefined ? null : decodeMessageReferences(item.text, item.references);
+    item.mentions === undefined ? null : decodeMessageMentions(item.text, item.mentions);
   return (
     <>
       {item.via == null ? null : <MessageViaLabel via={item.via} className="opacity-70" />}
@@ -501,39 +501,37 @@ function UserMessageBody({ item }: { item: AgentUiMessageItem }) {
           <div className="whitespace-pre-wrap leading-6">{item.text}</div>
         ) : (
           <div className="whitespace-pre-wrap leading-6">
-            {decodedMessage.ranges.flatMap((reference, index) => {
+            {decodedMessage.ranges.flatMap((mention, index) => {
               const previousEnd = decodedMessage.ranges[index - 1]?.to ?? 0;
-              const warning = referenceResolutionWarning(
-                item.referenceResolutions?.[reference.reference.id],
+              const warning = mentionResolutionWarning(
+                item.mentionResolutions?.[mention.mention.id],
               );
               return [
-                <span key={`text-${reference.from}`}>
-                  {decodedMessage.text.slice(previousEnd, reference.from)}
+                <span key={`text-${mention.from}`}>
+                  {decodedMessage.text.slice(previousEnd, mention.from)}
                 </span>,
                 <Badge
-                  key={`${reference.reference.id}-${reference.from}`}
+                  key={`${mention.mention.id}-${mention.from}`}
                   variant="outline"
                   className={cn(
                     "mx-0.5 inline-flex max-w-full align-middle font-mono font-normal",
                     warning !== null &&
                       "border-amber-500/50 bg-amber-500/10 text-amber-800 dark:text-amber-300",
                   )}
-                  title={warning ?? reference.reference.path}
-                  aria-label={warning === null ? undefined : `${reference.display}: ${warning}`}
-                  data-reference-type={reference.reference.type}
-                  data-reference-resolution={
-                    item.referenceResolutions?.[reference.reference.id]?.status
-                  }
+                  title={warning ?? mention.mention.path}
+                  aria-label={warning === null ? undefined : `${mention.display}: ${warning}`}
+                  data-mention-type={mention.mention.type}
+                  data-mention-resolution={item.mentionResolutions?.[mention.mention.id]?.status}
                 >
                   {warning === null ? (
                     <FileIcon className="size-3" aria-hidden="true" />
                   ) : (
                     <CircleAlertIcon className="size-3" aria-hidden="true" />
                   )}
-                  <span className="truncate">{reference.display}</span>
+                  <span className="truncate">{mention.display}</span>
                 </Badge>,
                 ...(index === decodedMessage.ranges.length - 1
-                  ? [<span key="text-tail">{decodedMessage.text.slice(reference.to)}</span>]
+                  ? [<span key="text-tail">{decodedMessage.text.slice(mention.to)}</span>]
                   : []),
               ];
             })}
@@ -559,9 +557,7 @@ function UserMessageBody({ item }: { item: AgentUiMessageItem }) {
   );
 }
 
-function referenceResolutionWarning(
-  resolution: AgentUiReferenceResolution | undefined,
-): string | null {
+function mentionResolutionWarning(resolution: AgentUiMentionResolution | undefined): string | null {
   if (resolution === undefined) return null;
   if (resolution.status === "missing") return "File was not found when this message was processed";
   if (resolution.status === "binary") return "Binary file content was not included";
