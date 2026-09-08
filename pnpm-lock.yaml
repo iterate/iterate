@@ -450,6 +450,9 @@ importers:
       yaml:
         specifier: ^2.8.0
         version: 2.8.3
+      zod:
+        specifier: 4.5.4
+        version: 4.5.4(patch_hash=bf04bb1ec1f0b9f31a7416bf98f83d3451e5011852877ca0ac19c12fcb3129b5)
 
   apps/dummy-petshop:
     dependencies:
