@@ -1,7 +1,16 @@
 {
   "name": "@iterate-com/voice-agent",
   "version": "0.1.0",
-  "description": "The realtime voice agent for iterate projects: a guest worker a config repo pulls in from its package.json.",
+  "description": "The realtime voice agent for iterate projects, as a guest worker a config repo pulls in with one package.json line: the platform builds it from node_modules, VoiceAgentApp gives the project worker its methods (health, setup, remove), and the worker refs and installer let a CLI or a phone enable and dial it.",
+  "keywords": [
+    "iterate",
+    "voice",
+    "realtime",
+    "grok",
+    "openai",
+    "cloudflare-workers",
+    "durable-objects"
+  ],
   "license": "Apache-2.0",
   "type": "module",
   "repository": {
