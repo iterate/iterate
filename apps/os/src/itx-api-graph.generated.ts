@@ -2653,10 +2653,10 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "AiRequest",
     kind: "typeAlias",
     sourceText:
-      '/** The two concrete outbound APIs, after host policy and request preparation. No credentials. */\nexport type AiRequest =\n  | {\n      kind: "openai-http";\n      gatewayId: string;\n      endpoint: string;\n      headers: Record<string, string>;\n      body: Record<string, unknown>;\n    }\n  | {\n      kind: "workers-ai";\n      model: string;\n      body: Record<string, unknown>;\n      options: CfAiRunOptions & {\n        returnRawResponse: true;\n        gateway: { id: string; metadata: Record<string, string | number> };\n      };\n    };',
+      "/** The two concrete outbound APIs, after host policy and request preparation. No credentials. */\nexport type AiRequest = OpenAiHttpRequest | WorkersAiRequest;",
     summary: "The two concrete outbound APIs, after host policy and request preparation.",
     memberSummaries: {},
-    referencedTypeNames: ["CfAiRunOptions"],
+    referencedTypeNames: ["OpenAiHttpRequest", "WorkersAiRequest"],
   },
   {
     name: "TypedStreamEventInput",
@@ -2842,6 +2842,24 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     summary: "One-shot acknowledgement capability owned by a single durable wake batch.",
     memberSummaries: {},
     referencedTypeNames: ["StreamWakeDeliveryResult"],
+  },
+  {
+    name: "OpenAiHttpRequest",
+    kind: "typeAlias",
+    sourceText:
+      'export type OpenAiHttpRequest = {\n  kind: "openai-http";\n  gatewayId: string;\n  endpoint: string;\n  headers: Record<string, string>;\n  body: Record<string, unknown>;\n};',
+    summary: "",
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
+    name: "WorkersAiRequest",
+    kind: "typeAlias",
+    sourceText:
+      'export type WorkersAiRequest = {\n  kind: "workers-ai";\n  model: string;\n  body: Record<string, unknown>;\n  options: CfAiRunOptions & {\n    returnRawResponse: true;\n    gateway: { id: string; metadata: Record<string, string | number> };\n  };\n};',
+    summary: "",
+    memberSummaries: {},
+    referencedTypeNames: ["CfAiRunOptions"],
   },
   {
     name: "CfImageTransformOptions",

@@ -5,7 +5,8 @@ import {
   noAiInterceptorError,
   InterceptedAiResponse,
   type ProjectAiInterceptorInput,
-  type AiRequest,
+  type OpenAiHttpRequest,
+  type WorkersAiRequest,
 } from "../../lib/model-interception.ts";
 import { readAiCallStop } from "./ai-budget.ts";
 
@@ -140,24 +141,27 @@ export async function runWorkersAiAttempt(input: {
     const prepared =
       route.kind === "openai-http"
         ? await deadline.race(
-            prepareOpenAiRequest(
-              { model: route.model, transport: route.transport, metadata: input.metadata },
-              {
-                endpoint: "chat/completions",
-                body,
-                headers: new Headers(),
-                cache:
-                  route.transport.responseCacheTtlSeconds !== undefined &&
-                  !input.messages.some((message) => message.containsFiles)
-                    ? { ttlSeconds: route.transport.responseCacheTtlSeconds }
-                    : null,
-              },
-            ),
+            prepareOpenAiRequest({
+              model: route.model,
+              transport: route.transport,
+              metadata: input.metadata,
+              endpoint: "chat/completions",
+              body,
+              headers: new Headers(),
+              cache:
+                route.transport.responseCacheTtlSeconds !== undefined &&
+                !input.messages.some((message) => message.containsFiles)
+                  ? { ttlSeconds: route.transport.responseCacheTtlSeconds }
+                  : null,
+            }),
           )
-        : prepareWorkersAiRequest(
-            { model: route.model, gatewayId: route.gatewayId, metadata: input.metadata },
-            { body, options: {} },
-          );
+        : prepareWorkersAiRequest({
+            model: route.model,
+            gatewayId: route.gatewayId,
+            metadata: input.metadata,
+            body,
+            options: {},
+          });
     const response = await deadline.race(
       sendAiRequest(
         {
@@ -447,25 +451,21 @@ function resolveAiRoute(model: string, transport: CloudflareAiGatewayTransport) 
 }
 
 type PreparedAiRequest = { sourceModel: string } & (
-  | (Extract<AiRequest, { kind: "openai-http" }> & { credential: string })
-  | (Extract<AiRequest, { kind: "workers-ai" }> & { credential: null })
+  | (OpenAiHttpRequest & { credential: string })
+  | (WorkersAiRequest & { credential: null })
 );
 
 /** Complete OpenAI-native request preparation, including cache policy. */
-export async function prepareOpenAiRequest(
-  account: {
-    model: string;
-    transport: Extract<CloudflareAiGatewayTransport, { kind: "byok" }>;
-    metadata: AiGatewayMetadata;
-  },
-  input: {
-    endpoint: string;
-    body: Record<string, unknown>;
-    headers: Headers;
-    cache: { ttlSeconds: number } | null;
-  },
-): Promise<PreparedAiRequest> {
-  const { transport, model } = account;
+export async function prepareOpenAiRequest(input: {
+  model: string;
+  transport: Extract<CloudflareAiGatewayTransport, { kind: "byok" }>;
+  metadata: AiGatewayMetadata;
+  endpoint: string;
+  body: Record<string, unknown>;
+  headers: Headers;
+  cache: { ttlSeconds: number } | null;
+}): Promise<PreparedAiRequest> {
+  const { transport, model } = input;
   const body = {
     ...input.body,
     ...openAiStreamingUsage(input.endpoint, input.body),
@@ -490,7 +490,7 @@ export async function prepareOpenAiRequest(
         [...input.headers].filter(([name]) => name.startsWith("openai-") || name === "accept"),
       ),
       "content-type": "application/json",
-      "cf-aig-metadata": JSON.stringify(account.metadata),
+      "cf-aig-metadata": JSON.stringify(input.metadata),
       "cf-aig-collect-log": "true",
       "cf-aig-collect-log-payload": "true",
       ...cacheHeaders,
@@ -499,20 +499,23 @@ export async function prepareOpenAiRequest(
 }
 
 /** Complete Workers AI binding input. No HTTP endpoint, headers, or OpenAI credential. */
-export function prepareWorkersAiRequest(
-  account: { model: string; gatewayId: string; metadata: AiGatewayMetadata },
-  input: { body: unknown; options: CfAiRunOptions },
-): PreparedAiRequest {
-  const model = account.model.replace(/^intercepted\//, "");
+export function prepareWorkersAiRequest(input: {
+  model: string;
+  gatewayId: string;
+  metadata: AiGatewayMetadata;
+  body: unknown;
+  options: CfAiRunOptions;
+}): PreparedAiRequest {
+  const model = input.model.replace(/^intercepted\//, "");
   const payload = z.record(z.string(), z.unknown()).parse(input.body);
   const metadata = Object.fromEntries(
-    Object.entries(account.metadata).filter(
+    Object.entries(input.metadata).filter(
       (entry): entry is [string, string | number] => entry[1] !== undefined,
     ),
   );
   return {
     kind: "workers-ai",
-    sourceModel: account.model,
+    sourceModel: input.model,
     credential: null,
     model,
     body: model.startsWith("openai/")
@@ -521,7 +524,7 @@ export function prepareWorkersAiRequest(
     options: {
       ...input.options,
       returnRawResponse: true,
-      gateway: { ...input.options.gateway, id: account.gatewayId, metadata },
+      gateway: { ...input.options.gateway, id: input.gatewayId, metadata },
     },
   };
 }

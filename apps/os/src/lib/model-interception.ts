@@ -39,23 +39,25 @@ export const InterceptedAiResponse = z.object({
 export type InterceptedAiResponse = z.infer<typeof InterceptedAiResponse>;
 
 /** The two concrete outbound APIs, after host policy and request preparation. No credentials. */
-export type AiRequest =
-  | {
-      kind: "openai-http";
-      gatewayId: string;
-      endpoint: string;
-      headers: Record<string, string>;
-      body: Record<string, unknown>;
-    }
-  | {
-      kind: "workers-ai";
-      model: string;
-      body: Record<string, unknown>;
-      options: CfAiRunOptions & {
-        returnRawResponse: true;
-        gateway: { id: string; metadata: Record<string, string | number> };
-      };
-    };
+export type AiRequest = OpenAiHttpRequest | WorkersAiRequest;
+
+export type OpenAiHttpRequest = {
+  kind: "openai-http";
+  gatewayId: string;
+  endpoint: string;
+  headers: Record<string, string>;
+  body: Record<string, unknown>;
+};
+
+export type WorkersAiRequest = {
+  kind: "workers-ai";
+  model: string;
+  body: Record<string, unknown>;
+  options: CfAiRunOptions & {
+    returnRawResponse: true;
+    gateway: { id: string; metadata: Record<string, string | number> };
+  };
+};
 
 /** Original model name and the complete credential-free request that would be dispatched. */
 export type ProjectAiInterceptorInput = {

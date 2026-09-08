@@ -458,13 +458,13 @@ export class AgentLlmRequest {
     if (ai === undefined) {
       throw new Error("Agent processor has no AI binding configured.");
     }
-    if (!this.#host.deps.aiCostAttribution)
+    if (!this.#host.deps.getAiGatewayMetadataInput)
       throw new Error("Agent host has no AI cost attribution");
-    const cost = await this.#host.deps.aiCostAttribution(input.eventOffset);
+    const metadataInput = await this.#host.deps.getAiGatewayMetadataInput(input.eventOffset);
     const completion = await raceAbort(
       input.signal,
       runWorkersAiAttempt({
-        metadata: aiGatewayMetadata(cost.attribution, cost.includeEventOffset),
+        metadata: aiGatewayMetadata(metadataInput),
         agentPath: this.#host.path,
         consultInterceptor: this.#host.deps.consultAiInterceptor,
         ai,

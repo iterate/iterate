@@ -3411,25 +3411,18 @@ class AiRpcTarget extends IterateRpcTarget<"Ai"> {
     const callOptions = options || {};
     const streamContext = this.props.streamContext;
     const config = parseConfig(env);
-    const metadata = aiGatewayMetadata(
-      {
-        ...(await projectStub(env.PROJECT, this.props.projectId).readAiCostIdentity()),
-        stream:
-          streamContext.kind === "script-execution"
-            ? {
-                path: streamContext.streamPath,
-                eventOffset: streamContext.scriptRunRequestedEventOffset,
-              }
-            : streamContext.kind === "scope"
-              ? { path: streamContext.scopePath }
-              : null,
-      },
-      config.cloudflareAiGateway.includeEventOffset,
-    );
-    const request = prepareWorkersAiRequest(
-      { model, gatewayId: config.cloudflareAiGateway.id, metadata },
-      { body, options: callOptions },
-    );
+    const metadata = aiGatewayMetadata({
+      identity: await projectStub(env.PROJECT, this.props.projectId).readAiCostIdentity(),
+      context: streamContext,
+      includeEventOffset: config.cloudflareAiGateway.includeEventOffset,
+    });
+    const request = prepareWorkersAiRequest({
+      model,
+      gatewayId: config.cloudflareAiGateway.id,
+      metadata,
+      body,
+      options: callOptions,
+    });
     const response = await sendAiRequest(
       {
         ai: env.AI,

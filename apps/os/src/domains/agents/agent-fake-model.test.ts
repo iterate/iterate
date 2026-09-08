@@ -192,13 +192,13 @@ function makeInterceptedModelHarness(
           gatewayId: "default",
           openaiApiKey: "must-not-leak",
         }),
-        aiCostAttribution: async () => ({
-          attribution: {
+        getAiGatewayMetadataInput: async (eventOffset) => ({
+          identity: {
             environment: "test",
             projectId: "prj_test",
             projectSlug: "test",
-            stream: { path: "/agents/test" },
           },
+          context: { kind: "agent-turn", streamPath: "/agents/test", eventOffset },
           includeEventOffset: false,
         }),
         ...(consultAiInterceptor === undefined

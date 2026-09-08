@@ -5370,23 +5370,7 @@ export type StreamWakeEventBatch = StreamEventBatch & {
 };
 
 /** The two concrete outbound APIs, after host policy and request preparation. No credentials. */
-export type AiRequest =
-  | {
-      kind: "openai-http";
-      gatewayId: string;
-      endpoint: string;
-      headers: Record<string, string>;
-      body: Record<string, unknown>;
-    }
-  | {
-      kind: "workers-ai";
-      model: string;
-      body: Record<string, unknown>;
-      options: CfAiRunOptions & {
-        returnRawResponse: true;
-        gateway: { id: string; metadata: Record<string, string | number> };
-      };
-    };
+export type AiRequest = OpenAiHttpRequest | WorkersAiRequest;
 
 /** `StreamEventInput` with `type`/`payload` narrowed to one event definition. */
 type TypedStreamEventInput<Type extends string = string, Payload = Record<string, unknown>> = Omit<
@@ -5625,6 +5609,24 @@ export type StreamSubscriptionDescription = {
  * each other forever.
  */
 export type ReportStreamWakeDeliveryResult = (result: StreamWakeDeliveryResult) => unknown;
+
+export type OpenAiHttpRequest = {
+  kind: "openai-http";
+  gatewayId: string;
+  endpoint: string;
+  headers: Record<string, string>;
+  body: Record<string, unknown>;
+};
+
+export type WorkersAiRequest = {
+  kind: "workers-ai";
+  model: string;
+  body: Record<string, unknown>;
+  options: CfAiRunOptions & {
+    returnRawResponse: true;
+    gateway: { id: string; metadata: Record<string, string | number> };
+  };
+};
 
 /** One Cloudflare Images transform step (width, height, fit, rotate, …),
  * passed through to the Images binding verbatim. */

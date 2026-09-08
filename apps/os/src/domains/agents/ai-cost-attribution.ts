@@ -1,29 +1,51 @@
 import { z } from "zod";
+import { StreamContext } from "../projects/stream-context.ts";
 
-export const AiCostAttribution = z.object({
-  environment: z.string().min(1),
-  projectId: z.string().min(1),
-  projectSlug: z.string().min(1),
-  stream: z
-    .object({
-      path: z.string().startsWith("/"),
-      eventOffset: z.number().int().nonnegative().optional(),
-    })
-    .nullable(),
+const AiGatewayMetadataInput = z.object({
+  identity: z.object({
+    environment: z.string().min(1),
+    projectId: z.string().min(1),
+    projectSlug: z.string().min(1),
+  }),
+  context: z.union([
+    StreamContext,
+    z.object({
+      kind: z.literal("agent-turn"),
+      streamPath: z.string().startsWith("/"),
+      eventOffset: z.number().int().nonnegative(),
+    }),
+  ]),
+  includeEventOffset: z.boolean(),
 });
-export type AiCostAttribution = z.infer<typeof AiCostAttribution>;
+export type AiGatewayMetadataInput = z.infer<typeof AiGatewayMetadataInput>;
 
 /** Host identity only. JSON encoding omits absent context; zero remains a valid offset. */
-export function aiGatewayMetadata(attribution: AiCostAttribution, includeEventOffset: boolean) {
-  const value = AiCostAttribution.parse(attribution);
+export function aiGatewayMetadata(input: AiGatewayMetadataInput) {
+  const { identity, context, includeEventOffset } = AiGatewayMetadataInput.parse(input);
+  let streamPath: string | undefined;
+  let eventOffset: number | undefined;
+  switch (context.kind) {
+    case "agent-turn":
+      streamPath = context.streamPath;
+      eventOffset = context.eventOffset;
+      break;
+    case "script-execution":
+      streamPath = context.streamPath;
+      eventOffset = context.scriptRunRequestedEventOffset;
+      break;
+    case "scope":
+      streamPath = context.scopePath;
+      break;
+    case "client-session":
+      break;
+  }
   return {
-    environment: value.environment,
-    projectId: value.projectId,
-    projectSlug: value.projectSlug,
-    streamPath: value.stream?.path,
-    eventOffset: includeEventOffset ? value.stream?.eventOffset : undefined,
-  };
+    ...identity,
+    streamPath,
+    eventOffset: includeEventOffset ? eventOffset : undefined,
+  } satisfies Record<string, string | number | null | undefined>; // ai gateway metadata doesn't allow nested objects
 }
+
 export type AiGatewayMetadata = ReturnType<typeof aiGatewayMetadata>;
 
 /** One reader per DO incarnation. Only the display slug is cached; IDs always come from the host. */

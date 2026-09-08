@@ -93,40 +93,26 @@ export async function routeCompanyOpenAi(input: {
   if (!parsedModel.success) return unsupported();
   const model = parsedModel.data;
   const gateway = config.cloudflareAiGateway;
-  const prepared = await prepareOpenAiRequest(
-    {
-      model,
-      transport: {
-        kind: "byok",
-        gatewayId: gateway.id,
-        openaiApiKey: config.openAiApiKey.exposeSecret(),
-      },
-      metadata: aiGatewayMetadata(
-        {
-          ...(await input.readIdentity()),
-          stream:
-            streamContext.kind === "script-execution"
-              ? {
-                  path: streamContext.streamPath,
-                  eventOffset: streamContext.scriptRunRequestedEventOffset,
-                }
-              : streamContext.kind === "scope"
-                ? { path: streamContext.scopePath }
-                : null,
-        },
-        config.cloudflareAiGateway.includeEventOffset,
-      ),
+  const prepared = await prepareOpenAiRequest({
+    model,
+    transport: {
+      kind: "byok",
+      gatewayId: gateway.id,
+      openaiApiKey: config.openAiApiKey.exposeSecret(),
     },
-    {
-      endpoint,
-      body,
-      headers: request.headers,
-      cache:
-        gateway.responseCacheTtlSeconds === undefined
-          ? null
-          : { ttlSeconds: gateway.responseCacheTtlSeconds },
-    },
-  );
+    metadata: aiGatewayMetadata({
+      identity: await input.readIdentity(),
+      context: streamContext,
+      includeEventOffset: config.cloudflareAiGateway.includeEventOffset,
+    }),
+    endpoint,
+    body,
+    headers: request.headers,
+    cache:
+      gateway.responseCacheTtlSeconds === undefined
+        ? null
+        : { ttlSeconds: gateway.responseCacheTtlSeconds },
+  });
   return sendAiRequest(
     { ai: input.ai, source: { source: "egress" }, consultInterceptor: input.consultInterceptor },
     prepared,

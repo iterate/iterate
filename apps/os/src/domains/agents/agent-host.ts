@@ -9,7 +9,7 @@
 import { isIdempotencyConflict } from "iterate/processors";
 import type { EmittedInput, ProcessEventArgs, StreamEvent } from "iterate/processors";
 import type { ProjectAiInterceptorInput } from "../../lib/model-interception.ts";
-import type { AiCostAttribution } from "./ai-cost-attribution.ts";
+import type { AiGatewayMetadataInput } from "./ai-cost-attribution.ts";
 import type {
   AgentFileAttachment,
   AgentProcessorContract,
@@ -65,9 +65,7 @@ export type AgentLlmTransport = (args: {
 export type AgentProcessorDeps = {
   ai?: WorkersAiBinding;
   cloudflareAiGatewayTransport?: () => CloudflareAiGatewayTransport;
-  aiCostAttribution?: (
-    eventOffset: number,
-  ) => Promise<{ attribution: AiCostAttribution; includeEventOffset: boolean }>;
+  getAiGatewayMetadataInput?: (eventOffset: number) => Promise<AiGatewayMetadataInput>;
   consultAiInterceptor?: (input: ProjectAiInterceptorInput) => Promise<unknown>;
   resolveModelFileUrl?: (file: AgentFileAttachment) => Promise<string>;
   writeWorkspaceFile?: (input: {

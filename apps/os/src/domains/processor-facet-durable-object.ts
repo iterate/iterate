@@ -548,8 +548,9 @@ export class ProcessorFacet extends ProcessorFacetBase<Env> {
       path,
       projectId,
       ai: this.env.AI,
-      aiCostAttribution: async (eventOffset: number) => ({
-        attribution: { ...(await readCostIdentity()), stream: { path, eventOffset } },
+      getAiGatewayMetadataInput: async (eventOffset: number) => ({
+        identity: await readCostIdentity(),
+        context: { kind: "agent-turn" as const, streamPath: path, eventOffset },
         includeEventOffset: parseConfig(this.env).cloudflareAiGateway.includeEventOffset,
       }),
       // intercepted/* model turns are served by the project's live AI interceptor
