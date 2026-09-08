@@ -3977,4 +3977,7 @@ enable-twice/disable tests, a vacuous quiet-clock test and a stale`test.fails` p
   `rewriteRules.get` spells it) and pinned in rewrite-rules-builtins-root.e2e. `@types/pako` dropped
   (pako 3 ships its types; the shared lockfile spliced in a detached worktree, frozen-verified);
   knip clean with no new ignores. GATES: tsc ×3 · oxlint · knip · `pnpm test` 84 files / 659 passed /
-  13 expected-fail / 16 deployed-only skips. Deployed proof: the next entry's line.
+  13 expected-fail / 16 deployed-only skips. DEPLOYED VERIFY (e89379d15 as d5edfae2): the full
+  suite 49 files / 196 passed / 3 expected-fail / 1 skip on the second run — the first run's three
+  failures were all "Durable Object reset because its code was updated", the DO-code-lag deploy
+  artefact, not the code.
