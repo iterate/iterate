@@ -23,12 +23,7 @@ import { authorColor, authorLabel } from "@iterate-com/workspace-documents/colla
 import { commentIdentityFor } from "@iterate-com/workspace-documents/identity";
 import { DocumentPreview } from "@iterate-com/ui/components/document-preview";
 import { useDocumentReview } from "@iterate-com/workspace-documents/review";
-import {
-  Drawer,
-  DrawerContent,
-  DrawerHeader,
-  DrawerTitle,
-} from "@iterate-com/ui/components/drawer";
+import { Drawer, DrawerContent, DrawerTitle } from "@iterate-com/ui/components/drawer";
 import type { WorkspaceDocumentTransport } from "@iterate-com/workspace-documents/types";
 import { withDocsProject, withDocsProjectOnce } from "../lib/docs-client.ts";
 import type { DocsUser, WorkspaceDocumentSnapshot } from "../lib/docs-api.ts";
@@ -235,19 +230,20 @@ export function WorkspaceDocumentPage({
               <MessageSquarePlusIcon aria-hidden className="size-3.5" />
             </Button>
           </WithTooltip>
-          {view === "source" ? (
-            <WithTooltip label="Show recent edits">
-              <Button
-                variant={showChanges ? "secondary" : "outline"}
-                size="icon-sm"
-                aria-label="Show recent edits"
-                aria-pressed={showChanges}
-                onClick={() => setShowChanges((value) => !value)}
-              >
-                <SparklesIcon />
-              </Button>
-            </WithTooltip>
-          ) : null}
+          <WithTooltip label={showChanges ? "Hide changes" : "Track changes"}>
+            <Button
+              variant={showChanges ? "secondary" : "outline"}
+              size="icon-sm"
+              aria-label="Track changes"
+              aria-pressed={showChanges}
+              onClick={() => {
+                setShowChanges((value) => !value);
+                setView("source");
+              }}
+            >
+              <SparklesIcon />
+            </Button>
+          </WithTooltip>
           <WithTooltip label={copied ? "Copied!" : "Copy share link"}>
             <Button
               variant="outline"
@@ -339,6 +335,7 @@ export function WorkspaceDocumentPage({
         >
           <DrawerContent
             className="h-[80svh]"
+            aria-describedby={undefined}
             onOpenAutoFocus={(event) => {
               if (!focusMobileComposer.current) return;
               event.preventDefault();
@@ -346,9 +343,7 @@ export function WorkspaceDocumentPage({
               mobileCommentsRef.current?.focusDocumentComment();
             }}
           >
-            <DrawerHeader>
-              <DrawerTitle>Comments</DrawerTitle>
-            </DrawerHeader>
+            <DrawerTitle className="sr-only">Comments</DrawerTitle>
             <DocumentComments ref={mobileCommentsRef} {...review.comments} />
           </DrawerContent>
         </Drawer>

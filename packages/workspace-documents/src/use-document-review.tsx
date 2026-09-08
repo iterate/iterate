@@ -13,6 +13,7 @@ import {
   sourceRangeForDisplayRange,
   type ReviewOperation,
 } from "iterate/document-review";
+import { authorColor } from "./collab-author.ts";
 import type { CommentIdentity } from "./types.ts";
 
 /** Connect RFM source to the format-independent preview and comments UI. */
@@ -89,6 +90,7 @@ export function useDocumentReview({
         comment.author === identity?.author
           ? (identity.authorDisplay ?? identity.author)
           : comment.author,
+      color: authorColor(comment.author ?? "someone", 1),
       createdAt: comment.createdAt,
       body: comment.body,
       canEdit: canWrite && comment.author === identity?.author,
@@ -146,7 +148,14 @@ export function useDocumentReview({
     annotations: [
       ...review.threads.flatMap((thread) =>
         thread.anchor
-          ? [{ id: thread.id, ...thread.anchor.display, state: thread.comments[0]?.status }]
+          ? [
+              {
+                id: thread.id,
+                ...thread.anchor.display,
+                state: thread.comments[0]?.status,
+                color: authorColor(thread.comments[0]?.author ?? "someone", 1),
+              },
+            ]
           : [],
       ),
       ...review.suggestions.map((suggestion) => ({

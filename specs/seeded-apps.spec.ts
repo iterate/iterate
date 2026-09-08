@@ -243,6 +243,13 @@ test("review a workspace document in the seeded Docs app", async ({ baseURL, pag
     .getByText("Reviewed in Docs.", { exact: true })
     .waitFor({ timeout: 10_000 }); // timeout: tight manual budget — the Preview repaint has no loading UI for the spinner-waiter
 
+  // Track changes is discoverable from Preview and opens the source redlines.
+  await page.getByRole("button", { name: "Track changes" }).click();
+  await editor.locator(".cm-redline-ins").filter({ hasText: "Reviewed in Docs." }).waitFor();
+  await page.getByRole("button", { name: "Track changes" }).click();
+  expect(await editor.locator(".cm-redline-ins").count()).toBe(0);
+  await page.getByRole("button", { name: "Preview" }).click();
+
   await page.getByRole("button", { name: "Comment on document" }).click();
   await page
     .getByPlaceholder("Comment on the entire document…")
@@ -252,7 +259,7 @@ test("review a workspace document in the seeded Docs app", async ({ baseURL, pag
   await commentsPanel
     .getByText("Please add a short owner summary before sharing.", { exact: true })
     .waitFor();
-  await commentsPanel.getByRole("heading", { name: "Document", exact: true }).waitFor();
+  await commentsPanel.getByRole("heading", { name: "Whole document", exact: true }).waitFor();
 
   const reviewSentence = page
     .locator("div.cursor-text")

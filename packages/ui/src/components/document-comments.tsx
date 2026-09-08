@@ -4,26 +4,15 @@ import * as React from "react";
 import {
   CheckIcon,
   EllipsisIcon,
-  FileTextIcon,
   MessageSquareIcon,
   PencilIcon,
-  SendIcon,
   Trash2Icon,
   Undo2Icon,
   XIcon,
 } from "lucide-react";
 
 import { Avatar, AvatarFallback, AvatarImage } from "@iterate-com/ui/components/avatar";
-import { Badge } from "@iterate-com/ui/components/badge";
 import { Button } from "@iterate-com/ui/components/button";
-import {
-  Card,
-  CardAction,
-  CardContent,
-  CardFooter,
-  CardHeader,
-  CardTitle,
-} from "@iterate-com/ui/components/card";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -39,7 +28,6 @@ import {
   EmptyTitle,
 } from "@iterate-com/ui/components/empty";
 import { Field, FieldGroup } from "@iterate-com/ui/components/field";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@iterate-com/ui/components/tabs";
 import { Textarea } from "@iterate-com/ui/components/textarea";
 import { cn } from "@iterate-com/ui/lib/utils";
 
@@ -47,6 +35,8 @@ export type ReviewComment = {
   id: string;
   author: string | null;
   avatarUrl?: string | null;
+  /** Optional author color shared with the document highlights. */
+  color?: string;
   createdAt: string | null;
   body: string;
   canEdit?: boolean;
@@ -110,7 +100,7 @@ export function DocumentComments({
   ref,
   className,
 }: DocumentCommentsProps) {
-  const [tab, setTab] = React.useState<"open" | "resolved">("open");
+  const [showResolved, setShowResolved] = React.useState(false);
   const documentComposerRef = React.useRef<HTMLTextAreaElement | null>(null);
   React.useImperativeHandle(ref, () => ({
     focusDocumentComment() {
@@ -120,7 +110,7 @@ export function DocumentComments({
   }));
   const openThreads = threads.filter((thread) => thread.status === "open");
   const resolvedThreads = threads.filter((thread) => thread.status === "resolved");
-  const visibleThreads = tab === "open" ? openThreads : resolvedThreads;
+  const visibleThreads = showResolved ? resolvedThreads : openThreads;
   const documentThreads = visibleThreads.filter((thread) => thread.quote == null);
   const selectionThreads = visibleThreads.filter((thread) => thread.quote != null);
 
@@ -130,31 +120,31 @@ export function DocumentComments({
       aria-label="Document comments"
     >
       {notice ? <div className="shrink-0 px-3 pt-3">{notice}</div> : null}
-      <Tabs
-        value={tab}
-        onValueChange={(value) => {
-          if (isReviewStatus(value)) setTab(value);
-        }}
-        className="min-h-0 flex-1"
-      >
-        <div className="flex shrink-0 items-center justify-between gap-2 border-b px-3 py-2">
-          <TabsList aria-label="Comment status">
-            <TabsTrigger value="open">Open {openThreads.length}</TabsTrigger>
-            <TabsTrigger value="resolved">Resolved {resolvedThreads.length}</TabsTrigger>
-          </TabsList>
-          <span className="text-xs text-muted-foreground">{threads.length} total</span>
-        </div>
-        <TabsContent value={tab} className="min-h-0 overflow-y-auto px-3 py-3">
-          <ThreadList
-            documentThreads={documentThreads}
-            selectionThreads={selectionThreads}
-            selectedThreadId={selectedThreadId}
-            onSelectThread={onSelectThread}
-            onAction={onAction}
-            renderComment={renderComment}
-          />
-        </TabsContent>
-      </Tabs>
+      <div className="flex shrink-0 items-center justify-between gap-2 px-4 py-3 text-xs text-muted-foreground">
+        <h2 className="font-medium">
+          Comments {openThreads.length ? `(${openThreads.length})` : ""}
+        </h2>
+        {resolvedThreads.length > 0 || showResolved ? (
+          <button
+            type="button"
+            className="underline-offset-2 hover:text-foreground hover:underline"
+            aria-pressed={showResolved}
+            onClick={() => setShowResolved((value) => !value)}
+          >
+            {showResolved ? "Show open" : `Show ${resolvedThreads.length} resolved`}
+          </button>
+        ) : null}
+      </div>
+      <div className="min-h-0 flex-1 overflow-y-auto px-4">
+        <ThreadList
+          documentThreads={documentThreads}
+          selectionThreads={selectionThreads}
+          selectedThreadId={selectedThreadId}
+          onSelectThread={onSelectThread}
+          onAction={onAction}
+          renderComment={renderComment}
+        />
+      </div>
       {onAction ? <DocumentComposer textareaRef={documentComposerRef} onAction={onAction} /> : null}
     </section>
   );
@@ -192,9 +182,9 @@ function ThreadList({
   }
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex flex-col gap-2">
       <ThreadGroup
-        label="Document"
+        label="Whole document"
         threads={documentThreads}
         selectedThreadId={selectedThreadId}
         onSelectThread={onSelectThread}
@@ -230,8 +220,10 @@ function ThreadGroup({
 }) {
   if (threads.length === 0) return null;
   return (
-    <div className="flex flex-col gap-2">
-      <h2 className="px-1 text-xs font-medium text-muted-foreground">{label}</h2>
+    <div className="flex flex-col">
+      <h3 className="-mx-2 border-b bg-muted/20 px-2 py-1.5 text-[10px] font-semibold tracking-wide text-muted-foreground uppercase">
+        {label}
+      </h3>
       {threads.map((thread) => (
         <ReviewThreadCard
           key={thread.id}
@@ -260,7 +252,7 @@ export function ReviewThreadCard({
   renderComment: (body: string) => React.ReactNode;
 }) {
   const [replying, setReplying] = React.useState(false);
-  const cardRef = React.useRef<HTMLDivElement | null>(null);
+  const cardRef = React.useRef<HTMLElement | null>(null);
   const [acting, setActing] = React.useState(false);
   const [actionFailed, setActionFailed] = React.useState(false);
   const isResolved = thread.status === "resolved";
@@ -277,37 +269,24 @@ export function ReviewThreadCard({
       .finally(() => setActing(false));
   };
   return (
-    <Card ref={cardRef} size="sm" className={cn(selected && "ring-2 ring-ring/30")}>
-      <CardHeader>
-        <CardTitle className="flex min-w-0 items-center gap-2">
-          {thread.kind === "suggestion" ? <PencilIcon /> : <MessageSquareIcon />}
-          <span className="truncate">
-            {thread.kind === "suggestion" ? "Suggested change" : "Comment"}
-          </span>
-          {isResolved ? <Badge variant="secondary">Resolved</Badge> : null}
-        </CardTitle>
-        {thread.quote ? (
-          <CardAction>
-            <Button
-              variant="ghost"
-              size="icon-xs"
-              aria-label="Show selected text"
-              onClick={() => onSelectThread?.(thread.id)}
-            >
-              <FileTextIcon />
-            </Button>
-          </CardAction>
-        ) : null}
-      </CardHeader>
-      <CardContent className="flex flex-col gap-3">
+    <article
+      ref={cardRef}
+      className={cn(
+        "-mx-2 border-b border-border/50 px-2 py-2 last:border-b-0",
+        isResolved && "opacity-70",
+        selected && "rounded-md ring-1 ring-primary/30",
+      )}
+    >
+      <div className="flex flex-col gap-1.5">
         {thread.quote ? (
           <button
             type="button"
+            style={{ borderColor: thread.comments[0]?.color }}
             className="border-l-2 border-primary/50 pl-2 text-left text-xs text-muted-foreground italic hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
             title={thread.quote}
             onClick={() => onSelectThread?.(thread.id)}
           >
-            <span className="block truncate">“{thread.quote}”</span>
+            <span className="block truncate">{thread.quote}</span>
           </button>
         ) : null}
         {thread.suggestion ? <SuggestionSummary suggestion={thread.suggestion} /> : null}
@@ -316,7 +295,7 @@ export function ReviewThreadCard({
             Couldn’t save that change. Try again.
           </p>
         ) : null}
-        <div className="flex flex-col gap-3">
+        <div className="flex flex-col gap-1">
           {thread.comments.map((comment) => (
             <ReviewCommentCard
               key={comment.id}
@@ -340,17 +319,17 @@ export function ReviewThreadCard({
             }
           />
         ) : null}
-      </CardContent>
+      </div>
       {onAction ? (
-        <CardFooter className="flex flex-wrap gap-1.5">
+        <div className="flex flex-wrap items-center gap-1 pt-0.5 pl-6 text-muted-foreground">
           {!isResolved && !replying ? (
-            <Button variant="ghost" size="sm" onClick={() => setReplying(true)}>
-              <MessageSquareIcon data-icon="inline-start" /> Reply
+            <Button variant="ghost" size="xs" onClick={() => setReplying(true)}>
+              Reply
             </Button>
           ) : null}
           <Button
             variant="ghost"
-            size="sm"
+            size="xs"
             disabled={acting}
             onClick={() =>
               act({
@@ -370,7 +349,7 @@ export function ReviewThreadCard({
           {!isResolved && thread.suggestion?.canAccept ? (
             <Button
               variant="ghost"
-              size="sm"
+              size="xs"
               disabled={acting}
               onClick={() => act({ kind: "accept-suggestion", threadId: thread.id })}
             >
@@ -380,16 +359,16 @@ export function ReviewThreadCard({
           {!isResolved && thread.suggestion?.canReject ? (
             <Button
               variant="ghost"
-              size="sm"
+              size="xs"
               disabled={acting}
               onClick={() => act({ kind: "reject-suggestion", threadId: thread.id })}
             >
               <XIcon data-icon="inline-start" /> Reject
             </Button>
           ) : null}
-        </CardFooter>
+        </div>
       ) : null}
-    </Card>
+    </article>
   );
 }
 
@@ -407,17 +386,23 @@ function ReviewCommentCard({
   const [editing, setEditing] = React.useState(false);
   const author = comment.author ?? "Unknown author";
   return (
-    <div className="flex min-w-0 gap-2">
-      <Avatar size="sm">
+    <div className="group/comment flex min-w-0 gap-2 py-1.5">
+      <Avatar size="sm" className="mt-0.5">
         {comment.avatarUrl ? <AvatarImage src={comment.avatarUrl} alt="" /> : null}
-        <AvatarFallback>{initials(author)}</AvatarFallback>
+        <AvatarFallback
+          style={comment.color ? { backgroundColor: comment.color, color: "white" } : undefined}
+        >
+          {initials(author)}
+        </AvatarFallback>
       </Avatar>
       <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2">
-          <span className="truncate text-sm font-medium">{author}</span>
+        <div className="flex items-center gap-2 text-xs">
+          <span className="min-w-0 truncate font-medium" title={author}>
+            {author}
+          </span>
           {comment.createdAt ? (
             <time
-              className="text-xs text-muted-foreground"
+              className="shrink-0 whitespace-nowrap text-muted-foreground"
               dateTime={comment.createdAt}
               title={comment.createdAt}
             >
@@ -429,7 +414,7 @@ function ReviewCommentCard({
               <DropdownMenuTrigger
                 render={
                   <Button
-                    className="ml-auto"
+                    className="ml-auto opacity-100 sm:opacity-0 sm:group-hover/comment:opacity-100 sm:group-focus-within/comment:opacity-100"
                     variant="ghost"
                     size="icon-xs"
                     aria-label="Comment actions"
@@ -478,7 +463,7 @@ function ReviewCommentCard({
             />
           </div>
         ) : (
-          <div className="mt-1 text-sm">{renderComment(comment.body)}</div>
+          <div className="text-sm">{renderComment(comment.body)}</div>
         )}
       </div>
     </div>
@@ -525,22 +510,13 @@ function DocumentComposer({
   onAction: (action: ReviewAction) => Promise<boolean>;
 }) {
   return (
-    <div className="shrink-0 border-t bg-muted/30 p-3">
-      <div className="flex items-start gap-2">
-        <MessageSquareIcon className="mt-1 size-4 shrink-0 text-muted-foreground" />
-        <div className="min-w-0 flex-1">
-          <p className="text-sm font-medium">Document comment</p>
-          <p className="text-xs text-muted-foreground">Applies to the whole document.</p>
-        </div>
-      </div>
-      <div className="mt-2">
-        <ReviewComposer
-          textareaRef={textareaRef}
-          placeholder="Comment on the entire document…"
-          submitLabel="Add document comment"
-          onSubmit={(body) => onAction({ kind: "add-document-comment", body })}
-        />
-      </div>
+    <div className="shrink-0 border-t bg-muted/20 px-4 py-3">
+      <ReviewComposer
+        textareaRef={textareaRef}
+        placeholder="Comment on the entire document…"
+        submitLabel="Add document comment"
+        onSubmit={(body) => onAction({ kind: "add-document-comment", body })}
+      />
     </div>
   );
 }
@@ -609,12 +585,12 @@ export function ReviewComposer({
       </FieldGroup>
       <div className="flex flex-wrap justify-end gap-2">
         {onCancel ? (
-          <Button variant="ghost" size="sm" onClick={onCancel}>
+          <Button variant="ghost" size="xs" onClick={onCancel}>
             Cancel
           </Button>
         ) : null}
-        <Button size="sm" disabled={submitting || draft.trim() === ""} onClick={submit}>
-          <SendIcon data-icon="inline-start" /> {submitLabel}
+        <Button size="xs" disabled={submitting || draft.trim() === ""} onClick={submit}>
+          {submitLabel}
         </Button>
       </div>
     </div>
@@ -631,10 +607,6 @@ function initials(author: string) {
       .join("")
       .toUpperCase() || "?"
   );
-}
-
-function isReviewStatus(value: string): value is "open" | "resolved" {
-  return value === "open" || value === "resolved";
 }
 
 function relativeTime(value: string) {

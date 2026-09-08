@@ -46,6 +46,8 @@ export interface DocumentPreviewAnnotation extends SourceRange {
   /** Stable application-owned thread or review-item ID. */
   id: string;
   state?: "open" | "resolved";
+  /** Optional author color for comment highlights. */
+  color?: string;
   tone?: "comment" | "addition" | "deletion" | "substitution";
 }
 
@@ -106,9 +108,9 @@ export function DocumentPreview({
       if (ranges.length === 0) return;
       groups.set(key, [...(groups.get(key) ?? []), ...ranges]);
     };
-    for (const annotation of annotations) {
+    for (const [index, annotation] of annotations.entries()) {
       const tone = annotation.state === "resolved" ? "resolved" : (annotation.tone ?? "comment");
-      add(tone, annotation);
+      add(tone === "comment" && annotation.color ? `author-${index}` : tone, annotation);
       if (selectedAnnotationIds.includes(annotation.id)) add("selected", annotation);
     }
     if (pendingComment !== null && pendingComment.markdown === markdown)
@@ -204,6 +206,7 @@ export function DocumentPreview({
         ::highlight(${highlightPrefix}-resolved) { background: color-mix(in srgb, var(--color-muted-foreground, #64748b) 14%, transparent); }
         ::highlight(${highlightPrefix}-selected) { background: color-mix(in srgb, var(--color-primary, #6366f1) 34%, transparent); }
         ::highlight(${highlightPrefix}-pending) { background: color-mix(in srgb, var(--color-primary, #6366f1) 25%, transparent); }
+        ${annotations.map((annotation, index) => (annotation.color ? `::highlight(${highlightPrefix}-author-${index}) { background: color-mix(in srgb, ${annotation.color} 22%, transparent); }` : "")).join("\n")}
       `}</style>
       {/* eslint-disable-next-line jsx-a11y/no-static-element-interactions, jsx-a11y/click-events-have-key-events -- text selection and CSS Highlight hit testing need the rendered DOM surface; the supplied panel exposes annotation actions accessibly. */}
       <div

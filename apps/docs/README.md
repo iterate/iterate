@@ -37,6 +37,8 @@ commit.
 
 - The default Preview tab renders Markdown or workspace-authored HTML.
 - Source opens the shared CodeMirror collaborative editor.
+- **Track changes** opens Source with author-colored insertions, deletion
+  markers, and hover attribution. The control is available from Preview too.
 - The comments rail always ends with **Comment on the whole document**.
 - Selecting rendered Markdown text creates a passage-anchored thread.
 - Threads and replies use Roughdraft Flavored Markdown (RFM): CriticMarkup
