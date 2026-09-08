@@ -22,7 +22,7 @@
 
 import { z } from "zod";
 import { AgentRuntime } from "@iterate-com/shared/agent-events";
-import { MessageReferences, decodeMessageReferences } from "@iterate-com/shared/message";
+import { MessageMentions, decodeMessageMentions } from "@iterate-com/shared/message";
 import {
   defineProcessorContract,
   type ConsumedInput,
@@ -836,12 +836,12 @@ function agentContextItemSchema() {
         .enum(["system", "developer", "user", "assistant"])
         .meta({ description: "The LLM message role this item renders as." }),
       content: z.string().meta({ description: "The model-visible text." }),
-      references: MessageReferences.optional().meta({
-        description: "Typed resources addressed by Markdown-like ref:// links in content.",
+      mentions: MessageMentions.optional().meta({
+        description: "Typed resources addressed by Markdown-like mention:// links in content.",
       }),
-      referenceResolution: z.unknown().optional().meta({
+      mentionResolution: z.unknown().optional().meta({
         description:
-          "Processor-authored, bounded resolution metadata for a prior message's references.",
+          "Processor-authored, bounded resolution metadata for a prior message's mentions.",
       }),
       key: z
         .string()
@@ -1017,13 +1017,13 @@ function agentContextItemSchema() {
     })
     .superRefine((payload, ctx) => {
       if (
-        payload.references !== undefined &&
-        decodeMessageReferences(payload.content, payload.references) === null
+        payload.mentions !== undefined &&
+        decodeMessageMentions(payload.content, payload.mentions) === null
       ) {
         ctx.addIssue({
           code: "custom",
-          path: ["references"],
-          message: "each reference must have a unique id and a matching inline ref:// link",
+          path: ["mentions"],
+          message: "each mention must have a unique id and a matching inline mention:// link",
         });
       }
       if (payload.role !== "developer" || payload.compaction === undefined) return;

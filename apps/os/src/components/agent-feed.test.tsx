@@ -77,25 +77,25 @@ function renderMessage(item: AgentUiMessageItem): HTMLDivElement {
   return container;
 }
 
-test("an empty reference list preserves the visible message text", () => {
+test("an empty mention list preserves the visible message text", () => {
   const container = renderMessage({
     kind: "user",
     id: "user-1",
-    text: "Hello with no references",
-    references: [],
+    text: "Hello with no mentions",
+    mentions: [],
     timestampMs: 0,
   });
-  expect(container.textContent).toContain("Hello with no references");
-  expect(container.querySelector("[data-reference-type]")).toBeNull();
+  expect(container.textContent).toContain("Hello with no mentions");
+  expect(container.querySelector("[data-mention-type]")).toBeNull();
 });
 
-test("a failed reference resolution marks the exact sent pill", () => {
+test("a failed mention resolution marks the exact sent pill", () => {
   const container = renderMessage({
     kind: "user",
     id: "user-1",
-    text: "Use [@AGENTS.md](ref://config-repo/AGENTS.md)",
+    text: "Use [@AGENTS.md](mention://config-repo/AGENTS.md)",
     timestampMs: 0,
-    references: [
+    mentions: [
       {
         id: "config-repo/AGENTS.md",
         type: "repo-file",
@@ -103,11 +103,11 @@ test("a failed reference resolution marks the exact sent pill", () => {
         path: "AGENTS.md",
       },
     ],
-    referenceResolutions: { "config-repo/AGENTS.md": { status: "missing" } },
+    mentionResolutions: { "config-repo/AGENTS.md": { status: "missing" } },
   });
-  const pill = container.querySelector('[data-reference-type="repo-file"]');
+  const pill = container.querySelector('[data-mention-type="repo-file"]');
 
-  expect(pill?.getAttribute("data-reference-resolution")).toBe("missing");
+  expect(pill?.getAttribute("data-mention-resolution")).toBe("missing");
   expect(pill?.getAttribute("aria-label")).toBe(
     "@AGENTS.md: File was not found when this message was processed",
   );

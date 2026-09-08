@@ -60,7 +60,7 @@ import type {
   ValidateProjectAppSessionInput,
   ValidatedProjectAppSession,
 } from "@iterate-com/auth-contract/worker";
-import { decodeMessageReferences, type Message } from "@iterate-com/shared/message";
+import { decodeMessageMentions, type Message } from "@iterate-com/shared/message";
 import type { AppConfig } from "./config.ts";
 import { parseConfig } from "./config.ts";
 import { closeItxSessionTransport } from "./session-transport.ts";
@@ -5241,9 +5241,9 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
    * `{ type: "agent", path }` and does NOT refill the receiver's autonomous
    * turn budget, so agent↔agent reply loops stay bounded; from anywhere else
    * (web UI, CLI, MCP session) it is a user message. The agent must already
-   * have been created explicitly. `references` are typed resources addressed
+   * have been created explicitly. `mentions` are typed resources addressed
    * from `content` with Markdown-like links such as
-   * `[@AGENTS.md](ref://config-repo/AGENTS.md)`. Optional files are stored
+   * `[@AGENTS.md](mention://config-repo/AGENTS.md)`. Optional files are stored
    * in project file storage and ride the same event (images stay visible to
    * vision-capable models).
    */
@@ -5262,20 +5262,20 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
     const {
       message,
       files: fileInputs,
-      references: referenceInputs,
+      mentions: mentionInputs,
     } = typeof input === "string"
-      ? { message: input, files: undefined, references: undefined }
+      ? { message: input, files: undefined, mentions: undefined }
       : "content" in input
-        ? { message: input.content, files: input.files, references: input.references }
-        : { message: input.message, files: input.files, references: undefined };
+        ? { message: input.content, files: input.files, mentions: input.mentions }
+        : { message: input.message, files: input.files, mentions: undefined };
     const decodedMessage =
-      referenceInputs === undefined ? undefined : decodeMessageReferences(message, referenceInputs);
+      mentionInputs === undefined ? undefined : decodeMessageMentions(message, mentionInputs);
     if (decodedMessage === null) {
       throw new Error(
-        "agent.message references must each have a unique id and a matching inline reference link.",
+        "agent.message mentions must each have a unique id and a matching inline mention link.",
       );
     }
-    const references = decodedMessage?.references.length ? decodedMessage.references : undefined;
+    const mentions = decodedMessage?.mentions.length ? decodedMessage.mentions : undefined;
     const actor = this.#contextActor();
     const files =
       fileInputs === undefined || fileInputs.length === 0
@@ -5293,8 +5293,8 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
         content: message,
         actor,
         ...(files === undefined ? {} : { files }),
-        ...(references === undefined ? {} : { references }),
-        ...(references === undefined
+        ...(mentions === undefined ? {} : { mentions }),
+        ...(mentions === undefined
           ? {}
           : { llmRequestPolicy: { behaviour: "dont-trigger-request" as const } }),
       },

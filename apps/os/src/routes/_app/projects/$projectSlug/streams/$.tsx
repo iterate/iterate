@@ -35,7 +35,7 @@ function ProjectStreamDetailContent() {
 
   async function submitMessage({
     content,
-    references,
+    mentions,
   }: import("@iterate-com/shared/message").Message) {
     const itx = await connectItx(project.id);
     const [event] = await itx.streams.get(streamPath).append({
@@ -43,7 +43,7 @@ function ProjectStreamDetailContent() {
       payload: {
         role: "user",
         content,
-        ...(!references?.length ? {} : { references }),
+        ...(!mentions?.length ? {} : { mentions }),
         actor: { type: "user", origin: "web" },
       },
     });

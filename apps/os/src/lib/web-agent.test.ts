@@ -26,11 +26,11 @@ describe("sendAgentFirstTurn", () => {
     expect(agent.message).toHaveBeenCalledWith({ content: "  hello  " });
   });
 
-  test("inline reference: forwards readable content and typed metadata together", async () => {
+  test("inline mention: forwards readable content and typed metadata together", async () => {
     const agent = fakeAgent();
     await sendAgentFirstTurn(agent, {
-      content: "Read [@AGENTS.md](ref://config-repo/AGENTS.md)",
-      references: [
+      content: "Read [@AGENTS.md](mention://config-repo/AGENTS.md)",
+      mentions: [
         {
           id: "config-repo/AGENTS.md",
           type: "repo-file",
@@ -40,8 +40,8 @@ describe("sendAgentFirstTurn", () => {
       ],
     });
     expect(agent.message).toHaveBeenCalledWith({
-      content: "Read [@AGENTS.md](ref://config-repo/AGENTS.md)",
-      references: [
+      content: "Read [@AGENTS.md](mention://config-repo/AGENTS.md)",
+      mentions: [
         {
           id: "config-repo/AGENTS.md",
           type: "repo-file",

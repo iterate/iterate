@@ -12,12 +12,12 @@ import {
 import { useQueryClient } from "@tanstack/react-query";
 import { composerCompletionSource } from "~/components/composer-completions.ts";
 import {
-  composerReferenceExtension,
-  composerReferences,
-  deleteComposerReferenceAtCursor,
-  sameComposerReferences,
-  setComposerReferences,
-} from "~/components/composer-references.ts";
+  composerMentionExtension,
+  composerMentions,
+  deleteComposerMentionAtCursor,
+  sameComposerMentions,
+  setComposerMentions,
+} from "~/components/composer-mentions.ts";
 import type { ComposerSuggestionProvider } from "~/components/composer-suggestions.ts";
 
 export type ComposerTextareaProps = {
@@ -65,7 +65,7 @@ export function ComposerTextareaClient({
         doc: initial.text,
         selection: { anchor: initial.text.length },
         extensions: [
-          composerReferenceExtension,
+          composerMentionExtension,
           placeholderExtension(placeholder),
           EditorView.lineWrapping,
           EditorView.contentAttributes.of({
@@ -87,11 +87,11 @@ export function ComposerTextareaClient({
               { key: "Tab", run: acceptCompletion },
               {
                 key: "Backspace",
-                run: (editor) => deleteComposerReferenceAtCursor(editor, -1),
+                run: (editor) => deleteComposerMentionAtCursor(editor, -1),
               },
               {
                 key: "Delete",
-                run: (editor) => deleteComposerReferenceAtCursor(editor, 1),
+                run: (editor) => deleteComposerMentionAtCursor(editor, 1),
               },
               {
                 key: "Enter",
@@ -114,7 +114,7 @@ export function ComposerTextareaClient({
             if (!update.docChanged || syncingExternalValueRef.current) return;
             const text = update.state.doc.toString();
             onValueChangeRef.current(
-              agentMessageFromEditorDocument(text, composerReferences(update.state)),
+              agentMessageFromEditorDocument(text, composerMentions(update.state)),
             );
           }),
           EditorView.theme({
@@ -128,7 +128,7 @@ export function ComposerTextareaClient({
             ".cm-scroller": { fontFamily: "inherit", overflow: "auto" },
             ".cm-content": { caretColor: "var(--foreground)", padding: "8px" },
             ".cm-line": { lineHeight: "1.375" },
-            ".cm-agent-reference": {
+            ".cm-agent-mention": {
               backgroundColor: "color-mix(in oklab, var(--primary) 12%, transparent)",
               border: "1px solid color-mix(in oklab, var(--primary) 25%, transparent)",
               borderRadius: "9999px",
@@ -169,7 +169,7 @@ export function ComposerTextareaClient({
         ],
       }),
     });
-    view.dispatch({ effects: setComposerReferences.of(initial.references) });
+    view.dispatch({ effects: setComposerMentions.of(initial.mentions) });
     viewRef.current = view;
     if (initialFocusOnMount) view.focus();
     return () => {
@@ -187,7 +187,7 @@ export function ComposerTextareaClient({
     const currentText = view.state.doc.toString();
     if (
       currentText === next.text &&
-      sameComposerReferences(composerReferences(view.state), next.references)
+      sameComposerMentions(composerMentions(view.state), next.mentions)
     ) {
       return;
     }
@@ -195,7 +195,7 @@ export function ComposerTextareaClient({
     view.dispatch({
       changes: { from: 0, to: currentText.length, insert: next.text },
       selection: { anchor: next.text.length },
-      effects: setComposerReferences.of(next.references),
+      effects: setComposerMentions.of(next.mentions),
     });
     syncingExternalValueRef.current = false;
   }, [value]);
