@@ -23,7 +23,9 @@ type ErrorCode =
   | "EXPRESSION_TOO_LONG" // a STRING itx expression over ITX_EXPRESSION_STRING_MAX_CHARS — pass the parsed form
   | "FACET_SOURCE_TOO_LARGE" // a facet's literal source over FACET_SOURCE_MAX_CHARS (worker-loader.ts) — refused at the door
   | "INVALID_CREDENTIALS" // authenticate(): the project token did not verify (bad signature, expired, no secret)
-  | "FORBIDDEN" // projects.get(id): the session's project token names another project
+  | "UNAUTHENTICATED" // authenticate(): no session cookie on the request and no project token (email login mode)
+  | "FORBIDDEN" // projects.get(id): the session's token names another project, or the user is no member of its org; list/create on a token session
+  | "PROJECT_NAME_TAKEN" // projects.create({ slug }): a project of that name exists in another org
   | "RPC_STUB_OFFLINE" // the rpc stub a row names is neither borrowed nor pager-backed right now — or its lend ended mid-call (recalled, returned, broken; the relay re-codes)
   | "NOT_A_METHOD" // the dotted path's terminal segment is not callable on the target
   | "NO_FACET" // no facet of that name has been loaded into this context

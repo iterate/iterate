@@ -151,7 +151,7 @@ on exhaustion, appends `stream/paused { reason }`; an operator appends `stream/r
 ## Layer 5 — the edge (sessions and the pager relay)
 
 `session.ts` + `iterate-context.ts`: capnweb terminates in `worker.ts`'s `/api`, never in a DO
-(`session.ts`: `UnauthenticatedSession → authenticate() → Session → projects.get(id)`;
+(`session.ts`: `UnauthenticatedSession → authenticate() → Session → projects.list()/get(id)/create({ slug })`;
 `iterate-context.ts`: `IterateContext`, `cd(path)` for the rest). The edge is A PROXY IN FRONT OF
 THE DO: every DO built-in root (`itx.append`, `itx.read`, `itx.waitForEvent`, `itx.kv.get`,
 `itx.rpcStubs.list`, `itx.rewriteRules.list`, …) rides the prototype hop into ONE

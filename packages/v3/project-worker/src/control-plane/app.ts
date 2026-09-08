@@ -212,30 +212,23 @@ export const app: Handler = {
     }
 
     if (url.pathname === "/projects" && request.method === "POST") {
-      if (!session) return new Response(null, { status: 302, headers: { location: "/" } });
-      // JSON `{ slug }` (an API caller or an e2e) or the console form's `slug`. The slug IS the project id
-      // (directory.ts) — the DO name and the host label — so nothing a caller could mint escapes it.
-      const json = request.headers.get("content-type")?.includes("application/json") ?? false;
-      const body = json
-        ? ((await request.json()) as { slug?: string })
-        : { slug: String((await request.formData()).get("slug") ?? "") };
-      const slug = slugify(body.slug ?? "");
+      // The console's form. A program creates projects over /api — `authenticate().projects.create`
+      // (src/session.ts) — the same directory door.
       const back = new Response(null, { status: 302, headers: { location: "/" } });
-      if (!slug)
-        return json ? Response.json({ error: "a slug is required" }, { status: 400 }) : back;
+      if (!session) return back;
+      const slug = slugify(String((await request.formData()).get("slug") ?? ""));
+      if (!slug) return back;
       const org = await dir.ensureOrg(session.sub, `${session.email}'s org`);
       try {
-        const project = await dir.createProject(org.id, slug);
-        return json ? Response.json(project) : back;
+        await dir.createProject(org.id, slug);
+        return back;
       } catch (error) {
-        // a name another org holds (the directory's "already taken") — the caller's, not a 500
+        // a name another org holds — the visitor's problem, shown, not a 500
         const message = error instanceof Error ? error.message : String(error);
-        return json
-          ? Response.json({ error: message }, { status: 409 })
-          : page(
-              "Create project",
-              `<h1>Not created</h1><p>${esc(message)}</p><p><a href="/">Back</a></p>`,
-            );
+        return page(
+          "Create project",
+          `<h1>Not created</h1><p>${esc(message)}</p><p><a href="/">Back</a></p>`,
+        );
       }
     }
 

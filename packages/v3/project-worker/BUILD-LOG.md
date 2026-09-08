@@ -3981,3 +3981,36 @@ enable-twice/disable tests, a vacuous quiet-clock test and a stale`test.fails` p
   suite 49 files / 196 passed / 3 expected-fail / 1 skip on the second run — the first run's three
   failures were all "Durable Object reset because its code was updated", the DO-code-lag deploy
   artefact, not the code.
+
+## 2026-09-08 — sign-in: `authenticate()` knows who you are; `projects.list/get/create` on the session (the apps/os shape)
+
+Jonas: "clean and minimal — and like in apps/os there should be an unauthenticated rpc target that
+you call authenticate on and can then do projects.create etc."
+
+- THE SHAPE (src/session.ts): `/api` hands out the `UnauthenticatedSession`; `authenticate()` with
+  no credentials is THE REQUEST'S control-plane identity — in `open` login mode the anonymous user
+  (no principal: attribution, and there is none), in `email` mode the session cookie a browser's
+  same-origin socket carried (none ⇒ UNAUTHENTICATED, coded); `authenticate({ projectToken })` stays
+  the in-band door, a principal bound to ONE project. The `Session` is the catalog: `whoami()`,
+  `projects.list()` (the user's orgs' projects, with the role), `projects.get(id)` and
+  `projects.create({ slug })` — both vend the project's ROOT context. AUTHORITY is org membership
+  (control-plane/directory.ts): in `email` mode `get` admits members only (FORBIDDEN otherwise, one
+  directory read); a token session holds its one project and may neither list nor create; in `open`
+  mode every project is the anonymous org's and the door stays open — the trusted-client doctrine
+  every local proof relies on, unchanged. `create` on a name another org holds is
+  PROJECT_NAME_TAKEN (the directory throws it coded; the console shows it).
+- The console's `POST /projects` keeps its FORM (a human's door); the JSON body is gone — a program
+  creates over /api. The e2e's `registerProject` is now
+  `session().authenticate().projects.create({ slug })`.
+- PROVEN in `__workers-tests__/control-plane.test.ts` (the one local lane with a D1): sign in on the
+  console → the cookie's socket to /api → `authenticate().whoami()` is her → `create` vends the root
+  context and its events carry her principal → `list` catalogs it → a second user is refused the
+  name (coded), refused her project (FORBIDDEN), lists only their own → no cookie is UNAUTHENTICATED
+  → the console lists and its form creates → /mcp still wants a bearer. Open mode: null principal,
+  create/list work, `get` of a never-created project opens, a /login cookie changes nothing, /mcp
+  tokenless.
+- Deliberately NOT done (minimal): an in-band `authenticate({ sessionToken })` for non-browser clients
+  in email mode (a CLI uses a project token today); OAuth-token sessions on /api (the AS still guards
+  /mcp only); project deletion; org management beyond "your first org, created on first use".
+- GATES: tsc ×3 · oxlint · knip · `pnpm test` 84 files / 659 passed / 13 expected-fail / 16
+  deployed-only skips. Deployed proof: the next entry's line.

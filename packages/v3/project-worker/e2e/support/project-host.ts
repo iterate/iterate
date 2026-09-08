@@ -6,7 +6,7 @@ import http from "node:http";
 import { join } from "node:path";
 import { test } from "vitest";
 import { experimental_readRawConfig } from "wrangler";
-import { workerUrl } from "./client.ts";
+import { session, workerUrl } from "./client.ts";
 import { PACKAGE_DIR } from "./worker-config.ts";
 
 const LOCAL_HOSTNAMES = new Set(["localhost", "127.0.0.1"]);
@@ -26,18 +26,13 @@ export function projectHostnameBase(): string {
   return String((rawConfig.vars as Record<string, unknown>).APP_CONFIG_PROJECT_HOSTNAME_BASE);
 }
 
-/** Register `projectId` with the IN-PROCESS control plane — `POST /projects { slug }` on the worker
- *  itself (open login mode: the anonymous identity may create projects) — so its host serves. A
- *  project's id IS its slug (a DNS label), so one name addresses both the DO (`openItx(projectId)`)
+/** Register `projectId` with the directory — `authenticate().projects.create({ slug })` over the
+ *  worker's own /api (open login mode: the anonymous user may create projects) — so its host serves.
+ *  A project's id IS its slug (a DNS label), so one name addresses both the DO (`openItx(projectId)`)
  *  and the host (`site--<projectId>.<base>`). Idempotent; identical against the local and the
  *  deployed worker. */
 export async function registerProject(projectId: string): Promise<void> {
-  const res = await fetch(workerUrl("/projects"), {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ slug: projectId }),
-  });
-  if (!res.ok) throw new Error(`registerProject(${projectId}): ${res.status} ${await res.text()}`);
+  await session().authenticate().projects.create({ slug: projectId });
 }
 
 /** A project id that is a DNS label — the convention needs one (`freshCtx` names carry `_`). */

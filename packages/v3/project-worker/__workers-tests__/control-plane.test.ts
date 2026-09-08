@@ -1,13 +1,20 @@
-// __workers-tests__/control-plane.test.ts — the in-process control plane's doors (src/control-plane),
-// pinned in the one local lane that binds a D1. EMAIL login mode: the login form, the session cookie,
-// a project created as that user and listed on the console, a taken name refused, the same-origin
-// redirect, and /mcp behind the OAuth bearer. OPEN login mode (this lane's own configuration):
-// every visitor is the anonymous identity — a /login cookie cannot make a second one — and /mcp is
-// tokenless. The worker's default fetch is called directly so each mode gets its own env
-// (app-config.ts memoizes the configuration per env object).
+// __workers-tests__/control-plane.test.ts — SIGN-IN, end to end, in the one local lane that binds a
+// D1: the control plane's doors (src/control-plane) and the session they yield over /api
+// (src/session.ts — the apps/os shape: `authenticate()` → `projects.list/get/create`).
+//   EMAIL login mode: the login form → the session cookie → a browser's same-origin socket to /api
+//   carries it → `authenticate()` knows who you are → `projects.create({ slug })` vends the project's
+//   root context, `list()` catalogs it, `get(id)` admits members only; a taken name is refused,
+//   coded; no cookie ⇒ UNAUTHENTICATED; the console lists and (by its form) creates; the post-login
+//   redirect stays on the origin; /mcp wants an OAuth bearer.
+//   OPEN login mode (this lane's own configuration): every visitor is the anonymous user — no
+//   principal, every project's door open, a /login cookie cannot make a second identity — and /mcp
+//   is tokenless.
+// The worker's default fetch is called directly so each mode gets its own env (app-config.ts
+// memoizes the configuration per env object).
 
 import { createExecutionContext, env } from "cloudflare:test";
-import { beforeAll, expect, test } from "vitest";
+import { newWebSocketRpcSession } from "capnweb";
+import { afterAll, beforeAll, expect, test } from "vitest";
 import definitionsSql from "../src/control-plane/definitions.sql?raw";
 import worker from "../src/worker.ts";
 
@@ -26,11 +33,47 @@ const form = (fields: Record<string, string>): RequestInit => ({
   method: "POST",
   body: new URLSearchParams(fields),
 });
-const json = (body: unknown, cookie?: string): RequestInit => ({
-  method: "POST",
-  headers: { "content-type": "application/json", ...(cookie && { cookie }) },
-  body: JSON.stringify(body),
+
+/** Sign in as `email` through the console's form: the session cookie (`name=value`). */
+async function signIn(mode: Record<string, unknown>, email: string): Promise<string> {
+  const login = await call(mode, "/login", form({ email, next: "/" }));
+  return (login.headers.get("set-cookie") ?? "").split(";")[0];
+}
+
+// capnweb sessions over /api, opened on the worker's own 101 (the socket pair lives in this isolate);
+// disposed at teardown so nothing lingers into the lane's teardown.
+const sessions: unknown[] = [];
+/** The `UnauthenticatedSession` stub a client holds after dialing /api — with the cookie a browser
+ *  would carry, or without. */
+async function api(mode: Record<string, unknown>, cookie?: string): Promise<any> {
+  const res = await call(mode, "/api", {
+    headers: { Upgrade: "websocket", ...(cookie && { cookie }) },
+  });
+  if (!res.webSocket) throw new Error(`expected a 101 with a WebSocket, got ${res.status}`);
+  res.webSocket.accept();
+  const session = newWebSocketRpcSession(res.webSocket as unknown as WebSocket);
+  sessions.push(session);
+  return session as any;
+}
+afterAll(() => {
+  for (const session of sessions) {
+    try {
+      (session as Partial<Disposable>)[Symbol.dispose]?.();
+    } catch {
+      /* already broken */
+    }
+  }
 });
+
+/** The code of a call that MUST reject. */
+async function codeOf(promise: Promise<unknown>): Promise<string | undefined> {
+  try {
+    await promise;
+  } catch (e) {
+    return (e as { code?: string }).code;
+  }
+  return undefined;
+}
 
 /** The JSON-RPC result of an /mcp answer — a JSON body, or (a tool call) one SSE `data:` frame. */
 async function mcpResult(response: Response): Promise<{ content: { text: string }[] }> {
@@ -41,7 +84,7 @@ async function mcpResult(response: Response): Promise<{ content: { text: string 
   return (JSON.parse(data) as { result: { content: { text: string }[] } }).result;
 }
 
-/** A JSON-RPC call on /mcp (the json response mode: one JSON body per request). */
+/** A JSON-RPC call on /mcp. */
 async function mcp(
   mode: Record<string, unknown>,
   method: string,
@@ -71,73 +114,102 @@ beforeAll(async () => {
   await db.batch(statements.map((statement) => db.prepare(statement)));
 });
 
-test("email mode: the login form → a session cookie → a project created as that user and listed; a taken name is refused; the redirect never leaves the origin; /mcp wants a bearer", async () => {
+test("email mode: sign in on the console, then the cookie's socket to /api authenticates — projects.create vends the root context, list catalogs it, get admits members only, a taken name is coded", async () => {
   const anonymousHome = await call(emailMode, "/");
   expect(anonymousHome.status).toBe(200);
   expect(await anonymousHome.text()).toContain("Sign in");
 
+  // the login form: the post-login redirect never leaves the origin
   const login = await call(
     emailMode,
     "/login",
     form({ email: "Ada@Example.com", next: "//evil.example/x" }),
   );
   expect(login.status).toBe(302);
-  expect(login.headers.get("location")).toBe("/"); // a foreign origin falls back to "/"
+  expect(login.headers.get("location")).toBe("/");
   const setCookie = login.headers.get("set-cookie") ?? "";
   expect(setCookie).toMatch(/^itx-control-plane-session=[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+; HttpOnly/);
-  const cookie = setCookie.split(";")[0];
+  const ada = setCookie.split(";")[0];
 
-  expect(await (await call(emailMode, "/", { headers: { cookie } })).text()).toContain(
-    "Signed in as ada@example.com",
-  );
+  // THE SESSION SHAPE: a socket carrying the cookie → authenticate() knows who you are
+  const session = (await api(emailMode, ada)).authenticate();
+  expect(await session.whoami()).toEqual({
+    actor: "user_ada@example.com",
+    email: "ada@example.com",
+  });
+  const created = await session.projects.create({ slug: "My Project" });
+  expect(await created.whoami()).toEqual({ projectId: "my-project", path: "/" }); // the id IS the slugified name
+  expect(await session.projects.list()).toEqual([
+    { id: "my-project", orgId: expect.stringMatching(/^org_/), role: "owner" },
+  ]);
+  expect(await session.projects.get("my-project").whoami()).toEqual({
+    projectId: "my-project",
+    path: "/",
+  });
+  // …and its events carry her — the DO's own stamp
+  const [note] = await created.append({ type: "note", payload: { n: 1 } });
+  expect(note.source?.principal).toEqual({
+    actor: "user_ada@example.com",
+    email: "ada@example.com",
+  });
+  // the same user again: idempotent
+  expect(await (await session.projects.create({ slug: "my-project" })).whoami()).toMatchObject({
+    projectId: "my-project",
+  });
 
-  const created = await call(emailMode, "/projects", json({ slug: "My Project" }, cookie));
-  expect(created.status).toBe(200);
-  const project = (await created.json()) as { id: string; orgId: string };
-  expect(project.id).toBe("my-project"); // the id IS the slugified name
-  expect(project.orgId).toMatch(/^org_/);
-  expect(await (await call(emailMode, "/", { headers: { cookie } })).text()).toContain(
+  // another user: cannot take the name, cannot reach her project, sees only their own
+  const bob = (await api(emailMode, await signIn(emailMode, "bob@example.com"))).authenticate();
+  expect(await codeOf(bob.projects.create({ slug: "my-project" }))).toBe("PROJECT_NAME_TAKEN");
+  expect(await codeOf(bob.projects.get("my-project").whoami())).toBe("FORBIDDEN");
+  await bob.projects.create({ slug: "bobs" });
+  expect((await bob.projects.list()).map((p: { id: string }) => p.id)).toEqual(["bobs"]);
+
+  // no cookie: no identity, no session
+  expect(await codeOf((await api(emailMode)).authenticate().whoami())).toBe("UNAUTHENTICATED");
+
+  // the console: lists her project, and its form creates one
+  expect(await (await call(emailMode, "/", { headers: { cookie: ada } })).text()).toContain(
     "<code>my-project</code>",
   );
-  // the same user again: idempotent
-  expect(
-    (
-      (await (await call(emailMode, "/projects", json({ slug: "my-project" }, cookie))).json()) as {
-        id: string;
-      }
-    ).id,
-  ).toBe("my-project");
-
-  // another user cannot take the name
-  const other = (
-    await call(emailMode, "/login", form({ email: "bob@example.com", next: "/" }))
-  ).headers
-    .get("set-cookie")!
-    .split(";")[0];
-  const taken = await call(emailMode, "/projects", json({ slug: "my-project" }, other));
-  expect(taken.status).toBe(409);
-  expect(await taken.json()).toEqual({ error: "project name 'my-project' is already taken" });
-
-  // no cookie: no project — back to the login page
-  expect((await call(emailMode, "/projects", json({ slug: "nope" }))).status).toBe(302);
+  const viaForm = await call(emailMode, "/projects", {
+    ...form({ slug: "Form Project" }),
+    headers: { cookie: ada },
+  });
+  expect(viaForm.status).toBe(302);
+  expect((await session.projects.list()).map((p: { id: string }) => p.id)).toEqual([
+    "form-project",
+    "my-project",
+  ]);
+  expect((await call(emailMode, "/projects", form({ slug: "nope" }))).status).toBe(302); // no cookie: back to sign in
   // /mcp is the OAuth-protected boundary: without a bearer the provider refuses
   expect((await mcp(emailMode, "initialize", {})).status).toBe(401);
   // logout clears the cookie
-  const logout = await call(emailMode, "/logout", { method: "POST" });
-  expect(logout.headers.get("set-cookie")).toContain("Max-Age=0");
+  expect(
+    (await call(emailMode, "/logout", { method: "POST" })).headers.get("set-cookie"),
+  ).toContain("Max-Age=0");
 });
 
-test("open mode (this lane's configuration): every visitor is the anonymous identity — the console, project creation, and a tokenless /mcp whoami; a /login cookie cannot make a second identity", async () => {
-  expect(await (await call(openMode, "/")).text()).toContain("Signed in as anonymous");
-  const created = await call(openMode, "/projects", json({ slug: "open-project" }));
-  expect(((await created.json()) as { id: string }).id).toBe("open-project");
-  expect(await (await call(openMode, "/")).text()).toContain("<code>open-project</code>");
+test("open mode (this lane's configuration): every visitor is the anonymous user — no principal, projects.create/list work, every project's door is open, a /login cookie cannot make a second identity, /mcp is tokenless", async () => {
+  const session = (await api(openMode)).authenticate();
+  expect(await session.whoami()).toBeNull(); // attribution, and there is none
+  expect(await (await session.projects.create({ slug: "open-project" })).whoami()).toEqual({
+    projectId: "open-project",
+    path: "/",
+  });
+  expect((await session.projects.list()).map((p: { id: string }) => p.id)).toContain(
+    "open-project",
+  );
+  expect(await session.projects.get("never-created").whoami()).toEqual({
+    projectId: "never-created",
+    path: "/",
+  }); // the open door: the trusted-client doctrine every local proof relies on
 
-  const login = await call(openMode, "/login", form({ email: "mallory@example.com", next: "/" }));
-  const cookie = login.headers.get("set-cookie")!.split(";")[0];
+  expect(await (await call(openMode, "/")).text()).toContain("<code>open-project</code>");
+  const cookie = await signIn(openMode, "mallory@example.com");
   expect(await (await call(openMode, "/", { headers: { cookie } })).text()).toContain(
     "Signed in as anonymous",
   );
+  expect(await (await api(openMode, cookie)).authenticate().whoami()).toBeNull();
 
   const initialized = await mcp(openMode, "initialize", {
     protocolVersion: "2025-06-18",

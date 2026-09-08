@@ -11,6 +11,8 @@ import {
 } from "capnweb";
 import { IterateContextDurableObject, type Env } from "./iterate-context-durable-object.ts";
 import { directory } from "./control-plane/directory.ts";
+import { ANONYMOUS } from "./control-plane/app.ts";
+import { currentSession } from "./control-plane/session.ts";
 import controlPlane from "./control-plane/index.ts";
 import type { Env as ControlPlaneEnv } from "./control-plane/env.ts";
 
@@ -68,7 +70,14 @@ export default {
     // relative links work. Inbound `x-itx-*` are stripped first: the lane's headers are the platform's,
     // never a visitor's. Everything on a project host is the app's; the platform's own doors (`/api`,
     // `/expression`, `/version`) live on the worker's hostname.
-    const { projectHostnameBase, projectTokenSecret, environmentName, deployId } = appConfigOf(env);
+    const {
+      projectHostnameBase,
+      projectTokenSecret,
+      loginMode,
+      sessionSecret,
+      environmentName,
+      deployId,
+    } = appConfigOf(env);
     const projectHost = projectHostOf(url.hostname, projectHostnameBase);
     if (projectHost) {
       // ADMISSION, before any Durable Object is dialled: a context is created on first touch, so a
@@ -136,15 +145,26 @@ export default {
     // THE ONE capnweb ENTRYPOINT (the hard rule): capnweb terminates HERE, in the stateless worker;
     // the DO is reached only over Workers RPC. A client dials `/api` and holds an
     // `UnauthenticatedSession`: `authenticate().projects.get(projectId)` → the project's root itx.
-    if (url.pathname === "/api")
+    // WHO dials (session.ts): in `open` login mode everyone is the anonymous user; in `email` mode the
+    // control plane's session cookie on THIS request — a browser's same-origin socket carries it.
+    if (url.pathname === "/api") {
+      const user = loginMode === "open" ? ANONYMOUS : await currentSession(request, sessionSecret);
       // newWorkersRpcResponse serves BOTH a WebSocket upgrade AND a one-shot HTTP batch —
       // a CLI script or cron does one POST, no socket handshake. (Batch sessions cannot hold
       // live capabilities: a live provide needs the relay to outlive the response —
       // the relay's lend call simply fails there, which is the honest error.)
       return newWorkersRpcResponse(
         request,
-        new UnauthenticatedSession(env.ITERATE_CONTEXT, ctx, projectTokenSecret),
+        new UnauthenticatedSession({
+          contextNamespace: env.ITERATE_CONTEXT,
+          waitUntil: (p) => ctx.waitUntil(p),
+          directory: directory(env.DB),
+          loginMode,
+          user: user && { id: user.sub, email: user.email },
+          projectTokenSecret,
+        }),
       );
+    }
 
     // THE FETCH LANE — the plain-HTTP door onto fetch-shaped capabilities (WS upgrades and all), for
     // callers with no capnweb session (curl, a browser tab, a webhook): `?context=` names the

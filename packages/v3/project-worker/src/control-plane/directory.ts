@@ -4,6 +4,7 @@
 // label — nothing a caller can mint escapes it.
 
 import { createD1Client } from "sqlfu";
+import { codedError } from "../lib/errors.ts";
 import {
   addOrgMember,
   createOrg,
@@ -69,7 +70,8 @@ export function directory(db: D1Database) {
       await createProject(client, { id, orgId });
       const p = await getProject(client, { id });
       if (!p) throw new Error(`failed to create project '${id}'`);
-      if (p.orgId !== orgId) throw new Error(`project name '${id}' is already taken`);
+      if (p.orgId !== orgId)
+        throw codedError("PROJECT_NAME_TAKEN", `project name '${id}' is already taken`);
       return { id: p.id, orgId: p.orgId };
     },
 
@@ -95,3 +97,6 @@ export function directory(db: D1Database) {
 
   return dir;
 }
+
+/** The directory as the edge holds it (src/session.ts). */
+export type Directory = ReturnType<typeof directory>;
