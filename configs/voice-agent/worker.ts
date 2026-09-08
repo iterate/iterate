@@ -1,11 +1,11 @@
 import { VoiceAgentApp } from "@iterate-com/voice-agent";
 import { IterateWorkerEntrypoint, type StreamEvent } from "iterate/sdk";
 
-// The voice agent is a guest worker: package.json declares
-// @iterate-com/voice-agent and the platform builds it from node_modules on
-// the first call into it. The boards, the voicelab CLI and the mobile app
-// address the guest directly; this project worker only needs to when it
-// wants to — VoiceAgentApp gives it the guest's methods, typed.
+// The voice agent is a guest worker: voice-agent.ts beside this file names
+// it, and the platform builds that file from @iterate-com/voice-agent. The
+// boards, the voicelab CLI and the mobile app talk to the guest directly.
+// VoiceAgentApp is the project worker's side of it: the voice app slug, and
+// `setup` / `remove` for a line the project starts itself.
 export default class VoiceAgentProjectWorker extends IterateWorkerEntrypoint {
   #voice = VoiceAgentApp.create(this.env);
 
@@ -27,15 +27,14 @@ export default class VoiceAgentProjectWorker extends IterateWorkerEntrypoint {
   }
 
   async fetch(req: Request): Promise<Response> {
-    // A dynamic worker is built lazily on the first call into it, so this
-    // route is where a build failure surfaces on request rather than in a
-    // conversation.
-    if (new URL(req.url).pathname === "/voice/health") {
-      return Response.json(await this.#voice.health());
-    }
-    return new Response(
-      "This project runs the iterate voice agent as a guest worker. GET /voice/health builds and probes it.",
-      { headers: { "content-type": "text/plain; charset=utf-8" } },
+    return (
+      (await this.#voice.fetch(req)) ??
+      new Response(
+        "This project runs the iterate voice agent as a guest worker (voice-agent.ts).",
+        {
+          headers: { "content-type": "text/plain; charset=utf-8" },
+        },
+      )
     );
   }
 }

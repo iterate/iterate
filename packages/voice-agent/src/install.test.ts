@@ -3,13 +3,17 @@ import {
   installVoiceAgent,
   legacyGuestPaths,
   removeLegacyGuest,
+  VOICE_AGENT_GUEST_SOURCE,
   VOICE_AGENT_PACKAGE_NAME,
   VOICE_AGENT_PACKAGE_SPEC,
+  VOICE_AGENT_ZOD_SPEC,
   withVoiceAgentDependency,
+  withVoiceAgentGuestFile,
   type VoiceAgentConfigRepo,
 } from "./install.ts";
 
 const PINNED = "https://pkg.pr.new/iterate/iterate/@iterate-com/voice-agent@0123456789abcdef";
+const ITERATE = "https://pkg.pr.new/iterate/iterate/iterate@main";
 
 const manifest = (dependencies: Record<string, string>) =>
   `${JSON.stringify({ name: "a-project", private: true, dependencies, devDependencies: { typescript: "^5" } }, null, 2)}\n`;
@@ -37,47 +41,54 @@ function fakeRepo(files: Record<string, string>) {
 }
 
 describe("withVoiceAgentDependency", () => {
-  it("adds the package to a manifest that lacks it and keeps everything else", () => {
-    const before = manifest({ iterate: "https://pkg.pr.new/iterate/iterate/iterate@main" });
-    const after = withVoiceAgentDependency(before, { existing: "replace" });
+  it("adds the package and zod to a manifest that lacks them, keeping everything else in order", () => {
+    const after = withVoiceAgentDependency(manifest({ iterate: ITERATE }), { existing: "replace" });
     expect(after.changed).toBe(true);
     expect(after.spec).toBe(VOICE_AGENT_PACKAGE_SPEC);
-    expect(JSON.parse(after.content)).toEqual({
+    const parsed = JSON.parse(after.content);
+    expect(parsed).toEqual({
       name: "a-project",
       private: true,
       dependencies: {
-        iterate: "https://pkg.pr.new/iterate/iterate/iterate@main",
+        iterate: ITERATE,
         [VOICE_AGENT_PACKAGE_NAME]: VOICE_AGENT_PACKAGE_SPEC,
+        zod: VOICE_AGENT_ZOD_SPEC,
       },
       devDependencies: { typescript: "^5" },
     });
     /* The layout the platform itself writes, so a later platform rewrite
      * produces no spurious diff — and the keys stay in the file's own order. */
     expect(after.content.endsWith("}\n")).toBe(true);
-    expect(Object.keys(JSON.parse(after.content))).toEqual([
-      "name",
-      "private",
-      "dependencies",
-      "devDependencies",
-    ]);
+    expect(Object.keys(parsed)).toEqual(["name", "private", "dependencies", "devDependencies"]);
+  });
+
+  it("leaves a zod the project already pins alone", () => {
+    const after = withVoiceAgentDependency(manifest({ zod: "4.3.6" }), { existing: "replace" });
+    expect(JSON.parse(after.content).dependencies.zod).toBe("4.3.6");
   });
 
   it("creates the dependencies field when there is none", () => {
     const after = withVoiceAgentDependency(`{"name":"bare"}`, { existing: "keep" });
     expect(JSON.parse(after.content)).toEqual({
       name: "bare",
-      dependencies: { [VOICE_AGENT_PACKAGE_NAME]: VOICE_AGENT_PACKAGE_SPEC },
+      dependencies: {
+        [VOICE_AGENT_PACKAGE_NAME]: VOICE_AGENT_PACKAGE_SPEC,
+        zod: VOICE_AGENT_ZOD_SPEC,
+      },
     });
   });
 
-  it("is a no-op when the wanted spec is already declared", () => {
-    const before = manifest({ [VOICE_AGENT_PACKAGE_NAME]: PINNED });
-    const after = withVoiceAgentDependency(before, { existing: "replace", spec: PINNED });
-    expect(after).toEqual({ content: before, spec: PINNED, changed: false });
+  it("is a no-op when both lines are already right", () => {
+    const before = manifest({ [VOICE_AGENT_PACKAGE_NAME]: PINNED, zod: VOICE_AGENT_ZOD_SPEC });
+    expect(withVoiceAgentDependency(before, { existing: "replace", spec: PINNED })).toEqual({
+      content: before,
+      spec: PINNED,
+      changed: false,
+    });
   });
 
   it("keeps a different existing spec when asked to, and replaces it otherwise", () => {
-    const before = manifest({ [VOICE_AGENT_PACKAGE_NAME]: PINNED });
+    const before = manifest({ [VOICE_AGENT_PACKAGE_NAME]: PINNED, zod: VOICE_AGENT_ZOD_SPEC });
     expect(withVoiceAgentDependency(before, { existing: "keep" })).toEqual({
       content: before,
       spec: PINNED,
@@ -104,24 +115,69 @@ describe("withVoiceAgentDependency", () => {
   });
 });
 
+describe("withVoiceAgentGuestFile", () => {
+  it("writes the re-export when the file is missing, and leaves it alone once it is that", () => {
+    expect(withVoiceAgentGuestFile(null, "keep")).toEqual({
+      content: VOICE_AGENT_GUEST_SOURCE,
+      changed: true,
+    });
+    expect(withVoiceAgentGuestFile(VOICE_AGENT_GUEST_SOURCE, "replace")).toEqual({
+      content: VOICE_AGENT_GUEST_SOURCE,
+      changed: false,
+    });
+  });
+
+  it("keeps a file holding something else under keep, and overwrites it under replace", () => {
+    const committedCopy = "// 5,000 lines of the agent, committed by an old deploy\n";
+    expect(withVoiceAgentGuestFile(committedCopy, "keep")).toEqual({
+      content: committedCopy,
+      changed: false,
+    });
+    expect(withVoiceAgentGuestFile(committedCopy, "replace")).toEqual({
+      content: VOICE_AGENT_GUEST_SOURCE,
+      changed: true,
+    });
+  });
+});
+
 describe("installVoiceAgent", () => {
-  it("commits package.json once, then reports the head unchanged", async () => {
-    const { repo, commits } = fakeRepo({ "package.json": manifest({}) });
+  it("commits package.json and voice-agent.ts together once, then reports the head unchanged", async () => {
+    const { repo, commits, files } = fakeRepo({ "package.json": manifest({ iterate: ITERATE }) });
     const first = await installVoiceAgent(repo, { existing: "replace" });
     expect(first).toEqual({
       changed: true,
       commitOid: "commit-1".padEnd(40, "0"),
       spec: VOICE_AGENT_PACKAGE_SPEC,
+      changedPaths: ["package.json", "voice-agent.ts"],
     });
     expect(commits).toHaveLength(1);
     expect(commits[0]!.message).toBe(`voice-agent: depend on ${VOICE_AGENT_PACKAGE_SPEC}`);
+    expect(files["voice-agent.ts"]).toBe(VOICE_AGENT_GUEST_SOURCE);
 
     const second = await installVoiceAgent(repo, { existing: "replace" });
     expect(second).toEqual({
       changed: false,
       commitOid: "head".padEnd(40, "0"),
       spec: VOICE_AGENT_PACKAGE_SPEC,
+      changedPaths: [],
     });
+    expect(commits).toHaveLength(1);
+  });
+
+  it("under keep, fills only the gaps: a pin and an old copy both stay", async () => {
+    const committedCopy = "// the old committed agent\n";
+    const { repo, commits, files } = fakeRepo({
+      "package.json": manifest({ [VOICE_AGENT_PACKAGE_NAME]: PINNED }),
+      "voice-agent.ts": committedCopy,
+    });
+    const result = await installVoiceAgent(repo, { existing: "keep" });
+    expect(result.spec).toBe(PINNED);
+    expect(result.changedPaths).toEqual(["package.json"]); // zod was missing
+    expect(JSON.parse(files["package.json"]!).dependencies).toEqual({
+      [VOICE_AGENT_PACKAGE_NAME]: PINNED,
+      zod: VOICE_AGENT_ZOD_SPEC,
+    });
+    expect(files["voice-agent.ts"]).toBe(committedCopy);
     expect(commits).toHaveLength(1);
   });
 
@@ -132,23 +188,25 @@ describe("installVoiceAgent", () => {
 });
 
 describe("the committed copy from before the package", () => {
-  it("is reported, and removed in one commit only when present", async () => {
+  it("is reported by its sibling files, and removed in one commit only when present", async () => {
     const { repo, commits, files } = fakeRepo({
       "package.json": manifest({}),
       "voice-agent.ts": "// old",
       "viseme.ts": "// old",
+      "pcm.ts": "// old",
       "worker.ts": "// the project's own",
     });
-    expect(await legacyGuestPaths(repo)).toEqual(["voice-agent.ts", "viseme.ts"]);
+    expect(await legacyGuestPaths(repo)).toEqual(["pcm.ts", "viseme.ts"]);
 
     const removed = await removeLegacyGuest(repo);
-    expect(removed?.paths).toEqual(["voice-agent.ts", "viseme.ts"]);
+    expect(removed?.paths).toEqual(["pcm.ts", "viseme.ts"]);
     expect(commits).toHaveLength(1);
     expect(commits[0]!.changes).toEqual([
-      { path: "voice-agent.ts", delete: true },
+      { path: "pcm.ts", delete: true },
       { path: "viseme.ts", delete: true },
     ]);
-    expect(Object.keys(files).sort()).toEqual(["package.json", "worker.ts"]);
+    /* voice-agent.ts is not a legacy file: the installer overwrites it with the re-export. */
+    expect(Object.keys(files).sort()).toEqual(["package.json", "voice-agent.ts", "worker.ts"]);
 
     expect(await removeLegacyGuest(repo)).toBeNull();
     expect(commits).toHaveLength(1);

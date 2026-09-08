@@ -1,4 +1,9 @@
-import { VOICE_AGENT_PACKAGE_NAME, VOICE_AGENT_PACKAGE_SPEC } from "@iterate-com/voice-agent";
+import {
+  VOICE_AGENT_GUEST_SOURCE,
+  VOICE_AGENT_PACKAGE_NAME,
+  VOICE_AGENT_PACKAGE_SPEC,
+  VOICE_AGENT_ZOD_SPEC,
+} from "@iterate-com/voice-agent";
 import { expect, test } from "vitest";
 import {
   chatVoiceStreamPath,
@@ -12,12 +17,20 @@ import {
 const packageJson = (dependencies: Record<string, string>) =>
   JSON.stringify({ name: "a-project", dependencies }, null, 2);
 
-/** A repo that already declares the package — the common case. */
+/** A repo that already has the agent: both dependency lines and the re-export — the common case. */
 const repoWithTemplate = {
-  readFile: async () => ({
-    commitOid: "0".repeat(40),
-    content: packageJson({ [VOICE_AGENT_PACKAGE_NAME]: VOICE_AGENT_PACKAGE_SPEC }),
-  }),
+  readFile: async ({ path }: { path: string }) =>
+    path === "package.json"
+      ? {
+          commitOid: "0".repeat(40),
+          content: packageJson({
+            [VOICE_AGENT_PACKAGE_NAME]: VOICE_AGENT_PACKAGE_SPEC,
+            zod: VOICE_AGENT_ZOD_SPEC,
+          }),
+        }
+      : path === "voice-agent.ts"
+        ? { commitOid: "0".repeat(40), content: VOICE_AGENT_GUEST_SOURCE }
+        : null,
   commitFiles: async () => {
     throw new Error("must not commit over an installed package");
   },
@@ -129,36 +142,50 @@ test("a failed setup writes no marker, so the next tap retries", async () => {
   expect(written).toEqual([]);
 });
 
-test("a project without the package gets it declared in package.json, once", async () => {
+test("a project without the agent gets the dependency lines and voice-agent.ts, once", async () => {
   const commits: any[] = [];
   const withoutPackage = {
-    readFile: async () => ({
-      commitOid: "0".repeat(40),
-      content: packageJson({ iterate: "https://pkg.pr.new/iterate/iterate/iterate@main" }),
-    }),
+    readFile: async ({ path }: { path: string }) =>
+      path === "package.json"
+        ? {
+            commitOid: "0".repeat(40),
+            content: packageJson({ iterate: "https://pkg.pr.new/iterate/iterate/iterate@main" }),
+          }
+        : null,
     commitFiles: async (input: any) => {
       commits.push(input);
-      return { commitOid: "1".repeat(40), changedPaths: ["package.json"], noChanges: false };
+      return {
+        commitOid: "1".repeat(40),
+        changedPaths: ["package.json", "voice-agent.ts"],
+        noChanges: false,
+      };
     },
   };
   await ensureVoiceAgentInstalled(withoutPackage);
   expect(commits).toHaveLength(1);
-  expect(commits[0].changes.map((c: any) => c.path)).toEqual(["package.json"]);
+  expect(commits[0].changes.map((c: any) => c.path)).toEqual(["package.json", "voice-agent.ts"]);
   expect(JSON.parse(commits[0].changes[0].content).dependencies).toEqual({
     iterate: "https://pkg.pr.new/iterate/iterate/iterate@main",
     [VOICE_AGENT_PACKAGE_NAME]: VOICE_AGENT_PACKAGE_SPEC,
+    zod: VOICE_AGENT_ZOD_SPEC,
   });
-  /* And a present declaration is never rewritten, whatever it pins —
-   * voicelab deploy owns upgrades; an app must not move a project. */
+  expect(commits[0].changes[1].content).toBe(VOICE_AGENT_GUEST_SOURCE);
+  /* And what is present is never rewritten — a pin somebody chose, or a
+   * voice-agent.ts holding an old committed copy: voicelab deploy owns
+   * upgrades; an app must not move a project. */
   await ensureVoiceAgentInstalled(repoWithTemplate);
   await ensureVoiceAgentInstalled({
     ...repoWithTemplate,
-    readFile: async () => ({
-      commitOid: "0".repeat(40),
-      content: packageJson({
-        [VOICE_AGENT_PACKAGE_NAME]:
-          "https://pkg.pr.new/iterate/iterate/@iterate-com/voice-agent@0123456789abcdef",
-      }),
-    }),
+    readFile: async ({ path }: { path: string }) =>
+      path === "package.json"
+        ? {
+            commitOid: "0".repeat(40),
+            content: packageJson({
+              [VOICE_AGENT_PACKAGE_NAME]:
+                "https://pkg.pr.new/iterate/iterate/@iterate-com/voice-agent@0123456789abcdef",
+              zod: VOICE_AGENT_ZOD_SPEC,
+            }),
+          }
+        : { commitOid: "0".repeat(40), content: "// the old committed agent\n" },
   });
 });

@@ -1,11 +1,12 @@
 // Point a project's config repo at the voice agent package.
 //
-// The guest worker is @iterate-com/voice-agent, built by the platform from
-// node_modules; a project opts in by naming the package in its config repo's
-// package.json. This command writes that one line and prints the commit it
-// made. Before the package existed it committed the agent's source files into
-// every project; `--prune-legacy` deletes those from a repo that still carries
-// them, since nothing builds from them any more.
+// The guest worker is @iterate-com/voice-agent: a project's config repo
+// declares the package and re-exports the agent from a three-line
+// voice-agent.ts, which the platform builds like any file in the repo. This
+// command writes those lines and prints the commit it made. Before the
+// package existed it committed the agent's source files into every project;
+// `--prune-legacy` deletes the ones beside voice-agent.ts from a repo that
+// still carries them, since nothing builds from them any more.
 //
 //   doppler run --config preview_3 -- pnpm cli voicelab deploy --project prj_…
 //   doppler run --config prd -- pnpm cli voicelab deploy --project iterate --prune-legacy
@@ -63,8 +64,8 @@ export async function deploy(options: DeployOptions) {
   });
   console.log(
     install.changed
-      ? `committed ${install.commitOid.slice(0, 8)}: package.json depends on ${install.spec}`
-      : `no change — package.json already depends on ${install.spec} (${install.commitOid.slice(0, 8)})`,
+      ? `committed ${install.commitOid.slice(0, 8)} (${install.changedPaths.join(", ")}): the repo names ${install.spec}`
+      : `no change — the repo already names ${install.spec} (${install.commitOid.slice(0, 8)})`,
   );
   if (options.pruneLegacy === true) {
     const removed = await removeLegacyGuest(repo);

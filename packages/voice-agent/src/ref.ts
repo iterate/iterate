@@ -1,11 +1,13 @@
 /**
- * Where the built guest sits once the config repo's package.json declares
- * this package. The dynamic worker host installs that package.json's
- * dependencies and builds from here; the repo itself contributes nothing
- * else, which is what `files.include` says.
+ * The file in a project's config repo that the platform builds as the voice
+ * guest worker. It is three lines, written by the installer:
+ *
+ *   export { default, VoiceAgentFacet } from "@iterate-com/voice-agent/worker";
+ *
+ * The platform bundles it the way it bundles worker.ts — resolving the
+ * package from the repo's package.json — so the repo holds a name, not a copy.
  */
-export const VOICE_AGENT_WORKER_ENTRYPOINT =
-  "node_modules/@iterate-com/voice-agent/dist/configured-worker.mjs";
+export const VOICE_AGENT_GUEST_FILE = "voice-agent.ts";
 
 /**
  * The platform's repo-sourced dynamic worker shape, spelled here rather than
@@ -16,7 +18,7 @@ export const VOICE_AGENT_WORKER_ENTRYPOINT =
 export interface VoiceAgentWorkerSource {
   createWorker: {
     entryPoint: string;
-    files: { include: string[]; repoPath: string; type: "repo" };
+    files: { repoPath: string; type: "repo" };
   };
 }
 
@@ -36,8 +38,8 @@ export interface VoiceAgentFacetRef {
 
 const source: VoiceAgentWorkerSource = {
   createWorker: {
-    entryPoint: VOICE_AGENT_WORKER_ENTRYPOINT,
-    files: { include: ["package.json"], repoPath: "/repos/config", type: "repo" },
+    entryPoint: VOICE_AGENT_GUEST_FILE,
+    files: { repoPath: "/repos/config", type: "repo" },
   },
 };
 
@@ -49,19 +51,18 @@ export const voiceAgentEntrypointRef: VoiceAgentEntrypointRef = {
 };
 
 /**
- * The STATEFUL facet worker for one conversation stream — the mirror of the
- * ref voice-agent.ts builds for itself, spelled here so a CLI can address
- * (and kill) it.
+ * The STATEFUL facet worker for one conversation stream — the ref the agent's
+ * own setup writes into the stream's subscription, spelled once here so a CLI
+ * can address (and kill) the same thing.
  *
- * The durable key predates this package: keeping it means a project that
- * moves from a committed copy of the agent to the package keeps its facet
- * state. Why a CLI ever needs to kill it: a stateful durable worker keeps the
- * bundle it booted with for as long as it stays warm, and back-to-back
- * voicelab runs keep it warm indefinitely — measured on prd (2026-08-26
- * evening): the facet served a build three commits stale while the STATELESS
- * entrypoint rebuilt fresh on every run, so setup wrote the new contract's
- * filter and the running facet honored the old one. After any install that
- * changed the repo, kill it; the next dispatch boots the build just declared.
+ * The durable key predates this package: a project that moves from a
+ * committed copy of the agent to the package keeps its facet state. Why a CLI
+ * ever needs to kill it: a stateful durable worker keeps the bundle it booted
+ * with for as long as it stays warm, and back-to-back voicelab runs keep it
+ * warm indefinitely — measured on prd (2026-08-26 evening): the facet served
+ * a build three commits stale while the STATELESS entrypoint rebuilt fresh on
+ * every run. After any install that changed the repo, kill it; the next
+ * dispatch boots the build the repo declares now.
  */
 export function voiceAgentFacetRef(streamPath: string): VoiceAgentFacetRef {
   return {

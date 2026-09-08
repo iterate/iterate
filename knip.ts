@@ -274,7 +274,7 @@ const config: KnipConfig = {
     "packages/voice-agent": {
       entry: [
         "src/index.ts",
-        "src/configured-worker.ts",
+        "src/worker.ts",
         "tsdown.config.ts",
         // The codegen preset behind viseme-model.generated.ts; lint runs it.
         "src/viseme-model.codegen.cjs",

@@ -25,44 +25,51 @@ package next to `@iterate-com/docs`.
 
 ## What this change does
 
-- **`packages/voice-agent`** (`@iterate-com/voice-agent`, 0.1.0): the sources
-  moved with `git mv`; `src/configured-worker.ts` is the tsdown physical
-  entry the worker refs name, carrying its whole runtime graph the way the
-  github-ai-linter entry does (the SDK's processor machinery, capnweb, yaml
-  and zod bundled; only `cloudflare:workers` external), because the dynamic
-  worker host installs only a config repo's own dependencies; `src/index.ts`
-  is the library entry: worker refs (`voiceAgentEntrypointRef`,
-  `voiceAgentFacetRef`, same durable key as before so facet state survives),
-  the installer (`installVoiceAgent`, `withVoiceAgentDependency`,
-  `legacyGuestPaths`, `removeLegacyGuest`), and the guest's RPC surface as
-  plain types (`VoiceAgentRpc`, `SetupVoiceAgentOptions`), which the
-  entrypoint class `implements`. The root entry imports nothing: the SDK's
-  ref types carry Cloudflare's runtime types, which the mobile app cannot
-  compile against, so `ref.ts` spells the shapes locally and `ref.test.ts`
-  pins them to the SDK's. Unit tests for the installer and refs live in the
-  package; the agent's behavioural tests stay in `apps/os/scripts/voicelab/`
-  and import the sources directly.
+- **`packages/voice-agent`** (`@iterate-com/voice-agent`, 0.1.0): an ordinary
+  library build with two entries. `./worker` is the agent (the stateless
+  entrypoint as default export, `VoiceAgentFacet`), with `iterate` a peer and
+  zod a dependency — both external, resolved from the config repo's own
+  package.json when the platform builds `voice-agent.ts`. `.` is what a
+  project worker, the CLI and the phone import: `VoiceAgentApp` (a partial
+  `fetch` for the `voice` app slug, plus `setup` / `remove`), the worker refs
+  (which name `voice-agent.ts` in the config repo, as they always did, same
+  durable key so facet state survives), the installer, and the guest's RPC
+  surface as plain types the entrypoint class `implements`. The root entry
+  imports nothing but zod: the SDK's ref types carry Cloudflare's runtime
+  types, which the mobile app cannot compile against, so `ref.ts` spells the
+  shapes locally and `ref.test.ts` pins them to the SDK's; `app.ts` types the
+  project handle structurally like the Docs app's bridge. Declarations come
+  from `tsc -p tsconfig.dts.json` (rolldown-plugin-dts's printer crashes on
+  function types inside interfaces). Unit tests for the installer, the refs
+  and the app live in the package; the agent's behavioural tests stay in
+  `apps/os/scripts/voicelab/` and import the sources directly.
+- **The install is two dependency lines and a three-line file.** A config
+  repo declares the package and zod (the SDK's processor entry leaves zod
+  external; every template already declares it) and holds
+  `voice-agent.ts` = `export { default, VoiceAgentFacet } from
+  "@iterate-com/voice-agent/worker"`. The platform builds that file the way
+  it builds worker.ts. The repo holds the agent's name, not a copy; a project
+  subclasses in the same file if it needs to. `packages/voice-agent/INSTALL.md`
+  says this for an agent making the edit.
 - **Publishing**: `.github/workflows/pkg-pr-new.yml` builds and publishes the
   package with the other two, so
   `https://pkg.pr.new/iterate/iterate/@iterate-com/voice-agent@{main,<sha>,<pr>}`
   exist on every push and PR. No platform change: `apps/os/src/pkg-pr-new.ts`
   recognises specs by URL shape, so a deployment pins this package to its own
   ref exactly as it pins `iterate`.
-- **`voicelab deploy`** now writes the dependency into the project's
-  `package.json` (`--spec` to pin, `--prune-legacy` to delete the committed
-  copy); `talk` declares it if absent and never overwrites a pin.
+- **`voicelab deploy`** writes the two files (`--spec` to pin,
+  `--prune-legacy` to delete the sources an older deploy committed beside
+  voice-agent.ts); `talk` fills gaps if absent and never overwrites a pin or
+  a voice-agent.ts holding something else.
 - **Mobile**: `voice-setup.ts` uses the package's installer and refs; the
   embedded copy (`voice-template.generated.ts` and its codegen) is gone.
   Which build a project runs is now the platform's pin rather than the app's
   own copy — a deliberate change, recorded in the code.
-- **`configs/voice-agent`** is a two-file template: `package.json` declaring
-  the package, and a minimal `worker.ts` that holds `VoiceAgentApp.create(this.env)`
-  and offers `/voice/health`, which builds and probes the guest (it also
-  proves the package's types resolve from a config repo, via the template
-  typecheck). `VoiceAgentApp` is how a project worker reaches the guest:
-  typed `health`, `setup`, `remove`, with the handle plumbing and the one
-  cast inside the package. A hosted web voice chat behind it is
-  `tasks/2026-09-08-voice-web-chat-app.md`.
+- **`configs/voice-agent`** is the template version: `package.json`,
+  `voice-agent.ts`, and a `worker.ts` that hands the voice app slug to
+  `VoiceAgentApp`. The browser client behind that slug is
+  `tasks/2026-09-08-voice-web-chat-app.md`; until it exists the slug answers
+  501 and says so.
 
 ## Not done here, deliberately
 
@@ -72,11 +79,18 @@ package next to `@iterate-com/docs`.
   `packages/voice-agent` would downgrade them. Bring it over as its own
   reviewed PR, then run `voicelab deploy --prune-legacy` against `iterate`
   and `templestein`.
-- **Preview proof.** Per AGENTS.md, this needs a preview deployment where a
-  project whose config repo only declares the package answers `health`,
-  `setupVoiceAgent`, and a call, with coherent traces. The package must be
-  published (this PR's `@<pr>` ref, or main) before any project can resolve
-  it, so the proof runs after the pkg.pr.new job for this branch is green.
+- **Preview proof.** Done on slot 10 for the first shape (a package-only
+  project answered `health` and folded a setup certificate through the
+  facet); to be repeated for the re-export shape, since the platform now
+  builds `voice-agent.ts` from the repo and resolves the package and zod
+  from its package.json. An actual audio call is only covered by the voicelab
+  e2e.
+- **The platform limitation behind every "big bundle".** The dynamic worker
+  host installs a config repo's own dependencies but not the dependencies of
+  a tarball-URL dependency, which is why `packages/iterate` bundles capnweb,
+  sqlfu, yaml and zod into its starter-app workers and why templates declare
+  zod. Resolving a tarball's declared dependencies in the host would let every
+  package be ordinary — see `tasks/2026-09-08-tarball-transitive-dependencies.md`.
 - **npm.** pkg.pr.new refs are the version that matters to the platform;
   a tag-triggered `npm publish --provenance` can come later if a registry
   version is wanted.

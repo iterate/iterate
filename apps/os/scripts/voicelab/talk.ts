@@ -270,8 +270,8 @@ export async function talk(options: TalkOptions = {}) {
   const install = await installVoiceAgent(voiceAgentConfigRepo(itx), { existing: "keep" });
   console.log(
     install.changed
-      ? `package.json now depends on ${install.spec} (${install.commitOid.slice(0, 8)})`
-      : `package.json already depends on ${install.spec} (${install.commitOid.slice(0, 8)})`,
+      ? `the repo now names ${install.spec} (${install.commitOid.slice(0, 8)}: ${install.changedPaths.join(", ")})`
+      : `the repo already names ${install.spec} (${install.commitOid.slice(0, 8)})`,
   );
 
   /* Only the secret the chosen provider's dial will spend — setup's gate is

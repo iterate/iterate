@@ -32,7 +32,7 @@ import { createVisemeTracker, firmwareVisemes, type VisemeChangeEvent } from "./
  * held when the incarnation died. The firmware dedupes on `at`, so every fold
  * stamps a fresh clock.
  */
-interface FaceValue {
+export interface FaceValue {
   /**
    * Which answer of the dial is playing, 1-based — the `answer` half of the
    * firmware's (answer, playoutSamples) coordinate, so a queued shape from a

@@ -1,8 +1,10 @@
 # @iterate-com/voice-agent
 
 The realtime voice agent for iterate projects — the server side that the ESP32
-boards, the voicelab host CLI, and the mobile app talk to — packaged so a
-project pulls it in with one line instead of carrying a copy of its source.
+boards, the voicelab host CLI, and the mobile app talk to — as an ordinary
+package. A project's config repo declares it and re-exports it from a
+three-line `voice-agent.ts`; the platform builds that file the way it builds
+`worker.ts`. The repo holds the agent's name, not a copy.
 
 - [What it is](#what-it-is)
 - [Enabling voice on a project](#enabling-voice-on-a-project)
@@ -18,14 +20,14 @@ project pulls it in with one line instead of carrying a copy of its source.
 
 ## What it is
 
-A project on iterate is a config repo whose `worker.ts` is built and run by
-the platform. The voice agent is a **guest worker** beside it: a second
-program, built from this package, that the platform runs in the project's
-name. It has two halves.
+A project on iterate is a config repo whose `worker.ts` the platform builds
+and runs. The voice agent is a **guest worker** beside it: a second program
+in the same repo, `voice-agent.ts`, which the platform builds and runs in the
+project's name. The file is a re-export of this package's `./worker` entry,
+and that entry has two halves.
 
-- **The stateless entrypoint** (`VoiceAgentEntrypoint`, the default export of
-  the built worker) is what you call: `health`, `setupVoiceAgent`,
-  `removeVoiceAgent`. It lives for a request.
+- **The stateless entrypoint** (the default export) is what you call:
+  `health`, `setupVoiceAgent`, `removeVoiceAgent`. It lives for a request.
 - **The stateful facet** (`VoiceAgentFacet`, a Durable Object) is one per
   conversation stream. It holds the provider's WebSocket (Grok or OpenAI
   realtime), paces the answer's audio back at playback rate, keeps the
@@ -39,31 +41,41 @@ the transcripts, `conversation-ended`) are the record. That is the whole
 architecture, and it is why any client — a board, a phone, a browser tab, a
 CLI on a Mac — can join a call by opening the stream.
 
-The dynamic worker host installs the config repo's `package.json`
-dependencies and builds the guest from
-`node_modules/@iterate-com/voice-agent/dist/configured-worker.mjs` on the
-first call into it. The built file carries its complete runtime graph (the
-SDK's stream-processor machinery, capnweb, yaml, zod); only
-`cloudflare:workers` is external. A config repo contributes nothing but the
-dependency line.
+How the facet gets "installed": `setupVoiceAgent` appends a
+`stream/subscription-configured` event to the conversation stream whose
+receiver is a facet processor with a **worker ref** — build a stateful worker
+from `voice-agent.ts` in the config repo, class `VoiceAgentFacet`, durable key
+`voice-agent-facet`, path equals the stream. The first time an event the
+contract consumes lands there, the platform builds that worker (installing
+the repo's `package.json` dependencies and bundling, cached by build key) and
+wakes the facet. Nothing is loaded into `worker.ts`; the subscription carries
+the ref, and the platform resolves it lazily.
 
 ## Enabling voice on a project
 
-**Declare the package** in the config repo's `package.json`:
+Two dependency lines and one file, in the config repo. [`INSTALL.md`](./INSTALL.md)
+is the same thing written for an agent making the edit.
 
 ```jsonc
+// package.json
 {
   "dependencies": {
     "iterate": "https://pkg.pr.new/iterate/iterate/iterate@main",
     "@iterate-com/voice-agent": "https://pkg.pr.new/iterate/iterate/@iterate-com/voice-agent@main",
+    "zod": "4.5.4", // the SDK's processor entry leaves zod external; every template declares it
   },
 }
 ```
 
-That is the whole install. Three ways to get the line there:
+```ts
+// voice-agent.ts — the file the worker refs name; the platform builds it
+export { default, VoiceAgentFacet } from "@iterate-com/voice-agent/worker";
+```
+
+Three ways to get them there:
 
 ```bash
-# 1. The CLI writes it (and --prune-legacy deletes the source files an older deploy committed):
+# 1. The CLI writes both (and --prune-legacy deletes the source files an older deploy committed):
 doppler run --config prd -- pnpm cli voicelab deploy --project <slug> --prune-legacy
 
 # 2. Pin a specific build instead of main:
@@ -71,72 +83,67 @@ pnpm cli voicelab deploy --project <slug> \
   --spec https://pkg.pr.new/iterate/iterate/@iterate-com/voice-agent@<sha-or-pr>
 ```
 
-3. The mobile app writes it itself on a project's first call if it is
-   missing, through `installVoiceAgent` below, and never rewrites a line that is
+3. The mobile app writes them itself on a project's first call if they are
+   missing, through `installVoiceAgent` below, and never rewrites what is
    already there.
 
 From then on the boards, `voicelab talk`, and the phone address the guest
 through the package's worker refs; nothing in the project's `worker.ts` has
 to change. `configs/voice-agent` in this repo is the template version of
-exactly this: the dependency line plus a minimal worker.
+exactly this: the two files plus a minimal worker.
+
+A project that wants to change the agent subclasses it in the same file
+instead of re-exporting — `voice-agent.ts` is the project's, and the platform
+builds whatever it exports under those two names.
 
 ## From the project's own worker: `VoiceAgentApp`
 
-A project worker that wants the guest — to start a line for a chat, to build
-it on deploy, to expose a health route — uses `VoiceAgentApp`. It has the
-guest's methods, typed; the worker refs and the handle plumbing stay inside
-the package.
+The packaged-app shape every starter app has: a partial `fetch` for its app
+slug, and typed methods on the guest. The worker refs and the handle plumbing
+stay inside the package.
 
 ```ts
 import { VoiceAgentApp } from "@iterate-com/voice-agent";
 import { IterateWorkerEntrypoint } from "iterate/sdk";
 
 export default class extends IterateWorkerEntrypoint {
-  #voice = VoiceAgentApp.create(this.env);
+  #voice = VoiceAgentApp.create(this.env); // { appSlug: "voice" } is the default
 
   async fetch(req: Request): Promise<Response> {
-    const url = new URL(req.url);
-
-    // A dynamic worker builds on the first call into it, so this is where a
-    // broken build shows up: on a request, not inside somebody's first call.
-    if (url.pathname === "/voice/health") {
-      return Response.json(await this.#voice.health());
-      // → { ok: true, projectId: "prj_…", buildCacheKey: "…" }
-    }
-
-    // Give a chat its own phone line. The chat becomes the call's
-    // "colleague": the transcript lands on the chat's stream and every
-    // message the chat agent writes is spoken into the live call.
-    if (url.pathname === "/voice/call" && req.method === "POST") {
-      const { chatPath } = await req.json<{ chatPath: string }>();
-      const line = await this.#voice.setup({
-        streamPath: `/agents/voice/chat${chatPath}`,
-        colleaguePath: chatPath,
-        provider: "openai",
-        instructions:
-          "You are on a phone call with a colleague who knows you well. Casual, direct, brief.",
-        clientTakesTurns: true, // push-to-talk client; omit for an open-mic board
-        greeting: true, // speak first when the call connects
-        tools: [
-          {
-            // No expression: a name the agent already knows how to be.
-            name: "hang_up",
-            description:
-              "End the call when the user says goodbye. Say goodbye BEFORE calling this.",
-          },
-        ],
-      });
-      return Response.json(line); // { streamPath, warmMs }
-    }
-
-    if (url.pathname === "/voice/hang-up" && req.method === "POST") {
-      const { streamPath } = await req.json<{ streamPath: string }>();
-      return Response.json(await this.#voice.remove({ streamPath }));
-    }
-
-    return new Response("voice project");
+    // Requests for the voice app (voice--<project>) are the app's; anything
+    // else returns null and the worker's own routing carries on.
+    return (await this.#voice.fetch(req)) ?? new Response("my project");
   }
 }
+```
+
+The browser client that will answer on that slug is not built yet
+(`tasks/2026-09-08-voice-web-chat-app.md`); until it is, the slug answers
+501 and says so. The methods work today:
+
+```ts
+// Give a chat its own phone line. The chat becomes the call's "colleague":
+// the transcript lands on the chat's stream and every message the chat agent
+// writes is spoken into the live call.
+const line = await this.#voice.setup({
+  streamPath: `/agents/voice/chat${chatPath}`,
+  colleaguePath: chatPath,
+  provider: "openai",
+  instructions:
+    "You are on a phone call with a colleague who knows you well. Casual, direct, brief.",
+  clientTakesTurns: true, // push-to-talk client; omit for an open-mic board
+  greeting: true, // speak first when the call connects
+  tools: [
+    {
+      // No expression: a name the agent already knows how to be.
+      name: "hang_up",
+      description: "End the call when the user says goodbye. Say goodbye BEFORE calling this.",
+    },
+  ],
+});
+// → { streamPath, warmMs }
+
+await this.#voice.remove({ streamPath: line.streamPath });
 ```
 
 `create(env)` takes the worker's `this.env` (anything with an `ITX` binding
@@ -229,10 +236,10 @@ project's key.
 
 `setupVoiceAgent` appends a **birth certificate** to the stream — the
 `events.iterate.com/voice-agent/configured` event carrying every option above
-— and installs the subscription that wakes the facet for that stream. Then it
-waits for the facet to fold the certificate (a cold build is most of the wait;
-`warmMs` in the result is that clock), so a returned `setup` means the line
-is live. Contract version `19.0.0`.
+— and the subscription that wakes the facet for that stream (the worker ref
+above). Then it waits for the facet to fold the certificate (a cold build is
+most of the wait; `warmMs` in the result is that clock), so a returned
+`setup` means the line is live. Contract version `19.0.0`.
 
 Every stream is born with a **colleague**: a normal text agent
 (`/agents/voice-notes/…` by default, or the chat you named in
@@ -298,7 +305,7 @@ using itx = session.projects.get("my-project");
 // The platform's handle is generic; the guest's methods are this package's
 // contract, which the entrypoint class implements.
 using guest = itx.workers.get(voiceAgentEntrypointRef) as unknown as VoiceAgentRpc & Disposable;
-console.log(await guest.health());
+console.log(await guest.health()); // builds the guest if it is not built yet
 const line = await guest.setupVoiceAgent({ streamPath: "/agents/voice/desk", provider: "openai" });
 
 // After upgrading the package: a WARM stateful facet keeps the bundle it
@@ -314,13 +321,13 @@ await facet.kill().catch(() => {}); // the abort takes the killing RPC down with
 is the stateful facet for one stream, `className: "VoiceAgentFacet"`,
 `durableWorkerKey: "voice-agent-facet"` — the same key the committed copies
 used, so a project that moves onto the package keeps its facet state. Both
-name `node_modules/@iterate-com/voice-agent/dist/configured-worker.mjs` with
-`files.include = ["package.json"]`: the repo contributes only the manifest.
+name `voice-agent.ts` in the config repo as the entry point, which is why
+that file and its two exported names are load-bearing.
 
 ## The installer
 
-The root entry also carries what the CLI and the phone use to write the
-dependency line, so any code with a config-repo handle can enable voice.
+The root entry also carries what the CLI and the phone use to write the two
+files, so any code with a config-repo handle can enable voice.
 
 ```ts
 import {
@@ -328,27 +335,27 @@ import {
   legacyGuestPaths,
   removeLegacyGuest,
   withVoiceAgentDependency,
-  VOICE_AGENT_PACKAGE_SPEC,
+  withVoiceAgentGuestFile,
+  VOICE_AGENT_GUEST_SOURCE,
 } from "@iterate-com/voice-agent";
 
-// Declare it, or upgrade an existing declaration to `spec` (default: @main).
+// Declare it and write voice-agent.ts, or upgrade what is there to `spec` (default: @main).
 const result = await installVoiceAgent(itx.repo, { existing: "replace" });
-// → { changed: true, commitOid: "…", spec: "https://pkg.pr.new/…/@iterate-com/voice-agent@main" }
+// → { changed: true, commitOid: "…", spec: "…@main", changedPaths: ["package.json", "voice-agent.ts"] }
 
-// "Present is enough": add it only if absent, never move a pin somebody chose
-// (what the mobile app does on a first call).
+// "Present is enough": fill only the gaps, never move a pin somebody chose or
+// overwrite a voice-agent.ts that holds something else — a subclass, or an
+// old committed copy (what the mobile app does on a first call).
 await installVoiceAgent(itx.repo, { existing: "keep", message: "app: depend on the voice agent" });
 
-// See what a commit would do without making one — pure, on the manifest text.
-const preview = withVoiceAgentDependency(packageJsonText, {
-  existing: "replace",
-  spec: VOICE_AGENT_PACKAGE_SPEC,
-});
-preview.changed; // false when the line is already right
+// See what a commit would do without making one — pure, on the file contents.
+withVoiceAgentDependency(packageJsonText, { existing: "replace" }).changed;
+withVoiceAgentGuestFile(currentVoiceAgentTs, "replace").content === VOICE_AGENT_GUEST_SOURCE;
 
-// A repo that predates the package still carries voice-agent.ts and its
-// siblings; nothing builds from them any more.
-await legacyGuestPaths(itx.repo); // → ["voice-agent.ts", "face.ts", …] or []
+// A repo that predates the package still carries face.ts, pcm.ts, viseme.ts
+// and viseme-model.generated.ts beside voice-agent.ts; nothing builds from
+// them once voice-agent.ts is the re-export.
+await legacyGuestPaths(itx.repo); // → ["face.ts", "pcm.ts", …] or []
 await removeLegacyGuest(itx.repo); // one commit deleting them, or null when there are none
 ```
 
@@ -383,7 +390,7 @@ install that changed the repo; the ref example above shows the call.
 ## Building and testing
 
 ```bash
-pnpm --dir packages/voice-agent build      # tsdown (two entries) + tsc declarations
+pnpm --dir packages/voice-agent build      # tsdown (two entries, every dependency external) + tsc declarations
 pnpm --dir packages/voice-agent typecheck
 pnpm --dir packages/voice-agent test       # the installer, the refs, VoiceAgentApp
 pnpm --dir apps/os exec vitest run scripts/voicelab/voice-agent.test.ts   # the agent itself, against a fake provider
@@ -397,18 +404,20 @@ Layout:
   model (met4citizen/HeadAudio, MIT — see `HEAD_AUDIO_LICENSE.txt`),
   embedded as a module by `viseme-model.codegen.cjs` from
   `viseme-model.bin`; drift is a fixable `codegen/codegen` lint error.
-- `src/configured-worker.ts` — the build entry the worker refs name.
+- `src/worker.ts` — the `./worker` entry a config repo's `voice-agent.ts`
+  re-exports.
 - `src/app.ts`, `src/ref.ts`, `src/install.ts`, `src/setup-options.ts` —
   `VoiceAgentApp`, the worker refs, the installer, and the guest's RPC
   surface as plain types: everything the root entry exports. The root entry
-  imports nothing but zod (bundled): the SDK's ref types would bring
-  Cloudflare's runtime types with them, which a phone does not have, so
-  `ref.ts` spells the shapes locally and `ref.test.ts` pins them to the
-  SDK's with `satisfies`; `app.ts` types the project handle structurally.
-- `tsdown.config.ts` — the guest bundles its whole runtime graph
-  (`onlyBundle` lists it; an unlisted dependency fails the build);
-  declarations come from `tsc -p tsconfig.dts.json` because
-  rolldown-plugin-dts's printer crashes on function types inside interfaces.
+  imports nothing but zod: the SDK's ref types would bring Cloudflare's
+  runtime types with them, which a phone does not have, so `ref.ts` spells
+  the shapes locally and `ref.test.ts` pins them to the SDK's with
+  `satisfies`; `app.ts` types the project handle structurally.
+- `tsdown.config.ts` — an ordinary library build: `iterate` is a peer and
+  zod a dependency, both external, resolved from the config repo's own
+  `package.json` when the platform builds `voice-agent.ts`. Declarations
+  come from `tsc -p tsconfig.dts.json` because rolldown-plugin-dts's printer
+  crashes on function types inside interfaces.
 
 The agent's behavioural tests live with the lab tooling in
 `apps/os/scripts/voicelab/` and import these sources directly.
@@ -420,9 +429,9 @@ The agent's behavioural tests live with the lab tooling in
   instead.
 - **The first call after enabling is slow, or fails with a build error** —
   a dynamic worker builds on the first call into it (npm install of the
-  config repo's dependencies plus a bundle). Call `health()` from a deploy
-  hook or a route to pay for it deliberately; a build error surfaces there,
-  naming the module it could not resolve.
+  config repo's dependencies plus a bundle). A build error surfaces there,
+  naming the module it could not resolve; `Could not resolve "zod"` means
+  the dependency line is missing.
 - **Setup succeeded but the call behaves like the previous version** — the
   stateful facet is warm and still running the bundle it booted with. Kill
   it (the ref example) and dial again.
@@ -430,5 +439,6 @@ The agent's behavioural tests live with the lab tooling in
   exist on pkg.pr.new: the push has not been published yet, or the platform
   is pinned to a commit that predates the package. `@main` is always right
   for a platform that shipped after the package existed.
-- **A migrated project still lists `voice-agent.ts`** — harmless dead
-  weight; `voicelab deploy --prune-legacy` or `removeLegacyGuest` removes it.
+- **A migrated project still lists `face.ts` and friends** — harmless dead
+  weight; `voicelab deploy --prune-legacy` or `removeLegacyGuest` removes
+  them.
