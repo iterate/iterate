@@ -5,9 +5,9 @@
   //
   //  1. no "build" block: the plugin imports the worker through Vite (same isolate as the tests).
   //     The generated SDK bundle (src/generated/*) is built by vitest.global-setup.ts.
-  //  2. no `ai` binding (see the note by the bindings below), and the in-process control plane's D1 +
-  //     OAuth KV are fresh local namespaces with no schema — this lane never touches the directory
-  //     (the e2e lane, which does, migrates definitions.sql in its global-setup).
+  //  2. no `ai` binding (see the note by the bindings below); the in-process control plane's D1 +
+  //     OAuth KV are fresh local namespaces with no schema — control-plane.test.ts applies
+  //     definitions.sql itself (the e2e lane does the same in its global-setup).
   //
   // KEPT identical on purpose: compatibility_date + flags, the declarative DO export, the LOADER
   // worker-loader binding, the DO binding, and the KV bindings (ids are meaningless locally —

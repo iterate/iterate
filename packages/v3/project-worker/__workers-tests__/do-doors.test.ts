@@ -33,7 +33,7 @@ import { RpcTarget } from "capnweb";
 import { expect, test } from "vitest";
 import { print, type ItxExpression } from "../src/context/expression.ts";
 import { rewriteRuleConfiguredEvent } from "../src/context/itx-expression-rewriting.ts";
-import { openSession, stub } from "./support.ts";
+import { openSession, stub, until } from "./support.ts";
 
 /** One rewrite-rule row as the core snapshot serializes it (the rules are `core` state — a RECORD
  *  by canonical match; both halves are the parsed ItxExpression, so `print` them to compare against
@@ -55,24 +55,6 @@ const rewriteRuleEventCount = async (ctx: string): Promise<number> =>
 /** The DO's in-memory socket census (a DO-only verb — physical facts, never event-derivable). */
 const rpcStubPagersOf = async (ctx: string): Promise<number> =>
   ((await stub(ctx).rpcStubTransportState()) as { rpcStubPagers: number }).rpcStubPagers;
-
-/** Poll `fn` until it returns a defined, non-false value (bounded). Physical facts arrive a beat
- *  after the RPC that triggered them: a pager leaves the census when its CLOSE lands at the DO, a
- *  handle's rule un-set rides the edge's waitUntil. */
-async function until<T>(
-  label: string,
-  fn: () => Promise<T | undefined | false>,
-  timeoutMs = 5_000,
-): Promise<T> {
-  const t0 = Date.now();
-  for (;;) {
-    const v = await fn();
-    if (v !== undefined && v !== false) return v;
-    if (Date.now() - t0 > timeoutMs)
-      throw new Error(`until(${label}): timed out after ${timeoutMs}ms`);
-    await new Promise((r) => setTimeout(r, 25));
-  }
-}
 
 /** The code of a call that MUST reject — awaited over the capnweb session, not the raw DO stub: a
  *  rejecting DO call through the vitest-plugin's RPC bridge is echoed by workerd as an "Uncaught (in

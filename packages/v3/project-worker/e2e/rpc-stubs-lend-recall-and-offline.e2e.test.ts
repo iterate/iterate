@@ -104,6 +104,21 @@ test("same-key re-provide replaces the transport while online and appends ONE mo
   expect(await observer.invoke(["itx", "dupTool", ["hello"]])).toBe("hello-from-two");
 });
 
+test("replacing a LIVE target with an EXPRESSION target at the same match / name recalls the lend — presence returns to baseline (provide and subscribe alike)", async () => {
+  const itx = openItx(freshCtx("swap-to-expression"));
+  await itx.provide("itx.p", new Tools("live"));
+  await until("the live stub present", async () => (await presence(itx)).includes("itx.p"));
+  await itx.provide("itx.p", "itx.kv"); // the match now means a built-in, not the stub
+  await until("the lend recalled", async () => (await presence(itx)).length === 0);
+
+  await itx.subscribe({ name: "swap", target: () => undefined });
+  await until("the live subscriber present", async () =>
+    (await presence(itx)).includes("subscription:swap"),
+  );
+  await itx.subscribe({ name: "swap", target: "itx.kv.get" }); // same name, an expression target
+  await until("the subscriber's lend recalled", async () => (await presence(itx)).length === 0);
+});
+
 test("disposing a client session recalls its stubs (presence) AND un-sets their rules — the match is default-deny afterwards", async () => {
   const ctx = freshCtx("dispose");
   const observer = openItx(ctx);
@@ -196,6 +211,45 @@ test("killing the provider session mid-invoke rejects the in-flight call promptl
     return codeOf(again) === "NO_ITX_EXPRESSION_MATCH";
   });
   expect(await rpcStubRewriteRuleMatches(observer)).not.toContain("itx.hanger");
+});
+
+// The DO owns a lent stub's rule and un-sets it one append AFTER the key's last pager closes, while
+// the lender's recall disposes the session's dup at once. A call landing in that window — the rule
+// still there, the dup gone — is refused CODED: the relay re-codes every ended lend (recalled,
+// returned, broken) to RPC_STUB_OFFLINE, and once the un-set lands default-deny answers
+// NO_ITX_EXPRESSION_MATCH. capnweb's raw "Attempted to use RPC stub after it has been disposed" never
+// reaches a caller.
+test("a call in the window between a lender's recall and the DO's un-set is refused CODED — RPC_STUB_OFFLINE, then NO_ITX_EXPRESSION_MATCH — never capnweb's raw disposed error", async () => {
+  // The window is a few ms wide, tens of ms after the dispose: six rounds of eight calls 1 ms apart
+  // straddle it wherever it falls. The first calls of a burst may still answer (the recall not yet
+  // at the edge), the last see the un-set.
+  const answers: string[] = [];
+  for (let round = 0; round < 6; round++) {
+    const ctx = freshCtx(`recall-window-${round}`);
+    const provided = await openItx(ctx).provide("itx.tool", new Tools("windowed"));
+    const itx = openItx(ctx);
+    expect(await itx.invoke("itx.tool.hello()")).toBe("hello-from-windowed");
+    provided[Symbol.dispose]();
+    const calls: Promise<unknown>[] = [];
+    for (let i = 0; i < 8; i++) {
+      calls.push(itx.invoke("itx.tool.hello()"));
+      await sleep(1);
+    }
+    for (const s of await Promise.allSettled(calls))
+      answers.push(
+        s.status === "fulfilled"
+          ? String(s.value)
+          : (codeOf(s.reason) ?? `UNCODED: ${(s.reason as Error).message}`),
+      );
+    const denied = await until("the un-set landed", async () => {
+      const e = await rejection(itx.invoke("itx.tool.hello()"));
+      return codeOf(e) === "RPC_STUB_OFFLINE" ? undefined : e; // the window — keep waiting
+    });
+    expect(codeOf(denied)).toBe("NO_ITX_EXPRESSION_MATCH");
+  }
+  expect(answers.filter((a) => a.startsWith("UNCODED"))).toEqual([]);
+  for (const a of answers)
+    expect(["hello-from-windowed", "RPC_STUB_OFFLINE", "NO_ITX_EXPRESSION_MATCH"]).toContain(a);
 });
 
 // Fan-out is NOT a built-in: the caller reads the rules whose target names the registry and maps
@@ -352,6 +406,22 @@ test("disposing a SubscriptionHandle removes its row and recalls its stub — th
   await observer.append({ type: "mark" });
   await sleep(600);
   expect(c.delivered).toBe(1); // nothing reaches a disposed subscription
+});
+
+test("disposing a SubscriptionHandle removes an EXPRESSION row in either codec half — a target that merely NAMES the registry lends nothing, so only the row goes", async () => {
+  for (const [half, target] of [
+    ["string", "itx.rpcStubs.get('cam')"],
+    ["array", ["itx", "rpcStubs", ["get", "cam"]]],
+  ] as const) {
+    const itx = openItx(freshCtx(`subrow-${half}`));
+    const handle = await itx.subscribe({ name: "viaExpression", target });
+    expect((await subscriptions(itx)).map((r) => r.name)).toEqual(["config", "viaExpression"]);
+    handle[Symbol.dispose]();
+    await until(`the ${half}-spelled row removed`, async () =>
+      (await subscriptions(itx)).every((r) => r.name === "config"),
+    );
+    expect(await presence(itx)).toEqual([]); // nothing was ever lent under it
+  }
 });
 
 test("storm of provide/dispose/subscribe/null-target/disconnect: presence AND the rule table return to baseline — nothing is left behind by a dead session", async () => {

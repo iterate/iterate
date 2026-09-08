@@ -3903,3 +3903,78 @@ subscription-configured("config")@4, [delta]` — the first user event at offset
   (ingress-project-host ×2, session-identity ×2) that fail at setup on `CONTROL_PLANE_ADMIN_TOKEN` /
   `PROJECT_TOKEN_SECRET` unset in this local env — unrelated to the funnel (simplification-52 confirms
   them 4/4 with the secrets). The funnel behaves on the real DO: every stream funnels to the "/" worker.
+
+## 2026-09-08 — ONE worker, ONE package: the control plane in-process, the topology deleted, then two review rounds against "a super tight core"
+
+Jonas: "We don't need control plane as a separate worker entry point. We can just have it as the
+default fetch function." "Everything can just be one package for now." "Everything is trusted code
+except the dynamic worker loader loaded code." "I'm worried that there's still too much cruft, too much
+gunk, for what this is. It's really meant to be a super tight core."
+
+- THE CONSOLIDATION (82095a262 → d856bc992, deployed 7ee86845): the orphan control plane rehomed as
+  `src/control-plane/` and mounted as worker.ts's default-fetch CATCH-ALL (OAuth AS via
+  @cloudflare/workers-oauth-provider + a D1/sqlfu directory of users/orgs/projects + /mcp); the
+  project-worker's own doors (`/api`, `/expression`, `/version`, `/demo`) take precedence. DELETED: the
+  FALLBACK service binding, DummyControlPlane, the SOLO-vs-deployed split, the control-plane shell, the
+  orphan packages, routes/api-keys/access-modes/grants. Ingress: `<app>--<projectId>.<base>` → one
+  directory read → the DO (unknown project = 421 before any DO is dialled). Egress in the DO. A project's
+  id IS its one DNS-safe name — this dissolved codex's P1 (an unvalidated caller id parsing as another
+  project's KV/secret scope). `LOGIN_MODE=open` is this pass's stub: every visitor is the seeded
+  `user_anonymous` row. The e2e harness applies definitions.sql through the worker's OWN D1 binding
+  (`getEnv().DB`, prepared batch — `wrangler d1 execute --local` persists elsewhere).
+- REVIEW ROUND 1 (a69cbee88 + c9639f324, deployed 1d050ad3; three Fable 5.1 reviewers + codex):
+  ONE vitest.config.ts with four projects (unit/workers/e2e/bench; the SDK bundle gitignored and built
+  by a root globalSetup), ONE `deployedOnly` gate, the dummy capnweb server gone (that proof dials the
+  worker's own /api), the "solo" noun gone with the topology, the app-config parser engine gone,
+  `src/shared/` dissolved, single-file exports un-exported. Learned: local miniflare's OUTBOUND fetch
+  cannot upgrade to a WebSocket — the three WS-transport connector tests are deployed-only.
+- REVIEW ROUND 2 (b6dcd22ae, deployed d7e03c23; two Fable reviewers + codex gpt-6-astra at xhigh).
+  CORRECTNESS, all fixed: the visitor's project-session cookie was forwarded to loaded app code (an app
+  could lift the token and act as the visitor via /api) — stripped now, the visitor's other cookies
+  still reach the app; `/.itx/session?next=` was an open redirect (`//evil`, `/\evil`) —
+  `sameOriginPath` is the ONE same-origin check, shared with the control plane's post-login redirect;
+  URL secret substitution spliced the raw value (`a&role=admin#x` added a parameter and a fragment)
+  and missed path placeholders the URL parser percent-encodes — one component now, both spellings
+  match; verified claims decoded UTF-8 as Latin-1 (`user_élise` → `user_Ã©lise`) — ONE signed-claims
+  codec (`signClaims`/`verifyClaims`) decodes with TextDecoder, the session cookie reuses it; open mode
+  let a `/login` cookie make a second identity /mcp never saw — open mode is ALWAYS anonymous; and a
+  REAL STREAM BUG (Fable, reproduced): a facet subscription halted on one incarnation and resumed on a
+  FRESH one never caught up from the log (the resume classified by a memory-only set, fell to the
+  cursor lane, returned without `catchUpFromLog`) — fixed, pinned as a two-row table.
+  SIMPLIFIED: the `platform` secret scope deleted (its KV was bound nowhere; the optional binding was
+  the last "self-host vs hosted" fork) — egress is ONE scan, `MissingProjectSecret` → 502; ONE
+  configuration door (LOGIN*MODE, SESSION_SECRET, the Artifacts pair are `APP_CONFIG*\*`now, the login
+mode validated); the`projects.slug`column dropped (the id is the one name, stored once — the
+deployed D1's`projects`re-created, which first needed the stale`routes`/`api_keys`tables dropped:
+they still referenced it); emerge/ensureOrg merged; the slug cache inlined;`#readPage`,
+`localReachableContext`, the host's duplicate reduce guard, the second and third `core`reservation,
+two indirection constants, the stale topology/design-doc prose — gone; the workers-lane Stream tests
+→ ONE`src/stream/stream.test.ts`in the node lane; a fully-covered e2e, two duplicate
+enable-twice/disable tests, a vacuous quiet-clock test and a stale`test.fails` pin deleted.
+  DECLINED, surfaced as product calls: deleting the OAuth AS/login/session (unreachable under open mode —
+  the sign-in pass makes it live instead), deleting the connector library (the library tier is
+  decided), deleting /demo + the React hook, an in-process no-op config worker, merging buildBuiltIns
+  into the DO, the two-walker merge (medium risk). KNOWN, by design until the sign-in pass: under open
+  mode loaded code can reach ANY project through the public /api (the self-dial e2e pins it).
+- GATES (round 2): tsc ×3 · oxlint · `pnpm test` 90 files / 654 passed / 13 expected-fail / 16
+  deployed-only skips. 59 files, +757 / −1695 (round 1: 39 files, +290 / −523; the runtime half 804
+  deletions). DEPLOYED VERIFY (d7e03c23, the directory's `projects` re-created): the FULL deployed
+  suite 52 files / 194 passed / 3 expected-fail / 1 skip (the opt-in wake-loop probe), first run
+  (round 1's 1d050ad3: 53 / 197 / 3 / 1, before the test prunes).
+- ROUND 3 — "keep all these things but otherwise get things working and clean" (Jonas). KEPT: the
+  OAuth AS + login + session, the connector library, /demo. Kept means PROVEN: a new
+  `__workers-tests__/control-plane.test.ts` (the one local lane with a D1) drives the worker's front
+  door in BOTH login modes — email: the form → the session cookie → a project created as that user
+  and listed on the console, a taken name is 409 (was an unhandled throw → 500), the post-login
+  redirect stays on the origin, `/mcp` refuses without a bearer; open: every visitor is the anonymous
+  identity, a `/login` cookie cannot make a second one, `/mcp` is tokenless (initialize → whoami →
+  list_projects, over the JSON/SSE answer). The nine `review-bugs-*` test files (1,623 LOC, no live
+  red pin left, every header stale) DISSOLVED — each surviving claim sits beside the module it pins
+  under a contract title, private `until`/`openPager`/`json` copies gone, net −631 LOC — and the
+  dissolution found ANOTHER real defect: disposing an EXPRESSION provide handle never removed its
+  rule (`#removeRuleInBackground` compared the row's PRINTED target to the event's PARSED one — never
+  equal; only the `null` mask case worked). Fixed (the expectation is printed with holes, as
+  `rewriteRules.get` spells it) and pinned in rewrite-rules-builtins-root.e2e. `@types/pako` dropped
+  (pako 3 ships its types; the shared lockfile spliced in a detached worktree, frozen-verified);
+  knip clean with no new ignores. GATES: tsc ×3 · oxlint · knip · `pnpm test` 84 files / 659 passed /
+  13 expected-fail / 16 deployed-only skips. Deployed proof: the next entry's line.

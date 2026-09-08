@@ -123,11 +123,16 @@ describe("configure — ONE event: set, replace, or remove", () => {
     expect(events).toHaveLength(0);
   });
 
-  test("the stored target IS the parsed form: an array target is stored as given (shape-checked, never printed), and the row reduces to it", () => {
+  test("the stored target IS the parsed form: an array target is stored as given (shape-checked, never printed) and the row reduces to it — so the reserved literal `{ '@': true }` is DATA here (the markers belong to a rule's target only)", () => {
     const { configure, rows } = setup();
-    const target: ItxExpression = ["itx", "facets", ["get", { "a b": 1e21 }], "processEventBatch"];
-    const event = configure({ name: "odd", target });
-    expect((event.payload as { target: unknown }).target).toEqual(target);
-    expect(rows().odd.target).toEqual(target);
+    const targets: ItxExpression[] = [
+      ["itx", "facets", ["get", { "a b": 1e21 }], "processEventBatch"],
+      ["itx", "x", ["y", { "@": true }]],
+    ];
+    for (const [i, target] of targets.entries()) {
+      const event = configure({ name: `odd${i}`, target });
+      expect((event.payload as { target: unknown }).target).toEqual(target);
+      expect(rows()[`odd${i}`].target).toEqual(target);
+    }
   });
 });

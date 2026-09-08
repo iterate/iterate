@@ -32,6 +32,7 @@
 
 import { evictDurableObject, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { expect, test, vi } from "vitest";
+import type { ItxExpression } from "../src/context/expression.ts";
 import { subscriptionConfiguredEvent } from "../src/stream/subscriptions.ts";
 import { Echo, openSession, quiesce, stub } from "./support.ts";
 
@@ -191,6 +192,41 @@ test("DISABLE deletes the facet's storage; RE-ENABLE rebuilds from the log (no s
   await new Promise((r) => setTimeout(r, 150));
   const after = await snapCounter(ctx);
   expect(after.state.n).toBe(await durableCount(ctx)); // rebuilt from the whole log — no stale-checkpoint skip
+});
+
+/** A facet that counts bumps in its OWN kv — state a processor's checkpoint stands in for. */
+const BUMP_COUNTER_SRC = /* js */ `
+import { DurableObject } from "cloudflare:workers";
+export class BumpCounterDurableObject extends DurableObject {
+  bump() { const n = (this.ctx.storage.kv.get("n") ?? 0) + 1; this.ctx.storage.kv.put("n", n); return n; }
+  count() { return this.ctx.storage.kv.get("n") ?? 0; }
+  processEventBatch() {}
+  catchUpFromLog() {}
+}
+`;
+test("a facet TWO rows host survives the removal of ONE of them — memo and storage intact (the delete is the LAST hosting row's, or the survivor would rebuild from 0 and re-run every effect)", async () => {
+  const context = stub("prj_shared_facet");
+  const spec = { source: { "cap.js": BUMP_COUNTER_SRC }, className: "BumpCounterDurableObject" };
+  const target: ItxExpression = ["itx", "facets", ["get", "shared", spec], "processEventBatch"];
+  // Two rows, both HOSTING the same facet — the `enableProcessor` shape, twice.
+  await context.append(subscriptionConfiguredEvent({ name: "a", target, consumes: ["demo/ping"] }));
+  await context.append(subscriptionConfiguredEvent({ name: "b", target, consumes: ["demo/ping"] }));
+  await context.invoke(["itx", "facets", ["get", "shared", spec], ["bump"]]);
+  await context.invoke(["itx", "facets", ["get", "shared", spec], ["bump"]]);
+  expect(await context.invoke(["itx", "facets", ["get", "shared", spec], ["count"]])).toBe(2);
+
+  // Remove ONE of the two rows. The other still hosts the facet.
+  await context.append(subscriptionConfiguredEvent({ name: "a", target: null }));
+  const core = (await context.invoke("itx.facets.get('core').snapshot()")) as {
+    state: { subscriptions: Record<string, unknown> };
+  };
+  expect(Object.keys(core.state.subscriptions)).toEqual(["config", "b"]); // "config" = the funnel's birth row
+  // The startup memo row "b" depends on, and the facet's own storage, are both still there.
+  const memo = await runInDurableObject(context, (_instance, state) =>
+    Promise.resolve(state.storage.kv.get("facet:shared") ?? null),
+  );
+  const count = await context.invoke(["itx", "facets", ["get", "shared", spec], ["count"]]);
+  expect({ memoKept: memo !== null, count }).toEqual({ memoKept: true, count: 2 });
 });
 
 test("A BORROW RACES THE QUIESCE ALARM: a stub invoke fired concurrently with the alarm still answers", async () => {

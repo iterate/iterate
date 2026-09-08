@@ -153,7 +153,7 @@ const pinnedArgCount = (match: ItxExpressionPrefix): number =>
   match.reduce<number>((n, step) => n + (Array.isArray(step) ? step.length - 1 : 0), 0);
 
 /** Rule 3: the most specific matching rule — or null. A mask row competes like any other. */
-export function pickItxExpressionRewriteRule(
+function pickItxExpressionRewriteRule(
   rules: readonly ItxExpressionRewriteRule[],
   call: ItxExpression,
 ): { rule: ItxExpressionRewriteRule; match: ItxExpressionPrefixMatch } | null {

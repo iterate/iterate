@@ -55,6 +55,7 @@ import {
   toItxExpression,
   type ItxExpression,
   type ItxExpressionInput,
+  print,
 } from "./context/expression.ts";
 import {
   rewriteRuleConfiguredEvent,
@@ -248,8 +249,15 @@ export class IterateContext extends RpcTarget {
       await this.#append(event);
       this.#sessionTeardown.dispose(sessionTeardownKey);
       // Disposing LIFTS the deny or REMOVES the rewrite — while the row is still this handle's own.
-      const expectedTarget = (event.payload as { target: string | null }).target;
-      return new RewriteRuleHandle(() => this.#removeRuleInBackground(matchString, expectedTarget));
+      // The event holds the PARSED target; a row's target is read back PRINTED (with holes), so the
+      // expectation is spelled the way `rewriteRules.get` spells it.
+      const expectedTarget = (event.payload as { target: ItxExpression | null }).target;
+      return new RewriteRuleHandle(() =>
+        this.#removeRuleInBackground(
+          matchString,
+          expectedTarget === null ? null : print(expectedTarget, { holes: true }),
+        ),
+      );
     }
     // Built BEFORE the lend so a match the codec refuses throws with nothing lent. The rule rides the
     // pager upgrade: the DO appends it in the turn it accepts the pager — ONE round trip, and the DO

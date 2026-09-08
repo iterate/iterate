@@ -18,6 +18,7 @@ import {
   readAll,
   readHead,
   rejection,
+  sleep,
   subscriptions,
   until,
 } from "./support/client.ts";
@@ -184,6 +185,35 @@ test("re-enable while WARM appends ONE more configured event (same name REPLACES
   });
   expect(s2.state.counts).toEqual(expected); // exact — the re-enable neither reset nor doubled
   expect(s2.state.counts.mark).toBe(3);
+});
+
+test("a STALE subscribe handle's dispose (a same-name row replaced it) leaves the newer row alone — and the facet it hosts: the undo is compare-and-set on the row's identity", async () => {
+  const ctx = freshCtx("stale-subscribe-handle");
+  const a = openItx(ctx);
+  const b = openItx(ctx);
+  const stale = await a.subscribe({ name: "p", target: "itx.kv.get" });
+  await b.subscribe({
+    name: "p", // same name REPLACES — and this one HOSTS a facet
+    target: [
+      "itx",
+      "facets",
+      ["get", "p", { source: SOURCES.tally, className: "TallyDurableObject" }],
+      "processEventBatch",
+    ],
+  });
+  const [mark] = await append(b, { type: "mark" });
+  await until("the facet reduced the mark", async () => {
+    const s: any = await b.invoke("itx.facets.get('p').snapshot()").catch(() => undefined);
+    return s && s.offset >= mark.offset && s;
+  });
+
+  stale[Symbol.dispose]();
+  await sleep(800);
+  expect((await subscriptions(b)).map((row: { name: string }) => row.name)).toEqual([
+    "config",
+    "p",
+  ]);
+  expect(await b.invoke("itx.facets.get('p').snapshot()")).toBeDefined(); // the facet and its storage stayed
 });
 
 test("double-enable then ONE disableProcessor disables it (same name REPLACES — there is no enablement stack to clear)", async () => {

@@ -224,8 +224,19 @@ export const app: Handler = {
       if (!slug)
         return json ? Response.json({ error: "a slug is required" }, { status: 400 }) : back;
       const org = await dir.ensureOrg(session.sub, `${session.email}'s org`);
-      const project = await dir.createProject(org.id, slug);
-      return json ? Response.json(project) : back;
+      try {
+        const project = await dir.createProject(org.id, slug);
+        return json ? Response.json(project) : back;
+      } catch (error) {
+        // a name another org holds (the directory's "already taken") — the caller's, not a 500
+        const message = error instanceof Error ? error.message : String(error);
+        return json
+          ? Response.json({ error: message }, { status: 409 })
+          : page(
+              "Create project",
+              `<h1>Not created</h1><p>${esc(message)}</p><p><a href="/">Back</a></p>`,
+            );
+      }
     }
 
     if (url.pathname === "/") {

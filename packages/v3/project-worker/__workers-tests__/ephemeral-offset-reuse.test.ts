@@ -57,61 +57,6 @@ const hostedFacet = (source: Record<string, string>, cls: string, name: string):
 const COUNTER_MODULES = { "cap.js": COUNTER_SRC };
 const DIGEST_MODULES = { "cap.js": DIGEST_SRC };
 
-test("processor: a fresh facet's first snapshot (wake) with ephemerals at head checkpoints the durable mark; after quiesce + evict the tick re-minted at a dead ephemeral's offset is reduced exactly once", async () => {
-  const ctx = "prj_rev_procskip";
-  const s = stub(ctx);
-  // enable with a consumes FILTER: the configured event is not pushed; the facet is materialized and woken at configure time
-  await s.append(
-    subscriptionConfiguredEvent({
-      name: "counter",
-      target: [
-        ...hostedFacet(COUNTER_MODULES, "CounterDurableObject", "counter"),
-        "processEventBatch",
-      ],
-      consumes: ["tick"],
-    }),
-  );
-  // core's live-state delta (the configured row changed core) already sits at head (ephemeral); add one more so the tail is ≥ 2
-  await s.append({ type: "blip", ephemeral: true });
-  const p0 = await page(ctx);
-  const highestDurableOffset = p0.events.at(-1)!.offset; // last durable row
-  expect(p0.scannedThroughOffset).toBe(highestDurableOffset); // the ephemeral tail (≥ 2 offsets) is NOT proven by a read
-
-  // READ-DRIVEN catch-up through the load chain: snapshot → catchUpFromLog() → read → durables ≤ mark
-  const before = (await s.invoke([
-    ...hostedFacet(COUNTER_MODULES, "CounterDurableObject", "counter"),
-    ["snapshot"],
-  ])) as { offset: number; state: { n: number } };
-  expect(before.state.n).toBe(p0.events.length); // reduced every durable
-  expect(before.offset).toBe(highestDurableOffset); // the persisted checkpoint is the durable mark, not the ephemeral head
-
-  await sleep(400); // let the facet's fire-and-forget live-state delta land before the clock jumps (else #lastActivityMs reads fresh and the quiesce skips)
-  await quiesce(ctx); // abort the facet (un-pin) — its checkpoint (the durable mark) is durable in its own storage
-  await evictDurableObject(s); // fresh incarnation: offsets resume from the durable mark
-
-  // The fresh incarnation's constructor wrote woken@mark+1 (its commit's core live-state delta took
-  // mark+2, ephemeral); tick lands at mark+3 — all at offsets the dead ephemerals held.
-  await s.append({ type: "tick" });
-  await sleep(400); // let the push land and the facet re-materialize
-  const p1 = await page(ctx);
-  expect(p1.events.map((e) => e.offset).slice(-2)).toEqual([
-    highestDurableOffset + 1,
-    highestDurableOffset + 3,
-  ]); // the log is exact
-  const after = (await s.invoke(["itx", "facets", ["get", "counter"], ["snapshot"]])) as {
-    offset: number;
-    state: { n: number };
-  };
-  // The pushed tick@mark+3 is reduced exactly once — and so is the new incarnation's woken@mark+1,
-  // ONCE, by a different path: the subscription's consumes filter never SENDS it (its own commit
-  // is filtered to nothing, and empty sends are skipped), so the tick's push range starts one past
-  // the facet's cursor and the engine's durable gap repair reads woken from the log and reduces it
-  // (the contract consumes "*") — the two-filter rule: the subscription decides what is PUSHED, the
-  // contract decides what is FOLDED. (The first incarnation's wake read the log from 0 — created,
-  // woken, configured — hence `before`.)
-  expect(after.state.n).toBe(before.state.n + 2);
-});
-
 test("stream-kept cursor: an alarm pump with ephemerals at head leaves the cursor on the durable mark; after quiesce + evict the durables re-minted at those offsets are delivered", async () => {
   const ctx = "prj_rev_cursorskip";
   const s = stub(ctx);

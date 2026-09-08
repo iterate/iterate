@@ -104,6 +104,15 @@ test("lent stub WebSocket fetch: a plain eyeball WebSocket opens (101), echoes, 
 // .test.ts (the dedicated fetch-upgrade leg; the DO mints the eyeball pair natively). The tunnel
 // (proxy-to-localhost) shape of this lent stub is fetch-door-tunnel-to-localhost.e2e.test.ts.
 
+test("/expression refuses to re-enter itself: `itx=itx.fetch` (an expression fetching its own lane, the same query every hop) answers 508 after a few hops, never loops", async () => {
+  const ctx = freshCtx("lane-reentry");
+  const response = await fetch(expressionUrl(ctx, "itx.fetch"), {
+    signal: AbortSignal.timeout(8000),
+  });
+  expect(response.status).toBe(508);
+  expect(await response.text()).toMatch(/re-entered itself/);
+});
+
 test("deleted routes fall through to the control plane's 404 — /call, /ws and /cap answer Not found, a WebSocket upgrade to /ws gets no 101", async () => {
   // The fetch door is /expression and nothing else: the old /call, /ws and /cap routes are gone and
   // land on the in-process control plane's catch-all (a plain 404 — never a 500), and an upgrade

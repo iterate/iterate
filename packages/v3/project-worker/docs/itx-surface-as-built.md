@@ -623,12 +623,13 @@ Record<string, string>`, `"cap.js"` the main module), and the old inline wrapper
 
 ### Decided on 2026-09-04, done (review round two)
 
-- Twenty-one red proofs, twenty fixed live (`src/review-bugs-round2.test.ts`, the workers and e2e
-  files of the same name): what names a dead stub is decided against a frozen table; live args obey
-  the rules; connections are memoized per context and released at the quiesce; hosting markers
-  follow the rules; a stub dying under a pause is un-set on resume; a whole-context override may
-  not name its own context; the subscribe undo is compare-and-set; MCP reads SSE as it arrives;
-  the array half of a match goes through the door. One stays red: JSON5 comments inside call args.
+- Twenty-one red proofs, all fixed live (each pinned beside the module it pins — the resolver,
+  the codec, the core reduce, the library, the delivery loop, the DO doors and the e2e surface):
+  what names a dead stub is decided against a frozen table; live args obey the rules; connections
+  are memoized per context and released at the quiesce; hosting markers follow the rules; a stub
+  dying under a pause is un-set on resume; a whole-context override may not name its own context;
+  the subscribe undo is compare-and-set; MCP reads SSE as it arrives; the array half of a match
+  goes through the door; JSON5 comments inside call args are comments.
 - The SDK processor host spells `itx.builtins.append` / `.readEvents`: the platform never spells a
   short name, and `builtins` is a typed member of the context.
 - Reduce and clean: ONE string-literal regex for the whole codec (measured equivalent on 40,000

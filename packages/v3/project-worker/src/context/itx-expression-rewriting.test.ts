@@ -19,6 +19,7 @@ import {
   resolveItxExpression,
   rewriteRuleConfiguredEvent,
   rewriteRuleRemovedEvent,
+  rowsNamingRpcStub,
 } from "./itx-expression-rewriting.ts";
 
 const table = (rows: string[]): ItxExpressionRewriteRule[] =>
@@ -422,7 +423,10 @@ describe("`@` round-trips the codec (targets only): parse → print → parse; t
     expect(print(parsed)).toBe(
       "itx.ai.gateway('g').run({provider:'anthropic',query:{'...@':true,model:'claude-x'}},{'@':true},[{'@':true}],'a@b')",
     );
-    expect(parse(print(["itx", ["x", { "@": true }]]))).toEqual(["itx", ["x", { "@": true }]]);
+    expect(parse(print(["itx", ["x", { "@": true }, { "...@": true }]]))).toEqual([
+      "itx",
+      ["x", { "@": true }, { "...@": true }],
+    ]);
     // a string VALUE that spells the marker's printed form is a string — print skips string literals
     expect(print(["itx", "kv", ["put", "k", "{'@':true}"]], { holes: true })).toBe(
       `itx.kv.put('k',"{'@':true}")`,
@@ -515,6 +519,9 @@ describe("rewriteRuleConfiguredEvent — ONE event, both halves canonical, loud 
     { match: "itx.broken(", target: "itx.kv", throws: /unbalanced/ },
     { match: ["itx", "builtins.kv"], target: "itx.kv", throws: /identifiers/ }, // the ARRAY half reads like the string half
     { match: ["itx", "a b"], target: "itx.kv", throws: /identifiers/ },
+    { match: ["itx", "cd.x"], target: "itx.kv", throws: /identifiers/ }, // …a dotted step never bypasses the proxy-verb refusal
+    { match: ["itx", ["builtins.kv", 1]], target: "itx.kv", throws: /identifiers/ }, // …a call step's name too
+    { match: ["itx", "__proto__"], target: "itx.kv", throws: /reserved/ },
   ];
   for (const { match, target, throws } of doorRefusals)
     test(`REFUSED: ${JSON.stringify(match)} ⇒ ${JSON.stringify(target)}  ${throws}`, () => {
@@ -539,10 +546,46 @@ describe("rewriteRuleConfiguredEvent — ONE event, both halves canonical, loud 
         target: "itx.kv",
         payload: { match: "itx.ai.run('gpt-5')", target: ["itx", "kv"] },
       }, // pinned args in the match, stored canonical; the target the parsed form
+      {
+        match: ["itx", "ok", ["get", 1]],
+        target: "itx.kv",
+        payload: { match: "itx.ok.get(1)", target: ["itx", "kv"] },
+      }, // the ARRAY half of a match lands as its printed canonical key
     ];
   for (const { match, target, payload } of doorAccepts)
-    test(`ACCEPTED: ${match} ⇒ ${target}`, () => {
+    test(`ACCEPTED: ${JSON.stringify(match)} ⇒ ${JSON.stringify(target)}`, () => {
       expect(rewriteRuleConfiguredEvent(match, target).payload).toEqual(payload);
+    });
+});
+
+// ───────────────────────────── what a dead stub's un-set removes ─────────────────────────────
+
+// When a lent stub's last pager closes, the DO un-sets every row that NAMES its key — decided against
+// ONE frozen table: the rows naming the key directly, plus the rows that still resolve to it once
+// those are gone. Order-independent by construction: a user's alias to a shadowed root (`itx.llm ⇒
+// itx.ai` while `itx.ai` is a lent fake) survives the fake dying whichever row was configured first.
+describe("rowsNamingRpcStub — decided against a frozen table, whatever the configuration order", () => {
+  const alias = "itx.llm ⇒ itx.ai";
+  const fake = "itx.ai ⇒ itx.builtins.rpcStubs.get('itx.ai')";
+  const ownRegistry = "itx.reg ⇒ itx.builtins.rpcStubs";
+  const throughOwnRegistry = "itx.cam ⇒ itx.reg.get('itx.ai')";
+  for (const [order, rules] of [
+    ["alias first", [alias, fake, ownRegistry, throughOwnRegistry]],
+    ["stub first", [fake, alias, ownRegistry, throughOwnRegistry]],
+  ] as const)
+    test(`${order}: the fake's own row and a row naming the key through the user's own registry go; the alias stays`, () => {
+      const { ruleMatches, subscriptionNames } = rowsNamingRpcStub({
+        rpcStubKey: "itx.ai",
+        rules: table([...rules]),
+        subscriptionTargets: {
+          viaShortSpelling: parse("itx.rpcStubs.get('itx.ai')"),
+          viaAlias: parse("itx.llm.notify"),
+        },
+      });
+      expect(ruleMatches.map((m) => print(m)).sort()).toEqual(["itx.ai", "itx.cam"]);
+      // the short spelling names the registry through the platform row and goes; the alias-spelled
+      // subscription resolves to the platform `ai` beneath once the fake is gone, and stays
+      expect(subscriptionNames).toEqual(["viaShortSpelling"]);
     });
 });
 
@@ -699,6 +742,29 @@ describe("built-in resolution + default-deny", () => {
     expect(await invoke("itx.kv.get", "k")).toEqual(await invoke("itx.kv.get('k')"));
     expect(await invoke("itx.whoami()")).toEqual({ projectId: "prj_t", path: "/" }); // no args: the call as spelled
     expect(typeof (await invoke("itx.whoami"))).toBe("function"); // no args, no call: the value the expression denotes
+  });
+
+  test("`invoke(call, ...args)` folds the live args into a name-final call BEFORE resolving: a template fills from them, a pinned row and a pinned mask see them; a call-final expression applies them to the value it denotes", async () => {
+    const { invoke, rewrite, provide } = setup();
+    provide("itx.s", (...args: unknown[]) => ["stubbed", args]);
+    rewrite("itx.fable", "itx.ai.run('@cf/x', @)");
+    rewrite("itx.ai.run('gpt-5')", "itx.builtins.rpcStubs.get('itx.s')");
+    rewrite("itx.kv.get('secret')", null);
+    // the template fills from the live args, exactly as the dotted call would
+    expect(await invoke("itx.fable", { prompt: "hi" })).toEqual({
+      model: "@cf/x",
+      inputs: { prompt: "hi" },
+      options: undefined,
+    });
+    // a pinned row matches the live args; the unpinned tail is the call on the target
+    expect(await invoke("itx.ai.run", "gpt-5", { q: 1 })).toEqual(["stubbed", [{ q: 1 }]]);
+    // a pinned mask refuses the live args it claims (default-deny); a sibling arg reaches the root
+    await expect(invoke("itx.kv.get", "secret")).rejects.toMatchObject({
+      code: "NO_ITX_EXPRESSION_MATCH",
+    });
+    expect(await invoke("itx.kv.get", "public")).toBeNull();
+    // a call-final expression keeps the old shape: the args apply to the value it denotes
+    expect(await invoke("itx.builtins.rpcStubs.get('itx.s')", 1, 2)).toEqual(["stubbed", [1, 2]]);
   });
 
   test("even a smuggled raw event cannot reach the built-ins (a target not rooted at itx matches nothing — default-deny)", async () => {

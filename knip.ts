@@ -234,9 +234,8 @@ function makeProjectWorkerWorkspace(): WorkspaceConfig {
     // src/generated is the SDK bundle (gitignored); sql/.generated is sqlfu's typed-query output,
     // whose exports are its own catalogue (row types, the query sources).
     ignore: ["src/generated/**", "src/control-plane/sql/.generated/**"],
-    // `cloudflare:workers` parses as the "cloudflare" package; wrangler backs the deploy script;
-    // miniflare is what wrangler's createTestHarness runs the e2e worker on (a catalog pin, no import).
-    ignoreDependencies: ["cloudflare", "wrangler", "miniflare"],
+    // `cloudflare:workers` parses as the "cloudflare" package; wrangler backs the deploy script.
+    ignoreDependencies: ["cloudflare", "wrangler"],
     ignoreBinaries: ["playwright"],
   };
 }

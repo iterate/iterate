@@ -27,6 +27,8 @@ const SPEC: OpenApiDocument = {
     "/raw": { put: { operationId: "putRaw", requestBody: {} } },
     "/text": { get: { operationId: "getText" } },
     "/call": { get: { operationId: "call" } }, // reserved: reachable through call('call') only
+    "/session": { get: { operationId: "whoami", parameters: [{ name: "session", in: "cookie" }] } },
+    "/then": { get: { operationId: "then" } }, // reserved too: a thenable connection would never settle
   },
 };
 
@@ -88,6 +90,13 @@ describe("connectToOpenApi", () => {
       url: "https://api.example/v1/me",
       header: ["x-user", "u1"],
     },
+    {
+      op: "whoami",
+      input: { session: "s 1" },
+      method: "GET",
+      url: "https://api.example/v1/session",
+      header: ["cookie", "session=s%201"],
+    }, // a cookie parameter rides the cookie header
     { op: "getPet", input: {}, method: "GET", url: "", throws: /getPet needs "id"/ },
     {
       op: "listPets",
@@ -125,7 +134,7 @@ describe("connectToOpenApi", () => {
       if (row.header) expect(request.headers.get(row.header[0])).toBe(row.header[1]);
     });
 
-  test("operations become methods; a reserved operationId stays reachable through call()", async () => {
+  test("operations become methods; a reserved operationId (`call`, and `then` — a thenable connection would never settle) stays reachable through call()", async () => {
     const { itx, requests } = fakeItx();
     const conn = await connectToOpenApi(itx, SPEC);
     expect(conn.operations().map((o) => o.operationId)).toEqual([
@@ -137,10 +146,18 @@ describe("connectToOpenApi", () => {
       "putRaw",
       "getText",
       "call",
+      "whoami",
+      "then",
     ]);
+    expect((conn as { then?: unknown }).then).toBeUndefined();
     expect(await (conn as any).getPet({ id: 1 })).toEqual({ ok: true });
     expect(await conn.call("call")).toEqual({ ok: true });
-    expect(requests.map((r) => new URL(r.url).pathname)).toEqual(["/v1/pets/1", "/v1/call"]);
+    expect(await conn.call("then")).toEqual({ ok: true });
+    expect(requests.map((r) => new URL(r.url).pathname)).toEqual([
+      "/v1/pets/1",
+      "/v1/call",
+      "/v1/then",
+    ]);
   });
 
   test("a text answer is text; a non-2xx answer throws with the status and a snippet", async () => {
@@ -180,6 +197,24 @@ describe("connectToOpenApi", () => {
     expect(other.requests[0].headers.get("authorization")).toBeNull();
     await conn2.call("getPet", { id: 1 });
     expect(other.requests[1].headers.get("authorization")).toBe("Bearer t");
+  });
+
+  test("from a URL: a RELATIVE servers[0].url resolves against the spec URL, QUERY KEPT (the fetch lane)", async () => {
+    const lane = "https://worker.example/expression/openapi.json?context=prj_x&itx=itx.site";
+    const { itx, requests } = fakeItx((request) =>
+      request.url === lane ? json({ ...SPEC, servers: [{ url: "api" }] }) : json({ ok: true }),
+    );
+    const conn = await connectToOpenApi(itx, lane);
+    await conn.call("getPet", { id: 5 });
+    expect(requests[1].url).toBe(
+      "https://worker.example/expression/api/pets/5?context=prj_x&itx=itx.site",
+    );
+  });
+
+  test("an INLINE document whose servers[0].url is relative is refused at connect with the baseUrl hint — never a raw TypeError", async () => {
+    await expect(
+      connectToOpenApi(fakeItx().itx, { ...SPEC, servers: [{ url: "/v1" }] }),
+    ).rejects.toThrow(/needs \{ baseUrl \}/);
   });
 
   test("baseUrl overrides the document's server", async () => {

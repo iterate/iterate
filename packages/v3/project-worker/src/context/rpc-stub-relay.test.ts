@@ -126,3 +126,32 @@ test("a refused pager upgrade (the DO would not append what names the key) lends
   expect(onRpcBrokenRegistrations).toBe(0);
   expect(lends).toBe(0);
 });
+
+// The relay dups the client's stub for the session BEFORE it dials the DO. A fetch that REJECTS
+// outright (the DO's constructor throwing on a bad APP_CONFIG_* var) must not leave that dup alive for
+// the session's life: the dup is disposed, then the error propagates as it is.
+test("a DO fetch that REJECTS releases the session's dup before the error propagates", async () => {
+  let disposed = 0;
+  const lent = {
+    onRpcBroken() {},
+    [Symbol.dispose]() {
+      disposed += 1;
+    },
+  };
+  const provider = { dup: () => lent };
+  const context = {
+    fetch: async () => {
+      throw new Error("APP_CONFIG_ENVIRONMENT_NAME: required, got nothing");
+    },
+  };
+  await expect(
+    lendRpcStubOverPager(
+      context as unknown as Parameters<typeof lendRpcStubOverPager>[0],
+      provider as unknown as Parameters<typeof lendRpcStubOverPager>[1],
+      "key-3",
+      [],
+      () => {},
+    ),
+  ).rejects.toThrow(/APP_CONFIG_ENVIRONMENT_NAME/);
+  expect(disposed).toBe(1);
+});

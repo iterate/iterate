@@ -1,8 +1,8 @@
 // __workers-tests__/support.ts — what every file in the workers lane (the vitest project that runs
 // INSIDE workerd, next to the worker) shares: the context DO stub by ctx name, a capnweb session
 // over SELF's /api (disposed at teardown — importing this module registers the afterAll), a live
-// value to lend (`Echo`, tagged per instance), and the production 60s idle quiesce reproduced on
-// demand.
+// value to lend (`Echo`, tagged per instance), the production 60s idle quiesce reproduced on
+// demand, and the one poll-until.
 import { runDurableObjectAlarm, SELF } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { newWebSocketRpcSession, RpcTarget } from "capnweb";
@@ -79,5 +79,23 @@ export async function quiesce(ctx: string): Promise<void> {
     await runDurableObjectAlarm(stub(ctx));
   } finally {
     vi.useRealTimers();
+  }
+}
+
+/** Poll `fn` until it returns a defined, non-false value (bounded). Physical facts arrive a beat
+ *  after the RPC that triggered them: a pager leaves the census when its CLOSE lands at the DO, a
+ *  handle's rule un-set rides the edge's waitUntil, a page reaches a pager over its socket. */
+export async function until<T>(
+  label: string,
+  fn: () => T | undefined | false | Promise<T | undefined | false>,
+  timeoutMs = 10_000,
+): Promise<T> {
+  const t0 = Date.now();
+  for (;;) {
+    const v = await fn();
+    if (v !== undefined && v !== false) return v;
+    if (Date.now() - t0 > timeoutMs)
+      throw new Error(`until(${label}): timed out after ${timeoutMs}ms`);
+    await new Promise((r) => setTimeout(r, 25));
   }
 }

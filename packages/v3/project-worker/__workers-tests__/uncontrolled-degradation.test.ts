@@ -38,7 +38,7 @@ import { rewriteRuleConfiguredEvent } from "../src/context/itx-expression-rewrit
 import { errorCode } from "../src/lib/errors.ts";
 const codeOf = errorCode;
 import { subscriptionConfiguredEvent } from "../src/stream/subscriptions.ts";
-import { stub } from "./support.ts";
+import { stub, until } from "./support.ts";
 
 const MiB = 1024 * 1024;
 const settle = (ms = 150) => new Promise((r) => setTimeout(r, ms));
@@ -106,21 +106,6 @@ const untilIssue = (failureSite: string, pattern: RegExp, timeoutMs = 10_000): P
       issues.find((i) => i.failureSite === failureSite && pattern.test(i.error?.message ?? "")),
     timeoutMs,
   );
-
-async function until<T>(
-  label: string,
-  fn: () => Promise<T | undefined | false>,
-  timeoutMs = 10_000,
-): Promise<T> {
-  const t0 = Date.now();
-  for (;;) {
-    const v = await fn();
-    if (v !== undefined && v !== false) return v;
-    if (Date.now() - t0 > timeoutMs)
-      throw new Error(`until(${label}): timed out after ${timeoutMs}ms`);
-    await settle(25);
-  }
-}
 
 // ── the DO doors, spelled the way the edge spells them ──
 

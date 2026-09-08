@@ -85,6 +85,21 @@ function referenceServer(options: { sse?: boolean } = {}): Handler {
   };
 }
 
+/** A session-less server (no `mcp-session-id`, so nothing to DELETE): initialize, then `tools`, then
+ *  every tools/call answers `answer` as text. */
+function plainServer(tools: { name: string }[] = [], answer = "answered"): Handler {
+  return (_request, body) => {
+    if (body?.method === "notifications/initialized") return new Response(null, { status: 202 });
+    const result =
+      body?.method === "initialize"
+        ? { protocolVersion: "2025-03-26", capabilities: {}, serverInfo: { name: "plain" } }
+        : body?.method === "tools/list"
+          ? { tools }
+          : { content: [{ type: "text", text: answer }] };
+    return json({ jsonrpc: "2.0", id: body?.id, result });
+  };
+}
+
 describe("connectToMcp", () => {
   test("connect: initialize → initialized → tools/list, the session id riding on every later request", async () => {
     const { itx, requests } = fakeItx(referenceServer());
@@ -145,16 +160,46 @@ describe("connectToMcp", () => {
     const deletes = withSession.requests.filter((r) => r.request.method === "DELETE");
     expect(deletes).toHaveLength(1);
     expect(deletes[0].request.headers.get("mcp-session-id")).toBe("s-1");
-    const sessionless = fakeItx((_request, body) => {
-      if (body?.method === "notifications/initialized") return new Response(null, { status: 202 });
-      return json({
-        jsonrpc: "2.0",
-        id: body?.id,
-        result: body?.method === "tools/list" ? { tools: [] } : {},
-      });
-    });
+    const sessionless = fakeItx(plainServer());
     await (await connectToMcp(sessionless.itx, "https://mcp.example/rpc")).close();
     expect(sessionless.requests.some((r) => r.request.method === "DELETE")).toBe(false);
+  });
+
+  test("a connection closed by a holder re-runs its handshake on the next request — a closed connection is never dead", async () => {
+    const { itx, requests } = fakeItx(referenceServer());
+    const conn = await connectToMcp(itx, "https://mcp.example/rpc");
+    await conn.close();
+    expect(await conn.callTool("echo", { x: 1 })).toEqual({ echoed: { x: 1 } });
+    expect(requests.filter((r) => r.body?.method === "initialize")).toHaveLength(2);
+  });
+
+  test("a tool named `then` never makes the connection THENABLE (an await would adopt it and call the tool, never settling): connect settles, no tools/call, and the tool stays reachable through callTool", async () => {
+    const { itx, requests } = fakeItx(plainServer([{ name: "then" }, { name: "echo" }]));
+    const conn = await connectToMcp(itx, "https://mcp.example/rpc");
+    expect(requests.map((r) => r.body?.method)).not.toContain("tools/call");
+    expect((conn as { then?: unknown }).then).toBeUndefined();
+    expect(await conn.callTool("then")).toBe("answered");
+  });
+
+  test("an SSE answer the server leaves OPEN still connects — read as it arrives and left at the matching id, never awaited to EOF", async () => {
+    const plain = plainServer();
+    const encoder = new TextEncoder();
+    const { itx } = fakeItx(async (request, body) => {
+      const answer = await plain(request, body);
+      if (answer.status !== 200) return answer;
+      const message = await answer.text();
+      return new Response(
+        new ReadableStream({
+          start(controller) {
+            // one `data:` event, then the stream stays OPEN
+            controller.enqueue(encoder.encode(`event: message\ndata: ${message}\n\n`));
+          },
+        }),
+        { headers: { "content-type": "text/event-stream" } },
+      );
+    });
+    const conn = await connectToMcp(itx, "https://mcp.example/rpc");
+    expect(conn.tools()).toEqual([]);
   });
 
   test("a non-2xx answer throws with the status and the body", async () => {

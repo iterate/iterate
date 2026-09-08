@@ -516,4 +516,73 @@ describe("the builtins root, as the reduce sees it: masks, the platform-equivale
     expect(s.subscriptions.early).not.toHaveProperty("hostedFacet");
     expect(s.subscriptions.masked).not.toHaveProperty("hostedFacet");
   });
+
+  // THE MARKER FOLLOWS THE RULES: every rule commit re-derives `hostedFacet` for every row that is not
+  // builtins-rooted, through the new table — the delivery loop re-resolves a target at every push, so
+  // the marker must name the facet the row would host NOW, or `disableProcessor` would delete the
+  // wrong facet (or orphan one). A row the change leaves unresolvable keeps its marker, conservatively.
+  const RULE = "events.iterate.com/itx/rewrite-rule-configured";
+  const facetF = "itx.builtins.facets.get('f',{source:{'cap.js':'x'},className:'F'})";
+  const facetG = "itx.builtins.facets.get('g',{source:{'cap.js':'y'},className:'G'})";
+  const rows: { rule: string; log: StreamEvent[]; hosts: string | undefined; target?: string }[] = [
+    {
+      rule: "a rule configured AFTER the row makes the row host that facet",
+      log: [
+        configured(1, "s", "itx.proc.processEventBatch"),
+        at(2, RULE, { match: "itx.proc", target: facetF }),
+      ],
+      hosts: "f",
+    },
+    {
+      rule: "a rule RE-POINTED after the row moves the marker",
+      log: [
+        at(1, RULE, { match: "itx.proc", target: facetF }),
+        configured(2, "s", "itx.proc.processEventBatch"),
+        at(3, RULE, { match: "itx.proc", target: facetG }),
+      ],
+      hosts: "g",
+    },
+    {
+      rule: "a rule REMOVED leaves the row unresolvable — the marker is kept, across later table changes",
+      log: [
+        at(1, RULE, { match: "itx.proc", target: facetF }),
+        configured(2, "s", "itx.proc.processEventBatch"),
+        at(3, RULE, { match: "itx.proc", target: null }),
+        at(4, RULE, { match: "itx.other", target: "itx.builtins.kv" }),
+      ],
+      hosts: "f",
+    },
+    {
+      rule: "a rule re-pointed AWAY from the facets door drops the marker",
+      log: [
+        at(1, RULE, { match: "itx.proc", target: facetF }),
+        configured(2, "s", "itx.proc.processEventBatch"),
+        at(3, RULE, { match: "itx.proc", target: "itx.builtins.kv" }),
+      ],
+      hosts: undefined,
+    },
+    {
+      rule: "a row whose OWN target carried the spec (elided at configure) keeps its marker across rule commits",
+      log: [
+        configured(1, "s", `${facetF.replace("itx.builtins.", "itx.")}.processEventBatch`),
+        at(2, RULE, { match: "itx.unrelated", target: "itx.builtins.kv" }),
+      ],
+      hosts: "f",
+      target: "itx.facets.get('f').processEventBatch",
+    },
+    {
+      rule: "a platform-written (builtins-rooted, elided) row is untouched by rule commits",
+      log: [
+        configured(1, "s", `${facetF}.processEventBatch`),
+        at(2, RULE, { match: "itx.facets", target: "itx.builtins.kv" }),
+      ],
+      hosts: "f",
+    },
+  ];
+  for (const { rule, log, hosts, target } of rows)
+    test(`the marker follows the rules: ${rule}`, () => {
+      const s = reduceAll(log);
+      expect(s.subscriptions.s.hostedFacet?.name).toBe(hosts);
+      if (target) expect(print(s.subscriptions.s.target)).toBe(target);
+    });
 });

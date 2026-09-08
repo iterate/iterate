@@ -7,11 +7,12 @@
 // context overrides the WHOLE context, `cd(p).builtins.append(…)` still reaching its log;
 // `rewriteRules.list()` shows the platform rows with their origin; `rewriteRules.resolve(call)` is the
 // pure chain and `invoke(call) ≡ invoke(resolve(call).at(-1))`; `invoke(call, ...args)` applies live
-// args; the door refuses a match at `itx.builtins` or at a proxy verb.
+// args; the door refuses a match at `itx.builtins`, at a proxy verb, or a whole-context override
+// naming its own context; a dead stub's un-set leaves a user's alias to the shadowed root alone.
 
 import { RpcTarget } from "capnweb";
 import { expect, test } from "vitest";
-import { codeOf, freshCtx, openItx, readAll, rejection, until } from "./support/client.ts";
+import { codeOf, freshCtx, openItx, readAll, rejection, session, until } from "./support/client.ts";
 
 /** A whole context's worth of capability, lent live (a plain object would ride by VALUE; a stub must
  *  be an RpcTarget or a bare function). */
@@ -59,6 +60,35 @@ test("MISHA'S TEST: a provided stub at a built-in's name shadows it; the physica
   });
 });
 
+// A dead stub's un-set removes what NAMES its key, decided against a frozen table
+// (context/itx-expression-rewriting.test.ts) — so a user's alias to the shadowed root survives, in
+// either configuration order, and resolves to the platform row beneath once the fake is gone.
+for (const order of ["alias first", "stub first"] as const)
+  test(`a user's alias to a shadowed root survives the shadow's stub dying (${order}) — it resolves to the platform row beneath`, async () => {
+    const ctx = freshCtx("alias-survives");
+    const itx = openItx(ctx);
+    const real = await itx.whoami();
+    const stubSession = session();
+    const stubItx = stubSession.authenticate().projects.get(ctx);
+    const alias = () => itx.provide("itx.me", "itx.whoami");
+    const fake = () => stubItx.provide("itx.whoami", () => "the fake");
+    for (const step of order === "alias first" ? [alias, fake] : [fake, alias]) await step();
+    expect(await itx.me()).toBe("the fake");
+
+    stubSession[Symbol.dispose]();
+    await until("the real whoami is back", async () => {
+      const row = await itx.rewriteRules.get("itx.whoami");
+      return row?.origin === "platform" ? row : undefined;
+    });
+    expect(await itx.rewriteRules.get("itx.me")).toEqual({
+      match: "itx.me",
+      target: "itx.whoami",
+      origin: "context",
+    });
+    expect((await itx.rewriteRules.resolve("itx.me()")).at(-1)).toBe("itx.builtins.whoami()");
+    expect(await itx.me()).toEqual(real);
+  });
+
 test("a DENY: provide(match, null) at a built-in's name masks it; the physical door still answers; disposing the deny lifts it", async () => {
   const ctx = freshCtx("mask");
   const itx = openItx(ctx);
@@ -105,6 +135,50 @@ test("rewriteRules.list() is the EFFECTIVE table: platform rows with their origi
     { match: "itx.kv", target: "itx.builtins.whoami", origin: "context" },
   ]);
   expect(after.length).toBe(before.length); // the context row REPLACED the platform row in the listing
+});
+
+test("rewriteRules.list() under a whole-context override shows NO platform rows (a bare `itx` row claims every call before one could); the platform-equivalent target `itx ⇒ itx.builtins` brings them back", async () => {
+  const itx = openItx(freshCtx("list-under-override"));
+  const list = () =>
+    itx.builtins.rewriteRules.list() as Promise<{ match: string; origin: string }[]>; // the physical door: the override never swallows the read
+  expect((await list()).some((row) => row.origin === "platform")).toBe(true);
+  await itx.provide("itx", "itx.builtins.rpcStubs.get('x')");
+  const rows = await list();
+  expect(rows.filter((row) => row.origin === "platform")).toEqual([]);
+  expect(rows.map((row) => row.match)).toEqual(["itx"]);
+  await itx.provide("itx", "itx.builtins"); // the removal spelling deletes the row
+  expect((await list()).some((row) => row.origin === "platform")).toBe(true);
+});
+
+// An EXPRESSION handle's undo is compare-and-set on the row's target: `#removeRuleInBackground`
+// (src/iterate-context.ts) removes the row only while its target is still the one this handle wrote —
+// spelled the way `rewriteRules.get` spells it (PRINTED, with holes), since the door's event carries
+// the PARSED form. (Was red: the two spellings were compared verbatim and never matched.)
+test("disposing an EXPRESSION provide handle removes the rule it wrote — the platform row beneath shows through again", async () => {
+  const itx = openItx(freshCtx("expression-dispose"));
+  const handle = await itx.provide("itx.kv", "itx.builtins.whoami");
+  expect(await itx.rewriteRules.get("itx.kv")).toMatchObject({
+    target: "itx.builtins.whoami",
+    origin: "context",
+  });
+  handle[Symbol.dispose]();
+  await until(
+    "the platform row back",
+    async () => ((await itx.rewriteRules.get("itx.kv"))?.origin === "platform" ? true : undefined),
+    5_000,
+  );
+});
+
+test("rewriteRules.get(match) canonicalizes the caller's spelling — whitespace, quotes, key order — before the lookup", async () => {
+  const itx = openItx(freshCtx("get-canonical"));
+  await itx.provide("itx.ai.run('x', {b:1, a:2})", "itx.builtins.whoami");
+  for (const spelling of [
+    "itx.ai.run('x',{a:2,b:1})",
+    'itx.ai.run("x", { b: 1, a: 2 })',
+    "itx.ai.run( 'x' , {b:1, a:2} )",
+  ])
+    expect((await itx.rewriteRules.get(spelling))?.target).toBe("itx.builtins.whoami");
+  expect(await itx.rewriteRules.get("not an expression at all")).toBeNull();
 });
 
 test("resolve(call) is the pure chain, and THE LAW holds: invoke(call) ≡ invoke(resolve(call).at(-1)); invoke(call, ...args) applies live args", async () => {
@@ -191,4 +265,17 @@ test("the door: a match rooted at itx.builtins, or at a proxy verb, is refused; 
     .filter((e) => e.type === "events.iterate.com/itx/rewrite-rule-configured" && e.payload.target)
     .map((e) => e.payload.target as string);
   expect(ruleTargets).toContainEqual(["itx", "builtins", "rpcStubs", ["get", "itx.tool"]]);
+});
+
+test("the door: a whole-context override may not name its OWN context (every call would route back into itself, a fresh resolve per hop); a sibling context is fine", async () => {
+  const itx = openItx(freshCtx("own-context-override")).cd("/x");
+  for (const target of [
+    "itx.builtins.cd('/x')",
+    "itx.cd('/x')",
+    "itx.builtins.cd('.')",
+    "itx.cd('../x')",
+  ])
+    expect((await rejection(itx.provide("itx", target))).message).toMatch(/own context/);
+  const sibling = await itx.provide("itx", "itx.builtins.cd('/y')");
+  sibling[Symbol.dispose]();
 });

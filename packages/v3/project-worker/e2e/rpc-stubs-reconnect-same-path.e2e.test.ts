@@ -22,6 +22,7 @@ import {
   openItx,
   freshCtx,
   presence,
+  rejection,
   rpcStubRewriteRuleMatches,
   session,
   sleep,
@@ -195,4 +196,45 @@ test("a live subscriber re-subscribes under the same name — the transport is r
   await sleep(1500);
   expect(cb1).toBe(0);
   expect(cb2).toBe(1);
+});
+
+// THE LEASE IS THE HANDLE: a provide handle's dispose tears down what IT set up and nothing else. Re-
+// provide at the same match (the reconnect) and then dispose the OLD handle: the new pager keeps
+// serving. The same for an EXPRESSION rule's handle whose match a live provider has since taken over:
+// its undo un-sets only the rule it wrote (compare-and-set on the row), never the newer one. (The
+// control — an expression handle removing its OWN rule — is rewrite-rules-builtins-root's red pin.)
+test("disposing a STALE provide handle leaves its replacement serving; only the live handle's dispose un-sets the match", async () => {
+  const ctx = freshCtx("stale-lease");
+  const itx = openItx(ctx);
+  const first = await itx.provide("itx.tool", new Tools("first"));
+  const second = await itx.provide("itx.tool", new Tools("second"));
+  await until(
+    "the reconnect serves",
+    async () => (await itx.invoke("itx.tool.echo('x')")) === "echo-second:x" || undefined,
+  );
+  first[Symbol.dispose](); // stale — must touch nothing
+  await sleep(300);
+  expect(await itx.invoke("itx.tool.echo('y')")).toBe("echo-second:y");
+  second[Symbol.dispose]();
+  const denied = await until("the un-set landed", async () => {
+    const e = await rejection(itx.invoke("itx.tool.echo('z')"));
+    return codeOf(e) === "RPC_STUB_OFFLINE" ? undefined : e; // the recall's window — keep waiting
+  });
+  expect(codeOf(denied)).toBe("NO_ITX_EXPRESSION_MATCH");
+});
+
+test("an EXPRESSION rule's handle disposed after a live provider took its match over un-sets nothing — the live rule and its stub keep serving", async () => {
+  const ctx = freshCtx("stale-expression-lease");
+  const observer = openItx(ctx);
+  const expressionHandle = await openItx(ctx).provide("itx.m", "itx.kv"); // session A: a pure-data rule
+  await openItx(ctx).provide("itx.m", new Tools("live")); // session B takes the match over (one rule per match)
+  await until(
+    "the live stub serves",
+    async () => (await observer.invoke("itx.m.echo('a')")) === "echo-live:a" || undefined,
+  );
+  expressionHandle[Symbol.dispose](); // A lets go of a rule that is no longer its own
+  await sleep(1_000);
+  expect(await presence(observer)).toContain("itx.m");
+  expect(await rpcStubRewriteRuleMatches(observer)).toContain("itx.m");
+  expect(await observer.invoke("itx.m.echo('b')")).toBe("echo-live:b");
 });

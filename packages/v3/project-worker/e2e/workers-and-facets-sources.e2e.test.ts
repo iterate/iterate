@@ -160,3 +160,49 @@ export class CounterDurableObject extends DurableObject {
   expect(await itx.invoke(["itx", "facets", ["get", "ck"], ["bump"]])).toBe(3);
   expect(facetCodeStore.produced).toBe(1);
 });
+
+// ── a producer that THREW: the key is never poisoned ──
+// The producer runs INSIDE the loader's `getCode` (a cold isolate only), and workerd caches a failed
+// `getCode` under its id exactly as it caches a successful isolate — while the cacheKey is deliberately
+// LOW-CARDINALITY (a build id, never a nonce), so minting a fresh one to recover is exactly what the
+// doctrine forbids. A TRANSIENT failure (the artifact not landed yet, a lent builder momentarily
+// offline) must not make the key dead for the life of the loader cache: the next attempt re-runs the
+// producer and loads under the id's next generation (worker-loader.ts `loaderIdGenerations`, fenced as
+// a workerd workaround) — at both doors, and for a facet through the bare-name memo too.
+
+test("workers.get: a cacheKey whose producer threw once loads on the next attempt, once the producer would succeed", async () => {
+  const itx = openItx(freshCtx("poisonkey"));
+  // The producer reads the built modules out of the context's own kv — "a build capability wrote
+  // the artifact, now load it".
+  const spec = { source: "itx.kv.get('build:cap.js')", cacheKey: "producer-poison:v1" };
+  const load = (): Promise<unknown> => itx.invoke(["itx", "workers", ["get", spec], ["hello"]]);
+  // 1. the artifact has not landed yet: the producer throws inside getCode
+  await expect(load()).rejects.toThrow();
+  // 2. the build lands — same producer expression, same key
+  await itx.invoke(["itx", "kv", ["put", "build:cap.js", entrypoint("hello() { return 'hi'; }")]]);
+  // 3. produced again, loaded under the next generation — never the first failure replayed
+  expect(await load()).toBe("hi");
+});
+
+test("facets.get: a facet whose producer threw once materializes on the next attempt — through the hosting door and by bare name through the memo", async () => {
+  const itx = openItx(freshCtx("poisonfacet"));
+  const spec = {
+    source: "itx.kv.get('build:door.js')",
+    cacheKey: "facet-poison:v1",
+    className: "Door",
+  };
+  const hello = (): Promise<unknown> =>
+    itx.invoke(["itx", "facets", ["get", "door", spec], ["hello"]]);
+  await expect(hello()).rejects.toThrow();
+  await itx.invoke([
+    "itx",
+    "kv",
+    [
+      "put",
+      "build:door.js",
+      `import { DurableObject } from "cloudflare:workers";\nexport class Door extends DurableObject { hello() { return "hi"; } }`,
+    ],
+  ]);
+  expect(await hello()).toBe("hi");
+  expect(await itx.invoke(["itx", "facets", ["get", "door"], ["hello"]])).toBe("hi"); // the memo alone
+});

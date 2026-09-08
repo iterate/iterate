@@ -110,21 +110,14 @@ test("a dynamic-worker processor's live state combines reduced (ticks) + runtime
   const itx = openItx(freshCtx("lsruntime"));
   // PresenceProcessor's contract consumes the EPHEMERAL 'poke', so its subscription must NAME it: the ONE
   // consumes rule (absent = durable events only; naming a type opts its ephemerals in) sits in
-  // front of the facet's own contract filter — hence `consumes` on the enable.
-  const presenceFacet = [
-    "itx",
-    "facets",
-    ["get", "presence", { source: SOURCES.presence, className: "PresenceDurableObject" }],
-  ];
+  // front of the facet's own contract filter — hence `consumes` on the enable. The facet is
+  // materialized at enable time whatever the filter says (subscription-delivery.ts), so the door
+  // answers before the first consumed event.
   await itx.enableProcessor("presence", {
     source: SOURCES.presence,
     className: "PresenceDurableObject",
     consumes: ["tick", "poke"],
   });
-  // A FILTERED processor's facet only materializes on its first consumed push (the enablement
-  // commit itself is filtered out), so `itx.facets.get('presence')` would be NO_FACET until the
-  // first tick — materialize it once through the hosting door before the first door read.
-  await itx.invoke([...presenceFacet, ["catchUpFromLog"]]);
 
   const door = async (): Promise<{ rev: number; state: PresenceLive }> =>
     clone(await itx.invoke("itx.facets.get('presence').liveSnapshot()"));
