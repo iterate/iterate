@@ -21,6 +21,17 @@ const MAX_REFRESH_DELAY_MS = 10 * MINUTE_MS;
 const MIN_REFRESH_DELAY_MS = 1_000;
 /** A renewal round trip that takes longer than this is an outage, not a wait. */
 const REFRESH_TIMEOUT_MS = 15_000;
+/**
+ * How many times ONE renewal tries the gate before falling back to the
+ * keepalive's slower cadence. The project host's POST path fronts the config
+ * worker's proxy to the vessel, which returns an intermittent 500 on POST
+ * (GET is unaffected); a member is still signed in, so a couple of fast
+ * retries turn that flake into a renewal instead of a minute-long gap. A 401
+ * (dead session) never retries — it is an answer, not a flake.
+ */
+const REFRESH_ATTEMPTS = 4;
+/** Backoff between those attempts: quick, since the flake clears on its own. */
+const refreshBackoffMs = (attempt: number) => Math.min(1_000, 200 * 2 ** (attempt - 1));
 /** A renewal younger than this is fresh enough to skip on a tab flap. */
 const FRESH_ENOUGH_MS = MINUTE_MS;
 
@@ -56,11 +67,39 @@ export function loginPathFor(returnTo: string): string {
 export async function refreshProjectSession(input: {
   fetch: (url: string, init: RequestInit) => Promise<Response>;
   returnTo: string;
+  /** Retry policy for transient failures — injected so the rule is testable. */
+  retry?: {
+    attempts: number;
+    delayMs: (attempt: number) => number;
+    sleep: (ms: number) => Promise<void>;
+  };
 }): Promise<RefreshOutcome> {
   const url = `${PROJECT_AUTH_REFRESH_PATH}?${new URLSearchParams({ return_to: input.returnTo })}`;
+  const retry = input.retry ?? {
+    attempts: REFRESH_ATTEMPTS,
+    delayMs: refreshBackoffMs,
+    sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  };
+  let last: RefreshOutcome = { outcome: "unavailable" };
+  for (let attempt = 1; attempt <= retry.attempts; attempt++) {
+    last = await attemptRefresh(input.fetch, url, input.returnTo);
+    // Only a transient outage is worth another try; a renewal or a dead
+    // session is a final answer.
+    if (last.outcome !== "unavailable") return last;
+    if (attempt < retry.attempts) await retry.sleep(retry.delayMs(attempt));
+  }
+  return last;
+}
+
+/** One renewal round trip. See {@link refreshProjectSession} for the retry loop. */
+async function attemptRefresh(
+  fetch: (url: string, init: RequestInit) => Promise<Response>,
+  url: string,
+  returnTo: string,
+): Promise<RefreshOutcome> {
   let response: Response;
   try {
-    response = await input.fetch(url, { credentials: "same-origin", method: "POST" });
+    response = await fetch(url, { credentials: "same-origin", method: "POST" });
   } catch {
     return { outcome: "unavailable" };
   }
@@ -69,7 +108,7 @@ export async function refreshProjectSession(input: {
     const body = SignedOutBody.safeParse(await jsonOf(response));
     return {
       outcome: "signed-out",
-      login: body.success ? body.data.login : loginPathFor(input.returnTo),
+      login: body.success ? body.data.login : loginPathFor(returnTo),
     };
   }
   if (!response.ok) return { outcome: "unavailable" };

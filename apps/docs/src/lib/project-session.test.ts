@@ -11,19 +11,55 @@ const MINUTE = 60_000;
 
 describe("refreshProjectSession", () => {
   const returnTo = "/?workspace=%2Fworkspaces%2Fscratch%2Fx&path=a.md";
+  // A synchronous retry policy: the loop runs to its verdict without real time.
+  const noWait = { attempts: 4, delayMs: () => 0, sleep: async () => {} };
 
   test("posts same-origin to the refresh route and reads back the new expiry", async () => {
     const fetchImpl = vi.fn(
       async () => new Response(JSON.stringify({ ok: true, expiresAt: 1_800_000_900 })),
     );
-    await expect(refreshProjectSession({ fetch: fetchImpl, returnTo })).resolves.toEqual({
+    await expect(
+      refreshProjectSession({ fetch: fetchImpl, returnTo, retry: noWait }),
+    ).resolves.toEqual({
       outcome: "renewed",
       expiresAt: 1_800_000_900,
     });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
     const [url, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
     expect(url).toBe(`/_iterate/auth/refresh?return_to=${encodeURIComponent(returnTo)}`);
     expect(init.method).toBe("POST");
     expect(init.credentials).toBe("same-origin");
+  });
+
+  test("retries the project host's intermittent 500 and renews once it clears", async () => {
+    const fetchImpl = vi
+      .fn<() => Promise<Response>>()
+      .mockResolvedValueOnce(new Response("boom", { status: 500 }))
+      .mockResolvedValueOnce(new Response("boom", { status: 500 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ ok: true, expiresAt: 42 })));
+    await expect(
+      refreshProjectSession({ fetch: fetchImpl, returnTo, retry: noWait }),
+    ).resolves.toEqual({ outcome: "renewed", expiresAt: 42 });
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+  });
+
+  test("gives up to the keepalive after a sustained outage spends the attempts", async () => {
+    const fetchImpl = vi.fn(async () => new Response("still down", { status: 503 }));
+    await expect(
+      refreshProjectSession({ fetch: fetchImpl, returnTo, retry: noWait }),
+    ).resolves.toEqual({ outcome: "unavailable" });
+    expect(fetchImpl).toHaveBeenCalledTimes(4);
+  });
+
+  test("a dead session is final: it never retries", async () => {
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ login: "/_iterate/auth/login?x" }), { status: 401 }),
+    );
+    await expect(
+      refreshProjectSession({ fetch: fetchImpl, returnTo, retry: noWait }),
+    ).resolves.toEqual({ outcome: "signed-out", login: "/_iterate/auth/login?x" });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
   test.each([
@@ -54,7 +90,7 @@ describe("refreshProjectSession", () => {
     },
   ])("$name", async ({ response, becomes }) => {
     await expect(
-      refreshProjectSession({ fetch: vi.fn(async () => response()), returnTo }),
+      refreshProjectSession({ fetch: vi.fn(async () => response()), returnTo, retry: noWait }),
     ).resolves.toEqual(becomes);
   });
 });
