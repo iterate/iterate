@@ -5,20 +5,19 @@ using Roughdraft's parser and validation. It has no React dependency. The UI
 components live in `@iterate-com/ui`; `@iterate-com/workspace-documents` connects
 them to RFM and collaborative storage.
 
-```md
+```text
 The launch is {==on Friday==}{>>Please confirm the date.<<}{#c_date}.
 
 ---
-
 comments:
-c_date:
-author: jonas@example.com
-at: 2026-09-08T12:00:00Z
-status: open
-c_document:
-author: jonas@example.com
-body: Ready for a final review.
-status: open
+  c_date:
+    by: jonas@example.com
+    at: 2026-09-08T12:00:00Z
+    status: open
+  c_document:
+    by: jonas@example.com
+    body: Ready for a final review.
+    status: open
 ```
 
 The trailing YAML is RFM endmatter. It is part of the Markdown file; ordinary
