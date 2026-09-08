@@ -28,7 +28,6 @@ async function openLocalDevD1(): Promise<DisposableAsyncClient> {
 
 export default defineConfig({
   db: openLocalDevD1,
-  migrations: { path: "./src/control-plane/migrations", preset: "d1" },
   definitions: "./src/control-plane/definitions.sql",
   queries: "./src/control-plane/sql",
 });

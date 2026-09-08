@@ -12,6 +12,10 @@ import {
 import { IterateContextDurableObject, type Env } from "./iterate-context-durable-object.ts";
 import { directory } from "./control-plane/directory.ts";
 import controlPlane from "./control-plane/index.ts";
+import type { Env as ControlPlaneEnv } from "./control-plane/env.ts";
+
+/** The one worker's env: the DO's bindings plus the in-process control plane's (D1, OAuth KV, …). */
+type WorkerEnv = Env & ControlPlaneEnv;
 import { registerPipelinedRpcBrand } from "./context/dispatch.ts";
 import { ITX_EXPRESSION_FETCH_HEADER } from "./fetch/rpc-stub-fetch.ts";
 import { DurableObjectNameCodec } from "./context/durable-object-names.ts";
@@ -53,7 +57,7 @@ export { ItxEntrypoint } from "./itx-entrypoint.ts";
  *  (one directory read per slug per isolate-minute, never per request). Only a hit is remembered — a
  *  project created a moment ago must serve at once, and an unknown slug stays 421 until it exists. */
 const resolvedSlugUntil = new Map<string, { projectId: string; until: number }>();
-async function resolveSlug(env: Env, slug: string): Promise<string | null> {
+async function resolveSlug(env: WorkerEnv, slug: string): Promise<string | null> {
   const now = Date.now();
   const cached = resolvedSlugUntil.get(slug);
   if (cached && cached.until > now) return cached.projectId;
@@ -66,7 +70,7 @@ async function resolveSlug(env: Env, slug: string): Promise<string | null> {
 const CODE_VERSION = "live-57";
 
 export default {
-  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+  async fetch(request: Request, env: WorkerEnv, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
 
     // PROJECT-HOST INGRESS (project-host.ts): a request on `<label>--<projectId>.<base>` IS the app
@@ -75,7 +79,7 @@ export default {
     // relative links work. Inbound `x-itx-*` are stripped first: the lane's headers are the platform's,
     // never a visitor's. Everything on a project host is the app's; the platform's own doors (`/api`,
     // `/expression`, `/version`) live on the worker's hostname.
-    const { projectHostnameBase, projectTokenSecret } = appConfigOf(env);
+    const { projectHostnameBase, projectTokenSecret, environmentName, deployId } = appConfigOf(env);
     const projectHost = projectHostOf(url.hostname, projectHostnameBase);
     if (projectHost) {
       // ADMISSION, before any Durable Object is dialled: a context is created on first touch, so a
@@ -133,10 +137,8 @@ export default {
 
     // `<label> <environmentName> <deployId>`: the hand-bumped label first (a smoke greps it), then the
     // configuration (app-config.ts) — which deployment, and Cloudflare's version id of this deploy.
-    if (url.pathname === "/version") {
-      const { environmentName, deployId } = appConfigOf(env);
+    if (url.pathname === "/version")
       return new Response(`${CODE_VERSION} ${environmentName} ${deployId}\n`);
-    }
 
     // /demo — the hosted live-state demo — is a STATIC ASSET (public/demo.html, built by
     // build-sdk.mjs; wrangler.jsonc `assets`): the platform serves it before this handler runs.

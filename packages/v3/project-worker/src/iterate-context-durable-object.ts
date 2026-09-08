@@ -28,7 +28,7 @@
 //   • the FETCH DOOR — the one place a 101 can enter: `x-itx-rpc-stub-pager` accepts a pager
 //     WebSocket AND appends the events that name its key in the same turn (the edge's `provide(stub)`
 //     is ONE round trip here), `x-itx-expression` resolves the fetch lane, anything else is EGRESS
-//     (secret placeholder substitution → the FALLBACK terminal).
+//     (secret placeholder substitution, then the terminal fetch).
 //
 // PURE WORKERS-RPC: capnweb never terminates here (hard rule) — the stateless `/api` worker
 // relays. Dispatch is ONE door: `invoke(call)` — parse → rewrite through the rules → evaluate →
@@ -127,9 +127,10 @@ const FACET_CALL_WATCHDOG_MS = 60_000;
  *  and reserved as a subscription name. */
 const CORE_SLUG = CoreContract.slug;
 
-/** The context worker's bindings (wrangler.jsonc): the DO namespace, the Worker Loader, the two kv
- *  namespaces, the egress terminal — and, from `AppConfigEnv`, the version-metadata binding and the
- *  `APP_CONFIG_*` vars app-config.ts parses. */
+/** The bindings THE DO reads (wrangler.jsonc): the DO namespace, the Worker Loader, the kv namespaces,
+ *  Workers AI, Artifacts — and, from `AppConfigEnv`, the version-metadata binding and the `APP_CONFIG_*`
+ *  vars app-config.ts parses. The in-process control plane's bindings (D1, OAuth KV, …) live in
+ *  control-plane/env.ts; the one worker's env is the intersection of both (src/worker.ts). */
 export interface Env extends AppConfigEnv {
   ITERATE_CONTEXT: DurableObjectNamespace<IterateContextDurableObject>;
   LOADER: WorkerLoader;
@@ -146,22 +147,6 @@ export interface Env extends AppConfigEnv {
    *  (#egress). Hosted only; a self-host leaves it unset and the placeholders pass through. The DO is
    *  trusted; loader-loaded code never sees this binding. */
   PLATFORM_SECRETS_KV?: KVNamespace;
-  /** The directory (D1/sqlfu) — projects, orgs, slugs, routes, api keys. The control plane runs
-   *  in-process now (src/control-plane), so the worker + DO share these bindings. */
-  DB: D1Database;
-  /** The in-process OAuth AS's provider store (grants/tokens/DCR clients). */
-  OAUTH_KV: KVNamespace;
-  /** HMAC secret for the control plane's session cookie + the project token it mints (principal.ts). */
-  SESSION_SECRET: string;
-  /** Login backend for the in-process control plane: `email` | `access` | `open` (default `email`). */
-  LOGIN_MODE?: "email" | "access" | "open";
-  /** Header carrying the verified email when `LOGIN_MODE=access`. */
-  ACCESS_EMAIL_HEADER?: string;
-  /** This deployment's own origin (for login redirects from a private app). */
-  CONTROL_PLANE_ORIGIN?: string;
-  /** Injected by the in-process OAuth AS wrapper at request time (control-plane/index.ts) — not a
-   *  wrangler binding; declared so the worker's env satisfies the control-plane handler's env. */
-  OAUTH_PROVIDER: import("@cloudflare/workers-oauth-provider").OAuthHelpers;
 }
 
 export class IterateContextDurableObject extends DurableObject<Env> {
@@ -853,7 +838,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     //      runtime arg; a
     //      101 flows back untouched; errors map to statuses by CODE. The routing header itself is
     //      stripped so it never reaches the capability or, below, egress;
-    //   3. everything else is EGRESS (secret substitution → the FALLBACK terminal).
+    //   3. everything else is EGRESS (secret substitution, then the terminal fetch).
     const pager = this.#rpcStubs.acceptRpcStubPagerWebSocket(request);
     if (pager) return pager;
     const upgradeLeg = this.#rpcStubFetch.acceptFetchUpgradeLeg(request);
@@ -909,7 +894,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     return this.#rpcStubs.rpcStubTransportState();
   }
 
-  /** EGRESS: substitute `{{secret:project:NAME}}` placeholders, then the FALLBACK terminal. A
+  /** EGRESS: substitute `{{secret:project:NAME}}` placeholders (then the platform ones), then the terminal fetch. A
    *  PROJECT-scope placeholder that survives substitution means no such secret is stored — and this
    *  is the LAST door that owns the project scope, so it must FAIL here, loudly: forwarding would
    *  leak the secret's NAME to the external destination and send a garbage credential in its place.

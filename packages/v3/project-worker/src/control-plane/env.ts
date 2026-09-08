@@ -1,14 +1,14 @@
 import type { OAuthHelpers } from "@cloudflare/workers-oauth-provider";
 
 /**
- * How a human proves who they are. The ONE knob of the auth worker (design §3).
+ * How a human proves who they are. The ONE knob of the control plane (design §3).
  * - `email`  — the login form takes an email; we own the session. (Consumer self-serve.)
- * - `access` — read the verified email from a Cloudflare-Access-injected header; no form of our own.
- * - `open`   — no login; a single anonymous identity. (The Raspberry-Pi floor.)
+ * - `open`   — no login; a single anonymous identity. (The Raspberry-Pi floor — and this pass's default.)
  */
-export type LoginMode = "email" | "access" | "open";
+export type LoginMode = "email" | "open";
 
-/** The auth worker's bindings. `OAUTH_PROVIDER` is injected by the OAuthProvider wrapper at request time. */
+/** The control plane's bindings — a slice of the one worker's env (src/worker.ts intersects it with the
+ *  DO's `Env`). `OAUTH_PROVIDER` is injected by the OAuthProvider wrapper at request time. */
 export interface Env {
   /** Provider-owned store: grants, tokens, DCR clients. Required by @cloudflare/workers-oauth-provider. */
   OAUTH_KV: KVNamespace;
@@ -18,10 +18,6 @@ export interface Env {
   SESSION_SECRET: string;
   /** Login backend. Defaults to `email`. */
   LOGIN_MODE?: LoginMode;
-  /** Header carrying the verified email when LOGIN_MODE=access (e.g. `cf-access-authenticated-user-email`). */
-  ACCESS_EMAIL_HEADER?: string;
-  /** This control plane's own origin — handed to the project worker so private apps can redirect to login. */
-  CONTROL_PLANE_ORIGIN?: string;
   /** Injected by the provider — the OAuth helper surface (parseAuthRequest / completeAuthorization / …). */
   OAUTH_PROVIDER: OAuthHelpers;
 }

@@ -11,7 +11,7 @@
   ],
   "project": ["src/**/*.{ts,tsx}", "e2e/**/*.ts", "__workers-tests__/**/*.ts"],
   "ignoreExportsUsedInFile": true,
-  "ignoreDependencies": ["cloudflare", "@v3/shared", "@playwright/test"],
+  "ignoreDependencies": ["cloudflare", "@playwright/test"],
   "ignoreBinaries": ["playwright"],
   "ignoreUnresolved": ["./e2e/support/global-setup.ts"]
 }

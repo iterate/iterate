@@ -1,13 +1,14 @@
 // The /mcp API route — the ONLY OAuth-protected boundary (design §2). The provider validated the bearer
-// (an OAuth access token OR an API key via resolveExternalToken) BEFORE this runs and put the granted props
-// on ctx.props. A real MCP server (@modelcontextprotocol/server) mounts here, scoped to that identity.
+// (an OAuth access token) BEFORE this runs and put the granted props on ctx.props; in `open` login mode
+// index.ts short-circuits here with the anonymous identity. A real MCP server
+// (@modelcontextprotocol/server) mounts here, scoped to that identity.
 //
 // The headline proof lives in `whoami`: after the OAuth dance where the caller created an org+project at
 // /authorize, the token's props carry that projectId — so whoami reflects the just-emerged project.
 
 import { createMcpHandler, fromJsonSchema, McpServer } from "@modelcontextprotocol/server";
 import { CfWorkerJsonSchemaValidator } from "@modelcontextprotocol/server/validators/cf-worker";
-import { directory, type Grant } from "./directory.ts";
+import { directory } from "./directory.ts";
 import type { Env, Handler } from "./env.ts";
 
 /** The props the provider put on ctx after validating the bearer. */
@@ -15,7 +16,6 @@ interface AuthProps {
   sub: string;
   email: string;
   projectId?: string;
-  grants?: Grant[];
 }
 
 const validator = new CfWorkerJsonSchemaValidator();
@@ -49,7 +49,6 @@ function buildServer(env: Env, props: AuthProps): McpServer {
             email: props.email,
             sub: props.sub,
             projectId: props.projectId ?? null,
-            grants: props.grants ?? [],
           },
           null,
           2,

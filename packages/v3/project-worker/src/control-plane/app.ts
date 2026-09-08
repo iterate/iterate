@@ -4,13 +4,9 @@
 // spot — the "emerge with a project during MCP auth" flow, ADR 0029). No first-party surface is ever an
 // OAuth client; they all just carry the session cookie.
 
-import { newWorkersRpcResponse } from "capnweb";
 import type { Env, Handler, LoginMode } from "./env.ts";
-import { Os } from "./api.ts";
 import { directory } from "./directory.ts";
-import { sha256hex } from "./hash.ts";
 import { slugify } from "./ids.ts";
-import { resolveHost, stampFor } from "./ingress.ts";
 import { clearSessionCookie, currentSession, setSessionCookie, type Session } from "./session.ts";
 
 const esc = (s: string) =>
@@ -56,30 +52,16 @@ ${body}`;
   });
 }
 
-/** Resolve identity WITHOUT a cookie — for `access` (header) and `open` (anonymous) modes. */
-async function ambientIdentity(request: Request, env: Env): Promise<Session | null> {
-  const mode: LoginMode = env.LOGIN_MODE ?? "email";
-  if (mode === "open") {
-    // The one anonymous identity IS a directory user (as access mode's is) — `user_anonymous`, the same
-    // sub /mcp's open-mode short-circuit uses — so its org membership's FOREIGN KEY holds the moment it
-    // creates a project.
-    const user = await directory(env.DB).upsertUser("anonymous");
-    return { sub: user.id, email: user.email, iat: 0 };
-  }
-  if (mode === "access") {
-    const email = request.headers.get(
-      env.ACCESS_EMAIL_HEADER ?? "cf-access-authenticated-user-email",
-    );
-    if (!email) return null;
-    const user = await directory(env.DB).upsertUser(email);
-    return { sub: user.id, email: user.email, iat: 0 };
-  }
-  return null;
-}
+/** THE ONE ANONYMOUS IDENTITY of `open` login mode — `user_anonymous`, a directory row seeded by
+ *  definitions.sql (so its org membership's FOREIGN KEY holds on every path, /mcp included). */
+export const ANONYMOUS: Session = { sub: "user_anonymous", email: "anonymous", iat: 0 };
 
-/** The session for a request: cookie (email mode) or ambient (access/open). */
+/** The session for a request: the cookie (email mode), else — in `open` mode — the anonymous identity. */
 async function identity(request: Request, env: Env): Promise<Session | null> {
-  return (await currentSession(request, env.SESSION_SECRET)) ?? ambientIdentity(request, env);
+  const cookie = await currentSession(request, env.SESSION_SECRET);
+  if (cookie) return cookie;
+  const mode: LoginMode = env.LOGIN_MODE ?? "email";
+  return mode === "open" ? ANONYMOUS : null;
 }
 
 function loginForm(next: string, note = ""): string {
@@ -165,7 +147,6 @@ async function authorize(request: Request, env: Env, session: Session | null): P
         sub: session.sub,
         email: session.email,
         projectId,
-        grants: [{ projectId, scopes: scope }],
       },
     });
     return Response.redirect(redirectTo, 302);
@@ -244,97 +225,19 @@ export const app: Handler = {
 
     if (url.pathname === "/projects" && request.method === "POST") {
       if (!session) return new Response(null, { status: 302, headers: { location: "/" } });
-      // JSON `{ slug, id? }` — an API caller or an e2e registering a project (the id is the caller's,
-      // like apps/os handing the auth worker its own TypeID) — or the console form's `slug`.
+      // JSON `{ slug }` (an API caller or an e2e) or the console form's `slug`. The slug IS the project id
+      // (directory.ts) — the DO name and the host label — so nothing a caller could mint escapes it.
       const json = request.headers.get("content-type")?.includes("application/json") ?? false;
       const body = json
-        ? ((await request.json()) as { slug?: string; id?: string })
+        ? ((await request.json()) as { slug?: string })
         : { slug: String((await request.formData()).get("slug") ?? "") };
       const slug = slugify(body.slug ?? "");
       const back = new Response(null, { status: 302, headers: { location: "/" } });
       if (!slug)
         return json ? Response.json({ error: "a slug is required" }, { status: 400 }) : back;
       const org = await dir.ensureOrg(session.sub, session.email);
-      const project = await dir.createProject(org.id, slug, body.id);
+      const project = await dir.createProject(org.id, slug);
       return json ? Response.json(project) : back;
-    }
-
-    // The capnweb /api — the control plane's typed API (sibling of /mcp). Session-or-API-key auth (design
-    // §2a): OAuth stays at /mcp. Os.authenticate() reads the cookie/bearer against the D1 directory.
-    if (url.pathname === "/api") {
-      return newWorkersRpcResponse(request, new Os(request, env));
-    }
-
-    // PROJECT INGRESS. In a real deploy the control plane fronts project HOSTs (`<slug>.<base>`), resolves
-    // host→projectId via the routes table, and serves the project. On single-host workers.dev we demonstrate
-    // the routing half via `/__ingress?host=<host>`: resolve the host + stamp membership. The DIAL half was
-    // deleted in clean-room increment cook-1 (the pre-skeleton runner is gone); serving returns via the
-    // capability host in a later control-plane increment.
-    if (url.pathname === "/__ingress") {
-      const host = url.searchParams.get("host");
-      if (!host) return new Response("missing ?host\n", { status: 400 });
-      const resolved = await resolveHost(host, env);
-      if (!resolved) return new Response(`no project for host '${host}'\n`, { status: 404 });
-      const actor = session?.sub ?? "user_anonymous";
-      const email = session?.email ?? "anonymous";
-      const caller = await stampFor(actor, email, resolved.projectId, env);
-      return Response.json(
-        { resolved, caller, error: "project dial removed (clean-room cook-1)" },
-        { status: 503 },
-      );
-    }
-
-    // Register a route (map a hostname to a project) — the human twin of capnweb project.mapHostname.
-    if (url.pathname === "/routes" && request.method === "POST") {
-      if (!session) return new Response(null, { status: 302, headers: { location: "/" } });
-      const form = await request.formData();
-      const host = String(form.get("host") ?? "").trim();
-      const projectId = String(form.get("projectId") ?? "").trim();
-      if (host && projectId) await dir.upsertRoute(host, projectId, String(form.get("app") ?? ""));
-      return new Response(null, { status: 302, headers: { location: "/" } });
-    }
-
-    // CIMD client metadata doc — a real public URL usable as an OAuth `client_id` (design §4). Its own URL
-    // is the client_id; the provider fetches + validates this when a client presents that URL.
-    if (url.pathname === "/cimd-test-client") {
-      return Response.json({
-        client_id: `${url.origin}/cimd-test-client`,
-        client_name: "Proof MCP Client",
-        redirect_uris: ["http://localhost:8976/callback"],
-        token_endpoint_auth_method: "none",
-        grant_types: ["authorization_code", "refresh_token"],
-        response_types: ["code"],
-      });
-    }
-
-    // Mint an API key scoped to a project (shown once). The console's programmatic-access affordance.
-    if (url.pathname === "/apikeys" && request.method === "POST") {
-      if (!session) return new Response(null, { status: 302, headers: { location: "/" } });
-      const form = await request.formData();
-      const projectId = String(form.get("projectId") ?? "").trim();
-      const label = String(form.get("label") ?? "cli").trim() || "cli";
-      // A key may only be scoped to a project the minter can actually reach — otherwise a user could assert
-      // a grant for a project they're not a member of. (Enforcement of these grants at read time is still a
-      // known gap — see the review-response doc; today a key inherits its owner's directory authority.)
-      if (projectId) {
-        const access = await dir.access(session.sub, projectId);
-        if (!access.ok) return new Response(`not a member of '${projectId}'\n`, { status: 403 });
-      }
-      const raw = `key_${crypto.randomUUID().replaceAll("-", "")}`;
-      await dir.createApiKey(
-        await sha256hex(raw),
-        session.sub,
-        label,
-        projectId ? [{ projectId, scopes: ["project"] }] : [],
-      );
-      return page(
-        "API key",
-        `<h1>API key created</h1>
-<p>Copy it now — it is not shown again:</p>
-<p><code>${esc(raw)}</code></p>
-<p class="muted">scoped to project: ${esc(projectId || "(none)")}</p>
-<p><a href="/">← back</a></p>`,
-      );
     }
 
     if (url.pathname === "/") {

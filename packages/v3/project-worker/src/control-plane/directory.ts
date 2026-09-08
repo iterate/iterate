@@ -1,24 +1,19 @@
-// The directory — the control plane IS the directory (design §8). One D1/sqlfu store, strongly consistent
-// (no KV list() lag), relational and org-centric: users → orgs (via org_members) → projects, plus ingress
-// routes owned by projects and API keys. Replaces the kernel's directory.ts provider switch AND routing.ts.
+// The directory — the control plane IS the directory. One D1/sqlfu store, strongly consistent (no KV
+// list() lag), relational and org-centric: users → orgs (via org_members) → projects. A project's id IS
+// its slug (definitions.sql): one DNS-safe name is the directory row, the context DO's name and the
+// project-host label — nothing a caller can mint escapes it.
 
 import { createD1Client } from "sqlfu";
 import {
   addOrgMember,
-  checkProjectAccess,
   createOrg,
   createProject,
-  getApiKey,
   getProjectBySlug,
-  insertApiKey,
   listOrgsForUser,
   listProjectsForUser,
-  listRoutesForProject,
-  resolveRoute,
-  upsertRoute,
   upsertUser,
 } from "./sql/.generated/index.ts";
-import { newOrgId, newProjectId, slugify } from "./ids.ts";
+import { newOrgId, slugify } from "./ids.ts";
 
 export interface User {
   id: string; // user_<lowercased-email>
@@ -31,14 +26,10 @@ export interface Org {
   role?: string;
 }
 export interface Project {
-  id: string;
+  id: string; // === slug
   slug: string;
   orgId: string;
   role?: string;
-}
-export interface Grant {
-  projectId: string;
-  scopes: string[];
 }
 
 export function directory(db: D1Database) {
@@ -70,32 +61,22 @@ export function directory(db: D1Database) {
       return rows.map((r) => ({ id: r.id, name: r.name, slug: r.slug, role: r.role }));
     },
 
-    /**
-     * Create a project inside an org. Mints a `prj_` id distinct from the slug; the slug is GLOBALLY
-     * unique (mirrors apps/auth) — a slug already taken in ANY org throws "already taken". Idempotent
-     * within the same org.
-     */
-    async createProject(orgId: string, slug: string, id?: string): Promise<Project> {
+    /** Create a project inside an org. The slug is normalized and IS the id; it is GLOBALLY unique — a
+     *  slug already taken in ANY org throws "already taken". Idempotent within the same org (the insert
+     *  is ON CONFLICT DO NOTHING, then re-selected to cover both "just created" and "already existed"). */
+    async createProject(orgId: string, slug: string): Promise<Project> {
       const s = slugify(slug);
       if (!s) throw new Error("project slug is empty or invalid");
-      // The id is minted here unless the caller brings its own (apps/os hands the auth worker its own
-      // TypeID; an e2e uses the slug as the id so one name addresses both the DO and the host).
-      // ON CONFLICT(slug) DO NOTHING (no RETURNING — a conflict yields 0 rows, so we re-select to cover
-      // both "just created" and "already existed" without a throw).
-      await createProject(client, { id: id ?? newProjectId(), slug: s, orgId });
+      await createProject(client, { id: s, slug: s, orgId });
       const p = (await getProjectBySlug(client, { slug: s }))[0];
       if (!p) throw new Error(`failed to create project '${s}'`);
       if (p.orgId !== orgId) throw new Error(`project slug '${s}' is already taken`);
       return { id: p.id, slug: p.slug, orgId: p.orgId };
     },
 
-    /**
-     * Emerge with an org + project — the "create a project during MCP /authorize" flow (ADR 0029). REUSES
-     * the caller's existing org when they have one (so a user doesn't accrue a throwaway org per project);
-     * creates one named `orgName` only on first use. The single create-a-project path (all surfaces route
-     * here). Not atomic across org/member/project — acceptable for the POC; a real deploy wraps it in a D1
-     * batch. See the review-response doc.
-     */
+    /** Emerge with an org + project — the "create a project during MCP /authorize" flow (ADR 0029). REUSES
+     *  the caller's existing org when they have one; creates one named `orgName` only on first use. The
+     *  single create-a-project path (all surfaces route here). Not atomic across org/member/project. */
     async emerge(
       userId: string,
       orgName: string,
@@ -119,49 +100,10 @@ export function directory(db: D1Database) {
       return rows.map((r) => ({ id: r.id, slug: r.slug, orgId: r.orgId, role: r.role }));
     },
 
-    /** Resolve a project by slug (id + org), or null. */
+    /** Resolve a project by slug (its id + org), or null — the edge's admission (worker.ts). */
     async getBySlug(slug: string): Promise<Project | null> {
       const p = (await getProjectBySlug(client, { slug }))[0];
       return p ? { id: p.id, slug: p.slug, orgId: p.orgId } : null;
-    },
-
-    /** Authorize a user against a project — membership in the project's org. */
-    async access(userId: string, projectId: string): Promise<{ ok: boolean; role?: string }> {
-      const m = (await checkProjectAccess(client, { projectId, userId }))[0];
-      return m ? { ok: true, role: m.role } : { ok: false };
-    },
-
-    /** Hostname → project routing (replaces routing.ts). null if the host isn't registered. */
-    async resolveRoute(host: string): Promise<{ projectId: string; app: string } | null> {
-      const r = await resolveRoute(client, { host });
-      return r ? { projectId: r.projectId, app: r.app } : null;
-    },
-
-    /** The routes (ingress hostnames) a project owns. */
-    async listRoutes(projectId: string): Promise<{ host: string; app: string }[]> {
-      return listRoutesForProject(client, { projectId });
-    },
-
-    /** Point an ingress hostname at a project (a project property). */
-    async upsertRoute(host: string, projectId: string, app = ""): Promise<void> {
-      await upsertRoute(client, { host, projectId, app });
-    },
-
-    /** Store an API key (hashed) with its project grants. */
-    async createApiKey(
-      hash: string,
-      userId: string,
-      label: string,
-      grants: Grant[],
-    ): Promise<void> {
-      await insertApiKey(client, { hash, userId, label, grants: JSON.stringify(grants) });
-    },
-
-    /** Resolve an API key hash → { actor, grants }, or null. */
-    async resolveApiKey(hash: string): Promise<{ userId: string; grants: Grant[] } | null> {
-      const row = await getApiKey(client, { hash });
-      if (!row) return null;
-      return { userId: row.userId, grants: JSON.parse(row.grants) as Grant[] };
     },
   };
 

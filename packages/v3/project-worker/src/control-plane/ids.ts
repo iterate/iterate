@@ -1,5 +1,6 @@
-// Id + slug helpers, mirroring apps/auth: minted `prj_`/`org_` ids (distinct from slugs), and a slugify
-// that matches @iterate-com/shared/slug's normalization (lowercase, non-alphanumeric → dash, trimmed).
+// Id + slug helpers: a minted `org_` id (distinct from the org slug) and a slugify that matches
+// @iterate-com/shared/slug's normalization (lowercase, non-alphanumeric → dash, trimmed). A PROJECT has
+// no minted id — its slug IS its id (directory.ts).
 
 export const slugify = (s: string) =>
   s
@@ -9,11 +10,5 @@ export const slugify = (s: string) =>
     .replace(/-+/g, "-")
     .replace(/^-+|-+$/g, "");
 
-const hex32 = () => crypto.randomUUID().replaceAll("-", "");
-
-/** `prj_<32hex>` — the control plane (this worker) is the directory authority that mints project ids
- *  (mirroring apps/auth's `prj_` scheme). */
-export const newProjectId = () => `prj_${hex32()}`;
-
 /** `org_<32hex>`. */
-export const newOrgId = () => `org_${hex32()}`;
+export const newOrgId = () => `org_${crypto.randomUUID().replaceAll("-", "")}`;
