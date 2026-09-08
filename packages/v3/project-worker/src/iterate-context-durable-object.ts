@@ -138,6 +138,9 @@ export interface Env extends AppConfigEnv {
   AI: Ai;
   /** Cloudflare Artifacts (beta) — the ONE bound namespace behind `itx.cfArtifacts`, project-scoped. */
   ARTIFACTS: ArtifactsNamespace;
+  /** The Artifacts account + namespace `itx.repos` builds git remotes from (wrangler vars). */
+  ARTIFACTS_ACCOUNT_ID: string;
+  ARTIFACTS_NAMESPACE: string;
   SECRETS_KV?: KVNamespace;
   /** The egress terminal this context's `fetch` bottoms out at (secret-substituted, then sent). */
   /** The control plane, over a service binding: the egress terminal (`fetch`) and the directory —

@@ -37,6 +37,7 @@ import { resolveContextPath } from "./durable-object-names.ts";
 import { print, type ItxExpression, type ItxExpressionInput } from "./expression.ts";
 import { FacetHandle, InvokeHandle, RpcStubHandle } from "./invoke-handle.ts";
 import type { BuiltInRoot } from "./built-in-roots.ts";
+import { projectScopedRepos, type ReposScope } from "./repos.ts";
 
 /** One row of `itx.rewriteRules.list()`: a context row (`target` a string, or `null` for a mask) or an
  *  implicit platform row. */
@@ -199,6 +200,11 @@ export interface BuiltInScope extends LibraryRoots {
     list(options?: { limit?: number; cursor?: string }): Promise<ArtifactListResult>;
     delete(name: string): Promise<boolean>;
   };
+  /** THE PRIMARY REPO DOOR — `itx.repos` (repos.ts): a repo's file BYTES, git-over-HTTPS, built ON TOP
+   *  of `cfArtifacts` + `@v3/shared/git-wire`. `cfArtifacts` is the raw control-plane escape hatch
+   *  beneath it. Minimal today: `readFile`/`writeFile` one root-level path on `main` — enough to move
+   *  the config worker's source out of KV (`itx.provide("itx.worker", "…itx.repos.readFile(…)")`). */
+  repos: ReposScope;
   /** Append to this context's append-only event log (the facets that REDUCE it are
    *  `itx.facets.get(name)`). A top-level root, so the expression surface mirrors the edge
    *  RpcTarget exactly: `itx.append({...})` is one spelling on every hop. */
@@ -305,6 +311,9 @@ interface BuildBuiltInsDeps {
     AI: Ai;
     /** Cloudflare Artifacts, the ONE bound namespace — `itx.cfArtifacts` scopes it per project. */
     ARTIFACTS: ArtifactsNamespace;
+    /** The Artifacts account + namespace `itx.repos` builds git remotes from (git-over-HTTPS). */
+    ARTIFACTS_ACCOUNT_ID: string;
+    ARTIFACTS_NAMESPACE: string;
   };
   /** The deploy identity every loader cacheKey folds in (app-config.ts). */
   deployId: string;
@@ -416,6 +425,12 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
     ai: env.AI,
     // THE ESCAPE HATCH: Cloudflare Artifacts, project-scoped (projectScopedArtifacts, below).
     cfArtifacts: projectScopedArtifacts(env.ARTIFACTS, projectId),
+    repos: projectScopedRepos({
+      namespace: env.ARTIFACTS,
+      projectId,
+      accountId: env.ARTIFACTS_ACCOUNT_ID,
+      namespaceName: env.ARTIFACTS_NAMESPACE,
+    }),
     // Own-enumerable closures (NOT prototype methods) — the resolver's `Object.hasOwn` gate is why.
     // Every event appended through the scope carries WHO appended it — the DO's own stamp, never a
     // client's (src/principal.ts): the session's verified principal, or none.

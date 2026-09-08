@@ -12,6 +12,7 @@ export const BUILT_IN_ROOTS = [
   "kv",
   "ai",
   "cfArtifacts",
+  "repos",
   "append",
   "readEvents",
   "waitForEvent",
