@@ -16,7 +16,9 @@ import { refreshProjectSession, type RefreshOutcome } from "./project-session.ts
  *    ride the replacement instead of each minting their own.
  * 3. When the replacement itself cannot connect, the likeliest cause is a
  *    lapsed project session: renew it through the gate and try once more; a
- *    session the gate declares dead hands off to sign-in.
+ *    session the gate declares dead hands off to sign-in. One renewal is
+ *    shared by everyone waiting on it, and no session dialed before it
+ *    completed is trusted afterwards — its handshake carried the old cookie.
  */
 
 function dialDocsApi() {
@@ -49,6 +51,23 @@ export function createDocsClient<Project>(deps: {
   const isTransport = deps.isTransportError ?? isSessionTransportError;
   let live: { project: Project; session: unknown; generation: number } | null = null;
   let generation = 0;
+  let renewing: Promise<RefreshOutcome> | null = null;
+  /** The generation counter when the last renewal completed: every session
+   * dialed at or before it shook hands with the cookie that renewal replaced. */
+  let renewedAtGeneration = 0;
+
+  const renew = () => {
+    renewing ??= deps
+      .refresh()
+      .then((outcome) => {
+        renewedAtGeneration = generation;
+        return outcome;
+      })
+      .finally(() => {
+        renewing = null;
+      });
+    return renewing;
+  };
 
   const current = () => (live ??= { ...deps.dial(), generation: ++generation });
 
@@ -71,12 +90,12 @@ export function createDocsClient<Project>(deps: {
         return await operation(second.project);
       } catch (secondError) {
         if (!isTransport(secondError)) throw secondError;
-        const renewal = await deps.refresh();
+        const renewal = await renew();
         if (renewal.outcome === "signed-out") {
           deps.signInAgain(renewal.login);
           throw new Error("Your session expired — signing in again…");
         }
-        const third = replace(second.generation);
+        const third = replace(Math.max(second.generation, renewedAtGeneration));
         return await operation(third.project);
       }
     }

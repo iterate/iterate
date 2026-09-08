@@ -1,5 +1,6 @@
 import { describe, expect, test, vi } from "vitest";
 import { createDocsClient, isSessionTransportError } from "./docs-client.ts";
+import type { RefreshOutcome } from "./project-session.ts";
 
 describe("isSessionTransportError", () => {
   test.each([
@@ -41,6 +42,11 @@ function fakeClient(overrides: Partial<Parameters<typeof createDocsClient>[0]> =
 }
 
 const transportFailure = () => new Error("RPC session was shut down by disposing the main stub");
+
+/** Let every pending microtask (a few awaits deep) run. */
+const settle = async () => {
+  for (let i = 0; i < 8; i++) await Promise.resolve();
+};
 
 describe("createDocsClient", () => {
   test("an application error leaves the shared session alone", async () => {
@@ -119,6 +125,53 @@ describe("createDocsClient", () => {
     ).rejects.toThrow(/signing in again/i);
     expect(refresh).toHaveBeenCalledTimes(1);
     expect(signInAgain).toHaveBeenCalledWith("/_iterate/auth/login?return_to=%2Fx");
+  });
+
+  test("a session dialed while the renewal was pending is not trusted after it", async () => {
+    let resolveRefresh: ((outcome: RefreshOutcome) => void) | null = null;
+    const { client, dial } = fakeClient({
+      refresh: vi.fn(
+        () =>
+          new Promise<RefreshOutcome>((resolve) => {
+            resolveRefresh = resolve;
+          }),
+      ),
+    });
+    // A loses session 1, then its replacement 2: it asks for a renewal and waits.
+    const a = client.withDocsProject(async (project) => {
+      if (project < 4) throw transportFailure();
+      return `a on ${project}`;
+    });
+    await settle();
+    expect(dial).toHaveBeenCalledTimes(2);
+    // Meanwhile B loses session 2 and dials 3 — with the OLD cookie.
+    const b = client.withDocsProject(async (project) => {
+      if (project < 3) throw transportFailure();
+      return `b on ${project}`;
+    });
+    await expect(b).resolves.toBe("b on 3");
+    expect(dial).toHaveBeenCalledTimes(3);
+    // The renewal lands: A must not ride 3, whose handshake predates it.
+    resolveRefresh!({ outcome: "renewed", expiresAt: 0 });
+    await expect(a).resolves.toBe("a on 4");
+    expect(dial).toHaveBeenCalledTimes(4);
+  });
+
+  test("concurrent callers share one renewal and one post-renewal dial", async () => {
+    const refresh = vi.fn(async () => ({ outcome: "renewed" as const, expiresAt: 0 }));
+    const { client, dial } = fakeClient({ refresh });
+    const operation = async (project: number) => {
+      if (project < 3) throw transportFailure();
+      return project;
+    };
+    const results = await Promise.all([
+      client.withDocsProject(operation),
+      client.withDocsProject(operation),
+      client.withDocsProject(operation),
+    ]);
+    expect(results).toEqual([3, 3, 3]);
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(dial).toHaveBeenCalledTimes(3);
   });
 
   test("withDocsProjectOnce never re-dials", async () => {
