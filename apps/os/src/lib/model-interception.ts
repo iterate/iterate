@@ -11,6 +11,7 @@
 // a handler.
 
 import { z } from "zod";
+import type { CfAiRunOptions } from "../domains/itx/cf-capabilities.ts";
 
 /** The model-name namespace served by the live AI interceptor. */
 const INTERCEPTED_MODEL_PREFIX = "intercepted/";
@@ -37,17 +38,29 @@ export const InterceptedAiResponse = z.object({
 /** Serialized provider response consumed by the normal response decoder. */
 export type InterceptedAiResponse = z.infer<typeof InterceptedAiResponse>;
 
-/** The prepared request, before credentials are attached or a provider is dialed. */
+/** The two concrete outbound APIs, after host policy and request preparation. No credentials. */
+export type AiRequest =
+  | {
+      kind: "openai-http";
+      gatewayId: string;
+      endpoint: string;
+      headers: Record<string, string>;
+      body: Record<string, unknown>;
+    }
+  | {
+      kind: "workers-ai";
+      model: string;
+      body: Record<string, unknown>;
+      options: CfAiRunOptions & {
+        returnRawResponse: true;
+        gateway: { id: string; metadata: Record<string, string | number> };
+      };
+    };
+
+/** Original model name and the complete credential-free request that would be dispatched. */
 export type ProjectAiInterceptorInput = {
   model: string;
-  request: {
-    provider: string;
-    endpoint: string;
-    headers: Record<string, string>;
-    body: Record<string, unknown>;
-    gatewayId: string;
-    metadata: Record<string, string | number>;
-  };
+  request: AiRequest;
 } & ({ source: "agent-turn"; agentPath: string } | { source: "ai-run" } | { source: "egress" });
 
 /** Replace only the provider call; response classification and decoding still run. */

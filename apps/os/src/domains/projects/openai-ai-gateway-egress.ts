@@ -9,7 +9,7 @@ import type { Env } from "../../env.ts";
  * their provider billing; an unsupported company transport must fail closed. */
 
 import type { AppConfig } from "../../config.ts";
-import { sendAiRequest } from "../agents/workers-ai-transport.ts";
+import { sendAiRequest, prepareOpenAiRequest } from "../agents/workers-ai-transport.ts";
 import type { StreamContext } from "./stream-context.ts";
 
 /** The host compares actual credentials, never a caller's billing-owner header.
@@ -92,36 +92,43 @@ export async function routeCompanyOpenAi(input: {
   const parsedModel = z.string().min(1).safeParse(body.model);
   if (!parsedModel.success) return unsupported();
   const model = parsedModel.data;
-  return sendAiRequest({
-    ai: input.ai,
-    transport: {
-      kind: "byok",
-      gatewayId: config.cloudflareAiGateway.id,
-      openaiApiKey: config.openAiApiKey.exposeSecret(),
-      responseCacheTtlSeconds: config.cloudflareAiGateway.responseCacheTtlSeconds,
-    },
-    model: model.startsWith("intercepted/") ? model : `openai/${model}`,
-    body,
-    endpoint,
-    headers: request.headers,
-    containsFiles: false,
-    options: {},
-    source: { source: "egress" },
-    consultInterceptor: input.consultInterceptor,
-    metadata: aiGatewayMetadata(
-      {
-        ...(await input.readIdentity()),
-        stream:
-          streamContext.kind === "script-execution"
-            ? {
-                path: streamContext.streamPath,
-                eventOffset: streamContext.scriptRunRequestedEventOffset,
-              }
-            : streamContext.kind === "scope"
-              ? { path: streamContext.scopePath }
-              : null,
+  const gateway = config.cloudflareAiGateway;
+  const prepared = await prepareOpenAiRequest(
+    {
+      model,
+      transport: {
+        kind: "byok",
+        gatewayId: gateway.id,
+        openaiApiKey: config.openAiApiKey.exposeSecret(),
       },
-      config.cloudflareAiGateway.includeEventOffset,
-    ),
-  });
+      metadata: aiGatewayMetadata(
+        {
+          ...(await input.readIdentity()),
+          stream:
+            streamContext.kind === "script-execution"
+              ? {
+                  path: streamContext.streamPath,
+                  eventOffset: streamContext.scriptRunRequestedEventOffset,
+                }
+              : streamContext.kind === "scope"
+                ? { path: streamContext.scopePath }
+                : null,
+        },
+        config.cloudflareAiGateway.includeEventOffset,
+      ),
+    },
+    {
+      endpoint,
+      body,
+      headers: request.headers,
+      cache:
+        gateway.responseCacheTtlSeconds === undefined
+          ? null
+          : { ttlSeconds: gateway.responseCacheTtlSeconds },
+    },
+  );
+  return sendAiRequest(
+    { ai: input.ai, source: { source: "egress" }, consultInterceptor: input.consultInterceptor },
+    prepared,
+  );
 }

@@ -52,10 +52,14 @@ await agent.ask({ message: "hello" });
 await interception.release(); // or let `using` dispose it
 ```
 
-Handlers receive `source` (`agent-turn`, `ai-run`, or `egress`), `model`, and
-`request`: provider, endpoint, headers, body, gateway ID, and trusted metadata.
-Agent calls also carry `agentPath`. Credentials are attached only after the
-interception decision, so handlers never receive the company key.
+Handlers receive `source` (`agent-turn`, `ai-run`, or `egress`), the original
+`model`, and a completed `request` with one of two shapes:
+
+- `kind: "openai-http"`: gateway ID, endpoint, body, and headers (including trusted metadata).
+- `kind: "workers-ai"`: model, body, and binding options (including the host-owned gateway ID and metadata).
+
+Agent calls also carry `agentPath`. Credentials are excluded from both shapes.
+The sender does not change the prepared body or choose a provider from the model name.
 
 Return `{ status, headers, body }`, where body is an HTTP response string (JSON
 or SSE). The normal response decoder and budget/rate-limit classifier process

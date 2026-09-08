@@ -5,6 +5,7 @@ import {
   noAiInterceptorError,
   InterceptedAiResponse,
   type ProjectAiInterceptorInput,
+  type AiRequest,
 } from "../../lib/model-interception.ts";
 import { readAiCallStop } from "./ai-budget.ts";
 
@@ -45,7 +46,7 @@ export type CloudflareAiGatewayBinding = {
 };
 
 /**
- * How one attempt travels through the Cloudflare AI Gateway.
+ * Host billing preferences. resolveAiRoute selects the concrete outbound API per model.
  *
  * - `unified`: `env.AI.run` partner models on Cloudflare's unified billing.
  * - `byok`: the gateway's universal endpoint with OUR OpenAI key. Same
@@ -128,33 +129,49 @@ export async function runWorkersAiAttempt(input: {
     message: `LLM attempt timed out after ${input.deadlineMs / 60_000} minutes.`,
   });
   try {
-    const transport = input.transport ?? { kind: "unified" };
-    const providerModel = input.model.replace(/^intercepted\//, "");
-    const response = await deadline.race(
-      sendAiRequest({
-        ai: input.ai,
-        transport,
-        metadata: input.metadata,
-        model: input.model,
-        body: {
-          messages: adaptMessagesForModel(input.messages, {
-            supportsDeveloperRole: transport.kind === "byok" && providerModel.startsWith("openai/"),
-          }),
-          stream: true,
-          ...openAiReasoningExtras(providerModel),
-        },
-        endpoint: "chat/completions",
-        headers: new Headers(),
-        containsFiles: input.messages.some((message) => message.containsFiles === true),
-        options: {},
-        source: {
-          source: "agent-turn",
-          agentPath: input.agentPath || input.metadata.streamPath || "/",
-        },
-        consultInterceptor: input.consultInterceptor,
+    const route = resolveAiRoute(input.model, input.transport ?? { kind: "unified" });
+    const body = {
+      messages: adaptMessagesForModel(input.messages, {
+        supportsDeveloperRole: route.kind === "openai-http",
       }),
+      stream: true,
+      ...openAiReasoningExtras(route.providerModel),
+    };
+    const prepared =
+      route.kind === "openai-http"
+        ? await deadline.race(
+            prepareOpenAiRequest(
+              { model: route.model, transport: route.transport, metadata: input.metadata },
+              {
+                endpoint: "chat/completions",
+                body,
+                headers: new Headers(),
+                cache:
+                  route.transport.responseCacheTtlSeconds !== undefined &&
+                  !input.messages.some((message) => message.containsFiles)
+                    ? { ttlSeconds: route.transport.responseCacheTtlSeconds }
+                    : null,
+              },
+            ),
+          )
+        : prepareWorkersAiRequest(
+            { model: route.model, gatewayId: route.gatewayId, metadata: input.metadata },
+            { body, options: {} },
+          );
+    const response = await deadline.race(
+      sendAiRequest(
+        {
+          ai: input.ai,
+          source: {
+            source: "agent-turn",
+            agentPath: input.agentPath || input.metadata.streamPath || "/",
+          },
+          consultInterceptor: input.consultInterceptor,
+        },
+        prepared,
+      ),
     );
-    const stop = await deadline.race(readAiCallStop(response, providerModel.split("/")[0]!));
+    const stop = await deadline.race(readAiCallStop(response, route.providerModel.split("/")[0]!));
     if (stop) {
       await deadline.race(response.body?.cancel() || Promise.resolve());
       return stop;
@@ -416,132 +433,151 @@ export function jsonCompatible(value: unknown): unknown {
   }
 }
 
-/** Prepare every company AI request once. Only the final provider call is replaceable.
- * Execute in the caller's context: no response stream crosses another DO RPC hop. */
-export async function sendAiRequest(input: {
-  ai: WorkersAiBinding;
-  transport: CloudflareAiGatewayTransport;
-  metadata: AiGatewayMetadata;
-  model: string;
-  body: unknown;
-  endpoint: string;
-  headers: Headers;
-  containsFiles: boolean;
-  options: CfAiRunOptions;
-  source: { source: "agent-turn"; agentPath: string } | { source: "ai-run" } | { source: "egress" };
-  consultInterceptor: ((request: ProjectAiInterceptorInput) => Promise<unknown>) | undefined;
-}): Promise<Response> {
-  const providerModel = input.model.replace(/^intercepted\//, "");
-  const payload = z.record(z.string(), z.unknown()).parse(input.body);
-  const metadata = Object.fromEntries(
-    Object.entries(input.metadata).filter(
-      (entry): entry is [string, string | number] => entry[1] !== undefined,
-    ),
-  );
-  const common = {
+/** Resolve billing once; callers use the result for both message preparation and sending. */
+function resolveAiRoute(model: string, transport: CloudflareAiGatewayTransport) {
+  const providerModel = model.replace(/^intercepted\//, "");
+  if (providerModel.startsWith("openai/") && transport.kind === "byok")
+    return { kind: "openai-http" as const, model, providerModel, transport };
+  return {
+    kind: "workers-ai" as const,
+    model,
+    providerModel,
+    gatewayId: transport.gatewayId || "default",
+  };
+}
+
+type PreparedAiRequest = { sourceModel: string } & (
+  | (Extract<AiRequest, { kind: "openai-http" }> & { credential: string })
+  | (Extract<AiRequest, { kind: "workers-ai" }> & { credential: null })
+);
+
+/** Complete OpenAI-native request preparation, including cache policy. */
+export async function prepareOpenAiRequest(
+  account: {
+    model: string;
+    transport: Extract<CloudflareAiGatewayTransport, { kind: "byok" }>;
+    metadata: AiGatewayMetadata;
+  },
+  input: {
+    endpoint: string;
+    body: Record<string, unknown>;
+    headers: Headers;
+    cache: { ttlSeconds: number } | null;
+  },
+): Promise<PreparedAiRequest> {
+  const { transport, model } = account;
+  const body = {
+    ...input.body,
+    ...openAiStreamingUsage(input.endpoint, input.body),
+    model: model.replace(/^intercepted\//, "").replace(/^openai\//, ""),
+    ...(transport.openaiPromptCacheKey && { prompt_cache_key: transport.openaiPromptCacheKey }),
+  };
+  const cacheHeaders: Record<string, string> = input.cache
+    ? {
+        "cf-aig-cache-ttl": String(input.cache.ttlSeconds),
+        "cf-aig-cache-key": await cloudflareAiGatewayResponseCacheKey(body),
+      }
+    : { "cf-aig-skip-cache": "true" };
+  return {
+    kind: "openai-http",
+    sourceModel: model,
+    credential: transport.openaiApiKey,
+    gatewayId: transport.gatewayId,
     endpoint: input.endpoint,
-    gatewayId: input.transport.gatewayId || "default",
-    metadata,
+    body,
     headers: {
       ...Object.fromEntries(
         [...input.headers].filter(([name]) => name.startsWith("openai-") || name === "accept"),
       ),
       "content-type": "application/json",
-      "cf-aig-metadata": JSON.stringify(metadata),
+      "cf-aig-metadata": JSON.stringify(account.metadata),
       "cf-aig-collect-log": "true",
       "cf-aig-collect-log-payload": "true",
+      ...cacheHeaders,
     },
   };
+}
 
-  // OpenAI bills our key. Construct the complete body before hashing it for caching.
-  if (providerModel.startsWith("openai/") && input.transport.kind === "byok") {
-    const transport = input.transport;
-    const body = {
-      ...payload,
-      ...openAiStreamingUsage(),
-      model: providerModel.slice("openai/".length),
-      ...(transport.openaiPromptCacheKey && { prompt_cache_key: transport.openaiPromptCacheKey }),
-    };
-    const cacheHeaders: Record<string, string> =
-      transport.responseCacheTtlSeconds !== undefined && !input.containsFiles
-        ? {
-            "cf-aig-cache-ttl": String(transport.responseCacheTtlSeconds),
-            "cf-aig-cache-key": await cloudflareAiGatewayResponseCacheKey(body),
-          }
-        : { "cf-aig-skip-cache": "true" };
-    const request = {
-      ...common,
-      provider: "openai",
-      body,
-      headers: { ...common.headers, ...cacheHeaders },
-    };
-    return dispatch(request, (prepared) => sendOpenAiWithKey(prepared, transport.openaiApiKey));
-  }
-
-  // Cloudflare bills this OpenAI model; streaming still needs OpenAI usage reporting.
-  if (providerModel.startsWith("openai/")) {
-    const request = {
-      ...common,
-      provider: "workers-ai",
-      body: { ...payload, ...openAiStreamingUsage() },
-    };
-    return dispatch(request, sendWorkersAi);
-  }
-
-  // Workers AI model: preserve its own input schema, without OpenAI-specific fields.
-  const request = { ...common, provider: "workers-ai", body: payload };
-  return dispatch(request, sendWorkersAi);
-
-  function openAiStreamingUsage() {
-    const endpointPath = input.endpoint.split("?")[0];
-    if (endpointPath !== "chat/completions" && endpointPath !== "completions") return {};
-    if (payload.stream !== true) return {};
-    return {
-      stream_options: {
-        ...z.record(z.string(), z.unknown()).parse(payload.stream_options || {}),
-        include_usage: true,
-      },
-    };
-  }
-
-  function sendOpenAiWithKey(request: ProjectAiInterceptorInput["request"], apiKey: string) {
-    const gateway = input.ai.gateway?.(request.gatewayId);
-    if (!gateway)
-      throw new Error("AI binding does not expose gateway(); BYOK transport unavailable.");
-    return gateway.run({
-      provider: request.provider,
-      endpoint: request.endpoint,
-      headers: { ...request.headers, authorization: `Bearer ${apiKey}` },
-      query: request.body,
-    });
-  }
-
-  async function sendWorkersAi(request: ProjectAiInterceptorInput["request"]) {
-    const response = await input.ai.run(input.model, request.body, {
+/** Complete Workers AI binding input. No HTTP endpoint, headers, or OpenAI credential. */
+export function prepareWorkersAiRequest(
+  account: { model: string; gatewayId: string; metadata: AiGatewayMetadata },
+  input: { body: unknown; options: CfAiRunOptions },
+): PreparedAiRequest {
+  const model = account.model.replace(/^intercepted\//, "");
+  const payload = z.record(z.string(), z.unknown()).parse(input.body);
+  const metadata = Object.fromEntries(
+    Object.entries(account.metadata).filter(
+      (entry): entry is [string, string | number] => entry[1] !== undefined,
+    ),
+  );
+  return {
+    kind: "workers-ai",
+    sourceModel: account.model,
+    credential: null,
+    model,
+    body: model.startsWith("openai/")
+      ? { ...payload, ...openAiStreamingUsage("chat/completions", payload) }
+      : payload,
+    options: {
       ...input.options,
       returnRawResponse: true,
-      gateway: { ...input.options.gateway, id: request.gatewayId, metadata: request.metadata },
-    });
-    if (!(response instanceof Response))
-      throw new Error("Workers AI did not return the requested raw response");
-    return response;
-  }
+      gateway: { ...input.options.gateway, id: account.gatewayId, metadata },
+    },
+  };
+}
 
-  // Prepared bodies and headers pass through unchanged. Only real dispatch adds credentials.
-  async function dispatch(
-    request: ProjectAiInterceptorInput["request"],
-    sendToProvider: (request: ProjectAiInterceptorInput["request"]) => Promise<Response>,
-  ): Promise<Response> {
-    if (isInterceptedModel(input.model)) {
-      if (!input.consultInterceptor) throw noAiInterceptorError(input.model);
-      const response = InterceptedAiResponse.parse(
-        await input.consultInterceptor({ ...input.source, model: input.model, request }),
-      );
-      return new Response(response.body, { status: response.status, headers: response.headers });
+/** Send an already prepared request unchanged, or substitute the interceptor's response.
+ * Keep execution local to the caller so response streams do not cross another DO RPC hop. */
+export async function sendAiRequest(
+  host: {
+    ai: WorkersAiBinding;
+    source:
+      | { source: "agent-turn"; agentPath: string }
+      | { source: "ai-run" }
+      | { source: "egress" };
+    consultInterceptor: ((request: ProjectAiInterceptorInput) => Promise<unknown>) | undefined;
+  },
+  prepared: PreparedAiRequest,
+): Promise<Response> {
+  const { sourceModel, credential: _credential, ...request } = prepared;
+  if (isInterceptedModel(sourceModel)) {
+    if (!host.consultInterceptor) throw noAiInterceptorError(sourceModel);
+    const response = InterceptedAiResponse.parse(
+      await host.consultInterceptor({ ...host.source, model: sourceModel, request }),
+    );
+    return new Response(response.body, { status: response.status, headers: response.headers });
+  }
+  switch (prepared.kind) {
+    case "openai-http": {
+      const gateway = host.ai.gateway?.(prepared.gatewayId);
+      if (!gateway)
+        throw new Error("AI binding does not expose gateway(); BYOK transport unavailable.");
+      return gateway.run({
+        provider: "openai",
+        endpoint: prepared.endpoint,
+        headers: { ...prepared.headers, authorization: `Bearer ${prepared.credential}` },
+        query: prepared.body,
+      });
     }
-
-    return sendToProvider(request);
+    case "workers-ai": {
+      const response = await host.ai.run(prepared.model, prepared.body, prepared.options);
+      if (!(response instanceof Response))
+        throw new Error("Workers AI did not return the requested raw response");
+      return response;
+    }
   }
+}
+
+function openAiStreamingUsage(endpoint: string, body: Record<string, unknown>) {
+  const path = endpoint.split("?")[0];
+  if (path !== "chat/completions" && path !== "completions") return {};
+  if (body.stream !== true) return {};
+  return {
+    stream_options: {
+      ...z.record(z.string(), z.unknown()).parse(body.stream_options || {}),
+      include_usage: true,
+    },
+  };
 }
 
 /** Bump to invalidate every cached response at once (prompt-format overhauls,

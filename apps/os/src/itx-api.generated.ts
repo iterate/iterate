@@ -4627,17 +4627,10 @@ export type AiBudgetStop = {
 /** A temporary rate refusal whose delay is bounded before journal persistence. */
 export type AiRateLimitStop = { status: "rate-limited"; retryAfterMs: number };
 
-/** The prepared request, before credentials are attached or a provider is dialed. */
+/** Original model name and the complete credential-free request that would be dispatched. */
 export type ProjectAiInterceptorInput = {
   model: string;
-  request: {
-    provider: string;
-    endpoint: string;
-    headers: Record<string, string>;
-    body: Record<string, unknown>;
-    gatewayId: string;
-    metadata: Record<string, string | number>;
-  };
+  request: AiRequest;
 } & ({ source: "agent-turn"; agentPath: string } | { source: "ai-run" } | { source: "egress" });
 
 /** Serialized provider response consumed by the normal response decoder. */
@@ -5375,6 +5368,25 @@ export type StreamSubscriptionListEntry = {
 export type StreamWakeEventBatch = StreamEventBatch & {
   reportDeliveryResult: ReportStreamWakeDeliveryResult;
 };
+
+/** The two concrete outbound APIs, after host policy and request preparation. No credentials. */
+export type AiRequest =
+  | {
+      kind: "openai-http";
+      gatewayId: string;
+      endpoint: string;
+      headers: Record<string, string>;
+      body: Record<string, unknown>;
+    }
+  | {
+      kind: "workers-ai";
+      model: string;
+      body: Record<string, unknown>;
+      options: CfAiRunOptions & {
+        returnRawResponse: true;
+        gateway: { id: string; metadata: Record<string, string | number> };
+      };
+    };
 
 /** `StreamEventInput` with `type`/`payload` narrowed to one event definition. */
 type TypedStreamEventInput<Type extends string = string, Payload = Record<string, unknown>> = Omit<

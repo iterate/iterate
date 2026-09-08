@@ -31,7 +31,10 @@ test("an intercepted/* turn is served by the interceptor: prompt in, text out, u
     {
       source: "agent-turn",
       model: "intercepted/main",
-      request: { metadata: { projectId: "prj_test" } },
+      request: {
+        kind: "workers-ai",
+        options: { gateway: { metadata: { projectId: "prj_test" } } },
+      },
     },
   ]);
   expect(JSON.stringify(seen)).not.toContain("must-not-leak");

@@ -89,7 +89,7 @@ import { buildProjectStreamViewerUrl } from "./lib/stream-viewer-url.ts";
 import { buildProjectWorkerUrl } from "./lib/project-host-routing.ts";
 import { readAiCallStop, type AiCallStop } from "./domains/agents/ai-budget.ts";
 import { aiGatewayMetadata } from "./domains/agents/ai-cost-attribution.ts";
-import { sendAiRequest } from "./domains/agents/workers-ai-transport.ts";
+import { sendAiRequest, prepareWorkersAiRequest } from "./domains/agents/workers-ai-transport.ts";
 import {
   canonicalizeStreamPath,
   DurableObjectNameCodec,
@@ -3426,20 +3426,19 @@ class AiRpcTarget extends IterateRpcTarget<"Ai"> {
       },
       config.cloudflareAiGateway.includeEventOffset,
     );
-    const response = await sendAiRequest({
-      ai: env.AI,
-      transport: { kind: "unified", gatewayId: config.cloudflareAiGateway.id },
-      metadata,
-      model,
-      body,
-      endpoint: "chat/completions",
-      headers: new Headers(),
-      containsFiles: false,
-      options: callOptions,
-      source: { source: "ai-run" },
-      consultInterceptor: (request) =>
-        projectStub(env.PROJECT, this.props.projectId).consultAiInterceptor(request),
-    });
+    const request = prepareWorkersAiRequest(
+      { model, gatewayId: config.cloudflareAiGateway.id, metadata },
+      { body, options: callOptions },
+    );
+    const response = await sendAiRequest(
+      {
+        ai: env.AI,
+        source: { source: "ai-run" },
+        consultInterceptor: (request) =>
+          projectStub(env.PROJECT, this.props.projectId).consultAiInterceptor(request),
+      },
+      request,
+    );
     const stop = await readAiCallStop(response, model.replace(/^intercepted\//, "").split("/")[0]!);
     if (stop) {
       await response.body?.cancel();

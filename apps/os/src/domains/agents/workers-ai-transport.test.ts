@@ -48,10 +48,10 @@ it.each([
             responseCacheTtlSeconds: 60,
           },
           ai: {
-            run: async (model, body) => {
+            run: async (model, body, options) => {
               expect(model).toBe(providerModel);
               expect(billing === "unified" || !providerModel.startsWith("openai/")).toBe(true);
-              requests.push({ provider: "workers-ai", endpoint: "chat/completions", body });
+              requests.push({ kind: "workers-ai", model, body, options });
               return new Response(fixture.body, fixture);
             },
             gateway: () => ({
@@ -59,7 +59,8 @@ it.each([
                 expect(request.headers.authorization).toBe("Bearer must-not-leak");
                 const { authorization, ...headers } = request.headers;
                 requests.push({
-                  provider: request.provider,
+                  kind: "openai-http",
+                  gatewayId: "costs",
                   endpoint: request.endpoint,
                   body: request.query,
                   headers,
@@ -71,8 +72,7 @@ it.each([
           consultInterceptor: async (call) => {
             expect(call.model).toBe(`intercepted/${providerModel}`);
             expect(JSON.stringify(call)).not.toContain("must-not-leak");
-            const { provider, endpoint, body, headers } = call.request;
-            requests.push({ provider, endpoint, body, ...(provider === "openai" && { headers }) });
+            requests.push(call.request);
             return fixture;
           },
         }),

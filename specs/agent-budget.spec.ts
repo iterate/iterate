@@ -19,6 +19,7 @@ test("budget stop stays visible across reload and new input, then explicit Retry
   await using _interception = await fixture.interceptAi(async (input) => {
     if (input.source !== "agent-turn") throw new Error(`Unexpected source ${input.source}`);
     calls++;
+    assert(input.request.kind === "openai-http");
     assert.equal(input.request.headers.authorization, undefined);
     const metadata = JSON.parse(input.request.headers["cf-aig-metadata"]!);
     assert.equal(metadata.streamPath, agent.path);

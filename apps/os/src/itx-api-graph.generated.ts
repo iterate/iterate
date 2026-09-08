@@ -2249,10 +2249,11 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "ProjectAiInterceptorInput",
     kind: "typeAlias",
     sourceText:
-      '/** The prepared request, before credentials are attached or a provider is dialed. */\nexport type ProjectAiInterceptorInput = {\n  model: string;\n  request: {\n    provider: string;\n    endpoint: string;\n    headers: Record<string, string>;\n    body: Record<string, unknown>;\n    gatewayId: string;\n    metadata: Record<string, string | number>;\n  };\n} & ({ source: "agent-turn"; agentPath: string } | { source: "ai-run" } | { source: "egress" });',
-    summary: "The prepared request, before credentials are attached or a provider is dialed.",
+      '/** Original model name and the complete credential-free request that would be dispatched. */\nexport type ProjectAiInterceptorInput = {\n  model: string;\n  request: AiRequest;\n} & ({ source: "agent-turn"; agentPath: string } | { source: "ai-run" } | { source: "egress" });',
+    summary:
+      "Original model name and the complete credential-free request that would be dispatched.",
     memberSummaries: {},
-    referencedTypeNames: [],
+    referencedTypeNames: ["AiRequest"],
   },
   {
     name: "InterceptedAiResponse",
@@ -2647,6 +2648,15 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
       "Internal hosted-processor frame: an ordinary batch plus its one-shot completion callback.",
     memberSummaries: {},
     referencedTypeNames: ["StreamEventBatch", "ReportStreamWakeDeliveryResult"],
+  },
+  {
+    name: "AiRequest",
+    kind: "typeAlias",
+    sourceText:
+      '/** The two concrete outbound APIs, after host policy and request preparation. No credentials. */\nexport type AiRequest =\n  | {\n      kind: "openai-http";\n      gatewayId: string;\n      endpoint: string;\n      headers: Record<string, string>;\n      body: Record<string, unknown>;\n    }\n  | {\n      kind: "workers-ai";\n      model: string;\n      body: Record<string, unknown>;\n      options: CfAiRunOptions & {\n        returnRawResponse: true;\n        gateway: { id: string; metadata: Record<string, string | number> };\n      };\n    };',
+    summary: "The two concrete outbound APIs, after host policy and request preparation.",
+    memberSummaries: {},
+    referencedTypeNames: ["CfAiRunOptions"],
   },
   {
     name: "TypedStreamEventInput",
