@@ -14,7 +14,8 @@
     "bench": "node build-sdk.mjs && vitest bench --run --config bench/vitest.config.ts",
     "sqlfu:generate": "sqlfu generate",
     "sqlfu:migrate": "sqlfu migrate",
-    "sqlfu:check": "sqlfu check all"
+    "sqlfu:check": "sqlfu check all",
+    "db:schema:remote": "wrangler d1 execute control-plane-directory --remote --file src/control-plane/definitions.sql"
   },
   "exports": {
     ".": "./src/worker.ts"
