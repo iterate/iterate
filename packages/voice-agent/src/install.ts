@@ -101,7 +101,7 @@ export function withVoiceAgentDependency(
   const { manifest, dependencies } = parseManifest(packageJson);
   const wanted = options.spec ?? VOICE_AGENT_PACKAGE_SPEC;
   const declared = dependencies[VOICE_AGENT_PACKAGE_NAME];
-  if (declared !== undefined && (declared === wanted || options.existing === "keep")) {
+  if (declared && (declared === wanted || options.existing === "keep")) {
     return { content: packageJson, spec: declared, changed: false };
   }
   const content = JSON.stringify(
