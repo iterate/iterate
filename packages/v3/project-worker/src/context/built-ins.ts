@@ -83,6 +83,61 @@ export default class RunScript extends WorkerEntrypoint {
  *  purpose: the resolver gates on `Object.hasOwn`, so a prototype-method class would leave every
  *  root unreachable. Exported for ONE reader: the edge `IterateContext`'s TYPE merges it in
  *  (iterate-context.ts), so what rides the dotted hop is typed where a client holds it. */
+/** Cloudflare Artifacts ("git for agents", beta) — the per-namespace binding, CONTROL PLANE ONLY, and
+ *  typed minimally here (not in `@cloudflare/workers-types` yet; reconcile against `wrangler types`
+ *  when the namespace is provisioned). `create` returns the repo's initial git credential; `get`
+ *  returns a HANDLE (mint a credential with `createToken`); `list` is UNFILTERED. A repo's file BYTES
+ *  ride git over the remote — the nicer `itx.repos` layer's job, later, not this raw escape hatch. */
+export interface ArtifactsNamespace {
+  create(name: string, options?: { setDefaultBranch?: string }): Promise<{ token: string }>;
+  get(name: string): Promise<ArtifactRepoHandle>;
+  list(options?: { limit?: number; cursor?: string }): Promise<ArtifactListResult>;
+}
+/** A repo handle from `get()`. Held ONLY inside this module — never handed to a caller, because its
+ *  runtime `fork(name, …)` (which the itx dispatcher would walk even though this type omits it) takes
+ *  an UNPREFIXED name and would escape the project's isolation wall. */
+export interface ArtifactRepoHandle {
+  createToken(scope: "read" | "write", ttlSeconds: number): Promise<{ plaintext: string }>;
+}
+/** `list`'s result: repos in the WHOLE namespace (the binding does NOT filter by name), one page. */
+export interface ArtifactListResult {
+  repos: { name: string }[];
+  cursor?: string;
+}
+
+/** `itx.cfArtifacts` — the RAW Artifacts binding, project-scoped, returning ONLY plain data (never a
+ *  repo handle — see `ArtifactRepoHandle`). Every repo name is forced under this project's
+ *  `${projectId}.` prefix (the isolation wall, like `itx.kv`'s `${projectId}:`). The delimiter is `.`
+ *  ON PURPOSE: project IDs are `[A-Za-z0-9_-]` (no `.`) so `${projectId}.` cannot collide even when IDs
+ *  contain `-` (a `--` delimiter could: `a` + `b--x` == `a--b` + `x`), and repo names allow `.`.
+ *  `list` is the one place the binding cannot be trusted — it returns EVERY project's repos — so it is
+ *  filtered to this prefix LOCALLY and the prefix stripped. Pure and namespace-injected: unit-tests alone. */
+export function projectScopedArtifacts(
+  namespace: ArtifactsNamespace,
+  projectId: string,
+): BuiltInScope["cfArtifacts"] {
+  const prefix = `${projectId}.`;
+  return {
+    create: (name, options) => namespace.create(prefix + name, options),
+    // Mint a git credential for an existing repo. The handle has UNSAFE methods (`fork` escapes the
+    // prefix), so it is used here and NEVER returned — only the token string leaves.
+    token: async (name, scope = "write", ttlSeconds = 3600) => {
+      const handle = await namespace.get(prefix + name);
+      const { plaintext } = await handle.createToken(scope, ttlSeconds);
+      return { token: plaintext };
+    },
+    list: async (options) => {
+      const page = await namespace.list(options);
+      return {
+        repos: page.repos.flatMap((r) =>
+          r.name.startsWith(prefix) ? [{ name: r.name.slice(prefix.length) }] : [],
+        ),
+        ...(page.cursor !== undefined && { cursor: page.cursor }),
+      };
+    },
+  };
+}
+
 export interface BuiltInScope extends LibraryRoots {
   /** THE RESERVED ROOT, typed: `itx.builtins.<root>` is the physical spelling of every root below —
    *  the fixed point of rewriting, never shadowed by a context's rows (itx-expression-rewriting.ts
@@ -104,6 +159,17 @@ export interface BuiltInScope extends LibraryRoots {
    *  model with `@` (`itx.fable ⇒ itx.ai.run('@cf/…', @)`). A test shadows it with `provide("itx.ai",
    *  fake)`; the physical door stays `itx.builtins.ai`. */
   ai: Ai;
+  /** THE ESCAPE HATCH: Cloudflare Artifacts, project-scoped. `itx.cfArtifacts` proxies the ONE bound
+   *  namespace, forcing every repo name under this project's `${projectId}--` prefix (the isolation
+   *  wall, exactly like `itx.kv`). The nicer `itx.repos` API is built ON TOP of this; anyone who wants
+   *  raw Artifacts falls back here — same shape as `itx.ai` proxying `env.AI`. Control plane only, and
+   *  returns ONLY plain data: `create` a repo (→ its initial git token), mint a `token` for one, or
+   *  `list` this project's repos. A repo's bytes are git-over-HTTPS (the `itx.repos` layer's job). */
+  cfArtifacts: {
+    create(name: string, options?: { setDefaultBranch?: string }): Promise<{ token: string }>;
+    token(name: string, scope?: "read" | "write", ttlSeconds?: number): Promise<{ token: string }>;
+    list(options?: { limit?: number; cursor?: string }): Promise<ArtifactListResult>;
+  };
   /** Append to this context's append-only event log (the facets that REDUCE it are
    *  `itx.facets.get(name)`). A top-level root, so the expression surface mirrors the edge
    *  RpcTarget exactly: `itx.append({...})` is one spelling on every hop. */
@@ -208,6 +274,8 @@ interface BuildBuiltInsDeps {
     LOADER: WorkerLoader;
     ITX_KV: KVNamespace;
     AI: Ai;
+    /** Cloudflare Artifacts, the ONE bound namespace — `itx.cfArtifacts` scopes it per project. */
+    ARTIFACTS: ArtifactsNamespace;
   };
   /** The deploy identity every loader cacheKey folds in (app-config.ts). */
   deployId: string;
@@ -317,6 +385,8 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
     },
     // The binding object itself — dispatch walks its methods (`run`, `models`, `gateway`, …).
     ai: env.AI,
+    // THE ESCAPE HATCH: Cloudflare Artifacts, project-scoped (projectScopedArtifacts, below).
+    cfArtifacts: projectScopedArtifacts(env.ARTIFACTS, projectId),
     // Own-enumerable closures (NOT prototype methods) — the resolver's `Object.hasOwn` gate is why.
     // Every event appended through the scope carries WHO appended it — the DO's own stamp, never a
     // client's (src/principal.ts): the session's verified principal, or none.

@@ -11,6 +11,7 @@ export const BUILT_IN_ROOTS = [
   "whoami",
   "kv",
   "ai",
+  "cfArtifacts",
   "append",
   "readEvents",
   "waitForEvent",

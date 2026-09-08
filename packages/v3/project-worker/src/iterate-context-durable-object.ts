@@ -102,6 +102,7 @@ import { subscriptionConfiguredEvent } from "./stream/subscriptions.ts";
 import { ITX_PRINCIPAL_HEADER, type Principal } from "./principal.ts";
 import {
   buildBuiltIns,
+  type ArtifactsNamespace,
   type RewriteRuleListEntry,
   type SubscriptionListEntry,
 } from "./context/built-ins.ts";
@@ -135,6 +136,8 @@ export interface Env extends AppConfigEnv {
   ITX_KV: KVNamespace;
   /** Workers AI — the built-in root `itx.ai`, the binding verbatim (context/built-ins.ts). */
   AI: Ai;
+  /** Cloudflare Artifacts (beta) — the ONE bound namespace behind `itx.cfArtifacts`, project-scoped. */
+  ARTIFACTS: ArtifactsNamespace;
   SECRETS_KV?: KVNamespace;
   /** The egress terminal this context's `fetch` bottoms out at (secret-substituted, then sent). */
   /** The control plane, over a service binding: the egress terminal (`fetch`) and the directory —
