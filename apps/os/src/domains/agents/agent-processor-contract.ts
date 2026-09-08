@@ -22,6 +22,7 @@
 
 import { z } from "zod";
 import { AgentRuntime } from "@iterate-com/shared/agent-events";
+import { MessageReferences, decodeMessageReferences } from "@iterate-com/shared/message";
 import {
   defineProcessorContract,
   type ConsumedInput,
@@ -835,6 +836,13 @@ function agentContextItemSchema() {
         .enum(["system", "developer", "user", "assistant"])
         .meta({ description: "The LLM message role this item renders as." }),
       content: z.string().meta({ description: "The model-visible text." }),
+      references: MessageReferences.optional().meta({
+        description: "Typed resources addressed by Markdown-like ref:// links in content.",
+      }),
+      referenceResolution: z.unknown().optional().meta({
+        description:
+          "Processor-authored, bounded resolution metadata for a prior message's references.",
+      }),
       key: z
         .string()
         .min(1)
@@ -880,6 +888,11 @@ function agentContextItemSchema() {
                 type: z.literal("git-commit"),
                 repoPath: z.string().meta({ description: "The repo's mount path." }),
                 commitOid: z.string().meta({ description: "The commit id." }),
+              }),
+              z.object({
+                type: z.literal("repo-file"),
+                repoPath: z.string().meta({ description: "The repo's mount path." }),
+                path: z.string().meta({ description: "The committed file path at latest HEAD." }),
               }),
             ])
             .meta({ description: "One coordinate for richer source material." }),
@@ -1003,6 +1016,16 @@ function agentContextItemSchema() {
         }),
     })
     .superRefine((payload, ctx) => {
+      if (
+        payload.references !== undefined &&
+        decodeMessageReferences(payload.content, payload.references) === null
+      ) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["references"],
+          message: "each reference must have a unique id and a matching inline ref:// link",
+        });
+      }
       if (payload.role !== "developer" || payload.compaction === undefined) return;
       if (payload.key !== undefined) {
         ctx.addIssue({
