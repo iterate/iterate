@@ -39,7 +39,7 @@ import {
   type ItxExpressionRewriteRule,
 } from "../context/itx-expression-rewriting.ts";
 import { jsonEqual } from "../lib/patch.ts";
-import type { StreamEventInput } from "./events.ts";
+import type { StreamEvent, StreamEventInput } from "./events.ts";
 import { StreamProcessor, type ProcessorContract, type ReduceArgs } from "./processor.ts";
 
 export type { ItxExpressionRewriteRule } from "../context/itx-expression-rewriting.ts";
@@ -150,6 +150,31 @@ function facetAddressedBy(resolvedTarget: ItxExpression): string | undefined {
     : undefined;
 }
 
+/** THE DRAFT TABLES OF ONE BATCH (`reduceBatch`): a table is copied ONCE per batch — on its first
+ *  touch, when it is not yet a draft — and mutated in place from then on, so a page of N control
+ *  events costs O(rows + N), not N copies of the whole table (the O(rows²) constructor re-reduce
+ *  memory-budget.test.ts pins). The set is fresh per batch and never holds a published table, so the
+ *  state a caller handed in — and every state a previous batch produced — stays immutable; only the
+ *  batch's own intermediate states share a draft, and nothing observes those. Without a batch (the
+ *  single-event `reduce`, the processor contract) every touch copies: the reduce is pure. */
+type DraftTables = WeakSet<object> | undefined;
+function draftOf<Table extends object>(table: Table, draftTables: DraftTables): Table {
+  if (draftTables?.has(table)) return table;
+  const draft = { ...table };
+  draftTables?.add(draft);
+  return draft;
+}
+/** Set a row on a draft as an OWN property: a valid subscription name may be `__proto__`, which a
+ *  plain assignment would route to the prototype setter (a spread's computed key never did). */
+function setDraftRow<Row>(draft: Record<string, Row>, key: string, row: Row): void {
+  Object.defineProperty(draft, key, {
+    value: row,
+    enumerable: true,
+    writable: true,
+    configurable: true,
+  });
+}
+
 /** THE MARKERS FOLLOW THE RULES: after the table changed, a row whose target is NOT builtins-rooted
  *  may host a different facet than its `hostedFacet` says — the rule that makes it host landed
  *  AFTER the row, or was re-pointed at another facet — while the delivery loop re-resolves at every
@@ -158,9 +183,11 @@ function facetAddressedBy(resolvedTarget: ItxExpression): string | undefined {
  *  marks that facet; one that resolves to an ADDRESS of the facet it is marked with keeps its marker
  *  (its own spec was elided, M1); anything else drops it. A builtins-rooted row's marker is final
  *  (no rule can move it); an unresolvable row (a mask, a prefix nothing names yet) keeps what it has. */
-function withHostedFacetMarkersFollowingRules(state: CoreState): CoreState {
-  let changed = false;
-  const subscriptions = { ...state.subscriptions };
+function withHostedFacetMarkersFollowingRules(
+  state: CoreState,
+  draftTables: DraftTables,
+): CoreState {
+  let subscriptions: CoreState["subscriptions"] | undefined; // the draft, taken on the first change
   for (const [name, row] of Object.entries(state.subscriptions)) {
     if (isBuiltInsRooted(row.target)) continue;
     const resolved = resolveThroughState(state, row.target);
@@ -176,11 +203,11 @@ function withHostedFacetMarkersFollowingRules(state: CoreState): CoreState {
         ? row.hostedFacet
         : undefined;
     if (jsonEqual(next ?? null, row.hostedFacet ?? null)) continue;
-    changed = true;
+    subscriptions ??= draftOf(state.subscriptions, draftTables);
     const { hostedFacet: _previous, ...rest } = row;
-    subscriptions[name] = next ? { ...rest, hostedFacet: next } : rest;
+    setDraftRow(subscriptions, name, next ? { ...rest, hostedFacet: next } : rest);
   }
-  return changed ? { ...state, subscriptions } : state;
+  return subscriptions ? { ...state, subscriptions } : state;
 }
 
 /** Does a `null` at `match` MASK a platform row (kept as a row) or merely delete (nothing beneath)?
@@ -199,6 +226,10 @@ export type Subscription = {
   consumes?: string[];
   /** The row's identity — the offset of its subscription-configured event. */
   configuredAtOffset: number;
+  /** Where the CURSOR lane starts for this row — its first delivery follows this offset (0 = the
+   *  whole log); absent = `configuredAtOffset`, "from now". A target that owns its progress (a
+   *  facet, a lent stub) ignores it. */
+  afterOffset?: number;
   /** Set when this row HOSTS a facet (a target that RESOLVES to `itx.builtins.facets.get(name,
    *  spec)…`, M1): the facet's name, class and cacheKey, but NOT the source — the source stays in the
    *  durable log event (and the `facet:<name>` kv memo), never in this reduced state, so a 100 KB
@@ -270,7 +301,7 @@ export const CoreContract: ProcessorContract<CoreState> & {
   }) => StreamEventInput;
 } = {
   slug: "core",
-  version: "6.0.0", // 6.0.0 (the builtins root): `null` rows kept as MASKS under a built-in root, the platform-equivalent target deletes, hosting detected on the RESOLVED target, hostedFacet carries the facet's `name`. 5.0.0 (M1): a hosted facet's SOURCE is elided from the reduced target (kept in the log + facet:<name> kv)
+  version: "7.0.0", // 7.0.0: a subscription row carries its optional `afterOffset` (where the cursor lane starts). 6.0.0 (the builtins root): `null` rows kept as MASKS under a built-in root, the platform-equivalent target deletes, hosting detected on the RESOLVED target, hostedFacet carries the facet's `name`. 5.0.0 (M1): a hosted facet's SOURCE is elided from the reduced target (kept in the log + facet:<name> kv)
   description:
     "The context's own state, reduced inline at the commit point: who it is, which incarnation runs, whether appends are paused, the itx-expression rewrite rules every call goes through, and the subscriptions every commit is sent to.",
   consumes: CORE_EVENT_TYPES,
@@ -294,13 +325,50 @@ export const CoreContract: ProcessorContract<CoreState> & {
 export class CoreStreamProcessor extends StreamProcessor<CoreState> {
   readonly contract = CoreContract;
 
-  // Ephemeral control events are IGNORED (they would vanish from any rebuild). A malformed payload
-  // (a match with an argless call step, a target that does not parse) THROWS here like any reduce would; the
-  // host contains it (Stream.#reduceEventIntoCoreReducedState reports the issue and keeps the
-  // state), so one bad hand-appended event never wedges a later commit.
+  /** ONE BATCH — a commit's fresh events, a page of the constructor's re-reduce: the events in
+   *  order over `state`, each table copied once for the whole batch (`draftOf`). A throwing event is
+   *  handed to `onError` and skipped — its state is the previous event's (the reduce touches a draft
+   *  only after everything that can throw), so one bad hand-appended event never wedges the batch.
+   *  The state handed in is never mutated: a mid-transaction throw rolls back to it cleanly. */
+  reduceBatch(
+    events: StreamEvent[],
+    state: CoreState,
+    onError: (error: unknown, event: StreamEvent) => void,
+  ): CoreState {
+    const draftTables = new WeakSet<object>();
+    for (const event of events) {
+      try {
+        state = this.#reduce({ event, state }, draftTables) ?? state;
+      } catch (error) {
+        onError(error, event);
+      }
+    }
+    return state;
+  }
+
+  /** The processor contract's PURE single-event reduce (no draft: every touch copies). */
   override reduce({ event, state }: ReduceArgs<CoreState>): CoreState | undefined {
+    return this.#reduce({ event, state }, undefined);
+  }
+
+  // Ephemeral control events are IGNORED (they would vanish from any rebuild). A malformed payload
+  // (a match with an argless call step, a target that does not parse) THROWS here like any reduce
+  // would — BEFORE any draft is touched — and the host contains it (`reduceBatch`'s `onError`:
+  // Stream reports the issue and keeps the state), so one bad hand-appended event never wedges a
+  // later commit.
+  #reduce(
+    { event, state }: ReduceArgs<CoreState>,
+    draftTables: DraftTables,
+  ): CoreState | undefined {
     if (event.ephemeral) return undefined;
     const payload = (event.payload ?? {}) as Record<string, unknown>;
+    /** The subscriptions table with `name` set to `row` (or removed): the batch's draft, mutated. */
+    const withSubscription = (name: string, row: Subscription | undefined): CoreState => {
+      const subscriptions = draftOf(state.subscriptions, draftTables);
+      if (row) setDraftRow(subscriptions, name, row);
+      else delete subscriptions[name];
+      return { ...state, subscriptions };
+    };
     switch (event.type) {
       case "events.iterate.com/stream/created":
         return {
@@ -323,43 +391,43 @@ export class CoreStreamProcessor extends StreamProcessor<CoreState> {
         const matchString = payload.match as string;
         const matchPrefix = parseItxExpressionPrefix(matchString);
         const existing = state.itxExpressionRewriteRules[matchString];
-        // every change to the table re-derives the subscriptions' hosting markers through it
-        const withTable = (rules: CoreState["itxExpressionRewriteRules"]): CoreState =>
-          withHostedFacetMarkersFollowingRules({ ...state, itxExpressionRewriteRules: rules });
-        const without = () => {
-          const { [matchString]: _gone, ...rest } = state.itxExpressionRewriteRules;
-          return withTable(rest);
+        // The rules table with `matchString` set (or removed), the batch's draft mutated — and every
+        // change to the table re-derives the subscriptions' hosting markers through it.
+        const withRule = (rule: ItxExpressionRewriteRule | undefined): CoreState => {
+          const rules = draftOf(state.itxExpressionRewriteRules, draftTables);
+          if (rule)
+            rules[matchString] = rule; // a match string is `itx…`, never a prototype key
+          else delete rules[matchString];
+          return withHostedFacetMarkersFollowingRules(
+            { ...state, itxExpressionRewriteRules: rules },
+            draftTables,
+          );
         };
         if (payload.target === null) {
           // A MASK where a platform row lies beneath (rule 5: the call is refused, not defaulted);
           // a plain deletion anywhere else (a mask there would equal a deletion and only grow the table).
-          if (!matchShadowsAPlatformRow(matchPrefix)) return existing ? without() : undefined;
+          if (!matchShadowsAPlatformRow(matchPrefix))
+            return existing ? withRule(undefined) : undefined;
           if (existing && existing.target === null) return undefined;
-          return withTable({
-            ...state.itxExpressionRewriteRules,
-            [matchString]: { match: matchPrefix, target: null },
-          });
+          return withRule({ match: matchPrefix, target: null });
         }
         const target = toItxExpression(payload.target as ItxExpressionInput, { holes: true }); // a target may hold `@` (rule 7); stored as the parsed form
         // THE PLATFORM-EQUIVALENT TARGET (`itx.kv ⇒ itx.builtins.kv`, `itx ⇒ itx.builtins`) is "back to
         // the platform row": the row is deleted, never stored — so an un-mask is one ordinary event and
         // the table never carries a row that only restates the default.
         if (jsonEqual(target, ["itx", "builtins", ...matchPrefix.slice(1)]))
-          return existing ? without() : undefined;
-        return withTable({
-          ...state.itxExpressionRewriteRules,
-          [matchString]: { match: matchPrefix, target },
-        });
+          return existing ? withRule(undefined) : undefined;
+        return withRule({ match: matchPrefix, target });
       }
 
       case "events.iterate.com/stream/subscription-configured": {
         const name = payload.name as string;
-        if (payload.target === null) {
-          if (!(name in state.subscriptions)) return undefined;
-          const { [name]: _gone, ...rest } = state.subscriptions;
-          return { ...state, subscriptions: rest };
-        }
+        if (payload.target === null)
+          return Object.hasOwn(state.subscriptions, name)
+            ? withSubscription(name, undefined)
+            : undefined;
         const consumes = payload.consumes as string[] | undefined;
+        const afterOffset = payload.afterOffset as number | undefined;
         // M1: a hosting target (one that RESOLVES to `itx.builtins.facets.get(name, spec)…`) keeps its
         // spelling but sheds its SOURCE here — the source is durable in this very event (and the
         // facet's kv memo), so the reduced state, and the checkpoint blob it is written into on every
@@ -369,56 +437,39 @@ export class CoreStreamProcessor extends StreamProcessor<CoreState> {
           configuredTarget,
           resolveThroughState(state, configuredTarget),
         );
-        return {
-          ...state,
-          subscriptions: {
-            ...state.subscriptions,
-            [name]: {
-              target,
-              ...(consumes && { consumes }),
-              configuredAtOffset: event.offset,
-              ...(hostedFacet && { hostedFacet }),
-            },
-          },
-        };
+        return withSubscription(name, {
+          target,
+          ...(consumes && { consumes }),
+          configuredAtOffset: event.offset,
+          ...(afterOffset !== undefined && { afterOffset }),
+          ...(hostedFacet && { hostedFacet }),
+        });
       }
       case "events.iterate.com/stream/subscription-delivery-halted": {
         const row = state.subscriptions[payload.name as string];
         if (!row) return undefined;
-        return {
-          ...state,
-          subscriptions: {
-            ...state.subscriptions,
-            [payload.name as string]: {
-              ...row,
-              halted: {
-                afterOffset: payload.afterOffset as number,
-                attempts: payload.attempts as number,
-                ...(payload.error !== undefined && { error: payload.error as string }),
-              },
-            },
+        return withSubscription(payload.name as string, {
+          ...row,
+          halted: {
+            afterOffset: payload.afterOffset as number,
+            attempts: payload.attempts as number,
+            ...(payload.error !== undefined && { error: payload.error as string }),
           },
-        };
+        });
       }
       case "events.iterate.com/stream/subscription-delivery-resumed": {
         const row = state.subscriptions[payload.name as string];
         if (!row) return undefined;
         const { halted: _cleared, ...kept } = row;
-        return {
-          ...state,
-          subscriptions: {
-            ...state.subscriptions,
-            [payload.name as string]: {
-              ...kept,
-              resumed: {
-                ...(payload.afterOffset !== undefined && {
-                  afterOffset: payload.afterOffset as number,
-                }),
-                atOffset: event.offset,
-              },
-            },
+        return withSubscription(payload.name as string, {
+          ...kept,
+          resumed: {
+            ...(payload.afterOffset !== undefined && {
+              afterOffset: payload.afterOffset as number,
+            }),
+            atOffset: event.offset,
           },
-        };
+        });
       }
       default:
         return undefined;

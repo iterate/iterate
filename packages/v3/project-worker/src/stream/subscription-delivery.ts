@@ -213,11 +213,19 @@ export class SubscriptionDelivery {
           if (row)
             this.#deliveryChainBySubscription.set(
               name,
-              this.#catchUpFacetRow(name, row).catch((error) => {
-                // NO_FACET here is a disable that landed during the load — nothing to report.
-                if (errorCode(error) !== "NO_FACET")
-                  reportIssue("subscription-delivery.configured", error, { name });
-              }),
+              this.#catchUpFacetRow(name, row)
+                .then((facet) =>
+                  // A row that asked for HISTORY (`afterOffset`) is delivered from there NOW — its
+                  // configure is its wake, as a resume is — not on its next consumed commit.
+                  facet || row.afterOffset === undefined
+                    ? undefined
+                    : this.#deliverFromCursor(name),
+                )
+                .catch((error) => {
+                  // NO_FACET here is a disable that landed during the load — nothing to report.
+                  if (errorCode(error) !== "NO_FACET")
+                    reportIssue("subscription-delivery.configured", error, { name });
+                }),
             );
           break;
         }
@@ -258,7 +266,19 @@ export class SubscriptionDelivery {
     // classifies too (a fresh incarnation, a live-client row).
     this.#pushSubscriptionNames.add(name);
     this.#pushedEventBatches.delete(name);
-    if (this.#stream.coreReducedState.subscriptions[name]) await head.invoke([["catchUpFromLog"]]);
+    if (!this.#stream.coreReducedState.subscriptions[name]) return true;
+    try {
+      await head.invoke([["catchUpFromLog"]]);
+    } catch (error) {
+      // A catch-up refused for good (a latched checkpoint, an event over its ceiling) HALTS the row
+      // as a push's refusal would (below) — else the row stays live, re-pushed into the same wall on
+      // every commit, and an operator's resume that was refused reads as if it had worked.
+      if (deterministicFailure(error)) {
+        this.#haltRow(name, row.configuredAtOffset, row.configuredAtOffset, 1, error);
+        return true;
+      }
+      throw error;
+    }
     return true;
   }
 
@@ -283,7 +303,10 @@ export class SubscriptionDelivery {
         const push = this.#pendingPushByRow.get(name);
         this.#pendingPushByRow.delete(name);
         const row = this.#stream.coreReducedState.subscriptions[name];
-        if (!push || !row) return; // removed meanwhile — #forgetSubscription emptied it
+        // Removed meanwhile (#forgetSubscription emptied it) — or HALTED meanwhile: a halted row is
+        // skipped by every commit from then on, and a push already waiting is no exception (it would
+        // push into the same refusal and stack a second halt on the first).
+        if (!push || !row || row.halted) return;
         if (push.droppedEvents > 0)
           console.warn({
             event: "delivery.pending-push.dropped",
@@ -480,16 +503,10 @@ export class SubscriptionDelivery {
           // A refusal that can only repeat HALTS the row — the same fact the cursor lane's ladder
           // ends in — instead of being re-pushed into on every commit; an operator's resume is the
           // way back. Anything else is the facet's own gap repair to heal on its next push.
-          if (deterministicFailure(error))
-            await this.#stream.append({
-              type: "events.iterate.com/stream/subscription-delivery-halted",
-              payload: {
-                name,
-                afterOffset: range.after,
-                attempts: 1,
-                error: (error instanceof Error ? error.message : String(error)).slice(0, 1024),
-              },
-            });
+          if (deterministicFailure(error)) {
+            this.#haltRow(name, row.configuredAtOffset, range.after, 1, error);
+            return;
+          }
           throw error;
         }
         return;
@@ -507,6 +524,34 @@ export class SubscriptionDelivery {
     } finally {
       this.#recordActivityForQuietClock();
     }
+  }
+
+  /** HALT ONCE, FOR THE RIGHT ROW — the one place the `subscription-delivery-halted` fact is
+   *  appended: the cursor lane's ladder end, a facet push refused for good, a facet catch-up refused
+   *  for good. Append is synchronous, so the check and the fact are ONE turn: the row must still be
+   *  the one the failing call was made for (`configuredAtOffset` is its identity — a replacement row
+   *  never inherits its predecessor's refusal) and not halted already — a push and a resume's
+   *  catch-up seeing the same refusal append one fact between them, never two. */
+  #haltRow(
+    name: string,
+    configuredAtOffset: number,
+    afterOffset: number,
+    attempts: number,
+    error: unknown,
+  ): void {
+    const current = this.#stream.coreReducedState.subscriptions[name];
+    if (current?.configuredAtOffset !== configuredAtOffset || current.halted) return;
+    this.#stream.append({
+      type: "events.iterate.com/stream/subscription-delivery-halted",
+      payload: {
+        name,
+        afterOffset,
+        attempts,
+        // Clipped: the message lands in the halted event AND the core state's row (checkpointed
+        // with every core change) — a target that throws a response body must not bloat either.
+        error: (error instanceof Error ? error.message : String(error)).slice(0, 1024),
+      },
+    });
   }
 
   /** The push path's per-row memo of the evaluated target head — one evaluation per row per
@@ -572,9 +617,10 @@ export class SubscriptionDelivery {
         if (!row) return this.#forgetSubscription(name);
         let cursor = this.#cursors.get(name);
         if (!cursor) {
-          // A subscription's FIRST cursor: born at its configuration offset ("now"), in memory only —
-          // the first durable delivery writes it.
-          cursor = { confirmedOffset: row.configuredAtOffset, attempt: 0 };
+          // A subscription's FIRST cursor: born where the row asked (`afterOffset`; 0 = the whole
+          // log) or at its configuration offset ("now"), in memory only — the first durable delivery
+          // writes it.
+          cursor = { confirmedOffset: row.afterOffset ?? row.configuredAtOffset, attempt: 0 };
           this.#adoptCursor(name, cursor, false);
         }
         // A delivery-resumed not yet applied: seek (if asked) and clear the ladder.
@@ -696,22 +742,11 @@ export class SubscriptionDelivery {
             if (latest?.resumed && latest.resumed.atOffset !== cursor.resumeAppliedAtOffset)
               continue;
             const attempt = cursor.attempt + 1;
-            // Clipped: the message lands in the halted event AND the core state's row (checkpointed
-            // with every core change) — a target that throws a response body must not bloat either.
-            const message = (error instanceof Error ? error.message : String(error)).slice(0, 1024);
             // A failure that can only repeat (deterministicFailure: the stamped `retryable: false`, or
             // one of our own codes a retry cannot change) halts now, not in half an hour.
             if (deterministicFailure(error) || attempt >= 15) {
               this.#adoptCursor(name, { ...cursor, attempt: 0 }, true);
-              await this.#stream.append({
-                type: "events.iterate.com/stream/subscription-delivery-halted",
-                payload: {
-                  name,
-                  afterOffset: cursor.confirmedOffset,
-                  attempts: attempt,
-                  error: message,
-                },
-              });
+              this.#haltRow(name, row.configuredAtOffset, cursor.confirmedOffset, attempt, error);
               return;
             }
             const backoff =

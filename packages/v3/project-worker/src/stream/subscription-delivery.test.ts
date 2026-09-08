@@ -11,6 +11,12 @@
 //   • THE CURSOR LANE across an eviction and a replace: the alarm's ROW-driven pass recovers a first
 //     delivery an eviction interrupted, a row replaced mid-delivery delivers to the NEW target, and a
 //     two-step target (`itx.<alias>`, the spelling every `provide` mints) is the callee itself.
+//   • HALT ONCE, FOR THE RIGHT ROW (v4 §2.3): a push queued behind a delivery never lands on a row
+//     that halted meanwhile; a facet catch-up refused for good halts the row like a push's refusal;
+//     a push and a resume's catch-up seeing the same refusal append ONE fact; a refusal of a call
+//     made for a row since replaced halts nothing.
+//   • `subscribe({ afterOffset })`: the cursor is born where the row asked (0 = the whole log) and
+//     the configure is its wake — history is delivered now; the push lane is unaffected.
 
 import { describe, expect, test } from "vitest";
 import { print, type ItxExpression } from "../context/expression.ts";
@@ -188,8 +194,133 @@ describe("an operator's resume wakes a halted FACET row now — the facet catche
   });
 });
 
+const HALTED = "events.iterate.com/stream/subscription-delivery-halted";
+const RESUMED = "events.iterate.com/stream/subscription-delivery-resumed";
+/** Every halted fact in the log for `name` — the audit trail an operator reads. */
+const haltFactsFor = (stream: Stream, name: string): StreamEvent[] =>
+  stream
+    .read(0, 500)
+    .events.filter((e) => e.type === HALTED && (e.payload as { name: string }).name === name);
+const facetTarget = (name: string): ItxExpression => [
+  "itx",
+  "facets",
+  ["get", name],
+  "processEventBatch",
+];
+
+describe("halt once, for the right row", () => {
+  test("a push queued behind an in-flight delivery is NOT delivered to a row that halted meanwhile", async () => {
+    const rig = stuckFacetRig();
+    await settle(); // the materialization (catchUpFromLog) parks — the chain's head
+    rig.commitBlobs(1); // queued behind it
+    rig.stream.append({
+      type: HALTED,
+      payload: { name: "slow", afterOffset: rig.configuredAtOffset, attempts: 1, error: "halt" },
+    });
+    await rig.release();
+    expect(rig.facetMethods).toEqual(["catchUpFromLog"]); // the queued push never reached the facet
+    expect(rig.pushes).toEqual([]);
+  });
+
+  test("a facet catch-up refused for good (retryable: false — a latched checkpoint) HALTS the row at once, ONE fact; on a resume, the catch-up and the resumed event's push see the same refusal and append ONE more fact, not two", async () => {
+    const latched = Object.assign(new Error("checkpoint latched"), { retryable: false });
+    const facetMethods: string[] = [];
+    const rig = incarnation(
+      () =>
+        new FacetHandle((steps) => {
+          const [call] = steps;
+          facetMethods.push(Array.isArray(call) ? call[0] : call);
+          return Promise.reject(latched);
+        }),
+    );
+    // `consumes` absent = EVERY durable event: the configure and the resume are themselves pushed,
+    // racing the catch-up each one triggers.
+    rig.stream.append(
+      subscriptionConfiguredEvent({ name: "poison", target: facetTarget("poison") }),
+    );
+    await settled();
+    expect(rig.stream.coreReducedState.subscriptions.poison.halted).toMatchObject({
+      attempts: 1,
+      error: "checkpoint latched",
+    });
+    expect(haltFactsFor(rig.stream, "poison")).toHaveLength(1);
+    expect(facetMethods).toEqual(["catchUpFromLog"]); // the configure's own push found the row halted
+    rig.stream.append({ type: RESUMED, payload: { name: "poison" } });
+    await settled();
+    expect(facetMethods.slice(1).sort()).toEqual(["catchUpFromLog", "processEventBatch"]); // both refused …
+    expect(haltFactsFor(rig.stream, "poison")).toHaveLength(2); // … one fact between them
+    expect(rig.stream.coreReducedState.subscriptions.poison.halted).toBeDefined();
+  });
+
+  test("a refusal of a call made for a row since REPLACED halts nothing — the replacement is not its predecessor", async () => {
+    let refuseInFlightPush!: (error: unknown) => void;
+    const rig = incarnation(
+      () =>
+        new FacetHandle((steps) => {
+          const [call] = steps;
+          return Array.isArray(call) && call[0] === "processEventBatch"
+            ? new Promise((_, reject) => (refuseInFlightPush = reject))
+            : Promise.resolve();
+        }),
+    );
+    const configure = () =>
+      rig.stream.append(
+        subscriptionConfiguredEvent({
+          name: "swap",
+          target: facetTarget("swap"),
+          consumes: ["blob"],
+        }),
+      )[0].offset;
+    configure();
+    await settled();
+    rig.stream.append({ type: "blob" });
+    await settled(); // the push is in flight, parked
+    const replacement = configure(); // REPLACES the row (a new identity) under the parked push
+    await settled();
+    refuseInFlightPush(Object.assign(new Error("poison"), { retryable: false }));
+    await settled();
+    expect(haltFactsFor(rig.stream, "swap")).toEqual([]);
+    expect(rig.stream.coreReducedState.subscriptions.swap).toMatchObject({
+      configuredAtOffset: replacement,
+    });
+    expect(rig.stream.coreReducedState.subscriptions.swap.halted).toBeUndefined();
+  });
+});
+
 /** The `n` of each delivered event — what a sink saw, in order. */
 const ns = (events: { payload?: { n?: number } }[]) => events.map((e) => e.payload?.n ?? -1);
+
+describe("subscribe({ afterOffset }) — the cursor lane starts where the row asked", () => {
+  test("a row configured with afterOffset: 0 after three durable events delivers those three NOW (its configure is its wake); a row without it starts from its configure offset; both take what lands next", async () => {
+    const history: number[][] = [];
+    const now: number[][] = [];
+    const rig = incarnation((printed) =>
+      printed === "itx.history"
+        ? { push: (events: { payload?: { n?: number } }[]) => void history.push(ns(events)) }
+        : printed === "itx.now"
+          ? { push: (events: { payload?: { n?: number } }[]) => void now.push(ns(events)) }
+          : undefined,
+    );
+    for (const n of [1, 2, 3]) rig.stream.append({ type: "demo/ping", payload: { n } });
+    rig.stream.append(
+      subscriptionConfiguredEvent({ name: "now", target: "itx.now.push", consumes: ["demo/ping"] }),
+    );
+    rig.stream.append(
+      subscriptionConfiguredEvent({
+        name: "history",
+        target: "itx.history.push",
+        consumes: ["demo/ping"],
+        afterOffset: 0,
+      }),
+    );
+    await settled();
+    expect({ history, now }).toEqual({ history: [[1, 2, 3]], now: [] });
+    expect(rig.delivery.cursor("history")?.confirmedOffset).toBe(rig.stream.highestDurableOffset());
+    rig.stream.append({ type: "demo/ping", payload: { n: 4 } });
+    await settled();
+    expect({ history, now }).toEqual({ history: [[1, 2, 3], [4]], now: [[4]] });
+  });
+});
 
 describe("the cursor lane across an eviction and a replace", () => {
   test("the alarm's cursor pass recovers a row whose FIRST delivery an eviction interrupted — ROW-driven (the cursor table holds nothing before the first ack), and the lane had armed the alarm to come back", async () => {

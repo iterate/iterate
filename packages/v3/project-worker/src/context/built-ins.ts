@@ -53,6 +53,8 @@ export type SubscriptionListEntry = {
   target: string;
   consumes?: string[];
   configuredAtOffset: number;
+  /** Where the cursor lane started (0 = the whole log); absent = at the configure. */
+  afterOffset?: number;
   /** Set when this row HOSTS a facet (a processor): the facet's name, class and cacheKey (the source
    *  lives in the log + the facet's kv memo, never here — M1). Address-only rows have none. */
   hostedFacet?: { name: string; className: string; cacheKey?: string };
@@ -179,6 +181,18 @@ export interface BuiltInScope extends LibraryRoots {
     put(key: string, value: string): Promise<{ ok: true }>;
     delete(key: string): Promise<{ ok: true }>;
     list(prefix?: string): Promise<{ keys: string[] }>;
+  };
+  /** Project secrets for egress: `{{secret:project:NAME}}` in an outbound request's URL or headers
+   *  substitutes to the value at the egress door (`fetch`). WRITE-ONLY — `set`, `delete`, and a
+   *  `list` of names and origins, never a value (the same physical-write carve-out as `kv.put`). A
+   *  secret `set` with an `origin` is sent to that origin ONLY: a mis-typed URL cannot mail a
+   *  credential to a stranger. Every change appends `events.iterate.com/secrets/changed` with the
+   *  name (and origin, or `deleted`) — the value never enters the log — attributed like any append
+   *  (`source.principal`). A name is the placeholder grammar, `[a-zA-Z0-9._-]+`. */
+  secrets: {
+    set(name: string, value: string, options?: { origin?: string }): Promise<{ ok: true }>;
+    delete(name: string): Promise<{ ok: true }>;
+    list(): Promise<{ name: string; origin?: string }[]>;
   };
   /** THE FIRST BINDINGS ROOT: Cloudflare's Workers AI binding, VERBATIM — `run(model, inputs,
    *  options?)`, `models()`, `gateway(id).run({ provider, endpoint, headers, query })`, `toMarkdown()`,
@@ -308,6 +322,8 @@ interface BuildBuiltInsDeps {
   env: {
     LOADER: WorkerLoader;
     ITX_KV: KVNamespace;
+    /** The per-project secret store egress substitutes from (`secret:<projectId>:<name>`). */
+    SECRETS_KV: KVNamespace;
     AI: Ai;
     /** Cloudflare Artifacts, the ONE bound namespace — `itx.cfArtifacts` scopes it per project. */
     ARTIFACTS: ArtifactsNamespace;
@@ -391,6 +407,23 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
 
   const kvPrefix = `${projectId}:`;
   const ownContext = () => deps.context(path);
+  // Project secrets live at `secret:<projectId>:<name>` — the key the DO's egress door reads.
+  const secretKeyPrefix = `secret:${projectId}:`;
+  const secretKey = (name: string): string => {
+    if (!/^[a-zA-Z0-9._-]+$/.test(name))
+      throw new Error(
+        `secrets: a name is [a-zA-Z0-9._-]+ (the {{secret:project:NAME}} grammar), got ${JSON.stringify(name)}`,
+      );
+    return secretKeyPrefix + name;
+  };
+  /** The one event a secret change appends — the name (and origin, or `deleted`), never the value. */
+  const appendSecretsChanged = (payload: Record<string, unknown>) =>
+    ownContext().append(
+      stampPrincipal<StreamEventInput>(
+        { type: "events.iterate.com/secrets/changed", payload },
+        deps.principal(),
+      ),
+    );
 
   // Each root implements one member of the BuiltInScope interface above (the canonical doc of the
   // kernel surface); the comments here add only what the interface can't say — the WHY of a code branch.
@@ -417,6 +450,37 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
           });
           for (const k of page.keys) out.push(k.name.slice(kvPrefix.length));
           if (page.list_complete) return { keys: out };
+          cursor = page.cursor;
+        }
+      },
+    },
+    secrets: {
+      set: async (name, value, options) => {
+        const origin = options?.origin === undefined ? undefined : new URL(options.origin).origin;
+        await env.SECRETS_KV.put(secretKey(name), String(value), {
+          metadata: { ...(origin && { origin }) },
+        });
+        await appendSecretsChanged({ name, ...(origin && { origin }) });
+        return { ok: true };
+      },
+      delete: async (name) => {
+        await env.SECRETS_KV.delete(secretKey(name));
+        await appendSecretsChanged({ name, deleted: true });
+        return { ok: true };
+      },
+      list: async () => {
+        const out: { name: string; origin?: string }[] = [];
+        for (let cursor: string | undefined; ; ) {
+          const page = await env.SECRETS_KV.list<{ origin?: string }>({
+            prefix: secretKeyPrefix,
+            ...(cursor && { cursor }),
+          });
+          for (const key of page.keys)
+            out.push({
+              name: key.name.slice(secretKeyPrefix.length),
+              ...(key.metadata?.origin && { origin: key.metadata.origin }),
+            });
+          if (page.list_complete) return out;
           cursor = page.cursor;
         }
       },

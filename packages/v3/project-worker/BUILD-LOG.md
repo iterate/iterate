@@ -4016,3 +4016,54 @@ you call authenticate on and can then do projects.create etc."
   deployed-only skips. DEPLOYED VERIFY (b476af5fd as 0346aade): the full suite 49 files / 196
   passed / 3 expected-fail / 1 skip, FIRST run — a 90 s pause after the deploy lets the DO code
   catch up with the worker's (the "Durable Object reset because its code was updated" window).
+
+## 2026-09-08 — from v4, items 1–5: the O(rows) re-reduce, a secrets write door, the machine lane, the types export, `subscribe({ afterOffset })`
+
+The next five of `docs/plan-v4-features-layered-on-v3.md`, each proved through the unchanged public
+door (two Fable implementers on the disjoint halves — stream, library — the rest by hand):
+
+- **4A.1 — `CoreStreamProcessor.reduceBatch` with per-batch draft tables.** v3 spread the whole
+  subscriptions table (and the rules table) on EVERY control event, so the constructor's re-reduce
+  over N configures was O(N²): the red pin `memory-budget.test.ts` "core re-reduce: 17,000 rows … 25 s"
+  (a reboot loop against the CPU limit). Now a batch owns a `WeakSet` of draft tables — a table is
+  copied ONCE on first touch, mutated after (`Object.defineProperty`: `__proto__` is a legal
+  subscription name) — and every replay/fold in `stream.ts` goes through ONE door,
+  `#reduceEventsIntoCoreReducedState` → `reduceBatch`; the single-event `reduce` stays pure. Measured:
+  the whole 17,000-row scenario 55 s → 0.8 s (`rereduceMs` 93). The pin is GREEN, bound kept.
+- **4B §2.7 — a poisoned DO stub is dropped.** Premise verified in Cloudflare's error-handling guide
+  ("many exceptions leave the DurableObjectStub in a broken state … create a new one"); workerd flags
+  those `retryable`. `rpc-stub-directory.ts` drops (and disposes) a borrowed stub whose call failed
+  that way — only if it is still the one under the key — never retrying the call; a client's own throw
+  keeps it warm. The edge's `IterateContext` mints its DO stub lazily and re-mints after a
+  `retryable` failure instead of replaying the original exception for the session's life.
+- **4B §2.3 — halt once, for the right row.** All three review cases were true: ONE `#haltRow`
+  (sync check + append in one turn; skips a replaced or already-halted row), `#catchUpFacetRow` now
+  halts on a deterministic refusal, a push queued behind an in-flight delivery lands on no row that
+  halted meanwhile. Three unit pins.
+- **`itx.secrets` — the write door** (assessment Gap 7, the credential half): `set(name, value,
+{ origin? })`, `delete`, `list()` of names and origins, never a value; ONE
+  `events.iterate.com/secrets/changed` per change (no value), attributed by `source.principal`; a
+  name is the placeholder grammar. ORIGIN BINDING at the egress door: a secret stored with an origin
+  is refused, 502, for any other (`ProjectSecretRefused`, the binding named to the caller). Proof:
+  `e2e/secrets.e2e` (the arrival at the bound origin deployed-only, through one of the project's own
+  apps on its real host). Every holder of `itx` may write (the trusted-client doctrine); a principal is
+  attributed when there is one.
+- **The machine lane** (Gap 7, §1.2): `itx.serveMcp()` — a library member, a handle whose one member is
+  `fetch(request)`, an MCP Streamable HTTP endpoint with ONE tool `itx.invoke({ expression, args? })`
+  evaluated exactly as `itx` evaluates it (via `itx.cd('.').invoke`), on the MCP server library the
+  control plane already uses — no new dependency; mounted by userspace as `itx.provide("itx.apps.mcp",
+"itx.serveMcp()")` and served at `mcp--<projectId>.<base>/`. A project host accepts
+  `Authorization: Bearer <projectToken>` beside the cookie (the bearer wins; stripped before loaded
+  code sees it), so a tool call's appends carry the bearer's principal with NO new plumbing. 13-row
+  unit table + `e2e/library-mcp-server.e2e` (bearer → principal in the log; none → none; a foreign
+  token stamps nothing; an expression error is an `isError` result).
+- **The types export** (Gap 8): `src/types.ts`, hand-written re-exports (`IterateContext`,
+  `UnauthenticatedSession`, `SessionPrincipal`, `Principal`, `StreamEvent`, the live-state client
+  types) + `./types` and `./client` export-map entries. Full names, nothing generated.
+- **`subscribe({ afterOffset })`** (Gap 6): the cursor lane starts at `afterOffset` (0 = the whole
+  log) instead of the configure offset; absent = today; the push lane ignores it. Core contract
+  6.0.0 → 7.0.0 (the row gained an optional field — one bump for all of this). Unit rows + a
+  digest-worker e2e.
+- GATES: tsc ×3 · oxlint · knip · `pnpm test` 89 files / 700 passed / 12 expected-fail / 17
+  deployed-only skips — and the whole suite 112 s → 57 s (the re-reduce). Deployed proof: the next
+  entry's line.

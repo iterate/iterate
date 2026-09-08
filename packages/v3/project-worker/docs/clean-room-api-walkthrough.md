@@ -104,7 +104,7 @@ packages/v3/project-worker/
     context/                     chapter 1 — the context: rpc stubs, expressions, rewrite rules
       built-ins.ts               the kernel roots: whoami, kv, ai, append, readEvents, waitForEvent, cd, fetch,
                                  rpcStubs, rewriteRules, facets, subscriptions, workers, runScript,
-                                 connectToMcp, connectToOpenApi, connectToCapnweb (src/library/: the LIBRARY tier)
+                                 connectToMcp, connectToOpenApi, connectToCapnweb, serveMcp (src/library/: the LIBRARY tier)
       expression.ts              the codec: "itx.a.b(1)" ⇄ ["itx","a",["b",1]]; ItxExpression /
                                  ItxExpressionInput / ItxExpressionPrefix; canonicalItxExpressionPrefix
       itx-expression-rewriting.ts  THE RULES 1–7 (match / pick / apply / rules-first to the fixed point `itx.builtins` / the door / `@`), the ONE
@@ -557,6 +557,8 @@ interface BuiltInScope {
     options?: OpenApiConnectOptions,
   ): Promise<OpenApiConnection>;
   connectToCapnweb(url: string, options?: CapnwebConnectOptions): Promise<CapnwebConnection>;
+  // this context as an MCP server: `.fetch(request)`, one tool `itx.invoke({ expression, args? })`
+  serveMcp(): McpServerHandle;
 }
 
 /** Where code comes from: the worker's MODULES, literally — module name → code, `"cap.js"` the
@@ -604,7 +606,7 @@ fetch channel (so a 101 works).
 
 One reduce-only processor is always on and runs **inline** in the commit
 transaction: `CoreStreamProcessor` (`src/stream/core-processor.ts`, slug `core`,
-contract 6.0.0), owned by the `Stream` itself (`stream.coreReducedState`). It reduces the context's own control
+contract 7.0.0), owned by the `Stream` itself (`stream.coreReducedState`). It reduces the context's own control
 events — and nothing else — into everything the DO needs synchronously at its
 doors: who it is, which incarnation runs, whether appends are paused, the
 rewrite rules every call goes through, the subscriptions every commit is sent

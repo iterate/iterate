@@ -40,16 +40,23 @@ let counter = 0;
 export const freshDnsSafeProjectId = (prefix: string): string =>
   `prj-${prefix}-${Date.now().toString(36)}-${counter++}`;
 
-/** GET `path` on `host`: with the Host header against the local worker, over the real wildcard DNS
- *  against a deployed one. */
+/** `path` on `host` — a GET, or `init`'s method and body: with the Host header against the local
+ *  worker, over the real wildcard DNS against a deployed one. */
 export async function fetchProjectHost(
   host: string,
   path: string,
   headers: Record<string, string> = {},
+  init: { method?: string; body?: string } = {},
 ): Promise<{ status: number; headers: Record<string, string>; text: string }> {
   const target = worker();
+  const { method = "GET", body } = init;
   if (!projectHostsAreLocal()) {
-    const res = await fetch(`${target.protocol}//${host}${path}`, { headers, redirect: "manual" });
+    const res = await fetch(`${target.protocol}//${host}${path}`, {
+      method,
+      headers,
+      body,
+      redirect: "manual",
+    });
     return { status: res.status, headers: Object.fromEntries(res.headers), text: await res.text() };
   }
   return new Promise((resolve, reject) => {
@@ -58,8 +65,12 @@ export async function fetchProjectHost(
         host: target.hostname,
         port: target.port,
         path,
-        method: "GET",
-        headers: { ...headers, host },
+        method,
+        headers: {
+          ...headers,
+          host,
+          ...(body !== undefined && { "content-length": String(Buffer.byteLength(body)) }),
+        },
       },
       (res) => {
         let body = "";
@@ -77,6 +88,6 @@ export async function fetchProjectHost(
       },
     );
     req.on("error", reject);
-    req.end();
+    req.end(body);
   });
 }

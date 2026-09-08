@@ -320,8 +320,9 @@ test(
 
 // ── the core checkpoint cell: the control plane's ceiling ──
 
-/** ONE ~55 s run (17,000 rows, O(rows²) both to configure and to re-reduce) feeds the two rows
- *  below — a memo, so the second row reads the first's facts instead of paying the run again. */
+/** ONE run (17,000 rows configured, then re-reduced after a version bump) feeds the two rows below
+ *  — a memo, so the second row reads the first's facts instead of paying the run again. Under a
+ *  second since `reduceBatch` (was ~55 s when every configure copied the whole table). */
 let coreRowsRun: ScenarioRun | undefined;
 const runCoreRowsUntilCellCap = () =>
   (coreRowsRun ??= runScenario("core-rows-until-cell-cap", {
@@ -345,13 +346,14 @@ test(
   },
 );
 
-// Dies of: the `rereduceMs` fact. A core-version bump re-reduces every configure inside the DO
-// constructor, and each one spreads the whole subscriptions table (core-processor.ts): O(rows²) —
-// 25 s for 17,000 rows on this laptop, i.e. past the 30 s CPU limit on an edge core (≈ half as
-// fast), and the next wake runs the same constructor: a reboot loop. The bound is 15 s here for
-// that reason.
-test.fails(
-  "core re-reduce: a core-version bump over 17,000 rows re-reduces O(rows²) in the constructor — 25 s, a reboot loop against the CPU limit",
+// A core-version bump re-reduces every configure inside the DO constructor. BORN RED (the
+// `rereduceMs` fact): each configure spread the whole subscriptions table — O(rows²), 25 s for
+// 17,000 rows on this laptop, past the 30 s CPU limit on an edge core (≈ half as fast), and the next
+// wake ran the same constructor: a reboot loop. FLIPPED by `CoreStreamProcessor.reduceBatch`
+// (v4 §2.1): a table is copied once per 500-event page, not once per event. The bound stays 15 s for
+// the reason above; the fixed cost is well under a second.
+test(
+  "core re-reduce: a core-version bump over 17,000 rows re-reduces in the constructor in O(rows) per page — under the 15 s that would be a reboot loop against the CPU limit",
   { timeout: 110_000 },
   () => {
     const run = runCoreRowsUntilCellCap();

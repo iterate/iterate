@@ -25,9 +25,9 @@ const reduceAll = (events: StreamEvent[], initial = proc.contract.initialState()
   events.reduce((s, e) => proc.reduce({ event: e, state: s }) ?? s, initial);
 
 describe("the contract", () => {
-  test("slug `core` v6.0.0; the schema-initial state; consumes EXACTLY its eight control events (an inline reduce reduces only what it consumes)", () => {
+  test("slug `core` v7.0.0; the schema-initial state; consumes EXACTLY its eight control events (an inline reduce reduces only what it consumes)", () => {
     expect(proc.contract.slug).toBe("core");
-    expect(proc.contract.version).toBe("6.0.0");
+    expect(proc.contract.version).toBe("7.0.0");
     expect(proc.contract.initialState()).toEqual({
       paused: null,
       itxExpressionRewriteRules: {},
@@ -179,6 +179,22 @@ describe("the subscriptions table — by name", () => {
         configuredAtOffset: 3,
       },
     });
+  });
+
+  test("configured with `afterOffset` stores it on the row (where the cursor lane starts — 0 = the whole log); without it, no key at all (= from the configure offset)", () => {
+    const s = reduceAll([
+      at(4, "events.iterate.com/stream/subscription-configured", {
+        name: "history",
+        target: "itx.digest.processEventBatch",
+        afterOffset: 0,
+      }),
+      at(5, "events.iterate.com/stream/subscription-configured", {
+        name: "now",
+        target: "itx.digest.processEventBatch",
+      }),
+    ]);
+    expect(s.subscriptions.history).toMatchObject({ configuredAtOffset: 4, afterOffset: 0 });
+    expect(s.subscriptions.now).not.toHaveProperty("afterOffset");
   });
 
   test("configured without `consumes` stores no `consumes` key at all (absent = every durable event)", () => {
@@ -362,6 +378,79 @@ describe("purity", () => {
     expect(
       proc.reduce({ event: at(1, "work"), state: proc.contract.initialState() }),
     ).toBeUndefined();
+  });
+
+  // `reduceBatch` is the host's door (Stream reduces a commit's fresh events and each page of the
+  // constructor's re-reduce through it): each core table is copied ONCE per batch and mutated as a
+  // draft after — O(rows + events), not O(rows × events) (memory-budget.test.ts pins the time). What
+  // that must NOT cost is purity at the batch's edges: the state handed in stays what it was.
+  describe("reduceBatch — a batch's draft tables never leak into the state it was given", () => {
+    const configured = (
+      offset: number,
+      name: string,
+      target: string | null = "itx.x.f",
+    ): StreamEvent =>
+      at(offset, "events.iterate.com/stream/subscription-configured", { name, target });
+    const rule = (offset: number, match: string, target: string | null): StreamEvent =>
+      at(offset, "events.iterate.com/itx/rewrite-rule-configured", { match, target });
+    const onError = (error: unknown, event: StreamEvent) => {
+      throw new Error(`unexpected reduce error at ${event.offset}: ${String(error)}`);
+    };
+
+    test("a batch folds to exactly the per-event fold; the input state and its tables are untouched — and a second batch over the result leaves the first result untouched too", () => {
+      const first = [configured(1, "a"), rule(2, "itx.x", "itx.kv"), configured(3, "b")];
+      const second = [
+        configured(4, "a", "itx.y.f"),
+        rule(5, "itx.x", null),
+        configured(6, "b", null),
+      ];
+      const initial = proc.contract.initialState();
+      const afterFirst = proc.reduceBatch(first, initial, onError);
+      expect(afterFirst).toEqual(reduceAll(first));
+      expect(initial).toEqual(proc.contract.initialState()); // the given state: not a row leaked into it
+      const afterFirstSnapshot = JSON.parse(JSON.stringify(afterFirst));
+      const afterSecond = proc.reduceBatch(second, afterFirst, onError);
+      expect(afterSecond).toEqual(reduceAll([...first, ...second]));
+      expect(afterFirst).toEqual(afterFirstSnapshot); // the previous batch's result: immutable
+      expect(afterSecond.subscriptions).not.toBe(afterFirst.subscriptions); // a fresh draft, not a shared table
+      expect(afterSecond.itxExpressionRewriteRules).not.toBe(afterFirst.itxExpressionRewriteRules);
+    });
+
+    test("a batch that touches nothing hands the SAME state back (identity is the host's change signal — no checkpoint rewrite, no live delta)", () => {
+      const state = proc.reduceBatch([configured(1, "a")], proc.contract.initialState(), onError);
+      expect(
+        proc.reduceBatch(
+          [at(2, "work"), { ...configured(3, "z"), ephemeral: true }],
+          state,
+          onError,
+        ),
+      ).toBe(state);
+    });
+
+    test("a throwing event is handed to onError and SKIPPED — the events after it still reduce, and its state is the previous event's", () => {
+      const reported: number[] = [];
+      const state = proc.reduceBatch(
+        [configured(1, "a"), rule(2, "itx.call()", "itx.kv"), configured(3, "b")],
+        proc.contract.initialState(),
+        (_error, event) => void reported.push(event.offset),
+      );
+      expect(reported).toEqual([2]);
+      expect(Object.keys(state.subscriptions)).toEqual(["a", "b"]);
+      expect(state.itxExpressionRewriteRules).toEqual({});
+    });
+
+    test("`__proto__` is a legal subscription name: it lands as an OWN row on the draft and is removed like any other, never the prototype", () => {
+      const set = proc.reduceBatch(
+        [configured(1, "__proto__"), configured(2, "b")],
+        proc.contract.initialState(),
+        onError,
+      );
+      expect(Object.hasOwn(set.subscriptions, "__proto__")).toBe(true);
+      expect(Object.getPrototypeOf(set.subscriptions)).toBe(Object.prototype);
+      expect(Object.keys(set.subscriptions)).toEqual(["__proto__", "b"]);
+      const removed = proc.reduceBatch([configured(3, "__proto__", null)], set, onError);
+      expect(Object.keys(removed.subscriptions)).toEqual(["b"]);
+    });
   });
 
   test("the reduce rebuilds bit-identically from the log (pure — no wall clock anywhere)", () => {

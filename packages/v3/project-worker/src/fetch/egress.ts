@@ -5,15 +5,16 @@
 // The placeholder as written, or as the URL parser percent-encodes it in a path segment.
 const SECRET_TOKEN = /(?:\{\{|%7B%7B)secret:project:([a-zA-Z0-9._-]+)(?:\}\}|%7D%7D)/g;
 
-/** A placeholder whose secret is not stored — the egress door answers it with a 502 (the DO). */
-export class MissingProjectSecret extends Error {}
+/** A placeholder whose secret is not stored, or whose secret is bound to another origin (the DO's
+ *  resolver throws it) — the egress door answers it with a 502, to the caller, never the destination. */
+export class ProjectSecretRefused extends Error {}
 
 /**
  * Substitute every `{{secret:project:<name>}}` token in the request URL AND headers. An existing
  * secret must never survive as a literal placeholder wherever it appears (a URL
  * `?access_token={{secret:project:token}}` would otherwise send the credential's NAME to the
  * destination and the value nowhere); a placeholder with NO stored secret throws
- * `MissingProjectSecret` naming the token and where it sat — to the caller, never the destination.
+ * `ProjectSecretRefused` naming the token and where it sat — to the caller, never the destination.
  * In the URL the value is spliced as ONE component (`encodeURIComponent`), so a secret can never add
  * a query parameter or a fragment. Returns a NEW Request when anything changed, else the original.
  *
@@ -33,7 +34,7 @@ export async function substituteProjectSecrets(
     for (const m of value.matchAll(SECRET_TOKEN)) {
       const secret = await resolve(m[1]);
       if (secret == null)
-        throw new MissingProjectSecret(
+        throw new ProjectSecretRefused(
           `egress: no stored project secret for {{secret:project:${m[1]}}} in ${where}`,
         );
       out += value.slice(last, m.index) + (encode ? encodeURIComponent(secret) : secret);

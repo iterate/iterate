@@ -90,6 +90,14 @@ export function disposeRpcStub(x: unknown): void {
   (x as Partial<Disposable> | null)?.[Symbol.dispose]?.();
 }
 
+/** A BROKEN STUB: the call failed at the TRANSPORT — workerd stamps `retryable: true` on every
+ *  DISCONNECTED failure (jsg/util.c++: "Network connection lost.", a Durable Object reset) — and a
+ *  stub whose transport is gone fails every later call the same way (Cloudflare, error handling:
+ *  "avoid reusing a stub after it throws an exception … create a new one"). A coded refusal (the
+ *  relay's RPC_STUB_OFFLINE) or the client's own throw says nothing about this leg. */
+const isBrokenRpcStubError = (error: unknown): boolean =>
+  (error as { retryable?: unknown } | null)?.retryable === true;
+
 export class RpcStubDirectory {
   readonly #ctx: Pick<DurableObjectState, "acceptWebSocket" | "getWebSockets">;
   /** PRESENCE as it changes: a key gained its (only) pager, or lost its last one. The DO turns these
@@ -156,14 +164,14 @@ export class RpcStubDirectory {
   /** THE one call door behind `itx.rpcStubs.get(rpcStubKey)` — resolved calls (`itx.<match>.m()`
    *  through a rewrite rule naming it) and the delivery loop's push (an anonymous call step = the
    *  bare lent callable itself). The stub stays borrowed afterwards — steady traffic is pure RPC, no
-   *  socket round-trips. Fire-and-forget callers just don't await. */
+   *  socket round-trips — unless the call broke it (below). Fire-and-forget callers just don't await. */
   async invokeRpcStub(rpcStubKey: string, itxExpressionSteps: ItxExpression): Promise<unknown> {
     let borrowed = this.#borrowedRpcStubs.get(rpcStubKey); // 1. have we got it? call it
     if (!borrowed && this.#rpcStubPagerFor(rpcStubKey))
       borrowed = await this.#pageRpcStub(rpcStubKey); // 2. can a pager lend it back?
     if (!borrowed)
       throw codedError("RPC_STUB_OFFLINE", `rpc stub ${JSON.stringify(rpcStubKey)} is offline`);
-    {
+    try {
       // THE TERMINAL-FETCH BRANCH (fetch/rpc-stub-fetch.ts, doctrine point 1 — dies with its
       // WORKAROUND fence): a terminal `fetch` carrying the one live Request rides the rpc-stub fetch
       // path; the borrowed stub is the transport. Everything else is a plain dotted dispatch. Either
@@ -178,6 +186,16 @@ export class RpcStubDirectory {
       )
         return await this.#rpcStubFetch.serve(borrowed, itxExpressionSteps.slice(0, -1), last[1]);
       return await borrowed.invoke(itxExpressionSteps);
+    } catch (error) {
+      // A BROKEN STUB IS DROPPED, NEVER KEPT (v4 §2.7): every later call on it would fail the same
+      // way until the idle return, while its pager may already be able to lend a live one — so the
+      // NEXT call pages again. Only the stub THIS call rode: a re-lend that landed meanwhile is the
+      // live one, and a late failure of the old leg must not drop it. The failed call is not retried.
+      if (isBrokenRpcStubError(error) && this.#borrowedRpcStubs.get(rpcStubKey) === borrowed) {
+        this.#borrowedRpcStubs.delete(rpcStubKey);
+        disposeRpcStub(borrowed);
+      }
+      throw error;
     }
   }
 

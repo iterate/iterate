@@ -624,7 +624,7 @@ const setup = () => {
   const core = new CoreStreamProcessor();
   const builtIns = fakeBuiltIns();
   // INLINE, exactly like the DO: the rules are core state, reduced from the durable log per call —
-  // and, as in Stream.#reduceEventIntoCoreReducedState, a malformed control event is skipped
+  // and, as in Stream.#reduceEventsIntoCoreReducedState, a malformed control event is skipped
   // (reported), never wedging the stream.
   const rewriteRules = (): ItxExpressionRewriteRule[] =>
     Object.values(

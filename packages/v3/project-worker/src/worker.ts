@@ -116,14 +116,20 @@ export default {
       for (const name of [...headers.keys()]) if (name.startsWith("x-itx-")) headers.delete(name);
       headers.set(ITX_EXPRESSION_FETCH_HEADER, `itx.apps.${projectHost.app}`);
       headers.set(ITX_EXPRESSION_LANE_HOPS_HEADER, "1");
-      // WHO: a valid cookie for this project stamps the principal the app (and the lane's call) sees.
-      // The platform's cookie itself never reaches the app (loaded code): only its verified stamp does.
+      // WHO: a valid project token for this project stamps the principal the app (and the lane's
+      // call) sees — the host cookie (a browser), or `Authorization: Bearer <projectToken>` (THE
+      // MACHINE LANE: an MCP client, a script), the bearer winning when both are present. The token
+      // itself never reaches the app (loaded code): only its verified stamp does — the platform's
+      // cookie is dropped, and so is a bearer that IS a project token (an app's own bearer scheme
+      // passes through untouched, exactly as a visitor's other cookies do).
       const cookieHeader = request.headers.get("cookie");
       const appCookies = withoutProjectSessionCookie(cookieHeader);
       if (appCookies) headers.set("cookie", appCookies);
       else headers.delete("cookie");
-      const cookieToken = projectSessionCookieOf(cookieHeader);
-      const claims = cookieToken && (await verifyProjectToken(cookieToken, projectTokenSecret));
+      const bearerToken = /^Bearer\s+(\S+)$/i.exec(request.headers.get("authorization") ?? "")?.[1];
+      const token = bearerToken ?? projectSessionCookieOf(cookieHeader);
+      const claims = token ? await verifyProjectToken(token, projectTokenSecret) : null;
+      if (bearerToken && claims) headers.delete("authorization");
       if (claims && claims.projectId === projectId)
         headers.set(
           ITX_PRINCIPAL_HEADER,

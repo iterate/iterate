@@ -27,6 +27,7 @@ const setup = () => {
     name: string;
     target: ItxExpressionInput | null;
     consumes?: string[];
+    afterOffset?: number;
   }) => {
     const event = subscriptionConfiguredEvent(input);
     stream.append(event);
@@ -66,6 +67,40 @@ describe("configure — ONE event: set, replace, or remove", () => {
       target: ["itx", "digest", "processEventBatch"], // a string target is parsed ONCE, at the door
     });
   });
+
+  test.each([
+    {
+      afterOffset: 0,
+      becomes: "carried: { afterOffset: 0 } — the whole log",
+      payloadHas: { afterOffset: 0 },
+    },
+    { afterOffset: 7, becomes: "carried: { afterOffset: 7 }", payloadHas: { afterOffset: 7 } },
+    { afterOffset: undefined, becomes: "omitted from the payload and the row", payloadHas: {} },
+  ])("`afterOffset` $afterOffset is $becomes", ({ afterOffset, payloadHas }) => {
+    const { configure, rows } = setup();
+    const event = configure({ name: "h", target: "itx.digest.processEventBatch", afterOffset });
+    expect(event.payload).toEqual({
+      name: "h",
+      target: ["itx", "digest", "processEventBatch"],
+      ...payloadHas,
+    });
+    expect(rows().h).toEqual({
+      target: ["itx", "digest", "processEventBatch"],
+      configuredAtOffset: rows().h.configuredAtOffset,
+      ...payloadHas,
+    });
+  });
+
+  test.each([-1, 1.5, Number.NaN, "0"])(
+    "an `afterOffset` that is not a non-negative integer (%s) is refused at the door — a throw, nothing appended",
+    (afterOffset) => {
+      const { configure, events } = setup();
+      expect(() =>
+        configure({ name: "h", target: "itx.digest.f", afterOffset: afterOffset as number }),
+      ).toThrow(/afterOffset is a non-negative integer/);
+      expect(events).toHaveLength(0);
+    },
+  );
 
   test("the SAME NAME REPLACES the row — target and filter of the newest configure, never a stack", () => {
     const { configure, events, rows } = setup();

@@ -4,7 +4,7 @@
 // it sat; substituted values are never rescanned; a NEW Request only when something changed (the
 // rebuild is WS-safe — method, Upgrade and body survive it).
 import { expect, test } from "vitest";
-import { MissingProjectSecret, substituteProjectSecrets } from "./egress.ts";
+import { ProjectSecretRefused, substituteProjectSecrets } from "./egress.ts";
 
 const secrets: Record<string, string> = { a: "alpha", b: "bravo", "api.key_v-2": "REAL" };
 const resolve = (name: string) => secrets[name] ?? null;
@@ -23,7 +23,7 @@ test("a header with no stored secret for its token throws, naming the token and 
     headers: { "x-auth": "Bearer {{secret:project:absent}}" },
   });
   const failure = await substituteProjectSecrets(request, resolve).catch((error) => error);
-  expect(failure).toBeInstanceOf(MissingProjectSecret);
+  expect(failure).toBeInstanceOf(ProjectSecretRefused);
   expect(failure.message).toBe(
     'egress: no stored project secret for {{secret:project:absent}} in header "x-auth"',
   );
@@ -74,7 +74,7 @@ test("a secret in the URL PATH (percent-encoded by the URL parser) is substitute
 test("a URL token with no stored secret throws naming the request URL", async () => {
   const request = new Request("https://api.example.com/?t={{secret:project:absent}}");
   const failure = await substituteProjectSecrets(request, resolve).catch((error) => error);
-  expect(failure).toBeInstanceOf(MissingProjectSecret);
+  expect(failure).toBeInstanceOf(ProjectSecretRefused);
   expect(failure.message).toBe(
     "egress: no stored project secret for {{secret:project:absent}} in the request URL",
   );

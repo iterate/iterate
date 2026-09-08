@@ -42,7 +42,7 @@
 
 import { AsyncLocalStorage } from "node:async_hooks";
 import { DurableObject } from "cloudflare:workers";
-import { MissingProjectSecret, substituteProjectSecrets } from "./fetch/egress.ts";
+import { ProjectSecretRefused, substituteProjectSecrets } from "./fetch/egress.ts";
 import {
   assertFacetSourceWithinCeiling,
   facetLoaderOwner,
@@ -487,6 +487,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         target: print(s.target),
         ...(s.consumes && { consumes: s.consumes }),
         configuredAtOffset: s.configuredAtOffset,
+        ...(s.afterOffset !== undefined && { afterOffset: s.afterOffset }),
         ...(s.hostedFacet && { hostedFacet: s.hostedFacet }),
         ...(cursor && {
           cursor: {
@@ -892,11 +893,21 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   async #egress(request: Request): Promise<Response> {
     let substitutedRequest: Request;
     try {
-      substitutedRequest = await substituteProjectSecrets(request, (name) =>
-        this.env.SECRETS_KV.get(`secret:${this.#durableObjectAddress.projectId}:${name}`),
-      );
+      // A secret stored with an origin (`itx.secrets.set(name, value, { origin })`) is sent to
+      // that origin ONLY — a mis-typed URL cannot mail a credential to a stranger.
+      const requestOrigin = new URL(request.url).origin;
+      substitutedRequest = await substituteProjectSecrets(request, async (name) => {
+        const { value, metadata } = await this.env.SECRETS_KV.getWithMetadata<{ origin?: string }>(
+          `secret:${this.#durableObjectAddress.projectId}:${name}`,
+        );
+        if (value !== null && metadata?.origin && metadata.origin !== requestOrigin)
+          throw new ProjectSecretRefused(
+            `egress: project secret ${name} is bound to ${metadata.origin} — not sent to ${requestOrigin}`,
+          );
+        return value;
+      });
     } catch (error) {
-      if (error instanceof MissingProjectSecret)
+      if (error instanceof ProjectSecretRefused)
         return new Response(`${error.message}\n`, { status: 502 });
       throw error;
     }

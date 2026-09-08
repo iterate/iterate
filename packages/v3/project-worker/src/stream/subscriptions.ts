@@ -5,9 +5,11 @@
 // lent rpc stub ⇒ push) or not (⇒ the stream keeps a cursor, at-least-once).
 //
 // A subscription is pure data — a NAME, a TARGET expression whose terminal is callable with
-// `(events, range)`, and an optional `consumes` filter. `configured` REPLACES a same-named row; a
-// `null` target REMOVES it. The one function here BUILDS that event; the caller appends it. The
-// halted fact is appended by the delivery loop; the resumed fact by an operator's plain `itx.append`.
+// `(events, range)`, an optional `consumes` filter, and an optional `afterOffset` (where the cursor
+// lane starts: 0 = the whole log; absent = from the configure offset). `configured` REPLACES a
+// same-named row; a `null` target REMOVES it. The one function here BUILDS that event; the caller
+// appends it. The halted fact is appended by the delivery loop; the resumed fact by an operator's
+// plain `itx.append`.
 
 import { normalizedItxExpression, print, type ItxExpressionInput } from "../context/expression.ts";
 import { CoreContract, parseSubscriptionName } from "./core-processor.ts";
@@ -20,8 +22,14 @@ export function subscriptionConfiguredEvent(input: {
   name: string;
   target: ItxExpressionInput | null;
   consumes?: string[];
+  afterOffset?: number;
 }): StreamEventInput {
   const name = parseSubscriptionName(input.name);
+  const { afterOffset } = input;
+  if (afterOffset !== undefined && !(Number.isInteger(afterOffset) && afterOffset >= 0))
+    throw new Error(
+      `a subscription's afterOffset is a non-negative integer offset (got ${JSON.stringify(afterOffset)})`,
+    );
   // BOTH halves through the codec's one door: a string is parsed (short by rule — the 2 KiB cap), an
   // array is shape-checked in place, so a target the reduce could not read (the reserved literal
   // `{ "@": true }` carried as data, a name step that is not an identifier) fails LOUD here, in the
@@ -38,6 +46,7 @@ export function subscriptionConfiguredEvent(input: {
       name,
       target,
       ...(target && input.consumes && { consumes: input.consumes }),
+      ...(target && afterOffset !== undefined && { afterOffset }),
     },
   });
 }

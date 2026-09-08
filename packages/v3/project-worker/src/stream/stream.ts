@@ -210,11 +210,10 @@ export class Stream {
           this.#coreReducedThroughOffset = offset;
           continue;
         }
-        for (const event of page.events)
-          this.#coreReducedState = this.#reduceEventIntoCoreReducedState(
-            event,
-            this.#coreReducedState,
-          );
+        this.#coreReducedState = this.#reduceEventsIntoCoreReducedState(
+          page.events,
+          this.#coreReducedState,
+        );
         if (page.scannedThroughOffset <= this.#coreReducedThroughOffset) break; // nothing left
         this.#coreReducedThroughOffset = page.scannedThroughOffset;
       }
@@ -430,8 +429,7 @@ export class Stream {
         // Reduced into a LOCAL: the fields move only after the transaction commits, so a failed
         // write never leaves phantom core state in memory (a subscription row the log never got).
         const { contract } = this.#coreProcessor;
-        for (const event of freshEvents)
-          reducedState = this.#reduceEventIntoCoreReducedState(event, reducedState);
+        reducedState = this.#reduceEventsIntoCoreReducedState(freshEvents, reducedState);
         this.storage.reduceCheckpoints.write(
           contract.slug,
           { reducerVersion: contract.version, reducedThroughOffset: throughOffset },
@@ -458,16 +456,15 @@ export class Stream {
     return committedEvents;
   }
 
-  /** Reduce one event into the core reduced state — the commit and the constructor's version-bump
-   *  re-reduce both come here (the reduce itself ignores ephemerals and the types it does not own).
-   *  A malformed control event must not wedge the stream: record the skip, move on. */
-  #reduceEventIntoCoreReducedState(event: StreamEvent, state: CoreState): CoreState {
-    try {
-      return this.#coreProcessor.reduce({ event, state }) ?? state;
-    } catch (err) {
-      reportIssue("stream.core-reduce", err, { offset: event.offset, type: event.type });
-      return state;
-    }
+  /** Reduce a batch of events into the core reduced state — the commit's fresh events and each page
+   *  of the constructor's version-bump re-reduce both come here, THE ONE DOOR (the reduce itself
+   *  ignores ephemerals and the types it does not own; `reduceBatch` copies each core table once per
+   *  batch, never once per event — the O(rows²) re-reduce memory-budget.test.ts pins). A malformed
+   *  control event must not wedge the stream: record the skip, move on. */
+  #reduceEventsIntoCoreReducedState(events: StreamEvent[], state: CoreState): CoreState {
+    return this.#coreProcessor.reduceBatch(events, state, (error, event) =>
+      reportIssue("stream.core-reduce", error, { offset: event.offset, type: event.type }),
+    );
   }
 
   /** One page after `afterOffset`: at most `limit` rows AND at most READ_PAGE_BUDGET_BYTES of

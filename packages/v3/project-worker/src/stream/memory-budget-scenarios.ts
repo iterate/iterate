@@ -619,7 +619,8 @@ const scenarios: Record<string, (args: Record<string, number>) => Promise<void>>
    *  platform's own uncoded SQLITE_TOOBIG where every other door refusal is coded. Rows land
    *  `rowsPerAppend` at a time (one core diff per commit; one at a time the Nth configure also pays
    *  an O(N) live-state diff — `configureMsAtCap` is that cost). Then a core-version bump: the
-   *  constructor re-reduces every configure, each spreading the whole table — O(rows²) — timed. */
+   *  constructor re-reduces every configure — one table copy per 500-event page (`reduceBatch`),
+   *  where it once spread the whole table per event, O(rows²) — timed. */
   async "core-rows-until-cell-cap"(args) {
     const storage = nodeSqliteDurableObjectStorage();
     const stream = bareStream(storage);

@@ -333,7 +333,7 @@ test("a subscription-configured for any OTHER name still lands (the guard is `co
 });
 
 // ── A MALFORMED CONTROL EVENT IS CONTAINED AT THE REDUCE: the core reduce throws on a payload it
-// cannot parse (core-processor.test.ts pins the throw); the host — Stream.#reduceEventIntoCoreReducedState —
+// cannot parse (core-processor.test.ts pins the throw); the host — Stream.#reduceEventsIntoCoreReducedState —
 // reports the issue and keeps the state, so one bad hand-appended event lands as a row and wedges
 // nothing. ──
 

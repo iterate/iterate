@@ -132,7 +132,11 @@ export interface IterateContext extends Omit<BuiltInScope, "cd"> {}
 export class IterateContext extends RpcTarget {
   readonly #contextNamespace: IterateContextNamespace;
   readonly #durableObjectAddress: DurableObjectAddress;
-  readonly #durableObject: IterateContextDurableObjectStub;
+  /** The context DO's stub, minted on first use — and again after a transport failure: "many
+   *  exceptions leave the DurableObjectStub in a broken state, such that all attempts to send
+   *  additional requests will just fail immediately with the original exception … create a new one"
+   *  (Cloudflare's error-handling guide); workerd flags those `retryable` (#invokeOnDurableObject). */
+  #durableObjectStub: IterateContextDurableObjectStub | undefined;
   readonly #sessionTeardown: SessionTeardown;
   readonly #waitUntil: WaitUntil;
   /** WHO holds this context: the session's verified principal (session.ts), or null for the
@@ -150,19 +154,37 @@ export class IterateContext extends RpcTarget {
     super();
     this.#contextNamespace = contextNamespace;
     this.#durableObjectAddress = durableObjectAddress;
-    this.#durableObject = contextNamespace.getByName(durableObjectAddress.name);
     this.#sessionTeardown = sessionTeardown;
     this.#waitUntil = waitUntil;
     this.#principal = principal;
   }
 
-  /** Dispatch on the DO under this context's principal — the one place the edge chooses the door. */
-  #invokeOnDurableObject(itxExpression: ItxExpression, args: unknown[] = []): Promise<unknown> {
-    return (
-      this.#principal
-        ? this.#durableObject.invokeAs(this.#principal, itxExpression, ...args)
-        : this.#durableObject.invoke(itxExpression, ...args)
-    ) as Promise<unknown>;
+  get #durableObject(): IterateContextDurableObjectStub {
+    return (this.#durableObjectStub ??= this.#contextNamespace.getByName(
+      this.#durableObjectAddress.name,
+    ));
+  }
+
+  /** Dispatch on the DO under this context's principal — the one place the edge chooses the door.
+   *  A transport failure (`retryable`: a reset, a lost connection) drops the stub so the next call
+   *  mints a fresh one instead of replaying the original exception for the session's life. */
+  async #invokeOnDurableObject(
+    itxExpression: ItxExpression,
+    args: unknown[] = [],
+  ): Promise<unknown> {
+    const durableObject = this.#durableObject;
+    try {
+      return await (this.#principal
+        ? durableObject.invokeAs(this.#principal, itxExpression, ...args)
+        : durableObject.invoke(itxExpression, ...args));
+    } catch (error) {
+      if (
+        (error as { retryable?: unknown } | null)?.retryable === true &&
+        this.#durableObjectStub === durableObject
+      )
+        this.#durableObjectStub = undefined;
+      throw error;
+    }
   }
 
   /** Another context of THIS project. Absolute by convention (`cd("/agents/support")`); relative
@@ -301,11 +323,16 @@ export class IterateContext extends RpcTarget {
     name?: string;
     target: ItxExpressionInput | ClientRpcStub | null;
     consumes?: string[];
+    /** Where the cursor lane starts (0 = the whole log); absent = from now. A push target ignores it. */
+    afterOffset?: number;
   }): Promise<SubscriptionHandle> {
     const name = input.name ?? `sub-${crypto.randomUUID().slice(0, 8)}`;
     const rpcStubKey = `subscription:${name}`;
     const sessionTeardownKey = this.#sessionTeardownKey(rpcStubKey);
-    const consumes = input.consumes && { consumes: input.consumes };
+    const consumes = {
+      ...(input.consumes && { consumes: input.consumes }),
+      ...(input.afterOffset !== undefined && { afterOffset: input.afterOffset }),
+    };
     if (input.target !== null && typeof input.target !== "string" && !Array.isArray(input.target)) {
       // A LIVE callback: the row (built first — a name the reduce rejects throws with nothing lent)
       // rides the pager upgrade and the DO appends it as it accepts the pager — one round trip, the

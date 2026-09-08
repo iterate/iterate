@@ -9,11 +9,14 @@
 // import from the stream, the DO, the fetch module or the context folder, except invoke-handle.ts,
 // the pipelinable-handle primitive).
 //
-// The verbs: `connectToMcp` · `connectToOpenApi` · `connectToCapnweb`. Each returns a connection
-// RpcTarget a caller can hold across calls, and each does ALL its HTTP through `itx.fetch` (egress:
-// `{{secret:project:NAME}}` placeholders in headers substitute for free; a user rule shadowing
-// `itx.fetch` redirects the library too, which is how a test fakes a remote). `connectToGraphql` is the
-// obvious next member of the family and does not exist yet.
+// The verbs: `connectToMcp` · `connectToOpenApi` · `connectToCapnweb` · `serveMcp`. The three
+// connectors each return a connection RpcTarget a caller can hold across calls, and each does ALL
+// its HTTP through `itx.fetch` (egress: `{{secret:project:NAME}}` placeholders in headers substitute
+// for free; a user rule shadowing `itx.fetch` redirects the library too, which is how a test fakes a
+// remote). `serveMcp` is the other direction — THIS context as an MCP server (mcp-server.ts): a
+// handle whose one member is `fetch(request)`, mounted as an app (`provide("itx.apps.mcp",
+// "itx.serveMcp()")`) and reached through `itx.cd('.')`, the dotted surface's expression-as-data
+// door. `connectToGraphql` is the obvious next member of the family and does not exist yet.
 //
 // LIVE CONNECTIONS ARE MEMOIZED per context: a connector reached THROUGH a rewrite rule
 // (`provide('itx.tools', "itx.connectToMcp(url)")`, the documented composition) is a connect per
@@ -27,6 +30,7 @@
 import type { BuiltInScope } from "../context/built-ins.ts";
 import { connectToCapnweb, type CapnwebConnection, type CapnwebConnectOptions } from "./capnweb.ts";
 import { connectToMcp, type McpConnection, type McpConnectOptions } from "./mcp.ts";
+import { McpServerHandle } from "./mcp-server.ts";
 import {
   connectToOpenApi,
   type OpenApiConnection,
@@ -35,9 +39,10 @@ import {
 } from "./openapi.ts";
 
 /** What a library module is handed: the itx handle (the record's own dotted surface), narrowed to
- *  what the library uses today (`fetch`). Widen it HERE when a module needs more of itx — never by
- *  importing something else. */
-export type LibraryItx = Pick<BuiltInScope, "fetch">;
+ *  what the library uses today — `fetch` (the connectors' HTTP) and `cd` (`serveMcp`'s evaluation
+ *  door: `cd('.')` is this context, and its handle's `invoke(steps)` takes an expression as data).
+ *  Widen it HERE when a module needs more of itx — never by importing something else. */
+export type LibraryItx = Pick<BuiltInScope, "fetch" | "cd">;
 
 /** The library's roots, exactly as the built-ins record spreads them in: each verb closed over ONE
  *  `itx`. `BuiltInScope` (context/built-ins.ts) extends this, so the typed surface has them once. */
@@ -55,11 +60,15 @@ export interface LibraryRoots {
    *  (default) or one HTTP batch per chain (`{ transport: "batch" }`); dotted calls chain with no round
    *  trip per step. */
   connectToCapnweb(url: string, options?: CapnwebConnectOptions): Promise<CapnwebConnection>;
+  /** THIS context as an MCP server: a handle whose one member is `fetch(request)` — the Streamable
+   *  HTTP endpoint with ONE tool, `itx.invoke({ expression, args? })`, evaluated as itx evaluates
+   *  it, under the calling request's principal. Mount it: `provide("itx.apps.mcp", "itx.serveMcp()")`. */
+  serveMcp(): McpServerHandle;
 }
 
-/** The library, built once per context: the three verbs closed over one `itx`, memoizing the live
- *  connections they open, and the one release door. Nothing is constructed here: a wake pays nothing
- *  for the library until a verb runs. */
+/** The library, built once per context: the verbs closed over one `itx`, memoizing the live
+ *  connections the connectors open, and the one release door. Nothing is constructed here: a wake
+ *  pays nothing for the library until a verb runs. */
 export function buildLibrary(itx: LibraryItx): {
   roots: LibraryRoots;
   /** Close every connection the library holds (the idle quiesce's call); the next use reopens. */
@@ -85,6 +94,8 @@ export function buildLibrary(itx: LibraryItx): {
         memoized(["openapi", specOrUrl, options], () => connectToOpenApi(itx, specOrUrl, options)),
       connectToCapnweb: (url, options) =>
         memoized(["capnweb", url, options], () => connectToCapnweb(itx, url, options)),
+      // Not memoized: the handle holds no connection — a stateless server per request.
+      serveMcp: () => new McpServerHandle(itx),
     },
     releaseConnections: () => {
       // `close()` where a connection has one (the graceful half-close), else its dispose; a release
