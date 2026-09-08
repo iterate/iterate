@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { renderDailyThread } from "./do-duration-alert.ts";
+import { isDetailsReply, renderDailyThread } from "./do-duration-alert.ts";
 
 const now = new Date("2026-09-04T05:41:00Z");
 const runUrl = "https://github.com/iterate/iterate/actions/runs/1";
@@ -70,6 +70,11 @@ test("the headline is one sentence about $/day; the table and the breach are rep
       links,
     ].join("\n"),
   );
+  // The hourly run finds the details reply to rewrite it; the headline and the
+  // alert replies must not be mistaken for it.
+  expect(isDetailsReply(thread.details)).toBe(true);
+  expect(isDetailsReply(thread.headline)).toBe(false);
+  expect(thread.replies.some(isDetailsReply)).toBe(false);
   expect(thread.replies).toEqual([
     [
       "🚨 Durable Objects hours over 600. account: prd.",

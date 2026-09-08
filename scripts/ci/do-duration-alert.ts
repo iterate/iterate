@@ -225,7 +225,7 @@ export function renderDailyThread(input: {
   return { date, headline, details, replies };
 }
 
-/** The details table's header row; also how the reply is recognised in the thread. */
+/** The details table's header row. */
 const DETAILS_HEADER = [
   "account",
   "latest hour",
@@ -233,6 +233,15 @@ const DETAILS_HEADER = [
   "hours over ceiling",
   "pinned invocations",
 ];
+
+/**
+ * How the details reply is recognised among the bot's replies in the thread:
+ * by two of its header words. Not by the header row itself, because `table`
+ * pads each column to its widest cell, so the spacing changes with the data.
+ */
+export function isDetailsReply(text: string) {
+  return text.includes("today (DO-hours)") && text.includes("hours over ceiling");
+}
 
 /** Rows padded into aligned columns for a Slack code block. */
 function table(rows: string[][]) {
@@ -310,8 +319,7 @@ async function findOrCreateHeadline(input: {
 
 /**
  * The thread's first reply is the per-account table: posted on the day's
- * first run, rewritten in place on every run after. Recognised among the
- * bot's replies by the table's header row.
+ * first run, rewritten in place on every run after.
  */
 async function upsertDetailsReply(input: {
   slack: WebClient;
@@ -328,7 +336,8 @@ async function upsertDetailsReply(input: {
     (message) =>
       message.bot_id &&
       message.ts !== input.headlineTs &&
-      message.text?.includes(DETAILS_HEADER.join("  ").slice(0, 20)),
+      message.text !== undefined &&
+      isDetailsReply(message.text),
   );
   if (existing?.ts) {
     await input.slack.chat.update({ channel: input.channel, ts: existing.ts, text: input.details });
