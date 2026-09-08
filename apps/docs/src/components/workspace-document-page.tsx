@@ -120,7 +120,7 @@ export function WorkspaceDocumentPage({
     setSource(content);
   }, []);
 
-  const onTransform = useCallback((transform: (current: string) => string): boolean => {
+  const onTransform = useCallback((transform: (current: string) => string) => {
     const editor = editorApiRef.current;
     if (editor === null || !editor.isLive()) return false;
     editor.applyTransform(transform);
