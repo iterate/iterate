@@ -35,12 +35,14 @@ const DNS_LABEL = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 /** An app label: a DNS label that is also an itx identifier (it becomes a step, `itx.apps.<label>`). */
 const APP_LABEL = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
 
-/** What a project host names, or null when `hostname` is not a project host under `base` (a blank
- *  `base` ⇒ no project-host ingress at all). */
+/** The app + slug a project host names, or null when `hostname` is not a project host under `base` (a
+ *  blank `base` ⇒ no project-host ingress at all). `<app>--<slug>.<base>` serves `itx.apps.<app>` of the
+ *  project whose slug is `<slug>`; the apex `<slug>.<base>` serves app `default`. The slug is resolved
+ *  to the project's id (the DO name) by the in-process directory (worker.ts) — a pure DNS label here. */
 export function projectHostOf(
   hostname: string,
   base: string,
-): { projectId: string; itxExpression: string } | null {
+): { app: string; slug: string } | null {
   if (!base) return null;
   // A fully-qualified Host (`site--p.base.`) and a wildcard spelling (`*.base`) name the same thing.
   const host = hostname.toLowerCase().replace(/\.$/, "").replace(/^\*\./, "");
@@ -50,7 +52,7 @@ export function projectHostOf(
   if (label.includes(".")) return null; // ONE label under the base; a deeper name is not a project host
   const separator = label.indexOf("--");
   const app = separator === -1 ? null : label.slice(0, separator);
-  const projectId = separator === -1 ? label : label.slice(separator + 2);
-  if (!DNS_LABEL.test(projectId) || (app !== null && !APP_LABEL.test(app))) return null;
-  return { projectId, itxExpression: `itx.apps.${app ?? "default"}` };
+  const slug = separator === -1 ? label : label.slice(separator + 2);
+  if (!DNS_LABEL.test(slug) || (app !== null && !APP_LABEL.test(app))) return null;
+  return { app: app ?? "default", slug };
 }

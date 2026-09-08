@@ -70,23 +70,24 @@
     "StreamDurableObject": { "type": "durable-object", "state": "deleted" },
   },
 
-  // The DO's fallback (target-core §4.4). SELF-HOST/HOSTED: a service binding to the real control-plane shell
-  // worker (deployed from packages/v3/control-plane-shell). SOLO would instead bind
-  // { service: "project-worker", entrypoint: "DummyControlPlane" } (this worker's own loopback).
-  "services": [
+  // The control plane runs IN-PROCESS now (src/control-plane) — no fallback worker. The directory
+  // (projects/orgs/slugs/routes/api-keys) is a D1; egress + admission are in-process.
+  "d1_databases": [
     {
-      "binding": "FALLBACK",
-      "service": "iterate-control-plane",
-      "entrypoint": "ControlPlaneShell",
+      "binding": "DB",
+      "database_name": "control-plane-directory",
+      "database_id": "fb3502bf-da4c-42e7-8e70-6f75765f7a4d",
     },
   ],
 
   // Per-project secret store behind the egress door (secret:<projectId>:<name>). Proves the middleware
   // rebuilds a WS-upgrade Request to substitute a header without breaking the 101 (target-core §6.0 risk #4).
+  // OAUTH_KV = the in-process OAuth AS's provider store (grants/tokens/DCR clients).
   "kv_namespaces": [
     { "binding": "SECRETS_KV", "id": "6df3b8c18a624d078d1a1da66f3251c0" },
     // itx.kv backing — project-prefixed (the D8 portability proof point).
     { "binding": "ITX_KV", "id": "08df862920b04446b3503c22f9888b04" },
+    { "binding": "OAUTH_KV", "id": "b8efbdc3253840fa95331a80efbeb03d" },
   ],
 
   // Configuration (src/app-config.ts): `APP_CONFIG_*` vars, parsed once per isolate, loud on a bad one.
@@ -99,5 +100,10 @@
     // — the `itx.repos` layer builds it from these when it does git over HTTPS.
     "ARTIFACTS_ACCOUNT_ID": "04b3b57291ef2626c6a8daa9d47065a7",
     "ARTIFACTS_NAMESPACE": "project-worker-repos",
+    // The in-process control plane: `open` = the no-login floor (this pass's stub); a committed demo
+    // session secret (Doppler-backed in a real deploy). PLATFORM_SECRETS_KV stays unbound (self-host
+    // passthrough) until the hosted platform binds it.
+    "LOGIN_MODE": "open",
+    "SESSION_SECRET": "b3f1c0a7d2e94f6581ac37bde90f24a15c68d7e3049fba21c5e6d8790a1b2c3d",
   },
 }

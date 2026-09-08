@@ -30,13 +30,16 @@
     "bindings": [{ "name": "ITERATE_CONTEXT", "class_name": "IterateContextDurableObject" }],
   },
   "exports": { "IterateContextDurableObject": { "type": "durable-object", "storage": "sqlite" } },
-  "services": [
-    { "binding": "FALLBACK", "service": "project-worker", "entrypoint": "DummyControlPlane" },
+  // The control plane is in-process — no FALLBACK service. A local (empty) D1 + OAuth KV so the worker
+  // loads; the e2e lane migrates the schema (support/global-setup.ts). ids are meaningless locally.
+  "d1_databases": [
+    { "binding": "DB", "database_name": "control-plane-directory", "database_id": "test" },
   ],
   "kv_namespaces": [
     { "binding": "SECRETS_KV", "id": "6df3b8c18a624d078d1a1da66f3251c0" },
     { "binding": "ITX_KV", "id": "08df862920b04446b3503c22f9888b04" },
+    { "binding": "OAUTH_KV", "id": "oauth-test" },
   ],
   // Configuration (src/app-config.ts): the workers lane is its own deployment name.
-  "vars": { "APP_CONFIG_ENVIRONMENT_NAME": "test" },
+  "vars": { "APP_CONFIG_ENVIRONMENT_NAME": "test", "LOGIN_MODE": "open", "SESSION_SECRET": "test" },
 }

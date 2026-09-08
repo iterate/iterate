@@ -142,11 +142,23 @@ export interface Env extends AppConfigEnv {
   ARTIFACTS_ACCOUNT_ID: string;
   ARTIFACTS_NAMESPACE: string;
   SECRETS_KV?: KVNamespace;
-  /** The egress terminal this context's `fetch` bottoms out at (secret-substituted, then sent). */
-  /** The control plane, over a service binding: the egress terminal (`fetch`) and the directory —
-   *  `projectExists`, the one question the edge asks before it dials a context for a project host
-   *  (worker.ts; the solo lane's `DummyControlPlane` answers yes to everything). */
-  FALLBACK: Fetcher & { projectExists(projectId: string): Promise<boolean> };
+  /** Platform (first-party) secrets — `{{secret:platform:NAME}}` substituted in-process at egress
+   *  (#egress). Hosted only; a self-host leaves it unset and the placeholders pass through. The DO is
+   *  trusted; loader-loaded code never sees this binding. */
+  PLATFORM_SECRETS_KV?: KVNamespace;
+  /** The directory (D1/sqlfu) — projects, orgs, slugs, routes, api keys. The control plane runs
+   *  in-process now (src/control-plane), so the worker + DO share these bindings. */
+  DB: D1Database;
+  /** The in-process OAuth AS's provider store (grants/tokens/DCR clients). */
+  OAUTH_KV: KVNamespace;
+  /** HMAC secret for the control plane's session cookie + the project token it mints (principal.ts). */
+  SESSION_SECRET: string;
+  /** Login backend for the in-process control plane: `email` | `access` | `open` (default `email`). */
+  LOGIN_MODE?: "email" | "access" | "open";
+  /** Header carrying the verified email when `LOGIN_MODE=access`. */
+  ACCESS_EMAIL_HEADER?: string;
+  /** This deployment's own origin (for login redirects from a private app). */
+  CONTROL_PLANE_ORIGIN?: string;
 }
 
 export class IterateContextDurableObject extends DurableObject<Env> {
@@ -920,7 +932,16 @@ export class IterateContextDurableObject extends DurableObject<Env> {
           { status: 502 },
         );
     }
-    return this.env.FALLBACK.fetch(substitutedRequest);
+    // PLATFORM secrets ({{secret:platform:NAME}}) substitute HERE too, in-process — the control plane
+    // is no longer a separate FALLBACK worker. The DO is trusted code (only loader-loaded code is not,
+    // and it never sees PLATFORM_SECRETS_KV); a self-host with no platform KV just passes them through.
+    // Then the terminal fetch — WS-safe, only headers were rewritten.
+    const platformSubstituted = await substituteHeaderSecrets(
+      substitutedRequest,
+      "platform",
+      (name) => (this.env.PLATFORM_SECRETS_KV ? this.env.PLATFORM_SECRETS_KV.get(name) : null),
+    );
+    return fetch(platformSubstituted);
   }
 
   webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): void {

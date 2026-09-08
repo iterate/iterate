@@ -11,10 +11,10 @@ import { experimental_readRawConfig, type Unstable_RawConfig } from "wrangler";
 /** The package root (this file lives at e2e/support/). */
 export const PACKAGE_DIR = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
 
-/** wrangler.jsonc patched for the SOLO topology: absolute main/build paths, and FALLBACK rebound to
- *  this worker's own DummyControlPlane entrypoint (egress bottoms out there — the topology
- *  wrangler.jsonc's own comment describes). The DO lifecycle is declarative (`exports`), so there is
- *  no migration history a fresh local namespace would have to replay. */
+/** wrangler.jsonc patched for the SOLO topology: absolute main/build paths. The control plane runs
+ *  in-process (src/control-plane) — no FALLBACK service to rebind. The directory D1 + OAuth KV are
+ *  inherited from wrangler.jsonc (a fresh local namespace; global-setup migrates the schema). The DO
+ *  lifecycle is declarative (`exports`), so there is no migration history to replay. */
 export function soloWorkerConfig(): Unstable_RawConfig {
   const { rawConfig } = experimental_readRawConfig({ config: join(PACKAGE_DIR, "wrangler.jsonc") });
   return {
@@ -22,9 +22,6 @@ export function soloWorkerConfig(): Unstable_RawConfig {
     main: join(PACKAGE_DIR, String(rawConfig.main)),
     assets: { ...rawConfig.assets, directory: join(PACKAGE_DIR, "public") },
     build: { ...rawConfig.build, cwd: PACKAGE_DIR },
-    services: [
-      { binding: "FALLBACK", service: String(rawConfig.name), entrypoint: "DummyControlPlane" },
-    ],
     // Configuration (src/app-config.ts): the e2e lane is its own deployment name, and its project
     // hosts hang under `localhost` (support/project-host.ts reaches them with a Host header).
     vars: {
