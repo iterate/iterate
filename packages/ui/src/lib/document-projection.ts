@@ -120,7 +120,7 @@ export function buildDocumentProjection(root: HTMLElement): DocumentProjection {
       }
       // No preceding text is selected: exclude this block and its Markdown prefix.
       const first = firstSegmentWithin(node);
-      if (first !== null) return segments[segments.indexOf(first) - 1]?.end ?? first.start;
+      if (first) return segments[segments.indexOf(first) - 1]?.end ?? first.start;
     }
     return elementPointToSource(node, affinity);
   };
