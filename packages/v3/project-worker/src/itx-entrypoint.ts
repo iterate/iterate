@@ -52,12 +52,11 @@ export class ItxEntrypoint extends WorkerEntrypoint<Env, { iterateContextName: s
   }
 }
 
-/** Mint the loopback stub for one context — `ctx.exports.ItxEntrypoint({ props })`. `ctx` is any
- *  ctx carrying `exports` (a worker ExecutionContext, a DurableObjectState: workers-types puts the
- *  worker's export table on both). Typed `unknown` only because built-ins.ts's dep record hands it
- *  over that way; `Cloudflare.Exports` is `{}` without a generated `GlobalProps`, hence the cast. */
-export function itxEntrypointFor(ctx: unknown, iterateContextName: string): Fetcher {
-  const { exports } = ctx as {
+/** Mint the loopback stub for one context — `ctx.exports.ItxEntrypoint({ props })` on the DO's own
+ *  state (workers-types puts the worker's export table on it). `Cloudflare.Exports` is `{}` without a
+ *  generated `GlobalProps`, hence the cast. */
+export function itxEntrypointFor(ctx: DurableObjectState, iterateContextName: string): Fetcher {
+  const { exports } = ctx as unknown as {
     exports: { ItxEntrypoint(opts: { props: { iterateContextName: string } }): Fetcher };
   };
   return exports.ItxEntrypoint({ props: { iterateContextName } });

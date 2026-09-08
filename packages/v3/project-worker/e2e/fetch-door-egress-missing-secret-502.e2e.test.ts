@@ -3,10 +3,9 @@
 // terminal is the LAST door that owns the project scope — a `{{secret:project:NAME}}` token that
 // survives substitution means no such secret is stored, and forwarding it would leak the secret's
 // NAME to the destination and send a garbage credential in its place. The door scans the
-// substituted request (URL first, then every header) and answers 502 BEFORE the terminal `fetch`.
-// `platform`-scope tokens are substituted next (PLATFORM_SECRETS_KV), not this scan's business. A
-// request that PASSES the door goes out to the network; the 502 cases never reach it, which is
-// exactly what makes them observable.
+// request (URL first, then every header) as it substitutes and answers 502 BEFORE the terminal
+// `fetch`. A request that PASSES the door goes out to the network; the 502 cases never reach it,
+// which is exactly what makes them observable.
 
 import { expect, test } from "vitest";
 import { freshCtx, openItx } from "./support/client.ts";
@@ -28,29 +27,14 @@ test("a missing project secret in a HEADER is a loud 502 naming the header and t
   expect(body).toContain('header "x-hunt-auth"'); // …and WHERE it sat, so the caller can fix it
 });
 
-test("a missing project secret in the URL query is a loud 502 naming the URL", async () => {
-  // substituteHeaderSecrets rebuilds ONLY headers, so the door sweeps the substituted request's URL
-  // too — checked FIRST, before the header sweep.
-  const res = await egress("&access_token={{secret:project:GHOST}}");
+test("a missing project secret in the URL query is a loud 502 naming the URL — checked FIRST, before the headers", async () => {
+  const res = await egress("&access_token={{secret:project:GHOST}}", {
+    "x-hunt-auth": "{{secret:project:GHOST}}",
+  });
   expect(res.status).toBe(502);
   const body = await res.text();
   expect(body).toMatch(/no stored project secret/);
   expect(body).toContain("{{secret:project:GHOST}}");
   expect(body).toContain("in the request URL");
-});
-
-test("a platform-scope token does NOT trip our door (the next door owns platform scope)", async () => {
-  // A platform-only request would pass the door out to the network, so "forwarded untouched" is
-  // not observable here. What IS observable: the door checks the URL BEFORE the headers, so a
-  // platform token in the URL alongside an unresolved project token in a header is a discriminator —
-  // if the door wrongly matched platform scope, the 502 would name the URL token; instead it names
-  // the header's project token, proving the platform token sailed past.
-  const res = await egress("&pass={{secret:platform:X}}", {
-    "x-hunt-auth": "{{secret:project:GHOST}}",
-  });
-  expect(res.status).toBe(502);
-  const body = await res.text();
-  expect(body).toContain('header "x-hunt-auth"'); // the PROJECT token, in the header, tripped it
-  expect(body).not.toContain("in the request URL"); // the URL's platform token did NOT
-  expect(body).not.toContain("platform"); // and the platform token is nowhere in the refusal
+  expect(body).not.toContain("x-hunt-auth");
 });

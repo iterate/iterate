@@ -22,10 +22,6 @@ export function subscriptionConfiguredEvent(input: {
   consumes?: string[];
 }): StreamEventInput {
   const name = parseSubscriptionName(input.name);
-  // A processor's subscription name IS its facet name, and the core reduce's address
-  // (`itx.facets.get('core')`) is taken. Refused at the door, never at delivery.
-  if (name === CoreContract.slug)
-    throw new Error(`"${name}" is the core reduce's name — reserved; pick another`);
   // BOTH halves through the codec's one door: a string is parsed (short by rule — the 2 KiB cap), an
   // array is shape-checked in place, so a target the reduce could not read (the reserved literal
   // `{ "@": true }` carried as data, a name step that is not an identifier) fails LOUD here, in the

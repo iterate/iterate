@@ -13,8 +13,6 @@ export type LoggedWorker = {
   url: URL;
   /** A fresh session's authenticated itx for `ctx` — its root context. */
   itx(ctx: string): any;
-  /** A raw capnweb session (an `UnauthenticatedSession` stub). */
-  session(): any;
   /** Everything the worker logged so far, as one string to grep. */
   logs(): string;
   /** Dispose every session this worker minted, then stop workerd. */
@@ -35,7 +33,6 @@ export async function startLoggedWorker(): Promise<LoggedWorker> {
   };
   return {
     url,
-    session: openSession,
     itx: (ctx) => openSession().authenticate().projects.get(ctx),
     logs: () => JSON.stringify(server.getLogs()),
     stop: async () => {

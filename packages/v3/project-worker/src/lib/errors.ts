@@ -1,4 +1,4 @@
-// lib/errors.ts — THE machine-readable error channel, stolen from cloudflare-os
+// lib/errors.ts — THE machine-readable error channel, after cloudflare-os
 // (workshop-shared/src/api.ts: plain Error + a `code` own-property via Object.assign, read with
 // `"code" in error`). Why this shape and no other: capnweb coerces custom error NAMES to a
 // builtin whitelist and drops subclass identity, but preserves ALL own enumerable properties

@@ -22,6 +22,13 @@ test("a token without an email carries none", async () => {
   expect(await verifyProjectToken(await signProjectToken(bare, SECRET), SECRET, NOW)).toEqual(bare);
 });
 
+test("non-ASCII claims round-trip intact (the payload is UTF-8, decoded as such)", async () => {
+  const unicode = { ...claims, actor: "user_élise", email: "élise@例え.jp" };
+  expect(await verifyProjectToken(await signProjectToken(unicode, SECRET), SECRET, NOW)).toEqual(
+    unicode,
+  );
+});
+
 const refusals: { title: string; token: () => Promise<string>; secret?: string; now?: number }[] = [
   { title: "the wrong secret", token: () => signProjectToken(claims, "other") },
   {

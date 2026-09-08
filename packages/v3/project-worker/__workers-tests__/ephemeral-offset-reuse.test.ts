@@ -209,7 +209,7 @@ test("processor: a read-driven catch-up (snapshot after quiesce) with ephemerals
   expect(p0.events.at(-1)!.type).toBe("note");
   await sleep(300);
   await quiesce(ctx); // abort the idle facet (checkpoint = tick offset, durable)
-  // the repo's own snapCounter shape: re-materialize by name → #pushedThroughOffset undefined → appendCreatedAndWokenEvents() → read(cursor) → [note], scannedThroughOffset = head
+  // the repo's own snapCounter shape: re-materialize by name → #pushedThroughOffset undefined → catchUpFromLog() → read(cursor) → [note], scannedThroughOffset = head
   const mid = (await s.invoke(["itx", "facets", ["get", "counter"], ["snapshot"]])) as {
     offset: number;
     state: { n: number };

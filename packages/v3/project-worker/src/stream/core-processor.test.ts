@@ -5,8 +5,7 @@
 // configured REPLACES or, with a null target, drops; delivery-halted marks, delivery-resumed clears
 // the halt and records the seek). No clock, no effects: the same log always reduces to the same state, an ephemeral
 // event never reduces (the checkpoint must rebuild from the durable log alone), and a malformed
-// hand-appended event THROWS at the reduce — the host contains it (__workers-tests__/stream.test.ts
-// pins the skip). The DOORS that build these events are pinned beside their modules
+// hand-appended event THROWS at the reduce — the host contains it (stream.test.ts pins the skip). The DOORS that build these events are pinned beside their modules
 // (context/itx-expression-rewriting.test.ts, stream/subscriptions.test.ts).
 import { describe, expect, test } from "vitest";
 import { parse, print } from "../context/expression.ts";

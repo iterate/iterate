@@ -2,8 +2,8 @@
 // wrangler vars plus the platform-supplied deploy identity (the version-metadata binding). Loud on
 // anything malformed, at first use — never a silent default.
 //
-// Configuration is what differs between deployments of the SAME code: the three vars below and the
-// deploy id. A constant (timeouts, budgets, key conventions, the loaded-worker compatibility flags) is a
+// Configuration is what differs between deployments of the SAME code: the vars below and the deploy
+// id. A constant (timeouts, budgets, key conventions, the loaded-worker compatibility flags) is a
 // property of the code and lives beside its consumer. A var nothing reads does not exist; an
 // `APP_CONFIG_*` var this file does not name is refused, so a typo can never configure nothing silently.
 
@@ -11,8 +11,16 @@ const APP_CONFIG_VARS = [
   "APP_CONFIG_ENVIRONMENT_NAME",
   "APP_CONFIG_PROJECT_HOSTNAME_BASE",
   "APP_CONFIG_PROJECT_TOKEN_SECRET",
+  "APP_CONFIG_ARTIFACTS_ACCOUNT_ID",
+  "APP_CONFIG_ARTIFACTS_NAMESPACE",
+  "APP_CONFIG_LOGIN_MODE",
+  "APP_CONFIG_SESSION_SECRET",
 ] as const;
 type AppConfigVarName = (typeof APP_CONFIG_VARS)[number];
+
+/** How a human proves who they are to the control plane: `email` — the login form takes an email and
+ *  the control plane owns the session; `open` — no login, the one seeded anonymous identity. */
+export type LoginMode = "email" | "open";
 
 export interface AppConfig {
   /** Which deployment this is, as a word a human reads at `/version`: "poc" (workers.dev), "test"
@@ -24,6 +32,15 @@ export interface AppConfig {
   /** The HMAC secret project tokens are signed with (principal.ts) — a wrangler SECRET on a deployment,
    *  a var in the e2e lane; blank ⇒ no token verifies, sessions stay anonymous. */
   readonly projectTokenSecret: string;
+  /** The Cloudflare account + Artifacts namespace `itx.repos` builds git remotes from
+   *  (`https://<account>.artifacts.cloudflare.net/git/<namespace>/<repo>.git`); blank where no
+   *  Artifacts binding exists (the workers lane). */
+  readonly artifactsAccountId: string;
+  readonly artifactsNamespace: string;
+  /** The control plane's login mode. Required. */
+  readonly loginMode: LoginMode;
+  /** The HMAC secret the control plane's session cookie is signed with (control-plane/session.ts). */
+  readonly sessionSecret: string;
   /** Cloudflare's version id of the running deployment (`CF_VERSION_METADATA.id`; local workerd mints
    *  one too); "unversioned" where the binding is absent or blank. In every loader cacheKey and at
    *  `/version`. */
@@ -54,10 +71,19 @@ export function parseAppConfig(vars: object, deployId = "unversioned"): AppConfi
   const environmentName = read("APP_CONFIG_ENVIRONMENT_NAME");
   if (!environmentName)
     throw new Error("APP_CONFIG_ENVIRONMENT_NAME: required, but unset or blank");
+  const loginMode = read("APP_CONFIG_LOGIN_MODE");
+  if (loginMode !== "email" && loginMode !== "open")
+    throw new Error(
+      `APP_CONFIG_LOGIN_MODE: expected "email" or "open", got ${JSON.stringify(loginMode)}`,
+    );
   return {
     environmentName,
     projectHostnameBase: read("APP_CONFIG_PROJECT_HOSTNAME_BASE"),
     projectTokenSecret: read("APP_CONFIG_PROJECT_TOKEN_SECRET"),
+    artifactsAccountId: read("APP_CONFIG_ARTIFACTS_ACCOUNT_ID"),
+    artifactsNamespace: read("APP_CONFIG_ARTIFACTS_NAMESPACE"),
+    loginMode,
+    sessionSecret: read("APP_CONFIG_SESSION_SECRET"),
     deployId,
   };
 }

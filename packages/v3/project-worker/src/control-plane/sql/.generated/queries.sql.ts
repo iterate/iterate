@@ -122,13 +122,13 @@ export namespace listOrgsForUser {
 }
 
 const createProjectSql = `
-INSERT INTO projects (id, slug, org_id) VALUES (?, ?, ?)
+INSERT INTO projects (id, org_id) VALUES (?, ?)
 ON CONFLICT DO NOTHING;
 `.trim();
 const createProjectQuery = (params: createProject.Params) => ({
   name: "createProject",
   sql: createProjectSql,
-  args: [params.id, params.slug, params.orgId],
+  args: [params.id, params.orgId],
 });
 
 export const createProject = Object.assign(
@@ -141,61 +141,55 @@ export const createProject = Object.assign(
 export namespace createProject {
   export type Params = {
     id: string;
-    slug: string;
     orgId: string;
   };
 }
 
-const getProjectBySlugSql = `
-SELECT id, slug, org_id FROM projects WHERE slug = ?;
-`.trim();
-const getProjectBySlugQuery = (params: getProjectBySlug.Params) => ({
-  name: "getProjectBySlug",
-  sql: getProjectBySlugSql,
-  args: [params.slug],
+const getProjectSql = `SELECT id, org_id FROM projects WHERE id = ?;`;
+const getProjectQuery = (params: getProject.Params) => ({
+  name: "getProject",
+  sql: getProjectSql,
+  args: [params.id],
 });
 
-function getProjectBySlugMapResult(row: getProjectBySlug.RawResult): getProjectBySlug.Result {
+function getProjectMapResult(row: getProject.RawResult): getProject.Result {
   return {
     id: row.id,
-    slug: row.slug,
     orgId: row.org_id,
   };
 }
 
-export const getProjectBySlug = Object.assign(
-  async function getProjectBySlug(
+export const getProject = Object.assign(
+  async function getProject(
     client: Client,
-    params: getProjectBySlug.Params,
-  ): Promise<getProjectBySlug.Result[]> {
-    const rows = await client.all<getProjectBySlug.RawResult>(getProjectBySlugQuery(params));
-    return rows.map(getProjectBySlugMapResult);
+    params: getProject.Params,
+  ): Promise<getProject.Result | null> {
+    const rows = await client.all<getProject.RawResult>(getProjectQuery(params));
+    return rows.length > 0 ? getProjectMapResult(rows[0]!) : null;
   },
-  { sql: getProjectBySlugSql, query: getProjectBySlugQuery, mapResult: getProjectBySlugMapResult },
+  { sql: getProjectSql, query: getProjectQuery, mapResult: getProjectMapResult },
 );
 
-export namespace getProjectBySlug {
+export namespace getProject {
   export type Params = {
-    slug: string;
+    id: string;
   };
   export type RawResult = {
     id: string;
-    slug: string;
     org_id: string;
   };
   export type Result = {
     id: string;
-    slug: string;
     orgId: string;
   };
 }
 
 const listProjectsForUserSql = `
-SELECT p.id, p.slug, p.org_id, m.role
+SELECT p.id, p.org_id, m.role
 FROM projects p
 JOIN org_members m ON m.org_id = p.org_id
 WHERE m.user_id = ?
-ORDER BY p.slug ASC;
+ORDER BY p.id ASC;
 `.trim();
 const listProjectsForUserQuery = (params: listProjectsForUser.Params) => ({
   name: "listProjectsForUser",
@@ -208,7 +202,6 @@ function listProjectsForUserMapResult(
 ): listProjectsForUser.Result {
   return {
     id: row.id,
-    slug: row.slug,
     orgId: row.org_id,
     role: row.role,
   };
@@ -235,13 +228,11 @@ export namespace listProjectsForUser {
   };
   export type RawResult = {
     id: string;
-    slug: string;
     org_id: string;
     role: string;
   };
   export type Result = {
     id: string;
-    slug: string;
     orgId: string;
     role: string;
   };

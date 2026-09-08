@@ -2,9 +2,8 @@
 -- who can access what." Strongly consistent (D1) — no KV list() lag. The OAuth provider keeps its own
 -- OAUTH_KV (tokens/grants/clients); this D1 is OURS.
 --
--- Org-centric (like apps/os): users belong to orgs, projects belong to orgs, access is org membership.
--- This is what makes "create an org + project during MCP /authorize" (ADR 0029, emerge-with-a-project)
--- a first-class flow rather than a bolt-on.
+-- Org-centric (like apps/os): users belong to orgs, projects belong to orgs, access is org membership
+-- — so "create an org + project during MCP /authorize" is a first-class flow rather than a bolt-on.
 --
 -- Idempotent (IF NOT EXISTS) on purpose: the e2e lane applies it into a fresh local D1 on every run and
 -- `pnpm db:schema:remote` re-applies it to the deployed D1 as a no-op.
@@ -36,11 +35,10 @@ create table if not exists org_members (
   primary key (org_id, user_id)
 );
 
--- A project's id IS its slug: one DNS-safe name is the directory row, the context DO's name
--- (`{id}.iterate{path}`) and the project-host label (`<app>--<slug>.<base>`). Globally unique.
+-- A project's id is ONE DNS-safe name (a slug), stored once: the directory row, the context DO's
+-- name (`{id}.iterate{path}`) and the project-host label (`<app>--<id>.<base>`). Globally unique.
 create table if not exists projects (
   id text primary key,
-  slug text not null unique,
   org_id text not null references orgs(id),
   created_at text not null default current_timestamp
 );

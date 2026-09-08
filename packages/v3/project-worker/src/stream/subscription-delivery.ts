@@ -39,8 +39,8 @@ import type { Stream } from "./stream.ts";
 import type { SubscriptionCursor } from "./stream-storage.ts";
 
 /** A cursor delivery's awaited call is bounded by this; it is also how far ahead the lane arms the
- *  alarm before the call — by the time it fires the call has acked (the cursor is in kv) or failed
- *  (the ladder armed), and an eviction in between leaves the alarm behind to re-derive. */
+ *  alarm before the call — by the time it fires the call has acked (the cursor row is written) or
+ *  failed (the ladder armed), and an eviction in between leaves the alarm behind to re-derive. */
 const CURSOR_DELIVERY_CALL_WATCHDOG_MS = 20_000;
 
 /** THE PENDING-PUSH BUDGET: the most serialized event chars one row may hold back while a delivery
@@ -188,16 +188,15 @@ export class SubscriptionDelivery {
           const name = (event.payload as { name: string }).name;
           const row = rows[name];
           if (!row) break;
-          // A halted PUSH row (a facet) resumes by catching up from the log itself; a cursor row by
-          // its lane. (A live client's row never halts — its pushes are dropped, never retried.)
-          if (this.#pushSubscriptionNames.has(name))
-            void this.#catchUpFacetRow(name, row).catch((error) =>
-              reportIssue("subscription-delivery.resume", error, { name }),
-            );
-          else
-            void this.#deliverFromCursor(name).catch((error) =>
-              reportIssue("subscription-delivery.resume", error, { name }),
-            );
+          // A halted FACET row resumes by catching up from the log itself; anything else by the
+          // cursor lane. Classified by EVALUATING, never by `#pushSubscriptionNames`: a fresh
+          // incarnation knows no push rows (a halted row is skipped by every commit, the wake's
+          // included), and the cursor lane, meeting a facet, only classifies it and returns — the
+          // undelivered span would wait for the next consumed commit. (A live client's row never
+          // halts — its pushes are dropped, never retried; the cursor lane classifies it away.)
+          void this.#catchUpFacetRow(name, row)
+            .then((facet) => (facet ? undefined : this.#deliverFromCursor(name)))
+            .catch((error) => reportIssue("subscription-delivery.resume", error, { name }));
           break;
         }
         case "events.iterate.com/stream/subscription-configured": {
@@ -245,10 +244,11 @@ export class SubscriptionDelivery {
   }
 
   /** Evaluate a row's target and, when it is a facet, have it catch up from the log — a
-   *  materialization (at configure) or a resume; the row must still exist once the load returns. */
-  async #catchUpFacetRow(name: string, row: Subscription): Promise<void> {
+   *  materialization (at configure) or a resume; the row must still exist once the load returns.
+   *  Resolves whether the target WAS a facet. */
+  async #catchUpFacetRow(name: string, row: Subscription): Promise<boolean> {
     const { head } = await this.#evaluateItxExpressionTargetHead(row.target);
-    if (!(head instanceof FacetHandle)) return;
+    if (!(head instanceof FacetHandle)) return false;
     // Classify it as a PUSH row NOW (a facet owns its progress), so onCommit never retains its
     // batches in #pushedEventBatches — the cursor-lane path, one batch per row, latest-wins and
     // UNBOUNDED by the delivery budgets. A burst to freshly-enabled facets would otherwise pin one
@@ -259,6 +259,7 @@ export class SubscriptionDelivery {
     this.#pushSubscriptionNames.add(name);
     this.#pushedEventBatches.delete(name);
     if (this.#stream.coreReducedState.subscriptions[name]) await head.invoke([["catchUpFromLog"]]);
+    return true;
   }
 
   /** Queue a push behind the row's in-flight delivery — or FOLD it into the one already waiting.
@@ -695,8 +696,8 @@ export class SubscriptionDelivery {
             if (latest?.resumed && latest.resumed.atOffset !== cursor.resumeAppliedAtOffset)
               continue;
             const attempt = cursor.attempt + 1;
-            // Clipped: the message lands in the halted event AND the core state's row (one kv cell) — a
-            // target that throws a response body must not bloat either.
+            // Clipped: the message lands in the halted event AND the core state's row (checkpointed
+            // with every core change) — a target that throws a response body must not bloat either.
             const message = (error instanceof Error ? error.message : String(error)).slice(0, 1024);
             // A failure that can only repeat (deterministicFailure: the stamped `retryable: false`, or
             // one of our own codes a retry cannot change) halts now, not in half an hour.

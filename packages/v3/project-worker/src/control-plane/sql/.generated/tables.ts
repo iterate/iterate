@@ -17,7 +17,6 @@ export type OrgsRow = {
 
 export type ProjectsRow = {
   id: string;
-  slug: string;
   org_id: string;
   created_at: string;
 };

@@ -1,13 +1,16 @@
 // principal.ts — WHO is calling, as the platform carries it. A PROJECT TOKEN is a signed claim
 // `{ projectId, actor, email?, expiresAt }` minted by whoever fronts the users (the control plane
 // after its membership check; a test with the secret) and verified here with the shared secret
-// (`APP_CONFIG_PROJECT_TOKEN_SECRET`): `<payload>.<sig>`, payload = base64url(JSON), sig =
-// base64url(HMAC-SHA256(payload)) — the control plane's own session-cookie shape. The principal it
-// yields rides the session (`authenticate({ projectToken })` → `session.whoami()`), is stamped by the
-// DO onto every event that session appends (`source.actor`, unforgeable: the DO owns the field), and
-// reaches an app on a project host as the `x-itx-principal` header after the cookie check
-// (worker.ts). Identity is ATTRIBUTION, not authority: a session with no token stays the anonymous
-// one intra-project code has always held (the trusted-client doctrine).
+// (`APP_CONFIG_PROJECT_TOKEN_SECRET`). The principal it yields rides the session
+// (`authenticate({ projectToken })` → `session.whoami()`), is stamped by the DO onto every event that
+// session appends (`source.principal`, unforgeable: the DO owns the field), and reaches an app on a
+// project host as the `x-itx-principal` header after the cookie check (worker.ts). Identity is
+// ATTRIBUTION, not authority: a session with no token stays the anonymous one intra-project code has
+// always held (the trusted-client doctrine).
+//
+// `signClaims` / `verifyClaims` is THE ONE signed-claims codec — `<payload>.<sig>`, payload =
+// base64url(UTF-8 JSON), sig = base64url(HMAC-SHA256(payload)) — the control plane's session cookie
+// (control-plane/session.ts) is the same codec under its own secret.
 
 /** Who is acting: a stable actor id (the control plane's user id) and, when known, an email. */
 export type Principal = { actor: string; email?: string };
@@ -31,17 +34,21 @@ export function stampPrincipal<E extends { source?: Record<string, unknown> }>(
 export type ProjectTokenClaims = Principal & { projectId: string; expiresAt: number };
 
 const encoder = new TextEncoder();
-const base64url = (bytes: ArrayBuffer | Uint8Array): string =>
-  btoa(String.fromCharCode(...new Uint8Array(bytes)))
+const decoder = new TextDecoder();
+const base64url = (bytes: Uint8Array): string =>
+  btoa(String.fromCharCode(...bytes))
     .replaceAll("+", "-")
     .replaceAll("/", "_")
     .replace(/=+$/, "");
-const fromBase64url = (text: string): string =>
-  atob(
-    text
-      .replaceAll("-", "+")
-      .replaceAll("_", "/")
-      .padEnd(Math.ceil(text.length / 4) * 4, "="),
+const bytesFromBase64url = (text: string): Uint8Array =>
+  Uint8Array.from(
+    atob(
+      text
+        .replaceAll("-", "+")
+        .replaceAll("_", "/")
+        .padEnd(Math.ceil(text.length / 4) * 4, "="),
+    ),
+    (c) => c.charCodeAt(0),
   );
 
 async function hmacKey(secret: string, usage: "sign" | "verify"): Promise<CryptoKey> {
@@ -54,27 +61,21 @@ async function hmacKey(secret: string, usage: "sign" | "verify"): Promise<Crypto
   );
 }
 
-/** Mint a project token. */
-export async function signProjectToken(
-  claims: ProjectTokenClaims,
-  secret: string,
-): Promise<string> {
+/** Sign any JSON claims with `secret`. */
+export async function signClaims(claims: unknown, secret: string): Promise<string> {
   const payload = base64url(encoder.encode(JSON.stringify(claims)));
   const signature = await crypto.subtle.sign(
     "HMAC",
     await hmacKey(secret, "sign"),
     encoder.encode(payload),
   );
-  return `${payload}.${base64url(signature)}`;
+  return `${payload}.${base64url(new Uint8Array(signature))}`;
 }
 
-/** The claims of a token that is well-formed, signed with `secret` and not yet expired — else null
- *  (no reason: a caller answers every bad token the same way). A blank secret verifies nothing. */
-export async function verifyProjectToken(
-  token: string,
-  secret: string,
-  now = Date.now(),
-): Promise<ProjectTokenClaims | null> {
+/** The claims of a token that is well-formed and signed with `secret` — else null (no reason: a
+ *  caller answers every bad token the same way). A blank secret verifies nothing. The caller checks
+ *  the claims' SHAPE and expiry. */
+export async function verifyClaims(token: string, secret: string): Promise<unknown> {
   if (!secret) return null;
   const dot = token.indexOf(".");
   if (dot <= 0) return null;
@@ -82,8 +83,8 @@ export async function verifyProjectToken(
   let signature: Uint8Array;
   let claims: unknown;
   try {
-    signature = Uint8Array.from(fromBase64url(token.slice(dot + 1)), (c) => c.charCodeAt(0));
-    claims = JSON.parse(fromBase64url(payload));
+    signature = bytesFromBase64url(token.slice(dot + 1));
+    claims = JSON.parse(decoder.decode(bytesFromBase64url(payload)));
   } catch {
     return null;
   }
@@ -93,7 +94,22 @@ export async function verifyProjectToken(
     signature,
     encoder.encode(payload),
   );
-  if (!valid || !isProjectTokenClaims(claims) || claims.expiresAt <= now) return null;
+  return valid ? claims : null;
+}
+
+/** Mint a project token. */
+export const signProjectToken = (claims: ProjectTokenClaims, secret: string): Promise<string> =>
+  signClaims(claims, secret);
+
+/** The claims of a project token that verifies (`verifyClaims`), has the claims' shape and is not
+ *  yet expired — else null. */
+export async function verifyProjectToken(
+  token: string,
+  secret: string,
+  now = Date.now(),
+): Promise<ProjectTokenClaims | null> {
+  const claims = await verifyClaims(token, secret);
+  if (!isProjectTokenClaims(claims) || claims.expiresAt <= now) return null;
   return {
     projectId: claims.projectId,
     actor: claims.actor,

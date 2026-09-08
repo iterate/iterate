@@ -45,15 +45,13 @@ let counter = 0;
 export const freshDnsSafeProjectId = (prefix: string): string =>
   `prj-${prefix}-${Date.now().toString(36)}-${counter++}`;
 
-export type ProjectHostAnswer = { status: number; headers: Record<string, string>; text: string };
-
 /** GET `path` on `host`: with the Host header against the local worker, over the real wildcard DNS
  *  against a deployed one. */
 export async function fetchProjectHost(
   host: string,
   path: string,
   headers: Record<string, string> = {},
-): Promise<ProjectHostAnswer> {
+): Promise<{ status: number; headers: Record<string, string>; text: string }> {
   const target = worker();
   if (!projectHostsAreLocal()) {
     const res = await fetch(`${target.protocol}//${host}${path}`, { headers, redirect: "manual" });

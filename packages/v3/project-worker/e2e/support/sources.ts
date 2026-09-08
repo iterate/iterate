@@ -264,15 +264,8 @@ export default class Site extends WorkerEntrypoint {
  *  `processEventBatch` is subscribed. `className` names the HOST (`<Name>DurableObject`, the one-line
  *  `StreamProcessorDurableObject` subclass), never the pure `StreamProcessor` it hosts. `tally`,
  *  `chunky`, `presence`, `user-tally`, `breaker` are the fixtures. */
-export async function enableFixtureProcessor(
-  itx: any,
-  name: string,
-  className?: string,
-): Promise<void> {
-  await itx.enableProcessor(name, {
-    source: SOURCES[name],
-    className: className ?? FIXTURE_CLASS[name],
-  });
+export async function enableFixtureProcessor(itx: any, name: string): Promise<void> {
+  await itx.enableProcessor(name, { source: SOURCES[name], className: FIXTURE_CLASS[name] });
 }
 const FIXTURE_CLASS: Record<string, string> = {
   tally: "TallyDurableObject",

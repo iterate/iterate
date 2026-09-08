@@ -1,14 +1,14 @@
 // The directory — the control plane IS the directory. One D1/sqlfu store, strongly consistent (no KV
-// list() lag), relational and org-centric: users → orgs (via org_members) → projects. A project's id IS
-// its slug (definitions.sql): one DNS-safe name is the directory row, the context DO's name and the
-// project-host label — nothing a caller can mint escapes it.
+// list() lag), relational and org-centric: users → orgs (via org_members) → projects. A project's id is
+// ONE DNS-safe name (definitions.sql): the directory row, the context DO's name and the project-host
+// label — nothing a caller can mint escapes it.
 
 import { createD1Client } from "sqlfu";
 import {
   addOrgMember,
   createOrg,
   createProject,
-  getProjectBySlug,
+  getProject,
   listOrgsForUser,
   listProjectsForUser,
   upsertUser,
@@ -26,8 +26,7 @@ export interface Org {
   role?: string;
 }
 export interface Project {
-  id: string; // === slug
-  slug: string;
+  id: string; // the DNS-safe name — the DO name and the host label
   orgId: string;
   role?: string;
 }
@@ -61,49 +60,36 @@ export function directory(db: D1Database) {
       return rows.map((r) => ({ id: r.id, name: r.name, slug: r.slug, role: r.role }));
     },
 
-    /** Create a project inside an org. The slug is normalized and IS the id; it is GLOBALLY unique — a
-     *  slug already taken in ANY org throws "already taken". Idempotent within the same org (the insert
-     *  is ON CONFLICT DO NOTHING, then re-selected to cover both "just created" and "already existed"). */
-    async createProject(orgId: string, slug: string): Promise<Project> {
-      const s = slugify(slug);
-      if (!s) throw new Error("project slug is empty or invalid");
-      await createProject(client, { id: s, slug: s, orgId });
-      const p = (await getProjectBySlug(client, { slug: s }))[0];
-      if (!p) throw new Error(`failed to create project '${s}'`);
-      if (p.orgId !== orgId) throw new Error(`project slug '${s}' is already taken`);
-      return { id: p.id, slug: p.slug, orgId: p.orgId };
+    /** Create a project inside an org: `name` slugified IS the id, GLOBALLY unique — a name already
+     *  taken in ANY org throws "already taken". Idempotent within the same org (the insert is ON
+     *  CONFLICT DO NOTHING, then re-selected to cover both "just created" and "already existed"). */
+    async createProject(orgId: string, name: string): Promise<Project> {
+      const id = slugify(name);
+      if (!id) throw new Error("project name is empty or invalid");
+      await createProject(client, { id, orgId });
+      const p = await getProject(client, { id });
+      if (!p) throw new Error(`failed to create project '${id}'`);
+      if (p.orgId !== orgId) throw new Error(`project name '${id}' is already taken`);
+      return { id: p.id, orgId: p.orgId };
     },
 
-    /** Emerge with an org + project — the "create a project during MCP /authorize" flow (ADR 0029). REUSES
-     *  the caller's existing org when they have one; creates one named `orgName` only on first use. The
-     *  single create-a-project path (all surfaces route here). Not atomic across org/member/project. */
-    async emerge(
-      userId: string,
-      orgName: string,
-      slug: string,
-    ): Promise<{ org: Org; project: Project }> {
-      const existing = (await dir.listOrgs(userId))[0];
-      const org = existing ?? (await dir.createOrg(userId, orgName));
-      const project = await dir.createProject(org.id, slug);
-      return { org, project };
-    },
-
-    /** Ensure the user has at least one org; returns their first (creating a personal one if none). */
-    async ensureOrg(userId: string, email: string): Promise<Org> {
+    /** The user's first org, created as `orgName` (with them as owner) when they have none yet — every
+     *  create-a-project door (the console, /authorize, /mcp) goes through here, then `createProject`. */
+    async ensureOrg(userId: string, orgName: string): Promise<Org> {
       const orgs = await dir.listOrgs(userId);
-      return orgs[0] ?? dir.createOrg(userId, `${email}'s org`);
+      return orgs[0] ?? dir.createOrg(userId, orgName);
     },
 
     /** Projects the user can reach (member of the owning org), with their role. */
     async listProjects(userId: string): Promise<Project[]> {
       const rows = await listProjectsForUser(client, { userId });
-      return rows.map((r) => ({ id: r.id, slug: r.slug, orgId: r.orgId, role: r.role }));
+      return rows.map((r) => ({ id: r.id, orgId: r.orgId, role: r.role }));
     },
 
-    /** Resolve a project by slug (its id + org), or null — the edge's admission (worker.ts). */
-    async getBySlug(slug: string): Promise<Project | null> {
-      const p = (await getProjectBySlug(client, { slug }))[0];
-      return p ? { id: p.id, slug: p.slug, orgId: p.orgId } : null;
+    /** A project by id (its org), or null — the edge's admission (worker.ts). */
+    async getProject(id: string): Promise<Project | null> {
+      const p = await getProject(client, { id });
+      return p ? { id: p.id, orgId: p.orgId } : null;
     },
   };
 

@@ -30,11 +30,10 @@
 //   D. THE CONSTRUCTOR — the core cursor lost bricks every wake
 //   E. THE LADDER — a deterministic failure walks all 15 rungs; on a paused stream it never ends
 //   F. STORAGE UNDER A LIVE INCARNATION — deleteAll() with the stream still in memory
-//   G. THE RESERVED NAME — a raw row named `core`
 
 import { evictDurableObject, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { afterAll, expect, test, vi } from "vitest";
-import { print, type ItxExpression } from "../src/context/expression.ts";
+import type { ItxExpression } from "../src/context/expression.ts";
 import { rewriteRuleConfiguredEvent } from "../src/context/itx-expression-rewriting.ts";
 import { errorCode } from "../src/lib/errors.ts";
 const codeOf = errorCode;
@@ -687,52 +686,4 @@ test.fails("F1 — deleteAll() under a live incarnation: the tables are gone, th
     return; // the pin MOVED
   // WANTED: the stream notices its store was reset and starts over, or refuses in its own words.
   expect(errs.append).toBeUndefined();
-});
-
-// ═══════════════════════════ G. THE RESERVED NAME ═══════════════════════════
-
-// WHAT IT DIES OF: two of OUR errors in the wrong places. The reserved-name check lives in the event
-// BUILDER (subscriptions.ts), not the reduce, so a raw `subscription-configured { name: "core" }`
-// becomes a row; and M1 elides the hosting spec from the row's target, so `#invokeFacet` never sees
-// the `spec` that its `"core" is the core reduce — never a facet name` guard keys on — the target
-// resolves to the core reduce's synthesized view instead, which has no `catchUpFromLog` or
-// `processEventBatch`: `NOT_A_METHOD` per commit, with the whole pushed batch printed into the
-// message. Removing the row lands — and then the append REJECTS, because the post-commit effect
-// `#deleteFacet("core")` throws `"core" is the core reduce — always on, never a facet`: the caller
-// sees a failure for an append that succeeded.
-test.fails("G1 — a raw `subscription-configured` row named `core` slips past the reduce: NOT_A_METHOD per commit against the core view; its removal lands, yet the append rejects", async () => {
-  const ctx = "prj_ud_reserved_core";
-  const s = stub(ctx);
-  drainIssues();
-  const target = print(hostingTarget("core", FINE_SRC, "FineDurableObject"));
-  await s.append({
-    type: "events.iterate.com/stream/subscription-configured",
-    payload: { name: "core", target },
-  });
-  await s.append({ type: "work" });
-  const perCommit = await untilIssue(
-    "subscription-delivery.deliver",
-    /"processEventBatch" is not a method/,
-  );
-  const rowsBefore = (await s.invoke("itx.subscriptions.list()")) as { name: string }[];
-  const removal = await rejectionOf(() =>
-    s.append({
-      type: "events.iterate.com/stream/subscription-configured",
-      payload: { name: "core", target: null },
-    }),
-  );
-  const rowsAfter = (await s.invoke("itx.subscriptions.list()")) as { name: string }[];
-  if (
-    !stillRed(
-      "a row named core, NOT_A_METHOD per commit, the removal landed yet rejected",
-      rowsBefore.some((r) => r.name === "core") &&
-        perCommit.code === "NOT_A_METHOD" &&
-        rowsAfter.length === 0 &&
-        /is the core reduce — always on, never a facet/.test(removal?.message ?? ""),
-      JSON.stringify({ rowsBefore, perCommit, removal: removal?.message, rowsAfter }),
-    )
-  )
-    return; // the pin MOVED
-  // WANTED: the reduce refuses the reserved name; no row named `core` ever exists.
-  expect(rowsBefore.map((r) => r.name)).not.toContain("core");
 });

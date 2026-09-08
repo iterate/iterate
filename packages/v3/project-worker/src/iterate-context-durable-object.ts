@@ -42,7 +42,7 @@
 
 import { AsyncLocalStorage } from "node:async_hooks";
 import { DurableObject } from "cloudflare:workers";
-import { substituteHeaderSecrets } from "./fetch/egress.ts";
+import { MissingProjectSecret, substituteProjectSecrets } from "./fetch/egress.ts";
 import {
   assertFacetSourceWithinCeiling,
   facetLoaderOwner,
@@ -75,12 +75,7 @@ import {
 import { walkSteps } from "./context/dispatch.ts";
 import { FacetHandle, InvokeHandle, RpcStubHandle } from "./context/invoke-handle.ts";
 import { buildLibrary, type LibraryItx } from "./library/index.ts";
-import {
-  localReachableContext,
-  Stream,
-  type StreamPage,
-  type WaitForEventFilter,
-} from "./stream/stream.ts";
+import { Stream, type StreamPage, type WaitForEventFilter } from "./stream/stream.ts";
 import {
   RpcStubDirectory,
   RPC_STUB_PAGER_KEEPALIVE_REQUEST,
@@ -139,14 +134,8 @@ export interface Env extends AppConfigEnv {
   AI: Ai;
   /** Cloudflare Artifacts (beta) — the ONE bound namespace behind `itx.cfArtifacts`, project-scoped. */
   ARTIFACTS: ArtifactsNamespace;
-  /** The Artifacts account + namespace `itx.repos` builds git remotes from (wrangler vars). */
-  ARTIFACTS_ACCOUNT_ID: string;
-  ARTIFACTS_NAMESPACE: string;
-  SECRETS_KV?: KVNamespace;
-  /** Platform (first-party) secrets — `{{secret:platform:NAME}}` substituted in-process at egress
-   *  (#egress). Hosted only; a self-host leaves it unset and the placeholders pass through. The DO is
-   *  trusted; loader-loaded code never sees this binding. */
-  PLATFORM_SECRETS_KV?: KVNamespace;
+  /** The per-project secret store egress substitutes from (`secret:<projectId>:<name>`). */
+  SECRETS_KV: KVNamespace;
 }
 
 export class IterateContextDurableObject extends DurableObject<Env> {
@@ -406,11 +395,13 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     iterateContextName: this.#durableObjectAddress.name,
     env: this.env,
     deployId: this.#appConfig.deployId,
+    artifactsAccountId: this.#appConfig.artifactsAccountId,
+    artifactsNamespace: this.#appConfig.artifactsNamespace,
     invoke: (call) => this.invoke(call),
-    // a sibling context by path; the own path is this DO as a uniform-async ReachableContext (stream.ts)
+    // a sibling context by path; the own path is this DO itself — a ReachableContext structurally (stream.ts)
     context: (p) =>
       p === this.#durableObjectAddress.path
-        ? localReachableContext(this)
+        ? this
         : this.env.ITERATE_CONTEXT.getByName(
             DurableObjectNameCodec.stringify({
               projectId: this.#durableObjectAddress.projectId,
@@ -777,9 +768,6 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     }
   }
 
-  /** Delete a facet, storage included — the removal effect of `subscription-configured { target: null }`
-   *  (`disableProcessor` ends here; there is no delete verb). A
-   *  re-load into the same name is a clean rebuild, never a resume from orphaned state. */
   /** Abort a facet that is running; one that is not (already quiesced, never started) is nothing. */
   #abortFacetIfRunning(name: string, reason: string): void {
     try {
@@ -789,6 +777,9 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     }
   }
 
+  /** Delete a facet, storage included — the removal effect of `subscription-configured { target: null }`
+   *  (`disableProcessor` ends here; there is no delete verb). A re-load into the same name is a clean
+   *  rebuild, never a resume from orphaned state. */
   #deleteFacet(name: string): void {
     if (name === CORE_SLUG)
       throw new Error(`"${name}" is the core reduce — always on, never a facet`);
@@ -894,42 +885,22 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     return this.#rpcStubs.rpcStubTransportState();
   }
 
-  /** EGRESS: substitute `{{secret:project:NAME}}` placeholders (then the platform ones), then the terminal fetch. A
-   *  PROJECT-scope placeholder that survives substitution means no such secret is stored — and this
-   *  is the LAST door that owns the project scope, so it must FAIL here, loudly: forwarding would
-   *  leak the secret's NAME to the external destination and send a garbage credential in its place.
-   *  (`platform`-scope tokens pass through untouched — the next door down owns those.) */
+  /** EGRESS: substitute `{{secret:project:NAME}}` placeholders, then the terminal fetch. A
+   *  placeholder that survives substitution means no such secret is stored, so it FAILS here,
+   *  loudly: forwarding would leak the secret's NAME to the external destination and send a garbage
+   *  credential in its place. */
   async #egress(request: Request): Promise<Response> {
-    const substitutedRequest = await substituteHeaderSecrets(request, "project", (name) =>
-      this.env.SECRETS_KV
-        ? this.env.SECRETS_KV.get(`secret:${this.#durableObjectAddress.projectId}:${name}`)
-        : null,
-    );
-    const unresolvedProjectToken = (value: string) =>
-      /\{\{secret:project:[a-zA-Z0-9._-]+\}\}/.exec(value)?.[0];
-    const inUrl = unresolvedProjectToken(substitutedRequest.url);
-    if (inUrl)
-      return new Response(`egress: no stored project secret for ${inUrl} in the request URL\n`, {
-        status: 502,
-      });
-    for (const [header, value] of substitutedRequest.headers) {
-      const token = unresolvedProjectToken(value);
-      if (token)
-        return new Response(
-          `egress: no stored project secret for ${token} in header "${header}"\n`,
-          { status: 502 },
-        );
+    let substitutedRequest: Request;
+    try {
+      substitutedRequest = await substituteProjectSecrets(request, (name) =>
+        this.env.SECRETS_KV.get(`secret:${this.#durableObjectAddress.projectId}:${name}`),
+      );
+    } catch (error) {
+      if (error instanceof MissingProjectSecret)
+        return new Response(`${error.message}\n`, { status: 502 });
+      throw error;
     }
-    // PLATFORM secrets ({{secret:platform:NAME}}) substitute HERE too, in-process — the control plane
-    // is no longer a separate FALLBACK worker. The DO is trusted code (only loader-loaded code is not,
-    // and it never sees PLATFORM_SECRETS_KV); a self-host with no platform KV just passes them through.
-    // Then the terminal fetch — WS-safe, only headers were rewritten.
-    const platformSubstituted = await substituteHeaderSecrets(
-      substitutedRequest,
-      "platform",
-      (name) => (this.env.PLATFORM_SECRETS_KV ? this.env.PLATFORM_SECRETS_KV.get(name) : null),
-    );
-    return fetch(platformSubstituted);
+    return fetch(substitutedRequest); // WS-safe: only the URL and headers were rewritten
   }
 
   webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): void {

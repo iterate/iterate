@@ -7,37 +7,37 @@ const rows: { hostname: string; base: string; becomes: ReturnType<typeof project
   {
     hostname: "site--prj-1.iterate.app",
     base: "iterate.app",
-    becomes: { app: "site", slug: "prj-1" },
+    becomes: { app: "site", projectId: "prj-1" },
   },
   {
     hostname: "prj-1.iterate.app",
     base: "iterate.app",
-    becomes: { app: "default", slug: "prj-1" },
+    becomes: { app: "default", projectId: "prj-1" },
   }, // the apex is the label `default`
   {
     hostname: "default--prj-1.iterate.app",
     base: "iterate.app",
-    becomes: { app: "default", slug: "prj-1" },
+    becomes: { app: "default", projectId: "prj-1" },
   },
   {
     hostname: "my-site--a1.iterate.app",
     base: "iterate.app",
-    becomes: { app: "my-site", slug: "a1" },
+    becomes: { app: "my-site", projectId: "a1" },
   },
   {
     hostname: "Site--PRJ-1.Iterate.App",
     base: "iterate.app",
-    becomes: { app: "site", slug: "prj-1" },
+    becomes: { app: "site", projectId: "prj-1" },
   },
   {
     hostname: "site--prj-1.localhost",
     base: "localhost",
-    becomes: { app: "site", slug: "prj-1" },
+    becomes: { app: "site", projectId: "prj-1" },
   },
   {
     hostname: "site--prj-1.iterate.app.", // a fully-qualified Host
     base: "iterate.app",
-    becomes: { app: "site", slug: "prj-1" },
+    becomes: { app: "site", projectId: "prj-1" },
   },
   // not a project host
   { hostname: "project-worker.iterate.workers.dev", base: "iterate.app", becomes: null },

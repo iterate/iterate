@@ -34,7 +34,6 @@ import {
 } from "../context/expression.ts";
 import { isBuiltInRoot } from "../context/built-in-roots.ts";
 import {
-  BUILTINS_ROOT,
   isBuiltInsRooted,
   resolveItxExpression,
   type ItxExpressionRewriteRule,
@@ -64,7 +63,7 @@ export function facetSpecFromHostingTarget(
 ): HostingFacetSpec | undefined {
   const getStep = resolvedTarget[3];
   if (
-    resolvedTarget[1] === BUILTINS_ROOT &&
+    resolvedTarget[1] === "builtins" &&
     resolvedTarget[2] === "facets" &&
     Array.isArray(getStep) &&
     getStep[0] === "get" &&
@@ -142,7 +141,7 @@ function elideHostedFacetSource(
  *  undefined when it is not the facets door at all. */
 function facetAddressedBy(resolvedTarget: ItxExpression): string | undefined {
   const getStep = resolvedTarget[3];
-  return resolvedTarget[1] === BUILTINS_ROOT &&
+  return resolvedTarget[1] === "builtins" &&
     resolvedTarget[2] === "facets" &&
     Array.isArray(getStep) &&
     getStep[0] === "get" &&
@@ -345,7 +344,7 @@ export class CoreStreamProcessor extends StreamProcessor<CoreState> {
         // THE PLATFORM-EQUIVALENT TARGET (`itx.kv ⇒ itx.builtins.kv`, `itx ⇒ itx.builtins`) is "back to
         // the platform row": the row is deleted, never stored — so an un-mask is one ordinary event and
         // the table never carries a row that only restates the default.
-        if (jsonEqual(target, ["itx", BUILTINS_ROOT, ...matchPrefix.slice(1)]))
+        if (jsonEqual(target, ["itx", "builtins", ...matchPrefix.slice(1)]))
           return existing ? without() : undefined;
         return withTable({
           ...state.itxExpressionRewriteRules,

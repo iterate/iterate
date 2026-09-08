@@ -3,13 +3,14 @@
 // teardown (evictDurableObject) deterministically).
 //
 // Target surface: IterateContextDurableObject.alarm()/#recordActivityForQuietClock/#liveFacetNames/#facetWorkInFlight
-// (src/iterate-context-durable-object.ts), the delivery loop's cursor lane + `pumpAll`
-// (src/stream/subscription-delivery.ts), and the rpc-stub directory (src/context/rpc-stub-directory.ts).
+// (src/iterate-context-durable-object.ts), the delivery loop's cursor lane +
+// `deliverEveryCursorSubscription` (src/stream/subscription-delivery.ts), and the rpc-stub directory
+// (src/context/rpc-stub-directory.ts).
 //
 // THE ALARM DOES TWO THINGS, IN ORDER — this file pins both:
-//   1. `pumpAll`: every CURSOR subscription (a target that cannot own its progress — a stateless
-//      Worker-Loader entrypoint) whose retry is due is pumped from its kv cursor; the awaited call
-//      is the ack, the ladder resets. AWAITED before step 2, so the quiesce never aborts a
+//   1. `deliverEveryCursorSubscription`: every CURSOR subscription (a target that cannot own its
+//      progress — a stateless Worker-Loader entrypoint) whose retry is due is delivered from its
+//      cursor row; the awaited call is the ack, the ladder resets. AWAITED before step 2, so the quiesce never aborts a
 //      delivery in flight and a later retry's re-arm lands before the actor hibernates.
 //   2. the idle QUIESCE: 60s without activity (and nothing in flight) aborts every live facet and
 //      RETURNS every borrowed stub, so the actor can hibernate. A MEASURED PROPERTY, load-bearing
@@ -289,7 +290,7 @@ test("SCALE DROP + QUIESCE + EVICT + WAKE: a DISPOSED live provide stays gone; t
 // ─────────────────────────── THE ALARM'S FIRST JOB: the cursor lane's pump ───────────────────────────
 
 /** A stateless project worker — the CURSOR lane (a Worker-Loader entrypoint cannot own its
- *  progress, so the stream keeps a kv cursor and the awaited `processEventBatch` is the ack).
+ *  progress, so the stream keeps a cursor row and the awaited `processEventBatch` is the ack).
  *  Throws while kv `flaky-mode` is "fail"; otherwise tallies the batch into kv `flaky-digested`. */
 const FLAKY_SRC = /* js */ `
 import { WorkerEntrypoint } from "cloudflare:workers";
@@ -329,8 +330,8 @@ test("ALARM PUMPS THE CURSOR LANE: a failed at-least-once delivery is retried fr
   // The cursor lane rides THIS DO's alarm (facets have none — workerd#6810 — so a retry can never
   // live in the facet). PINS: a delivery that throws leaves a cursor row on the ladder
   // (attempt ≥ 1, a nextAttemptAtMs, NOT halted — one failure is far from 15); when the alarm fires
-  // past that instant, `pumpAll` re-delivers the SAME batch from the kv cursor, the awaited call
-  // acks it, and the row reads attempt 0 with its confirmedOffset at the head.
+  // past that instant, `deliverEveryCursorSubscription` re-delivers the SAME batch from the cursor
+  // row, the awaited call acks it, and the row reads attempt 0 with its confirmedOffset at the head.
   const ctx = "prj_q_cursorpump";
   const s = stub(ctx);
   await s.invoke(["itx", "kv", ["put", "flaky-mode", "fail"]]);
@@ -364,8 +365,8 @@ test("ALARM PUMPS THE CURSOR LANE: a failed at-least-once delivery is retried fr
     vi.useRealTimers();
   }
 
-  // pumpAll delivered from the cursor: the mark reached the worker exactly once, the ladder reset,
-  // the cursor sits at the head.
+  // deliverEveryCursorSubscription delivered from the cursor: the mark reached the worker exactly
+  // once, the ladder reset, the cursor sits at the head.
   const after = await untilRow(ctx, "flaky", (r) => r?.cursor?.attempt === 0);
   expect(after.cursor!.confirmedOffset).toBeGreaterThanOrEqual(mark.offset);
   expect(after.cursor!.nextAttemptAtMs).toBeUndefined();

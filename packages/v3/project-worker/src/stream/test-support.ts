@@ -10,7 +10,7 @@
 // registered in `engines` after each append (awaited, it would deadlock a processor that appends
 // during its own batch). A short page's proof is the in-memory head (`Math.max(after, head)`), so
 // the engine's stale-push and ephemeral-window rules are exercised directly; the real Stream stops
-// at the DURABLE mark (__workers-tests__/stream.test.ts pins that against real storage).
+// at the DURABLE mark (stream.test.ts pins that against real SQL).
 import {
   idempotencyConflictMessage,
   sameIdempotentEvent,

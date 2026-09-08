@@ -4,14 +4,13 @@
   // truth. The divergences, each deliberate and test-only:
   //
   //  1. no "build" block: the plugin imports the worker through Vite (same isolate as the tests).
-  //     The generated SDK bundle (src/generated/*) is produced by `node build-sdk.mjs`, which the
-  //     test script runs before vitest.
+  //     The generated SDK bundle (src/generated/*) is built by vitest.global-setup.ts.
   //  2. no `ai` binding (see the note by the bindings below), and the in-process control plane's D1 +
   //     OAuth KV are fresh local namespaces with no schema — this lane never touches the directory
   //     (the e2e lane, which does, migrates definitions.sql in its global-setup).
   //
   // KEPT identical on purpose: compatibility_date + flags, the declarative DO export, the LOADER
-  // worker-loader binding, the DO binding, and both KV bindings (ids are meaningless locally —
+  // worker-loader binding, the DO binding, and the KV bindings (ids are meaningless locally —
   // miniflare keys namespaces by binding).
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "project-worker",
@@ -39,6 +38,10 @@
     { "binding": "ITX_KV", "id": "08df862920b04446b3503c22f9888b04" },
     { "binding": "OAUTH_KV", "id": "oauth-test" },
   ],
-  // Configuration (src/app-config.ts): the workers lane is its own deployment name.
-  "vars": { "APP_CONFIG_ENVIRONMENT_NAME": "test", "LOGIN_MODE": "open", "SESSION_SECRET": "test" },
+  // Configuration (src/app-config.ts): the workers lane is its own deployment name; open login mode.
+  "vars": {
+    "APP_CONFIG_ENVIRONMENT_NAME": "test",
+    "APP_CONFIG_LOGIN_MODE": "open",
+    "APP_CONFIG_SESSION_SECRET": "test",
+  },
 }

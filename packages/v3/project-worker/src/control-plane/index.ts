@@ -4,12 +4,11 @@
 // the .well-known metadata, and token-validation on /mcp. EVERYTHING ELSE (login, session, console,
 // /authorize consent, project creation) falls through to `app`.
 //
-// This is the boundary that keeps us out of the app/os client-juggling mess:
 //   • first-party surfaces  → session cookie via `app`   (0 OAuth clients)
 //   • external MCP clients  → OAuth on /mcp, self-describing via CIMD  (0 hand-registered clients)
-// See apps/os/docs/simplification/wayfinder/auth-worker-design.md.
 
 import { OAuthProvider } from "@cloudflare/workers-oauth-provider";
+import { appConfigOf } from "../app-config.ts";
 import type { Env } from "./env.ts";
 import { ANONYMOUS, app } from "./app.ts";
 import { mcpHandler } from "./mcp.ts";
@@ -17,21 +16,21 @@ import { mcpHandler } from "./mcp.ts";
 const provider = new OAuthProvider<Env>({
   apiRoute: "/mcp", // the ONLY OAuth-protected boundary
   apiHandler: mcpHandler,
-  defaultHandler: app, // login + session + /authorize consent + console + CIMD test-client doc
+  defaultHandler: app, // login + session + /authorize consent + console
   authorizeEndpoint: "/authorize",
   tokenEndpoint: "/token",
   scopesSupported: ["project"],
   allowPlainPKCE: false, // OAuth 2.1: S256 only
-  clientIdMetadataDocumentEnabled: true, // CIMD — clients register themselves by URL (default, proved on HTTPS)
-  clientRegistrationEndpoint: "/register", // DCR — the spec-sanctioned MAY-fallback (used for the local http proof)
+  clientIdMetadataDocumentEnabled: true, // CIMD — clients register themselves by URL (proved on HTTPS)
+  clientRegistrationEndpoint: "/register", // DCR — the spec-sanctioned MAY-fallback (the local http proof)
 });
 
-// WIDE-OPEN topology (LOGIN_MODE=open, the Raspberry-Pi floor): the box has no OAuth, so `/mcp` must be
-// TOKENLESS — we short-circuit before the provider's apiRoute would 401, running the MCP server with the
-// single anonymous identity. Every other mode goes through the provider unchanged.
+// `open` login mode (APP_CONFIG_LOGIN_MODE): no OAuth, so `/mcp` is TOKENLESS — short-circuit before
+// the provider's apiRoute would 401, running the MCP server with the single anonymous identity. `email`
+// mode goes through the provider unchanged.
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
-    if ((env.LOGIN_MODE ?? "email") === "open" && new URL(request.url).pathname === "/mcp") {
+    if (appConfigOf(env).loginMode === "open" && new URL(request.url).pathname === "/mcp") {
       (ctx as ExecutionContext & { props: unknown }).props = {
         sub: ANONYMOUS.sub,
         email: ANONYMOUS.email,

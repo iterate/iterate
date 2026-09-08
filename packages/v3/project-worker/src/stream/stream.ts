@@ -25,8 +25,8 @@
 // constructor calls `appendCreatedAndWokenEvents()` before any door opens (the apps/os shape), so a probe on a never-seen
 // context materializes it — deliberately; what is worth reaching is worth recording.
 //
-// The CONTEXT seam (`interface ReachableContext` + `localContext`) lives at the bottom: what one context
-// reaches another THROUGH, uniform-async and REAL-typed.
+// The CONTEXT seam (`interface ReachableContext`) lives at the bottom: what one context reaches
+// another THROUGH, uniform-async and REAL-typed.
 
 import { codedError, errorCode, reportIssue } from "../lib/errors.ts";
 import type { ItxExpressionInput } from "../context/expression.ts";
@@ -38,7 +38,6 @@ import {
   type StreamEventInput,
 } from "./events.ts";
 import { LiveState } from "./live-state.ts";
-import { consumesEvent } from "./processor.ts";
 import { StreamStorage, type DurableObjectStorageSlice } from "./stream-storage.ts";
 
 /** One page of the log: the events after an offset, how far the scan reached (the range a client
@@ -197,12 +196,12 @@ export class Stream {
     } else {
       this.#coreReducedState = contract.initialState();
       this.#coreReducedThroughOffset = 0;
-      // Budgeted pages (READ_PAGE_BUDGET_CHARS): this runs in the DO constructor, where a page that
+      // Budgeted pages (READ_PAGE_BUDGET_BYTES): this runs in the DO constructor, where a page that
       // did not fit the isolate would be a reboot loop — every wake re-running the same re-reduce.
       while (this.#coreReducedThroughOffset < this.#highestDurableOffset) {
         let page: StreamPage;
         try {
-          ({ page } = this.#readPage(this.#coreReducedThroughOffset, 500, READ_PAGE_BUDGET_BYTES));
+          page = this.read(this.#coreReducedThroughOffset, 500);
         } catch (error) {
           // An unreadable row must not brick the context on every wake: report it, skip it, go on.
           if (errorCode(error) !== "EVENT_UNREADABLE") throw error;
@@ -459,12 +458,10 @@ export class Stream {
     return committedEvents;
   }
 
-  /** Reduce one durable event into the core reduced state — the commit and the constructor's
-   *  version-bump re-reduce both come here. A malformed control event must not wedge the stream:
-   *  record the skip, move on. */
+  /** Reduce one event into the core reduced state — the commit and the constructor's version-bump
+   *  re-reduce both come here (the reduce itself ignores ephemerals and the types it does not own).
+   *  A malformed control event must not wedge the stream: record the skip, move on. */
   #reduceEventIntoCoreReducedState(event: StreamEvent, state: CoreState): CoreState {
-    if (event.ephemeral || !consumesEvent(this.#coreProcessor.contract.consumes, event))
-      return state;
     try {
       return this.#coreProcessor.reduce({ event, state }) ?? state;
     } catch (err) {
@@ -481,21 +478,11 @@ export class Stream {
    *  once are an accepted client-behaviour limit (e2e/stream-uncontrolled-degradation CONCURRENT
    *  READERS documents why, and how it would be fixed). */
   read(afterOffset = 0, limit = 500): StreamPage {
-    return this.#readPage(afterOffset, limit, READ_PAGE_BUDGET_BYTES).page;
-  }
-
-  /** The scan itself — a page of at most `limit` rows and `budgetBytes` of bodies, plus what it
-   *  holds in bytes (the door meters it). */
-  #readPage(
-    afterOffset: number,
-    limit: number,
-    budgetBytes: number,
-  ): { page: StreamPage; bytes: number } {
     limit = Math.min(Math.max(1, limit), READ_PAGE_MAX_EVENTS); // limit 0 crashed the cut check (userspace-reachable)
-    const { rows, bytes, nextRowDidNotFit } = this.storage.readEventPage(
+    const { rows, nextRowDidNotFit } = this.storage.readEventPage(
       afterOffset,
       limit,
-      budgetBytes,
+      READ_PAGE_BUDGET_BYTES,
     );
     // Chunk rows never enter a page, so it counts EVENTS and its scannedThroughOffset is an event
     // offset — never a chunk boundary.
@@ -525,10 +512,7 @@ export class Stream {
     const lastOffset = events.length ? events[events.length - 1].offset : afterOffset;
     const atHead =
       !nextRowDidNotFit && (events.length < limit || lastOffset >= highestDurableOffset);
-    return {
-      page: { events, scannedThroughOffset: atHead ? highestDurableOffset : lastOffset, atHead },
-      bytes,
-    };
+    return { events, scannedThroughOffset: atHead ? highestDurableOffset : lastOffset, atHead };
   }
 
   /** Resolve with the next event matching `filter` — or the first COMMITTED durable match already
@@ -549,7 +533,7 @@ export class Stream {
     const timeoutMs = Math.min(filter.timeoutMs ?? 30_000, 120_000);
     let cursor = afterOffset;
     for (;;) {
-      const { page } = this.#readPage(cursor, 500, READ_PAGE_BUDGET_BYTES);
+      const page = this.read(cursor, 500);
       for (const event of page.events)
         if (type === undefined || event.type === type) return Promise.resolve(event);
       if (page.atHead) break;
@@ -646,37 +630,17 @@ export class Stream {
 }
 
 // ── THE STREAM / CONTEXT SEAM, uniform-async and REAL-typed ──
-//
-// What one context reaches another THROUGH — a sibling by name, or the own-path parent. Naming it
-// with the REAL event types (StreamEventInput / StreamEvent / StreamPage) and making the whole
-// surface Promise-returning is what lets every backing satisfy it with ZERO casts:
-//   • a sibling `DurableObjectStub<IterateContextDurableObject>` — Workers-RPC methods already return
-//     Promises of these exact types, so it IS a ReachableContext structurally (no `as unknown as`);
-//   • the own parent — `localContext(this)`, whose only wrap is `read` (sync on the class, async
-//     on the wire — one microtask on a path that then does real I/O anyway);
-//   • an off-platform Pi — its `RpcTarget` returns Promises over capnweb.
 
 /** A CONTEXT reachable over the wire: the stream verbs (append/read), plus `invoke` for capability
- *  dispatch. This is what `itx.cd('/x')` routes through and what `deps.context(path)`
- *  returns. The IterateContextDurableObject is one; a sibling DO stub and the own-path adapter satisfy it. */
+ *  dispatch — what `itx.cd('/x')` routes through and what `deps.context(path)` returns. Named with
+ *  the REAL event types (StreamEventInput / StreamEvent / StreamPage) and Promise-returning
+ *  throughout, so every backing satisfies it structurally, with ZERO casts: the
+ *  IterateContextDurableObject itself (its own path hands `this` — its `read` is the Stream's
+ *  synchronous `read` behind an async door), a sibling `DurableObjectStub<IterateContextDurableObject>`
+ *  (Workers-RPC methods already return Promises of these exact types), an off-platform Pi's
+ *  `RpcTarget` over capnweb. */
 export interface ReachableContext {
   append(...events: StreamEventInput[]): Promise<StreamEvent[]>;
   read(afterOffset?: number, limit?: number): Promise<StreamPage>;
   invoke(call: ItxExpressionInput): Promise<unknown>;
-}
-
-/** The own IterateContextDurableObject (same isolate) as a uniform-async ReachableContext — a
- *  straight pass-through: the DO exposes `read`/`append`/`invoke` Promise-returning (its `read` is a
- *  thin async wrap of the Stream's SYNCHRONOUS `read` at this cross-hop door). Built once per DO,
- *  never per call. */
-export function localReachableContext(self: {
-  append(...events: StreamEventInput[]): Promise<StreamEvent[]>;
-  read(afterOffset?: number, limit?: number): Promise<StreamPage>;
-  invoke(call: ItxExpressionInput): Promise<unknown>;
-}): ReachableContext {
-  return {
-    append: (...events) => self.append(...events),
-    read: (afterOffset, limit) => self.read(afterOffset, limit),
-    invoke: (call) => self.invoke(call),
-  };
 }

@@ -26,18 +26,18 @@ JOIN org_members m ON m.org_id = o.id
 WHERE m.user_id = :userId
 ORDER BY o.name ASC;
 
--- ── Projects (the id IS the slug — one name for the directory row, the DO, and the host label) ───────
+-- ── Projects (the id is ONE DNS-safe name — the directory row, the DO, and the host label) ──────────
 
 /** @name createProject */
-INSERT INTO projects (id, slug, org_id) VALUES (:id, :slug, :orgId)
+INSERT INTO projects (id, org_id) VALUES (:id, :orgId)
 ON CONFLICT DO NOTHING;
 
-/** @name getProjectBySlug */
-SELECT id, slug, org_id FROM projects WHERE slug = :slug;
+/** @name getProject */
+SELECT id, org_id FROM projects WHERE id = :id;
 
 /** @name listProjectsForUser */
-SELECT p.id, p.slug, p.org_id, m.role
+SELECT p.id, p.org_id, m.role
 FROM projects p
 JOIN org_members m ON m.org_id = p.org_id
 WHERE m.user_id = :userId
-ORDER BY p.slug ASC;
+ORDER BY p.id ASC;

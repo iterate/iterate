@@ -9,8 +9,9 @@ import { jsonEqual } from "../lib/patch.ts";
 export { jsonEqual };
 
 /** What `append` accepts: the event body, before the stream assigns its committed identity. Plain
- *  types — the door (stream.ts `append`, step 1) checks the two rules by hand: `type` is a non-empty
- *  string, and an ephemeral event carries no idempotencyKey. */
+ *  types — the door (stream.ts `append`, step 1) checks ONE rule by hand: `type` is a non-empty
+ *  string. (An ephemeral's `idempotencyKey` dedupes like any other but is never stored — ephemerals
+ *  never reach the idempotency column.) */
 export type StreamEventInput = {
   /** Convention: `events.iterate.com/<domain>/<fact>`. */
   type: string;
@@ -34,8 +35,8 @@ export type StreamEventInput = {
   offset?: number;
   /** An EPHEMERAL event rides the stream to live subscribers but is NEVER persisted: it consumes
    *  an offset (which survives as a valid gap), triggers zero reduce/cursor writes, and its body is
-   *  gone the moment the incarnation ends — it cannot be redelivered by anyone. `ephemeral: false`
-   *  is a loud input error, not a synonym for durable. */
+   *  gone the moment the incarnation ends — it cannot be redelivered by anyone. A durable OMITS the
+   *  field: the type admits only `true` (the door reads the flag's truthiness and checks nothing). */
   ephemeral?: true;
 };
 
@@ -63,7 +64,3 @@ export function sameIdempotentEvent(
     jsonEqual(existingEvent.metadata, requestedEvent.metadata)
   );
 }
-
-// The contract helper `defineProcessorContract` (the zod-based authoring surface) lives on the SDK
-// side now — sdk/processor-contract.ts — so this module and the edge/DO script it belongs to stay
-// zod-free. The platform's own contract is hand-built in stream/core-processor.ts.

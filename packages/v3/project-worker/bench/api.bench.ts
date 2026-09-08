@@ -10,7 +10,7 @@
 //   facet     — a processor's COLD materialization on a fresh context (loader + class + first call)
 
 import { bench, describe } from "vitest";
-import { freshCtx, openItx, session, sleep, workerUrl } from "../e2e/support/client.ts";
+import { freshCtx, openItx, session, workerUrl } from "../e2e/support/client.ts";
 import { enableFixtureProcessor } from "../e2e/support/sources.ts";
 
 const TIME = Number(process.env.BENCH_TIME_MS ?? 4000);
@@ -250,6 +250,3 @@ describe("facet cold start", () => {
     },
   );
 });
-
-// keep the module's sleep import used for future pacing scenarios
-void sleep;

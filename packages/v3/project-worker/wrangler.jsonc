@@ -1,8 +1,8 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "project-worker",
-  // The build hook regenerates the bundled processor SDK (src/generated/*) before wrangler
-  // bundles src directly. (capnweb-validate was removed — no mirror, no decorators.)
+  // The build hook regenerates the bundled processor SDK (src/generated/*, gitignored) before
+  // wrangler bundles src — for `wrangler dev` and `wrangler deploy` alike.
   "main": "src/worker.ts",
   "build": {
     "command": "node build-sdk.mjs",
@@ -24,15 +24,12 @@
   // proxied — originless, the route terminates it) lives in the zone; the route is this line.
   "routes": [{ "pattern": "*.project-worker.iterate.com/*", "zone_name": "iterate.com" }],
 
-  // A capnweb WebSocket session is pumped by ONE long-lived stateless invocation, and every
-  // edge->DO `invoke` it makes is a subrequest counted against that one invocation for the session's
-  // whole life — so the 10,000 paid default is hit by an ordinary long-lived client (3 appends/s for
-  // ~1 h). Raise the ceiling; only subrequests actually made are billed, so this costs nothing until
-  // used. (The durable fix is client-side batching/reconnect — docs/perf learnings F-subreq.)
-  // subrequests: a long-lived capnweb WS session accumulates against its one pump invocation (above).
-  // cpu_ms: a cold re-reduce over a long log, or a large per-commit fan-out, is CPU-bound on the DO's
-  // single thread; 5 min (the paid max) gives 10x the 30 s default before a CPU-limit abort. Neither
-  // is billed until used.
+  // subrequests: a capnweb WebSocket session is pumped by ONE long-lived stateless invocation, and
+  // every edge->DO `invoke` it makes is a subrequest counted against that one invocation for the
+  // session's whole life — the 10,000 paid default is hit by an ordinary long-lived client
+  // (3 appends/s for ~1 h). cpu_ms: a cold re-reduce over a long log, or a large per-commit fan-out,
+  // is CPU-bound on the DO's single thread; 5 min (the paid max) gives 10x the 30 s default before a
+  // CPU-limit abort. Neither is billed until used.
   "limits": { "subrequests": 1000000, "cpu_ms": 300000 },
 
   // The hosted /demo page as a static asset (build-sdk.mjs writes public/demo.html): served by the
@@ -60,14 +57,13 @@
   "durable_objects": {
     "bindings": [{ "name": "ITERATE_CONTEXT", "class_name": "IterateContextDurableObject" }],
   },
-  // The DO's lifecycle, declaratively: one SQLite-backed class, no migration history to replay
-  // (the legacy `migrations` array is gone; a deployed namespace keeps its data across this change).
+  // The DO's lifecycle, declaratively: one SQLite-backed class, no migration history to replay.
   "exports": {
     "IterateContextDurableObject": { "type": "durable-object", "storage": "sqlite" },
   },
 
-  // The control plane runs IN-PROCESS now (src/control-plane) — no fallback worker. The directory
-  // (projects/orgs/slugs/routes/api-keys) is a D1; egress + admission are in-process.
+  // The in-process control plane's directory (src/control-plane/definitions.sql: users, orgs,
+  // org_members, projects — a project's id IS its slug).
   "d1_databases": [
     {
       "binding": "DB",
@@ -76,8 +72,7 @@
     },
   ],
 
-  // Per-project secret store behind the egress door (secret:<projectId>:<name>). Proves the middleware
-  // rebuilds a WS-upgrade Request to substitute a header without breaking the 101 (target-core §6.0 risk #4).
+  // SECRETS_KV = the per-project secret store egress substitutes from (secret:<projectId>:<name>).
   // OAUTH_KV = the in-process OAuth AS's provider store (grants/tokens/DCR clients).
   "kv_namespaces": [
     { "binding": "SECRETS_KV", "id": "6df3b8c18a624d078d1a1da66f3251c0" },
@@ -86,19 +81,19 @@
     { "binding": "OAUTH_KV", "id": "b8efbdc3253840fa95331a80efbeb03d" },
   ],
 
-  // Configuration (src/app-config.ts): `APP_CONFIG_*` vars, parsed once per isolate, loud on a bad one.
-  // Bindings are declared above; a var is what differs between deployments of the same code.
+  // Configuration (src/app-config.ts): `APP_CONFIG_*` vars — the ONE door, parsed once per isolate,
+  // loud on a bad or unknown one. Bindings are declared above; a var is what differs between
+  // deployments of the same code. (APP_CONFIG_PROJECT_TOKEN_SECRET is a wrangler secret.)
   "vars": {
     "APP_CONFIG_ENVIRONMENT_NAME": "poc",
     "APP_CONFIG_PROJECT_HOSTNAME_BASE": "project-worker.iterate.com",
     // The Artifacts git remote is `https://<ACCOUNT_ID>.artifacts.cloudflare.net/git/<NAMESPACE>/<repo>.git`
     // — the `itx.repos` layer builds it from these when it does git over HTTPS.
-    "ARTIFACTS_ACCOUNT_ID": "04b3b57291ef2626c6a8daa9d47065a7",
-    "ARTIFACTS_NAMESPACE": "project-worker-repos",
+    "APP_CONFIG_ARTIFACTS_ACCOUNT_ID": "04b3b57291ef2626c6a8daa9d47065a7",
+    "APP_CONFIG_ARTIFACTS_NAMESPACE": "project-worker-repos",
     // The in-process control plane: `open` = the no-login floor (this pass's stub); a committed demo
-    // session secret (Doppler-backed in a real deploy). PLATFORM_SECRETS_KV stays unbound (self-host
-    // passthrough) until the hosted platform binds it.
-    "LOGIN_MODE": "open",
-    "SESSION_SECRET": "b3f1c0a7d2e94f6581ac37bde90f24a15c68d7e3049fba21c5e6d8790a1b2c3d",
+    // session secret (a wrangler secret in a real deploy).
+    "APP_CONFIG_LOGIN_MODE": "open",
+    "APP_CONFIG_SESSION_SECRET": "b3f1c0a7d2e94f6581ac37bde90f24a15c68d7e3049fba21c5e6d8790a1b2c3d",
   },
 }

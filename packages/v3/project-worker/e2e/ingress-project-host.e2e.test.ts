@@ -36,6 +36,7 @@ export default class Site extends WorkerEntrypoint {
         url: request.url,
         itxHeaders: [...request.headers.keys()].filter((name) => name.startsWith("x-itx-")),
         principal: JSON.parse(request.headers.get("x-itx-principal") || "null"),
+        cookie: request.headers.get("cookie"),
       });
     return new Response(
       "<!doctype html><title>site</title><script src=\"app.js\"></script><p>" +
@@ -106,8 +107,17 @@ test("the session door on a project host: a token becomes the cookie, the cookie
   expect(cookie).toContain("HttpOnly");
 
   const cookieHeader = cookie.split(";")[0];
-  const seen = JSON.parse((await fetchProjectHost(host, "/echo", { cookie: cookieHeader })).text);
+  const seen = JSON.parse(
+    (await fetchProjectHost(host, "/echo", { cookie: `${cookieHeader}; theme=dark` })).text,
+  );
   expect(seen.principal).toEqual(principal);
+  // the app (loaded code) sees the verified stamp, never the platform's cookie — the visitor's own
+  // cookies still reach it
+  expect(seen.cookie).toBe("theme=dark");
+  // the door's redirect never leaves the host
+  expect(
+    (await fetchProjectHost(host, "/.itx/session?logout&next=//evil.example/x")).headers.location,
+  ).toBe("/");
   // without the cookie there is no principal; a visitor cannot stamp one
   const forged = JSON.parse(
     (

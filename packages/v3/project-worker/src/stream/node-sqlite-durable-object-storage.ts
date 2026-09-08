@@ -8,7 +8,7 @@
 import { DatabaseSync } from "node:sqlite";
 import type { DurableObjectStorageSlice } from "./stream-storage.ts";
 
-export function nodeSqliteDurableObjectStorage(): DurableObjectStorageSlice & { close(): void } {
+export function nodeSqliteDurableObjectStorage(): DurableObjectStorageSlice {
   const db = new DatabaseSync(":memory:");
   return {
     sql: {
@@ -36,6 +36,5 @@ export function nodeSqliteDurableObjectStorage(): DurableObjectStorageSlice & { 
       }
     },
     setAlarm: async () => {},
-    close: () => db.close(),
   };
 }

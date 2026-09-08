@@ -10,7 +10,7 @@
 // userspace processors reducing side by side.
 
 import { expect, test } from "vitest";
-import { freshCtx, openItx, processorNames, subscriptions, until } from "./support/client.ts";
+import { freshCtx, openItx, processorNames, subscriptions } from "./support/client.ts";
 import { enableFixtureProcessor } from "./support/sources.ts";
 
 /** ONE event type for the rewrite-rule table: a set and an un-set (`target: null`) alike. */
@@ -53,33 +53,6 @@ test("facet spine: cold catch-up + driven reduces + the subscriptions table list
   expect(row.target).toBe("itx.builtins.facets.get('tally').processEventBatch"); // the platform's spelling, minus the source
   expect(row.hostedFacet).toEqual({ name: "tally", className: "TallyDurableObject" });
   expect(row.cursor).toBeUndefined();
-});
-
-// An enablement is a subscription, and the SAME NAME REPLACES — there is no shadow stack to pop.
-// Enabling twice appends ONE more configured event (the verb is literally "append the event"; the
-// map entry is replaced), and ONE disable turns the processor off: the row is gone and the facet
-// is deleted.
-test("enable twice, disable once: same name replaces (no shadow stack) — one row, ONE more configured event, off after one disable", async () => {
-  const itx = openItx(freshCtx("facet-twice"));
-  await enableFixtureProcessor(itx, "tally");
-  const logOnce = await itx.readEvents(0, 500);
-  await enableFixtureProcessor(itx, "tally"); // the same subscription again ⇒ one more configured event, same row
-  const logTwice = await itx.readEvents(0, 500);
-  expect(logTwice.events.length).toBe(logOnce.events.length + 1);
-  expect(await processorNames(itx)).toEqual(["tally"]);
-
-  await itx.append({ type: "mark" });
-  await until("tally counted the mark", async () => {
-    const s = await itx.invoke("itx.facets.get('tally').snapshot()");
-    return s.state?.counts?.mark === 1 ? s : undefined;
-  });
-
-  await itx.disableProcessor("tally"); // ONE disable
-  expect(await processorNames(itx)).toEqual([]);
-  await expect(itx.invoke("itx.facets.get('tally').snapshot()")).rejects.toThrow(/no facet/);
-  // a later mark reaches no processor — nothing re-materializes a disabled facet
-  await itx.append({ type: "mark" });
-  await expect(itx.invoke("itx.facets.get('tally').snapshot()")).rejects.toThrow(/no facet/);
 });
 
 test("facet address: the built-in door, a rewrite rule onto it, barrier verb, probe-resistance", async () => {

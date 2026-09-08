@@ -1,7 +1,7 @@
 // The subscriptions table's one COMMAND (src/stream/subscriptions.ts): `subscriptionConfiguredEvent`
 // BUILDS the event the caller appends — a configure, a replace, or (target null) a removal; a refusal
-// (a dotted name, the reserved `core`, a target not rooted at itx) THROWS at the door, nothing
-// appended. A subscription is PURE DATA — a name, a target expression stored as its printed string,
+// (a dotted name, a target not rooted at itx) THROWS at the door, nothing appended (the reserved
+// `core` is the APPEND door's refusal — stream.test.ts). A subscription is PURE DATA — a name, a target expression stored as its printed string,
 // an optional `consumes` filter; nothing here knows HOW a target is served (subscription-delivery.ts
 // decides that by evaluating it). The rows THEMSELVES are `core` state, reduced here through
 // `CoreStreamProcessor` exactly as the DO does; the reduce's own pins (replace / drop / halted /
@@ -121,14 +121,6 @@ describe("configure — ONE event: set, replace, or remove", () => {
     expect(() => configure({ name: "has space", target: "itx.whoami" })).toThrow(/one segment/);
     expect(() => configure({ name: "a.b", target: null })).toThrow(/one segment/);
     expect(events).toHaveLength(0);
-  });
-
-  test("`core` is RESERVED (the core reduce's own address); other names are ordinary", () => {
-    const { configure, events } = setup();
-    expect(() => configure({ name: "core", target: "itx.whoami" })).toThrow(/reserved/);
-    expect(events).toHaveLength(0);
-    configure({ name: "subscriptions", target: "itx.whoami" });
-    expect(events.map((e) => (e.payload as { name: string }).name)).toEqual(["subscriptions"]);
   });
 
   test("the stored target IS the parsed form: an array target is stored as given (shape-checked, never printed), and the row reduces to it", () => {

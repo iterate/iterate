@@ -5,7 +5,7 @@ import { signProjectToken, type ProjectTokenClaims } from "../../src/principal.t
 import { projectHostsAreLocal } from "./project-host.ts";
 import { E2E_PROJECT_TOKEN_SECRET } from "./worker-config.ts";
 
-export function projectTokenSecret(): string {
+function projectTokenSecret(): string {
   if (projectHostsAreLocal()) return E2E_PROJECT_TOKEN_SECRET;
   const secret = process.env.PROJECT_TOKEN_SECRET;
   if (!secret)

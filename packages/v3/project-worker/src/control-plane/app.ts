@@ -1,10 +1,11 @@
 // The default handler — everything that is NOT the OAuth token/metadata endpoints or the /mcp API route.
-// This is the FIRST-PARTY world (design §2): the login form, the session, the home page/console, and the
-// OAuth /authorize consent page (which reuses the same session AND lets you create an org + project on the
-// spot — the "emerge with a project during MCP auth" flow, ADR 0029). No first-party surface is ever an
-// OAuth client; they all just carry the session cookie.
+// This is the FIRST-PARTY world: the login form, the session, the home page/console, and the OAuth
+// /authorize consent page (which reuses the same session AND lets you create an org + project on the
+// spot). No first-party surface is ever an OAuth client; they all just carry the session cookie.
 
-import type { Env, Handler, LoginMode } from "./env.ts";
+import { appConfigOf } from "../app-config.ts";
+import { sameOriginPath } from "../project-host.ts";
+import type { Env, Handler } from "./env.ts";
 import { directory } from "./directory.ts";
 import { slugify } from "./ids.ts";
 import { clearSessionCookie, currentSession, setSessionCookie, type Session } from "./session.ts";
@@ -15,18 +16,6 @@ const esc = (s: string) =>
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;");
-
-/** Post-login redirect target, hardened against open redirects: only SAME-ORIGIN. Resolving `next` against
- *  our origin turns `http://evil.com` and protocol-relative `//evil.com` into a foreign origin → rejected
- *  to "/". A same-origin absolute URL (e.g. the /authorize URL) collapses to its path+query. */
-function safeNext(next: string, origin: string): string {
-  try {
-    const u = new URL(next, origin);
-    return u.origin === origin ? u.pathname + u.search : "/";
-  } catch {
-    return "/";
-  }
-}
 
 function page(title: string, body: string, headers: HeadersInit = {}): Response {
   const html = `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -56,12 +45,11 @@ ${body}`;
  *  definitions.sql (so its org membership's FOREIGN KEY holds on every path, /mcp included). */
 export const ANONYMOUS: Session = { sub: "user_anonymous", email: "anonymous", iat: 0 };
 
-/** The session for a request: the cookie (email mode), else — in `open` mode — the anonymous identity. */
+/** The session for a request: in `open` mode ALWAYS the anonymous identity (a cookie cannot make a
+ *  second identity, so /mcp and the console agree on who owns what); in `email` mode the cookie. */
 async function identity(request: Request, env: Env): Promise<Session | null> {
-  const cookie = await currentSession(request, env.SESSION_SECRET);
-  if (cookie) return cookie;
-  const mode: LoginMode = env.LOGIN_MODE ?? "email";
-  return mode === "open" ? ANONYMOUS : null;
+  const { sessionSecret, loginMode } = appConfigOf(env);
+  return loginMode === "open" ? ANONYMOUS : currentSession(request, sessionSecret);
 }
 
 function loginForm(next: string, note = ""): string {
@@ -85,7 +73,7 @@ async function home(_request: Request, env: Env, session: Session): Promise<Resp
     ? `<ul>${orgs.map((o) => `<li>${esc(o.name)} <span class="muted">(${esc(o.role ?? "")})</span></li>`).join("")}</ul>`
     : `<p class="muted">No orgs yet.</p>`;
   const projList = projects.length
-    ? `<ul>${projects.map((p) => `<li><code>${esc(p.slug)}</code> <span class="muted">in ${esc(p.orgId)}</span></li>`).join("")}</ul>`
+    ? `<ul>${projects.map((p) => `<li><code>${esc(p.id)}</code> <span class="muted">in ${esc(p.orgId)}</span></li>`).join("")}</ul>`
     : `<p class="muted">No projects yet.</p>`;
   return page(
     "Control plane",
@@ -134,8 +122,8 @@ async function authorize(request: Request, env: Env, session: Session | null): P
           "Enter a project slug.",
         );
       const orgName = String(form.get("orgName") ?? "").trim() || `${session.email}'s org`;
-      const { project } = await dir.emerge(session.sub, orgName, slug); // create org + membership + project
-      projectId = project.id;
+      const org = await dir.ensureOrg(session.sub, orgName);
+      projectId = (await dir.createProject(org.id, slug)).id;
     }
     const scope = oauthRequest.scope.length ? oauthRequest.scope : ["project"];
     const { redirectTo } = await env.OAUTH_PROVIDER.completeAuthorization({
@@ -168,7 +156,7 @@ async function authorizeConsent(
   const existing = projects
     .map(
       (p) =>
-        `<label><input type="radio" name="projectId" value="${esc(p.id)}"> <code>${esc(p.slug)}</code></label>`,
+        `<label><input type="radio" name="projectId" value="${esc(p.id)}"> <code>${esc(p.id)}</code></label>`,
     )
     .join("");
   return page(
@@ -204,11 +192,11 @@ export const app: Handler = {
       const user = await dir.upsertUser(email);
       const cookie = await setSessionCookie(
         { sub: user.id, email: user.email, iat: Math.floor(Date.now() / 1000) },
-        env.SESSION_SECRET,
+        appConfigOf(env).sessionSecret,
       );
       return new Response(null, {
         status: 302,
-        headers: { location: safeNext(next, url.origin), "set-cookie": cookie },
+        headers: { location: sameOriginPath(next, url.origin), "set-cookie": cookie },
       });
     }
 
@@ -235,7 +223,7 @@ export const app: Handler = {
       const back = new Response(null, { status: 302, headers: { location: "/" } });
       if (!slug)
         return json ? Response.json({ error: "a slug is required" }, { status: 400 }) : back;
-      const org = await dir.ensureOrg(session.sub, session.email);
+      const org = await dir.ensureOrg(session.sub, `${session.email}'s org`);
       const project = await dir.createProject(org.id, slug);
       return json ? Response.json(project) : back;
     }

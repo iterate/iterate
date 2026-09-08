@@ -1,81 +1,30 @@
-// The session — a signed cookie that says "you are this user". This is the FIRST-PARTY auth mechanism
-// (design §2): browser pages carry it, no OAuth involved. OAuth only appears at the MCP/device edge, and
-// its /authorize consent reuses whatever session this module minted. One login, reused everywhere.
+// The session — a signed cookie that says "you are this user". This is the FIRST-PARTY auth mechanism:
+// browser pages carry it, no OAuth involved. OAuth only appears at the MCP edge, and its /authorize
+// consent reuses whatever session this module minted. One login, reused everywhere. The token is the
+// platform's one signed-claims codec (src/principal.ts) under the session secret.
+
+import { signClaims, verifyClaims } from "../principal.ts";
 
 /** The identity behind a browser session. */
 export interface Session {
-  /** Directory user id, e.g. `user:ada@example.com`. */
+  /** Directory user id, e.g. `user_ada@example.com`. */
   sub: string;
   email: string;
   /** Issued-at (epoch seconds). */
   iat: number;
 }
 
-const COOKIE = "kernel_auth_session";
+const COOKIE = "itx-control-plane-session";
 const MAX_AGE = 60 * 60 * 24 * 30; // 30 days
 
-const enc = new TextEncoder();
-const dec = new TextDecoder();
-
-function b64url(bytes: Uint8Array): string {
-  let s = "";
-  for (const b of bytes) s += String.fromCharCode(b);
-  return btoa(s).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
-}
-
-function unb64url(s: string): Uint8Array {
-  const pad = s.length % 4 === 0 ? "" : "=".repeat(4 - (s.length % 4));
-  const bin = atob(s.replaceAll("-", "+").replaceAll("_", "/") + pad);
-  const out = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
-  return out;
-}
-
-async function hmacKey(secret: string): Promise<CryptoKey> {
-  return crypto.subtle.importKey(
-    "raw",
-    enc.encode(secret),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign", "verify"],
-  );
-}
-
-/** `<payload>.<sig>`, payload = base64url(JSON(session)), sig = base64url(HMAC-SHA256(payload)). */
-async function signSession(session: Session, secret: string): Promise<string> {
-  const payload = b64url(enc.encode(JSON.stringify(session)));
-  const sig = await crypto.subtle.sign("HMAC", await hmacKey(secret), enc.encode(payload));
-  return `${payload}.${b64url(new Uint8Array(sig))}`;
-}
-
-/** Verify + decode a token; null if malformed or the signature doesn't check out. */
+/** The session a token carries, or null: malformed, a bad signature, the wrong shape, or past
+ *  MAX_AGE (the signed token is otherwise valid forever — Max-Age is only a browser hint, so a
+ *  captured token could be replayed indefinitely). */
 async function verifySession(token: string, secret: string): Promise<Session | null> {
-  const dot = token.indexOf(".");
-  if (dot < 1) return null;
-  const payload = token.slice(0, dot);
-  const sig = token.slice(dot + 1);
-  let ok: boolean;
-  try {
-    ok = await crypto.subtle.verify(
-      "HMAC",
-      await hmacKey(secret),
-      unb64url(sig),
-      enc.encode(payload),
-    );
-  } catch {
-    return null;
-  }
-  if (!ok) return null;
-  try {
-    const session = JSON.parse(dec.decode(unb64url(payload))) as Session;
-    // Shape + server-side expiry: the signed token is otherwise valid forever (Max-Age is only a browser
-    // hint), so a captured token could be replayed indefinitely. Reject anything past MAX_AGE.
-    if (typeof session?.sub !== "string" || typeof session?.iat !== "number") return null;
-    if (Math.floor(Date.now() / 1000) - session.iat > MAX_AGE) return null;
-    return session;
-  } catch {
-    return null;
-  }
+  const session = (await verifyClaims(token, secret)) as Session | null;
+  if (typeof session?.sub !== "string" || typeof session?.iat !== "number") return null;
+  if (Math.floor(Date.now() / 1000) - session.iat > MAX_AGE) return null;
+  return session;
 }
 
 function readCookie(request: Request): string | null {
@@ -97,7 +46,7 @@ export async function currentSession(request: Request, secret: string): Promise<
 
 /** `Set-Cookie` value that establishes the session. */
 export async function setSessionCookie(session: Session, secret: string): Promise<string> {
-  const token = await signSession(session, secret);
+  const token = await signClaims(session, secret);
   return `${COOKIE}=${token}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${MAX_AGE}`;
 }
 

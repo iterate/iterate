@@ -1,10 +1,7 @@
-// The /mcp API route — the ONLY OAuth-protected boundary (design §2). The provider validated the bearer
-// (an OAuth access token) BEFORE this runs and put the granted props on ctx.props; in `open` login mode
-// index.ts short-circuits here with the anonymous identity. A real MCP server
-// (@modelcontextprotocol/server) mounts here, scoped to that identity.
-//
-// The headline proof lives in `whoami`: after the OAuth dance where the caller created an org+project at
-// /authorize, the token's props carry that projectId — so whoami reflects the just-emerged project.
+// The /mcp API route — the ONLY OAuth-protected boundary. The provider validated the bearer (an OAuth
+// access token) BEFORE this runs and put the granted props on ctx.props; in `open` login mode index.ts
+// short-circuits here with the anonymous identity. An MCP server (@modelcontextprotocol/server) mounts
+// here, scoped to that identity: `whoami` reflects the project the token was granted at /authorize.
 
 import { createMcpHandler, fromJsonSchema, McpServer } from "@modelcontextprotocol/server";
 import { CfWorkerJsonSchemaValidator } from "@modelcontextprotocol/server/validators/cf-worker";
@@ -62,9 +59,7 @@ function buildServer(env: Env, props: AuthProps): McpServer {
     async () => {
       const ps = await dir.listProjects(props.sub);
       return text(
-        ps.length
-          ? ps.map((p) => `${p.slug}  (org ${p.orgId}, ${p.role})`).join("\n")
-          : "(none yet)",
+        ps.length ? ps.map((p) => `${p.id}  (org ${p.orgId}, ${p.role})`).join("\n") : "(none yet)",
       );
     },
   );
@@ -81,12 +76,9 @@ function buildServer(env: Env, props: AuthProps): McpServer {
       try {
         const slug = str(a, "slug");
         if (!slug) return text("create_project needs a slug", true);
-        const { org, project } = await dir.emerge(
-          props.sub,
-          str(a, "orgName") || `${props.email}'s org`,
-          slug,
-        );
-        return text(`created project '${project.slug}' in org '${org.name}' (${org.id})`);
+        const org = await dir.ensureOrg(props.sub, str(a, "orgName") || `${props.email}'s org`);
+        const project = await dir.createProject(org.id, slug);
+        return text(`created project '${project.id}' in org '${org.name}' (${org.id})`);
       } catch (e) {
         return text(e instanceof Error ? e.message : String(e), true);
       }
@@ -98,7 +90,7 @@ function buildServer(env: Env, props: AuthProps): McpServer {
 
 export const mcpHandler: Handler = {
   async fetch(request, env, ctx) {
-    const props = (ctx as ExecutionContext & { props?: AuthProps }).props ?? { sub: "", email: "" };
+    const { props } = ctx as ExecutionContext & { props: AuthProps };
     // responseMode: "json" => a single JSON body per request (client must still Accept both json + SSE).
     return createMcpHandler(() => buildServer(env, props), { responseMode: "json" }).fetch(request);
   },

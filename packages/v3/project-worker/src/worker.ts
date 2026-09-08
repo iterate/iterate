@@ -26,6 +26,8 @@ import {
   projectHostOf,
   projectSessionCookieOf,
   projectSessionSetCookie,
+  sameOriginPath,
+  withoutProjectSessionCookie,
 } from "./project-host.ts";
 import { ITX_PRINCIPAL_HEADER, verifyProjectToken } from "./principal.ts";
 
@@ -53,19 +55,6 @@ registerPipelinedRpcBrand(CapnwebRpcStub as unknown as abstract new () => unknow
 export { IterateContextDurableObject };
 export { ItxEntrypoint } from "./itx-entrypoint.ts";
 
-/** Slug → project id, resolved through the IN-PROCESS directory and cached per isolate for a minute
- *  (one directory read per slug per isolate-minute, never per request). Only a hit is remembered — a
- *  project created a moment ago must serve at once, and an unknown slug stays 421 until it exists. */
-const resolvedSlugUntil = new Map<string, { projectId: string; until: number }>();
-async function resolveSlug(env: WorkerEnv, slug: string): Promise<string | null> {
-  const now = Date.now();
-  const cached = resolvedSlugUntil.get(slug);
-  if (cached && cached.until > now) return cached.projectId;
-  const project = await directory(env.DB).getBySlug(slug);
-  if (project) resolvedSlugUntil.set(slug, { projectId: project.id, until: now + 60_000 });
-  return project?.id ?? null;
-}
-
 // Bumped every deploy so a smoke test can wait for THIS build to propagate (workers.dev lags ~1-2min/colo).
 const CODE_VERSION = "live-57";
 
@@ -83,22 +72,18 @@ export default {
     const projectHost = projectHostOf(url.hostname, projectHostnameBase);
     if (projectHost) {
       // ADMISSION, before any Durable Object is dialled: a context is created on first touch, so a
-      // hostname whose SLUG the in-process directory does not know must never reach one — else any
-      // label under the wildcard would mint durable storage from the public internet. The slug
-      // resolves to the project's id (the DO name); an unknown slug is 421.
-      const projectId = await resolveSlug(env, projectHost.slug);
-      if (!projectId)
-        return new Response(
-          `421: no project for slug ${JSON.stringify(projectHost.slug)} is served here\n`,
-          {
-            status: 421,
-          },
-        );
+      // hostname whose project the in-process directory does not know must never reach one — else
+      // any label under the wildcard would mint durable storage from the public internet. One
+      // directory read; an unknown project is 421.
+      const { projectId } = projectHost;
+      if (!(await directory(env.DB).getProject(projectId)))
+        return new Response(`421: no project ${JSON.stringify(projectId)} is served here\n`, {
+          status: 421,
+        });
       // THE SESSION DOOR on a project host: a project token (src/principal.ts) for THIS project
       // becomes the host-scoped cookie, and the browser goes on to `next`; `?logout` clears it.
       if (url.pathname === PROJECT_SESSION_PATH) {
-        const next = url.searchParams.get("next") ?? "/";
-        const location = next.startsWith("/") ? next : "/"; // same host only
+        const location = sameOriginPath(url.searchParams.get("next") ?? "/", url.origin);
         if (url.searchParams.has("logout"))
           return new Response(null, {
             status: 303,
@@ -123,7 +108,12 @@ export default {
       headers.set(ITX_EXPRESSION_FETCH_HEADER, `itx.apps.${projectHost.app}`);
       headers.set(ITX_EXPRESSION_LANE_HOPS_HEADER, "1");
       // WHO: a valid cookie for this project stamps the principal the app (and the lane's call) sees.
-      const cookieToken = projectSessionCookieOf(request.headers.get("cookie"));
+      // The platform's cookie itself never reaches the app (loaded code): only its verified stamp does.
+      const cookieHeader = request.headers.get("cookie");
+      const appCookies = withoutProjectSessionCookie(cookieHeader);
+      if (appCookies) headers.set("cookie", appCookies);
+      else headers.delete("cookie");
+      const cookieToken = projectSessionCookieOf(cookieHeader);
       const claims = cookieToken && (await verifyProjectToken(cookieToken, projectTokenSecret));
       if (claims && claims.projectId === projectId)
         headers.set(

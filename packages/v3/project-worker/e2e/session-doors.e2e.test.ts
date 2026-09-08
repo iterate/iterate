@@ -1,12 +1,12 @@
-// session-doors.e2e.test.ts — the session's doors: one-shot HTTP batch at /api (no WebSocket),
-// a fetch-shaped target through the session as a dotted `.fetch(request)` behind a rewrite rule (the
-// commissioned fork feature carries the Response back), and disableProcessor.
+// session-doors.e2e.test.ts — the session's doors: one-shot HTTP batch at /api (no WebSocket), an
+// inline-source worker, and a fetch-shaped target through the session as a dotted `.fetch(request)`
+// behind a rewrite rule (the commissioned fork feature carries the Response back).
 
 import { expect, test } from "vitest";
-import { freshCtx, httpBatch, openItx, processorNames } from "./support/client.ts";
-import { enableFixtureProcessor, SOURCES } from "./support/sources.ts";
+import { freshCtx, httpBatch, openItx } from "./support/client.ts";
+import { SOURCES } from "./support/sources.ts";
 
-test("edge adoption: one-shot HTTP batch whoami, inline-source worker, dotted .fetch(request), disableProcessor", async () => {
+test("edge adoption: one-shot HTTP batch whoami, inline-source worker, dotted .fetch(request)", async () => {
   // The batch and the live session share ONE ctx (the proof used a single CTX for both).
   const ctx = freshCtx("edge");
 
@@ -45,19 +45,4 @@ export default class Mine extends WorkerEntrypoint {
   // the Response rides back over capnweb
   expect(resp.status).toBe(200);
   expect(html).toContain("dynamic web capability");
-
-  // 4. disableProcessor: enable (from the fixture source), disable, snapshot now refuses
-  await enableFixtureProcessor(itx, "tally");
-  await itx.invoke(`itx.append({ type: 'mark' })`);
-  expect(await processorNames(itx)).toEqual(["tally"]);
-  await itx.disableProcessor("tally");
-  expect(await processorNames(itx)).toEqual([]); // the subscription row is gone…
-  let denied = "";
-  try {
-    await itx.invoke("itx.facets.get('tally').snapshot()");
-  } catch (e) {
-    denied = String(e);
-  }
-  // …and so is the facet, storage included (a re-enable is a clean rebuild from the log)
-  expect(denied).toMatch(/no facet/);
 });

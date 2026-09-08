@@ -220,9 +220,8 @@ export interface BuiltInScope extends LibraryRoots {
    *  convention ("/agents/x"); relative ("agents/x", "../inbox") resolves against this context's
    *  path — the same resolver the edge `cd` uses (resolveContextPath). */
   cd(path: string): InvokeHandle;
-  /** Egress: `{{secret:project:NAME}}` (then platform) placeholders substituted, then the terminal
-   *  `fetch` — the same door a loaded worker's `globalOutbound` and the edge `itx.fetch(request)`
-   *  land on. */
+  /** Egress: `{{secret:project:NAME}}` placeholders substituted, then the terminal `fetch` — the
+   *  same door a loaded worker's `globalOutbound` and the edge `itx.fetch(request)` land on. */
   fetch(request: Request): Promise<Response>;
   /** The rpc-stub REGISTRY — physical, never event-sourced: a client's live capnweb value lent under
    *  an OPAQUE key by its session (relay-side, DON'T-PIN — the edge owns it, this side borrows).
@@ -304,20 +303,20 @@ interface BuildBuiltInsDeps {
   path: string;
   /** The codec name of the context these roots belong to (loader cache keys). */
   iterateContextName: string;
-  /** The bindings the built-ins reach: the loader, the project kv and the Workers AI binding (all
-   *  bound in both wrangler configs). */
+  /** The bindings the built-ins reach: the loader, the project kv, Workers AI and Artifacts (the
+   *  workers lane binds neither AI nor Artifacts; nothing there calls them). */
   env: {
     LOADER: WorkerLoader;
     ITX_KV: KVNamespace;
     AI: Ai;
     /** Cloudflare Artifacts, the ONE bound namespace — `itx.cfArtifacts` scopes it per project. */
     ARTIFACTS: ArtifactsNamespace;
-    /** The Artifacts account + namespace `itx.repos` builds git remotes from (git-over-HTTPS). */
-    ARTIFACTS_ACCOUNT_ID: string;
-    ARTIFACTS_NAMESPACE: string;
   };
   /** The deploy identity every loader cacheKey folds in (app-config.ts). */
   deployId: string;
+  /** The Artifacts account + namespace `itx.repos` builds git remotes from (app-config.ts). */
+  artifactsAccountId: string;
+  artifactsNamespace: string;
   /** Evaluate a producer source expression through THIS context's dispatch (inside the loader's
    *  `getCode`, so only on a cold isolate). */
   invoke: (call: ItxExpression) => Promise<unknown>;
@@ -429,8 +428,8 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
     repos: projectScopedRepos({
       namespace: env.ARTIFACTS,
       projectId,
-      accountId: env.ARTIFACTS_ACCOUNT_ID,
-      namespaceName: env.ARTIFACTS_NAMESPACE,
+      accountId: deps.artifactsAccountId,
+      namespaceName: deps.artifactsNamespace,
     }),
     // Own-enumerable closures (NOT prototype methods) — the resolver's `Object.hasOwn` gate is why.
     // Every event appended through the scope carries WHO appended it — the DO's own stamp, never a

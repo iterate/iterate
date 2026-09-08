@@ -1,6 +1,6 @@
 // stream-wake-loop.e2e.test.ts — THE SELF-WAKE BILLING CONTROL (wave-0 3b, Jonas: "we need runaway
 // billing controls"). The control (stream.ts SELF_WAKE_HALT_STREAK) is proven deterministically in
-// src/stream/stream-self-wake.test.ts (halts at N, resumes on a public door, durable across
+// src/stream/stream.test.ts (halts at N, resumes on a public door, durable across
 // incarnations); its DO wiring is live. This file is the DEPLOYED, EVICTION-RATE-DEPENDENT observation.
 //
 // MEASURED (2026-09-07, deployed): the self-wake loop the plan feared as "one billed wake per minute

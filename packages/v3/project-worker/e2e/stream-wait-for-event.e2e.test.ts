@@ -1,7 +1,7 @@
 // stream-wait-for-event.e2e.test.ts — waitForEvent THROUGH ITS DOORS: the wait lives on the DO (the caller's open
 // call is what keeps it alive), a SECOND session appends the matching event, and the waiting
 // promise resolves with the committed event. Plus the coded timeout. The wait/settle mechanics are
-// pinned deterministically in __workers-tests__/stream.test.ts; this file proves the doors end to
+// pinned deterministically in src/stream/stream.test.ts; this file proves the doors end to
 // end — the capnweb edge (`itx.waitForEvent`, a built-in root riding `invoke` → DO → Stream) AND
 // the loaded-worker lane (`env.ITX.get()` → the scope's `waitForEvent` → DO → Stream).
 

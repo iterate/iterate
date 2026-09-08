@@ -1,55 +1,57 @@
-// core/egress.ts — secret substitution, WS-SAFE. Ported/simplified from apps/kernel/src/egress.ts.
-//
-// The one thing this file must NOT do: break a WebSocket upgrade while rewriting headers (target-core §6.0
-// risk #4). It only rebuilds the Headers and constructs `new Request(request, { headers })`, which preserves
-// the method + the `Upgrade` header + everything else — so a 101 flows straight back through it.
+// fetch/egress.ts — `{{secret:project:NAME}}` substitution at the egress door, WS-SAFE: it only
+// rebuilds the URL and the Headers and constructs `new Request(request, { headers })`, which preserves
+// the method, the `Upgrade` header and the body — so a 101 flows straight back through it.
 
-const SECRET_TOKEN = /\{\{secret:(project|platform):([a-zA-Z0-9._-]+)\}\}/g;
+// The placeholder as written, or as the URL parser percent-encodes it in a path segment.
+const SECRET_TOKEN = /(?:\{\{|%7B%7B)secret:project:([a-zA-Z0-9._-]+)(?:\}\}|%7D%7D)/g;
+
+/** A placeholder whose secret is not stored — the egress door answers it with a 502 (the DO). */
+export class MissingProjectSecret extends Error {}
 
 /**
- * Substitute every `{{secret:<scope>:<name>}}` token this door owns in the request URL AND headers —
- * an existing secret must never survive as a literal placeholder wherever it appears (a URL
+ * Substitute every `{{secret:project:<name>}}` token in the request URL AND headers. An existing
+ * secret must never survive as a literal placeholder wherever it appears (a URL
  * `?access_token={{secret:project:token}}` would otherwise send the credential's NAME to the
- * destination and the value nowhere). Unresolved tokens (no value) are left intact for the next door
- * down. Returns a NEW Request when anything changed, else the original.
+ * destination and the value nowhere); a placeholder with NO stored secret throws
+ * `MissingProjectSecret` naming the token and where it sat — to the caller, never the destination.
+ * In the URL the value is spliced as ONE component (`encodeURIComponent`), so a secret can never add
+ * a query parameter or a fragment. Returns a NEW Request when anything changed, else the original.
  *
- * WS-safe: `new Request(url, request)` / `new Request(request, { headers })` both preserve the
- * method, the `Upgrade` header, and the body, so a 101 flows straight back through.
- *
- * NOTE: the BODY is not yet scanned (substituting a streaming body means buffering it and recomputing
- * content-length) — a secret spelled inside a request body still forwards as a literal placeholder.
+ * NOTE: the BODY is not scanned (substituting a streaming body means buffering it and recomputing
+ * content-length) — a secret spelled inside a request body forwards as a literal placeholder.
  */
-export async function substituteHeaderSecrets(
+export async function substituteProjectSecrets(
   request: Request,
-  scope: "project" | "platform",
   resolve: (name: string) => Promise<string | null> | string | null,
 ): Promise<Request> {
-  // Substitute this door's owned tokens in one string; null = nothing owned changed (leave as-is).
-  const subst = async (value: string): Promise<string | null> => {
-    if (!value.includes("{{secret:")) return null;
+  // Substitute the tokens in one string; null = no token in it (leave as-is).
+  const substitute = async (value: string, where: string, encode: boolean) => {
+    if (!value.includes("secret:project:")) return null;
     let out = "";
     let last = 0;
     let any = false;
     for (const m of value.matchAll(SECRET_TOKEN)) {
-      if (m[1] !== scope) continue; // not our door's scope — leave the token for the next door
-      const val = await resolve(m[2]);
-      if (val == null) continue; // unresolved — leave the placeholder intact
-      out += value.slice(last, m.index) + val;
-      last = (m.index ?? 0) + m[0].length;
+      const secret = await resolve(m[1]);
+      if (secret == null)
+        throw new MissingProjectSecret(
+          `egress: no stored project secret for {{secret:project:${m[1]}}} in ${where}`,
+        );
+      out += value.slice(last, m.index) + (encode ? encodeURIComponent(secret) : secret);
+      last = m.index + m[0].length;
       any = true;
     }
     return any ? out + value.slice(last) : null;
   };
 
   // URL first: rebuild onto the new URL (carrying method/headers/body/upgrade), then headers on top.
-  const newUrl = await subst(request.url);
-  const base = newUrl !== null ? new Request(newUrl, request) : request;
+  const url = await substitute(request.url, "the request URL", true);
+  const base = url !== null ? new Request(url, request) : request;
   const headers = new Headers(base.headers);
   let changed = false;
-  for (const [hname, hvalue] of base.headers) {
-    const sub = await subst(hvalue);
-    if (sub !== null) {
-      headers.set(hname, sub);
+  for (const [name, value] of base.headers) {
+    const substituted = await substitute(value, `header "${name}"`, false);
+    if (substituted !== null) {
+      headers.set(name, substituted);
       changed = true;
     }
   }

@@ -82,15 +82,11 @@ import {
  *  MASK: the row matches like any other and refuses the call (rule 5). */
 export type ItxExpressionRewriteRule = { match: ItxExpressionPrefix; target: ItxExpression | null };
 
-/** The reserved root: `itx.builtins` is the fixed point of rewriting (rule 5). */
-export const BUILTINS_ROOT = "builtins";
-
 /** THE CONFIG WORKER short name. `itx.worker` is a PLATFORM DEFAULT (below): every stream subscribes
  *  `itx.cd('/').worker.processEventBatch` (the DO constructor), so `itx.worker` must ALWAYS resolve or
  *  that subscription would halt on a project that never set one up. The default loads a bundled NO-OP;
  *  a context OVERRIDES it with its own rule (picked before this fallback) pointing at its source in KV
  *  — `itx.provide("itx.worker", "itx.workers.get({ source: itx.kv.get('/repos/config/worker.ts'), cacheKey })")`. */
-const CONFIG_WORKER_MATCH = "worker";
 /** The bundled no-op ConfigWorker the `itx.worker` default loads — its processEventBatch does nothing,
  *  so a project with no config worker set up delivers quietly (its config subscription never halts).
  *  Overridden the moment userspace provides its own `itx.worker`. */
@@ -114,7 +110,7 @@ const PROXY_VERBS: readonly string[] = [
 
 /** Is `call` at the fixed point — rooted at `itx.builtins` (a NAME step; `itx.builtins(…)` is not)? */
 export function isBuiltInsRooted(call: ItxExpression): boolean {
-  return call[0] === "itx" && call[1] === BUILTINS_ROOT;
+  return call[0] === "itx" && call[1] === "builtins";
 }
 
 // ── the rules (pure) ──
@@ -264,11 +260,11 @@ export function resolveItxExpression(
     const root = itxExpressionStepName(current[1]);
     if (current[0] === "itx" && isBuiltInRoot(root)) {
       // THE IMPLICIT PLATFORM ROW: `itx.<root> ⇒ itx.builtins.<root>` — the fixed point, done.
-      current = ["itx", BUILTINS_ROOT, ...current.slice(1)];
+      current = ["itx", "builtins", ...current.slice(1)];
       chain.push(current);
       return chain;
     }
-    if (current[0] === "itx" && root === CONFIG_WORKER_MATCH) {
+    if (current[0] === "itx" && root === "worker") {
       // THE DEFAULT CONFIG WORKER ROW: `itx.worker ⇒ itx.workers.get({ source: <bundled no-op>, … })`,
       // reached only when NO context rule matched `itx.worker` (a userspace override is picked above).
       // Keeps the steps after `.worker` (`.processEventBatch`), then resolves on through `itx.workers`.
@@ -307,7 +303,7 @@ export function rewriteRuleConfiguredEvent(
       `\`@\` (the caller's input) is legal only in a rewrite rule's target, not its match (${JSON.stringify(print(matchPrefix))})`,
     );
   const firstName = itxExpressionStepName(matchPrefix[1]);
-  if (firstName === BUILTINS_ROOT)
+  if (firstName === "builtins")
     throw new Error(
       `a rewrite rule's match may not be rooted at "itx.builtins" — the reserved root is the fixed point every call rewrites TO, never a name a rule claims (${JSON.stringify(print(matchPrefix))})`,
     );
@@ -343,7 +339,7 @@ export function rewriteRuleConfiguredEvent(
 function namesRpcStubDirectly(target: ItxExpression, rpcStubKey: string): boolean {
   return (
     target.length >= 4 &&
-    jsonEqual(target.slice(0, 4), ["itx", BUILTINS_ROOT, "rpcStubs", ["get", rpcStubKey]])
+    jsonEqual(target.slice(0, 4), ["itx", "builtins", "rpcStubs", ["get", rpcStubKey]])
   );
 }
 
@@ -404,7 +400,7 @@ export function rpcStubKeysNamed(args: {
       const resolved = resolveItxExpression(() => rules, target).at(-1)!;
       const getStep = resolved[3];
       if (
-        resolved[1] === BUILTINS_ROOT &&
+        resolved[1] === "builtins" &&
         resolved[2] === "rpcStubs" &&
         Array.isArray(getStep) &&
         getStep[0] === "get" &&
@@ -424,7 +420,7 @@ export function rpcStubKeysNamed(args: {
  *  dead stub RESTORE `itx.ai` rather than mask it (`null` is the caller's deliberate deny). */
 export function rewriteRuleRemovedEvent(match: ItxExpressionInput): StreamEventInput {
   const matchPrefix = parseItxExpressionPrefix(match);
-  return rewriteRuleConfiguredEvent(matchPrefix, ["itx", BUILTINS_ROOT, ...matchPrefix.slice(1)]);
+  return rewriteRuleConfiguredEvent(matchPrefix, ["itx", "builtins", ...matchPrefix.slice(1)]);
 }
 
 // ── THE RESOLVER (parent-constructed over the physical built-ins and a reader of the CURRENT rules) ──

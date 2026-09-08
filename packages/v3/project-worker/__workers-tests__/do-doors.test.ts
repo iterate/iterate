@@ -131,26 +131,6 @@ test("a core-snapshot probe on a NEVER-TOUCHED ctx materializes it (created, wok
   });
 });
 
-// #recordActivityForQuietClock runs at the TOP of invoke(), BEFORE the call borrows the stub — so the rpcStubs
-// handle re-notes in a `finally` (like #invokeFacet does): a context whose only pinning resource is
-// a borrowed stub arms its quiet clock on THAT invoke, not one activity late.
-test("the quiet clock arms as soon as there IS something to quiesce: the invoke that borrows an rpc stub", async () => {
-  const ctx = "prj_doors_stubarms";
-  await runInDurableObject(stub(ctx), async (_instance, state) => {
-    // Lend a client's rpc stub (a hibernatable pager socket — a transport, not yet a borrowed stub) with
-    // the rule `itx.armcap ⇒ itx.rpcStubs.get('itx.armcap')`…
-    const itx = await (await openSession()).authenticate().projects.get(ctx);
-    await itx.provide("itx.armcap", new Alive());
-    // The config subscription (every stream subscribes the "/" worker) already arms the alarm from
-    // birth, so it is non-null even before the borrow — the borrow-arms-the-quiet-clock isolation this
-    // test once showed is now dominated by that config-delivery alarm.
-    expect(await state.storage.getAlarm()).not.toBeNull();
-    // …then a call borrows the stub: a BORROWED stub pins this actor, and the alarm stays armed.
-    expect(await itx.invoke("itx.armcap.ping()")).toBe("alive");
-    expect(await state.storage.getAlarm()).not.toBeNull();
-  });
-});
-
 test("the DO's doors are the stream, invoke, fetch and the rpc-stub plumbing — no configuration verbs; a rewrite rule is ONE appended event whose builder canonicalizes the match, and a table row is `{ match, target }`, nothing else", async () => {
   const ctx = "prj_doors_canonical";
   await runInDurableObject(stub(ctx), async (instance) => {
