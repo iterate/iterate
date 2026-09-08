@@ -1,4 +1,7 @@
 import { lazy, Suspense, useState } from "react";
+import { DocumentPreview } from "@iterate-com/ui/components/document-preview";
+import { DocumentComments } from "@iterate-com/ui/components/document-comments";
+import { useDocumentReview } from "@iterate-com/workspace-documents/review";
 import { BotIcon, RotateCcwIcon, Trash2Icon } from "lucide-react";
 import { Input } from "@iterate-com/ui/components/input";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@iterate-com/ui/components/sheet";
@@ -35,17 +38,6 @@ const WorkspaceTaskEditor = lazy(() =>
     default: module.WorkspaceTaskEditor,
   })),
 );
-const WorkspaceTaskPreview = lazy(() =>
-  import("./workspace-task-preview.tsx").then((module) => ({
-    default: module.WorkspaceTaskPreview,
-  })),
-);
-const TaskComments = lazy(() =>
-  import("./task-comments.tsx").then((module) => ({
-    default: module.TaskComments,
-  })),
-);
-
 /**
  * The task detail sheet on the WORKSPACE lane: the shared collab-editor
  * state machine (rebase model over the vessel WS) with the redline layers
@@ -95,10 +87,9 @@ export function WorkspaceTaskSheet({
     current: import("@iterate-com/workspace-documents/editor-api").CollabEditorApi | null;
   };
   /** Who authors discussion comments (null → comments are read-only). */
-  commentIdentity: import("./task-comments.tsx").CommentIdentity | null;
-  /** Route a whole-file transform to the live editor or the write lane;
-   * resolves whether it landed (the write lane can roll back). */
-  onApplyTransform: (transform: (source: string) => string) => Promise<boolean>;
+  commentIdentity: import("@iterate-com/workspace-documents/types").CommentIdentity | null;
+  /** Apply a transform to the current local document through the live editor. */
+  onApplyTransform: (transform: (source: string) => string) => boolean;
   /** Owner act (commits the mount) — absent for guests. */
   onAssignAgent?: () => Promise<void>;
   onLiveContent: (path: string, content: string) => void;
@@ -188,10 +179,9 @@ function SheetBody({
     current: import("@iterate-com/workspace-documents/editor-api").CollabEditorApi | null;
   };
   /** Who authors discussion comments (null → comments are read-only). */
-  commentIdentity: import("./task-comments.tsx").CommentIdentity | null;
-  /** Route a whole-file transform to the live editor or the write lane;
-   * resolves whether it landed (the write lane can roll back). */
-  onApplyTransform: (transform: (source: string) => string) => Promise<boolean>;
+  commentIdentity: import("@iterate-com/workspace-documents/types").CommentIdentity | null;
+  /** Apply a transform to the current local document through the live editor. */
+  onApplyTransform: (transform: (source: string) => string) => boolean;
   /** Owner act (commits the mount) — absent for guests. */
   onAssignAgent?: () => Promise<void>;
   onLiveContent: (path: string, content: string) => void;
@@ -204,8 +194,12 @@ function SheetBody({
 }) {
   const [status, setStatus] = useState("connecting…");
   const [assigning, setAssigning] = useState(false);
-  // One selection shared by the preview's highlights and the comments strip.
-  const [selectedThreadId, setSelectedThreadId] = useState<string | null>(null);
+  const review = useDocumentReview({
+    source: liveSource?.() ?? task.source,
+    identity: commentIdentity,
+    busy: status === "connecting…",
+    onTransform: onApplyTransform,
+  });
   // The path is editable in place; SheetBody is keyed by task.path, so a
   // successful rename remounts with the fresh path and clean state.
   const [pathDraft, setPathDraft] = useState(task.path);
@@ -382,14 +376,7 @@ function SheetBody({
         </div>
         <TabsContent value="preview" className="flex min-h-0 flex-1 flex-col">
           <Suspense fallback={<p className="p-4 text-sm text-muted-foreground">Rendering…</p>}>
-            <WorkspaceTaskPreview
-              source={liveSource?.() ?? task.source}
-              identity={commentIdentity}
-              busy={status === "connecting…"}
-              onTransform={onApplyTransform}
-              selectedThreadId={selectedThreadId}
-              onSelectThread={setSelectedThreadId}
-            />
+            <DocumentPreview {...review.preview} />
           </Suspense>
         </TabsContent>
         <TabsContent
@@ -415,17 +402,7 @@ function SheetBody({
       </Tabs>
       <div className="flex max-h-[45%] shrink-0 flex-col border-t">
         <Suspense fallback={null}>
-          <TaskComments
-            source={liveSource?.() ?? task.source}
-            identity={commentIdentity}
-            // While the editor is attaching, a transform would fall through
-            // to the raw write lane — which the arriving session then
-            // overwrites with its older snapshot, dropping the comment.
-            busy={status === "connecting…"}
-            onTransform={onApplyTransform}
-            selectedThreadId={selectedThreadId}
-            onSelectThread={setSelectedThreadId}
-          />
+          <DocumentComments {...review.comments} />
         </Suspense>
       </div>
     </div>

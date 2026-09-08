@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { projectMarkdownPreview } from "./markdown-frontmatter.ts";
+import { projectMarkdownPreview } from "@iterate-com/ui/lib/markdown-frontmatter";
 
 test("projects YAML frontmatter separately from the Markdown body", () => {
   expect(
@@ -23,4 +23,9 @@ test("leaves ordinary or malformed Markdown untouched", () => {
   });
   const malformed = "---\nlabels: [broken\n---\n# Keep this visible\n";
   expect(projectMarkdownPreview(malformed)).toEqual({ body: malformed, metadata: [] });
+});
+
+test("leaves frontmatter with a recursive YAML alias untouched", () => {
+  const recursive = "---\na: &a\n  self: *a\n---\n# Keep this visible\n";
+  expect(projectMarkdownPreview(recursive)).toEqual({ body: recursive, metadata: [] });
 });

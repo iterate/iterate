@@ -1931,7 +1931,7 @@ export interface CfVideosCapability {
 }
 
 /**
- * The collaborative session lane of a workspace: server-authoritative
+ * The collaborative editing API of a workspace: server-authoritative
  * rebase-model editing (@codemirror/collab wire — per-file op logs, integer
  * versions, optimistic clients rebasing unconfirmed edits). Sessions are
  * durable; the workspace's ordinary filesystem RPC reads/writes route through

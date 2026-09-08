@@ -1,18 +1,11 @@
-import { parseRestrictedFrontmatterYaml } from "./frontmatter.ts";
+import { isMap, parseDocument } from "yaml";
 
 export interface MarkdownPreviewProjection {
   body: string;
   metadata: Array<{ key: string; value: string }>;
 }
 
-/**
- * Projects independently valid YAML frontmatter away from a Markdown preview.
- *
- * This deliberately does not parse the annotation store. A malformed store
- * makes the transactional document codec fail open, but it must not make
- * otherwise valid frontmatter appear as document prose. Invalid or unsupported
- * frontmatter remains byte-for-byte visible with the rest of the raw file.
- */
+/** Projects valid YAML frontmatter away from a Markdown preview. */
 export function projectMarkdownPreview(content: string): MarkdownPreviewProjection {
   const opening = /^(?:\uFEFF)?---[ \t]*\r?\n/.exec(content);
   if (opening === null) return { body: content, metadata: [] };
@@ -21,16 +14,25 @@ export function projectMarkdownPreview(content: string): MarkdownPreviewProjecti
   const closing = /^(?:---|\.\.\.)[ \t]*(?:\r?\n|$)/m.exec(afterOpening);
   if (closing === null) return { body: content, metadata: [] };
 
-  const parsed = parseRestrictedFrontmatterYaml(afterOpening.slice(0, closing.index));
-  if (!parsed.ok) return { body: content, metadata: [] };
+  let document;
+  try {
+    document = parseDocument(afterOpening.slice(0, closing.index));
+  } catch {
+    return { body: content, metadata: [] };
+  }
 
-  return {
-    body: afterOpening.slice(closing.index + closing[0].length),
-    metadata: Object.entries(parsed.data).map(([key, value]) => ({
+  if (document.errors.length > 0 || !isMap(document.contents))
+    return { body: content, metadata: [] };
+  let metadata: Array<{ key: string; value: string }>;
+  try {
+    metadata = Object.entries(document.toJS()).map(([key, value]) => ({
       key,
       value: formatFrontmatterValue(value),
-    })),
-  };
+    }));
+  } catch {
+    return { body: content, metadata: [] };
+  }
+  return { body: afterOpening.slice(closing.index + closing[0].length), metadata };
 }
 
 function formatFrontmatterValue(value: unknown): string {

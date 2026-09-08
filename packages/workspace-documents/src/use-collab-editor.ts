@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Compartment, EditorState, type Extension } from "@codemirror/state";
 import { getSyncedVersion, sendableUpdates } from "@codemirror/collab";
 import { EditorView } from "@codemirror/view";
+import { textEdits } from "./text-edits.ts";
 import { CollabConnection, peerExtension } from "./collab-client.ts";
 import { redlineExtension } from "./collab-redline.ts";
 import { remoteCursorsExtension } from "./collab-cursors.ts";
@@ -144,6 +145,8 @@ export function useCollabEditor(input: {
       connection.reseed(snapshot);
       // Layers ride the rebuilt state atomically — no undecorated frame.
       view.setState(buildState(snapshot.content, snapshot.version, redlines(redlineRef.current)));
+      if (reflectTimer) clearTimeout(reflectTimer);
+      onLiveContent?.(path, snapshot.content);
       // Unacked local edits cannot be positionally rebased without the
       // server history that is gone — surface them, never guess a merge.
       setRecovery(unsynced);
@@ -165,25 +168,10 @@ export function useCollabEditor(input: {
             applyTransform: (transform) => {
               const current = live.state.doc.toString();
               const next = transform(current);
-              if (next === current) return;
-              // Minimal splice: only the changed region moves, so concurrent
-              // edits elsewhere survive and attribution stays honest.
-              let start = 0;
-              const maxStart = Math.min(current.length, next.length);
-              while (start < maxStart && current[start] === next[start]) start++;
-              let endCurrent = current.length;
-              let endNext = next.length;
-              while (
-                endCurrent > start &&
-                endNext > start &&
-                current[endCurrent - 1] === next[endNext - 1]
-              ) {
-                endCurrent--;
-                endNext--;
-              }
-              live.dispatch({
-                changes: { from: start, insert: next.slice(start, endNext), to: endCurrent },
-              });
+              live.dispatch({ changes: textEdits(current, next) });
+              // Explicit actions update their controls immediately, unlike continuous typing.
+              if (reflectTimer) clearTimeout(reflectTimer);
+              onLiveContent?.(path, live.state.doc.toString());
             },
             flushPending: async () => {
               const pending = sendableUpdates(live.state);

@@ -4,6 +4,7 @@ import {
   ViewPlugin,
   WidgetType,
   hoverTooltip,
+  showPanel,
   type DecorationSet,
   type Tooltip,
   type ViewUpdate,
@@ -187,9 +188,10 @@ export function redlineExtension(connection: CollabConnection) {
       timer: ReturnType<typeof setTimeout> | null = null;
       done = false;
       generation = 0;
+      message = "Loading changes…";
       /** Version-mismatch retries since the last edit: when the peer is stuck
        * (too-large, prolonged recovery) the layer must not poll changes()
-       * forever — it goes quiet until the next docChanged. */
+       * forever — it goes quiet until the next edit or delivery. */
       futile = 0;
 
       constructor(readonly view: EditorView) {
@@ -227,7 +229,7 @@ export function redlineExtension(connection: CollabConnection) {
           this.render(update.state);
         }
         this.futile = 0;
-        if (update.docChanged) {
+        if (update.docChanged || this.message) {
           if (this.timer) clearTimeout(this.timer);
           this.timer = setTimeout(() => void this.refresh(), REFRESH_DEBOUNCE_MS);
         }
@@ -264,8 +266,9 @@ export function redlineExtension(connection: CollabConnection) {
           ) {
             if (this.futile++ < 20) {
               this.timer = setTimeout(() => void this.refresh(), REFRESH_DEBOUNCE_MS);
+              return;
             }
-            return;
+            throw new Error("The change history has not caught up with this document.");
           }
           this.futile = 0;
           // Adopt the server fold as the confirmed state (the install guard
@@ -276,12 +279,13 @@ export function redlineExtension(connection: CollabConnection) {
             inserted: changes.inserted.map((span) => ({ ...span })),
           };
           this.render(this.view.state);
-          // Nudge a measure/paint without touching the doc.
-          this.view.dispatch({});
-        } catch {
-          // Attribution is decorative — a failed refresh just tries again on
-          // the next edit.
+          this.message = "";
+        } catch (error) {
+          if (this.done || this.generation !== mine) return;
+          this.message = `Could not load changes: ${error instanceof Error ? error.message : String(error)}`;
         }
+        // Paint the marks and their loading/error state without editing text.
+        this.view.dispatch({});
       }
 
       destroy() {
@@ -291,10 +295,29 @@ export function redlineExtension(connection: CollabConnection) {
     },
     { decorations: (value) => value.decorations },
   );
-  return [plugin, redlineHoverTooltip(), theme];
+  return [
+    plugin,
+    redlineHoverTooltip(),
+    theme,
+    showPanel.of((view) => {
+      const dom = document.createElement("div");
+      dom.className = "cm-redline-status";
+      dom.setAttribute("role", "status");
+      const update = () => {
+        const message = view.plugin(plugin)?.message ?? "";
+        dom.textContent = message;
+        dom.hidden = !message;
+        dom.dataset.spinner = String(message === "Loading changes…");
+      };
+      update();
+      return { dom, top: true, update };
+    }),
+  ];
 }
 
 const theme = EditorView.baseTheme({
+  ".cm-panels-top:has(> .cm-redline-status[hidden]:only-child)": { display: "none" },
+  ".cm-redline-status": { padding: "6px 16px", fontSize: "12px" },
   ".cm-redline-del": { cursor: "help", fontWeight: "bold", padding: "0 1px" },
   ".cm-redline-ins": { borderRadius: "2px" },
   // shadcn tooltip dialect: primary bg, small radius, xs text.

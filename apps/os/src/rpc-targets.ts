@@ -2527,7 +2527,7 @@ class WorkspaceRpcTarget extends IterateRpcTarget<"Workspace"> {
         exists: "Whether a path exists in the merged view.",
         getConfig: "The live EFFECTIVE mount table (derived default merged with overlays).",
         collab:
-          "Collaborative session lane: open(path) / push(batch) / wait(path, epoch, afterVersion) / changes(path) — live rebase-model editing plus attributed redlines.",
+          "Collaborative editing API: open(path) / push(batch) / wait(path, epoch, afterVersion) / changes(path) — live rebase-model editing plus attributed redlines.",
         git: "Per-mount git surface: status (changes grouped by mount), commit ({ message, scope? }), log ({ scope? }).",
         glob: "Merged file paths matching a glob pattern.",
         kill: "Restart the workspace's server-side object; the next request boots it fresh.",
@@ -2798,7 +2798,7 @@ class WorkspaceGitRpcTarget extends IterateRpcTarget<"WorkspaceGit"> {
 }
 
 /**
- * The collaborative session lane of a workspace: server-authoritative
+ * The collaborative editing API of a workspace: server-authoritative
  * rebase-model editing (@codemirror/collab wire — per-file op logs, integer
  * versions, optimistic clients rebasing unconfirmed edits). Sessions are
  * durable; the workspace's ordinary filesystem RPC reads/writes route through
@@ -2808,7 +2808,7 @@ class WorkspaceGitRpcTarget extends IterateRpcTarget<"WorkspaceGit"> {
 class WorkspaceCollabRpcTarget extends IterateRpcTarget<"WorkspaceCollab"> {
   async __describe(): Promise<Description> {
     return describeNode({
-      instructions: `Collaborative session lane of the workspace at "${this.props.path}": open(path) joins (or starts) a durable per-file session; push(batch) submits client updates (idempotent via clientSeq, rebased server-side when stale); wait(path, epoch, afterVersion) long-polls for accepted ops (snapshot past the retained floor, "ended" after a destructive op); changes(path) returns attributed redline segments since the last commit.`,
+      instructions: `Collaborative editing API of the workspace at "${this.props.path}": open(path) joins (or starts) a durable per-file session; push(batch) submits client updates (idempotent via clientSeq, rebased server-side when stale); wait(path, epoch, afterVersion) long-polls for accepted ops (snapshot past the retained floor, "ended" after a destructive op); changes(path) returns attributed redline segments since the last commit.`,
       children: {
         changes: "Attributed tracked changes since the last commit (redline segments).",
         open: "Join (or start) the collaborative editing session for one file.",

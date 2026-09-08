@@ -23,7 +23,6 @@ export interface CollabEditorApi {
    * attempt finished — rename lanes await this before reading the old
    * session's head, so the carry can't race the final keystrokes. */
   flushPending(): Promise<void>;
-  /** Apply `transform` to the live doc as a minimal splice (concurrent
-   * edits outside the changed region survive; the redline stays truthful). */
+  /** Transform the current local document into ordinary, disjoint text edits. */
   applyTransform(transform: (source: string) => string): void;
 }

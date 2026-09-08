@@ -8,93 +8,81 @@
 // derived title has landed yet.
 
 import { expect } from "@playwright/test";
-import { createFlake } from "@iterate-com/shared/test-support/flake-test";
 import { test } from "../test-support/test.ts";
 
-// Known flake (2026-09-08), quarantined per docs/testing.md: on preview CI the
-// 💬 hand-off's Message composer sometimes takes longer than the 1 s
-// inputValue() budget to appear — seen first-attempt on PR #2598 and on four
-// consecutive lane runs of PR #2602 (retry included), whose diff has no path
-// into this composer. The wrap keeps the test running and measured; unwrap
-// once the composer renders inside the budget again. The wrapper deadline
-// sits well above a healthy run (~50s: signup fixture plus the whole flow)
-// and under the 240s spec timeout, so a hang goes red instead of green.
-const flake = createFlake(test, /locator\.inputValue: Timeout 1000ms exceeded/, {
-  timeoutMs: 120_000,
+test("captures a note from the global composer and manages it on /notes", async ({
+  page,
+  helpers,
+}) => {
+  await using fixture = await helpers.createMobileFixture("mobile-notes");
+
+  // The composer is already there on the chat-list screen — no navigation
+  // between "I opened the app" and "I captured the thought".
+  await page.getByText(`→ /notes in ${fixture.projectSlug}`).waitFor();
+  await page.getByPlaceholder("Capture a note").fill("Standing desk height: 76cm felt right");
+  await page.getByLabel("Save note").click();
+
+  await page.getByLabel("Collapse note composer").click();
+  await page.getByPlaceholder("Capture a note").waitFor({ state: "hidden" });
+  await page.getByLabel("Capture a note").click();
+  await page.getByPlaceholder("Capture a note").waitFor();
+
+  // First-line title until the analysis settlement overlays it — either way
+  // the note's own text is on screen.
+  await page.getByText("view in /notes").click();
+  await page.getByPlaceholder("Search notes…").waitFor();
+  await page
+    .getByText(/76cm felt right/)
+    .first()
+    .waitFor();
+
+  await page.getByPlaceholder("Search notes…").fill("standing desk");
+  await page
+    .getByText(/76cm felt right/)
+    .first()
+    .waitFor();
+  await page.getByPlaceholder("Search notes…").fill("zzz-no-match");
+  await page.getByText("No results").waitFor();
+  await page.getByPlaceholder("Search notes…").fill("");
+
+  await page
+    .getByText(/76cm felt right/)
+    .first()
+    .click();
+  await page.getByRole("button", { name: "✏️ Edit" }).click();
+  await page.getByLabel("Edit note text").fill("Standing desk height: 76cm — confirmed at home");
+  await page.getByRole("button", { name: "Save", exact: true }).click();
+  await page
+    .getByText(/confirmed at home/)
+    .first()
+    .waitFor();
+
+  // 💬 pre-types a pointer to the note; the question under it is the human's
+  // to write, so nothing is sent on the way in.
+  await page.getByLabel("Chat about this note").click();
+  // waitFor participates in navigation/spinner waiting; inputValue does not.
+  await page.getByPlaceholder("Message").waitFor();
+  expect(await page.getByPlaceholder("Message").inputValue()).toMatch(
+    /About my note `\/repos\/notes\/.*\.md`:[\s\S]*confirmed at home/,
+  );
+
+  // Send it. This is the step that makes the platform PARSE the derived agent
+  // path (create() + message()), so a path it would reject — the note's
+  // filename stamp carries an uppercase T and Z — fails here instead of on a
+  // phone. Only the echo of our own message is asserted; whatever the agent
+  // says back is its own business.
+  await page.getByLabel("Send").click();
+  await page
+    .getByText(/About my note/)
+    .first()
+    .waitFor();
+
+  // The notes screen stayed mounted underneath the pushed chat — its row is
+  // still open.
+  await page.goBack();
+
+  // The delete tombstone empties the list over the live stream.
+  await page.getByRole("button", { name: "Delete…" }).click();
+  await page.getByRole("button", { name: "Yes, delete this note" }).click();
+  await page.getByText("Nothing here yet").waitFor();
 });
-
-flake(
-  "captures a note from the global composer and manages it on /notes",
-  async ({ page, helpers }) => {
-    await using fixture = await helpers.createMobileFixture("mobile-notes");
-
-    // The composer is already there on the chat-list screen — no navigation
-    // between "I opened the app" and "I captured the thought".
-    await page.getByText(`→ /notes in ${fixture.projectSlug}`).waitFor();
-    await page.getByPlaceholder("Capture a note").fill("Standing desk height: 76cm felt right");
-    await page.getByLabel("Save note").click();
-
-    await page.getByLabel("Collapse note composer").click();
-    await page.getByPlaceholder("Capture a note").waitFor({ state: "hidden" });
-    await page.getByLabel("Capture a note").click();
-    await page.getByPlaceholder("Capture a note").waitFor();
-
-    // First-line title until the analysis settlement overlays it — either way
-    // the note's own text is on screen.
-    await page.getByText("view in /notes").click();
-    await page.getByPlaceholder("Search notes…").waitFor();
-    await page
-      .getByText(/76cm felt right/)
-      .first()
-      .waitFor();
-
-    await page.getByPlaceholder("Search notes…").fill("standing desk");
-    await page
-      .getByText(/76cm felt right/)
-      .first()
-      .waitFor();
-    await page.getByPlaceholder("Search notes…").fill("zzz-no-match");
-    await page.getByText("No results").waitFor();
-    await page.getByPlaceholder("Search notes…").fill("");
-
-    await page
-      .getByText(/76cm felt right/)
-      .first()
-      .click();
-    await page.getByRole("button", { name: "✏️ Edit" }).click();
-    await page.getByLabel("Edit note text").fill("Standing desk height: 76cm — confirmed at home");
-    await page.getByRole("button", { name: "Save", exact: true }).click();
-    await page
-      .getByText(/confirmed at home/)
-      .first()
-      .waitFor();
-
-    // 💬 pre-types a pointer to the note; the question under it is the human's
-    // to write, so nothing is sent on the way in.
-    await page.getByLabel("Chat about this note").click();
-    // inputValue() does the waiting; expect only checks the string it returned.
-    expect(await page.getByPlaceholder("Message").inputValue()).toMatch(
-      /About my note `\/repos\/notes\/.*\.md`:[\s\S]*confirmed at home/,
-    );
-
-    // Send it. This is the step that makes the platform PARSE the derived agent
-    // path (create() + message()), so a path it would reject — the note's
-    // filename stamp carries an uppercase T and Z — fails here instead of on a
-    // phone. Only the echo of our own message is asserted; whatever the agent
-    // says back is its own business.
-    await page.getByLabel("Send").click();
-    await page
-      .getByText(/About my note/)
-      .first()
-      .waitFor();
-
-    // The notes screen stayed mounted underneath the pushed chat — its row is
-    // still open.
-    await page.goBack();
-
-    // The delete tombstone empties the list over the live stream.
-    await page.getByRole("button", { name: "Delete…" }).click();
-    await page.getByRole("button", { name: "Yes, delete this note" }).click();
-    await page.getByText("Nothing here yet").waitFor();
-  },
-);
