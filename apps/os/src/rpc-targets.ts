@@ -87,7 +87,9 @@ import { timedStep } from "./lib/step-timing.ts";
 import { buildCollectSecretUrl } from "./lib/collect-secret-link.ts";
 import { buildProjectStreamViewerUrl } from "./lib/stream-viewer-url.ts";
 import { buildProjectWorkerUrl } from "./lib/project-host-routing.ts";
-import type { Env } from "./env.ts";
+import { readAiCallStop, type AiCallStop } from "./domains/agents/ai-budget.ts";
+import { aiGatewayMetadata } from "./domains/agents/ai-cost-attribution.ts";
+import { sendAiRequest } from "./domains/agents/workers-ai-transport.ts";
 import {
   canonicalizeStreamPath,
   DurableObjectNameCodec,
@@ -453,7 +455,6 @@ import { WorkspaceProcessorContract } from "./domains/workspaces/workspace-proce
 import { normalizeConfigRepoTemplateReference } from "./lib/config-repo-template-reference.ts";
 import {
   AI_INTERCEPTOR_CAPABILITY_NAME,
-  isInterceptedModel,
   type ProjectAiIntercept,
   type ProjectAiInterceptor,
 } from "./lib/model-interception.ts";
@@ -2901,7 +2902,14 @@ class SecretCollectionRpcTarget extends IterateRpcTarget<"SecretCollection"> {
     });
   }
 
-  constructor(readonly props: { auth: ItxAuth; projectId: string; scopePath: string }) {
+  constructor(
+    readonly props: {
+      auth: ItxAuth;
+      projectId: string;
+      scopePath: string;
+      streamContext: StreamContext;
+    },
+  ) {
     super();
     props.auth.assertCanAccessProject(props.projectId);
   }
@@ -2912,6 +2920,7 @@ class SecretCollectionRpcTarget extends IterateRpcTarget<"SecretCollection"> {
       auth: this.props.auth,
       path: normalizeSecretPath(path),
       projectId: this.props.projectId,
+      streamContext: this.props.streamContext,
     });
   }
 
@@ -3023,7 +3032,14 @@ class SecretRpcTarget extends IterateRpcTarget<"Secret"> {
     });
   }
 
-  constructor(readonly props: { auth: ItxAuth; path: string; projectId: string }) {
+  constructor(
+    readonly props: {
+      auth: ItxAuth;
+      path: string;
+      projectId: string;
+      streamContext: StreamContext;
+    },
+  ) {
     super();
     props.auth.assertCanAccessProject(props.projectId);
   }
@@ -3041,7 +3057,9 @@ class SecretRpcTarget extends IterateRpcTarget<"Secret"> {
   /** Egress fetch with this secret's placeholders substituted server-side —
    * the standard fetch signature: a Request, or a URL plus optional init. */
   fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
-    return this.durableObjectStub.fetch(new Request(input, init));
+    return this.durableObjectStub.fetch(
+      withStreamContext(new Request(input, init), this.props.streamContext),
+    );
   }
 
   /** Admin-only recovery read of the current encrypted cell. */
@@ -3248,8 +3266,6 @@ function assertDeviceId(deviceId: string): void {
   }
 }
 
-type AiRunOptions = NonNullable<Parameters<Env["AI"]["run"]>[2]>;
-
 /** One project file, addressed by path. */
 class FileHandleRpcTarget extends IterateRpcTarget<"FileHandle"> {
   constructor(readonly props: { auth: ItxAuth; path: string; projectId: string }) {
@@ -3360,7 +3376,7 @@ class AiRpcTarget extends IterateRpcTarget<"Ai"> {
       auth: ItxAuth;
       ctx: CfExecutionContext;
       projectId: string;
-      gateway?: AiRunOptions["gateway"];
+      streamContext: StreamContext;
     },
   ) {
     super();
@@ -3379,31 +3395,61 @@ class AiRpcTarget extends IterateRpcTarget<"Ai"> {
    * Outputs are model-shaped: instantiate `run<T>` with the response shape you
    * read (`run<{ response?: string }>(…)`); uninstantiated it stays the honest
    * `unknown`. The optional third argument is the binding's own options object
-   * — e.g. `{ gateway: { id: "default", skipCache: true } }` — passed through
-   * to `env.AI.run`; its `gateway` wins over any constructor-provided one.
+   * — cache preferences are honored, but the host always owns the gateway
+   * ID and billing metadata. Callers cannot bypass company spending limits.
    * An `intercepted/*` model never reaches Cloudflare: the live interceptor installed
-   * with `intercept(handler)` serves it, and its return value comes back
-   * verbatim (no handler installed → a loud error). */
-  run<T = unknown>(model: string, body: unknown, options?: CfAiRunOptions): Promise<T> {
-    if (isInterceptedModel(model)) {
-      // Same contract as the env.AI.run cast below: `run<T>` is
-      // caller-instantiated by design — the caller names the shape it will
-      // read, uninstantiated stays the honest `unknown` — and on this branch
-      // the caller also authored the handler producing the value, so no
-      // runtime schema exists to check it against.
-      return projectStub(env.PROJECT, this.props.projectId).consultAiInterceptor({
-        source: "ai-run",
-        model,
-        body,
-      }) as Promise<T>;
-    }
-    const gateway = options?.gateway ?? this.props.gateway;
-    const merged = gateway === undefined ? options : { ...options, gateway };
-    return env.AI.run(
+   * with `intercept(handler)` supplies a provider response which follows the
+   * same decoding as a real call (no handler installed → a loud error). Expected refusals return
+   * `{ status: "budget-exhausted", budget }` or `{ status: "rate-limited", retryAfterMs }`. */
+  async run<T = unknown>(
+    model: string,
+    body: unknown,
+    options?: CfAiRunOptions,
+  ): Promise<T | AiCallStop> {
+    // Keep the provider response in this call's context; an extra DO RPC hop
+    // can disconnect streaming bodies after returning their headers.
+    const callOptions = options || {};
+    const streamContext = this.props.streamContext;
+    const config = parseConfig(env);
+    const metadata = aiGatewayMetadata(
+      {
+        ...(await projectStub(env.PROJECT, this.props.projectId).readAiCostIdentity()),
+        stream:
+          streamContext.kind === "script-execution"
+            ? {
+                path: streamContext.streamPath,
+                eventOffset: streamContext.scriptRunRequestedEventOffset,
+              }
+            : streamContext.kind === "scope"
+              ? { path: streamContext.scopePath }
+              : null,
+      },
+      config.cloudflareAiGateway.includeEventOffset,
+    );
+    const response = await sendAiRequest({
+      ai: env.AI,
+      transport: { kind: "unified", gatewayId: config.cloudflareAiGateway.id },
+      metadata,
       model,
-      body as Record<string, unknown>,
-      merged as AiRunOptions | undefined,
-    ) as Promise<T>;
+      body,
+      endpoint: "chat/completions",
+      headers: new Headers(),
+      containsFiles: false,
+      options: callOptions,
+      source: { source: "ai-run" },
+      consultInterceptor: (request) =>
+        projectStub(env.PROJECT, this.props.projectId).consultAiInterceptor(request),
+    });
+    const stop = await readAiCallStop(response, model.replace(/^intercepted\//, "").split("/")[0]!);
+    if (stop) {
+      await response.body?.cancel();
+      return stop;
+    }
+    if (callOptions.returnRawResponse) return response as T;
+    if (!response.ok) throw new Error(`Workers AI request failed with status ${response.status}`);
+    if (response.headers.get("content-type")?.includes("application/json"))
+      return response.json() as Promise<T>;
+    return response.body as T;
   }
 
   /** Install a live handler for `intercepted/*` models (last writer wins); returns a
@@ -3411,9 +3457,9 @@ class AiRpcTarget extends IterateRpcTarget<"Ai"> {
    * `model: "intercepted/<x>"` and every `run("intercepted/<x>", …)` call are served by your
    * handler — an in-memory function on YOUR side of the connection — instead
    * of a real provider. The handler receives
-   * `{ source: "agent-turn" | "ai-run", model, body }`; for agent turns it
-   * returns assistant text (a string, or `{ text, usage? }`), for ai-run its
-   * return value is handed back verbatim. Live means session-bound, with the
+   * `{ source, model, request }`, including prepared body, safe headers and
+   * host-owned attribution. Return `{ status, headers, body }` with the provider's
+   * JSON or SSE response. The normal decoder handles it. Live means session-bound, with the
    * mount invariant: the interception lives exactly as long as your session
    * connection, and if the platform's half dies while your socket is open,
    * the socket closes (4901) — reconnect and intercept() again.
@@ -3631,7 +3677,14 @@ class CfVideosCapabilityRpcTarget extends IterateRpcTarget<"CfVideosCapability">
 
 /** Grouped first-party Cloudflare platform bindings under integrations.cf. */
 class CloudflareIntegrationsRpcTarget extends IterateRpcTarget<"CloudflareIntegrations"> {
-  constructor(readonly props: { auth: ItxAuth; ctx: CfExecutionContext; projectId: string }) {
+  constructor(
+    readonly props: {
+      auth: ItxAuth;
+      ctx: CfExecutionContext;
+      projectId: string;
+      streamContext: StreamContext;
+    },
+  ) {
     super();
   }
 
@@ -3655,6 +3708,7 @@ class CloudflareIntegrationsRpcTarget extends IterateRpcTarget<"CloudflareIntegr
       auth: this.props.auth,
       ctx: this.props.ctx,
       projectId: this.props.projectId,
+      streamContext: this.props.streamContext,
     });
   }
 
@@ -3903,6 +3957,7 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
       auth: this.props.auth,
       ctx: this.props.ctx,
       projectId: this.props.projectId,
+      streamContext: this.props.streamContext,
     });
   }
 
@@ -7363,6 +7418,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
       auth: this.#props.auth,
       ctx: this.#props.ctx,
       projectId: this.#projectId,
+      streamContext: this.#streamContext,
     });
   }
 
@@ -7606,6 +7662,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
       // The scope path makes collectFromUser's links notify the calling
       // agent when the user submits; non-agent scopes mint plain links.
       scopePath: this.#capabilityHost.path,
+      streamContext: this.#streamContext,
     });
   }
 

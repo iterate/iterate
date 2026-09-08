@@ -66,7 +66,15 @@ export const AgentFeedItemRow = memo(function AgentFeedItemRow({
   onInspectScriptExecution,
   projectSlug,
   database,
+  onRetryBudget,
+  activeBudgetPauseOffset,
+  retryBudgetPending,
+  retryBudgetError,
 }: {
+  onRetryBudget?: (offset: number) => Promise<void>;
+  activeBudgetPauseOffset?: number | null;
+  retryBudgetPending?: boolean;
+  retryBudgetError?: string;
   item: AgentUiItem;
   toggledIds: ReadonlySet<string>;
   onToggle: (id: string) => void;
@@ -91,7 +99,15 @@ export const AgentFeedItemRow = memo(function AgentFeedItemRow({
   }
 
   if (item.kind === "stream-paused" || item.kind === "stream-resumed") {
-    return <StreamPauseRow item={item} />;
+    return (
+      <StreamPauseRow
+        item={item}
+        onRetryBudget={onRetryBudget}
+        activeBudgetPauseOffset={activeBudgetPauseOffset}
+        pending={retryBudgetPending}
+        error={retryBudgetError}
+      />
+    );
   }
 
   if (item.kind === "user") {
@@ -294,8 +310,16 @@ function ProcessorRevivedRow({
 
 function StreamPauseRow({
   item,
+  onRetryBudget,
+  activeBudgetPauseOffset,
+  pending,
+  error,
 }: {
   item: Extract<AgentUiItem, { kind: "stream-paused" | "stream-resumed" }>;
+  onRetryBudget?: (offset: number) => Promise<void>;
+  activeBudgetPauseOffset?: number | null;
+  pending?: boolean;
+  error?: string;
 }) {
   const dateTime = formatDateTimeAttribute(item.timestampMs);
   const paused = item.kind === "stream-paused";
@@ -318,6 +342,21 @@ function StreamPauseRow({
           {item.reason == null ? item.text : `${item.text}: ${item.reason}`}
         </time>
       </div>
+      {item.budgetPauseOffset !== undefined &&
+        item.budgetPauseOffset === activeBudgetPauseOffset &&
+        onRetryBudget && (
+          <div className="text-xs">
+            <button
+              type="button"
+              className="rounded border px-2 py-1"
+              disabled={pending}
+              onClick={() => void onRetryBudget(item.budgetPauseOffset!).catch(() => {})}
+            >
+              {pending ? "Retrying…" : "Retry"}
+            </button>
+            {error && <p role="alert">{error}</p>}
+          </div>
+        )}
       <div className="h-px flex-1 bg-border" />
     </div>
   );

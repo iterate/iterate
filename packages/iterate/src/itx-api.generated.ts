@@ -397,20 +397,21 @@ export interface Ai {
    * Outputs are model-shaped: instantiate `run<T>` with the response shape you
    * read (`run<{ response?: string }>(…)`); uninstantiated it stays the honest
    * `unknown`. The optional third argument is the binding's own options object
-   * — e.g. `{ gateway: { id: "default", skipCache: true } }` — passed through
-   * to `env.AI.run`; its `gateway` wins over any constructor-provided one.
+   * — cache preferences are honored, but the host always owns the gateway
+   * ID and billing metadata. Callers cannot bypass company spending limits.
    * An `intercepted/*` model never reaches Cloudflare: the live interceptor installed
-   * with `intercept(handler)` serves it, and its return value comes back
-   * verbatim (no handler installed → a loud error). */
-  run<T = unknown>(model: string, body: unknown, options?: CfAiRunOptions): Promise<T>;
+   * with `intercept(handler)` supplies a provider response which follows the
+   * same decoding as a real call (no handler installed → a loud error). Expected refusals return
+   * `{ status: "budget-exhausted", budget }` or `{ status: "rate-limited", retryAfterMs }`. */
+  run<T = unknown>(model: string, body: unknown, options?: CfAiRunOptions): Promise<T | AiCallStop>;
   /** Install a live handler for `intercepted/*` models (last writer wins); returns a
    * release handle. For deterministic testing: an agent configured with
    * `model: "intercepted/<x>"` and every `run("intercepted/<x>", …)` call are served by your
    * handler — an in-memory function on YOUR side of the connection — instead
    * of a real provider. The handler receives
-   * `{ source: "agent-turn" | "ai-run", model, body }`; for agent turns it
-   * returns assistant text (a string, or `{ text, usage? }`), for ai-run its
-   * return value is handed back verbatim. Live means session-bound, with the
+   * `{ source, model, request }`, including prepared body, safe headers and
+   * host-owned attribution. Return `{ status, headers, body }` with the provider's
+   * JSON or SSE response. The normal decoder handles it. Live means session-bound, with the
    * mount invariant: the interception lives exactly as long as your session
    * connection, and if the platform's half dies while your socket is open,
    * the socket closes (4901) — reconnect and intercept() again.
@@ -2594,8 +2595,8 @@ export type StreamIndexRow = {
 };
 
 /** The Workers AI binding's per-call options (`env.AI.run`'s third argument),
- * published structurally so itx callers can route a call through a specific
- * AI Gateway configuration — e.g. `{ gateway: { id: "default", skipCache: true } }`. */
+ * published structurally for cache preferences. The host replaces gateway id
+ * and metadata with its trusted cost identity; caller values cannot change billing. */
 export type CfAiRunOptions = {
   gateway?: {
     id: string;
@@ -2608,14 +2609,13 @@ export type CfAiRunOptions = {
   returnRawResponse?: boolean;
 };
 
-/**
- * Live replacement for intercepted/* model calls. For `source: "agent-turn"` the
- * return value must be assistant text — a plain string, or
- * `{ text, usage? }` to also report token usage (report inflated numbers to
- * drive compaction deterministically). For `source: "ai-run"` the return value
- * is handed back to the `itx.ai.run` caller verbatim.
- */
-export type ProjectAiInterceptor = (input: ProjectAiInterceptorInput) => Promise<unknown>;
+/** Expected refusal of an AI call: a spending pause or a bounded temporary rate limit. */
+export type AiCallStop = AiBudgetStop | AiRateLimitStop;
+
+/** Replace only the provider call; response classification and decoding still run. */
+export type ProjectAiInterceptor = (
+  input: ProjectAiInterceptorInput,
+) => Promise<InterceptedAiResponse>;
 
 /** One file format the markdown converter accepts (extension plus MIME type);
  * `ai.toMarkdown()` with no arguments returns the full list. */
@@ -2828,13 +2828,27 @@ export type AgentProcessorState = {
   lastLlmRequestOffset: number;
   latestExternalTriggerOffset: number;
   pendingLlmRequestTrigger: {
+    costEventOffset: number | null;
     offset: number;
     atMs: number;
     source: "agent-loop" | "external";
   } | null;
-  openRequest: { requestedAtOffset: number; expiresAt: number; model: string } | null;
+  openRequest: {
+    costEventOffset: number;
+    requestedAtOffset: number;
+    expiresAt: number;
+    model: string;
+  } | null;
   consecutiveLlmFailures: number;
-  paused: { reason?: string | undefined; atOffset: number } | null;
+  paused:
+    | { kind: "waiting-for-input"; reason?: string | undefined; atOffset: number }
+    | {
+        kind: "budget-exhausted";
+        reason: string;
+        budget: { provider: string; ruleId: string | null; resetsAt: string | null };
+        atOffset: number;
+      }
+    | null;
   autonomousTurnCount: number;
   activeScriptExecutions: { executionId: string; requestedAt: string }[];
   summary: {
@@ -2914,6 +2928,11 @@ export type AgentEventInput =
         durationMs?: number | undefined;
         result:
           | {
+              status: "budget-exhausted";
+              budget: { provider: string; ruleId: string | null; resetsAt: string | null };
+            }
+          | { status: "rate-limited"; retryAfterMs: number }
+          | {
               status: "succeeded";
               text: string;
               usage?:
@@ -2936,9 +2955,16 @@ export type AgentEventInput =
     >
   | TypedConsumedEventInput<
       "events.iterate.com/agent/paused",
-      { reason?: string | undefined; triggerOffset?: number | undefined }
+      {
+        reason?: string | undefined;
+        budget?: { provider: string; ruleId: string | null; resetsAt: string | null } | undefined;
+        triggerOffset?: number | undefined;
+      }
     >
-  | TypedConsumedEventInput<"events.iterate.com/agent/resumed", { reason?: string | undefined }>
+  | TypedConsumedEventInput<
+      "events.iterate.com/agent/resumed",
+      { reason?: string | undefined; budgetPauseOffset?: number | undefined }
+    >
   | TypedConsumedEventInput<
       "events.iterate.com/agent/summary-updated",
       | {
@@ -4592,26 +4618,34 @@ export type LiveStatePatch =
   | { set: unknown }
   | { fields?: Record<string, LiveStatePatch>; drop?: string[] };
 
-/**
- * One intercepted/* invocation as the interceptor sees it. `source` discriminates the
- * two egress paths: an agent conversation turn carries the provider-neutral
- * chat projection, a direct `itx.ai.run` call carries the caller's body
- * argument verbatim (honestly `unknown` — the caller chose its shape).
- */
-export type ProjectAiInterceptorInput =
-  | {
-      source: "agent-turn";
-      agentPath: string;
-      model: string;
-      body: {
-        messages: { role: "system" | "developer" | "user" | "assistant"; content: string }[];
-      };
-    }
-  | {
-      source: "ai-run";
-      model: string;
-      body: unknown;
-    };
+/** A confirmed spending-limit refusal, with provider evidence for the pause UI. */
+export type AiBudgetStop = {
+  status: "budget-exhausted";
+  budget: { provider: string; ruleId: string | null; resetsAt: string | null };
+};
+
+/** A temporary rate refusal whose delay is bounded before journal persistence. */
+export type AiRateLimitStop = { status: "rate-limited"; retryAfterMs: number };
+
+/** The prepared request, before credentials are attached or a provider is dialed. */
+export type ProjectAiInterceptorInput = {
+  model: string;
+  request: {
+    provider: string;
+    endpoint: string;
+    headers: Record<string, string>;
+    body: Record<string, unknown>;
+    gatewayId: string;
+    metadata: Record<string, string | number>;
+  };
+} & ({ source: "agent-turn"; agentPath: string } | { source: "ai-run" } | { source: "egress" });
+
+/** Serialized provider response consumed by the normal response decoder. */
+export type InterceptedAiResponse = {
+  status: number;
+  headers: Record<string, string>;
+  body: string;
+};
 
 /**
  * A durable processor input. Wake processors never receive ephemeral events, so

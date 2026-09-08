@@ -22,7 +22,10 @@
 //   doppler run --config preview_N -- pnpm --dir apps/os e2e --run abandoned-project-goes-quiet
 import { expect, test } from "vitest";
 import { createFailing } from "@iterate-com/shared/test-support/failing-test";
-import { installResilientAiInterceptor } from "@iterate-com/shared/test-support/resilient-ai-interceptor";
+import {
+  installResilientAiInterceptor,
+  aiTextResponse,
+} from "@iterate-com/shared/test-support/resilient-ai-interceptor";
 import { createTestProject } from "../test-support/create-test-project.ts";
 import { createAdminOsItx } from "../test-support/os-client.ts";
 import { deployedBaseUrl } from "./test-helpers.ts";
@@ -69,12 +72,15 @@ failWakeUp(
       await using _interception = await installResilientAiInterceptor({
         projectId: handle.project.id,
         connect: (options) => createAdminOsItx({ baseUrl: handle.baseUrl, ...options }),
-        handler: async () =>
-          [
-            "```ts",
-            `async (itx) => {\n  await itx.chat.sendMessage("scripted reply")\n}`,
-            "```",
-          ].join("\n"),
+        handler: async (call: any) =>
+          aiTextResponse(
+            [
+              "```ts",
+              `async (itx) => {\n  await itx.chat.sendMessage("scripted reply")\n}`,
+              "```",
+            ].join("\n"),
+            call,
+          ),
       });
       using agent = handle.agent("/agents/abandoned");
       await agent.create();

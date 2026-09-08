@@ -1,6 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
 import { LiveState, LiveStateRpcTarget } from "iterate/sdk/capnweb";
 import type { StreamEvent } from "iterate/processors";
+import { createAiCostIdentityReader } from "../agents/ai-cost-attribution.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
 import { parseConfig } from "../../config.ts";
 import { workerVersion, type Env } from "../../env.ts";
@@ -40,14 +41,8 @@ import {
   type HeldRequest,
   type HumanApprovalRequestedPayload,
 } from "./egress-approvals.ts";
-import {
-  applyOpenAiAiGatewayCacheHeaders,
-  isOpenAiPublicApiRequest,
-  openAiAiGatewayBindingHeaders,
-  openAiAiGatewayRoutingFromConfig,
-  openAiGatewayBindingEndpoint,
-} from "./openai-ai-gateway-egress.ts";
-import { takeStreamContext, type StreamContext } from "./stream-context.ts";
+import { isOpenAiPublicApiRequest, routeCompanyOpenAi } from "./openai-ai-gateway-egress.ts";
+import { takeStreamContext, withStreamContext, type StreamContext } from "./stream-context.ts";
 import {
   ProjectProcessorContract,
   type ProjectProcessorState,
@@ -62,6 +57,11 @@ export class ProjectDurableObject extends DurableObject<Env> {
   }
 
   readonly #name = DurableObjectNameCodec.parse(this.ctx.id.name!);
+  readonly #readCostIdentity = createAiCostIdentityReader({
+    environment: () => parseConfig(this.env).environmentName,
+    projectId: this.#name.projectId!,
+    directory: this.env.PROJECT_DIRECTORY,
+  });
   #egressInterceptor?: ReturnType<typeof deepRetainRpcStubs<ProjectEgressInterceptor>>;
   // Last time #egressRules paid a facade snapshot — bounds rules staleness to ~5s.
   #egressRulesFreshAt = 0;
@@ -240,7 +240,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
    */
   async #egressWithApprovalGate(request: Request, streamContext: StreamContext): Promise<Response> {
     const rules = await this.#egressRules();
-    if (rules.length === 0) return this.#egress(request);
+    if (rules.length === 0) return this.#egress(request, streamContext);
 
     // Secret references also feed rule matching (match.secretPaths). If the
     // reference set is malformed we still match on method/host/path — a broken
@@ -251,7 +251,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
     const secretPaths = scanned.problems.length === 0 ? scanned.paths : [];
 
     const rule = matchEgressRule(rules, { method: request.method, url: request.url, secretPaths });
-    if (rule === undefined) return this.#egress(request);
+    if (rule === undefined) return this.#egress(request, streamContext);
     if (rule.verdict === "deny") {
       return approvalGateResponse({
         code: "egress_denied",
@@ -259,7 +259,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
         ruleKey: rule.ruleKey,
       });
     }
-    if (scanned.problems[0] !== undefined) return this.#egress(request);
+    if (scanned.problems[0] !== undefined) return this.#egress(request, streamContext);
     return this.#holdForHumanApproval({ request, rule, secretPaths, streamContext });
   }
 
@@ -478,7 +478,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
               body: entry.bodyBytes as BodyInit | null,
               redirect: entry.redirect,
             });
-            response = await this.#egress(released);
+            response = await this.#egress(released, batch.streamContext);
           } catch (error) {
             try {
               await settle({ error: error instanceof Error ? error.message : String(error) });
@@ -672,7 +672,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
   }
 
   /** The egress lanes proper: platform references, secret substitution, bare fetch. */
-  async #egress(request: Request): Promise<Response> {
+  async #egress(request: Request, streamContext: StreamContext): Promise<Response> {
     // Placeholders live in the request envelope: headers, the URL path, or an
     // explicitly marked JSON body.
     const { paths: secretPaths, problems } = await secretReferencePathsFromRequest(request);
@@ -715,7 +715,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
           projectId: this.#name.projectId,
           path: secretPaths[0]!,
         }),
-      ).fetch(request);
+      ).fetch(withStreamContext(request, streamContext));
       return withWebSocketHandshakeHeaders(request, response);
     }
 
@@ -724,57 +724,24 @@ export class ProjectDurableObject extends DurableObject<Env> {
     // including if a WebSocket client falls back to an HTTP POST, so credential
     // provenance and the secret audit cannot silently change between transports.
     if (isOpenAiPublicApiRequest(request)) {
-      const routed = await this.#egressOpenAiViaAiGateway(request);
+      const routed = await routeCompanyOpenAi({
+        request,
+        config: parseConfig(this.env),
+        ai: this.env.AI,
+        readIdentity: this.#readCostIdentity,
+        consultInterceptor: (request) => this.consultAiInterceptor(request),
+        streamContext,
+      });
       if (routed !== null) return routed;
-      // Fall through when accountId/gateway config is missing (local/dev edge).
+      // Only customer-funded calls reach the direct provider.
     }
 
     return withWebSocketHandshakeHeaders(request, await fetch(request));
   }
 
-  /**
-   * Route JSON POST/PUT to `api.openai.com` through Cloudflare AI Gateway via
-   * the Workers AI binding only (same door as agent BYOK). Returns null when
-   * the request is not binding-shaped (GET, non-JSON, missing gateway) so
-   * normal egress applies — no REST rewrite and no direct-OpenAI platform-key
-   * ladder.
-   */
-  async #egressOpenAiViaAiGateway(request: Request): Promise<Response | null> {
-    if (request.method !== "POST" && request.method !== "PUT") return null;
-
-    const config = parseConfig(this.env);
-    const routing = openAiAiGatewayRoutingFromConfig(config);
-    if (routing === null) return null;
-
-    const gateway = this.env.AI?.gateway?.(routing.gatewayId);
-    if (gateway === undefined) return null;
-
-    const endpoint = openAiGatewayBindingEndpoint(request.url);
-    if (endpoint.replace(/\?.*$/, "").length === 0) return null;
-
-    let body: unknown;
-    try {
-      body = await request.clone().json();
-    } catch {
-      return null;
-    }
-
-    const headers = openAiAiGatewayBindingHeaders({
-      openaiApiKey: routing.openaiApiKey,
-      projectId: this.#name.projectId,
-      requestHeaders: request.headers,
-    });
-    await applyOpenAiAiGatewayCacheHeaders({
-      headers,
-      body,
-      responseCacheTtlSeconds: routing.responseCacheTtlSeconds,
-    });
-    return gateway.run({
-      provider: "openai",
-      endpoint,
-      headers,
-      query: body,
-    });
+  /** Host-owned billing identity; only plain data crosses this RPC boundary. */
+  readAiCostIdentity() {
+    return this.#readCostIdentity();
   }
 
   interceptEgress(handler: ProjectEgressInterceptor): ProjectEgressIntercept {

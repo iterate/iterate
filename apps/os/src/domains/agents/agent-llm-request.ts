@@ -10,7 +10,9 @@
 // decides WHEN a normal request runs and calls `run()`/`abortInFlight()`.
 
 import type { EmittedInput, ProcessEventArgs, StreamEvent } from "iterate/processors";
-import * as modelInterception from "../../lib/model-interception.ts";
+import { aiGatewayMetadata } from "./ai-cost-attribution.ts";
+import { budgetPauseReason } from "./ai-budget.ts";
+import type { AgentLlmResult } from "./agent-processor-contract.ts";
 import { appendUnlessLostIdempotencyRace, stringifyError, type AgentHost } from "./agent-host.ts";
 import {
   AgentProcessorContract,
@@ -26,7 +28,6 @@ import {
 import {
   extractChunkText,
   jsonCompatible,
-  normalizeLlmUsage,
   runWorkersAiAttempt,
   type WorkersAiMessage,
 } from "./workers-ai-transport.ts";
@@ -84,7 +85,11 @@ export class AgentLlmRequest {
    */
   processEvent(args: ProcessEventArgs<AgentProcessorContract>): undefined {
     const { event, state, blockProcessorWhile } = args;
-    if (event?.type !== "events.iterate.com/agent/token-usage-reported") return;
+    if (
+      event?.type !== "events.iterate.com/agent/token-usage-reported" ||
+      state.paused?.kind === "budget-exhausted"
+    )
+      return;
     const usage = event.payload;
     const contextTokens = usage.inputTokens + usage.outputTokens;
     const thresholdTokens = Math.floor(
@@ -216,6 +221,7 @@ export class AgentLlmRequest {
         const events = await this.readConsumedEvents();
         const body = buildAgentLlmRequestBody({ events, llmRequestOffset: requestOffset });
         const completion = await this.attempt({
+          eventOffset: open.costEventOffset,
           model: open.model,
           messages: await prepareAgentLlmMessages(
             body.messages,
@@ -245,6 +251,21 @@ export class AgentLlmRequest {
             await flushChunkBuffer();
           },
         });
+        if ("status" in completion) {
+          if (inFlight.controller.signal.aborted) return;
+          await appendUnlessLostIdempotencyRace(args.append, [
+            {
+              type: "events.iterate.com/agent/llm-request-settled",
+              payload: {
+                requestOffset,
+                durationMs: Math.max(0, this.#host.now() - startedAtMs),
+                result: completion,
+              },
+              idempotencyKey: this.#host.idempotencyKey(`settle/${requestOffset}`),
+            },
+          ]);
+          return;
+        }
         // A non-streaming transport reports no chunks, so its text exists
         // only in this closure until the success batch commits. Record it as
         // the in-flight partial BEFORE awaiting that append: an interrupt
@@ -418,21 +439,13 @@ export class AgentLlmRequest {
    * void with `onChunk` gated on the same signal.
    */
   async attempt(input: {
+    eventOffset: number;
     model: string;
     messages: WorkersAiMessage[];
     signal: AbortSignal;
     deadlineMs: number;
     onChunk: (chunk: unknown) => Promise<void>;
-  }): Promise<{
-    text: string;
-    usage?: {
-      inputTokens: number;
-      outputTokens: number;
-      cachedInputTokens?: number;
-      reasoningOutputTokens?: number;
-    };
-    rawResponse?: unknown;
-  }> {
+  }): Promise<AgentLlmResult> {
     if (this.#host.deps.callLlm !== undefined) {
       return await this.#host.deps.callLlm({
         model: input.model,
@@ -441,42 +454,19 @@ export class AgentLlmRequest {
         onChunk: (text) => input.onChunk(text),
       });
     }
-    if (modelInterception.isInterceptedModel(input.model)) {
-      const consult = this.#host.deps.consultAiInterceptor;
-      if (consult === undefined) throw modelInterception.noAiInterceptorError(input.model);
-      const result = await raceAbort(
-        input.signal,
-        consult({
-          source: "agent-turn",
-          agentPath: this.#host.path,
-          model: input.model,
-          body: { messages: input.messages },
-        }),
-      );
-      const normalized = modelInterception.normalizeInterceptedTurnResult({
-        result,
-        model: input.model,
-        inputCharacters: input.messages.reduce((sum, message) => sum + message.content.length, 0),
-      });
-      // Word-split delivery keeps journaled chunk events flowing. An
-      // abort mid-delivery fails the attempt like the real transport's
-      // raceAbort-over-the-drain does — a succeeded completion must never
-      // race the interrupt's cancelled settle on the shared idempotency key.
-      for (const chunk of normalized.text.split(/\b/)) {
-        if (chunk.length === 0) continue;
-        if (input.signal.aborted) break;
-        await input.onChunk(chunk);
-      }
-      if (input.signal.aborted) throw new Error("Interception attempt aborted mid-response.");
-      return { text: normalized.text, usage: normalized.usage, rawResponse: result };
-    }
     const ai = this.#host.deps.ai;
     if (ai === undefined) {
       throw new Error("Agent processor has no AI binding configured.");
     }
+    if (!this.#host.deps.aiCostAttribution)
+      throw new Error("Agent host has no AI cost attribution");
+    const cost = await this.#host.deps.aiCostAttribution(input.eventOffset);
     const completion = await raceAbort(
       input.signal,
       runWorkersAiAttempt({
+        metadata: aiGatewayMetadata(cost.attribution, cost.includeEventOffset),
+        agentPath: this.#host.path,
+        consultInterceptor: this.#host.deps.consultAiInterceptor,
         ai,
         transport: this.#host.deps.cloudflareAiGatewayTransport?.(),
         deadlineMs: input.deadlineMs,
@@ -487,12 +477,7 @@ export class AgentLlmRequest {
         onChunk: async (chunk) => input.onChunk(chunk),
       }),
     );
-    const usage = normalizeLlmUsage(completion.usage);
-    return {
-      text: completion.text,
-      ...(usage === undefined ? {} : { usage }),
-      rawResponse: completion.rawResponse,
-    };
+    return completion;
   }
 
   /**
@@ -545,7 +530,7 @@ export class AgentLlmRequest {
     } = input;
     if (!hasHistory) return;
     try {
-      if (await this.#hasCompactionCovering(llmRequestOffset)) return;
+      if (await this.#hasCompactionCovering(llmRequestOffset, triggerOffset)) return;
       const events = await this.readConsumedEvents();
 
       // Same transport seam as normal turns: BYOK carries the per-agent
@@ -556,6 +541,7 @@ export class AgentLlmRequest {
       // a later configuration event may already have selected another model,
       // but switching here would forfeit that cache.
       const summary = await this.attempt({
+        eventOffset: triggerOffset,
         model,
         messages: await prepareAgentLlmMessages(
           buildAgentCompactionRequestBody({ events, llmRequestOffset }).messages,
@@ -566,6 +552,27 @@ export class AgentLlmRequest {
         onChunk: async () => {},
       });
 
+      if ("status" in summary) {
+        const stopped: EmittedInput<AgentProcessorContract> = {
+          type: "events.iterate.com/agent/compaction-stopped",
+          payload: { triggerOffset, result: summary },
+          idempotencyKey: this.#host.idempotencyKey(`compact-stop@${triggerOffset}`),
+        };
+        // The stop and its budget pause commit together. Replaying the usage
+        // report checks the stop before dialing, even before the pause folds.
+        const outcomes: EmittedInput<AgentProcessorContract>[] = [stopped];
+        if (summary.status === "budget-exhausted")
+          outcomes.push({
+            type: "events.iterate.com/agent/paused",
+            payload: {
+              reason: `Compaction: ${budgetPauseReason(summary.budget)}`,
+              budget: summary.budget,
+            },
+            idempotencyKey: this.#host.idempotencyKey(`compact-budget@${triggerOffset}`),
+          });
+        await this.#host.append(...outcomes);
+        return;
+      }
       await this.#host.append({
         type: "events.iterate.com/agents/context-added",
         idempotencyKey: this.#host.idempotencyKey(`compact-context@${triggerOffset}`),
@@ -597,18 +604,27 @@ export class AgentLlmRequest {
   /** Targeted durable guard for compaction redelivery. Long streams are
    * exactly where this runs, so never reread their entire consumed history
    * merely to discover a later summary. */
-  async #hasCompactionCovering(offset: number): Promise<boolean> {
+  async #hasCompactionCovering(offset: number, triggerOffset: number): Promise<boolean> {
     const payloadSchema =
       AgentProcessorContract.events["events.iterate.com/agents/context-added"].payloadSchema;
     using pager = this.#host.readEvents({
       afterOffset: offset,
-      eventTypes: ["events.iterate.com/agents/context-added"],
+      eventTypes: [
+        "events.iterate.com/agents/context-added",
+        "events.iterate.com/agent/compaction-stopped",
+      ],
       limit: CONSUMED_EVENTS_PAGE_SIZE,
     });
     for (;;) {
       const page = await pager.next();
       if (
         page.some((candidate) => {
+          if (candidate.type === "events.iterate.com/agent/compaction-stopped") {
+            const stopped = AgentProcessorContract.events[candidate.type].payloadSchema.parse(
+              candidate.payload,
+            );
+            return stopped.triggerOffset === triggerOffset;
+          }
           const parsed = payloadSchema.safeParse(candidate.payload);
           return (
             parsed.success &&

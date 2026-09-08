@@ -253,6 +253,7 @@ export function foldAgentSummaryUpdated({
 }
 
 type AgentRuntimeSource = {
+  paused?: unknown;
   activeScriptExecutions: readonly unknown[];
   contextItems: readonly { kind: string; payload?: { role: string } }[];
   openRequest: null | { requestedAtOffset: number };
@@ -268,7 +269,7 @@ export function deriveAgentRuntime(state: AgentRuntimeSource): AgentRuntimeRecor
   const promptExists = state.contextItems.some(
     (item) => item.kind === "section" && item.payload?.role === "system",
   );
-  const runnable = pending === 1 && promptExists ? 1 : 0;
+  const runnable = pending === 1 && promptExists && !state.paused ? 1 : 0;
   return {
     triggers: { pending, runnable },
     // The offset-identified request model has no scheduled/started phases:

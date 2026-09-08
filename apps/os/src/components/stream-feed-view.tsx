@@ -73,7 +73,13 @@ export function StreamFeedView({
   onInspectLlmRequest,
   onInspectScriptExecution,
   projectSlug,
+  onRetryBudget,
+  retryBudgetPending,
+  retryBudgetError,
 }: {
+  onRetryBudget?: (offset: number) => Promise<void>;
+  retryBudgetPending?: boolean;
+  retryBudgetError?: string;
   database: StreamBrowserDatabase;
   emptyLabel?: string | null;
   /** Which kind families (and constraints within them) this mode shows. */
@@ -284,6 +290,10 @@ export function StreamFeedView({
                   />
                 ) : transientItem != null ? (
                   <AgentFeedItemRow
+                    onRetryBudget={onRetryBudget}
+                    activeBudgetPauseOffset={liveState?.budgetPauseOffset}
+                    retryBudgetPending={retryBudgetPending}
+                    retryBudgetError={retryBudgetError}
                     item={transientItem}
                     toggledIds={toggledIds}
                     onToggle={toggleExpanded}
@@ -304,6 +314,10 @@ export function StreamFeedView({
                   </div>
                 ) : row.agentItem != null ? (
                   <AgentFeedItemRow
+                    onRetryBudget={onRetryBudget}
+                    activeBudgetPauseOffset={liveState?.budgetPauseOffset}
+                    retryBudgetPending={retryBudgetPending}
+                    retryBudgetError={retryBudgetError}
                     item={row.agentItem}
                     toggledIds={toggledIds}
                     onToggle={toggleExpanded}

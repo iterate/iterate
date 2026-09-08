@@ -5,6 +5,139 @@ import {
   maskCloudflareAiGatewayResponseCacheEntropy,
   runWorkersAiAttempt,
 } from "./workers-ai-transport.ts";
+import { AiBudgetStop, AiRateLimitStop } from "./agent-processor-contract.ts";
+
+it.each([
+  { providerModel: "openai/gpt-4.1-nano", billing: "byok" as const },
+  { providerModel: "openai/gpt-4.1-nano", billing: "unified" as const },
+  { providerModel: "@cf/meta/llama-3.2-1b-instruct", billing: "byok" as const },
+  { providerModel: "@cf/meta/llama-3.2-1b-instruct", billing: "unified" as const },
+])(
+  "intercepting $providerModel with $billing billing preserves preparation and decoding",
+  async ({ providerModel, billing }) => {
+    const requests: any[] = [];
+    const results: unknown[] = [];
+    const chunks: unknown[][] = [];
+    const fixture = {
+      status: 200,
+      headers: { "content-type": "text/event-stream" },
+      body: 'data: {"choices":[{"delta":{"content":"hello"}}]}\n\ndata: {"choices":[],"usage":{"prompt_tokens":12,"completion_tokens":2}}\n\ndata: [DONE]\n\n',
+    };
+    for (const model of [providerModel, `intercepted/${providerModel}`]) {
+      const attemptChunks: unknown[] = [];
+      results.push(
+        await runWorkersAiAttempt({
+          model,
+          agentPath: "/agents/parity",
+          metadata: {
+            environment: "preview_9",
+            projectId: "prj_host",
+            projectSlug: "host",
+            streamPath: "/agents/parity",
+            eventOffset: 0,
+          },
+          messages: [{ role: "developer", content: "say hello" }],
+          deadlineMs: 1000,
+          onChunk: async (chunk) => {
+            attemptChunks.push(chunk);
+          },
+          transport: {
+            kind: billing,
+            gatewayId: "costs",
+            openaiApiKey: "must-not-leak",
+            responseCacheTtlSeconds: 60,
+          },
+          ai: {
+            run: async (model, body) => {
+              expect(model).toBe(providerModel);
+              expect(billing === "unified" || !providerModel.startsWith("openai/")).toBe(true);
+              requests.push({ provider: "workers-ai", endpoint: "chat/completions", body });
+              return new Response(fixture.body, fixture);
+            },
+            gateway: () => ({
+              run: async (request) => {
+                expect(request.headers.authorization).toBe("Bearer must-not-leak");
+                const { authorization, ...headers } = request.headers;
+                requests.push({
+                  provider: request.provider,
+                  endpoint: request.endpoint,
+                  body: request.query,
+                  headers,
+                });
+                return new Response(fixture.body, fixture);
+              },
+            }),
+          },
+          consultInterceptor: async (call) => {
+            expect(call.model).toBe(`intercepted/${providerModel}`);
+            expect(JSON.stringify(call)).not.toContain("must-not-leak");
+            const { provider, endpoint, body, headers } = call.request;
+            requests.push({ provider, endpoint, body, ...(provider === "openai" && { headers }) });
+            return fixture;
+          },
+        }),
+      );
+      chunks.push(attemptChunks);
+    }
+    expect(requests).toHaveLength(2);
+    expect(requests[1]).toEqual(requests[0]);
+    expect(results[0]).toMatchObject({
+      text: "hello",
+      usage: { inputTokens: 12, outputTokens: 2 },
+    });
+    expect(results[1]).toEqual(results[0]);
+    expect(chunks[1]).toEqual(chunks[0]);
+  },
+);
+
+it("intercepted refusals decode into the shared processor stop contracts", async () => {
+  for (const { body, schema, expected } of [
+    {
+      body: {
+        name: "AiGatewayError",
+        internalCode: 2041,
+        message: "Spend limit exceeded: rule 'daily'",
+      },
+      schema: AiBudgetStop,
+      expected: { status: "budget-exhausted", budget: { ruleId: "daily" } },
+    },
+    {
+      body: { error: { code: "rate_limit_exceeded" } },
+      schema: AiRateLimitStop,
+      expected: { status: "rate-limited", retryAfterMs: 2000 },
+    },
+  ]) {
+    const result = await runWorkersAiAttempt({
+      model: "intercepted/test",
+      agentPath: "/agents/refusal",
+      metadata: {
+        environment: "preview_9",
+        projectId: "prj_host",
+        projectSlug: "host",
+        streamPath: "/agents/refusal",
+        eventOffset: 0,
+      },
+      messages: [{ role: "user", content: "hello" }],
+      deadlineMs: 1000,
+      onChunk: async () => {
+        throw new Error("a refusal cannot stream assistant text");
+      },
+      transport: { kind: "byok", gatewayId: "costs", openaiApiKey: "must-not-leak" },
+      ai: {
+        run: async () => {
+          throw new Error("interception must not dial a provider");
+        },
+      },
+      consultInterceptor: async () => ({
+        status: 429,
+        headers: { "content-type": "application/json", "retry-after": "2" },
+        body: JSON.stringify(body),
+      }),
+    });
+    expect(schema.parse(result)).toMatchObject(expected);
+  }
+});
+
 const DEFAULT_AGENT_MODEL = "openai/gpt-5.6-terra"; // the config schema default
 
 describe("adaptMessagesForModel", () => {
@@ -32,10 +165,17 @@ describe("runWorkersAiAttempt", () => {
     let requestBody: unknown;
 
     await runWorkersAiAttempt({
+      metadata: {
+        environment: "test",
+        projectId: "prj_test",
+        projectSlug: "test",
+        streamPath: "/agents/test",
+        eventOffset: undefined,
+      },
       ai: {
         run: async (_model, body) => {
           requestBody = body;
-          return { response: "ok" };
+          return Response.json({ response: "ok" });
         },
       },
       deadlineMs: 1_000,
@@ -66,7 +206,16 @@ describe("runWorkersAiAttempt", () => {
 
     await expect(
       runWorkersAiAttempt({
-        ai: { run: async () => body },
+        metadata: {
+          environment: "test",
+          projectId: "prj_test",
+          projectSlug: "test",
+          streamPath: "/agents/test",
+          eventOffset: undefined,
+        },
+        ai: {
+          run: async () => new Response(body, { headers: { "content-type": "text/event-stream" } }),
+        },
         deadlineMs: 50,
         messages: [{ role: "user", content: "hi" }],
         model: "test-model",
@@ -97,7 +246,16 @@ describe("runWorkersAiAttempt", () => {
 
     await expect(
       runWorkersAiAttempt({
-        ai: { run: async () => body },
+        metadata: {
+          environment: "test",
+          projectId: "prj_test",
+          projectSlug: "test",
+          streamPath: "/agents/test",
+          eventOffset: undefined,
+        },
+        ai: {
+          run: async () => new Response(body, { headers: { "content-type": "text/event-stream" } }),
+        },
         deadlineMs: 50,
         messages: [{ role: "user", content: "hi" }],
         model: "test-model",
@@ -111,6 +269,13 @@ describe("runWorkersAiAttempt", () => {
   it("caps the dial itself, not just the drain", async () => {
     await expect(
       runWorkersAiAttempt({
+        metadata: {
+          environment: "test",
+          projectId: "prj_test",
+          projectSlug: "test",
+          streamPath: "/agents/test",
+          eventOffset: undefined,
+        },
         ai: { run: () => new Promise(() => {}) },
         deadlineMs: 50,
         messages: [{ role: "user", content: "hi" }],
@@ -125,11 +290,18 @@ describe("runWorkersAiAttempt", () => {
     const ai = {
       run: async (_model: string, body: unknown) => {
         bodies.push(body as Record<string, unknown>);
-        return { response: "ok" };
+        return Response.json({ response: "ok" });
       },
     };
     for (const model of [DEFAULT_AGENT_MODEL, "@cf/test/non-openai-model"]) {
       await runWorkersAiAttempt({
+        metadata: {
+          environment: "test",
+          projectId: "prj_test",
+          projectSlug: "test",
+          streamPath: "/agents/test",
+          eventOffset: undefined,
+        },
         ai,
         deadlineMs: 1_000,
         messages: [{ role: "user", content: "hi" }],
@@ -167,18 +339,27 @@ describe("runWorkersAiAttempt", () => {
     });
 
     const completion = await runWorkersAiAttempt({
-      ai: { run: async () => body },
+      metadata: {
+        environment: "test",
+        projectId: "prj_test",
+        projectSlug: "test",
+        streamPath: "/agents/test",
+        eventOffset: undefined,
+      },
+      ai: {
+        run: async () => new Response(body, { headers: { "content-type": "text/event-stream" } }),
+      },
       deadlineMs: 1_000,
       messages: [{ role: "user", content: "hi" }],
       model: DEFAULT_AGENT_MODEL,
       onChunk: async () => {},
     });
 
-    expect(completion.text).toBe("hello");
+    expect(completion).toMatchObject({ text: "hello" });
+    if ("status" in completion) throw new Error("unexpected budget result");
     expect(completion.usage).toEqual({
-      prompt_tokens: 12,
-      completion_tokens: 5,
-      total_tokens: 17,
+      inputTokens: 12,
+      outputTokens: 5,
     });
   });
 });
@@ -230,9 +411,19 @@ describe("the BYOK gateway lane", () => {
 
   it("dials the universal endpoint with our key, strips the model prefix, and pins the prompt cache key", async () => {
     const fake = byokAi(
-      () => new Response(sseBody(okFrames), { headers: { "cf-aig-cache-status": "MISS" } }),
+      () =>
+        new Response(sseBody(okFrames), {
+          headers: { "content-type": "text/event-stream", "cf-aig-cache-status": "MISS" },
+        }),
     );
     const completion = await runWorkersAiAttempt({
+      metadata: {
+        environment: "test",
+        projectId: "prj_test",
+        projectSlug: "test",
+        streamPath: "/agents/test",
+        eventOffset: undefined,
+      },
       ai: fake.ai,
       deadlineMs: 1_000,
       messages: [
@@ -258,7 +449,9 @@ describe("the BYOK gateway lane", () => {
     expect(request.headers["cf-aig-collect-log"]).toBe("true");
     expect(request.headers["cf-aig-collect-log-payload"]).toBe("true");
     expect(request.headers["cf-aig-cache-ttl"]).toBe("600");
-    expect(request.headers["cf-aig-cache-key"]).toMatch(/^[0-9a-f]{64}$/);
+    expect(request.headers["cf-aig-cache-key"]).toBe(
+      await cloudflareAiGatewayResponseCacheKey(request.query),
+    );
     expect(request.query).toMatchObject({
       model: "gpt-5.6-terra",
       messages: [
@@ -269,15 +462,25 @@ describe("the BYOK gateway lane", () => {
       reasoning_effort: "medium",
       stream: true,
     });
-    expect(completion.text).toBe("OK");
+    expect(completion).toMatchObject({ text: "OK" });
+    if ("status" in completion) throw new Error("unexpected budget result");
     expect(completion.rawResponse).toMatchObject({
       cloudflareAiGatewayResponseCacheStatus: "MISS",
     });
   });
 
   it("sends no cache headers when the response cache is not opted into", async () => {
-    const fake = byokAi(() => new Response(sseBody(okFrames)));
+    const fake = byokAi(
+      () => new Response(sseBody(okFrames), { headers: { "content-type": "text/event-stream" } }),
+    );
     const completion = await runWorkersAiAttempt({
+      metadata: {
+        environment: "test",
+        projectId: "prj_test",
+        projectSlug: "test",
+        streamPath: "/agents/test",
+        eventOffset: undefined,
+      },
       ai: fake.ai,
       deadlineMs: 1_000,
       messages: [{ role: "user", content: "hi" }],
@@ -292,12 +495,22 @@ describe("the BYOK gateway lane", () => {
     // opted out of: no-TTL deployments must never serve a cached reply.
     expect(request.headers["cf-aig-skip-cache"]).toBe("true");
     // No header on the response either -> no cache-status claim in evidence.
+    if ("status" in completion) throw new Error("unexpected budget result");
     expect(completion.rawResponse).not.toHaveProperty("cloudflareAiGatewayResponseCacheStatus");
   });
 
   it("never caches file-bearing turns even when the deployment enables response caching", async () => {
-    const fake = byokAi(() => new Response(sseBody(okFrames)));
+    const fake = byokAi(
+      () => new Response(sseBody(okFrames), { headers: { "content-type": "text/event-stream" } }),
+    );
     await runWorkersAiAttempt({
+      metadata: {
+        environment: "test",
+        projectId: "prj_test",
+        projectSlug: "test",
+        streamPath: "/agents/test",
+        eventOffset: undefined,
+      },
       ai: fake.ai,
       deadlineMs: 1_000,
       messages: [
@@ -331,10 +544,18 @@ describe("the BYOK gateway lane", () => {
   it("falls back to unified billing for non-OpenAI models", async () => {
     let unifiedDialed = false;
     const completion = await runWorkersAiAttempt({
+      metadata: {
+        environment: "test",
+        projectId: "prj_test",
+        projectSlug: "test",
+        streamPath: "/agents/test",
+        eventOffset: undefined,
+      },
       ai: {
-        run: async () => {
+        run: async (_model, body) => {
+          expect(body).not.toHaveProperty("prompt_cache_key");
           unifiedDialed = true;
-          return { response: "OK" };
+          return Response.json({ response: "OK" });
         },
         gateway: () => {
           throw new Error("gateway must not be dialed for non-OpenAI models");
@@ -344,16 +565,29 @@ describe("the BYOK gateway lane", () => {
       messages: [{ role: "user", content: "hi" }],
       model: "@cf/test/non-openai-model",
       onChunk: async () => {},
-      transport: { kind: "byok", gatewayId: "default", openaiApiKey: "sk-test" },
+      transport: {
+        kind: "byok",
+        gatewayId: "default",
+        openaiApiKey: "sk-test",
+        openaiPromptCacheKey: "openai-only",
+      },
     });
     expect(unifiedDialed).toBe(true);
-    expect(completion.text).toBe("OK");
+    expect(completion).toMatchObject({ text: "OK" });
+    if ("status" in completion) throw new Error("unexpected budget result");
   });
 
   it("fails the attempt loudly on a non-2xx gateway response", async () => {
     const fake = byokAi(() => new Response('{"error":"nope"}', { status: 401 }));
     await expect(
       runWorkersAiAttempt({
+        metadata: {
+          environment: "test",
+          projectId: "prj_test",
+          projectSlug: "test",
+          streamPath: "/agents/test",
+          eventOffset: undefined,
+        },
         ai: fake.ai,
         deadlineMs: 1_000,
         messages: [{ role: "user", content: "hi" }],
@@ -458,4 +692,148 @@ describe("cloudflareAiGatewayResponseCacheKey", () => {
     expect(maskedA).toContain("- Project: MASKED");
     expect(maskedA).not.toContain("snake");
   });
+});
+
+it("understands the captured CF budget rejection as a result, and sends trusted metadata", async () => {
+  const fixture = await import("./fixtures/cloudflare-budget-exceeded.json");
+  const requests: any[] = [];
+  const completion = await runWorkersAiAttempt({
+    ai: {
+      run: async () => {
+        throw new Error("unexpected direct call");
+      },
+      gateway: () => ({
+        run: async (request) => {
+          requests.push(request);
+          return new Response(fixture.body, fixture);
+        },
+      }),
+    },
+    transport: { kind: "byok", gatewayId: "test", openaiApiKey: "test-key" },
+    metadata: {
+      environment: "preview_1",
+      projectId: "prj_one",
+      projectSlug: "one",
+      streamPath: "/agents/a",
+      eventOffset: 0,
+    },
+    model: "openai/gpt-4.1-nano",
+    messages: [{ role: "user", content: "hi" }],
+    deadlineMs: 1000,
+    onChunk: async () => {},
+  });
+  expect(completion).toMatchObject({
+    status: "budget-exhausted",
+    budget: { provider: "openai", ruleId: "probe", resetsAt: null },
+  });
+  expect(JSON.parse(requests[0].headers["cf-aig-metadata"])).toMatchObject({
+    projectId: "prj_one",
+    eventOffset: 0,
+  });
+});
+
+it("decodes unified raw budget responses and keeps ordinary rate limits distinct", async () => {
+  const fixture = await import("./fixtures/cloudflare-budget-exceeded.json");
+  const input = {
+    metadata: {
+      environment: "test",
+      projectId: "project",
+      projectSlug: "project",
+      streamPath: "/agents/test",
+      eventOffset: undefined,
+    },
+    deadlineMs: 1000,
+    messages: [{ role: "user" as const, content: "Hi" }],
+    model: "@cf/test",
+    onChunk: async () => {},
+    ai: {
+      run: async (_model: string, _body: unknown, options: any) => {
+        expect(options).toMatchObject({
+          returnRawResponse: true,
+          gateway: { id: "default", metadata: { projectId: "project" } },
+        });
+        return new Response(fixture.default.body, fixture.default);
+      },
+    },
+  };
+  expect(await runWorkersAiAttempt(input)).toMatchObject({ status: "budget-exhausted" });
+  expect(
+    await runWorkersAiAttempt({
+      ...input,
+      ai: {
+        run: async () =>
+          new Response("slow down", { status: 429, headers: { "retry-after": "900" } }),
+      },
+    }),
+  ).toEqual({ status: "rate-limited", retryAfterMs: 60_000 });
+});
+
+it("gateway interception strips credentials and cannot replace real model calls", async () => {
+  let calls = 0;
+  const input = {
+    metadata: {
+      environment: "test",
+      projectId: "project",
+      projectSlug: "project",
+      streamPath: undefined,
+      eventOffset: undefined,
+    },
+    deadlineMs: 1000,
+    messages: [{ role: "user" as const, content: "Hi" }],
+    onChunk: async () => {},
+    ai: {
+      run: async () => {
+        throw new Error("Provider must not be called");
+      },
+    },
+    transport: {
+      kind: "byok" as const,
+      gatewayId: "default",
+      openaiApiKey: "sk-real-must-not-escape",
+    },
+    consultInterceptor: async ({ request }: any) => {
+      calls++;
+      expect(JSON.stringify(request)).not.toContain("sk-real");
+      expect(request.headers.authorization).toBeUndefined();
+      return { status: 429, headers: {}, body: "slow down" };
+    },
+  };
+  expect(await runWorkersAiAttempt({ ...input, model: "intercepted/openai/test" })).toMatchObject({
+    status: "rate-limited",
+  });
+  await expect(runWorkersAiAttempt({ ...input, model: "openai/test" })).rejects.toThrow(
+    "BYOK transport unavailable",
+  );
+  expect(calls).toBe(1);
+});
+
+it("keeps the deadline active while draining a raw unified SSE Response", async () => {
+  let cancelled = false;
+  await expect(
+    runWorkersAiAttempt({
+      metadata: {
+        environment: "test",
+        projectId: "project",
+        projectSlug: "project",
+        streamPath: undefined,
+        eventOffset: undefined,
+      },
+      ai: {
+        run: async () =>
+          new Response(
+            new ReadableStream({
+              cancel() {
+                cancelled = true;
+              },
+            }),
+            { headers: { "content-type": "text/event-stream" } },
+          ),
+      },
+      model: "@cf/test",
+      messages: [],
+      deadlineMs: 20,
+      onChunk: async () => {},
+    }),
+  ).rejects.toThrow("timed out");
+  expect(cancelled).toBe(true);
 });

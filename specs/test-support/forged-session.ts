@@ -14,7 +14,10 @@ import {
   type ProjectAiInterceptorInput,
 } from "iterate/node";
 import dedent from "dedent";
-import { installResilientAiInterceptor } from "@iterate-com/shared/test-support/resilient-ai-interceptor";
+import {
+  installResilientAiInterceptor,
+  aiTextResponse,
+} from "@iterate-com/shared/test-support/resilient-ai-interceptor";
 import { doppler, localOsDevServer } from "../../apps/os/scripts/dev.ts";
 import { mintForgedAccessToken, mintForgedIdToken } from "../../scripts/auth/forge-token.ts";
 import { signUpWithEmailOtp, uniqueSignupEmail } from "./email-otp-signup.ts";
@@ -364,7 +367,9 @@ export function createAgentHelper<
 
       lastUserMessage(call: ProjectAiInterceptorInput) {
         if (call.source !== "agent-turn") throw new Error(`unexpected source: ${call.source}`);
-        return call.body.messages.findLast((m) => m.role === "user")?.content;
+        return (call.request.body.messages as { role: string; content: string }[]).findLast(
+          (m) => m.role === "user",
+        )?.content;
       }
 
       codemodify(script: string) {
@@ -427,7 +432,10 @@ export function createAgentHelper<
       await addAgentTurnInterceptor(path, async (call) => {
         const next = responses.take(call);
         if (!next) throw new Error(`No responses available for agent ${path}`);
-        return await next(call as Extract<ProjectAiInterceptorInput, { source: "agent-turn" }>);
+        return aiTextResponse(
+          await next(call as Extract<ProjectAiInterceptorInput, { source: "agent-turn" }>),
+          call,
+        );
       });
     }
     const webUrl = `/projects/${input.projectSlug}/agents/streams${path}`;

@@ -13,7 +13,9 @@ test("multi-turn chat with a sarcastic agent served by the spec's own fake-model
 
   const agent = await fixture.createAgent();
   agent.responses.set(async (call) => {
-    const lastUser = [...call.body.messages].reverse().find((m) => m.role === "user");
+    const lastUser = [...(call.request.body.messages as { role: string; content: string }[])]
+      .reverse()
+      .find((m) => m.role === "user");
     const reply = formatSarcasticResponse(stripXmlBlocks(lastUser?.content ?? ""));
     return [
       "```ts",

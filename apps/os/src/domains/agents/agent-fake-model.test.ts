@@ -7,6 +7,7 @@
 import { expect, test } from "vitest";
 import { makeProcessorHarness } from "iterate/processors/testing";
 import type { ConsumedInput } from "iterate/processors";
+import { aiTextResponse } from "@iterate-com/shared/test-support/resilient-ai-interceptor";
 import { AgentProcessorContract } from "./agent-processor-contract.ts";
 import { AgentProcessor, type AgentProcessorDeps } from "./agent-processor-implementation.ts";
 
@@ -26,8 +27,17 @@ test("an intercepted/* turn is served by the interceptor: prompt in, text out, u
     ["advanceTime", 10_000],
   );
 
-  expect(seen).toMatchObject([{ source: "agent-turn", model: "intercepted/main" }]);
-  expect(seen[0]!.body.messages.some((m) => m.content.includes("Hello fake model"))).toBe(true);
+  expect(seen).toMatchObject([
+    {
+      source: "agent-turn",
+      model: "intercepted/main",
+      request: { metadata: { projectId: "prj_test" } },
+    },
+  ]);
+  expect(JSON.stringify(seen)).not.toContain("must-not-leak");
+  expect(
+    (seen[0] as any).request.body.messages.some((m: any) => m.content.includes("Hello fake model")),
+  ).toBe(true);
 
   const requested = h.events(REQUESTED)[0]!;
   expect(h.events(SETTLED)).toMatchObject([
@@ -169,7 +179,31 @@ function makeInterceptedModelHarness(
     createProcessor: (deps) =>
       new AgentProcessor({
         ...deps,
-        ...(consultAiInterceptor === undefined ? {} : { consultAiInterceptor }),
+        ai: {
+          run: async () => {
+            throw new Error("An intercepted model must never dial");
+          },
+        },
+        cloudflareAiGatewayTransport: () => ({
+          kind: "byok",
+          gatewayId: "default",
+          openaiApiKey: "must-not-leak",
+        }),
+        aiCostAttribution: async () => ({
+          attribution: {
+            environment: "test",
+            projectId: "prj_test",
+            projectSlug: "test",
+            stream: { path: "/agents/test" },
+          },
+          includeEventOffset: false,
+        }),
+        ...(consultAiInterceptor === undefined
+          ? {}
+          : {
+              consultAiInterceptor: async (input) =>
+                aiTextResponse((await consultAiInterceptor(input)) as any, input),
+            }),
       }),
     path: "/agents/test",
   });
