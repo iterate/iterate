@@ -4013,4 +4013,6 @@ you call authenticate on and can then do projects.create etc."
   in email mode (a CLI uses a project token today); OAuth-token sessions on /api (the AS still guards
   /mcp only); project deletion; org management beyond "your first org, created on first use".
 - GATES: tsc ×3 · oxlint · knip · `pnpm test` 84 files / 659 passed / 13 expected-fail / 16
-  deployed-only skips. Deployed proof: the next entry's line.
+  deployed-only skips. DEPLOYED VERIFY (b476af5fd as 0346aade): the full suite 49 files / 196
+  passed / 3 expected-fail / 1 skip, FIRST run — a 90 s pause after the deploy lets the DO code
+  catch up with the worker's (the "Durable Object reset because its code was updated" window).
