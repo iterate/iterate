@@ -98,19 +98,14 @@ export function buildDocumentProjection(root: HTMLElement): DocumentProjection {
     if (node.nodeType === Node.TEXT_NODE) {
       const segment = segmentForText(node);
       if (segment === undefined) return elementPointToSource(node.parentNode, affinity);
+      if (offset === 0 && affinity === "end")
+        return segments[segments.indexOf(segment) - 1]?.end ?? segment.start;
       if (!segment.atomic) return segment.start + Math.min(offset, segment.end - segment.start);
       if (offset <= 0) return segment.start;
       if (offset >= segment.text.data.length) return segment.end;
       return affinity === "start" ? segment.start : segment.end;
     }
     if (node.nodeType !== Node.ELEMENT_NODE) return null;
-
-    // A selection can end at offset zero of the next span. Use the previous
-    // text edge so neither that span nor its Markdown prefix is included.
-    if (offset === 0 && affinity === "end") {
-      const first = firstSegmentWithin(node);
-      if (first !== null) return segments[segments.indexOf(first) - 1]?.end ?? first.start;
-    }
 
     const children = Array.from(node.childNodes);
     if (affinity === "start") {
@@ -123,6 +118,9 @@ export function buildDocumentProjection(root: HTMLElement): DocumentProjection {
         const segment = lastSegmentWithin(child);
         if (segment !== null) return segment.end;
       }
+      // No preceding text is selected: exclude this block and its Markdown prefix.
+      const first = firstSegmentWithin(node);
+      if (first !== null) return segments[segments.indexOf(first) - 1]?.end ?? first.start;
     }
     return elementPointToSource(node, affinity);
   };

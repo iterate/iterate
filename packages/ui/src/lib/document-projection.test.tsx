@@ -39,7 +39,7 @@ describe("document source projection", () => {
     expect(markdown.slice(range!.start, range!.end)).toBe("Plain **bold middle");
   });
 
-  test.each(["Next paragraph.", "- Next list item."])(
+  test.each(["Next paragraph.", "- Next list item.", "- [ ] Next task."])(
     "a paragraph selection ending at the start of %s excludes that block",
     (following) => {
       const markdown = `Selected paragraph.\n\n${following}\n`;
@@ -47,15 +47,29 @@ describe("document source projection", () => {
       const projection = buildDocumentProjection(root);
       const start = pointAt(root, "Selected paragraph.");
       const next = pointAt(root, "Next");
-      // Chromium's triple-click ends at offset zero of the following element.
-      const range = projection.domRangeToSource({
-        startContainer: start.node,
-        startOffset: 0,
-        endContainer: next.node.parentElement!,
-        endOffset: 0,
-      });
-
-      expect(markdown.slice(range!.start, range!.end).trim()).toBe("Selected paragraph.");
+      // Native selections can end at the next text node or its wrapper.
+      for (const endContainer of [next.node, next.node.parentElement!]) {
+        expect(
+          projection.domRangeToSource({
+            startContainer: start.node,
+            startOffset: 0,
+            endContainer,
+            endOffset: 0,
+          }),
+        ).toEqual({ start: 0, end: 19 });
+      }
+      // Selecting up to a task's checkbox still includes none of its text.
+      const checkbox = root.querySelector("input");
+      if (checkbox) {
+        expect(
+          projection.domRangeToSource({
+            startContainer: start.node,
+            startOffset: 0,
+            endContainer: checkbox.parentElement!,
+            endOffset: 1,
+          }),
+        ).toEqual({ start: 0, end: 19 });
+      }
     },
   );
 
