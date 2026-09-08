@@ -12,20 +12,19 @@ already has plain display Markdown and annotation ranges:
   annotations={annotations}
   selectedAnnotationIds={selectedIds}
   onSelectAnnotations={setSelectedIds}
-  onComment={async (selection, body) => saveSelection(selection, body)}
+  onComment={(selection, body) => applySelection(selection, body)}
 />
 
 <DocumentComments
   threads={threads}
   renderComment={(body) => <MarkdownBody source={body} />}
-  onAction={async (action) => saveAction(action)}
+  onAction={(action) => applyAction(action)}
 />
 ```
 
-Both write callbacks return `Promise<boolean>`. Return `true` only after an
-atomic write of the current document has landed. Return `false` for a stale
-revision, unavailable connection, or rejected write: the built-in composer
-keeps its draft so the user can retry.
+Both callbacks return `boolean`: `true` means the edit was applied locally;
+`false` keeps the composer draft. Synchronisation and recovery belong to the
+host document, just as they do for typing. The components own no persistence.
 
 For Roughdraft Flavored Markdown, use `useDocumentReview`:
 
@@ -39,6 +38,13 @@ const review = useDocumentReview({ source, identity, busy, onTransform });
 The hook reads and writes RFM through `iterate/document-review`, maps display
 ranges back to source ranges, and checks the selection's display revision before
 it creates an anchored comment. `onTransform` receives a whole-file transform
-and must apply it atomically to the latest live source. RFM cannot represent
-crossing inline review ranges; the core rejects overlapping selections rather
-than silently changing their meaning.
+and applies it to the current local editor with `applyTransform`. The editor uses
+CodeMirror's diff to dispatch separate text changes, preserving unchanged prose
+between a passage marker and its endmatter. Pending typing is included, and the
+normal collaboration protocol handles attribution, retries and redlines.
+
+RFM cannot represent crossing inline review ranges; existing overlaps are
+rejected locally. Concurrent edits can still produce invalid markup: two clients
+creating the first endmatter can append two footers. The known race is pinned by
+an expected-failure test and tracked in
+[tasks/roughdraft-concurrent-endmatter.md](../../tasks/roughdraft-concurrent-endmatter.md).

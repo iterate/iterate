@@ -3,7 +3,6 @@ import type { WorkspaceDocumentLane } from "@iterate-com/workspace-documents/typ
 export type {
   CollabAcceptResult,
   CollabChanges,
-  CollabExactApplyResult,
   CollabOpened,
   CollabWaitResult,
 } from "@iterate-com/workspace-documents/types";

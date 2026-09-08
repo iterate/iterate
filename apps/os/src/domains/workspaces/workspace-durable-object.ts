@@ -39,12 +39,7 @@ import {
 } from "./workspace-core.ts";
 import { effectiveWorkspaceMounts, normalizeWorkspaceMountKeys } from "./utils.ts";
 import { resolveAbsolutePath } from "./paths.ts";
-import type {
-  CollabExactApplyResult,
-  CollabPull,
-  CollabPush,
-  CollabPushResult,
-} from "./collab-engine.ts";
+import type { CollabPull, CollabPush, CollabPushResult } from "./collab-engine.ts";
 import { CollabHost, type CollabPresenceFlat } from "./collab-host.ts";
 import { sqliteCollabStore } from "./collab-store.ts";
 
@@ -643,21 +638,6 @@ export class WorkspaceV2DurableObject extends DurableObject<Env> {
   async collabPush(input: CollabPush): Promise<CollabPushResult> {
     await this.#assertCreated();
     return this.#collab.push({ ...input, path: this.#resolvePath(input.path) });
-  }
-
-  async collabApplyIfUnchanged(
-    path: string,
-    expectedContent: string,
-    nextContent: string,
-    author?: string,
-  ): Promise<CollabExactApplyResult> {
-    await this.#assertCreated();
-    return this.#collab.applyIfUnchanged(
-      this.#resolvePath(path),
-      expectedContent,
-      nextContent,
-      author,
-    );
   }
 
   /** Long-poll lane: resolves when ops land past afterVersion (or ~20s);

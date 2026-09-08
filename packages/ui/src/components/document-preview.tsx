@@ -67,7 +67,7 @@ export interface DocumentPreviewProps {
   className?: string;
   onSelectAnnotations?: (ids: string[]) => void;
   /** Receives display-Markdown offsets. The caller maps them to its storage source. */
-  onComment?: (selection: DocumentPreviewCommentSelection, body: string) => Promise<boolean>;
+  onComment?: (selection: DocumentPreviewCommentSelection, body: string) => boolean;
 }
 
 interface PendingComment extends DocumentPreviewCommentSelection {
@@ -230,12 +230,11 @@ export function DocumentPreview({
           <ReviewComposer
             placeholder="Comment on the selection…"
             submitLabel="Comment"
-            onSubmit={(body) =>
-              onComment(pendingComment, body).then((saved) => {
-                if (saved) clearPendingComment();
-                return saved;
-              })
-            }
+            onSubmit={(body) => {
+              const saved = onComment(pendingComment, body);
+              if (saved) clearPendingComment();
+              return saved;
+            }}
             onCancel={clearPendingComment}
           />
         </div>

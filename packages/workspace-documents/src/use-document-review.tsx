@@ -26,34 +26,34 @@ export function useDocumentReview({
   source: string;
   identity: CommentIdentity | null;
   busy: boolean;
-  /** Atomically apply to current source; false means no change was confirmed. */
-  onTransform: (transform: (current: string) => string) => Promise<boolean>;
+  /** Apply to the current local source; false means the editor is unavailable. */
+  onTransform: (transform: (current: string) => string) => boolean;
 }) {
   const review = useMemo(() => readReview(source), [source]);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const canWrite =
     identity !== null && !busy && !review.diagnostics.some((d) => d.severity === "error");
 
-  const apply = async (operation: ReviewOperation) => {
+  const apply = (operation: ReviewOperation) => {
     try {
-      const confirmed = await onTransform((current) => {
+      const applied = onTransform((current) => {
         const result = applyReviewOperation(current, operation);
         if (!result.ok) throw new Error(result.message);
         return result.source;
       });
-      if (!confirmed) {
+      if (!applied) {
         toast.error(
-          "The document changed or is still syncing. Your draft is saved here; try again.",
+          "The document editor is unavailable. Your draft is saved here; reconnect to continue.",
         );
       }
-      return confirmed;
+      return applied;
     } catch (error) {
       toast.error(error instanceof Error ? error.message : String(error));
       return false;
     }
   };
 
-  const onAction = async (action: ReviewAction) => {
+  const onAction = (action: ReviewAction) => {
     if (!identity) return false;
     switch (action.kind) {
       case "add-document-comment":
@@ -168,7 +168,7 @@ export function useDocumentReview({
     selectedAnnotationIds: selectedIds,
     onSelectAnnotations: setSelectedIds,
     onComment: canWrite
-      ? async (range, body) => {
+      ? (range, body) => {
           if (range.markdown !== review.projection.markdown) {
             toast.error(
               "The document changed after you selected this text. Select the passage again.",

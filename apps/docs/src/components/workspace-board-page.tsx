@@ -651,13 +651,11 @@ export function WorkspaceBoardPage({
         redline={trackChanges}
         editorApiRef={editorApiRef}
         commentIdentity={commentIdentity}
-        onApplyTransform={async (transform) => {
+        onApplyTransform={(transform) => {
           const api = openTask ? liveApi(openTask.path) : null;
           if (!api) return false;
-          const result = await api.applyExactTransform(transform);
-          if (result === "too-large")
-            throw new Error("This document is too large for live review edits.");
-          return result === "accepted";
+          api.applyTransform(transform);
+          return true;
         }}
         onAssignAgent={
           guest

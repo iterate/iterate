@@ -23,15 +23,6 @@ export interface CollabEditorApi {
    * attempt finished — rename lanes await this before reading the old
    * session's head, so the carry can't race the final keystrokes. */
   flushPending(): Promise<void>;
-  /** Apply `transform` to the live doc as a minimal splice (concurrent
-   * edits outside the changed region survive; the redline stays truthful). */
+  /** Transform the current local document into ordinary, disjoint text edits. */
   applyTransform(transform: (source: string) => string): void;
-  /**
-   * Durably apply a structured whole-file change only when the live source is
-   * still the server head. Pending ordinary typing is deliberately refused:
-   * a review footer must never be rebased over unknown local source edits.
-   */
-  applyExactTransform(
-    transform: (source: string) => string,
-  ): Promise<"accepted" | "conflict" | "pending" | "too-large" | "unavailable">;
 }

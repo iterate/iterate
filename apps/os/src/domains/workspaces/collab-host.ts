@@ -5,7 +5,6 @@ import { resolveAbsolutePath } from "./paths.ts";
 import type { EditWorkspaceFileInput, EditWorkspaceFileResult } from "./types.ts";
 import {
   CollabEngine,
-  type CollabExactApplyResult,
   type CollabBroadcast,
   MAX_DOC_BYTES,
   minimalSplice,
@@ -267,25 +266,6 @@ export class CollabHost {
     const head = await this.#opened(input.path);
     this.#assertQuota(input.path, head.version);
     return this.#engine.push(input);
-  }
-
-  /**
-   * Atomically replace a live document only when the caller's source is still
-   * current. Review endmatter is a structured whole-file rewrite, so a stale
-   * write is a normal conflict rather than a candidate for positional rebase.
-   */
-  async applyIfUnchanged(
-    rawPath: string,
-    expectedContent: string,
-    nextContent: string,
-    author?: string,
-  ): Promise<CollabExactApplyResult> {
-    const path = CollabHost.canonical(rawPath);
-    this.#touch(path);
-    this.#assertLive(path);
-    const head = await this.#opened(path);
-    this.#assertQuota(path, head.version);
-    return this.#engine.applyIfUnchanged(path, expectedContent, nextContent, author);
   }
 
   /** Long-poll: resolves when ops land past afterVersion (or ~20s). */

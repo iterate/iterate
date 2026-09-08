@@ -88,9 +88,8 @@ export function WorkspaceTaskSheet({
   };
   /** Who authors discussion comments (null → comments are read-only). */
   commentIdentity: import("@iterate-com/workspace-documents/types").CommentIdentity | null;
-  /** Route a whole-file transform to the live editor or the write lane;
-   * resolves whether it landed (the write lane can roll back). */
-  onApplyTransform: (transform: (source: string) => string) => Promise<boolean>;
+  /** Apply a transform to the current local document through the live editor. */
+  onApplyTransform: (transform: (source: string) => string) => boolean;
   /** Owner act (commits the mount) — absent for guests. */
   onAssignAgent?: () => Promise<void>;
   onLiveContent: (path: string, content: string) => void;
@@ -181,9 +180,8 @@ function SheetBody({
   };
   /** Who authors discussion comments (null → comments are read-only). */
   commentIdentity: import("@iterate-com/workspace-documents/types").CommentIdentity | null;
-  /** Route a whole-file transform to the live editor or the write lane;
-   * resolves whether it landed (the write lane can roll back). */
-  onApplyTransform: (transform: (source: string) => string) => Promise<boolean>;
+  /** Apply a transform to the current local document through the live editor. */
+  onApplyTransform: (transform: (source: string) => string) => boolean;
   /** Owner act (commits the mount) — absent for guests. */
   onAssignAgent?: () => Promise<void>;
   onLiveContent: (path: string, content: string) => void;

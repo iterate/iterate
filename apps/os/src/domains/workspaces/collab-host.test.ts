@@ -108,30 +108,6 @@ describe("collab host", () => {
     );
   });
 
-  test("structured whole-file rewrites conflict instead of rebasing stale footers", async () => {
-    const { store } = fakeSessionStore();
-    const { fs } = fakeFs({ [PATH]: "# Notes\n\n---\ncomments: {}\n" });
-    const host = new CollabHost({ fs, store });
-    const opened = await host.open(PATH);
-    const first = "# Notes\n\n---\ncomments:\n  c1:\n    body: first\n";
-    const second = "# Notes\n\n---\ncomments:\n  c2:\n    body: second\n";
-
-    const [left, right] = await Promise.all([
-      host.applyIfUnchanged(PATH, opened.content, first, "reviewer-a"),
-      host.applyIfUnchanged(PATH, opened.content, second, "reviewer-b"),
-    ]);
-
-    expect([left.status, right.status].sort()).toEqual(["accepted", "conflict"]);
-    expect(await host.readFile(PATH)).toBe(first);
-    expect(
-      right.status === "conflict"
-        ? right.content
-        : left.status === "conflict"
-          ? left.content
-          : null,
-    ).toBe(first);
-  });
-
   test("flush failure keeps the session durably dirty; the next barrier retries", async () => {
     const { store } = fakeSessionStore();
     const { files, fs, state } = fakeFs({ [PATH]: SEED });

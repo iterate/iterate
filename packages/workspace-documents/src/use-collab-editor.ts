@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Compartment, EditorState, type Extension } from "@codemirror/state";
 import { getSyncedVersion, sendableUpdates } from "@codemirror/collab";
 import { EditorView } from "@codemirror/view";
+import { textEdits } from "./text-edits.ts";
 import { CollabConnection, peerExtension } from "./collab-client.ts";
 import { redlineExtension } from "./collab-redline.ts";
 import { remoteCursorsExtension } from "./collab-cursors.ts";
@@ -162,46 +163,10 @@ export function useCollabEditor(input: {
         if (apiRef !== undefined) {
           const live = view;
           apiRef.current = {
-            applyExactTransform: async (transform) => {
-              if (connection.dead) return "unavailable";
-              if (sendableUpdates(live.state).length > 0) return "pending";
-              const current = live.state.doc.toString();
-              const next = transform(current);
-              if (next === current) return "accepted";
-              const result = await transport.runOnce((collab) =>
-                collab.applyIfUnchanged(
-                  workspacePath,
-                  current,
-                  next,
-                  `${connection.clientId}-review`,
-                ),
-              );
-              if (result.status === "accepted") return "accepted";
-              if (result.status === "conflict") return "conflict";
-              return "too-large";
-            },
             applyTransform: (transform) => {
               const current = live.state.doc.toString();
               const next = transform(current);
-              if (next === current) return;
-              // Minimal splice: only the changed region moves, so concurrent
-              // edits elsewhere survive and attribution stays honest.
-              let start = 0;
-              const maxStart = Math.min(current.length, next.length);
-              while (start < maxStart && current[start] === next[start]) start++;
-              let endCurrent = current.length;
-              let endNext = next.length;
-              while (
-                endCurrent > start &&
-                endNext > start &&
-                current[endCurrent - 1] === next[endNext - 1]
-              ) {
-                endCurrent--;
-                endNext--;
-              }
-              live.dispatch({
-                changes: { from: start, insert: next.slice(start, endNext), to: endCurrent },
-              });
+              live.dispatch({ changes: textEdits(current, next) });
             },
             flushPending: async () => {
               const pending = sendableUpdates(live.state);

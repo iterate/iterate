@@ -3,7 +3,6 @@ import type { ProjectDial } from "@iterate-com/workspace-documents/server";
 import type {
   CollabAcceptResult,
   CollabChanges,
-  CollabExactApplyResult,
   CollabOpened,
   CollabWaitResult,
   WorkspaceStreamEvent,
@@ -28,12 +27,6 @@ type WorkspaceStub = {
   create(input: object): Promise<unknown>;
   collab: {
     open(path: string): Promise<CollabOpened>;
-    applyIfUnchanged(
-      path: string,
-      expectedContent: string,
-      nextContent: string,
-      author?: string,
-    ): Promise<CollabExactApplyResult>;
     push(input: {
       baseVersion: number;
       clientId: string;
@@ -196,17 +189,6 @@ export class TasksWorkspaceApi extends RpcTarget implements TasksWorkspace {
 
   changes(filePath: string): Promise<CollabChanges> {
     return this.#withWorkspace((ws) => ws.collab.changes(filePath));
-  }
-
-  applyIfUnchanged(
-    filePath: string,
-    expectedContent: string,
-    nextContent: string,
-    author?: string,
-  ): Promise<CollabExactApplyResult> {
-    return this.#withWorkspace((ws) =>
-      ws.collab.applyIfUnchanged(filePath, expectedContent, nextContent, author),
-    );
   }
 
   push(input: {

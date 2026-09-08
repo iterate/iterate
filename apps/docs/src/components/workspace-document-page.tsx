@@ -101,17 +101,12 @@ export function WorkspaceDocumentPage({
     setSource(content);
   }, []);
 
-  const onTransform = useCallback(
-    async (transform: (current: string) => string): Promise<boolean> => {
-      const editor = editorApiRef.current;
-      if (editor === null || !editor.isLive()) return false;
-      const result = await editor.applyExactTransform(transform);
-      if (result === "too-large")
-        throw new Error("This document is too large for live review edits.");
-      return result === "accepted";
-    },
-    [],
-  );
+  const onTransform = useCallback((transform: (current: string) => string): boolean => {
+    const editor = editorApiRef.current;
+    if (editor === null || !editor.isLive()) return false;
+    editor.applyTransform(transform);
+    return true;
+  }, []);
   const format = loaded?.snapshot.format;
   const onCommentTransform = useCallback(
     (transform: (current: string) => string) =>

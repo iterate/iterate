@@ -76,7 +76,7 @@ export type DocumentCommentsProps = {
   renderComment: (body: string) => React.ReactNode;
   selectedThreadId?: string | null;
   onSelectThread?: (threadId: string | null) => void;
-  onAction?: (action: ReviewAction) => Promise<boolean>;
+  onAction?: (action: ReviewAction) => boolean;
   notice?: React.ReactNode;
   ref?: React.Ref<DocumentCommentsHandle>;
   className?: string;
@@ -162,7 +162,7 @@ function ThreadList({
   selectionThreads: ReviewThread[];
   selectedThreadId: string | null;
   onSelectThread?: (threadId: string | null) => void;
-  onAction?: (action: ReviewAction) => Promise<boolean>;
+  onAction?: (action: ReviewAction) => boolean;
   renderComment: (body: string) => React.ReactNode;
 }) {
   if (documentThreads.length === 0 && selectionThreads.length === 0) {
@@ -215,7 +215,7 @@ function ThreadGroup({
   threads: ReviewThread[];
   selectedThreadId: string | null;
   onSelectThread?: (threadId: string | null) => void;
-  onAction?: (action: ReviewAction) => Promise<boolean>;
+  onAction?: (action: ReviewAction) => boolean;
   renderComment: (body: string) => React.ReactNode;
 }) {
   if (threads.length === 0) return null;
@@ -248,25 +248,23 @@ export function ReviewThreadCard({
   thread: ReviewThread;
   selected: boolean;
   onSelectThread?: (threadId: string | null) => void;
-  onAction?: (action: ReviewAction) => Promise<boolean>;
+  onAction?: (action: ReviewAction) => boolean;
   renderComment: (body: string) => React.ReactNode;
 }) {
   const [replying, setReplying] = React.useState(false);
   const cardRef = React.useRef<HTMLElement | null>(null);
-  const [acting, setActing] = React.useState(false);
   const [actionFailed, setActionFailed] = React.useState(false);
   const isResolved = thread.status === "resolved";
   React.useEffect(() => {
     if (selected) cardRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
   }, [selected]);
   const act = (action: ReviewAction) => {
-    if (!onAction || acting) return;
-    setActing(true);
-    setActionFailed(false);
-    void onAction(action)
-      .then((saved) => setActionFailed(!saved))
-      .catch(() => setActionFailed(true))
-      .finally(() => setActing(false));
+    if (!onAction) return;
+    try {
+      setActionFailed(!onAction(action));
+    } catch {
+      setActionFailed(true);
+    }
   };
   return (
     <article
@@ -311,12 +309,11 @@ export function ReviewThreadCard({
             placeholder="Reply…"
             submitLabel="Reply"
             onCancel={() => setReplying(false)}
-            onSubmit={(body) =>
-              onAction({ kind: "reply", threadId: thread.id, body }).then((ok) => {
-                if (ok) setReplying(false);
-                return ok;
-              })
-            }
+            onSubmit={(body) => {
+              const ok = onAction({ kind: "reply", threadId: thread.id, body });
+              if (ok) setReplying(false);
+              return ok;
+            }}
           />
         ) : null}
       </div>
@@ -330,7 +327,6 @@ export function ReviewThreadCard({
           <Button
             variant="ghost"
             size="xs"
-            disabled={acting}
             onClick={() =>
               act({
                 kind: "set-thread-status",
@@ -350,7 +346,6 @@ export function ReviewThreadCard({
             <Button
               variant="ghost"
               size="xs"
-              disabled={acting}
               onClick={() => act({ kind: "accept-suggestion", threadId: thread.id })}
             >
               <CheckIcon data-icon="inline-start" /> Accept
@@ -360,7 +355,6 @@ export function ReviewThreadCard({
             <Button
               variant="ghost"
               size="xs"
-              disabled={acting}
               onClick={() => act({ kind: "reject-suggestion", threadId: thread.id })}
             >
               <XIcon data-icon="inline-start" /> Reject
@@ -380,7 +374,7 @@ function ReviewCommentCard({
 }: {
   threadId: string;
   comment: ReviewComment;
-  onAction?: (action: ReviewAction) => Promise<boolean>;
+  onAction?: (action: ReviewAction) => boolean;
   renderComment: (body: string) => React.ReactNode;
 }) {
   const [editing, setEditing] = React.useState(false);
@@ -452,14 +446,16 @@ function ReviewCommentCard({
               placeholder="Edit comment…"
               submitLabel="Save"
               onCancel={() => setEditing(false)}
-              onSubmit={(body) =>
-                onAction({ kind: "edit-comment", threadId, commentId: comment.id, body }).then(
-                  (ok) => {
-                    if (ok) setEditing(false);
-                    return ok;
-                  },
-                )
-              }
+              onSubmit={(body) => {
+                const ok = onAction({
+                  kind: "edit-comment",
+                  threadId,
+                  commentId: comment.id,
+                  body,
+                });
+                if (ok) setEditing(false);
+                return ok;
+              }}
             />
           </div>
         ) : (
@@ -507,7 +503,7 @@ function DocumentComposer({
   onAction,
 }: {
   textareaRef: React.RefObject<HTMLTextAreaElement | null>;
-  onAction: (action: ReviewAction) => Promise<boolean>;
+  onAction: (action: ReviewAction) => boolean;
 }) {
   return (
     <div className="shrink-0 border-t bg-muted/20 px-4 py-3">
@@ -533,29 +529,19 @@ export function ReviewComposer({
   placeholder: string;
   submitLabel: string;
   textareaRef?: React.RefObject<HTMLTextAreaElement | null>;
-  onSubmit: (body: string) => Promise<boolean>;
+  onSubmit: (body: string) => boolean;
   onCancel?: () => void;
 }) {
   const [draft, setDraft] = React.useState(initialValue);
-  const [submitting, setSubmitting] = React.useState(false);
-  const inFlight = React.useRef(false);
   const [error, setError] = React.useState<string | null>(null);
   const submit = () => {
-    if (inFlight.current || draft.trim() === "") return;
-    inFlight.current = true;
-    setSubmitting(true);
+    if (draft.trim() === "") return;
     setError(null);
-    void onSubmit(draft)
-      .then((ok) => {
-        if (ok) setDraft("");
-      })
-      .catch((error: unknown) =>
-        setError(error instanceof Error ? error.message : "The comment could not be saved."),
-      )
-      .finally(() => {
-        inFlight.current = false;
-        setSubmitting(false);
-      });
+    try {
+      if (onSubmit(draft)) setDraft("");
+    } catch (error) {
+      setError(error instanceof Error ? error.message : "The comment could not be saved.");
+    }
   };
   return (
     <div className="flex flex-col gap-2">
@@ -589,7 +575,7 @@ export function ReviewComposer({
             Cancel
           </Button>
         ) : null}
-        <Button size="xs" disabled={submitting || draft.trim() === ""} onClick={submit}>
+        <Button size="xs" disabled={draft.trim() === ""} onClick={submit}>
           {submitLabel}
         </Button>
       </div>
