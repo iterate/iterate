@@ -270,18 +270,32 @@ export class DynamicWorkerRunner {
         return withWorkerCommit(await entrypoint.fetch(currentRequest), resolved.commitOid);
       };
 
-      const retryRequest =
+      // A request is byte-replayable when there is nothing to consume: GET and
+      // HEAD by spec, and any other method that carries no body (the auth
+      // gate's refresh POST is one). WebSocket upgrades are never replayed.
+      // Cloudflare's clone() widens the Request metadata generics even though
+      // the runtime value stays the same Fetch API request.
+      const replayableRequest =
         !isWebSocketUpgradeRequest(request) &&
-        (request.method === "GET" || request.method === "HEAD")
-          ? // Cloudflare's clone() widens the Request metadata generics even
-            // though the runtime value remains the same Fetch API request.
-            (request.clone() as typeof request)
+        (request.method === "GET" || request.method === "HEAD" || request.body === null)
+          ? (request.clone() as typeof request)
           : undefined;
+      // A Durable Object reset can land AFTER the app began handling the
+      // request, so only an idempotent method may replay that one; a
+      // clone-version skew is a loader-isolate deserialize failure BEFORE the
+      // app runs (the shared isolate outlived its captured bindings), so any
+      // byte-replayable request is safe to retry on a fresh isolate.
+      const isIdempotentMethod = request.method === "GET" || request.method === "HEAD";
       let response: Response;
       try {
         response = await dispatch(request);
       } catch (error) {
-        if (retryRequest && ref.type === "stateful" && isDurableObjectLifecycleError(error)) {
+        if (
+          replayableRequest &&
+          isIdempotentMethod &&
+          ref.type === "stateful" &&
+          isDurableObjectLifecycleError(error)
+        ) {
           span.setAttribute("iterate.worker.durable_object_availability_retry", true);
           console.info("Stateful worker fetch retrying after Durable Object unavailability", {
             error,
@@ -289,24 +303,23 @@ export class DynamicWorkerRunner {
             rayId: request.headers.get("cf-ray") ?? undefined,
             traceRole,
           });
-          // GET/HEAD are safe to replay. A deploy, eviction, or temporary
-          // platform fault may retire the hosting DO between dispatch and
-          // response; the second lookup reaches a fresh incarnation, and a
-          // second failure remains terminal.
-          response = await dispatch(retryRequest);
+          // A deploy, eviction, or temporary platform fault may retire the
+          // hosting DO between dispatch and response; the second lookup reaches
+          // a fresh incarnation, and a second failure remains terminal.
+          response = await dispatch(replayableRequest);
         } else if (
-          retryRequest &&
+          replayableRequest &&
           ref.type === "stateless" &&
-          error instanceof Error &&
-          error.message.includes(WORKERS_RPC_CLONE_VERSION_ERROR)
+          isWorkerRpcCloneVersionError(error)
         ) {
           span.setAttribute("iterate.worker.rpc_clone_version_retry", true);
           console.warn("Workers RPC clone-version skew; retrying stateless fetch once", {
+            method: request.method,
             projectId: this.#projectId,
             rayId: request.headers.get("cf-ray") ?? undefined,
             traceRole,
           });
-          response = await dispatch(retryRequest, crypto.randomUUID());
+          response = await dispatch(replayableRequest, crypto.randomUUID());
         } else {
           throw error;
         }
