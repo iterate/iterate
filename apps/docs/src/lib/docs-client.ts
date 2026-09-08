@@ -17,8 +17,10 @@ import { refreshProjectSession, type RefreshOutcome } from "./project-session.ts
  * 3. When the replacement itself cannot connect, the likeliest cause is a
  *    lapsed project session: renew it through the gate and try once more; a
  *    session the gate declares dead hands off to sign-in. One renewal is
- *    shared by everyone waiting on it, and no session dialed before it
- *    completed is trusted afterwards — its handshake carried the old cookie.
+ *    shared by everyone waiting on it; no session dialed before it completed
+ *    is trusted afterwards (its handshake carried the old cookie); and a
+ *    caller whose session was retired that way rides the renewal instead
+ *    of starting another, which would retire the fresh session in turn.
  */
 
 function dialDocsApi() {
@@ -49,8 +51,16 @@ export function createDocsClient<Project>(deps: {
   isTransportError?: (error: unknown) => boolean;
 }) {
   const isTransport = deps.isTransportError ?? isSessionTransportError;
-  let live: { project: Project; session: unknown; generation: number } | null = null;
+  type Session = {
+    project: Project;
+    session: unknown;
+    generation: number;
+    /** How many renewals had completed when this session was dialed. */
+    renewalsAtDial: number;
+  };
+  let live: Session | null = null;
   let generation = 0;
+  let renewalsCompleted = 0;
   let renewing: Promise<RefreshOutcome> | null = null;
   /** The generation counter when the last renewal completed: every session
    * dialed at or before it shook hands with the cookie that renewal replaced. */
@@ -60,6 +70,7 @@ export function createDocsClient<Project>(deps: {
     renewing ??= deps
       .refresh()
       .then((outcome) => {
+        renewalsCompleted++;
         renewedAtGeneration = generation;
         return outcome;
       })
@@ -69,13 +80,19 @@ export function createDocsClient<Project>(deps: {
     return renewing;
   };
 
-  const current = () => (live ??= { ...deps.dial(), generation: ++generation });
+  const dial = (): Session => ({
+    ...deps.dial(),
+    generation: ++generation,
+    renewalsAtDial: renewalsCompleted,
+  });
+
+  const current = () => (live ??= dial());
 
   /** Replace the session a caller lost — unless someone already did. */
   const replace = (lost: number) => {
     if (live !== null && live.generation > lost) return live;
     dispose(live?.session);
-    live = { ...deps.dial(), generation: ++generation };
+    live = dial();
     return live;
   };
 
@@ -90,6 +107,14 @@ export function createDocsClient<Project>(deps: {
         return await operation(second.project);
       } catch (secondError) {
         if (!isTransport(secondError)) throw secondError;
+        if (second.renewalsAtDial < renewalsCompleted) {
+          // A renewal landed after this session was dialed — another
+          // caller's, which retired it under us. That renewal covers us
+          // too: ride what is live now (or dial) rather than renew again
+          // and retire the fresh session in turn.
+          const third = replace(second.generation);
+          return await operation(third.project);
+        }
         const renewal = await renew();
         if (renewal.outcome === "signed-out") {
           deps.signInAgain(renewal.login);

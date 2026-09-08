@@ -157,6 +157,48 @@ describe("createDocsClient", () => {
     expect(dial).toHaveBeenCalledTimes(4);
   });
 
+  test("a caller retired by another caller's renewal rides it instead of renewing again", async () => {
+    const renewals: Array<(outcome: RefreshOutcome) => void> = [];
+    const refresh = vi.fn(
+      () =>
+        new Promise<RefreshOutcome>((resolve) => {
+          renewals.push(resolve);
+        }),
+    );
+    const { client, dial, disposed } = fakeClient({ refresh });
+    // A loses 1 and its replacement 2, then waits on a renewal.
+    const a = client.withDocsProject(async (project) => {
+      if (project < 4) throw transportFailure();
+      return `a on ${project}`;
+    });
+    await settle();
+    expect(dial).toHaveBeenCalledTimes(2);
+    // B loses 2 too, dials 3 with the old cookie, and is mid-call on it.
+    let failB: (() => void) | null = null;
+    const b = client.withDocsProject((project) => {
+      if (project === 2) return Promise.reject(transportFailure());
+      if (project === 3) {
+        return new Promise<string>((_, reject) => {
+          failB = () => reject(transportFailure());
+        });
+      }
+      return Promise.resolve(`b on ${project}`);
+    });
+    await settle();
+    expect(dial).toHaveBeenCalledTimes(3);
+    // A's renewal lands: A retires 3 and dials 4 with the renewed cookie…
+    renewals[0]!({ outcome: "renewed", expiresAt: 0 });
+    await settle();
+    expect(dial).toHaveBeenCalledTimes(4);
+    expect(disposed).toContain(3);
+    // …which kills B's call on 3. B must ride 4, not renew again and retire it.
+    failB!();
+    await expect(b).resolves.toBe("b on 4");
+    await expect(a).resolves.toBe("a on 4");
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(disposed).not.toContain(4);
+  });
+
   test("concurrent callers share one renewal and one post-renewal dial", async () => {
     const refresh = vi.fn(async () => ({ outcome: "renewed" as const, expiresAt: 0 }));
     const { client, dial } = fakeClient({ refresh });
