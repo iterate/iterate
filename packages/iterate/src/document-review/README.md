@@ -16,6 +16,7 @@ comments:
     status: open
   c_document:
     by: jonas@example.com
+    at: 2026-09-08T12:00:00Z
     body: Ready for a final review.
     status: open
 ```
