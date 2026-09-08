@@ -39,6 +39,26 @@ describe("document source projection", () => {
     expect(markdown.slice(range!.start, range!.end)).toBe("Plain **bold middle");
   });
 
+  test.each(["Next paragraph.", "- Next list item."])(
+    "a paragraph selection ending at the start of %s excludes that block",
+    (following) => {
+      const markdown = `Selected paragraph.\n\n${following}\n`;
+      const root = mount(markdown);
+      const projection = buildDocumentProjection(root);
+      const start = pointAt(root, "Selected paragraph.");
+      const next = pointAt(root, "Next");
+      // Chromium's triple-click ends at offset zero of the following element.
+      const range = projection.domRangeToSource({
+        startContainer: start.node,
+        startOffset: 0,
+        endContainer: next.node.parentElement!,
+        endOffset: 0,
+      });
+
+      expect(markdown.slice(range!.start, range!.end).trim()).toBe("Selected paragraph.");
+    },
+  );
+
   test("maps fenced code to its body rather than an info string", () => {
     const markdown = "```python\npython\n```\n";
     const root = mount(markdown);
