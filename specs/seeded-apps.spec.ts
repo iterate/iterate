@@ -312,8 +312,8 @@ test("review a workspace document in the seeded Docs app", async ({ baseURL, pag
   const reviewSentence = page
     .locator("div.cursor-text")
     .getByText("Make review decisions directly in the workspace file.", { exact: true });
-  await reviewSentence.selectText();
-  await reviewSentence.dispatchEvent("pointerup");
+  // Native paragraph selection can end at offset zero of the next block.
+  await reviewSentence.click({ clickCount: 3 });
   await page
     .getByPlaceholder("Comment on the selection…")
     .fill("Can we make this promise more concrete?");
