@@ -68,10 +68,6 @@ export type CollabPushResult =
   /** Batch or resulting document exceeds the size policy. */
   | { status: "too-large"; maxBytes: number };
 
-/** A whole-document mutation that is permitted only against its exact source.
- * Review metadata rewrites use this instead of the normal rebase protocol: a
- * stale footer must surface a conflict, never be positionally merged. */
-
 /** Ephemeral cursor presence for one session: who has a caret where, in the
  * sender's head coordinates. In-memory only — an eviction loses it and
  * clients re-announce on their next throttle tick — delivered on the wait()

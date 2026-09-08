@@ -41,7 +41,10 @@ it creates an anchored comment. `onTransform` receives a whole-file transform
 and applies it to the current local editor with `applyTransform`. The editor uses
 CodeMirror's diff to dispatch separate text changes, preserving unchanged prose
 between a passage marker and its endmatter. Pending typing is included, and the
-normal collaboration protocol handles attribution, retries and redlines.
+normal collaboration protocol handles attribution, retries and redlines. An
+anchored comment still requires its preview selection to match the current local
+source; otherwise the draft is retained for reselection. Explicit UI actions
+refresh the preview and discussion controls immediately; typing stays debounced.
 
 RFM cannot represent crossing inline review ranges; existing overlaps are
 rejected locally. Concurrent edits can still produce invalid markup: two clients

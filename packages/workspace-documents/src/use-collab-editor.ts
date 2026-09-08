@@ -167,6 +167,9 @@ export function useCollabEditor(input: {
               const current = live.state.doc.toString();
               const next = transform(current);
               live.dispatch({ changes: textEdits(current, next) });
+              // Explicit actions update their controls immediately, unlike continuous typing.
+              if (reflectTimer) clearTimeout(reflectTimer);
+              onLiveContent?.(path, live.state.doc.toString());
             },
             flushPending: async () => {
               const pending = sendableUpdates(live.state);
