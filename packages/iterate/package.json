@@ -197,7 +197,8 @@
     "bin",
     "dist",
     "menubar",
-    "README.md"
+    "README.md",
+    "THIRD_PARTY_NOTICES.md"
   ],
   "scripts": {
     "build": "node scripts/build.ts",
@@ -215,7 +216,7 @@
     "sqlfu": "0.1.1",
     "trpc-cli": "0.15.1",
     "ws": "8.19.0",
-    "yaml": "^2.8.3",
+    "yaml": "^2.9.0",
     "zod": "4.5.4"
   },
   "optionalDependencies": {

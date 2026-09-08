@@ -154,7 +154,10 @@ export function WorkspaceDocumentPage({
     );
   const selectAnnotations = (ids: string[]) => {
     review.preview.onSelectAnnotations?.(ids);
-    if (ids.length && window.matchMedia("(max-width: 1023px)").matches) setCommentsOpen(true);
+    if (ids.length && window.matchMedia("(max-width: 1023px)").matches) {
+      focusMobileComposer.current = false;
+      setCommentsOpen(true);
+    }
   };
 
   const copyLink = () => {
@@ -221,8 +224,11 @@ export function WorkspaceDocumentPage({
               disabled={!review.comments.onAction}
               onClick={() => {
                 if (window.matchMedia("(max-width: 1023px)").matches) {
-                  focusMobileComposer.current = true;
-                  setCommentsOpen(true);
+                  if (commentsOpen) mobileCommentsRef.current?.focusDocumentComment();
+                  else {
+                    focusMobileComposer.current = true;
+                    setCommentsOpen(true);
+                  }
                 } else commentsRef.current?.focusDocumentComment();
               }}
             >
@@ -324,7 +330,13 @@ export function WorkspaceDocumentPage({
         <aside className="hidden min-h-0 border-l bg-muted/5 lg:block">
           <DocumentComments ref={commentsRef} {...review.comments} />
         </aside>
-        <Drawer open={commentsOpen} onOpenChange={setCommentsOpen}>
+        <Drawer
+          open={commentsOpen}
+          onOpenChange={(open) => {
+            if (!open) focusMobileComposer.current = false;
+            setCommentsOpen(open);
+          }}
+        >
           <DrawerContent
             className="h-[80svh]"
             onOpenAutoFocus={(event) => {

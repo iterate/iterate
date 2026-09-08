@@ -105,12 +105,27 @@ export function applyReviewOperation(
       if (operation.range.start === operation.range.end) {
         return failure("invalid-operation", "Select text before adding a passage comment.", review);
       }
+      const indexedItems = extractRoughdraftReviewIndex(source).items;
       if (
         review.threads.some(
           (thread) =>
             thread.anchor !== null && rangesOverlap(thread.anchor.source, operation.range),
         ) ||
-        review.suggestions.some((suggestion) => rangesOverlap(suggestion.source, operation.range))
+        review.suggestions.some((suggestion) =>
+          rangesOverlap(suggestion.source, operation.range),
+        ) ||
+        indexedItems.some(
+          (item) =>
+            item.offset >= review.body.range.start &&
+            item.endOffset <= review.body.range.end &&
+            rangesOverlap(
+              {
+                start: item.offset - review.body.range.start,
+                end: item.endOffset - review.body.range.start,
+              },
+              operation.range,
+            ),
+        )
       ) {
         return failure(
           "overlapping-selection",

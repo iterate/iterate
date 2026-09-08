@@ -119,6 +119,44 @@ describe("applyReviewOperation", () => {
     ).toMatchObject({ ok: false, code: "overlapping-selection" });
   });
 
+  it("rejects a display selection that would wrap an existing hidden inline comment", () => {
+    const source =
+      'Before {>>hidden note<<}{id="c1" by="Jonas" at="2026-09-08T10:00:00.000Z"} after.\n';
+    const review = readReview(source);
+    expect(review.projection.markdown).toBe("Before  after.\n");
+
+    expect(
+      applyReviewOperation(source, {
+        type: "add-selected-comment",
+        range: { start: 0, end: source.length - 1 },
+        expectedSource: source,
+        body: "This would contain hidden review syntax.",
+        author: "AI",
+      }),
+    ).toMatchObject({ ok: false, code: "overlapping-selection" });
+  });
+
+  it("relies on Roughdraft's shared closing-delimiter guard for document comments and replies", () => {
+    const documentComment = applyReviewOperation("# Doc\n", {
+      type: "add-document-comment",
+      body: "Literal <<} delimiter",
+      author: "Jonas",
+    });
+    expect(documentComment).toMatchObject({ ok: false, code: "invalid-operation" });
+    if (documentComment.ok) return;
+    expect(documentComment.message).toContain("close delimiter");
+
+    const reply = applyReviewOperation(anchoredSource, {
+      type: "reply",
+      parentId: "c1",
+      body: "Literal ==} delimiter",
+      author: "Jonas",
+    });
+    expect(reply).toMatchObject({ ok: false, code: "invalid-operation" });
+    if (reply.ok) return;
+    expect(reply.message).toContain("close delimiter");
+  });
+
   it("edits, resolves, reopens and deletes YAML-only comments", () => {
     const added = applyReviewOperation("# Doc\n", {
       type: "add-document-comment",
