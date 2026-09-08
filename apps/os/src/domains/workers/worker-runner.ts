@@ -366,6 +366,9 @@ export class DynamicWorkerRunner {
         traceRole,
       });
       try {
+        // Cloudflare's clone() widens the Request metadata generics even though
+        // the runtime value stays the same Fetch API request; the request is
+        // bodyless here, so the clone is a cheap header/URL copy.
         return await dispatch(request.clone() as typeof request, crypto.randomUUID());
       } catch (error) {
         lastError = error;
