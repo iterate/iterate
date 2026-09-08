@@ -12,7 +12,7 @@ test("a config file mention is materialized before the model sees the turn", asy
   agent.responses.set(async (call) => {
     modelCalls += 1;
     materializedContext = call.body.messages.find((message) =>
-      message.content.includes("Config repository references resolved at latest HEAD"),
+      message.content.includes('<reference type="file" repo="/repos/config" path="ONBOARDING.md">'),
     )?.content;
     return [
       "```ts",
@@ -36,9 +36,12 @@ test("a config file mention is materialized before the model sees the turn", asy
     )
     .waitFor();
   expect(modelCalls).toBe(1);
-  expect(materializedContext).toContain('"status": "resolved"');
-  expect(materializedContext).toContain('"path": "ONBOARDING.md"');
-  expect(materializedContext).toContain('"content":');
+  expect(materializedContext).toContain(
+    '<reference type="file" repo="/repos/config" path="ONBOARDING.md">\n',
+  );
+  expect(materializedContext).toContain("</reference>");
+  expect(materializedContext).not.toContain("resolvedCommitOid");
+  expect(materializedContext).not.toContain("includedBytes");
 });
 
 // The deterministic sibling of agent-chat.spec.ts: same UI journey (composer →
