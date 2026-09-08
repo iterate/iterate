@@ -494,6 +494,94 @@ it("recovers a safe stateless fetch once with a fresh loader after clone-version
   });
 });
 
+it("recovers a BODYLESS POST after clone-version skew (the auth gate's refresh)", async () => {
+  // A clone-version skew is a loader-isolate deserialize failure before the
+  // app runs, so a request with no body — the gate's refresh POST — is safe
+  // to replay on a fresh loader, exactly like a GET. Regression for the
+  // production 500 that only hit POSTs to a project host after a deploy.
+  const workerFetch = vi
+    .fn()
+    .mockRejectedValueOnce(
+      new Error("Unable to deserialize cloned data due to invalid or unsupported version."),
+    )
+    .mockResolvedValueOnce(new Response("recovered"));
+  h.resolveWorkerSource.mockResolvedValue({
+    ok: true,
+    source: {
+      assetConfig: undefined,
+      assetManifest: {},
+      assets: {},
+      cacheKey: "build-key",
+      commitOid: "commit-1",
+      mainModule: "worker.js",
+      modules: {},
+      wranglerConfig: undefined,
+    },
+  });
+  h.loadResolvedWorker.mockImplementation(() => ({
+    getEntrypoint: () => ({ fetch: workerFetch }),
+  }));
+  const runner = new DynamicWorkerRunner({
+    streamContext: { kind: "scope", scopePath: inlineRef.path },
+    exports: {} as ExecutionContext["exports"],
+    projectId: "prj_private",
+    scopePath: inlineRef.path,
+  });
+
+  const response = await runner.fetch({
+    ref: inlineRef,
+    request: new Request("https://example.com/", { method: "POST" }),
+  });
+
+  expect(await response.text()).toBe("recovered");
+  expect(workerFetch).toHaveBeenCalledTimes(2);
+  const initialLoader = h.loadResolvedWorker.mock.calls[0]?.[0].loaderInstanceNonce;
+  const replacementLoader = h.loadResolvedWorker.mock.calls[1]?.[0].loaderInstanceNonce;
+  expect(replacementLoader).not.toBe(initialLoader);
+  expect(recordedSpans[0]?.attributes).toMatchObject({
+    "http.response.status_code": 200,
+    "iterate.worker.rpc_clone_version_retry": true,
+  });
+});
+
+it("never replays a BODY-BEARING POST on clone-version skew — the body cannot be consumed twice", async () => {
+  const workerFetch = vi
+    .fn()
+    .mockRejectedValueOnce(
+      new Error("Unable to deserialize cloned data due to invalid or unsupported version."),
+    );
+  h.resolveWorkerSource.mockResolvedValue({
+    ok: true,
+    source: {
+      assetConfig: undefined,
+      assetManifest: {},
+      assets: {},
+      cacheKey: "build-key",
+      commitOid: "commit-1",
+      mainModule: "worker.js",
+      modules: {},
+      wranglerConfig: undefined,
+    },
+  });
+  h.loadResolvedWorker.mockImplementation(() => ({
+    getEntrypoint: () => ({ fetch: workerFetch }),
+  }));
+  const runner = new DynamicWorkerRunner({
+    streamContext: { kind: "scope", scopePath: inlineRef.path },
+    exports: {} as ExecutionContext["exports"],
+    projectId: "prj_private",
+    scopePath: inlineRef.path,
+  });
+
+  await expect(
+    runner.fetch({
+      ref: inlineRef,
+      request: new Request("https://example.com/", { method: "POST", body: "payload" }),
+    }),
+  ).rejects.toThrow("Unable to deserialize cloned data");
+  expect(workerFetch).toHaveBeenCalledTimes(1);
+});
+
 it("replays one safe stateful fetch after its hosting Durable Object resets", async () => {
   const reset = Object.assign(new Error("Durable Object reset because its code was updated."), {
     durableObjectReset: true,
