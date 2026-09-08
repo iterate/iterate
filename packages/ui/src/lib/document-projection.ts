@@ -2,7 +2,6 @@ export const SOURCE_START_ATTRIBUTE = "data-document-source-start";
 export const SOURCE_END_ATTRIBUTE = "data-document-source-end";
 export const SOURCE_ATOMIC_ATTRIBUTE = "data-document-source-atomic";
 export const BLOCK_START_ATTRIBUTE = "data-document-block-start";
-export const BLOCK_END_ATTRIBUTE = "data-document-block-end";
 
 export interface SourceRange {
   start: number;
@@ -20,7 +19,6 @@ export interface DocumentProjection {
   domPointToSource(node: Node, offset: number, affinity: "start" | "end"): number | null;
   domRangeToSource(range: DomRangeEndpoints): SourceRange | null;
   sourceRangeToDomRanges(range: SourceRange): Range[];
-  blockRangeOf(node: Node): SourceRange | null;
   sourceOffsetAtPoint(documentRef: Document, x: number, y: number): number | null;
 }
 
@@ -146,16 +144,6 @@ export function buildDocumentProjection(root: HTMLElement): DocumentProjection {
         ranges.push(domRange);
       }
       return ranges;
-    },
-
-    blockRangeOf(node) {
-      const element = node instanceof Element ? node : node.parentElement;
-      const block = element?.closest(`[${BLOCK_START_ATTRIBUTE}]`);
-      if (block === null || block === undefined) return null;
-      const start = Number(block.getAttribute(BLOCK_START_ATTRIBUTE));
-      const end = Number(block.getAttribute(BLOCK_END_ATTRIBUTE));
-      if (!Number.isInteger(start) || !Number.isInteger(end)) return null;
-      return { start, end };
     },
 
     sourceOffsetAtPoint(documentRef, x, y) {

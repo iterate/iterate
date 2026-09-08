@@ -79,7 +79,6 @@ export function useDocumentReview({
 
   const threads: ReviewThread[] = review.threads.map((thread) => ({
     id: thread.id,
-    kind: "comment",
     status: thread.comments[0]?.status ?? "open",
     quote: thread.anchor
       ? review.projection.markdown.slice(thread.anchor.display.start, thread.anchor.display.end)
@@ -101,7 +100,6 @@ export function useDocumentReview({
     const thread = threads.find((thread) => thread.id === suggestion.id);
     const value: ReviewThread = {
       id: suggestion.id,
-      kind: "suggestion",
       status: suggestion.status,
       quote: suggestion.originalText || suggestion.replacementText,
       comments: thread?.comments ?? [],
@@ -111,8 +109,6 @@ export function useDocumentReview({
         createdAt: suggestion.createdAt,
         originalText: suggestion.originalText,
         replacementText: suggestion.replacementText,
-        canAccept: canWrite,
-        canReject: canWrite,
       },
     };
     if (thread) Object.assign(thread, value);
@@ -190,5 +186,5 @@ export function useDocumentReview({
         }
       : undefined,
   };
-  return { preview, comments, diagnostics: review.diagnostics };
+  return { preview, comments };
 }

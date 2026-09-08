@@ -45,9 +45,13 @@ normal collaboration protocol handles attribution, retries and redlines. An
 anchored comment still requires its preview selection to match the current local
 source; otherwise the draft is retained for reselection. Explicit UI actions
 refresh the preview and discussion controls immediately; typing stays debounced.
+Snapshot recovery also refreshes consumers immediately and cancels stale pending
+reflections. Composers retain drafts when submit callbacks become unavailable.
 
 RFM cannot represent crossing inline review ranges; existing overlaps are
 rejected locally. Concurrent edits can still produce invalid markup: two clients
-creating the first endmatter can append two footers. The known race is pinned by
-an expected-failure test and tracked in
+creating the first endmatter can append two footers, and overlapping word/paragraph
+comments can leak nested highlight delimiters into the preview. Both races are
+pinned by precise expected-failure tests, alongside upstream metadata reformatting
+and orphaned-endmatter handling, and tracked in
 [tasks/roughdraft-concurrent-endmatter.md](../../tasks/roughdraft-concurrent-endmatter.md).

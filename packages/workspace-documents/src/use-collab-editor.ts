@@ -145,6 +145,8 @@ export function useCollabEditor(input: {
       connection.reseed(snapshot);
       // Layers ride the rebuilt state atomically — no undecorated frame.
       view.setState(buildState(snapshot.content, snapshot.version, redlines(redlineRef.current)));
+      if (reflectTimer) clearTimeout(reflectTimer);
+      onLiveContent?.(path, snapshot.content);
       // Unacked local edits cannot be positionally rebased without the
       // server history that is gone — surface them, never guess a merge.
       setRecovery(unsynced);

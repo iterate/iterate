@@ -7,7 +7,6 @@ export interface ReviewDiagnostic {
   code: string;
   message: string;
   severity: "error" | "warning";
-  range: ReviewRange | null;
 }
 
 export interface ReviewAnchor {
@@ -22,7 +21,6 @@ export interface ReviewComment {
   createdAt: string | null;
   status: "open" | "resolved";
   body: string;
-  anchor: ReviewAnchor | null;
 }
 
 export interface ReviewThread {
@@ -92,8 +90,7 @@ export type ApplyReviewOperationResult =
         | "invalid-operation"
         | "missing-item"
         | "stale-selection"
-        | "overlapping-selection"
-        | "unsupported-operation";
+        | "overlapping-selection";
       message: string;
       review: DocumentReview;
     };

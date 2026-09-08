@@ -218,7 +218,7 @@ export function DocumentPreview({
       >
         <MarkdownDocumentRenderer markdown={markdown} className={BODY_STYLES} />
       </div>
-      {pendingComment !== null && onComment !== undefined ? (
+      {pendingComment !== null ? (
         <div
           className="absolute z-10 max-w-[calc(100vw-2rem)] rounded-lg border bg-popover p-2 shadow-lg"
           style={{
@@ -230,11 +230,15 @@ export function DocumentPreview({
           <ReviewComposer
             placeholder="Comment on the selection…"
             submitLabel="Comment"
-            onSubmit={(body) => {
-              const saved = onComment(pendingComment, body);
-              if (saved) clearPendingComment();
-              return saved;
-            }}
+            onSubmit={
+              onComment
+                ? (body) => {
+                    const saved = onComment(pendingComment, body);
+                    if (saved) clearPendingComment();
+                    return saved;
+                  }
+                : undefined
+            }
             onCancel={clearPendingComment}
           />
         </div>

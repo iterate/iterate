@@ -80,6 +80,78 @@ describe("readReview", () => {
 });
 
 describe("applyReviewOperation", () => {
+  it("keeps stacked comments attached when the first comment is deleted", () => {
+    const source =
+      '{==passage==}{>>a<<}{id="c1" by="A" at="2026-09-08T10:00:00Z"}{>>b<<}{id="c2" by="B" at="2026-09-08T10:00:00Z"}\n';
+    expect(readReview(source).threads.map((thread) => thread.anchor?.display)).toEqual([
+      { start: 0, end: 7 },
+      { start: 0, end: 7 },
+    ]);
+    const deleted = applyReviewOperation(source, { type: "delete", id: "c1" });
+    expect(deleted.ok).toBe(true);
+    if (!deleted.ok) throw new Error(deleted.message);
+    expect(deleted.review.threads[0]?.anchor?.display).toEqual({ start: 0, end: 7 });
+    expect(deleted.review.projection.markdown).toBe("passage\n");
+  });
+
+  it.each([
+    {
+      markup: '{>>note<<}{id="c1" by="A" at="2026-09-08T10:00:00Z"}',
+      operation: "delete" as const,
+      id: "c1",
+      text: "",
+    },
+    {
+      markup: '{++new++}{id="s1" by="A" at="2026-09-08T10:00:00Z"}',
+      operation: "accept-suggestion" as const,
+      id: "s1",
+      text: "new",
+    },
+  ])("$operation works before an ordinary thematic break", ({ markup, operation, id, text }) => {
+    const result = applyReviewOperation(`Text ${markup} here.\n\n---\n\nMore prose.\n`, {
+      type: operation,
+      id,
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error(result.message);
+    expect(result.source).toBe(`Text ${text} here.\n\n---\n\nMore prose.\n`);
+  });
+
+  it("comments after thematic breaks without rewriting the selected body", () => {
+    const source = "# Doc\n\nIntro.\n\n---\n\n* one\n\nNote: this is: tricky.  \n";
+    const start = source.indexOf("tricky");
+    const result = applyReviewOperation(source, {
+      type: "add-selected-comment",
+      expectedSource: source,
+      range: { start, end: source.length },
+      body: "Clarify.",
+      author: "A",
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error(result.message);
+    expect(result.review.projection.markdown.trimEnd()).toBe(source.trimEnd());
+    expect(result.source).toContain(`{==${source.slice(start)}==}`);
+  });
+
+  it("writes replies to document comments in endmatter", () => {
+    const source =
+      "# Doc\n\n---\ncomments:\n  c_doc:\n    by: A\n    at: 2026-09-08T10:00:00Z\n    body: Check this.\n";
+    const result = applyReviewOperation(source, {
+      type: "reply",
+      parentId: "c_doc",
+      body: "Yes.",
+      author: "B",
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error(result.message);
+    expect(result.source).not.toContain("{>>");
+    expect(result.source).toContain("re: c_doc");
+    expect(result.review.threads[0]?.comments.map((comment) => comment.body)).toEqual([
+      "Check this.",
+      "Yes.",
+    ]);
+  });
+
   it("adds a selected comment with a source revision guard and rejects overlap", () => {
     const source = "A document with selected words.\n";
     const range = { start: 16, end: 30 };

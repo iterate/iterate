@@ -111,9 +111,6 @@ export function applyReviewOperation(
           (thread) =>
             thread.anchor !== null && rangesOverlap(thread.anchor.source, operation.range),
         ) ||
-        review.suggestions.some((suggestion) =>
-          rangesOverlap(suggestion.source, operation.range),
-        ) ||
         indexedItems.some(
           (item) =>
             item.offset >= review.body.range.start &&
@@ -145,22 +142,36 @@ export function applyReviewOperation(
       const start = review.body.range.start + operation.range.start;
       const end = review.body.range.start + operation.range.end;
       const selected = source.slice(start, end);
-      const annotated = `${source.slice(0, start)}{==${selected}==}{>>${operation.body}<<}{#${id}}${source.slice(end)}`;
-      nextSource = appendRoughdraftDocumentComment(annotated, {
+      nextSource = appendRoughdraftDocumentComment(source, {
         id,
         message: inlineCommentPlaceholder,
         author: operation.author,
         at: operation.createdAt,
       });
+      const endmatter = reviewEndmatter(nextSource, review.body.range.start);
+      if (!endmatter) throw new Error("Roughdraft did not create comment metadata.");
+      // Add metadata before introducing a reference after a thematic break;
+      // preserve the original body, including selected trailing whitespace.
+      nextSource = `${source.slice(0, start)}{==${selected}==}{>>${operation.body}<<}{#${id}}${source.slice(end, review.body.range.end)}${nextSource.slice(endmatter.start)}`;
       nextSource = removeEndmatterField(nextSource, id, "body");
     } else if (operation.type === "reply") {
-      nextSource = appendRoughdraftReply(source, {
-        id: newReviewId("c"),
-        parentId: operation.parentId,
+      if (!findItem(source, operation.parentId))
+        return failure("missing-item", "Reply target was not found.", review);
+      const id = newReviewId("c");
+      const reply = {
+        id,
         message: operation.body,
         author: operation.author,
         at: operation.createdAt,
-      });
+      };
+      nextSource = hasEndmatterEntry(source, operation.parentId)
+        ? updateEndmatterField(
+            appendRoughdraftDocumentComment(source, reply),
+            id,
+            "re",
+            operation.parentId,
+          )
+        : appendRoughdraftReply(source, { ...reply, parentId: operation.parentId });
     } else if (operation.type === "set-status") {
       const item = findItem(source, operation.id);
       if (item === null) return failure("missing-item", "Review item was not found.", review);
@@ -295,7 +306,6 @@ function indexReview(source: string): IndexedReview {
     code: diagnostic.code,
     message: diagnostic.message,
     severity: diagnostic.severity,
-    range: null,
   }));
   const malformedEndmatter = malformedReservedEndmatter(source, bodyStart);
   if (malformedEndmatter !== null) {
@@ -303,27 +313,13 @@ function indexReview(source: string): IndexedReview {
       code: "invalid-endmatter-yaml",
       message: malformedEndmatter.message,
       severity: "error",
-      range: {
-        start: malformedEndmatter.start - bodyStart,
-        end: malformedEndmatter.start - bodyStart,
-      },
     });
   }
   const bodyEnd = endmatter?.start ?? malformedEndmatter?.start ?? source.length;
   return {
     bodyRange: { start: bodyStart, end: bodyEnd },
     items: index.items,
-    diagnostics: diagnostics.map((diagnostic, index) => {
-      const upstream = validation.diagnostics[index];
-      if (upstream === undefined || diagnostic.range !== null) return diagnostic;
-      return {
-        ...diagnostic,
-        range:
-          upstream.offset >= bodyStart && upstream.offset <= bodyEnd
-            ? { start: upstream.offset - bodyStart, end: upstream.offset - bodyStart }
-            : null,
-      };
-    }),
+    diagnostics,
   };
 }
 
@@ -393,13 +389,11 @@ function finalEndmatterStart(source: string, bodyStart: number): number | null {
 function anchorsFor(indexed: IndexedReview, source: string): Map<string, ReviewRange> {
   const anchors = new Map<string, ReviewRange>();
   for (const item of indexed.items) {
-    if (item.anchorText === undefined) continue;
-    const open = source.lastIndexOf("{==", item.offset);
-    const close = item.offset - 3;
-    if (open === -1 || source.slice(close, item.offset) !== "==}") continue;
+    const anchor = inlineAnchor(item, source);
+    if (!anchor) continue;
     anchors.set(item.id, {
-      start: open + 3 - indexed.bodyRange.start,
-      end: close - indexed.bodyRange.start,
+      start: anchor.open + 3 - indexed.bodyRange.start,
+      end: anchor.open + 3 + anchor.text.length - indexed.bodyRange.start,
     });
   }
   return anchors;
@@ -407,10 +401,8 @@ function anchorsFor(indexed: IndexedReview, source: string): Map<string, ReviewR
 
 function inlineAnchor(item: RfmReviewItem, source: string): { open: number; text: string } | null {
   if (item.anchorText === undefined) return null;
-  const open = source.lastIndexOf("{==", item.offset);
-  const close = item.offset - 3;
-  if (open === -1 || source.slice(close, item.offset) !== "==}") return null;
-  return { open, text: source.slice(open + 3, close) };
+  const open = source.lastIndexOf(`{==${item.anchorText}==}`, item.offset);
+  return open === -1 ? null : { open, text: item.anchorText };
 }
 
 function projectReviewBody(
@@ -426,11 +418,6 @@ function projectReviewBody(
     if (anchor !== undefined) {
       const open = anchor.start - 3;
       hidden.push({ start: open, end: item.endOffset - indexed.bodyRange.start });
-    } else if (item.kind === "comment" || item.kind === "reply") {
-      hidden.push({
-        start: item.offset - indexed.bodyRange.start,
-        end: item.endOffset - indexed.bodyRange.start,
-      });
     } else {
       hidden.push({
         start: item.offset - indexed.bodyRange.start,
@@ -520,7 +507,6 @@ function threadsFor(
     }
     const rootAnchor = anchorFor(root.id, anchors, projection);
     const thread = threads.get(rootId) ?? { id: rootId, anchor: rootAnchor, comments: [] };
-    const itemAnchor = rootAnchor;
     thread.comments.push({
       id: item.id,
       parentId: item.parentId,
@@ -528,7 +514,6 @@ function threadsFor(
       createdAt: item.createdAt,
       status: item.status === "resolved" ? "resolved" : "open",
       body: item.text,
-      anchor: itemAnchor,
     });
     threads.set(rootId, thread);
   }
@@ -769,7 +754,7 @@ function removeEndmatterField(source: string, id: string, field: string): string
 }
 
 function removeEndmatterEntry(source: string, id: string, section = "comments"): string {
-  if (finalEndmatterStart(source, frontmatterEnd(source)) === null) return source;
+  if (!hasEndmatterEntry(source, id)) return source;
   return rewriteEndmatter(source, (root) => {
     const entries = root.get(section, true);
     if (!isMap(entries)) return;
@@ -805,8 +790,15 @@ function reviewEntry(root: YAMLMap, id: string): YAMLMap | null {
 }
 
 function hasEndmatterEntry(source: string, id: string): boolean {
-  const endmatter = reviewEndmatter(source, frontmatterEnd(source));
-  return endmatter !== null && reviewEntry(endmatter.root, id) !== null;
+  // Cleanup still needs the entry after its last inline reference was removed.
+  const start = finalEndmatterStart(source, frontmatterEnd(source));
+  if (start === null) return false;
+  const document = parseDocument(source.slice(start).replace(/^\n---[ \t]*\r?\n/, ""));
+  return (
+    document.errors.length === 0 &&
+    isMap(document.contents) &&
+    reviewEntry(document.contents, id) !== null
+  );
 }
 
 function reopenInlineItem(source: string, item: RfmReviewItem): string {

@@ -52,8 +52,8 @@ when creating an anchored comment. A stale selection or overlapping annotation
 is rejected. In Docs, `textEdits` from `@iterate-com/workspace-documents/text-edits`
 turns the result into ordinary local editor changes, using the same collaboration
 path as typing. Clear drafts when the local edit is accepted. Concurrent edits
-can still break structured markup; the first-endmatter race is pinned by an
-expected-failure test.
+can still break structured markup; first-endmatter creation and overlapping
+passage comments are pinned by precise expected-failure tests.
 
 Agents edit comments using ordinary file edits; there is no comment-specific RPC.
 The [editing instructions](../../../../apps/docs/src/lib/document-review-instructions.ts)

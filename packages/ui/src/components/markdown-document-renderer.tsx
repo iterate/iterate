@@ -5,7 +5,6 @@ import { gfm } from "micromark-extension-gfm";
 import type { Nodes, Parents, RootContent } from "mdast";
 import type { ReactNode } from "react";
 import {
-  BLOCK_END_ATTRIBUTE,
   BLOCK_START_ATTRIBUTE,
   SOURCE_ATOMIC_ATTRIBUTE,
   SOURCE_END_ATTRIBUTE,
@@ -169,7 +168,7 @@ function inlineCode(ctx: RenderContext, node: Nodes & { value: string }, afterFi
 function blockAttributes(node: Nodes) {
   const offsets = offsetsOf(node);
   if (offsets === null) return {};
-  return { [BLOCK_START_ATTRIBUTE]: offsets.start, [BLOCK_END_ATTRIBUTE]: offsets.end };
+  return { [BLOCK_START_ATTRIBUTE]: offsets.start };
 }
 
 function children(ctx: RenderContext, node: Parents) {

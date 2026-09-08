@@ -214,11 +214,9 @@ export function WorkspaceBoardPage({
       const api = liveApi(path);
       if (api === null) return false;
       api.applyTransform(transform);
-      // Reflect immediately so cards/commit summaries don't lag the doc.
-      board.reflectLiveContent(path, api.source());
       return true;
     },
-    [board, liveApi],
+    [liveApi],
   );
 
   /** The live-doc rule, structurally: transform the OPEN file in its editor,

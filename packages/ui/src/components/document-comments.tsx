@@ -49,13 +49,10 @@ export type ReviewSuggestion = {
   createdAt?: string | null;
   originalText?: string;
   replacementText?: string;
-  canAccept?: boolean;
-  canReject?: boolean;
 };
 
 export type ReviewThread = {
   id: string;
-  kind: "comment" | "suggestion";
   status: "open" | "resolved";
   quote?: string | null;
   comments: ReviewComment[];
@@ -65,8 +62,8 @@ export type ReviewThread = {
 export type ReviewAction =
   | { kind: "add-document-comment"; body: string }
   | { kind: "reply"; threadId: string; body: string }
-  | { kind: "edit-comment"; threadId: string; commentId: string; body: string }
-  | { kind: "delete-comment"; threadId: string; commentId: string }
+  | { kind: "edit-comment"; commentId: string; body: string }
+  | { kind: "delete-comment"; commentId: string }
   | { kind: "set-thread-status"; threadId: string; status: "open" | "resolved" }
   | { kind: "accept-suggestion"; threadId: string }
   | { kind: "reject-suggestion"; threadId: string };
@@ -145,7 +142,16 @@ export function DocumentComments({
           renderComment={renderComment}
         />
       </div>
-      {onAction ? <DocumentComposer textareaRef={documentComposerRef} onAction={onAction} /> : null}
+      <div className="shrink-0 border-t bg-muted/20 px-4 py-3">
+        <ReviewComposer
+          textareaRef={documentComposerRef}
+          placeholder="Comment on the entire document…"
+          submitLabel="Add document comment"
+          onSubmit={
+            onAction ? (body) => onAction({ kind: "add-document-comment", body }) : undefined
+          }
+        />
+      </div>
     </section>
   );
 }
@@ -297,23 +303,26 @@ export function ReviewThreadCard({
           {thread.comments.map((comment) => (
             <ReviewCommentCard
               key={comment.id}
-              threadId={thread.id}
               comment={comment}
               onAction={onAction}
               renderComment={renderComment}
             />
           ))}
         </div>
-        {replying && onAction ? (
+        {replying ? (
           <ReviewComposer
             placeholder="Reply…"
             submitLabel="Reply"
             onCancel={() => setReplying(false)}
-            onSubmit={(body) => {
-              const ok = onAction({ kind: "reply", threadId: thread.id, body });
-              if (ok) setReplying(false);
-              return ok;
-            }}
+            onSubmit={
+              onAction
+                ? (body) => {
+                    const ok = onAction({ kind: "reply", threadId: thread.id, body });
+                    if (ok) setReplying(false);
+                    return ok;
+                  }
+                : undefined
+            }
           />
         ) : null}
       </div>
@@ -342,7 +351,7 @@ export function ReviewThreadCard({
             )}
             {isResolved ? "Reopen" : "Resolve"}
           </Button>
-          {!isResolved && thread.suggestion?.canAccept ? (
+          {!isResolved && thread.suggestion ? (
             <Button
               variant="ghost"
               size="xs"
@@ -351,7 +360,7 @@ export function ReviewThreadCard({
               <CheckIcon data-icon="inline-start" /> Accept
             </Button>
           ) : null}
-          {!isResolved && thread.suggestion?.canReject ? (
+          {!isResolved && thread.suggestion ? (
             <Button
               variant="ghost"
               size="xs"
@@ -367,12 +376,10 @@ export function ReviewThreadCard({
 }
 
 function ReviewCommentCard({
-  threadId,
   comment,
   onAction,
   renderComment,
 }: {
-  threadId: string;
   comment: ReviewComment;
   onAction?: (action: ReviewAction) => boolean;
   renderComment: (body: string) => React.ReactNode;
@@ -428,7 +435,7 @@ function ReviewCommentCard({
                     <DropdownMenuItem
                       variant="destructive"
                       onClick={() =>
-                        void onAction({ kind: "delete-comment", threadId, commentId: comment.id })
+                        void onAction({ kind: "delete-comment", commentId: comment.id })
                       }
                     >
                       <Trash2Icon /> Delete
@@ -439,23 +446,26 @@ function ReviewCommentCard({
             </DropdownMenu>
           ) : null}
         </div>
-        {editing && onAction ? (
+        {editing ? (
           <div className="mt-2">
             <ReviewComposer
               initialValue={comment.body}
               placeholder="Edit comment…"
               submitLabel="Save"
               onCancel={() => setEditing(false)}
-              onSubmit={(body) => {
-                const ok = onAction({
-                  kind: "edit-comment",
-                  threadId,
-                  commentId: comment.id,
-                  body,
-                });
-                if (ok) setEditing(false);
-                return ok;
-              }}
+              onSubmit={
+                onAction
+                  ? (body) => {
+                      const ok = onAction({
+                        kind: "edit-comment",
+                        commentId: comment.id,
+                        body,
+                      });
+                      if (ok) setEditing(false);
+                      return ok;
+                    }
+                  : undefined
+              }
             />
           </div>
         ) : (
@@ -498,25 +508,6 @@ function SuggestionSummary({ suggestion }: { suggestion: ReviewSuggestion }) {
   );
 }
 
-function DocumentComposer({
-  textareaRef,
-  onAction,
-}: {
-  textareaRef: React.RefObject<HTMLTextAreaElement | null>;
-  onAction: (action: ReviewAction) => boolean;
-}) {
-  return (
-    <div className="shrink-0 border-t bg-muted/20 px-4 py-3">
-      <ReviewComposer
-        textareaRef={textareaRef}
-        placeholder="Comment on the entire document…"
-        submitLabel="Add document comment"
-        onSubmit={(body) => onAction({ kind: "add-document-comment", body })}
-      />
-    </div>
-  );
-}
-
 export function ReviewComposer({
   initialValue = "",
   placeholder,
@@ -529,13 +520,14 @@ export function ReviewComposer({
   placeholder: string;
   submitLabel: string;
   textareaRef?: React.RefObject<HTMLTextAreaElement | null>;
-  onSubmit: (body: string) => boolean;
+  /** Absent while unavailable: keep the draft editable and disable submission. */
+  onSubmit?: (body: string) => boolean;
   onCancel?: () => void;
 }) {
   const [draft, setDraft] = React.useState(initialValue);
   const [error, setError] = React.useState<string | null>(null);
   const submit = () => {
-    if (draft.trim() === "") return;
+    if (!onSubmit || draft.trim() === "") return;
     setError(null);
     try {
       if (onSubmit(draft)) setDraft("");
@@ -575,7 +567,7 @@ export function ReviewComposer({
             Cancel
           </Button>
         ) : null}
-        <Button size="xs" disabled={draft.trim() === ""} onClick={submit}>
+        <Button size="xs" disabled={!onSubmit || draft.trim() === ""} onClick={submit}>
           {submitLabel}
         </Button>
       </div>
