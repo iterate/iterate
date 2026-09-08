@@ -303,13 +303,15 @@ export function peerExtension(connection: CollabConnection, startVersion: number
             }
           } catch (error) {
             if (this.done) break;
+            // Reconnect for as long as the editor is open. A multi-hour
+            // multiplayer session outlives deploys, evictions, and laptop
+            // sleeps; the pull long-poll must ride every one of them out
+            // rather than declaring the session dead after a fixed count.
+            // The genuinely terminal cases end the loop elsewhere: a deleted
+            // or replaced file ("ended" above), and a signed-out re-dial,
+            // which navigates to sign-in. Backoff is capped, so a sustained
+            // outage settles into one quiet retry every MAX_BACKOFF_MS.
             this.failures++;
-            if (this.failures > 8) {
-              this.done = true;
-              connection.dead = true;
-              connection.onStatus(`disconnected: ${message(error)}`);
-              return;
-            }
             connection.onStatus(`reconnecting (${this.failures})…`);
             await sleep(backoff(this.failures));
           }
