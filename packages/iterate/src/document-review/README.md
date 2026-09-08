@@ -27,6 +27,7 @@ CriticMarkup additions, deletions, and substitutions with RFM metadata.
 
 ```ts
 import { readReview, applyReviewOperation } from "iterate/document-review";
+import { textEdits } from "@iterate-com/workspace-documents/text-edits";
 
 const review = readReview(source);
 // review.projection.markdown: preview text, without review delimiters/endmatter
@@ -39,7 +40,7 @@ const result = applyReviewOperation(source, {
   author: "jonas@example.com",
   body: "Ready for a final review.",
 });
-if (result.ok) await compareAndSwap(source, result.source);
+if (result.ok) editor.dispatch({ changes: textEdits(source, result.source) });
 ```
 
 The module also supports selected comments, replies, edits, deletion,
@@ -48,8 +49,18 @@ source ranges are relative to `review.body.source`, display ranges to
 `review.projection.markdown`. Map display selections with
 `sourceRangeForDisplayRange` and pass the original full file as `expectedSource`
 when creating an anchored comment. A stale selection or overlapping annotation
-is rejected. Callers must persist mutations atomically and retain drafts until
-the write is confirmed.
+is rejected. In Docs, `textEdits` from `@iterate-com/workspace-documents/text-edits`
+turns the result into ordinary local editor changes, using the same collaboration
+path as typing. Clear drafts when the local edit is accepted. Concurrent edits
+can still break structured markup; the first-endmatter race is pinned by an
+expected-failure test.
+
+Agents edit comments using ordinary file edits; there is no comment-specific RPC.
+The [editing instructions](../../../../apps/docs/src/lib/document-review-instructions.ts)
+are included in jam invitations and task assignments. Add document comments as
+YAML entries, reply with `re: <parent ID>`, edit `body` or the inline message,
+and resolve with `status: resolved`. Keep IDs stable and extend the existing
+endmatter block.
 
 This replaces the previous Iterate annotation format without a compatibility
 parser or automatic conversion.

@@ -7,6 +7,7 @@
 import { parseDocument, type Document } from "yaml";
 import { readReview } from "iterate/document-review";
 import { BOARD_COLUMNS, type TaskCard, type TaskChangeSummary } from "./state.ts";
+import { DOCUMENT_REVIEW_INSTRUCTIONS } from "./lib/document-review-instructions.ts";
 
 const DEFAULT_TASK_STATE = BOARD_COLUMNS[0];
 const MAX_TASK_FILENAME_SLUG_LENGTH = 64;
@@ -97,8 +98,8 @@ export function taskAssignmentInstructions(repoPath: string, taskPath: string): 
     "First, verify that the task frontmatter state is `in-progress`; set and commit it before doing any other work if it is not.",
     "Read the task Markdown before starting and treat it as the durable source of truth.",
     "Keep that task file current as you work. Commit implementation changes and task updates to the same repo.",
-    "Keep a lightweight work log in a final `## Comments` section. Add entries as `### <ISO timestamp> — <agent path>` followed by a short Markdown note; keep this section at the end of the file.",
-    "When the work is ready for human review, summarize the result in Comments and set the task frontmatter state to `in-review`.",
+    DOCUMENT_REVIEW_INSTRUCTIONS,
+    "Keep a lightweight work log as document comments. When the work is ready for human review, summarize the result in a document comment and set the task frontmatter state to `in-review`.",
   ].join("\n\n");
 }
 
