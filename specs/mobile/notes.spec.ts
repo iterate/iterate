@@ -16,8 +16,12 @@ import { test } from "../test-support/test.ts";
 // inputValue() budget to appear — seen first-attempt on PR #2598 and on four
 // consecutive lane runs of PR #2602 (retry included), whose diff has no path
 // into this composer. The wrap keeps the test running and measured; unwrap
-// once the composer renders inside the budget again.
-const flake = createFlake(test, /locator\.inputValue: Timeout 1000ms exceeded/);
+// once the composer renders inside the budget again. The wrapper deadline
+// sits well above a healthy run (~50s: signup fixture plus the whole flow)
+// and under the 240s spec timeout, so a hang goes red instead of green.
+const flake = createFlake(test, /locator\.inputValue: Timeout 1000ms exceeded/, {
+  timeoutMs: 120_000,
+});
 
 flake(
   "captures a note from the global composer and manages it on /notes",
