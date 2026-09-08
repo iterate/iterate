@@ -43,6 +43,10 @@
   "worker_loaders": [{ "binding": "LOADER" }],
   // Workers AI, exposed VERBATIM as the built-in root `itx.ai` (context/built-ins.ts).
   "ai": { "binding": "AI" },
+  // Cloudflare Artifacts ("git for agents", beta) — the ONE bound namespace, project-scoped as the
+  // built-in root `itx.cfArtifacts` (context/built-ins.ts forces every repo name under `${projectId}.`).
+  // repo-create auto-provisions the namespace; ARTIFACTS_ACCOUNT_ID/NAMESPACE below build git remotes.
+  "artifacts": [{ "binding": "ARTIFACTS", "namespace": "project-worker-repos" }],
 
   // Deploy identity. Loader isolates are cached ACROSS deployments, but a DO is durable and
   // survives redeploys — so a facet built from an isolate minted by a PRIOR deployment can't be
@@ -91,5 +95,9 @@
   "vars": {
     "APP_CONFIG_ENVIRONMENT_NAME": "poc",
     "APP_CONFIG_PROJECT_HOSTNAME_BASE": "project-worker.iterate.com",
+    // The Artifacts git remote is `https://<ACCOUNT_ID>.artifacts.cloudflare.net/git/<NAMESPACE>/<repo>.git`
+    // — the `itx.repos` layer builds it from these when it does git over HTTPS.
+    "ARTIFACTS_ACCOUNT_ID": "04b3b57291ef2626c6a8daa9d47065a7",
+    "ARTIFACTS_NAMESPACE": "project-worker-repos",
   },
 }

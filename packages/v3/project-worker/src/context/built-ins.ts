@@ -22,6 +22,7 @@
 // per host on purpose. `itx.runScript(lambda)` is sugar for the one bare-lambda case (wrap →
 // `workers.get({ source }).run`).
 
+import { RpcTarget } from "capnweb";
 import type { ReachableContext, StreamPage, WaitForEventFilter } from "../stream/stream.ts";
 import { stampPrincipal, type Principal } from "../principal.ts";
 import type { StreamEvent, StreamEventInput } from "../stream/events.ts";
@@ -92,14 +93,15 @@ export interface ArtifactsNamespace {
   create(name: string, options?: { setDefaultBranch?: string }): Promise<ArtifactCreateResult>;
   get(name: string): Promise<ArtifactRepoHandle>;
   list(options?: { limit?: number; cursor?: string }): Promise<ArtifactListResult>;
+  delete(name: string): Promise<boolean>;
 }
 /** `create`/`import`'s result: the repo's initial git credential (typed minimally — there may be more). */
 export interface ArtifactCreateResult {
   token: string;
 }
-/** The REAL repo handle `get()` yields. `createToken`/`lastPushAt` are scoped to this one repo and
- *  safe; `fork(name, …)` is NOT — its name is unprefixed and would escape the project — so the scoped
- *  handle `itx.cfArtifacts.get` returns (`ScopedArtifactRepo`) mirrors this shape MINUS `fork`. */
+/** The REAL repo handle `get()` yields (a live RPC stub). `createToken`/`lastPushAt` are scoped to this
+ *  one repo and safe; `fork(name, …)` is NOT — its name is unprefixed and would escape the project — so
+ *  the scoped handle `itx.cfArtifacts.get` returns (`ScopedArtifactRepo`) re-exposes only `createToken`. */
 export interface ArtifactRepoHandle {
   lastPushAt: string | null;
   createToken(scope: "read" | "write", ttlSeconds: number): Promise<ArtifactToken>;
@@ -110,10 +112,20 @@ export interface ArtifactToken {
   plaintext: string;
   expiresAt?: string;
 }
-/** What `itx.cfArtifacts.get` returns — the real handle's shape MINUS `fork` (the one escape). */
-export interface ScopedArtifactRepo {
-  lastPushAt: string | null;
-  createToken(scope: "read" | "write", ttlSeconds: number): Promise<ArtifactToken>;
+/** What `itx.cfArtifacts.get` returns: a genuine capnweb `RpcTarget`, so a client can pipeline
+ *  `get(name).createToken(...)` ACROSS the /api hop exactly like the real binding's handle — a plain
+ *  object cannot (its `createToken` closure is NonPipelinable and fails to serialize; invoke-handle.ts).
+ *  It re-exposes ONLY `createToken`, delegated to the already-prefixed repo; the real handle's `fork`
+ *  (whose unprefixed name escapes the wall) and everything else are deliberately withheld. */
+export class ScopedArtifactRepo extends RpcTarget {
+  readonly #handle: ArtifactRepoHandle;
+  constructor(handle: ArtifactRepoHandle) {
+    super();
+    this.#handle = handle;
+  }
+  createToken(scope: "read" | "write", ttlSeconds: number): Promise<ArtifactToken> {
+    return this.#handle.createToken(scope, ttlSeconds);
+  }
 }
 /** `list`'s result: repos in the WHOLE namespace (the binding does NOT filter by name), one page. */
 export interface ArtifactListResult {
@@ -127,8 +139,8 @@ export interface ArtifactListResult {
  *  `.`), so `${projectId}.` cannot collide even when IDs contain `-` (a `--` delimiter could: `a` +
  *  `b--x` == `a--b` + `x`), and repo names allow `.`. `create` and `list` return the real shapes
  *  (`list` filtered to this prefix LOCALLY — the binding returns EVERY project's repos). `get` returns
- *  the real handle's shape MINUS `fork` (its unprefixed name is the one method that escapes the wall).
- *  Pure and namespace-injected: unit-tests alone. */
+ *  a `ScopedArtifactRepo` RpcTarget exposing only `createToken` (the real handle's `fork` — whose
+ *  unprefixed name escapes the wall — is withheld). Pure and namespace-injected: unit-tests alone. */
 export function projectScopedArtifacts(
   namespace: ArtifactsNamespace,
   projectId: string,
@@ -136,15 +148,9 @@ export function projectScopedArtifacts(
   const prefix = `${projectId}.`;
   return {
     create: (name, options) => namespace.create(prefix + name, options),
-    get: async (name): Promise<ScopedArtifactRepo> => {
-      const handle = await namespace.get(prefix + name);
-      // Re-expose the handle SHAPED like the real one, minus `fork` (whose unprefixed name escapes the
-      // project). `createToken`/`lastPushAt` act on this already-prefixed repo, so they pass through.
-      return {
-        lastPushAt: handle.lastPushAt,
-        createToken: (scope, ttlSeconds) => handle.createToken(scope, ttlSeconds),
-      };
-    },
+    // Wrap the raw handle in an RpcTarget so `get(name).createToken(...)` pipelines across /api; the
+    // wrapper exposes only `createToken` (scoped to this already-prefixed repo), never `fork`.
+    get: async (name) => new ScopedArtifactRepo(await namespace.get(prefix + name)),
     list: async (options) => {
       const page = await namespace.list(options);
       return {
@@ -154,6 +160,7 @@ export function projectScopedArtifacts(
         ...(page.cursor !== undefined && { cursor: page.cursor }),
       };
     },
+    delete: (name) => namespace.delete(prefix + name),
   };
 }
 
@@ -183,12 +190,14 @@ export interface BuiltInScope extends LibraryRoots {
    *  wall, exactly like `itx.kv`). The nicer `itx.repos` API is built ON TOP of this; anyone who wants
    *  raw Artifacts falls back here — same shape as `itx.ai` proxying `env.AI`, and its methods return
    *  the SAME SHAPES as the real binding: `create` a repo (→ its initial git token), `get` a repo's
-   *  handle (mint a git credential with `createToken`; NO `fork` — its name escapes the wall), or
-   *  `list` this project's repos. A repo's bytes are git-over-HTTPS (the `itx.repos` layer's job). */
+   *  handle (mint a git credential with `createToken`; NO `fork` — its name escapes the wall), `list`
+   *  this project's repos, or `delete` one (project teardown deletes a project's repos). A repo's
+   *  bytes are git-over-HTTPS (the `itx.repos` layer's job). */
   cfArtifacts: {
     create(name: string, options?: { setDefaultBranch?: string }): Promise<ArtifactCreateResult>;
     get(name: string): Promise<ScopedArtifactRepo>;
     list(options?: { limit?: number; cursor?: string }): Promise<ArtifactListResult>;
+    delete(name: string): Promise<boolean>;
   };
   /** Append to this context's append-only event log (the facets that REDUCE it are
    *  `itx.facets.get(name)`). A top-level root, so the expression surface mirrors the edge

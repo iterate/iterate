@@ -12,6 +12,7 @@
 import { expect, test } from "vitest";
 import {
   projectScopedArtifacts,
+  ScopedArtifactRepo,
   type ArtifactRepoHandle,
   type ArtifactsNamespace,
 } from "./built-ins.ts";
@@ -43,6 +44,10 @@ function recordingNamespace(allRepos: string[] = []) {
       calls.push({ method: "list", name: "*" });
       return { repos: allRepos.map((name) => ({ name })) };
     },
+    delete: async (name) => {
+      calls.push({ method: "delete", name });
+      return true;
+    },
   };
   return { namespace, calls, forkCalled: () => forkCalled };
 }
@@ -56,13 +61,16 @@ test("cfArtifacts prefixes with a '.' delimiter and re-exposes the handle WITHOU
 
   const repo = await a.get("config");
   expect(calls.at(-1)).toEqual({ method: "get", name: "prj_a.config" }); // prefixed on the way in
-  // The handle is re-exposed SHAPED like the real one — the safe fields, and ONLY those.
-  expect(Object.keys(repo).sort()).toEqual(["createToken", "lastPushAt"]);
-  expect(repo.lastPushAt).toBe("pushed-prj_a.config"); // passes through
+  // The handle is an RpcTarget wrapper (so `get(name).createToken(...)` pipelines across /api), and it
+  // re-exposes ONLY createToken, acting on the already-prefixed repo…
+  expect(repo).toBeInstanceOf(ScopedArtifactRepo);
   expect((await repo.createToken("read", 60)).plaintext).toBe("read-prj_a.config-60");
-  // fork is NOT on the returned handle, so it can never be reached (its unprefixed name would escape).
+  // …while fork is NOT reachable on it (its unprefixed name would escape the project wall).
   expect((repo as unknown as Record<string, unknown>).fork).toBeUndefined();
   expect(forkCalled()).toBe(false);
+
+  expect(await a.delete("config")).toBe(true);
+  expect(calls.at(-1)).toEqual({ method: "delete", name: "prj_a.config" }); // prefixed on the way in
 });
 
 test("the '.' delimiter is collision-free for hyphenated project IDs; list filters locally", async () => {
