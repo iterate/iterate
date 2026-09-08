@@ -7,6 +7,17 @@
 > produced the material (`docs/reviews/2026-09-07-v4-*.md`); nothing in v4 was edited, built, tested or deployed.
 > Code lines throughout are non-blank, non-comment, non-test, measured with `wc`/`grep`.
 
+> **STATUS (2026-09-08).** LANDED: wave 0 (421 admission — now a real directory, in-process; the loader
+> fixes; the FQDN host; the json5 patch is gone), 1.7 (the directory, slugs = ids; custom domains not),
+> 1.10-A (`reduceBatch`, `using` on the SDK host, `core` reserved), 1.10-B (§2.3 halt-once, §2.6 the
+> lease is the handle, §2.7 poisoned-stub drop), 1.1 (`itx.secrets` + origin binding), 1.2
+> (`itx.serveMcp()` + the bearer on project hosts), 1.3 (`src/types.ts`), 1.11's
+> `subscribe({ afterOffset })`. The files half of 1.4 arrived as `itx.repos` over Cloudflare
+> Artifacts (real git) rather than a facet. Sign-in is the control plane's (`authenticate()` +
+> `projects.list/get/create`), which settles decision 5. OPEN: 1.5 build/check, 1.6's structural
+> estimate + parsed-bytes page cut, 1.8 Docs, 1.9 (conditional), 1.11's line budget and the
+> named-loader telemetry probe. The wave table below is the original plan.
+
 ## 0. The two trees at a glance
 
 |                   | v3 `packages/v3/project-worker` (9a6f74bbe)                                                       | v4 `packages/v4/project-worker` (untracked)                                                                                                                                                                                                                                                                       |

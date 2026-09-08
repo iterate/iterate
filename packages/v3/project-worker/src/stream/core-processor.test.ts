@@ -25,13 +25,14 @@ const reduceAll = (events: StreamEvent[], initial = proc.contract.initialState()
   events.reduce((s, e) => proc.reduce({ event: e, state: s }) ?? s, initial);
 
 describe("the contract", () => {
-  test("slug `core` v7.0.0; the schema-initial state; consumes EXACTLY its eight control events (an inline reduce reduces only what it consumes)", () => {
+  test("slug `core` v8.0.0; the schema-initial state; consumes EXACTLY its nine control events (an inline reduce reduces only what it consumes)", () => {
     expect(proc.contract.slug).toBe("core");
-    expect(proc.contract.version).toBe("7.0.0");
+    expect(proc.contract.version).toBe("8.0.0");
     expect(proc.contract.initialState()).toEqual({
       paused: null,
       itxExpressionRewriteRules: {},
       subscriptions: {},
+      secrets: {},
     });
     expect(proc.contract.consumes).toEqual([
       "events.iterate.com/stream/created",
@@ -42,6 +43,7 @@ describe("the contract", () => {
       "events.iterate.com/stream/subscription-configured",
       "events.iterate.com/stream/subscription-delivery-halted",
       "events.iterate.com/stream/subscription-delivery-resumed",
+      "events.iterate.com/secrets/changed",
     ]);
     expect(proc.contract.emits).toEqual([]);
   });
@@ -673,5 +675,39 @@ describe("the builtins root, as the reduce sees it: masks, the platform-equivale
       const s = reduceAll(log);
       expect(s.subscriptions.s.hostedFacet?.name).toBe(hosts);
       if (target) expect(print(s.subscriptions.s.target)).toBe(target);
+    });
+});
+
+describe("the secrets catalog — by name, the origin only, never a value", () => {
+  const changed = (offset: number, payload: Record<string, unknown>) =>
+    at(offset, "events.iterate.com/secrets/changed", payload);
+  const rows: { title: string; events: StreamEvent[]; becomes: CoreState["secrets"] }[] = [
+    { title: "a set", events: [changed(1, { name: "a" })], becomes: { a: {} } },
+    {
+      title: "a set with an origin",
+      events: [changed(1, { name: "a", origin: "https://api.example.com" })],
+      becomes: { a: { origin: "https://api.example.com" } },
+    },
+    {
+      title: "a re-set REPLACES (the origin can be dropped)",
+      events: [
+        changed(1, { name: "a", origin: "https://api.example.com" }),
+        changed(2, { name: "a" }),
+      ],
+      becomes: { a: {} },
+    },
+    {
+      title: "a delete removes; deleting what is not there is a no-op",
+      events: [
+        changed(1, { name: "a" }),
+        changed(2, { name: "a", deleted: true }),
+        changed(3, { name: "b", deleted: true }),
+      ],
+      becomes: {},
+    },
+  ];
+  for (const { title, events, becomes } of rows)
+    test(title, () => {
+      expect(reduceAll(events).secrets).toEqual(becomes);
     });
 });

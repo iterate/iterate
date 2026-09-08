@@ -262,6 +262,10 @@ export type CoreState = {
   itxExpressionRewriteRules: Record<string, ItxExpressionRewriteRule>;
   /** THE SUBSCRIPTIONS TABLE, by name. */
   subscriptions: Record<string, Subscription>;
+  /** THE SECRETS CATALOG, by name — the origin a secret is bound to, never a value (the value is
+   *  physical, in KV): `itx.secrets.list()` reads this, strongly consistent, where KV's own list lags
+   *  a write by up to a minute. */
+  secrets: Record<string, { origin?: string }>;
 };
 
 /** A subscription/registry name is ONE segment, [A-Za-z0-9_-]: the facet name for a processor, the
@@ -285,6 +289,7 @@ const CORE_EVENT_TYPES = [
   "events.iterate.com/stream/subscription-configured",
   "events.iterate.com/stream/subscription-delivery-halted",
   "events.iterate.com/stream/subscription-delivery-resumed",
+  "events.iterate.com/secrets/changed",
 ] as const;
 const CORE_EVENT_TYPE_SET = new Set<string>(CORE_EVENT_TYPES);
 
@@ -301,7 +306,7 @@ export const CoreContract: ProcessorContract<CoreState> & {
   }) => StreamEventInput;
 } = {
   slug: "core",
-  version: "7.0.0", // 7.0.0: a subscription row carries its optional `afterOffset` (where the cursor lane starts). 6.0.0 (the builtins root): `null` rows kept as MASKS under a built-in root, the platform-equivalent target deletes, hosting detected on the RESOLVED target, hostedFacet carries the facet's `name`. 5.0.0 (M1): a hosted facet's SOURCE is elided from the reduced target (kept in the log + facet:<name> kv)
+  version: "8.0.0", // 8.0.0: the secrets catalog (names + origins, reduced from `secrets/changed`). 7.0.0: a subscription row carries its optional `afterOffset` (where the cursor lane starts). 6.0.0 (the builtins root): `null` rows kept as MASKS under a built-in root, the platform-equivalent target deletes, hosting detected on the RESOLVED target, hostedFacet carries the facet's `name`. 5.0.0 (M1): a hosted facet's SOURCE is elided from the reduced target (kept in the log + facet:<name> kv)
   description:
     "The context's own state, reduced inline at the commit point: who it is, which incarnation runs, whether appends are paused, the itx-expression rewrite rules every call goes through, and the subscriptions every commit is sent to.",
   consumes: CORE_EVENT_TYPES,
@@ -310,6 +315,7 @@ export const CoreContract: ProcessorContract<CoreState> & {
     paused: null,
     itxExpressionRewriteRules: {},
     subscriptions: {},
+    secrets: {},
   }),
   buildEvent: (event) => {
     if (!CORE_EVENT_TYPE_SET.has(event.type))
@@ -370,6 +376,16 @@ export class CoreStreamProcessor extends StreamProcessor<CoreState> {
       return { ...state, subscriptions };
     };
     switch (event.type) {
+      case "events.iterate.com/secrets/changed": {
+        const name = payload.name as string;
+        const secrets = draftOf(state.secrets, draftTables);
+        if (payload.deleted) delete secrets[name];
+        else
+          setDraftRow(secrets, name, {
+            ...(typeof payload.origin === "string" && { origin: payload.origin }),
+          });
+        return { ...state, secrets };
+      }
       case "events.iterate.com/stream/created":
         return {
           ...state,

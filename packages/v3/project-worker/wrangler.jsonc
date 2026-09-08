@@ -42,7 +42,8 @@
   "ai": { "binding": "AI" },
   // Cloudflare Artifacts ("git for agents", beta) — the ONE bound namespace, project-scoped as the
   // built-in root `itx.cfArtifacts` (context/built-ins.ts forces every repo name under `${projectId}.`).
-  // repo-create auto-provisions the namespace; ARTIFACTS_ACCOUNT_ID/NAMESPACE below build git remotes.
+  // repo-create auto-provisions the namespace; APP_CONFIG_ARTIFACTS_ACCOUNT_ID/NAMESPACE (vars, below)
+  // build the git remotes.
   "artifacts": [{ "binding": "ARTIFACTS", "namespace": "project-worker-repos" }],
 
   // Deploy identity. Loader isolates are cached ACROSS deployments, but a DO is durable and

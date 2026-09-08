@@ -63,8 +63,9 @@ export function rawSession(prepare?: (ws: WebSocket) => void): { session: any; w
   return { session: s, ws };
 }
 
-/** THE default door: a fresh session's authenticated itx for a project ctx (its root context).
- *  `.authenticate()` is a no-op gate today; it is the only door — there is no bare one. */
+/** THE default door: a fresh session's itx for a project ctx (its root context). `.authenticate()`
+ *  with no credentials is the request's identity — the anonymous user under the worker's `open`
+ *  login mode, which every lane runs (src/session.ts); it is the only door — there is no bare one. */
 export function openItx(ctx: string): any {
   return session().authenticate().projects.get(ctx);
 }

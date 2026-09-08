@@ -1,4 +1,3 @@
-tutorial-proof/
 public/
 # The processor SDK bundle build-sdk.mjs writes (injected into every loaded isolate) — built by every
 # script that needs it and by the vitest global-setup, never committed (a 400 KB diff per SDK edit).

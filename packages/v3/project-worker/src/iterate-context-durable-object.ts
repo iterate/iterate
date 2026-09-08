@@ -397,6 +397,11 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     deployId: this.#appConfig.deployId,
     artifactsAccountId: this.#appConfig.artifactsAccountId,
     artifactsNamespace: this.#appConfig.artifactsNamespace,
+    secrets: () =>
+      Object.entries(this.#stream.coreReducedState.secrets).map(([name, secret]) => ({
+        name,
+        ...secret,
+      })),
     invoke: (call) => this.invoke(call),
     // a sibling context by path; the own path is this DO itself — a ReachableContext structurally (stream.ts)
     context: (p) =>

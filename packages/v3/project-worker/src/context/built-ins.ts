@@ -333,6 +333,9 @@ interface BuildBuiltInsDeps {
   /** The Artifacts account + namespace `itx.repos` builds git remotes from (app-config.ts). */
   artifactsAccountId: string;
   artifactsNamespace: string;
+  /** The secrets catalog — names and origins, from the core reduce (strongly consistent; a KV list
+   *  lags a write by up to a minute). */
+  secrets: () => { name: string; origin?: string }[];
   /** Evaluate a producer source expression through THIS context's dispatch (inside the loader's
    *  `getCode`, so only on a cold isolate). */
   invoke: (call: ItxExpression) => Promise<unknown>;
@@ -407,14 +410,13 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
 
   const kvPrefix = `${projectId}:`;
   const ownContext = () => deps.context(path);
-  // Project secrets live at `secret:<projectId>:<name>` — the key the DO's egress door reads.
-  const secretKeyPrefix = `secret:${projectId}:`;
+  // A project secret lives at `secret:<projectId>:<name>` — the key the DO's egress door reads.
   const secretKey = (name: string): string => {
     if (!/^[a-zA-Z0-9._-]+$/.test(name))
       throw new Error(
         `secrets: a name is [a-zA-Z0-9._-]+ (the {{secret:project:NAME}} grammar), got ${JSON.stringify(name)}`,
       );
-    return secretKeyPrefix + name;
+    return `secret:${projectId}:${name}`;
   };
   /** The one event a secret change appends — the name (and origin, or `deleted`), never the value. */
   const appendSecretsChanged = (payload: Record<string, unknown>) =>
@@ -468,22 +470,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
         await appendSecretsChanged({ name, deleted: true });
         return { ok: true };
       },
-      list: async () => {
-        const out: { name: string; origin?: string }[] = [];
-        for (let cursor: string | undefined; ; ) {
-          const page = await env.SECRETS_KV.list<{ origin?: string }>({
-            prefix: secretKeyPrefix,
-            ...(cursor && { cursor }),
-          });
-          for (const key of page.keys)
-            out.push({
-              name: key.name.slice(secretKeyPrefix.length),
-              ...(key.metadata?.origin && { origin: key.metadata.origin }),
-            });
-          if (page.list_complete) return out;
-          cursor = page.cursor;
-        }
-      },
+      list: async () => deps.secrets(),
     },
     // The binding object itself — dispatch walks its methods (`run`, `models`, `gateway`, …).
     ai: env.AI,
