@@ -85,12 +85,12 @@ package next to `@iterate-com/docs`.
   builds `voice-agent.ts` from the repo and resolves the package and zod
   from its package.json. An actual audio call is only covered by the voicelab
   e2e.
-- **The platform limitation behind every "big bundle".** The dynamic worker
-  host installs a config repo's own dependencies but not the dependencies of
-  a tarball-URL dependency, which is why `packages/iterate` bundles capnweb,
-  sqlfu, yaml and zod into its starter-app workers and why templates declare
-  zod. Resolving a tarball's declared dependencies in the host would let every
-  package be ordinary — see `tasks/2026-09-08-tarball-transitive-dependencies.md`.
+- **The SDK's bundling lists.** `packages/iterate` bundles capnweb, sqlfu,
+  yaml and zod into its starter-app workers on the ground that the host does
+  not install what a tarball dependency declares; the proof above shows it
+  resolving capnweb from the `iterate` tarball's own dependencies. Whether
+  those lists (and the templates' zod lines) are still needed is
+  `tasks/2026-09-08-tarball-transitive-dependencies.md`.
 - **npm.** pkg.pr.new refs are the version that matters to the platform;
   a tag-triggered `npm publish --provenance` can come later if a registry
   version is wanted.

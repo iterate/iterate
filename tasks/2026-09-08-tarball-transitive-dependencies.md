@@ -5,33 +5,38 @@ size: medium
 tags: [os, dynamic-workers, packages, pkg-pr-new]
 ---
 
-# Dynamic worker host: install the dependencies a tarball-URL dependency declares
+# Re-examine the SDK's bundling lists: the dynamic worker host resolves what a tarball dependency declares
 
-Config repos depend on first-party packages through pkg.pr.new tarball URLs
-(`iterate`, `@iterate-com/docs`, `@iterate-com/voice-agent`). The dynamic
-worker host (`@cloudflare/worker-bundler`, driven from
-`apps/os/src/domains/workers/build-backend.ts`) resolves transitive
-dependencies of registry packages, but not the dependencies a tarball's own
-package.json declares. Consequences today:
+`packages/iterate/tsdown.config.ts` bundles capnweb, sqlfu, yaml and zod
+into every starter-app "physical" worker and into the github-ai-linter
+entry, on the stated ground that "the dynamic worker host installs the
+config repo's dependencies, not transitive dependencies inside iterate's
+tarball". Every config template declares `zod` for the same reason, and
+`@iterate-com/voice-agent`'s installer writes that line.
 
-- `packages/iterate/tsdown.config.ts` bundles capnweb, sqlfu, yaml and zod
-  into every starter-app "physical" worker and into the github-ai-linter
-  entry, with `alwaysBundle` / `onlyBundle` lists that must be kept in step
-  with the SDK's imports.
-- The SDK's library entries leave zod and capnweb external, so every config
-  template declares `zod` and any config-repo file that reaches
-  `iterate/processors` needs it too (`@iterate-com/voice-agent`'s installer
-  writes the line for that reason).
-- Any second-party package has to choose between the same bundling and
-  telling its users which of the SDK's dependencies to declare.
+Measured on 2026-09-08 (PR #2600, preview slot 10, head a637bda): a config
+repo that declared only `iterate`, `@iterate-com/voice-agent` and `zod` had
+its `voice-agent.ts` built by the host, and that build reaches
+`@iterate-com/capnweb` — through the SDK's `iterate/sdk/capnweb` entry and
+the processors keepalive chunk, both of which leave capnweb external — which
+the repo does not declare. The guest came up and its facet ran. So the host
+did resolve a dependency that only the `iterate` tarball declares, and the
+premise behind the bundling lists no longer holds, at least for that case
+(`@cloudflare/worker-bundler`'s README says transitive resolution has no
+depth limit and installs a flat `node_modules`).
 
-If the host read a tarball dependency's `dependencies` and installed them
-(flat, like the registry path), all of that goes away: the SDK's entries stop
-bundling anything, templates stop declaring zod, and a package is an ordinary
-npm package. Check first whether the bundler already supports this for
-tarball specs behind an option, and what its flat node_modules does with two
-versions of zod; the repo already patches this bundler
-(`patches/@cloudflare__worker-bundler@0.2.1.patch`), so a small upstream-able
-change is on the table.
+To do:
+
+- Confirm against `apps/os/src/domains/workers/build-backend.ts` and the
+  bundler what is installed for a tarball spec, and whether zod would have
+  resolved without the template's line (a proof project with no `zod`
+  declared).
+- If so, delete the `alwaysBundle` / `onlyBundle` machinery in
+  `packages/iterate/tsdown.config.ts` (keeping `cloudflare:*` external), the
+  `zod` lines in `configs/*/package.json`, and `VOICE_AGENT_ZOD_SPEC` in the
+  voice agent's installer; note what the flat node_modules does when two
+  packages pin different zod versions.
+- If not, record precisely which cases are resolved and which are not, next
+  to the lists, so the next package does not have to rediscover it.
 
 Prompted by the review of #2600 (Jonas, 2026-09-08).
