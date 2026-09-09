@@ -67,7 +67,7 @@ import {
   type FacetSpec,
 } from "./context/worker-loader.ts";
 import { installPrototypeInvokeFallback } from "./context/dotted-path-proxy.ts";
-import type { BuiltInScope, RewriteRuleListEntry } from "./context/built-ins.ts";
+import type { BuiltInScope } from "./context/built-ins.ts";
 import {
   DurableObjectNameCodec,
   resolveContextPath,
@@ -255,16 +255,11 @@ export class IterateContext extends RpcTarget {
       this.#refuseAnOverrideNamingItsOwnContext(matchString, event);
       await this.#append(event);
       this.#sessionTeardown.dispose(sessionTeardownKey);
-      // Disposing LIFTS the deny or REMOVES the rewrite — while the row is still this handle's own.
-      // The event holds the PARSED target; a row's target is read back PRINTED (with holes), so the
-      // expectation is spelled the way `rewriteRules.get` spells it.
+      // Disposing LIFTS the deny or REMOVES the rewrite — while the row is still this handle's own:
+      // the removal carries the PARSED target this event wrote, and the reduce compares inside the
+      // commit (a stale undo over a replacement is a no-op).
       const expectedTarget = (event.payload as { target: ItxExpression | null }).target;
-      return new RewriteRuleHandle(() =>
-        this.#removeRuleInBackground(
-          matchString,
-          expectedTarget === null ? null : print(expectedTarget, { holes: true }),
-        ),
-      );
+      return new RewriteRuleHandle(() => this.#removeRuleInBackground(matchString, expectedTarget));
     }
     // Built BEFORE the lend so a match the codec refuses throws with nothing lent. The rule rides the
     // pager upgrade: the DO appends it in the turn it accepts the pager — ONE round trip, and the DO
@@ -402,41 +397,30 @@ export class IterateContext extends RpcTarget {
     return this.#invokeOnDurableObject(["itx", "builtins", ["append", event]]);
   }
 
-  /** An undo's REMOVAL of a rule: un-set ONLY the row this handle wrote (its target still
-   *  `expectedTarget` — a later provide at the same match, a live provider's, another session's, owns
-   *  the row now, never a stale undo over it), spelled as the removal (back to the platform row
-   *  beneath, if any), never as a mask. Fire-and-forget under waitUntil (a disposer cannot await), a
-   *  refusal ignored. */
-  #removeRuleInBackground(matchString: string, expectedTarget: string | null): void {
+  /** An undo's REMOVAL of a rule: un-set ONLY the row this handle wrote — the removal carries the
+   *  target it wrote (`ifTarget`) and the core reduce applies it only while the row's target is still
+   *  that (a later provide at the same match, a live provider's, another session's, owns the row now);
+   *  spelled as the removal (back to the platform row beneath, if any), never as a mask. ONE append,
+   *  fire-and-forget under waitUntil (a disposer cannot await), a refusal ignored. */
+  #removeRuleInBackground(matchString: string, expectedTarget: ItxExpression | null): void {
     this.#waitUntil(
-      (async () => {
-        const row = (await this.#durableObject.invoke([
-          "itx",
-          "builtins",
-          "rewriteRules",
-          ["get", matchString],
-        ])) as RewriteRuleListEntry | null;
-        if (row?.origin === "context" && row.target === expectedTarget)
-          await this.#append(rewriteRuleRemovedEvent(matchString));
-      })().catch(() => undefined),
+      this.#append(rewriteRuleRemovedEvent(matchString, expectedTarget)).catch(() => undefined),
     );
   }
 
-  /** An undo's REMOVAL of a subscription row: un-set ONLY the row this handle wrote — its
-   *  `configuredAtOffset` is the offset of the event the handle's call committed; a later same-name
-   *  subscribe replaced it and owns the name now. Fire-and-forget under waitUntil, a refusal ignored. */
+  /** An undo's REMOVAL of a subscription row: un-set ONLY the row this handle wrote — its identity is
+   *  the offset of the event the handle's call committed (`ifConfiguredAtOffset`); a later same-name
+   *  subscribe owns the name and the reduce ignores the stale removal. ONE append, fire-and-forget
+   *  under waitUntil, a refusal ignored. */
   #removeSubscriptionInBackground(name: string, configuredAtOffset: number): void {
     this.#waitUntil(
-      (async () => {
-        const row = (await this.#durableObject.invoke([
-          "itx",
-          "builtins",
-          "subscriptions",
-          ["get", name],
-        ])) as { configuredAtOffset: number } | null;
-        if (row?.configuredAtOffset === configuredAtOffset)
-          await this.#append(subscriptionConfiguredEvent({ name, target: null }));
-      })().catch(() => undefined),
+      this.#append(
+        subscriptionConfiguredEvent({
+          name,
+          target: null,
+          ifConfiguredAtOffset: configuredAtOffset,
+        }),
+      ).catch(() => undefined),
     );
   }
 

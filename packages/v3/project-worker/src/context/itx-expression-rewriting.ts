@@ -437,10 +437,23 @@ export function rpcStubKeysNamed(args: {
 /** The REMOVAL spelling of the same event: the row at `match` is gone — back to the platform row when
  *  one lies beneath, nothing otherwise. Spelled as the platform-equivalent target
  *  `itx.builtins.<match…>`, which the core reduce turns into a deletion, so a disposed handle and a
- *  dead stub RESTORE `itx.ai` rather than mask it (`null` is the caller's deliberate deny). */
-export function rewriteRuleRemovedEvent(match: ItxExpressionInput): StreamEventInput {
+ *  dead stub RESTORE `itx.ai` rather than mask it (`null` is the caller's deliberate deny).
+ *  `ifTarget` is a handle's undo: the reduce removes the row ONLY while its target is still the one
+ *  the handle wrote (a `null` for a mask) — a later provide at the same match owns the row and a
+ *  stale undo is a no-op. Decided inside the commit: there is no read-then-append window. */
+export function rewriteRuleRemovedEvent(
+  match: ItxExpressionInput,
+  ifTarget?: ItxExpression | null,
+): StreamEventInput {
   const matchPrefix = parseItxExpressionPrefix(match);
-  return rewriteRuleConfiguredEvent(matchPrefix, ["itx", "builtins", ...matchPrefix.slice(1)]);
+  const event = rewriteRuleConfiguredEvent(matchPrefix, [
+    "itx",
+    "builtins",
+    ...matchPrefix.slice(1),
+  ]);
+  return ifTarget === undefined
+    ? event
+    : { ...event, payload: { ...(event.payload as object), ifTarget } };
 }
 
 // ── THE RESOLVER (parent-constructed over the physical built-ins and a reader of the CURRENT rules) ──

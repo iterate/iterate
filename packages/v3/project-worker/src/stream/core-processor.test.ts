@@ -148,6 +148,33 @@ describe("the rewrite-rule table — a MAP by match", () => {
     ]);
     expect(Object.keys(s.itxExpressionRewriteRules)).toEqual(["itx.fine"]);
   });
+
+  test("a removal with `ifTarget` (a handle's undo) applies only while the row's target is still that — a replacement survives a stale undo, identity kept; a mask's undo names `null`", () => {
+    const configure = (offset: number, target: string | null) =>
+      at(offset, "events.iterate.com/itx/rewrite-rule-configured", { match: "itx.x", target });
+    const remove = (offset: number, ifTarget: unknown) =>
+      at(offset, "events.iterate.com/itx/rewrite-rule-configured", {
+        match: "itx.x",
+        target: "itx.builtins.x",
+        ifTarget,
+      });
+    const replaced = reduceAll([configure(1, "itx.tab1"), configure(2, "itx.tab2")]);
+    // the first handle's undo arrives after the replacement: a no-op, the very same state object
+    expect(proc.reduce({ event: remove(3, parse("itx.tab1")), state: replaced })).toBeUndefined();
+    // the row's own handle removes it
+    expect(reduceAll([remove(3, parse("itx.tab2"))], replaced).itxExpressionRewriteRules).toEqual(
+      {},
+    );
+    // an undo over a row that is already gone: a no-op too
+    expect(
+      proc.reduce({ event: remove(4, parse("itx.tab2")), state: proc.contract.initialState() }),
+    ).toBeUndefined();
+    // a MASK's handle undoes with `ifTarget: null` — lifting the mask, never someone else's rewrite
+    const masked = reduceAll([configure(1, null)]);
+    expect(reduceAll([remove(2, null)], masked).itxExpressionRewriteRules).toEqual({});
+    const rewritten = reduceAll([configure(1, null), configure(2, "itx.tab1")]);
+    expect(proc.reduce({ event: remove(3, null), state: rewritten })).toBeUndefined();
+  });
 });
 
 describe("the subscriptions table — by name", () => {
@@ -226,6 +253,26 @@ describe("the subscriptions table — by name", () => {
         state: s,
       }),
     ).toBeUndefined();
+  });
+
+  test("a null target with `ifConfiguredAtOffset` (a handle's undo) drops only the row configured at that offset — a same-name replace survives the stale undo, identity kept", () => {
+    const configure = (offset: number) =>
+      at(offset, "events.iterate.com/stream/subscription-configured", {
+        name: "digest",
+        target: "itx.digest.processEventBatch",
+      });
+    const remove = (offset: number, ifConfiguredAtOffset: number) =>
+      at(offset, "events.iterate.com/stream/subscription-configured", {
+        name: "digest",
+        target: null,
+        ifConfiguredAtOffset,
+      });
+    const replaced = reduceAll([configure(1), configure(2)]);
+    expect(proc.reduce({ event: remove(3, 1), state: replaced })).toBeUndefined(); // the first handle's stale undo
+    expect(reduceAll([remove(3, 2)], replaced).subscriptions).toEqual({}); // the row's own handle
+    expect(
+      proc.reduce({ event: remove(4, 2), state: proc.contract.initialState() }),
+    ).toBeUndefined(); // already gone
   });
 
   test("delivery-halted sets `halted { afterOffset, attempts, error? }` on the row (the loop's fact); unknown name → no-op", () => {

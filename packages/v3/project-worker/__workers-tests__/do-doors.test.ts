@@ -31,8 +31,12 @@
 import { evictDurableObject, runInDurableObject } from "cloudflare:test";
 import { RpcTarget } from "capnweb";
 import { expect, test } from "vitest";
-import { print, type ItxExpression } from "../src/context/expression.ts";
-import { rewriteRuleConfiguredEvent } from "../src/context/itx-expression-rewriting.ts";
+import { parse, print, type ItxExpression } from "../src/context/expression.ts";
+import {
+  rewriteRuleConfiguredEvent,
+  rewriteRuleRemovedEvent,
+} from "../src/context/itx-expression-rewriting.ts";
+import { subscriptionConfiguredEvent } from "../src/stream/subscriptions.ts";
 import { openSession, stub, until } from "./support.ts";
 
 /** One rewrite-rule row as the core snapshot serializes it (the rules are `core` state — a RECORD
@@ -231,4 +235,41 @@ test("a PAUSED context survives an eviction: the constructor's birth-row replay 
     type: string;
   }[];
   expect(afterResume.type).toBe("after-resume");
+});
+
+test("a handle's undo is a COMPARE-AND-SET decided in the reduce: a stale removal (naming the target or the offset the handle wrote) is a no-op against a replacement — there is no read-then-append window", async () => {
+  const ctx = "prj_doors_undo_cas";
+  const s = stub(ctx);
+  // RULES: session A's row, replaced by session B's; A's undo names A's target and changes nothing.
+  await s.append(rewriteRuleConfiguredEvent("itx.x", "itx.tab1"));
+  await s.append(rewriteRuleConfiguredEvent("itx.x", "itx.tab2"));
+  await s.append(rewriteRuleRemovedEvent("itx.x", parse("itx.tab1")));
+  expect(print((await rewriteRulesOf(ctx))["itx.x"].target)).toBe("itx.tab2");
+  await s.append(rewriteRuleRemovedEvent("itx.x", parse("itx.tab2"))); // B's own undo
+  expect((await rewriteRulesOf(ctx))["itx.x"]).toBeUndefined();
+  // SUBSCRIPTIONS: the row's identity is its configure offset.
+  const [first] = (await s.append(
+    subscriptionConfiguredEvent({ name: "digest", target: "itx.digest.processEventBatch" }),
+  )) as unknown as { offset: number }[];
+  const [second] = (await s.append(
+    subscriptionConfiguredEvent({ name: "digest", target: "itx.digest.processEventBatch" }),
+  )) as unknown as { offset: number }[];
+  const row = async () =>
+    (await s.invoke("itx.subscriptions.get('digest')")) as { configuredAtOffset: number } | null;
+  await s.append(
+    subscriptionConfiguredEvent({
+      name: "digest",
+      target: null,
+      ifConfiguredAtOffset: first.offset,
+    }),
+  );
+  expect((await row())?.configuredAtOffset).toBe(second.offset); // the replacement stands
+  await s.append(
+    subscriptionConfiguredEvent({
+      name: "digest",
+      target: null,
+      ifConfiguredAtOffset: second.offset,
+    }),
+  );
+  expect(await row()).toBeNull();
 });

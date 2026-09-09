@@ -5,8 +5,8 @@
 //   who this context is       stream/created { projectId, path }            → projectId · path · createdAt
 //   which incarnation runs    stream/woken { incarnation }                  → incarnation
 //   may appends land          stream/paused { reason } · stream/resumed     → paused        (one `if` in Stream.append)
-//   how calls rewrite         itx/rewrite-rule-configured { match, target|null } → itxExpressionRewriteRules (every invoke)
-//   who is sent each commit   stream/subscription-configured { name, target|null }|
+//   how calls rewrite         itx/rewrite-rule-configured { match, target|null, ifTarget? } → itxExpressionRewriteRules (every invoke)
+//   who is sent each commit   stream/subscription-configured { name, target|null, ifConfiguredAtOffset? }|
 //                             -delivery-halted|-delivery-resumed            → subscriptions (the delivery loop)
 //
 // ONE reduce, no effects, no verbs — a pure fold with a batch door (`reduceBatch`), NOT a hosted
@@ -377,6 +377,12 @@ export class CoreStreamProcessor {
         const matchString = payload.match as string;
         const matchPrefix = parseItxExpressionPrefix(matchString);
         const existing = state.itxExpressionRewriteRules[matchString];
+        // THE COMPARE-AND-SET of a handle's undo (`rewriteRuleRemovedEvent(match, ifTarget)`): the
+        // removal applies only while the row's target is still the one the handle wrote — a
+        // replacement (another session's, a live provider's) owns the match now and a stale undo is
+        // a no-op. Decided here, inside the commit, so there is no read-then-append window.
+        if ("ifTarget" in payload && (!existing || !jsonEqual(existing.target, payload.ifTarget)))
+          return undefined;
         // The rules table with `matchString` set (or removed), the batch's draft mutated — and every
         // change to the table re-derives the subscriptions' hosting markers through it.
         const withRule = (rule: ItxExpressionRewriteRule | undefined): CoreState => {
@@ -408,8 +414,17 @@ export class CoreStreamProcessor {
 
       case "events.iterate.com/stream/subscription-configured": {
         const name = payload.name as string;
-        if (payload.target === null)
+        if (payload.target === null) {
+          // The same compare-and-set for a subscription handle's undo: `ifConfiguredAtOffset` names
+          // the row the handle wrote (its identity — the configure's own offset); a same-name replace
+          // since then owns the name, and the stale removal is a no-op.
+          if (
+            "ifConfiguredAtOffset" in payload &&
+            state.subscriptions[name]?.configuredAtOffset !== payload.ifConfiguredAtOffset
+          )
+            return undefined;
           return state.subscriptions[name] ? withSubscription(name, undefined) : undefined;
+        }
         const consumes = payload.consumes as string[] | undefined;
         const afterOffset = payload.afterOffset as number | undefined;
         // M1: a hosting target (one that RESOLVES to `itx.builtins.facets.get(name, spec)…`) keeps its

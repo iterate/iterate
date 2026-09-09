@@ -4206,9 +4206,16 @@ The codex read of the pass-2 tree, every claim verified in the code before a lin
 - Handed to the stream implementer (its files): a superseded target evaluation classifying or
   invoking its replacement; a re-enabled processor keeping its old source while the startup memo
   stands.
-- STILL OPEN from codex: a handle's undo is a read-then-append (two RPCs), so a replacement installed
-  between them by another session is deleted — a compare-and-set carried IN the removal event and
-  checked in the reduce would close it (and make the identical-handles pin moot); next.
+- BUG (codex's, COMPLEX in its reading, small in ours): a handle's undo was a READ-THEN-APPEND — two
+  RPCs — so a replacement another session installed between them was deleted by the stale undo. The
+  compare-and-set now rides IN the removal event and is decided in the reduce, inside the commit:
+  `rewriteRuleRemovedEvent(match, ifTarget)` removes the row only while its target is still the one
+  the handle wrote (a `null` for a mask), `subscriptionConfiguredEvent({ target: null,
+ifConfiguredAtOffset })` only while the row is still the one configured at that offset. The undo
+  is ONE append (the read is gone, −20 LOC), and there is no window at all. Pinned in the reduce's
+  table (both events, replacement / own / already-gone / mask rows) and in the workers lane through
+  the raw DO door. The identical-rule handles pin stays red: two handles with the same target are
+  still one identity to a target-compare.
 
 THE STREAM REVIEW (the third Fable launch; every contested claim first reproduced on a node:sqlite
 rig with the real `Stream` + `SubscriptionDelivery`, then applied by the same agent):
@@ -4254,3 +4261,8 @@ rig with the real `Stream` + `SubscriptionDelivery`, then applied by the same ag
   or counting doors at the RPC entry — not made here.
 - Declined by evidence: moving `walkStepsOnRpcStub` to dispatch.ts breaks the library's import
   boundary pin; skipping the pending-push fold for cursor rows needs a known-cursor set (a new noun).
+- GATES: tsc ×3 · oxlint · knip · `pnpm test` 88 files / 717 passed / 17 expected-fail / 17
+  deployed-only skips. DEPLOYED (de471369f, version ae5fcbe7): 49 files / 200 passed / 4 expected-
+  fail; the one failure is the 1001-key kv list losing its socket mid-way ("Network connection
+  lost") — the second full deployed run in a row to drop it, green alone both times: a platform
+  signature on 1001 puts over one socket, recorded, not code.

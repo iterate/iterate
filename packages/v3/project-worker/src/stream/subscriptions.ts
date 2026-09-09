@@ -17,12 +17,15 @@ import type { StreamEventInput } from "./events.ts";
 
 /** The `subscription-configured` event for (or replacing, or with `target: null` removing)
  *  `input.name`. The target must be rooted at `itx`; it is stored in the PARSED form (below), which
- *  the reduce takes as it is. */
+ *  the reduce takes as it is. `ifConfiguredAtOffset` (with a null target) is a handle's undo: the
+ *  reduce drops the row ONLY while it is still the one configured at that offset — a same-name
+ *  replace since then owns the name and the stale undo is a no-op, decided inside the commit. */
 export function subscriptionConfiguredEvent(input: {
   name: string;
   target: ItxExpressionInput | null;
   consumes?: string[];
   afterOffset?: number;
+  ifConfiguredAtOffset?: number;
 }): StreamEventInput {
   const name = parseSubscriptionName(input.name);
   const { afterOffset } = input;
@@ -47,6 +50,10 @@ export function subscriptionConfiguredEvent(input: {
       target,
       ...(target && input.consumes && { consumes: input.consumes }),
       ...(target && afterOffset !== undefined && { afterOffset }),
+      ...(!target &&
+        input.ifConfiguredAtOffset !== undefined && {
+          ifConfiguredAtOffset: input.ifConfiguredAtOffset,
+        }),
     },
   };
 }
