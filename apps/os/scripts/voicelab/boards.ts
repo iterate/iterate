@@ -73,6 +73,7 @@ const BOARDS: readonly Board[] = [
   { label: "StackChan CoreS3", name: "stackchan", pushToTalk: false },
   { label: "M5StickS3", name: "m5stick-s3", pushToTalk: true },
   { label: "HA Voice PE", name: "home-assistant-voice-preview-edition", pushToTalk: false },
+  { label: "FutureProofHomes Satellite1", name: "satellite1", pushToTalk: false },
   { label: "Waveshare AMOLED", name: "waveshare", pushToTalk: true },
 ];
 

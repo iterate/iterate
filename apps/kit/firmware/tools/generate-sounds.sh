@@ -49,8 +49,12 @@ python3 devices/m5sticks3/assets/make-sounds.py "$WORK" \
 python3 devices/waveshare_s3_amoled/assets/make-sounds.py "$WORK" \
   > devices/waveshare_s3_amoled/assets/waveshare_sounds_generated.inc
 
+python3 devices/satellite1/assets/make-sounds.py "$WORK" \
+  > devices/satellite1/assets/satellite1_sounds_generated.inc
+
 echo "generated:"
 wc -c devices/havpe/assets/havpe_sounds_generated.inc \
       devices/stackchan/assets/stackchan_sounds_generated.inc \
       devices/m5sticks3/assets/m5sticks3_sounds_generated.inc \
-      devices/waveshare_s3_amoled/assets/waveshare_sounds_generated.inc
+      devices/waveshare_s3_amoled/assets/waveshare_sounds_generated.inc \
+      devices/satellite1/assets/satellite1_sounds_generated.inc
