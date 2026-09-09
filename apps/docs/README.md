@@ -7,24 +7,23 @@ Tailwind and the shared Iterate UI package.
 A URL addresses one existing workspace and, optionally, one of its files.
 The file tree is the same pierre tree as the apps/os repo IDE, over the WHOLE
 workspace: every project repo mounted at its own `repos/<name>` path plus the
-workspace's own directory, with git-status badges for the workspace's
+`/workspace` directory, with git-status badges for the workspace's
 uncommitted changes and new/rename/delete/discard. Documents (`.md`,
 `.markdown`, `.html`, `.htm`) open in the collaborative editor; any other
 text file opens read-only, with change bars against HEAD in the gutter and
 a diff toggle (`?diff=1`) that shows the file's uncommitted change in
 CodeMirror's merge view. Each dirty repo gets its own Commit button, which
 publishes that mount's dirty set to the repo's main — a commit never spans
-mounts, and the workspace's own files are never committed. Listings load
-per mount: the config repo and the workspace's own directory at once, any
+mounts, and the files under `/workspace` are never committed. Listings load
+per mount: the config repo and the `/workspace` directory at once, any
 other mount when its row is opened, so a big repo costs nothing until then.
 The tree, file view, diff, and commit controls are the shared
 `@iterate-com/workspace-documents` components that apps/os renders too, over
 the same platform workspace surface. A relative
-`path` resolves against the workspace's own stream path; an absolute `path`
-must be a fully qualified stream path (e.g. `/repos/config/docs/plan.md`):
+`path` resolves under `/workspace`; an absolute `path` names a workspace file (e.g. `/repos/config/docs/plan.md`):
 
 ```text
-https://docs--<project>.iterate.app/?workspace=/workspaces/agents/<agent>&path=review.md
+https://docs--<project>.iterate.app/?workspace=/agents/<agent>&path=review.md
 ```
 
 The default project worker exposes the Docs connector as
@@ -33,7 +32,7 @@ production, preview, or localhost link instead of assembling a hostname:
 
 ```ts
 const url = await itx.worker.docs.link({
-  workspace: "/workspaces/agents/reviewer",
+  workspace: "/agents/reviewer",
   path: "review.md",
 });
 await itx.chat.sendMessage(`[Review the plan](${url})`);

@@ -3,7 +3,7 @@ import { waitForCondition } from "../test-support/wait-for-condition.ts";
 import { adminSecret, withItxSession } from "./test-helpers.ts";
 
 test(
-  "workspaces are one namespace: repos auto-mount at /repos/**, scratch lives at the workspace's own path, commits route per mount",
+  "workspaces are one namespace: repos auto-mount at /repos/**, scratch lives at /workspace, commits route per mount",
   { timeout: 240_000 },
   async () => {
     using session = withItxSession();
@@ -67,23 +67,23 @@ test(
     });
     expect(await workspace.readFile("/repos/config/docs/freshness.md")).toBe("fresh off main");
 
-    // -- private scratch: the workspace's own path; relative paths resolve there
+    // -- private scratch: /workspace; relative paths resolve there
 
     await workspace.writeFile("notes.md", "workspace hello");
     // Relative and absolute spellings are the same file.
     expect(await workspace.readFile("notes.md")).toBe("workspace hello");
-    expect(await workspace.readFile(`${workspacePath}/notes.md`)).toBe("workspace hello");
+    expect(await workspace.readFile(`/workspace/notes.md`)).toBe("workspace hello");
     const editedScratch = await workspace.edit({
       path: "notes.md",
       oldString: "hello",
       newString: "hello world",
     });
     // Results speak the resolved absolute spelling.
-    expect(editedScratch).toEqual({ occurrenceCount: 1, path: `${workspacePath}/notes.md` });
+    expect(editedScratch).toEqual({ occurrenceCount: 1, path: `/workspace/notes.md` });
     expect(await workspace.readFile("notes.md")).toBe("workspace hello world");
-    expect(await workspace.listAllFiles()).toContain(`${workspacePath}/notes.md`);
+    expect(await workspace.listAllFiles()).toContain(`/workspace/notes.md`);
     // A relative glob resolves against the workspace's own directory.
-    expect(await workspace.glob("*.md")).toContain(`${workspacePath}/notes.md`);
+    expect(await workspace.glob("*.md")).toContain(`/workspace/notes.md`);
     expect(await workspace.glob("**")).not.toContain("/repos/config/worker.ts");
 
     // Writes outside every mount and the workspace's own directory fail
@@ -194,7 +194,7 @@ test(
     });
     expect(status.unmounted).toContainEqual({
       change: "added",
-      path: `${workspacePath}/notes.md`,
+      path: `/workspace/notes.md`,
     });
 
     // -- commit: ONE mount's changes land on that repo's MAIN ------------------
@@ -227,7 +227,7 @@ test(
     expect(statusAfter.mounts.find((mount) => mount.path === "/repos/config")?.changes).toEqual([]);
     expect(statusAfter.unmounted).toContainEqual({
       change: "added",
-      path: `${workspacePath}/notes.md`,
+      path: `/workspace/notes.md`,
     });
     expect(await workspace.readFile("/repos/config/notes/e2e.md")).toBe("workspace hello world");
     expect(await workspace.exists("/repos/config/worker.ts")).toBe(false);
@@ -433,9 +433,7 @@ test(
       "imported/transfer.txt",
       await project.files.get("/e2e/transfer.txt").bytes(),
     );
-    expect(await workspace.readFile(`${workspacePath}/imported/transfer.txt`)).toBe(
-      "born in itx.files",
-    );
+    expect(await workspace.readFile(`/workspace/imported/transfer.txt`)).toBe("born in itx.files");
 
     // workspace -> files: publish a fallen-through repo file and mint a signed URL.
     const packageJsonBytes = await workspace.readFileBytes("/repos/config/package.json");
@@ -461,10 +459,96 @@ test(
       .get("/e2e/blob.bin")
       .put({ contentType: "application/octet-stream", data: binary });
     await workspace.writeFileBytes(
-      `${workspacePath}/imported/blob.bin`,
+      `/workspace/imported/blob.bin`,
       await project.files.get("/e2e/blob.bin").bytes(),
     );
     const roundTripped = await workspace.readFileBytes("imported/blob.bin");
     expect(Array.from(roundTripped ?? [])).toEqual(Array.from(binary));
   },
 );
+
+test("an agent and its workspace share one stream and keep /workspace files isolated", async () => {
+  using session = withItxSession();
+  using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
+  using project = await itx.projects.get(`agent-workspace-${crypto.randomUUID()}`).create({});
+  const agentPath = `/agents/workspace-${crypto.randomUUID()}`;
+  using agent = project.agents.get(agentPath);
+  using workspace = project.workspaces.get(agentPath);
+
+  // Creating the agent explicitly creates the workspace at that same path.
+  await agent.create();
+  await agent.create();
+  await workspace.writeFile("notes.md", "agent workspace");
+  expect((await workspace.processor.snapshot()).state.birthCertificate).not.toBeNull();
+  const agentBirth = (await agent.processor.snapshot()).state.birthCertificate;
+  expect(agentBirth).not.toBeNull();
+  const births = await agent.stream.getEvents({
+    eventTypes: ["events.iterate.com/agent/created", "events.iterate.com/workspace/created"],
+  });
+  expect(births.map((event) => event.type).sort()).toEqual([
+    "events.iterate.com/agent/created",
+    "events.iterate.com/workspace/created",
+  ]);
+  await waitForCondition(
+    async () => (await project.workspaces.list()).some((entry) => entry.path === agentPath),
+    { description: "agent workspace catalog entry", timeoutMs: 15_000 },
+  );
+  expect(
+    (await project.workspaces.list()).filter((entry) => entry.path === agentPath),
+  ).toHaveLength(1);
+  expect(
+    (await project.workspaces.list()).some((entry) => entry.path === `/workspaces${agentPath}`),
+  ).toBe(false);
+
+  const scoped = await agent.capabilityHost.runScript(
+    'async (itx) => { return await itx.workspace.readFile("notes.md"); }',
+  );
+  expect(scoped).toMatchObject({ result: "agent workspace" });
+  expect(await workspace.readFile("/workspace/notes.md")).toBe("agent workspace");
+  const opened = await workspace.collab.open("notes.md");
+  expect(opened).toMatchObject({ content: "agent workspace" });
+  expect(await workspace.collab.open("/workspace/notes.md")).toEqual(opened);
+
+  using other = project.workspaces.get(`/workspaces/isolated-${crypto.randomUUID()}`);
+  await other.create({});
+  expect(await other.readFile("/workspace/notes.md")).toBeNull();
+  await other.writeFile("notes.md", "another workspace");
+  expect(await workspace.readFile("notes.md")).toBe("agent workspace");
+  expect((await workspace.git.status()).unmounted).toContainEqual({
+    path: "/workspace/notes.md",
+    change: "added",
+  });
+  await expect(workspace.writeFile(`${agentPath}/notes.md`, "old spelling")).rejects.toThrow(
+    /not writable/,
+  );
+  await expect(
+    workspace.configure({
+      config: { mounts: { "/workspace": { repoPath: "/repos/config", policy: "commit-to-main" } } },
+    }),
+  ).rejects.toThrow(/reserved/);
+
+  // The reverse order works too: adding an agent to an existing workspace
+  // preserves its files and does not duplicate its catalog entry.
+  const preexistingPath = `/agents/preexisting-${crypto.randomUUID()}`;
+  using preexisting = project.workspaces.get(preexistingPath);
+  await preexisting.create({});
+  await preexisting.writeFile("notes.md", "before agent birth");
+  using laterAgent = project.agents.get(preexistingPath);
+  await laterAgent.create();
+  expect(await preexisting.readFile("notes.md")).toBe("before agent birth");
+  expect((await laterAgent.processor.snapshot()).state.birthCertificate).not.toBeNull();
+
+  // Killing the shared stream also evicts its processor facets. Both
+  // processors must reconstruct their own state on the next request.
+  try {
+    await agent.stream.kill();
+  } catch (error) {
+    // ctx.abort may reject its own in-flight kill RPC as the object exits.
+    expect(String(error)).toMatch(/kill requested|aborted|reset|disconnected|shut down|canceled/i);
+  }
+  expect((await agent.processor.snapshot()).state).toMatchObject({ birthCertificate: agentBirth });
+  expect((await workspace.processor.snapshot()).state.birthCertificate).not.toBeNull();
+  expect(await workspace.readFile("notes.md")).toBe("agent workspace");
+  await workspace.writeFile("notes.md", "after stream restart");
+  expect(await workspace.readFile("/workspace/notes.md")).toBe("after stream restart");
+});

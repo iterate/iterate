@@ -35,8 +35,7 @@ export function jamAgentPath(workspacePath: string): string | null {
 
 /**
  * The kickoff brief an invited agent receives: where the jam lives, how to
- * read and write through the workspace (never the repo), and that nothing
- * commits by itself.
+ * read and write through the workspace (never the repo), and how the human view controls commits.
  */
 export function jamInvitation(workspacePath: string, path: string | null): string {
   const example = path ?? `${JAM_REPO_PATH}/README.md`;
@@ -48,9 +47,9 @@ export function jamInvitation(workspacePath: string, path: string | null): strin
     `  const ws = itx.workspaces.get(${JSON.stringify(workspacePath)});`,
     `  await ws.readFile(${JSON.stringify(example)});`,
     `  await ws.edit({ path, oldString, newString }); // or ws.writeFile(path, content)`,
-    `- Every project repo is mounted at its own /repos/<name> path inside the workspace (the config repo at ${JAM_REPO_PATH}); the workspace's own files live under ${workspacePath}/. readFile returns the live text of a file someone has open, keystrokes included; your writes appear in their editor immediately.`,
+    `- Every project repo is mounted at its own /repos/<name> path inside the workspace (the config repo at ${JAM_REPO_PATH}); the workspace's own files live under /workspace/. readFile returns the live text of a file someone has open, keystrokes included; your writes appear in their editor immediately.`,
     path === null
-      ? `- Nobody has a file open yet; list the config repo with ws.glob(${JSON.stringify(`${JAM_REPO_PATH}/**/*`)}) or this workspace's own files with ws.glob(${JSON.stringify(`${workspacePath}/**/*`)}) (never listAllFiles — it walks every mounted repo), and wait for instructions.`
+      ? `- Nobody has a file open yet; list the config repo with ws.glob(${JSON.stringify(`${JAM_REPO_PATH}/**/*`)}) or this workspace's own files with ws.glob(${JSON.stringify("/workspace/**/*")}) (never listAllFiles — it walks every mounted repo), and wait for instructions.`
       : `- The file open right now is ${path}. Say hello: append one short line to it saying you have joined, then wait for instructions in that file or here.`,
     DOCUMENT_REVIEW_INSTRUCTIONS,
     "- You must not commit. The people's view publishes a repo's changes to its main about a minute after the last edit unless they turn auto-commit off; they can also commit or discard by hand. Landing on main is their call.",

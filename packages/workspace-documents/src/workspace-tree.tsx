@@ -19,7 +19,7 @@ const RepoFileTree = lazy(async () => {
 /**
  * The file column of a workspace: the shared repo tree over the WHOLE
  * workspace — every mounted repo under repos/, the workspace's own directory
- * under workspaces/ — with git-status badges from the overlay and
+ * under /workspace — with git-status badges from the overlay and
  * new/rename/delete/discard. Listings load per root: a mount opens (and
  * lists) when its row is clicked, so a big repo costs nothing until then.
  * The tree speaks paths without their leading slash (its row ids);
@@ -56,7 +56,7 @@ export function WorkspaceTree({
       // the workspace's own directory instead (the only unmounted place the
       // platform writes). `.md` is implied when no extension was typed.
       const named = withDocumentExtension(treePath);
-      const path = named.includes("/") ? qualified(named) : `${workspacePath}/${named}`;
+      const path = named.includes("/") ? qualified(named) : `/workspace/${named}`;
       void files.createFile(path).then((ok) => {
         if (ok) onSelect(path);
       });

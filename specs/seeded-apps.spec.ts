@@ -149,7 +149,7 @@ test("review a workspace document in the seeded Docs app", async ({ baseURL, pag
   // Review needs the authenticated project, independently of the chat composer.
   await page.getByRole("link", { name: "New agent", exact: true }).waitFor();
 
-  const workspacePath = "/workspaces/agents/reviewer";
+  const workspacePath = "/agents/reviewer";
   // Relative on purpose, twice over: workspace writes resolve relative paths
   // against the workspace's own directory (the only writable home for private
   // files — absolute paths outside it and the /repos/** mounts are rejected),

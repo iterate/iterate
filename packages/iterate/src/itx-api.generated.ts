@@ -1368,11 +1368,10 @@ export interface DynamicWorkerCollection {
 /**
  * Catalog of durable workspaces within one project: EVENT-SOURCED,
  * MOUNT-ROUTED workspace filesystems (Durable-Object-hosted, no container,
- * always warm). Every workspace is addressed by its FULL path under
- * `/workspaces/` — the same domain-prefix convention as `/sandboxes/...` and
- * `/repos/...`: an agent's workspace is the agent path under the prefix
- * (`/workspaces/agents/...`, exposed as `itx.workspace` in that agent's
- * scope), and standalone workspaces live under `/workspaces/<anything>`.
+ * always warm). Agent workspaces share their agent's FULL path under `/agents/`
+ * (exposed as `itx.workspace` in that agent's scope). Standalone workspaces
+ * live under `/workspaces/<anything>`. These identities address streams;
+ * private files inside either kind of workspace live under `/workspace/`.
  *
  * A workspace's identity + configuration are stream facts. `get(path)` only
  * addresses a handle; `get(path).create({ mounts? })` appends the atomic birth
@@ -1828,9 +1827,8 @@ export interface Secret {
  * HEAD, writes land in a private copy-on-write local layer (large files spill
  * to R2 transparently), and `git.commit({ scope })` turns ONE mount's changes
  * into one commit on that repo's main (honoring the mount's policy). Private
- * files live only under the workspace's own path (relative paths resolve
- * there); writes anywhere else error. The `.git` name is reserved
- * (platform-managed).
+ * files live only under /workspace (relative paths resolve there); writes
+ * anywhere else error. The `.git` name is reserved (platform-managed).
  */
 export interface Workspace {
   __describe(): Promise<Description>;

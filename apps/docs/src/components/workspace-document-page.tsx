@@ -79,7 +79,7 @@ export function WorkspaceDocumentPage({
     // A relative path is a document in the workspace's own directory; an
     // absolute one is a fully qualified platform path (a mount file). The
     // resolved form is the collab session's identity, shared with agents.
-    const resolvedPath = path.startsWith("/") ? path : `${workspacePath}/${path}`;
+    const resolvedPath = path.startsWith("/") ? path : `/workspace/${path}`;
     void withRetries(
       () =>
         withDocsProject(async (project) => {
@@ -199,8 +199,8 @@ export function WorkspaceDocumentPage({
     <div className="flex min-h-svh flex-col bg-background lg:h-svh lg:overflow-hidden">
       <DocumentToolbar
         path={
-          loaded.snapshot.path.startsWith(`${workspacePath}/`)
-            ? loaded.snapshot.path.slice(workspacePath.length + 1)
+          loaded.snapshot.path.startsWith("/workspace/")
+            ? loaded.snapshot.path.slice("/workspace/".length)
             : loaded.snapshot.path
         }
         format={loaded.snapshot.format}

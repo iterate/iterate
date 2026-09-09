@@ -1,6 +1,5 @@
 import { describe, expect, test } from "vitest";
 import {
-  agentWorkspacePath,
   effectiveWorkspaceMounts,
   normalizeWorkspaceMountKeys,
   normalizeWorkspacePath,
@@ -128,7 +127,7 @@ describe("effectiveWorkspaceMounts", () => {
 describe("normalizeWorkspacePath", () => {
   test("accepts /workspaces/ paths, arbitrarily nested", () => {
     expect(normalizeWorkspacePath("/workspaces/scratch")).toBe("/workspaces/scratch");
-    expect(normalizeWorkspacePath("/workspaces/agents/demo")).toBe("/workspaces/agents/demo");
+    expect(normalizeWorkspacePath("/workspaces/scratch/nested")).toBe("/workspaces/scratch/nested");
   });
 
   test("there is no root workspace — the bare prefix and '/' are rejected", () => {
@@ -136,27 +135,39 @@ describe("normalizeWorkspacePath", () => {
     expect(() => normalizeWorkspacePath("/workspaces")).toThrow(/no root workspace/);
   });
 
-  test("agent workspaces live at the agent path under /workspaces", () => {
-    // This is `itx.workspace`: agentWorkspacePath maps the agent's own path
-    // under the domain prefix, in lockstep with agentSandboxPath.
-    expect(agentWorkspacePath("/agents/demo")).toBe("/workspaces/agents/demo");
-    // Slack thread agents nest a dotted timestamp — must stay in lockstep.
-    expect(agentWorkspacePath("/agents/slack/C123/ts-1738000000.123456")).toBe(
-      "/workspaces/agents/slack/C123/ts-1738000000.123456",
+  test("agent workspaces share the agent's exact path", () => {
+    expect(normalizeWorkspacePath("/agents/demo")).toBe("/agents/demo");
+    expect(normalizeWorkspacePath("/agents/slack/C123/ts-1738000000.123456")).toBe(
+      "/agents/slack/C123/ts-1738000000.123456",
     );
+    expect(normalizeWorkspacePath("/agents/foo@bar")).toBe("/agents/foo@bar");
   });
 
-  test("accepts any path the agent Durable Object can tolerate (codec-safe)", () => {
-    expect(agentWorkspacePath("/agents/foo@bar")).toBe("/workspaces/agents/foo@bar");
-  });
-
-  test("rejects paths outside /workspaces/ and codec-unstable paths", () => {
-    expect(() => normalizeWorkspacePath("/agents/demo")).toThrow(/workspace paths live under/);
+  test("rejects collection roots, other domains, and codec-unstable paths", () => {
+    for (const path of ["/agents", "/repos/config", "/workspace", "/agentsx/demo"]) {
+      expect(() => normalizeWorkspacePath(path)).toThrow(/workspace paths live under/);
+    }
     expect(() => normalizeWorkspacePath("/workspaces/a b")).toThrow(/stable Durable Object path/);
+    expect(() => normalizeWorkspacePath("/agents/a b")).toThrow(/stable Durable Object path/);
   });
 });
 
 describe("normalizeWorkspaceMountKeys", () => {
+  test("reserves /workspace and its descendants for private files", () => {
+    for (const path of ["/workspace", "/workspace/notes", "/tmp/../workspace"]) {
+      expect(() =>
+        normalizeWorkspaceMountKeys({
+          [path]: { policy: "commit-to-main", repoPath: "/repos/config" },
+        }),
+      ).toThrow(/reserved.*workspace|workspace.*reserved/);
+    }
+    expect(
+      normalizeWorkspaceMountKeys({
+        "/workspace-tools": { policy: "read-only", repoPath: "/repos/config" },
+      }),
+    ).toHaveProperty("/workspace-tools");
+  });
+
   test("normalizes mount points and repo paths", () => {
     expect(
       normalizeWorkspaceMountKeys({

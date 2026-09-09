@@ -179,7 +179,7 @@ messages:
       </section>
 
       <section key="agent/boot-context">
-      Context for this agent: Project "demo" (slug demo); your stream path /agents/web/demo; workspace /workspaces/agents/web/demo; config repo at /repos/config…
+      Context for this agent: Project "demo" (slug demo); your stream path /agents/web/demo; workspace /agents/web/demo; config repo at /repos/config…
       </section>
 
       <section key="config/agents-md">
@@ -254,7 +254,7 @@ messages:
       </section>
 
       <section key="agent/boot-context">
-      Context for this agent: Project "demo" (slug demo); your stream path /agents/web/demo; workspace /workspaces/agents/web/demo; config repo at /repos/config…
+      Context for this agent: Project "demo" (slug demo); your stream path /agents/web/demo; workspace /agents/web/demo; config repo at /repos/config…
       </section>
 
       <section key="config/agents-md">

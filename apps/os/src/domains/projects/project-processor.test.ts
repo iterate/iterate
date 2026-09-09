@@ -759,10 +759,10 @@ describe("ProjectProcessor catalogs", () => {
         },
         {
           type: "events.iterate.com/stream/child-stream-created",
-          payload: { childPath: "/workspaces/agents" },
+          payload: { childPath: "/agents/slack" },
         },
         copiedWorkspaceCreated("/workspaces/scratch"),
-        copiedWorkspaceCreated("/workspaces/agents/slack/C123"),
+        copiedWorkspaceCreated("/agents/slack/C123"),
         // Creating the same workspace twice dedupes on the birth's
         // idempotency key upstream; a redelivered copy must not double-list.
         copiedWorkspaceCreated("/workspaces/scratch"),
@@ -770,12 +770,12 @@ describe("ProjectProcessor catalogs", () => {
     );
 
     expect(h.state().workspaces.map((workspace) => workspace.path)).toEqual([
-      "/workspaces/agents/slack/C123",
+      "/agents/slack/C123",
       "/workspaces/scratch",
     ]);
     expect(h.state().streams.map((stream) => stream.path)).toEqual([
+      "/agents/slack",
       "/workspaces",
-      "/workspaces/agents",
     ]);
   });
 });

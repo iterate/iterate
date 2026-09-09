@@ -38,7 +38,7 @@ describe("repo paths", () => {
 describe("ownership", () => {
   test("this app's scratch workspaces are owned; every other path is a guest view", () => {
     expect(isGuestWorkspacePath("/workspaces/scratch/20260909-1130-ab3f")).toBe(false);
-    expect(isGuestWorkspacePath("/workspaces/agents/reviewer")).toBe(true);
+    expect(isGuestWorkspacePath("/agents/reviewer")).toBe(true);
     expect(isGuestWorkspacePath("/workspaces/notes")).toBe(true);
     expect(isGuestWorkspacePath("/workspaces/scratch")).toBe(true);
   });

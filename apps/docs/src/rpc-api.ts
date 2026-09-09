@@ -196,7 +196,7 @@ class DocsProjectApi extends RpcTarget implements DocsProject {
       await stub.create({});
       // The document must EXIST before the editor opens it (no lazy file
       // create anywhere in Docs) — seed the starter note in the same breath.
-      await stub.writeFile(`${workspacePath}/${path}`, "# Notes\n\n");
+      await stub.writeFile(`/workspace/${path}`, "# Notes\n\n");
     });
     return { workspacePath, path };
   }
@@ -220,7 +220,7 @@ class DocsProjectApi extends RpcTarget implements DocsProject {
     if (agentPath === null) {
       throw new Error(`only a jam workspace can invite an agent; ${workspace} is not one`);
     }
-    const document = path === undefined ? null : resolveWorkspaceFilePath(workspace, path);
+    const document = path === undefined ? null : resolveWorkspaceFilePath(path);
     // Same birth-if-needed sequence as assignAgent; the brief goes out every
     // time so a re-invite re-points an existing agent.
     await this.#withPlatform((project) =>
@@ -485,20 +485,20 @@ async function briefAgent(agent: PlatformAgent, brief: string): Promise<void> {
   await agent.message(brief);
 }
 
-/** Relative document paths join onto the workspace's own stream path; absolute paths are used verbatim. */
-export function resolveDocumentPath(workspacePath: string, value: string): string {
+/** Relative document paths join onto /workspace; absolute paths are used verbatim. */
+export function resolveDocumentPath(value: string): string {
   const path = requireDocumentPath(value);
-  return path.startsWith("/") ? path : `${workspacePath}/${path}`;
+  return path.startsWith("/") ? path : `/workspace/${path}`;
 }
 
 /**
  * Any file of the workspace, not only a document (the tree opens every
  * file): relative joins onto the workspace's own directory, absolute must be
- * a fully qualified stream path under /workspaces/ or /repos/.
+ * an absolute file path under /workspace/ or /repos/.
  */
-export function resolveWorkspaceFilePath(workspacePath: string, value: string): string {
+export function resolveWorkspaceFilePath(value: string): string {
   const path = requireWorkspaceFilePath(value);
-  return path.startsWith("/") ? path : `${workspacePath}/${path}`;
+  return path.startsWith("/") ? path : `/workspace/${path}`;
 }
 
 function stringClaim(value: unknown): string | null {

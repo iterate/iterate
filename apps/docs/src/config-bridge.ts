@@ -20,11 +20,11 @@ export type DocsLinkInput =
        * stream path. Must end in .md, .markdown, .html, or .htm.
        */
       path: string;
-      /** Absolute /workspaces/** stream path of the reviewing workspace. */
+      /** Absolute /agents/** or /workspaces/** stream path of the reviewing workspace. */
       workspace: string;
     }
   | {
-      /** Absolute /workspaces/** stream path of the workspace the board renders. */
+      /** Absolute /agents/** or /workspaces/** stream path of the workspace the board renders. */
       workspace: string;
       /** Absolute /repos/** path of the repo whose task files the board shows. */
       repo: string;
@@ -134,7 +134,7 @@ export const DocsApp = {
 };
 
 export function requireWorkspacePath(value: string): string {
-  if (!value.startsWith("/workspaces/")) {
+  if (!value.startsWith("/workspaces/") && !value.startsWith("/agents/")) {
     throw new Error(`invalid workspace path: ${JSON.stringify(value)}`);
   }
   return requireCanonicalPath(value, "workspace path");
@@ -142,20 +142,20 @@ export function requireWorkspacePath(value: string): string {
 
 /**
  * A document path is either relative (resolved against a workspace when the
- * document opens) or a fully qualified stream path (e.g.
- * "/workspaces/agents/you/review.md", "/repos/config/docs/plan.md").
+ * document opens) or an absolute workspace file path (e.g.
+ * "/workspace/review.md", "/repos/config/docs/plan.md").
  */
 export function requireDocumentPath(value: string): string {
   const path = requireCanonicalPath(value, "document path");
   if (!/\.(?:html?|markdown|md)$/i.test(path)) {
     throw new Error("document path must end in .md, .markdown, .html, or .htm");
   }
-  // An ABSOLUTE document path must be a fully qualified stream path — the
+  // An ABSOLUTE document path must be an absolute workspace file path — the
   // only places a workspace can actually read or write. A bare "/review.md"
   // would validate here and then dead-end on the workspace's write guard.
-  if (path.startsWith("/") && !path.startsWith("/workspaces/") && !path.startsWith("/repos/")) {
+  if (path.startsWith("/") && !path.startsWith("/workspace/") && !path.startsWith("/repos/")) {
     throw new Error(
-      'an absolute document path must be fully qualified (under "/workspaces/" or "/repos/"); use a relative path to target the workspace\'s own directory',
+      'an absolute document path must be fully qualified (under "/workspace/" or "/repos/"); use a relative path to target the workspace\'s own directory',
     );
   }
   return path;
@@ -163,14 +163,14 @@ export function requireDocumentPath(value: string): string {
 
 /**
  * Any workspace file path: relative (resolved against a workspace's own
- * directory when used) or a fully qualified stream path under "/workspaces/"
+ * directory when used) or an absolute workspace file path under "/workspace/"
  * or "/repos/" — the document rule minus the extension check.
  */
 export function requireWorkspaceFilePath(value: string): string {
   const path = requireCanonicalPath(value, "file path");
-  if (path.startsWith("/") && !path.startsWith("/workspaces/") && !path.startsWith("/repos/")) {
+  if (path.startsWith("/") && !path.startsWith("/workspace/") && !path.startsWith("/repos/")) {
     throw new Error(
-      'an absolute file path must be fully qualified (under "/workspaces/" or "/repos/"); use a relative path to target the workspace\'s own directory',
+      'an absolute file path must be fully qualified (under "/workspace/" or "/repos/"); use a relative path to target the workspace\'s own directory',
     );
   }
   return path;

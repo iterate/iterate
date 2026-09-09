@@ -137,7 +137,6 @@ import {
 } from "./domains/sandboxes/sandbox-processor-contract.ts";
 import { linkRepoToGithub, unlinkRepoFromGithub } from "./domains/repos/github-link.ts";
 import {
-  agentWorkspacePath,
   effectiveWorkspaceMounts,
   normalizeWorkspaceMountKeys,
   normalizeWorkspacePath,
@@ -2470,11 +2469,10 @@ class SandboxCollectionRpcTarget extends IterateRpcTarget<"SandboxCollection"> {
 /**
  * Catalog of durable workspaces within one project: EVENT-SOURCED,
  * MOUNT-ROUTED workspace filesystems (Durable-Object-hosted, no container,
- * always warm). Every workspace is addressed by its FULL path under
- * `/workspaces/` — the same domain-prefix convention as `/sandboxes/...` and
- * `/repos/...`: an agent's workspace is the agent path under the prefix
- * (`/workspaces/agents/...`, exposed as `itx.workspace` in that agent's
- * scope), and standalone workspaces live under `/workspaces/<anything>`.
+ * always warm). Agent workspaces share their agent's FULL path under `/agents/`
+ * (exposed as `itx.workspace` in that agent's scope). Standalone workspaces
+ * live under `/workspaces/<anything>`. These identities address streams;
+ * private files inside either kind of workspace live under `/workspace/`.
  *
  * A workspace's identity + configuration are stream facts. `get(path)` only
  * addresses a handle; `get(path).create({ mounts? })` appends the atomic birth
@@ -2484,7 +2482,7 @@ class WorkspaceCollectionRpcTarget extends IterateRpcTarget<"WorkspaceCollection
   async __describe(): Promise<Description> {
     return describeNode({
       instructions:
-        'Event-sourced, mount-routed workspaces. get("/workspaces/<name>") returns a handle without creating anything; call handle.create({ mounts? }) once before use. list() every created workspace (the project catalog of copied workspace/created facts). Every project repo is mounted at its own /repos/** path automatically (commit-to-main); supplied mounts are overlay DEVIATIONS committed atomically as an initial configured patch. An agent\'s own workspace is its agent path under the prefix (what itx.workspace resolves to).',
+        'Event-sourced, mount-routed workspaces. get("/workspaces/<name>") returns a handle without creating anything; call handle.create({ mounts? }) once before use. list() every created workspace (the project catalog of copied workspace/created facts). Every project repo is mounted at its own /repos/** path automatically (commit-to-main); supplied mounts are overlay DEVIATIONS committed atomically as an initial configured patch. An agent\'s own workspace shares its /agents/** path (what itx.workspace resolves to).',
       children: {
         get: "A possibly nonexistent workspace handle; call get(path).create({ mounts? }) before use.",
         list: "Known workspaces: every workspace/created copied to the project catalog.",
@@ -2521,14 +2519,13 @@ class WorkspaceCollectionRpcTarget extends IterateRpcTarget<"WorkspaceCollection
  * HEAD, writes land in a private copy-on-write local layer (large files spill
  * to R2 transparently), and `git.commit({ scope })` turns ONE mount's changes
  * into one commit on that repo's main (honoring the mount's policy). Private
- * files live only under the workspace's own path (relative paths resolve
- * there); writes anywhere else error. The `.git` name is reserved
- * (platform-managed).
+ * files live only under /workspace (relative paths resolve there); writes
+ * anywhere else error. The `.git` name is reserved (platform-managed).
  */
 class WorkspaceRpcTarget extends IterateRpcTarget<"Workspace"> {
   async __describe(): Promise<Description> {
     return describeNode({
-      instructions: `A workspace at "${this.props.path}" — your private working copy of the project's one path namespace. Every project repo is mounted at its own /repos/** path automatically (reads track that repo's latest main until a local write shadows a path; a freshly created repo just appears). Private files live under the workspace's own directory ("${this.props.path}/..."; relative paths resolve there) — writable anywhere under it, never committable. Writes under a mounted repo stay in a private overlay until git.commit({ message, scope? }) commits ONE mount's changes to that repo's main (read-only mounts reject commits; scope is required when more than one mount is dirty). Writes anywhere else error loudly.`,
+      instructions: `A workspace at "${this.props.path}" — your private working copy of the project's one path namespace. Every project repo is mounted at its own /repos/** path automatically (reads track that repo's latest main until a local write shadows a path; a freshly created repo just appears). Private files live under "/workspace/..." (relative paths resolve there) — writable anywhere under it, never committable. Writes under a mounted repo stay in a private overlay until git.commit({ message, scope? }) commits ONE mount's changes to that repo's main (read-only mounts reject commits; scope is required when more than one mount is dirty). Writes anywhere else error loudly.`,
       children: {
         create:
           "Create this workspace (every project repo is auto-mounted at its /repos/** path; optional mounts are overlay deviations); waits through the atomic birth batch and returns this handle.",
@@ -5152,7 +5149,7 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
   ): Promise<AgentRpcTarget> {
     const workspace = new WorkspaceRpcTarget({
       auth: this.#props.auth,
-      path: agentWorkspacePath(this.#path),
+      path: this.#path,
       projectId: this.#props.projectId,
     });
     const workspaceReady = workspace.create({});
@@ -6619,7 +6616,7 @@ const PROJECT_BUILTIN_BLIPS: Record<string, string> = {
   worker: "The default repo-backed project worker.",
   workers: "Dynamic worker refs: get(ref).",
   workspaces:
-    "Event-sourced, mount-routed workspaces by path: get(\"/workspaces/<name>\") returns a possibly nonexistent handle; handle.create({}) commits the atomic birth batch; list() every created workspace. Every project repo is auto-mounted at its own /repos/** path; private files live under the workspace's own path. git.commit({ scope? }) commits per mount. An agent's own workspace is itx.workspace.",
+    'Event-sourced, mount-routed workspaces by path: get("/workspaces/<name>") returns a possibly nonexistent handle; handle.create({}) commits the atomic birth batch; list() every created workspace. Every project repo is auto-mounted at its own /repos/** path; private files live under /workspace. git.commit({ scope? }) commits per mount. An agent\'s own workspace is itx.workspace.',
 };
 
 type ExistingProjectRpcTargetProps = {
