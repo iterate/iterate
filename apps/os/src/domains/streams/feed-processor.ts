@@ -15,12 +15,7 @@ import {
   type AgentUiState,
 } from "@iterate-com/ui/components/events/agent-ui-reducer";
 import { AgentRuntimeTransition } from "../agents/agent-processor-contract.ts";
-import {
-  FEED_ITEM_PUBLISHED,
-  FeedItemPublication,
-  FeedProcessorContract,
-  type FeedLiveState,
-} from "./feed-contract.ts";
+import { FeedItemPublication, FeedProcessorContract, type FeedLiveState } from "./feed-contract.ts";
 
 type FeedState = ReturnType<typeof FeedProcessorContract.stateSchema.parse>;
 
@@ -29,7 +24,7 @@ export function reduceFeed(
   state: FeedState,
   event: StreamEvent,
 ): { state: FeedState; items: AgentUiItem[] } {
-  if (event.ephemeral || event.type === FEED_ITEM_PUBLISHED) {
+  if (event.ephemeral || event.type === "events.iterate.com/feed/item-published") {
     return { state, items: [] };
   }
   if (event.type === "events.iterate.com/agent/runtime-changed") {
@@ -107,7 +102,7 @@ export class FeedProcessor extends StreamProcessor<
   protected override processEvent(args: ProcessEventArgs<FeedProcessorContract>): undefined {
     // Wildcard consumption includes domain events beyond the named ephemeral types.
     const event: StreamEvent | null = args.event;
-    if (!event || event.type === FEED_ITEM_PUBLISHED) return;
+    if (!event || event.type === "events.iterate.com/feed/item-published") return;
     if (event.ephemeral) {
       if (event.offset <= this.#volatileThroughOffset) return;
       this.#volatileThroughOffset = event.offset;
@@ -148,6 +143,8 @@ export class FeedProcessor extends StreamProcessor<
       advanceVolatile();
       return;
     }
+    // Losing this consequence would permanently omit an item from browser feeds.
+    // Block cursor advancement until its idempotent publication is committed.
     args.blockProcessorWhile(async () => {
       const publications = items.map((item, ordinal) => {
         const previous = this.deps.publications.get(item.id);
@@ -160,7 +157,7 @@ export class FeedProcessor extends StreamProcessor<
       });
       const committed = await args.append(
         ...publications.map<EmittedInput<FeedProcessorContract>>((publication) => ({
-          type: FEED_ITEM_PUBLISHED,
+          type: "events.iterate.com/feed/item-published",
           payload: publication,
           idempotencyKey: this.idempotencyKey(`v1/${publication.item.id}`, event),
         })),

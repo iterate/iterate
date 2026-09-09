@@ -34,8 +34,18 @@ import {
 
 const MAX_REPLAY_GAP = 2_000;
 const MAX_QUEUED_EVENTS = 20_000;
+// Stop a repeated failure instead of polling forever; returning online/visible
+// starts a fresh bounded attempt, and the view exposes a manual retry as well.
 const MAX_RECONNECT_ATTEMPTS = 8;
 const IDLE_DISPOSE_MS = 2_000;
+// Small pages bound catch-up writes; RPC deadlines and probes detect dead sockets.
+const CATCHUP_PAGE_LIMIT = 500;
+const RPC_TIMEOUT_MS = 10_000;
+const LIVENESS_PROBE_INTERVAL_MS = 5_000;
+// A stable connection earns a fresh failure budget; brief flaps do not.
+const HEALTHY_CONNECTION_MS = 30_000;
+const RECONNECT_BASE_DELAY_MS = 250;
+const RECONNECT_MAX_DELAY_MS = 5_000;
 
 export type StreamBrowserSnapshot = {
   connectionStatus:
@@ -43,7 +53,7 @@ export type StreamBrowserSnapshot = {
     | "reconnecting"
     | "opening-event-callback"
     | "receiving-events";
-  databaseRole: "idle" | "electing" | "writer" | "reader";
+  databaseRole: "idle" | "writer" | "reader";
   clearVersion: number;
   connectionError: string | undefined;
   databaseInfo: StreamDatabaseInfo | undefined;
@@ -53,11 +63,10 @@ export type BrowserStreamMetrics = {
   transportRttMs: LatencyStats | null;
   eventConsumption: EventConsumptionMetricsReport | undefined;
 };
-export type StreamRpcResult<T> = Promise<T> & Disposable;
 export type StreamBrowserStore = Disposable & {
   readonly streamDatabase: StreamBrowserDatabase;
-  appendBatch(args: { events: StreamEventInput[] }): StreamRpcResult<StreamEvent[]>;
-  runtimeState(): StreamRpcResult<StreamRuntimeState>;
+  appendBatch(args: { events: StreamEventInput[] }): Promise<StreamEvent[]>;
+  runtimeState(): Promise<StreamRuntimeState>;
   metrics(): BrowserStreamMetrics;
   noteExternalAppend(args: { maxCommittedOffset: number; t0: number }): void;
   clearLocalDatabase(): Promise<void>;
@@ -186,7 +195,7 @@ function createStreamMirror(
     try {
       const result = await raceWithTimeout(
         Promise.resolve(request()),
-        10_000,
+        RPC_TIMEOUT_MS,
         "stream RPC timed out",
       );
       transportRtt.record(Date.now() - startedAt, Date.now());
@@ -216,7 +225,7 @@ function createStreamMirror(
       },
     });
     try {
-      return await raceWithTimeout(opening, 10_000, "stream connection timed out");
+      return await raceWithTimeout(opening, RPC_TIMEOUT_MS, "stream connection timed out");
     } catch (error) {
       // A timed-out open may resolve later. It must not leak a socket/stub.
       void opening.then(
@@ -277,7 +286,7 @@ function createStreamMirror(
       const caughtUp = await catchUpToLiveReplayBoundary({
         afterOffset: mirror.throughOffset,
         throughOffset: head.streamMaxOffset,
-        pageLimit: 500,
+        pageLimit: CATCHUP_PAGE_LIMIT,
         maxReplayOffsetGap: MAX_REPLAY_GAP,
         expectedStreamId: head.streamId,
         shouldContinue: isCurrent,
@@ -364,7 +373,7 @@ function createStreamMirror(
           .finally(() => {
             checking = false;
           });
-      }, 5_000);
+      }, LIVENESS_PROBE_INTERVAL_MS);
       throw await ended;
     } finally {
       clearInterval(heartbeat);
@@ -420,7 +429,7 @@ function createStreamMirror(
             return;
           } catch (error) {
             if (disposed || writer !== role) return;
-            if (healthySince > 0 && Date.now() - healthySince >= 30_000) attempt = 0;
+            if (healthySince > 0 && Date.now() - healthySince >= HEALTHY_CONNECTION_MS) attempt = 0;
             if (!canReconnect(error) || attempt >= MAX_RECONNECT_ATTEMPTS) {
               publish({ connectionStatus: "error", connectionError: errorMessage(error) });
               console.error("stream event synchronization stopped", {
@@ -435,7 +444,10 @@ function createStreamMirror(
             }
             publish({ connectionStatus: "reconnecting", connectionError: errorMessage(error) });
             await new Promise((resolve) =>
-              setTimeout(resolve, Math.min(5_000, 250 * 2 ** attempt)),
+              setTimeout(
+                resolve,
+                Math.min(RECONNECT_MAX_DELAY_MS, RECONNECT_BASE_DELAY_MS * 2 ** attempt),
+              ),
             );
           }
         }
@@ -470,6 +482,13 @@ function createStreamMirror(
     }, IDLE_DISPOSE_MS);
   }
 
+  const resume = () => {
+    void store.nudge();
+  };
+  const onVisibilityChange = () => {
+    if (document.visibilityState === "visible") resume();
+  };
+
   const store: StreamBrowserStore = {
     streamDatabase,
     appendBatch({ events: input }) {
@@ -492,18 +511,17 @@ function createStreamMirror(
             if (disposed || !canReconnect(error) || attempt >= MAX_RECONNECT_ATTEMPTS) throw error;
             active?.abort.abort(error);
             await new Promise((resolve) =>
-              setTimeout(resolve, Math.min(5_000, 250 * 2 ** attempt)),
+              setTimeout(
+                resolve,
+                Math.min(RECONNECT_MAX_DELAY_MS, RECONNECT_BASE_DELAY_MS * 2 ** attempt),
+              ),
             );
           }
         }
       })();
-      return Object.assign(result, { [Symbol.dispose]() {} });
+      return result;
     },
-    runtimeState: () =>
-      Object.assign(
-        withClient((client) => client.runtimeState()),
-        { [Symbol.dispose]() {} },
-      ),
+    runtimeState: () => withClient((client) => client.runtimeState()),
     metrics: () => ({
       transportRttMs: transportRtt.stats(),
       eventConsumption: active?.handle ? eventMetrics.report() : undefined,
@@ -511,8 +529,12 @@ function createStreamMirror(
     noteExternalAppend: ({ maxCommittedOffset, t0 }) =>
       eventMetrics.noteAppendCommitted({ maxCommittedOffset, t0, atMs: Date.now() }),
     async clearLocalDatabase() {
-      cacheReset = cacheReset.then(() =>
-        streamDatabase.batch(
+      cacheReset = cacheReset.then(async () => {
+        const tables = await streamDatabase.exec(
+          `SELECT name FROM sqlite_master WHERE name = 'stream_sync'`,
+        );
+        if (tables.length === 0) return;
+        await streamDatabase.batch(
           [
             { sql: `DELETE FROM events` },
             { sql: `DELETE FROM event_type_counts` },
@@ -522,12 +544,13 @@ function createStreamMirror(
             },
           ],
           { transaction: true },
-        ),
-      );
+        );
+      });
       await cacheReset;
       streamDatabase.notifyChanged({ kind: "reset" });
     },
     async nudge() {
+      if (disposed) return;
       if (!started) {
         start();
         return;
@@ -566,6 +589,12 @@ function createStreamMirror(
       disposed = true;
       clearTimeout(idleTimer);
       clearTimeout(infoTimer);
+      if (typeof window !== "undefined") {
+        window.removeEventListener("online", resume);
+        window.removeEventListener("pageshow", resume);
+      }
+      if (typeof document !== "undefined")
+        document.removeEventListener("visibilitychange", onVisibilityChange);
       offDatabaseChange();
       listeners.clear();
       synchronizationAbort?.abort(new StreamSyncDisconnected("stream mirror disposed"));
@@ -575,6 +604,12 @@ function createStreamMirror(
       onDispose();
     },
   };
+  if (typeof window !== "undefined") {
+    window.addEventListener("online", resume);
+    window.addEventListener("pageshow", resume);
+  }
+  if (typeof document !== "undefined")
+    document.addEventListener("visibilitychange", onVisibilityChange);
   debug.set(`${projectId} ${streamPath}`, () => ({
     ...snapshot,
     lastDeliveredOffset,

@@ -31,7 +31,7 @@ export const StreamViewSearch = z.object({
   types: z.array(z.string()).optional().catch(undefined),
   /**
    * Raw feed-item *kind* filter (any-of) — `feed_items.kind` values such as
-   * `raw.group`, `raw.stream.woken`, `raw.stream.child-stream-created`.
+   * `raw.event`, `raw.stream.woken`, `raw.stream.child-stream-created`.
    */
   components: z.array(z.string()).optional().catch(undefined),
   /** Inclusive lower offset bound for feed_items. */

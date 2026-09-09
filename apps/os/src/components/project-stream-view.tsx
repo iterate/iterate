@@ -222,9 +222,11 @@ function BrowserDatabaseProjectStreamView({
     streamPath,
   });
 
-  // Live state uses this tab's transport even when another tab owns event sync.
-  // Database ownership alone says nothing about whether writes can reach the server.
-  const streamTransportReady = feed.status === "live";
+  // Readers share another tab's event connection; a writer needs both its
+  // mirror and live state connected before another submission can be observed.
+  const streamTransportReady =
+    feed.status === "live" &&
+    (snapshot.databaseRole === "reader" || snapshot.connectionStatus === "receiving-events");
   // Busy = work is actively running, independent of chat-message timing.
   const agentBusy = isAgentUiActivityWorking(agentUiState?.live ?? null, agentRuntime);
   const presence = agentUiState?.presence ?? [];
@@ -427,7 +429,14 @@ function StreamComposerFooter({
   return (
     <div className="shrink-0 px-4 pb-2.5 pt-2.5">
       <div className="mx-auto flex w-full max-w-3xl flex-col gap-1.5">
-        {eventCount > 0 && composer.disabled ? (
+        {connectionStatus === "error" ? (
+          <div className="flex items-center gap-2 px-4 text-sm" role="alert" data-type="error">
+            <span>Live updates stopped.</span>
+            <Button size="sm" variant="outline" onClick={composer.onNudgeDeliveries}>
+              Retry
+            </Button>
+          </div>
+        ) : eventCount > 0 && composer.disabled ? (
           <p
             className="px-4 text-xs text-muted-foreground"
             data-testid="stream-cache-status"

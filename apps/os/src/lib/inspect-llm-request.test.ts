@@ -69,6 +69,30 @@ describe("bounded server LLM inspection", () => {
     );
   });
 
+  it("stops at this request's settlement before unrelated later responses exhaust the budget", async () => {
+    const read = reader([
+      event(1, "events.iterate.com/agent/llm-request-requested", { model: "test/model" }),
+      event(2, "events.iterate.com/agents/context-added", {
+        role: "assistant",
+        content: "done",
+        llmRequestOffset: 1,
+      }),
+      event(3, "events.iterate.com/agent/llm-request-settled", {
+        requestOffset: 1,
+        result: { status: "succeeded" },
+      }),
+      ...Array.from({ length: 10_001 }, (_, index) =>
+        event(index + 4, "events.iterate.com/agents/context-added", {
+          role: "assistant",
+          content: "later",
+          llmRequestOffset: 4,
+        }),
+      ),
+    ]);
+    expect((await inspectLlmRequest(read, 1))?.response?.text).toBe("done");
+    expect(read).toHaveBeenCalledTimes(3);
+  });
+
   it("stops a large history with an explicit inspection-window error", async () => {
     const events = Array.from({ length: 10_002 }, (_, index) =>
       event(index + 1, "events.iterate.com/agents/context-added", {

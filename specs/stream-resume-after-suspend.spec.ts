@@ -131,13 +131,18 @@ test("feed resumes after page freeze + socket death (mobile suspend shape)", asy
     await page.evaluate(() =>
       (window as unknown as { __armSuspendTimerProbe: () => void }).__armSuspendTimerProbe(),
     );
-    await cdp.send("Emulation.setScriptExecutionDisabled", { value: true });
+    // Disabling script execution discards one-shot timers that expire while
+    // disabled, permanently stranding retry promises. Pause the debugger so
+    // queued callbacks survive the suspension, as they do during a real freeze.
+    await cdp.send("Debugger.enable");
+    await cdp.send("Debugger.pause");
     // This sleep IS the suspend stimulus: wall-clock passing while the page
-    // is frozen (scripts disabled), so there is no UI to wait on.
+    // is paused, so there is no UI to wait on.
     // timeout: the stimulus itself — nothing for the spinner-waiter here
     await page.waitForTimeout(SUSPEND_STIMULUS_MS);
     await page.context().setOffline(false);
-    await cdp.send("Emulation.setScriptExecutionDisabled", { value: false });
+    await cdp.send("Debugger.resume");
+    await cdp.send("Debugger.disable");
     await expect
       .poll(async () => (await readSuspendTimerEvidence(page)).maxTimerGapMs, {
         message: "the armed page timer should remain suspended for the stimulus window",

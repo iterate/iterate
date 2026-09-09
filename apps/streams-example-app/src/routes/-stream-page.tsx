@@ -1588,14 +1588,14 @@ function InsertEventsTool({
         insertEventCount: string;
         insertBatchSize: string;
         periodSeconds: string;
-        appendResponseMode: "await" | "background" | "dispose";
+        appendResponseMode: "await" | "background";
         insertState: "idle" | "inserting" | "done" | "error";
       },
       action:
         | { type: "set-insert-event-count"; value: string }
         | { type: "set-insert-batch-size"; value: string }
         | { type: "set-period-seconds"; value: string }
-        | { type: "set-append-response-mode"; value: "await" | "background" | "dispose" }
+        | { type: "set-append-response-mode"; value: "await" | "background" }
         | { type: "set-insert-state"; value: "idle" | "inserting" | "done" | "error" },
     ) => {
       switch (action.type) {
@@ -1666,16 +1666,10 @@ function InsertEventsTool({
             if (insertState.appendResponseMode === "await") {
               pendingResponses.push(result);
             } else if (insertState.appendResponseMode === "background") {
-              // CapnWeb RpcPromises are lazy. Calling `.then()` starts the
-              // append without making this form wait for the returned events.
+              // Report background failures without waiting in the form.
               void result.then(undefined, (error: unknown) => {
                 console.error("background appendBatch failed", error);
               });
-            } else if (insertState.appendResponseMode === "dispose") {
-              // CapnWeb says callers should dispose RpcPromises they do not
-              // await. This option tests whether that still lets a write-only
-              // append reach the Durable Object before cancellation wins.
-              result[Symbol.dispose]();
             }
           }),
         ),
@@ -1751,18 +1745,12 @@ function InsertEventsTool({
           onChange={(event) =>
             dispatchInsertState({
               type: "set-append-response-mode",
-              value:
-                event.currentTarget.value === "dispose"
-                  ? "dispose"
-                  : event.currentTarget.value === "background"
-                    ? "background"
-                    : "await",
+              value: event.currentTarget.value === "background" ? "background" : "await",
             })
           }
         >
           <option value="await">Await</option>
           <option value="background">Background</option>
-          <option value="dispose">Dispose</option>
         </select>
       </label>
       <button

@@ -54,8 +54,7 @@ import { useTickingNowMs } from "~/lib/use-ticking-now-ms.ts";
 
 // The clean agent chat rows: user and assistant messages plus archived
 // activity rows ("Ran code 2× · 3 requests · 7.4 s"), and the live in-flight
-// activity tail. The rows are `agent.*` feed_items written by the browser-feed
-// projector; the virtualized list that windows over them lives in
+// activity tail. The rows are `agent.*` feed_items from server publications; the virtualized list that windows over them lives in
 // stream-feed-view.tsx — this file owns only how each item renders.
 
 // Memoized: the feed re-renders on every 16ms live-streaming tick, and settled

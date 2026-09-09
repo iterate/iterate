@@ -1,3 +1,4 @@
+import { StreamEvent } from "iterate/processors";
 import {
   memo,
   useCallback,
@@ -23,7 +24,7 @@ import type {
   SqlValue,
   StreamBrowserDatabase,
 } from "~/domains/streams/client-libraries/browser/stream-browser-db.ts";
-import { AGENT_KIND_PREFIX, type RawFeedItemData } from "~/domains/streams/feed-item-types.ts";
+import { AGENT_KIND_PREFIX } from "~/domains/streams/feed-item-types.ts";
 import { AgentFeedItemRow, AgentLiveActivity } from "~/components/agent-feed.tsx";
 import { useStickToBottom } from "~/lib/use-stick-to-bottom.ts";
 import {
@@ -43,11 +44,10 @@ type FeedRow = {
   error?: string;
   firstOffset: number;
   lastOffset: number;
-  eventCount: number;
   /** The settled chat item for `agent.*` rows. */
   agentItem: AgentUiItem | null;
-  /** The grouped raw events for `raw.*` rows. */
-  rawData: RawFeedItemData | null;
+  /** The individual raw event for `raw.*` rows. */
+  rawData: StreamEvent | null;
 };
 
 /**
@@ -408,7 +408,7 @@ function useRetainedFeedRows({
   // IS the virtualizer's row window in dense positions.
   const rowsResult = useStreamQuery(
     database,
-    `SELECT local_index, kind, first_offset, last_offset, event_count, json(data) AS data
+    `SELECT local_index, kind, first_offset, last_offset, json(data) AS data
      FROM feed_items WHERE ${whereSql}
      ORDER BY local_index ASC, ordinal ASC LIMIT ? OFFSET ?`,
     [...params, windowSize, queryOffset],
@@ -447,10 +447,8 @@ function useRetainedFeedRows({
             kind,
             firstOffset: Number(sqlRow.first_offset),
             lastOffset: Number(sqlRow.last_offset),
-            eventCount: Number(sqlRow.event_count),
             agentItem,
-            // Raw rows are constructed by the local SQL view from complete event records.
-            rawData: isAgent ? null : (parsed as RawFeedItemData),
+            rawData: isAgent ? null : StreamEvent.parse(parsed),
           },
         });
       } catch (error) {
@@ -460,7 +458,6 @@ function useRetainedFeedRows({
             kind,
             firstOffset: Number(sqlRow.first_offset),
             lastOffset: Number(sqlRow.last_offset),
-            eventCount: Number(sqlRow.event_count),
             agentItem: null,
             rawData: null,
             error: error instanceof Error ? error.message : String(error),
@@ -498,9 +495,8 @@ const RawFeedItemRow = memo(function RawFeedItemRow({
   row: FeedRow;
 }) {
   const data = row.rawData;
-  const eventType =
-    data != null && "eventType" in data ? data.eventType : (data?.events[0]?.type ?? row.kind);
-  const createdAt = data?.events[0]?.createdAt;
+  const eventType = data?.type ?? row.kind;
+  const createdAt = data?.createdAt;
   const createdAtMs = createdAt == null ? null : Date.parse(createdAt);
   const deltaMs =
     previousTimestampMs == null || createdAtMs == null || Number.isNaN(createdAtMs)
@@ -521,17 +517,8 @@ const RawFeedItemRow = memo(function RawFeedItemRow({
         "hover:bg-muted/60 hover:text-foreground",
       )}
     >
-      <span className="shrink-0 tabular-nums text-muted-foreground/70">
-        {row.firstOffset === row.lastOffset
-          ? `#${row.firstOffset}`
-          : `#${row.firstOffset}–${row.lastOffset}`}
-      </span>
+      <span className="shrink-0 tabular-nums text-muted-foreground/70">#{row.firstOffset}</span>
       <span className="min-w-0 truncate text-foreground/80">{shortEventType(eventType)}</span>
-      {row.eventCount > 1 ? (
-        <span className="shrink-0 tabular-nums text-muted-foreground/60">
-          ×{row.eventCount.toLocaleString()}
-        </span>
-      ) : null}
       <span className="ml-auto flex shrink-0 items-baseline gap-2.5 tabular-nums">
         {deltaMs != null ? (
           <span
@@ -559,7 +546,7 @@ const RawFeedItemRow = memo(function RawFeedItemRow({
 function rowLastTimestampMs(row: FeedRow | undefined): number | null {
   if (row == null) return null;
   if (row.rawData != null) {
-    const createdAt = row.rawData.events.at(-1)?.createdAt;
+    const createdAt = row.rawData.createdAt;
     const parsed = createdAt == null ? Number.NaN : Date.parse(createdAt);
     return Number.isNaN(parsed) ? null : parsed;
   }

@@ -356,9 +356,10 @@ event; it does not mean the destination path implicitly selects a processor.
   recovery because the Containers SDK owns that object's single alarm. The
   addressed sandbox handle exposes `processor` and `liveState` and dynamically
   replays the remaining Cloudflare Sandbox SDK surface onto the claimed stub.
-- Browser raw-event, feed, and composite processors are client-side
-  projections over existing streams. They do not declare durable domain
-  existence and therefore have no domain birth.
+- The Feed facet is a platform subscription installed when each stream boots.
+  It publishes immutable complete feed revisions and exposes volatile live
+  presentation without a domain birth. Browsers mirror durable events and
+  query those publications through a SQLite view; they run no processors.
 - The project worker is a worker-hosted subscriber with its own durable
   delivery cursor, not a path-created domain object.
 - Custom-domain events are reduced and acted on by ProjectProcessor; there is

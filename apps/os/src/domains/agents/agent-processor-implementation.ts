@@ -55,6 +55,8 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
   protected override processEvent(args: ProcessEventArgs<AgentProcessorContract>): undefined {
     const transition = args.state.runtimeChange;
     if (transition && transition.sinceOffset !== args.previousState.runtimeChange?.sinceOffset) {
+      // A dropped transition could leave the feed activity permanently unsettled.
+      // Commit the idempotent runtime fact before advancing this event's cursor.
       args.blockProcessorWhile(() =>
         args.append({
           type: "events.iterate.com/agent/runtime-changed",

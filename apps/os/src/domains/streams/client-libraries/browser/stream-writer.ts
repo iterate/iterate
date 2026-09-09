@@ -23,13 +23,7 @@ export type WriterRole = {
   release(): void;
 };
 
-export function acquireWriterRole(args: {
-  lockName: string;
-  /**
-   * "exclusive" elects a writer; "shared" can observe an existing writer's release.
-   */
-  mode?: "exclusive" | "shared";
-}): WriterRole {
+export function acquireWriterRole(args: { lockName: string }): WriterRole {
   let releaseLock = () => {};
   // The lock is held until this promise resolves; resolving it === resigning.
   const held = new Promise<void>((resolve) => {
@@ -53,14 +47,10 @@ export function acquireWriterRole(args: {
   // settles, so the callback's `await held` then returns and frees the lock.
   const abortController = new AbortController();
   navigator.locks
-    .request(
-      args.lockName,
-      { mode: args.mode ?? "exclusive", signal: abortController.signal },
-      async () => {
-        signalWriter();
-        await held;
-      },
-    )
+    .request(args.lockName, { mode: "exclusive", signal: abortController.signal }, async () => {
+      signalWriter();
+      await held;
+    })
     .catch((error: unknown) => {
       // AbortError is the expected outcome of release()-before-grant; anything else is a
       // genuine failure to acquire the lock and must not be swallowed silently.

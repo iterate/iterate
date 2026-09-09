@@ -23,6 +23,7 @@ export async function inspectLlmRequest(
   const rawEventJsons: string[] = [];
   let eventCount = 0;
   let bytes = 0;
+  const encoder = new TextEncoder();
   // The prompt is a prefix. Later reads only need response lifecycle types;
   // unrelated requests cannot expand the prompt reconstruction work.
   for (const window of [
@@ -30,6 +31,7 @@ export async function inspectLlmRequest(
     { after: llmRequestOffset, through: head.streamMaxOffset, eventTypes: RESPONSE_EVENT_TYPES },
   ]) {
     let afterOffset = window.after;
+    let settled = false;
     while (afterOffset < window.through) {
       const page = await readPage({
         afterOffset,
@@ -44,13 +46,20 @@ export async function inspectLlmRequest(
       for (const event of page.events) {
         const json = JSON.stringify(event);
         eventCount++;
-        bytes += new TextEncoder().encode(json).byteLength;
+        bytes += encoder.encode(json).byteLength;
         if (eventCount > MAX_EVENTS || bytes > MAX_BYTES) {
           throw new Error("LLM inspection window exceeded (10,000 events or 16 MiB)");
         }
         rawEventJsons.push(json);
+        if (
+          event.type === "events.iterate.com/agent/llm-request-settled" &&
+          event.payload?.requestOffset === llmRequestOffset
+        ) {
+          settled = true;
+          break;
+        }
       }
-      if (page.events.length < PAGE_SIZE) break;
+      if (settled || page.events.length < PAGE_SIZE) break;
       const nextOffset = page.events.at(-1)!.offset;
       if (nextOffset <= afterOffset) throw new Error("LLM inspection page did not advance");
       afterOffset = nextOffset;

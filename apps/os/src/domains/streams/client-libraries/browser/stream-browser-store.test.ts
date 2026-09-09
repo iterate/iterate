@@ -173,6 +173,34 @@ function event(offset: number, ephemeral = false): StreamEvent {
 }
 
 describe("browser durable event synchronization", () => {
+  it("bounds a transport outage and resumes when the browser comes back online", async () => {
+    vi.useFakeTimers();
+    const browser = new EventTarget();
+    vi.stubGlobal("window", browser);
+    const stopped = vi.spyOn(console, "error").mockImplementation(() => {});
+    const h = setup([event(1)]);
+    const healthyRead = h.getEventPage.getMockImplementation()!;
+    h.getEventPage.mockRejectedValue(new Error("Peer closed WebSocket: 1006"));
+    try {
+      await vi.advanceTimersByTimeAsync(25_000);
+      expect(h.store.getSnapshot()).toMatchObject({ connectionStatus: "error" });
+      expect(h.getEventPage).toHaveBeenCalledTimes(9);
+      expect(stopped).toHaveBeenCalledOnce();
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(h.getEventPage).toHaveBeenCalledTimes(9);
+
+      h.getEventPage.mockImplementation(healthyRead);
+      browser.dispatchEvent(new Event("online"));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(h.store.getSnapshot().connectionStatus).toBe("receiving-events");
+      expect(h.db.prepare("SELECT offset FROM events").all()).toEqual([{ offset: 1 }]);
+    } finally {
+      h.store[Symbol.dispose]();
+      stopped.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
   it("copies durable history and opens a durable-only callback with the initial user identity", async () => {
     const h = setup([event(1), event(2, true), event(3)]);
     await vi.waitFor(() => expect(h.store.getSnapshot().connectionStatus).toBe("receiving-events"));

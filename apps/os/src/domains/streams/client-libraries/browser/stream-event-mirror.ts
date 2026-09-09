@@ -2,6 +2,7 @@ import type { StreamEventBatch } from "iterate/processors";
 import type { SqlClient } from "./stream-browser-db.ts";
 
 /** Copies selected events verbatim. Normal browser subscriptions select only durable events. */
+// Raw rows use INT_MAX as their tie-breaker to follow pretty rows at the same offset.
 export async function openStreamEventMirror(
   sql: SqlClient,
   source: { streamId: string; streamMaxOffset: number },
@@ -44,7 +45,7 @@ export async function openStreamEventMirror(
             'agent.' || json_extract(raw_jsonb, '$.payload.item.kind') AS kind,
             json_extract(raw_jsonb, '$.payload.firstOffset') AS first_offset,
             json_extract(raw_jsonb, '$.payload.revisionOffset') AS last_offset,
-            1 AS event_count, jsonb_extract(raw_jsonb, '$.payload.item') AS data
+            jsonb_extract(raw_jsonb, '$.payload.item') AS data
           FROM events AS item WHERE type = 'events.iterate.com/feed/item-published'
             AND NOT EXISTS (
               SELECT 1 FROM events AS newer
@@ -60,9 +61,9 @@ export async function openStreamEventMirror(
               WHEN 'events.iterate.com/stream/created' THEN 'raw.stream.created'
               WHEN 'events.iterate.com/stream/woken' THEN 'raw.stream.woken'
               WHEN 'events.iterate.com/stream/child-stream-created' THEN 'raw.stream.child-stream-created'
-              ELSE 'raw.group' END AS kind,
-            offset AS first_offset, offset AS last_offset, 1 AS event_count,
-            jsonb_object('eventType', type, 'events', jsonb_array(raw_jsonb)) AS data
+              ELSE 'raw.event' END AS kind,
+            offset AS first_offset, offset AS last_offset,
+            raw_jsonb AS data
           FROM events`,
       },
       {

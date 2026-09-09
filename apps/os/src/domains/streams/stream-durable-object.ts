@@ -1225,9 +1225,8 @@ export class StreamDurableObject extends DurableObject<Env> {
         if ("APP_CONFIG_POSTHOG" in this.env) this.append(posthogSubscriptionEvent());
       }
     }
-    // The deployment's presentation facet is a platform subscription. Installing
-    // it on boot also upgrades existing streams: its durable cursor starts at
-    // zero, so ordinary hosted delivery backfills the complete source history.
+    // The presentation facet is a platform subscription whose durable cursor
+    // starts at zero, so hosted delivery publishes the complete source history.
     if (
       "FeedFacet" in this.ctx.exports &&
       !this.#coreProcessorState.subscriptions.outbound.byName.feed

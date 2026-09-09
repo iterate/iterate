@@ -220,9 +220,9 @@ describe("feed queries over immutable events", () => {
       sql.exec(`SELECT local_index, kind FROM feed_items ORDER BY local_index, ordinal`);
     const before = await positions();
     expect(before.slice(0, 4)).toEqual([
-      { local_index: 1, kind: "raw.group" },
-      { local_index: 2, kind: "raw.group" },
-      { local_index: 3, kind: "raw.group" },
+      { local_index: 1, kind: "raw.event" },
+      { local_index: 2, kind: "raw.event" },
+      { local_index: 3, kind: "raw.event" },
       { local_index: 4, kind: "agent.user" },
     ]);
     await mirror.ingest({ ...batch([5], 4), events: [publish(5, "corrected")] });

@@ -17,6 +17,7 @@ vi.mock("./agent-pill-composer.tsx", () => ({
 vi.mock("./example-events-panel.tsx", () => ({ ExampleEventsPanel: () => null }));
 
 test("keeps submission pending between append response and server acknowledgement, including a no-op result", async () => {
+  vi.useFakeTimers();
   const host = document.createElement("div");
   const root = createRoot(host);
   const committed = StreamEvent.parse({
@@ -57,9 +58,13 @@ test("keeps submission pending between append response and server acknowledgemen
     // Intermediate live updates (including an unresolved mention) cannot clear it.
     await render(9);
     expect(host.textContent).toBe("pending");
+    await act(async () => vi.advanceTimersByTimeAsync(30_000));
+    expect(host.textContent).toBe("ready");
+    expect(view.props!.error).toContain("Message saved");
     // The acknowledgement can describe no work; no busy transition is required.
     await render(10);
     expect(host.textContent).toBe("ready");
+    expect(view.props!.error).toBeUndefined();
     // If the next acknowledgement arrives before the RPC result, there is no extra wait.
     await act(async () => view.props!.message!.onValueChange({ content: "Again" }));
     await act(async () => {
@@ -68,5 +73,6 @@ test("keeps submission pending between append response and server acknowledgemen
     expect(host.textContent).toBe("ready");
   } finally {
     await act(async () => root.unmount());
+    vi.useRealTimers();
   }
 });

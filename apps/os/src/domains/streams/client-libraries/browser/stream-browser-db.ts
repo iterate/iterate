@@ -277,8 +277,8 @@ export class StreamBrowserDatabase implements Disposable {
       return { data, status: "ok", error: undefined };
     } catch (error) {
       if (error instanceof Error && error.message.includes("no such table")) {
-        // A view's table may not exist until its processor's first write creates it. Treat
-        // that as an empty result (count 0 / no rows) rather than a surfaced error.
+        // The first mirror connection creates the event tables. Queries can
+        // mount before that connection opens, so a missing table is empty.
         return { data: emptyTableRows(entry.sql), status: "ok", error: undefined };
       }
       console.error(`[stream-browser-db ${this.streamPath}] SQLite query failed`, {
@@ -379,9 +379,8 @@ export class StreamBrowserDatabase implements Disposable {
 // OPFS layout: one folder per projectId, one SQLite file per stream path inside it.
 // Bump this when browser OPFS state can leave the local cache unusable. The
 // database contains replayable cache data, so a new version may use a new file.
-// "v4" is the itx namespace: older clients on the same origin use "v3", so
-// old and new code cannot open or clear each other's files.
-const DATABASE_CACHE_VERSION = "v5";
+// Versioned paths keep old and new code from opening or clearing each other's files.
+const DATABASE_CACHE_VERSION = "v6";
 
 /** OPFS path for one stream's local SQLite cache. */
 export function databasePathFor(projectId: string, streamPath: string) {

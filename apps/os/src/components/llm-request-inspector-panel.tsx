@@ -43,6 +43,7 @@ export function LlmRequestInspectorContent({
     [llmRequestOffset, llmRequestOffset, llmRequestOffset],
   );
   const request = useQuery({
+    staleTime: Infinity,
     queryKey: ["llm-request", database.databasePath, llmRequestOffset, lifecycle.data[0]?.offset],
     queryFn: async () => {
       const stream = await streamSource(streamPath);

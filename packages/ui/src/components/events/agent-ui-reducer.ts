@@ -14,17 +14,10 @@ import type { Event } from "./types.ts";
 //
 // The agent UI is a clean chat: user message → activity ("Ran code 2× · 3
 // requests · 7.4 s") → assistant message, with quiet stream wake dividers.
-// SETTLED items are emitted in order; the browser-feed projector
-// (apps/os .../processors/browser-feed) interleaves them with raw feed rows
-// and allocates each one a `feed_items.local_index`. The reduced state holds
-// only what is still in flight — the live activity with partially streamed
-// thinking/response text and the presence roster. The live part renders as
-// one element below the list, straight from this state, and exists only
-// while work is active.
-//
-// `reduce` advances state one event at a time; `processEventBatch` plans the
-// whole batch from the same entry state to produce one idempotent SQLite
-// transaction.
+// Settled items are published by the server Feed facet as immutable revisions.
+// Browsers query those publications alongside raw events in a SQLite view.
+// Reduced state holds in-flight activity, streamed text and presence; the
+// server exposes that current presentation separately through live state.
 // ---------------------------------------------------------------------------
 
 export type AgentUiLlmStep = {
@@ -697,7 +690,7 @@ export function initialAgentUiState(): AgentUiState {
 
 /**
  * Fold ONE event into settled items + the resulting state. Items are appended
- * to `items` in emission order; the caller (the browser-feed projector) owns
+ * to `items` in emission order; the caller owns
  * list positions. Idempotent by construction: replaying the same event from
  * the same entry state yields the same items.
  */

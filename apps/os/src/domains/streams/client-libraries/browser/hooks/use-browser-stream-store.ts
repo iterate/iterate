@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useReducer, useSyncExternalStore } from "react";
+import { useCallback, useMemo, useReducer, useSyncExternalStore } from "react";
 import {
   acquireStreamRuntime,
   type StreamBrowserSnapshot,
@@ -47,9 +47,6 @@ export function useBrowserStreamStore(input: {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- reacquireEpoch drives the self-heal re-acquire.
     [createStreamClient, resetTransport, projectId, streamPath, subscriberUser, reacquireEpoch],
   );
-  useEffect(() => {
-    store.setSubscriberUser(input.subscriberUser);
-  }, [store, input.subscriberUser]);
   const subscribe = useCallback(
     (listener: () => void) => {
       if (store.isDisposed()) {

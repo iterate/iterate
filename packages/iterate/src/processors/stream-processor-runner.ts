@@ -164,7 +164,7 @@ export type ProcessorRecovery = {
 /**
  * The ONE optional durability adapter a hosting runtime hands the runner:
  * `progress` is required whenever the processor is durable at all (without the
- * adapter the runner keeps progress in memory — tests, ephemeral browser
+ * adapter the runner keeps progress in memory — tests, ephemeral
  * views); `recovery` is orthogonal and present only when the processor owns
  * background work that must survive eviction. This is deliberately where
  * every runtime-specific concern lives — no Cloudflare `ctx` in the runner.

@@ -11,8 +11,6 @@ import {
 } from "../agents/agent-processor-contract.ts";
 import { CoreProcessorContract } from "./core-processor-contract.ts";
 
-export const FEED_ITEM_PUBLISHED = "events.iterate.com/feed/item-published";
-
 /** Complete immutable revision. Position is retained when a late fact corrects the item. */
 export const FeedItemPublication = z.strictObject({
   item: AgentUiItemSchema,
@@ -47,7 +45,7 @@ export const FeedProcessorContract = defineProcessorContract({
   }),
   processorDeps: [AgentProcessorContract, CoreProcessorContract],
   events: {
-    [FEED_ITEM_PUBLISHED]: {
+    "events.iterate.com/feed/item-published": {
       description: "A complete renderable feed item revision, with a stable display position.",
       payloadSchema: FeedItemPublication,
     },
@@ -58,6 +56,6 @@ export const FeedProcessorContract = defineProcessorContract({
     "events.iterate.com/stream/connection-opened",
     "events.iterate.com/stream/connection-closed",
   ],
-  emits: [FEED_ITEM_PUBLISHED],
+  emits: ["events.iterate.com/feed/item-published"],
 });
 export type FeedProcessorContract = typeof FeedProcessorContract;
