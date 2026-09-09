@@ -60,6 +60,26 @@ test("a cold stream stays pending until its server history catches up", async ({
   using stream = project.streams.get(streamPath);
   await stream.append({ type: "events.iterate.com/spec/cold-history", payload: {} });
 
+  await page.addInitScript(() => {
+    let release = () => {};
+    const election = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    Object.assign(window, {
+      __releaseStreamWriter: release,
+      __streamWriterElection: "not-requested",
+    });
+    const request = navigator.locks.request;
+    // Preserve both Web Locks overloads while delaying only event-mirror election.
+    navigator.locks.request = (async (name: string, ...args: unknown[]) => {
+      if (name.startsWith("stream-event-sync:")) {
+        Object.assign(window, { __streamWriterElection: "waiting" });
+        await election;
+      }
+      return Reflect.apply(request, navigator.locks, [name, ...args]);
+    }) as typeof request;
+  });
+
   await page.routeWebSocket(
     (url) => url.pathname === "/api",
     (socket) => {
@@ -73,9 +93,19 @@ test("a cold stream stays pending until its server history catches up", async ({
   // The loading indicator is under test, so the spinner-waiter must not skip it.
   await spinnerWaiter.settings.run({ disabled: true }, async () => {
     await page.goto(`/projects/${fixture.project.slug}/streams${streamPath}`);
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () => (window as unknown as { __streamWriterElection: string }).__streamWriterElection,
+        ),
+      )
+      .toBe("waiting");
     await page.getByText("Connecting to the stream", { exact: true }).waitFor({ timeout: 30_000 }); // timeout: every WS frame is delayed by 1s; spinner-waiter is disabled because the loading state is under test
     await page.getByRole("button", { name: "Append events (⌘↵)", disabled: true }).waitFor();
     await page.getByText("Nothing here yet").waitFor({ state: "hidden" });
+    await page.evaluate(() =>
+      (window as unknown as { __releaseStreamWriter: () => void }).__releaseStreamWriter(),
+    );
     await page
       .getByTestId("stream-feed-inspect")
       .filter({ hasText: "spec/cold-history" })

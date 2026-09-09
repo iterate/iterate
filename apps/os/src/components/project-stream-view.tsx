@@ -373,12 +373,9 @@ function ProjectStreamFeed({
   const caps = modeCapabilities(search, streamPath);
   const feedSearch = (search.q ?? "").trim();
   const rawFilter = feedItemsFilterFromSearch(search, streamPath);
-  // Cached rows can paint immediately. Readers share the writer's database;
-  // an empty writer waits until reconciliation and callback setup complete.
-  const streamContentsReady =
-    eventCount > 0 ||
-    snapshot.databaseRole === "reader" ||
-    snapshot.connectionStatus === "receiving-events";
+  // Cached rows can paint immediately. An empty cache waits for history or
+  // callback readiness; a reader role alone may mean election is still pending.
+  const streamContentsReady = eventCount > 0 || snapshot.connectionStatus === "receiving-events";
   const error = snapshot.connectionError ?? feed.error;
   return (
     <StreamFeedView
@@ -560,11 +557,12 @@ function useProjectStreamData({
     { makeConnection: makeFeedConnection },
   );
   const presentedFeed = useEventSynchronizedLiveState(store.streamDatabase, feed.value);
-  // Readers share another tab's event connection; a writer needs both its
-  // mirror and live state connected before another submission can be observed.
+  // Readers need actual shared history, not merely a pending writer election.
+  // Both roles wait for the current live snapshot's publications to reach SQLite.
   const streamTransportReady =
     feed.status === "live" &&
-    (browserStore.snapshot.databaseRole === "reader" ||
+    presentedFeed === feed.value &&
+    ((browserStore.snapshot.databaseRole === "reader" && eventCount > 0) ||
       browserStore.snapshot.connectionStatus === "receiving-events");
   return {
     resolvedStreamSource,
