@@ -473,3 +473,21 @@ Order, each gate before the next:
   hour-one GPIO0 strap fault; needs an unplug, a tap on the right button, a
   replug) and still has to take the wake-word build; the wake-word bench on
   the HAVPE; round 2's consolidation list (#10) as the last codex chunk.
+
+## Design round 2: "adding a new ESP32 device should be easy" (2026-09-09, evening)
+
+Four independent designs, each under a different constraint, against the six real axes of difference (topology, echo cancellation, input, output, chips, power). Reports in the session scratchpad (`design2/report-{A,B,C,D}.md`).
+
+| | A: the table absorbs every axis | B: three seams (codec, input, output as ops + context) | C: three families (profiles that fill the table) | D: delete and move only |
+|---|---|---|---|---|
+| Shape | enums for topology/echo/chips/inputs/outputs; a pure posture rule | the hardware tasks pump a codec; `inputs[]`/`outputs[]` of ops structs; one gesture struct, one grammar | `dsp_audio` / `codec_audio` / `processor_audio` profiles, each a component that fills the table | the table untouched; the periphery consolidated |
+| Sixth board | ~110 lines | ~95 + files | ~80 (C says: a wash vs today's table) | ~71 lines in 4 files (today: 445 lines in 12 files + 4 touches) |
+| Fleet net | ≈ −1,000 (+2,900 shared, ~900 new) | ≈ −2,150 | ≈ −1,500 (−1,200 of it family 2) | ≈ −700 |
+| Cost | header 136→300; fixed enums with one implementation per value; boot-time validation | reworks `i2s_codec.c`'s tasks and StackChan's audio path; a UX change to StackChan's menu | two layers; ten fields repeated in three headers; family 3 has one member | Kconfig split over two files; `main/`-less targets are unusual |
+
+**Decision.** D now, B later, A and C not.
+
+- **D lands as chunk 7 (step 23).** The measured cost of a new board is the periphery, not the table: 245 of 445 lines are verbatim copies (target CMake, `main/`, the device header, the manifest, partitions, 61 identical sdkconfig lines, make-sounds.py, four `.gitignore`s, the CMake guard), and the table already writes the sixth board in ~60 lines. Every step is a move or a deletion with a mechanical proof (sdkconfig key→value maps equal, partition offsets equal, generated sounds byte-identical), the ESP-IDF facts it leans on were verified in the 5.4.2 source, and none of it changes behaviour, so it is safe to land with three boards off the bench.
+- **B is the right shape for the six axes and waits for a bench.** Ops structs with a context rhyme with `iterate_kit_audio_codec` and `iterate_kit_board_ops`, which is this codebase's idiom, and one gesture struct with one grammar removes the four grammar copies. But its codec seam re-plumbs the shared hardware tasks and StackChan's TDM path, which cannot be proven without the M5StickS3, the Waveshare and the StackChan connected; the three review rounds so far caught regressions on exactly those boards. Take it up in a chunk when they are on the desk, input and output seams first (no audio path), codec seam last.
+- **A is rejected**: a fixed list of kinds with one implementation per value (TDM_MASTER, ES7210_AW88298_BSP, two ES8311 values) is the framework the doctrine forbids, and it trades compile-time typing for boot-time validation of tagged rows. Its one durable insight, posture derived from facts instead of restated per board, lands in its smallest form as D's board.c defaults.
+- **C is rejected**: profiles are spec-objects layered over the table (profile → table → ops), three headers repeating ten fields, and C's own numbers say the sixth board is a wash. Its `core/mode.c` observation (HAVPE and StackChan carry the same NVS/adopt code) is real and goes with B's chunk.
