@@ -51,6 +51,15 @@ export interface BoardsOptions extends VoicelabConnectOptions {
    * stopped playing, only what the model eventually said.
    */
   barge?: boolean;
+  /**
+   * Wake the board by SAYING its wake word instead of pressing its button.
+   *
+   * The hands-free path is a different path: WakeNet on the board hears the
+   * Mac, the shared grammar gets a synthetic tap, the chime plays, and only
+   * then does a call start. A press-driven pass proves none of that. The
+   * word is spoken through the same speaker the prompt is.
+   */
+  wakeWord?: string;
 }
 
 /** One board, as this harness has to drive it. */
@@ -164,7 +173,12 @@ export async function boards(options: BoardsOptions) {
       };
 
       const askedAt = Date.now();
-      await kit.conversation.start();
+      if (options.wakeWord) {
+        console.error(`  saying "${options.wakeWord}"`);
+        await run("say", ["-r", "170", `${options.wakeWord}.`]);
+      } else {
+        await kit.conversation.start();
+      }
 
       let callActiveMs: number | null = null;
       for (let attempt = 0; attempt < 60; attempt++) {
