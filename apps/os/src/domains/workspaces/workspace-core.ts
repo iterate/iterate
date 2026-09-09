@@ -542,7 +542,7 @@ export class WorkspaceCore {
         if (!isPathUnder(path, under) || this.isMaskedFromMount(path)) continue;
         if (routeMount(mounts, path)?.mount !== mount || isVirtualDirectoryPath(mounts, path))
           continue;
-        entries.set(path, { ...file, path });
+        entries.set(path, { ...file, path, repoPath: mount.repoPath });
       }
     }
     for (const path of await this.#localFilePaths()) {

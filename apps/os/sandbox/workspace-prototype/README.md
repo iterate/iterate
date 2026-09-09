@@ -39,7 +39,7 @@ Only explicitly selected native directories bypass persistence. The mount refuse
 
 ## Consistency and recovery
 
-A command sees the manifest captured at its start. A cache miss checks that the workspace still contains that version; a concurrent change produces a conflict instead of returning mixed-version bytes. Source writes compare their original version with current DO state, including the collaborative editor's write queue. A conflicting editor write survives. Repeated writes with the same resulting content are idempotent.
+A command sees the manifest captured at its start. Committed files read their exact immutable Git blob directly from the repo DO; private/live files check that the workspace still contains that version. If a blob was pruned or a private file changed, a cache miss produces a conflict instead of returning mixed-version bytes. Source writes compare their original version with current DO state, including the collaborative editor's write queue. A conflicting editor write survives. Repeated writes with the same resulting content are idempotent.
 
 Writes synchronize after the command, including commands with nonzero exits. Each acknowledgement means that individual file is durable in the workspace. The group of writes is not atomic. If synchronization fails, the native upper and original manifest remain under `/workspace/.iterate-workspace-prototype/<scope>` and the next command refuses to run until they are recovered. An abrupt container loss before synchronization can lose pending edits; this is a command-boundary prototype, not continuous write-through storage. The immutable cache and native dependencies are disposable and are rebuilt after container replacement.
 
@@ -55,19 +55,19 @@ Live preview measurements are recorded below after running the reproducible proo
 
 ### Live preview result (2026-09-09)
 
-Stock basic container, preview-2 OS version `093da0a7-0e18-4909-8b7f-b8ca003a9e7b`, fixture `workspace-prototype-1788971359053`:
+Stock basic container, preview-2 OS version `5518a1ef-7bb3-4025-b27a-99c80fbf5f68`, fixture `workspace-prototype-1788972259663`:
 
 | Check                                                         | Result                                                                           |
 | ------------------------------------------------------------- | -------------------------------------------------------------------------------- |
-| Enumerate/stat 2,025 files                                    | 0 file payload bytes; 1.98s SDK execution including mount/cleanup                |
+| Enumerate/stat 2,025 files                                    | 0 file payload bytes; 2.08s SDK execution including mount/cleanup                |
 | Read private DO files, edit/create/delete in sandbox          | Correct DO state; 30B read, 21B written, one deletion                            |
 | Re-read a changed DO file in a later command                  | New version observed; next cached read transferred 0B                            |
 | Install TypeScript/types and generate 20,000 dependency files | `node_modules` on native ext4; 0 source uploads; compiler worked                 |
-| Read 100 distinct 4.2KB files, sequentially                   | Cold: 16.54s / 420,290B; warm: 23.4ms / 0B                                       |
-| Offline npm install, two samples per path                     | Native: 5.64s, 5.40s; mounted: 6.61s, 6.71s                                      |
+| Read 100 distinct 4.2KB files, sequentially                   | Cold: 6.47s / 420,290B; warm: 30.5ms / 0B                                        |
+| Offline npm install, two samples per path                     | Native: 6.20s, 8.10s; mounted: 6.90s, 6.90s                                      |
 | Destroy container, read uncommitted work in a new container   | Both files recovered from DO; dependencies empty; subsequent Git commit verified |
 
-Cold serial reads are **not yet fast enough**: avoiding a bulk copy shifts cost to a network round trip for each first read. Warm reads and native dependency storage validate the architecture, but the fifth goal remains a performance question, not a claimed success. Mounting/cleanup also adds per-command overhead (the cached `cat` itself took 10ms; its SDK execution took 1.17s). The native comparison uses a warmed package cache and two samples, not a statistical benchmark. Timings exclude fixture/bootstrap and the caller's manifest preparation/RPC overhead.
+Direct immutable reads bypass repeated workspace lifecycle/routing checks and base64 encoding. The first implementation took 16.54s for the same 100-file cold-read case; direct blob reads took 6.47s. **Cold serial reads still pay network latency** (about 65ms per file here), so the fifth goal is only partially demonstrated: cached reads and native dependencies are fast, while first-read latency remains material. Mounting/cleanup also adds per-command overhead (the cached `cat` itself took 32ms; its SDK execution took 391ms). The native comparison uses a warmed package cache and two samples, not a statistical benchmark. Timings exclude fixture/bootstrap and the caller's manifest preparation/RPC overhead.
 
 The final proof exited successfully. Cloudflare error-level telemetry was empty over the proof window after fixing CLI close-handshake teardown. Trace inspection verified successful source reads/writes and also exposed native RPC capability-lifetime spans marked `canceled`/`span_not_ended` at info level; these are recorded separately from operation failures, not counted as successful durable writes. The compact proof is in `evidence.json`.
 

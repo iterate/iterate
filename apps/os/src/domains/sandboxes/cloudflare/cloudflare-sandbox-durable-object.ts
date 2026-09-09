@@ -435,7 +435,16 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
       if (!original || original.version !== url.searchParams.get("version")) {
         return new Response("File is outside this manifest", { status: 404 });
       }
-      const bytes = await workspace.readFileBytes(absolute);
+      // Committed bytes are immutable: avoid workspace lifecycle/routing RPCs on every read.
+      // repoPath comes only from the DO-generated manifest, never from the container request.
+      const bytes = original.repoPath
+        ? await this.env.REPO.getByName(
+            DurableObjectNameCodec.stringify({
+              path: original.repoPath,
+              projectId: this.#identity().projectId,
+            }),
+          ).prototypeReadBlob(original.version.slice(4))
+        : await workspace.readFileBytes(absolute);
       if (bytes === null || prototypeFileVersion(bytes) !== original.version) {
         return new Response("Workspace changed during sandbox command", { status: 409 });
       }

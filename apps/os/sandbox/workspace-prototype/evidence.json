@@ -1,7 +1,7 @@
 {
   "environment": "preview_2",
-  "osVersion": "093da0a7-0e18-4909-8b7f-b8ca003a9e7b",
-  "project": "workspace-prototype-1788971359053",
+  "osVersion": "5518a1ef-7bb3-4025-b27a-99c80fbf5f68",
+  "project": "workspace-prototype-1788972259663",
   "commit": {
     "amended": false,
     "branch": "main",
@@ -11,13 +11,13 @@
       "/repos/prototype/remove.txt",
       "/repos/prototype/source.txt"
     ],
-    "commitOid": "0954c31a386053fc386063eae6e1327b88e25c24",
+    "commitOid": "c7f862730cb0b8452b09b1ae1563c207503794cf",
     "mount": "/repos/prototype",
     "repoPath": "/repos/prototype"
   },
   "checks": {
     "metadata": {
-      "sdkDurationMs": 1975,
+      "sdkDurationMs": 2082,
       "exitCode": 0,
       "metrics": {
         "fileReads": 0,
@@ -29,7 +29,7 @@
       }
     },
     "edit": {
-      "sdkDurationMs": 1280,
+      "sdkDurationMs": 1327,
       "exitCode": 0,
       "metrics": {
         "fileReads": 3,
@@ -41,7 +41,7 @@
       }
     },
     "read": {
-      "sdkDurationMs": 737,
+      "sdkDurationMs": 430,
       "exitCode": 0,
       "metrics": {
         "fileReads": 1,
@@ -53,7 +53,7 @@
       }
     },
     "cached": {
-      "sdkDurationMs": 1168,
+      "sdkDurationMs": 391,
       "exitCode": 0,
       "metrics": {
         "fileReads": 0,
@@ -65,7 +65,7 @@
       }
     },
     "dependencies": {
-      "sdkDurationMs": 18756,
+      "sdkDurationMs": 20660,
       "exitCode": 0,
       "metrics": {
         "fileReads": 1,
@@ -77,7 +77,7 @@
       }
     },
     "benchmark": {
-      "sdkDurationMs": 44369,
+      "sdkDurationMs": 38358,
       "exitCode": 0,
       "metrics": {
         "fileReads": 100,
@@ -89,30 +89,30 @@
       },
       "measurements": {
         "sourceReadCount": 100,
-        "coldReadMs": 16536.991286,
-        "warmReadMs": 23.400580000001355,
+        "coldReadMs": 6474.330114,
+        "warmReadMs": 30.500028000000384,
         "installs": [
           {
             "native": true,
-            "milliseconds": 5644.607211000002
+            "milliseconds": 6204.6137499999995
           },
           {
             "native": false,
-            "milliseconds": 6611.712466000001
+            "milliseconds": 6902.783418999999
           },
           {
             "native": false,
-            "milliseconds": 6709.856119000004
+            "milliseconds": 6895.144869
           },
           {
             "native": true,
-            "milliseconds": 5402.995155000004
+            "milliseconds": 8100.753568
           }
         ]
       }
     },
     "recovery": {
-      "sdkDurationMs": 914,
+      "sdkDurationMs": 2175,
       "exitCode": 0,
       "metrics": {
         "fileReads": 2,

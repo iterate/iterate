@@ -146,6 +146,7 @@ describe("sandbox prototype", () => {
       return [
         { path: "worker.ts", size: 17, mode: "100644", version: "git:base" },
         { path: "tasks/one.md", size: 5, mode: "100644", version: "git:deleted" },
+        { path: "untouched.txt", size: 4, mode: "100644", version: "git:untouched" },
       ];
     });
     expect(files).toEqual([
@@ -154,6 +155,13 @@ describe("sandbox prototype", () => {
         size: 7,
         mode: "100644",
         version: prototypeFileVersion(new TextEncoder().encode("private")),
+      },
+      {
+        path: "/config/untouched.txt",
+        size: 4,
+        mode: "100644",
+        version: "git:untouched",
+        repoPath: "/repos/config",
       },
     ]);
   });

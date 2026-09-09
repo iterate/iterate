@@ -1226,6 +1226,15 @@ export class RepoDurableObject extends DurableObject<Env> {
     return content === undefined ? null : { commitOid, content, path };
   }
 
+  /** Prototype immutable read: the manifest already selected this exact blob, never refresh HEAD. */
+  async prototypeReadBlob(oid: string): Promise<Uint8Array | null> {
+    assertCommitOid(oid);
+    const object = await this.#gitObjectStore.getObject(oid);
+    if (object === null) return null; // A later commit may have pruned the old manifest's blob.
+    if (object.type !== "blob") throw new Error(`Expected blob object: ${oid}`);
+    return object.payload;
+  }
+
   /** Prototype mount metadata: SQLite sizes and object IDs, without reading blobs. */
   async prototypeFileMetadata() {
     await this.#lazyFreshHead();

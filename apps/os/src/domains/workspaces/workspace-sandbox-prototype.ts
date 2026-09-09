@@ -27,6 +27,8 @@ export interface PrototypeWorkspaceFile {
   mode: string;
   size: number;
   version: string;
+  /** Present only for an unchanged committed file; private/live overlays clear it. */
+  repoPath?: string;
 }
 
 /** Git blob IDs work for both the committed base and the private overlay. */
