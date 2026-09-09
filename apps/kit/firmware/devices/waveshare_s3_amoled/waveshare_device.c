@@ -184,6 +184,12 @@ static enum iterate_kit_status hardware_write(void *context, const int16_t *samp
 /** esp_codec_dev owns both channels: one IN_OUT handle, opened once.
  * Table scripts have settled the rails before this post-I2S hook opens the
  * board-owned channels; audio=NULL keeps the shared runner off these pins.
+ * iterate_kit_i2s_codec_open_playback cannot preserve this sequence: it opens
+ * TX alone, uses master priority 2 and clear-before instead of IDF's default
+ * priority and clear-after, and installs overflow telemetry. This duplex pair
+ * keeps on_dma_sent before TX/RX init, strict full-descriptor preload, then
+ * TX/RX enable; esp_codec_dev subsequently owns format changes. Reusing the
+ * TX-only helper would also add playbackQueueOverflows to health().
  */
 static bool open_codec(void) {
   i2s_chan_handle_t tx = NULL;
@@ -355,7 +361,9 @@ static bool open_codec(void) {
   ESP_LOGI(tag, "ES8311 duplex audio ready at 16 kHz");
   return true;
 }
-/*
+/** Apply a percent already clamped by iterate_kit_board_set_volume to the
+ * facts.speaker.ceiling of 92; publish applied only after the codec accepts it.
+ *
  * MEASURED DISTORTION IS THE CEILING HERE, not power or echo: a 1 kHz tone at
  * volume 100 put the 2nd harmonic at -16.8 dB, and at 60 at -34.9 dB. 92 is
  * where the harmonic is still below the noise a listener notices and the
@@ -365,9 +373,6 @@ static bool open_codec(void) {
 static enum iterate_kit_status set_volume(
     uint8_t percent, uint8_t *applied) {
   if (codec_dev == NULL) return ITERATE_KIT_UNAVAILABLE;
-  if (percent > WAVESHARE_AUDIO_VOLUME_CEILING) {
-    percent = WAVESHARE_AUDIO_VOLUME_CEILING;
-  }
   if (esp_codec_dev_set_out_vol(codec_dev, (int)percent) !=
       ESP_CODEC_DEV_OK) {
     return ITERATE_KIT_IO_ERROR;
@@ -642,7 +647,7 @@ static const struct iterate_kit_board board = {
     /*
      * TURN IT UP. Every board here shipped at a volume somebody measured once
      * and nobody could change without a reflash, and all four were reported as
-     * too quiet. The driver keeps its ceiling; the knob is a call away.
+     * too quiet. The table keeps the measured 92 ceiling; the knob is a call away.
      */
     .context = NULL,
     .ceiling = WAVESHARE_AUDIO_VOLUME_CEILING,
