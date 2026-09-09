@@ -123,9 +123,12 @@ function WorkspaceFiles({
         selectedPath={selectedPath}
         onSelect={onSelect}
         onDocumentRevised={onDocumentRevised}
+        // A bounded height on every viewport: the whole screen on a phone
+        // (where the tree IS the page until a file opens), the row's height
+        // beside the file on large screens.
         className={cn(
-          "w-full shrink-0 flex-col border-r bg-background lg:flex lg:w-72",
-          selectedPath === undefined ? "flex" : "hidden",
+          "h-svh w-full shrink-0 border-r bg-background lg:h-auto lg:w-72",
+          selectedPath === undefined ? "flex" : "hidden lg:flex",
         )}
       />
       <div
