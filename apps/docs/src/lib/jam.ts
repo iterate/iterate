@@ -6,6 +6,7 @@
  */
 
 import { DEFAULT_REPO_PATH, SCRATCH_WORKSPACE_PREFIX } from "./board-shared.ts";
+import { DOCUMENT_REVIEW_INSTRUCTIONS } from "./document-review-instructions.ts";
 
 /** The repo mount a jam's tree shows and its seed document lives in. */
 export const JAM_REPO_PATH = DEFAULT_REPO_PATH;
@@ -63,7 +64,7 @@ export function jamInvitation(workspacePath: string, path: string | null): strin
     path === null
       ? '- Nobody has a file open yet; list the workspace with ws.glob("/repos/config/**/*.md") and wait for instructions.'
       : `- The file open right now is ${path}. Say hello: append one short line to it saying you have joined, then wait for instructions in that file or here.`,
-    "- Comments are stored at the end of a file as <!-- iterate-annotations:v1 --> sentinel lines. Read them; keep them intact when you edit.",
+    DOCUMENT_REVIEW_INSTRUCTIONS,
     "- Nothing is committed automatically and you must not commit; the people in the jam decide when it lands on main.",
   ].join("\n");
 }

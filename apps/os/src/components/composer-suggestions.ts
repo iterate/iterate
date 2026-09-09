@@ -1,4 +1,4 @@
-import type { ReferenceTarget } from "@iterate-com/shared/message";
+import type { MentionTarget } from "@iterate-com/shared/message";
 
 export type ComposerSuggestion = {
   id: string;
@@ -7,7 +7,7 @@ export type ComposerSuggestion = {
   /** Semantic completion inserted in place of the active trigger and query. */
   completion:
     | { type: "text"; text: string }
-    | { type: "reference"; display: string; target: ReferenceTarget };
+    | { type: "mention"; display: string; target: MentionTarget };
   description?: string;
   /** CodeMirror completion icon class; providers may define their own type. */
   type?: string;
@@ -72,10 +72,10 @@ export function composerSuggestionEdit(
 ): {
   insert: string;
   caret: number;
-  reference?: {
+  mention?: {
     display: string;
     from: number;
-    target: ReferenceTarget;
+    target: MentionTarget;
     to: number;
   };
 } {
@@ -89,8 +89,8 @@ export function composerSuggestionEdit(
   return {
     insert: `${inserted}${separator}`,
     caret: from + inserted.length + separator.length + existingSeparatorLength,
-    ...(suggestion.completion.type === "reference" && {
-      reference: {
+    ...(suggestion.completion.type === "mention" && {
+      mention: {
         display: suggestion.completion.display,
         from,
         target: suggestion.completion.target,

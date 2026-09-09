@@ -36,6 +36,7 @@ const CapnWebContext = createContext<ConnectionSnapshot | undefined>(undefined);
 const CONNECTION_STABLE_MS = 30_000;
 const CONNECTION_RETRY_MAX_MS = 10_000;
 const SUBSCRIBE_RETRY_MS = 10_000;
+const MAX_SUBSCRIBE_RETRIES = 2;
 const SUBSCRIBE_TIMEOUT_MS = 15_000;
 const PING_INTERVAL_MS = 45_000;
 const PING_TIMEOUT_MS = 10_000;
@@ -237,7 +238,6 @@ export function useLiveState<Root extends CapnWebRoot, State, Selected = State>(
   const root = (hasRootOverride ? options.root : connection?.root) ?? undefined;
   const enabled = options?.enabled ?? true;
   const [epoch, setEpoch] = useState(0);
-  const refresh = useCallback(() => setEpoch((current) => current + 1), []);
   const liveRef = useRef(live);
   const selectorRef = useRef(selector);
   useEffect(() => {
@@ -255,6 +255,12 @@ export function useLiveState<Root extends CapnWebRoot, State, Selected = State>(
       : connection?.scope;
   // oxlint-disable-next-line react-hooks/exhaustive-deps -- this memo is intentionally keyed; deps complete the caller's logical-node identity
   const store = useMemo(() => createLiveStateStore<State>(), [logicalConnection, ...deps]);
+  // oxlint-disable-next-line react-hooks/exhaustive-deps -- store is the logical subscription identity; its replacement must reset the retry budget
+  const subscribeRetries = useMemo(() => ({ count: 0 }), [store]);
+  const refresh = useCallback(() => {
+    subscribeRetries.count = 0;
+    setEpoch((current) => current + 1);
+  }, [subscribeRetries]);
   const [subscriptionState, setSubscriptionState] = useState<{
     error?: string;
     epoch: number;
@@ -295,7 +301,10 @@ export function useLiveState<Root extends CapnWebRoot, State, Selected = State>(
           status: "error",
           store,
         });
-        if (shouldRetry) retry = setTimeout(refresh, SUBSCRIBE_RETRY_MS);
+        if (shouldRetry && subscribeRetries.count < MAX_SUBSCRIBE_RETRIES) {
+          subscribeRetries.count += 1;
+          retry = setTimeout(() => setEpoch((current) => current + 1), SUBSCRIBE_RETRY_MS);
+        }
       };
 
       // The context erases its root parameter; this hook's provider/factory/root
@@ -321,6 +330,7 @@ export function useLiveState<Root extends CapnWebRoot, State, Selected = State>(
               return;
             }
             handle = subscription;
+            subscribeRetries.count = 0;
             setSubscriptionState({
               epoch,
               generation: connection?.generation,
@@ -346,11 +356,11 @@ export function useLiveState<Root extends CapnWebRoot, State, Selected = State>(
           },
           (cause: unknown) => {
             clearTimeout(timeout);
-            report(cause);
+            report(cause, true);
           },
         );
       } catch (cause) {
-        report(cause);
+        report(cause, true);
       }
     }
 

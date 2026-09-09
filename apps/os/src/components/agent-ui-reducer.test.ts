@@ -62,8 +62,8 @@ function projectRuntime(
 }
 
 describe("agent-ui reducer", () => {
-  test("preserves valid linked references and falls back to plain text on mismatch", () => {
-    const references = [
+  test("preserves valid linked mentions and falls back to plain text on mismatch", () => {
+    const mentions = [
       {
         id: "config-repo/AGENTS.md",
         type: "repo-file",
@@ -77,8 +77,8 @@ describe("agent-ui reducer", () => {
         payload: {
           role: "user",
           actor: { type: "user", origin: "web" },
-          content: "Read [@AGENTS.md](ref://config-repo/AGENTS.md)",
-          references,
+          content: "Read [@AGENTS.md](mention://config-repo/AGENTS.md)",
+          mentions,
         },
       },
       {
@@ -87,18 +87,18 @@ describe("agent-ui reducer", () => {
           role: "user",
           actor: { type: "user", origin: "web" },
           content: "plain fallback",
-          references,
+          mentions,
         },
       },
     ]);
 
-    expect(state.items[0]).toMatchObject({ kind: "user", references });
+    expect(state.items[0]).toMatchObject({ kind: "user", mentions });
     expect(state.items[1]).toMatchObject({ kind: "user", text: "plain fallback" });
-    expect(state.items[1]).not.toHaveProperty("references");
+    expect(state.items[1]).not.toHaveProperty("mentions");
   });
 
-  test("projects durable reference outcomes onto their original occurrences", () => {
-    const references = [
+  test("projects durable mention outcomes onto their original occurrences", () => {
+    const mentions = [
       {
         id: "config-repo/AGENTS.md",
         type: "repo-file",
@@ -112,33 +112,33 @@ describe("agent-ui reducer", () => {
         payload: {
           role: "user",
           actor: { type: "user", origin: "web" },
-          content: "[@AGENTS.md](ref://config-repo/AGENTS.md)",
-          references,
+          content: "[@AGENTS.md](mention://config-repo/AGENTS.md)",
+          mentions,
         },
       },
       {
         type: "events.iterate.com/agents/context-added",
         payload: {
           role: "developer",
-          actor: { type: "integration", name: "agent-reference-resolver" },
+          actor: { type: "integration", name: "agent-mention-resolver" },
           content: "resolution details",
-          referenceResolution: {
+          mentionResolution: {
             sourceOffset: 1,
-            outcomes: [{ status: "missing", referenceIds: ["config-repo/AGENTS.md"] }],
+            outcomes: [{ status: "missing", mentionIds: ["config-repo/AGENTS.md"] }],
           },
         },
       },
     ]);
 
     expect(state.items).toMatchObject([
-      { id: "user-1", references },
+      { id: "user-1", mentions },
       {
         id: "user-1",
-        references,
-        referenceResolutions: { "config-repo/AGENTS.md": { status: "missing" } },
+        mentions,
+        mentionResolutions: { "config-repo/AGENTS.md": { status: "missing" } },
       },
     ]);
-    expect(state.pendingReferenceMessages).toEqual({});
+    expect(state.pendingMentionMessages).toEqual({});
   });
 
   test("streams thinking and response deltas into the live llm step", () => {
@@ -1375,7 +1375,7 @@ describe("agent-ui reducer", () => {
   });
 
   test("updates a queued file mention when its resolution arrives mid-turn", () => {
-    const references = [
+    const mentions = [
       {
         id: "config-repo/AGENTS.md",
         type: "repo-file",
@@ -1395,8 +1395,8 @@ describe("agent-ui reducer", () => {
         payload: {
           role: "user",
           actor: { type: "user", origin: "web" },
-          content: "[@AGENTS.md](ref://config-repo/AGENTS.md)",
-          references,
+          content: "[@AGENTS.md](mention://config-repo/AGENTS.md)",
+          mentions,
         },
       },
       {
@@ -1404,15 +1404,15 @@ describe("agent-ui reducer", () => {
         offset: 9,
         payload: {
           role: "developer",
-          actor: { type: "integration", name: "agent-reference-resolver" },
+          actor: { type: "integration", name: "agent-mention-resolver" },
           content: "resolution details",
-          referenceResolution: {
+          mentionResolution: {
             sourceOffset: 8,
             outcomes: [
               {
                 status: "resolved",
                 truncated: true,
-                referenceIds: ["config-repo/AGENTS.md"],
+                mentionIds: ["config-repo/AGENTS.md"],
               },
             ],
           },
@@ -1424,13 +1424,13 @@ describe("agent-ui reducer", () => {
     expect(state.queuedUserMessages).toMatchObject([
       {
         id: "user-8",
-        references,
-        referenceResolutions: {
+        mentions,
+        mentionResolutions: {
           "config-repo/AGENTS.md": { status: "resolved", truncated: true },
         },
       },
     ]);
-    expect(state.pendingReferenceMessages).toEqual({});
+    expect(state.pendingMentionMessages).toEqual({});
   });
 
   test("settles queued user messages before the next LLM request starts", () => {

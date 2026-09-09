@@ -235,7 +235,9 @@ export function peerExtension(connection: CollabConnection, startVersion: number
           }
         } catch (error) {
           this.failures++;
-          connection.onStatus(`push retry ${this.failures}: ${message(error)}`);
+          connection.onStatus(
+            `push retry ${this.failures}: ${error instanceof Error ? error.message : String(error)}`,
+          );
           await sleep(backoff(this.failures));
         }
         this.pushing = false;
@@ -254,7 +256,12 @@ export function peerExtension(connection: CollabConnection, startVersion: number
             // react-doctor-disable-next-line react-doctor/js-cache-property-access
             const result = await connection.wait(getSyncedVersion(this.view.state));
             if (this.done) break;
-            this.failures = 0;
+            if (this.failures > 0) {
+              // Back after "reconnecting (n)…": say so, or the badge would
+              // report a dead session that is in fact syncing again.
+              this.failures = 0;
+              connection.onStatus(`live · v${getSyncedVersion(this.view.state)}`);
+            }
             if (result.status === "ended") {
               // The file was deleted/replaced/reset: the session is gone for
               // everyone. Surface it and stop — reopening is a page decision.
@@ -296,15 +303,21 @@ export function peerExtension(connection: CollabConnection, startVersion: number
               this.recovering = false;
               void this.push();
             }
-          } catch (error) {
+          } catch {
             if (this.done) break;
+            // Reconnect for as long as the editor is open, the same way the
+            // push loop already does. A multi-hour multiplayer session
+            // outlives deploys, evictions, and laptop sleeps; the pull
+            // long-poll rides every one of them out rather than declaring the
+            // session dead after a fixed count. Recovery needs no reopen here:
+            // a session reset or eviction rotates the epoch, so the very next
+            // wait() returns a "snapshot" (handled above, with correct acked-op
+            // slicing), and a deleted or replaced file returns "ended". Only a
+            // genuine transport outage lands here, and retrying it is right —
+            // when the network returns, wait() answers again. Backoff is
+            // capped, so a sustained outage settles into one quiet retry every
+            // MAX_BACKOFF_MS.
             this.failures++;
-            if (this.failures > 8) {
-              this.done = true;
-              connection.dead = true;
-              connection.onStatus(`disconnected: ${message(error)}`);
-              return;
-            }
             connection.onStatus(`reconnecting (${this.failures})…`);
             await sleep(backoff(this.failures));
           }
@@ -315,8 +328,12 @@ export function peerExtension(connection: CollabConnection, startVersion: number
         // Best-effort final flush: unpushed edits still in the doc would die
         // with the view (the board may already show them via the live
         // reflector). Safe to fire even beside an in-flight push — the
-        // server dedupes by (clientId, clientSeq).
-        if (!this.done && !this.recovering) {
+        // server dedupes by (clientId, clientSeq). Deliberately also after
+        // the loops gave up (`done`): a Reconnect remount is exactly when
+        // those edits are worth one more try over the shared session, which
+        // may have been re-dialed since. Only a reseed in flight is skipped —
+        // its pending edits are positionally meaningless.
+        if (!this.recovering) {
           const pending = sendableUpdates(this.view.state);
           if (pending.length > 0) {
             // ONE quiet try on the live session: a failure here must never
@@ -333,4 +350,3 @@ export function peerExtension(connection: CollabConnection, startVersion: number
 }
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-const message = (error: unknown) => (error instanceof Error ? error.message : String(error));

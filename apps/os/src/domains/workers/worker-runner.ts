@@ -32,6 +32,17 @@ export type DynamicWorkerTraceRole = "project_config" | "run_script" | "schedule
 const WORKERS_RPC_CLONE_VERSION_ERROR =
   "Unable to deserialize cloned data due to invalid or unsupported version.";
 
+/**
+ * How many times a replayable stateless request is dispatched through a
+ * clone-version skew before giving up (the first try plus its retries). One
+ * retry is not always enough: during a deploy the whole parent isolate is
+ * being replaced, so a fresh loader isolate can be stale too, and the first
+ * clean load is the one that pins the recovery nonce for every later request
+ * here. A small bound keeps a genuinely dying isolate from being hammered —
+ * past it the caller reconnects onto a different parent isolate.
+ */
+const CLONE_VERSION_MAX_ATTEMPTS = 4;
+
 /** True when an error is workerd's clone-version skew — a loader isolate
  * outliving the bindings it captured. The one error class where retiring the
  * shared isolate (a recovery nonce) and retrying is the correct response. */
@@ -270,18 +281,35 @@ export class DynamicWorkerRunner {
         return withWorkerCommit(await entrypoint.fetch(currentRequest), resolved.commitOid);
       };
 
-      const retryRequest =
+      // GET and HEAD are idempotent, so they may replay any transient dispatch
+      // failure. Cloudflare's clone() widens the Request metadata generics even
+      // though the runtime value stays the same Fetch API request.
+      const idempotentReplay =
         !isWebSocketUpgradeRequest(request) &&
         (request.method === "GET" || request.method === "HEAD")
-          ? // Cloudflare's clone() widens the Request metadata generics even
-            // though the runtime value remains the same Fetch API request.
-            (request.clone() as typeof request)
+          ? (request.clone() as typeof request)
           : undefined;
+      // A clone-version skew is a loader-isolate deserialize failure BEFORE the
+      // app runs (the shared isolate outlived its captured bindings), so any
+      // request with nothing to consume is safe to replay on a fresh isolate —
+      // and a WebSocket upgrade too, whose socket does not exist yet when the
+      // dispatch throws. "Nothing to consume" is a null body OR an explicitly
+      // empty one: a browser's bodyless `fetch(url, { method: "POST" })` — the
+      // auth gate's refresh — arrives with `Content-Length: 0` and a non-null
+      // empty stream, and it must replay too or that POST 500s where the same
+      // GET recovers.
+      const cloneSkewReplayable =
+        request.body === null || request.headers.get("content-length") === "0";
       let response: Response;
       try {
         response = await dispatch(request);
       } catch (error) {
-        if (retryRequest && ref.type === "stateful" && isDurableObjectLifecycleError(error)) {
+        if (idempotentReplay && ref.type === "stateful" && isDurableObjectLifecycleError(error)) {
+          // A Durable Object reset can land AFTER the app began handling the
+          // request, so only an idempotent method replays it; a deploy,
+          // eviction, or temporary platform fault may retire the hosting DO
+          // between dispatch and response, and the second lookup reaches a
+          // fresh incarnation. A second failure remains terminal.
           span.setAttribute("iterate.worker.durable_object_availability_retry", true);
           console.info("Stateful worker fetch retrying after Durable Object unavailability", {
             error,
@@ -289,24 +317,20 @@ export class DynamicWorkerRunner {
             rayId: request.headers.get("cf-ray") ?? undefined,
             traceRole,
           });
-          // GET/HEAD are safe to replay. A deploy, eviction, or temporary
-          // platform fault may retire the hosting DO between dispatch and
-          // response; the second lookup reaches a fresh incarnation, and a
-          // second failure remains terminal.
-          response = await dispatch(retryRequest);
+          response = await dispatch(idempotentReplay);
         } else if (
-          retryRequest &&
+          cloneSkewReplayable &&
           ref.type === "stateless" &&
-          error instanceof Error &&
-          error.message.includes(WORKERS_RPC_CLONE_VERSION_ERROR)
+          isWorkerRpcCloneVersionError(error)
         ) {
           span.setAttribute("iterate.worker.rpc_clone_version_retry", true);
-          console.warn("Workers RPC clone-version skew; retrying stateless fetch once", {
-            projectId: this.#projectId,
+          response = await this.#dispatchThroughCloneSkew({
+            dispatch,
+            request,
+            firstError: error,
             rayId: request.headers.get("cf-ray") ?? undefined,
             traceRole,
           });
-          response = await dispatch(retryRequest, crypto.randomUUID());
         } else {
           throw error;
         }
@@ -314,6 +338,57 @@ export class DynamicWorkerRunner {
       span.setAttribute("http.response.status_code", response.status);
       return response;
     });
+  }
+
+  /**
+   * Replay a bodyless stateless dispatch through a clone-version skew on a
+   * fresh loader isolate, bounded by {@link CLONE_VERSION_MAX_ATTEMPTS}. Each
+   * retry mints a new isolate (a stale replacement during a deploy skews
+   * again); the first clean load pins the shared recovery nonce, so later
+   * requests on this parent isolate skip the skew. A non-skew error, or the
+   * bound running out, is terminal — the caller then reconnects elsewhere.
+   */
+  async #dispatchThroughCloneSkew({
+    dispatch,
+    request,
+    firstError,
+    rayId,
+    traceRole,
+  }: {
+    dispatch: (currentRequest: Request, freshInstanceNonce?: string) => Promise<Response>;
+    request: Request;
+    firstError: unknown;
+    rayId?: string;
+    traceRole?: DynamicWorkerTraceRole;
+  }): Promise<Response> {
+    let lastError = firstError;
+    for (let attempt = 2; attempt <= CLONE_VERSION_MAX_ATTEMPTS; attempt++) {
+      console.warn("Workers RPC clone-version skew; retrying stateless fetch on a fresh isolate", {
+        attempt,
+        method: request.method,
+        projectId: this.#projectId,
+        rayId,
+        traceRole,
+      });
+      try {
+        // Rebuild the request rather than clone() it: the caller only reaches
+        // here for a null- or empty-body request, and the first dispatch may
+        // already have handed that empty stream to the isolate — clone() on a
+        // used body throws, which would defeat the retry. A fresh request from
+        // the method, URL, and headers carries everything the gate needs (the
+        // body was empty) and never touches a stream.
+        const retryRequest = new Request(request.url, {
+          headers: request.headers,
+          method: request.method,
+          redirect: request.redirect,
+        }) as typeof request;
+        return await dispatch(retryRequest, crypto.randomUUID());
+      } catch (error) {
+        lastError = error;
+        if (!isWorkerRpcCloneVersionError(error)) throw error;
+      }
+    }
+    throw lastError;
   }
 
   async invokeCapability({

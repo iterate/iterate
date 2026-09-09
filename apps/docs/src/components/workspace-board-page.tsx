@@ -157,14 +157,14 @@ export function WorkspaceBoardPage({
   // sheet-open's critical path.
   // Durable attribution for cards created here: "Name <email>".
   const createdByRef = useRef<string | undefined>(undefined);
-  // Discussion-comment identity (sentinel author token + display name).
+  // Review-comment identity and optional display name.
   const [commentIdentity, setCommentIdentity] = useState<{
     author: string;
     authorDisplay?: string;
   } | null>(null);
   useEffect(() => {
     void import("@iterate-com/workspace-documents/editor");
-    void import("./workspace-task-preview.tsx");
+    void import("@iterate-com/ui/components/document-preview");
     void whoami()
       .then((me) => {
         createdByRef.current =
@@ -214,11 +214,9 @@ export function WorkspaceBoardPage({
       const api = liveApi(path);
       if (api === null) return false;
       api.applyTransform(transform);
-      // Reflect immediately so cards/commit summaries don't lag the doc.
-      board.reflectLiveContent(path, api.source());
       return true;
     },
-    [board, liveApi],
+    [liveApi],
   );
 
   /** The live-doc rule, structurally: transform the OPEN file in its editor,
@@ -651,9 +649,12 @@ export function WorkspaceBoardPage({
         redline={trackChanges}
         editorApiRef={editorApiRef}
         commentIdentity={commentIdentity}
-        onApplyTransform={(transform) =>
-          openTask === null ? Promise.resolve(false) : mutateTask(openTask, transform)
-        }
+        onApplyTransform={(transform) => {
+          const api = openTask ? liveApi(openTask.path) : null;
+          if (!api) return false;
+          api.applyTransform(transform);
+          return true;
+        }}
         onAssignAgent={
           guest
             ? undefined

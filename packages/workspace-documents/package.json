@@ -4,37 +4,42 @@
   "version": "0.0.1",
   "type": "module",
   "exports": {
+    "./text-edits": "./src/text-edits.ts",
     "./attribution": "./src/collab-attribution.ts",
     "./collab": "./src/collab.ts",
-    "./comments": "./src/document-comments.tsx",
     "./editor": "./src/workspace-document-editor.tsx",
     "./editor-api": "./src/collab-editor-api.ts",
     "./html-annotations": "./src/html-document-annotations.ts",
     "./identity": "./src/comment-identity.ts",
-    "./preview": "./src/markdown-document-preview.tsx",
     "./server": "./src/server.ts",
-    "./types": "./src/types.ts"
+    "./types": "./src/types.ts",
+    "./review": "./src/use-document-review.tsx"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "vitest run --reporter=default --reporter=../shared/src/test-support/e2e-policy/retry-telemetry-reporter.ts"
   },
   "dependencies": {
+    "@atomic-editor/editor": "0.6.2",
     "@codemirror/collab": "^6.1.1",
     "@codemirror/commands": "^6.10.4",
     "@codemirror/lang-html": "^6.4.11",
     "@codemirror/lang-markdown": "^6.5.0",
+    "@codemirror/language": "^6.12.2",
+    "@codemirror/merge": "^6.12.2",
     "@codemirror/state": "^6.7.1",
     "@codemirror/view": "^6.43.6",
     "@iterate-com/ui": "workspace:*",
+    "@lezer/common": "^1.5.1",
     "capnweb": "npm:@iterate-com/capnweb@^0.10.0",
     "iterate": "workspace:*",
-    "lucide-react": "^0.553.0",
-    "react": "^19.2.7"
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "catalog:cloudflare",
     "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
     "typescript": "^5.9.3",
     "vite": "^8.0.16",
     "vitest": "^4.1.10"

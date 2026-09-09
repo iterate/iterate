@@ -44,7 +44,7 @@ export const RAW_GROUP_KIND = "raw.group";
  * are disposable caches and must be rebuilt, never interpreted as current
  * state (in particular, they may contain historical ephemeral activity).
  */
-export const BROWSER_FEED_SCHEMA_VERSION = 9;
+export const BROWSER_FEED_SCHEMA_VERSION = 10;
 export { isAgentActivity } from "@iterate-com/ui/components/events/agent-ui-reducer";
 
 /** Maps an event type to its specific raw renderer kind, or null to fall into the group. */
@@ -104,7 +104,7 @@ export type BrowserFeedState = {
   lastAgentWake: { localIndex: number; count: number } | null;
   /**
    * Stable row addresses for the bounded set of items awaiting a durable
-   * correction: inferred activities and rich messages whose references are
+   * correction: inferred activities and rich messages whose mentions are
    * still resolving. Ordinary settled items are never indexed here.
    */
   replaceableAgentItemIndexes: Record<string, number>;
@@ -325,8 +325,8 @@ export function isCurrentBrowserFeedState(value: unknown): value is BrowserFeedS
   if (!isRecord(candidate.replaceableAgentItemIndexes)) return false;
   const agent = candidate.agent;
   const nextLocalIndex = candidate.nextLocalIndex;
-  const pendingReferenceMessageIds = new Set(
-    Object.values(agent.pendingReferenceMessages).map((message) => message.id),
+  const pendingMentionMessageIds = new Set(
+    Object.values(agent.pendingMentionMessages).map((message) => message.id),
   );
   if (
     !Object.entries(candidate.replaceableAgentItemIndexes).every(
@@ -334,7 +334,7 @@ export function isCurrentBrowserFeedState(value: unknown): value is BrowserFeedS
         id.length > 0 &&
         isNonNegativeSafeInteger(index) &&
         index < nextLocalIndex &&
-        (Object.hasOwn(agent.provisionalActivities, id) || pendingReferenceMessageIds.has(id)),
+        (Object.hasOwn(agent.provisionalActivities, id) || pendingMentionMessageIds.has(id)),
     )
   ) {
     return false;
@@ -404,7 +404,7 @@ function retainCurrentReplacementIndexes(
     const index = indexes[id];
     if (index !== undefined) retained[id] = index;
   }
-  for (const message of Object.values(agent.pendingReferenceMessages)) {
+  for (const message of Object.values(agent.pendingMentionMessages)) {
     const index = indexes[message.id];
     if (index !== undefined) retained[message.id] = index;
   }
@@ -412,7 +412,7 @@ function retainCurrentReplacementIndexes(
 }
 
 function needsDurableCorrection(item: AgentUiItem): boolean {
-  return hasInferredScriptOutcome(item) || hasPendingReferenceResolution(item);
+  return hasInferredScriptOutcome(item) || hasPendingMentionResolution(item);
 }
 
 function hasInferredScriptOutcome(item: AgentUiItem): boolean {
@@ -422,11 +422,11 @@ function hasInferredScriptOutcome(item: AgentUiItem): boolean {
   );
 }
 
-function hasPendingReferenceResolution(item: AgentUiItem): boolean {
+function hasPendingMentionResolution(item: AgentUiItem): boolean {
   return (
     item.kind === "user" &&
-    item.referenceResolutions === undefined &&
-    item.references?.some((reference) => reference.type === "repo-file") === true
+    item.mentionResolutions === undefined &&
+    item.mentions?.some((mention) => mention.type === "repo-file") === true
   );
 }
 

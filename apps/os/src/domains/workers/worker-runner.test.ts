@@ -494,6 +494,275 @@ it("recovers a safe stateless fetch once with a fresh loader after clone-version
   });
 });
 
+it("recovers a BODYLESS POST after clone-version skew (the auth gate's refresh)", async () => {
+  // A clone-version skew is a loader-isolate deserialize failure before the
+  // app runs, so a request with no body — the gate's refresh POST — is safe
+  // to replay on a fresh loader, exactly like a GET. Regression for the
+  // production 500 that only hit POSTs to a project host after a deploy.
+  const workerFetch = vi
+    .fn()
+    .mockRejectedValueOnce(
+      new Error("Unable to deserialize cloned data due to invalid or unsupported version."),
+    )
+    .mockResolvedValueOnce(new Response("recovered"));
+  h.resolveWorkerSource.mockResolvedValue({
+    ok: true,
+    source: {
+      assetConfig: undefined,
+      assetManifest: {},
+      assets: {},
+      cacheKey: "build-key",
+      commitOid: "commit-1",
+      mainModule: "worker.js",
+      modules: {},
+      wranglerConfig: undefined,
+    },
+  });
+  h.loadResolvedWorker.mockImplementation(() => ({
+    getEntrypoint: () => ({ fetch: workerFetch }),
+  }));
+  const runner = new DynamicWorkerRunner({
+    streamContext: { kind: "scope", scopePath: inlineRef.path },
+    exports: {} as ExecutionContext["exports"],
+    projectId: "prj_private",
+    scopePath: inlineRef.path,
+  });
+
+  const response = await runner.fetch({
+    ref: inlineRef,
+    request: new Request("https://example.com/", { method: "POST" }),
+  });
+
+  expect(await response.text()).toBe("recovered");
+  expect(workerFetch).toHaveBeenCalledTimes(2);
+  const initialLoader = h.loadResolvedWorker.mock.calls[0]?.[0].loaderInstanceNonce;
+  const replacementLoader = h.loadResolvedWorker.mock.calls[1]?.[0].loaderInstanceNonce;
+  expect(replacementLoader).not.toBe(initialLoader);
+  expect(recordedSpans[0]?.attributes).toMatchObject({
+    "http.response.status_code": 200,
+    "iterate.worker.rpc_clone_version_retry": true,
+  });
+});
+
+it("never replays a BODY-BEARING POST on clone-version skew — the body cannot be consumed twice", async () => {
+  const workerFetch = vi
+    .fn()
+    .mockRejectedValueOnce(
+      new Error("Unable to deserialize cloned data due to invalid or unsupported version."),
+    );
+  h.resolveWorkerSource.mockResolvedValue({
+    ok: true,
+    source: {
+      assetConfig: undefined,
+      assetManifest: {},
+      assets: {},
+      cacheKey: "build-key",
+      commitOid: "commit-1",
+      mainModule: "worker.js",
+      modules: {},
+      wranglerConfig: undefined,
+    },
+  });
+  h.loadResolvedWorker.mockImplementation(() => ({
+    getEntrypoint: () => ({ fetch: workerFetch }),
+  }));
+  const runner = new DynamicWorkerRunner({
+    streamContext: { kind: "scope", scopePath: inlineRef.path },
+    exports: {} as ExecutionContext["exports"],
+    projectId: "prj_private",
+    scopePath: inlineRef.path,
+  });
+
+  await expect(
+    runner.fetch({
+      ref: inlineRef,
+      request: new Request("https://example.com/", { method: "POST", body: "payload" }),
+    }),
+  ).rejects.toThrow("Unable to deserialize cloned data");
+  expect(workerFetch).toHaveBeenCalledTimes(1);
+});
+
+it("keeps retrying a bodyless POST on a fresh isolate until the skew clears", async () => {
+  // One retry is not always enough: during a deploy the replacement isolate
+  // can be stale too, so the loop tries a fresh isolate up to the bound.
+  const workerFetch = vi
+    .fn()
+    .mockRejectedValueOnce(
+      new Error("Unable to deserialize cloned data due to invalid or unsupported version."),
+    )
+    .mockRejectedValueOnce(
+      new Error("Unable to deserialize cloned data due to invalid or unsupported version."),
+    )
+    .mockResolvedValueOnce(new Response("recovered on the third isolate"));
+  h.resolveWorkerSource.mockResolvedValue({
+    ok: true,
+    source: {
+      assetConfig: undefined,
+      assetManifest: {},
+      assets: {},
+      cacheKey: "build-key",
+      commitOid: "commit-1",
+      mainModule: "worker.js",
+      modules: {},
+      wranglerConfig: undefined,
+    },
+  });
+  h.loadResolvedWorker.mockImplementation(() => ({
+    getEntrypoint: () => ({ fetch: workerFetch }),
+  }));
+  const runner = new DynamicWorkerRunner({
+    streamContext: { kind: "scope", scopePath: inlineRef.path },
+    exports: {} as ExecutionContext["exports"],
+    projectId: "prj_private",
+    scopePath: inlineRef.path,
+  });
+
+  const response = await runner.fetch({
+    ref: inlineRef,
+    request: new Request("https://example.com/", { method: "POST" }),
+  });
+
+  expect(await response.text()).toBe("recovered on the third isolate");
+  expect(workerFetch).toHaveBeenCalledTimes(3);
+  const nonces = h.loadResolvedWorker.mock.calls.map((c) => c[0].loaderInstanceNonce);
+  // Each retry moved to a distinct fresh isolate.
+  expect(new Set(nonces.slice(1)).size).toBe(nonces.length - 1);
+});
+
+it("gives up a bodyless POST after the attempt bound so the caller can reconnect", async () => {
+  const workerFetch = vi
+    .fn()
+    .mockRejectedValue(
+      new Error("Unable to deserialize cloned data due to invalid or unsupported version."),
+    );
+  h.resolveWorkerSource.mockResolvedValue({
+    ok: true,
+    source: {
+      assetConfig: undefined,
+      assetManifest: {},
+      assets: {},
+      cacheKey: "build-key",
+      commitOid: "commit-1",
+      mainModule: "worker.js",
+      modules: {},
+      wranglerConfig: undefined,
+    },
+  });
+  h.loadResolvedWorker.mockImplementation(() => ({
+    getEntrypoint: () => ({ fetch: workerFetch }),
+  }));
+  const runner = new DynamicWorkerRunner({
+    streamContext: { kind: "scope", scopePath: inlineRef.path },
+    exports: {} as ExecutionContext["exports"],
+    projectId: "prj_private",
+    scopePath: inlineRef.path,
+  });
+
+  await expect(
+    runner.fetch({
+      ref: inlineRef,
+      request: new Request("https://example.com/", { method: "POST" }),
+    }),
+  ).rejects.toThrow("Unable to deserialize cloned data");
+  // First attempt plus CLONE_VERSION_MAX_ATTEMPTS - 1 retries = 4 dispatches.
+  expect(workerFetch).toHaveBeenCalledTimes(4);
+});
+
+it("recovers an empty-body POST (Content-Length: 0) after clone-version skew", async () => {
+  // A browser's bodyless fetch(url, { method: "POST" }) — the auth refresh —
+  // arrives with Content-Length: 0 and a non-null empty stream, not a null
+  // body. That must still replay, or the POST 500s where the same GET recovers.
+  const workerFetch = vi
+    .fn()
+    // The first dispatch hands the empty stream to the isolate (consuming it)
+    // before the skew — a clone() of the used body would then throw, so the
+    // retry must rebuild the request instead.
+    .mockImplementationOnce(async (received: Request) => {
+      await received.text();
+      throw new Error("Unable to deserialize cloned data due to invalid or unsupported version.");
+    })
+    .mockResolvedValueOnce(new Response("recovered"));
+  h.resolveWorkerSource.mockResolvedValue({
+    ok: true,
+    source: {
+      assetConfig: undefined,
+      assetManifest: {},
+      assets: {},
+      cacheKey: "build-key",
+      commitOid: "commit-1",
+      mainModule: "worker.js",
+      modules: {},
+      wranglerConfig: undefined,
+    },
+  });
+  h.loadResolvedWorker.mockImplementation(() => ({
+    getEntrypoint: () => ({ fetch: workerFetch }),
+  }));
+  const runner = new DynamicWorkerRunner({
+    streamContext: { kind: "scope", scopePath: inlineRef.path },
+    exports: {} as ExecutionContext["exports"],
+    projectId: "prj_private",
+    scopePath: inlineRef.path,
+  });
+
+  const request = new Request("https://example.com/", {
+    method: "POST",
+    body: "",
+    headers: { "content-length": "0" },
+  });
+  // Guard the premise: an empty body is NOT null, so the body===null check
+  // alone would have skipped the retry.
+  expect(request.body).not.toBeNull();
+  const response = await runner.fetch({ ref: inlineRef, request });
+
+  expect(await response.text()).toBe("recovered");
+  expect(workerFetch).toHaveBeenCalledTimes(2);
+});
+
+it("recovers a WebSocket upgrade after clone-version skew (a reconnecting collab session)", async () => {
+  // A WebSocket upgrade is a bodyless GET whose socket does not exist yet when
+  // the dispatch throws, so a clone skew during a deploy is safe to replay —
+  // the collab session reconnects instead of failing.
+  const workerFetch = vi
+    .fn()
+    .mockRejectedValueOnce(
+      new Error("Unable to deserialize cloned data due to invalid or unsupported version."),
+    )
+    // 101 cannot be constructed as a Response in the test runtime; the point
+    // is that the upgrade request rode the clone-skew retry at all.
+    .mockResolvedValueOnce(new Response("connected"));
+  h.resolveWorkerSource.mockResolvedValue({
+    ok: true,
+    source: {
+      assetConfig: undefined,
+      assetManifest: {},
+      assets: {},
+      cacheKey: "build-key",
+      commitOid: "commit-1",
+      mainModule: "worker.js",
+      modules: {},
+      wranglerConfig: undefined,
+    },
+  });
+  h.loadResolvedWorker.mockImplementation(() => ({
+    getEntrypoint: () => ({ fetch: workerFetch }),
+  }));
+  const runner = new DynamicWorkerRunner({
+    streamContext: { kind: "scope", scopePath: inlineRef.path },
+    exports: {} as ExecutionContext["exports"],
+    projectId: "prj_private",
+    scopePath: inlineRef.path,
+  });
+
+  const response = await runner.fetch({
+    ref: inlineRef,
+    request: new Request("https://example.com/api", { headers: { Upgrade: "websocket" } }),
+  });
+
+  expect(await response.text()).toBe("connected");
+  expect(workerFetch).toHaveBeenCalledTimes(2);
+});
+
 it("replays one safe stateful fetch after its hosting Durable Object resets", async () => {
   const reset = Object.assign(new Error("Durable Object reset because its code was updated."), {
     durableObjectReset: true,

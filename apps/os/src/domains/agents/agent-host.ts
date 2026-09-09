@@ -8,9 +8,9 @@
 
 import { isIdempotencyConflict } from "iterate/processors";
 import type { EmittedInput, ProcessEventArgs, StreamEvent } from "iterate/processors";
-import type { ConfigRepoFileReferenceTarget } from "@iterate-com/shared/message";
+import type { ConfigRepoFileMentionTarget } from "@iterate-com/shared/message";
 import type { AgentFileAttachment, AgentProcessorContract } from "./agent-processor-contract.ts";
-import type { AgentReferenceReadResult } from "./agent-reference-materialization.ts";
+import type { AgentMentionReadResult } from "./agent-mention-materialization.ts";
 import type {
   WorkersAiBinding,
   CloudflareAiGatewayTransport,
@@ -53,7 +53,7 @@ export type AgentLlmTransport = (args: {
  *   file immediately before a model request. Production hosts provide it;
  *   bare tests without it retain the stored reference URL.
  * - `readRepoFile` resolves a bounded prefix of one semantic config-repo
- *   reference at latest HEAD. The processor commits that source material
+ *   mention at latest HEAD. The processor commits that source material
  *   before scheduling a turn.
  * - `writeWorkspaceFile` writes one file into THIS agent's own workspace
  *   directory (the filesystem `itx.workspace` resolves to; the given path is
@@ -81,9 +81,9 @@ export type AgentProcessorDeps = {
   }) => Promise<unknown>;
   resolveModelFileUrl?: (file: AgentFileAttachment) => Promise<string>;
   readRepoFile?: (
-    target: ConfigRepoFileReferenceTarget,
+    target: ConfigRepoFileMentionTarget,
     maximumBytes: number,
-  ) => Promise<AgentReferenceReadResult | null>;
+  ) => Promise<AgentMentionReadResult | null>;
   writeWorkspaceFile?: (input: {
     content: string;
     path: string;

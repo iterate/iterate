@@ -34,7 +34,7 @@ type WebAgentHandle = {
 
 /**
  * Create the agent and send the first turn as one message event. The unified
- * input keeps text, references, and uploaded files atomic.
+ * input keeps text, mentions, and uploaded files atomic.
  */
 export async function sendAgentFirstTurn(
   agent: WebAgentHandle,
@@ -46,9 +46,9 @@ export async function sendAgentFirstTurn(
   const files = input.files || [];
   await agent.message({
     content: input.content,
-    ...(input.references === undefined || input.references.length === 0
+    ...(input.mentions === undefined || input.mentions.length === 0
       ? {}
-      : { references: input.references }),
+      : { mentions: input.mentions }),
     ...(files.length === 0 ? {} : { files: await filesToAgentPayload(files) }),
   });
 }

@@ -60,7 +60,7 @@ import type {
   ValidateProjectAppSessionInput,
   ValidatedProjectAppSession,
 } from "@iterate-com/auth-contract/worker";
-import { decodeMessageReferences, type Message } from "@iterate-com/shared/message";
+import { decodeMessageMentions, type Message } from "@iterate-com/shared/message";
 import type { AppConfig } from "./config.ts";
 import { parseConfig } from "./config.ts";
 import { closeItxSessionTransport } from "./session-transport.ts";
@@ -2152,7 +2152,13 @@ class AgentCollectionLiveStateRpcTarget
   async subscribe(
     onUpdate: (update: LiveUpdate<AgentCollectionProcessorState>) => unknown,
   ): Promise<LiveStateSubscriptionHandle> {
-    return await this.#bornThenRetry(() => this.#relay().subscribe(onUpdate));
+    // The Pager's upgrade is routed by the Stream DO's committed subscription
+    // catalog and therefore fails before the relay can inspect the facade's
+    // unconfigured-subscription refusal. Ensure this collection's idempotent
+    // birth batch first; get() supplies that narrow initialization and leaves
+    // no retained subscription.
+    await this.get();
+    return await this.#relay().subscribe(onUpdate);
   }
 }
 
@@ -2527,7 +2533,7 @@ class WorkspaceRpcTarget extends IterateRpcTarget<"Workspace"> {
         exists: "Whether a path exists in the merged view.",
         getConfig: "The live EFFECTIVE mount table (derived default merged with overlays).",
         collab:
-          "Collaborative session lane: open(path) / push(batch) / wait(path, epoch, afterVersion) / changes(path) — live rebase-model editing plus attributed redlines.",
+          "Collaborative editing API: open(path) / push(batch) / wait(path, epoch, afterVersion) / changes(path) — live rebase-model editing plus attributed redlines.",
         git: "Per-mount git surface: status (changes grouped by mount), commit ({ message, scope? }), log ({ scope? }).",
         glob: "Merged file paths matching a glob pattern.",
         kill: "Restart the workspace's server-side object; the next request boots it fresh.",
@@ -2798,7 +2804,7 @@ class WorkspaceGitRpcTarget extends IterateRpcTarget<"WorkspaceGit"> {
 }
 
 /**
- * The collaborative session lane of a workspace: server-authoritative
+ * The collaborative editing API of a workspace: server-authoritative
  * rebase-model editing (@codemirror/collab wire — per-file op logs, integer
  * versions, optimistic clients rebasing unconfirmed edits). Sessions are
  * durable; the workspace's ordinary filesystem RPC reads/writes route through
@@ -2808,7 +2814,7 @@ class WorkspaceGitRpcTarget extends IterateRpcTarget<"WorkspaceGit"> {
 class WorkspaceCollabRpcTarget extends IterateRpcTarget<"WorkspaceCollab"> {
   async __describe(): Promise<Description> {
     return describeNode({
-      instructions: `Collaborative session lane of the workspace at "${this.props.path}": open(path) joins (or starts) a durable per-file session; push(batch) submits client updates (idempotent via clientSeq, rebased server-side when stale); wait(path, epoch, afterVersion) long-polls for accepted ops (snapshot past the retained floor, "ended" after a destructive op); changes(path) returns attributed redline segments since the last commit.`,
+      instructions: `Collaborative editing API of the workspace at "${this.props.path}": open(path) joins (or starts) a durable per-file session; push(batch) submits client updates (idempotent via clientSeq, rebased server-side when stale); wait(path, epoch, afterVersion) long-polls for accepted ops (snapshot past the retained floor, "ended" after a destructive op); changes(path) returns attributed redline segments since the last commit.`,
       children: {
         changes: "Attributed tracked changes since the last commit (redline segments).",
         open: "Join (or start) the collaborative editing session for one file.",
@@ -5241,9 +5247,9 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
    * `{ type: "agent", path }` and does NOT refill the receiver's autonomous
    * turn budget, so agent↔agent reply loops stay bounded; from anywhere else
    * (web UI, CLI, MCP session) it is a user message. The agent must already
-   * have been created explicitly. `references` are typed resources addressed
+   * have been created explicitly. `mentions` are typed resources addressed
    * from `content` with Markdown-like links such as
-   * `[@AGENTS.md](ref://config-repo/AGENTS.md)`. Optional files are stored
+   * `[@AGENTS.md](mention://config-repo/AGENTS.md)`. Optional files are stored
    * in project file storage and ride the same event (images stay visible to
    * vision-capable models).
    */
@@ -5262,20 +5268,20 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
     const {
       message,
       files: fileInputs,
-      references: referenceInputs,
+      mentions: mentionInputs,
     } = typeof input === "string"
-      ? { message: input, files: undefined, references: undefined }
+      ? { message: input, files: undefined, mentions: undefined }
       : "content" in input
-        ? { message: input.content, files: input.files, references: input.references }
-        : { message: input.message, files: input.files, references: undefined };
+        ? { message: input.content, files: input.files, mentions: input.mentions }
+        : { message: input.message, files: input.files, mentions: undefined };
     const decodedMessage =
-      referenceInputs === undefined ? undefined : decodeMessageReferences(message, referenceInputs);
+      mentionInputs === undefined ? undefined : decodeMessageMentions(message, mentionInputs);
     if (decodedMessage === null) {
       throw new Error(
-        "agent.message references must each have a unique id and a matching inline reference link.",
+        "agent.message mentions must each have a unique id and a matching inline mention link.",
       );
     }
-    const references = decodedMessage?.references.length ? decodedMessage.references : undefined;
+    const mentions = decodedMessage?.mentions.length ? decodedMessage.mentions : undefined;
     const actor = this.#contextActor();
     const files =
       fileInputs === undefined || fileInputs.length === 0
@@ -5293,8 +5299,8 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
         content: message,
         actor,
         ...(files === undefined ? {} : { files }),
-        ...(references === undefined ? {} : { references }),
-        ...(references === undefined
+        ...(mentions === undefined ? {} : { mentions }),
+        ...(mentions === undefined
           ? {}
           : { llmRequestPolicy: { behaviour: "dont-trigger-request" as const } }),
       },
@@ -6531,6 +6537,10 @@ class ProjectAuthRpcTarget extends IterateRpcTarget<"ProjectAuth"> {
    */
   async fetch(request: Request): Promise<Response | null> {
     return await handleProjectAuthFetch({
+      // Renewal mints through the auth worker like login does; validation
+      // stays local (the HS256 check in project-app-session-token.ts, no
+      // auth-worker call).
+      mintSession: (input) => env.AUTH.mintProjectAppSession(input),
       osBaseUrl: parseConfig(env).baseUrl,
       projectId: this.props.projectId,
       request,
@@ -8997,10 +9007,9 @@ type LiveStateDurableObjectStub<State> = {
  * read must never leave a capability pinning the DO for the session's life.
  * `subscribe()` rides the client-given hibernatable Live State Pager
  * (domains/live-state-pager.ts) when the host declares the lane, so a
- * watched idle DO leaves memory; a host without the lane — and any socket
- * failure — falls back to forwarding the subscription into the DO, which
- * retains the callback there and pins it (exactly the pre-socket behavior,
- * loudly logged so pinning regressions are greppable).
+ * watched idle DO leaves memory. A Pager failure rejects the subscription;
+ * the browser hook reports it and performs its bounded re-subscribe, rather
+ * than retaining a callback that pins the Durable Object.
  */
 class LiveStateRelayRpcTarget<State extends object>
   extends IterateRpcRelay<"LiveStateRpc">
@@ -9077,14 +9086,7 @@ class LiveStateRelayRpcTarget<State extends object>
     onUpdate: (update: LiveUpdate<State>) => unknown,
   ): Promise<LiveStateSubscriptionHandle> {
     if (this.#relay !== undefined) {
-      try {
-        return new LiveStateSubscriptionRpcTarget(await this.#relay.subscribe(onUpdate));
-      } catch (error) {
-        console.warn(
-          "Live State Pager unavailable; subscription falls back to pinning the durable object",
-          { label: this.#label, error },
-        );
-      }
+      return new LiveStateSubscriptionRpcTarget(await this.#relay.subscribe(onUpdate));
     }
     return await (await (await this.#stub()).liveState).subscribe(onUpdate);
   }

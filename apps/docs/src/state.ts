@@ -18,7 +18,7 @@ export type TaskCard = {
    * parse — the file is then treated as plain text (no state/tags). */
   frontmatterError: boolean;
   /** Non-deleted comments in the file's discussion store (0 when the store
-   * is absent or the file fails the strict annotated-markdown parse). */
+   * is absent or the file contains malformed RFM). */
   commentCount: number;
 };
 

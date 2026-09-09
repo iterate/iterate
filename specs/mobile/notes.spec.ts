@@ -60,7 +60,8 @@ test("captures a note from the global composer and manages it on /notes", async 
   // 💬 pre-types a pointer to the note; the question under it is the human's
   // to write, so nothing is sent on the way in.
   await page.getByLabel("Chat about this note").click();
-  // inputValue() does the waiting; expect only checks the string it returned.
+  // waitFor participates in navigation/spinner waiting; inputValue does not.
+  await page.getByPlaceholder("Message").waitFor();
   expect(await page.getByPlaceholder("Message").inputValue()).toMatch(
     /About my note `\/repos\/notes\/.*\.md`:[\s\S]*confirmed at home/,
   );
