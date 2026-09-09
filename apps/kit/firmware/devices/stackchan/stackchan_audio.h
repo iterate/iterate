@@ -116,17 +116,6 @@ uint32_t stackchan_audio_playback_driver_failures(void);
 uint32_t stackchan_audio_playback_partial_chunks(void);
 uint32_t stackchan_audio_epoch_resets(void);
 
-/** Apply the shared starvation phase under this board's lock; amplifier
- * control remains with the device. Safe on the app and playback tasks.
- */
-void stackchan_audio_phase(enum iterate_kit_voice_phase phase);
-
-void stackchan_audio_reserve_write(uint32_t ms);
-void stackchan_audio_rollback_write(uint32_t ms);
-uint32_t stackchan_audio_starved_ms(void);
-uint32_t stackchan_audio_starve_events(void);
-uint32_t stackchan_audio_written_ms(void);
-
 #ifdef __cplusplus
 }
 #endif

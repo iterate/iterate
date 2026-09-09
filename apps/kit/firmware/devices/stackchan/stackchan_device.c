@@ -46,7 +46,7 @@
 #include "iterate/kit/devices/stackchan.h"
 #include "iterate/kit/session_grammar.h"
 #include "iterate/kit/capabilities/health.h"
-#include "iterate/kit/voice/loop.h"
+#include "iterate/kit/platforms/board.h"
 #include "iterate/kit/voice_device_profile.h"
 
 #include "stackchan_audio.h"
@@ -277,28 +277,12 @@ static void present(
    * grammar reads last pass's facts — one poll of lag, invisible at 5 ms. */
   mode_state.call_active = view->call_active;
   mode_state.wants_call = view->wants_call;
-  visual = (struct iterate_kit_conversation_visual_state){
-    .network = view->link_ready ? ITERATE_KIT_NETWORK_CONNECTED
-                                : ITERATE_KIT_NETWORK_CONNECTING,
-    .reach = iterate_kit_reach_from(
-        view->api_ready, view->stream_ready, view->call_active),
-    .has_wifi_rssi = false,
-    .wifi_rssi_dbm = 0,
-    /*
-     * A session in play, not just a call: the wake press must open the
-     * robot's eyes while the dial is still in flight, or the chime answers
-     * a face that sleeps through its own wake — and the body LEDs lighting
-     * during the dial is the working feedback the ring boards already give.
-     */
-    .conversation_active = view->call_active || view->wants_call,
-    .media_ready = view->link_ready,
-    .media_failed = view->fault,
-    .microphone_listening = view->listening,
-    .microphone_peak = view->microphone_peak,
-    /* The one hardware-owned "is it speaking" fact both surfaces share. */
-    .speaker_peak = iterate_kit_stackchan_avatar_speaker_status_peak(),
-    .restart_armed = false,
-  };
+  /* One fleet mapping. This board's physical playout meter is passed as the
+   * mapping's microphone_peak input; the speaking cue remains the shared
+   * screen cue, and pending calls follow the same readiness rule as the ring. */
+  struct iterate_kit_voice_view lights_view = *view;
+  lights_view.microphone_peak = iterate_kit_stackchan_avatar_speaker_status_peak();
+  iterate_kit_voice_view_lights(&lights_view, &visual);
   /*
    * The OVERLAY comparison for the face, not the lights one: the screen also
    * carries a word, and "connecting" and "ready" can render the same twelve
@@ -397,13 +381,9 @@ static void poll(void *context, struct iterate_kit_voice_intent *out) {
   }
 }
 
-static void phase(void *context, enum iterate_kit_voice_phase phase_value) {
-  (void)context;
-  stackchan_audio_phase(phase_value);
-  /* The rail stays up for the life of the boot: the software canceller's
-   * reference rides the running TX stream. Gating it would force the filter
-   * to re-adapt on every answer. ARRIVED/QUIET leave it alone. */
-}
+/* The rail remains on for the boot: the software canceller's reference
+ * rides TX. Gating it would force re-adaptation on every answer; the table
+ * has no amplifier GPIO and ARRIVED/QUIET only update the shared ledger. */
 
 /*
  * WHAT THE CODEC KNOWS ABOUT THE CHUNK IT JUST HANDED OVER, which on this
@@ -422,12 +402,6 @@ static void capture_meta(
   stackchan_audio_last_chunk_meta(
       &out->sequence, &out->captured_through_at_us,
       &out->playback_content_active);
-}
-
-static enum iterate_kit_status set_volume(
-    void *context, uint8_t percent, uint8_t *applied) {
-  (void)context;
-  return stackchan_audio_set_volume(percent, applied);
 }
 
 static uint8_t volume(void *context) {
@@ -797,10 +771,7 @@ static size_t health(void *context, char *out, size_t capacity) {
        * what makes the two numbers underneath falsifiable rather than
        * reassuring — that gate was silently dark on this board.
        */
-      {"dmaWrittenMs", stackchan_audio_written_ms()},
-      /* The task-side starvation measure: ms the ring was empty, how often. */
-      {"spkStarvedMs", stackchan_audio_starved_ms()},
-      {"spkStarveEvents", stackchan_audio_starve_events()},
+      {"dmaWrittenMs", iterate_kit_i2s_codec_written_ms()},
       {"codecPlaybackFailures", stackchan_audio_playback_driver_failures()},
       {"spkPartialChunks", stackchan_audio_playback_partial_chunks()},
       /*
@@ -884,7 +855,7 @@ static const struct iterate_kit_board_ops ops = {
   .start = start,
   .present = present,
   .poll = poll,
-  .phase = phase,
+  .phase = NULL,
   /* The only board that can answer this, and the reason the bridge exists. */
   .capture_meta = capture_meta,
   /* Full duplex behind its own canceller: no fence, nothing to wait for. */
@@ -902,7 +873,8 @@ static const struct iterate_kit_board_ops ops = {
   .health = health,
 };
 
-static const struct iterate_kit_board_facts facts = {
+static const struct iterate_kit_board board = {
+  .facts = {
   .stream_path = "/agents/voice/stackchan-2",
   .client_path = "/clients/stackchan",
   .conversation_id = "scdev",
@@ -973,8 +945,7 @@ static const struct iterate_kit_board_facts facts = {
   .call_hint = "connection lost — press the side button to call",
   .speaker = {
     .context = NULL,
-    .set_volume = set_volume,
-    .volume = volume,
+    .volume = volume, /* Seed board.c from the NVS-restored hardware volume. */
     .ceiling = STACKCHAN_AUDIO_VOLUME_CEILING,
   },
   /*
@@ -1004,8 +975,16 @@ static const struct iterate_kit_board_facts facts = {
    * first take() so it cannot take the internal DMA memory Wi-Fi needs.
    */
   .radio_before_codec = false,
+  },
+  .i2c = {.sda = -1, .scl = -1}, /* The CoreS3 BSP owns all buses in extra. */
+  .audio = NULL, /* Four-slot TDM and esp-sr remain board-owned. */
+  .ring = {.gpio = -1, .power_gpio = -1},
+  .status_led_gpio = -1,
+  .button = {.gpio = -1}, /* Touch, side button and mode menu own the grammar. */
+  .set_volume = stackchan_audio_set_volume,
+  .extra = &ops,
 };
 
 void iterate_kit_stackchan_run(void) {
-  iterate_kit_voice_loop_run(&ops, &facts, NULL);
+  iterate_kit_board_run(&board);
 }

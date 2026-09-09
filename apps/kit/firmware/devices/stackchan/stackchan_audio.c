@@ -23,7 +23,7 @@
  * codec seam's read().
  */
 #include "stackchan_audio.h"
-#include "iterate/kit/starvation_ledger.h"
+#include "iterate/kit/platforms/i2s_codec.h"
 
 #include <stdatomic.h>
 #include <string.h>
@@ -117,6 +117,7 @@ _Static_assert(
     "a DMA descriptor must be a whole number of milliseconds for the "
     "starvation ledger to account it exactly");
 
+/** One 20 ms wire frame staged into the board's 8 ms hardware edges. */
 struct wire_frame {
   int16_t samples[WIRE_FRAME_SAMPLES];
   size_t sample_count;
@@ -304,56 +305,6 @@ static const struct iterate_kit_audio_codec_properties codec_properties = {
   .has_output_gain_control = true,
   .output_gain_ceiling_centi_db = 0,
 };
-
-/* --- absolute-deadline starvation ledger (shared components/audio policy) ---------- */
-
-static portMUX_TYPE ledger_lock = portMUX_INITIALIZER_UNLOCKED;
-static struct iterate_kit_starvation_ledger ledger;
-
-void stackchan_audio_phase(enum iterate_kit_voice_phase phase) {
-  portENTER_CRITICAL(&ledger_lock);
-  iterate_kit_starvation_ledger_phase(&ledger, phase, esp_timer_get_time());
-  portEXIT_CRITICAL(&ledger_lock);
-}
-
-void stackchan_audio_reserve_write(uint32_t ms) {
-  const int64_t now_us = esp_timer_get_time();
-  portENTER_CRITICAL(&ledger_lock);
-  iterate_kit_starvation_ledger_reserve_write(&ledger, ms, now_us);
-  portEXIT_CRITICAL(&ledger_lock);
-}
-
-void stackchan_audio_rollback_write(uint32_t ms) {
-  portENTER_CRITICAL(&ledger_lock);
-  iterate_kit_starvation_ledger_rollback_write(&ledger, ms);
-  portEXIT_CRITICAL(&ledger_lock);
-}
-
-uint32_t stackchan_audio_starved_ms(void) {
-  struct iterate_kit_starvation_ledger_metrics metrics;
-  portENTER_CRITICAL(&ledger_lock);
-  iterate_kit_starvation_ledger_metrics(&ledger, &metrics);
-  portEXIT_CRITICAL(&ledger_lock);
-  return metrics.starved_ms;
-}
-
-uint32_t stackchan_audio_starve_events(void) {
-  struct iterate_kit_starvation_ledger_metrics metrics;
-  portENTER_CRITICAL(&ledger_lock);
-  iterate_kit_starvation_ledger_metrics(&ledger, &metrics);
-  portEXIT_CRITICAL(&ledger_lock);
-  return metrics.starve_events;
-}
-
-uint32_t stackchan_audio_written_ms(void) {
-  struct iterate_kit_starvation_ledger_metrics metrics;
-  portENTER_CRITICAL(&ledger_lock);
-  iterate_kit_starvation_ledger_metrics(&ledger, &metrics);
-  portEXIT_CRITICAL(&ledger_lock);
-  return metrics.written_ms;
-}
-
-
 
 /* --- ISR tap ---------------------------------------------------------------- */
 
@@ -682,7 +633,7 @@ static void io_task_main(void *argument) {
        * gate — were structurally pinned at 0.
        */
       if (content) {
-        stackchan_audio_reserve_write(CHUNK_MS);
+        iterate_kit_i2s_codec_reserve_write(CHUNK_MS);
       }
       /* Tagged before the write so the edge's own completion finds it. */
       if (from_sound) {
@@ -697,7 +648,7 @@ static void io_task_main(void *argument) {
           __atomic_sub_fetch(&sound_edges_in_flight, 1U, __ATOMIC_ACQ_REL);
         }
         if (content) {
-          stackchan_audio_rollback_write(CHUNK_MS);
+          iterate_kit_i2s_codec_rollback_write(CHUNK_MS);
         }
         ++playback_driver_failures;
         if (consecutive_write_errors != UINT32_MAX) {
@@ -758,7 +709,7 @@ static void io_task_main(void *argument) {
 }
 
 bool stackchan_audio_init(void) {
-  iterate_kit_starvation_ledger_init(&ledger, DMA_RING_MS);
+  iterate_kit_i2s_codec_init_ledger(DMA_RING_MS);
   if (iterate_kit_core_s3_capture_reserve_init(&capture_reserve) !=
       ITERATE_KIT_OK) {
     ESP_LOGE(tag, "capture reserve init failed");

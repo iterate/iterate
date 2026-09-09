@@ -109,6 +109,32 @@ static const struct iterate_kit_audio_codec_properties codec_properties = {
   .output_gain_ceiling_centi_db = 0,
 };
 
+void iterate_kit_i2s_codec_init_ledger(uint16_t ring_ms) {
+  portENTER_CRITICAL(&codec_lock);
+  iterate_kit_starvation_ledger_init(&ledger, ring_ms);
+  portEXIT_CRITICAL(&codec_lock);
+}
+
+void iterate_kit_i2s_codec_reserve_write(uint32_t ms) {
+  portENTER_CRITICAL(&codec_lock);
+  iterate_kit_starvation_ledger_reserve_write(&ledger, ms, esp_timer_get_time());
+  portEXIT_CRITICAL(&codec_lock);
+}
+
+void iterate_kit_i2s_codec_rollback_write(uint32_t ms) {
+  portENTER_CRITICAL(&codec_lock);
+  iterate_kit_starvation_ledger_rollback_write(&ledger, ms);
+  portEXIT_CRITICAL(&codec_lock);
+}
+
+uint32_t iterate_kit_i2s_codec_written_ms(void) {
+  struct iterate_kit_starvation_ledger_metrics metrics;
+  portENTER_CRITICAL(&codec_lock);
+  iterate_kit_starvation_ledger_metrics(&ledger, &metrics);
+  portEXIT_CRITICAL(&codec_lock);
+  return metrics.written_ms;
+}
+
 void iterate_kit_i2s_codec_phase(enum iterate_kit_voice_phase phase) {
   portENTER_CRITICAL(&codec_lock);
   iterate_kit_starvation_ledger_phase(&ledger, phase, esp_timer_get_time());
@@ -238,9 +264,7 @@ static void playback_hardware_task(void *argument) {
     }
     if (before_write != NULL) before_write(hardware_context);
     const uint32_t frame_ms = (uint32_t)(frame.sample_count * 1000U / 16000U);
-    portENTER_CRITICAL(&codec_lock);
-    iterate_kit_starvation_ledger_reserve_write(&ledger, frame_ms, esp_timer_get_time());
-    portEXIT_CRITICAL(&codec_lock);
+    iterate_kit_i2s_codec_reserve_write(frame_ms);
     const enum iterate_kit_status status = hardware_write(
         hardware_context, frame.samples, frame.sample_count);
     if (status != ITERATE_KIT_OK) {
@@ -266,9 +290,7 @@ bool iterate_kit_i2s_codec_start_over(
   hardware_read = read;
   hardware_write = write;
   hardware_context = context;
-  portENTER_CRITICAL(&codec_lock);
-  iterate_kit_starvation_ledger_init(&ledger, ring_ms);
-  portEXIT_CRITICAL(&codec_lock);
+  iterate_kit_i2s_codec_init_ledger(ring_ms);
   capture_mailbox = xQueueCreate(1U, sizeof(struct iterate_kit_i2s_codec_frame));
   playback_mailbox = xQueueCreate(1U, sizeof(struct iterate_kit_i2s_codec_frame));
   TaskHandle_t capture_task = NULL;
@@ -293,17 +315,21 @@ size_t iterate_kit_i2s_codec_health(char *out, size_t capacity) {
   portENTER_CRITICAL(&codec_lock);
   iterate_kit_starvation_ledger_metrics(&ledger, &metrics);
   const struct iterate_kit_health_field fields[] = {
+    {"spkStarvedMs", metrics.starved_ms},
+    {"spkStarveEvents", metrics.starve_events},
     {"codecCaptureOverruns", capture_overruns},
     {"codecCaptureFailures", capture_driver_failures},
     {"codecPlaybackFailures", playback_driver_failures},
-    {"spkStarvedMs", metrics.starved_ms},
-    {"spkStarveEvents", metrics.starve_events},
     {"speakerPlaying", iterate_kit_starvation_ledger_speaker_is_playing(
         &ledger, esp_timer_get_time(), 1500U) ? 1U : 0U},
   };
   portEXIT_CRITICAL(&codec_lock);
+  /* A board-owned TDM task publishes its own capture/playback counters in
+   * extra->health. Only the ledger is shared there: never emit duplicate keys
+   * or invent mailbox counters for hardware that has no shared mailbox. */
+  const size_t count = hardware_read == NULL ? 2U : sizeof(fields) / sizeof(fields[0]);
   return channel_health(out, capacity, iterate_kit_health_append_fields(
-      out, capacity, fields, sizeof(fields) / sizeof(fields[0])));
+      out, capacity, fields, count));
 }
 
 /* --- channels from hardware facts ----------------------------------------- */

@@ -129,6 +129,21 @@ void iterate_kit_i2s_codec_drop_pending_sound(void);
  * hardware task: that path is already counted by start_over.
  */
 void iterate_kit_i2s_codec_note_failure(bool capture);
+/** Initialize the one locked starvation ledger for a board-owned I/O task
+ * (StackChan's 8 ms TDM owner). start_over does this for shared tasks. Call
+ * once before starting hardware producers; do not reset it mid-session.
+ */
+void iterate_kit_i2s_codec_init_ledger(uint16_t ring_ms);
+/** Reserve deadline credit immediately BEFORE a blocking hardware write.
+ * StackChan credits answer edges only, never its continuously clocked silence
+ * or local chimes; doing otherwise would keep its starvation gate green.
+ */
+void iterate_kit_i2s_codec_reserve_write(uint32_t ms);
+/** Undo a failed write's credit; skipped/fenced PCM was never played. */
+void iterate_kit_i2s_codec_rollback_write(uint32_t ms);
+/** Successful/reserved answer duration, for StackChan's dmaWrittenMs oracle. */
+uint32_t iterate_kit_i2s_codec_written_ms(void);
+
 /** Apply the shared starvation phase under one lock; boards own amp actions. */
 void iterate_kit_i2s_codec_phase(enum iterate_kit_voice_phase phase);
 /** Preempt stream PCM with flash-resident PCM16LE, without mixing or allocation.
