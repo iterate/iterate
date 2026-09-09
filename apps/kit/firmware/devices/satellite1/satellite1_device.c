@@ -9,6 +9,7 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "iterate/kit/button.h"
+#include "iterate/kit/conversation_overlay.h"
 #include "iterate/kit/capabilities/health.h"
 #include "iterate/kit/platforms/board.h"
 #include "iterate/kit/platforms/pcm5122.h"
@@ -122,6 +123,7 @@ static void iterate_kit_satellite1_poll(void *context, struct iterate_kit_voice_
     if (side_button_read_failures < UINT32_MAX) ++side_button_read_failures;
     volume_up = (struct iterate_kit_button){0};
     volume_down = (struct iterate_kit_button){0};
+    if (microphone_muted) iterate_kit_led_ring_borrow(NULL, 0);
     microphone_muted = false;
     return;
   }
@@ -130,7 +132,9 @@ static void iterate_kit_satellite1_poll(void *context, struct iterate_kit_voice_
   iterate_kit_button_update(&volume_up, (pressed & 1U) != 0U, now_ms);
   iterate_kit_button_update(&volume_down, (pressed & 4U) != 0U, now_ms);
   /* Specification uses inverted bit 3; verify polarity on the physical rail. */
-  microphone_muted = (pressed & 8U) != 0U;
+  const bool muted = (pressed & 8U) != 0U;
+  if (microphone_muted != muted) iterate_kit_led_ring_borrow(NULL, 0);
+  microphone_muted = muted;
   const int step = (int)iterate_kit_button_take_press(&volume_up) -
       (int)iterate_kit_button_take_press(&volume_down);
   if (step == 0) return;
@@ -141,6 +145,23 @@ static void iterate_kit_satellite1_poll(void *context, struct iterate_kit_voice_
   if (iterate_kit_board_set_volume((uint8_t)target, &applied) == ITERATE_KIT_OK) {
     if (!microphone_muted) iterate_kit_satellite1_show_volume(applied);
   }
+}
+
+/** Add the hardware mute fact to the shared renderer, after board.c presents.
+ * Borrow once for its next refresh; a fault still uses the shared fault chase.
+ * Poll clears the overlay on mute transitions before any new volume gesture.
+ */
+static void iterate_kit_satellite1_present(
+    void *context, const struct iterate_kit_voice_view *view) {
+  (void)context;
+  if (!microphone_muted) return;
+  struct iterate_kit_conversation_visual_state state;
+  struct iterate_kit_rgb8 pixels[ITERATE_KIT_CONVERSATION_LIGHT_COUNT];
+  iterate_kit_voice_view_lights(view, &state);
+  state.microphone_muted = true;
+  iterate_kit_conversation_lights_animate(
+      &state, (uint32_t)(esp_timer_get_time() / 1000), pixels);
+  iterate_kit_led_ring_borrow(pixels, 0);
 }
 
 /** Refresh amplifier faults before appending its fields and the XMOS facts. */
@@ -183,6 +204,7 @@ static size_t iterate_kit_satellite1_modules(
 }
 
 static const struct iterate_kit_board_ops satellite1_extra = {
+  .present = iterate_kit_satellite1_present,
   .poll = iterate_kit_satellite1_poll,
   .health = iterate_kit_satellite1_health,
   .modules = iterate_kit_satellite1_modules,
