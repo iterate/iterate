@@ -126,7 +126,14 @@ async function healthWithRetry(
 export async function boards(options: BoardsOptions) {
   const prompt = options.prompt ?? "Hello there. Please reply with the single word banana.";
   const expect = (options.expect ?? "banana").toLowerCase();
-  const chosen = options.only ? BOARDS.filter((board) => board.name === options.only) : BOARDS;
+  /* Accept the short names people type (`havpe`) as well as the registered
+   * client name: the alias table in connect.ts is the one place that knows
+   * both, and "no board named havpe" read as an unplugged device for a whole
+   * bench run. */
+  const onlyPath = options.only === undefined ? undefined : deviceClientPath(options.only);
+  const chosen = onlyPath
+    ? BOARDS.filter((board) => deviceClientPath(board.name) === onlyPath)
+    : BOARDS;
   if (chosen.length === 0) {
     throw new Error(
       `no board named ${options.only}; known: ${BOARDS.map((b) => b.name).join(", ")}`,
