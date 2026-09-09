@@ -25,41 +25,48 @@ warning.
 
 ## Cause and repair
 
-A canceled RPC span does not imply its method was still executing. In production
-trace `48971bf9e8432c8fcb6d8fc9c8fc9117`, the processor completed registration at
-07:51:12.030 UTC, but the Stream RPC remained alive until the browser closed at
-07:53:53.851 UTC. Its enclosing subrequest ended 29.969 seconds later with the
-native `waitUntil()` cancellation warning. Revocation succeeded in that trace.
+Two native resources outlived a completed client registration:
 
-Workers adds a hidden disposer to every object returned over native RPC. The
-Stream forwards the processor's result, including that disposer. Workerd treats
-it as a returned application disposer and retains the Stream call until its
-caller disposes the result. The relay copied the coordinates and dropped the
-result without disposal, so a completed registration retained its RPC context
-for the lifetime of the browser session.
+1. The processor returns fresh coordinates, but Workers RPC adds a hidden
+   disposer. The Stream forwarded that result unchanged, so workerd treated
+   its disposer as an application disposer and retained the Stream invocation
+   until the client released it. The Stream now uses `using` and returns fresh
+   coordinates, covering both live and non-live registrations.
+2. The Stream's hibernatable `webSocketClose` handler never reciprocated the
+   close frame. The Pager disappeared from the DO's socket inventory while
+   the relay's socket read loop could remain open. The handler now calls
+   `ws.close()` before journaling departure.
 
-The relay now scopes that result with `using`. The live provider and its Pager
-remain owned by the mount; only the completed registration result is released.
-No new timeout, retry, queue, or public API is needed.
+No new timeout, retry, queue, or public API is needed. Providers remain owned
+by their durable mounts; registration returns only the mount coordinates.
 
 ## Evidence and coverage
 
-- The relay regression failed before the repair (result disposer called zero
-  times), then passed with the live provision still active and normal revoke
-  intact. All 124 capability-host unit tests passed.
-- A native Miniflare/workerd experiment confirmed callback arguments are
-  automatically disposed. A three-hop caller/Stream/facet experiment confirmed
-  forwarding a disposable result retains the return pipeline until the caller
-  disposes it; copying and disposing releases it before the outer call returns.
-- The runtime mechanism is documented in [Workers RPC lifecycle](https://developers.cloudflare.com/workers/runtime-apis/rpc/lifecycle/)
-  and implemented in [workerd return-value deserialization](https://github.com/cloudflare/workerd/blob/c4e03fa1d2a3f2607e2b79567076d5fdd5179d03/src/workerd/api/worker-rpc.c++#L149).
-- `clients-connect.e2e.test.ts` terminates a real `/api` WebSocket after
-  registration, verifies durable disconnection, reconnects the same path, and
-  invokes the replacement capability. It passed on the unmodified local server;
-  it protects recovery but does not itself detect the retained RPC context.
+- Production trace `48971bf9e8432c8fcb6d8fc9c8fc9117`: the processor completed
+  registration at 07:51:12.030 UTC, but the Stream RPC remained alive until the
+  browser closed at 07:53:53.851 UTC. A native waitUntil cancellation followed
+  29.969 seconds later. Revocation succeeded.
+- An initial preview fix at the relay released the registration RPC promptly,
+  but close-correlated trace `c0913e3d6ef42e1a038abb9fc0791bd0` still showed the
+  native warning 30.046 seconds after transport termination, even though
+  revocation completed within 76ms. That prompted the socket-handshake repro.
+- Native Miniflare/workerd, compatibility date `2026-07-01`: an empty DO close
+  handler left the peer waiting after 250ms; adding only `ws.close()` delivered
+  the peer's close event. Both versions reported zero DO sockets, demonstrating
+  why durable presence/socket inventory alone did not detect the leak.
+- `stream-capability-lifecycle.test.ts` exercises the real Stream DO. Both
+  regressions failed before their fixes: no result disposal, and no reciprocal
+  socket close. The registration test also checks no disposer escapes.
+- `clients-connect.e2e.test.ts` terminates a real `/api` WebSocket, verifies
+  durable disconnection, reconnects the same path, and invokes its replacement
+  capability. The initial fixed preview and an additional held-open fixture
+  passed; final proof must also inspect teardown telemetry.
+- Native ownership semantics: [Workers RPC lifecycle](https://developers.cloudflare.com/workers/runtime-apis/rpc/lifecycle/)
+  and [workerd return-value deserialization](https://github.com/cloudflare/workerd/blob/c4e03fa1d2a3f2607e2b79567076d5fdd5179d03/src/workerd/api/worker-rpc.c++#L149).
 
 ## Remaining validation
 
-Run the repaired public-worker lifecycle against preview and inspect its native
-RPC durations and teardown telemetry. Registration must finish while the client
-is still connected, with no unexplained cancellation or disposal errors.
+Deploy both repairs, hold a uniquely identified client connection open after
+registration, then terminate it. Confirm registration ends before transport
+close, durable recovery succeeds, and the identified request has no native
+waitUntil cancellation or disposal error after the teardown window.

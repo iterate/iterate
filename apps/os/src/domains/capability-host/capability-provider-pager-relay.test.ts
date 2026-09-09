@@ -36,7 +36,6 @@ function makeDurableObject(overrides: Record<string, unknown> = {}) {
     provideCapability: vi.fn(async (record: LiveCapabilityProvidedPayload) => ({
       path: record.path,
       providedAtOffset: nextProvidedAtOffset++,
-      [Symbol.dispose]: vi.fn(),
     })),
     revokeCapability: vi.fn(async () => undefined),
     ...overrides,
@@ -59,31 +58,6 @@ function relayOver(
 describe("CapabilityProviderPagerRelay", () => {
   beforeEach(() => {
     dialPager.mockReset();
-  });
-
-  it("releases the registration RPC result while retaining the live provider", async () => {
-    const pager = new FakePager();
-    dialPager.mockResolvedValue(pager);
-    const dispose = vi.fn();
-    const result = { path: ["tools"], providedAtOffset: 7 };
-    Object.defineProperty(result, Symbol.dispose, { value: dispose });
-    const durableObject = makeDurableObject({
-      provideCapability: vi.fn(async () => result),
-    });
-    const relay = relayOver(durableObject);
-
-    const provision = await relay.provide({
-      capability: { echo: (value: string) => value },
-      path: ["tools"],
-      type: "live",
-    });
-
-    expect(dispose).toHaveBeenCalledOnce();
-    expect(provision.isActive()).toBe(true);
-    expect(pager.closed).toEqual([]);
-    await provision.revoke({ path: provision.path, providedAtOffset: provision.providedAtOffset });
-    expect(dispose).toHaveBeenCalledOnce();
-    expect(provision.isActive()).toBe(false);
   });
 
   it("mounts multiple providers through one connected Pager offset", async () => {
