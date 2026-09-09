@@ -249,7 +249,7 @@ function BrowserDatabaseProjectStreamView({
     );
 
   const feedColumn = (
-    <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-stream-path={streamPath}>
       <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
         <ProjectStreamFeed
           data={streamData}
@@ -270,7 +270,7 @@ function BrowserDatabaseProjectStreamView({
 
       {layout === "fullPanel" ? null : (
         <StreamComposerFooter
-          key={`${store.streamDatabase.databasePath}:${snapshot.clearVersion}`}
+          key={store.streamDatabase.databasePath}
           autoFocusMessage={autoFocusMessageComposer}
           defaultComposerMode={defaultComposerMode}
           interrupt={interrupt}

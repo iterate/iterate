@@ -123,10 +123,11 @@ test("switching agents clears the previous stream's submission acknowledgement",
   await page.keyboard.press("ControlOrMeta+k");
   await page.getByPlaceholder("Search agents…").fill(second.path);
   await page.getByRole("option", { name: new RegExp(second.path) }).click();
-  // Fill the destination composer only after navigation commits; the old
-  // stream's composer remains mounted while the router loads the destination.
-  await expect(page).toHaveURL((url) => url.pathname === second.webUrl);
-  await composer.fill("Hello second");
+  // The old composer remains mounted while the router loads the destination.
+  await page
+    .locator(`[data-stream-path="${second.path}"]`)
+    .getByRole("combobox", { name: "Message this agent" })
+    .fill("Hello second");
   await page.getByRole("button", { name: "Send message" }).click();
   await page.getByText("Second agent replied").waitFor();
 });
