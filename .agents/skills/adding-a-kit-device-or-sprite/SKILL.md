@@ -11,7 +11,7 @@ hardware facts and nothing else.** Everything a person can see or hear —
 what the lights mean, when the face sleeps, what "connecting" looks like, how
 a turn ends — is decided once, in `components/core`, for every board at once.
 
-Read `apps/kit/docs/2026-08-06-stream-stack-review.md` before any large change.
+Read the task file `tasks/2026-09-09-board-table-and-satellite1.md` before any large change.
 It measures the duplication these instructions try not to add to.
 
 ---
@@ -32,38 +32,65 @@ It measures the duplication these instructions try not to add to.
 If you find yourself writing a second answer to any row above, stop: the
 answer belongs in `components/core` and the other boards want it too.
 
-### The nine things a board actually owns
+### A board is a table
 
-1. **Pins and buses** (`<board>_audio.c`). Copy them from the vendor's own
-   first-party configuration, not from a datasheet reading. For the HA Voice
-   PE these came from `esphome/home-assistant-voice-pe/home-assistant-voice.yaml`;
-   getting a bus wrong is invisible until an echo canceller silently has no
-   reference.
-2. **A codec** — `iterate_kit_audio_codec_ops` with `read`/`write`, plus
-   `iterate_kit_audio_codec_properties`. Three properties change behaviour
-   everywhere else, so get them right:
-   - `capture_is_echo_cancelled` — **true only if hardware or DSP actually
-     cancels.** This is what decides push-to-talk vs open-mic (see below).
-   - `has_reference_channel` — true only if the capture bus really carries the
-     speaker signal. Intended playback is not a measured reference.
-   - `capture_clock_is_hardware_owned`.
-3. **A speaker level** — `<board>_audio_set_volume(percent, applied)` and
-   `<board>_audio_volume()`, mounted through the shared `speaker` capability.
-   Every board has a _ceiling with a measured reason_ (a brownout limit, a
-   distortion knee, an AEC headroom budget). Clamp to it and **report what you
-   applied**, so a caller learns the ceiling by asking for more.
-4. **A display or a ring**, which renders the shared snapshot and nothing else.
-5. **Buttons.** Never put a held gesture on a pin the hardware treats as power.
-6. **Board-specific capabilities** (servos, camera). One portable capability in
-   `components/capabilities` + one board driver of function pointers. The
-   servo module is the reference; the camera module is the reference for
-   anything that returns more bytes than fit in one message.
-7. **A `health()` renderer.** See "instruments" below.
-8. **A `run()`** that composes the above. Today this is ~1,500 duplicated
-   lines per board; the review's §3.3 plans to hoist it. Until then, copy the
-   nearest board **and re-read every comment you copied** — the two most
-   expensive bugs of the consolidation week were duplicates, not logic errors.
-9. **A mount path**: `{"kit", "<name>"}`.
+Since 2026-09-09 a board is `struct iterate_kit_board` (header:
+`platforms/iterate_esp_idf/components/board/include/iterate/kit/platforms/board.h`)
+handed to `iterate_kit_board_run()`. Read `devices/satellite1/satellite1_device.c`
+first: it is the smallest complete board (~330 lines) and the FutureProofHomes
+Satellite1 talks through it. Then `devices/havpe/havpe_device.c` for a board
+with a dial and XMOS pipeline taps.
+
+The table carries the hardware facts and nothing else:
+
+| Field | What it is | Satellite1 |
+| --- | --- | --- |
+| `facts` | the loop's `iterate_kit_board_facts`: stream/client paths, prose, `turns`, `radio_before_codec` | open mic, `/agents/voice/satellite1` |
+| `i2c` | sda/scl/hz; board.c opens the bus | 5/6 @ 400 kHz |
+| `boot[]` | GPIO steps in order: rails, reset pulses, boot waits | `{4, 0, 0}` (XMOS runs) |
+| `scripts[]` | I2C register scripts, `BEFORE_I2S` or `AFTER_I2S`, with a settle | empty (its chips have drivers) |
+| `audio` | `iterate_kit_i2s_codec_facts`: ports, `i2s_std_config_t` pair, DMA, two `iterate_kit_pcm_shape`s, gain, amp GPIO | one duplex slave bus, 48 kHz, ratio 3 |
+| `volume` | a register map, or `register_count 0` + `set_volume` | TAS2780 via `set_volume` |
+| `ring`, `status_led_gpio`, `button`, `sounds` | WS2812 ring (N % 12 == 0), a link LED, the one grammar button, the two chimes | 24 px, GPIO45, GPIO0 |
+| `wake_word` | a WakeNet model name or NULL | `"jarvis"` |
+
+Three things are code because no table can say them:
+
+- `open_codec`: runs AFTER the I2S channels are opened and enabled (TX preloaded
+  with silence) but BEFORE the hardware tasks start, so a slave bus with no
+  clock cannot block yet. Version gates, SAR-ADC power modes, read-modify-writes
+  live here (Satellite1: SPI version poll, TAS2780 init + activate, PCM5122).
+- `set_volume`: for a chip with no plain register (TAS2780's DVC map).
+- `extra`: a full `iterate_kit_board_ops` for what only this board has (a face,
+  servos, a camera, a half-duplex fence, a dial, side buttons). board.c runs its
+  own half of every op first, then `extra`'s; `extra->poll` may OR into the
+  intent or own the grammar when `button.gpio == -1`.
+
+Everything below the table is shared and must not be re-implemented:
+`i2s_codec.c` (hardware tasks, mailboxes, ledger, play_sound, idle silence on
+DSP-reference buses, the raw/clean echo oracle), `led_ring.c`, `wake_word.c`,
+`codecs/{aic3204,tas2780,pcm5122}.c`, `xmos_{i2c,spi}.c`, and in core
+`button.c`, `xmos_control.c`, `starvation_ledger.c`, `pcm_format.c`.
+
+Facts that cost a bench run each, so copy them from the vendor's first-party
+config, then MEASURE:
+
+1. **Which I2S slot carries the microphone.** The Satellite1's XMOS source says
+   slot 0 = AGC and slot 1 = NS; on the shipped XMOS 1.0.3 slot 1 is silent.
+   `micRawPeak`/`micCleanPeak` in `health()` say which one moves. If the board
+   has no raw tap, set `diagnostic_slot = -1`, or the oracle reports nonsense.
+2. **Button polarity per pin.** The Satellite1's Vol± are inverted and its mute
+   is not; treating them alike made a fresh board report `micMuted 1` and refuse
+   every call.
+3. **MCLK.** When a DSP masters the bus, `.mclk = I2S_GPIO_UNUSED`.
+4. **The make-up gain.** x16 after an AGC'd tap fed the provider its own echo on
+   the HA Voice PE; the Satellite1 runs its AGC tap at unity.
+
+A new board also needs: a `targets/<board>/` copied from the nearest board
+(check `partitions.csv` keeps `iterate_kit` at its offset and, with a wake
+word, a `model` partition), a line in `tools/generate-sounds.sh` and an
+`assets/make-sounds.py` (or derive the `.inc` from havpe's when the clips are
+the same), and an entry in `apps/os/scripts/voicelab/boards.ts`.
 
 ### Push-to-talk or open microphone
 
@@ -212,6 +239,26 @@ In order, because each step is cheaper than the next:
 4. **The lights.** A comet chasing round means not connected; still means
    settled. Three green is a healthy network sector.
 5. **Only then the console**, accepting that opening it reboots the board.
+
+Two things that look like a dead board and are not (2026-09-09):
+
+- **The call never becomes active, `ptt-start` repeats on the stream.** The
+  stream has no voice agent, or has one in push-to-talk posture.
+  `pnpm cli voicelab talk --project <slug> --setup-only --stream-path /agents/voice/<board>`
+  births the agent BUT with `clientTakesTurns: true`; an open-mic board then
+  sends audio the provider never commits (`heard: ""`). Append a
+  `voice-agent/configured` with `clientTakesTurns: false` (copy instructions
+  and tools from a working board's stream). A bare `agents.get(path).create()`
+  births a chat agent, not a voice agent.
+- **`no board named havpe`.** `voicelab boards --only` takes the registered
+  name or its alias; `voicelab device` takes `--name`.
+
+And the wake word: `wakeWordModel 1` and `wakeWordFrames` climbing prove the
+model loaded and audio reaches it; `wakeWordDetections` moves on the word;
+`wakeWordMaxUs` against `wakeWordChunkSamples * 1000000 / 16000` is the CPU
+budget (6.9 ms of 32 ms on the HA Voice PE). A board flashed app-only after
+adding the `model` partition has no model: flash with `idf.py flash`, which
+includes `srmodels.bin`.
 
 And before concluding the audio is broken: check whether the _prompt_ explains
 it. "Never read out long lists" is in the voice instructions, so a board asked
