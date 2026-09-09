@@ -1,18 +1,25 @@
 /**
- * Board workspace naming, shared by the vessel (rpc-api.ts) and the browser
- * (routes/use-workspace-board). A board id has
- * exactly one job left: minting a fresh board workspace path under the tasks
- * app's own /workspaces/tasks/ namespace — the workspace mechanism holds all
- * actual state.
+ * Board workspace naming and the ownership rule, shared by the vessel
+ * (rpc-api.ts) and the browser (routes, hooks). A board id has exactly one
+ * job: naming a fresh board workspace under this app's own namespace — the
+ * workspace mechanism holds all actual state, and every project repo is
+ * mounted in it by derivation, so the repo a board shows is a VIEW choice
+ * (`?repo=`), never part of the workspace's identity.
  */
 
 /** The repo a board edits when none is picked. */
 export const DEFAULT_REPO_PATH = "/repos/config";
 
+/** The namespace this app mints board workspaces under. */
+export const BOARD_WORKSPACE_PREFIX = "/workspaces/tasks/";
+
+/** The app-neutral scratch namespace "New workspace" and /jam mint under. */
+export const SCRATCH_WORKSPACE_PREFIX = "/workspaces/scratch/";
+
 /**
- * A board's repo path must be a clean `/repos/...` path — it becomes part
- * of a Durable Object name and a git-API target, so reject anything with
- * empty, dotted, or exotic segments. Returns null when invalid.
+ * A board's repo path must be a clean `/repos/...` path — it becomes a
+ * mount lookup and a git-API scope, so reject anything with empty, dotted,
+ * or exotic segments. Returns null when invalid.
  */
 export function normalizeRepoPath(value: string | null | undefined): string | null {
   if (value === null || value === undefined || value === "") return DEFAULT_REPO_PATH;
@@ -25,84 +32,36 @@ export function normalizeRepoPath(value: string | null | undefined): string | nu
   return value;
 }
 
-/**
- * The board's platform workspace stream path — the workspace identity
- * ENCODES the repo, so the same board id against a different repository
- * can never bind to the first repository's workspace. The human-readable
- * slug alone is NOT injective ("/repos/a/b" and "/repos/a--b" both slug to
- * "repos--a--b"); a short repoPath hash disambiguates. FNV-1a, not SHA-256:
- * the route component builds this path during render, and WebCrypto digests
- * are async-only.
- */
-export function boardWorkspacePath(boardId: string, repoPath: string): string {
-  const slug = repoPath.replace(/^\/+/, "").replaceAll("/", "--");
-  return `/workspaces/tasks/${boardId}~${slug}-${fnv1a32Hex(repoPath)}`;
+/** A board workspace's stream path: the id under the tasks namespace. */
+export function boardWorkspacePath(boardId: string): string {
+  if (!isBoardId(boardId)) throw new Error(`bad board id: ${JSON.stringify(boardId)}`);
+  return `${BOARD_WORKSPACE_PREFIX}${boardId}`;
 }
 
 /**
- * Which board address a workspace path carries, resolved EXACTLY: the slug
- * alone is not injective ("--" is both the path separator and a legal repo
- * name substring), so instead of guessing readings we re-mint the path for
- * each repo the project actually has and keep the one that matches. Returns
- * null for anything that is not one of this app's board workspaces.
- */
-export function boardAddressFor(
-  path: string,
-  repoPaths: readonly string[],
-): { boardId: string; repoPath: string } | null {
-  const boardId = boardIdOf(path);
-  if (boardId === null) return null;
-  const repoPath = repoPaths.find((candidate) => boardWorkspacePath(boardId, candidate) === path);
-  return repoPath === undefined ? null : { boardId, repoPath };
-}
-
-/** The board id a /workspaces/tasks/ path carries, if it is shaped like one. */
-function boardIdOf(path: string): string | null {
-  const match = /^\/workspaces\/tasks\/([A-Za-z0-9][A-Za-z0-9_-]{0,63})~/.exec(path);
-  return match?.[1] ?? null;
-}
-
-/**
- * How a board addresses its workspace. `boardId` is set when the board
- * uses the tasks app's own naming (the workspace is lazily created on first
- * use); null when the board is a lens on an existing workspace addressed
- * purely by path (plain get). `workspacePath` is always resolved.
+ * How a board addresses its workspace: an EXISTING workspace by its platform
+ * path (plain get — nothing here creates) plus the /repos/** mount whose
+ * task files the board shows.
  */
 export type BoardAddress = {
-  boardId: string | null;
   workspacePath: string;
   /** The /repos/** mount whose task files this board shows. */
   repoPath: string;
 };
 
 /**
- * Publishing is the workspace OWNER's act. The tasks app owns only the board
- * workspaces it mints itself, and a board workspace ENCODES its one repo —
- * so ownership is proven by RE-MINTING the path from (board id, this lens's
- * repo) and requiring an exact match. Anything else — an agent's workspace
- * mid-thought, a foreign name under the tasks namespace, a board opened
- * against a different mount — is a guest: read, comment, edit, but never
- * Commit or Discard-all.
+ * Publishing is the workspace OWNER's act. This app owns the workspaces it
+ * mints itself — boards under /workspaces/tasks/ and scratch workspaces
+ * (the sidebar's "New workspace", /jam). Anything else — an agent's
+ * workspace mid-thought, a foreign name — is a guest: read, comment, edit,
+ * but never Commit or Discard-all, because a commit publishes a mount's
+ * ENTIRE dirty set, the owner's uncommitted work included.
  */
-export function isGuestWorkspacePath(workspacePath: string, repoPath: string): boolean {
-  // Scratch workspaces (the sidebar's "New workspace", /jam) are this app's
-  // own creation too; they are not repo-bound, and commit scope pins the
-  // mount anyway.
-  if (workspacePath.startsWith(SCRATCH_WORKSPACE_PREFIX)) return false;
-  const boardId = boardIdOf(workspacePath);
-  return boardId === null || boardWorkspacePath(boardId, repoPath) !== workspacePath;
-}
-
-/** The app-neutral namespace "New workspace" and /jam mint under. */
-export const SCRATCH_WORKSPACE_PREFIX = "/workspaces/scratch/";
-
-/** 32-bit FNV-1a as 8 lowercase hex chars. */
-function fnv1a32Hex(value: string): string {
-  let hash = 0x811c9dc5;
-  for (let index = 0; index < value.length; index++) {
-    hash = Math.imul(hash ^ value.charCodeAt(index), 0x01000193);
-  }
-  return (hash >>> 0).toString(16).padStart(8, "0");
+export function isGuestWorkspacePath(workspacePath: string): boolean {
+  return (
+    !workspacePath.startsWith(BOARD_WORKSPACE_PREFIX) &&
+    !workspacePath.startsWith(SCRATCH_WORKSPACE_PREFIX)
+  );
 }
 
 /** Shareable board id: date-time prefix for humans, random tail for uniqueness. */

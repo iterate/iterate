@@ -22,9 +22,6 @@ import {
  * `iterate` client types predate it, so the shape is asserted locally —
  * capnweb stubs are Proxies, so unknown properties resolve at runtime. */
 type WorkspaceStub = {
-  // Mounts are not create's business: every project repo is derived onto its
-  // own /repos/** path, and mounting at "/" is rejected.
-  create(input: object): Promise<unknown>;
   collab: {
     open(path: string): Promise<CollabOpened>;
     push(input: {
@@ -53,7 +50,6 @@ type WorkspaceStub = {
     boardPresent(clientId: string, name: string | null): Promise<void>;
   };
   readBase(path: string): Promise<string | null>;
-  exists(path: string): Promise<boolean>;
   glob(pattern: string): Promise<string[]>;
   readFile(path: string): Promise<string | null>;
   readFiles(paths: string[]): Promise<Record<string, string | null>>;
@@ -93,22 +89,12 @@ export class TasksWorkspaceApi extends RpcTarget implements TasksWorkspace {
   readonly #dial: ProjectDial;
   readonly #workspacePath: string;
   readonly #repoPath: string;
-  /** Boards on the tasks app's own naming are created on first use; a lens
-   * addressed at an arbitrary workspace path never creates (plain get). */
-  readonly #lazyCreate: boolean;
-  #created = false;
 
-  constructor(
-    dial: ProjectDial,
-    workspacePath: string,
-    repoPath: string,
-    posture: { lazyCreate: boolean },
-  ) {
+  constructor(dial: ProjectDial, workspacePath: string, repoPath: string) {
     super();
     this.#dial = dial;
     this.#workspacePath = workspacePath;
     this.#repoPath = repoPath;
-    this.#lazyCreate = posture.lazyCreate;
   }
 
   /** Board-lane paths → the platform's mount-qualified form. */
@@ -124,16 +110,15 @@ export class TasksWorkspaceApi extends RpcTarget implements TasksWorkspace {
   }
 
   /**
-   * Publishing is the workspace OWNER's act. The tasks app owns only its own
-   * /workspaces/tasks/ naming (boards, shared by every project member), and
-   * a board workspace ENCODES its one repo — so owner acts additionally
-   * require this capability to be scoped to that repo. Everything else is a
-   * guest lens: it reads, comments, and edits, but a commit would publish a
-   * mount's ENTIRE dirty set (the owning agent's uncommitted work included),
-   * so the owner acts are refused here.
+   * Publishing is the workspace OWNER's act. This app owns only the
+   * workspaces it mints itself (boards and scratch workspaces, shared by
+   * every project member). Everything else is a guest lens: it reads,
+   * comments, and edits, but a commit would publish a mount's ENTIRE dirty
+   * set (the owning agent's uncommitted work included), so the owner acts
+   * are refused here.
    */
   #assertOwnerAct(operation: string): void {
-    if (isGuestWorkspacePath(this.#workspacePath, this.#repoPath)) {
+    if (isGuestWorkspacePath(this.#workspacePath)) {
       throw new Error(
         `${operation} is the workspace owner's act — this board is a guest lens on ${this.#workspacePath}; ask the workspace's owner (its agent) to publish`,
       );
@@ -141,41 +126,11 @@ export class TasksWorkspaceApi extends RpcTarget implements TasksWorkspace {
   }
 
   async #withWorkspace<T>(operation: (ws: WorkspaceStub) => Promise<T>): Promise<T> {
-    return this.#dial.withProject(async (project) => {
+    return this.#dial.withProject((project) => {
       const workspaces = (
         project as unknown as { workspaces: { get(path: string): WorkspaceStub } }
       ).workspaces;
-      // For boards the workspace identity ENCODES the repo (see
-      // boardWorkspacePath): the same board id against a different
-      // repository can never bind to (and edit) the first repository's
-      // workspace.
-      const ws = workspaces.get(this.#workspacePath);
-      try {
-        return await operation(ws);
-      } catch (error) {
-        // Only the workspace-missing error (exact platform phrasing) on a
-        // lazily-creating board triggers creation — a file-level "does not
-        // exist" (and ANY error on a plain-get lens) must surface as-is.
-        if (
-          !this.#lazyCreate ||
-          this.#created ||
-          !/workspace "[^"]+" does not exist/.test(
-            error instanceof Error ? error.message : String(error),
-          )
-        ) {
-          throw error;
-        }
-        // Concurrent first-touchers may race create: tolerate its failure and
-        // retry the operation regardless — ITS error is the one that matters.
-        // The repo mount is not passed: creation derives every project repo
-        // onto its own /repos/** path.
-        await ws.create({}).catch(() => undefined);
-        // Proven by USE: only a successful retry marks the workspace created —
-        // a transient create failure must not wedge this held capability.
-        const result = await operation(ws);
-        this.#created = true;
-        return result;
-      }
+      return operation(workspaces.get(this.#workspacePath));
     });
   }
 
@@ -260,11 +215,6 @@ export class TasksWorkspaceApi extends RpcTarget implements TasksWorkspace {
 
   /** The newest page of the workspace's stream events, newest first. */
   async events(limit = 50): Promise<WorkspaceStreamEvent[]> {
-    // A REAL workspace call: on a fresh board it throws the
-    // missing-workspace error, which is what makes #withWorkspace lazily
-    // create it — so the stream (and its birth events) exist to read.
-    // Probed at the repo mount: "/" is no path in any workspace now.
-    await this.#withWorkspace((ws) => ws.exists(this.#repoPath));
     const events = (await this.#dial.withProject(async (project) => {
       const streams = (
         project as unknown as {
@@ -294,8 +244,6 @@ export class TasksWorkspaceApi extends RpcTarget implements TasksWorkspace {
     processEventBatch: (batch: { events: WorkspaceStreamEvent[] }) => unknown,
     afterOffset = 0,
   ): Promise<{ ping?(): Promise<boolean> | boolean; unsubscribe(): void }> {
-    // A real call (see events()) so lazy creation actually runs.
-    await this.#withWorkspace((ws) => ws.exists(this.#repoPath));
     return this.#dial.withProject(async (project) => {
       const streams = (
         project as unknown as {

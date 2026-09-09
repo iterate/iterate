@@ -18,7 +18,6 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as JamRouteImport } from './routes/jam'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as WIndexRouteImport } from './routes/w.index'
-import { Route as WBoardIdRouteImport } from './routes/w.$boardId'
 
 const JamRoute = JamRouteImport.update({
   id: '/jam',
@@ -35,43 +34,34 @@ const WIndexRoute = WIndexRouteImport.update({
   path: '/w/',
   getParentRoute: () => rootRouteImport,
 } as any)
-const WBoardIdRoute = WBoardIdRouteImport.update({
-  id: '/w/$boardId',
-  path: '/w/$boardId',
-  getParentRoute: () => rootRouteImport,
-} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/jam': typeof JamRoute
-  '/w/$boardId': typeof WBoardIdRoute
   '/w/': typeof WIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/jam': typeof JamRoute
-  '/w/$boardId': typeof WBoardIdRoute
   '/w': typeof WIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/jam': typeof JamRoute
-  '/w/$boardId': typeof WBoardIdRoute
   '/w/': typeof WIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/jam' | '/w/$boardId' | '/w/'
+  fullPaths: '/' | '/jam' | '/w/'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/jam' | '/w/$boardId' | '/w'
-  id: '__root__' | '/' | '/jam' | '/w/$boardId' | '/w/'
+  to: '/' | '/jam' | '/w'
+  id: '__root__' | '/' | '/jam' | '/w/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   JamRoute: typeof JamRoute
-  WBoardIdRoute: typeof WBoardIdRoute
   WIndexRoute: typeof WIndexRoute
 }
 
@@ -98,20 +88,12 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof WIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/w/$boardId': {
-      id: '/w/$boardId'
-      path: '/w/$boardId'
-      fullPath: '/w/$boardId'
-      preLoaderRoute: typeof WBoardIdRouteImport
-      parentRoute: typeof rootRouteImport
-    }
   }
 }
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   JamRoute: JamRoute,
-  WBoardIdRoute: WBoardIdRoute,
   WIndexRoute: WIndexRoute,
 }
 export const routeTree = rootRouteImport

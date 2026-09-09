@@ -43,7 +43,7 @@ function WorkspaceDocuments({
   path: string | undefined;
 }) {
   const files = useWorkspaceFiles({ workspacePath, repoPath: JAM_REPO_PATH });
-  const commit = useWorkspaceCommit({ files, workspacePath, repoPath: JAM_REPO_PATH });
+  const commit = useWorkspaceCommit({ files, workspacePath });
   const navigate = useNavigate({ from: Route.fullPath });
   const onSelect = useCallback(
     (path: string | null) =>

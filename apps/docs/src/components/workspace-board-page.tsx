@@ -52,9 +52,9 @@ export type BoardSearch = {
  * The tasks board on the WORKSPACE mechanism: every read and write is the
  * platform workspace — the overlay is the diff, commits are workspace
  * commits, and the detail editor is the live rebase-model collab session
- * with redlines. Mounted by both board routes: the app's own boards
- * (/w/<id>, lazily created) and the lens form (/w?workspace=, plain get).
- * On a workspace the app doesn't own the page is a GUEST lens: read,
+ * with redlines. Mounted by the /w route on an existing workspace (plain
+ * get: the app's own boards under /workspaces/tasks/ are created from the
+ * board home before the route ever opens them). On a workspace the app doesn't own the page is a GUEST lens: read,
  * comment, edit — the owner acts (Commit, Discard all, Assign agent) stay
  * hidden, and publishing remains the workspace owner's call.
  */
@@ -71,7 +71,7 @@ export function WorkspaceBoardPage({
   patchSearch: (patch: Partial<BoardSearch>) => void;
 }) {
   const { repoPath, workspacePath } = address;
-  const guest = isGuestWorkspacePath(workspacePath, repoPath);
+  const guest = isGuestWorkspacePath(workspacePath);
   const board = useWorkspaceBoard(address);
   // Owners auto-commit by default; guest views never publish another workspace.
   const [autoCommit, setAutoCommit] = useState(true);
@@ -488,12 +488,7 @@ export function WorkspaceBoardPage({
     <>
       <header className="flex h-14 shrink-0 items-center gap-2 border-b bg-background px-3">
         <SidebarTrigger className="-ml-1 md:hidden" />
-        <BoardBreadcrumbs
-          workspace={
-            address.boardId !== null ? `/workspaces/tasks/${address.boardId}` : workspacePath
-          }
-          rootPath={repoPath}
-        />
+        <BoardBreadcrumbs workspace={workspacePath} rootPath={repoPath} />
         {guest && (
           <span
             className="shrink-0 rounded-md bg-sky-500/15 px-1.5 py-0.5 text-[10px] font-semibold tracking-wide text-sky-800 uppercase"

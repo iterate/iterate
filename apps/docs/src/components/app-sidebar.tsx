@@ -35,12 +35,6 @@ import {
   useSidebar,
 } from "@iterate-com/ui/components/sidebar";
 import { withDocsProject } from "../lib/docs-client.ts";
-import {
-  DEFAULT_REPO_PATH,
-  boardWorkspacePath,
-  isBoardId,
-  normalizeRepoPath,
-} from "../lib/board-shared.ts";
 import { CloseMobileSidebarOnNavigate } from "./close-mobile-sidebar-on-navigate.tsx";
 
 /**
@@ -59,19 +53,10 @@ export function AppSidebar() {
   const location = useRouterState({ select: (state) => state.location });
   const search = location.search as { repo?: string; workspace?: string };
   const boardView = location.pathname.startsWith("/w");
-  // An owned board (/w/<boardId>) carries no ?workspace= — its workspace
-  // path is DERIVED from the id + repo, so derive it here too or the
-  // switcher (and the Docs view link) would lose the workspace on the
-  // board's main route.
-  const boardId = decodeURIComponent(/^\/w\/([^/]+)/.exec(location.pathname)?.[1] ?? "");
   // /w's validated search supplies workspace as a STRING ("" on the board
   // home) — empty means unset here, or the switcher would wear a blank
   // label and the Docs link a dangling workspace=.
-  const workspacePath =
-    (search.workspace === "" ? undefined : search.workspace) ??
-    (isBoardId(boardId)
-      ? boardWorkspacePath(boardId, normalizeRepoPath(search.repo) ?? DEFAULT_REPO_PATH)
-      : undefined);
+  const workspacePath = search.workspace === "" ? undefined : search.workspace;
 
   return (
     <>
@@ -200,7 +185,10 @@ function WorkspaceSwitcher({
     setCreateError(null);
     void withDocsProject((project) => project.createWorkspace())
       .then(({ workspacePath: created, path }) =>
-        navigate({ to: "/", search: { workspace: created, path } }),
+        navigate({
+          to: "/",
+          search: path === null ? { workspace: created } : { workspace: created, path },
+        }),
       )
       // The menu has closed by the time this settles — surface the failure
       // under the trigger, where the eye already is.

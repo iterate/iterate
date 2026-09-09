@@ -7,17 +7,10 @@ export type {
   CollabWaitResult,
 } from "@iterate-com/workspace-documents/types";
 
-/**
- * One workspace stream in the project, as the picker lists them. `board` is
- * present when the path is a tasks-app board workspace (minted under
- * /workspaces/tasks/), parsed back into its (boardId, repoPath) address;
- * null for every other workspace (an agent's, ...) — a lens opens those by
- * path, as a guest.
- */
+/** One workspace stream in the project, as the pickers list them. */
 export type WorkspaceListEntry = {
   path: string;
   createdAt: string;
-  board: { boardId: string; repoPath: string } | null;
 };
 
 /** One event from the workspace's platform stream (the event-sourced spine). */

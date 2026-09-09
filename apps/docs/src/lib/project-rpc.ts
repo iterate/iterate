@@ -14,20 +14,14 @@ export const withProjectOnce = withDocsProjectOnce;
 
 /**
  * The board's workspace capability for one address, on a live project stub:
- * the lazily-creating door for the app's own board naming, the plain-`get`
- * lens door for an existing workspace path. (The stub is a capnweb Proxy;
- * the local cast just names the doors.)
+ * the plain-`get` lens door on an existing workspace path. (The stub is a
+ * capnweb Proxy; the local cast just names the door.)
  */
 export function workspaceFor(project: unknown, address: BoardAddress): TasksWorkspace {
   const doors = project as {
-    board(boardId: string, repoPath?: string): unknown;
     workspaceAt(workspacePath: string, repoPath?: string): unknown;
   };
-  return (
-    address.boardId !== null
-      ? doors.board(address.boardId, address.repoPath)
-      : doors.workspaceAt(address.workspacePath, address.repoPath)
-  ) as TasksWorkspace;
+  return doors.workspaceAt(address.workspacePath, address.repoPath) as TasksWorkspace;
 }
 
 /** The project's repos, for the board home's per-repo sections. */

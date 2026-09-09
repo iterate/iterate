@@ -26,19 +26,15 @@ export function WorkspaceTaskEditor({
   onStatus?: (status: string) => void;
   onRequestClose?: () => void;
 }) {
-  const { boardId, workspacePath, repoPath } = address;
+  const { workspacePath, repoPath } = address;
   const transport = useMemo<WorkspaceDocumentTransport>(
     () => ({
       run: (operation) =>
-        withProject((project) =>
-          operation(workspaceFor(project, { boardId, workspacePath, repoPath })),
-        ),
+        withProject((project) => operation(workspaceFor(project, { workspacePath, repoPath }))),
       runOnce: (operation) =>
-        withProjectOnce((project) =>
-          operation(workspaceFor(project, { boardId, workspacePath, repoPath })),
-        ),
+        withProjectOnce((project) => operation(workspaceFor(project, { workspacePath, repoPath }))),
     }),
-    [boardId, workspacePath, repoPath],
+    [workspacePath, repoPath],
   );
 
   return (

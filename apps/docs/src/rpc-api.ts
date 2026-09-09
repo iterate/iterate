@@ -18,10 +18,9 @@ import { requireDocumentPath, requireWorkspacePath } from "./config-bridge.ts";
 import type { AppEnv } from "./env.ts";
 import { TasksWorkspaceApi } from "./tasks-rpc-api.ts";
 import {
+  BOARD_WORKSPACE_PREFIX,
   DEFAULT_REPO_PATH,
-  boardAddressFor,
-  boardWorkspacePath,
-  isBoardId,
+  SCRATCH_WORKSPACE_PREFIX,
   newBoardId,
   normalizeRepoPath,
 } from "./lib/board-shared.ts";
@@ -130,34 +129,16 @@ class DocsProjectApi extends RpcTarget implements DocsProject {
   }
 
   /**
-   * A board on the app's own workspace naming: the workspace path is derived
-   * from (boardId, repoPath) and lazily created on first use — opening a
-   * fresh board id IS how a new board workspace is born.
-   */
-  board(boardId: string, repoPath: string = DEFAULT_REPO_PATH): TasksWorkspace {
-    const normalized = normalizeRepoPath(repoPath);
-    if (!isBoardId(boardId) || normalized === null) {
-      throw new Error("bad board id or repo path");
-    }
-    return new TasksWorkspaceApi(this.#dial, boardWorkspacePath(boardId, normalized), normalized, {
-      lazyCreate: true,
-    });
-  }
-
-  /**
    * A board lens on an EXISTING workspace, addressed by its platform path —
-   * the same plain-`get` posture as workspace(): no lazy creation, no side
-   * effects. Workspaces outside the app's own /workspaces/tasks/ namespace
-   * are someone else's (an agent's, mid-thought): the capability serves
-   * reads, comments, and edits there, but refuses the owner acts (commit,
-   * assignAgent).
+   * the same plain-`get` posture as workspace(): no creation, no side
+   * effects. Workspaces outside the app's own namespaces are someone else's
+   * (an agent's, mid-thought): the capability serves reads, comments, and
+   * edits there, but refuses the owner acts (commit, assignAgent).
    */
   workspaceAt(workspacePath: string, repoPath: string = DEFAULT_REPO_PATH): TasksWorkspace {
     const normalized = normalizeRepoPath(repoPath);
     if (normalized === null) throw new Error("bad repo path");
-    return new TasksWorkspaceApi(this.#dial, requireWorkspacePath(workspacePath), normalized, {
-      lazyCreate: false,
-    });
+    return new TasksWorkspaceApi(this.#dial, requireWorkspacePath(workspacePath), normalized);
   }
 
   async whoami(): Promise<DocsUser> {
@@ -191,9 +172,6 @@ class DocsProjectApi extends RpcTarget implements DocsProject {
       // The platform's StreamListItem shape ({ path, createdAt }) — asserted
       // for the same pinned-client reason.
     })) as { createdAt: string; path: string }[];
-    // The project's repos resolve board paths EXACTLY (a board path is
-    // re-minted per repo and compared) — no guessing at the "--" separator.
-    const repoPaths = await this.repos();
     // Ancestor pruning: every stream announces to every ancestor path, so a
     // nested workspace drags phantom ancestor streams into the catalog that
     // were never created as workspaces.
@@ -202,11 +180,7 @@ class DocsProjectApi extends RpcTarget implements DocsProject {
     const workspaces: WorkspaceListEntry[] = [];
     for (const stream of candidates) {
       if (paths.some((other) => other.startsWith(`${stream.path}/`))) continue;
-      workspaces.push({
-        path: stream.path,
-        createdAt: stream.createdAt,
-        board: boardAddressFor(stream.path, repoPaths),
-      });
+      workspaces.push({ path: stream.path, createdAt: stream.createdAt });
     }
     return workspaces.sort((left, right) => right.createdAt.localeCompare(left.createdAt));
   }
@@ -241,13 +215,18 @@ class DocsProjectApi extends RpcTarget implements DocsProject {
     });
   }
 
-  async createWorkspace(): Promise<{ workspacePath: string; path: string }> {
-    // Human-readable stamp + random tail, the tasks board-id recipe.
-    const now = new Date();
-    const pad = (value: number) => String(value).padStart(2, "0");
-    const stamp = `${now.getUTCFullYear()}${pad(now.getUTCMonth() + 1)}${pad(now.getUTCDate())}-${pad(now.getUTCHours())}${pad(now.getUTCMinutes())}`;
-    const workspacePath = `/workspaces/scratch/${stamp}-${Math.random().toString(36).slice(2, 6)}`;
-    const path = "notes.md";
+  async createWorkspace(
+    input: { path?: string } = {},
+  ): Promise<{ workspacePath: string; path: string | null }> {
+    // An explicit path is a board under this app's own namespace — the only
+    // caller-named workspaces this door births; a scratch workspace wears
+    // the human-readable stamp + random tail of a board id.
+    const explicit = input.path === undefined ? null : requireWorkspacePath(input.path);
+    if (explicit !== null && !explicit.startsWith(BOARD_WORKSPACE_PREFIX)) {
+      throw new Error(`createWorkspace only names workspaces under ${BOARD_WORKSPACE_PREFIX}`);
+    }
+    const workspacePath = explicit ?? `${SCRATCH_WORKSPACE_PREFIX}${newBoardId()}`;
+    const path = explicit === null ? "notes.md" : null;
     await this.#dial.withProject(async (project) => {
       // Same pinned-client caveat as workspaces(): create/writeFile are the
       // platform workspace surface, asserted locally; birth stays explicit
@@ -265,7 +244,7 @@ class DocsProjectApi extends RpcTarget implements DocsProject {
       await stub.create({});
       // The document must EXIST before the editor opens it (no lazy file
       // create anywhere in Docs) — seed the starter note in the same breath.
-      await stub.writeFile(`${workspacePath}/${path}`, "# Notes\n\n");
+      if (path !== null) await stub.writeFile(`${workspacePath}/${path}`, "# Notes\n\n");
     });
     return { workspacePath, path };
   }

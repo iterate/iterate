@@ -3,22 +3,24 @@ import { useEffect, useState } from "react";
 import { ClockIcon, FolderGit2Icon, Loader2Icon, PlusIcon, TelescopeIcon } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
 import { SidebarTrigger } from "@iterate-com/ui/components/sidebar";
-import { newBoardId } from "../lib/board-shared.ts";
-import { listRepos, listWorkspaces } from "../lib/project-rpc.ts";
+import { boardWorkspacePath, newBoardId } from "../lib/board-shared.ts";
+import { listRepos, listWorkspaces, withProject } from "../lib/project-rpc.ts";
 import type { WorkspaceListEntry } from "../lib/tasks-api.ts";
 
 /**
  * The tasks view's home — /w without a workspace addressed. One flat list of
- * every workspace (the app's own boards with their repo scope, agents'
- * workspaces as guest lenses), then per-repo cards for starting a new board
- * workspace. Nothing actionable renders until the lists are actually known —
- * a spinner, never a premature empty state.
+ * every workspace (the app's own boards, agents' workspaces as guest views),
+ * then one button per repo for starting a new board workspace on that
+ * repo's task files. Nothing actionable renders until the lists are actually
+ * known — a spinner, never a premature empty state.
  */
 export function BoardHome() {
   const navigate = useNavigate();
   const [repos, setRepos] = useState<string[]>([]);
   const [workspaces, setWorkspaces] = useState<WorkspaceListEntry[]>([]);
   const [loaded, setLoaded] = useState(false);
+  const [creating, setCreating] = useState<string | null>(null);
+  const [createError, setCreateError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -33,12 +35,25 @@ export function BoardHome() {
     };
   }, []);
 
+  // A board workspace is CREATED here, explicitly, then opened by path —
+  // the route itself never creates (plain get), so a shared link to a
+  // workspace that does not exist says so instead of minting one.
   const openNewBoard = (repoPath: string) => {
-    void navigate({
-      to: "/w/$boardId",
-      params: { boardId: newBoardId() },
-      search: { group: "folder", q: "", repo: repoPath, task: "" },
-    });
+    setCreating(repoPath);
+    setCreateError(null);
+    void withProject((project) =>
+      project.createWorkspace({ path: boardWorkspacePath(newBoardId()) }),
+    )
+      .then(({ workspacePath }) =>
+        navigate({
+          to: "/w",
+          search: { group: "folder", q: "", repo: repoPath, task: "", workspace: workspacePath },
+        }),
+      )
+      .catch((error: unknown) => {
+        setCreateError(error instanceof Error ? error.message : String(error));
+      })
+      .finally(() => setCreating(null));
   };
 
   return (
@@ -69,100 +84,57 @@ export function BoardHome() {
               <ul className="divide-y">
                 {workspaces.map((entry) => (
                   <li key={entry.path}>
-                    {entry.board === null ? (
-                      <Link
-                        to="/w"
-                        search={{
-                          group: "folder",
-                          q: "",
-                          repo: "",
-                          task: "",
-                          workspace: entry.path,
-                        }}
-                        className="flex items-center justify-between gap-3 px-5 py-3 transition-colors hover:bg-muted/50"
-                      >
-                        <span className="truncate font-mono text-sm">{entry.path}</span>
-                        <span className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
-                          <ClockIcon aria-hidden className="size-3.5" />
-                          {relativeTimeLong(entry.createdAt)}
-                        </span>
-                      </Link>
-                    ) : (
-                      <Link
-                        to="/w/$boardId"
-                        params={{ boardId: entry.board.boardId }}
-                        search={{
-                          group: "folder",
-                          q: "",
-                          repo: entry.board.repoPath,
-                          task: "",
-                        }}
-                        className="flex items-center justify-between gap-3 px-5 py-3 transition-colors hover:bg-muted/50"
-                      >
-                        <span className="truncate font-mono text-sm">
-                          /workspaces/tasks/{entry.board.boardId}
-                        </span>
-                        <span className="flex shrink-0 items-center gap-3 text-xs text-muted-foreground">
-                          <span className="font-mono">{entry.board.repoPath}</span>
-                          <span className="flex items-center gap-1.5">
-                            <ClockIcon aria-hidden className="size-3.5" />
-                            {relativeTimeLong(entry.createdAt)}
-                          </span>
-                        </span>
-                      </Link>
-                    )}
+                    <Link
+                      to="/w"
+                      search={{
+                        group: "folder",
+                        q: "",
+                        repo: "",
+                        task: "",
+                        workspace: entry.path,
+                      }}
+                      className="flex items-center justify-between gap-3 px-5 py-3 transition-colors hover:bg-muted/50"
+                    >
+                      <span className="truncate font-mono text-sm">{entry.path}</span>
+                      <span className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
+                        <ClockIcon aria-hidden className="size-3.5" />
+                        {relativeTimeLong(entry.createdAt)}
+                      </span>
+                    </Link>
                   </li>
                 ))}
               </ul>
             </section>
           )}
-          <h2 className="mt-2 text-sm font-semibold text-muted-foreground">
-            Start a new board workspace
-          </h2>
-          {repos.map((repoPath) => {
-            const entries = workspaces.filter((entry) => entry.board?.repoPath === repoPath);
-            return (
-              <section key={repoPath} className="rounded-xl border bg-background shadow-xs">
-                <div className="flex items-center justify-between gap-3 border-b px-5 py-4">
-                  <div className="flex min-w-0 items-center gap-2.5">
-                    <FolderGit2Icon aria-hidden className="size-5 text-muted-foreground" />
-                    <div className="min-w-0">
-                      <h2 className="truncate font-mono text-sm font-semibold">{repoPath}</h2>
-                      <p className="text-xs text-muted-foreground">
-                        {entries.length === 0
-                          ? "No boards yet"
-                          : `${entries.length} board${entries.length === 1 ? "" : "s"}`}
-                      </p>
-                    </div>
-                  </div>
-                  <Button onClick={() => openNewBoard(repoPath)}>
+          <section className="rounded-xl border bg-background shadow-xs">
+            <div className="border-b px-5 py-4">
+              <h2 className="text-sm font-semibold">Start a new board workspace</h2>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Every repo is mounted in it; pick which repo&rsquo;s task files the board shows.
+              </p>
+            </div>
+            <ul className="divide-y">
+              {repos.map((repoPath) => (
+                <li key={repoPath} className="flex items-center justify-between gap-3 px-5 py-3">
+                  <span className="flex min-w-0 items-center gap-2.5">
+                    <FolderGit2Icon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
+                    <span className="truncate font-mono text-sm">{repoPath}</span>
+                  </span>
+                  <Button
+                    size="sm"
+                    disabled={creating !== null}
+                    onClick={() => openNewBoard(repoPath)}
+                  >
                     <PlusIcon aria-hidden className="size-4" />
-                    New board
+                    {creating === repoPath ? "Creating…" : "New board"}
                   </Button>
-                </div>
-                {entries.length === 0 ? null : (
-                  <ul className="divide-y">
-                    {entries.map((entry) => (
-                      <li key={entry.path}>
-                        <Link
-                          to="/w/$boardId"
-                          params={{ boardId: entry.board!.boardId }}
-                          search={{ group: "folder", q: "", repo: repoPath, task: "" }}
-                          className="flex items-center justify-between gap-3 px-5 py-3 transition-colors hover:bg-muted/50"
-                        >
-                          <span className="truncate font-mono text-sm">{entry.board!.boardId}</span>
-                          <span className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
-                            <ClockIcon aria-hidden className="size-3.5" />
-                            {relativeTimeLong(entry.createdAt)}
-                          </span>
-                        </Link>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </section>
-            );
-          })}
+                </li>
+              ))}
+            </ul>
+            {createError !== null && (
+              <p className="border-t px-5 py-2 text-xs text-red-700">{createError}</p>
+            )}
+          </section>
         </div>
       )}
     </div>

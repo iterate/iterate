@@ -70,8 +70,8 @@ export function DeepLinkEmptyState({ workspacePath }: { workspacePath?: string }
     };
   }, [chosen]);
 
-  const open = (workspace: string, path: string) =>
-    void navigate({ to: "/", search: { workspace, path } });
+  const open = (workspace: string, path: string | null) =>
+    void navigate({ to: "/", search: path === null ? { workspace } : { workspace, path } });
 
   const createScratch = () => {
     setCreating(true);

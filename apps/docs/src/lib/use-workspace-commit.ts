@@ -9,11 +9,9 @@ import { useTaskCommit } from "./use-task-commit.ts";
 export function useWorkspaceCommit({
   files,
   workspacePath,
-  repoPath,
 }: {
   files: ReturnType<typeof useWorkspaceFiles>;
   workspacePath: string;
-  repoPath: string;
 }) {
   const taskChanges = useMemo<TaskChangeSummary[]>(
     () =>
@@ -25,7 +23,7 @@ export function useWorkspaceCommit({
   // Publishing is the workspace OWNER's act (the board's rule): on someone
   // else's workspace — an agent's, mid-thought — the whole commit surface is
   // withheld, discard-all and the auto-commit timer included.
-  const guest = isGuestWorkspacePath(workspacePath, repoPath);
+  const guest = isGuestWorkspacePath(workspacePath);
   const [autoCommit, setAutoCommit] = useState(true);
   const [commitPending, setCommitPending] = useState(false);
   const commitFiles = files.commit;

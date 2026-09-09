@@ -34,9 +34,7 @@ export function useWorkspaceFiles({
   // this address (a plain-get lens; nothing here creates a workspace).
   const withWorkspace = useCallback(
     <T>(operation: (ws: TasksWorkspace) => Promise<T>) =>
-      withDocsProject((project) =>
-        operation(workspaceFor(project, { boardId: null, workspacePath, repoPath })),
-      ),
+      withDocsProject((project) => operation(workspaceFor(project, { workspacePath, repoPath }))),
     [workspacePath, repoPath],
   );
 

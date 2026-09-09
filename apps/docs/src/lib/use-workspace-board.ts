@@ -53,7 +53,7 @@ export function changeMap(
 }
 
 export function useWorkspaceBoard(address: BoardAddress) {
-  const { boardId, workspacePath, repoPath } = address;
+  const { workspacePath, repoPath } = address;
   const [files, setFiles] = useState<Record<string, string> | null>(null);
   const [changes, setChanges] = useState<Map<string, TaskChangeStatus>>(new Map());
   // Fresh caret presence per path — "who has this card open" (clientIds).
@@ -66,10 +66,8 @@ export function useWorkspaceBoard(address: BoardAddress) {
 
   const lane = useCallback(
     <T>(operation: (ws: TasksWorkspace) => Promise<T>) =>
-      withProject((project) =>
-        operation(workspaceFor(project, { boardId, workspacePath, repoPath })),
-      ),
-    [boardId, workspacePath, repoPath],
+      withProject((project) => operation(workspaceFor(project, { workspacePath, repoPath }))),
+    [workspacePath, repoPath],
   );
 
   // Initial seed: the whole task file set + dirty state, in parallel.
