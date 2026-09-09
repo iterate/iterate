@@ -1,35 +1,7 @@
-/*
- * Home Assistant Voice Preview Edition — what makes this board this board.
- *
- * The program it runs is components/voice/src/voice_loop.c, and it is the same
- * program the other three run. What is left here is the hardware: a 12-pixel
- * WS2812 ring that is the ENTIRE display, one centre button, an always-on
- * speaker rail, and an XMOS DSP doing echo cancellation in silicon.
- *
- * Turn taking is the PROVIDER'S, and that is a consequence of the XMOS rather
- * than a preference. This board is genuinely full duplex, so its microphone
- * stays open for the whole call and server VAD decides where turns end. It was
- * push-to-talk until somebody tried to talk to it: the call came up, the ring
- * showed one dim pixel meaning "call up, nobody listening", and speaking did
- * nothing, because the microphone only opened while a finger held the button.
- * Push-to-talk's rationale is the echo story on boards WITHOUT cancellation,
- * and this is the one board that has it in hardware.
- *
- * ITS XMOS AEC GETS NO VTABLE ENTRY, deliberately. Cancellation has already
- * happened by the time a sample reaches the ESP32, so the composition is
- * `audio_processor_passthrough` plus the codec's own
- * `capture_is_echo_cancelled` property — the two facts the loop needs, both
- * already expressible. A board op would have been a third spelling of them.
- *
- * `aec.setStage` IS here, because it is not the canceller: it is a handle on
- * the XMOS output taps, and it exists because an echo canceller cannot be
- * argued about, only measured — which means putting the SAME microphone on
- * both output channels, one raw and one cancelled, without a rebuild.
- *
- * Opening the USB console resets this board, which is why `health()` exists
- * and why the stats line is the instrument of record. There is no screen to
- * read anything off: if a method is not named in `instructions`, the only way
- * to find out this device can do it is to read this file.
+/* Home Assistant Voice PE: XMOS hardware AEC, a dial, and the table.
+ * The provider takes turns on open-mic modes; push-to-talk modes remain
+ * selectable with the dial. Cancellation happened before the ESP32 sees
+ * the PCM, so the processor is passthrough and no reference is fabricated.
  */
 #include <stdio.h>
 
@@ -44,7 +16,10 @@
 #include "iterate/kit/voice/loop.h"
 #include "iterate/kit/voice_device_profile.h"
 
-#include "havpe_audio.h"
+#include "iterate/kit/platforms/board.h"
+#include "iterate/kit/platforms/aic3204.h"
+#include "iterate/kit/platforms/xmos_i2c.h"
+#include "esp_log.h"
 #include "havpe_modes.h"
 #include "havpe_ui.h"
 
@@ -56,6 +31,91 @@
  * play PCM it is handed.
  */
 #include "assets/havpe_sounds_generated.inc"
+
+static const char tag[] = "havpe";
+static i2c_master_dev_handle_t xmos_device;
+static uint8_t pipeline_stage[2];
+
+/** Firmware must be exactly 1.3.1 and both selected taps must read back.
+ * Enabling slave I2S is nonblocking; no capture/write task runs until this
+ * gate succeeds. A dead XMOS therefore faults before a blocking read.
+ */
+static bool open_codec(void) {
+  if (iterate_kit_board_i2c_device(0x42, &xmos_device) != ESP_OK) return false;
+  {
+    struct iterate_kit_xmos_version xmos_version;
+    if (iterate_kit_xmos_i2c_verify_version(xmos_device, &xmos_version) != ESP_OK) {
+      ESP_LOGE(tag, "XMOS version verification failed — failing closed");
+      return false;
+    }
+    ESP_LOGI(
+        tag,
+        "verified XMOS firmware %u.%u.%u",
+        xmos_version.major,
+        xmos_version.minor,
+        xmos_version.patch);
+  }
+  pipeline_stage[0] = (uint8_t)iterate_kit_xmos_uplink_stage();
+  pipeline_stage[1] = (uint8_t)ITERATE_KIT_XMOS_STAGE_NONE;
+  if (iterate_kit_xmos_i2c_configure_pipeline(
+          xmos_device, 0U, (enum iterate_kit_xmos_stage)pipeline_stage[0]) !=
+          ESP_OK ||
+      iterate_kit_xmos_i2c_configure_pipeline(
+          xmos_device, 1U, (enum iterate_kit_xmos_stage)pipeline_stage[1]) !=
+          ESP_OK) {
+    ESP_LOGE(tag, "XMOS pipeline configuration failed — failing closed");
+    return false;
+  }
+  return true;
+}
+
+/** Separate XMOS slave clock domains: capture ratio 1, playback ratio 3.
+ * Keep capture's 320x5 geometry distinct from playback's 480x6 ring.
+ */
+static const struct iterate_kit_i2s_codec_facts audio_facts = {
+  .playback_port = I2S_NUM_0,
+  .capture_port = I2S_NUM_1,
+  .role = I2S_ROLE_SLAVE,
+  .playback = {
+    .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(48000),
+    .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(
+        I2S_DATA_BIT_WIDTH_32BIT, I2S_SLOT_MODE_STEREO),
+    .gpio_cfg = {
+      .mclk = I2S_GPIO_UNUSED,
+      .bclk = 8,
+      .ws = 7,
+      .dout = 10,
+      .din = I2S_GPIO_UNUSED,
+      .invert_flags = {0},
+    },
+  },
+  .capture = {
+    .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(16000),
+    .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(
+        I2S_DATA_BIT_WIDTH_32BIT, I2S_SLOT_MODE_STEREO),
+    .gpio_cfg = {
+      .mclk = I2S_GPIO_UNUSED,
+      .bclk = 13,
+      .ws = 14,
+      .dout = I2S_GPIO_UNUSED,
+      .din = 15,
+      .invert_flags = {0},
+    },
+  },
+  .dma_frames = 480,
+  .dma_descriptors = 6,
+  .playback_shape = {32, 2, 0, -1, 3},
+  .capture_shape = {32, 2, 0, 1, 1},
+  /* Fixed x16: the quiet XMOS tap otherwise landed below provider VAD.
+   * Saturation is counted. Never duck, ramp or gate it while speaking:
+   * those experiments erased nearby speech and made interruption impossible. */
+  .capture_gain = 16,
+  .amplifier_gpio = 47,
+  .amplifier_gated = false,
+  .amplifier_settle_ms = 0,
+  .capture_dma_frames = 320,
+  .capture_dma_descriptors = 5,
+};
 
 enum {
   /*
@@ -75,7 +135,6 @@ enum {
  */
 static struct {
   struct havpe_mode_wheel wheel;
-  struct iterate_kit_session session;
   /** The adopted mode: announced, dialled, persisted. */
   uint8_t mode;
   bool call_active;
@@ -125,7 +184,7 @@ static void store_mode(uint8_t mode) {
  */
 static void adopt_mode(uint8_t mode, bool settled) {
   iterate_kit_voice_loop_set_stream_path(havpe_mode_stream_path(mode));
-  iterate_kit_voice_loop_set_turns(
+  iterate_kit_board_set_turns(
       havpe_mode_push_to_talk(mode)
           ? ITERATE_KIT_VOICE_TURNS_PUSH_TO_TALK
           : ITERATE_KIT_VOICE_TURNS_SERVER_VAD);
@@ -140,27 +199,9 @@ static void adopt_mode(uint8_t mode, bool settled) {
   havpe_ui_set_mode(mode);
 }
 
-/*
- * THE RING FIRST, THEN THE CODEC, AND THE RADIO BETWEEN THEM.
- *
- * `facts.radio_before_codec` defers this whole call until after the transport
- * has started, which is the point: the XMOS boot plus the AIC3204's mandatory
- * analogue soft-start is 6.2 s measured, and it used to run to completion
- * before Wi-Fi was even started, so two waits ran back to back for no reason
- * and this board reached a ready mount at ~14 s where the others managed ~8.
- *
- * Inside, the ring is raised BEFORE the codec, and that ordering is this
- * file's to keep: `transport_start` only configures Wi-Fi and spawns the
- * network task — association happens in the background — so it returns in
- * milliseconds, and the ring is therefore lit within milliseconds of where it
- * used to be, with the 6.2 s spent behind an already-lit ring rather than a
- * dark one. Doing it the other way round would leave this board's only display
- * dark for the whole of its longest bring-up step.
- */
 static bool start(void *context, struct iterate_kit_board_audio *out) {
   (void)context;
   if (!havpe_ui_init()) return false;
-  if (!havpe_audio_init()) return false;
   /*
    * RESTORE THE DIAL, silently. `radio_before_codec` means the transport —
    * and with it nvs_flash_init — has already run by the time this board
@@ -172,14 +213,7 @@ static bool start(void *context, struct iterate_kit_board_audio *out) {
   mode_state.mode = load_mode();
   havpe_mode_wheel_init(&mode_state.wheel, mode_state.mode);
   adopt_mode(mode_state.mode, false);
-  out->codec = havpe_audio_codec();
-  /*
-   * PASSTHROUGH, because the cancellation already happened. What arrives at
-   * the ESP32 is the XMOS's echo-cancelled output; the codec advertises that
-   * through its own properties, and running a second canceller over it would
-   * adapt against a signal whose echo is already gone.
-   */
-  out->processor = iterate_kit_audio_processor_passthrough();
+  (void)out;
   return true;
 }
 
@@ -190,55 +224,12 @@ static void present(
   /* Mirrored for poll, which runs before this pass's view exists. */
   mode_state.call_active = view->call_active;
   mode_state.wants_call = view->wants_call;
-  /* This ring has no timer behind it: `present` is also its pump. */
-  havpe_ui_tick();
 }
 
 static void poll(void *context, struct iterate_kit_voice_intent *out) {
   (void)context;
-  havpe_button_poll();
-  /*
-   * THE BUTTON MEANS WHAT THE SESSION SAYS IT MEANS. Classification (tap
-   * against hold) is the ui's; meaning is the shared session grammar's —
-   * the state table in iterate/kit/session_grammar.h, host-tested. This
-   * wires the machine's answers to their seams: the two intent edges the
-   * loop resolves, the talk level for its turn machine, the wake chime (the
-   * acknowledgement a wake word would earn), the "call ended" announcement
-   * on every session's exit, and the mode-reminder flash for the bare tap a
-   * push-to-talk mode refuses to wake on. Every other press is answered by
-   * the ring alone. The posture is the dial's to pick each poll; the centre
-   * button doubles as the talk hold, so a bare tap never wakes push-to-talk
-   * (`tap_wakes` false) while the tap stays the in-session end.
-   */
-  {
-    struct iterate_kit_session_actions actions;
-    const struct iterate_kit_session_poll gestures = {
-      .tap = havpe_button_take_tap(),
-      .held = havpe_button_talk_held(),
-      .end_hold = havpe_button_take_end_hold(),
-      .wants_call = mode_state.wants_call,
-      .call_active = mode_state.call_active,
-      .push_to_talk = havpe_mode_push_to_talk(mode_state.mode),
-      .tap_wakes = false,
-      .tap_ends = true,
-      .now_ms = (uint64_t)(esp_timer_get_time() / 1000),
-    };
-    iterate_kit_session_step(&mode_state.session, &gestures, &actions);
-    out->start_call = actions.start_call;
-    out->end_call = actions.end_call;
-    out->talk_held = actions.talk_held;
-    /* End before wake: play_sound replaces, so if one poll carries both
-     * edges the newer intent — the wake — is the one heard. */
-    if (actions.end_chime) {
-      iterate_kit_i2s_codec_play_sound(
-          havpe_sound_chime_ended, sizeof(havpe_sound_chime_ended));
-    }
-    if (actions.wake_chime) {
-      iterate_kit_i2s_codec_play_sound(
-          havpe_sound_chime_press, sizeof(havpe_sound_chime_press));
-    }
-    if (actions.mode_flash) havpe_ui_show_mode(mode_state.mode);
-  }
+  (void)out;
+  if (iterate_kit_board_button_actions()->mode_flash) havpe_ui_show_mode(mode_state.mode);
 
   /*
    * THE DIAL IS TWO KNOBS, split by whether a call is in play: volume while
@@ -262,11 +253,11 @@ static void poll(void *context, struct iterate_kit_voice_intent *out) {
        * exactly as it clamps the RPC.
        */
       int target =
-          (int)havpe_audio_volume() + steps * DIAL_VOLUME_STEP_PERCENT;
+          (int)iterate_kit_board_volume() + steps * DIAL_VOLUME_STEP_PERCENT;
       if (target < 0) target = 0;
       if (target > 100) target = 100;
       uint8_t applied = 0U;
-      if (havpe_audio_set_volume((uint8_t)target, &applied) ==
+      if (iterate_kit_board_set_volume((uint8_t)target, &applied) ==
           ITERATE_KIT_OK) {
         havpe_ui_show_volume(applied);
       }
@@ -286,24 +277,6 @@ static void poll(void *context, struct iterate_kit_voice_intent *out) {
   }
 }
 
-static void phase(void *context, enum iterate_kit_voice_phase phase_value) {
-  (void)context;
-  iterate_kit_i2s_codec_phase(phase_value);
-  /* The rail stays up for the life of the boot: the XMOS AEC reference
-   * rides the always-running TX stream. ARRIVED/QUIET do not gate it. */
-}
-
-static enum iterate_kit_status set_volume(
-    void *context, uint8_t percent, uint8_t *applied) {
-  (void)context;
-  return havpe_audio_set_volume(percent, applied);
-}
-
-static uint8_t volume(void *context) {
-  (void)context;
-  return havpe_audio_volume();
-}
-
 /* --- the XMOS pipeline, as something a person can move and then measure ---- */
 
 /*
@@ -319,7 +292,7 @@ static enum capnweb_status button_press(
     void *context, const struct capnweb_call *call, struct capnweb_reply *reply) {
   (void)context;
   (void)call;
-  havpe_button_inject_tap();
+  iterate_kit_board_inject_tap();
   return capnweb_reply_set_boolean(reply, true);
 }
 
@@ -345,11 +318,13 @@ static enum capnweb_status aec_set_stage(
         "RangeError",
         "channel is 0 or 1; stage is 0 none, 1 aec, 2 ic, 3 ns, 4 agc");
   }
-  if (havpe_audio_set_pipeline_stage((uint8_t)channel, (uint8_t)stage) !=
-      ITERATE_KIT_OK) {
+  if (iterate_kit_xmos_i2c_configure_pipeline(
+          xmos_device, (uint8_t)channel, (enum iterate_kit_xmos_stage)stage) != ESP_OK) {
     return capnweb_reply_set_error(
         reply, "Error", "the XMOS refused the pipeline change");
   }
+  pipeline_stage[channel] = (uint8_t)stage;
+  iterate_kit_i2s_codec_reset_echo_peaks();
   return capnweb_reply_set_boolean(reply, true);
 }
 
@@ -379,7 +354,7 @@ static size_t modules(
  */
 static size_t health(void *context, char *out, size_t capacity) {
   uint8_t vnr = 0U;
-  (void)havpe_audio_read_vnr(&vnr);
+  (void)iterate_kit_xmos_i2c_read_vnr(xmos_device, &vnr);
   const struct iterate_kit_health_field fields[] = {
     /*
      * The DSP's own opinion of the uplink, 0-255, read live from the XMOS.
@@ -387,8 +362,8 @@ static size_t health(void *context, char *out, size_t capacity) {
      * counters below say which.
      */
     {"xmosVnr", vnr},
-    {"aecUplinkStage", havpe_audio_pipeline_stage(0U)},
-    {"aecDiagnosticStage", havpe_audio_pipeline_stage(1U)},
+    {"aecUplinkStage", pipeline_stage[0]},
+    {"aecDiagnosticStage", pipeline_stage[1]},
     /*
      * WHERE THE DIAL SITS, 1-4 in the spoken order (grok ptt, grok open-mic,
      * openai ptt, openai open-mic). The adopted stream already shows as
@@ -398,18 +373,15 @@ static size_t health(void *context, char *out, size_t capacity) {
     {"dialMode", (uint32_t)mode_state.mode + 1U},
   };
   (void)context;
-  const size_t used = iterate_kit_i2s_codec_health(out, capacity);
-  if (used == 0U) return 0U;
-  const size_t added = iterate_kit_health_append_fields(
-      out + used, capacity - used, fields, sizeof(fields) / sizeof(fields[0]));
-  return added == 0U ? 0U : used + added;
+  return iterate_kit_health_append_fields(
+      out, capacity, fields, sizeof(fields) / sizeof(fields[0]));
 }
 
 static const struct iterate_kit_board_ops ops = {
   .start = start,
   .present = present,
   .poll = poll,
-  .phase = phase,
+  .phase = NULL,
   /* No bridge metadata: this codec hands over whole wire frames, so the loop
    * synthesises the timeline. See `capture_chunk_samples`. */
   .capture_meta = NULL,
@@ -423,7 +395,13 @@ static const struct iterate_kit_board_ops ops = {
   .health = health,
 };
 
-static const struct iterate_kit_board_facts facts = {
+/** Rails off, active-high XMOS reset pulse, then its mandatory 3 s boot.
+ * Sending stage commands early can NACK and leave unknown defaults.
+ */
+static const struct iterate_kit_gpio_step boot[] = {{47, 0, 0}, {4, 1, 1}, {4, 0, 3000}};
+
+static const struct iterate_kit_board board = {
+  .facts = {
   /*
    * The factory default is the dial's mode 4 (openai open-mic), and the two
    * spellings must stay equal: this one seeds the loop before `start` runs,
@@ -501,12 +479,10 @@ static const struct iterate_kit_board_facts facts = {
   .call_hint = "connection lost — press the centre button to call",
   .speaker = {
     .context = NULL,
-    .set_volume = set_volume,
-    .volume = volume,
     /*
      * 100 is 0 dB here — the loudest setting that neither clips a full-scale
      * sample nor feeds the provider this device's own voice. The clamp lives
-     * in the driver; see havpe_audio.h.
+     * in the table: full 0, floor -126 half-dB steps.
      */
     .ceiling = 100,
   },
@@ -544,8 +520,22 @@ static const struct iterate_kit_board_facts facts = {
    * is itself ~6-8 s of waiting.
    */
   .radio_before_codec = true,
+  },
+  .i2c = {.sda = 5, .scl = 6, .hz = 400000},
+  .boot = boot, .boot_count = sizeof(boot) / sizeof(boot[0]),
+  .scripts = iterate_kit_aic3204_scripts, .script_count = 2,
+  .audio = &audio_facts,
+  .volume = {.i2c_address = 0x18, .page_register = 0, .page = 0,
+    .registers = {0x41, 0x42}, .register_count = 2, .full_code = 0, .floor_code = -126},
+  .ring = {.gpio = 21, .pixels = 12, .order = LED_PIXEL_FORMAT_GRB, .power_gpio = 45},
+  .status_led_gpio = -1,
+  .button = {.gpio = 0, .active_low = true, .tap_wakes = false, .tap_ends = true},
+  .sounds = {.wake = havpe_sound_chime_press, .wake_bytes = sizeof(havpe_sound_chime_press),
+    .ended = havpe_sound_chime_ended, .ended_bytes = sizeof(havpe_sound_chime_ended)},
+  .open_codec = open_codec,
+  .extra = &ops,
 };
 
 void iterate_kit_havpe_run(void) {
-  iterate_kit_voice_loop_run(&ops, &facts, NULL);
+  iterate_kit_board_run(&board);
 }

@@ -67,26 +67,29 @@ static const struct iterate_kit_register_write power_up_writes[] = {
   {0x40, 0x00},
 };
 
-const struct iterate_kit_register_script *iterate_kit_aic3204_initial_script(void) {
-  static const struct iterate_kit_register_script script = {
+const struct iterate_kit_register_script iterate_kit_aic3204_scripts[2] = {
+  {
     .i2c_address = 0x18,
     .writes = initial_writes,
     .count = sizeof(initial_writes) / sizeof(initial_writes[0]),
     .settle_ms = 2500,
     .when = ITERATE_KIT_SCRIPT_BEFORE_I2S,
-  };
-  return &script;
-}
-
-const struct iterate_kit_register_script *iterate_kit_aic3204_power_up_script(void) {
-  static const struct iterate_kit_register_script script = {
+  },
+  {
     .i2c_address = 0x18,
     .writes = power_up_writes,
     .count = sizeof(power_up_writes) / sizeof(power_up_writes[0]),
     .settle_ms = 0,
     .when = ITERATE_KIT_SCRIPT_AFTER_I2S,
-  };
-  return &script;
+  },
+};
+
+const struct iterate_kit_register_script *iterate_kit_aic3204_initial_script(void) {
+  return &iterate_kit_aic3204_scripts[0];
+}
+
+const struct iterate_kit_register_script *iterate_kit_aic3204_power_up_script(void) {
+  return &iterate_kit_aic3204_scripts[1];
 }
 
 enum iterate_kit_xmos_stage
@@ -216,31 +219,3 @@ uint8_t iterate_kit_aic3204_volume_register(uint8_t percent) {
       : (int8_t)(MINIMUM_HALF_DB + ((int)-MINIMUM_HALF_DB * (int)percent) / 100);
   return (uint8_t)half_db;
 }
-
-#ifdef ESP_PLATFORM
-esp_err_t iterate_kit_aic3204_write_script(
-    i2c_master_dev_handle_t device, const struct iterate_kit_register_script *script) {
-  if (script == NULL || script->writes == NULL || script->count == 0U) return ESP_ERR_INVALID_ARG;
-  for (size_t index = 0U; index < script->count; ++index) {
-    const uint8_t command[] = {script->writes[index].address, script->writes[index].value};
-    const esp_err_t status = i2c_master_transmit(device, command, sizeof(command), 50);
-    if (status != ESP_OK) return status;
-  }
-  return ESP_OK;
-}
-
-esp_err_t iterate_kit_aic3204_set_volume(i2c_master_dev_handle_t device, uint8_t percent) {
-  const uint8_t code = iterate_kit_aic3204_volume_register(percent);
-  const struct iterate_kit_register_write writes[] = {
-    {0x00U, 0x00U}, {0x41U, code}, {0x42U, code},
-  };
-  const struct iterate_kit_register_script script = {
-    .i2c_address = 0x18,
-    .writes = writes,
-    .count = sizeof(writes) / sizeof(writes[0]),
-    .settle_ms = 0,
-    .when = ITERATE_KIT_SCRIPT_AFTER_I2S,
-  };
-  return iterate_kit_aic3204_write_script(device, &script);
-}
-#endif

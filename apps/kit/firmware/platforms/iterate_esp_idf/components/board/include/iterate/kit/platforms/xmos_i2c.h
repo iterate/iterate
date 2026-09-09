@@ -20,7 +20,7 @@ esp_err_t iterate_kit_xmos_i2c_configure_pipeline(
  */
 enum iterate_kit_status iterate_kit_xmos_i2c_read_vnr(
     i2c_master_dev_handle_t device, uint8_t *vnr);
-/** Verify the pinned firmware version before enabling slave I2S. An unbooted
+/** Verify the pinned firmware before starting blocking slave-I2S tasks. An unbooted
  * XMOS supplies no BCLK and would leave blocking audio stuck; unsupported or
  * malformed responses fail closed with ESP_ERR_INVALID_VERSION.
  */

@@ -39,7 +39,8 @@ struct iterate_kit_i2s_codec_facts {
 };
 
 /** Validate and open the table, preload the complete TX ring with silence,
- * enable both channels, then start_over the shape converters. Invalid byte
+ * enable both channels. finish starts the shape-converter tasks after the
+ * board has configured its codec. Invalid byte
  * geometry (>4092/descriptor), rate/ratio, or conflicting pins fails before
  * hardware allocation. Failures return false; the board loop must park with
  * its fault, never return past an enrolled watchdog. Start once per boot.
@@ -55,11 +56,21 @@ bool iterate_kit_i2s_codec_start(
  */
 bool iterate_kit_i2s_codec_open_playback(
     const struct iterate_kit_i2s_codec_facts *facts, i2s_chan_handle_t *out);
-/** Install the board's post-enable codec script before start, or NULL.
- * HAVPE powers the AIC3204 up AFTER I2S enable but BEFORE the speaker rail
- * and tasks. false aborts start and releases the channels; no tasks survive.
+/** Pure validation used by start, before allocating any hardware. */
+bool iterate_kit_i2s_codec_valid(const struct iterate_kit_i2s_codec_facts *facts);
+/** Validate one direction; open_playback uses this for M5's pin handover. */
+bool iterate_kit_i2s_codec_valid_channel(
+    i2s_port_t port, const i2s_std_config_t *config,
+    const struct iterate_kit_pcm_shape *shape, uint16_t frames, uint8_t descriptors);
+/** After board.c's AFTER_I2S scripts and open_codec, raise the amplifier and
+ * start the hardware tasks. start only enables preloaded channels: no samples
+ * are read or written until finish succeeds. This replaces the global hook.
  */
-void iterate_kit_i2s_codec_set_after_enable(bool (*power_up)(void));
+bool iterate_kit_i2s_codec_finish(struct iterate_kit_audio_codec *out);
+/** Release enabled channels after a failed script/open/finish, before tasks
+ * exist. The caller then returns false to the loop's durable fault path.
+ */
+void iterate_kit_i2s_codec_abort(void);
 /** Reset the accumulated echo oracle when XMOS changes either selected tap.
  * Latest-frame mic peaks and the lifetime gain-clipped count are retained.
  */

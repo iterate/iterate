@@ -7,7 +7,6 @@ endif()
 idf_component_register(
   SRCS
     havpe_device.c
-    havpe_audio.c
     havpe_modes.c
     havpe_ui.c
   INCLUDE_DIRS include

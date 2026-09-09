@@ -316,14 +316,9 @@ static uint32_t mic_raw_peak;
 static uint32_t mic_clean_peak;
 static uint32_t echo_raw_peak;
 static uint32_t echo_clean_peak;
-static bool (*after_enable)(void);
 static bool amplifier_on;
 static int64_t amplifier_settled_at_us;
 static int64_t amplifier_sound_hold_until_us;
-
-void iterate_kit_i2s_codec_set_after_enable(bool (*power_up)(void)) {
-  after_enable = power_up;
-}
 
 static bool IRAM_ATTR note_playback_queue_overflow(
     i2s_chan_handle_t handle, i2s_event_data_t *event, void *context) {
@@ -341,65 +336,6 @@ static bool IRAM_ATTR note_capture_queue_overflow(
   (void)context;
   ++capture_queue_overflows;
   return false;
-}
-
-/** Slot bytes and nominal clock must describe the same 16 kHz PCM contract. */
-static bool valid_channel(
-    i2s_port_t port, const i2s_std_config_t *config,
-    const struct iterate_kit_pcm_shape *shape,
-    uint16_t frames, uint8_t descriptors) {
-  const size_t bytes = iterate_kit_pcm_bytes_for_frames(shape, frames);
-  return (unsigned)port < SOC_I2S_NUM && bytes > 0U && bytes <= 4092U &&
-      descriptors > 0U &&
-      config->clk_cfg.sample_rate_hz == 16000U * shape->ratio &&
-      config->slot_cfg.data_bit_width == shape->bits &&
-      (config->slot_cfg.slot_bit_width == I2S_SLOT_BIT_WIDTH_AUTO ||
-       config->slot_cfg.slot_bit_width == shape->bits) &&
-      (unsigned)config->slot_cfg.slot_mode == shape->slots &&
-      config->gpio_cfg.bclk >= 0 && config->gpio_cfg.ws >= 0;
-}
-
-/** Equal controllers must share clocks; separate controllers cannot drive the
- * same pins. M5 deliberately uses open_playback because its mic swaps owners.
- */
-static bool valid_duplex(const struct iterate_kit_i2s_codec_facts *facts) {
-  const bool duplex = facts->capture_port == facts->playback_port;
-  if (!valid_channel(facts->playback_port, &facts->playback, &facts->playback_shape,
-          facts->dma_frames, facts->dma_descriptors) ||
-      !valid_channel(facts->capture_port, &facts->capture, &facts->capture_shape,
-          duplex ? facts->dma_frames : facts->capture_dma_frames,
-          duplex ? facts->dma_descriptors : facts->capture_dma_descriptors) ||
-      facts->capture_gain == 0U ||
-      (facts->role != I2S_ROLE_MASTER && facts->role != I2S_ROLE_SLAVE) ||
-      facts->amplifier_gpio < -1 || facts->amplifier_gpio >= GPIO_NUM_MAX) return false;
-  const i2s_std_gpio_config_t *tx = &facts->playback.gpio_cfg;
-  const i2s_std_gpio_config_t *rx = &facts->capture.gpio_cfg;
-  if (tx->dout < 0 || rx->din < 0 || tx->dout == rx->din) return false;
-  if (duplex) {
-    return tx->bclk == rx->bclk && tx->ws == rx->ws && tx->mclk == rx->mclk &&
-        (tx->din == I2S_GPIO_UNUSED || tx->din == rx->din) &&
-        (rx->dout == I2S_GPIO_UNUSED || rx->dout == tx->dout) &&
-        facts->playback.clk_cfg.sample_rate_hz == facts->capture.clk_cfg.sample_rate_hz &&
-        facts->playback.clk_cfg.mclk_multiple == facts->capture.clk_cfg.mclk_multiple &&
-        facts->playback.clk_cfg.clk_src == facts->capture.clk_cfg.clk_src &&
-        facts->playback.slot_cfg.ws_width == facts->capture.slot_cfg.ws_width &&
-        facts->playback.slot_cfg.ws_pol == facts->capture.slot_cfg.ws_pol &&
-        facts->playback.slot_cfg.bit_shift == facts->capture.slot_cfg.bit_shift &&
-        facts->playback.slot_cfg.data_bit_width == facts->capture.slot_cfg.data_bit_width &&
-        facts->playback.slot_cfg.slot_mode == facts->capture.slot_cfg.slot_mode &&
-        tx->invert_flags.bclk_inv == rx->invert_flags.bclk_inv &&
-        tx->invert_flags.ws_inv == rx->invert_flags.ws_inv &&
-        tx->invert_flags.mclk_inv == rx->invert_flags.mclk_inv;
-  }
-  if (tx->din != I2S_GPIO_UNUSED || rx->dout != I2S_GPIO_UNUSED) return false;
-  const gpio_num_t tx_pins[] = {tx->mclk, tx->bclk, tx->ws, tx->dout};
-  const gpio_num_t rx_pins[] = {rx->mclk, rx->bclk, rx->ws, rx->din};
-  for (size_t i = 0; i < sizeof(tx_pins) / sizeof(tx_pins[0]); ++i) {
-    for (size_t j = 0; j < sizeof(rx_pins) / sizeof(rx_pins[0]); ++j) {
-      if (tx_pins[i] >= 0 && tx_pins[i] == rx_pins[j]) return false;
-    }
-  }
-  return true;
 }
 
 /** Preserve the proven difference: slave TX clears after callbacks (HAVPE),
@@ -445,7 +381,7 @@ bool iterate_kit_i2s_codec_open_playback(
     const struct iterate_kit_i2s_codec_facts *facts, i2s_chan_handle_t *out) {
   if (facts == NULL || out == NULL ||
       (facts->role != I2S_ROLE_MASTER && facts->role != I2S_ROLE_SLAVE) ||
-      !valid_channel(facts->playback_port, &facts->playback, &facts->playback_shape,
+      !iterate_kit_i2s_codec_valid_channel(facts->playback_port, &facts->playback, &facts->playback_shape,
           facts->dma_frames, facts->dma_descriptors) || facts->playback.gpio_cfg.dout < 0) return false;
   *out = NULL;
   i2s_chan_config_t config = playback_config(facts);
@@ -562,7 +498,7 @@ static enum iterate_kit_status write_channels(void *context, const int16_t *samp
 
 bool iterate_kit_i2s_codec_start(
     const struct iterate_kit_i2s_codec_facts *facts, struct iterate_kit_audio_codec *out) {
-  if (facts == NULL || out == NULL || capture_mailbox != NULL || !valid_duplex(facts)) return false;
+  if (facts == NULL || out == NULL || capture_mailbox != NULL || !iterate_kit_i2s_codec_valid(facts)) return false;
   const uint64_t ring_ms = (uint64_t)facts->dma_frames * facts->dma_descriptors * 1000U /
       facts->playback.clk_cfg.sample_rate_hz;
   if (ring_ms == 0U || ring_ms > UINT16_MAX) return false;
@@ -598,11 +534,7 @@ bool iterate_kit_i2s_codec_start(
   tx_enabled = true;
   if (i2s_channel_enable(table_capture_channel) != ESP_OK) goto failed;
   rx_enabled = true;
-  if (after_enable != NULL && !after_enable()) goto failed;
-  if (!facts->amplifier_gated && !set_table_amplifier(true)) goto failed;
-  iterate_kit_i2s_codec_set_before_write(wait_for_table_amplifier);
-  if (!iterate_kit_i2s_codec_start_over(read_channels, write_channels, NULL, (uint16_t)ring_ms, out)) goto failed;
-  table_started = true;
+  *out = (struct iterate_kit_audio_codec){.ops = &codec_ops, .properties = &codec_properties};
   return true;
 failed:
   (void)set_table_amplifier(false);
@@ -613,6 +545,32 @@ failed:
   table_capture_channel = NULL;
   table_playback_channel = NULL;
   return false;
+}
+
+bool iterate_kit_i2s_codec_finish(struct iterate_kit_audio_codec *out) {
+  if (out == NULL || table_playback_channel == NULL || table_capture_channel == NULL || table_started) return false;
+  const uint16_t ring_ms = (uint16_t)((uint64_t)channel_facts.dma_frames *
+      channel_facts.dma_descriptors * 1000U / channel_facts.playback.clk_cfg.sample_rate_hz);
+  if (!channel_facts.amplifier_gated && !set_table_amplifier(true)) return false;
+  iterate_kit_i2s_codec_set_before_write(wait_for_table_amplifier);
+  if (!iterate_kit_i2s_codec_start_over(read_channels, write_channels, NULL, ring_ms, out)) return false;
+  table_started = true;
+  return true;
+}
+
+void iterate_kit_i2s_codec_abort(void) {
+  if (table_started) return;
+  (void)set_table_amplifier(false);
+  if (table_capture_channel != NULL) {
+    (void)i2s_channel_disable(table_capture_channel);
+    (void)i2s_del_channel(table_capture_channel);
+    table_capture_channel = NULL;
+  }
+  if (table_playback_channel != NULL) {
+    (void)i2s_channel_disable(table_playback_channel);
+    (void)i2s_del_channel(table_playback_channel);
+    table_playback_channel = NULL;
+  }
 }
 
 void iterate_kit_i2s_codec_reset_echo_peaks(void) {

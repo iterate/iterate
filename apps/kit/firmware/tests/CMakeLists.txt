@@ -53,6 +53,13 @@ function(iterate_kit_add_core_test NAME)
   iterate_kit_add_test(${NAME} ${ARGN} LINK iterate-kit-core)
 endfunction()
 
+# Pure board-table rules; IDF value types only, no simulated hardware startup.
+iterate_kit_add_test(iterate-kit-board-table-test
+  board_table_test.c
+  ../platforms/iterate_esp_idf/components/board/board.c
+  INCLUDES fakes/board ../platforms/iterate_esp_idf/components/board/include
+  LINK iterate-kit-voice iterate-kit-audio iterate-kit-core)
+
 iterate_kit_add_core_test(iterate-kit-atomic-test atomic_test.c)
 iterate_kit_add_core_test(iterate-kit-button-test button_test.c)
 iterate_kit_add_core_test(iterate-kit-configuration-test configuration_test.c)
