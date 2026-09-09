@@ -75,10 +75,14 @@ export async function tap(options: TapOptions): Promise<void> {
   const file = fs.openSync(options.out, "w");
   const openedAt = Date.now();
   let rows = 0;
-  await stream.openConnection({
+  let closed = false;
+  const connection = await stream.openConnection({
     connectionKey: `tap-${openedAt}`,
     eventTypes: LIVE_TYPES,
     processEventBatch: (batch) => {
+      /* A batch already in flight can land after the window ends; the file is
+       * gone by then, so it is dropped rather than written to a dead descriptor. */
+      if (closed) return;
       const atTapMs = Date.now() - openedAt;
       for (const event of batch.events ?? []) {
         /* Rows are what the payload says it is; the shapes below are the
@@ -113,7 +117,14 @@ export async function tap(options: TapOptions): Promise<void> {
     },
   });
   console.log(`tapping ${options.path} for ${minutes} min → ${options.out}`);
-  await new Promise((resolve) => setTimeout(resolve, minutes * 60_000));
-  fs.closeSync(file);
+  try {
+    await new Promise((resolve) => setTimeout(resolve, minutes * 60_000));
+  } finally {
+    /* The subscription closes BEFORE the file: batches keep arriving until the
+     * live stream hears the close, and a write after closeSync would throw. */
+    closed = true;
+    connection.close();
+    fs.closeSync(file);
+  }
   console.log(`${rows} rows`);
 }
