@@ -99,11 +99,11 @@ XAI_API_KEY=… pnpm cli voicelab direct --say "What is the capital of France?"
 # server side, terminal A (holds the Grok socket)
 XAI_API_KEY=… pnpm cli voicelab bridge --project prj_… --path /voicelab/call-1 --once
 
-# client, terminal B — headless synthetic utterance (macOS `say`), prints summary JSON
-pnpm cli voicelab client --project prj_… --path /voicelab/call-1
+# live: the Mac as a client — real mic + speaker, against the deployed agent
+pnpm cli voicelab talk --project <slug>
 
-# live: real mic + speaker, space = push-to-talk mute toggle, q quits
-pnpm cli voicelab client --project prj_… --path /voicelab/call-1 --mic --device
+# (the old headless `client --say` command is gone; `boards` is the headless
+# proof now: it speaks through the Mac speaker at every connected board)
 
 # Literal no-cloud proof: loopback fake provider, synthetic mic, accounted speaker
 pnpm cli voicelab local --project voice-test --say "Prove the local audio path."
@@ -163,7 +163,7 @@ Ask the board; do not wait to be told. Every number a device has is served on
 demand by its `health()` capability —
 
 ```bash
-doppler run --config prd -- pnpm cli voicelab device --action health
+doppler run --config prd -- pnpm cli voicelab device --project <slug> --name havpe --action health
 ```
 
 — and that is deliberately the ONLY way to get one. The boards used to append
@@ -191,8 +191,10 @@ What survives drives real hardware and reads `health()` directly:
 doppler run --config preview_3 -- pnpm cli voicelab reliability \
   --project prj_… --attempts 10
 
-# every connected board, out loud, through real air (Mac speaker -> board mic)
-doppler run --config prd -- pnpm cli voicelab boards --project voice-test
+# every connected board, out loud, through real air (Mac speaker -> board mic);
+# --only takes a board name or its alias (havpe, satellite1), --barge speaks a
+# second time over the answer and requires the device to react
+doppler run --config prd -- pnpm cli voicelab boards --project templestein --only satellite1 --barge
 
 # the whole capability surface, through a real deployed agent's own turns
 doppler run --config prd -- pnpm cli voicelab prove --project voice-test
