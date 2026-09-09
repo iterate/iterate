@@ -33,20 +33,17 @@ import {
 } from "./principal.ts";
 import { isSameOriginBrowserRequest } from "./lib.ts";
 
-/** A project host's re-entry count: an app that fetches its own host egresses and lands here again;
- *  the header counts the passes and the edge refuses past a few. */
-const ITX_EXPRESSION_LANE_HOPS_HEADER = "x-itx-expression-hops";
-const ITX_EXPRESSION_LANE_MAX_HOPS = 4;
-
-/** The app label a project host selected, as the app sees it — apps/os's header. The edge ALWAYS
- *  overwrites it (set to the label, deleted when the host named none), so a visitor can never pick
- *  an app the host did not. */
-const ITERATE_APP_HEADER = "x-iterate-app";
+/** A project host's re-entry count — THE COUNT THE APP FORWARDS: an app that fetches its own host
+ *  and forwards the headers it was handed re-enters with the count on them, each pass adds one, and
+ *  the edge refuses past a few. A fresh Request starts at zero — an app looping its own project
+ *  with fresh Requests is its own cost. */
+const PROJECT_HOST_HOPS_HEADER = "x-itx-expression-hops";
+const PROJECT_HOST_MAX_HOPS = 4;
 
 /** WHO a project host's request is, as the lane into a context reads it: `principal` is the
  *  verified stamp the context runs the call under (null: nobody); `platformBearer` says the
  *  `Authorization: Bearer` was the platform's own credential, which an app never sees. */
-type LaneIdentity = { principal: Principal | null; platformBearer: boolean };
+type ProjectHostIdentity = { principal: Principal | null; platformBearer: boolean };
 
 /** The credential kinds `authenticate` takes (session.ts), read off a request and tried in order —
  *  the bearer as a project token, as the admin secret, as THIS project's secret; then the host
@@ -55,10 +52,10 @@ type LaneIdentity = { principal: Principal | null; platformBearer: boolean };
  *  `/api`'s alone (`from-server-cookie`, same origin only) — on a project host a cross-site
  *  navigation would carry it with no Origin to check. A credential of another project is nobody
  *  here: it stamps nothing and, as an app's own bearer scheme does, passes through. */
-async function laneIdentityOf(
+async function projectHostIdentityOf(
   projectId: string,
   input: Pick<SessionInput, "request" | "directory" | "appConfig" | "secretsKv">,
-): Promise<LaneIdentity> {
+): Promise<ProjectHostIdentity> {
   const { headers } = input.request;
   const bearer = /^Bearer\s+(\S+)$/i.exec(headers.get("authorization") ?? "")?.[1];
   const hostCookieToken = projectSessionCookieOf(headers.get("cookie"));
@@ -100,26 +97,30 @@ async function laneIdentityOf(
  *  pager or fetch-upgrade header from outside would enter the DO's internal protocol), the cookie
  *  header replaced by `appCookies` (null ⇒ none — what the capability may see), a platform bearer
  *  (this project's token, the admin secret, this project's secret) removed (an app's own bearer
- *  scheme passes through untouched), `x-iterate-app` overwritten with the label the host selected
- *  (deleted when it selected none), then the expression the host names — `itx.apps.<app>`, or the
+ *  scheme passes through untouched), then the expression the host names — `itx.apps.<app>`, or the
  *  config worker `itx.worker` for a host with no app label (its `fetch` routes by hostname,
- *  sdk/index.ts `ConfigWorker`) — the hop count and the principal's stamp. */
-function laneRequestTo(
+ *  sdk/index.ts `ConfigWorker`) — the hop count and the principal's stamp. The app label the app
+ *  sees (`x-iterate-app`) is not written here: the DO's fetch lane derives it from the expression,
+ *  the one door every fetch-lane Request passes (iterate-context-durable-object.ts). */
+function projectHostRequestTo(
   request: Request,
-  lane: { app: string | null; hops: number; appCookies: string | null; identity: LaneIdentity },
+  lane: {
+    app: string | null;
+    hops: number;
+    appCookies: string | null;
+    identity: ProjectHostIdentity;
+  },
 ): Request {
   const headers = new Headers(request.headers);
   for (const name of [...headers.keys()]) if (name.startsWith("x-itx-")) headers.delete(name);
   if (lane.appCookies) headers.set("cookie", lane.appCookies);
   else headers.delete("cookie");
   if (lane.identity.platformBearer) headers.delete("authorization");
-  if (lane.app === null) headers.delete(ITERATE_APP_HEADER);
-  else headers.set(ITERATE_APP_HEADER, lane.app);
   headers.set(
     ITX_EXPRESSION_FETCH_HEADER,
     lane.app === null ? "itx.worker" : `itx.apps.${lane.app}`,
   );
-  headers.set(ITX_EXPRESSION_LANE_HOPS_HEADER, String(lane.hops));
+  headers.set(PROJECT_HOST_HOPS_HEADER, String(lane.hops));
   if (lane.identity.principal)
     headers.set(ITX_PRINCIPAL_HEADER, JSON.stringify(lane.identity.principal));
   return new Request(request, { headers });
@@ -146,12 +147,13 @@ export { ItxEntrypoint } from "./iterate-context.ts";
 export default {
   async fetch(request: Request, env: WorkerEnv, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
-    // THE HOP COUNT: an app that fetches its own host re-enters here through egress; each pass
-    // counts, a few is a loop. The platform writes the count as digits; anything else (an app
-    // spelling "NaN" to defeat the budget — `NaN > max` is never true) is over budget by definition.
-    const hopsHeader = request.headers.get(ITX_EXPRESSION_LANE_HOPS_HEADER) ?? "0";
+    // THE HOP COUNT — what the app forwards: a request carrying the count it was handed re-enters
+    // here with it, each pass adds one, a few is a loop; a fresh Request carries none and starts at
+    // zero. The edge writes digits; anything else (an app spelling "NaN" to defeat the budget —
+    // `NaN > max` is never true) is over budget by definition.
+    const hopsHeader = request.headers.get(PROJECT_HOST_HOPS_HEADER) ?? "0";
     const hops = /^\d{1,3}$/.test(hopsHeader) ? Number(hopsHeader) + 1 : Infinity;
-    if (hops > ITX_EXPRESSION_LANE_MAX_HOPS)
+    if (hops > PROJECT_HOST_MAX_HOPS)
       return new Response(
         `the request re-entered itself ${Number.isFinite(hops) ? hops : `"${hopsHeader}"`} times (an app fetching its own host)\n`,
         { status: 508 },
@@ -192,14 +194,22 @@ export default {
       return env.ITERATE_CONTEXT.getByName(
         DurableObjectNameCodec.stringify({ projectId, path: "/" }),
       ).fetch(
-        laneRequestTo(request, {
+        projectHostRequestTo(request, {
           app: projectHost.app,
           hops,
           appCookies: withoutProjectSessionCookie(request.headers.get("cookie")) || null,
-          identity: await laneIdentityOf(projectId, sessionInput),
+          identity: await projectHostIdentityOf(projectId, sessionInput),
         }),
       );
     }
+    // Under the base there are project hosts and nothing else: a hostname there that fails the
+    // grammar (`site--prj_1`, `a.b.c`, `--x`) names no project host and must not fall through to the
+    // control plane — a working platform origin on a name the platform never chose. 421.
+    if (hostnameLabelsUnderBase(url.hostname, projectHostnameBase))
+      return new Response(
+        `421: ${url.hostname} is not a project host under ${projectHostnameBase}\n`,
+        { status: 421 },
+      );
 
     // `<deployId> <environmentName>`: Cloudflare's version id of this deploy — the stamp a smoke
     // waits for (`wrangler deploy` prints it) — and which deployment this is (the app config section below).
@@ -270,7 +280,7 @@ export interface AppConfig {
    *  cookie and verifies none. */
   readonly sessionSecret: string;
   /** The deployment's admin secret — `authenticate({ type: "admin-secret" })` (session.ts) and the
-   *  lanes' admin bearer (`laneIdentityOf`): every project. A wrangler SECRET on a deployment, a var
+   *  project host's admin bearer (`projectHostIdentityOf`): every project. A wrangler SECRET on a deployment, a var
    *  in the test lanes. Required: a blank secret would match nothing. */
   readonly adminApiSecret: string;
   /** Cloudflare's version id of the running deployment (`CF_VERSION_METADATA.id`; local workerd mints
@@ -345,7 +355,7 @@ export function appConfigOf(env: AppConfigEnv): AppConfig {
 // exactly one row, and the log never names a hostname: one rule row (`provide("itx.apps.site", …)`)
 // serves the app on every host the project has. `<project>` is the project's id or its slug — one
 // DNS label here, the directory slugifies an id — which the in-process directory resolves and admits
-// before the Request rides into the DO's fetch lane (`laneRequestTo`). A CUSTOM HOSTNAME
+// before the Request rides into the DO's fetch lane (`projectHostRequestTo`). A CUSTOM HOSTNAME
 // (`acme.com`, `<app>.acme.com`) is a directory lookup by hostname, not built: a later build adds the
 // row and the resolver. The one door the platform itself answers on a project host — the session
 // cookie's — is here too (`projectSessionResponse`), beside the cookie it sets.
@@ -435,6 +445,16 @@ const DNS_LABEL = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 /** An app label: a DNS label that is also an itx identifier (it becomes a step, `itx.apps.<label>`). */
 const APP_LABEL = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
 
+/** The labels `hostname` has under `base` — `site--p.iterate.app` ⇒ `["site--p"]` — lowercased, a
+ *  trailing dot (a fully-qualified Host, `site--p.base.`) dropped; null when the hostname is not
+ *  under `base` at all, and a blank `base` has nothing under it. */
+function hostnameLabelsUnderBase(hostname: string, base: string): string[] | null {
+  if (!base) return null;
+  const host = hostname.toLowerCase().replace(/\.$/, "");
+  const suffix = `.${base.toLowerCase()}`;
+  return host.endsWith(suffix) ? host.slice(0, -suffix.length).split(".") : null;
+}
+
 /** The app + project a host names, or null when `hostname` is not a project host under `base` (a
  *  blank `base` ⇒ no project-host ingress at all). `<app>--<project>.<base>` and
  *  `<app>.<project>.<base>` name the app `<app>`; the apex `<project>.<base>` names none (`app:
@@ -444,14 +464,10 @@ export function projectHostOf(
   hostname: string,
   base: string,
 ): { app: string | null; project: ProjectIdOrSlug } | null {
-  if (!base) return null;
-  const host = hostname.toLowerCase().replace(/\.$/, ""); // a fully-qualified Host (`site--p.base.`) too
-  const suffix = `.${base.toLowerCase()}`;
-  if (!host.endsWith(suffix)) return null;
-  const labels = host.slice(0, -suffix.length).split(".");
-  if (labels.length > 2) return null; // deeper than `<app>.<project>` is not a project host
+  const labels = hostnameLabelsUnderBase(hostname, base);
+  if (labels === null || labels.length > 2) return null; // deeper than `<app>.<project>` is not a project host
   const [first, second] = labels as [string, string?];
-  const separator = first.indexOf("--");
+  const separator = first.startsWith("xn--") ? -1 : first.indexOf("--"); // `xn--…` is an IDN label (punycode), never `<app>--<project>`
   const [app, project] =
     second !== undefined
       ? [first, second] // `<app>.<project>`

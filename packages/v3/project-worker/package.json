@@ -34,6 +34,7 @@
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
     "typescript": "^5.9.3",
+    "undici": "^7.29.0",
     "vitest": "^4.1.7",
     "wrangler": "4.127.1"
   }

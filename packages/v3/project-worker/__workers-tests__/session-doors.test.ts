@@ -21,8 +21,11 @@
 //     a project the directory does not know is 421;
 //   • THE HOST SHAPES: `<app>--<project>`, `<app>.<project>` and the apex `<project>` under the base
 //     (src/worker.ts `projectHostOf`) — the two app shapes reach the same `itx.apps.<app>` with the
-//     trusted `x-iterate-app` ALWAYS overwritten; the apex names no app and reaches the config
-//     worker's `fetch` (sdk/index.ts `ConfigWorker`: the bundled default is 404, an override routes).
+//     trusted `x-iterate-app` ALWAYS overwritten (derived at the DO's fetch lane from the expression,
+//     so loaded code forging it on `env.ITX.fetch` is overwritten too); the apex names no app and
+//     reaches the config worker's `fetch` (sdk/index.ts `ConfigWorker`: the bundled default is 404,
+//     an override routes); under the base a hostname that fails the grammar is 421, never the
+//     control plane.
 // The worker's default fetch is called directly with this lane's env (wrangler.test.jsonc: project
 // hosts hang under `projects.test`).
 
@@ -296,6 +299,46 @@ test("the host shapes: `<app>--<project>` and `<app>.<project>` reach the same a
   expect(await routed.json()).toEqual({ root: true, app: null });
   // a label with no row stays the lane's 404
   expect((await call("https://other--doors-shapes.projects.test/")).status).toBe(404);
+});
+
+/** A loaded worker that fetches an app of its own project through `env.ITX.fetch`, forging the app
+ *  label on the way — what the app then sees is the fetch lane's answer. */
+const SRC_FORGER = {
+  "cap.js": `import { WorkerEntrypoint } from "cloudflare:workers";
+export default class Forger extends WorkerEntrypoint {
+  async run() {
+    const res = await this.env.ITX.fetch(new Request("https://forger.internal/", {
+      headers: { "x-itx-expression": "itx.apps.echo", "x-iterate-app": "forged-by-loaded-code" },
+    }));
+    return { status: res.status, body: await res.json() };
+  }
+}`,
+};
+
+test("x-iterate-app is the fetch lane's, on every door: loaded code forging it on env.ITX.fetch is overwritten with the expression's label", async () => {
+  const admin = (await api()).authenticate(ADMIN);
+  const itx = await admin.projects.create({ project: "doors-forge" });
+  await itx.provide("itx.apps.echo", ["itx", "workers", ["get", { source: SRC_ECHO_APP }]]);
+  const seen = (await itx.invoke(["itx", "workers", ["get", { source: SRC_FORGER }], ["run"]])) as {
+    status: number;
+    body: { app: string | null };
+  };
+  expect(seen.status).toBe(200);
+  expect(seen.body.app).toBe("echo");
+});
+
+test("under the base, only a project host: a hostname that fails the grammar is 421 — never the control plane; the platform host itself is unaffected", async () => {
+  // `site--prj_1` (an `_`), `a.b.c` (deeper than `<app>.<project>`), `--x` (no app label): none is
+  // a project host, and none may be a working platform origin on a name the platform never chose
+  for (const host of ["site--prj_1", "a.b.c", "--x"]) {
+    const res = await call(`https://${host}.projects.test/login`, {
+      method: "POST",
+      body: new URLSearchParams({ email: "stranger@example.com", next: "/" }),
+    });
+    expect(res.status, host).toBe(421);
+    expect(res.headers.get("set-cookie"), host).toBeNull();
+  }
+  expect((await call("https://control.test/version")).status).toBe(200);
 });
 
 test("the session door on a project host: /.itx/session?token= turns a token for THIS project into the host cookie, the cookie into the principal the app sees; a foreign token is 401; POST ?logout clears it (a GET is 405, a foreign origin's POST 403); the redirect never leaves the host; an unknown project's host is 421", async () => {

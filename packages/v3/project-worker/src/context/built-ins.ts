@@ -82,10 +82,12 @@ export interface BuiltInScope extends LibraryRoots {
     delete(key: string): Promise<{ ok: true }>;
     list(prefix?: string): Promise<{ keys: string[] }>;
   };
-  /** Project secrets for egress: `getSecret("/secrets/NAME")` in an outbound request's URL or
-   *  headers substitutes to the value at the egress door (`fetch`), and `getSecret("/secrets/NAME",
-   *  { field: "a.b" })` to one dotted field of a JSON value — apps/os's placeholder grammar
-   *  (iterate-context-durable-object.ts `substituteProjectSecrets`). WRITE-ONLY — `set`, `delete`,
+  /** Project secrets for egress: `getSecret("/secrets/NAME")` in an outbound request's URL (path
+   *  or query) or headers substitutes to the value at the fetch door (`fetch`), and
+   *  `getSecret("/secrets/NAME", { field: "a.b" })` to one dotted field of a JSON value — apps/os's
+   *  placeholder grammar for a URL or a header (iterate-context-durable-object.ts
+   *  `substituteProjectSecrets`); not its `Basic base64(user:getSecret(…))` peeling nor its
+   *  JSON-body template — the body is never scanned. WRITE-ONLY — `set`, `delete`,
    *  and a `list` of names and origins, never a value (the same physical-write carve-out as
    *  `kv.put`). A secret `set` with an `origin` is sent to that origin ONLY: a mis-typed URL cannot
    *  mail a credential to a stranger. Every change appends `events.iterate.com/secrets/changed` with

@@ -189,6 +189,7 @@ const rows: { hostname: string; base: string; becomes: ReturnType<typeof project
   { hostname: "a.site.prj-1.iterate.app", base: "iterate.app", becomes: null }, // deeper than `<app>.<project>`
   { hostname: "site--prj_1.iterate.app", base: "iterate.app", becomes: null }, // `_` is not a DNS label
   { hostname: "site--prj--1.iterate.app", base: "iterate.app", becomes: null }, // a second `--`
+  { hostname: "xn--acme.iterate.app", base: "iterate.app", becomes: null }, // an IDN label (punycode), not the app `xn`
   { hostname: "site--x.prj-1.iterate.app", base: "iterate.app", becomes: null }, // an app label has single hyphens
   { hostname: "3d--prj-1.iterate.app", base: "iterate.app", becomes: null }, // an app label is an identifier
   { hostname: "3d.prj-1.iterate.app", base: "iterate.app", becomes: null },

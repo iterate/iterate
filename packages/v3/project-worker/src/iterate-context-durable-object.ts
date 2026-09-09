@@ -4,7 +4,7 @@
 // (stream/subscription-delivery.ts), the facets (`ctx.facets`, context/worker-loader.ts), the rpc
 // stubs (context/rpc-stubs.ts), and the fetch door (the pager upgrade, the fetch lane,
 // egress). Each module's header says what it does; this file is the wiring and the doors.
-//   egress — `substituteProjectSecrets`: `getSecret("/secrets/NAME")` substitution at the egress door, WS-safe
+//   egress — `substituteProjectSecrets`: `getSecret("/secrets/NAME")` substitution at the fetch door, WS-safe
 //
 // PURE WORKERS-RPC: capnweb never terminates here — the stateless `/api` worker relays. Dispatch is
 // ONE door, `invoke(call)`; every OTHER change to this context is an appended event (the edge's
@@ -37,6 +37,7 @@ import type { StreamEvent, StreamEventInput } from "./stream/processor.ts";
 import {
   normalizedItxExpression,
   canonicalItxExpressionPrefix,
+  itxExpressionStepName,
   parse,
   print,
   type ItxExpression,
@@ -111,6 +112,12 @@ export interface Env extends AppConfigEnv {
   /** The per-project secret store egress substitutes from (`secret:<projectId>:<name>`). */
   SECRETS_KV: KVNamespace;
 }
+
+/** The app label an app sees — apps/os's header. Written at the fetch lane alone (`fetch` below),
+ *  from the expression: the label of `itx.apps.<label>…`, deleted for any other expression — so
+ *  neither a visitor on a project host nor loaded code on `env.ITX.fetch` can pick an app the
+ *  expression did not. */
+const ITERATE_APP_HEADER = "x-iterate-app";
 
 export class IterateContextDurableObject extends DurableObject<Env> {
   /** WHO THIS DO IS: the DO name parsed ONCE into `{ name, projectId, path }`. A context is only
@@ -810,6 +817,16 @@ export class IterateContextDurableObject extends DurableObject<Env> {
           : parse(itxExpressionHeader);
         const headers = new Headers(request.headers);
         headers.delete(ITX_EXPRESSION_FETCH_HEADER);
+        // THE APP LABEL the app sees (`x-iterate-app`, apps/os's header) is derived HERE, from the
+        // expression, on every fetch-lane Request — a project host's, a session's terminal fetch, a
+        // loaded worker's `env.ITX.fetch` — so whatever a visitor or loaded code wrote is overwritten
+        // (set to the label of `itx.apps.<label>…`, deleted for any other expression).
+        const appLabel =
+          itxExpression[0] === "itx" && itxExpression[1] === "apps"
+            ? itxExpressionStepName(itxExpression[2])
+            : undefined;
+        if (appLabel === undefined) headers.delete(ITERATE_APP_HEADER);
+        else headers.set(ITERATE_APP_HEADER, appLabel);
         // The edge's stamp (ingress after the cookie check, a session's terminal fetch): the call runs
         // under that principal, and the header stays on the Request the app receives.
         const principal = JSON.parse(
@@ -857,7 +874,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         );
         if (value !== null && metadata?.origin && metadata.origin !== requestOrigin)
           throw new ProjectSecretRefused(
-            `egress: project secret ${name} is bound to ${metadata.origin} — not sent to ${requestOrigin}`,
+            `itx.fetch: project secret ${name} is bound to ${metadata.origin} — not sent to ${requestOrigin}`,
           );
         return value;
       });
@@ -906,16 +923,19 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   }
 }
 
-// ── egress ── `getSecret("/secrets/NAME")` substitution at the egress door, WS-SAFE: it only
+// ── egress ── `getSecret("/secrets/NAME")` substitution at the fetch door, WS-SAFE: it only
 // rebuilds the URL and the Headers and constructs `new Request(request, { headers })`, which preserves
 // the method, the `Upgrade` header and the body — so a 101 flows straight back through it.
 
-// THE PLACEHOLDER GRAMMAR — apps/os's (apps/os/src/domains/secrets/utils.ts): `getSecret("/secrets/NAME")`
-// is the whole stored value; `getSecret("/secrets/NAME", { field: "a.b" })` is one dotted field of a
-// JSON-valued secret. Double quotes, whitespace free inside the parentheses; `/secrets/NAME` is the
-// name `itx.secrets.set(NAME, …)` stored, `[a-zA-Z0-9._-]+` (context/built-ins.ts `secretKey`).
-// Matched as written in a header, and as the URL parser percent-encodes it in a URL (`"` → %22, a
-// space → %20, `{` → %7B, `}` → %7D); the value is spliced back into the URL as ONE component.
+// THE PLACEHOLDER GRAMMAR — apps/os's (apps/os/src/domains/secrets/utils.ts) for a URL or a header:
+// `getSecret("/secrets/NAME")` is the whole stored value; `getSecret("/secrets/NAME", { field: "a.b" })`
+// is one dotted field of a JSON-valued secret. Double quotes, whitespace free inside the
+// parentheses; `/secrets/NAME` is the name `itx.secrets.set(NAME, …)` stored, `[a-zA-Z0-9._-]+`
+// (context/built-ins.ts `secretKey`). Matched as written in a header, and as the URL parser
+// percent-encodes it in a URL (`"` → %22, a space → %20, `{` → %7B, `}` → %7D) — the path and the
+// query alike; the value is spliced back into the URL as ONE component, `:` kept (Telegram's
+// `bot123:abc` path). Where this DIVERGES from apps/os: no peeling of a `Basic base64(user:getSecret(…))`
+// credential, no JSON-body template — the body is never scanned.
 const QUOTE = '(?:"|%22)';
 const SPACE = "(?:\\s|%20)*";
 const SECRET_PLACEHOLDER = new RegExp(
@@ -943,7 +963,7 @@ function secretFieldOf(stored: string, field: string, placeholder: string, where
     value = JSON.parse(stored);
   } catch {
     throw new ProjectSecretRefused(
-      `egress: ${placeholder} in ${where} names a field, but the secret is not a JSON value`,
+      `itx.fetch: ${placeholder} in ${where} names a field, but the secret is not a JSON value`,
     );
   }
   for (const segment of field.split("."))
@@ -953,7 +973,7 @@ function secretFieldOf(stored: string, field: string, placeholder: string, where
         : undefined;
   if (typeof value !== "string")
     throw new ProjectSecretRefused(
-      `egress: ${placeholder} in ${where}: the secret has no string at field "${field}"`,
+      `itx.fetch: ${placeholder} in ${where}: the secret has no string at field "${field}"`,
     );
   return value;
 }
@@ -966,8 +986,9 @@ function secretFieldOf(stored: string, field: string, placeholder: string, where
  * `ProjectSecretRefused` naming the placeholder and where it sat — to the caller, never the
  * destination. `resolve(name)` answers the stored value; a `{ field }` placeholder then picks one
  * string out of it as JSON. In the URL the value is spliced as ONE component
- * (`encodeURIComponent`), so a secret can never add a query parameter or a fragment. Returns a NEW
- * Request when anything changed, else the original.
+ * (`encodeURIComponent`, with `:` kept — a Telegram bot token in the path), so a secret can never
+ * add a query parameter or a fragment. Returns a NEW Request when anything changed, else the
+ * original.
  *
  * NOTE: the BODY is not scanned (substituting a streaming body means buffering it and recomputing
  * content-length) — a secret spelled inside a request body forwards as a literal placeholder.
@@ -988,11 +1009,13 @@ export async function substituteProjectSecrets(
       const stored = await resolve(name);
       if (stored == null)
         throw new ProjectSecretRefused(
-          `egress: no stored project secret for ${placeholder} in ${where}`,
+          `itx.fetch: no stored project secret for ${placeholder} in ${where}`,
         );
       const secret =
         field === undefined ? stored : secretFieldOf(stored, field, placeholder, where);
-      out += value.slice(last, m.index) + (encode ? encodeURIComponent(secret) : secret);
+      out +=
+        value.slice(last, m.index) +
+        (encode ? encodeURIComponent(secret).replaceAll("%3A", ":") : secret);
       last = m.index + m[0].length;
       any = true;
     }

@@ -181,7 +181,7 @@ membership answer.
 **Who** (`src/principal.ts`, `src/session.ts`). `SessionCredentials` is a union of four kinds;
 `verifyCredentials(credentials, input)` is THE ONE verifier — it answers the principal or null, no
 reason — shared by `/api` (`authenticate`, which names the refusal per kind, coded), both lanes into
-a context (`src/worker.ts` `laneIdentityOf`: the kinds read off a request and tried in order, the
+a context (`src/worker.ts` `projectHostIdentityOf`: the kinds read off a request and tried in order, the
 first that verifies for the project wins) and `/mcp` (`resolveExternalToken`). What a session
 reaches is its `Reach` (`src/control-plane.ts`): `"every"` (the admin secret), `{ userId }` (a
 user: the cookie, the admin's `as`) or `{ projectIds }` (a token, the secret, an OAuth grant that
@@ -249,7 +249,7 @@ own append, a lent stub's rule, a processor's row are all `itx.builtins.…`, so
 | `readEvents(afterOffset?, limit?)`                    | `→ { events, scannedThroughOffset, atHead }` — a page is cut by the server's byte budget (8 MiB, less while other readers are outstanding) or by `limit`; `atHead` says the durable mark was reached                                                                                                                                                                                                      | the stream                                                        |
 | `waitForEvent(filter?)`                               | `{ type?, afterOffset?, timeoutMs? } → StreamEvent`                                                                                                                                                                                                                                                                                                                                                       | the stream                                                        |
 | `cd(path)`                                            | `→ InvokeHandle` onto a sibling context, every call through ITS table (`cd(p).builtins.append(…)` is its physical door)                                                                                                                                                                                                                                                                                   | `ITERATE_CONTEXT.getByName`                                       |
-| `fetch(request)`                                      | egress (`src/iterate-context-durable-object.ts`, the DO's `#egress`): `getSecret("/secrets/NAME")` and `getSecret("/secrets/NAME", { field: "a.b" })` substituted in the URL (spliced as ONE component; the parser's percent-encoded spelling matched too) and the headers — a placeholder with no stored secret, a field the value has no string at, or a secret bound to another origin, is a 502 (`ProjectSecretRefused`) to the caller, never the destination — then the terminal `fetch`. No next door. | `SECRETS_KV`, then `fetch`                                        |
+| `fetch(request)`                                      | egress (`src/iterate-context-durable-object.ts`, the DO's `#egress`): `getSecret("/secrets/NAME")` and `getSecret("/secrets/NAME", { field: "a.b" })` substituted in the URL — path and query, spliced as ONE component with `:` kept (a Telegram bot token); the parser's percent-encoded spelling matched too — and the headers: apps/os's grammar for a URL or a header, WITHOUT its `Basic base64(user:getSecret(…))` peeling or its JSON-body template (the body is never scanned). A placeholder with no stored secret, a field the value has no string at, or a secret bound to another origin, is a 502 (`ProjectSecretRefused`) to the caller, never the destination — then the terminal `fetch`. No next door. | `SECRETS_KV`, then `fetch`                                        |
 | `rpcStubs`                                            | `.get(rpcStubKey) → RpcStubHandle` · `.list() → string[]` (presence) | `RpcStubDirectory`                                                |
 | `rewriteRules`                                        | `.list() → { match, target, origin }[]` (the EFFECTIVE table: context rows, masks as `target: null`, and the platform rows, `origin: "platform" \| "context"`) · `.get(match)` · `.resolve(call) → string[]` (the pure chain; `invoke(call) ≡ invoke(resolve(call).at(-1))`) | core state + the platform rows                                    |
 | `facets`                                              | `.get(name) → FacetHandle` (a RUNNING facet) · `.get(name, { source, cacheKey?, className })` (load and host it) — no delete: a facet leaves with the row that hosted it (section 9) | `ctx.facets`; mirrors `ctx.facets.get(name, startupCallback)`     |
@@ -539,15 +539,18 @@ workerd and capnweb serialize sockets over plain RPC.
 
 **Project hosts** (`src/worker.ts`: `projectHostOf`, the pure half, and the edge branch). A label is
 the address — apps/os's host shapes: a request on `<app>--<project>.<base>` or
-`<app>.<project>.<base>` IS the app `itx.apps.<app>` of that project's root context; the apex
+`<app>.<project>.<base>` IS the app `itx.apps.<app>` of that project's root context (the dotted
+shape is parsed and served locally; deployed, the one-label wildcard certificate does not cover a
+second label, so only `<app>--<project>` serves until a certificate per project exists); the apex
 `<project>.<base>` names no app and lands on the project's config worker, `itx.worker.fetch(request)`
 (`src/sdk/index.ts` `ConfigWorker`: the bundled default answers 404, a project's own `fetch` routes
 by hostname — `this.env.ITX.get().apps.site.fetch(request)`). `<project>` is the project's id or its
 slug (one string here: the directory slugifies an id), resolved by the directory read below. A
 CUSTOM HOSTNAME (`acme.com`, `<app>.acme.com`) is a directory lookup by hostname — a later build. The
-edge strips inbound `x-itx-*`, ALWAYS overwrites `x-iterate-app` with the label the host selected
-(deleted when it selected none — a visitor can never pick an app the host did not), sets
-`x-itx-expression` to the spelling, and rides the Request VERBATIM into the DO's fetch lane: the
+edge strips inbound `x-itx-*`, sets `x-itx-expression` to the spelling, and rides the Request
+VERBATIM into the DO's fetch lane, where `x-iterate-app` is ALWAYS overwritten from the expression
+(the label of `itx.apps.<label>`, deleted for any other — a visitor on a host, or loaded code on
+`env.ITX.fetch`, can never pick an app the expression did not): the
 URL, host-scoped cookies and WebSocket upgrades survive, so a served page's relative links resolve
 on the same host. The app is one rule row (`provide("itx.apps.site", "itx.workers.get({ source })")`,
 a live stub, a facet) and the log never names a hostname; a label with no row is the lane's 404.
@@ -557,11 +560,15 @@ lane's is `projects.test`, the e2e lane's `localhost`. ADMISSION comes first: a 
 first touch, so before the edge dials a Durable Object for a project host it asks the in-process
 directory whether the project exists — ONE D1 read, `directory(env.DB).getProject(project)`
 (`src/control-plane.ts`), whose row is the project id — and an unknown project is 421 (a stranger's
-label under the wildcard mints nothing). A project's id IS its DNS-safe slug (`projects.create({
+label under the wildcard mints nothing); a hostname under the base that fails the grammar at all
+(`site--prj_1`, `a.b.c`, `--x`; an `xn--` label is punycode, never an app) is 421 too, never the
+control plane. A project's id IS its DNS-safe slug (`projects.create({
 project })` slugifies it): the directory row, the DO name and the host label are one name.
 Everything on a project host is the app's; the platform's own doors stay on the worker's hostname.
-An app that fetches its own host re-enters the edge with a hop count the platform writes
-(`x-itx-expression-hops`); the fourth pass is a 508. WHO, on a project host:
+An app that fetches its own host re-enters the edge with the hop count it FORWARDS
+(`x-itx-expression-hops`, the count the app was handed); the fourth forwarded pass is a 508 — a
+fresh Request starts at zero, so an app looping its own project with fresh Requests is its own
+cost. WHO, on a project host:
 `/.itx/session?token=<projectToken>&next=<path>` turns a token for THIS project into the host-scoped
 `__Host-itx-project-session` cookie (HttpOnly, Secure, SameSite=Lax, `Path=/`, no `Domain` — the
 `__Host-` prefix makes a browser refuse it set any other way, so no sibling host can set or shadow it;
@@ -589,7 +596,9 @@ foreign one refused), a D1 directory (`control-plane.sql`: users → orgs via `o
 projects; access is org membership), a console at `/` with an email login form (`POST /login`,
 `POST /logout`, `POST /projects` — every POST refused with 403 from a foreign `Origin`; every page
 `Cache-Control: no-store`) whose session is a signed cookie (`__Host-itx-control-plane-session`,
-`src/principal.ts` verifies it), the `/authorize` consent page with PROJECT SELECTION (the user's
+`src/principal.ts` verifies it) and whose project rows each link `open` through
+`/.itx/session?token=` to the project's APEX host — the config worker's `fetch`, which for a project
+with no config worker of its own is the bundled default's 404 — the `/authorize` consent page with PROJECT SELECTION (the user's
 projects as checkboxes, all checked; the grant's `props: { actor, email, projects }` — `projects`
 absent when there was nothing to choose from ⇒ every project of the user's orgs, per call; a
 request the provider refuses is sent back to the client with `error`, `error_description`, `state`

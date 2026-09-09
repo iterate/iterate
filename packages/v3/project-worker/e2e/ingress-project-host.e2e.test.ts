@@ -7,7 +7,8 @@
 // app. The app is one rule row: the log never names a hostname. WHO, on a host: a project token a
 // member minted becomes the `/.itx/session` cookie and stamps `x-itx-principal`; the platform's
 // credential never reaches the app (the bearer lanes — a token, the admin secret, the project's own
-// secret — are __workers-tests__/session-doors.test.ts).
+// secret — are __workers-tests__/session-doors.test.ts). RED, deployed: the hop budget counts only
+// what an app forwards — an app fetching its own host with a FRESH Request is not stopped by it.
 
 import { expect, test } from "vitest";
 import { openItx } from "./support/client.ts";
@@ -85,7 +86,8 @@ test("an app is served at / on its project host — URL verbatim, relative asset
   expect(asset.status, asset.text).toBe(200);
   expect(asset.text).toContain("document.title");
   // a visitor's x-itx-* never reach the app (the lane's own header is set after the strip), and
-  // x-iterate-app is the label the host selected — a visitor's own is overwritten
+  // x-iterate-app is the label the host selected — a visitor's own is overwritten at the DO's fetch
+  // lane, from the expression
   const echo = await fetchProjectHost(host, "/echo", {
     "x-itx-expression": "itx.kv",
     "x-itx-visitor": "1",
@@ -107,7 +109,9 @@ test("an app is served at / on its project host — URL verbatim, relative asset
     expect(dotted.text).toContain(`<p>site.${projectId}.${base}/w</p>`);
   }
   // the apex names no app: the config worker's fetch answers it — the bundled default is 404, a
-  // project's own routes it (here: to the site), and sees no app label
+  // project's own routes it (here: to the site, through `itx.apps.site.fetch`), and the site then
+  // sees ITS label: the DO's fetch lane derives `x-iterate-app` from the expression at every door,
+  // never from what the config worker forwarded (the config worker itself sees none — the workers lane)
   const bare = await fetchProjectHost(`${projectId}.${base}`, "/");
   expect(bare.status, bare.text).toBe(404);
   expect(bare.text).toContain("Not found");
@@ -116,9 +120,11 @@ test("an app is served at / on its project host — URL verbatim, relative asset
     "workers",
     ["get", { source: SRC_CONFIG_ROUTER, cacheKey: "config:ingress" }],
   ]);
-  const apex = await fetchProjectHost(`${projectId}.${base}`, "/echo", { "x-iterate-app": "site" });
+  const apex = await fetchProjectHost(`${projectId}.${base}`, "/echo", {
+    "x-iterate-app": "other",
+  });
   expect(apex.status, apex.text).toBe(200);
-  expect((JSON.parse(apex.text) as { app: string | null }).app).toBeNull();
+  expect((JSON.parse(apex.text) as { app: string | null }).app).toBe("site");
   // a label no rule serves is the lane's 404 (NO_ITX_EXPRESSION_MATCH), never a 500
   const missing = await fetchProjectHost(`other--${projectId}.${base}`, "/");
   expect(missing.status, missing.text).toBe(404);
@@ -186,6 +192,37 @@ test("the session door on a project host: a token becomes the cookie, the cookie
   expect(out.status).toBe(303);
   expect(out.headers["set-cookie"]).toContain("Max-Age=0");
 });
+
+/** An app that fetches its own host with a FRESH Request — nothing forwarded, so no hop count. */
+const SRC_SELF_LOOP = {
+  "cap.js": `import { WorkerEntrypoint } from "cloudflare:workers";
+export default class Loop extends WorkerEntrypoint {
+  fetch(request) { return fetch(new Request(request.url)); }
+}`,
+};
+
+// RED BY CONSTRUCTION: the hop budget (src/worker.ts `PROJECT_HOST_HOPS_HEADER`) is the count the
+// app FORWARDS — an app that fetches its own host with a fresh Request re-enters at 1 every pass,
+// and the fourth pass is never reached. Deployed only: the local DO's fetch cannot resolve a
+// `*.localhost` host. OPT-IN (RUN_SELF_LOOP_PROBE=1), like the wake-loop probe: the row starts a
+// REAL self-nesting chain on the deployed worker that runs until the eyeball's 10 s abort — never
+// in a routine deployed run.
+const SELF_LOOP_OPT_IN = process.env.RUN_SELF_LOOP_PROBE === "1";
+test
+  .skipIf(projectHostsAreLocal() || !SELF_LOOP_OPT_IN)
+  .fails(
+    "an app that fetches its own host with a FRESH Request is stopped by the hop budget (508 on the fourth pass)",
+    async () => {
+      const projectId = freshDnsSafeProjectId("ingress-loop");
+      await registerProject(projectId);
+      const itx = openItx(projectId);
+      await itx.provide("itx.apps.loop", ["itx", "workers", ["get", { source: SRC_SELF_LOOP }]]);
+      const answer = await fetch(`https://loop--${projectId}.${projectHostnameBase()}/`, {
+        signal: AbortSignal.timeout(10_000),
+      });
+      expect(answer.status).toBe(508);
+    },
+  );
 
 deployedOnly("deployed: a WebSocket upgrade on the project host reaches the app", async () => {
   const projectId = freshDnsSafeProjectId("ingress-ws");

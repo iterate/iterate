@@ -4,7 +4,7 @@
 // methods along the path; the prototype hop (context/expression.ts) turns every unknown segment into
 // ONE accumulated `invoke(expression)` dispatch. Pins:
 //   • a project label outside the DNS grammar is not a project host — the edge names no DO for it
-//     (the control plane's 404); the codec's own charset gate is the unit lane's
+//     and answers 421 (never the control plane); the codec's own charset gate is the unit lane's
 //   • `kv.list` returns EVERY key, not the first KV page
 //   • `cd('')` is SELF — an in-process call on this very context, never a self-RPC hop or a twin DO
 //   • a default-deny miss and a paused-stream refusal each carry their machine-readable `code` end to
@@ -24,15 +24,15 @@ import { SlackReplayTarget, Tools } from "./support/targets.ts";
 
 // ── the built-in roots and the error grammar ──
 
-test("a project label outside the DNS grammar is not a project host: the edge names no DO for it — the control plane's 404", async () => {
+test("a project label outside the DNS grammar is not a project host: the edge names no DO for it — 421, never the control plane", async () => {
   // A project host is the one HTTP way into a project, and `projectHostOf` (src/worker.ts) admits a
-  // DNS label only — `prj_evil` (an `_`, legal in a DO name) is no project host, so the request falls
-  // through to the control plane's catch-all (its 404 for an app's path; `/` would be the console)
-  // and no Durable Object is ever named or minted for it; the DO-name codec's own charset gate (`:`
-  // and the rest) is src/iterate-context.test.ts.
+  // DNS label only — `prj_evil` (an `_`, legal in a DO name) is no project host. Under the base there
+  // is nothing else, so the edge answers 421 (a fall-through to the control plane would be a working
+  // platform origin on a name the platform never chose) and no Durable Object is ever named or
+  // minted for it; the DO-name codec's own charset gate (`:` and the rest) is src/iterate-context.test.ts.
   const answer = await fetchProjectHost(`site--prj_evil.${projectHostnameBase()}`, "/w?repo=x");
-  expect(answer.status, answer.text).toBe(404);
-  expect(answer.text).toContain("Not found");
+  expect(answer.status, answer.text).toBe(421);
+  expect(answer.text).toContain("not a project host");
 });
 
 test("kv list returns EVERY key, not silently the first 1000", async () => {

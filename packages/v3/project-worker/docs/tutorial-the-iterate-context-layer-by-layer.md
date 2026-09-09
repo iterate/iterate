@@ -59,9 +59,10 @@ the **context** (things you can call, in both directions), **fetch** (in both di
 ### One worker, one package
 
 `src/worker.ts` is the stateless edge: capnweb terminates at `/api`; a project host —
-`<app>--<project>.<base>`, `<app>.<project>.<base>`, or the apex `<project>.<base>`, `<project>` an
+`<app>--<project>.<base>`, `<app>.<project>.<base>` (parsed and served locally; deployed, the
+one-label wildcard certificate does not cover it), or the apex `<project>.<base>`, `<project>` an
 id or a slug — is routed by hostname into the project's root context, the app label riding as a
-trusted `x-iterate-app` header the edge ALWAYS overwrites; and everything else on the worker's own
+trusted `x-iterate-app` header the DO's fetch lane ALWAYS overwrites; and everything else on the worker's own
 hostname is the control plane, in-process (`src/control-plane.ts`: an OAuth 2.1 Authorization
 Server, a D1 directory of users, orgs and projects, `/mcp`, a console with a login form). A project
 host is the one HTTP way in: an app host answers with the app, and a host naming no app with the
@@ -1399,7 +1400,9 @@ to the internet today, to internal hostnames later. Not "egress"; the word is fe
 context is what it adds. What it adds today is the secret substitution: a
 `getSecret("/secrets/NAME")` placeholder in the request URL or a header is replaced at the door
 with a value the caller never sees, and `getSecret("/secrets/NAME", { field: "a.b" })` picks one
-field out of a JSON secret — apps/os's grammar, verbatim; `/secrets/NAME` is the name
+field out of a JSON secret — apps/os's grammar for a URL or a header (the path and the query alike,
+`:` kept in a spliced value; NOT its `Basic base64(user:getSecret(…))` peeling nor its JSON-body
+template — the body is never scanned); `/secrets/NAME` is the name
 `itx.secrets.set(NAME, …)` stored. `itx.secrets` is the WRITE-ONLY door to those values — `set`,
 `delete`, and a `list` of names and origins, never a value. Every change appends
 `events.iterate.com/secrets/changed` without the value:
@@ -1446,14 +1449,16 @@ on its real host.
 
 The other direction. A fetch-shaped capability is always called through a terminal
 `.fetch(request)`, and from the web there is ONE way to it: a project host. `<app>--<project>.<base>`
-and `<app>.<project>.<base>` name the app `<app>` of `<project>` — an id or a slug; the apex
-`<project>.<base>` names no app. The edge resolves the project through the in-process directory
-(the row is the id, whichever the label was), strips every inbound `x-itx-*` header, sets the
-trusted `x-iterate-app` — the label the host selected, ALWAYS overwritten, deleted when the host
-selected none, so a visitor can never pick an app the host did not — and the principal's stamp
-(chapter 10), and rides the Request VERBATIM into the project's root context with the expression
-the host names in `x-itx-expression` (the internal channel a session's terminal fetch and a loaded
-worker's `env.ITX.fetch` ride too), so the URL, host-scoped cookies and WebSocket upgrades survive.
+and `<app>.<project>.<base>` name the app `<app>` of `<project>` — an id or a slug (the dotted shape
+is parsed and served locally; deployed, the one-label wildcard certificate does not cover a second
+label, a deploy-side fact); the apex `<project>.<base>` names no app. The edge resolves the project
+through the in-process directory (the row is the id, whichever the label was), strips every inbound
+`x-itx-*` header, sets the principal's stamp (chapter 10), and rides the Request VERBATIM into the
+project's root context with the expression the host names in `x-itx-expression` (the internal
+channel a session's terminal fetch and a loaded worker's `env.ITX.fetch` ride too), so the URL,
+host-scoped cookies and WebSocket upgrades survive. There, at the DO's fetch lane, the trusted
+`x-iterate-app` is ALWAYS overwritten from the expression — the label of `itx.apps.<label>`, deleted
+for any other — so neither a visitor nor loaded code can pick an app the expression did not.
 
 An app host lands on `itx.apps.<app>.fetch(request)`: an app is one rule row and the log never names
 a hostname. A host naming no app lands on the project's config worker (chapter 7),
@@ -1482,7 +1487,7 @@ await itx.provide("itx.apps.site", ["itx", "workers", ["get", { source: SRC_SITE
 const page = await fetchProjectHost(`site--${projectId}.${base}`, "/w?repo=x");
 expect(page.status).toBe(200);
 expect(page.text).toContain(`<p>site--${projectId}.${base}/w?repo=x</p>`); // the URL verbatim
-expect((await fetchProjectHost(`site.${projectId}.${base}`, "/w")).status).toBe(200); // the second shape, the same row
+expect((await fetchProjectHost(`site.${projectId}.${base}`, "/w")).status).toBe(200); // the second shape, the same row — locally: deployed, the wildcard certificate covers one label
 const seen = JSON.parse((await fetchProjectHost(host, "/echo", { "x-iterate-app": "other" })).text);
 expect(seen.app).toBe("site"); // what the app saw in x-iterate-app, whatever the visitor sent
 expect((await fetchProjectHost(`${projectId}.${base}`, "/")).status).toBe(404); // the apex: the bundled config worker's fetch
@@ -1498,11 +1503,14 @@ expect((await fetchProjectHost(`site--${unknown}.${base}`, "/")).status).toBe(42
 
 Admission comes first: a context is created on first touch, so before the edge dials a Durable
 Object for a project host it asks the in-process directory whether the project exists — one D1 read
-— and a stranger's label under the wildcard mints nothing. A visitor's credential is read as chapter
+— and a stranger's label under the wildcard mints nothing; a hostname under the base that fails the
+grammar at all is 421 too, never the control plane. A visitor's credential is read as chapter
 10 says — this project's token, its secret or the admin secret as the bearer, or the host cookie a
 token was turned into; never the platform's login cookie — and the platform's own credential is
-stripped before the app sees the Request. A host cannot re-enter itself: an app that fetches its own
-host comes back through the edge with a hop count the platform writes, and the fourth pass is a 508.
+stripped before the app sees the Request. The hop budget counts what an app FORWARDS: an app that
+fetches its own host with the headers it was handed comes back through the edge with that count,
+and the fourth forwarded pass is a 508; a fresh Request starts at zero — an app looping its own
+project with fresh Requests is its own cost (`e2e/ingress-project-host.e2e.test.ts`, the red row).
 Deployed, a WebSocket upgrade rides through the host to the app.
 
 Inside a session the door is the dotted terminal `.fetch(request)`: `invoke` forks a call whose
@@ -1634,7 +1642,7 @@ secret that proves it — and every lane reads the same kinds off a request:
 
 The fetch lane — a project host — is bearer and token only: this project's token, its secret or the
 admin secret as `Authorization: Bearer`, or the host cookie a token was turned into (below). The
-platform's login cookie is never a lane credential (`laneIdentityOf`, `src/worker.ts`): on a lane a
+platform's login cookie is never a lane credential (`projectHostIdentityOf`, `src/worker.ts`): on a lane a
 cross-site navigation would carry it with no `Origin` to check. `/mcp` is behind the OAuth AS and
 takes the same bearers.
 

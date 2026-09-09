@@ -4578,3 +4578,25 @@ pin naming its mechanism, or declined with the reason above. The red pins are th
   two (RFC 6125); the shape needs a certificate per project subdomain, a deploy-side task exactly as
   apps/os provisions custom hostnames. The dotted sub-claim is pinned in the local lane and the
   workers lane's parse rows; deployed, the two one-label shapes serve. Green alone after.
+
+## 2026-09-09 — auth, review round 3 applied: a grammar-miss host is 421, the app header is derived at the one door, the e2e support dials hosts through undici
+
+- ROUND 3 (a fresh reviewer over the lane deletion; the rig's repros run against the real worker): a
+  hostname under the project base that failed the grammar (`3d--x.<base>`, `a.b.c.<base>`) fell
+  through to the control plane — a working platform origin on a name the platform never chose; it is
+  421 now, and `xn--…` is never an app label. `x-iterate-app` was trusted only on the edge path (loaded
+  code could set it on `env.ITX.fetch` and be believed); it is derived at the DO's fetch lane from
+  `itx.apps.<label>` and deleted otherwise — true at every door, the edge's set/delete gone. The hop
+  budget counts what an app FORWARDS: an app fetching its own host with a fresh Request re-enters at
+  one every pass — left as the app's own cost, the sentences that said "the platform writes" fixed,
+  a red pin behind `RUN_SELF_LOOP_PROBE=1` (it starts a real self-nesting chain deployed; never in a
+  routine run). The placeholder's divergences from apps/os stated where the grammar is documented (no
+  Basic peeling, no JSON body, the query allowed); a spliced URL value keeps `:` (Telegram's tokens).
+- SIMPLER: the e2e support's hand-rolled HTTP/1.1 + RFC 6455 (134 lines, written because Node's fetch
+  and WebSocket refuse a Host override) is one undici `Agent` whose connector dials the worker for any
+  hostname — the URL and Host stay as the eyeball spelled them, and the upgrade carries cookies and
+  bearers for free (`undici` a devDependency, spliced into the lockfile). The lane's constants and
+  functions are named for the project host, not the deleted lane; "egress" is out of the 502s and the
+  README; the substitution unit file is a `{ …, becomes }` table.
+- GATES: tsc ×3 · oxlint · knip · unit 519 · workers 59 · local e2e 177 · `pnpm test` (the line
+  below). DEPLOYED: the line below.

@@ -7,7 +7,7 @@ as its catch-all (`src/control-plane.ts`: OAuth AS + a D1 directory + `/mcp`, th
 every project + the console);
 `src/iterate-context-durable-object.ts` is THE CONTEXT — one Durable Object per `{ projectId, path }`
 holding the event log, the core reduce, subscription delivery, the facets, the rpc-stub pagers and
-the egress door. Everything a client does is one dotted expression on `itx`.
+the fetch door. Everything a client does is one dotted expression on `itx`.
 
 ```ts
 using api = newWebSocketRpcSession("wss://<worker>/api"); // the client's only dependency: capnweb
