@@ -23,6 +23,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "havpe_modes.h"
+#include "iterate/kit/button.h"
 #include "iterate/kit/conversation_lights.h"
 #include "iterate/kit/conversation_overlay.h"
 #include "led_strip.h"
@@ -36,12 +37,6 @@ enum {
   /* The rail needs to settle before the first RMT refresh is honest. */
   LED_POWER_ENABLE_MS = 20,
   BUTTON_GPIO = 0,
-  BUTTON_DEBOUNCE_MS = 30,
-  /* Shorter is a tap (call toggle); longer is push-to-talk. */
-  BUTTON_TAP_THRESHOLD_MS = 250,
-  /* The deliberate hang-up: long enough that no press meaning "talk" or
-   * "wake" wanders across it, short enough to answer a person who means it. */
-  BUTTON_END_HOLD_MS = 800,
   /* The rotary ring around the top face: same pins and quadrature grain as
    * the official firmware's `dial` (pin_a GPIO16, pin_b GPIO18,
    * resolution 2). */
@@ -113,20 +108,7 @@ void havpe_ui_set_microphone_peak(uint32_t peak) {
   microphone_peak = peak;
 }
 
-static struct {
-  bool level_pressed;
-  bool debounced_pressed;
-  uint64_t changed_at_ms;
-  uint64_t pressed_since_ms;
-  bool talk_latched;
-  bool tap_pending;
-  /* The deliberate end: latched ONCE when a press crosses END_HOLD_MS,
-   * fired while still pressed so the answer is immediate. An ordinary
-   * press crosses the 250 ms talk threshold without meaning anything —
-   * measured on the desk as "call ended" the moment a call opened. */
-  bool end_hold_latched;
-  bool end_hold_pending;
-} button;
+static struct iterate_kit_button button;
 
 /*
  * The dial, sampled by the tick rather than the control poll on purpose: the
@@ -465,51 +447,19 @@ void havpe_ui_tick(void) {
 }
 
 void havpe_button_poll(void) {
-  const uint64_t now = now_ms();
-  const bool pressed = gpio_get_level(BUTTON_GPIO) == 0;
-  if (pressed != button.level_pressed) {
-    button.level_pressed = pressed;
-    button.changed_at_ms = now;
-  }
-  if (pressed != button.debounced_pressed &&
-      now - button.changed_at_ms >= BUTTON_DEBOUNCE_MS) {
-    button.debounced_pressed = pressed;
-    if (pressed) {
-      button.pressed_since_ms = now;
-      button.talk_latched = false;
-    } else if (!button.talk_latched) {
-      /* Released before the threshold: a completed tap. */
-      button.tap_pending = true;
-    } else {
-      button.talk_latched = false;
-    }
-  }
-  if (button.debounced_pressed && !button.talk_latched &&
-      now - button.pressed_since_ms >= BUTTON_TAP_THRESHOLD_MS) {
-    button.talk_latched = true;
-  }
-  if (button.debounced_pressed && !button.end_hold_latched &&
-      now - button.pressed_since_ms >= BUTTON_END_HOLD_MS) {
-    button.end_hold_latched = true;
-    button.end_hold_pending = true;
-  }
-  if (!button.debounced_pressed) button.end_hold_latched = false;
+  iterate_kit_button_update(&button, gpio_get_level(BUTTON_GPIO) == 0, now_ms());
 }
 
-void havpe_button_inject_tap(void) { button.tap_pending = true; }
+void havpe_button_inject_tap(void) { iterate_kit_button_inject_tap(&button); }
 
 bool havpe_button_take_end_hold(void) {
-  const bool held = button.end_hold_pending;
-  button.end_hold_pending = false;
-  return held;
+  return iterate_kit_button_take_end_hold(&button);
 }
 
 bool havpe_button_talk_held(void) {
-  return button.talk_latched && button.debounced_pressed;
+  return iterate_kit_button_held(&button);
 }
 
 bool havpe_button_take_tap(void) {
-  const bool tapped = button.tap_pending;
-  button.tap_pending = false;
-  return tapped;
+  return iterate_kit_button_take_tap(&button);
 }

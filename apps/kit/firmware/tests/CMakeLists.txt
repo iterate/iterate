@@ -54,6 +54,7 @@ function(iterate_kit_add_core_test NAME)
 endfunction()
 
 iterate_kit_add_core_test(iterate-kit-atomic-test atomic_test.c)
+iterate_kit_add_core_test(iterate-kit-button-test button_test.c)
 iterate_kit_add_core_test(iterate-kit-configuration-test configuration_test.c)
 iterate_kit_add_core_test(
   iterate-kit-conversation-launch-test conversation_launch_test.c)
