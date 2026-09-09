@@ -90,7 +90,6 @@ function ProjectWorkspaceDetailContent() {
       {dirty ? <DiffToggle active={showDiff} onToggle={toggleDiff} /> : null}
       <WorkspaceChanges
         files={files}
-        canCommit
         onDiscarded={(scope) => {
           if (selectedPath === undefined) return;
           const underScope =

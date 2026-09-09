@@ -11,19 +11,10 @@ import type {
   WorkspaceGitSurface,
   WorkspaceSurface,
 } from "@iterate-com/workspace-documents/types";
-import {
-  requireDocumentPath,
-  requireWorkspaceFilePath,
-  requireWorkspacePath,
-} from "./config-bridge.ts";
+import { requireDocumentPath, requireWorkspacePath } from "./config-bridge.ts";
 import type { AppEnv } from "./env.ts";
-import {
-  SCRATCH_WORKSPACE_PREFIX,
-  isGuestWorkspacePath,
-  newScratchWorkspaceName,
-  normalizeRepoPath,
-} from "./lib/board-shared.ts";
-import { jamAgentPath, jamDocumentPath, jamInvitation, jamWorkspacePath } from "./lib/jam.ts";
+import { normalizeRepoPath } from "./lib/board-shared.ts";
+import { workspacePathForName } from "./lib/workspace-names.ts";
 import {
   parseTaskCard,
   setTaskCardAgent,
@@ -68,7 +59,7 @@ type PlatformProject = {
   };
 };
 
-/** The agent surface the jam invite and the task assignment touch. */
+/** The agent surface the task assignment touches. */
 type PlatformAgent = {
   create(): Promise<unknown>;
   message(text: string): Promise<unknown>;
@@ -185,48 +176,18 @@ class DocsProjectApi extends RpcTarget implements DocsProject {
       .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
   }
 
-  async createWorkspace(): Promise<{ workspacePath: string; path: string }> {
-    const workspacePath = `${SCRATCH_WORKSPACE_PREFIX}${newScratchWorkspaceName()}`;
-    const path = "notes.md";
-    await this.#withPlatform(async (project) => {
-      // Birth stays explicit (this is the app's ONE create call). Mounts are
-      // not create's business: every project repo is derived onto its own
-      // /repos/** path.
-      const stub = project.workspaces.get(workspacePath);
-      await stub.create({});
-      // The document must EXIST before the editor opens it (no lazy file
-      // create anywhere in Docs) — seed the starter note in the same breath.
-      await stub.writeFile(`${workspacePath}/${path}`, "# Notes\n\n");
-    });
-    return { workspacePath, path };
-  }
-
-  async createJam(): Promise<{ workspacePath: string; path: string }> {
-    const id = newScratchWorkspaceName();
-    const workspacePath = jamWorkspacePath(id);
-    const path = jamDocumentPath(id);
-    await this.#withPlatform(async (project) => {
-      // Creates through the same workspace `create` call as createWorkspace.
-      const stub = project.workspaces.get(workspacePath);
-      await stub.create({});
-      await stub.writeFile(path, `# Jam ${id}\n\n`);
-    });
-    return { workspacePath, path };
-  }
-
-  async inviteAgent(workspacePath: string, path?: string): Promise<{ agentPath: string }> {
-    const workspace = requireWorkspacePath(workspacePath);
-    const agentPath = jamAgentPath(workspace);
-    if (agentPath === null) {
-      throw new Error(`only a jam workspace can invite an agent; ${workspace} is not one`);
+  async createWorkspace(input: { name: string }): Promise<{ workspacePath: string }> {
+    const workspacePath = workspacePathForName(input.name);
+    if (workspacePath === null) {
+      throw new Error(`not a workspace name: ${JSON.stringify(input.name)}`);
     }
-    const document = path === undefined ? null : resolveWorkspaceFilePath(workspace, path);
-    // Same birth-if-needed sequence as assignAgent; the brief goes out every
-    // time so a re-invite re-points an existing agent.
+    // Birth stays explicit (this is the app's ONE create call). Mounts are
+    // not create's business: every project repo is derived onto its own
+    // /repos/** path.
     await this.#withPlatform((project) =>
-      briefAgent(project.agents.get(agentPath), jamInvitation(workspace, document)),
+      project.workspaces.get(requireWorkspacePath(workspacePath)).create({}),
     );
-    return { agentPath };
+    return { workspacePath };
   }
 
   /**
@@ -234,7 +195,6 @@ class DocsProjectApi extends RpcTarget implements DocsProject {
    * (`state: in-progress` + `agent:`, visible to every collaborator through
    * the live workspace), then ONE commit so a born agent always finds its
    * durable assignment at HEAD, then birth-if-needed and the kickoff brief.
-   * Commits the mount, so it is an owner act like commit itself.
    */
   async assignAgent(input: {
     workspacePath: string;
@@ -244,7 +204,6 @@ class DocsProjectApi extends RpcTarget implements DocsProject {
     const workspacePath = requireWorkspacePath(input.workspacePath);
     const repoPath = normalizeRepoPath(input.repoPath);
     if (repoPath === null) throw new Error("bad repo path");
-    assertOwnerAct("assignAgent", workspacePath);
     const filePath = `${repoPath}/${input.path.replace(/^\/+/, "")}`;
     const source = await this.#withPlatform((project) =>
       project.workspaces.get(workspacePath).readFile(filePath),
@@ -293,7 +252,7 @@ class WorkspaceApi extends RpcTarget implements DocsWorkspace {
     this.#dial = dial;
     this.#path = path;
     this.#run = run;
-    this.#git = new WorkspaceGitApi(path, run);
+    this.#git = new WorkspaceGitApi(run);
     this.#collab = new WorkspaceCollabApi(run);
   }
 
@@ -384,14 +343,12 @@ class WorkspaceApi extends RpcTarget implements DocsWorkspace {
   }
 }
 
-/** `workspace.git`, forwarded — with the owner rule on commit. */
+/** `workspace.git`, forwarded. */
 class WorkspaceGitApi extends RpcTarget implements WorkspaceGitSurface {
-  readonly #workspacePath: string;
   readonly #run: WorkspaceRun;
 
-  constructor(workspacePath: string, run: WorkspaceRun) {
+  constructor(run: WorkspaceRun) {
     super();
-    this.#workspacePath = workspacePath;
     this.#run = run;
   }
 
@@ -400,7 +357,6 @@ class WorkspaceGitApi extends RpcTarget implements WorkspaceGitSurface {
   }
 
   commit(input: Parameters<WorkspaceGitSurface["commit"]>[0]) {
-    assertOwnerAct("commit", this.#workspacePath);
     return this.#run((workspace) => workspace.git.commit(input));
   }
 
@@ -459,21 +415,6 @@ class WorkspaceCollabApi extends RpcTarget implements WorkspaceCollabSurface {
   }
 }
 
-/**
- * Publishing is the workspace OWNER's act. This app owns only the
- * workspaces it mints itself (boards and scratch workspaces, shared by every
- * project member). Everything else is a guest view: it reads, comments, and
- * edits, but a commit would publish a mount's ENTIRE dirty set (the owning
- * agent's uncommitted work included), so the owner acts are refused here.
- */
-function assertOwnerAct(operation: string, workspacePath: string): void {
-  if (isGuestWorkspacePath(workspacePath)) {
-    throw new Error(
-      `${operation} is the workspace owner's act — this is a guest view on ${workspacePath}; ask the workspace's owner (its agent) to publish`,
-    );
-  }
-}
-
 /** Birth the agent if it has never been born, then send it the brief. */
 async function briefAgent(agent: PlatformAgent, brief: string): Promise<void> {
   const snapshot = await agent.processor.snapshot();
@@ -484,16 +425,6 @@ async function briefAgent(agent: PlatformAgent, brief: string): Promise<void> {
 /** Relative document paths join onto the workspace's own stream path; absolute paths are used verbatim. */
 export function resolveDocumentPath(workspacePath: string, value: string): string {
   const path = requireDocumentPath(value);
-  return path.startsWith("/") ? path : `${workspacePath}/${path}`;
-}
-
-/**
- * Any file of the workspace, not only a document (the tree opens every
- * file): relative joins onto the workspace's own directory, absolute must be
- * a fully qualified stream path under /workspaces/ or /repos/.
- */
-export function resolveWorkspaceFilePath(workspacePath: string, value: string): string {
-  const path = requireWorkspaceFilePath(value);
   return path.startsWith("/") ? path : `${workspacePath}/${path}`;
 }
 

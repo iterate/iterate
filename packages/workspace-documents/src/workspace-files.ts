@@ -290,7 +290,7 @@ export function useWorkspaceFiles({
         paths,
       );
     },
-    /** Owner act: publishes ONE mount's whole dirty set to its repo's main. */
+    /** Publishes ONE mount's whole dirty set to its repo's main. */
     commit: (input: { message: string; scope: string }) =>
       run(() => withWorkspace((workspace) => workspace.git.commit(input)), [input.scope]),
   };

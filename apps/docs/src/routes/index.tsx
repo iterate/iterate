@@ -3,6 +3,7 @@ import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { SidebarTrigger } from "@iterate-com/ui/components/sidebar";
 import { cn } from "@iterate-com/ui/lib/utils";
 import { workspaceFileKind } from "@iterate-com/workspace-documents/file-kinds";
+import { WorkspaceChanges } from "@iterate-com/workspace-documents/workspace-changes";
 import {
   DiffToggle,
   WorkspaceFileDiff,
@@ -12,7 +13,6 @@ import { useWorkspaceFiles } from "@iterate-com/workspace-documents/workspace-fi
 import { WorkspaceTree } from "@iterate-com/workspace-documents/workspace-tree";
 import { DeepLinkEmptyState } from "../components/deep-link-empty-state.tsx";
 import { WorkspaceDocumentPage } from "../components/workspace-document-page.tsx";
-import { WorkspaceActions } from "../components/workspace-actions.tsx";
 import { DEFAULT_REPO_PATH } from "../lib/board-shared.ts";
 import { workspaceTransport } from "../lib/project-rpc.ts";
 
@@ -95,10 +95,8 @@ function WorkspaceFiles({
   const actions = (
     <>
       {dirty ? <DiffToggle active={showDiff} onToggle={toggleDiff} /> : null}
-      <WorkspaceActions
+      <WorkspaceChanges
         files={files}
-        workspacePath={workspacePath}
-        selectedPath={selectedPath}
         onDiscarded={(scope) => {
           // The open file was under the discarded mount: an addition is gone
           // (close it), anything else was replaced under its editor (remount).

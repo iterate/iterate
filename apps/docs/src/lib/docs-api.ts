@@ -44,9 +44,7 @@ export interface DocsProject {
   /**
    * An existing workspace, forwarded verbatim from the platform (plain
    * `get`: this never creates one). Synchronous on purpose so calls
-   * pipeline through it. Outside this app's own namespaces the workspace is
-   * a guest view: reads, comments, and edits work; the owner acts (commit,
-   * assignAgent) are refused.
+   * pipeline through it.
    */
   workspace(workspacePath: string): DocsWorkspace;
   /** The project's repo catalog — paths a board can be opened against. */
@@ -54,30 +52,16 @@ export interface DocsProject {
   /** Every workspace of the project (the platform catalog), newest first. */
   workspaces(): Promise<WorkspaceListEntry[]>;
   /**
-   * CREATE a scratch workspace under /workspaces/scratch/ — the one
-   * deliberate exception to the plain-`get` posture (createJam is the same
-   * call with a different seed). App-neutral: the same workspace opens
-   * through every view. Seeded with one starter document, returned as `path`.
+   * CREATE a workspace at /workspaces/<name> — the one deliberate exception
+   * to the plain-`get` posture, and the only method here that creates
+   * anything. Every project repo is mounted in it by derivation.
    */
-  createWorkspace(): Promise<{ workspacePath: string; path: string }>;
-  /**
-   * Start a jam: mint and CREATE a scratch workspace seeded with one
-   * document inside the config mount (committable later), and return the
-   * deep link's two halves. Creates through the same workspace `create`
-   * call as createWorkspace; these two are the only methods here that
-   * create anything.
-   */
-  createJam(): Promise<{ workspacePath: string; path: string }>;
-  /**
-   * Put an agent into a jam: birth the jam's own agent if needed and brief
-   * it with the workspace path and the open file. Jam workspaces only.
-   */
-  inviteAgent(workspacePath: string, path?: string): Promise<{ agentPath: string }>;
+  createWorkspace(input: { name: string }): Promise<{ workspacePath: string }>;
   /**
    * Assign an agent to one task, the apps/os way: sets `state: in-progress`
    * + the `agent:` frontmatter, commits the mount so the assignment is
    * durable, births the agent if needed, and sends it the kickoff brief.
-   * Owner act (it commits). `path` is repo-relative under `repoPath`.
+   * `path` is repo-relative under `repoPath`.
    */
   assignAgent(input: {
     workspacePath: string;

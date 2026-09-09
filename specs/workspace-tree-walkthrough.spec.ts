@@ -5,7 +5,7 @@ import { test } from "./test-support/test.ts";
  * PR #2611 demo recording — the Docs app as a workspace app, on a preview:
  *
  *   1. Sign in through the preview's one-click test login.
- *   2. Docs: mint a scratch workspace; the tree shows the config repo
+ *   2. Docs: name a new workspace; the tree shows the config repo
  *      mounted at repos/config beside the workspace's own directory.
  *   3. Edit the starter note (live collab editor), open a repo file
  *      read-only, watch the Commit control arm for the config mount.
@@ -37,7 +37,7 @@ test("workspace tree walkthrough", async ({ page }) => {
   );
   await page.getByRole("button", { name: "Toggle Sidebar" }).waitFor({ timeout: 90_000 }); // timeout: cross-server OAuth hop + cold preview shell — past the spinner-waiter's 30s ceiling
 
-  // 2. Docs: a fresh scratch workspace, the whole workspace in the tree.
+  // 2. Docs: a new workspace by name, the whole workspace in the tree.
   await page.goto(`${docsHost}/`);
   await passProjectGate(page);
   // The picker lists workspaces over the app's socket once hydrated: a
@@ -47,13 +47,13 @@ test("workspace tree walkthrough", async ({ page }) => {
     .getByRole("button", { name: /^\/workspaces\// })
     .first()
     .waitFor();
-  await page.getByRole("button", { name: "New workspace" }).click();
-  await page.getByRole("heading", { name: /notes\.md$/ }).waitFor({ timeout: 60_000 }); // timeout: docs vessel cold load + collab attach on the preview — past the spinner-waiter's 30s ceiling
+  await page.getByRole("button", { name: "Create" }).click();
+  await page.locator('[data-item-path^="repos/config"]').first().waitFor({ timeout: 60_000 }); // timeout: docs vessel cold load + first status on the preview — past the spinner-waiter's 30s ceiling
   // Tree rows carry their path (directories in pierre's trailing-slash form);
   // the compacted mount row comes first among everything under it.
   const configRow = page.locator('[data-item-path^="repos/config"]').first();
   await configRow.waitFor();
-  await page.locator('[data-item-path^="workspaces/scratch/"]').first().waitFor();
+  await page.locator('[data-item-path^="workspaces/"]').first().waitFor();
 
   // 3. Type into the starter note; the own directory shows the addition,
   //    and a repo file opens read-only.
