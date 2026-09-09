@@ -291,10 +291,15 @@ export class DynamicWorkerRunner {
           : undefined;
       // A clone-version skew is a loader-isolate deserialize failure BEFORE the
       // app runs (the shared isolate outlived its captured bindings), so any
-      // request with no body is safe to replay on a fresh isolate — a bodyless
-      // POST like the auth gate's refresh, and a WebSocket upgrade too, whose
-      // socket does not exist yet when the dispatch throws.
-      const cloneSkewReplayable = request.body === null;
+      // request with nothing to consume is safe to replay on a fresh isolate —
+      // and a WebSocket upgrade too, whose socket does not exist yet when the
+      // dispatch throws. "Nothing to consume" is a null body OR an explicitly
+      // empty one: a browser's bodyless `fetch(url, { method: "POST" })` — the
+      // auth gate's refresh — arrives with `Content-Length: 0` and a non-null
+      // empty stream, and it must replay too or that POST 500s where the same
+      // GET recovers.
+      const cloneSkewReplayable =
+        request.body === null || request.headers.get("content-length") === "0";
       let response: Response;
       try {
         response = await dispatch(request);
@@ -366,10 +371,18 @@ export class DynamicWorkerRunner {
         traceRole,
       });
       try {
-        // Cloudflare's clone() widens the Request metadata generics even though
-        // the runtime value stays the same Fetch API request; the request is
-        // bodyless here, so the clone is a cheap header/URL copy.
-        return await dispatch(request.clone() as typeof request, crypto.randomUUID());
+        // Rebuild the request rather than clone() it: the caller only reaches
+        // here for a null- or empty-body request, and the first dispatch may
+        // already have handed that empty stream to the isolate — clone() on a
+        // used body throws, which would defeat the retry. A fresh request from
+        // the method, URL, and headers carries everything the gate needs (the
+        // body was empty) and never touches a stream.
+        const retryRequest = new Request(request.url, {
+          headers: request.headers,
+          method: request.method,
+          redirect: request.redirect,
+        }) as typeof request;
+        return await dispatch(retryRequest, crypto.randomUUID());
       } catch (error) {
         lastError = error;
         if (!isWorkerRpcCloneVersionError(error)) throw error;

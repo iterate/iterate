@@ -668,6 +668,57 @@ it("gives up a bodyless POST after the attempt bound so the caller can reconnect
   expect(workerFetch).toHaveBeenCalledTimes(4);
 });
 
+it("recovers an empty-body POST (Content-Length: 0) after clone-version skew", async () => {
+  // A browser's bodyless fetch(url, { method: "POST" }) — the auth refresh —
+  // arrives with Content-Length: 0 and a non-null empty stream, not a null
+  // body. That must still replay, or the POST 500s where the same GET recovers.
+  const workerFetch = vi
+    .fn()
+    // The first dispatch hands the empty stream to the isolate (consuming it)
+    // before the skew — a clone() of the used body would then throw, so the
+    // retry must rebuild the request instead.
+    .mockImplementationOnce(async (received: Request) => {
+      await received.text();
+      throw new Error("Unable to deserialize cloned data due to invalid or unsupported version.");
+    })
+    .mockResolvedValueOnce(new Response("recovered"));
+  h.resolveWorkerSource.mockResolvedValue({
+    ok: true,
+    source: {
+      assetConfig: undefined,
+      assetManifest: {},
+      assets: {},
+      cacheKey: "build-key",
+      commitOid: "commit-1",
+      mainModule: "worker.js",
+      modules: {},
+      wranglerConfig: undefined,
+    },
+  });
+  h.loadResolvedWorker.mockImplementation(() => ({
+    getEntrypoint: () => ({ fetch: workerFetch }),
+  }));
+  const runner = new DynamicWorkerRunner({
+    streamContext: { kind: "scope", scopePath: inlineRef.path },
+    exports: {} as ExecutionContext["exports"],
+    projectId: "prj_private",
+    scopePath: inlineRef.path,
+  });
+
+  const request = new Request("https://example.com/", {
+    method: "POST",
+    body: "",
+    headers: { "content-length": "0" },
+  });
+  // Guard the premise: an empty body is NOT null, so the body===null check
+  // alone would have skipped the retry.
+  expect(request.body).not.toBeNull();
+  const response = await runner.fetch({ ref: inlineRef, request });
+
+  expect(await response.text()).toBe("recovered");
+  expect(workerFetch).toHaveBeenCalledTimes(2);
+});
+
 it("recovers a WebSocket upgrade after clone-version skew (a reconnecting collab session)", async () => {
   // A WebSocket upgrade is a bodyless GET whose socket does not exist yet when
   // the dispatch throws, so a clone skew during a deploy is safe to replay —
