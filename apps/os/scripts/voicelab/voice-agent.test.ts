@@ -3712,10 +3712,11 @@ describe("say, and the announced farewell", () => {
   /*
    * A HANG-UP SAY PARKED BEHIND A BARGED TURN. The press cancelled the
    * answer; the say pends, waiting for a settled turn; the listener never
-   * gives one. The reaper, past its deadline, asks for the line itself and
-   * arms the grace, instead of deferring to the parked reason for ever.
+   * gives one. The reaper, past its deadline, does not defer to the parked
+   * reason for ever, and does not try to speak the line either: it ends
+   * the call without it, as it ended every idle call before there were lines.
    */
-  it("a hang-up say pended behind a barged turn is asked for by the reaper, and the call still ends", async () => {
+  it("a hang-up say pended behind a barged turn is ended by the reaper without the line", async () => {
     const h = makeHarness();
     await callIsLive(h, CLIENT_TAKES_TURNS);
     h.provider.responseCreated();
@@ -3731,10 +3732,9 @@ describe("say, and the announced farewell", () => {
     await h.settle();
     expect(h.provider.sentOfType("response.create")).toHaveLength(createsBefore);
     await idleDeadline(h);
-    /* The reaper asked for the parked line rather than adding a farewell. */
-    expect(h.provider.sentOfType("response.create")).toHaveLength(createsBefore + 1);
+    /* No create from the reaper, no farewell of its own: the call ends. */
+    expect(h.provider.sentOfType("response.create")).toHaveLength(createsBefore);
     expect(eventsOfType(h, "say")).toHaveLength(1);
-    await stepTime(h, IDLE_FAREWELL_GRACE_MS + 5_000);
     expect(eventsOfType(h, "conversation-end-requested")).toHaveLength(1);
     expect(endReason(h)).toBe("operator: done; the line was never spoken");
   });

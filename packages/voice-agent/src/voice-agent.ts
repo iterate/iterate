@@ -1955,6 +1955,8 @@ interface Dial {
   sayHangUpBy: string | null;
   /** The provider has been asked for the parked line (its start grace runs). */
   sayHangUpAsked: boolean;
+  /** When the line was parked; the reaper gives an unasked one this long. */
+  sayHangUpParkedAtMs: number;
   /** Which request-to-speak the running start grace belongs to, so only the
    * latest grace can bury the call. */
   sayHangUpEpisode: number;
@@ -2005,6 +2007,7 @@ const freshDial = (
   sayHangUpReason: null,
   sayHangUpBy: null,
   sayHangUpAsked: false,
+  sayHangUpParkedAtMs: 0,
   sayHangUpEpisode: 0,
   buried: false,
   idleFarewells: 0,
@@ -2747,6 +2750,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
           dial.sayHangUpReason = reason;
           dial.sayHangUpBy = asker;
           dial.sayHangUpAsked = false;
+          dial.sayHangUpParkedAtMs = this.deps.nowAtFacetMs();
         }
         this.#sendControl(
           dial,
@@ -3771,27 +3775,33 @@ export class VoiceAgentProcessor extends StreamProcessor<
       }
       if (dial.sayHangUpReason !== null) {
         /*
-         * A HANG-UP LINE IS PARKED. Asked for already: its start grace
-         * decides, and this tick defers. Still pended — behind a turn a
-         * barge cancelled and nobody finished, or a tool that never came
-         * back — it would stay parked for ever, because the re-create waits
-         * for a settled turn a silent listener never gives it. Idle IS the
-         * floor being free: ask for the line now where nothing is streaming
-         * and no tool is open, and arm the grace either way, so the call
-         * ends with the line or, past the grace, without it.
+         * A HANG-UP LINE IS PARKED. Asked for: its start grace decides, and
+         * this tick defers. Never asked — pended behind a turn a barge
+         * cancelled and nobody finished, or a tool that never came back —
+         * and the call idle past its deadline: nobody is going to ask. The
+         * reaper does not try to speak it (a create from here raced the
+         * follow-up sites, and a grace from here buried calls still busy);
+         * it ends the call now, without the line, exactly as it ended every
+         * idle call before there were lines. A line parked within the last
+         * grace is given that long to be asked for.
          */
-        if (!dial.sayHangUpAsked && dial.ready && dial.socket !== null) {
-          if (dial.answer.phase !== "streaming" && dial.openToolCallIds.size === 0) {
-            dial.pendingNoteResponse = false;
-            dial.answerCancelledForNote = false;
-            dial.followUpResponsePending = true;
-            dial.followUpKind = "say";
-            dial.pendingFollowUpKind = "note";
-            this.#sendControl(dial, { type: "response.create" }, append);
-          }
-          this.#armSayStartGrace(dial, append);
+        if (
+          dial.sayHangUpAsked ||
+          nowAtFacetMs - dial.sayHangUpParkedAtMs < IDLE_FAREWELL_GRACE_MS
+        ) {
+          this.runInBackground(idleTick);
+          return;
         }
-        this.runInBackground(idleTick);
+        const reason = dial.sayHangUpReason;
+        const by = dial.sayHangUpBy;
+        dial.sayHangUpReason = null;
+        dial.buried = true;
+        await this.#requestEnd(
+          conversationId,
+          by === "idle-reaper" ? "idle" : "hang-up",
+          `${reason}; the line was never spoken`,
+          append,
+        );
         return;
       }
       if (!dial.ready || dial.socket === null) {
@@ -3800,9 +3810,14 @@ export class VoiceAgentProcessor extends StreamProcessor<
         await this.#requestEnd(conversationId, "idle", idleReason, append);
         return;
       }
-      /* The say arm parks the reason and arms its start grace when the
-       * farewell comes back round; nothing is decided here, so a refused
-       * append simply leaves the next tick to try again. */
+      /* Parked here as well as by the say arm when the farewell comes back
+       * round, so a slow delivery cannot draw a second farewell from the next
+       * tick. The arm asks for the line and arms its start grace. */
+      const farewellReason = `idle: ${idleReason}`;
+      dial.sayHangUpReason = farewellReason;
+      dial.sayHangUpBy = "idle-reaper";
+      dial.sayHangUpAsked = false;
+      dial.sayHangUpParkedAtMs = nowAtFacetMs;
       const episode = ++dial.idleFarewells;
       try {
         await append({
@@ -3811,13 +3826,15 @@ export class VoiceAgentProcessor extends StreamProcessor<
           payload: {
             conversationId,
             text: idleFarewell(state.clientTakesTurns),
-            reason: `idle: ${idleReason}`,
+            reason: farewellReason,
             by: "idle-reaper",
             thenHangUp: true,
           },
         });
       } catch (error) {
+        /* A refused farewell must not sit parked: the next tick tries again. */
         console.error("voice-agent idle farewell could not be queued", { error });
+        dial.sayHangUpReason = null;
       }
       this.runInBackground(idleTick);
     };
