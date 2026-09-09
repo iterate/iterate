@@ -4598,5 +4598,16 @@ pin naming its mechanism, or declined with the reason above. The red pins are th
   bearers for free (`undici` a devDependency, spliced into the lockfile). The lane's constants and
   functions are named for the project host, not the deleted lane; "egress" is out of the 502s and the
   README; the substitution unit file is a `{ …, becomes }` table.
-- GATES: tsc ×3 · oxlint · knip · unit 519 · workers 59 · local e2e 177 · `pnpm test` (the line
-  below). DEPLOYED: the line below.
+- GATES: tsc ×3 · oxlint · knip · unit 519 · workers 59 · local e2e 177 · `pnpm test` 51 files / 755
+  passed / 17 expected-fail / 19 deployed-only skips. DEPLOYED (a07dc16b8 + e949c2b65, version
+  bfe3a77f): 22 files / 194 passed / 4 expected-fail — ALL GREEN.
+
+THE AUTH BUILD, CLOSED (2026-09-09): the plan (rev 3) met — one login, one credential union at the
+one door, the admin secret for the lanes, the project secret and mintToken, ONE /mcp for every
+project behind the platform's own OAuth provider at 0.10.3, the fetch lanes bearer-only, the public
+/expression lane gone, project hosts in apps/os's shapes with a trusted app header, the secret
+placeholder in apps/os's grammar. Three review rounds, each with repros run against the real worker
+before a fix; every finding fixed and pinned, or left with its mechanism named. Open by decision:
+§6 the TanStack console (the string console still serves), custom hostnames (a certificate task),
+the dotted host shape deployed (the same certificate), the client-helper stack (a proposal in the
+tutorial's chapter 0), and kernel-vs-library namespacing (an open question in chapter 9).
