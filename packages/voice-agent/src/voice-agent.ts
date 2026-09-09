@@ -1953,6 +1953,8 @@ interface Dial {
   sayHangUpReason: string | null;
   /** Who asked for the hang-up say — the obituary's key class. */
   sayHangUpBy: string | null;
+  /** The provider has been asked for the parked line (its start grace runs). */
+  sayHangUpAsked: boolean;
   /** Which request-to-speak the running start grace belongs to, so only the
    * latest grace can bury the call. */
   sayHangUpEpisode: number;
@@ -2002,6 +2004,7 @@ const freshDial = (
   pendingFollowUpKind: "note",
   sayHangUpReason: null,
   sayHangUpBy: null,
+  sayHangUpAsked: false,
   sayHangUpEpisode: 0,
   buried: false,
   idleFarewells: 0,
@@ -2743,6 +2746,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
               : `asked to hang up${asker === null ? "" : ` by ${asker}`}`;
           dial.sayHangUpReason = reason;
           dial.sayHangUpBy = asker;
+          dial.sayHangUpAsked = false;
         }
         this.#sendControl(
           dial,
@@ -3761,7 +3765,32 @@ export class VoiceAgentProcessor extends StreamProcessor<
        * behind it — a listener who answers barges the goodbye and un-decides
        * the hang-up (#bargeAnswer), and the deadline starts again.
        */
-      if (dial.hangUpAfterAnswerDrains !== null || dial.sayHangUpReason !== null) {
+      if (dial.hangUpAfterAnswerDrains !== null) {
+        this.runInBackground(idleTick);
+        return;
+      }
+      if (dial.sayHangUpReason !== null) {
+        /*
+         * A HANG-UP LINE IS PARKED. Asked for already: its start grace
+         * decides, and this tick defers. Still pended — behind a turn a
+         * barge cancelled and nobody finished, or a tool that never came
+         * back — it would stay parked for ever, because the re-create waits
+         * for a settled turn a silent listener never gives it. Idle IS the
+         * floor being free: ask for the line now where nothing is streaming
+         * and no tool is open, and arm the grace either way, so the call
+         * ends with the line or, past the grace, without it.
+         */
+        if (!dial.sayHangUpAsked && dial.ready && dial.socket !== null) {
+          if (dial.answer.phase !== "streaming" && dial.openToolCallIds.size === 0) {
+            dial.pendingNoteResponse = false;
+            dial.answerCancelledForNote = false;
+            dial.followUpResponsePending = true;
+            dial.followUpKind = "say";
+            dial.pendingFollowUpKind = "note";
+            this.#sendControl(dial, { type: "response.create" }, append);
+          }
+          this.#armSayStartGrace(dial, append);
+        }
         this.runInBackground(idleTick);
         return;
       }
@@ -4152,6 +4181,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
     const by = dial.sayHangUpBy;
     const episode = ++dial.sayHangUpEpisode;
     const askedAtMs = this.deps.nowAtFacetMs();
+    dial.sayHangUpAsked = true;
     this.runInBackground(async () => {
       await this.deps.sleep(IDLE_FAREWELL_GRACE_MS);
       if (this.#dial !== dial || dial.sayHangUpEpisode !== episode) return;

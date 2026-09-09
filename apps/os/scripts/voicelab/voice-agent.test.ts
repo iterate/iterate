@@ -3710,6 +3710,36 @@ describe("say, and the announced farewell", () => {
   });
 
   /*
+   * A HANG-UP SAY PARKED BEHIND A BARGED TURN. The press cancelled the
+   * answer; the say pends, waiting for a settled turn; the listener never
+   * gives one. The reaper, past its deadline, asks for the line itself and
+   * arms the grace, instead of deferring to the parked reason for ever.
+   */
+  it("a hang-up say pended behind a barged turn is asked for by the reaper, and the call still ends", async () => {
+    const h = makeHarness();
+    await callIsLive(h, CLIENT_TAKES_TURNS);
+    h.provider.responseCreated();
+    h.provider.answerAudio(200);
+    /* The press barges the answer; the provider never settles it. */
+    await h.append({ type: "events.iterate.com/voice-agent/ptt-start", payload: {} });
+    await h.settle();
+    const createsBefore = h.provider.sentOfType("response.create").length;
+    await h.append({
+      type: "events.iterate.com/voice-agent/say",
+      payload: { text: "Closing this call now.", reason: "operator: done", thenHangUp: true },
+    });
+    await h.settle();
+    expect(h.provider.sentOfType("response.create")).toHaveLength(createsBefore);
+    await idleDeadline(h);
+    /* The reaper asked for the parked line rather than adding a farewell. */
+    expect(h.provider.sentOfType("response.create")).toHaveLength(createsBefore + 1);
+    expect(eventsOfType(h, "say")).toHaveLength(1);
+    await stepTime(h, IDLE_FAREWELL_GRACE_MS + 5_000);
+    expect(eventsOfType(h, "conversation-end-requested")).toHaveLength(1);
+    expect(endReason(h)).toBe("operator: done; the line was never spoken");
+  });
+
+  /*
    * A NOTE BEHIND A PENDING SAY. The re-create at response.done comes back
    * as ONE kind; a note that lands after a thenHangUp say has pended must
    * not turn that re-create into a note, or the hang-up is never armed and
