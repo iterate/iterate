@@ -98,8 +98,8 @@ const CORE_SLUG = CoreContract.slug;
 
 /** The bindings THE DO reads (wrangler.jsonc): the DO namespace, the Worker Loader, the kv namespaces,
  *  Workers AI, Artifacts — and, from `AppConfigEnv`, the version-metadata binding and the `APP_CONFIG_*`
- *  vars worker.ts's `parseAppConfig` parses. The in-process control plane's bindings (D1, OAuth KV, …) live in
- *  control-plane.ts; the one worker's env is the intersection of both (src/worker.ts). */
+ *  vars worker.ts's `parseAppConfig` parses. control-plane.ts's `Env` extends this with the
+ *  in-process control plane's own (D1, OAuth KV, …): the one worker's env. */
 export interface Env extends AppConfigEnv {
   ITERATE_CONTEXT: DurableObjectNamespace<IterateContextDurableObject>;
   LOADER: WorkerLoader;

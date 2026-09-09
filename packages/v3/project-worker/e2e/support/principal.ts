@@ -9,7 +9,7 @@ import { adminCredentials, session } from "./client.ts";
  *  the admin (`{ actor: "admin" }`). 15 minutes unless `ttlSeconds` says otherwise. */
 export const mintProjectToken = (
   project: string,
-  as?: { sub: string; email: string },
+  as?: { email: string },
   ttlSeconds?: number,
 ): Promise<string> =>
   session()

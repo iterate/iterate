@@ -4523,3 +4523,26 @@ pin naming its mechanism, or declined with the reason above. The red pins are th
   kv-list storage reset (measured 2026-09-09) and a DO "reset because its code was updated" inside
   the deploy's own code-lag window (green alone).
 - ROUND 2 running: a fresh reviewer over the committed result.
+
+## 2026-09-09 — auth, review round 2 applied: the reach rule once, binding first; `__Host-` cookies; the impossible tool gone
+
+- ROUND 2 (a fresh reviewer over round 1's result; six repros, all reproduced): an admin-MINTED project
+  token — bound to one project on `/api` and the lanes — reached EVERY project on `/mcp`, because the
+  reach rule tested "admin" before the binding. `reachOf(principal)` is one exported function
+  beside `Reach`, binding first, used by `authenticate` and `/mcp` alike; `as` takes `{ email }` only
+  (this directory's `sub` IS `user_<email>`, and a foreign `sub` acted as itself then died uncoded in
+  `create`). Both platform cookies are `__Host-` prefixed (a sibling project host — loaded code —
+  could otherwise toss a `Domain=<base>` twin onto the platform origin: fixation, not forgery).
+  `/.itx/session?logout` is POST only, origin-checked, like the console's `/logout`. `create_project`
+  on `/mcp` deleted: a grant that chose projects cannot create (a fresh project is outside it) and
+  the tool's text promised a way out that did not exist — a project is created on the console or
+  over `/api`. `itx.invoke`'s `project` refuses a context name (it ran at the root). Hygiene: one
+  `describeReach`, one claims-shape style, one `ProjectDoorsInput` alias, the control plane's `Env`
+  extends the DO's, the "no lane candidate" sentence once, three docstrings, the backcompat prose
+  gone. Net +57 (three new pins are the growth). The reviewer's verdict: the spec (rev 3 §1–§5, §7)
+  is met, §3 with `rotateApiKey` for "born at create + reveal".
+- THE TUTORIAL (63c115290): Jonas's eleven Plannotator annotations applied; five passages carry a
+  "Landing" mark for the next build — the public `/expression` route deleted (the `x-itx-expression`
+  header stays internal), `<app>--<project>` / `<app>.<project>` / custom hostnames with a trusted
+  `x-iterate-app`, `project` as id or slug on hosts, and the secret placeholder as apps/os's
+  `getSecret("/secrets/NAME")`.

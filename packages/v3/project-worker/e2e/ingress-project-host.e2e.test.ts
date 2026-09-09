@@ -91,25 +91,25 @@ test("an app is served at / on its project host — URL verbatim, relative asset
 
 // WHO, on a project host: `/.itx/session?token=<projectToken>&next=` turns a token for THIS project
 // into the host-scoped cookie; every request carrying it reaches the app with `x-itx-principal`; a
-// token for another project is refused; a visitor's own `x-itx-principal` is stripped; `?logout`
-// clears the cookie.
+// token for another project is refused; a visitor's own `x-itx-principal` is stripped; `POST
+// ?logout` clears the cookie (a GET is 405).
 test("the session door on a project host: a token becomes the cookie, the cookie becomes the principal the app sees", async () => {
   const projectId = freshDnsSafeProjectId("ingress-who");
   const email = `${projectId}@example.com`;
-  const ada = { sub: `user_${email}`, email };
+  const ada = { email };
   await registerProject(projectId, ada); // her project: she mints her own token through the door
   const base = projectHostnameBase();
   const itx = openItx(projectId);
   await itx.provide("itx.apps.site", siteRule());
   const host = `site--${projectId}.${base}`;
-  const principal = { actor: ada.sub, email };
+  const principal = { actor: `user_${email}`, email };
   const token = await mintProjectToken(projectId, ada);
 
   const door = await fetchProjectHost(host, `/.itx/session?token=${token}&next=/w`);
   expect(door.status, door.text).toBe(303);
   expect(door.headers.location).toBe("/w");
   const cookie = door.headers["set-cookie"];
-  expect(cookie).toContain(`itx-project-session=${token}`);
+  expect(cookie).toContain(`__Host-itx-project-session=${token}`);
   expect(cookie).toContain("HttpOnly");
 
   const cookieHeader = cookie.split(";")[0];
@@ -122,7 +122,16 @@ test("the session door on a project host: a token becomes the cookie, the cookie
   expect(seen.cookie).toBe("theme=dark");
   // the door's redirect never leaves the host
   expect(
-    (await fetchProjectHost(host, "/.itx/session?logout&next=//evil.example/x")).headers.location,
+    (
+      await fetchProjectHost(
+        host,
+        "/.itx/session?logout&next=//evil.example/x",
+        {},
+        {
+          method: "POST",
+        },
+      )
+    ).headers.location,
   ).toBe("/");
   // without the cookie there is no principal; a visitor cannot stamp one
   const forged = JSON.parse(
@@ -136,8 +145,9 @@ test("the session door on a project host: a token becomes the cookie, the cookie
   // a token for another project is refused at the door
   const foreign = await mintProjectToken(`${projectId}-other`);
   expect((await fetchProjectHost(host, `/.itx/session?token=${foreign}&next=/`)).status).toBe(401);
-  // logout clears the cookie
-  const out = await fetchProjectHost(host, "/.itx/session?logout&next=/");
+  // logout is a POST (a GET cannot end a session) and clears the cookie
+  expect((await fetchProjectHost(host, "/.itx/session?logout&next=/")).status).toBe(405);
+  const out = await fetchProjectHost(host, "/.itx/session?logout&next=/", {}, { method: "POST" });
   expect(out.status).toBe(303);
   expect(out.headers["set-cookie"]).toContain("Max-Age=0");
 });

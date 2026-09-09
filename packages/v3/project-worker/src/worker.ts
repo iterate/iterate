@@ -12,11 +12,9 @@ import {
   RpcPromise as CapnwebRpcPromise,
   RpcStub as CapnwebRpcStub,
 } from "capnweb";
-import { IterateContextDurableObject, type Env } from "./iterate-context-durable-object.ts";
-import { directory, controlPlane, type Env as ControlPlaneEnv } from "./control-plane.ts";
-
-/** The one worker's env: the DO's bindings plus the in-process control plane's (D1, OAuth KV, …). */
-type WorkerEnv = Env & ControlPlaneEnv;
+import { IterateContextDurableObject } from "./iterate-context-durable-object.ts";
+// the one worker's env: the DO's bindings plus the in-process control plane's (control-plane.ts `Env`)
+import { directory, controlPlane, type Env as WorkerEnv } from "./control-plane.ts";
 import { registerPipelinedRpcBrand } from "./context/expression.ts";
 import { ITX_EXPRESSION_FETCH_HEADER } from "./context/rpc-stubs.ts";
 import { DurableObjectNameCodec, type DurableObjectAddress } from "./iterate-context.ts";
@@ -32,6 +30,7 @@ import {
   verifyProjectToken,
   type Principal,
 } from "./principal.ts";
+import { isSameOriginBrowserRequest } from "./lib.ts";
 
 /** The fetch lane's re-entry count: `/expression?itx=itx.fetch` egresses to its own URL and lands
  *  here again with the same query; the header counts the passes and the lane refuses past a few. */
@@ -171,7 +170,7 @@ export default {
         return new Response(`421: no project ${JSON.stringify(projectId)} is served here\n`, {
           status: 421,
         });
-      const sessionResponse = await projectSessionResponse(url, projectId, projectTokenSecret);
+      const sessionResponse = await projectSessionResponse(request, projectId, projectTokenSecret);
       if (sessionResponse) return sessionResponse;
       // the visitor's own cookies reach the app; the platform's cookie and bearer never do
       return env.ITERATE_CONTEXT.getByName(
@@ -225,9 +224,7 @@ export default {
         return new Response(`${(error as Error).message}\n`, { status: 400 });
       }
       const identity = await laneIdentityOf(address.projectId, sessionInput);
-      // ADMISSION: the caller bears the project's token, its secret or the admin secret — never
-      // the control plane's cookie: this IS the platform host, and a cross-site navigation carries
-      // that cookie with no Origin to check (`laneIdentityOf`; a browser's door is `/api`).
+      // ADMISSION: a lane credential (`laneIdentityOf`), else 401.
       if (!identity.principal)
         return new Response("401: bear this project's token, its secret or the admin secret\n", {
           status: 401,
@@ -274,8 +271,11 @@ const APP_CONFIG_VARS = [
   "APP_CONFIG_SESSION_SECRET",
   "APP_CONFIG_ADMIN_API_SECRET",
 ] as const;
+/** One of the `APP_CONFIG_*` vars — the only names `parseAppConfig` reads. */
 type AppConfigVarName = (typeof APP_CONFIG_VARS)[number];
 
+/** THE WORKER'S CONFIGURATION: what differs between deployments of the same code, parsed once per
+ *  isolate (`appConfigOf`) from the `APP_CONFIG_*` vars and the deploy identity. */
 export interface AppConfig {
   /** Which deployment this is, as a word a human reads at `/version`: "poc" (the deployment), "test"
    *  (the workers lane), "e2e" (the e2e lane). Required. */
@@ -375,10 +375,12 @@ export function appConfigOf(env: AppConfigEnv): AppConfig {
 // answers on a project host — the session cookie's — is here too (`projectSessionResponse`), beside
 // the cookie it sets.
 
-/** The cookie a project host holds a project token in (a browser's lane; `/.itx/session` sets it). */
-const PROJECT_SESSION_COOKIE = "itx-project-session";
+/** The cookie a project host holds a project token in (a browser's lane; `/.itx/session` sets it).
+ *  `__Host-`: a browser accepts it only as set here — `Secure`, `Path=/`, no `Domain` — so it is
+ *  this host's alone and no sibling host under the base can set or shadow it. */
+const PROJECT_SESSION_COOKIE = "__Host-itx-project-session";
 /** The one path the platform answers on a project host — `?token=<projectToken>&next=<path>` sets
- *  the cookie and redirects to `next`; `?logout` clears it. Everything else is the app's. */
+ *  the cookie and redirects to `next`; `POST ?logout` clears it. Everything else is the app's. */
 const PROJECT_SESSION_PATH = "/.itx/session";
 
 /** The project token a request's cookie carries, or null. */
@@ -408,28 +410,38 @@ export function sameOriginPath(next: string, origin: string): string {
   }
 }
 
-/** The `Set-Cookie` value that stores `token` for `maxAgeSeconds` (≤ 0 clears it): host-scoped,
- *  HttpOnly, Secure (a browser exempts localhost), SameSite=Lax so a top-level navigation from the
- *  control plane's login carries it. */
+/** The `Set-Cookie` value that stores `token` for `maxAgeSeconds` (≤ 0 clears it): host-scoped
+ *  (`__Host-`, `Path=/`, no `Domain`), HttpOnly, Secure (a browser exempts localhost), SameSite=Lax
+ *  so a top-level navigation from the control plane's login carries it. */
 const projectSessionSetCookie = (token: string, maxAgeSeconds: number): string =>
   `${PROJECT_SESSION_COOKIE}=${maxAgeSeconds > 0 ? token : ""}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${Math.max(0, Math.floor(maxAgeSeconds))}`;
 
-/** THE SESSION DOOR on a project host (PARTIAL: null when `url` is not its path): a project token
- *  (principal.ts) for `projectId` — `?token=` — becomes the host-scoped cookie and the browser goes
- *  on to `next` (303); `?logout` clears the cookie; a token that does not verify for this project
- *  is a 401. */
+/** THE SESSION DOOR on a project host (PARTIAL: null when the request is not on its path): a
+ *  project token (principal.ts) for `projectId` — `?token=` — becomes the host-scoped cookie and the
+ *  browser goes on to `next` (303); `POST ?logout` clears the cookie — a POST like the console's
+ *  `/logout` (a GET cannot end a session: 405) and, like every console POST, refused from a foreign
+ *  origin (403); a token that does not verify for this project is a 401. */
 export async function projectSessionResponse(
-  url: URL,
+  request: Pick<Request, "url" | "method" | "headers">,
   projectId: string,
   projectTokenSecret: string,
 ): Promise<Response | null> {
+  const url = new URL(request.url);
   if (url.pathname !== PROJECT_SESSION_PATH) return null;
   const location = sameOriginPath(url.searchParams.get("next") ?? "/", url.origin);
-  if (url.searchParams.has("logout"))
+  if (url.searchParams.has("logout")) {
+    if (request.method !== "POST")
+      return new Response("405: log out with a POST\n", {
+        status: 405,
+        headers: { allow: "POST" },
+      });
+    if (!isSameOriginBrowserRequest(request))
+      return new Response("403: a cross-site request cannot end this session\n", { status: 403 });
     return new Response(null, {
       status: 303,
       headers: { location, "set-cookie": projectSessionSetCookie("", 0) },
     });
+  }
   const token = url.searchParams.get("token") ?? "";
   const claims = await verifyProjectToken(token, projectTokenSecret);
   if (!claims || claims.projectId !== projectId)

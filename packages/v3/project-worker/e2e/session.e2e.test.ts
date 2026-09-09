@@ -39,12 +39,11 @@ import {
 } from "./support/project-host.ts";
 import { SOURCES } from "./support/sources.ts";
 
-/** A member of a fresh project: their `as` claims (`user_<email>`, the directory's own id) and the
- *  principal a token they mint carries. */
+/** A member of a fresh project: their `as` (the email; the directory's id for it is `user_<email>`)
+ *  and the principal a token they mint carries. */
 const memberOf = (projectId: string) => {
   const email = `${projectId}@example.com`;
-  const as = { sub: `user_${email}`, email };
-  return { as, principal: { actor: as.sub, email } };
+  return { as: { email }, principal: { actor: `user_${email}`, email } };
 };
 
 // ── identity ──
@@ -80,13 +79,14 @@ test("a project token: whoami, source.principal on every append (unforgeable), t
   // the token names ONE project
   const other = await rejection(authenticated.projects.get(`${projectId}-other`).whoami());
   expect(codeOf(other), other.message).toBe("FORBIDDEN");
-  // a bad token, and a token past its ttl (one second, minted through the door): refused the same way
+  // a bad token, and a token past its ttl (one second, minted through the door; a 2 s margin —
+  // the mint's clock is the worker's): refused the same way
   const bad = await rejection(
     api.authenticate({ type: "project-token", token: `${token}x` }).whoami(),
   );
   expect(codeOf(bad), bad.message).toBe("INVALID_CREDENTIALS");
   const expiring = await mintProjectToken(projectId, ada, 1);
-  await sleep(1200);
+  await sleep(2000);
   expect(
     codeOf(await rejection(api.authenticate({ type: "project-token", token: expiring }).whoami())),
   ).toBe("INVALID_CREDENTIALS");

@@ -50,7 +50,7 @@ import {
   type FacetSpec,
 } from "./context/worker-loader.ts";
 import type { BuiltInScope } from "./context/built-ins.ts";
-import { SessionTeardown, type SessionInput } from "./session.ts";
+import { SessionTeardown, type ProjectDoorsInput } from "./session.ts";
 import {
   ITX_PRINCIPAL_HEADER,
   rotateProjectApiKey,
@@ -118,7 +118,7 @@ export class IterateContext extends RpcTarget {
    *  token secret, `rotateApiKey` writes the key hash to `SECRETS_KV` — or null for a handle that
    *  carries neither door: one no session vended (a loaded worker's `env.ITX`), or a project-token
    *  session's (a delegation, minutes long, never a minter of tokens or keys — session.ts). */
-  readonly #projectDoors: Pick<SessionInput, "appConfig" | "secretsKv"> | null;
+  readonly #projectDoors: ProjectDoorsInput | null;
 
   constructor(
     contextNamespace: IterateContextNamespace,
@@ -126,7 +126,7 @@ export class IterateContext extends RpcTarget {
     sessionTeardown: SessionTeardown,
     waitUntil: WaitUntil,
     principal: Principal | null = null,
-    projectDoors: Pick<SessionInput, "appConfig" | "secretsKv"> | null = null,
+    projectDoors: ProjectDoorsInput | null = null,
   ) {
     super();
     this.#contextNamespace = contextNamespace;
@@ -203,10 +203,10 @@ export class IterateContext extends RpcTarget {
    *  (principal.ts) signed with `APP_CONFIG_PROJECT_TOKEN_SECRET`: what `/.itx/session?token=` on a
    *  project host turns into its cookie (the console links a project host through it), what a script
    *  presents as `Authorization: Bearer`, what `authenticate({ type: "project-token" })` takes.
-   *  Reaching this context IS the gate: `projects.get` admitted a member, the admin, or the project's
-   *  own secret (then the token's actor is `project:<projectId>`). `ttlSeconds` defaults to 15
-   *  minutes; 24 hours is the most. A handle without the project doors — a loaded worker's
-   *  `env.ITX`, a project-token session's — is FORBIDDEN. */
+   *  The door is a member's, the admin's, or the project-secret session's for its own project (then
+   *  the token's actor is `project:<projectId>`) — the session that vended this handle carries it
+   *  (session.ts). `ttlSeconds` defaults to 15 minutes; 24 hours is the most. A handle without the
+   *  project doors — a loaded worker's `env.ITX`, a project-token session's — is FORBIDDEN. */
   async mintToken({ ttlSeconds = 15 * 60 }: { ttlSeconds?: number } = {}): Promise<string> {
     if (!this.#projectDoors || !this.#principal)
       throw codedError(
@@ -228,8 +228,8 @@ export class IterateContext extends RpcTarget {
    *  the bearer a device or a headless app presents on a project host), minted fresh and answered
    *  ONCE: only its SHA-256 hash is stored (principal.ts `rotateProjectApiKey`), so a reveal IS a
    *  rotation and the previous key stops verifying at once (a project has no key until the first
-   *  call). Reaching this context is the gate, as for `mintToken`; the key is the PROJECT's, so any
-   *  context of it (`cd`) rotates the same key. A handle without the project doors is FORBIDDEN. */
+   *  call). The same door as `mintToken`'s; the key is the PROJECT's, so any context of it (`cd`)
+   *  rotates the same key. A handle without the project doors is FORBIDDEN. */
   async rotateApiKey(): Promise<string> {
     if (!this.#projectDoors)
       throw codedError(

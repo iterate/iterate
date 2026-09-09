@@ -23,7 +23,7 @@ const adminApiSecret = (): string => {
 /** THE lane's credentials (src/session.ts `SessionCredentials`): the admin secret — every project,
  *  `{ actor: "admin" }`; with `as`, that user's session (the projects of their orgs) — what a
  *  membership row authenticates with. */
-export const adminCredentials = (as?: { sub: string; email: string }): SessionCredentials => ({
+export const adminCredentials = (as?: { email: string }): SessionCredentials => ({
   type: "admin-secret",
   secret: adminApiSecret(),
   ...(as && { as }),

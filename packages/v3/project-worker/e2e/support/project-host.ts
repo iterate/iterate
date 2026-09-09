@@ -31,10 +31,7 @@ export function projectHostnameBase(): string {
  *  session: their org, with them a member) — so its host serves. A project's id IS its slug (a DNS
  *  label), so one name addresses both the DO (`openItx(projectId)`) and the host
  *  (`site--<projectId>.<base>`). Idempotent; identical against the local and the deployed worker. */
-export async function registerProject(
-  projectId: string,
-  as?: { sub: string; email: string },
-): Promise<void> {
+export async function registerProject(projectId: string, as?: { email: string }): Promise<void> {
   await session().authenticate(adminCredentials(as)).projects.create({ project: projectId });
 }
 

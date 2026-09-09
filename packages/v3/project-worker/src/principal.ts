@@ -112,13 +112,19 @@ export async function verifyProjectToken(
   secret: string,
   now = Date.now(),
 ): Promise<ProjectTokenClaims | null> {
-  const claims = await verifyClaims(token, secret);
-  if (!isProjectTokenClaims(claims) || claims.expiresAt <= now) return null;
+  const claims = (await verifyClaims(token, secret)) as ProjectTokenClaims | null;
+  if (
+    typeof claims?.projectId !== "string" ||
+    typeof claims?.actor !== "string" ||
+    typeof claims?.expiresAt !== "number" ||
+    claims.expiresAt <= now
+  )
+    return null;
   return {
     projectId: claims.projectId,
     actor: claims.actor,
     expiresAt: claims.expiresAt,
-    ...(claims.email && { email: claims.email }),
+    ...(typeof claims.email === "string" && { email: claims.email }),
   };
 }
 
@@ -213,7 +219,9 @@ export async function verifyProjectSecret(
  *  from then, the signed token being otherwise valid forever). */
 export type SessionCookieClaims = { sub: string; email: string; iat: number };
 
-const SESSION_COOKIE = "itx-control-plane-session";
+/** `__Host-`: a browser accepts the cookie only as set here — `Secure`, `Path=/`, no `Domain` — so
+ *  it is the platform host's alone and no sibling host under a shared parent can set or shadow it. */
+const SESSION_COOKIE = "__Host-itx-control-plane-session";
 const SESSION_COOKIE_MAX_AGE = 60 * 60 * 24 * 30; // 30 days
 
 /** The value of the cookie `name` in a `Cookie` header, or null. */
@@ -254,12 +262,3 @@ export async function setSessionCookie(
 export function clearSessionCookie(): string {
   return `${SESSION_COOKIE}=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0`;
 }
-
-const isProjectTokenClaims = (value: unknown): value is ProjectTokenClaims =>
-  typeof value === "object" &&
-  value !== null &&
-  typeof (value as ProjectTokenClaims).projectId === "string" &&
-  typeof (value as ProjectTokenClaims).actor === "string" &&
-  typeof (value as ProjectTokenClaims).expiresAt === "number" &&
-  (typeof (value as ProjectTokenClaims).email === "string" ||
-    (value as ProjectTokenClaims).email === undefined);

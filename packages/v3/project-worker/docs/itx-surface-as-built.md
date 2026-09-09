@@ -20,7 +20,7 @@ Object class, one dotted surface, one package.
 flowchart LR
   client["client<br/>(only dependency: capnweb)"]
   edge["/api — IterateContext<br/>A PROXY in front of the DO<br/>src/session.ts · src/iterate-context.ts"]
-  cp["the control plane, in-process (src/worker.ts's catch-all)<br/>OAuth AS · D1 directory (users · orgs · projects) · /mcp · console<br/>src/control-plane/"]
+  cp["the control plane, in-process (src/worker.ts's catch-all)<br/>OAuth AS · D1 directory (users · orgs · projects) · /mcp · console<br/>src/control-plane.ts"]
   do["IterateContextDurableObject<br/>one per {projectId, path}<br/>src/iterate-context-durable-object.ts"]
   client -- "capnweb WebSocket" --> edge
   edge -- "directory.getProject(id): admission, membership" --> cp
@@ -155,8 +155,8 @@ reader of the file sees the whole surface, and `env.ITX.get().append(…)` typec
 | `subscribe({ name?, target: ItxExpressionInput \| ClientRpcStub \| null, consumes?, afterOffset? })` | `SubscriptionHandle` (has `name`) | A live target is lent under the key `subscription:<name>`, its row (target `itx.builtins.rpcStubs.get('subscription:<name>')`) riding the same pager upgrade; an expression target is `append(subscriptionConfiguredEvent(…))` from here. `afterOffset` is where the cursor lane starts (0 = the whole log; absent = from now); a push target ignores it.                      |
 | `enableProcessor(name, { source, className, consumes? })`                                            | `{ name }`                        | `append(subscriptionConfiguredEvent)` with target `itx.builtins.facets.get(name, { source, className }).processEventBatch`. DURABLE, no handle.                                                                                                                                                                                                                                |
 | `disableProcessor(name)`                                                                             | `void`                            | ONE append: `{ name, target: null }`. The DO deletes the facet the row hosted before the append returns (section 9).                                                                                                                                                                                                                                                           |
-| `mintToken({ ttlSeconds? })` | `Promise<string>` | A PROJECT TOKEN for this project as this context's principal — `ProjectTokenClaims` signed with `APP_CONFIG_PROJECT_TOKEN_SECRET` (`signClaims`), 15 minutes by default, 24 hours at most. No DO touched. Reaching the context IS the gate (`projects.get` admitted a member, the admin, or the project's own secret — then the actor is `project:<projectId>`); a handle no session vended (a loaded worker's `env.ITX`) is `FORBIDDEN`. |
-| `rotateApiKey()` | `Promise<string>` | The project's API KEY, minted fresh (32 random bytes, base64url) and answered ONCE: only its SHA-256 hash is stored, in `SECRETS_KV` under `project-api-key:<projectId>` (`rotateProjectApiKey`), so a reveal IS a rotation and the previous key stops verifying at once; a project has no key until the first call. No DO touched; the same gate as `mintToken`; the key is the project's, so a `cd` child rotates the same one. |
+| `mintToken({ ttlSeconds? })` | `Promise<string>` | A PROJECT TOKEN for this project as this context's principal — `ProjectTokenClaims` signed with `APP_CONFIG_PROJECT_TOKEN_SECRET` (`signClaims`), 15 minutes by default, 24 hours at most. No DO touched. The door is a member's, the admin's, or the project-secret session's for its own project (then the actor is `project:<projectId>`); a project-token session's handle (a delegation) and a handle no session vended (a loaded worker's `env.ITX`) are `FORBIDDEN`. |
+| `rotateApiKey()` | `Promise<string>` | The project's API KEY, minted fresh (32 random bytes, base64url) and answered ONCE: only its SHA-256 hash is stored, in `SECRETS_KV` under `project-api-key:<projectId>` (`rotateProjectApiKey`), so a reveal IS a rotation and the previous key stops verifying at once; a project has no key until the first call. No DO touched; the same door as `mintToken`'s; the key is the project's, so a `cd` child rotates the same one. |
 
 The two handles (`RewriteRuleHandle`, `SubscriptionHandle`) are server-side RpcTargets with one
 member, `[Symbol.dispose]`, plus a `name` getter on `SubscriptionHandle`. Disposing undoes the act. capnweb disposes every
@@ -202,8 +202,8 @@ neither project door — a token is a delegation, minutes long, never a minter o
 token that does not verify is `INVALID_CREDENTIALS`, whatever is wrong with it. `admin-secret`:
 `APP_CONFIG_ADMIN_API_SECRET`
 compared in constant time (`verifyAdminSecret`, both SHA-256 hashed) — `{ actor: "admin" }` on every
-project, or with `as: { sub, email }` that user's session without a login (the directory row upserted
-as `/login` does); a wrong secret is `INVALID_CREDENTIALS`. `project-secret`: the project's OWN
+project, or with `as: { email }` that user's session without a login (the directory row upserted
+as `/login` does — its id, `user_<email>`, is the actor); a wrong secret is `INVALID_CREDENTIALS`. `project-secret`: the project's OWN
 long-lived key — `projects.get(project).rotateApiKey()` mints 32 random bytes as base64url and stores
 ONLY the SHA-256 hash in `SECRETS_KV` under `project-api-key:<projectId>` (outside the
 `secret:<projectId>:` prefix egress substitutes from, so no `{{secret:project:…}}` placeholder can
@@ -556,8 +556,10 @@ is 421 (a stranger's label under the wildcard mints nothing). A project's id IS 
 name. A pretty name or a custom domain is a directory row, later. Everything on a project host is the
 app's; the platform's own doors stay on the worker's hostname. WHO, on a project host:
 `/.itx/session?token=<projectToken>&next=<path>` turns a token for THIS project into the host-scoped
-`itx-project-session` cookie (HttpOnly, Secure, SameSite=Lax, until the token expires) and redirects;
-`?logout` clears it. A valid project token — the cookie (a browser), or `Authorization: Bearer
+`__Host-itx-project-session` cookie (HttpOnly, Secure, SameSite=Lax, `Path=/`, no `Domain` — the
+`__Host-` prefix makes a browser refuse it set any other way, so no sibling host can set or shadow it;
+until the token expires) and redirects; `POST ?logout` clears it (a GET is 405 — a GET cannot end a
+session; a foreign origin's POST 403). A valid project token — the cookie (a browser), or `Authorization: Bearer
 <projectToken>` (a script; the bearer wins when both are present) —
 stamps `x-itx-principal` (the JSON principal) on the Request the app sees, and the lane's call runs
 under it; the token itself never reaches the app: the platform's cookie is stripped from the cookie
@@ -580,23 +582,27 @@ pinned resource, `<origin>/mcp`, this origin the authorization server — every 
 foreign one refused), a D1 directory (`control-plane.sql`: users → orgs via `org_members` →
 projects; access is org membership), a console at `/` with an email login form (`POST /login`,
 `POST /logout`, `POST /projects` — every POST refused with 403 from a foreign `Origin`; every page
-`Cache-Control: no-store`) whose session is a signed cookie (`itx-control-plane-session`,
+`Cache-Control: no-store`) whose session is a signed cookie (`__Host-itx-control-plane-session`,
 `src/principal.ts` verifies it), the `/authorize` consent page with PROJECT SELECTION (the user's
 projects as checkboxes, all checked; the grant's `props: { actor, email, projects }` — `projects`
 absent when there was nothing to choose from ⇒ every project of the user's orgs, per call; a
 request the provider refuses is sent back to the client with `error`, `error_description`, `state`
 and `iss` once its redirect URI validated, rendered here otherwise), and `/mcp` — THE ONE MCP SERVER
-for every project, four tools: `whoami` (the props), `list_projects` (what the bearer reaches),
-`create_project({ project })` (a user or the admin; a grant that chose is bound to its choice),
+for every project, three tools: `whoami` (the props), `list_projects` (what the bearer reaches),
 `itx.invoke({ project?, expression, args? })` — the expression, in either codec half with `args`
 appended to its terminal call, evaluated through THAT project's root context in-process under the
 bearer's principal (`invokeAs`); `project` optional when the grant reaches exactly one, required
-for the admin secret, refused outside the grant (apps/os `resolveToolProject`); an expression error
-an `isError` result led by its code. The provider's `resolveExternalToken` admits the platform's
-own credentials as bearers, through the one `verifyCredentials`: a project token (its principal on
-its one project), the admin secret (`{ actor: "admin" }`, every project) and a project's own secret,
-which names its project with `?project=<id>` on the `/mcp` URL (`{ actor: "project:<id>" }`, that
-project). The admin secret's projects live in `org_admin`, the deployment's own org (no members;
+for the admin secret, refused outside the grant (apps/os `resolveToolProject`) and refused as a
+context name (the expression reaches the project's other contexts through `itx.cd(path)`); an
+expression error an `isError` result led by its code. No tool creates a project: a project is
+created on the console or over `/api` (`projects.create`). The provider's `resolveExternalToken`
+admits the platform's own credentials as bearers, through the one `verifyCredentials`: a project
+token (its principal on its one project), the admin secret (`{ actor: "admin" }`, every project) and
+a project's own secret, which names its project with `?project=<id>` on the `/mcp` URL
+(`{ actor: "project:<id>" }`, that project). What a bearer reaches is `reachOf`'s answer, THE
+BINDING FIRST: a bearer bound to named projects — a grant that chose, a token, a secret — reaches
+exactly those whoever it is (a token the admin minted reaches its one project, never every); unbound,
+the admin secret every project and a user the projects of their orgs. The admin secret's projects live in `org_admin`, the deployment's own org (no members;
 `directory.adminOrg`).
 
 **Configuration** (`src/worker.ts`). ONE typed object per isolate, parsed once from the
@@ -839,7 +845,7 @@ LibraryRoots`, the resolver walks from the record with one built-in predicate, t
 
 - The separate control-plane Worker — with the service binding the DO's egress used to fall through
   to, its local stand-in and its own test lane — and the shared package are DELETED. The control plane runs in-process as
-  `src/worker.ts`'s catch-all (`src/control-plane/`, section 10): an OAuth AS, a D1 directory of
+  `src/worker.ts`'s catch-all (`src/control-plane.ts`, section 10): an OAuth AS, a D1 directory of
   users, orgs and projects (a project's id IS its DNS-safe name), `/mcp`, a console with an email login
   form (the `open` login mode of that day is gone since 2026-09-09: every session names a
   credential — the cookie, a project token, the admin secret). Ingress admits a project host by ONE

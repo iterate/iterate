@@ -111,7 +111,7 @@ test("the session cookie round-trips its claims beside a visitor's other cookies
   };
   const setCookie = await setSessionCookie(cookieClaims, SECRET);
   expect(setCookie).toMatch(
-    /^itx-control-plane-session=[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+; HttpOnly; Secure; SameSite=Lax; Path=\/; Max-Age=2592000$/,
+    /^__Host-itx-control-plane-session=[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+; HttpOnly; Secure; SameSite=Lax; Path=\/; Max-Age=2592000$/,
   );
   const cookie = setCookie.split(";")[0]!;
   expect(await verifySessionCookie(`theme=dark; ${cookie}`, SECRET)).toEqual(cookieClaims);
@@ -123,7 +123,7 @@ test("the session cookie round-trips its claims beside a visitor's other cookies
     SECRET,
   );
   expect(await verifySessionCookie(stale.split(";")[0]!, SECRET)).toBeNull();
-  expect(clearSessionCookie()).toMatch(/^itx-control-plane-session=; .*Max-Age=0$/);
+  expect(clearSessionCookie()).toMatch(/^__Host-itx-control-plane-session=; .*Max-Age=0$/);
 });
 
 const cookieRows: { header: string | null; name: string; becomes: string | null }[] = [

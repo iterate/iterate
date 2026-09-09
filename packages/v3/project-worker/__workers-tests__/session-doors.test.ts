@@ -17,8 +17,9 @@
 //     another project's secret is nobody — 401 on `/expression`, an unstamped pass-through on a
 //     host; the control plane's session cookie stamps nothing on a host;
 //   • THE PROJECT HOST: `/.itx/session?token=` turns a token for THIS project into the host cookie
-//     and the cookie into the principal the app sees, a foreign token is 401, `?logout` clears it,
-//     the redirect never leaves the host; a host for a project the directory does not know is 421.
+//     and the cookie into the principal the app sees, a foreign token is 401, `POST ?logout` clears
+//     it (a GET is 405, a foreign origin's POST 403), the redirect never leaves the host; a host for
+//     a project the directory does not know is 421.
 // The worker's default fetch is called directly with this lane's env plus a project-host base
 // (wrangler.test.jsonc sets none): worker.ts's app config memoizes per env object.
 
@@ -160,7 +161,7 @@ test("mintToken: the admin's, a member's and the project's own handle each sign 
   // a member (the admin's `as`): her token carries her, for her project only
   const ada = (await api()).authenticate({
     ...ADMIN,
-    as: { sub: "user_ada@example.com", email: "ada@example.com" },
+    as: { email: "ada@example.com" },
   });
   await ada.projects.create({ project: "adas-mint" });
   const hers = await ada.projects.get("adas-mint").mintToken({ ttlSeconds: 60 });
@@ -272,19 +273,19 @@ test("the lanes: this project's secret as the bearer admits /expression and stam
   expect(await seenByStranger.json()).toEqual({ principal: null, authorization: null });
 });
 
-test("the session door on a project host: /.itx/session?token= turns a token for THIS project into the host cookie, the cookie into the principal the app sees; a foreign token is 401; ?logout clears it; the redirect never leaves the host; an unknown project's host is 421", async () => {
+test("the session door on a project host: /.itx/session?token= turns a token for THIS project into the host cookie, the cookie into the principal the app sees; a foreign token is 401; POST ?logout clears it (a GET is 405, a foreign origin's POST 403); the redirect never leaves the host; an unknown project's host is 421", async () => {
   const admin = (await api()).authenticate(ADMIN);
   const itx = await admin.projects.create({ project: "doors-host" });
   await itx.provide("itx.apps.echo", ["itx", "workers", ["get", { source: SRC_ECHO }]]);
   const token = await itx.mintToken();
-  const host = (path: string, headers: Record<string, string> = {}) =>
-    call(`https://echo--doors-host.projects.test${path}`, { headers });
+  const host = (path: string, headers: Record<string, string> = {}, method = "GET") =>
+    call(`https://echo--doors-host.projects.test${path}`, { headers, method });
 
   const door = await host(`/.itx/session?token=${token}&next=/w`);
   expect(door.status, await door.clone().text()).toBe(303);
   expect(door.headers.get("location")).toBe("/w");
   const setCookie = door.headers.get("set-cookie") ?? "";
-  expect(setCookie).toContain(`itx-project-session=${token}`);
+  expect(setCookie).toContain(`__Host-itx-project-session=${token}`);
   expect(setCookie).toContain("HttpOnly");
   const cookie = setCookie.split(";")[0]!;
   expect(await (await host("/", { cookie: `${cookie}; theme=dark` })).json()).toEqual({
@@ -294,8 +295,13 @@ test("the session door on a project host: /.itx/session?token= turns a token for
   // a token for another project is refused at the door
   const foreign = await admin.projects.get("doors-host-other").mintToken();
   expect((await host(`/.itx/session?token=${foreign}&next=/`)).status).toBe(401);
-  // the redirect never leaves the host; logout clears the cookie
-  const out = await host("/.itx/session?logout&next=//evil.example/x");
+  // logout is a POST (a GET cannot end a session; a foreign origin's POST is refused) that clears
+  // the cookie; the redirect never leaves the host
+  expect((await host("/.itx/session?logout&next=/")).status).toBe(405);
+  expect(
+    (await host("/.itx/session?logout&next=/", { origin: "https://evil.example" }, "POST")).status,
+  ).toBe(403);
+  const out = await host("/.itx/session?logout&next=//evil.example/x", {}, "POST");
   expect(out.status).toBe(303);
   expect(out.headers.get("location")).toBe("/");
   expect(out.headers.get("set-cookie")).toContain("Max-Age=0");

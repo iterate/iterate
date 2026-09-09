@@ -12,12 +12,13 @@
 //   const itx = api.authenticate({ type: "from-server-cookie" }).projects.get("my-project");
 //   const fresh = await api.authenticate({ type: "project-token", token }).projects.get("my-project");
 //
-// What a session reaches is its `Reach` (control-plane.ts, the directory's word): org membership for
-// a control-plane user — membership being whatever `/login` was told (the demo login form verifies
-// nothing, so a cookie is attribution, not authentication) — the one project a project token or the
-// project secret names, every project for the admin secret. The two project-level doors a session
-// vends ride the root context it hands out: `projects.get(project).mintToken()` and
-// `.rotateApiKey()` (iterate-context.ts) — a project-token session gets neither.
+// What a session reaches is its `Reach` (control-plane.ts, the directory's word — `reachOf` is the
+// one rule, the binding first): the one project a project token or the project secret names, every
+// project for the admin secret, org membership for a control-plane user — membership being whatever
+// `/login` was told (the demo login form verifies nothing, so a cookie is attribution, not
+// authentication). The two project-level doors a session vends ride the root context it hands out:
+// `projects.get(project).mintToken()` and `.rotateApiKey()` (iterate-context.ts) — a project-token
+// session gets neither.
 //
 // Every class here is a server-side capnweb RpcTarget (the client is JUST capnweb — iterate-context.ts).
 // None of them touches a Durable Object: `projects.get(project)` is addressing (plus the directory's
@@ -30,7 +31,13 @@ import {
   type IterateContextNamespace,
   type WaitUntil,
 } from "./iterate-context.ts";
-import type { Directory, Project, Reach } from "./control-plane.ts";
+import {
+  describeReach,
+  reachOf,
+  type Directory,
+  type Project,
+  type Reach,
+} from "./control-plane.ts";
 import type { AppConfig } from "./worker.ts";
 import { codedError, isSameOriginBrowserRequest } from "./lib.ts";
 import {
@@ -53,17 +60,22 @@ export type ProjectIdOrSlug = string;
  *  long-lived key (`rotateApiKey` minted it; a device, a headless app) — the session IS the project,
  *  `{ actor: "project:<project>" }`, bound to that one project like a token's.
  *  `admin-secret`: the deployment's `APP_CONFIG_ADMIN_API_SECRET` — every project (the e2e lane,
- *  tooling); with `as`, a user's session without a login: the cookie's claims unsigned — `sub`
- *  (`user_<email>` in this directory) and `email`. */
+ *  tooling); with `as`, a user's session without a login: the directory row `email` names, upserted
+ *  as `/login` upserts it — its id, `user_<email>`, is the session's actor. */
 export type SessionCredentials =
   | { type: "from-server-cookie" }
   | { type: "project-token"; token: string }
   | { type: "project-secret"; project: ProjectIdOrSlug; secret: string }
-  | { type: "admin-secret"; secret: string; as?: { sub: string; email: string } };
+  | { type: "admin-secret"; secret: string; as?: { email: string } };
 
 /** Who a session is: a principal, bound to ONE project when it came from a project token or the
  *  project secret (`projectId`). The admin secret's is `{ actor: "admin" }`. */
 export type SessionPrincipal = Principal & { projectId?: string };
+
+/** What the two project doors a vended context carries — `mintToken` signs with the configuration's
+ *  token secret, `rotateApiKey` writes the key hash to `SECRETS_KV` (iterate-context.ts) — sign
+ *  and write with. */
+export type ProjectDoorsInput = Pick<SessionInput, "appConfig" | "secretsKv">;
 
 /** What every session is built from: the edge's bindings, the configuration and THIS request. */
 export interface SessionInput {
@@ -85,7 +97,8 @@ export interface SessionInput {
  *  tries several kinds in turn (the lanes, `/mcp`) treats every miss alike; `authenticate` names
  *  the miss per kind. A bearer is opaque, so its kind IS its verification: each kind has one
  *  verifier (principal.ts). The cookie counts on a same-origin request only; the admin's `as`
- *  upserts the user's directory row as `/login` does, so membership works. */
+ *  upserts the user's directory row as `/login` does — the row's id is the actor — so membership
+ *  works. */
 export async function verifyCredentials(
   credentials: SessionCredentials,
   {
@@ -121,9 +134,8 @@ export async function verifyCredentials(
     case "admin-secret": {
       const admin = await verifyAdminSecret(credentials.secret, appConfig.adminApiSecret);
       if (!admin || !credentials.as) return admin;
-      const { sub, email } = credentials.as;
-      await directory.upsertUser(email);
-      return { actor: sub, email };
+      const user = await directory.upsertUser(credentials.as.email);
+      return { actor: user.id, email: user.email };
     }
   }
 }
@@ -149,11 +161,11 @@ export class UnauthenticatedSession extends RpcTarget {
    *  handed it by a gate that checked something): `verifyCredentials`, or the refusal coded per
    *  kind — the cookie on a cross-origin browser request, or no cookie at all, is
    *  `UNAUTHENTICATED`; a token or a secret that does not verify is `INVALID_CREDENTIALS`, whatever
-   *  is wrong with it. What verified sets the session's reach: every project for the admin secret,
-   *  the projects of their orgs for a user (the cookie, the admin's `as`), the one project a token
-   *  or the secret names. A project token is a delegation, minutes long — its session mints no
-   *  token and rotates no key (the project doors are the member's, the admin's and the project's
-   *  own). */
+   *  is wrong with it. What verified sets the session's reach (`reachOf`, control-plane.ts): the
+   *  one project a token or the secret names, every project for the admin secret, the projects of
+   *  their orgs for a user (the cookie, the admin's `as`). A project token is a delegation, minutes
+   *  long — its session mints no token and rotates no key (the project doors are the member's, the
+   *  admin's and the project's own). */
   async authenticate(credentials: SessionCredentials): Promise<Session> {
     const principal = await verifyCredentials(credentials, this.#input);
     if (!principal) {
@@ -174,14 +186,14 @@ export class UnauthenticatedSession extends RpcTarget {
           throw codedError("INVALID_CREDENTIALS", "the admin secret did not match");
       }
     }
-    const reach: Reach =
-      credentials.type === "admin-secret" && !credentials.as
-        ? "every"
-        : principal.projectId !== undefined
-          ? { projectIds: [principal.projectId] }
-          : { userId: principal.actor };
     const projectDoors = credentials.type === "project-token" ? null : this.#input;
-    return new Session(this.#input, this.#sessionTeardown, principal, reach, projectDoors);
+    return new Session(
+      this.#input,
+      this.#sessionTeardown,
+      principal,
+      reachOf(principal),
+      projectDoors,
+    );
   }
 }
 
@@ -196,7 +208,7 @@ class Session extends RpcTarget {
     sessionTeardown: SessionTeardown,
     principal: SessionPrincipal,
     reach: Reach,
-    projectDoors: Pick<SessionInput, "appConfig" | "secretsKv"> | null,
+    projectDoors: ProjectDoorsInput | null,
   ) {
     super();
     this.#principal = principal;
@@ -228,14 +240,14 @@ class ProjectCollection extends RpcTarget {
   readonly #contextPrincipal: Principal;
   /** What the project doors a vended context carries (`mintToken`, `rotateApiKey`) sign and write
    *  with — null for a project-token session, whose contexts carry neither. */
-  readonly #projectDoors: Pick<SessionInput, "appConfig" | "secretsKv"> | null;
+  readonly #projectDoors: ProjectDoorsInput | null;
 
   constructor(
     input: SessionInput,
     sessionTeardown: SessionTeardown,
     principal: SessionPrincipal,
     reach: Reach,
-    projectDoors: Pick<SessionInput, "appConfig" | "secretsKv"> | null,
+    projectDoors: ProjectDoorsInput | null,
   ) {
     super();
     this.#input = input;
@@ -291,14 +303,6 @@ class ProjectCollection extends RpcTarget {
     );
   }
 }
-
-/** `reach`, for a refusal's message. */
-const describeReach = (reach: Reach): string =>
-  reach === "every"
-    ? "every project"
-    : "userId" in reach
-      ? `the projects of the orgs ${reach.userId} belongs to`
-      : `bound to ${reach.projectIds.map((projectId) => JSON.stringify(projectId)).join(", ") || "no project"}`;
 
 // ── session teardown ── WHAT A SESSION MUST UNDO AT ITS END, as a leaf (no imports): the one-entry-per-key
 // register every IterateContext of a session shares, testable in the node lane.

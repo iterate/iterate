@@ -17,7 +17,7 @@ import {
   type ResolveExternalTokenResult,
 } from "@cloudflare/workers-oauth-provider";
 import { codedError, errorCode, isSameOriginBrowserRequest } from "./lib.ts";
-import { appConfigOf, type AppConfigEnv, sameOriginPath } from "./worker.ts";
+import { appConfigOf, sameOriginPath } from "./worker.ts";
 import {
   clearSessionCookie,
   setSessionCookie,
@@ -26,8 +26,9 @@ import {
   type Principal,
   type SessionCookieClaims,
 } from "./principal.ts";
-import { verifyCredentials, type SessionCredentials } from "./session.ts";
-import { DurableObjectNameCodec, type IterateContextNamespace } from "./iterate-context.ts";
+import { verifyCredentials, type SessionCredentials, type SessionPrincipal } from "./session.ts";
+import { DurableObjectNameCodec } from "./iterate-context.ts";
+import type { Env as DurableObjectEnv } from "./iterate-context-durable-object.ts";
 import {
   normalizedItxExpression,
   type ItxExpression,
@@ -71,10 +72,32 @@ const slugify = (name: string) =>
 
 /** The projects a session may touch — what its credential earned (session.ts `authenticate`, the
  *  `/mcp` grant): `"every"` for the admin secret; the projects of the orgs `userId` belongs to for a
- *  control-plane user (the cookie, the admin's `as`, a grant that chose nothing); the projects named
- *  outright for a project token or the project secret (one) and for an OAuth grant (the consent's
- *  choice). */
+ *  control-plane user (the cookie, the admin's `as`, a grant with nothing to choose from); the
+ *  projects named outright for a project token or the project secret (one) and for an OAuth grant
+ *  (the consent's choice — none chosen is bound to none). */
 export type Reach = "every" | { userId: string } | { projectIds: string[] };
+
+/** THE ONE RULE for what a principal reaches (`Reach`) — session.ts `authenticate` and `/mcp`
+ *  (`buildServer`) both ask it. THE BINDING FIRST: a principal bound to projects — a session's
+ *  `projectId` (a project token's, the project secret's), an `/mcp` grant's `projects` (the
+ *  consent's choice; a token's or a secret's one through `resolveExternalToken`) — reaches exactly
+ *  those, whoever it is: a project token the admin minted reaches its one project, never every.
+ *  Unbound, the admin secret's `{ actor: "admin" }` reaches every project and a user (the cookie,
+ *  the admin's `as` — `user_<email>`, never `admin`) the projects of their orgs. */
+export function reachOf(principal: SessionPrincipal | McpProps): Reach {
+  if ("projects" in principal && principal.projects) return { projectIds: principal.projects };
+  if ("projectId" in principal && principal.projectId !== undefined)
+    return { projectIds: [principal.projectId] };
+  return principal.actor === "admin" ? "every" : { userId: principal.actor };
+}
+
+/** `reach`, for a refusal's message (session.ts `projects.get`, `createProject`). */
+export const describeReach = (reach: Reach): string =>
+  reach === "every"
+    ? "every project"
+    : "userId" in reach
+      ? `the projects of the orgs ${reach.userId} belongs to`
+      : `bound to ${reach.projectIds.map((projectId) => JSON.stringify(projectId)).join(", ") || "no project"}`;
 
 /** `org_<32hex>`. */
 const newOrgId = () => `org_${crypto.randomUUID().replaceAll("-", "")}`;
@@ -137,13 +160,13 @@ ORDER BY o.name ASC;`,
      *  in the deployment's own org for the admin secret. A reach that names its projects (a token,
      *  the secret, a grant that chose) creates none: FORBIDDEN. A name already taken in ANY org is
      *  PROJECT_NAME_TAKEN; the same org's again is idempotent (the insert is ON CONFLICT DO NOTHING,
-     *  then re-selected to cover both "just created" and "already existed"). Every create-a-project
-     *  door — `projects.create` over /api, the console's form, /mcp's `create_project` — is this. */
+     *  then re-selected to cover both "just created" and "already existed"). Both create-a-project
+     *  doors — `projects.create` over /api and the console's form — are this. */
     async createProject(reach: Reach, name: string): Promise<Project> {
       if (typeof reach === "object" && "projectIds" in reach)
         throw codedError(
           "FORBIDDEN",
-          `this session is bound to ${reach.projectIds.map((projectId) => JSON.stringify(projectId)).join(", ") || "no project"} — creating a project needs a signed-in user or the admin secret`,
+          `this session is ${describeReach(reach)} — creating a project needs a signed-in user or the admin secret`,
         );
       const id = slugify(name);
       if (!id) throw new Error("project name is empty or invalid");
@@ -254,39 +277,39 @@ export type Directory = ReturnType<typeof directory>;
 // provider validated the bearer BEFORE this runs and put the granted props on ctx.props: an OAuth
 // access token's (the user and the projects chosen at consent — `authorize`, the app section below)
 // or, through `resolveExternalToken`, the admin secret's or a project secret's. An MCP server
-// (@modelcontextprotocol/server) mounts here with four tools; `itx.invoke` runs an expression
+// (@modelcontextprotocol/server) mounts here with three tools; `itx.invoke` runs an expression
 // through a named project's context IN-PROCESS under the bearer's principal (the DO's `invokeAs`),
 // so MCP is not a parallel capability API: a tool call reaches what an expression reaches, for any
 // project the bearer names. The project is resolved as apps/os's `resolveToolProject` does:
 // optional when the bearer reaches exactly one, required for the admin secret, refused outside the
-// grant.
+// grant. No tool creates a project: a project is created on the console or over `/api`
+// (`projects.create`) — a bearer that chose its projects at consent is bound to them.
 
 /** What the provider puts on `ctx.props` once the bearer is validated — WHO the tools act as (the
- *  principal `invokeAs` stamps on every event) and WHICH projects they reach: `projects` names them
- *  outright — an OAuth grant's, chosen at consent (`authorize`); a project secret's or a project
- *  token's one (`resolveExternalToken`); absent — a grant older than project selection, or a user
- *  who had no project to choose from — the projects of the user's orgs, read per call; the admin
- *  secret's `{ actor: "admin" }` reaches every project, so its tool calls must name one. */
+ *  principal `invokeAs` stamps on every event) and WHICH projects they reach, `reachOf`'s answer:
+ *  `projects` names them outright and binds the bearer to them whoever it is — an OAuth grant's,
+ *  chosen at consent (`authorize`); a project secret's or a project token's one
+ *  (`resolveExternalToken`, the admin's own token included); absent — a user who had no project to
+ *  choose from — the projects of the user's orgs, read per call; the admin secret's
+ *  `{ actor: "admin" }` reaches every project, so its tool calls must name one. */
 type McpProps = Principal & { projects?: string[] };
 
-/** The projects `props` reaches (`Reach`, the directory's word). */
-const reachOf = (props: McpProps): Reach =>
-  props.actor === "admin"
-    ? "every"
-    : props.projects
-      ? { projectIds: props.projects }
-      : { userId: props.actor };
-
-/** The project a tool call runs in (apps/os `resolveToolProject`): `project`, when named, must be
- *  within the grant (the name checked by the codec); omitted, it is the one project the bearer
- *  reaches — the admin secret reaches every project, so it must name one. */
+/** The project a tool call runs in (apps/os `resolveToolProject`): `project`, when named, is a
+ *  project — a context name is refused, as `projects.get` refuses it (session.ts): the expression
+ *  reaches the project's other contexts through `itx.cd(path)` — and must be within the grant;
+ *  omitted, it is the one project the bearer reaches — the admin secret reaches every project, so
+ *  it must name one. */
 async function projectOfToolCall(
   d1Directory: Directory,
   reach: Reach,
   requested: string,
 ): Promise<string> {
   if (requested) {
-    const { projectId } = DurableObjectNameCodec.parse(requested);
+    const { projectId, path } = DurableObjectNameCodec.parse(requested);
+    if (path !== "/")
+      throw new Error(
+        `project: got a context name ${JSON.stringify(requested)} — pass the project and cd(path) in the expression`,
+      );
     if (!(await d1Directory.reachesProject(reach, projectId)))
       throw new Error(`project ${JSON.stringify(requested)} is outside this token's grant`);
     return projectId;
@@ -320,6 +343,7 @@ function itxExpressionWithArgs(input: ItxExpressionInput, args: unknown[]): ItxE
 }
 
 const validator = new CfWorkerJsonSchemaValidator();
+/** A tool's input schema as `fromJsonSchema` takes it — the SDK's own JSON-Schema type. */
 type JsonSchema = Parameters<typeof fromJsonSchema>[0];
 const objectSchema = (properties: Record<string, unknown>, required: string[] = []) =>
   fromJsonSchema(
@@ -379,26 +403,6 @@ function buildServer(env: Env, props: McpProps): McpServer {
               .join("\n")
           : "(none yet)",
       );
-    },
-  );
-
-  mcpServer.registerTool(
-    "create_project",
-    {
-      description:
-        "Create a project in your first org (creating that org if you have none; the admin secret's land in the deployment's own org) and return it. A token bound to named projects — a grant that chose projects at authorization, a project secret, a project token — creates none: authorize again with nothing chosen, or create over /api.",
-      inputSchema: objectSchema({ project: { type: "string" } }, ["project"]),
-    },
-    async (raw: unknown) => {
-      const toolArguments = raw as { project?: string };
-      try {
-        const name = String(toolArguments.project ?? "").trim();
-        if (!name) return textResult("create_project needs a project name", true);
-        const project = await d1Directory.createProject(reach, name);
-        return textResult(`created project '${project.id}' in org '${project.orgId}'`);
-      } catch (error) {
-        return failure(error);
-      }
     },
   );
 
@@ -526,23 +530,18 @@ async function resolveExternalToken({
 //   • first-party surfaces  → session cookie via `app`   (0 OAuth clients)
 //   • external MCP clients  → OAuth on /mcp, self-describing via CIMD  (0 hand-registered clients)
 
-/** The control plane's bindings — a slice of the one worker's env (src/worker.ts intersects it with the
- *  DO's `Env`). Its configuration (the session and admin secrets) is the worker's, through
- *  `appConfigOf(env)` (src/worker.ts). `OAUTH_PROVIDER` is injected by the OAuthProvider wrapper at
- *  request time. */
-export interface Env extends AppConfigEnv {
+/** THE ONE WORKER's bindings: the DO's (`iterate-context-durable-object.ts` `Env` — `ITERATE_CONTEXT`,
+ *  where `/mcp`'s `itx.invoke` runs an expression in-process through the named project's root
+ *  context; `SECRETS_KV`, where a project's API-key hash sits for the project-secret bearer; the
+ *  `APP_CONFIG_*` vars `appConfigOf(env)` parses) plus the control plane's own below. src/worker.ts
+ *  is typed on this. `OAUTH_PROVIDER` is injected by the OAuthProvider wrapper at request time. */
+export interface Env extends DurableObjectEnv {
   /** Provider-owned store: grants, tokens, DCR clients. Required by @cloudflare/workers-oauth-provider. */
   OAUTH_KV: KVNamespace;
   /** The directory: users, orgs, org_members, projects (control-plane.sql). Strongly consistent (D1). */
   DB: D1Database;
   /** Injected by the provider — the OAuth helper surface (parseAuthRequest / completeAuthorization / …). */
   OAUTH_PROVIDER: OAuthHelpers;
-  /** The context namespace — where `/mcp`'s `itx.invoke` runs an expression, in-process, through
-   *  the named project's root context (`invokeAs`). */
-  ITERATE_CONTEXT: IterateContextNamespace;
-  /** The per-project secret store — where a project's API-key hash sits (principal.ts
-   *  `verifyProjectSecret`, the project-secret bearer on `/mcp`). */
-  SECRETS_KV: KVNamespace;
 }
 
 /** A worker handler with a REQUIRED fetch — what OAuthProvider expects for defaultHandler/apiHandler. */
