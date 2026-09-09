@@ -58,13 +58,13 @@ export type FirmwareVisemeId = (typeof firmwareVisemes)[keyof typeof firmwareVis
 export const visemeSampleRateHz = 16000;
 
 /** Samples per classification hop: one classification every 16 ms. */
-export const visemeHopSamples = 256;
+const visemeHopSamples = 256;
 
 /** Number of MFCC features per vector (and per prototype mean). */
-export const visemeFeatureCount = 12;
+const visemeFeatureCount = 12;
 
 /** Byte length of one Gaussian prototype record in the model binary. */
-export const visemeModelRecordBytes = 368;
+const visemeModelRecordBytes = 368;
 
 const visemeCount = 15;
 const fftSamples = 512;
@@ -78,7 +78,7 @@ const pcmScale = 1 / 32768;
 const silenceSensitivity = 1.2;
 
 /** One parsed Gaussian prototype from the HeadAudio model binary. */
-export interface VisemePrototype {
+interface VisemePrototype {
   /** IPA phoneme label decoded from the record's big-endian codepoint pair. */
   phoneme: string;
   /** Firmware viseme id this prototype votes for. */
@@ -532,7 +532,7 @@ export interface VisemeChangeEvent {
 }
 
 /** Tuning knobs for the change track; defaults mirror FACE_VISEME_DEFAULT_CONFIG. */
-export interface VisemeChangeTrackOptions {
+interface VisemeChangeTrackOptions {
   /** VAD opens at or above this mean-absolute s16le level. */
   vadOpenLevel?: number;
   /** VAD counts a hop at or below this level as quiet. */
