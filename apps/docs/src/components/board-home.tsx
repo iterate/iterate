@@ -5,7 +5,7 @@ import { Button } from "@iterate-com/ui/components/button";
 import { SidebarTrigger } from "@iterate-com/ui/components/sidebar";
 import { boardWorkspacePath, newBoardId } from "../lib/board-shared.ts";
 import { listRepos, listWorkspaces, withProject } from "../lib/project-rpc.ts";
-import type { WorkspaceListEntry } from "../lib/tasks-api.ts";
+import type { WorkspaceListEntry } from "../lib/docs-api.ts";
 
 /**
  * The tasks view's home — /w without a workspace addressed. One flat list of

@@ -1,6 +1,5 @@
 import type { ProjectCredential } from "@iterate-com/workspace-documents/server";
-import type { WorkspaceDocumentLane } from "@iterate-com/workspace-documents/types";
-import type { TasksWorkspace, WorkspaceListEntry } from "./tasks-api.ts";
+import type { WorkspaceSurface } from "@iterate-com/workspace-documents/types";
 
 export type { ProjectCredential } from "@iterate-com/workspace-documents/server";
 
@@ -13,11 +12,26 @@ export type DocsUser = {
 
 export type DocumentFormat = "html" | "markdown";
 
+/** One opened document, classified by extension for the editor. */
 export type WorkspaceDocumentSnapshot = {
   content: string;
   format: DocumentFormat;
   path: string;
   workspacePath: string;
+};
+
+/** One workspace stream in the project, as the pickers list them. */
+export type WorkspaceListEntry = {
+  path: string;
+  createdAt: string;
+};
+
+/** One event from the workspace's platform stream (the event-sourced spine). */
+export type WorkspaceStreamEvent = {
+  createdAt: string;
+  offset: number;
+  payload: unknown;
+  type: string;
 };
 
 export interface DocsApi {
@@ -27,19 +41,16 @@ export interface DocsApi {
 export interface DocsProject {
   projectId(): Promise<string>;
   whoami(): Promise<DocsUser>;
-  /** Address an existing workspace through the DOCUMENT lens. This never
-   * creates one. */
+  /**
+   * An existing workspace, forwarded verbatim from the platform (plain
+   * `get`: this never creates one). Synchronous on purpose so calls
+   * pipeline through it. Outside this app's own namespaces the workspace is
+   * a guest view: reads, comments, and edits work; the owner acts (commit,
+   * assignAgent) are refused.
+   */
   workspace(workspacePath: string): DocsWorkspace;
   /** The project's repo catalog — paths a board can be opened against. */
   repos(): Promise<string[]>;
-  /**
-   * The BOARD lens on an existing workspace addressed by its platform path —
-   * plain `get`, like workspace(). Synchronous on purpose so calls pipeline
-   * through it. Outside this app's own namespaces the lens is a guest:
-   * reads, comments, and edits work; owner acts (commit, assignAgent) are
-   * refused.
-   */
-  workspaceAt(workspacePath: string, repoPath?: string): TasksWorkspace;
   /** Every workspace stream in the project, newest first (the pickers).
    * Ancestor stream paths that were never created as workspaces are pruned. */
   workspaces(): Promise<WorkspaceListEntry[]>;
@@ -75,9 +86,30 @@ export interface DocsProject {
    * it with the workspace path and the open file. Jam workspaces only.
    */
   inviteAgent(workspacePath: string, path?: string): Promise<{ agentPath: string }>;
+  /**
+   * Assign an agent to one task, the apps/os way: sets `state: in-progress`
+   * + the `agent:` frontmatter, commits the mount so the assignment is
+   * durable, births the agent if needed, and sends it the kickoff brief.
+   * Owner act (it commits). `path` is repo-relative under `repoPath`.
+   */
+  assignAgent(input: {
+    workspacePath: string;
+    repoPath: string;
+    path: string;
+  }): Promise<{ agentPath: string }>;
 }
 
-export interface DocsWorkspace extends WorkspaceDocumentLane {
-  /** Read and classify an existing supported document before live editing. */
-  inspect(path: string): Promise<WorkspaceDocumentSnapshot>;
+/**
+ * The platform workspace surface, forwarded verbatim (fs, git, collab), plus
+ * the workspace's stream — the two stream reads the events sheet needs.
+ */
+export interface DocsWorkspace extends WorkspaceSurface {
+  /** The newest page of the workspace's stream events, newest first. */
+  events(limit?: number): Promise<WorkspaceStreamEvent[]>;
+  /** Live push lane: replay after `afterOffset`, then new commits, delivered
+   * to the retained callback until the handle unsubscribes. */
+  subscribeEvents(
+    processEventBatch: (batch: { events: WorkspaceStreamEvent[] }) => unknown,
+    afterOffset?: number,
+  ): Promise<{ ping?(): Promise<boolean> | boolean; unsubscribe(): void }>;
 }

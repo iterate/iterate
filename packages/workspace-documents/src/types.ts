@@ -1,6 +1,14 @@
+import type {
+  WorkspaceCommitInput,
+  WorkspaceCommitResult,
+  WorkspaceGitLogEntry,
+  WorkspaceGitLogInput,
+  WorkspaceStatus,
+} from "iterate/client";
+
 /**
- * The platform workspace collaboration wire. Both Tasks and Docs adapt their
- * project-specific lookup into this one document lane.
+ * The platform workspace collaboration wire, as `itx.workspaces.get(path).collab`
+ * speaks it. Vessels forward it verbatim; hosts hand over a live stub.
  */
 export type CollabOpened = { content: string; epoch: string; version: number };
 
@@ -35,7 +43,11 @@ export type CollabChanges = {
   inserted: { clientId: string; createdAt?: number; from: number; to: number }[];
 };
 
-export interface WorkspaceDocumentLane {
+/** Fresh caret presence per live session, index-matched (the platform's flat, generator-legal shape). */
+export type CollabPresenceFlat = { clientIds: string[]; paths: string[] };
+
+/** The collaborative session lane of one workspace (`workspace.collab`). */
+export interface WorkspaceCollabSurface {
   open(path: string): Promise<CollabOpened>;
   changes(path: string): Promise<CollabChanges>;
   push(input: {
@@ -57,6 +69,49 @@ export interface WorkspaceDocumentLane {
     clientId: string,
     selection: { anchor: number; head: number } | null,
   ): Promise<void>;
+  /** Head versions of every live session — a cheap change cursor. */
+  versions(): Promise<Record<string, number>>;
+  presenceSummary(): Promise<CollabPresenceFlat>;
+  /** Everyone with the board open (heartbeats): clientId → display name. */
+  boardViewers(): Promise<Record<string, string>>;
+  /** Announce (or clear, with a null name) one client viewing the board. */
+  boardPresent(clientId: string, name: string | null): Promise<void>;
+}
+
+/** The per-mount git surface of one workspace (`workspace.git`). */
+export interface WorkspaceGitSurface {
+  /** Changes grouped by owning mount, plus the never-committable unmounted scratch. */
+  status(): Promise<WorkspaceStatus>;
+  /** ONE mount's changes become one commit on that repo's main; `scope` picks the mount. */
+  commit(input: WorkspaceCommitInput): Promise<WorkspaceCommitResult>;
+  log(input?: WorkspaceGitLogInput): Promise<WorkspaceGitLogEntry[]>;
+}
+
+/**
+ * The platform workspace surface every shared workspace component speaks —
+ * the shape of `itx.workspaces.get(path)`, spelled with plain promises. A
+ * host inside OS hands over the live stub; a vessel outside forwards it
+ * method for method. Paths are fully qualified workspace paths throughout
+ * (`/repos/config/docs/plan.md`, `/workspaces/agents/x/notes.md`).
+ */
+export interface WorkspaceSurface {
+  /** One file's contents from the merged view (overlay, then its mount at HEAD); null when missing. */
+  readFile(path: string): Promise<string | null>;
+  /** Batched reads: one round trip, missing paths map to null. */
+  readFiles(paths: string[]): Promise<Record<string, string | null>>;
+  /** A path's mount content at HEAD — the base uncommitted work diffs against. */
+  readBase(path: string): Promise<string | null>;
+  exists(path: string): Promise<boolean>;
+  writeFile(path: string, content: string): Promise<void>;
+  /** Whiteouts a mount copy; false when the path did not exist. */
+  deleteFile(path: string): Promise<boolean>;
+  /** Back to the mount's version: restore a delete, drop an add, undo edits. */
+  revert(path: string): Promise<void>;
+  /** Every file path in the merged view (local layer + every mount at HEAD), sorted. */
+  listAllFiles(): Promise<string[]>;
+  glob(pattern: string): Promise<string[]>;
+  git: WorkspaceGitSurface;
+  collab: WorkspaceCollabSurface;
 }
 
 /**
@@ -64,8 +119,8 @@ export interface WorkspaceDocumentLane {
  * teardown flushes must never replace the shared connection under live polls.
  */
 export interface WorkspaceDocumentTransport {
-  run<T>(operation: (lane: WorkspaceDocumentLane) => PromiseLike<T>): Promise<T>;
-  runOnce<T>(operation: (lane: WorkspaceDocumentLane) => PromiseLike<T>): Promise<T>;
+  run<T>(operation: (workspace: WorkspaceSurface) => PromiseLike<T>): Promise<T>;
+  runOnce<T>(operation: (workspace: WorkspaceSurface) => PromiseLike<T>): Promise<T>;
 }
 
 export type CommentIdentity = { author: string; authorDisplay?: string };

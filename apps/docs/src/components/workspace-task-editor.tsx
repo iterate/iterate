@@ -29,12 +29,11 @@ export function WorkspaceTaskEditor({
   const { workspacePath, repoPath } = address;
   const transport = useMemo<WorkspaceDocumentTransport>(
     () => ({
-      run: (operation) =>
-        withProject((project) => operation(workspaceFor(project, { workspacePath, repoPath }))),
+      run: (operation) => withProject((project) => operation(workspaceFor(project, workspacePath))),
       runOnce: (operation) =>
-        withProjectOnce((project) => operation(workspaceFor(project, { workspacePath, repoPath }))),
+        withProjectOnce((project) => operation(workspaceFor(project, workspacePath))),
     }),
-    [workspacePath, repoPath],
+    [workspacePath],
   );
 
   return (

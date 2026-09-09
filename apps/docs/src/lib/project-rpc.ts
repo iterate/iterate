@@ -1,6 +1,4 @@
-import type { TasksWorkspace, WorkspaceListEntry } from "./tasks-api.ts";
-import type { DocsUser } from "./docs-api.ts";
-import type { BoardAddress } from "./board-shared.ts";
+import type { DocsUser, DocsWorkspace, WorkspaceListEntry } from "./docs-api.ts";
 import { withDocsProject, withDocsProjectOnce } from "./docs-client.ts";
 
 /**
@@ -13,15 +11,14 @@ export const withProject = withDocsProject;
 export const withProjectOnce = withDocsProjectOnce;
 
 /**
- * The board's workspace capability for one address, on a live project stub:
- * the plain-`get` lens door on an existing workspace path. (The stub is a
- * capnweb Proxy; the local cast just names the door.)
+ * One workspace on a live project stub — the platform surface forwarded
+ * verbatim, plain get. (The stub is a capnweb Proxy; the local cast just
+ * names the door.)
  */
-export function workspaceFor(project: unknown, address: BoardAddress): TasksWorkspace {
-  const doors = project as {
-    workspaceAt(workspacePath: string, repoPath?: string): unknown;
-  };
-  return doors.workspaceAt(address.workspacePath, address.repoPath) as TasksWorkspace;
+export function workspaceFor(project: unknown, workspacePath: string): DocsWorkspace {
+  return (project as { workspace(workspacePath: string): unknown }).workspace(
+    workspacePath,
+  ) as DocsWorkspace;
 }
 
 /** The project's repos, for the board home's per-repo sections. */

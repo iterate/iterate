@@ -6,7 +6,7 @@ import { commentIdentityFor } from "@iterate-com/workspace-documents/identity";
 import type { CollabEditorApi } from "@iterate-com/workspace-documents/editor-api";
 import { authorColor, authorLabel } from "@iterate-com/workspace-documents/collab";
 import { useWorkspaceBoard } from "../lib/use-workspace-board.ts";
-import { whoami, withProject, workspaceFor } from "../lib/project-rpc.ts";
+import { whoami, withProject } from "../lib/project-rpc.ts";
 import { useTaskCommit } from "../lib/use-task-commit.ts";
 import { projectBoard } from "../lib/board-engine.ts";
 import {
@@ -625,7 +625,7 @@ export function WorkspaceBoardPage({
                   // durable assignment (and clean status) without waiting on
                   // a poll tick.
                   await withProject((project) =>
-                    workspaceFor(project, address).assignAgent(openTask.path),
+                    project.assignAgent({ workspacePath, repoPath, path: openTask.path }),
                   );
                   await board.refresh();
                 } catch (cause) {

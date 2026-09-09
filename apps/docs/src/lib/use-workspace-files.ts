@@ -3,8 +3,8 @@ import type { RepoFileStatus } from "@iterate-com/ui/components/repo-file-tree";
 import { withDocsProject } from "./docs-client.ts";
 import { isDocumentPath } from "./jam.ts";
 import { workspaceFor } from "./project-rpc.ts";
-import type { TasksWorkspace } from "./tasks-api.ts";
-import { changeMap } from "./use-workspace-board.ts";
+import type { DocsWorkspace } from "./docs-api.ts";
+import { changeMap, qualifyBoardPath } from "./use-workspace-board.ts";
 
 /** Files an agent adds or edits show up on this cadence; own edits refresh at once. */
 const POLL_MS = 5_000;
@@ -30,13 +30,15 @@ export function useWorkspaceFiles({
   const [changes, setChanges] = useState<ReadonlyMap<string, RepoFileStatus>>(new Map());
   const [error, setError] = useState<string | null>(null);
 
-  // Every workspace call goes through the board's workspace capability for
-  // this address (a plain-get lens; nothing here creates a workspace).
+  // Every workspace call goes through the platform surface for this
+  // workspace (plain get; nothing here creates a workspace). Paths cross
+  // this hook repo-relative and are qualified at the call.
   const withWorkspace = useCallback(
-    <T>(operation: (ws: TasksWorkspace) => Promise<T>) =>
-      withDocsProject((project) => operation(workspaceFor(project, { workspacePath, repoPath }))),
-    [workspacePath, repoPath],
+    <T>(operation: (ws: DocsWorkspace) => Promise<T>) =>
+      withDocsProject((project) => operation(workspaceFor(project, workspacePath))),
+    [workspacePath],
   );
+  const qualified = useCallback((path: string) => qualifyBoardPath(repoPath, path), [repoPath]);
 
   // Newest refresh wins: a poll that started before a create/rename/delete/
   // discard/commit must not land after the post-mutation refresh and hide
@@ -49,7 +51,7 @@ export function useWorkspaceFiles({
     try {
       [documents, status] = await Promise.all([
         withDocsProject((project) => project.documentsUnder(workspacePath, repoPath)),
-        withWorkspace((ws) => ws.status()),
+        withWorkspace((ws) => ws.git.status()),
       ]);
     } catch (cause) {
       // A superseded refresh's failure is as stale as its data would have been.
@@ -115,29 +117,33 @@ export function useWorkspaceFiles({
     changes,
     error,
     refresh,
-    createFile: (path: string) => run(() => withWorkspace((ws) => ws.write(path, ""))),
+    createFile: (path: string) =>
+      run(() => withWorkspace((ws) => ws.writeFile(qualified(path), ""))),
     rename: (from: string, to: string, isFolder: boolean) =>
       run(async () => {
         if (isFolder) throw new Error("Renaming folders is not supported yet.");
-        const content = await withWorkspace((ws) => ws.read(from));
-        await withWorkspace((ws) => ws.write(to, content ?? ""));
-        await withWorkspace((ws) => ws.delete(from));
+        const content = await withWorkspace((ws) => ws.readFile(qualified(from)));
+        await withWorkspace((ws) => ws.writeFile(qualified(to), content ?? ""));
+        await withWorkspace((ws) => ws.deleteFile(qualified(from)));
       }),
     remove: (path: string, isFolder: boolean) =>
       run(() =>
         Promise.all(
           (isFolder ? pathsUnder(path) : [path]).map((victim) =>
-            withWorkspace((ws) => ws.delete(victim)),
+            withWorkspace((ws) => ws.deleteFile(qualified(victim))),
           ),
         ),
       ),
     /** Back to the mount's version: restore a delete, drop an add, undo edits. */
-    discard: (path: string) => run(() => withWorkspace((ws) => ws.revert(path))),
+    discard: (path: string) => run(() => withWorkspace((ws) => ws.revert(qualified(path)))),
     discardAll: () =>
       run(() =>
-        Promise.all([...changes.keys()].map((path) => withWorkspace((ws) => ws.revert(path)))),
+        Promise.all(
+          [...changes.keys()].map((path) => withWorkspace((ws) => ws.revert(qualified(path)))),
+        ),
       ),
     /** Owner act: publishes the mount's whole dirty set to the repo's main. */
-    commit: (message: string) => run(() => withWorkspace((ws) => ws.commit(message))),
+    commit: (message: string) =>
+      run(() => withWorkspace((ws) => ws.git.commit({ message, scope: repoPath }))),
   };
 }

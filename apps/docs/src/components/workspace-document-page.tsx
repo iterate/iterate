@@ -80,11 +80,24 @@ export function WorkspaceDocumentPage({
     // waking, a colo hiccup): the shared client re-dials, and this waits
     // out a network that is still coming back. An application error (no
     // such document) is final at once.
+    // A relative path is a document in the workspace's own directory; an
+    // absolute one is a fully qualified platform path (a mount file). The
+    // resolved form is the collab session's identity, shared with agents.
+    const resolvedPath = path.startsWith("/") ? path : `${workspacePath}/${path}`;
     void withRetries(
       () =>
         withDocsProject(async (project) => {
-          const workspace = project.workspace(workspacePath);
-          const [snapshot, user] = await Promise.all([workspace.inspect(path), project.whoami()]);
+          const [content, user] = await Promise.all([
+            project.workspace(workspacePath).readFile(resolvedPath),
+            project.whoami(),
+          ]);
+          if (content === null) throw new Error(`document "${resolvedPath}" does not exist`);
+          const snapshot: WorkspaceDocumentSnapshot = {
+            content,
+            format: /\.html?$/i.test(resolvedPath) ? "html" : "markdown",
+            path: resolvedPath,
+            workspacePath,
+          };
           return { snapshot, user };
         }),
       { attempts: 3, delayMs: (attempt) => attempt * 1_500, shouldRetry: isSessionTransportError },
@@ -253,6 +266,7 @@ export function WorkspaceDocumentPage({
                 transport={transport}
                 displayName={displayName}
                 path={path}
+                workspacePath={loaded.snapshot.path}
                 mode={loaded.snapshot.format}
                 presentation={view}
                 review={loaded.snapshot.format === "markdown" ? editorReview : undefined}
