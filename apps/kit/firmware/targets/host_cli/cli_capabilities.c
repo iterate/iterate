@@ -245,7 +245,7 @@ static void cli_capabilities_write_health_start(
       runtime->stats_sequence++, cli_runtime_now_ms(NULL),
       runtime->voicelab.frames_sent, runtime->voicelab.frame_send_failures,
       runtime->mic_frames_captured, mic_dropped, runtime->mic_frames_gated,
-      runtime->voicelab.spk_frames_received, runtime->speaker_frames_played,
+      runtime->voicelab.spk_frames_received, runtime->playout.stats.frames_played,
       runtime->speaker_overflow_drops);
 }
 
@@ -272,9 +272,9 @@ static void cli_capabilities_write_health_audio(
       "\"connGeneration\":%u,"
       "\"bridgeAgeMs\":%u,\"downlinkRecycles\":%u,\"batchAgeMs\":%u,"
       "\"uptimeMs\":%" PRIu64,
-      runtime->speaker_underruns, runtime->speaker_conceal_frames,
-      runtime->speaker_catchup_frames,
-      runtime->speaker_write_failures, runtime->speaker_margin_max_ms,
+      runtime->speaker_underruns, runtime->playout.stats.conceal_frames,
+      runtime->playout.stats.catchup_frames,
+      runtime->playout.stats.write_failures, runtime->playout.stats.margin_max_ms,
       runtime->speaker_bad_frames,
       runtime->voicelab.spk_decode_failures, runtime->barge_in_flushes,
       runtime->voicelab.batches_on_connection,
@@ -318,7 +318,7 @@ static void cli_capabilities_write_health_end(
       writer,
       ",\"spkMarginMinMs\":%u,\"spkMarginP10Ms\":%u,\"spkWrites\":%u,"
       "\"outboxUsed\":%u,\"outboxSlots\":%u}",
-      runtime->speaker_margin_min_ms, 0U, runtime->speaker_writes,
+      runtime->playout.stats.margin_min_ms, 0U, runtime->playout.stats.writes,
       outbox->current_slots, ITERATE_KIT_VOICE_CONTROL_OUTBOX_SLOTS);
 }
 

@@ -94,7 +94,7 @@ static uint32_t abandon_speaker_audio(void);
 #include "iterate/kit/voicelab_stream.h"
 #include "iterate/kit/voice_device_profile.h"
 #include "iterate/kit/voice/loop.h"
-#include "iterate/kit/voice_playback_clock.h"
+#include "iterate/kit/voice_playout.h"
 
 static const char tag[] = "iterate-voicelab";
 
@@ -552,12 +552,11 @@ EXT_RAM_BSS_ATTR static struct {
   atomic_uint speaker_generation;
   atomic_uint_fast64_t speaker_last_write_ms;
   /*
-   * The playback step's two persistent locals. They were locals of a `for(;;)`
-   * that never returned; a step returns every pass, so they live here with the
-   * rest of the speaker's state. Written only by the playback task.
+   * The playback step's persistent state — the shared playout clock, its
+   * counters and the last write — written only by the playback task. The
+   * step itself is shared with the host CLI: iterate/kit/voice_playout.h.
    */
-  struct iterate_kit_voice_playback_clock playout_clock;
-  uint64_t last_write_ms;
+  struct iterate_kit_voice_playout playout;
   uint32_t mic_frames_captured;
   uint32_t mic_frames_dropped;
   uint32_t mic_process_failures;
@@ -588,7 +587,6 @@ EXT_RAM_BSS_ATTR static struct {
   atomic_uint aec_sequence_discontinuities;
   atomic_uint aec_clock_regressions;
   atomic_uint aec_egress_copy_failures;
-  uint32_t speaker_frames_played;
   /* Written by both the app producer and playback consumer. */
   atomic_uint speaker_overflow_drops;
   /*
@@ -603,18 +601,6 @@ EXT_RAM_BSS_ATTR static struct {
   /* Queue-reset accounting is app-owned; in-flight rejection is playback-owned. */
   atomic_uint speaker_discarded_frames;
   /*
-   * The two ways the reader can decline to play WITHOUT touching any other
-   * counter, and therefore the only remaining blind spots in this loop.
-   *
-   * `speaker_waits_priming` is ready() saying no: the ring is below the
-   * prefill mark. `speaker_waits_dry` is the ring being empty and the clock
-   * choosing WAIT over CONCEAL. A stall in either is invisible today - the
-   * failing runs show frames arriving with played AND conceal both frozen,
-   * which is exactly what these two look like from outside.
-   */
-  uint32_t speaker_waits_priming;
-  uint32_t speaker_waits_dry;
-  /*
    * A starve is only a DEFECT if the stream had more to say. The buffer
    * legitimately empties at the end of every answer, and counting that as an
    * underrun made the metric read one per answer no matter how healthy the
@@ -623,19 +609,7 @@ EXT_RAM_BSS_ATTR static struct {
    * after it, meaning the answer was still in progress.
    */
   uint32_t speaker_underruns;
-  uint32_t speaker_conceal_frames;
-  uint32_t speaker_catchup_frames;
-  uint32_t speaker_write_failures;
-  uint32_t speaker_margin_max_ms;
   atomic_uint_fast64_t starve_at_ms;
-  /*
-   * Proving "no underruns" needs more than a count of holes: every write
-   * records how much audio was still queued behind it, so the minimum over a
-   * call says how close the pipe ever came to running dry. A run with a
-   * healthy floor is evidence; a zero count alone proves nothing.
-   */
-  uint32_t speaker_margin_min_ms;
-  uint32_t speaker_writes;
   uint32_t speaker_bad_frames;
   /* Connections replaced because nothing was being delivered on them. */
   uint32_t downlink_recycles;
@@ -699,23 +673,9 @@ EXT_RAM_BSS_ATTR static struct {
   /* Release pressed, but the capture queue is not yet on the wire. */
   bool flushing_turn;
   atomic_bool speaker_reprime;
-  /**
-   * When the current answer's playout began, and how much of it has played.
-   *
-   * Together these ARE the audio timeline: frame N of an answer should reach
-   * the speaker 20N ms after the first one did. The difference between that
-   * and the wall clock is how far behind realtime this device is, and it is
-   * the only honest measure of "behind" — queue depth is not, because a whole
-   * answer legitimately arrives at once and a deep queue then means the
-   * sender was fast, not that playback is late.
-   *
-   * Needs no clock agreement with the server: both terms are local, and the
-   * answer's own first frame is the origin.
-   */
-  atomic_uint_fast64_t answer_started_ms;
-  atomic_uint answer_emitted_ms;
-  /** When an RPC was last answered: the mount's own liveness, not the socket's. */
-  uint32_t speaker_lag_max_ms;
+  /* The answer's playout timeline — when it began, how much has played, the
+   * worst lag — is `playout.clock`'s, shared with the host CLI; see
+   * iterate/kit/voice_playback_clock.h. */
   atomic_bool speaker_answer_done;
   /*
    * The SENDER said this answer is complete, latched until the speaker actually
@@ -996,24 +956,15 @@ static uint32_t abandon_speaker_audio(void) {
   atomic_store_explicit(
       &runtime.speaker_reprime, true, memory_order_release);
   /*
-   * AND THE ANSWER'S CLOCK GOES WITH ITS AUDIO.
-   *
-   * The playout timeline is per-ANSWER — frame N belongs 20N ms after the
-   * first one played — so a flush, which by definition leaves no answer in
-   * flight, must leave no timeline either. Zero rather than `now`: the origin
-   * is then taken from the next frame that actually plays, which is correct
-   * however long the gap turns out to be.
-   *
-   * IN THE FUNNEL RATHER THAN AT THE FLUSH SITES, for the reason the funnel
-   * exists. It was written at ONE of the four — the new-answer branch — and
-   * the other three were left resetting nothing: a new CALL emptied the ring
-   * and kept the last call's clock, so the first audio of the new one was
-   * measured against an answer minutes old and the catch-up rule deleted it.
-   * Measured on the StackChan after this file's other fix: 34 frames skipped
-   * with `spkLagMaxMs` at 117,083.
+   * AND THE ANSWER'S CLOCK GOES WITH ITS AUDIO — carried by the reprime the
+   * playback task applies before its next frame: the playout clock owns the
+   * answer's timeline, and `iterate_kit_voice_playback_clock_reprime` starts
+   * it from zero. It used to be reset here by hand, in the funnel rather than
+   * at the flush sites, because it had first been written at ONE of the four
+   * and a new CALL then kept the last call's clock — 34 frames skipped with
+   * `spkLagMaxMs` at 117,083 on the StackChan. Now neither a site nor a
+   * funnel can forget it: whatever primes the clock resets the timeline.
    */
-  atomic_store_explicit(&runtime.answer_started_ms, 0U, memory_order_release);
-  atomic_store_explicit(&runtime.answer_emitted_ms, 0U, memory_order_release);
   /* And the part-frame waiting for audio that is never coming: spliced onto
    * the front of the next answer, it is a click once per barge-in. */
   speaker_partial_length = 0U;
@@ -1244,76 +1195,29 @@ static bool playback_apply_reprime(
 }
 
 /*
- * ONE PASS OF THE SPEAKER, so that it is a function rather than a `for(;;)`.
+ * THE BOARD'S RING AND SINK, AS THE SHARED PLAYOUT STEP SEES THEM.
  *
- * A step can be called, and therefore tested, and therefore driven by a host
- * that has one thread where a board has three. Nothing else about it changed:
- * every `continue` in the body below became a `return`, and the two locals
- * that had to survive an iteration — the playout clock and the last write —
- * moved into the runtime beside the state they already describe.
+ * The step — iterate/kit/voice_playout.h — is the sequence this board and the
+ * host CLI both run: prime, take one frame, treat a dry ring as a hole or the
+ * end, skip a late frame with backlog behind it, hand the rest to the
+ * speaker, report what was played. It used to be written here and again in
+ * the CLI, and the two drifted apart twice. What is below is only what is
+ * the board's alone: the FreeRTOS queue with its generations and reprime
+ * handshake, and the codec write with its bounded wait for DMA headroom.
  */
-void iterate_kit_voice_loop_playback_step(void) {
-  static struct speaker_frame frame;
-  /*
-   * The writer NEVER stops. That is the whole design.
-   *
-   * It used to stop on an empty read and wait to re-buy a cushion — and the
-   * cushion it waited for (40 ms) was SMALLER THAN THE DMA RING IT HAD JUST
-   * LET RUN DRY (90 ms). So every recovery under-filled the hardware and
-   * immediately starved again: one network hiccup produced a train of holes,
-   * which is why the rate never went to zero however large the buffers grew.
-   *
-   * The answer to that was to write silence on an empty read, and it was the
-   * wrong one: silence occupies playout time and cannot be taken back, so
-   * every frame of it puts the rest of the answer permanently further behind.
-   * The right answer, and the one three reference implementations use, is to
-   * wait long enough that a late frame is absorbed by the hardware cushion
-   * rather than concealed — see the read and the dry branch below.
-   */
-  size_t received;
 
-  /*
-   * FENCED OUT. While the microphone owns the shared pins — or the fence is
-   * moving in either direction — this step must not pull frames it can only
-   * fail to write. Frames stay queued; the fence drops within milliseconds of
-   * the turn committing, long before an answer.
-   */
-  if (runtime.board->playout_fenced_out != NULL &&
-      runtime.board->playout_fenced_out(runtime.board_context)) {
-    board_phase(ITERATE_KIT_VOICE_PHASE_WAITING);
-    DELAY_MS(5);
-    return;
-  }
+/* The frame in flight between the queue and the codec. File-scope so the
+ * write callback sees the generation the read callback received it with. */
+static struct speaker_frame playout_item;
 
-  (void)playback_apply_reprime(&runtime.playout_clock);
-  if (atomic_exchange_explicit(
-          &runtime.speaker_answer_done, false, memory_order_acq_rel)) {
-    iterate_kit_voice_playback_clock_answer_done(&runtime.playout_clock);
-  }
-  if (!iterate_kit_voice_playback_clock_ready(
-          &runtime.playout_clock, speaker_queued_bytes())) {
-    /*
-     * NOT FEEDING, SO NOT WATCHING.
-     *
-     * The watch means "we are handing the DAC audio right now". This branch
-     * decides not to, while the clock builds its prefill — and leaving the
-     * watch armed across it made the DAC's correct silence read as
-     * starvation at every boundary that re-primes: a cold first turn, a turn
-     * after idle, the refill after a barge-in, and teardown. That was the
-     * whole of the systematic DMA ledger deficits, and it is one missing disarm
-     * rather than four separate causes.
-     */
-    board_phase(ITERATE_KIT_VOICE_PHASE_WAITING);
-    ++runtime.speaker_waits_priming;
-    /* Idle, not starving: nothing is playing, so write nothing. */
-    if (runtime.last_write_ms != 0U &&
-        iterate_kit_voice_elapsed_ms(now_ms(NULL), runtime.last_write_ms) > SPEAKER_IDLE_POWERDOWN_MS) {
-      board_phase(ITERATE_KIT_VOICE_PHASE_QUIET);
-    }
-    DELAY_MS(5);
-    return;
-  }
+static uint32_t playout_ring_queued_bytes(void *context) {
+  (void)context;
+  return speaker_queued_bytes();
+}
 
+static enum iterate_kit_voice_playout_read playout_ring_read(
+    void *context, const uint8_t **frame, size_t *length) {
+  (void)context;
   /*
    * WAIT AS LONG AS THE HARDWARE CUSHION ALLOWS.
    *
@@ -1358,47 +1262,10 @@ void iterate_kit_voice_loop_playback_step(void) {
           &runtime.answer_declared_done, memory_order_acquire)) {
     board_phase(ITERATE_KIT_VOICE_PHASE_DRAINING);
   }
-  received = xQueueReceive(
-                 runtime.speaker_queue,
-                 &frame,
-                 pdMS_TO_TICKS(runtime.facts->speaker_dry_wait_ms)) ==
-                     pdTRUE
-      ? FRAME_BYTES
-      : 0U;
-
-  /*
-   * A REPRIME REQUESTED WHILE WE WERE BLOCKED STILL COUNTS.
-   *
-   * The receive above waits up to 60 ms, and a new answer's first frame
-   * routinely arrives inside that window — REPLACE sets speaker_reprime and
-   * pushes the frame, and this loop then wakes holding it. Checking the
-   * flag only at the top of the loop played that frame with priming already
-   * cancelled, so ~20 ms of the first phoneme escaped, the reprime was
-   * honoured on the NEXT iteration, and the rest of the answer waited out a
-   * full prefill behind it. That is the clipped first word.
-   */
-  if (received > 0U && playback_apply_reprime(&runtime.playout_clock)) {
-    /*
-     * A replacement can wake the blocked receive with its first frame. Put
-     * that whole tagged frame back at the head so opening prefill includes
-     * it. If another replacement raced this one, its generation is already
-     * stale and it must not be reintroduced after the newer queue reset.
-     */
-    if (frame.generation == atomic_load_explicit(
-                                &runtime.speaker_generation,
-                                memory_order_acquire)) {
-      if (xQueueSendToFront(runtime.speaker_queue, &frame, 0) != pdTRUE) {
-        (void)atomic_fetch_add_explicit(
-            &runtime.speaker_overflow_drops, 1U, memory_order_relaxed);
-      }
-    } else {
-      (void)atomic_fetch_add_explicit(
-          &runtime.speaker_discarded_frames, 1U, memory_order_relaxed);
-    }
-    return;
-  }
-
-  if (received == 0U) {
+  if (xQueueReceive(
+          runtime.speaker_queue,
+          &playout_item,
+          pdMS_TO_TICKS(runtime.facts->speaker_dry_wait_ms)) != pdTRUE) {
     /*
      * DRY. WRITE NOTHING AND COME BACK.
      *
@@ -1420,114 +1287,77 @@ void iterate_kit_voice_loop_playback_step(void) {
      *
      * This is what xiaozhi-esp32, ESPHome's speaker and esp-adf all do:
      * when the source is dry, stop calling write. None of them conceals.
+     * Hence no `conceal` on this board's sink: the step counts the hole and
+     * inserts nothing.
+     *
+     * "The answer has finished being HEARD" was once reported to the
+     * classifier from here; that distinction is now measured where the audio
+     * is actually thrown away (an abandon with bytes queued is a supersede,
+     * with an empty queue the gap between turns).
      */
-    /* Nothing to play: the zeros the DAC now sends are correct. */
     board_phase(ITERATE_KIT_VOICE_PHASE_WAITING);
-    /*
-     * "The answer has finished being HEARD" was reported to the classifier
-     * here, gated on the sender having declared it complete — the classifier
-     * needed it to tell a new answer following a finished one from a new
-     * answer cutting a live one off. That distinction is now measured where
-     * the audio is actually thrown away: an abandon with bytes still queued
-     * is a supersede, an abandon with an empty queue is the gap between
-     * turns. `answer_declared_done` still disarms the starvation watch above,
-     * which is the other thing it was ever for.
-     */
-    ++runtime.speaker_waits_dry;
-    if (iterate_kit_voice_playback_clock_empty(
-            &runtime.playout_clock, now_ms(NULL)) ==
-        ITERATE_KIT_VOICE_PLAYBACK_CONCEAL) {
-      /* Kept as telemetry: how often the source could not keep up. It no
-       * longer costs the listener anything. */
-      ++runtime.speaker_conceal_frames;
-      atomic_store_explicit(
-          &runtime.starve_at_ms, now_ms(NULL), memory_order_release);
-    } else {
-      /*
-       * SETTLED BACK TO PRIMING, WHICH IS THIS DEVICE'S OWN PROOF THAT NO
-       * ANSWER IS IN FLIGHT — and therefore that nothing is late.
-       *
-       * WAIT is returned by exactly one branch of the clock: the answer was
-       * declared over, or nothing has been written for longer than the conceal
-       * limit. Either way the ring is empty and playback is AT THE LIVE EDGE,
-       * so whatever lag the last answer ended on is unrecoverable by
-       * definition — the catch-up rule already refuses to skip into an empty
-       * ring for that exact reason. Carrying the number forward does not
-       * measure anything; it only waits to be charged against the next answer.
-       *
-       * This is the reset that needs no cooperation from the sender. `drop`
-       * covers the answer that replaces a LIVE one; this covers every ordinary
-       * turn, including the ones where `drop` arrives a few chunks late —
-       * measured on the StackChan, where 800 ms of a new answer was delivered
-       * ahead of the clear that was supposed to precede it.
-       */
-      atomic_store_explicit(
-          &runtime.answer_started_ms, 0U, memory_order_release);
-      atomic_store_explicit(
-          &runtime.answer_emitted_ms, 0U, memory_order_release);
-    }
-    return;
+    return ITERATE_KIT_VOICE_PLAYOUT_READ_DRY;
   }
 
-  if (frame.generation != atomic_load_explicit(
-                              &runtime.speaker_generation,
-                              memory_order_acquire)) {
+  /*
+   * A REPRIME REQUESTED WHILE WE WERE BLOCKED STILL COUNTS.
+   *
+   * The receive above waits up to 60 ms, and a new answer's first frame
+   * routinely arrives inside that window — REPLACE sets speaker_reprime and
+   * pushes the frame, and this loop then wakes holding it. Checking the
+   * flag only at the top of the loop played that frame with priming already
+   * cancelled, so ~20 ms of the first phoneme escaped, the reprime was
+   * honoured on the NEXT iteration, and the rest of the answer waited out a
+   * full prefill behind it. That is the clipped first word.
+   */
+  if (playback_apply_reprime(&runtime.playout.clock)) {
+    /*
+     * A replacement can wake the blocked receive with its first frame. Put
+     * that whole tagged frame back at the head so opening prefill includes
+     * it. If another replacement raced this one, its generation is already
+     * stale and it must not be reintroduced after the newer queue reset.
+     */
+    if (playout_item.generation == atomic_load_explicit(
+                                       &runtime.speaker_generation,
+                                       memory_order_acquire)) {
+      if (xQueueSendToFront(runtime.speaker_queue, &playout_item, 0) !=
+          pdTRUE) {
+        (void)atomic_fetch_add_explicit(
+            &runtime.speaker_overflow_drops, 1U, memory_order_relaxed);
+      }
+    } else {
+      (void)atomic_fetch_add_explicit(
+          &runtime.speaker_discarded_frames, 1U, memory_order_relaxed);
+    }
+    return ITERATE_KIT_VOICE_PLAYOUT_READ_ABANDONED;
+  }
+
+  if (playout_item.generation != atomic_load_explicit(
+                                     &runtime.speaker_generation,
+                                     memory_order_acquire)) {
     /* A replacement raced this frame after it left the synchronized queue. */
     (void)atomic_fetch_add_explicit(
         &runtime.speaker_discarded_frames, 1U, memory_order_relaxed);
     board_phase(ITERATE_KIT_VOICE_PHASE_WAITING);
-    return;
+    return ITERATE_KIT_VOICE_PLAYOUT_READ_ABANDONED;
   }
 
-  /*
-   * Flooded: skip this frame to catch up.
-   *
-   * The bridge paces off its own wall clock and the device consumes off
-   * the I2S clock; the two are independent, so a small rate difference
-   * accumulates without bound. Left alone the buffer fills and frames are
-   * discarded ON ARRIVAL — which punches a hole in the middle of speech.
-   * Dropping one 20ms frame here instead, only when there is most of a
-   * second of backlog, is the same total loss placed where it is least
-   * audible, and it bounds playout latency as a side effect.
-   *
-   * This is the symmetric counterpart to concealment: conceal when
-   * starved, skip when flooded, and count both honestly.
-   */
-  {
-    const enum iterate_kit_voice_playback_action action =
-        iterate_kit_voice_playback_clock_frame(
-            &runtime.playout_clock,
-            speaker_queued_bytes(),
-            iterate_kit_voice_playout_lag_ms(
-                atomic_load_explicit(
-                    &runtime.answer_started_ms, memory_order_acquire),
-                atomic_load_explicit(
-                    &runtime.answer_emitted_ms, memory_order_acquire),
-                now_ms(NULL)),
-            now_ms(NULL));
-    if (action == ITERATE_KIT_VOICE_PLAYBACK_DROP_CATCHUP) {
-      /*
-       * A SKIPPED FRAME STILL SPENT ITS PLACE IN THE TIMELINE.
-       *
-       * Skipping recovers lag only if the timeline advances as the frame is
-       * discarded. Leave the counter alone and the computed lag never
-       * falls, so the loop keeps deciding it is late and skips again — it
-       * drains the whole backlog and the listener hears half the answer
-       * missing. Measured exactly that: 78 of 162 frames skipped.
-       *
-       * Advancing here is what makes "skip until level" terminate at the
-       * point it is level, which is the entire safety of the mechanism.
-       */
-      ++runtime.speaker_catchup_frames;
-      (void)atomic_fetch_add_explicit(
-          &runtime.answer_emitted_ms,
-          (uint32_t)(received / (FRAME_BYTES / FRAME_MS)),
-          memory_order_acq_rel);
-      return;
-    }
-  }
+  *frame = (const uint8_t *)playout_item.samples;
+  *length = sizeof(playout_item.samples);
+  return ITERATE_KIT_VOICE_PLAYOUT_READ_FRAME;
+}
 
-  const uint64_t write_started_ms = now_ms(NULL);
+static uint64_t playout_sink_now_ms(void *context) {
+  (void)context;
+  return now_ms(NULL);
+}
+
+static enum iterate_kit_voice_playout_write playout_sink_write(
+    void *context, const uint8_t *frame, size_t length) {
+  enum iterate_kit_status write_status;
+  const uint64_t write_deadline_ms = now_ms(NULL) + 100U;
+  (void)context;
+  (void)frame; /* it is playout_item.samples; the generation rides with it */
   board_phase(ITERATE_KIT_VOICE_PHASE_FEEDING);
   /*
    * Admission is nonblocking. The hardware-owner task reserves the DMA
@@ -1535,20 +1365,18 @@ void iterate_kit_voice_loop_playback_step(void) {
    * five frame periods for bounded queue headroom and keeps running the
    * stream protocol independently of the codec driver's pacing.
    */
-  enum iterate_kit_status write_status;
-  const uint64_t write_deadline_ms = now_ms(NULL) + 100U;
   do {
     if (atomic_load_explicit(
             &runtime.speaker_reprime, memory_order_acquire) ||
-        frame.generation != atomic_load_explicit(
-                                &runtime.speaker_generation,
-                                memory_order_acquire)) {
+        playout_item.generation != atomic_load_explicit(
+                                       &runtime.speaker_generation,
+                                       memory_order_acquire)) {
       /* A replacement answer arrived while this stale frame waited. */
       write_status = ITERATE_KIT_UNAVAILABLE;
       break;
     }
     write_status = iterate_kit_audio_codec_write(
-        &runtime.codec, frame.samples, received / 2U);
+        &runtime.codec, playout_item.samples, length / 2U);
     if (write_status == ITERATE_KIT_BACKPRESSURE) {
       DELAY_MS(1);
     }
@@ -1556,94 +1384,142 @@ void iterate_kit_voice_loop_playback_step(void) {
            now_ms(NULL) < write_deadline_ms);
 
   if (write_status == ITERATE_KIT_OK) {
-    ++runtime.speaker_frames_played;
     /*
      * The mouth, from audio the DAC has accepted rather than audio that
      * arrived. This is the only place on the device where those two are the
      * same thing, which is why the tap is here and not on the receive path:
      * see waveshare_avatar.h for what the delay line does with it.
      */
-    board_playout(frame.samples, received / 2U);
-    /*
-     * HOW FAR BEHIND REALTIME THIS ANSWER HAS FALLEN.
-     *
-     * Frame N of an answer belongs 20N ms after the first one played. The
-     * gap between that and the wall clock is lag, and it only grows when
-     * playback stalls — never from the sender running ahead, which is why
-     * this is measured against the audio timeline rather than queue depth.
-     *
-     * Recorded rather than acted on. Paying it back means deleting speech,
-     * and this device has already shipped one mechanism that did exactly
-     * that; the number has to exist before anyone can argue about whether
-     * being late is worse than being clipped.
-     */
-    {
-      /*
-       * STAMPED BEFORE THE WRITE, NOT AFTER.
-       *
-       * codec admission may wait for bounded queue headroom. Stamping after
-       * that wait folds hardware pacing into the measurement,
-       * so a perfectly punctual loop reports itself progressively later and
-       * the catch-up rule then deletes speech to fix a delay that only
-       * existed in the metric. Measured that way: 1089 ms of "lag" while
-       * the ring held 1620 ms of audio, which is the signature of a
-       * consumer that is keeping up.
-       */
-      const uint64_t played_at = write_started_ms;
-      uint64_t answer_started = atomic_load_explicit(
-          &runtime.answer_started_ms, memory_order_acquire);
-      if (answer_started == 0U) {
-        atomic_store_explicit(
-            &runtime.answer_started_ms, played_at, memory_order_release);
-        atomic_store_explicit(
-            &runtime.answer_emitted_ms, 0U, memory_order_release);
-        answer_started = played_at;
-      }
-      {
-        const uint32_t lag = iterate_kit_voice_playout_lag_ms(
-            answer_started,
-            atomic_load_explicit(
-                &runtime.answer_emitted_ms, memory_order_acquire),
-            played_at);
-        if (lag > runtime.speaker_lag_max_ms) {
-          runtime.speaker_lag_max_ms = lag;
-        }
-      }
-      /* Milliseconds actually emitted, so a short read advances the
-       * timeline by what it played and not by a whole frame. */
-      (void)atomic_fetch_add_explicit(
-          &runtime.answer_emitted_ms,
-          (uint32_t)(received / (FRAME_BYTES / FRAME_MS)),
-          memory_order_acq_rel);
-    }
-  } else if (write_status == ITERATE_KIT_UNAVAILABLE &&
-             atomic_load_explicit(
-                 &runtime.speaker_reprime, memory_order_acquire)) {
+    board_playout(playout_item.samples, length / 2U);
+    return ITERATE_KIT_VOICE_PLAYOUT_WRITE_OK;
+  }
+  if (write_status == ITERATE_KIT_UNAVAILABLE &&
+      atomic_load_explicit(&runtime.speaker_reprime, memory_order_acquire)) {
     /* Intentional replacement, not a codec failure. */
     (void)atomic_fetch_add_explicit(
         &runtime.speaker_discarded_frames,
-        (uint32_t)(received / (FRAME_SAMPLES * sizeof(int16_t))),
+        (uint32_t)(length / (FRAME_SAMPLES * sizeof(int16_t))),
         memory_order_relaxed);
-  } else {
-    /* The bounded hardware path did not admit this frame. */
-    ++runtime.speaker_write_failures;
+    return ITERATE_KIT_VOICE_PLAYOUT_WRITE_ABANDONED;
+  }
+  /* The bounded hardware path did not admit this frame. */
+  return ITERATE_KIT_VOICE_PLAYOUT_WRITE_FAILED;
+}
+
+static const struct iterate_kit_voice_playout_ring playout_ring = {
+  .context = NULL,
+  .queued_bytes = playout_ring_queued_bytes,
+  .read = playout_ring_read,
+};
+
+static const struct iterate_kit_voice_playout_sink playout_sink = {
+  .context = NULL,
+  .now_ms = playout_sink_now_ms,
+  .write = playout_sink_write,
+  .conceal = NULL, /* the DAC clocks out its own zeros; see the dry read */
+};
+
+/*
+ * ONE PASS OF THE SPEAKER, so that it is a function rather than a `for(;;)`.
+ *
+ * A step can be called, and therefore tested, and therefore driven by a host
+ * that has one thread where a board has three. The pass itself is the shared
+ * step; what is here is the board's handshake around it and the board's
+ * response to what it decided.
+ */
+void iterate_kit_voice_loop_playback_step(void) {
+  /*
+   * The writer NEVER stops. That is the whole design.
+   *
+   * It used to stop on an empty read and wait to re-buy a cushion — and the
+   * cushion it waited for (40 ms) was SMALLER THAN THE DMA RING IT HAD JUST
+   * LET RUN DRY (90 ms). So every recovery under-filled the hardware and
+   * immediately starved again: one network hiccup produced a train of holes,
+   * which is why the rate never went to zero however large the buffers grew.
+   *
+   * The answer to that was to write silence on an empty read, and it was the
+   * wrong one: silence occupies playout time and cannot be taken back, so
+   * every frame of it puts the rest of the answer permanently further behind.
+   * The right answer, and the one three reference implementations use, is to
+   * wait long enough that a late frame is absorbed by the hardware cushion
+   * rather than concealed — see the read callback above.
+   */
+
+  /*
+   * FENCED OUT. While the microphone owns the shared pins — or the fence is
+   * moving in either direction — this step must not pull frames it can only
+   * fail to write. Frames stay queued; the fence drops within milliseconds of
+   * the turn committing, long before an answer.
+   */
+  if (runtime.board->playout_fenced_out != NULL &&
+      runtime.board->playout_fenced_out(runtime.board_context)) {
+    board_phase(ITERATE_KIT_VOICE_PHASE_WAITING);
+    DELAY_MS(5);
+    return;
   }
 
-  {
-    const uint32_t margin_ms = speaker_queued_bytes() / 32U;
-    ++runtime.speaker_writes;
-    if (runtime.speaker_writes == 1U ||
-        margin_ms < runtime.speaker_margin_min_ms) {
-      runtime.speaker_margin_min_ms = margin_ms;
-    }
-    if (margin_ms > runtime.speaker_margin_max_ms) {
-      runtime.speaker_margin_max_ms = margin_ms;
-    }
+  (void)playback_apply_reprime(&runtime.playout.clock);
+  if (atomic_exchange_explicit(
+          &runtime.speaker_answer_done, false, memory_order_acq_rel)) {
+    iterate_kit_voice_playback_clock_answer_done(&runtime.playout.clock);
   }
-  runtime.last_write_ms = now_ms(NULL);
-  atomic_store_explicit(
-    &runtime.speaker_last_write_ms, runtime.last_write_ms,
-    memory_order_release);
+
+  switch (iterate_kit_voice_playout_step(
+      &runtime.playout, &playout_ring, &playout_sink)) {
+  case ITERATE_KIT_VOICE_PLAYOUT_PRIMING:
+    /*
+     * NOT FEEDING, SO NOT WATCHING.
+     *
+     * The watch means "we are handing the DAC audio right now". This branch
+     * decides not to, while the clock builds its prefill — and leaving the
+     * watch armed across it made the DAC's correct silence read as
+     * starvation at every boundary that re-primes: a cold first turn, a turn
+     * after idle, the refill after a barge-in, and teardown. That was the
+     * whole of the systematic DMA ledger deficits, and it is one missing disarm
+     * rather than four separate causes.
+     */
+    board_phase(ITERATE_KIT_VOICE_PHASE_WAITING);
+    /* Idle, not starving: nothing is playing, so write nothing. */
+    if (runtime.playout.last_write_ms != 0U &&
+        iterate_kit_voice_elapsed_ms(now_ms(NULL), runtime.playout.last_write_ms) >
+            SPEAKER_IDLE_POWERDOWN_MS) {
+      board_phase(ITERATE_KIT_VOICE_PHASE_QUIET);
+    }
+    DELAY_MS(5);
+    return;
+  case ITERATE_KIT_VOICE_PLAYOUT_STARVED:
+    /*
+     * A hole mid-answer. The step counted it (`spkSoftDryTicks`: how often
+     * the source could not keep up; it no longer costs the listener anything)
+     * and this stamp lets the admit path promote it to an underrun if audio
+     * resumes within a second — a hole in an answer that was still going.
+     */
+    atomic_store_explicit(
+        &runtime.starve_at_ms, now_ms(NULL), memory_order_release);
+    return;
+  case ITERATE_KIT_VOICE_PLAYOUT_SETTLED:
+    /*
+     * SETTLED BACK TO PRIMING, which is this device's own proof that no
+     * answer is in flight — and the clock forgot the answer's timeline on
+     * that same WAIT, so nothing is late. That reset needs no cooperation
+     * from the sender: `drop` covers the answer that replaces a LIVE one;
+     * this covers every ordinary turn, including the ones where `drop`
+     * arrives a few chunks late — measured on the StackChan, where 800 ms of
+     * a new answer was delivered ahead of the clear that was supposed to
+     * precede it.
+     */
+    return;
+  case ITERATE_KIT_VOICE_PLAYOUT_ABANDONED:
+  case ITERATE_KIT_VOICE_PLAYOUT_SKIPPED:
+    return;
+  case ITERATE_KIT_VOICE_PLAYOUT_PLAYED:
+  case ITERATE_KIT_VOICE_PLAYOUT_REPLACED:
+  case ITERATE_KIT_VOICE_PLAYOUT_REFUSED:
+    atomic_store_explicit(
+        &runtime.speaker_last_write_ms, runtime.playout.last_write_ms,
+        memory_order_release);
+    return;
+  }
 }
 
 /* --- microphone path ------------------------------------------------------ */
@@ -2279,7 +2155,7 @@ static size_t health_json(char *out, size_t capacity) {
     {"micPeakMax",
      atomic_load_explicit(&runtime.mic_peak_max, memory_order_relaxed)},
     {"spkFrames", runtime.voicelab.spk_frames_received},
-    {"spkPlayed", runtime.speaker_frames_played},
+    {"spkPlayed", runtime.playout.stats.frames_played},
     {"spkOverflow",
      atomic_load_explicit(
          &runtime.speaker_overflow_drops, memory_order_relaxed)},
@@ -2292,13 +2168,13 @@ static size_t health_json(char *out, size_t capacity) {
      * and the listener: on the turns that moved it, spkStarvedMs was 0 and every
      * frame received was played. spkStarvedMs is the audible-failure gate.
      */
-    {"spkSoftDryTicks", runtime.speaker_conceal_frames},
-    {"spkCatchup", runtime.speaker_catchup_frames},
-    {"spkWriteFailures", runtime.speaker_write_failures},
-    {"spkMarginMaxMs", runtime.speaker_margin_max_ms},
-    {"spkLagMaxMs", runtime.speaker_lag_max_ms},
-    {"spkMarginMinMs", runtime.speaker_margin_min_ms},
-    {"spkWrites", runtime.speaker_writes},
+    {"spkSoftDryTicks", runtime.playout.stats.conceal_frames},
+    {"spkCatchup", runtime.playout.stats.catchup_frames},
+    {"spkWriteFailures", runtime.playout.stats.write_failures},
+    {"spkMarginMaxMs", runtime.playout.stats.margin_max_ms},
+    {"spkLagMaxMs", runtime.playout.clock.lag_max_ms},
+    {"spkMarginMinMs", runtime.playout.stats.margin_min_ms},
+    {"spkWrites", runtime.playout.stats.writes},
     {"spkBadFrames", runtime.speaker_bad_frames},
     /*
      * A CHUNK THE DEVICE COULD NOT DECODE, which is now the only way audio
@@ -2333,8 +2209,8 @@ static size_t health_json(char *out, size_t capacity) {
      * a clock that owes nothing to the event lane. */
     {"spkDrops", runtime.speaker_drops},
     {"spkLastDropUptimeMs", runtime.last_drop_uptime_ms},
-    {"spkWaitPriming", runtime.speaker_waits_priming},
-    {"spkAnswerDrains", runtime.speaker_waits_dry},
+    {"spkWaitPriming", runtime.playout.stats.waits_priming},
+    {"spkAnswerDrains", runtime.playout.stats.waits_dry},
     /*
      * THE FACE LANE, AND WHICH HALF OF IT IS DARK.
      *
@@ -2732,7 +2608,7 @@ bool iterate_kit_voice_loop_init(
   (void)snprintf(
       stream_path, sizeof(stream_path), "%s", facts->stream_path);
   turn_policy = facts->turns;
-  iterate_kit_voice_playback_clock_init(&runtime.playout_clock);
+  iterate_kit_voice_playout_init(&runtime.playout);
   /*
    * The app task is the sole consumer of the control inbox and therefore the
    * producer of every speaker frame: it parses the delivery batch, base64
@@ -3725,8 +3601,8 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
       }
       if (runtime.voicelab.call_active &&
           runtime.voicelab.call_active != call_active_shown) {
-        runtime.speaker_margin_min_ms = 0U;
-        runtime.speaker_writes = 0U;
+        runtime.playout.stats.margin_min_ms = 0U;
+        runtime.playout.stats.writes = 0U;
       }
       if (runtime.voicelab.call_active != call_active_shown) {
         /*
@@ -4176,8 +4052,8 @@ void iterate_kit_voice_loop_step(uint64_t now_ms_value) {
               runtime.voicelab.batches_on_connection,
               runtime.voicelab.spk_frames_received,
               runtime.voicelab.spk_decode_failures,
-              runtime.speaker_frames_played,
-              runtime.speaker_conceal_frames,
+              runtime.playout.stats.frames_played,
+              runtime.playout.stats.conceal_frames,
               runtime.speaker_underruns,
               (unsigned int)(speaker_queued_bytes() / 32U));
         }

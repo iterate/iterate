@@ -14,6 +14,7 @@ set(ITERATE_KIT_CORE_SOURCES
   src/spsc_ring.c
   src/touch_tap.c
   src/voice_playback_clock.c
+  src/voice_playout.c
   src/voicelab_stream.c
   src/websocket_frame_reader.c
   src/websocket_frame_writer.c
