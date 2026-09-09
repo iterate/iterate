@@ -20,15 +20,15 @@ canonical match and written by ONE event.
 
 Every callable thing is a live object plus a small piece of durable data that gets the object back.
 
-| Built-in / kind                                                                                                 | The durable data                                                                   | Who restores it                                                                                         | Where                                                                  |
-| --------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
-| a context (`cd`, the DO)                                                                                        | its codec name (`prj_x.iterate/path`)                                              | Cloudflare (`getByName`)                                                                                | `context/durable-object-names.ts`, `iterate-context-durable-object.ts` |
-| `env.ITX` (a loaded worker's world)                                                                             | the props `{ iterateContextName }`                                                 | Cloudflare (`ctx.exports`, persistent stubs)                                                            | `itx-entrypoint.ts`                                                    |
-| `workers.get({ source, cacheKey?, className?, props? })` / `facets.get(name, { source, cacheKey?, className })` | cacheKey + source; a facet's `props { iterateContextName, name }` and startup memo | Cloudflare (Worker Loader, `ctx.facets`)                                                                | `context/worker-loader.ts`, the DO's `#invokeFacet`                    |
-| **`rpcStubs`** (a lent rpc stub)                                                                                | a pager WebSocket attachment `{ transportId, rpcStubKey }`                         | **us** — `{type:"page"}` pages the edge worker, which lends a fresh Workers-RPC stub over `lendRpcStub` | `context/rpc-stub-directory.ts`, `context/rpc-stub-relay.ts`           |
-| the stream (`append` / `read` / `waitForEvent`)                                                                 | the log (SQLite)                                                                   | —                                                                                                       | `stream/stream.ts`                                                     |
-| `kv`, `whoami`, `fetch`                                                                                         | KV / the address / FALLBACK                                                        | —                                                                                                       | `context/built-ins.ts`                                                 |
-| `rewriteRules`, `subscriptions` (read views)                                                                    | slices of the core reduce (layer 1)                                                | —                                                                                                       | `context/built-ins.ts`, the DO                                         |
+| Built-in / kind                                                                                                 | The durable data                                                                        | Who restores it                                                                                         | Where                                                                  |
+| --------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| a context (`cd`, the DO)                                                                                        | its codec name (`prj_x.iterate/path`)                                                   | Cloudflare (`getByName`)                                                                                | `context/durable-object-names.ts`, `iterate-context-durable-object.ts` |
+| `env.ITX` (a loaded worker's world)                                                                             | the props `{ iterateContextName }`                                                      | Cloudflare (`ctx.exports`, persistent stubs)                                                            | `itx-entrypoint.ts`                                                    |
+| `workers.get({ source, cacheKey?, className?, props? })` / `facets.get(name, { source, cacheKey?, className })` | cacheKey + source; a facet's `props { iterateContextName, name }` and startup memo      | Cloudflare (Worker Loader, `ctx.facets`)                                                                | `context/worker-loader.ts`, the DO's `#invokeFacet`                    |
+| **`rpcStubs`** (a lent rpc stub)                                                                                | a pager WebSocket attachment `{ transportId, rpcStubKey }`                              | **us** — `{type:"page"}` pages the edge worker, which lends a fresh Workers-RPC stub over `lendRpcStub` | `context/rpc-stub-directory.ts`, `context/rpc-stub-relay.ts`           |
+| the stream (`append` / `read` / `waitForEvent`)                                                                 | the log (SQLite)                                                                        | —                                                                                                       | `stream/stream.ts`                                                     |
+| `kv`, `secrets`, `whoami`, `fetch`                                                                              | KV / SECRETS_KV (write-only) / the address / the terminal `fetch` (secrets substituted) | —                                                                                                       | `context/built-ins.ts`, `fetch/egress.ts`                              |
+| `rewriteRules`, `subscriptions` (read views)                                                                    | slices of the core reduce (layer 1)                                                     | —                                                                                                       | `context/built-ins.ts`, the DO                                         |
 
 The first three rows are Cloudflare features. `rpcStubs` is ours — a poor-man's sturdy ref whose
 restore hook must route through whichever stateless worker holds the client's capnweb socket. Its
@@ -60,11 +60,13 @@ log-derived where there is one: a subscription's id is the offset of its subscri
 fact; a rewrite rule has no identity beyond its `match` (one map entry per match).
 
 ONE reduce-only processor runs INLINE at the commit point: `CoreStreamProcessor`
-(`stream/core-processor.ts`, slug `core`, contract 4.0.0), owned by the `Stream` itself (`#coreReducedState`) with
-zero runner apparatus. It reduces the context's own control events into
-`{ projectId, path, createdAt, incarnation, paused, itxExpressionRewriteRules, subscriptions }` —
-layer 2's rules and layer 3's rows are slices of that one state, each layer keeping its OWN event
-family. Runtime state IS reduced state: `itx.facets.get('core').snapshot().state`. Policy is not
+(`stream/core-processor.ts`, slug `core`, contract 8.0.0), owned by the `Stream` itself (`#coreReducedState`) with
+zero runner apparatus. It reduces a whole batch at once (`reduceBatch`: each table copied ONCE per batch,
+on first touch, then mutated in place) — the context's own control events into
+`{ projectId, path, createdAt, incarnation, paused, itxExpressionRewriteRules, subscriptions, secrets }`
+(`secrets` is the catalog `itx.secrets.list()` reads — names and origins from `secrets/changed`, never
+a value) — layer 2's rules and layer 3's rows are slices of that one state, each layer keeping its OWN
+event family. Runtime state IS reduced state: `itx.facets.get('core').snapshot().state`. Policy is not
 in core: a token-bucket breaker is a facet processor that appends `stream/paused { reason }` (layer 4).
 
 ## Layer 2 — itx-expression rewrite rules
@@ -99,8 +101,9 @@ view is `itx.rewriteRules.list()` / `.get(match)`.
 
 ## Layer 3 — subscriptions (own events, ONE delivery loop)
 
-Three events of its own: `subscription-configured { name, target | null, consumes? }` (same name
-REPLACES; `target: null` removes the row and, for a cursor target, its cursor),
+Three events of its own: `subscription-configured { name, target | null, consumes?, afterOffset? }` (same name
+REPLACES; `target: null` removes the row and, for a cursor target, its cursor; `afterOffset` is where
+the cursor lane starts — 0 = the whole log, absent = from the configure),
 `subscription-delivery-halted` (appended by the loop), `subscription-delivery-resumed` (appended by
 an operator; un-halt, optional seek). The core reduce reduces them into `state.subscriptions`;
 `stream/subscriptions.ts` is the ONE command that builds the first (`subscriptionConfiguredEvent`).
@@ -121,7 +124,7 @@ evaluate the target and ASK THE VALUE what it is:
 
 Nothing is declared or stamped; a rule whose target names another rule's prefix classifies
 correctly because it evaluates to the same handle. `itx.subscriptions.list()` is the read door
-(rows ⋈ cursors). Edge sugar: `subscribe({ name?, target | null, consumes? })` → a DISPOSABLE
+(rows ⋈ cursors). Edge sugar: `subscribe({ name?, target | null, consumes?, afterOffset? })` → a DISPOSABLE
 `SubscriptionHandle` (its `name` getter is the generated one when none was given); a live callback
 is lent under `subscription:<name>` and targeted as `itx.rpcStubs.get('…')`. Disposing the
 handle, or the session ending, removes the row; the durable spelling is the raw event.
@@ -151,7 +154,10 @@ on exhaustion, appends `stream/paused { reason }`; an operator appends `stream/r
 ## Layer 5 — the edge (sessions and the pager relay)
 
 `session.ts` + `iterate-context.ts`: capnweb terminates in `worker.ts`'s `/api`, never in a DO
-(`session.ts`: `UnauthenticatedSession → authenticate() → Session → projects.list()/get(id)/create({ slug })`;
+(`session.ts`: `UnauthenticatedSession → authenticate() → Session → projects.list()/get(id)/create({ slug })`
+— `authenticate()` bare is the request's control-plane identity (the anonymous user in `open` login
+mode, the session cookie in `email` mode), `authenticate({ projectToken })` a principal bound to one
+project; membership is the in-process directory's, `src/control-plane/`;
 `iterate-context.ts`: `IterateContext`, `cd(path)` for the rest). The edge is A PROXY IN FRONT OF
 THE DO: every DO built-in root (`itx.append`, `itx.read`, `itx.waitForEvent`, `itx.kv.get`,
 `itx.rpcStubs.list`, `itx.rewriteRules.list`, …) rides the prototype hop into ONE

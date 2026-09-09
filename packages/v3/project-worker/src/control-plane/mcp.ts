@@ -91,7 +91,9 @@ function buildServer(env: Env, props: AuthProps): McpServer {
 export const mcpHandler: Handler = {
   async fetch(request, env, ctx) {
     const { props } = ctx as ExecutionContext & { props: AuthProps };
-    // responseMode: "json" => a single JSON body per request (client must still Accept both json + SSE).
-    return createMcpHandler(() => buildServer(env, props), { responseMode: "json" }).fetch(request);
+    // A fresh handler per request under the default response mode (`auto`: one JSON body unless a
+    // notification precedes the result — these tools emit none). Not `responseMode: "json"`: the
+    // SDK `console.warn`s on every handler built that way, which here would be every request.
+    return createMcpHandler(() => buildServer(env, props)).fetch(request);
   },
 };

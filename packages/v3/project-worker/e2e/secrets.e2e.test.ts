@@ -121,3 +121,40 @@ export default class Echo extends WorkerEntrypoint {
   },
   30_000,
 );
+
+test("the catalog is the PROJECT's: a secret set from one context is listed from any other and from the root, and a delete anywhere clears it everywhere", async () => {
+  const projectId = freshCtx("secrets-project");
+  const root = openItx(projectId);
+  const a = root.cd("/a");
+  const b = root.cd("/b");
+  await a.secrets.set("shared", "v", { origin: "https://api.example.com" });
+  expect(await b.secrets.list()).toEqual([{ name: "shared", origin: "https://api.example.com" }]);
+  expect(await root.secrets.list()).toEqual([
+    { name: "shared", origin: "https://api.example.com" },
+  ]);
+  await b.secrets.delete("shared");
+  expect(await a.secrets.list()).toEqual([]);
+  // the change events live in the ROOT's log, whichever context wrote them
+  expect((await readAll(root)).filter((e) => e.type === CHANGED).map((e) => e.payload)).toEqual([
+    { name: "shared", origin: "https://api.example.com" },
+    { name: "shared", deleted: true },
+  ]);
+});
+
+// RED (`test.fails` — a known defect, too costly to fix now): `set` writes KV and THEN appends the
+// change; a paused stream refuses the append after the value already changed, so the credential is
+// live with no catalog row (and `list()` denies it). Making the two one recoverable step is a new
+// mechanism (an intent event first, the KV write as its committed effect).
+test.fails("a set refused by a paused stream leaves no value behind — egress cannot substitute what the catalog never listed", async () => {
+  const itx = openItx(freshCtx("secrets-paused"));
+  await itx.append({ type: "events.iterate.com/stream/paused" });
+  await expect(itx.secrets.set("ghost", "v")).rejects.toThrow();
+  await itx.append({ type: "events.iterate.com/stream/resumed" });
+  expect(await itx.secrets.list()).toEqual([]);
+  const res = await itx.fetch(
+    new Request("https://egress.invalid/", {
+      headers: { authorization: "{{secret:project:ghost}}" },
+    }),
+  );
+  expect(res.status).toBe(502); // no value ⇒ the door refuses; today the value is there and the request leaves
+});

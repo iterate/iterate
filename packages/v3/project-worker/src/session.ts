@@ -31,8 +31,6 @@ import { codedError } from "./lib/errors.ts";
 import { verifyProjectToken, type Principal } from "./principal.ts";
 import { SessionTeardown } from "./session-teardown.ts";
 
-export { SessionTeardown };
-
 /** A control-plane user: the cookie's, or the anonymous one in `open` mode. */
 export type SessionUser = { id: string; email: string };
 /** Who a session is: a principal, bound to ONE project when it came from a project token. */
@@ -163,8 +161,8 @@ class ProjectCollection extends RpcTarget {
     return this.#input.directory.listProjects(this.#signedInUser().id);
   }
 
-  /** Create the project named `slug` (slugified: that IS its id) in the user's org — their first,
-   *  created on first use — and vend its root context. A name ANY org already holds is refused,
+  /** Create the project named `slug` (slugified: that IS its id) in the user's org — the first by
+   *  name when they have several, created on first use when they have none — and vend its root context. A name ANY org already holds is refused,
    *  coded (PROJECT_NAME_TAKEN); the user's own again is idempotent. */
   async create(input: { slug: string }): Promise<IterateContext> {
     const user = this.#signedInUser();

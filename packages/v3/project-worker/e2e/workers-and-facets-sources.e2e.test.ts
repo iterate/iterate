@@ -58,7 +58,7 @@ export class CounterDurableObject extends DurableObject {
   ).toBe(1);
 });
 
-test("itx.workers.get takes the modules INLINE, and runScript(lambda) sugar", async () => {
+test("itx.workers.get takes the modules INLINE", async () => {
   const ctx = freshCtx("inline");
   const itx = openItx(ctx);
 
@@ -88,10 +88,6 @@ test("itx.workers.get takes the modules INLINE, and runScript(lambda) sugar", as
     ["run"],
   ]);
   expect(withItx).toBe(ctx);
-
-  // 3. runScript(lambda) sugar: a bare lambda STRING is wrapped in a WorkerEntrypoint (injecting
-  //    itx) and run — no source at all.
-  expect(await itx.runScript("async (itx, x) => x * 2", 21)).toBe(42);
 });
 
 // ── a PRODUCER source behind a cacheKey: Cloudflare's `get(id, getCode)` contract, end to end ──

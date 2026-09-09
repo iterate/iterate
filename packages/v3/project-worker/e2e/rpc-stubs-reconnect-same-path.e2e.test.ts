@@ -238,3 +238,16 @@ test("an EXPRESSION rule's handle disposed after a live provider took its match 
   expect(await rpcStubRewriteRuleMatches(observer)).toContain("itx.m");
   expect(await observer.invoke("itx.m.echo('b')")).toBe("echo-live:b");
 });
+
+// RED (`test.fails` — a known defect, too costly to fix now): an EXPRESSION handle's undo compares the
+// row's TARGET, not the handle's own generation, so two sessions providing the IDENTICAL rule share
+// one identity — disposing the first removes the second's row. The fix is a per-configure generation
+// compared inside ONE DO commit — a new mechanism.
+test.fails("an EXPRESSION handle disposed after another session provided the IDENTICAL rule leaves that session's row standing", async () => {
+  const ctx = freshCtx("identical-expression-handles");
+  const first = await openItx(ctx).provide("itx.same", "itx.builtins.whoami");
+  await openItx(ctx).provide("itx.same", "itx.builtins.whoami"); // the second session, the same rule
+  first[Symbol.dispose]();
+  await sleep(1_000);
+  expect(await openItx(ctx).rewriteRules.get("itx.same")).toMatchObject({ origin: "context" });
+});

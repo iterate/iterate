@@ -233,3 +233,42 @@ test("open mode (this lane's configuration): every visitor is the anonymous user
   );
   expect((await mcpResult(listed)).content[0].text).toContain("open-project");
 });
+
+test("the fetch lane (/expression): in email mode a non-member is 401 (a member's cookie or the project's bearer admits), and a visitor's `x-itx-*` headers never reach the DO's internal protocol", async () => {
+  const lane = (await api(openMode)).authenticate();
+  const target = await lane.projects.create({ slug: "lane-project" });
+  // a forged pager header (the DO's internal attach protocol, which appends the events it carries)
+  // is stripped at the edge: nothing lands in the log
+  const forged = encodeURIComponent(
+    JSON.stringify({
+      rpcStubKey: "attack",
+      appendEvents: [{ type: "events.iterate.com/stream/paused", payload: { reason: "forged" } }],
+    }),
+  );
+  await call(openMode, "/expression?context=lane-project&itx=itx.whoami()", {
+    headers: { "x-itx-rpc-stub-pager": forged, Upgrade: "websocket" },
+  });
+  const events = (await target.readEvents(0, 100)).events as { type: string }[];
+  expect(events.some((e) => e.type === "events.iterate.com/stream/paused")).toBe(false);
+  // email mode: a member's cookie (or a project-token bearer) admits; anyone else is 401
+  const ada = await signIn(emailMode, "lane-ada@example.com");
+  await (await api(emailMode, ada)).authenticate().projects.create({ slug: "adas-lane" });
+  const bob = await signIn(emailMode, "lane-bob@example.com");
+  expect(
+    (
+      await call(emailMode, "/expression?context=adas-lane&itx=itx.whoami()", {
+        headers: { cookie: bob },
+      })
+    ).status,
+  ).toBe(401);
+  expect((await call(emailMode, "/expression?context=adas-lane&itx=itx.whoami()")).status).toBe(
+    401,
+  );
+  expect(
+    (
+      await call(emailMode, "/expression?context=adas-lane&itx=itx.whoami()", {
+        headers: { cookie: ada },
+      })
+    ).status,
+  ).not.toBe(401); // admitted — what the lane answers for a non-fetch-shaped target is its own business
+});

@@ -55,17 +55,15 @@ test("calling a match no rule was configured for rejects with code NO_ITX_EXPRES
   expect(codeOf(err)).toBe("NO_ITX_EXPRESSION_MATCH");
 });
 
-test("rpc-stub pager upgrade with a malformed attach header is refused with 400", async () => {
+test("a pager header from OUTSIDE never reaches the DO's attach door: the edge strips every inbound x-itx-* on the fetch lane", async () => {
   // ONE-SHOT attach: the pager header IS the attach request (the key + the events that name it,
-  // URI-encoded JSON); anything else is refused before a socket exists. /expression forwards to
-  // the DO's fetch, whose door walk checks the pager header FIRST — the `itx` expression the door
-  // insists on is never consulted. (The attach itself is pinned DO-level, where the census is
-  // readable: __workers-tests__/rpc-stub-pager-attach.test.ts.)
-  const res = await fetch(expressionUrl(freshCtx("pager400"), "itx.whoami"), {
+  // URI-encoded JSON) — the edge relay's, and only the relay's. A visitor's copy of it is stripped
+  // at /expression before the DO's door walk, so the door's own refusal ("malformed …", pinned
+  // DO-level in __workers-tests__/rpc-stub-pager-attach.test.ts) is never what a visitor sees.
+  const res = await fetch(expressionUrl(freshCtx("pager-outside"), "itx.whoami"), {
     headers: { "x-itx-rpc-stub-pager": "424242" },
   });
-  expect(res.status).toBe(400);
-  expect(await res.text()).toContain("malformed x-itx-rpc-stub-pager header");
+  expect(await res.text()).not.toContain("x-itx-rpc-stub-pager");
 });
 
 test("same-key re-provide replaces the transport while online and appends ONE more rule event — the map still holds one rule, the match follows the survivor", async () => {

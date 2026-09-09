@@ -11,7 +11,7 @@
 
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { IterateContext } from "./iterate-context.ts";
-import { SessionTeardown } from "./session.ts";
+import { SessionTeardown } from "./session-teardown.ts";
 import { DurableObjectNameCodec } from "./context/durable-object-names.ts";
 import type { Env } from "./iterate-context-durable-object.ts";
 import { ITX_PRINCIPAL_HEADER } from "./principal.ts";

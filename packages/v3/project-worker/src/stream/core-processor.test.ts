@@ -1,9 +1,9 @@
 // The core reduce's executable spec (src/stream/core-processor.ts): ONE pure reduce of the context's
-// eight control events into the state the DO reads SYNCHRONOUSLY at its doors — identity (created),
+// nine control events into the state the DO reads SYNCHRONOUSLY at its doors — identity (created),
 // incarnation (woken), the pause latch (paused/resumed), the itx-expression rewrite rules (a MAP by
-// match: configured sets or, with a null target, deletes) and the subscriptions table (by name:
+// match: configured sets or, with a null target, deletes), the subscriptions table (by name:
 // configured REPLACES or, with a null target, drops; delivery-halted marks, delivery-resumed clears
-// the halt and records the seek). No clock, no effects: the same log always reduces to the same state, an ephemeral
+// the halt and records the seek) and the secrets catalog (names + origins, never a value). No clock, no effects: the same log always reduces to the same state, an ephemeral
 // event never reduces (the checkpoint must rebuild from the durable log alone), and a malformed
 // hand-appended event THROWS at the reduce — the host contains it (stream.test.ts pins the skip). The DOORS that build these events are pinned beside their modules
 // (context/itx-expression-rewriting.test.ts, stream/subscriptions.test.ts).

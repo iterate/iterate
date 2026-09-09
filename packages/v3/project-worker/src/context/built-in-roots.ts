@@ -24,7 +24,6 @@ export const BUILT_IN_ROOTS = [
   "facets",
   "subscriptions",
   "workers",
-  "runScript",
   // THE LIBRARY (library/index.ts): first-party verbs that take only `itx` — could be userspace
   "connectToMcp",
   "connectToOpenApi",

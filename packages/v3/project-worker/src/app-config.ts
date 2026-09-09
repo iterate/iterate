@@ -23,7 +23,7 @@ type AppConfigVarName = (typeof APP_CONFIG_VARS)[number];
 export type LoginMode = "email" | "open";
 
 export interface AppConfig {
-  /** Which deployment this is, as a word a human reads at `/version`: "poc" (workers.dev), "test"
+  /** Which deployment this is, as a word a human reads at `/version`: "poc" (the deployment), "test"
    *  (the workers lane), "e2e" (the e2e lane). Required. */
   readonly environmentName: string;
   /** The base every project host hangs under — `<app>--<slug>.<base>` (project-host.ts); blank ⇒ no

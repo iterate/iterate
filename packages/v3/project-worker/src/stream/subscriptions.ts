@@ -16,8 +16,8 @@ import { CoreContract, parseSubscriptionName } from "./core-processor.ts";
 import type { StreamEventInput } from "./events.ts";
 
 /** The `subscription-configured` event for (or replacing, or with `target: null` removing)
- *  `input.name`. The target must be rooted at `itx`; it is stored PRINTED (the codec round-trips —
- *  expression.test.ts — so what is stored is what the reduce parses). */
+ *  `input.name`. The target must be rooted at `itx`; it is stored in the PARSED form (below), which
+ *  the reduce takes as it is. */
 export function subscriptionConfiguredEvent(input: {
   name: string;
   target: ItxExpressionInput | null;

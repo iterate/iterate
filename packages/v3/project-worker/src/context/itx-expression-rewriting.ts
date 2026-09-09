@@ -55,8 +55,9 @@
 // user's row at `itx.facets` or `itx.rpcStubs` redirects the user's calls and nothing else. A LENT RPC
 // STUB is no exception: `itx.provide(match, stub)` lends the stub to the `itx.builtins.rpcStubs`
 // registry (physical) under the key = the canonical match and configures that pure-data rule — the log
-// records the rule, never the socket. STRING AT REST: the event stores both halves in the string half
-// of the codec; the core reduce parses ONCE.
+// records the rule, never the socket. AT REST (`rewriteRuleConfiguredEvent`, below): the event stores
+// the match as its canonical STRING (the table's key) and the target in the PARSED form; the core
+// reduce parses the match once and takes the target as it is.
 
 import { codedError } from "../lib/errors.ts";
 import { jsonEqual } from "../lib/patch.ts";
@@ -281,11 +282,11 @@ export function resolveItxExpression(
 
 // ── THE ONE EVENT: build it, the caller appends it ──
 
-/** `itx/rewrite-rule-configured`, STRING at rest — both halves canonicalized through the codec (for
- *  the ARRAY half that round trip is the only validation: reserved names, an anonymous call at the
- *  root, an argless pinned step), so a spelling the parser refuses fails LOUD here, in the parser's own
- *  words (the reduce would skip a target that does not parse — a rule that silently never exists).
- *  `target: null` un-sets the rule at
+/** `itx/rewrite-rule-configured`: the match PRINTED (its canonical string), the target PARSED — both
+ *  through the codec's one door, which for an ARRAY input is the only validation (reserved names, an
+ *  anonymous call at the root, an argless pinned step), so a spelling the parser refuses fails LOUD
+ *  here, in the parser's own words (the reduce would skip a match that does not parse — a rule that
+ *  silently never exists). `target: null` un-sets the rule at
  *  `match` (a MASK when a platform row lies beneath, a deletion otherwise); the platform-equivalent
  *  target `itx.builtins.<match…>` restores the platform row (the reduce deletes the row). Rule 6 is
  *  enforced here, at the door. */

@@ -12,7 +12,16 @@
 
 import { RpcTarget } from "capnweb";
 import { expect, test } from "vitest";
-import { codeOf, freshCtx, openItx, readAll, rejection, session, until } from "./support/client.ts";
+import {
+  codeOf,
+  freshCtx,
+  openItx,
+  readAll,
+  rejection,
+  session,
+  sleep,
+  until,
+} from "./support/client.ts";
 
 /** A whole context's worth of capability, lent live (a plain object would ride by VALUE; a stub must
  *  be an RpcTarget or a bare function). */
@@ -278,4 +287,22 @@ test("the door: a whole-context override may not name its OWN context (every cal
     expect((await rejection(itx.provide("itx", target))).message).toMatch(/own context/);
   const sibling = await itx.provide("itx", "itx.builtins.cd('/y')");
   sibling[Symbol.dispose]();
+});
+
+// RED (`test.fails` — a known defect, too costly to fix now): an EXPRESSION handle's undo is a
+// compare-and-set that runs in the edge's waitUntil and DISCARDS its failure; while the stream is
+// paused the removal is refused (STREAM_PAUSED) and forgotten, so the session-scoped row outlives its
+// handle forever. The fix is a retained, observable removal (retry after resume) — a new mechanism.
+test.fails("disposing an EXPRESSION provide handle while the stream is paused removes the rule once the stream resumes", async () => {
+  const itx = openItx(freshCtx("expression-dispose-paused"));
+  const handle = await itx.provide("itx.paused", "itx.builtins.whoami");
+  await itx.append({ type: "events.iterate.com/stream/paused" });
+  handle[Symbol.dispose]();
+  await sleep(500);
+  await itx.append({ type: "events.iterate.com/stream/resumed" });
+  await until(
+    "the row is gone",
+    async () => ((await itx.rewriteRules.get("itx.paused")) === null ? true : undefined),
+    3_000,
+  );
 });

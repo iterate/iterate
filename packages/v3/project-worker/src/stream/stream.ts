@@ -111,8 +111,9 @@ interface StreamDeps {
 }
 
 /** THE STREAM — the commit point: SQLite rows + ONE durable mark, idempotency at the door,
- *  offsets assigned from one shared sequence (ephemeral events consume offsets, never rows — after
- *  a reboot their offsets survive as valid gaps), and THE CORE REDUCE (core-processor.ts) reduced
+ *  offsets assigned from one shared sequence (ephemeral events consume offsets, never rows; their
+ *  offsets are this incarnation's, and the next one — resuming from the durable mark — may hand the
+ *  same numbers to durables: the header's contract), and THE CORE REDUCE (core-processor.ts) reduced
  *  inside every commit: the stream's own state — who it is, its incarnation, pause, rewrite rules,
  *  subscriptions — checkpointed with the rows it was reduced from. A body over EVENT_CHUNK_SIZE is
  *  chunked into `event_chunks` rows keyed (offset, chunk_index) — INVISIBLE to the events table, so a
@@ -408,9 +409,9 @@ export class Stream {
           // the stream is the path
           const { offset: _offset, path: _path, ...eventBody } = event;
           const serializedBody = JSON.stringify(eventBody);
-          // THE APPEND CEILING (EVENT_BODY_MAX_CHARS). The transaction rolls back and the marks are
-          // locals until it commits: nothing written, no offset burned. Ephemerals are never
-          // stored, so they are not measured — the pending-push budget bounds them in delivery.
+          // THE APPEND CEILING (EVENT_BODY_MAX_CHARS), measured on the durable's stored body. The
+          // transaction rolls back and the marks are locals until it commits: nothing written, no
+          // offset burned. (An ephemeral met the same ceiling in step 1, before any offset was assigned.)
           if (serializedBody.length > EVENT_BODY_MAX_CHARS)
             throw codedError(
               "EVENT_TOO_LARGE",

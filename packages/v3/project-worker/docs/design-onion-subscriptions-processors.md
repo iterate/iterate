@@ -22,8 +22,9 @@
   below them. Sugar is kept visibly apart from axioms. `itx.connections` could one day be one more
   layer over `rpcStubs`. Not built here.
 - **Sessions like apps/os**: `authenticate().projects.get(id)` returns the root context; `cd` takes
-  absolute paths by convention (relative and `..` also resolve); no `list`/`create` yet; plural
-  collections end in `Collection`.
+  absolute paths by convention (relative and `..` also resolve); plural collections end in
+  `Collection`. (No `list`/`create` when this was written; as built since 2026-09-08 the catalog has
+  `list()` and `create({ slug })`, over the in-process directory — §6.)
 - **A processor is a `DurableObject` subclass** of an SDK base, hosted through the ordinary
   `itx.facets.get(name, { source, className })` (as built 2026-09-02; the `load(src)
 .getDurableObjectClass(C).get(name)` chain this doc sketched was folded into that one door). No
@@ -50,7 +51,7 @@ flowchart TB
     stream["stream: append · readEvents · waitForEvent"]
     stubs["rpcStubs: get(rpcStubKey) · list — lent by the edge's provide<br/>+ ephemeral attached/detached { rpcStubKey } events"]
     facets["facets · workers (Worker Loader)"]
-    misc["kv · whoami · cd · fetch (egress)"]
+    misc["kv · secrets · whoami · cd · fetch (egress: secrets substituted, then the terminal fetch)"]
   end
   subgraph L1["Layer 1 — itx-expression rewrite rules (ONE event, a slice of the core reduce)"]
     rule["itx/rewrite-rule-configured { match, target | null } — a MAP by canonical match<br/>provide(match, stub) = lend to rpcStubs under the key = the canonical match + rule match ⇒ itx.rpcStubs.get('&lt;match&gt;')"]
@@ -125,16 +126,25 @@ interface BuiltInScope {
     delete(k): Promise<{ ok: true }>;
     list(prefix?): Promise<{ keys: string[] }>;
   };
+  /** Project secrets for egress, WRITE-ONLY: set/delete, and a list of names + origins, never a value;
+   *  a secret set with an `origin` is sent to that origin only; every change appends
+   *  `events.iterate.com/secrets/changed` (the name, never the value). */
+  secrets: {
+    set(name: string, value: string, options?: { origin?: string }): Promise<{ ok: true }>;
+    delete(name: string): Promise<{ ok: true }>;
+    list(): Promise<{ name: string; origin?: string }[]>;
+  };
   append(...events: StreamEventInput[]): Promise<StreamEvent[]>;
   readEvents(afterOffset?: number, limit?: number): Promise<StreamPage>;
   ai: Ai; // Workers AI, the binding verbatim
   connectToMcp(url, options?): Promise<McpConnection>; // THE LIBRARY: first-party code that takes only itx
   connectToOpenApi(specOrUrl, options?): Promise<OpenApiConnection>;
   connectToCapnweb(url, options?): Promise<CapnwebConnection>;
+  serveMcp(): McpServerHandle; // THIS context as an MCP server: `.fetch(request)`, ONE tool `itx.invoke({ expression, args? })`; mount: provide("itx.apps.mcp", "itx.serveMcp()")
   waitForEvent(filter?: WaitForEventFilter): Promise<StreamEvent>;
   /** Absolute by convention ("/agents/x"); relative and ".." also resolve. Same resolver as the edge `cd`. */
   cd(path: string): InvokeHandle;
-  /** Egress: {{secret:project:NAME}} substituted here, then FALLBACK. Loaded code's globalOutbound already lands here. */
+  /** Egress: {{secret:project:NAME}} substituted here (URL + headers; a missing or origin-bound secret is a 502), then the terminal fetch. Loaded code's globalOutbound already lands here. */
   fetch(request: Request): Promise<Response>;
   /** THE physical registry. The key is OPAQUE to the directory, which never parses it — but the two
    *  lenders spell it by contract: `provide` uses the canonical match, `subscribe` uses
@@ -246,7 +256,7 @@ replaces the pager and is not a close).
 ### 4.1 Events and reduce
 
 Three events of the layer's own, reduced by the ONE core reduce (`stream/core-processor.ts`,
-`CoreStreamProcessor`, slug `core`, contract 7.0.0 — the `subscriptions` slice beside
+`CoreStreamProcessor`, slug `core`, contract 8.0.0 — the `subscriptions` slice beside
 `itxExpressionRewriteRules`). DECIDED 2026-09-02, reversing this doc's earlier "own inline reduce
 beside `core` and a separate rule reduce" (§8): the layering lives in the EVENTS, and one reduce
 serves every synchronous reader — the append door, the dispatcher, the delivery loop. Jonas: "a core
@@ -261,13 +271,15 @@ COMMAND that builds the first event (`subscriptionConfiguredEvent({ name, target
   name: string;          // [A-Za-z0-9_-]+; same name REPLACES (no stack — an enablement wants replace)
   target: string | null; // an itx expression whose terminal is callable with (events: StreamEvent[], range: ScannedRange); null REMOVES the row (and a cursor target's cursor)
   consumes?: string[];   // consumesEvent rule: absent = every durable event; naming a type opts its ephemerals in
+  afterOffset?: number;  // where the CURSOR lane starts (0 = the whole log); absent = from the configure; a push target ignores it
 }
 "events.iterate.com/stream/subscription-delivery-halted":  { name: string; afterOffset: number; attempts: number; error?: string }  // appended by the loop
 "events.iterate.com/stream/subscription-delivery-resumed": { name: string; afterOffset?: number }   // operator: un-halt, optionally seek
 
 // reduced state
 subscriptions: Record<string, {
-  target: ItxExpression; consumes?: string[]; configuredAtOffset: number;
+  target: ItxExpression; consumes?: string[]; configuredAtOffset: number; afterOffset?: number;
+  hostedFacet?: { name: string; className: string; cacheKey?: string };  // the row HOSTS a facet (the source stays in the log + the facet's kv memo)
   halted?: { afterOffset: number; attempts: number; error?: string };
   resumed?: { afterOffset?: number; atOffset: number };            // level-triggered onto the cursor row
 }>;
@@ -282,6 +294,9 @@ subscriptions: {
 };
 type SubscriptionListEntry = {
   name: string; target: string; consumes?: string[]; configuredAtOffset: number;
+  /** Where the cursor lane started (0 = the whole log); absent = at the configure. */
+  afterOffset?: number;
+  hostedFacet?: { name: string; className: string; cacheKey?: string };
   /** Present only when the STREAM keeps the cursor (a target that cannot own its progress). */
   cursor?: { confirmedOffset: number; attempt: number; nextAttemptAtMs?: number };
   halted?: { afterOffset: number; attempts: number; error?: string };
@@ -340,7 +355,7 @@ processor: that shape needed an alarm proxy facets do not have (workerd#6810, st
  *  removes the row. Same name replaces. Literally `append(subscriptionConfiguredEvent(…))` — the
  *  returned handle removes the row (and recalls the lent callback) when disposed or when the
  *  session ends. */
-subscribe(input: { name?: string; target: ItxExpressionInput | ClientRpcStub | null; consumes?: string[] }): Promise<SubscriptionHandle>;
+subscribe(input: { name?: string; target: ItxExpressionInput | ClientRpcStub | null; consumes?: string[]; afterOffset?: number }): Promise<SubscriptionHandle>;
 class SubscriptionHandle extends RpcTarget { get name(): string; [Symbol.dispose](): void }
 ```
 
@@ -426,8 +441,8 @@ returns, for a different reason than there (unit-testability, not facet-vs-DO ho
 With the forwarder re-homed into the kernel, nothing the platform NEEDS runs as a facet processor.
 The one built-in `StreamProcessor` is the core reduce — slug `core`, reducing the context's own
 control events (`stream/created`, `stream/woken`, `stream/paused`, `stream/resumed`, the one
-rewrite-rule event, the three subscription events) into
-`{ projectId, path, createdAt, incarnation, paused, itxExpressionRewriteRules, subscriptions }`, hosted inline at the
+rewrite-rule event, the three subscription events, and since 2026-09-08 `secrets/changed`) into
+`{ projectId, path, createdAt, incarnation, paused, itxExpressionRewriteRules, subscriptions, secrets }`, hosted inline at the
 commit point because every reader is synchronous. Anything that is NOT needed synchronously before
 an append is not built in at all: the token-bucket breaker left core (2026-09-02) and is
 `BreakerProcessor` (`e2e/support/sources.ts`), an ordinary userspace facet processor that reduces
@@ -512,18 +527,23 @@ await itx.append({
 
 ```ts
 class UnauthenticatedSession extends RpcTarget {
-  authenticate(credentials?: unknown): Session;
+  /** No credentials ⇒ the request's control-plane identity (open mode: the anonymous user, no principal;
+   *  email mode: the session cookie, else UNAUTHENTICATED); a project token ⇒ a principal bound to ONE project. */
+  authenticate(credentials?: { projectToken?: string }): Promise<Session>;
   [Symbol.dispose](): void;
-} // what /api serves; no-op gate today; dispose: relays + anonymous subscriptions
+} // what /api serves; dispose: relays + anonymous subscriptions
 class Session extends RpcTarget {
+  whoami(): SessionPrincipal | null; // { actor, email?, projectId? } — null for the anonymous session
   get projects(): ProjectCollection;
 } // a GETTER: capnweb exposes prototype members only
 class ProjectCollection extends RpcTarget {
-  get(projectId: string): IterateContext;
-} // the ROOT context; pure addressing
+  list(): Promise<Project[]>; // { id, orgId, role? } — the projects of the user's orgs
+  get(projectId: string): Promise<IterateContext>; // the ROOT context; addressing + the directory's membership answer (FORBIDDEN)
+  create(input: { slug: string }): Promise<IterateContext>; // the slug IS the id; PROJECT_NAME_TAKEN
+} // list/create need a signed-in user: a token session holds its one project
 
 // iterate-context.ts — A PROXY IN FRONT OF THE DO. Declares only what must be edge code, in the order the tutorial builds them;
-// every DO built-in root (append · readEvents · waitForEvent · fetch · whoami · kv · ai · rpcStubs.get/list · rewriteRules · facets · subscriptions · workers · runScript · connectToMcp · connectToOpenApi · connectToCapnweb)
+// every DO built-in root (append · readEvents · waitForEvent · fetch · whoami · kv · secrets · ai · cfArtifacts · repos · rpcStubs.get/list · rewriteRules · facets · subscriptions · workers · runScript · connectToMcp · connectToOpenApi · connectToCapnweb · serveMcp)
 // and every rewrite rule ride the prototype hop into ONE invoke(expression) with ZERO code here.
 class IterateContext extends RpcTarget {
   cd(path: string): IterateContext; // pure addressing, zero DO hops; returns an EDGE context
@@ -540,6 +560,7 @@ class IterateContext extends RpcTarget {
     name?: string;
     target: ItxExpressionInput | ClientRpcStub | null;
     consumes?: string[];
+    afterOffset?: number; // where the cursor lane starts (0 = the whole log); absent = from now
   }): Promise<SubscriptionHandle>;
   enableProcessor(
     name: string,
@@ -666,7 +687,9 @@ Layout after step 4 (the tutorial's map) — AS LANDED. Two deviations from the 
 the plain reading: no `sugar.ts` (row 4) and no `stream-processor-runner.ts` (the engine stayed
 `processor.ts`, wrapped by the SDK base rather than split); `patch.ts` is a generic diff/apply and
 went to `lib/`, `live-state.ts` is a stream projection and went to `stream/`; `fetch/egress.ts` was
-never a file here (egress lives in `../shared`). `core/` is gone — it was not a name.
+not a file here then (egress lived in a shared package; it moved in with the one-package
+consolidation of 2026-09-08, when that package and the separate control-plane Worker were deleted).
+`core/` is gone — it was not a name.
 
 ```text
 src/

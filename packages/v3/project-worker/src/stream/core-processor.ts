@@ -308,7 +308,7 @@ export const CoreContract: ProcessorContract<CoreState> & {
   slug: "core",
   version: "8.0.0", // 8.0.0: the secrets catalog (names + origins, reduced from `secrets/changed`). 7.0.0: a subscription row carries its optional `afterOffset` (where the cursor lane starts). 6.0.0 (the builtins root): `null` rows kept as MASKS under a built-in root, the platform-equivalent target deletes, hosting detected on the RESOLVED target, hostedFacet carries the facet's `name`. 5.0.0 (M1): a hosted facet's SOURCE is elided from the reduced target (kept in the log + facet:<name> kv)
   description:
-    "The context's own state, reduced inline at the commit point: who it is, which incarnation runs, whether appends are paused, the itx-expression rewrite rules every call goes through, and the subscriptions every commit is sent to.",
+    "The context's own state, reduced inline at the commit point: who it is, which incarnation runs, whether appends are paused, the itx-expression rewrite rules every call goes through, the subscriptions every commit is sent to, and the secrets catalog (names and origins, never a value).",
   consumes: CORE_EVENT_TYPES,
   emits: [],
   initialState: (): CoreState => ({
@@ -462,7 +462,9 @@ export class CoreStreamProcessor extends StreamProcessor<CoreState> {
         });
       }
       case "events.iterate.com/stream/subscription-delivery-halted": {
-        const row = state.subscriptions[payload.name as string];
+        const row = Object.hasOwn(state.subscriptions, payload.name as string)
+          ? state.subscriptions[payload.name as string]
+          : undefined; // a hand-appended `__proto__` must not find the prototype
         if (!row) return undefined;
         return withSubscription(payload.name as string, {
           ...row,
@@ -474,7 +476,9 @@ export class CoreStreamProcessor extends StreamProcessor<CoreState> {
         });
       }
       case "events.iterate.com/stream/subscription-delivery-resumed": {
-        const row = state.subscriptions[payload.name as string];
+        const row = Object.hasOwn(state.subscriptions, payload.name as string)
+          ? state.subscriptions[payload.name as string]
+          : undefined;
         if (!row) return undefined;
         const { halted: _cleared, ...kept } = row;
         return withSubscription(payload.name as string, {

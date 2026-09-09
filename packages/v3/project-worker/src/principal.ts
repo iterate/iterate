@@ -1,12 +1,14 @@
 // principal.ts — WHO is calling, as the platform carries it. A PROJECT TOKEN is a signed claim
-// `{ projectId, actor, email?, expiresAt }` minted by whoever fronts the users (the control plane
-// after its membership check; a test with the secret) and verified here with the shared secret
-// (`APP_CONFIG_PROJECT_TOKEN_SECRET`). The principal it yields rides the session
+// `{ projectId, actor, email?, expiresAt }` minted by a holder of the secret — today the e2e support
+// (e2e/support/principal.ts); the control plane mints none yet — and verified here with the shared
+// secret (`APP_CONFIG_PROJECT_TOKEN_SECRET`). The principal it yields rides the session
 // (`authenticate({ projectToken })` → `session.whoami()`), is stamped by the DO onto every event that
 // session appends (`source.principal`, unforgeable: the DO owns the field), and reaches an app on a
-// project host as the `x-itx-principal` header after the cookie check (worker.ts). Identity is
-// ATTRIBUTION, not authority: a session with no token stays the anonymous one intra-project code has
-// always held (the trusted-client doctrine).
+// project host as the `x-itx-principal` header after the token check (cookie or bearer, worker.ts).
+// On an EVENT the principal is ATTRIBUTION; at the SESSION it is also authority (session.ts): a
+// project token binds its session to the token's one project, and in `email` login mode
+// `projects.get` admits org members only. A session with no token in `open` mode stays the
+// anonymous one intra-project code has always held (the trusted-client doctrine).
 //
 // `signClaims` / `verifyClaims` is THE ONE signed-claims codec — `<payload>.<sig>`, payload =
 // base64url(UTF-8 JSON), sig = base64url(HMAC-SHA256(payload)) — the control plane's session cookie

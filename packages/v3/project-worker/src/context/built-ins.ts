@@ -1,8 +1,8 @@
 // built-ins.ts — THE BUILT-INS: a plain record whose KEYS are the physical-layer roots (the one list
 // is context/built-in-roots.ts). Three kinds of key, one record: the AXIOMS (the log, the stub
-// registry, the rule table, the two hosts, addressing), the BINDINGS (`kv`, `ai` — a Cloudflare
-// binding only this env holds, exposed verbatim) and THE LIBRARY (`connectTo*`, src/library/ — code a
-// user could write, taking only `itx`). THE RECORD IS `itx.builtins`, the reserved root: a call
+// registry, the rule table, the two hosts, addressing), the BINDINGS (`kv`, `secrets`, `ai`,
+// `cfArtifacts`, `repos` — a Cloudflare binding only this env holds, exposed or scoped) and THE
+// LIBRARY (`connectTo*`, `serveMcp`, src/library/ — code a user could write, taking only `itx`). THE RECORD IS `itx.builtins`, the reserved root: a call
 // `itx.builtins.<root>…` runs against it directly and never reads the rule table; a short
 // `itx.<root>…` reaches it through the IMPLICIT PLATFORM ROW `itx.<root> ⇒ itx.builtins.<root>` unless
 // the context's own table says otherwise (itx-expression-rewriting.ts, rule 5) — so a test may shadow
@@ -19,8 +19,7 @@
 //     running (a processor, a named instance) — same door, no source.
 // Both bottom out in Cloudflare's Worker Loader (`env.LOADER.get(cacheKey, …)` then
 // `worker.getEntrypoint()` / `worker.getDurableObjectClass()`); the two-step is folded into one door
-// per host on purpose. `itx.runScript(lambda)` is sugar for the one bare-lambda case (wrap →
-// `workers.get({ source }).run`).
+// per host on purpose.
 
 import { RpcTarget } from "capnweb";
 import type { ReachableContext, StreamPage, WaitForEventFilter } from "../stream/stream.ts";
@@ -63,26 +62,10 @@ export type SubscriptionListEntry = {
   halted?: { afterOffset: number; attempts: number; error?: string };
 };
 
-/** The one bare-lambda wrapper — `itx.runScript("async (itx, x) => …")`. The lambda STRING becomes
- *  a `WorkerEntrypoint`'s default export, so `runScript` bottoms out at the SAME `workers.get({
- *  source })` path as any exported entrypoint (no separate loader branch). `run()` injects
- *  the itx scope via `env.ITX.get()` — mid-chain handles/callbacks pipeline natively, exactly like a
- *  capnweb client after `projects.get(id)`. */
-const RUN_SCRIPT_ENTRYPOINT = (script: string) => /* js */ `
-import { WorkerEntrypoint } from "cloudflare:workers";
-const cap = ${script};
-export default class RunScript extends WorkerEntrypoint {
-  async run(...args) {
-    if (typeof cap !== "function") throw new Error("runScript: expected a function");
-    return await cap(await this.env.ITX.get(), ...args);
-  }
-}
-`;
-
 /** THE built-in scope, as ONE interface — the physical-layer roots: `itx.builtins.<root>` runs
  *  against them directly; `itx.<root>` reaches them through the implicit platform row unless the
  *  context's table says otherwise (itx-expression-rewriting.ts, rule 5: rules FIRST). The library's
- *  three verbs come in by `extends` (library/index.ts).
+ *  verbs come in by `extends` (library/index.ts).
  *  This is the clean-room's whole kernel surface. It is a PLAIN OBJECT, not an RpcTarget class, on
  *  purpose: the resolver gates on `Object.hasOwn`, so a prototype-method class would leave every
  *  root unreachable. Exported for ONE reader: the edge `IterateContext`'s TYPE merges it in
@@ -295,7 +278,6 @@ export interface BuiltInScope extends LibraryRoots {
   };
   /** Run a stateless lambda STRING — sugar: wrap into a `WorkerEntrypoint`, then
    *  `workers.get({ source }).run(...)`. The one bare-lambda ergonomic (same as apps/os). */
-  runScript(script: string, ...args: unknown[]): Promise<unknown>;
   // ── THE LIBRARY (src/library/) — `connectToMcp`, `connectToOpenApi`, `connectToCapnweb` — is
   // the `extends LibraryRoots` above: first-party code that takes ONLY `itx`. ──
 }
@@ -418,14 +400,12 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
       );
     return `secret:${projectId}:${name}`;
   };
-  /** The one event a secret change appends — the name (and origin, or `deleted`), never the value. */
-  const appendSecretsChanged = (payload: Record<string, unknown>) =>
-    ownContext().append(
-      stampPrincipal<StreamEventInput>(
-        { type: "events.iterate.com/secrets/changed", payload },
-        deps.principal(),
-      ),
-    );
+  /** THE append: every event appended through this scope carries WHO appended it — the DO's own
+   *  stamp, never a client's (src/principal.ts): the session's verified principal, or none. */
+  const append = (...events: StreamEventInput[]) =>
+    ownContext().append(...events.map((event) => stampPrincipal(event, deps.principal())));
+  /** The project's ROOT context when this is not it — where the secrets catalog lives. */
+  const rootContext = path === "/" ? null : deps.context("/");
 
   // Each root implements one member of the BuiltInScope interface above (the canonical doc of the
   // kernel surface); the comments here add only what the interface can't say — the WHY of a code branch.
@@ -456,21 +436,45 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
         }
       },
     },
+    // Secrets are the PROJECT's: the value's key is project-scoped, so the catalog lives in ONE log —
+    // the root context's. A child context's `itx.secrets` is the root's, over the DO hop.
     secrets: {
       set: async (name, value, options) => {
+        if (rootContext)
+          return rootContext.invoke([
+            "itx",
+            "builtins",
+            "secrets",
+            ["set", name, value, options],
+          ]) as Promise<{ ok: true }>;
         const origin = options?.origin === undefined ? undefined : new URL(options.origin).origin;
         await env.SECRETS_KV.put(secretKey(name), String(value), {
           metadata: { ...(origin && { origin }) },
         });
-        await appendSecretsChanged({ name, ...(origin && { origin }) });
+        await append({
+          type: "events.iterate.com/secrets/changed",
+          payload: { name, ...(origin && { origin }) },
+        });
         return { ok: true };
       },
       delete: async (name) => {
+        if (rootContext)
+          return rootContext.invoke(["itx", "builtins", "secrets", ["delete", name]]) as Promise<{
+            ok: true;
+          }>;
         await env.SECRETS_KV.delete(secretKey(name));
-        await appendSecretsChanged({ name, deleted: true });
+        await append({
+          type: "events.iterate.com/secrets/changed",
+          payload: { name, deleted: true },
+        });
         return { ok: true };
       },
-      list: async () => deps.secrets(),
+      list: async () =>
+        rootContext
+          ? (rootContext.invoke(["itx", "builtins", "secrets", ["list"]]) as Promise<
+              { name: string; origin?: string }[]
+            >)
+          : deps.secrets(),
     },
     // The binding object itself — dispatch walks its methods (`run`, `models`, `gateway`, …).
     ai: env.AI,
@@ -483,10 +487,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
       namespaceName: deps.artifactsNamespace,
     }),
     // Own-enumerable closures (NOT prototype methods) — the resolver's `Object.hasOwn` gate is why.
-    // Every event appended through the scope carries WHO appended it — the DO's own stamp, never a
-    // client's (src/principal.ts): the session's verified principal, or none.
-    append: (...e: StreamEventInput[]) =>
-      ownContext().append(...e.map((event) => stampPrincipal(event, deps.principal()))),
+    append,
     readEvents: (afterOffset?: number, limit?: number) => ownContext().read(afterOffset, limit),
     waitForEvent: deps.waitForEvent,
     // `cd` routes EVERY call through the target context's own table — a sibling's rows apply, its
@@ -523,9 +524,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
     },
     // `RUN_SCRIPT_ENTRYPOINT` wraps the lambda string into a WorkerEntrypoint default export, so even
     // this bare-lambda door bottoms out at `workers.get({ source }).run(...)`.
-    runScript: (script: string, ...args: unknown[]) =>
-      callEntrypoint({ source: { "cap.js": RUN_SCRIPT_ENTRYPOINT(script) } }, "run", args),
-    // THE LIBRARY: three verbs closed over the context's own `itx` handle, built and owned by the DO
+    // THE LIBRARY: its verbs closed over the context's own `itx` handle, built and owned by the DO
     // (library/index.ts — it also owns the live connections' release at the idle quiesce).
     ...deps.library,
   } satisfies Omit<BuiltInScope, "builtins">;

@@ -37,21 +37,13 @@ test("itx tour: built-in roots, lent stubs, the rule map, dynamic-worker rules, 
       return "from B";
     }
   }
-  const sessionA = session();
-  const itxA = await sessionA.authenticate().projects.get(ctx);
+  const itxA = await session().authenticate().projects.get(ctx);
   await itxA.provide("itx.proverA", new ToolsA());
   const itxB = await session().authenticate().projects.get(ctx);
   await itxB.provide("itx.proverB", new ToolsB());
 
   // 1. whoami — a built-in root, reached through the ONE dispatch door
   const who = await itxA.invoke(["itx", ["whoami"]]);
-  // 1b. the authenticate() introduction door (a NO-OP today; the shape the real gate lands in)
-  const whoAuth = await sessionA
-    .authenticate({ token: "ignored-today" })
-    .projects.get(ctx)
-    .invoke(["itx", ["whoami"]]);
-  // authenticate() introduction door
-  expect(whoAuth?.projectId).toBe(ctx);
   // whoami through the dispatch door
   expect(who?.projectId).toBe(ctx);
 

@@ -27,10 +27,11 @@ test("a legitimate ctx (hyphen, underscore, uppercase, digits) is served; a ':' 
       await openItx(`${freshCtx("w2kv")}:x`).kv.get("leak"); // never reached
     })(),
   ).rejects.toThrow();
-  // The same wall at the /expression HTTP door: the edge canonicalizes the context name before it
-  // names a DO, so a ':' fails there (a 5xx) and no object is ever addressed.
+  // The same wall at the /expression HTTP door: the edge parses the context name before it names
+  // a DO, so a ':' is refused there (a 400 naming the wall) and no object is ever addressed.
   const viaDoor = await fetch(expressionUrl("prj_x:evil", "itx.whoami"));
-  expect(viaDoor.status).toBeGreaterThanOrEqual(500);
+  expect(viaDoor.status).toBe(400);
+  expect(await viaDoor.text()).toContain("invalid projectId");
 });
 
 test("kv list returns EVERY key, not silently the first 1000", async () => {

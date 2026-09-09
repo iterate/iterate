@@ -1,7 +1,7 @@
 // The PROJECT WORKER — the stateless edge AND the front door. capnweb terminates at `/api`; a project
 // host forwards to the IterateContextDurableObject over Workers RPC (the DO does the real work and stays
 // hibernatable); the control plane (OAuth AS + D1 directory + /mcp) runs IN-PROCESS here (src/control-plane)
-// — one worker, no fallback. A project host resolves its slug → project id through the directory.
+// — one worker, one front door. A project host names its project; the directory confirms it exists.
 
 import * as cloudflareWorkers from "cloudflare:workers";
 import {
@@ -11,8 +11,7 @@ import {
 } from "capnweb";
 import { IterateContextDurableObject, type Env } from "./iterate-context-durable-object.ts";
 import { directory } from "./control-plane/directory.ts";
-import { ANONYMOUS } from "./control-plane/app.ts";
-import { currentSession } from "./control-plane/session.ts";
+import { currentSession, identity } from "./control-plane/session.ts";
 import controlPlane from "./control-plane/index.ts";
 import type { Env as ControlPlaneEnv } from "./control-plane/env.ts";
 
@@ -20,7 +19,10 @@ import type { Env as ControlPlaneEnv } from "./control-plane/env.ts";
 type WorkerEnv = Env & ControlPlaneEnv;
 import { registerPipelinedRpcBrand } from "./context/dispatch.ts";
 import { ITX_EXPRESSION_FETCH_HEADER } from "./fetch/rpc-stub-fetch.ts";
-import { DurableObjectNameCodec } from "./context/durable-object-names.ts";
+import {
+  DurableObjectNameCodec,
+  type DurableObjectAddress,
+} from "./context/durable-object-names.ts";
 import { UnauthenticatedSession } from "./session.ts";
 import { appConfigOf } from "./app-config.ts";
 import {
@@ -63,6 +65,14 @@ const CODE_VERSION = "live-57";
 export default {
   async fetch(request: Request, env: WorkerEnv, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
+    // THE HOP COUNT, for both lanes into a context: an app or an expression that fetches its own
+    // host or the fetch lane's URL re-enters here through egress; each pass counts, a few is a loop.
+    const hops = Number(request.headers.get(ITX_EXPRESSION_LANE_HOPS_HEADER) ?? "0") + 1;
+    if (hops > ITX_EXPRESSION_LANE_MAX_HOPS)
+      return new Response(
+        `the request re-entered itself ${hops} times (an app or an expression fetching its own lane)\n`,
+        { status: 508 },
+      );
 
     // PROJECT-HOST INGRESS (project-host.ts): a request on `<label>--<projectId>.<base>` IS the app
     // `itx.apps.<label>` of that project's ROOT context, the Request riding VERBATIM into the fetch
@@ -115,7 +125,7 @@ export default {
       const headers = new Headers(request.headers);
       for (const name of [...headers.keys()]) if (name.startsWith("x-itx-")) headers.delete(name);
       headers.set(ITX_EXPRESSION_FETCH_HEADER, `itx.apps.${projectHost.app}`);
-      headers.set(ITX_EXPRESSION_LANE_HOPS_HEADER, "1");
+      headers.set(ITX_EXPRESSION_LANE_HOPS_HEADER, String(hops));
       // WHO: a valid project token for this project stamps the principal the app (and the lane's
       // call) sees — the host cookie (a browser), or `Authorization: Bearer <projectToken>` (THE
       // MACHINE LANE: an MCP client, a script), the bearer winning when both are present. The token
@@ -127,9 +137,15 @@ export default {
       if (appCookies) headers.set("cookie", appCookies);
       else headers.delete("cookie");
       const bearerToken = /^Bearer\s+(\S+)$/i.exec(request.headers.get("authorization") ?? "")?.[1];
-      const token = bearerToken ?? projectSessionCookieOf(cookieHeader);
-      const claims = token ? await verifyProjectToken(token, projectTokenSecret) : null;
-      if (bearerToken && claims) headers.delete("authorization");
+      const bearerClaims = bearerToken
+        ? await verifyProjectToken(bearerToken, projectTokenSecret)
+        : null;
+      if (bearerClaims) headers.delete("authorization");
+      // a bearer that is not a project token is the app's own; the cookie still stamps
+      const cookieToken = projectSessionCookieOf(cookieHeader);
+      const claims =
+        bearerClaims ??
+        (cookieToken ? await verifyProjectToken(cookieToken, projectTokenSecret) : null);
       if (claims && claims.projectId === projectId)
         headers.set(
           ITX_PRINCIPAL_HEADER,
@@ -154,7 +170,7 @@ export default {
     // WHO dials (session.ts): in `open` login mode everyone is the anonymous user; in `email` mode the
     // control plane's session cookie on THIS request — a browser's same-origin socket carries it.
     if (url.pathname === "/api") {
-      const user = loginMode === "open" ? ANONYMOUS : await currentSession(request, sessionSecret);
+      const user = await identity(request, env);
       // newWorkersRpcResponse serves BOTH a WebSocket upgrade AND a one-shot HTTP batch —
       // a CLI script or cron does one POST, no socket handshake. (Batch sessions cannot hold
       // live capabilities: a live provide needs the relay to outlive the response —
@@ -187,21 +203,43 @@ export default {
           "/expression needs ?context=<project id | context name>&itx=<itx expression>\n",
           { status: 400 },
         );
-      // THE HOP COUNT: an expression that fetches THIS lane's own URL (`?itx=itx.fetch`) re-enters
-      // here through egress with the same query, unbounded; each pass counts, a few is a loop.
-      const hops = Number(request.headers.get(ITX_EXPRESSION_LANE_HOPS_HEADER) ?? "0") + 1;
-      if (hops > ITX_EXPRESSION_LANE_MAX_HOPS)
-        return new Response(
-          `/expression: the lane re-entered itself ${hops} times (an expression fetching its own lane)\n`,
-          { status: 508 },
-        );
+      let address: DurableObjectAddress;
+      try {
+        address = DurableObjectNameCodec.parse(context);
+      } catch (error) {
+        return new Response(`${(error as Error).message}\n`, { status: 400 });
+      }
+      // ADMISSION: in `email` login mode the caller must be a member of the project — the control
+      // plane's cookie (this IS the platform host) or a project-token bearer for it; `open` mode is
+      // open here exactly as `/api` is (the trusted-client doctrine every local proof relies on).
+      if (loginMode === "email") {
+        const bearerToken = /^Bearer\s+(\S+)$/i.exec(
+          request.headers.get("authorization") ?? "",
+        )?.[1];
+        const bearerClaims = bearerToken
+          ? await verifyProjectToken(bearerToken, projectTokenSecret)
+          : null;
+        const user = bearerClaims ? null : await currentSession(request, sessionSecret);
+        const admitted =
+          bearerClaims?.projectId === address.projectId ||
+          (user !== null &&
+            (await directory(env.DB).listProjects(user.sub)).some(
+              (project) => project.id === address.projectId,
+            ));
+        if (!admitted)
+          return new Response("401: sign in as a member of this project, or bear its token\n", {
+            status: 401,
+          });
+      }
+      // The lane's headers are the platform's, never a caller's: every inbound `x-itx-*` goes (a
+      // pager or fetch-upgrade header from outside would enter the DO's internal protocol), and so do
+      // the cookies (an app served on the platform host never sees the platform's own).
       const headers = new Headers(request.headers);
-      headers.delete(ITX_PRINCIPAL_HEADER); // the stamp is the edge's, never a caller's
+      for (const name of [...headers.keys()]) if (name.startsWith("x-itx-")) headers.delete(name);
+      headers.delete("cookie");
       headers.set(ITX_EXPRESSION_FETCH_HEADER, itxExpression);
       headers.set(ITX_EXPRESSION_LANE_HOPS_HEADER, String(hops));
-      return env.ITERATE_CONTEXT.getByName(DurableObjectNameCodec.parse(context).name).fetch(
-        new Request(request, { headers }),
-      );
+      return env.ITERATE_CONTEXT.getByName(address.name).fetch(new Request(request, { headers }));
     }
 
     // Everything else on the platform host is the CONTROL PLANE, in-process (src/control-plane): login

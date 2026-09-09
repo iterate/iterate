@@ -3,6 +3,7 @@
 // consent reuses whatever session this module minted. One login, reused everywhere. The token is the
 // platform's one signed-claims codec (src/principal.ts) under the session secret.
 
+import { appConfigOf, type AppConfigEnv } from "../app-config.ts";
 import { signClaims, verifyClaims } from "../principal.ts";
 
 /** The identity behind a browser session. */
@@ -12,6 +13,18 @@ export interface Session {
   email: string;
   /** Issued-at (epoch seconds). */
   iat: number;
+}
+
+/** THE ONE ANONYMOUS IDENTITY of `open` login mode — `user_anonymous`, a directory row seeded by
+ *  definitions.sql (so its org membership's FOREIGN KEY holds on every path, /mcp included). */
+export const ANONYMOUS: Session = { sub: "user_anonymous", email: "anonymous", iat: 0 };
+
+/** WHO a request is, for every door on the platform host (the console, `/api`, the fetch lane): in
+ *  `open` mode ALWAYS the anonymous identity (a cookie cannot make a second one, so every door agrees
+ *  on who owns what); in `email` mode the session cookie's user, or nobody. */
+export async function identity(request: Request, env: AppConfigEnv): Promise<Session | null> {
+  const { sessionSecret, loginMode } = appConfigOf(env);
+  return loginMode === "open" ? ANONYMOUS : currentSession(request, sessionSecret);
 }
 
 const COOKIE = "itx-control-plane-session";

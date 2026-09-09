@@ -31,8 +31,9 @@ function stepGet(value: object, key: string): unknown {
 
 /**
  * THE step walk: property steps `Reflect.get` with the receiver carried; call steps `Reflect.apply`
- * ON that receiver (detaching a method from a Workers-RPC receiver breaks it); every step is awaited
- * so stub-returning calls pipeline naturally. `where` names the walk in errors.
+ * ON that receiver (detaching a method from a Workers-RPC receiver breaks it); an ordinary promise
+ * is awaited between steps, a branded RPC promise (PIPELINED_RPC_BRANDS) is not — so a chain over
+ * Workers RPC stays pipelined into one round trip. `where` names the walk in errors.
  *
  * ⚠️  DataCloneError LEARNING (a full investigation — see FACET-RPC-INVESTIGATION.md): invoke
  * facet/RPC-stub methods with `Reflect.apply(fn, receiver, args)`, NEVER `stub[m].apply(stub,

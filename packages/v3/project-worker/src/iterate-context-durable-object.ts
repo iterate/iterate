@@ -94,7 +94,7 @@ import {
 } from "./context/itx-expression-rewriting.ts";
 import { BUILT_IN_ROOTS } from "./context/built-in-roots.ts";
 import { subscriptionConfiguredEvent } from "./stream/subscriptions.ts";
-import { ITX_PRINCIPAL_HEADER, type Principal } from "./principal.ts";
+import { ITX_PRINCIPAL_HEADER, stampPrincipal, type Principal } from "./principal.ts";
 import {
   buildBuiltIns,
   type ArtifactsNamespace,
@@ -161,7 +161,10 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     // carries (the edge's `provide(stub)` / `subscribe(fn)` hand over the rule / the row it built)
     // land through the same door as any append, in the turn the pager is accepted. The un-set half
     // is `#unsetWhatNamesRpcStub` below.
-    appendEvents: (events) => void this.#appendAndRunCommittedEffects(events),
+    // the events that ride a pager upgrade are a client's: their `source.principal` is dropped (the
+    // DO owns that field — a lent stub's rule is unattributed today)
+    appendEvents: (events) =>
+      void this.#appendAndRunCommittedEffects(events.map((event) => stampPrincipal(event, null))),
     // PRESENCE, as it changes: an EPHEMERAL fact a live watcher can subscribe to (`consumes:
     // ["events.iterate.com/rpc-stub/attached", …]`), never a durable row — presence is physical
     // (`itx.rpcStubs.list()`), and the log must never claim a socket is open. A refusal (a paused
@@ -916,7 +919,17 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         return new Response(`${error.message}\n`, { status: 502 });
       throw error;
     }
-    return fetch(substitutedRequest); // WS-safe: only the URL and headers were rewritten
+    // The platform's own headers never leave: the principal stamp (actor + email) and the
+    // expression would ride whatever an app forwards outbound. The hop counter stays — the fetch
+    // lane's re-entry guard reads it on the way back in.
+    const headers = new Headers(substitutedRequest.headers);
+    headers.delete(ITX_PRINCIPAL_HEADER);
+    headers.delete(ITX_EXPRESSION_FETCH_HEADER);
+    // A substituted secret follows NO redirect: a 3xx to another origin would carry the credential
+    // there (the Fetch standard strips `Authorization` on a cross-origin redirect, not other headers).
+    return fetch(new Request(substitutedRequest, { headers }), {
+      ...(substitutedRequest !== request && { redirect: "manual" }),
+    }); // WS-safe: only the URL and headers were rewritten
   }
 
   webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): void {

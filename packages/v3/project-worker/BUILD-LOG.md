@@ -4065,5 +4065,62 @@ door (two Fable implementers on the disjoint halves — stream, library — the 
   6.0.0 → 7.0.0 (the row gained an optional field — one bump for all of this). Unit rows + a
   digest-worker e2e.
 - GATES: tsc ×3 · oxlint · knip · `pnpm test` 89 files / 700 passed / 12 expected-fail / 17
-  deployed-only skips — and the whole suite 112 s → 57 s (the re-reduce). Deployed proof: the next
-  entry's line.
+  deployed-only skips — and the whole suite 112 s → 57 s (the re-reduce). DEPLOYED (6a535925f as
+  6963eccf): 202 passed, ONE real failure — `itx.secrets.list()` right after two `set`s came back
+  EMPTY: Cloudflare KV's `list()` is eventually consistent (up to a minute behind a write), which
+  local miniflare's is not. The fix is the simpler design: the names and origins are already in the
+  log, so the core reduce keeps THE SECRETS CATALOG (`CoreState.secrets`, contract 7.0.0 → 8.0.0)
+  and `list()` reads it — strongly consistent, the KV list loop gone, the value still physical in
+  KV and never reduced. DEPLOYED (b78086ec5 as 0e72540a): 202 passed, the secrets rows green; the
+  one failure was the deployed-only memory-degradation file — a DO reset under the stalled-subscriber
+  flood, then a platform "Internal error in Durable Object storage" at its 144 MiB seed, then 5/5 on
+  the third run alone: the platform, not the code (the file passed deployed three times earlier in
+  the day).
+
+## 2026-09-09 — review pass 1 on the v4 items: the fetch lane's admission, forged pager headers, and three red pins
+
+Three reviewers over the whole package (codex gpt-6-astra at xhigh; Fable on the edge + control
+plane + library; two more Fable passes on the stream and the context were cut short by a rate limit
+and re-run after). Jonas: "keep trying to clean up or improve or find opportunities for cleanup wins
+… bugs too complex to fix → leave them as xfail."
+
+- BUGS FIXED (small): the `/expression` lane copied a visitor's headers through, so a public request
+  could enter the DO's INTERNAL pager protocol (`x-itx-rpc-stub-pager` carries `appendEvents` — a
+  forged `stream/paused`, a forged `source.principal`) — every inbound `x-itx-*` is stripped now, as
+  on a project host; the pager-attach door also drops a client-supplied `source.principal` (the DO
+  owns the field). In `email` login mode the lane admits a member of the project (the platform-host
+  cookie) or a project-token bearer for it — 401 otherwise; `open` mode stays open there exactly as
+  `/api` is. The lane strips inbound cookies (an app served on the platform host never sees the
+  platform's own). The hop counter is ONE, hoisted above both lanes: a project-host app that fetches
+  its own host looped until Cloudflare killed it (508 now). A substituted secret follows NO redirect
+  (a cross-origin 3xx would carry a custom header on — only `Authorization` is stripped by the Fetch
+  standard). Egress strips the platform's own headers (the principal stamp, the expression) from what
+  an app forwards outbound. A bearer that is NOT a project token no longer hides the cookie's stamp.
+  A bad `?context=` is 400, not 500. The OAuth consent verifies the posted project is the user's.
+  The reduce's halted/resumed cases use `Object.hasOwn` (a hand-appended `__proto__` found the
+  prototype). The edge's DO stub is minted PER CALL — my earlier "re-mint after a retryable failure"
+  covered one of six call sites; per-call covers all and is 15 lines shorter.
+- LESS CODE: `runScript` deleted (a second spelling of `workers.get({ source }).run`, one e2e use);
+  ONE `identity()` (control-plane/session.ts) for the console, `/api` and the fetch lane; the
+  library's `responseTextPrefix` inlined, its `keySorted` replaced by the codec's; the relay's
+  forwarding-only walk deleted; the session module's `SessionTeardown` re-export gone; the
+  control-plane `/mcp` no longer builds a warning-per-request `responseMode`; the tour's "authenticate
+  is a no-op" branch deleted; the `secrets` root's append is the scope's one `append`.
+- THE SECRETS CATALOG IS THE PROJECT's: a child context's `itx.secrets` delegates to the root
+  context (the value's key is project-scoped; the catalog lives in ONE log). Pinned.
+- RED PINS (`test.fails`, too costly to fix now, each naming the missing mechanism): a `secrets.set`
+  refused by a paused stream has already written the value (an intent-event-first design); an
+  EXPRESSION handle disposed during a pause is forgotten (a retained removal); two sessions providing
+  the IDENTICAL rule share one identity, so disposing the first removes the second's row (a
+  per-configure generation compared in one DO commit).
+- DECLINED, surfaced: deleting the `/expression` lane outright (codex's biggest cut — it is the local
+  WS proof lane and nine e2e files ride it; the admission above closes the holes); refusing
+  anonymous MCP calls in `serveMcp` (the app decides; documented); deleting the control-plane OAuth
+  AS again (kept on Jonas's word).
+- CLARITY: a dozen comments that described deleted behaviour rewritten (both halves "stored as
+  strings", "stored PRINTED", "every step is awaited", "an ephemeral offset is always a gap", the
+  principal header's "minted by the control plane", "three verbs", the bindings list); the four
+  living docs refreshed to the one-worker truth (the FALLBACK/DummyControlPlane/solo prose gone,
+  contract 8.0.0, the session catalog, `secrets`, `serveMcp`, `afterOffset`; +430/−200).
+- GATES: tsc ×3 · oxlint · knip · `pnpm test` 87 files / 704 passed / 15 expected-fail (the three
+  new red pins among them) / 17 deployed-only skips. Deployed proof: the next line.

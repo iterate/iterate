@@ -10,8 +10,9 @@
 import { OAuthProvider } from "@cloudflare/workers-oauth-provider";
 import { appConfigOf } from "../app-config.ts";
 import type { Env } from "./env.ts";
-import { ANONYMOUS, app } from "./app.ts";
+import { app } from "./app.ts";
 import { mcpHandler } from "./mcp.ts";
+import { ANONYMOUS } from "./session.ts";
 
 const provider = new OAuthProvider<Env>({
   apiRoute: "/mcp", // the ONLY OAuth-protected boundary

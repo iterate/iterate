@@ -211,8 +211,9 @@ export function normalizedItxExpression(
 }
 
 /** Object args print with their keys SORTED, so two spellings of one object are one canonical string
- *  — one rewrite-rule row, one facet memo — the way `jsonEqual` already matches them. */
-const keySortedForPrint = (_key: string, value: unknown): unknown =>
+ *  — one rewrite-rule row, one facet memo, one library connection memo (library/index.ts) — the way
+ *  `jsonEqual` already matches them. A `JSON.stringify` / `JSON5.stringify` replacer. */
+export const keySortedForPrint = (_key: string, value: unknown): unknown =>
   value !== null && typeof value === "object" && !Array.isArray(value)
     ? Object.fromEntries(
         Object.keys(value as Record<string, unknown>)

@@ -78,7 +78,7 @@ import {
   type ClientRpcStub,
   type IterateContextDurableObjectStub,
 } from "./context/rpc-stub-relay.ts";
-import type { SessionTeardown } from "./session.ts";
+import type { SessionTeardown } from "./session-teardown.ts";
 import { ITX_PRINCIPAL_HEADER, type Principal } from "./principal.ts";
 import type { StreamEvent, StreamEventInput } from "./stream/events.ts";
 import { subscriptionConfiguredEvent } from "./stream/subscriptions.ts";
@@ -132,11 +132,6 @@ export interface IterateContext extends Omit<BuiltInScope, "cd"> {}
 export class IterateContext extends RpcTarget {
   readonly #contextNamespace: IterateContextNamespace;
   readonly #durableObjectAddress: DurableObjectAddress;
-  /** The context DO's stub, minted on first use — and again after a transport failure: "many
-   *  exceptions leave the DurableObjectStub in a broken state, such that all attempts to send
-   *  additional requests will just fail immediately with the original exception … create a new one"
-   *  (Cloudflare's error-handling guide); workerd flags those `retryable` (#invokeOnDurableObject). */
-  #durableObjectStub: IterateContextDurableObjectStub | undefined;
   readonly #sessionTeardown: SessionTeardown;
   readonly #waitUntil: WaitUntil;
   /** WHO holds this context: the session's verified principal (session.ts), or null for the
@@ -159,32 +154,21 @@ export class IterateContext extends RpcTarget {
     this.#principal = principal;
   }
 
+  /** The context DO's stub, minted PER CALL (a stub is a cheap handle onto one shared connection):
+   *  "many exceptions leave the DurableObjectStub in a broken state, such that all attempts to send
+   *  additional requests will just fail immediately with the original exception … create a new one"
+   *  (Cloudflare's error-handling guide) — so no call after a reset replays the reset. */
   get #durableObject(): IterateContextDurableObjectStub {
-    return (this.#durableObjectStub ??= this.#contextNamespace.getByName(
-      this.#durableObjectAddress.name,
-    ));
+    return this.#contextNamespace.getByName(this.#durableObjectAddress.name);
   }
 
-  /** Dispatch on the DO under this context's principal — the one place the edge chooses the door.
-   *  A transport failure (`retryable`: a reset, a lost connection) drops the stub so the next call
-   *  mints a fresh one instead of replaying the original exception for the session's life. */
-  async #invokeOnDurableObject(
-    itxExpression: ItxExpression,
-    args: unknown[] = [],
-  ): Promise<unknown> {
-    const durableObject = this.#durableObject;
-    try {
-      return await (this.#principal
-        ? durableObject.invokeAs(this.#principal, itxExpression, ...args)
-        : durableObject.invoke(itxExpression, ...args));
-    } catch (error) {
-      if (
-        (error as { retryable?: unknown } | null)?.retryable === true &&
-        this.#durableObjectStub === durableObject
-      )
-        this.#durableObjectStub = undefined;
-      throw error;
-    }
+  /** Dispatch on the DO under this context's principal — the one place the edge chooses the door. */
+  #invokeOnDurableObject(itxExpression: ItxExpression, args: unknown[] = []): Promise<unknown> {
+    return (
+      this.#principal
+        ? this.#durableObject.invokeAs(this.#principal, itxExpression, ...args)
+        : this.#durableObject.invoke(itxExpression, ...args)
+    ) as Promise<unknown>;
   }
 
   /** Another context of THIS project. Absolute by convention (`cd("/agents/support")`); relative

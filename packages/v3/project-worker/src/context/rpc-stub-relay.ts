@@ -61,13 +61,6 @@ class LentRpcStub extends WorkersRpcTarget {
     this.#durableObject = durableObject;
   }
 
-  /** Walk itx-expression steps off the session's capnweb stub — the ONE pipelined walk
-   *  (invoke-handle.ts `walkStepsOnRpcStub`), awaited once at the end so a rejection anywhere in the
-   *  chain lands where the callers' catch → #recodeIfLendEnded sees it. */
-  async #walkItxExpressionSteps(itxExpressionSteps: ItxExpression): Promise<unknown> {
-    return await walkStepsOnRpcStub(this.#clientRpcStub, itxExpressionSteps);
-  }
-
   /** The lend ended mid-call — the client died (capnweb throws its raw, UNCODED close error), or the
    *  lender recalled the stub while the DO still held the rule naming it (the DO's un-set lands one
    *  append AFTER the pager's close; a call in that window walks the disposed dup and capnweb throws
@@ -88,7 +81,7 @@ class LentRpcStub extends WorkersRpcTarget {
     request: Request,
   ): Promise<unknown> {
     try {
-      const receiver = (await this.#walkItxExpressionSteps(itxExpressionSteps)) as {
+      const receiver = (await walkStepsOnRpcStub(this.#clientRpcStub, itxExpressionSteps)) as {
         fetch(r: Request): Promise<unknown>;
       };
       return await dialRpcStubFetch(
@@ -104,7 +97,7 @@ class LentRpcStub extends WorkersRpcTarget {
 
   async invoke(itxExpressionSteps: ItxExpression): Promise<unknown> {
     try {
-      return await this.#walkItxExpressionSteps(itxExpressionSteps);
+      return await walkStepsOnRpcStub(this.#clientRpcStub, itxExpressionSteps);
     } catch (e) {
       this.#recodeIfLendEnded(e, "mid-invoke");
     }

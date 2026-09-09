@@ -10,8 +10,11 @@
 // the request's principal (a project token as the host cookie or as `Authorization: Bearer`), so
 // every event a `tools/call` appends carries `source.principal` with no plumbing of its own — the
 // library runs in the context, where the principal is the current call's. A fresh, stateless server
-// per request (`createMcpHandler`, the control plane's shape): a bearer is the credential, never
-// isolate state. Written against `itx` alone (the library rule, index.ts): `itx.cd('.')` is this
+// per request (`createMcpHandler`, the control plane's shape), and NO bearer is required: a request
+// with none — or with another project's token — is served and stamps nothing (the ingress refuses
+// no one; library-mcp-server.e2e.test.ts). The principal is attribution; what an unattributed call
+// may reach is the project's own rules' decision. Written against `itx` alone (the library rule,
+// index.ts): `itx.cd('.')` is this
 // context through its own table, and its handle's `invoke(steps)` is the one door on the dotted
 // surface that takes an expression as DATA — the same door a loaded worker holds.
 

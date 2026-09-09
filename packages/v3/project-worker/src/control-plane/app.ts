@@ -8,7 +8,7 @@ import { sameOriginPath } from "../project-host.ts";
 import type { Env, Handler } from "./env.ts";
 import { directory } from "./directory.ts";
 import { slugify } from "./ids.ts";
-import { clearSessionCookie, currentSession, setSessionCookie, type Session } from "./session.ts";
+import { clearSessionCookie, identity, setSessionCookie, type Session } from "./session.ts";
 
 const esc = (s: string) =>
   s
@@ -39,17 +39,6 @@ ${body}`;
   return new Response(html, {
     headers: { "content-type": "text/html; charset=utf-8", ...headers },
   });
-}
-
-/** THE ONE ANONYMOUS IDENTITY of `open` login mode — `user_anonymous`, a directory row seeded by
- *  definitions.sql (so its org membership's FOREIGN KEY holds on every path, /mcp included). */
-export const ANONYMOUS: Session = { sub: "user_anonymous", email: "anonymous", iat: 0 };
-
-/** The session for a request: in `open` mode ALWAYS the anonymous identity (a cookie cannot make a
- *  second identity, so /mcp and the console agree on who owns what); in `email` mode the cookie. */
-async function identity(request: Request, env: Env): Promise<Session | null> {
-  const { sessionSecret, loginMode } = appConfigOf(env);
-  return loginMode === "open" ? ANONYMOUS : currentSession(request, sessionSecret);
 }
 
 function loginForm(next: string, note = ""): string {
@@ -109,6 +98,16 @@ async function authorize(request: Request, env: Env, session: Session | null): P
     const choice = String(form.get("projectId") ?? "");
     let projectId: string;
     if (choice && choice !== "__new__") {
+      // the posted choice must be one of the user's own projects — the radio is the browser's word
+      if (!(await dir.listProjects(session.sub)).some((project) => project.id === choice))
+        return authorizeConsent(
+          request,
+          oauthRequest,
+          clientName,
+          session,
+          dir,
+          "Not your project.",
+        );
       projectId = choice;
     } else {
       const slug = slugify(String(form.get("slug") ?? ""));

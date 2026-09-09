@@ -1,7 +1,8 @@
 # The clean-room Iterate Context: API and code-structure walkthrough
 
-> Current as of the itx-surface rename (2026-09-02) on `wip/kernel-wayfinder-2026-07-30`.
-> Package: `packages/v3/project-worker`. Every interface below is transcribed from
+> Current as of the one-worker consolidation (2026-09-08) on `wip/kernel-wayfinder-2026-07-30`.
+> Package: `packages/v3/project-worker` — ONE worker, ONE package (the control plane runs
+> in-process). Every interface below is transcribed from
 > source; file paths are given so you can check. The design these steps
 > implemented is `docs/design-onion-subscriptions-processors.md` (and, for the
 > surface itself, `docs/proposals/itx-surface-SYNTHESIS.md`); the tutorial
@@ -31,7 +32,7 @@ on top of the stream.
   project code is egress with `{{secret:project:NAME}}` substitution.
 - **The stream.** One append-only log per context. One inline reduce (`core`)
   reduces the context's own control events at the commit point — identity, wake,
-  pause, the rewrite rules, the subscriptions; one delivery loop hands every
+  pause, the rewrite rules, the subscriptions, the secrets catalog; one delivery loop hands every
   commit to the subscriptions; a processor is a Durable Object class hosted as a
   facet and subscribed to the log.
 
@@ -40,21 +41,28 @@ Every context is one `IterateContextDurableObject`, named by the codec
 `prj_demo.iterate/agents/support` a child). The stateless worker at `/api` is
 the only place capnweb terminates. It reaches the DO over Workers RPC. Loaded
 userspace code runs in Worker Loader isolates or as facets of the DO, and its
-entire world is one binding, `env.ITX`.
+entire world is one binding, `env.ITX`. The control plane — an OAuth AS, the D1
+directory of users, orgs and projects (a project's id IS its DNS-safe name),
+`/mcp`, a console with an email login form — runs IN-PROCESS as the same
+worker's catch-all (`src/control-plane/`); a project host
+(`<app>--<projectId>.<base>`) is admitted by one directory read before any DO is
+dialled. Egress is terminal: secrets substituted, then `fetch`.
 
 ```mermaid
 flowchart LR
   subgraph client["Client: browser / CLI / device (dependency: capnweb only)"]
     c["capnweb session<br/>api.authenticate().projects.get(id)"]
   end
-  subgraph edge["project-worker, stateless edge (src/worker.ts)"]
+  subgraph edge["project-worker, ONE stateless worker (src/worker.ts)"]
     api["/api → UnauthenticatedSession → Session → ProjectCollection → IterateContext<br/>src/session.ts, src/iterate-context.ts"]
     relay["pager relay + SessionTeardown<br/>the session's lent rpc stubs"]
     lane["/expression?context=…&itx=… fetch lane"]
+    host["project-host ingress: app--projectId.base → itx.apps.app<br/>src/project-host.ts · /.itx/session · Bearer projectToken"]
+    cp["the control plane, in-process (the catch-all)<br/>OAuth AS · D1 directory · /mcp · console<br/>src/control-plane/"]
   end
   subgraph do["IterateContextDurableObject, one per {projectId, path}"]
     stream["Stream: log, offsets, idempotency, waitForEvent"]
-    inline["the core reduce, reduced inside every commit<br/>(identity, wake, pause, rewrite rules, subscriptions)"]
+    inline["the core reduce, reduced inside every commit<br/>(identity, wake, pause, rewrite rules, subscriptions, secrets)"]
     delivery["SubscriptionDelivery: push or stream-kept cursor"]
     transport["RpcStubDirectory: borrowed stubs + pager sockets"]
     facets["Facets: loaded DurableObject classes,<br/>StreamProcessorDurableObject hosts"]
@@ -62,10 +70,13 @@ flowchart LR
   subgraph loader["Worker Loader isolates"]
     ep["WorkerEntrypoint: any exported method<br/>env.ITX = ItxEntrypoint"]
   end
-  cp["iterate-control-plane<br/>ControlPlaneShell = FALLBACK"]
+  net(("internet"))
   c -- "capnweb WS or HTTP batch" --> api
+  api -- "directory: membership, create" --> cp
+  host -- "directory.getProject: admission (421)" --> cp
   api -- "Workers RPC: invoke(expression)" --> do
   lane -- "x-itx-expression header" --> do
+  host -- "x-itx-expression: itx.apps.app, Request verbatim" --> do
   transport -. "{type:'page'} over the pager WS" .-> relay
   relay -- "lendRpcStub: a fresh Workers-RPC stub" --> transport
   stream -- "onCommit" --> delivery
@@ -74,7 +85,7 @@ flowchart LR
   do -- "ctx.facets" --> facets
   do -- "LOADER.get" --> loader
   ep -- "env.ITX / globalOutbound" --> do
-  do -- "egress: FALLBACK.fetch" --> cp
+  do -- "egress: {{secret:project:NAME}} substituted → fetch" --> net
 ```
 
 ---
@@ -85,15 +96,34 @@ The tree is laid out by primitive, one folder per chapter of the tutorial.
 
 ```text
 packages/v3/project-worker/
-  wrangler.jsonc                 bindings: ITERATE_CONTEXT (DO), LOADER, ITX_KV, SECRETS_KV,
-                                 CF_VERSION_METADATA, FALLBACK (service → ControlPlaneShell)
+  wrangler.jsonc                 bindings: ITERATE_CONTEXT (DO), LOADER, AI, ARTIFACTS, ITX_KV, SECRETS_KV,
+                                 OAUTH_KV, DB (D1: the directory), CF_VERSION_METADATA; the APP_CONFIG_* vars;
+                                 the *.project-worker.iterate.com route (project hosts)
+  wrangler.test.jsonc            the workers lane's config (no build, no AI; fresh local D1 + OAuth KV)
+  vitest.config.ts               THE ONE test config: four projects — unit · workers · e2e · bench
   build-sdk.mjs                  bundles src/sdk/index.ts → generated/processor-sdk.ts (processor.js),
                                  client/demo.tsx → generated/demo-page.ts
   src/
-    worker.ts                    THE EDGE. default fetch routes /api /expression /demo /version.
-                                 Exports DummyControlPlane, ItxEntrypoint, IterateContextDurableObject.
-    session.ts                   UnauthenticatedSession → Session → ProjectCollection (the gate + catalog),
-                                 SessionTeardown (what a session undoes at its end)
+    worker.ts                    THE EDGE and the front door. default fetch: project-host ingress (admission,
+                                 /.itx/session, the principal stamp), /api, /expression, /version; everything
+                                 else on the worker's hostname is the in-process control plane.
+                                 Exports ItxEntrypoint, IterateContextDurableObject.
+    session.ts                   UnauthenticatedSession → Session (whoami, projects) → ProjectCollection
+                                 (list · get · create — the gate + catalog), SessionTeardown (what a session
+                                 undoes at its end)
+    project-host.ts              project-host ingress, the pure half: which app + project a hostname names,
+                                 the session cookie, /.itx/session
+    principal.ts                 WHO: the project token (signClaims/verifyClaims — the ONE signed-claims
+                                 codec), stampPrincipal (source.principal), x-itx-principal
+    app-config.ts                ONE typed configuration per isolate from the APP_CONFIG_* vars
+    types.ts                     the `./types` export: the session and context types, hand-written
+    control-plane/               THE CONTROL PLANE, in-process (the catch-all): index.ts (the OAuth AS wrapper:
+                                 /authorize /token /register /.well-known; /mcp its one protected route),
+                                 app.ts (login form, session, console, /projects, /authorize consent),
+                                 directory.ts (D1/sqlfu: users → orgs → projects; a project's id IS its slug),
+                                 session.ts (the itx-control-plane-session cookie), mcp.ts (/mcp: whoami,
+                                 list_projects, create_project), ids.ts, env.ts, definitions.sql (the schema),
+                                 sql/queries.sql (sqlfu; its generated client under sql/.generated/)
     iterate-context.ts           IterateContext, the client-facing RpcTarget: a PROXY in front of the DO —
                                  cd · invoke · provide · subscribe · enableProcessor · disableProcessor;
                                  RewriteRuleHandle / SubscriptionHandle (disposable)
@@ -102,9 +132,10 @@ packages/v3/project-worker/
                                  #name = parseIterateContextDurableObjectName(ctx.id.name)
     itx-entrypoint.ts            ItxEntrypoint: what a loaded worker's env.ITX is
     context/                     chapter 1 — the context: rpc stubs, expressions, rewrite rules
-      built-ins.ts               the kernel roots: whoami, kv, ai, append, readEvents, waitForEvent, cd, fetch,
-                                 rpcStubs, rewriteRules, facets, subscriptions, workers, runScript,
-                                 connectToMcp, connectToOpenApi, connectToCapnweb, serveMcp (src/library/: the LIBRARY tier)
+      built-ins.ts               the kernel roots: whoami, kv, secrets, ai, cfArtifacts, repos, append, readEvents,
+                                 waitForEvent, cd, fetch, rpcStubs, rewriteRules, facets, subscriptions, workers,
+                                 runScript, connectToMcp, connectToOpenApi, connectToCapnweb, serveMcp
+                                 (src/library/: the LIBRARY tier)
       expression.ts              the codec: "itx.a.b(1)" ⇄ ["itx","a",["b",1]]; ItxExpression /
                                  ItxExpressionInput / ItxExpressionPrefix; canonicalItxExpressionPrefix
       itx-expression-rewriting.ts  THE RULES 1–7 (match / pick / apply / rules-first to the fixed point `itx.builtins` / the door / `@`), the ONE
@@ -121,41 +152,51 @@ packages/v3/project-worker/
     fetch/                       chapter 2 — fetch, in both directions
       rpc-stub-fetch.ts          fetch-shaped calls: the x-itx-expression lane (itxExpressionEndingInFetch),
                                  the 101 tunnel on a lent rpc stub (fenced WORKAROUND, delete-day checklist inside)
+      egress.ts                  substituteProjectSecrets: {{secret:project:NAME}} in the URL + headers,
+                                 ProjectSecretRefused (the DO's #egress answers it with a 502)
+    library/                     THE LIBRARY: connectToMcp, connectToOpenApi, connectToCapnweb, serveMcp
+                                 (mcp-server.ts: this context as an MCP server, one tool itx.invoke)
     stream/                      chapter 3 — the log and what reduces it
       stream.ts                  Stream (the commit pipeline), Context interface, localContext
       events.ts                  StreamEventInput / StreamEvent (plain types), defineProcessorContract (zod)
       processor.ts               StreamProcessor (the pure author class), ProcessorEngine, consumesEvent
       reduce-checkpoint.ts       the one persisted reduce-checkpoint shape
-      core-processor.ts          CoreStreamProcessor (slug core, 4.0.0): created/woken/paused/resumed
-                                 + the rewrite rules (a map) + the subscriptions, one reduce
+      core-processor.ts          CoreStreamProcessor (slug core, 8.0.0): created/woken/paused/resumed
+                                 + the rewrite rules (a map) + the subscriptions + the secrets catalog,
+                                 one reduce (reduceBatch: each table copied once per batch, a draft)
       subscriptions.ts           the subscriptions' one command: subscriptionConfiguredEvent
-                                 ({ name, target | null, consumes? })
+                                 ({ name, target | null, consumes?, afterOffset? })
       subscription-delivery.ts   THE ONE DELIVERY LOOP: push to a facet or lent stub, else a
                                  stream-kept cursor with a bounded retry ladder
       live-state.ts              LiveState<S>: revision chain + diff → ephemeral delta event
     sdk/                         what userspace imports from "./processor.js"
       index.ts                   the export list
       stream-processor-durable-object.ts  StreamProcessorDurableObject: the host, `processor = new X()`
-    lib/                         errors.ts (codedError / errorCode)  logs.ts  patch.ts (diff / applyPatch)  timeout.ts
+    lib/                         errors.ts (codedError / errorCode)  patch.ts (diff / applyPatch)  timeout.ts
     client/
       live-state-store.ts        pure store: seed + deltas → current state
       live-state-client.ts       connectLiveState(itx, { key, door, ... })
       react.tsx                  useLiveState hook
       demo.tsx                   the hosted /demo page
-    generated/                   build outputs (committed; rebuilt by build-sdk.mjs)
-  e2e/                           `pnpm e2e` — the real worker, booted ONCE (support/global-setup.ts),
-                                 every <primitive>-<claim>.e2e.test.ts speaks capnweb at /api through
-                                 support/client.ts (the whole client surface a test uses)
-  __workers-tests__/             `pnpm test` workers project — @cloudflare/vitest-plugin, runs INSIDE
-                                 workerd for the hibernation cases that need its controls
+    generated/                   build outputs (gitignored; rebuilt by build-sdk.mjs)
+  e2e/                           `pnpm e2e` — the real worker, booted ONCE (support/global-setup.ts from
+                                 support/worker-config.ts: wrangler.jsonc patched for the lane; the directory
+                                 schema applied through the worker's own DB binding), every
+                                 <primitive>-<claim>.e2e.test.ts speaks capnweb at /api through
+                                 support/client.ts (the whole client surface a test uses).
+                                 WORKER_BASE_URL=https://project-worker.iterate.workers.dev pnpm e2e runs the
+                                 same suite against the DEPLOYED worker; `deployedOnly` (support/project-host.ts)
+                                 gates what only a deployment can prove
+  __workers-tests__/             the workers project — @cloudflare/vitest-plugin over wrangler.test.jsonc,
+                                 runs INSIDE workerd for the hibernation cases that need its controls
+  bench/                         `pnpm bench` — vitest's benchmark runner over the same client + worker
   specs/                         `pnpm spec` — Playwright drives the hosted /demo page
-../control-plane-shell/src/index.ts   ControlPlaneShell: fetch (platform secrets → internet),
-                                 a stub fallthrough verb, default fetch /emit writes into a
-                                 project's context
-../shared/src/egress.ts          substituteHeaderSecrets({{secret:<scope>:NAME}})
 ```
 
-Unit-lane tests (`pnpm test`, in-process node) sit next to their subject
+The package exports two entry points: `./types` (`src/types.ts`) and `./client`
+(`src/client/live-state-client.ts`). ONE `vitest.config.ts`, four projects;
+`pnpm test` runs them all, `--project <name>` picks a lane. Unit-lane tests
+(in-process node) sit next to their subject
 (`context/itx-expression-rewriting.test.ts` is the rules' table test) and share
 one `stream/test-support.ts` (the in-memory stream and storage fakes); the
 workers lane shares `__workers-tests__/support.ts`. Everything that needs the
@@ -178,6 +219,8 @@ using api = newWebSocketRpcSession("wss://<worker>/api");
 const itx = api.authenticate().projects.get("prj_demo"); // the project ROOT, path "/"
 const agent = itx.cd("/agents/x"); // a context within the project
 const inbox = agent.cd("../inbox"); // relative resolves; absolute by convention
+const fresh = await api.authenticate().projects.create({ slug: "another" }); // a new project's root
+const mine = await api.authenticate().projects.list(); // [{ id, orgId, role? }, …]
 
 // One-shot and socketless (CLI, cron): every call chained off the session flushes as ONE POST.
 // A batch session cannot hold live callbacks (nothing outlives the response).
@@ -185,7 +228,15 @@ const cli = newHttpBatchRpcSession("https://<worker>/api").authenticate().projec
 ```
 
 `projects.get` takes a project id (the root context's full name is accepted too);
-a non-root context name is refused, reach those with `cd`. One
+a non-root context name is refused, reach those with `cd`. `projects.create`
+slugifies the name — the slug IS the project's id, globally unique
+(`PROJECT_NAME_TAKEN` names another org's) — in the user's org, created on first
+use. WHO: `authenticate()` bare is the request's control-plane identity — in `open`
+login mode the anonymous user, in `email` mode the session cookie a same-origin
+browser socket carried (none ⇒ `UNAUTHENTICATED`); `authenticate({ projectToken })`
+is a principal bound to ONE project (`get` of any other is `FORBIDDEN`; `list`
+and `create` need a signed-in user). In `email` mode `get` admits members of the
+owning org only. One
 session may hold contexts of many projects; the session's `SessionTeardown` is keyed
 `"<iterateContextName> <rpcStubKey>"`, so two contexts lending under the same key never
 recall each other's stubs.
@@ -213,25 +264,46 @@ args (a callback function, a Date, bytes, a `Request`).
 `src/session.ts`
 
 ```ts
+/** A control-plane user: the cookie's, or the anonymous one in `open` mode. */
+/** Who a session is: a principal, bound to ONE project when it came from a project token. */
+type SessionPrincipal = Principal & { projectId?: string }; // Principal = { actor: string; email?: string }
+
 class UnauthenticatedSession extends RpcTarget {
-  /** THE introduction door. A no-op today; the one place a real credential check lands
-   *  without changing any caller (clients already spell `api.authenticate(creds)`). */
-  authenticate(credentials?: unknown): Session;
+  /** THE introduction door. A project token ⇒ a session that knows who it is, bound to the token's
+   *  one project (a token that does not verify is INVALID_CREDENTIALS, whatever is wrong with it).
+   *  No credentials ⇒ the request's control-plane user: in `open` mode the anonymous one — carrying
+   *  NO principal; in `email` mode the session cookie's user, or UNAUTHENTICATED. */
+  authenticate(credentials?: { projectToken?: string }): Promise<Session>;
   /** capnweb calls this when the session ends: every stub this session lent is recalled
    *  (its pager closed), and every handle it exported is disposed — see 4.2. */
   [Symbol.dispose](): void;
 }
 
 class Session extends RpcTarget {
+  /** Who this session is: the cookie's user, the token's principal (and its project), or null for
+   *  the anonymous one. */
+  whoami(): SessionPrincipal | null;
   /** The project catalog. A getter, not a field: capnweb exposes prototype members only. */
   get projects(): ProjectCollection;
 }
 
+/** A directory row (src/control-plane/directory.ts): the id IS the DNS-safe slug. */
+type Project = { id: string; orgId: string; role?: string };
+
 class ProjectCollection extends RpcTarget {
-  /** Pure addressing → that project's ROOT context ("/"). The DO itself is materialized by the
-   *  first door that reaches it (its constructor appends `stream/created` + `stream/woken`,
-   *  section 5.5). A project id only; a context name belongs to `cd`. */
-  get(projectId: string): IterateContext;
+  /** The projects this session's user can reach — a member of the owning org — with their role. */
+  list(): Promise<Project[]>;
+  /** Create the project named `slug` (slugified: that IS its id) in the user's org — their first,
+   *  created on first use — and vend its root context. A name ANY org already holds is refused,
+   *  coded (PROJECT_NAME_TAKEN); the user's own again is idempotent. */
+  create(input: { slug: string }): Promise<IterateContext>;
+  /** The project's root context ("/"). A project id only — a context name belongs to `cd`. A session
+   *  with a project token holds the token's ONE project; in `email` mode a user's session holds the
+   *  projects of their orgs (one directory read); in `open` mode the door is open — any project.
+   *  The DO itself is materialized by the first door that reaches it (its constructor appends
+   *  `stream/created` + `stream/woken`, section 5.5). */
+  get(projectId: string): Promise<IterateContext>;
+  // list() and create() on a token session are FORBIDDEN: a token names one project.
 }
 ```
 
@@ -283,6 +355,8 @@ class IterateContext extends RpcTarget {
     name?: string;
     target: ItxExpressionInput | ClientRpcStub | null;
     consumes?: string[];
+    /** Where the cursor lane starts (0 = the whole log); absent = from now. A push target ignores it. */
+    afterOffset?: number;
   }): Promise<SubscriptionHandle>;
 
   // ── processors: DURABLE configuration, two lines each over the subscription event ──
@@ -467,10 +541,12 @@ type ClientRpcStub = { dup(): ClientRpcStub; [k: string]: unknown };
 
 ### 4.4 The built-in roots (what `itx.<root>` resolves to on the DO)
 
-`src/context/built-ins.ts`. These are the kernel. A call `itx.<root>...` whose
-root is one of these resolves **directly**, before any rewrite rule is
-consulted, so they cannot be shadowed. Everything else is rewritten through the
-rules until its root IS one of these (section 9.1).
+`src/context/built-ins.ts`. These are the kernel — and the record IS `itx.builtins`,
+the reserved root, the fixed point of rewriting: `itx.builtins.<root>…` runs against
+it directly and reads no rule; a short `itx.<root>…` reaches it through the implicit
+platform row `itx.<root> ⇒ itx.builtins.<root>` unless the context's own rows say
+otherwise (rules FIRST, section 9.1), so a root can be shadowed or masked and
+`itx.builtins.…` is always the physical door.
 
 ```ts
 interface BuiltInScope {
@@ -485,6 +561,28 @@ interface BuiltInScope {
     list(prefix?: string): Promise<{ keys: string[] }>;
   };
 
+  /** Project secrets for egress: `{{secret:project:NAME}}` in an outbound request's URL or headers
+   *  substitutes to the value at the egress door (`fetch`). WRITE-ONLY — `set`, `delete`, and a
+   *  `list` of names and origins, never a value. A secret `set` with an `origin` is sent to that
+   *  origin ONLY. Every change appends `events.iterate.com/secrets/changed` with the name (and
+   *  origin, or `deleted`) — the value never enters the log. A name is `[a-zA-Z0-9._-]+`. */
+  secrets: {
+    set(name: string, value: string, options?: { origin?: string }): Promise<{ ok: true }>;
+    delete(name: string): Promise<{ ok: true }>;
+    list(): Promise<{ name: string; origin?: string }[]>;
+  };
+
+  /** Workers AI, the binding verbatim; Cloudflare Artifacts project-scoped (the escape hatch); the
+   *  repo door built on it (context/repos.ts). */
+  ai: Ai;
+  cfArtifacts: {
+    create(name: string, options?: { setDefaultBranch?: string }): Promise<ArtifactCreateResult>;
+    get(name: string): Promise<ScopedArtifactRepo>;
+    list(options?: { limit?: number; cursor?: string }): Promise<ArtifactListResult>;
+    delete(name: string): Promise<boolean>;
+  };
+  repos: ReposScope; // readFile(repo, path) · writeFile(repo, path, content)
+
   /** This context's log — the same commit pipeline the edge's verbs write through. */
   append(...events: StreamEventInput[]): Promise<StreamEvent[]>;
   readEvents(afterOffset?: number, limit?: number): Promise<StreamPage>;
@@ -496,8 +594,9 @@ interface BuiltInScope {
    *  Own path → same isolate; anything else → a Workers-RPC call to that DO. */
   cd(path: string): InvokeHandle;
 
-  /** Egress: {{secret:project:NAME}} substituted, then FALLBACK — the same terminal a loaded
-   *  worker's globalOutbound lands on. */
+  /** Egress: {{secret:project:NAME}} placeholders substituted in the URL and headers (a placeholder
+   *  with no stored secret, or a secret bound to another origin, is a 502 to the caller — never sent),
+   *  then the terminal `fetch` — the same door a loaded worker's globalOutbound lands on. */
   fetch(request: Request): Promise<Response>;
 
   /** The rpc-stub REGISTRY — physical, never event-sourced: a client's live value lent under an
@@ -508,11 +607,14 @@ interface BuiltInScope {
     list(): string[];
   };
 
-  /** The rewrite-rule table, READ (a slice of core; both halves printed). Written by the edge's
-   *  `provide` — sugar over the ONE `itx/rewrite-rule-configured` event — never a verb here. */
+  /** The rewrite-rule table, READ — the EFFECTIVE table: the context's rows (a slice of core, a mask
+   *  as `target: null`) plus the implicit platform rows, each `origin: "platform" | "context"`.
+   *  Written by the edge's `provide` — sugar over the ONE `itx/rewrite-rule-configured` event — never
+   *  a verb here. `resolve(call)` is the pure chain: `invoke(call) ≡ invoke(resolve(call).at(-1))`. */
   rewriteRules: {
-    list(): { match: string; target: string }[];
-    get(match: string): { match: string; target: string } | null;
+    list(): RewriteRuleListEntry[]; // { match: string; target: string | null; origin: "platform" | "context" }
+    get(match: string): RewriteRuleListEntry | null;
+    resolve(call: ItxExpressionInput): string[];
   };
 
   /** `get(name)` ADDRESSES a facet that is ALREADY RUNNING (a processor, a named instance) and
@@ -571,6 +673,10 @@ type SubscriptionListEntry = {
   target: string; // the expression, printed
   consumes?: string[];
   configuredAtOffset: number;
+  /** Where the cursor lane started (0 = the whole log); absent = at the configure. */
+  afterOffset?: number;
+  /** Set when this row HOSTS a facet (a processor): its name, class and cacheKey — never the source. */
+  hostedFacet?: { name: string; className: string; cacheKey?: string };
   /** Present ONLY when the stream keeps the cursor (a target that cannot own its progress). */
   cursor?: { confirmedOffset: number; attempt: number; nextAttemptAtMs?: number };
   halted?: { afterOffset: number; attempts: number; error?: string };
@@ -606,11 +712,14 @@ fetch channel (so a 101 works).
 
 One reduce-only processor is always on and runs **inline** in the commit
 transaction: `CoreStreamProcessor` (`src/stream/core-processor.ts`, slug `core`,
-contract 7.0.0), owned by the `Stream` itself (`stream.coreReducedState`). It reduces the context's own control
+contract 8.0.0), owned by the `Stream` itself (`stream.coreReducedState`). It reduces the context's own control
 events — and nothing else — into everything the DO needs synchronously at its
 doors: who it is, which incarnation runs, whether appends are paused, the
 rewrite rules every call goes through, the subscriptions every commit is sent
-to. It has no facet, but `snapshot()`, `liveSnapshot()` and `waitUntilProcessed()` (always
+to, and the secrets catalog (names and origins, never a value). A commit's batch
+is reduced at once (`reduceBatch`): each table is copied ONCE per batch, on its
+first touch, then mutated in place; the contract's single-event `reduce` stays
+pure. It has no facet, but `snapshot()`, `liveSnapshot()` and `waitUntilProcessed()` (always
 `{ ok: true }`) are exposed through the same door (it publishes
 `live-state/changed` deltas like any processor, keyed `core`), and the name
 `core` is reserved (a subscription may not take it, and the DO refuses to delete
@@ -640,10 +749,15 @@ type CoreState = {
       target: ItxExpression;
       consumes?: string[];
       configuredAtOffset: number;
+      afterOffset?: number; // where the cursor lane starts (0 = the whole log); absent = configuredAtOffset
+      hostedFacet?: { name: string; className: string; cacheKey?: string }; // the row hosts a facet (source elided)
       halted?: { afterOffset: number; attempts: number; error?: string };
       resumed?: { afterOffset?: number; atOffset: number };
     }
   >;
+  // THE SECRETS CATALOG: by name — the origin a secret is bound to, never a value (the value is
+  // physical, in SECRETS_KV); `itx.secrets.list()` reads this, strongly consistent
+  secrets: Record<string, { origin?: string }>;
 };
 
 type ItxExpressionRewriteRule = CoreState["itxExpressionRewriteRules"][string];
@@ -657,8 +771,8 @@ policy — a token-bucket breaker is a facet processor that appends
 `stream/paused` (section 5.3).
 
 There is no separate status verb anywhere: runtime state IS reduced state.
-Identity, incarnation, pause, the rewrite rules and the subscription rows are one
-snapshot, `itx.facets.get('core').snapshot()`; the rules printed are
+Identity, incarnation, pause, the rewrite rules, the subscription rows and the
+secrets catalog are one snapshot, `itx.facets.get('core').snapshot()`; the rules printed are
 `itx.rewriteRules.list()`; presence is `itx.rpcStubs.list()`;
 enabled processors are `itx.subscriptions.list()` entries whose target ends in
 `.processEventBatch`, and a halted delivery is a `halted` field. A snapshot reads
@@ -1106,29 +1220,34 @@ await itx.append({ type: "events.iterate.com/stream/resumed" });
   (the verbs build exactly these; appending one by hand is the durable
   spelling):
 
-| Event                                                           | Payload                                    | Written by                                                                                                                                |
-| --------------------------------------------------------------- | ------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| `events.iterate.com/itx/rewrite-rule-configured`                | `{ match, target \| null }` (both strings) | `provide` (a live stub or an expression); `null` on dispose / session end, or by the DO when the key's last pager closes                  |
-| `events.iterate.com/stream/subscription-configured`             | `{ name, target \| null, consumes? }`      | `subscribe` / `enableProcessor`; `null` from `disableProcessor`, dispose, session end, or the DO when a lent callback's last pager closes |
-| `events.iterate.com/stream/subscription-delivery-halted`        | `{ name, afterOffset, attempts, error? }`  | the delivery loop, after the ladder                                                                                                       |
-| `events.iterate.com/stream/subscription-delivery-resumed`       | `{ name, afterOffset? }`                   | you, to un-halt and optionally seek                                                                                                       |
-| `events.iterate.com/rpc-stub/attached` / `detached` (ephemeral) | `{ rpcStubKey }`                           | the rpc-stub directory, first/last pager of a key                                                                                         |
-| `events.iterate.com/live-state/changed` (ephemeral)             | `{ key, from, to, patch }`                 | `LiveState.set`                                                                                                                           |
-| `events.iterate.com/stream/created`                             | `{ projectId, path }`                      | the DO constructor (`Stream.appendCreatedAndWokenEvents`), offset 1, once                                                                 |
-| `events.iterate.com/stream/woken`                               | `{ incarnation }`                          | the DO constructor (`Stream.appendCreatedAndWokenEvents`), every incarnation                                                              |
-| `events.iterate.com/stream/paused` / `resumed`                  | `{ reason }` / `{}`                        | you, or a policy facet such as `BreakerProcessor`                                                                                         |
+| Event                                                           | Payload                                             | Written by                                                                                                                                |
+| --------------------------------------------------------------- | --------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `events.iterate.com/itx/rewrite-rule-configured`                | `{ match, target \| null }` (both strings)          | `provide` (a live stub or an expression); `null` on dispose / session end, or by the DO when the key's last pager closes                  |
+| `events.iterate.com/stream/subscription-configured`             | `{ name, target \| null, consumes?, afterOffset? }` | `subscribe` / `enableProcessor`; `null` from `disableProcessor`, dispose, session end, or the DO when a lent callback's last pager closes |
+| `events.iterate.com/secrets/changed`                            | `{ name, origin? }` / `{ name, deleted: true }`     | `itx.secrets.set` / `.delete` — the name, never the value                                                                                 |
+| `events.iterate.com/stream/subscription-delivery-halted`        | `{ name, afterOffset, attempts, error? }`           | the delivery loop, after the ladder                                                                                                       |
+| `events.iterate.com/stream/subscription-delivery-resumed`       | `{ name, afterOffset? }`                            | you, to un-halt and optionally seek                                                                                                       |
+| `events.iterate.com/rpc-stub/attached` / `detached` (ephemeral) | `{ rpcStubKey }`                                    | the rpc-stub directory, first/last pager of a key                                                                                         |
+| `events.iterate.com/live-state/changed` (ephemeral)             | `{ key, from, to, patch }`                          | `LiveState.set`                                                                                                                           |
+| `events.iterate.com/stream/created`                             | `{ projectId, path }`                               | the DO constructor (`Stream.appendCreatedAndWokenEvents`), offset 1, once                                                                 |
+| `events.iterate.com/stream/woken`                               | `{ incarnation }`                                   | the DO constructor (`Stream.appendCreatedAndWokenEvents`), every incarnation                                                              |
+| `events.iterate.com/stream/paused` / `resumed`                  | `{ reason }` / `{}`                                 | you, or a policy facet such as `BreakerProcessor`                                                                                         |
 
 Refusals surface as coded errors (`src/lib/errors.ts`): `STREAM_PAUSED`,
 `IDEMPOTENCY_CONFLICT`, `OFFSET_CONFLICT`, `NO_ITX_EXPRESSION_MATCH`, `NO_FACET`,
-`RPC_STUB_OFFLINE`, `WAIT_TIMEOUT`, `NOT_A_METHOD`, `TIMEOUT`.
+`RPC_STUB_OFFLINE`, `WAIT_TIMEOUT`, `NOT_A_METHOD`, `TIMEOUT`, `EVENT_TOO_LARGE`,
+`REDUCE_CHECKPOINT_TOO_LARGE`, `EVENT_UNREADABLE`, `RESERVED_SUBSCRIPTION_NAME`,
+`INVALID_CONTEXT`, `EXPRESSION_TOO_LONG`, `FACET_SOURCE_TOO_LARGE`; at the session:
+`INVALID_CREDENTIALS`, `UNAUTHENTICATED`, `FORBIDDEN`, `PROJECT_NAME_TAKEN`.
 
 ---
 
 ## 6. Subscriptions and the one delivery loop
 
 `src/stream/subscriptions.ts` is the one command that builds the layer's event
-(`subscriptionConfiguredEvent({ name, target | null, consumes? })` — a `null`
-target removes the row); the core reduce reduces the three subscription events
+(`subscriptionConfiguredEvent({ name, target | null, consumes?, afterOffset? })` — a `null`
+target removes the row; `afterOffset` is where the cursor lane starts, 0 = the
+whole log); the core reduce reduces the three subscription events
 into `state.subscriptions`. `src/stream/subscription-delivery.ts` is the loop, run from the
 stream's post-commit hook. For every subscription it filters the batch by
 `consumes`, evaluates the target expression, and asks the **value** what it is:
@@ -1146,7 +1265,8 @@ stream's post-commit hook. For every subscription it filters the batch by
   (1s·2ⁿ⁻¹ with ±20% jitter, capped at 30 min, 15 attempts; an error with
   `retryable: false` halts at once), then a `subscription-delivery-halted` fact.
   Retries ride the DO's own alarm, with a 20 s watchdog per attempt. The cursor
-  is born at the subscription's `configuredAtOffset`, lives in memory, and is
+  is born where the row asked (`afterOffset`; 0 = the whole log) else at the
+  subscription's `configuredAtOffset`, lives in memory, and is
   written to kv only at durable boundaries: a delivered batch that held a
   durable event, a ladder step, a halt, a resume. An ephemeral-only advance
   touches no storage.
@@ -1265,8 +1385,10 @@ class IterateContextDurableObject extends DurableObject<Env> {
 
   // ── native platform entry points ──
   /** Ordered partial-fetch walk: x-itx-rpc-stub-pager (the pager WS) → x-itx-fetch-upgrade (the
-   *  101 leg of an rpc-stub fetch) → x-itx-expression (the fetch lane) → else EGRESS:
-   *  {{secret:project:NAME}} substitution then FALLBACK.fetch. */
+   *  101 leg of an rpc-stub fetch) → x-itx-expression (the fetch lane, run under the x-itx-principal
+   *  stamp when the edge set one) → else EGRESS (#egress): {{secret:project:NAME}} substitution in
+   *  the URL and headers from SECRETS_KV (a missing secret, or one bound to another origin, is a
+   *  502 — ProjectSecretRefused — to the caller), then the terminal fetch. */
   fetch(request: Request): Promise<Response>;
   /** The cursor retry pump, then idle quiesce (aborts idle facets, returns borrowed stubs). */
   alarm(): Promise<void>;
@@ -1297,12 +1419,11 @@ interface Context {
 
 ## 8. Worker entrypoints, DO classes, bindings
 
-| Export (from `src/worker.ts`) | Kind                                                                                          | Surface                                                                                                                                                                                                |
-| ----------------------------- | --------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `default`                     | module worker `fetch`                                                                         | `/api` (capnweb: WS or one-shot HTTP batch → `UnauthenticatedSession`), `/expression?context=<id or name>&itx=<expr>` (fetch lane → DO with `x-itx-expression`; 400 without both), `/demo`, `/version` |
-| `IterateContextDurableObject` | Durable Object (binding `ITERATE_CONTEXT`)                                                    | section 7                                                                                                                                                                                              |
-| `ItxEntrypoint`               | `WorkerEntrypoint`, minted via `ctx.exports.ItxEntrypoint({ props: { iterateContextName } })` | `get()` → the real `IterateContext` scope (every stream verb rides it: `env.ITX.get().append(…)`); `fetch` (egress). Nothing else.                                                                     |
-| `DummyControlPlane`           | `WorkerEntrypoint`                                                                            | `fetch` = bare `fetch(request)`. Bound as `FALLBACK` only in solo/test config                                                                                                                          |
+| Export (from `src/worker.ts`) | Kind                                                                                          | Surface                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| ----------------------------- | --------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `default`                     | module worker `fetch`                                                                         | a PROJECT HOST `<app>--<projectId>.<base>` (admitted by `directory.getProject`, 421 for the unknown; `/.itx/session` the cookie door; the Request rides verbatim into the fetch lane as `itx.apps.<app>`); on the worker's hostname `/api` (capnweb: WS or one-shot HTTP batch → `UnauthenticatedSession`), `/expression?context=<id or name>&itx=<expr>` (fetch lane → DO with `x-itx-expression`; 400 without both), `/version`, `/demo` (a static asset); everything else the in-process CONTROL PLANE |
+| `IterateContextDurableObject` | Durable Object (binding `ITERATE_CONTEXT`)                                                    | section 7                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `ItxEntrypoint`               | `WorkerEntrypoint`, minted via `ctx.exports.ItxEntrypoint({ props: { iterateContextName } })` | `get()` → the real `IterateContext` scope (every stream verb rides it: `env.ITX.get().append(…)`); `fetch` (egress). Nothing else.                                                                                                                                                                                                                                                                                                                                                                        |
 
 Injected into loaded isolates, never deployed as a class:
 
@@ -1310,29 +1431,39 @@ Injected into loaded isolates, never deployed as a class:
 | -------------- | -------------------------------------- | ------------------------------------------------------ |
 | `processor.js` | `src/sdk/index.ts` via `build-sdk.mjs` | the userspace SDK (section 5.3), present in every load |
 
-The other package, `packages/v3/control-plane-shell`:
-
-```ts
-class ControlPlaneShell extends WorkerEntrypoint<Env> {
-  /** Egress terminal: substitute {{secret:platform:NAME}} then fetch the internet. */
-  fetch(request: Request): Promise<Response>;
-  /** Stand-in fallthrough verb (its own, pre-rename spelling `invokeCapability(callPath, args)`;
-   *  only "itx.auth.gate" answers). Nothing in project-worker calls it yet. */
-}
-// default fetch: GET /emit?projectId=&path=&type= appends into a project's context (outer → inner)
-```
+The control plane (`src/control-plane/`, the catch-all — one worker, one front door): an OAuth 2.1
+Authorization Server (`@cloudflare/workers-oauth-provider`) owning `/authorize`, `/token`,
+`/register`, `/.well-known/*` and token validation on `/mcp` (its ONLY protected route; tokenless in
+`open` login mode, the anonymous identity); everything else falls through to `app.ts` — the console
+at `/`, the email login form (`POST /login`, `/logout`; the session is the signed
+`itx-control-plane-session` cookie, `signClaims` under `APP_CONFIG_SESSION_SECRET`), `POST /projects`
+(the console's form; a program creates projects over `/api`, `projects.create`), the `/authorize`
+consent page (pick a project or create an org + project on the spot). `/mcp` serves three tools:
+`whoami`, `list_projects`, `create_project`. The directory (`directory.ts`, D1 through sqlfu,
+`definitions.sql`): users → orgs via `org_members` → projects; access is org membership; a project's
+id is ONE DNS-safe slug — the directory row, the DO name and the host label. `APP_CONFIG_LOGIN_MODE`:
+`open` (no login, the one seeded anonymous user `user_anonymous`) or `email`.
 
 Bindings (`wrangler.jsonc`):
 
-| Binding               | Kind                                                | Used for                                                                           |
-| --------------------- | --------------------------------------------------- | ---------------------------------------------------------------------------------- |
-| `ITERATE_CONTEXT`     | DO namespace → `IterateContextDurableObject`        | every context, `getByName(codec)`                                                  |
-| `LOADER`              | Worker Loader                                       | `itx.workers.get`, `runScript`, processors                                         |
-| `ITX_KV`              | KV                                                  | `itx.kv`, keys prefixed `${projectId}:`                                            |
-| `SECRETS_KV`          | KV                                                  | egress substitution, keys `secret:${projectId}:${name}`                            |
-| `CF_VERSION_METADATA` | version metadata                                    | `app-config.ts` reads it into `deployId`: every loader cacheKey, and `/version`    |
-| `APP_CONFIG_*` vars   | configuration (`src/app-config.ts`)                 | parsed once per isolate into one typed object; today `APP_CONFIG_ENVIRONMENT_NAME` |
-| `FALLBACK`            | service → `iterate-control-plane#ControlPlaneShell` | the egress terminal                                                                |
+| Binding               | Kind                                         | Used for                                                                                                                                                                                                                                                                          |
+| --------------------- | -------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ITERATE_CONTEXT`     | DO namespace → `IterateContextDurableObject` | every context, `getByName(codec)`                                                                                                                                                                                                                                                 |
+| `LOADER`              | Worker Loader                                | `itx.workers.get`, `runScript`, processors                                                                                                                                                                                                                                        |
+| `AI`                  | Workers AI                                   | `itx.ai`, the binding verbatim                                                                                                                                                                                                                                                    |
+| `ARTIFACTS`           | Cloudflare Artifacts namespace               | `itx.cfArtifacts` (project-scoped), `itx.repos`                                                                                                                                                                                                                                   |
+| `ITX_KV`              | KV                                           | `itx.kv`, keys prefixed `${projectId}:`                                                                                                                                                                                                                                           |
+| `SECRETS_KV`          | KV                                           | `itx.secrets` writes, egress reads: keys `secret:${projectId}:${name}`, the origin in metadata                                                                                                                                                                                    |
+| `DB`                  | D1                                           | the control plane's directory (`definitions.sql`)                                                                                                                                                                                                                                 |
+| `OAUTH_KV`            | KV                                           | the OAuth AS's store (grants, tokens, DCR clients)                                                                                                                                                                                                                                |
+| `CF_VERSION_METADATA` | version metadata                             | `app-config.ts` reads it into `deployId`: every loader cacheKey, and `/version`                                                                                                                                                                                                   |
+| `APP_CONFIG_*` vars   | configuration (`src/app-config.ts`)          | parsed once per isolate into one typed object, an unknown var refused: `ENVIRONMENT_NAME`, `PROJECT_HOSTNAME_BASE`, `PROJECT_TOKEN_SECRET` (a wrangler secret on a deployment), `ARTIFACTS_ACCOUNT_ID`, `ARTIFACTS_NAMESPACE`, `LOGIN_MODE` (`open` \| `email`), `SESSION_SECRET` |
+
+The route `*.project-worker.iterate.com/*` (a wildcard DNS record in the zone) is the project hosts;
+`public/` is served as static assets (`/demo`). The e2e lane boots this same config, patched
+(`e2e/support/worker-config.ts`: absolute paths, `APP_CONFIG_ENVIRONMENT_NAME=e2e`,
+`APP_CONFIG_PROJECT_HOSTNAME_BASE=localhost`, a var for the token secret); the workers lane runs
+`wrangler.test.jsonc` (no build block, no `AI`).
 
 The loader cacheKey is the JSON array `[kind, deploy, owner, cacheKey ?? contentHash]` (never a `:`-joined string — an owner or a key may contain `:`): the caller's
 `cacheKey` when the source is a producer expression (required there — the producer runs only
@@ -1501,7 +1632,7 @@ itself.
 | Word                  | Meaning here                                                                                                                                                                                                                                                                          |
 | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | context               | one `IterateContextDurableObject`, named `{projectId}.iterate{path}`; a stream + a rewrite-rule table + a subscriptions table + the rpc-stub directory                                                                                                                                |
-| session               | what `/api` hands you: `UnauthenticatedSession → authenticate() → Session → projects.get(id)`; a session is not a context, it is how you reach one                                                                                                                                    |
+| session               | what `/api` hands you: `UnauthenticatedSession → authenticate() → Session → projects.list()/get(id)/create({ slug })`; a session is not a context, it is how you reach one — and who you are (`whoami()`: the control plane's user, or a project token's principal)                   |
 | itx expression        | `["itx", ...steps]` (`ItxExpression`) or its string form; either half is an `ItxExpressionInput`; the persisted currency of every target                                                                                                                                              |
 | itx-expression prefix | a rewrite rule's `match`: dotted names, any step may pin literal args — `itx.greet`, `itx.ai.run('gpt-5')`; `canonicalItxExpressionPrefix` is its one spelling, the table's key                                                                                                       |
 | rewrite rule          | `{ match, target }`: a call starting with `match` runs as the same call with `match` replaced by `target`; one map entry per canonical match, written by `itx/rewrite-rule-configured { match, target \| null }`; nothing else rides it                                               |
@@ -1515,13 +1646,15 @@ itself.
 | push                  | delivery to a target that owns its progress: `(events, range)`, fire-and-forget to a lent stub, awaited to a facet                                                                                                                                                                    |
 | stream-kept cursor    | delivery to a target that cannot own progress: at-least-once from a kv cursor, retry ladder, halt fact                                                                                                                                                                                |
 | processor             | a pure `StreamProcessor` (contract + reduce, optional effects) inside a `StreamProcessorDurableObject` host, hosted as a facet and subscribed to `processEventBatch`; durable configuration; the core reduce is one hosted inline instead                                             |
-| core reduce           | the ONE reduce-only processor run inside the commit transaction: `core` (identity, wake, pause, rewrite rules, subscriptions), owned by the `Stream`                                                                                                                                  |
+| core reduce           | the ONE reduce-only processor run inside the commit transaction: `core` (identity, wake, pause, rewrite rules, subscriptions, the secrets catalog), owned by the `Stream`                                                                                                             |
 | facet                 | a workerd `ctx.facets` child of the DO with its own storage; hosts loaded `DurableObject` classes, processors included                                                                                                                                                                |
 | scanned range         | `{ after, through }` delivered with each batch; the contiguity proof subscribers chain                                                                                                                                                                                                |
 | ephemeral             | an event that takes an offset but is never stored and costs no write; delivered only to subscribers that name its type                                                                                                                                                                |
 | incarnation           | one life of the DO between evictions; the constructor's `stream/woken` opens each (offset 1 is the first one's `stream/created`); ephemeral offsets are unique within one                                                                                                             |
 | live state            | a `LiveState` holder's `{ rev, state }` plus `live-state/changed` deltas; clients chain revs and re-seed on a gap                                                                                                                                                                     |
-| egress                | any fetch leaving project code: `{{secret:project:NAME}}` substituted in the DO, then `FALLBACK.fetch`                                                                                                                                                                                |
+| egress                | any fetch leaving project code: `{{secret:project:NAME}}` substituted in the DO (URL + headers; a missing or origin-bound secret is a 502), then the terminal `fetch` — no next door                                                                                                  |
+| control plane         | the in-process catch-all of the one worker (`src/control-plane/`): the OAuth AS, the D1 directory (users → orgs → projects; a project's id IS its slug), `/mcp`, the console + email login; what admits a project host and answers membership                                         |
+| project host          | `<app>--<projectId>.<base>`: the app `itx.apps.<app>` of the project's root context, the Request verbatim; admitted by one directory read (421 otherwise); a project token as the `/.itx/session` cookie or as `Authorization: Bearer` stamps `x-itx-principal`                       |
 | fetch lane            | reaching something fetch-shaped: `/expression?context=&itx=` from outside (`x-itx-expression` to the DO), a terminal `itx.x.fetch(request)` from inside a session                                                                                                                     |
 
 ---

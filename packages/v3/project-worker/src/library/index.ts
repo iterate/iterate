@@ -6,8 +6,8 @@
 // takes `itx` and nothing else, so it could move to a userspace worker unchanged (capnweb.ts once the
 // SDK exports `InvokeHandle`); the surface shows no level — `itx.connectToMcp(url)` reads like
 // `itx.ai.run(...)` — the folder and the signature do. boundary.test.ts pins the rule (no runtime
-// import from the stream, the DO, the fetch module or the context folder, except invoke-handle.ts,
-// the pipelinable-handle primitive).
+// import from the stream, the DO, the fetch module or the context folder, except its two pure
+// primitives: expression.ts, the codec, and invoke-handle.ts, the pipelinable handle).
 //
 // The verbs: `connectToMcp` · `connectToOpenApi` · `connectToCapnweb` · `serveMcp`. The three
 // connectors each return a connection RpcTarget a caller can hold across calls, and each does ALL
@@ -28,6 +28,7 @@
 // reopens itself on its next use (mcp.ts, capnweb.ts), so a memoized one is never dead.
 
 import type { BuiltInScope } from "../context/built-ins.ts";
+import { keySortedForPrint } from "../context/expression.ts";
 import { connectToCapnweb, type CapnwebConnection, type CapnwebConnectOptions } from "./capnweb.ts";
 import { connectToMcp, type McpConnection, type McpConnectOptions } from "./mcp.ts";
 import { McpServerHandle } from "./mcp-server.ts";
@@ -76,7 +77,7 @@ export function buildLibrary(itx: LibraryItx): {
 } {
   const liveConnections = new Map<string, Promise<unknown>>();
   const memoized = <T>(key: unknown[], open: () => Promise<T>): Promise<T> => {
-    const memoKey = JSON.stringify(key, keySorted);
+    const memoKey = JSON.stringify(key, keySortedForPrint); // keys sorted: two spellings, one key
     let connection = liveConnections.get(memoKey) as Promise<T> | undefined;
     if (!connection) {
       connection = open();
@@ -114,16 +115,6 @@ export function buildLibrary(itx: LibraryItx): {
   };
 }
 
-/** Object keys sorted, so two spellings of one options object are one memo key. */
-const keySorted = (_key: string, value: unknown): unknown =>
-  value !== null && typeof value === "object" && !Array.isArray(value)
-    ? Object.fromEntries(
-        Object.keys(value as Record<string, unknown>)
-          .sort()
-          .map((k) => [k, (value as Record<string, unknown>)[k]]),
-      )
-    : value;
-
 // ── what the three connectors share ──
 
 /** A per-connection subclass whose PROTOTYPE carries one method per name — prototype members are what
@@ -151,31 +142,28 @@ export function subclassWithMethods<Base extends abstract new (...args: never[])
   return Subclass as unknown as Base;
 }
 
-/** The error for a response that refused: `<what> returned <status>: <the first 300 characters>`. */
+/** The error for a response that refused: `<what> returned <status>: <the first 300 characters>`.
+ *  The body is read only that far, then CANCELLED — a refusal's snippet must never buffer a whole
+ *  error page (the v4 review's hygiene item). */
 export async function responseRefusal(response: Response, what: string): Promise<Error> {
-  const snippet = await responseTextPrefix(response, 300);
-  return new Error(`${what} returned ${response.status}${snippet ? `: ${snippet}` : ""}`);
-}
-
-/** The first `maxChars` of a body, then the stream is CANCELLED — a refusal's snippet must never buffer
- *  a whole error page (the v4 review's hygiene item). */
-async function responseTextPrefix(response: Response, maxChars: number): Promise<string> {
   const reader = response.body?.getReader();
-  if (!reader) return "";
-  const decoder = new TextDecoder();
-  let text = "";
-  try {
-    while (text.length < maxChars) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      text += decoder.decode(value, { stream: true });
+  let snippet = "";
+  if (reader) {
+    const decoder = new TextDecoder();
+    try {
+      while (snippet.length < 300) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        snippet += decoder.decode(value, { stream: true });
+      }
+    } catch {
+      /* a body that cannot be read adds nothing to the refusal */
+    } finally {
+      reader.cancel().catch(() => undefined);
     }
-  } catch {
-    /* a body that cannot be read adds nothing to the refusal */
-  } finally {
-    reader.cancel().catch(() => undefined);
+    snippet = snippet.slice(0, 300);
   }
-  return text.slice(0, maxChars);
+  return new Error(`${what} returned ${response.status}${snippet ? `: ${snippet}` : ""}`);
 }
 
 /** The response, or the refusal thrown — ONE spelling for every non-2xx the connectors meet. */
