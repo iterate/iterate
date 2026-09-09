@@ -9,6 +9,7 @@
 #include "iterate/kit/audio_processor.h"
 #include "iterate/kit/capabilities/speaker.h"
 #include "iterate/kit/peer.h"
+#include "iterate/kit/voice_playout.h"
 #include "iterate/kit/conversation_lights.h"
 
 #ifdef __cplusplus
@@ -133,48 +134,6 @@ struct iterate_kit_voice_intent {
   /** A level: the talk control is down right now, in a state where the
    * grammar says holding means talking. Push-to-talk boards. */
   bool talk_held;
-};
-
-/**
- * What the speaker path is doing, so a board can follow it in hardware.
- *
- * This replaces `dma_watch(bool)`, `dma_draining()`, `note_flush()` and
- * `amplifier(bool)` — eleven calls whose only job was to tell the driver which
- * of six situations the playback task was in. Named after the situations, the
- * six are exhaustive, and a board that ignores one is ignoring a fact rather
- * than missing a call.
- *
- * Called from BOTH the app task and the playback task, so a board's handler
- * must be safe under that — which the four drivers already were.
- */
-enum iterate_kit_voice_phase {
-  /**
-   * Audio has ARRIVED and been admitted — not written yet.
-   *
-   * A class-D amplifier needs tens of milliseconds to settle, and raising it
-   * two milliseconds before the first write meant the opening of every answer
-   * played into an amp that was not up: heard as the first half-word clipped.
-   * Raising it here spends the playout prefill as settle time, which is free.
-   * Boards whose speaker rail stays up for the life of the boot ignore this.
-   */
-  ITERATE_KIT_VOICE_PHASE_ARRIVED,
-  /** Handing the DAC a frame right now. This is the only armed state. */
-  ITERATE_KIT_VOICE_PHASE_FEEDING,
-  /** Deliberately not feeding: priming, dry, fenced out, or holding a stale frame. */
-  ITERATE_KIT_VOICE_PHASE_WAITING,
-  /** The sender declared the answer over, so a dry ring is the end, not a hole. */
-  ITERATE_KIT_VOICE_PHASE_DRAINING,
-  /**
-   * We are about to throw queued audio away on purpose.
-   *
-   * MUST be announced BEFORE the audio goes, never after. Invalidating first
-   * leaves a window in which the device's own intentional cut is recorded as
-   * listener-visible starvation — measured on 2026-08-04, when a hang-up
-   * arriving with 13,020 ms of audio still queued moved `spkStarveEvents` by one.
-   */
-  ITERATE_KIT_VOICE_PHASE_FLUSHED,
-  /** Dry long enough that the amplifier can go down without power-cycling it. */
-  ITERATE_KIT_VOICE_PHASE_QUIET,
 };
 
 /** Which fact about the current answer this note carries. */

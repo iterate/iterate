@@ -6,6 +6,7 @@
 #include <stdint.h>
 
 #include "iterate/kit/audio_codec.h"
+#include "iterate/kit/voice_playout.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -115,24 +116,10 @@ uint32_t m5sticks3_audio_playback_driver_failures(void);
 /** Half-duplex fence crossings, for the health surface. */
 uint32_t m5sticks3_audio_mode_switches(void);
 
-/**
- * Count starvation only while an answer is being fed. Between answers the
- * DAC correctly clocks zeros; counting that measures silence, not a fault.
+/** Apply the shared starvation phase under this board's lock; amplifier
+ * control remains with the device. Safe on the app and playback tasks.
  */
-void m5sticks3_audio_watch(bool active);
-
-/**
- * The source has run dry because the answer is over: stall time from here is
- * the normal end-of-answer drain, not a defect.
- */
-void m5sticks3_audio_draining(void);
-
-/**
- * An intentional flush just discarded queued audio. The hardware ring may
- * still hold up to one ring of audio it will never be credited for, so the
- * empty-deadline must not assume an empty ring.
- */
-void m5sticks3_audio_note_flush(void);
+void m5sticks3_audio_phase(enum iterate_kit_voice_phase phase);
 
 /**
  * Reserve credit for `ms` of audio ABOUT to be written, before the blocking

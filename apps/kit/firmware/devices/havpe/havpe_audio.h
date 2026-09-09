@@ -6,6 +6,7 @@
 #include <stdint.h>
 
 #include "iterate/kit/audio_codec.h"
+#include "iterate/kit/voice_playout.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -79,11 +80,11 @@ uint32_t havpe_audio_playback_queue_overflows(void);
 /** Samples the fixed capture make-up gain had to clip (lifetime). */
 uint32_t havpe_audio_capture_gain_clipped(void);
 
-/* The absolute-deadline starvation ledger; semantics identical to the other
- * boards (see m5sticks3_audio.h). */
-void havpe_audio_watch(bool active);
-void havpe_audio_draining(void);
-void havpe_audio_note_flush(void);
+/** Apply the shared starvation phase under this board's lock; amplifier
+ * control remains with the device. Safe on the app and playback tasks.
+ */
+void havpe_audio_phase(enum iterate_kit_voice_phase phase);
+
 void havpe_audio_reserve_write(uint32_t ms);
 void havpe_audio_rollback_write(uint32_t ms);
 uint32_t havpe_audio_starved_ms(void);

@@ -399,33 +399,10 @@ static void poll(void *context, struct iterate_kit_voice_intent *out) {
 
 static void phase(void *context, enum iterate_kit_voice_phase phase_value) {
   (void)context;
-  switch (phase_value) {
-    case ITERATE_KIT_VOICE_PHASE_ARRIVED:
-    case ITERATE_KIT_VOICE_PHASE_QUIET:
-      /*
-       * NO AMPLIFIER TO GATE. The speaker rail stays up for the life of the
-       * boot: the software canceller's reference is taken from the running TX
-       * stream, so cutting the rail between answers would take the reference
-       * with it and the filter would re-adapt at the start of every answer.
-       */
-      break;
-    case ITERATE_KIT_VOICE_PHASE_FEEDING:
-      stackchan_audio_watch(true);
-      break;
-    case ITERATE_KIT_VOICE_PHASE_WAITING:
-      stackchan_audio_watch(false);
-      break;
-    case ITERATE_KIT_VOICE_PHASE_DRAINING:
-      stackchan_audio_draining();
-      stackchan_audio_watch(false);
-      break;
-    case ITERATE_KIT_VOICE_PHASE_FLUSHED:
-      /* Disarm before declaring: the other order records the device's own
-       * intentional cut as listener-visible starvation. */
-      stackchan_audio_watch(false);
-      stackchan_audio_note_flush();
-      break;
-  }
+  stackchan_audio_phase(phase_value);
+  /* The rail stays up for the life of the boot: the software canceller's
+   * reference rides the running TX stream. Gating it would force the filter
+   * to re-adapt on every answer. ARRIVED/QUIET leave it alone. */
 }
 
 /*

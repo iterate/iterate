@@ -284,3 +284,6 @@ iterate_kit_add_test(iterate-kit-voice-view-lights-test voice_view_lights_test.c
   STD 11 LINK iterate-kit-voice iterate-kit-esp-idf-fakes)
 
 iterate_kit_add_core_test(iterate-kit-xmos-control-test xmos_control_test.c)
+
+iterate_kit_add_audio_test(
+  iterate-kit-starvation-ledger-test starvation_ledger_test.c)

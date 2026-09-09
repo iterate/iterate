@@ -182,35 +182,14 @@ static void poll(void *context, struct iterate_kit_voice_intent *out) {
 
 static void phase(void *context, enum iterate_kit_voice_phase phase_value) {
   (void)context;
-  switch (phase_value) {
-    case ITERATE_KIT_VOICE_PHASE_ARRIVED:
-      m5sticks3_audio_amplifier(true);
-      break;
-    case ITERATE_KIT_VOICE_PHASE_FEEDING:
-      m5sticks3_audio_watch(true);
-      break;
-    case ITERATE_KIT_VOICE_PHASE_WAITING:
-      m5sticks3_audio_watch(false);
-      break;
-    case ITERATE_KIT_VOICE_PHASE_DRAINING:
-      m5sticks3_audio_draining();
-      m5sticks3_audio_watch(false);
-      break;
-    case ITERATE_KIT_VOICE_PHASE_FLUSHED:
-      /* Disarm before declaring: the other order records the device's own
-       * intentional cut as listener-visible starvation. */
-      m5sticks3_audio_watch(false);
-      m5sticks3_audio_note_flush();
-      break;
-    case ITERATE_KIT_VOICE_PHASE_QUIET:
-      /*
-       * Not while the board's own voice is mid-word: the idle powerdown fires
-       * 1.5 s after the last stream write, which is exactly when "call ended"
-       * is playing. QUIET is re-raised every idle pass, so the amplifier
-       * still drops on the first pass after the sound finishes.
-       */
-      if (!m5sticks3_audio_sound_active()) m5sticks3_audio_amplifier(false);
-      break;
+  m5sticks3_audio_phase(phase_value);
+  if (phase_value == ITERATE_KIT_VOICE_PHASE_ARRIVED) {
+    m5sticks3_audio_amplifier(true);
+  } else if (phase_value == ITERATE_KIT_VOICE_PHASE_QUIET) {
+    /* The idle powerdown fires 1.5 s after the last stream write, while
+     * "call ended" may still be playing. QUIET repeats each idle pass, so
+     * the amp drops on the first pass after the board's own voice finishes. */
+    if (!m5sticks3_audio_sound_active()) m5sticks3_audio_amplifier(false);
   }
 }
 

@@ -33,6 +33,7 @@
  *    underrun.
  */
 #include "havpe_audio.h"
+#include "iterate/kit/starvation_ledger.h"
 
 #include <stdatomic.h>
 #include <string.h>
@@ -233,108 +234,54 @@ static const struct iterate_kit_audio_codec_properties codec_properties = {
   .output_gain_ceiling_centi_db = 0,
 };
 
-/* --- absolute-deadline starvation ledger (see m5sticks3_audio.c) ---------- */
+/* --- absolute-deadline starvation ledger (shared components/audio policy) ---------- */
 
 static portMUX_TYPE ledger_lock = portMUX_INITIALIZER_UNLOCKED;
-static bool ledger_watch;
-static bool ledger_draining;
-static bool ledger_stale_ring;
-static int64_t ledger_empty_at_us;
-static uint32_t ledger_written_ms;
-static uint32_t ledger_starved_ms;
-static uint32_t ledger_starve_events;
+static struct iterate_kit_starvation_ledger ledger;
 
-static uint32_t saturating_add(uint32_t value, uint32_t delta) {
-  const uint32_t sum = value + delta;
-  return sum < value ? 0xffffffffU : sum;
-}
-
-void havpe_audio_watch(bool active) {
+void havpe_audio_phase(enum iterate_kit_voice_phase phase) {
   portENTER_CRITICAL(&ledger_lock);
-  if (active && !ledger_watch) {
-    ledger_written_ms = 0U;
-    ledger_empty_at_us = esp_timer_get_time() +
-        (ledger_stale_ring ? (int64_t)PLAYBACK_RING_MS * 1000 : 0);
-    ledger_stale_ring = false;
-  }
-  if (active) ledger_draining = false;
-  ledger_watch = active;
-  portEXIT_CRITICAL(&ledger_lock);
-}
-
-void havpe_audio_draining(void) {
-  portENTER_CRITICAL(&ledger_lock);
-  ledger_draining = true;
-  portEXIT_CRITICAL(&ledger_lock);
-}
-
-void havpe_audio_note_flush(void) {
-  portENTER_CRITICAL(&ledger_lock);
-  ledger_stale_ring = true;
+  iterate_kit_starvation_ledger_phase(&ledger, phase, esp_timer_get_time());
   portEXIT_CRITICAL(&ledger_lock);
 }
 
 void havpe_audio_reserve_write(uint32_t ms) {
   const int64_t now_us = esp_timer_get_time();
   portENTER_CRITICAL(&ledger_lock);
-  if (ledger_watch && !ledger_draining && ledger_empty_at_us > 0 &&
-      ledger_written_ms >= (uint32_t)PLAYBACK_RING_MS &&
-      now_us > ledger_empty_at_us) {
-    ledger_starved_ms = saturating_add(
-        ledger_starved_ms,
-        (uint32_t)((now_us - ledger_empty_at_us) / 1000));
-    ledger_starve_events = saturating_add(ledger_starve_events, 1U);
-  }
-  {
-    const int64_t base_us =
-        now_us > ledger_empty_at_us ? now_us : ledger_empty_at_us;
-    ledger_empty_at_us = base_us + (int64_t)ms * 1000;
-  }
-  ledger_written_ms = saturating_add(ledger_written_ms, ms);
+  iterate_kit_starvation_ledger_reserve_write(&ledger, ms, now_us);
   portEXIT_CRITICAL(&ledger_lock);
 }
 
 void havpe_audio_rollback_write(uint32_t ms) {
   portENTER_CRITICAL(&ledger_lock);
-  ledger_empty_at_us -= (int64_t)ms * 1000;
-  if (ledger_written_ms >= ms) ledger_written_ms -= ms;
+  iterate_kit_starvation_ledger_rollback_write(&ledger, ms);
   portEXIT_CRITICAL(&ledger_lock);
 }
 
 uint32_t havpe_audio_starved_ms(void) {
-  return ledger_starved_ms;
+  struct iterate_kit_starvation_ledger_metrics metrics;
+  portENTER_CRITICAL(&ledger_lock);
+  iterate_kit_starvation_ledger_metrics(&ledger, &metrics);
+  portEXIT_CRITICAL(&ledger_lock);
+  return metrics.starved_ms;
 }
 
 uint32_t havpe_audio_starve_events(void) {
-  return ledger_starve_events;
+  struct iterate_kit_starvation_ledger_metrics metrics;
+  portENTER_CRITICAL(&ledger_lock);
+  iterate_kit_starvation_ledger_metrics(&ledger, &metrics);
+  portEXIT_CRITICAL(&ledger_lock);
+  return metrics.starve_events;
 }
 
-
 bool havpe_audio_speaker_is_playing(void) {
-  bool playing;
   const int64_t now_us = esp_timer_get_time();
   portENTER_CRITICAL(&ledger_lock);
-  /*
-   * The ledger already knows the wall-clock instant the hardware ring runs
-   * dry, because that is how starvation is measured. "Sound is coming out of
-   * the speaker right now" is the same fact read forwards.
-   *
-   * THE HOLD IS THE POINT. An answer is not one continuous noise: "One. Two.
-   * Three." is three short bursts with real silence between them, and the
-   * ring genuinely empties in those gaps. Read instant by instant, this said
-   * "not playing" during every pause, the uplink opened, the provider heard
-   * the room through the gap and cancelled its own answer — which is why a
-   * request to count to twelve came back as "One. Two." and was marked
-   * complete. The hold spans the pauses inside an answer without spanning the
-   * silence after one, and it costs nothing when the room is quiet because
-   * the caller still asks whether a PERSON is talking before muting anything.
-   */
-  playing = ledger_watch &&
-      ledger_empty_at_us + (int64_t)SPEAKER_ACTIVITY_HOLD_MS * 1000 > now_us;
+  const bool playing = iterate_kit_starvation_ledger_speaker_is_playing(
+      &ledger, now_us, SPEAKER_ACTIVITY_HOLD_MS);
   portEXIT_CRITICAL(&ledger_lock);
   return playing;
 }
-
 
 /* --- local sounds ---------------------------------------------------------- */
 
@@ -919,6 +866,7 @@ static esp_err_t preload_playback_silence(void) {
 }
 
 bool havpe_audio_init(void) {
+  iterate_kit_starvation_ledger_init(&ledger, PLAYBACK_RING_MS);
   size_t initial_write_count = 0U;
   size_t power_up_write_count = 0U;
   const struct iterate_kit_voice_pe_register_write *initial_writes =

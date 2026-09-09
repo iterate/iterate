@@ -6,6 +6,7 @@
 #include <stdint.h>
 
 #include "iterate/kit/audio_codec.h"
+#include "iterate/kit/voice_playout.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -115,12 +116,11 @@ uint32_t stackchan_audio_playback_driver_failures(void);
 uint32_t stackchan_audio_playback_partial_chunks(void);
 uint32_t stackchan_audio_epoch_resets(void);
 
-/* The absolute-deadline starvation ledger; semantics identical to the other
- * boards (see m5sticks3_audio.h). "Starved" here means the staging ran dry
- * while an answer was being fed — the DAC itself never stops clocking. */
-void stackchan_audio_watch(bool active);
-void stackchan_audio_draining(void);
-void stackchan_audio_note_flush(void);
+/** Apply the shared starvation phase under this board's lock; amplifier
+ * control remains with the device. Safe on the app and playback tasks.
+ */
+void stackchan_audio_phase(enum iterate_kit_voice_phase phase);
+
 void stackchan_audio_reserve_write(uint32_t ms);
 void stackchan_audio_rollback_write(uint32_t ms);
 uint32_t stackchan_audio_starved_ms(void);

@@ -288,33 +288,9 @@ static void poll(void *context, struct iterate_kit_voice_intent *out) {
 
 static void phase(void *context, enum iterate_kit_voice_phase phase_value) {
   (void)context;
-  switch (phase_value) {
-    case ITERATE_KIT_VOICE_PHASE_ARRIVED:
-    case ITERATE_KIT_VOICE_PHASE_QUIET:
-      /*
-       * NO AMPLIFIER TO GATE. The speaker rail stays up for the life of the
-       * boot because the XMOS's AEC reference rides the always-running TX
-       * stream — cutting the rail between answers would take the canceller's
-       * reference with it. See havpe_audio_init().
-       */
-      break;
-    case ITERATE_KIT_VOICE_PHASE_FEEDING:
-      havpe_audio_watch(true);
-      break;
-    case ITERATE_KIT_VOICE_PHASE_WAITING:
-      havpe_audio_watch(false);
-      break;
-    case ITERATE_KIT_VOICE_PHASE_DRAINING:
-      havpe_audio_draining();
-      havpe_audio_watch(false);
-      break;
-    case ITERATE_KIT_VOICE_PHASE_FLUSHED:
-      /* Disarm before declaring: the other order records the device's own
-       * intentional cut as listener-visible starvation. */
-      havpe_audio_watch(false);
-      havpe_audio_note_flush();
-      break;
-  }
+  havpe_audio_phase(phase_value);
+  /* The rail stays up for the life of the boot: the XMOS AEC reference
+   * rides the always-running TX stream. ARRIVED/QUIET do not gate it. */
 }
 
 static enum iterate_kit_status set_volume(

@@ -24,6 +24,7 @@
  * electrically present but semantically irrelevant to the codec.
  */
 #include "m5sticks3_audio.h"
+#include "iterate/kit/starvation_ledger.h"
 
 #include "m5sticks3_board.h"
 
@@ -160,18 +161,7 @@ void publish_stage(Stage next) {
  * measure and this board keeps only it.
  */
 portMUX_TYPE ledger_lock = portMUX_INITIALIZER_UNLOCKED;
-bool ledger_watch;
-bool ledger_draining;
-bool ledger_stale_ring;
-int64_t ledger_empty_at_us;
-uint32_t ledger_written_ms;
-uint32_t ledger_starved_ms;
-uint32_t ledger_starve_events;
-
-uint32_t saturating_add(uint32_t value, uint32_t delta) {
-  const uint32_t sum = value + delta;
-  return sum < value ? 0xffffffffU : sum;
-}
+struct iterate_kit_starvation_ledger ledger;
 
 /* --- the shared codec seam ------------------------------------------------ */
 
@@ -668,6 +658,7 @@ void capture_hardware_task(void *argument) {
 extern "C" {
 
 bool m5sticks3_audio_init(void) {
+  iterate_kit_starvation_ledger_init(&ledger, DMA_RING_MS);
   capture_mailbox = xQueueCreate(1U, sizeof(struct audio_frame));
   playback_mailbox = xQueueCreate(1U, sizeof(struct audio_frame));
   if (capture_mailbox == nullptr || playback_mailbox == nullptr) {
@@ -805,74 +796,39 @@ uint32_t m5sticks3_audio_mode_switches(void) {
   return mode_switches.load(std::memory_order_relaxed);
 }
 
-void m5sticks3_audio_watch(bool active) {
+void m5sticks3_audio_phase(enum iterate_kit_voice_phase phase) {
   portENTER_CRITICAL(&ledger_lock);
-  if (active && !ledger_watch) {
-    ledger_written_ms = 0U;
-    /*
-     * How much the hardware may still be holding. Zero after a normal drain;
-     * one ring after an intentional flush, because that audio was never
-     * un-queued and will play out without any new credit.
-     */
-    ledger_empty_at_us = esp_timer_get_time() +
-        (ledger_stale_ring ? static_cast<int64_t>(DMA_RING_MS) * 1000 : 0);
-    ledger_stale_ring = false;
-  }
-  if (active) ledger_draining = false;
-  ledger_watch = active;
-  portEXIT_CRITICAL(&ledger_lock);
-}
-
-void m5sticks3_audio_draining(void) {
-  portENTER_CRITICAL(&ledger_lock);
-  ledger_draining = true;
-  portEXIT_CRITICAL(&ledger_lock);
-}
-
-void m5sticks3_audio_note_flush(void) {
-  portENTER_CRITICAL(&ledger_lock);
-  ledger_stale_ring = true;
+  iterate_kit_starvation_ledger_phase(&ledger, phase, esp_timer_get_time());
   portEXIT_CRITICAL(&ledger_lock);
 }
 
 void m5sticks3_audio_reserve_write(uint32_t ms) {
   const int64_t now_us = esp_timer_get_time();
   portENTER_CRITICAL(&ledger_lock);
-  /*
-   * Late only if the ring had already run out — meaningful only while we
-   * were meant to be feeding, and only once the ring has been filled for the
-   * first time (an answer's opening plays into a ring that was idle).
-   */
-  if (ledger_watch && !ledger_draining && ledger_empty_at_us > 0 &&
-      ledger_written_ms >= static_cast<uint32_t>(DMA_RING_MS) &&
-      now_us > ledger_empty_at_us) {
-    ledger_starved_ms = saturating_add(
-        ledger_starved_ms,
-        static_cast<uint32_t>((now_us - ledger_empty_at_us) / 1000));
-    ledger_starve_events = saturating_add(ledger_starve_events, 1U);
-  }
-  /* The deadline moves out by exactly the audio this write hands over. */
-  const int64_t base_us =
-      now_us > ledger_empty_at_us ? now_us : ledger_empty_at_us;
-  ledger_empty_at_us = base_us + static_cast<int64_t>(ms) * 1000;
-  ledger_written_ms = saturating_add(ledger_written_ms, ms);
+  iterate_kit_starvation_ledger_reserve_write(&ledger, ms, now_us);
   portEXIT_CRITICAL(&ledger_lock);
 }
 
 void m5sticks3_audio_rollback_write(uint32_t ms) {
-  /* The write failed, so the audio never went in: take the credit back. */
   portENTER_CRITICAL(&ledger_lock);
-  ledger_empty_at_us -= static_cast<int64_t>(ms) * 1000;
-  if (ledger_written_ms >= ms) ledger_written_ms -= ms;
+  iterate_kit_starvation_ledger_rollback_write(&ledger, ms);
   portEXIT_CRITICAL(&ledger_lock);
 }
 
 uint32_t m5sticks3_audio_starved_ms(void) {
-  return ledger_starved_ms;
+  struct iterate_kit_starvation_ledger_metrics metrics;
+  portENTER_CRITICAL(&ledger_lock);
+  iterate_kit_starvation_ledger_metrics(&ledger, &metrics);
+  portEXIT_CRITICAL(&ledger_lock);
+  return metrics.starved_ms;
 }
 
 uint32_t m5sticks3_audio_starve_events(void) {
-  return ledger_starve_events;
+  struct iterate_kit_starvation_ledger_metrics metrics;
+  portENTER_CRITICAL(&ledger_lock);
+  iterate_kit_starvation_ledger_metrics(&ledger, &metrics);
+  portEXIT_CRITICAL(&ledger_lock);
+  return metrics.starve_events;
 }
 
 enum iterate_kit_status m5sticks3_audio_set_volume(
