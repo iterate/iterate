@@ -2666,7 +2666,7 @@ class WorkspaceRpcTarget extends IterateRpcTarget<"Workspace"> {
     return this.#read("readFile", () => this.durableObjectStub.readFile(path));
   }
 
-  /** The collaborative session lane (rebase model, no Yjs) — workspace.collab. */
+  /** Collaborative editing sessions (rebase model, no Yjs) — workspace.collab. */
   get collab(): WorkspaceCollabRpcTarget {
     return new WorkspaceCollabRpcTarget(this.props);
   }
@@ -5070,6 +5070,16 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
     return this.#props.capabilityHost.revokeCapability(input);
   }
 
+  /** The workspace at this agent's path; equivalent to `itx.workspaces.get(agentPath)`.
+   * Addressing does not create it; `agent.create()` creates both. */
+  get workspace(): WorkspaceRpcTarget {
+    return new WorkspaceRpcTarget({
+      auth: this.#props.auth,
+      path: this.#path,
+      projectId: this.#props.projectId,
+    });
+  }
+
   /** The agent stream processor (snapshot/state) — facet-hosted on the agent stream. */
   get processor(): StreamProcessorRpc<AgentProcessorState> {
     return agentProcessorRelay({
@@ -5432,6 +5442,7 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
         provideCapability: "Shortcut: mount a capability on THIS agent's scope.",
         revokeCapability: "Shortcut: remove a mount from THIS agent's scope.",
         stream: "The agent's own event stream.",
+        workspace: "The workspace at this same agent path; created by agent.create().",
       },
       parent: `project ${this.#props.projectId}, via agents.get("${this.#path}")`,
       agentPath: this.#path,

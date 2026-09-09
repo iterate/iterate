@@ -30,6 +30,7 @@ COPY of the project's one path namespace, for agents and tooling.
   configuration methods reject loudly before creation; no read, write, or
   first touch can birth a workspace. Agent creation explicitly creates the
   agent's own workspace before the agent handle is returned.
+  `agent.workspace` is shorthand for `itx.workspaces.get(agentPath)`.
 - **`itx.workspaces.list()` reads the project catalog.** The project reducer
   records each copied `workspace/created` under its source path (the same
   `repo-catalog` shape repos use), so the list holds exactly the workspaces

@@ -478,7 +478,9 @@ test("an agent and its workspace share one stream and keep /workspace files isol
   // Creating the agent explicitly creates the workspace at that same path.
   await agent.create();
   await agent.create();
-  await workspace.writeFile("notes.md", "agent workspace");
+  await project.agents.get(agentPath).workspace.writeFile("notes.md", "agent workspace");
+  expect(await agent.workspace.whoami()).toBe(await workspace.whoami());
+  expect(await agent.workspace.readFile("/workspace/notes.md")).toBe("agent workspace");
   expect((await workspace.processor.snapshot()).state.birthCertificate).not.toBeNull();
   const agentBirth = (await agent.processor.snapshot()).state.birthCertificate;
   expect(agentBirth).not.toBeNull();
