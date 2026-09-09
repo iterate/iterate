@@ -91,6 +91,7 @@ bool iterate_kit_i2s_codec_valid(const struct iterate_kit_i2s_codec_facts *facts
 
 static const struct iterate_kit_board *board;
 static i2c_master_bus_handle_t i2c_bus;
+static bool (*i2c_write)(uint8_t address, uint8_t reg, uint8_t value, uint32_t hz);
 static struct iterate_kit_button button;
 static struct iterate_kit_session session;
 static struct iterate_kit_session_actions actions;
@@ -112,6 +113,11 @@ static bool drive_gpio(int8_t gpio, uint8_t level) {
   return gpio_config(&config) == ESP_OK && gpio_set_level(gpio, level) == ESP_OK;
 }
 
+void iterate_kit_board_i2c_write_with(
+    bool (*write)(uint8_t address, uint8_t reg, uint8_t value, uint32_t hz)) {
+  i2c_write = write;
+}
+
 void iterate_kit_board_i2c_use(i2c_master_bus_handle_t bus) { i2c_bus = bus; }
 
 esp_err_t iterate_kit_board_i2c_device(uint8_t address, i2c_master_dev_handle_t *out) {
@@ -126,6 +132,14 @@ esp_err_t iterate_kit_board_i2c_device(uint8_t address, i2c_master_dev_handle_t 
 
 bool iterate_kit_i2c_write_script(const struct iterate_kit_register_script *script) {
   if (script == NULL || (script->count != 0U && script->writes == NULL)) return false;
+  if (i2c_write != NULL) {
+    for (size_t i = 0; i < script->count; ++i) {
+      if (!i2c_write(script->i2c_address, script->writes[i].address,
+              script->writes[i].value, board->i2c.hz)) return false;
+    }
+    if (script->settle_ms != 0U) wait_ms(script->settle_ms);
+    return true;
+  }
   i2c_master_dev_handle_t device;
   if (iterate_kit_board_i2c_device(script->i2c_address, &device) != ESP_OK) return false;
   esp_err_t status = ESP_OK;
@@ -218,7 +232,7 @@ static bool start(void *context, struct iterate_kit_board_audio *out) {
     };
     if (gpio_config(&config) != ESP_OK) return false;
   }
-  if (i2c_bus == NULL && board->i2c.sda >= 0 && board->i2c.scl >= 0) {
+  if (i2c_bus == NULL && i2c_write == NULL && board->i2c.sda >= 0 && board->i2c.scl >= 0) {
     const i2c_master_bus_config_t config = {
       .i2c_port = -1, .sda_io_num = board->i2c.sda, .scl_io_num = board->i2c.scl,
       .clk_source = I2C_CLK_SRC_DEFAULT, .glitch_ignore_cnt = 7,

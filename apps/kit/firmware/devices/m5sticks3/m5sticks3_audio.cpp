@@ -24,7 +24,7 @@
  * electrically present but semantically irrelevant to the codec.
  */
 #include "m5sticks3_audio.h"
-#include "iterate/kit/platforms/i2s_codec.h"
+#include "iterate/kit/platforms/board.h"
 
 #include "m5sticks3_board.h"
 
@@ -47,61 +47,12 @@ namespace {
 constexpr char tag[] = "m5sticks3-audio";
 
 enum {
-  /*
-   * DMA geometry from Espressif's standard-mode sizing formula:
-   *
-   *   descriptor bytes = frames * slots * bits / 8
-   *                    = 320 * 2 * 16 / 8 = 1280 (must be <= 4092)
-   *   interrupt period = frames / sample rate = 320 / 16000 = 20 ms
-   *   ring depth       = descriptors * period = 6 * 20 = 120 ms
-   *
-   * The 20 ms hardware-task cycle therefore needs more than one descriptor;
-   * six leaves five cycles of scheduling headroom. The donor target used
-   * sixteen (320 ms), but that number was sized for its nonblocking
-   * descriptor-token lane, where a measured 250 ms interarrival gap had to
-   * live entirely in hardware. This port holds jitter in the 30 s software
-   * speaker queue upstream, so the ring only covers task scheduling.
-   * Source: ESP-IDF 5.4 I2S documentation, "DMA buffer info and
-   * configuration".
-   * https://docs.espressif.com/projects/esp-idf/en/v5.4.2/esp32s3/api-reference/peripherals/i2s.html#dma-buffer-info-and-configuration
-   */
-  DMA_DESCRIPTOR_COUNT = 6,
-  DMA_FRAMES_PER_DESCRIPTOR = M5STICKS3_AUDIO_FRAME_SAMPLES,
-  DMA_DESCRIPTOR_MS = 20,
-  DMA_RING_MS = DMA_DESCRIPTOR_COUNT * DMA_DESCRIPTOR_MS,
-  PIN_I2S_MCLK = 18,
-  PIN_I2S_BCLK = 17,
-  PIN_I2S_WS = 15,
-  PIN_I2S_DOUT = 14,
+  DMA_RING_MS = 120,
   /* One 20 ms settling frame is discarded after every microphone start. */
   CAPTURE_STARTUP_DISCARD_FRAMES = 1,
 };
-
-/** Native stereo PCM16: no interpolation and no software gain. */
-constexpr struct iterate_kit_pcm_shape playback_shape = {16, 2, 0, -1, 1};
-
-constexpr std::uint8_t es8311Address = 0x18U;
 constexpr std::uint8_t m5pm1Address = 0x6eU;
 constexpr std::uint32_t boardI2cFrequency = 100000U;
-
-/*
- * The direct path hands provider PCM to I2S without M5Unified's software
- * mixer. That omission is desirable for deadline predictability, but copying
- * M5Unified's codec setup verbatim also copied its 0 dB DAC setting while
- * silently discarding the mixer's normal attenuation. A 75%-scale physical
- * tone then drew enough speaker power to trip the board's brownout detector.
- *
- * Espressif defines ES8311 register 0x32 as 0.5 dB per step with 0xBF equal
- * to 0 dB. Apply a fixed -18 dB ceiling at the codec: arbitrary provider PCM
- * is reduced before the power amplifier, while the realtime path pays no
- * per-sample multiplication. This is a board power policy, not a test-tone
- * workaround; exceeding it needs a new physical power proof.
- */
-constexpr std::uint8_t es8311ZeroDbVolume = 0xbfU;
-constexpr std::uint8_t es8311SafeDacAttenuationHalfDbSteps = 36U;
-constexpr std::uint8_t es8311SafeDacVolume =
-    es8311ZeroDbVolume - es8311SafeDacAttenuationHalfDbSteps;
-static_assert(es8311SafeDacVolume == 0x9bU);
 
 /*
  * Who owns the shared audio pins right now. Each stage value has exactly one
@@ -152,26 +103,6 @@ enum iterate_kit_status codec_write(
     return ITERATE_KIT_UNAVAILABLE;
   }
   return shared_codec.ops->write(context, playback, sample_count);
-}
-
-std::uint8_t speakerVolumePercent = 100U;
-
-/*
- * Percent to ES8311 register 0x32, with the brownout ceiling as the TOP of
- * the scale rather than a value somewhere along it.
- *
- * 100% here means es8311SafeDacVolume (-18 dB), which is as loud as this board
- * has ever been proven to survive: copying M5Unified's 0 dB DAC while dropping
- * its mixer attenuation made a 75%-scale tone trip the brownout detector. So
- * this knob spans "silent" to "the loudest measured-safe setting", and asking
- * for more than 100 is refused by the capability above rather than clamped
- * quietly here. Raising the ceiling itself needs a new physical power proof,
- * not a bigger number.
- */
-std::uint8_t volumeRegisterFor(std::uint8_t percent) {
-  if (percent == 0U) return 0x00U;
-  const std::uint32_t span = es8311SafeDacVolume;
-  return static_cast<std::uint8_t>((span * percent) / 100U);
 }
 
 const struct iterate_kit_audio_codec_ops codec_ops = {
@@ -229,38 +160,9 @@ bool amplifier_set(bool on) {
       : M5.In_I2C.bitOff(m5pm1Address, 0x11U, 1U << 3U, boardI2cFrequency);
 }
 
-bool configure_codec_playback(void) {
-  /*
-   * Byte-identical to M5Unified's StickS3 speaker-enable sequence except
-   * 0x32 (the -18 dB power ceiling above). 0x01 = 0xB5 selects BCLK as the
-   * codec clock; 0x02 = 0x18 makes the internal clock 8 x BCLK = 256 fs.
-   */
-  struct register_value {
-    std::uint8_t address;
-    std::uint8_t value;
-  };
-  static constexpr register_value configuration[] = {
-    {0x00U, 0x80U},
-    {0x01U, 0xb5U},
-    {0x02U, 0x18U},
-    {0x0dU, 0x01U},
-    {0x12U, 0x00U},
-    {0x13U, 0x10U},
-    {0x32U, es8311SafeDacVolume},  /* 100% of this board's safe range */
-    {0x37U, 0x08U},
-  };
-  /*
-   * Fail on the first unacknowledged register. Retrying here would make
-   * start latency variable and hide a broken I2C/power state; the caller
-   * exposes one classified driver failure instead.
-   */
-  for (const auto &entry : configuration) {
-    if (!M5.In_I2C.writeRegister8(
-            es8311Address, entry.address, entry.value, boardI2cFrequency)) {
-      return false;
-    }
-  }
-  return true;
+/** Keep M5Unified's bus owner and locking for both table scripts and volume. */
+bool write_register(uint8_t address, uint8_t reg, uint8_t value, uint32_t hz) {
+  return M5.In_I2C.writeRegister8(address, reg, value, hz);
 }
 
 void release_playback_channel(void) {
@@ -279,35 +181,15 @@ void release_playback_channel(void) {
   playback_channel = nullptr;
 }
 
-/** Keep M5's codec-before-enable and delete/rebuild fence board-local. */
-bool build_playback_channel(void) {
-  struct iterate_kit_i2s_codec_facts facts = {};
-  facts.playback_port = I2S_NUM_0;
-  facts.role = I2S_ROLE_MASTER;
-  facts.dma_frames = DMA_FRAMES_PER_DESCRIPTOR;
-  facts.dma_descriptors = DMA_DESCRIPTOR_COUNT;
-  facts.playback_shape = playback_shape;
-  i2s_std_config_t std_config = {};
-  std_config.clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(
-      M5STICKS3_AUDIO_SAMPLE_RATE_HZ);
-  /* Present on the pin but unused: the codec clocks off BCLK (file comment). */
-  std_config.clk_cfg.mclk_multiple = I2S_MCLK_MULTIPLE_128;
-  std_config.slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(
-      I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO);
-  std_config.gpio_cfg.mclk = static_cast<gpio_num_t>(PIN_I2S_MCLK);
-  std_config.gpio_cfg.bclk = static_cast<gpio_num_t>(PIN_I2S_BCLK);
-  std_config.gpio_cfg.ws = static_cast<gpio_num_t>(PIN_I2S_WS);
-  std_config.gpio_cfg.dout = static_cast<gpio_num_t>(PIN_I2S_DOUT);
-  std_config.gpio_cfg.din = I2S_GPIO_UNUSED;
-  std_config.gpio_cfg.invert_flags = {};
-  facts.playback = std_config;
-  if (!iterate_kit_i2s_codec_open_playback(&facts, &playback_channel)) return false;
-  /*
-   * Codec setup happens with the channel not yet enabled and the amplifier
-   * muted. Several ES8311 registers transiently select/reset signal paths;
-   * exposing those transitions is a common source of start-of-stream pops.
-   */
-  if (!configure_codec_playback()) {
+/** The same pin deletion/rebuild on every fence crossing. Initial boot's
+ * BEFORE_I2S script was already run by board.c. Mic.end powers the codec off,
+ * so a subsequent rebuild replays that script while the amplifier is muted.
+ * It retains the existing full-safe-volume reset (0x9b) on every rebuild;
+ * changing that acoustic behaviour belongs in a separate measured change.
+ */
+bool build_playback_channel(bool replay_script) {
+  if (!iterate_kit_i2s_codec_open_playback(&m5sticks3_audio_facts, &playback_channel)) return false;
+  if (replay_script && !iterate_kit_i2c_write_script(&m5sticks3_audio_script)) {
     release_playback_channel();
     return false;
   }
@@ -334,7 +216,7 @@ bool playback_ready(void *context) {
     mode_switches.fetch_add(1U, std::memory_order_relaxed);
     publish_stage(Stage::micHandoff);
   } else if (now_stage == Stage::playbackHandoff) {
-    if (build_playback_channel()) {
+    if (build_playback_channel(true)) {
       mode_switches.fetch_add(1U, std::memory_order_relaxed);
       publish_stage(Stage::playback);
       return true;
@@ -357,7 +239,7 @@ enum iterate_kit_status hardware_write(void *context, const int16_t *samples, si
   static int16_t stereo[M5STICKS3_AUDIO_FRAME_SAMPLES * 2];
   static struct iterate_kit_pcm_playback_resampler resampler;
   size_t bytes = 0U;
-  if (iterate_kit_pcm_expand_playback_shape(&playback_shape, &resampler,
+  if (iterate_kit_pcm_expand_playback_shape(&m5sticks3_audio_facts.playback_shape, &resampler,
           samples, count, stereo, sizeof(stereo), &bytes) != ITERATE_KIT_OK) {
     return ITERATE_KIT_IO_ERROR;
   }
@@ -512,10 +394,15 @@ enum iterate_kit_status hardware_read(void *context, int16_t *samples, size_t co
 
 extern "C" {
 
-bool m5sticks3_audio_init(void) {
-  /* Amplifier stays muted until audio actually arrives. */
+bool m5sticks3_audio_prepare(void) {
+  iterate_kit_board_i2c_write_with(write_register);
+  /* The table writes ES8311 while the PMIC amplifier is muted. */
   (void)amplifier_set(false);
-  if (!build_playback_channel()) {
+  return true;
+}
+
+bool m5sticks3_audio_init(void) {
+  if (!build_playback_channel(false)) {
     ESP_LOGE(tag, "playback bring-up failed");
     return false;
   }
@@ -612,22 +499,5 @@ void m5sticks3_audio_amplifier(bool on) {
 uint32_t m5sticks3_audio_mode_switches(void) {
   return mode_switches.load(std::memory_order_relaxed);
 }
-
-enum iterate_kit_status m5sticks3_audio_set_volume(
-    uint8_t percent, uint8_t *applied) {
-  if (percent > 100U) percent = 100U;
-  if (!M5.In_I2C.writeRegister8(
-          es8311Address,
-          0x32U,
-          volumeRegisterFor(percent),
-          boardI2cFrequency)) {
-    return ITERATE_KIT_IO_ERROR;
-  }
-  speakerVolumePercent = percent;
-  if (applied != nullptr) *applied = percent;
-  return ITERATE_KIT_OK;
-}
-
-uint8_t m5sticks3_audio_volume(void) { return speakerVolumePercent; }
 
 }  // extern "C"

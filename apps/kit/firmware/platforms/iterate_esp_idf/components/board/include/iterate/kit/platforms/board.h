@@ -102,6 +102,13 @@ const struct iterate_kit_session_actions *iterate_kit_board_button_actions(void)
  * deletion: its lifetime belongs to the BSP. Call before board startup scripts.
  */
 void iterate_kit_board_i2c_use(i2c_master_bus_handle_t bus);
+/** Use extra's existing native I2C register writer (M5Unified owns its bus
+ * through M5GFX, not an IDF master handle). Table scripts/volume still own
+ * ordering and mapping; the callback receives the table's bus frequency.
+ * Install in extra->start. A board supplies either this or an IDF bus.
+ */
+void iterate_kit_board_i2c_write_with(
+    bool (*write)(uint8_t address, uint8_t reg, uint8_t value, uint32_t hz));
 /** Attach to the table's I2C bus at its declared speed. open_codec owns the
  * returned device; scripts use temporary handles, preserving page order.
  */

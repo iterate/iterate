@@ -5,23 +5,23 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include "iterate/kit/audio_codec.h"
+#include "iterate/kit/platforms/board.h"
 #include "iterate/kit/voice_playout.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-/**
- * Applies 0-100 of this board's SAFE range to the ES8311 DAC.
- *
- * 100 is -18 dB, not 0 dB: the ceiling is a brownout limit, not a taste, and
- * this scale is stretched to fit inside it so the knob has usable travel. See
- * the note at the setter for the tone that tripped the detector.
+/** C table for the playback controller; capture shares these pins but its
+ * lifetime belongs to M5.Mic and the half-duplex fence, never duplex start.
  */
-enum iterate_kit_status m5sticks3_audio_set_volume(
-    uint8_t percent, uint8_t *applied);
-uint8_t m5sticks3_audio_volume(void);
+extern const struct iterate_kit_i2s_codec_facts m5sticks3_audio_facts;
+/** ES8311 DAC reset/clock/power script; replayed after every Mic.end. */
+extern const struct iterate_kit_register_script m5sticks3_audio_script;
+/** Bind M5Unified's native I2C writer and mute the PMIC amplifier before
+ * board.c runs the register script. Called after M5 board identity checks.
+ */
+bool m5sticks3_audio_prepare(void);
 
 enum {
   M5STICKS3_AUDIO_SAMPLE_RATE_HZ = 16000,
@@ -40,7 +40,7 @@ enum {
  * this adapter owns I2S0, the codec's playback registers, and the M5PM1
  * amplifier latch.
  *
- * Must be called after m5sticks3_board_init(): M5Unified's board bring-up is
+ * Called by board.open_codec after the BEFORE_I2S script. M5 board bring-up is
  * what muxes the M5PM1 amplifier GPIO and probes the internal I2C bus.
  */
 bool m5sticks3_audio_init(void);

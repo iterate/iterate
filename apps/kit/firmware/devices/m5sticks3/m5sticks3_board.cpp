@@ -47,8 +47,10 @@
 
 namespace {
 
+/** App-task display snapshot and paint throttle. */
 struct ui_model {
   enum m5sticks3_ui_state state;
+  struct iterate_kit_voice_view view;
   char status[64];
   bool call_active;
   bool link_ready;
@@ -163,15 +165,8 @@ bool face_init(void) {
 /* The same semantic snapshot every surface in this product renders from. */
 iterate_kit_conversation_visual_state face_status(void) {
   iterate_kit_conversation_visual_state status = {};
-  status.network = ui.link_ready ? ITERATE_KIT_NETWORK_CONNECTED
-                                 : ITERATE_KIT_NETWORK_CONNECTING;
-  status.reach =
-      iterate_kit_reach_from(ui.api_ready, ui.stream_ready, ui.call_active);
-  status.conversation_active = ui.call_active;
-  status.media_ready = ui.link_ready;
-  status.media_failed = ui.fault;
-  status.microphone_listening = ui.state == M5STICKS3_UI_LISTENING;
-  status.speaker_peak = ui.state == M5STICKS3_UI_SPEAKING ? 4096U : 0U;
+  ui.view.fault = ui.fault;
+  iterate_kit_voice_view_lights(&ui.view, &status);
   return status;
 }
 
@@ -410,6 +405,7 @@ bool m5sticks3_board_take_side_press(void) {
 }
 
 void m5sticks3_ui_present(const struct iterate_kit_voice_view *view) {
+  ui.view = *view;
   const auto state = static_cast<enum m5sticks3_ui_state>(view->screen);
   const char *status = view->status == nullptr ? "" : view->status;
   if (ui.state != state ||

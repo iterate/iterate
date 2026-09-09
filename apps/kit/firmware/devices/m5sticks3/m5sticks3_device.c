@@ -120,7 +120,7 @@ static bool start(void *context, struct iterate_kit_board_audio *out) {
   /* M5Unified first, and it fails closed on board identity: a wrong image
    * must not drive another board's pins. */
   if (!m5sticks3_board_init()) return false;
-  if (!m5sticks3_audio_init()) return false;
+  if (!m5sticks3_audio_prepare()) return false;
   out->codec = m5sticks3_audio_codec();
   out->processor = iterate_kit_audio_processor_passthrough();
   return true;
@@ -183,7 +183,6 @@ static void poll(void *context, struct iterate_kit_voice_intent *out) {
 
 static void phase(void *context, enum iterate_kit_voice_phase phase_value) {
   (void)context;
-  iterate_kit_i2s_codec_phase(phase_value);
   if (phase_value == ITERATE_KIT_VOICE_PHASE_ARRIVED) {
     m5sticks3_audio_amplifier(true);
   } else if (phase_value == ITERATE_KIT_VOICE_PHASE_QUIET) {
@@ -205,17 +204,6 @@ static bool playout_fenced_out(void *context) {
   return m5sticks3_audio_capturing() || m5sticks3_audio_mode_switching();
 }
 
-static enum iterate_kit_status set_volume(
-    void *context, uint8_t percent, uint8_t *applied) {
-  (void)context;
-  return m5sticks3_audio_set_volume(percent, applied);
-}
-
-static uint8_t volume(void *context) {
-  (void)context;
-  return m5sticks3_audio_volume();
-}
-
 static size_t health(void *context, char *out, size_t capacity) {
   const struct iterate_kit_health_field fields[] = {
     /* The half-duplex fence, this board's one structural novelty. */
@@ -229,11 +217,8 @@ static size_t health(void *context, char *out, size_t capacity) {
     {"faceFailures", m5sticks3_board_face_failures()},
   };
   (void)context;
-  const size_t used = iterate_kit_i2s_codec_health(out, capacity);
-  if (used == 0U) return 0U;
-  const size_t added = iterate_kit_health_append_fields(
-      out + used, capacity - used, fields, sizeof(fields) / sizeof(fields[0]));
-  return added == 0U ? 0U : used + added;
+  return iterate_kit_health_append_fields(
+      out, capacity, fields, sizeof(fields) / sizeof(fields[0]));
 }
 
 static const struct iterate_kit_board_ops ops = {
@@ -256,7 +241,41 @@ static const struct iterate_kit_board_ops ops = {
   .health = health,
 };
 
-static const struct iterate_kit_board_facts facts = {
+/** Native stereo PCM16: 320x6 gives a 120 ms DMA ring. MCLK is present
+ * but the codec clocks off BCLK: 0x01=B5, 0x02=18 selects 8xBCLK=256fs.
+ * The microphone on I2S1 shares these clocks, so extra deletes/rebuilds TX
+ * before M5.Mic can own them; this is deliberately not a duplex declaration.
+ */
+const struct iterate_kit_i2s_codec_facts m5sticks3_audio_facts = {
+  .playback_port = I2S_NUM_0, .capture_port = I2S_NUM_1, .role = I2S_ROLE_MASTER,
+  .playback = {
+    .clk_cfg = {.sample_rate_hz = 16000, .clk_src = I2S_CLK_SRC_DEFAULT,
+      .mclk_multiple = I2S_MCLK_MULTIPLE_128},
+    .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO),
+    .gpio_cfg = {.mclk = 18, .bclk = 17, .ws = 15, .dout = 14, .din = I2S_GPIO_UNUSED},
+  },
+  .dma_frames = 320, .dma_descriptors = 6,
+  .playback_shape = {16, 2, 0, -1, 1},
+  .amplifier_gpio = -1,
+};
+
+/** M5Unified's sequence except for the measured -18 dB ceiling, 0x9b.
+ * Dropping its software mixer but copying its 0 dB DAC made a 75%-scale
+ * tone trip brownout. Raising this ceiling needs a physical power proof.
+ * Writes fail on the first NACK. The PMIC amplifier is muted by extra.
+ */
+static const struct iterate_kit_register_write dac_writes[] = {
+  {0x00, 0x80}, {0x01, 0xb5}, {0x02, 0x18}, {0x0d, 0x01},
+  {0x12, 0x00}, {0x13, 0x10}, {0x32, 0x9b}, {0x37, 0x08},
+};
+const struct iterate_kit_register_script m5sticks3_audio_script = {
+  .i2c_address = 0x18, .writes = dac_writes,
+  .count = sizeof(dac_writes) / sizeof(dac_writes[0]),
+  .when = ITERATE_KIT_SCRIPT_BEFORE_I2S,
+};
+
+static const struct iterate_kit_board board = {
+  .facts = {
   .stream_path = "/agents/voice/m5stick-s3",
   .client_path = "/clients/m5stick-s3",
   .conversation_id = "stickdev",
@@ -294,8 +313,6 @@ static const struct iterate_kit_board_facts facts = {
   .call_hint = "connection lost — press side to call",
   .speaker = {
     .context = NULL,
-    .set_volume = set_volume,
-    .volume = volume,
     /*
      * 100 means this capability advertises no clamp, not that the board plays
      * at full scale: the ceiling here is a brownout limit and lives inside the
@@ -317,8 +334,21 @@ static const struct iterate_kit_board_facts facts = {
   .capture_stack_bytes = 4096,
   .turns = ITERATE_KIT_VOICE_TURNS_PUSH_TO_TALK,
   .radio_before_codec = false,
+  },
+  .i2c = {.sda = 47, .scl = 48, .hz = 100000},
+  .scripts = &m5sticks3_audio_script, .script_count = 1,
+  .audio = NULL, /* M5.Mic and the fence own capture; only TX uses the facts above. */
+  .volume = {.i2c_address = 0x18, .page_register = 0xff, .registers = {0x32},
+    .register_count = 1, .full_code = 0x9b, .floor_code = 0},
+  .ring = {.gpio = -1, .power_gpio = -1},
+  .status_led_gpio = -1,
+  .button = {.gpio = -1}, /* M5's debounced side press and front hold are distinct. */
+  .sounds = {.wake = m5sticks3_sound_chime_press, .wake_bytes = sizeof(m5sticks3_sound_chime_press),
+    .ended = m5sticks3_sound_chime_ended, .ended_bytes = sizeof(m5sticks3_sound_chime_ended)},
+  .open_codec = m5sticks3_audio_init,
+  .extra = &ops,
 };
 
 void iterate_kit_m5sticks3_run(void) {
-  iterate_kit_voice_loop_run(&ops, &facts, NULL);
+  iterate_kit_board_run(&board);
 }
