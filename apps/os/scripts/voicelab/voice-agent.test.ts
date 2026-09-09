@@ -3556,7 +3556,7 @@ describe("say, and the announced farewell", () => {
     expect(eventsOfType(h, "conversation-ended")).toHaveLength(0);
     await stepTime(h, IDLE_FAREWELL_GRACE_MS + 5_000);
     expect(eventsOfType(h, "conversation-ended")).toHaveLength(1);
-    expect(endReason(h)).toBe("no input from the device for 60s; the farewell was never spoken");
+    expect(endReason(h)).toBe("idle: no input from the device for 60s; the line was never spoken");
   });
 
   it("a listener who comes back before the goodbye even starts keeps the call too", async () => {
@@ -3634,7 +3634,46 @@ describe("say, and the announced farewell", () => {
     expect(eventsOfType(h, "say")).toHaveLength(1);
     /* And a provider that never starts it still gets the silent end. */
     await stepTime(h, IDLE_FAREWELL_GRACE_MS + 5_000);
-    expect(endReason(h)).toBe("no input from the device for 60s; the farewell was never spoken");
+    expect(endReason(h)).toBe("idle: no input from the device for 60s; the line was never spoken");
+  });
+
+  /*
+   * AN OPEN-MIC LISTENER WHO STARTS SPEAKING IN THE WINDOW. Nothing is
+   * playing, so the onset is only held — it never reaches #bargeAnswer —
+   * and the goodbye's created must read it as the person coming back.
+   */
+  it("an open-mic listener who starts speaking before the goodbye starts keeps the call", async () => {
+    const h = makeHarness();
+    await callIsLive(h, GROK_LISTENS);
+    await idleDeadline(h);
+    expect(eventsOfType(h, "say")).toHaveLength(1);
+    h.provider.speechStarted();
+    await h.settle();
+    h.provider.responseCreated();
+    h.provider.answerAudio(200);
+    h.provider.answerComplete();
+    await playOutEverything(h, 400);
+    await stepTime(h, IDLE_FAREWELL_GRACE_MS + 5_000);
+    expect(eventsOfType(h, "conversation-end-requested")).toHaveLength(0);
+  });
+
+  /*
+   * EVERY HANG-UP SAY HAS A START GRACE, not only the reaper's: a parked
+   * reason makes the idle tick defer, so an operator's line the provider
+   * never starts would otherwise leave the call unreapable for ever.
+   */
+  it("a hang-up say the provider never starts ends the call after the grace, and says so", async () => {
+    const h = makeHarness();
+    await callIsLive(h);
+    await h.append({
+      type: "events.iterate.com/voice-agent/say",
+      payload: { text: "Closing this call now.", reason: "operator: done", thenHangUp: true },
+    });
+    await h.settle();
+    expect(h.provider.sentOfType("response.create")).toHaveLength(1);
+    await stepTime(h, IDLE_FAREWELL_GRACE_MS + 5_000);
+    expect(eventsOfType(h, "conversation-end-requested")).toHaveLength(1);
+    expect(endReason(h)).toBe("operator: done; the line was never spoken");
   });
 
   /*

@@ -348,9 +348,9 @@ const IDLE_STAMP_STEP_MS = 5_000;
 
 /** How often the idle countdown looks at the facet clock. */
 const IDLE_TICK_MS = 5_000;
-/** How long the idle reaper waits for the provider to START its farewell
- * before burying the call silently; a farewell that has started is the
- * drain point's to finish. Under IDLE_TIMEOUT_MS's own slack on purpose. */
+/** How long a `thenHangUp` say's response may take to START before the call
+ * is ended without it; a line that has started is the drain point's to
+ * finish. Under IDLE_TIMEOUT_MS's own slack on purpose. */
 export const IDLE_FAREWELL_GRACE_MS = 8_000;
 
 /** The reaper's goodbye, worded per client: press, or press and talk, to come back. */
@@ -1951,6 +1951,11 @@ interface Dial {
    * moved onto `hangUpAfterAnswerDrains` at the say's own `response.created`
    * so the line PLAYS first. Still set after the reaper's grace: never started. */
   sayHangUpReason: string | null;
+  /** Which thenHangUp say the parked reason belongs to: its start grace
+   * checks it, so a later say's grace is the only one that can bury the call. */
+  sayHangUpEpisode: number;
+  /** A grace has ended this call; the idle tick must not say goodbye again. */
+  buried: boolean;
   /** Farewells announced on this dial: the per-episode idempotency suffix. */
   idleFarewells: number;
   /** The answer in flight — replaced wholesale at `response.created`. */
@@ -1994,6 +1999,8 @@ const freshDial = (
   pendingNoteResponse: false,
   pendingFollowUpKind: "note",
   sayHangUpReason: null,
+  sayHangUpEpisode: 0,
+  buried: false,
   idleFarewells: 0,
   answer: freshAnswer(),
 });
@@ -2726,11 +2733,36 @@ export class VoiceAgentProcessor extends StreamProcessor<
         }
         const thenHangUp = event.payload.thenHangUp === true;
         if (thenHangUp) {
-          const by = typeof event.payload.by === "string" ? ` by ${event.payload.by}` : "";
-          dial.sayHangUpReason =
+          const asker = typeof event.payload.by === "string" ? event.payload.by : null;
+          const reason =
             typeof event.payload.reason === "string" && event.payload.reason !== ""
               ? event.payload.reason
-              : `asked to hang up${by}`;
+              : `asked to hang up${asker === null ? "" : ` by ${asker}`}`;
+          dial.sayHangUpReason = reason;
+          const episode = ++dial.sayHangUpEpisode;
+          const parkedAtMs = this.deps.nowAtFacetMs();
+          /*
+           * EVERY HANG-UP SAY GETS A START GRACE, not only the reaper's. A
+           * parked reason makes the idle tick defer; a provider that never
+           * starts the line would otherwise leave it parked for ever and the
+           * call unreapable. Past the grace, still parked, the call is ended
+           * without the line — unless the listener came back meanwhile.
+           */
+          runInBackground(async () => {
+            await this.deps.sleep(IDLE_FAREWELL_GRACE_MS);
+            if (this.#dial !== dial || dial.sayHangUpEpisode !== episode) return;
+            if (dial.sayHangUpReason === null) return; /* started, or un-decided */
+            dial.sayHangUpReason = null;
+            /* Backstop for the press-inside-the-grace case #bargeAnswer covers. */
+            if (this.#lastDeviceInputAtStreamMsMirror > parkedAtMs) return;
+            dial.buried = true;
+            await this.#requestEnd(
+              dial.conversationId,
+              asker === "idle-reaper" ? "idle" : "hang-up",
+              `${reason}; the line was never spoken`,
+              append,
+            );
+          });
         }
         this.#sendControl(
           dial,
@@ -3373,6 +3405,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
              * at the committed arm; both arms share the no-op guard. */
             const followUp = dial.followUpResponsePending;
             dial.followUpResponsePending = false;
+            const listenerSpeaking = dial.tentativeOnset !== null && !dial.tentativeOnset.retracted;
             if (followUp) {
               dial.tentativeOnset = null;
             } else {
@@ -3381,9 +3414,13 @@ export class VoiceAgentProcessor extends StreamProcessor<
             dial.answer = freshAnswer();
             dial.answer.kind = followUp ? dial.followUpKind : "turn";
             /* A thenHangUp say's response has started: from here the drain
-             * point owns the ending, exactly as after the hang_up tool. */
+             * point owns the ending, exactly as after the hang_up tool — unless
+             * an open-mic listener started speaking while the line was queued.
+             * That onset never reaches #bargeAnswer (nothing was playing to
+             * barge), so it is read here: the person wants the call, and the
+             * line is just a line. */
             if (followUp && dial.followUpKind === "say" && dial.sayHangUpReason !== null) {
-              dial.hangUpAfterAnswerDrains = dial.sayHangUpReason;
+              if (!listenerSpeaking) dial.hangUpAfterAnswerDrains = dial.sayHangUpReason;
               dial.sayHangUpReason = null;
             }
             /* A new answer supersedes any cancelled-status bookkeeping. */
@@ -3689,12 +3726,9 @@ export class VoiceAgentProcessor extends StreamProcessor<
      * milliseconds from Cloudflare's own clock and the deadline is a
      * minute. Anything tighter than that would need a single clock.
      */
-    /* Set once the farewell's grace has buried the call, so a tick due in the
-     * same clock step does not say goodbye to a call already ended. */
-    let buriedByReaper = false;
     const idleTick = async (): Promise<void> => {
       await this.deps.sleep(IDLE_TICK_MS);
-      if (this.#dial !== dial || buriedByReaper) return;
+      if (this.#dial !== dial || dial.buried) return;
       const nowAtFacetMs = this.deps.nowAtFacetMs();
       /*
        * IDLE SINCE THE LAST THING THAT HAPPENED, whichever end it happened
@@ -3756,12 +3790,10 @@ export class VoiceAgentProcessor extends StreamProcessor<
         await this.#requestEnd(conversationId, "idle", idleReason, append);
         return;
       }
-      const farewellReason = `idle: ${idleReason}`;
-      /* Set BEFORE the append, so a say that never comes back round (facet
-       * evicted) still leaves the grace below with something to bury. */
-      dial.sayHangUpReason = farewellReason;
+      /* The say arm parks the reason and arms its start grace when the
+       * farewell comes back round; nothing is decided here, so a refused
+       * append simply leaves the next tick to try again. */
       const episode = ++dial.idleFarewells;
-      const farewellAtMs = nowAtFacetMs;
       try {
         await append({
           type: "events.iterate.com/voice-agent/say",
@@ -3769,41 +3801,14 @@ export class VoiceAgentProcessor extends StreamProcessor<
           payload: {
             conversationId,
             text: idleFarewell(state.clientTakesTurns),
-            reason: farewellReason,
+            reason: `idle: ${idleReason}`,
             by: "idle-reaper",
             thenHangUp: true,
           },
         });
       } catch (error) {
-        /* A refused farewell must not disarm the reaper: with the reason
-         * left set, every later tick would defer to a hang-up that is not
-         * coming. Forget this attempt; the next tick tries again. */
         console.error("voice-agent idle farewell could not be queued", { error });
-        dial.sayHangUpReason = null;
-        this.runInBackground(idleTick);
-        return;
       }
-      this.runInBackground(async () => {
-        await this.deps.sleep(IDLE_FAREWELL_GRACE_MS);
-        if (this.#dial !== dial) return;
-        /* Null: the farewell's response was created (the drain point owns
-         * the end) or a returning listener un-decided it. Still set: the
-         * provider never started the line — bury the call the old way. */
-        if (dial.sayHangUpReason === null) return;
-        /* Backstop for the press-inside-the-grace case #bargeAnswer covers. */
-        if (this.#lastDeviceInputAtStreamMsMirror > farewellAtMs) {
-          dial.sayHangUpReason = null;
-          return;
-        }
-        dial.sayHangUpReason = null;
-        buriedByReaper = true;
-        await this.#requestEnd(
-          conversationId,
-          "idle",
-          `${idleReason}; the farewell was never spoken`,
-          append,
-        );
-      });
       this.runInBackground(idleTick);
     };
     this.runInBackground(idleTick);
