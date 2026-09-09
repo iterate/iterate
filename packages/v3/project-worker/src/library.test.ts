@@ -663,19 +663,19 @@ describe("openapi", () => {
       );
     });
 
-    test("from a URL: the document is fetched (auth headers only on the API's host), and a document without servers is addressed under the spec URL, QUERY KEPT (the fetch lane)", async () => {
-      const lane = "https://worker.example/expression/openapi.json?context=prj_x&itx=itx.site";
+    test("from a URL: the document is fetched (auth headers only on the API's host), and a document without servers is addressed under the spec URL, QUERY KEPT", async () => {
+      const specUrl = "https://api--prj-x.worker.example/v2/openapi.json?rev=3";
       const { itx, requests } = fakeItx((request) =>
-        request.url === lane
+        request.url === specUrl
           ? json({ ...SPEC, servers: [] })
           : json({ pet: new URL(request.url).pathname }),
       );
-      const conn = await connectToOpenApi(itx, lane, { headers: { authorization: "Bearer t" } });
+      const conn = await connectToOpenApi(itx, specUrl, {
+        headers: { authorization: "Bearer t" },
+      });
       expect(requests[0].headers.get("authorization")).toBe("Bearer t");
-      expect(await conn.call("getPet", { id: 5 })).toEqual({ pet: "/expression/pets/5" });
-      expect(requests[1].url).toBe(
-        "https://worker.example/expression/pets/5?context=prj_x&itx=itx.site",
-      );
+      expect(await conn.call("getPet", { id: 5 })).toEqual({ pet: "/v2/pets/5" });
+      expect(requests[1].url).toBe("https://api--prj-x.worker.example/v2/pets/5?rev=3");
       // the spec on another host than the API (baseUrl names the API): the auth header stays home
       const other = fakeItx((request) =>
         request.url.includes("spec.example") ? json(SPEC) : json({}),
@@ -689,16 +689,14 @@ describe("openapi", () => {
       expect(other.requests[1].headers.get("authorization")).toBe("Bearer t");
     });
 
-    test("from a URL: a RELATIVE servers[0].url resolves against the spec URL, QUERY KEPT (the fetch lane)", async () => {
-      const lane = "https://worker.example/expression/openapi.json?context=prj_x&itx=itx.site";
+    test("from a URL: a RELATIVE servers[0].url resolves against the spec URL, QUERY KEPT", async () => {
+      const specUrl = "https://api--prj-x.worker.example/v2/openapi.json?rev=3";
       const { itx, requests } = fakeItx((request) =>
-        request.url === lane ? json({ ...SPEC, servers: [{ url: "api" }] }) : json({ ok: true }),
+        request.url === specUrl ? json({ ...SPEC, servers: [{ url: "api" }] }) : json({ ok: true }),
       );
-      const conn = await connectToOpenApi(itx, lane);
+      const conn = await connectToOpenApi(itx, specUrl);
       await conn.call("getPet", { id: 5 });
-      expect(requests[1].url).toBe(
-        "https://worker.example/expression/api/pets/5?context=prj_x&itx=itx.site",
-      );
+      expect(requests[1].url).toBe("https://api--prj-x.worker.example/v2/api/pets/5?rev=3");
     });
 
     test("an INLINE document whose servers[0].url is relative is refused at connect with the baseUrl hint — never a raw TypeError", async () => {

@@ -7,10 +7,11 @@
 // passed as the connector's `headers` option — exactly what a user writes. Egress is the DO's own fetch:
 // local workerd reaches the internet too, but its outbound fetch cannot upgrade to a WebSocket, so the
 // WebSocket transports are proved against the deployed worker only. Pins:
-//   • behind the lane (no pet shop): the fetch lane accepts `/expression/<path>` and hands the Request
-//     to the target VERBATIM, and the SDK bundle exports capnweb's SERVER half (`newWorkersRpcResponse`,
-//     built with the `workerd` condition) — a LOADED worker serves a capnweb API that connectToCapnweb
-//     dials, through egress, back into this worker's own lane
+//   • behind a project host (no pet shop; deployed — the DO's egress cannot resolve a local host): the
+//     Request reaches the app VERBATIM, path and all, and the SDK bundle exports capnweb's SERVER half
+//     (`newWorkersRpcResponse`, built with the `workerd` condition) — a LOADED worker serves a capnweb
+//     API at `rpc--<project>.<base>/<path>` that connectToCapnweb dials, through egress, back into
+//     this worker's own host (the local twin: __workers-tests__/ws-fetch-live-101.test.ts)
 //   • connectToMcp: initialize + tools/list at connect, a tool as a method, callTool, an isError tool
 //     call throws, held across calls; without the bearer the shop's 401 reaches the caller
 //   • rules composition: `provide('itx.tools', "itx.connectToMcp(…)")`, then `itx.tools.listTools()` and
@@ -24,36 +25,36 @@
 //     WebSocket on the deployed egress
 
 import { beforeAll, describe, expect, test } from "vitest";
+import { adminCredentials, freshCtx, openItx, workerUrl } from "./support/client.ts";
 import {
-  adminBearer,
-  adminCredentials,
-  expressionUrl,
-  freshCtx,
-  openItx,
-  workerUrl,
-} from "./support/client.ts";
-import { deployedOnly } from "./support/project-host.ts";
+  deployedOnly,
+  freshDnsSafeProjectId,
+  projectHostnameBase,
+  registerProject,
+} from "./support/project-host.ts";
 import { SOURCES } from "./support/sources.ts";
 
-test("a loaded worker serves capnweb behind /expression/<path>, dialed with connectToCapnweb over the batch transport", async () => {
-  const ctx = freshCtx("capnweb-behind-lane");
-  const itx = openItx(ctx);
-  await itx.provide("itx.rpcService", [
-    "itx",
-    "workers",
-    ["get", { source: SOURCES.capnwebServer }],
-  ]);
-  const url = new URL(expressionUrl(ctx, "itx.rpcService.fetch"));
-  url.pathname = "/expression/rpc/v1";
-  // the lane admits the admin bearer (the context dials its own worker's /expression from inside)
-  const connection = await itx.connectToCapnweb(url.toString(), {
-    transport: "batch",
-    headers: adminBearer(),
-  });
-  expect(await connection.hello("lane")).toBe("hello lane");
-  // the path suffix reached the loaded worker untouched
-  expect(await connection.path()).toBe("/expression/rpc/v1");
-});
+deployedOnly(
+  "a loaded worker serves capnweb behind a project host, dialed with connectToCapnweb over the batch transport — the path arriving verbatim",
+  async () => {
+    const projectId = freshDnsSafeProjectId("capnweb-host");
+    await registerProject(projectId);
+    const itx = openItx(projectId);
+    await itx.provide("itx.apps.rpc", [
+      "itx",
+      "workers",
+      ["get", { source: SOURCES.capnwebServer }],
+    ]);
+    // the context dials its own project's host from inside — no credential: the app is public
+    const connection = await itx.connectToCapnweb(
+      `https://rpc--${projectId}.${projectHostnameBase()}/rpc/v1`,
+      { transport: "batch" },
+    );
+    expect(await connection.hello("host")).toBe("hello host");
+    // the path reached the loaded worker untouched
+    expect(await connection.path()).toBe("/rpc/v1");
+  },
+);
 
 // The pet-shop rows share one gate: the deployed shop must answer before any of them runs (a shop that
 // is down fails the block loudly instead of failing eight rows on eight timeouts).

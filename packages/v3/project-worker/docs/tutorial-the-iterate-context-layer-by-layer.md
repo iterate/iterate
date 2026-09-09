@@ -59,22 +59,20 @@ the **context** (things you can call, in both directions), **fetch** (in both di
 ### One worker, one package
 
 `src/worker.ts` is the stateless edge: capnweb terminates at `/api`; a project host —
-`<app>--<project>.<base>`, `<app>.<project>.<base>`, or a custom hostname the directory knows
-(`<app>.<custom>` too), `<project>` an id or a slug — is routed by hostname into the project's root
-context, the app label riding as a trusted `x-iterate-app` header the edge ALWAYS overwrites; and
-everything else on the worker's own hostname is the control plane, in-process
-(`src/control-plane.ts`: an OAuth 2.1 Authorization Server, a D1 directory of users, orgs and
-projects, `/mcp`, a console with a login form). A project host is the one HTTP way in, and what
-answers it is the project's config worker (chapter 7), whose `fetch` routes by hostname.
+`<app>--<project>.<base>`, `<app>.<project>.<base>`, or the apex `<project>.<base>`, `<project>` an
+id or a slug — is routed by hostname into the project's root context, the app label riding as a
+trusted `x-iterate-app` header the edge ALWAYS overwrites; and everything else on the worker's own
+hostname is the control plane, in-process (`src/control-plane.ts`: an OAuth 2.1 Authorization
+Server, a D1 directory of users, orgs and projects, `/mcp`, a console with a login form). A project
+host is the one HTTP way in: an app host answers with the app, and a host naming no app with the
+project's config worker (chapter 7), whose `fetch` routes by hostname.
 `src/iterate-context-durable-object.ts` is THE CONTEXT: one Durable Object per `{ projectId, path }`,
 holding the event log, the core reduce, subscription delivery, the facets, the rpc-stub pagers and
 the fetch door.
 
-> **Landing:** today the edge serves one host shape, `<app>--<projectId>.<base>` (an id only), and
-> a public `/expression?context=&itx=` fetch lane beside it. The lane is deleted next build; the
-> `<app>.<project>.<base>` and custom-hostname shapes, slug-or-id resolution, the `x-iterate-app`
-> header and the config worker's `fetch` terminal land with it (apps/os's `decideIngressRoute` is
-> the model).
+> **Landing:** a custom hostname the directory knows (`acme.com`, `<app>.acme.com`) is a later
+> build — a hostname row and a lookup by hostname; the three shapes under the base are what the edge
+> serves today (apps/os's `decideIngressRoute` is the model).
 
 The hard rule: capnweb never terminates in the Durable Object. The edge is a proxy in front of the
 DO and reaches it only over Workers RPC. Everything you hold is minted at the edge.
@@ -1431,36 +1429,36 @@ expect(await res.text()).toContain("bound to https://api.example.com"); // and "
 const missing = await openItx("acme-support").fetch(new Request("https://egress.invalid/hunt", { headers: { "x-hunt-auth": 'Bearer getSecret("/secrets/GHOST")' } }));
 expect(missing.status).toBe(502);
 expect(await missing.text()).toContain('header "x-hunt-auth"'); // WHERE it sat, so the caller can fix it
-// e2e/secrets.e2e.test.ts · e2e/fetch-door.e2e.test.ts — the lane still spells the placeholder `{{secret:project:bound}}`
+// e2e/secrets.e2e.test.ts · e2e/fetch-door.e2e.test.ts
 ```
 
-> **Landing:** the placeholder grammar. The door substitutes `{{secret:project:NAME}}` today; it
-> becomes apps/os's `getSecret("/secrets/NAME")` (and the `{ field }` form) in the next build, and
-> the e2e rows above move with it.
-
-The door (`src/iterate-context-durable-object.ts`) scans the URL first, then every header, splices a URL value as ONE
-component so a secret can never add a query parameter, and preserves method, `Upgrade` and body, so a
-101 flows through it. The catalog is the PROJECT's: a secret set from `/a` is listed from `/b` and
-the root, and the change events live in the root's log. Deployed, the value arrives at the bound
-origin — proven by fetching one of the project's own apps on its real host.
+The door (`src/iterate-context-durable-object.ts`) scans the URL first, then every header — the
+placeholder as written, or as the URL parser percent-encodes it in a path or a query — splices a URL
+value as ONE component so a secret can never add a query parameter, and preserves method, `Upgrade`
+and body, so a 101 flows through it. A `{ field }` placeholder whose value is not JSON, or has no
+string at that path, is the same 502; the project's own API key (chapter 10) lives outside the
+catalog, so `getSecret("/secrets/project-api-key")` finds nothing. The catalog is the PROJECT's: a
+secret set from `/a` is listed from `/b` and the root, and the change events live in the root's log.
+Deployed, the value arrives at the bound origin — proven by fetching one of the project's own apps
+on its real host.
 
 ### Fetch into the project: a project host is the address
 
 The other direction. A fetch-shaped capability is always called through a terminal
 `.fetch(request)`, and from the web there is ONE way to it: a project host. `<app>--<project>.<base>`
 and `<app>.<project>.<base>` name the app `<app>` of `<project>` — an id or a slug; the apex
-`<project>.<base>` names the app `default`; a custom hostname the directory knows — `acme.com`, or
-`<app>.acme.com` — names the project it is registered to. The edge resolves the project through the
-in-process directory, strips every inbound `x-itx-*` header, sets the trusted `x-iterate-app` — the
-label the host selected, ALWAYS overwritten, deleted when the host selected none, so a visitor can
-never pick an app the host did not — and the principal's stamp (chapter 10), and rides the Request
-VERBATIM into the project's root context, so the URL, host-scoped cookies and WebSocket upgrades
-survive.
+`<project>.<base>` names no app. The edge resolves the project through the in-process directory
+(the row is the id, whichever the label was), strips every inbound `x-itx-*` header, sets the
+trusted `x-iterate-app` — the label the host selected, ALWAYS overwritten, deleted when the host
+selected none, so a visitor can never pick an app the host did not — and the principal's stamp
+(chapter 10), and rides the Request VERBATIM into the project's root context with the expression
+the host names in `x-itx-expression` (the internal channel a session's terminal fetch and a loaded
+worker's `env.ITX.fetch` ride too), so the URL, host-scoped cookies and WebSocket upgrades survive.
 
-What answers is the project's config worker (chapter 7): the request lands on
-`itx.worker.fetch(request)`. The bundled default forwards to `itx.apps.<x-iterate-app>.fetch(request)`,
-so an app is one rule row and the log never names a hostname; a project that wants its own routing
-overrides `fetch`:
+An app host lands on `itx.apps.<app>.fetch(request)`: an app is one rule row and the log never names
+a hostname. A host naming no app lands on the project's config worker (chapter 7),
+`itx.worker.fetch(request)`: the bundled default answers 404, and a project that wants its own
+routing overrides `fetch` — the apex today, a custom hostname once the directory knows one:
 
 ```ts
 // the config repo's worker.ts — routing by hostname, in the author's own `fetch`
@@ -1468,14 +1466,13 @@ export default class Config extends ConfigWorker {
   async fetch(request: Request) {
     const itx = this.env.ITX.get();
     const host = new URL(request.url).hostname;
-    if (host === "docs.acme.com") return itx.apps.docs.fetch(request);
-    if (request.headers.get("x-iterate-app") === "site") return itx.apps.site.fetch(request);
+    if (host === "acme-support.iterate.app") return itx.apps.site.fetch(request); // the apex: the site
     return new Response("no app here\n", { status: 404 });
   }
 }
 ```
 
-The lane, today, on the one shape the edge serves:
+The lane, on the three shapes:
 
 ```ts
 const projectId = freshDnsSafeProjectId("ingress"); // a project's id IS its DNS-safe slug
@@ -1485,19 +1482,19 @@ await itx.provide("itx.apps.site", ["itx", "workers", ["get", { source: SRC_SITE
 const page = await fetchProjectHost(`site--${projectId}.${base}`, "/w?repo=x");
 expect(page.status).toBe(200);
 expect(page.text).toContain(`<p>site--${projectId}.${base}/w?repo=x</p>`); // the URL verbatim
-await itx.provide("itx.apps.default", "itx.apps.site"); // the apex `<projectId>.<base>` is the label `default`: 200 from here on
+expect((await fetchProjectHost(`site.${projectId}.${base}`, "/w")).status).toBe(200); // the second shape, the same row
+const seen = JSON.parse((await fetchProjectHost(host, "/echo", { "x-iterate-app": "other" })).text);
+expect(seen.app).toBe("site"); // what the app saw in x-iterate-app, whatever the visitor sent
+expect((await fetchProjectHost(`${projectId}.${base}`, "/")).status).toBe(404); // the apex: the bundled config worker's fetch
+await itx.provide("itx.worker", ["itx", "workers", ["get", { source: SRC_CONFIG_ROUTER, cacheKey: "config:ingress" }]]);
+expect((await fetchProjectHost(`${projectId}.${base}`, "/echo")).status).toBe(200); // the project's own fetch routes it to the site
 expect((await fetchProjectHost(`other--${projectId}.${base}`, "/")).status).toBe(404); // a label with no row: 404
 expect((await fetchProjectHost(`site--${unknown}.${base}`, "/")).status).toBe(421); // a project the directory does not know
 // e2e/ingress-project-host.e2e.test.ts
 ```
 
-> **Landing:** today the edge dispatches a project host straight to `itx.apps.<label>` (the
-> `x-itx-expression` header carries the spelling) and serves `<app>--<projectId>.<base>` only, with
-> a public `/expression?context=&itx=` lane beside it that takes any expression. That lane is
-> deleted next build; the config worker's `fetch` terminal, `x-iterate-app`, the
-> `<app>.<project>.<base>` and custom-hostname shapes and slug-or-id resolution land in its place.
-> `x-itx-expression` stays as the internal channel — the header a project host and the proxy's
-> terminal fetch ride into the DO.
+> **Landing:** a custom hostname (`acme.com`, `<app>.acme.com`) is a later build: a directory row
+> and a lookup by hostname, then the same `x-iterate-app` and the same config-worker `fetch`.
 
 Admission comes first: a context is created on first touch, so before the edge dials a Durable
 Object for a project host it asks the in-process directory whether the project exists — one D1 read
@@ -1522,7 +1519,7 @@ class HttpDevice extends RpcTarget {
 }
 await session().authenticate(adminCredentials()).projects.get("acme-support").provide("itx.device", new HttpDevice());
 expect((await itx.device.fetch(new Request("https://itx.device/", { method: "POST", body: "ping" }))).status).toBe(201); // (composed)
-// e2e/fetch-door.e2e.test.ts (the provider, reached through `/expression` today) · e2e/session.e2e.test.ts (the dotted terminal)
+// e2e/fetch-door.e2e.test.ts (the provider, reached through its project host) · e2e/session.e2e.test.ts (the dotted terminal)
 ```
 
 From loaded code, `env.ITX.fetch` is a real Fetcher — set `x-itx-expression` yourself and the same
@@ -1583,10 +1580,9 @@ remote's 401 reaches the caller as the connector's refusal. `connectToCapnweb` o
 session through `itx.fetch` pipelines a chain and is held across calls (deployed only: local workerd's
 outbound fetch cannot upgrade). A loaded worker can also SERVE a capnweb API — the SDK exports
 `newWorkersRpcResponse` — and `connectToCapnweb` dials it back through a project host,
-`<app>--<project>.<base>/<path>`, the path arriving verbatim (`e2e/library-connectors.e2e.test.ts`).
-
-> **Landing:** the lane dials `/expression/<path>` for this today; it moves to a project host with
-> chapter 8's route deletion.
+`<app>--<project>.<base>/<path>`, the path arriving verbatim (`e2e/library-connectors.e2e.test.ts`,
+deployed only — the DO's egress cannot resolve a local host; the local twin dials the host's 101 with
+`newWebSocketRpcSession`, `__workers-tests__/ws-fetch-live-101.test.ts`).
 
 ### Open question: one root, or `kernel` and `lib`?
 

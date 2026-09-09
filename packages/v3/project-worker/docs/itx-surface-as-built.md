@@ -206,7 +206,7 @@ project, or with `as: { email }` that user's session without a login (the direct
 as `/login` does — its id, `user_<email>`, is the actor); a wrong secret is `INVALID_CREDENTIALS`. `project-secret`: the project's OWN
 long-lived key — `projects.get(project).rotateApiKey()` mints 32 random bytes as base64url and stores
 ONLY the SHA-256 hash in `SECRETS_KV` under `project-api-key:<projectId>` (outside the
-`secret:<projectId>:` prefix egress substitutes from, so no `{{secret:project:…}}` placeholder can
+`secret:<projectId>:` prefix egress substitutes from, so no `getSecret("/secrets/…")` placeholder can
 ever spell it); a reveal IS a rotation, the previous key stops verifying at once, and a project has
 no key until the first call. `verifyProjectSecret(project, secret, kv)` hashes the candidate and
 compares in constant time ⇒ `{ actor: "project:<projectId>" }`: a session bound to that one project
@@ -243,13 +243,13 @@ own append, a lent stub's rule, a processor's row are all `itx.builtins.…`, so
 | ----------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
 | `whoami()`                                            | `→ { projectId, path }`                                                                                                                                                                                                                                                                                                                                                                                   | the DO name                                                       |
 | `kv`                                                  | `.get(k)` `.put(k, v)` `.delete(k)` `.list(prefix?)`                                                                                                                                                                                                                                                                                                                                                      | `ITX_KV`, `${projectId}:` prefixed                                |
-| `secrets`                                             | `.set(name, value, { origin? })` `.delete(name)` `.list()` → names + origins, never a value — WRITE-ONLY; `{{secret:project:NAME}}` substitutes at egress, a bound secret only to its origin; each change appends `events.iterate.com/secrets/changed` (no value)                                                                                                                                         | `SECRETS_KV`, `secret:${projectId}:` prefixed, origin in metadata |
+| `secrets`                                             | `.set(name, value, { origin? })` `.delete(name)` `.list()` → names + origins, never a value — WRITE-ONLY; `getSecret("/secrets/NAME")` substitutes at egress (`{ field: "a.b" }` picks one string out of a JSON value), a bound secret only to its origin; each change appends `events.iterate.com/secrets/changed` (no value)                                                                            | `SECRETS_KV`, `secret:${projectId}:` prefixed, origin in metadata |
 | `ai`                                                  | Cloudflare's Workers AI binding, VERBATIM: `.run(model, inputs, options?)` `.models()` `.gateway(id).run(req)` `.toMarkdown()` `.autorag(id)`                                                                                                                                                                                                                                                             | `AI` (Workers AI), the binding object itself                      |
 | `append(...events)`                                   | `→ StreamEvent[]`                                                                                                                                                                                                                                                                                                                                                                                         | the stream                                                        |
 | `readEvents(afterOffset?, limit?)`                    | `→ { events, scannedThroughOffset, atHead }` — a page is cut by the server's byte budget (8 MiB, less while other readers are outstanding) or by `limit`; `atHead` says the durable mark was reached                                                                                                                                                                                                      | the stream                                                        |
 | `waitForEvent(filter?)`                               | `{ type?, afterOffset?, timeoutMs? } → StreamEvent`                                                                                                                                                                                                                                                                                                                                                       | the stream                                                        |
 | `cd(path)`                                            | `→ InvokeHandle` onto a sibling context, every call through ITS table (`cd(p).builtins.append(…)` is its physical door)                                                                                                                                                                                                                                                                                   | `ITERATE_CONTEXT.getByName`                                       |
-| `fetch(request)`                                      | egress (`src/iterate-context-durable-object.ts`, the DO's `#egress`): `{{secret:project:NAME}}` substituted in the URL (spliced as ONE component, path placeholders too) and the headers — a placeholder with no stored secret, or a secret bound to another origin, is a 502 (`ProjectSecretRefused`) to the caller, never the destination — then the terminal `fetch`. No next door.                                      | `SECRETS_KV`, then `fetch`                                        |
+| `fetch(request)`                                      | egress (`src/iterate-context-durable-object.ts`, the DO's `#egress`): `getSecret("/secrets/NAME")` and `getSecret("/secrets/NAME", { field: "a.b" })` substituted in the URL (spliced as ONE component; the parser's percent-encoded spelling matched too) and the headers — a placeholder with no stored secret, a field the value has no string at, or a secret bound to another origin, is a 502 (`ProjectSecretRefused`) to the caller, never the destination — then the terminal `fetch`. No next door. | `SECRETS_KV`, then `fetch`                                        |
 | `rpcStubs`                                            | `.get(rpcStubKey) → RpcStubHandle` · `.list() → string[]` (presence) | `RpcStubDirectory`                                                |
 | `rewriteRules`                                        | `.list() → { match, target, origin }[]` (the EFFECTIVE table: context rows, masks as `target: null`, and the platform rows, `origin: "platform" \| "context"`) · `.get(match)` · `.resolve(call) → string[]` (the pure chain; `invoke(call) ≡ invoke(resolve(call).at(-1))`) | core state + the platform rows                                    |
 | `facets`                                              | `.get(name) → FacetHandle` (a RUNNING facet) · `.get(name, { source, cacheKey?, className })` (load and host it) — no delete: a facet leaves with the row that hosted it (section 9) | `ctx.facets`; mirrors `ctx.facets.get(name, startupCallback)`     |
@@ -531,30 +531,37 @@ initializer is one line over the scope:
 | anything spelled as an event | `itx.append(event)`                     | its `null` event                                                                                                                            |
 
 **Fetch** (`src/context/rpc-stubs.ts`, parked). A fetch-shaped capability is
-always called through a terminal `.fetch(request)`. Three doors: the plain-HTTP lane
-`/expression?context=<id>&itx=<expression>` (the worker copies the expression into
-`x-itx-expression`), a terminal `.fetch` inside a session, which `invoke` forks onto the DO's
-fetch channel, and the PROJECT HOST (below). Everything unusual in the file is fenced WORKAROUND for
-the day workerd and capnweb serialize sockets over plain RPC.
+always called through a terminal `.fetch(request)`. Two doors: a terminal `.fetch` inside a session,
+which `invoke` forks onto the DO's fetch channel with the expression in `x-itx-expression` (a loaded
+worker's `env.ITX.fetch` sets the same header itself), and from the web the PROJECT HOST (below) —
+the one HTTP way into a project. Everything unusual in the file is fenced WORKAROUND for the day
+workerd and capnweb serialize sockets over plain RPC.
 
-**Project hosts** (`src/worker.ts`, the pure half; `worker.ts`, the edge branch). A label is
-the address (`docs/plan-one-fetch-rules.md` D1): a request on `<label>--<projectId>.<base>` IS the
-app `itx.apps.<label>` of that project's root context, and the apex `<projectId>.<base>` is the label
-`default` (`itx.apps.default` — never a bare `itx.apps`, whose row would be a prefix of every label
-without a row of its own). The edge strips inbound `x-itx-*`, sets `x-itx-expression` to that
-spelling, and rides the Request VERBATIM into the fetch lane: the URL, host-scoped cookies and
-WebSocket upgrades survive, so a served page's relative links resolve on the same host. The app is
-one rule row (`provide("itx.apps.site", "itx.workers.get({ source })")`, a live stub, a facet) and the
-log never names a hostname; a label with no row is the lane's 404. `<base>` is
-`APP_CONFIG_PROJECT_HOSTNAME_BASE` (blank ⇒ no project-host ingress); the deployed base is
-`project-worker.iterate.com` (a wildcard DNS record and the route in wrangler.jsonc). ADMISSION comes
-first: a context is created on first touch, so before the edge dials a Durable Object for a project
-host it asks the in-process directory whether the project exists — ONE D1 read,
-`directory(env.DB).getProject(projectId)` (`src/control-plane.ts`) — and an unknown project
-is 421 (a stranger's label under the wildcard mints nothing). A project's id IS its DNS-safe slug
-(`projects.create({ project })` slugifies it): the directory row, the DO name and the host label are one
-name. A pretty name or a custom domain is a directory row, later. Everything on a project host is the
-app's; the platform's own doors stay on the worker's hostname. WHO, on a project host:
+**Project hosts** (`src/worker.ts`: `projectHostOf`, the pure half, and the edge branch). A label is
+the address — apps/os's host shapes: a request on `<app>--<project>.<base>` or
+`<app>.<project>.<base>` IS the app `itx.apps.<app>` of that project's root context; the apex
+`<project>.<base>` names no app and lands on the project's config worker, `itx.worker.fetch(request)`
+(`src/sdk/index.ts` `ConfigWorker`: the bundled default answers 404, a project's own `fetch` routes
+by hostname — `this.env.ITX.get().apps.site.fetch(request)`). `<project>` is the project's id or its
+slug (one string here: the directory slugifies an id), resolved by the directory read below. A
+CUSTOM HOSTNAME (`acme.com`, `<app>.acme.com`) is a directory lookup by hostname — a later build. The
+edge strips inbound `x-itx-*`, ALWAYS overwrites `x-iterate-app` with the label the host selected
+(deleted when it selected none — a visitor can never pick an app the host did not), sets
+`x-itx-expression` to the spelling, and rides the Request VERBATIM into the DO's fetch lane: the
+URL, host-scoped cookies and WebSocket upgrades survive, so a served page's relative links resolve
+on the same host. The app is one rule row (`provide("itx.apps.site", "itx.workers.get({ source })")`,
+a live stub, a facet) and the log never names a hostname; a label with no row is the lane's 404.
+`<base>` is `APP_CONFIG_PROJECT_HOSTNAME_BASE` (blank ⇒ no project-host ingress); the deployed base is
+`project-worker.iterate.com` (a wildcard DNS record and the route in wrangler.jsonc); the workers
+lane's is `projects.test`, the e2e lane's `localhost`. ADMISSION comes first: a context is created on
+first touch, so before the edge dials a Durable Object for a project host it asks the in-process
+directory whether the project exists — ONE D1 read, `directory(env.DB).getProject(project)`
+(`src/control-plane.ts`), whose row is the project id — and an unknown project is 421 (a stranger's
+label under the wildcard mints nothing). A project's id IS its DNS-safe slug (`projects.create({
+project })` slugifies it): the directory row, the DO name and the host label are one name.
+Everything on a project host is the app's; the platform's own doors stay on the worker's hostname.
+An app that fetches its own host re-enters the edge with a hop count the platform writes
+(`x-itx-expression-hops`); the fourth pass is a 508. WHO, on a project host:
 `/.itx/session?token=<projectToken>&next=<path>` turns a token for THIS project into the host-scoped
 `__Host-itx-project-session` cookie (HttpOnly, Secure, SameSite=Lax, `Path=/`, no `Domain` — the
 `__Host-` prefix makes a browser refuse it set any other way, so no sibling host can set or shadow it;
@@ -570,11 +577,10 @@ as a visitor's other cookies do); a visitor's own `x-itx-principal` is stripped 
 is `{ actor: "admin" }` on any project. The control plane's session cookie is never a lane
 credential: a cross-site top-level navigation carries it with no `Origin` to check, so it counts on
 `/api` alone (`from-server-cookie`). Who logs in and mints the token is the control plane's; the
-ingress only verifies. `/expression` on the platform host admits the project's token, its secret or
-the admin secret — else 401.
+ingress only verifies.
 
 **The control plane** (`src/control-plane.ts`, IN-PROCESS: everything on the worker's hostname that
-is not `/api`, `/expression`, `/version` or `/demo` is its catch-all — one worker, one front door).
+is not `/api`, `/version` or `/demo` is its catch-all — one worker, one front door).
 An OAuth 2.1 Authorization Server (`@cloudflare/workers-oauth-provider`, built per request from the
 request's origin: `/authorize` app-owned, `/oauth/token`, `/oauth/register` (DCR; CIMD on, with the
 `global_fetch_strictly_public` flag), `/.well-known/*`; `/mcp` its ONLY protected route and its ONE
@@ -768,10 +774,10 @@ LibraryRoots`, the resolver walks from the record with one built-in predicate, t
   and the DO's method keep their names — only the root and its callers renamed).
 
 - **Arc three, the library tier** (`src/library/`): `connectToMcp`, `connectToOpenApi`,
-  `connectToCapnweb` as built-in verbs that take only `itx` (section 5, "Two groups"); the fetch lane
-  accepts a path suffix (`/expression/<path>?context=&itx=`) so a service served behind it sees real
-  paths; the SDK bundle is capnweb's workerd build and exports `newWorkersRpcResponse`, so a loaded
-  worker can serve a capnweb API; capnweb's own promises register as pipelinable in the step walk.
+  `connectToCapnweb` as built-in verbs that take only `itx` (section 5, "Two groups"); a service
+  served behind a project host sees real paths (the Request rides verbatim); the SDK bundle is
+  capnweb's workerd build and exports `newWorkersRpcResponse`, so a loaded worker can serve a capnweb
+  API; capnweb's own promises register as pipelinable in the step walk.
   Proved (arc 3b) against the REAL pet shop, `apps/dummy-petshop`, which grew a bearer-authed
   `/capnweb` door for it (the same `accessGrant` as its `/mcp` and `/api/v2`): the connector e2e
   depends on the deployed shop (`PETSHOP_BASE_URL`, default `https://dummy-petshop.iterate.com`),
@@ -792,7 +798,9 @@ LibraryRoots`, the resolver walks from the record with one built-in predicate, t
 
 - **A label is the address** (section 10, "Project hosts"; `src/worker.ts` + the edge branch in
   `worker.ts`): `<label>--<projectId>.<base>` serves `itx.apps.<label>` of the project's root context
-  with the Request verbatim; the apex is the label `default`. The DO is untouched — the fetch lane
+  with the Request verbatim; the apex was the label `default` (since 2026-09-09 the config worker's
+  `fetch`; the `<app>.<project>` shape and the trusted `x-iterate-app` landed with it, and the public
+  `/expression` lane was deleted — a project host is the one HTTP way in). The DO is untouched — the fetch lane
   already resolves the expression, appends the terminal `.fetch`, maps `NO_ITX_EXPRESSION_MATCH` to
   404 and carries 101s. Deployed under `*.project-worker.iterate.com` (the wildcard DNS record, the
   route, `APP_CONFIG_PROJECT_HOSTNAME_BASE`); the e2e lane hangs its hosts under `localhost` and

@@ -10,9 +10,10 @@
 //   THE ADMIN SECRET (this lane's configured one, wrangler.test.jsonc): `{ actor: "admin" }` on a
 //   project the admin is no member of, every project listed, a project of its own in `org_admin`;
 //   `as` is a user's session confined to their orgs; a wrong secret is INVALID_CREDENTIALS.
-//   THE FETCH LANE: the project's token, its secret or the admin bearer admits; the control plane's
-//   cookie never does (a cross-site navigation carries it), nor anyone else: 401; a visitor's
-//   `x-itx-*` headers never reach the DO's internal protocol.
+//   THE PROJECT HOST: a visitor's `x-itx-*` headers never reach the DO's internal protocol; the
+//   control plane's cookie is never read there (a cross-site navigation carries it — it stamps
+//   nothing); a bearer stamps only what verifies FOR THIS PROJECT — the admin secret, this
+//   project's token; another project's token is nobody.
 //   THE CONSOLE's POST doors refuse a foreign Origin (403) and `/logout` is a POST.
 //   /mcp (the last block): the ONE MCP server for every project — the metadata documents, the
 //   code + PKCE flow with project selection at consent, the three tools, a project token, the admin
@@ -27,6 +28,7 @@ import { afterAll, beforeAll, expect, test } from "vitest";
 import definitionsSql from "../src/control-plane.sql?raw";
 import { rotateProjectApiKey, signProjectToken } from "../src/principal.ts";
 import worker from "../src/worker.ts";
+import { SRC_ECHO_APP } from "./support.ts";
 
 const workersLaneEnv = env as unknown as Record<string, unknown>;
 /** This lane's admin secret and token secret (wrangler.test.jsonc). */
@@ -305,71 +307,74 @@ test("the admin secret: { actor: 'admin' } reaches a project the admin is no mem
   ).toBe("INVALID_CREDENTIALS"); // no key rotated for danas, so nothing verifies (session-doors.test.ts has the rest)
 });
 
-test("the fetch lane (/expression): the project's token, its secret or the admin bearer admits; the control plane's cookie never does — a cross-site navigation carries it, and appends nothing — nor anyone else: 401; a visitor's `x-itx-*` headers never reach the DO's internal protocol", async () => {
+test("a project host: a visitor's `x-itx-*` never reach the DO's internal protocol; the control plane's cookie is never read there — a member's cross-site navigation stamps nothing; a bearer stamps only what verifies FOR THIS PROJECT, another project's token is nobody", async () => {
   const lane = (await api(workersLaneEnv)).authenticate(ADMIN);
   const target = await lane.projects.create({ project: "lane-project" });
+  await target.provide("itx.apps.echo", ["itx", "workers", ["get", { source: SRC_ECHO_APP }]]);
+  /** One request on the project's `echo` host under this lane's configuration. */
+  const onHost = (project: string, init?: RequestInit): Promise<Response> =>
+    worker.fetch(
+      new Request(`https://echo--${project}.projects.test/`, init),
+      workersLaneEnv as never,
+      createExecutionContext(),
+    );
   // a forged pager header (the DO's internal attach protocol, which appends the events it carries)
-  // is stripped at the edge: nothing lands in the log — on an admitted request, so the strip is
-  // what kept it out, not the admission
+  // is stripped at the edge: nothing lands in the log
   const forged = encodeURIComponent(
     JSON.stringify({
       rpcStubKey: "attack",
       appendEvents: [{ type: "events.iterate.com/stream/paused", payload: { reason: "forged" } }],
     }),
   );
-  await call(workersLaneEnv, "/expression?context=lane-project&itx=itx.whoami()", {
-    headers: {
-      "x-itx-rpc-stub-pager": forged,
-      Upgrade: "websocket",
-      authorization: `Bearer ${ADMIN_API_SECRET}`,
-    },
+  await onHost("lane-project", {
+    headers: { "x-itx-rpc-stub-pager": forged, Upgrade: "websocket" },
   });
   const events = (await target.readEvents(0, 100)).events as { type: string }[];
   expect(events.some((e) => e.type === "events.iterate.com/stream/paused")).toBe(false);
 
-  // admission: the admin bearer, a project-token bearer for the project; anyone else is 401
+  // the stamp: a member's cookie — as a cross-site top-level navigation sends it, an <a href> on
+  // another site: the Lax cookie rides, no Origin is stamped — is no credential on a host (the
+  // browser's door is /api, `from-server-cookie`, same origin only); nor is a stranger's, nor none
   const ada = await signIn(workersLaneEnv, "lane-ada@example.com");
-  const adasLane = await (
+  const adasProject = await (
     await api(workersLaneEnv, { cookie: ada })
   )
     .authenticate(COOKIE)
     .projects.create({ project: "adas-lane" });
+  await adasProject.provide("itx.apps.echo", ["itx", "workers", ["get", { source: SRC_ECHO_APP }]]);
   const bob = await signIn(workersLaneEnv, "lane-bob@example.com");
-  const laneStatus = async (
-    headers: Record<string, string>,
-    itx = "itx.whoami()",
-  ): Promise<number> =>
-    (
-      await call(workersLaneEnv, `/expression?context=adas-lane&itx=${encodeURIComponent(itx)}`, {
-        headers,
-      })
-    ).status;
-  expect(await laneStatus({ cookie: bob })).toBe(401);
-  expect(await laneStatus({})).toBe(401);
-  expect(await laneStatus({ authorization: "Bearer neither-a-token-nor-the-secret" })).toBe(401);
-  expect(await laneStatus({ authorization: `Bearer ${ADMIN_API_SECRET}` })).not.toBe(401); // admitted — what the lane answers for a non-fetch-shaped target is its own business
-  // the member's OWN cookie is no credential here: as a cross-site top-level navigation sends it —
-  // an <a href> on another site: the Lax cookie rides, no Origin is stamped — it is 401, and the
-  // expression it named never ran (the browser's door is /api, `from-server-cookie`, same origin only)
+  const seen = async (headers: Record<string, string>) =>
+    (await (await onHost("adas-lane", { headers })).json()) as {
+      principal: unknown;
+      authorization: string | null;
+    };
   expect(
-    await laneStatus(
-      { cookie: ada, "sec-fetch-site": "cross-site", "sec-fetch-mode": "navigate" },
-      "itx.append({ type: 'csrf-landed', payload: { from: 'evil' } })",
-    ),
-  ).toBe(401);
-  expect(
-    ((await adasLane.readEvents(0, 100)).events as { type: string }[]).some(
-      (e) => e.type === "csrf-landed",
-    ),
-  ).toBe(false);
+    await seen({ cookie: ada, "sec-fetch-site": "cross-site", "sec-fetch-mode": "navigate" }),
+  ).toMatchObject({ principal: null, authorization: null });
+  expect(await seen({ cookie: bob })).toMatchObject({ principal: null });
+  expect(await seen({})).toMatchObject({ principal: null, authorization: null });
+  // a bearer: the admin secret and this project's token stamp; a stranger's bearer and a token for
+  // another project are the app's own — passed through, unstamped
+  expect(await seen({ authorization: "Bearer neither-a-token-nor-the-secret" })).toEqual({
+    principal: null,
+    authorization: "Bearer neither-a-token-nor-the-secret",
+    app: "echo",
+  });
+  expect(await seen({ authorization: `Bearer ${ADMIN_API_SECRET}` })).toMatchObject({
+    principal: { actor: "admin" },
+    authorization: null,
+  });
   const projectToken = (projectId: string) =>
     signProjectToken({ projectId, actor: "user_lane-ada@example.com" }, 60_000, TOKEN_SECRET);
-  expect(await laneStatus({ authorization: `Bearer ${await projectToken("adas-lane")}` })).not.toBe(
-    401,
-  );
-  expect(await laneStatus({ authorization: `Bearer ${await projectToken("someone-elses")}` })).toBe(
-    401,
-  ); // a token names ONE project
+  expect(await seen({ authorization: `Bearer ${await projectToken("adas-lane")}` })).toMatchObject({
+    principal: { actor: "user_lane-ada@example.com" },
+    authorization: null,
+  });
+  const foreign = await projectToken("someone-elses"); // a token names ONE project
+  expect(await seen({ authorization: `Bearer ${foreign}` })).toMatchObject({
+    principal: null,
+    authorization: `Bearer ${foreign}`,
+  });
 });
 
 // ── /mcp ── THE ONE MCP SERVER, for every project, behind the OAuth provider's bearer check: an

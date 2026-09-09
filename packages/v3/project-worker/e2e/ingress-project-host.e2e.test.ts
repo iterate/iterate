@@ -1,12 +1,13 @@
-// ingress-project-host.e2e.test.ts — PROJECT-HOST INGRESS (src/worker.ts): an app
-// is served at `/` on `<label>--<projectId>.<base>` with the URL verbatim, so its relative asset
-// loads from the same host; inbound `x-itx-*` never reach it; the apex `<projectId>.<base>` is the
-// label `default`; a label with no rule is a 404; and — deployed only, the local lane cannot set Host on a
-// WebSocket — an upgrade rides through the host to the app. The app is one rule row: the log never
-// names a hostname. WHO, on a host: a project token a member minted becomes the `/.itx/session`
-// cookie and stamps `x-itx-principal`; the platform's credential never reaches the app (the bearer
-// lanes — a token, the admin secret, the project's own secret — are
-// __workers-tests__/session-doors.test.ts).
+// ingress-project-host.e2e.test.ts — PROJECT-HOST INGRESS (src/worker.ts), the one HTTP way into a
+// project: an app is served at `/` on `<app>--<project>.<base>` and `<app>.<project>.<base>` with the
+// URL verbatim, so its relative asset loads from the same host; inbound `x-itx-*` never reach it and
+// `x-iterate-app` is the label the host selected, whatever a visitor sent; the apex `<project>.<base>`
+// names no app and lands on the config worker's `fetch` (the bundled default: 404; a project's own
+// routes it); a label with no rule is a 404; and — deployed — an upgrade rides through the host to the
+// app. The app is one rule row: the log never names a hostname. WHO, on a host: a project token a
+// member minted becomes the `/.itx/session` cookie and stamps `x-itx-principal`; the platform's
+// credential never reaches the app (the bearer lanes — a token, the admin secret, the project's own
+// secret — are __workers-tests__/session-doors.test.ts).
 
 import { expect, test } from "vitest";
 import { openItx } from "./support/client.ts";
@@ -38,6 +39,7 @@ export default class Site extends WorkerEntrypoint {
       return Response.json({
         url: request.url,
         itxHeaders: [...request.headers.keys()].filter((name) => name.startsWith("x-itx-")),
+        app: request.headers.get("x-iterate-app"),
         principal: JSON.parse(request.headers.get("x-itx-principal") || "null"),
         cookie: request.headers.get("cookie"),
         authorization: request.headers.get("authorization"),
@@ -53,7 +55,18 @@ export default class Site extends WorkerEntrypoint {
 
 const siteRule = () => ["itx", "workers", ["get", { source: SRC_SITE }]];
 
-test("an app is served at / on its project host — URL verbatim, relative asset intact, x-itx-* stripped, apex and 404", async () => {
+/** A project's own config worker: `fetch` routes the apex host to the `site` app — the tutorial's
+ *  shape (sdk/index.ts `ConfigWorker`). */
+const SRC_CONFIG_ROUTER = {
+  "cap.js": `import { ConfigWorker } from "./processor.js";
+export default class extends ConfigWorker {
+  fetch(request) {
+    return this.env.ITX.get().apps.site.fetch(request);
+  }
+}`,
+};
+
+test("an app is served at / on its project host — URL verbatim, relative asset intact, x-itx-* stripped, x-iterate-app the host's label; both app shapes; the apex is the config worker's fetch; a label with no rule is 404", async () => {
   const projectId = freshDnsSafeProjectId("ingress");
   await registerProject(projectId);
   const base = projectHostnameBase();
@@ -70,20 +83,35 @@ test("an app is served at / on its project host — URL verbatim, relative asset
   const asset = await fetchProjectHost(host, "/app.js");
   expect(asset.status, asset.text).toBe(200);
   expect(asset.text).toContain("document.title");
-  // a visitor's x-itx-* never reach the app (the lane's own header is set after the strip)
+  // a visitor's x-itx-* never reach the app (the lane's own header is set after the strip), and
+  // x-iterate-app is the label the host selected — a visitor's own is overwritten
   const echo = await fetchProjectHost(host, "/echo", {
     "x-itx-expression": "itx.kv",
     "x-itx-visitor": "1",
+    "x-iterate-app": "other",
   });
-  const seen = JSON.parse(echo.text) as { url: string; itxHeaders: string[] };
+  const seen = JSON.parse(echo.text) as { url: string; itxHeaders: string[]; app: string | null };
   expect(seen.url).toContain(`//${host}/echo`);
   expect(seen.itxHeaders).not.toContain("x-itx-expression");
   expect(seen.itxHeaders).not.toContain("x-itx-visitor");
-  // the apex host is the label `default` — one more rule points it at the same app
-  await itx.provide("itx.apps.default", "itx.apps.site");
-  const apex = await fetchProjectHost(`${projectId}.${base}`, "/");
+  expect(seen.app).toBe("site");
+  // the second app shape, `<app>.<project>.<base>`: the same row
+  const dotted = await fetchProjectHost(`site.${projectId}.${base}`, "/w");
+  expect(dotted.status, dotted.text).toBe(200);
+  expect(dotted.text).toContain(`<p>site.${projectId}.${base}/w</p>`);
+  // the apex names no app: the config worker's fetch answers it — the bundled default is 404, a
+  // project's own routes it (here: to the site), and sees no app label
+  const bare = await fetchProjectHost(`${projectId}.${base}`, "/");
+  expect(bare.status, bare.text).toBe(404);
+  expect(bare.text).toContain("Not found");
+  await itx.provide("itx.worker", [
+    "itx",
+    "workers",
+    ["get", { source: SRC_CONFIG_ROUTER, cacheKey: "config:ingress" }],
+  ]);
+  const apex = await fetchProjectHost(`${projectId}.${base}`, "/echo", { "x-iterate-app": "site" });
   expect(apex.status, apex.text).toBe(200);
-  expect(apex.text).toContain(`<p>${projectId}.${base}/</p>`);
+  expect((JSON.parse(apex.text) as { app: string | null }).app).toBeNull();
   // a label no rule serves is the lane's 404 (NO_ITX_EXPRESSION_MATCH), never a 500
   const missing = await fetchProjectHost(`other--${projectId}.${base}`, "/");
   expect(missing.status, missing.text).toBe(404);

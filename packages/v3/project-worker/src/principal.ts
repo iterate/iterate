@@ -170,7 +170,7 @@ export async function verifyAdminSecret(
 
 /** The SECRETS_KV key a project's API-key hash sits under — OUTSIDE the `secret:<projectId>:` prefix
  *  egress substitutes from (iterate-context-durable-object.ts `#egress`, context/built-ins.ts
- *  `secretKey`): no `{{secret:project:NAME}}` placeholder can spell it, so the key that
+ *  `secretKey`): no `getSecret("/secrets/NAME")` placeholder can spell it, so the key that
  *  authenticates AS the project can never be substituted into an outbound request by the project's
  *  own code. */
 const projectApiKeyHashKey = (projectId: string): string => `project-api-key:${projectId}`;

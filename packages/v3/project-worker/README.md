@@ -1,7 +1,8 @@
 # project-worker — the clean-room platform, ONE worker
 
-One Cloudflare Worker, one package: `src/worker.ts` is the stateless edge (capnweb at `/api`,
-project-host ingress `<app>--<projectId>.<base>`, the fetch lane) with the control plane in-process
+One Cloudflare Worker, one package: `src/worker.ts` is the stateless edge (capnweb at `/api`;
+project-host ingress — `<app>--<project>.<base>`, `<app>.<project>.<base>`, the apex
+`<project>.<base>` — the one HTTP way into a project) with the control plane in-process
 as its catch-all (`src/control-plane.ts`: OAuth AS + a D1 directory + `/mcp`, the ONE MCP server for
 every project + the console);
 `src/iterate-context-durable-object.ts` is THE CONTEXT — one Durable Object per `{ projectId, path }`

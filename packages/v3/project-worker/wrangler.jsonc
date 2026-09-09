@@ -22,8 +22,8 @@
   "account_id": "04b3b57291ef2626c6a8daa9d47065a7",
   "observability": { "enabled": true, "logs": { "head_sampling_rate": 1 } },
   "workers_dev": true,
-  // PROJECT HOSTS (src/worker.ts `projectHostOf`): every `<label>--<projectId>.<base>` under the wildcard is
-  // an app of that project. The wildcard DNS record (`*.project-worker.iterate.com` AAAA 100::,
+  // PROJECT HOSTS (src/worker.ts `projectHostOf`): `<app>--<project>.<base>`, `<app>.<project>.<base>` and
+  // the apex `<project>.<base>` under the wildcard. The wildcard DNS record (`*.project-worker.iterate.com` AAAA 100::,
   // proxied — originless, the route terminates it) lives in the zone; the route is this line.
   "routes": [{ "pattern": "*.project-worker.iterate.com/*", "zone_name": "iterate.com" }],
 

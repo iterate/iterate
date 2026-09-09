@@ -28,7 +28,7 @@ import { keySortedForPrint, InvokeHandle, walkStepsOnRpcStub } from "./context/e
 //
 // The verbs: `connectToMcp` · `connectToOpenApi` · `connectToCapnweb`. The three connectors each
 // return a connection RpcTarget a caller can hold across calls, and each does ALL its HTTP through
-// `itx.fetch` (egress: `{{secret:project:NAME}}` placeholders in headers substitute for free; a user
+// `itx.fetch` (egress: `getSecret("/secrets/NAME")` placeholders in headers substitute for free; a user
 // rule shadowing `itx.fetch` redirects the library too, which is how a test fakes a remote). The
 // other direction — this deployment as an MCP server — is not a library member: the control plane
 // serves ONE `/mcp` for every project (control-plane.ts). `connectToGraphql` is the obvious next
@@ -172,7 +172,7 @@ export async function refuseUnlessOk(response: Response, what: string): Promise<
 // ── capnweb ── `itx.connectToCapnweb(url, { headers?, transport? })`: a remote capnweb API's
 // main object as a pipelinable handle, written against `itx.fetch` alone (the library rule, above).
 // The WebSocket is opened THROUGH egress — `itx.fetch` with the Upgrade header, the 101's socket
-// accepted and handed to capnweb — so `{{secret:project:NAME}}` headers substitute and the socket is
+// accepted and handed to capnweb — so `getSecret("/secrets/NAME")` headers substitute and the socket is
 // the context's. `{ transport: "batch" }` is the one-shot alternative: capnweb's HTTP batch client
 // uses the global fetch, so the same transport is re-spelled here over `itx.fetch` (RpcTransport is
 // capnweb's own extension point for exactly that). A held connection pins this context awake for its
@@ -557,8 +557,7 @@ async function readJsonRpcResponse(response: Response, id: number): Promise<Json
 // parameters go on the URL, header parameters on the request, and what is left is the JSON body
 // when the operation declares one (an input whose only key is `body` sends `input.body` verbatim, for
 // a non-object body). A non-2xx answer throws with the status and the first 300 characters. The base
-// URL keeps the spec URL's query when it falls back to it, so a service served over the fetch lane
-// (`/expression/<path>?context=…&itx=…`) works like any other.
+// URL keeps the spec URL's query when it falls back to it.
 
 /** Options for `connectToOpenApi`: `baseUrl` overrides the document's first server; `headers` ride on
  *  every operation call (and on the spec fetch only when the spec shares the API's host). */

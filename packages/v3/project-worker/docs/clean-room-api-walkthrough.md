@@ -29,7 +29,7 @@ on top of the stream.
   with `match` replaced by `target`.
 - **Fetch.** In both directions: anything fetch-shaped can be a web server
   (reached via a terminal `.fetch(request)`), and every outbound fetch from
-  project code is egress with `{{secret:project:NAME}}` substitution.
+  project code is egress with `getSecret("/secrets/NAME")` substitution.
 - **The stream.** One append-only log per context. One inline reduce (`core`)
   reduces the context's own control events at the commit point — identity, wake,
   pause, the rewrite rules, the subscriptions, the secrets catalog; one delivery loop hands every
@@ -45,7 +45,8 @@ entire world is one binding, `env.ITX`. The control plane — an OAuth AS, the D
 directory of users, orgs and projects (a project's id IS its DNS-safe name),
 `/mcp`, a console with an email login form — runs IN-PROCESS as the same
 worker's catch-all (`src/control-plane.ts`); a project host
-(`<app>--<projectId>.<base>`) is admitted by one directory read before any DO is
+(`<app>--<project>.<base>`, `<app>.<project>.<base>`, the apex `<project>.<base>` — the one
+HTTP way into a project) is admitted by one directory read before any DO is
 dialled. Egress is terminal: secrets substituted, then `fetch`.
 
 ```mermaid
@@ -56,8 +57,7 @@ flowchart LR
   subgraph edge["project-worker, ONE stateless worker (src/worker.ts)"]
     api["/api → UnauthenticatedSession → Session → ProjectCollection → IterateContext<br/>src/session.ts, src/iterate-context.ts"]
     relay["pager relay + SessionTeardown<br/>the session's lent rpc stubs"]
-    lane["/expression?context=…&itx=… fetch lane"]
-    host["project-host ingress: app--projectId.base → itx.apps.app<br/>src/worker.ts · /.itx/session · Bearer token | admin secret | project secret"]
+    host["project-host ingress: app--project.base | app.project.base → itx.apps.app, project.base → itx.worker<br/>src/worker.ts · x-iterate-app · /.itx/session · Bearer token | admin secret | project secret"]
     cp["the control plane, in-process (the catch-all)<br/>OAuth AS · D1 directory · /mcp · console<br/>src/control-plane.ts"]
   end
   subgraph do["IterateContextDurableObject, one per {projectId, path}"]
@@ -75,8 +75,7 @@ flowchart LR
   api -- "directory: membership, create" --> cp
   host -- "directory.getProject: admission (421)" --> cp
   api -- "Workers RPC: invoke(expression)" --> do
-  lane -- "x-itx-expression header" --> do
-  host -- "x-itx-expression: itx.apps.app, Request verbatim" --> do
+  host -- "x-itx-expression: itx.apps.app | itx.worker, Request verbatim" --> do
   transport -. "{type:'page'} over the pager WS" .-> relay
   relay -- "lendRpcStub: a fresh Workers-RPC stub" --> transport
   stream -- "onCommit" --> delivery
@@ -85,7 +84,7 @@ flowchart LR
   do -- "ctx.facets" --> facets
   do -- "LOADER.get" --> loader
   ep -- "env.ITX / globalOutbound" --> do
-  do -- "egress: {{secret:project:NAME}} substituted → fetch" --> net
+  do -- "egress: getSecret(\"/secrets/NAME\") substituted → fetch" --> net
 ```
 
 ---
@@ -104,9 +103,10 @@ packages/v3/project-worker/
   build-sdk.mjs                  bundles src/sdk/index.ts → generated/processor-sdk.ts (processor.js),
                                  client/demo.tsx → generated/demo-page.ts
   src/
-    worker.ts                    THE EDGE and the front door. default fetch: project-host ingress (admission,
-                                 /.itx/session, the principal stamp), /api, /expression, /version; everything
-                                 else on the worker's hostname is the in-process control plane.
+    worker.ts                    THE EDGE and the front door. default fetch: project-host ingress (the three
+                                 host shapes, admission, x-iterate-app, /.itx/session, the principal stamp —
+                                 the one HTTP way into a project), /api, /version; everything else on the
+                                 worker's hostname is the in-process control plane.
                                  Exports ItxEntrypoint, IterateContextDurableObject.
     session.ts                   UnauthenticatedSession → Session (whoami, projects) → ProjectCollection
                                  (list · get · create — the gate + catalog); SessionTeardown (what a session
@@ -128,7 +128,7 @@ packages/v3/project-worker/
                                  worker's env.ITX is)
     iterate-context-durable-object.ts  THE CONTEXT DO: stream + the core reduce + delivery + facets +
                                  rpc stubs + the fetch doors + egress (substituteProjectSecrets:
-                                 {{secret:project:NAME}} in the URL + headers). One class.
+                                 getSecret("/secrets/NAME") in the URL + headers). One class.
     lib.ts                       codedError / errorCode / reportIssue · diff / applyPatch / jsonEqual · withTimeout
     library.ts                   THE LIBRARY: connectToMcp, connectToOpenApi, connectToCapnweb; the memo
                                  table
@@ -589,11 +589,12 @@ interface BuiltInScope {
     list(prefix?: string): Promise<{ keys: string[] }>;
   };
 
-  /** Project secrets for egress: `{{secret:project:NAME}}` in an outbound request's URL or headers
-   *  substitutes to the value at the egress door (`fetch`). WRITE-ONLY — `set`, `delete`, and a
-   *  `list` of names and origins, never a value. A secret `set` with an `origin` is sent to that
-   *  origin ONLY. Every change appends `events.iterate.com/secrets/changed` with the name (and
-   *  origin, or `deleted`) — the value never enters the log. A name is `[a-zA-Z0-9._-]+`. */
+  /** Project secrets for egress: `getSecret("/secrets/NAME")` in an outbound request's URL or
+   *  headers substitutes to the value at the egress door (`fetch`); `getSecret("/secrets/NAME",
+   *  { field: "a.b" })` to one field of a JSON value. WRITE-ONLY — `set`, `delete`, and a `list` of
+   *  names and origins, never a value. A secret `set` with an `origin` is sent to that origin ONLY.
+   *  Every change appends `events.iterate.com/secrets/changed` with the name (and origin, or
+   *  `deleted`) — the value never enters the log. A name is `[a-zA-Z0-9._-]+`. */
   secrets: {
     set(name: string, value: string, options?: { origin?: string }): Promise<{ ok: true }>;
     delete(name: string): Promise<{ ok: true }>;
@@ -622,9 +623,9 @@ interface BuiltInScope {
    *  Own path → same isolate; anything else → a Workers-RPC call to that DO. */
   cd(path: string): InvokeHandle;
 
-  /** Egress: {{secret:project:NAME}} placeholders substituted in the URL and headers (a placeholder
-   *  with no stored secret, or a secret bound to another origin, is a 502 to the caller — never sent),
-   *  then the terminal `fetch` — the same door a loaded worker's globalOutbound lands on. */
+  /** Egress: getSecret("/secrets/NAME") placeholders substituted in the URL and headers (a
+   *  placeholder with no stored secret, or a secret bound to another origin, is a 502 to the caller —
+   *  never sent), then the terminal `fetch` — the same door a loaded worker's globalOutbound lands on. */
   fetch(request: Request): Promise<Response>;
 
   /** The rpc-stub REGISTRY — physical, never event-sourced: a client's live value lent under an
@@ -1403,7 +1404,7 @@ class IterateContextDurableObject extends DurableObject<Env> {
   // ── native platform entry points ──
   /** Ordered partial-fetch walk: x-itx-rpc-stub-pager (the pager WS) → x-itx-fetch-upgrade (the
    *  101 leg of an rpc-stub fetch) → x-itx-expression (the fetch lane, run under the x-itx-principal
-   *  stamp when the edge set one) → else EGRESS (#egress): {{secret:project:NAME}} substitution in
+   *  stamp when the edge set one) → else EGRESS (#egress): getSecret("/secrets/NAME") substitution in
    *  the URL and headers from SECRETS_KV (a missing secret, or one bound to another origin, is a
    *  502 — ProjectSecretRefused — to the caller), then the terminal fetch. */
   fetch(request: Request): Promise<Response>;
@@ -1438,7 +1439,7 @@ interface Context {
 
 | Export (from `src/worker.ts`) | Kind                                                                                          | Surface                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | ----------------------------- | --------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `default`                     | module worker `fetch`                                                                         | a PROJECT HOST `<app>--<projectId>.<base>` (admitted by `directory.getProject`, 421 for the unknown; `/.itx/session` the cookie door; the Request rides verbatim into the fetch lane as `itx.apps.<app>`); on the worker's hostname `/api` (capnweb: WS or one-shot HTTP batch → `UnauthenticatedSession`), `/expression?context=<id or name>&itx=<expr>` (fetch lane → DO with `x-itx-expression`; 400 without both), `/version`, `/demo` (a static asset); everything else the in-process CONTROL PLANE |
+| `default`                     | module worker `fetch`                                                                         | a PROJECT HOST — `<app>--<project>.<base>`, `<app>.<project>.<base>` (the app `itx.apps.<app>`), the apex `<project>.<base>` (the config worker, `itx.worker`) — admitted by `directory.getProject`, 421 for the unknown; `/.itx/session` the cookie door; `x-iterate-app` always overwritten; the Request rides verbatim into the DO's fetch lane; on the worker's hostname `/api` (capnweb: WS or one-shot HTTP batch → `UnauthenticatedSession`), `/version`, `/demo` (a static asset); everything else the in-process CONTROL PLANE |
 | `IterateContextDurableObject` | Durable Object (binding `ITERATE_CONTEXT`)                                                    | section 7                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | `ItxEntrypoint`               | `WorkerEntrypoint`, minted via `ctx.exports.ItxEntrypoint({ props: { iterateContextName } })` | `get()` → the real `IterateContext` scope (every stream verb rides it: `env.ITX.get().append(…)`); `fetch` (egress). Nothing else.                                                                                                                                                                                                                                                                                                                                                                        |
 
@@ -1683,10 +1684,10 @@ itself.
 | ephemeral             | an event that takes an offset but is never stored and costs no write; delivered only to subscribers that name its type                                                                                                                                                                |
 | incarnation           | one life of the DO between evictions; the constructor's `stream/woken` opens each (offset 1 is the first one's `stream/created`); ephemeral offsets are unique within one                                                                                                             |
 | live state            | a `LiveState` holder's `{ rev, state }` plus `live-state/changed` deltas; clients chain revs and re-seed on a gap                                                                                                                                                                     |
-| egress                | any fetch leaving project code: `{{secret:project:NAME}}` substituted in the DO (URL + headers; a missing or origin-bound secret is a 502), then the terminal `fetch` — no next door                                                                                                  |
+| egress                | any fetch leaving project code: `getSecret("/secrets/NAME")` (and `{ field: "a.b" }`) substituted in the DO (URL + headers; a missing or origin-bound secret is a 502), then the terminal `fetch` — no next door                                                                     |
 | control plane         | the in-process catch-all of the one worker (`src/control-plane.ts`): the OAuth AS, the D1 directory (users → orgs → projects; a project's id IS its slug), `/mcp`, the console + email login; what admits a project host and answers membership                                         |
-| project host          | `<app>--<projectId>.<base>`: the app `itx.apps.<app>` of the project's root context, the Request verbatim; admitted by one directory read (421 otherwise); a project token as the `/.itx/session` cookie or as `Authorization: Bearer` stamps `x-itx-principal`                       |
-| fetch lane            | reaching something fetch-shaped: `/expression?context=&itx=` from outside (`x-itx-expression` to the DO), a terminal `itx.x.fetch(request)` from inside a session                                                                                                                     |
+| project host          | the one HTTP way into a project: `<app>--<project>.<base>` and `<app>.<project>.<base>` are the app `itx.apps.<app>` of the project's root context, the apex `<project>.<base>` its config worker's `fetch`; the Request verbatim, `x-iterate-app` the host's label; admitted by one directory read (421 otherwise); a project token as the `/.itx/session` cookie or as `Authorization: Bearer` stamps `x-itx-principal` |
+| fetch lane            | the DO's `x-itx-expression` door: a project host from outside, a terminal `itx.x.fetch(request)` from inside a session, `env.ITX.fetch` from loaded code                                                                                                                             |
 
 ---
 

@@ -1,8 +1,8 @@
 // The PROJECT WORKER — the stateless edge AND the front door. capnweb terminates at `/api`; a project
-// host forwards to the IterateContextDurableObject over Workers RPC (the DO does the real work and stays
-// hibernatable); the control plane (OAuth AS + D1 directory + /mcp) runs IN-PROCESS here (control-plane.ts)
-// — one worker, one front door. A project host names its project; the directory confirms it exists.
-// Two pure halves ride with the edge:
+// host — the ONE HTTP way into a project — forwards to the IterateContextDurableObject over Workers
+// RPC (the DO does the real work and stays hibernatable); the control plane (OAuth AS + D1 directory
+// + /mcp) runs IN-PROCESS here (control-plane.ts) — one worker, one front door. A project host names
+// its project; the directory confirms it exists. Two pure halves ride with the edge:
 //   app config   — `appConfigOf` / `parseAppConfig`: THE WORKER'S CONFIGURATION, one typed object per isolate
 //   project host — `projectHostOf` + the project-session cookie door: which project and which app a hostname names
 
@@ -17,10 +17,11 @@ import { IterateContextDurableObject } from "./iterate-context-durable-object.ts
 import { directory, controlPlane, type Env as WorkerEnv } from "./control-plane.ts";
 import { registerPipelinedRpcBrand } from "./context/expression.ts";
 import { ITX_EXPRESSION_FETCH_HEADER } from "./context/rpc-stubs.ts";
-import { DurableObjectNameCodec, type DurableObjectAddress } from "./iterate-context.ts";
+import { DurableObjectNameCodec } from "./iterate-context.ts";
 import {
   UnauthenticatedSession,
   verifyCredentials,
+  type ProjectIdOrSlug,
   type SessionCredentials,
   type SessionInput,
 } from "./session.ts";
@@ -32,13 +33,18 @@ import {
 } from "./principal.ts";
 import { isSameOriginBrowserRequest } from "./lib.ts";
 
-/** The fetch lane's re-entry count: `/expression?itx=itx.fetch` egresses to its own URL and lands
- *  here again with the same query; the header counts the passes and the lane refuses past a few. */
+/** A project host's re-entry count: an app that fetches its own host egresses and lands here again;
+ *  the header counts the passes and the edge refuses past a few. */
 const ITX_EXPRESSION_LANE_HOPS_HEADER = "x-itx-expression-hops";
 const ITX_EXPRESSION_LANE_MAX_HOPS = 4;
 
-/** WHO a lane's request is, as both lanes into a context read it: `principal` is the verified
- *  stamp the context runs the call under (null: nobody); `platformBearer` says the
+/** The app label a project host selected, as the app sees it — apps/os's header. The edge ALWAYS
+ *  overwrites it (set to the label, deleted when the host named none), so a visitor can never pick
+ *  an app the host did not. */
+const ITERATE_APP_HEADER = "x-iterate-app";
+
+/** WHO a project host's request is, as the lane into a context reads it: `principal` is the
+ *  verified stamp the context runs the call under (null: nobody); `platformBearer` says the
  *  `Authorization: Bearer` was the platform's own credential, which an app never sees. */
 type LaneIdentity = { principal: Principal | null; platformBearer: boolean };
 
@@ -46,9 +52,9 @@ type LaneIdentity = { principal: Principal | null; platformBearer: boolean };
  *  the bearer as a project token, as the admin secret, as THIS project's secret; then the host
  *  cookie as a project token — the first that verifies FOR THIS PROJECT wins (session.ts
  *  `verifyCredentials`, the one verifier). The control plane's session cookie is no candidate: it is
- *  `/api`'s alone (`from-server-cookie`, same origin only) — on a lane a cross-site navigation
- *  would carry it with no Origin to check. A credential of another project is nobody here: it
- *  stamps nothing and, as an app's own bearer scheme does, passes through. */
+ *  `/api`'s alone (`from-server-cookie`, same origin only) — on a project host a cross-site
+ *  navigation would carry it with no Origin to check. A credential of another project is nobody
+ *  here: it stamps nothing and, as an app's own bearer scheme does, passes through. */
 async function laneIdentityOf(
   projectId: string,
   input: Pick<SessionInput, "request" | "directory" | "appConfig" | "secretsKv">,
@@ -89,22 +95,30 @@ async function laneIdentityOf(
   return { principal: null, platformBearer: false };
 }
 
-/** The Request a lane hands the context DO — the same Request, its URL, method, body and a
+/** The Request a project host hands the context DO — the same Request, its URL, method, body and a
  *  WebSocket upgrade intact, with the headers made the platform's: every inbound `x-itx-*` gone (a
  *  pager or fetch-upgrade header from outside would enter the DO's internal protocol), the cookie
  *  header replaced by `appCookies` (null ⇒ none — what the capability may see), a platform bearer
  *  (this project's token, the admin secret, this project's secret) removed (an app's own bearer
- *  scheme passes through untouched), then the expression, the hop count and the principal's stamp. */
+ *  scheme passes through untouched), `x-iterate-app` overwritten with the label the host selected
+ *  (deleted when it selected none), then the expression the host names — `itx.apps.<app>`, or the
+ *  config worker `itx.worker` for a host with no app label (its `fetch` routes by hostname,
+ *  sdk/index.ts `ConfigWorker`) — the hop count and the principal's stamp. */
 function laneRequestTo(
   request: Request,
-  lane: { itxExpression: string; hops: number; appCookies: string | null; identity: LaneIdentity },
+  lane: { app: string | null; hops: number; appCookies: string | null; identity: LaneIdentity },
 ): Request {
   const headers = new Headers(request.headers);
   for (const name of [...headers.keys()]) if (name.startsWith("x-itx-")) headers.delete(name);
   if (lane.appCookies) headers.set("cookie", lane.appCookies);
   else headers.delete("cookie");
   if (lane.identity.platformBearer) headers.delete("authorization");
-  headers.set(ITX_EXPRESSION_FETCH_HEADER, lane.itxExpression);
+  if (lane.app === null) headers.delete(ITERATE_APP_HEADER);
+  else headers.set(ITERATE_APP_HEADER, lane.app);
+  headers.set(
+    ITX_EXPRESSION_FETCH_HEADER,
+    lane.app === null ? "itx.worker" : `itx.apps.${lane.app}`,
+  );
   headers.set(ITX_EXPRESSION_LANE_HOPS_HEADER, String(lane.hops));
   if (lane.identity.principal)
     headers.set(ITX_PRINCIPAL_HEADER, JSON.stringify(lane.identity.principal));
@@ -132,22 +146,21 @@ export { ItxEntrypoint } from "./iterate-context.ts";
 export default {
   async fetch(request: Request, env: WorkerEnv, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
-    // THE HOP COUNT, for both lanes into a context: an app or an expression that fetches its own
-    // host or the fetch lane's URL re-enters here through egress; each pass counts, a few is a loop.
-    // The platform writes the count as digits; anything else (an app spelling "NaN" to defeat the
-    // budget — `NaN > max` is never true) is over budget by definition.
+    // THE HOP COUNT: an app that fetches its own host re-enters here through egress; each pass
+    // counts, a few is a loop. The platform writes the count as digits; anything else (an app
+    // spelling "NaN" to defeat the budget — `NaN > max` is never true) is over budget by definition.
     const hopsHeader = request.headers.get(ITX_EXPRESSION_LANE_HOPS_HEADER) ?? "0";
     const hops = /^\d{1,3}$/.test(hopsHeader) ? Number(hopsHeader) + 1 : Infinity;
     if (hops > ITX_EXPRESSION_LANE_MAX_HOPS)
       return new Response(
-        `the request re-entered itself ${Number.isFinite(hops) ? hops : `"${hopsHeader}"`} times (an app or an expression fetching its own lane)\n`,
+        `the request re-entered itself ${Number.isFinite(hops) ? hops : `"${hopsHeader}"`} times (an app fetching its own host)\n`,
         { status: 508 },
       );
 
-    // PROJECT-HOST INGRESS (the project host section below): a request on a project host IS the app it names, the
-    // Request riding into the fetch lane with its URL, the app's own cookies and a WebSocket upgrade
-    // intact. Everything on a project host is the app's; the platform's own doors live on the
-    // worker's hostname.
+    // PROJECT-HOST INGRESS (the project host section below): a request on a project host IS the app
+    // it names — or, with no app label, the project's config worker — the Request riding into the
+    // DO's fetch lane with its URL, the app's own cookies and a WebSocket upgrade intact. Everything
+    // on a project host is the app's; the platform's own doors live on the worker's hostname.
     const appConfig = appConfigOf(env);
     const { projectHostnameBase, projectTokenSecret, environmentName, deployId } = appConfig;
     /** What every session and every lane's identity is built from — ONE object per request. */
@@ -164,12 +177,15 @@ export default {
       // ADMISSION, before any Durable Object is dialled: a context is created on first touch, so a
       // hostname whose project the in-process directory does not know must never reach one — else
       // any label under the wildcard would mint durable storage from the public internet. One
-      // directory read; an unknown project is 421.
-      const { projectId } = projectHost;
-      if (!(await sessionInput.directory.getProject(projectId)))
-        return new Response(`421: no project ${JSON.stringify(projectId)} is served here\n`, {
-          status: 421,
-        });
+      // directory read — the row resolves the host's label (an id or a slug) to the project's id;
+      // an unknown project is 421.
+      const project = await sessionInput.directory.getProject(projectHost.project);
+      if (!project)
+        return new Response(
+          `421: no project ${JSON.stringify(projectHost.project)} is served here\n`,
+          { status: 421 },
+        );
+      const projectId = project.id;
       const sessionResponse = await projectSessionResponse(request, projectId, projectTokenSecret);
       if (sessionResponse) return sessionResponse;
       // the visitor's own cookies reach the app; the platform's cookie and bearer never do
@@ -177,7 +193,7 @@ export default {
         DurableObjectNameCodec.stringify({ projectId, path: "/" }),
       ).fetch(
         laneRequestTo(request, {
-          itxExpression: `itx.apps.${projectHost.app}`,
+          app: projectHost.app,
           hops,
           appCookies: withoutProjectSessionCookie(request.headers.get("cookie")) || null,
           identity: await laneIdentityOf(projectId, sessionInput),
@@ -202,49 +218,6 @@ export default {
       // live capabilities: a live provide needs the relay to outlive the response —
       // the relay's lend call simply fails there, which is the honest error.)
       return newWorkersRpcResponse(request, new UnauthenticatedSession(sessionInput));
-    }
-
-    // THE FETCH LANE — the plain-HTTP door onto fetch-shaped capabilities (WS upgrades and all), for
-    // callers with no capnweb session (curl, a browser tab, a webhook): `?context=` names the
-    // context (a project id = its root, or a full context name), `?itx=` the itx expression, which
-    // rides to the context DO in `x-itx-expression`. `/expression/<path>` too: the Request rides to
-    // the target verbatim, so a server behind the lane sees a real path.
-    if (url.pathname === "/expression" || url.pathname.startsWith("/expression/")) {
-      const context = url.searchParams.get("context");
-      const itxExpression = url.searchParams.get("itx");
-      if (!context || !itxExpression)
-        return new Response(
-          "/expression needs ?context=<project id | context name>&itx=<itx expression>\n",
-          { status: 400 },
-        );
-      let address: DurableObjectAddress;
-      try {
-        address = DurableObjectNameCodec.parse(context);
-      } catch (error) {
-        return new Response(`${(error as Error).message}\n`, { status: 400 });
-      }
-      const identity = await laneIdentityOf(address.projectId, sessionInput);
-      // ADMISSION: a lane credential (`laneIdentityOf`), else 401.
-      if (!identity.principal)
-        return new Response("401: bear this project's token, its secret or the admin secret\n", {
-          status: 401,
-        });
-      // No cookie reaches the capability: every cookie on the platform host is the platform's own.
-      const response = await env.ITERATE_CONTEXT.getByName(address.name).fetch(
-        laneRequestTo(request, { itxExpression, hops, appCookies: null, identity }),
-      );
-      if (response.status === 101) return response;
-      // The answer is LOADED code's, served on the PLATFORM's origin: a document it returns must not
-      // run as this origin (its script would reach `/api` with the visitor's session cookie — every
-      // project the visitor can reach). A CSP sandbox gives it an opaque origin: scripts and forms
-      // run, cookies and same-origin authority do not. An app that needs an origin is a project host.
-      const headers = new Headers(response.headers);
-      headers.set("content-security-policy", "sandbox allow-scripts allow-forms");
-      return new Response(response.body, {
-        status: response.status,
-        statusText: response.statusText,
-        headers,
-      });
     }
 
     // Everything else on the platform host is the CONTROL PLANE, in-process (src/control-plane.ts
@@ -280,8 +253,8 @@ export interface AppConfig {
   /** Which deployment this is, as a word a human reads at `/version`: "poc" (the deployment), "test"
    *  (the workers lane), "e2e" (the e2e lane). Required. */
   readonly environmentName: string;
-  /** The base every project host hangs under — `<app>--<slug>.<base>` (the project host section); blank ⇒ no
-   *  project-host ingress (the workers lane). */
+  /** The base every project host hangs under — `<app>--<project>.<base>`, `<app>.<project>.<base>`,
+   *  `<project>.<base>` (the project host section); blank ⇒ no project-host ingress. */
   readonly projectHostnameBase: string;
   /** The HMAC secret project tokens are signed with (principal.ts) — a wrangler SECRET on a deployment,
    *  a var in the test lanes. Required: a blank secret signs no token (`mintToken`, the console's
@@ -365,15 +338,17 @@ export function appConfigOf(env: AppConfigEnv): AppConfig {
 }
 
 // ── project host ── PROJECT-HOST INGRESS, the pure half: which project and which app a hostname names
-// ("a label is the address"). `<app>--<projectId>.<base>` serves `itx.apps.<app>` of the project's
-// ROOT context; the apex `<projectId>.<base>` serves the app `default` — `itx.apps.default`, never a
-// bare `itx.apps`: a row at the bare prefix would catch every label without a row of its own and hand
-// the apex app a stray step. Every host is exactly one row, and the log never names a hostname: one
-// rule row (`provide("itx.apps.site", …)`) serves the app on every host the project has. A project id
-// is a DNS label by construction (the directory slugifies it); the in-process directory admits it and
-// the Request rides into the fetch lane (worker.ts `laneRequestTo`). The one door the platform itself
-// answers on a project host — the session cookie's — is here too (`projectSessionResponse`), beside
-// the cookie it sets.
+// ("a label is the address" — apps/os's host shapes). `<app>--<project>.<base>` and
+// `<app>.<project>.<base>` serve `itx.apps.<app>` of the project's ROOT context; the apex
+// `<project>.<base>` names no app and serves the project's config worker, `itx.worker` — its `fetch`
+// routes by hostname (sdk/index.ts `ConfigWorker`; the bundled default answers 404). Every app is
+// exactly one row, and the log never names a hostname: one rule row (`provide("itx.apps.site", …)`)
+// serves the app on every host the project has. `<project>` is the project's id or its slug — one
+// DNS label here, the directory slugifies an id — which the in-process directory resolves and admits
+// before the Request rides into the DO's fetch lane (`laneRequestTo`). A CUSTOM HOSTNAME
+// (`acme.com`, `<app>.acme.com`) is a directory lookup by hostname, not built: a later build adds the
+// row and the resolver. The one door the platform itself answers on a project host — the session
+// cookie's — is here too (`projectSessionResponse`), beside the cookie it sets.
 
 /** The cookie a project host holds a project token in (a browser's lane; `/.itx/session` sets it).
  *  `__Host-`: a browser accepts it only as set here — `Secure`, `Path=/`, no `Domain` — so it is
@@ -461,22 +436,28 @@ const DNS_LABEL = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const APP_LABEL = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
 
 /** The app + project a host names, or null when `hostname` is not a project host under `base` (a
- *  blank `base` ⇒ no project-host ingress at all). `<app>--<projectId>.<base>` serves `itx.apps.<app>`
- *  of that project; the apex `<projectId>.<base>` serves app `default`. Pure: whether the project
- *  EXISTS is the directory's answer (worker.ts). */
+ *  blank `base` ⇒ no project-host ingress at all). `<app>--<project>.<base>` and
+ *  `<app>.<project>.<base>` name the app `<app>`; the apex `<project>.<base>` names none (`app:
+ *  null` — the config worker answers). `project` is the label as written, an id or a slug: whether
+ *  the project EXISTS, and which id it is, is the directory's answer (the edge above). Pure. */
 export function projectHostOf(
   hostname: string,
   base: string,
-): { app: string; projectId: string } | null {
+): { app: string | null; project: ProjectIdOrSlug } | null {
   if (!base) return null;
   const host = hostname.toLowerCase().replace(/\.$/, ""); // a fully-qualified Host (`site--p.base.`) too
   const suffix = `.${base.toLowerCase()}`;
   if (!host.endsWith(suffix)) return null;
-  const label = host.slice(0, -suffix.length);
-  if (label.includes(".")) return null; // ONE label under the base; a deeper name is not a project host
-  const separator = label.indexOf("--");
-  const app = separator === -1 ? null : label.slice(0, separator);
-  const projectId = separator === -1 ? label : label.slice(separator + 2);
-  if (!DNS_LABEL.test(projectId) || (app !== null && !APP_LABEL.test(app))) return null;
-  return { app: app ?? "default", projectId };
+  const labels = host.slice(0, -suffix.length).split(".");
+  if (labels.length > 2) return null; // deeper than `<app>.<project>` is not a project host
+  const [first, second] = labels as [string, string?];
+  const separator = first.indexOf("--");
+  const [app, project] =
+    second !== undefined
+      ? [first, second] // `<app>.<project>`
+      : separator === -1
+        ? [null, first] // the apex, `<project>`
+        : [first.slice(0, separator), first.slice(separator + 2)]; // `<app>--<project>`
+  if (!DNS_LABEL.test(project) || (app !== null && !APP_LABEL.test(app))) return null;
+  return { app, project };
 }

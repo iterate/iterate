@@ -51,10 +51,21 @@ const adminApiSecret = (): string =>
   String((env as unknown as { APP_CONFIG_ADMIN_API_SECRET: string }).APP_CONFIG_ADMIN_API_SECRET);
 /** THE lane's credentials (src/session.ts): the admin secret — every project, `{ actor: "admin" }`. */
 export const adminCredentials = () => ({ type: "admin-secret" as const, secret: adminApiSecret() });
-/** The same secret as a lane's bearer — what a raw request to `/expression` is admitted with. */
-export const adminBearer = (): { authorization: string } => ({
-  authorization: `Bearer ${adminApiSecret()}`,
-});
+
+/** An app that answers with what the platform handed it: the principal stamp, the bearer and the
+ *  trusted app label — provided as `itx.apps.<label>` and fetched on a project host. */
+export const SRC_ECHO_APP = {
+  "cap.js": `import { WorkerEntrypoint } from "cloudflare:workers";
+export default class Echo extends WorkerEntrypoint {
+  fetch(request) {
+    return Response.json({
+      principal: JSON.parse(request.headers.get("x-itx-principal") || "null"),
+      authorization: request.headers.get("authorization"),
+      app: request.headers.get("x-iterate-app"),
+    });
+  }
+}`,
+};
 
 // capnweb sessions live for the whole file; disposed at teardown (sessions left open turn into
 // unhandled-rejection noise).

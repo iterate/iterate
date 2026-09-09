@@ -494,7 +494,7 @@ export const DurableObjectNameCodec = {
     return `${projectId}${DURABLE_OBJECT_HOST_SUFFIX}${resolveContextPath("/", path)}`;
   },
   /** Parses a Durable Object name. A bare name (no `.iterate`) is that project's root — what
-   *  `projects.get("prj_x")` and the `/expression` lane's `?context=prj_x` hand in. */
+   *  `projects.get("prj_x")` hands in. */
   parse(name: string): DurableObjectAddress {
     const i = name.indexOf(DURABLE_OBJECT_HOST_SUFFIX);
     const parts =

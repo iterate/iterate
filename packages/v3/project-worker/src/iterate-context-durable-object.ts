@@ -4,7 +4,7 @@
 // (stream/subscription-delivery.ts), the facets (`ctx.facets`, context/worker-loader.ts), the rpc
 // stubs (context/rpc-stubs.ts), and the fetch door (the pager upgrade, the fetch lane,
 // egress). Each module's header says what it does; this file is the wiring and the doors.
-//   egress — `substituteProjectSecrets`: `{{secret:project:NAME}}` substitution at the egress door, WS-safe
+//   egress — `substituteProjectSecrets`: `getSecret("/secrets/NAME")` substitution at the egress door, WS-safe
 //
 // PURE WORKERS-RPC: capnweb never terminates here — the stateless `/api` worker relays. Dispatch is
 // ONE door, `invoke(call)`; every OTHER change to this context is an appended event (the edge's
@@ -794,9 +794,10 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     this.#notePublicDoor();
     // The doors, in order — each answers or declines: the rpc-stub pager and the rpc-stub fetch
     // upgrade leg; THE FETCH LANE (`x-itx-expression` names an itx expression — JSON from a session's
-    // terminal `fetch(request)`, dotted text from the edge's `/expression?itx=` — resolved as a
-    // terminal-fetch call with the live Request as its one runtime arg; the routing header is
-    // stripped so it never reaches the capability or egress); everything else is EGRESS.
+    // terminal `fetch(request)`, dotted text from a project host (`itx.apps.<app>`, `itx.worker`) or
+    // a loaded worker's own `env.ITX.fetch` — resolved as a terminal-fetch call with the live Request
+    // as its one runtime arg; the routing header is stripped so it never reaches the capability or
+    // egress); everything else is EGRESS.
     const pager = this.#rpcStubs.acceptRpcStubPagerWebSocket(request);
     if (pager) return pager;
     const upgradeLeg = this.#rpcStubFetch.acceptFetchUpgradeLeg(request);
@@ -840,7 +841,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     return this.#rpcStubs.rpcStubTransportState();
   }
 
-  /** EGRESS: substitute `{{secret:project:NAME}}` placeholders, then the terminal fetch. A
+  /** EGRESS: substitute `getSecret("/secrets/NAME")` placeholders, then the terminal fetch. A
    *  placeholder that survives substitution means no such secret is stored, so it FAILS here,
    *  loudly: forwarding would leak the secret's NAME to the external destination and send a garbage
    *  credential in its place. */
@@ -866,8 +867,8 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       throw error;
     }
     // The platform's own headers never leave: the principal stamp (actor + email) and the
-    // expression would ride whatever an app forwards outbound. The hop counter stays — the fetch
-    // lane's re-entry guard reads it on the way back in.
+    // expression would ride whatever an app forwards outbound. The hop counter stays — the edge's
+    // re-entry guard reads it when an app fetches its own host.
     const headers = new Headers(substitutedRequest.headers);
     headers.delete(ITX_PRINCIPAL_HEADER);
     headers.delete(ITX_EXPRESSION_FETCH_HEADER);
@@ -905,25 +906,68 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   }
 }
 
-// ── egress ── `{{secret:project:NAME}}` substitution at the egress door, WS-SAFE: it only
+// ── egress ── `getSecret("/secrets/NAME")` substitution at the egress door, WS-SAFE: it only
 // rebuilds the URL and the Headers and constructs `new Request(request, { headers })`, which preserves
 // the method, the `Upgrade` header and the body — so a 101 flows straight back through it.
 
-// The placeholder as written, or as the URL parser percent-encodes it in a path segment.
-const SECRET_TOKEN = /(?:\{\{|%7B%7B)secret:project:([a-zA-Z0-9._-]+)(?:\}\}|%7D%7D)/g;
+// THE PLACEHOLDER GRAMMAR — apps/os's (apps/os/src/domains/secrets/utils.ts): `getSecret("/secrets/NAME")`
+// is the whole stored value; `getSecret("/secrets/NAME", { field: "a.b" })` is one dotted field of a
+// JSON-valued secret. Double quotes, whitespace free inside the parentheses; `/secrets/NAME` is the
+// name `itx.secrets.set(NAME, …)` stored, `[a-zA-Z0-9._-]+` (context/built-ins.ts `secretKey`).
+// Matched as written in a header, and as the URL parser percent-encodes it in a URL (`"` → %22, a
+// space → %20, `{` → %7B, `}` → %7D); the value is spliced back into the URL as ONE component.
+const QUOTE = '(?:"|%22)';
+const SPACE = "(?:\\s|%20)*";
+const SECRET_PLACEHOLDER = new RegExp(
+  `getSecret\\(${SPACE}${QUOTE}/secrets/([a-zA-Z0-9._-]+)${QUOTE}${SPACE}` +
+    `(?:,${SPACE}(?:\\{|%7B)${SPACE}field${SPACE}:${SPACE}${QUOTE}([^"%\\s]+)${QUOTE}${SPACE}(?:\\}|%7D))?${SPACE}\\)`,
+  "g",
+);
 
-/** A placeholder whose secret is not stored, or whose secret is bound to another origin (the DO's
- *  resolver throws it) — the egress door answers it with a 502, to the caller, never the destination. */
+/** The placeholder as a caller wrote it, for a refusal that names it. */
+const placeholderOf = (name: string, field: string | undefined): string =>
+  field === undefined
+    ? `getSecret("/secrets/${name}")`
+    : `getSecret("/secrets/${name}", { field: "${field}" })`;
+
+/** A placeholder whose secret is not stored, whose secret is bound to another origin (the DO's
+ *  resolver throws it), or whose `field` the stored JSON has no string at — the egress door answers
+ *  it with a 502, to the caller, never the destination. */
 export class ProjectSecretRefused extends Error {}
 
+/** The string `field` (a dotted path) selects in the JSON value `stored`; refused when the value is
+ *  not JSON or the path does not land on a string. */
+function secretFieldOf(stored: string, field: string, placeholder: string, where: string): string {
+  let value: unknown;
+  try {
+    value = JSON.parse(stored);
+  } catch {
+    throw new ProjectSecretRefused(
+      `egress: ${placeholder} in ${where} names a field, but the secret is not a JSON value`,
+    );
+  }
+  for (const segment of field.split("."))
+    value =
+      typeof value === "object" && value !== null
+        ? (value as Record<string, unknown>)[segment]
+        : undefined;
+  if (typeof value !== "string")
+    throw new ProjectSecretRefused(
+      `egress: ${placeholder} in ${where}: the secret has no string at field "${field}"`,
+    );
+  return value;
+}
+
 /**
- * Substitute every `{{secret:project:<name>}}` token in the request URL AND headers. An existing
- * secret must never survive as a literal placeholder wherever it appears (a URL
- * `?access_token={{secret:project:token}}` would otherwise send the credential's NAME to the
+ * Substitute every `getSecret("/secrets/<name>")` placeholder in the request URL AND headers. An
+ * existing secret must never survive as a literal placeholder wherever it appears (a URL
+ * `?access_token=getSecret("/secrets/token")` would otherwise send the credential's NAME to the
  * destination and the value nowhere); a placeholder with NO stored secret throws
- * `ProjectSecretRefused` naming the token and where it sat — to the caller, never the destination.
- * In the URL the value is spliced as ONE component (`encodeURIComponent`), so a secret can never add
- * a query parameter or a fragment. Returns a NEW Request when anything changed, else the original.
+ * `ProjectSecretRefused` naming the placeholder and where it sat — to the caller, never the
+ * destination. `resolve(name)` answers the stored value; a `{ field }` placeholder then picks one
+ * string out of it as JSON. In the URL the value is spliced as ONE component
+ * (`encodeURIComponent`), so a secret can never add a query parameter or a fragment. Returns a NEW
+ * Request when anything changed, else the original.
  *
  * NOTE: the BODY is not scanned (substituting a streaming body means buffering it and recomputing
  * content-length) — a secret spelled inside a request body forwards as a literal placeholder.
@@ -932,18 +976,22 @@ export async function substituteProjectSecrets(
   request: Request,
   resolve: (name: string) => Promise<string | null> | string | null,
 ): Promise<Request> {
-  // Substitute the tokens in one string; null = no token in it (leave as-is).
+  // Substitute the placeholders in one string; null = none in it (leave as-is).
   const substitute = async (value: string, where: string, encode: boolean) => {
-    if (!value.includes("secret:project:")) return null;
+    if (!value.includes("getSecret(")) return null;
     let out = "";
     let last = 0;
     let any = false;
-    for (const m of value.matchAll(SECRET_TOKEN)) {
-      const secret = await resolve(m[1]);
-      if (secret == null)
+    for (const m of value.matchAll(SECRET_PLACEHOLDER)) {
+      const [, name, field] = m as unknown as [string, string, string | undefined];
+      const placeholder = placeholderOf(name, field);
+      const stored = await resolve(name);
+      if (stored == null)
         throw new ProjectSecretRefused(
-          `egress: no stored project secret for {{secret:project:${m[1]}}} in ${where}`,
+          `egress: no stored project secret for ${placeholder} in ${where}`,
         );
+      const secret =
+        field === undefined ? stored : secretFieldOf(stored, field, placeholder, where);
       out += value.slice(last, m.index) + (encode ? encodeURIComponent(secret) : secret);
       last = m.index + m[0].length;
       any = true;

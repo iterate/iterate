@@ -141,9 +141,11 @@ export abstract class StreamProcessorDurableObject<
 }
 
 // ── ConfigWorker ── THE CONFIG WORKER base class, bundled into `processor.js` (this file).
-// A project's ONE event handler: every context subscribes `itx.cd('/').worker.processEventBatch`, so
-// the "/" context's config worker is called with every stream's committed batch. `itx.worker` is a
-// platform row (itx-expression-rewriting.ts) a project re-points at its own source —
+// A project's ONE event handler AND its web root: every context subscribes
+// `itx.cd('/').worker.processEventBatch`, so the "/" context's config worker is called with every
+// stream's committed batch; a project host that names no app (the apex `<project>.<base>`,
+// src/worker.ts) lands on `itx.worker.fetch(request)`, so `fetch` routes by hostname. `itx.worker` is
+// a platform row (itx-expression-rewriting.ts) a project re-points at its own source —
 // `itx.provide("itx.worker", "itx.workers.get({ source: itx.repos.readFile('config','worker.ts'), cacheKey })")`
 // — with no className: the module's DEFAULT export is the class, as in the bundled no-op default.
 // An author writes:
@@ -152,6 +154,10 @@ export abstract class StreamProcessorDurableObject<
 //   export default class extends ConfigWorker {
 //     async processEvent({ event, itx }) {
 //       if (event.type === "events.iterate.com/ping") await itx.builtins.append({ type: "…/pong" });
+//     }
+//     fetch(request) {
+//       if (new URL(request.url).hostname === "acme.example") return this.env.ITX.get().apps.site.fetch(request);
+//       return new Response("no app here", { status: 404 });
 //     }
 //   }
 //
@@ -166,8 +172,9 @@ export type ConfigWorkerItx = ReturnType<Service<ItxEntrypoint>["get"]>;
 /** One committed event handed to the config worker, with the batch's range and the batch's itx scope. */
 export type ConfigEventArgs = { event: StreamEvent; range: ScannedRange; itx: ConfigWorkerItx };
 
-/** THE CONFIG WORKER — a stateless `WorkerEntrypoint`. Override `processEvent`; the platform calls
- *  `processEventBatch` (the subscription target). Nothing to construct, no contract, no reduce. */
+/** THE CONFIG WORKER — a stateless `WorkerEntrypoint`. Override `processEvent` (the platform calls
+ *  `processEventBatch`, the subscription target) and `fetch` (a project host with no app label).
+ *  Nothing to construct, no contract, no reduce. */
 export abstract class ConfigWorker<
   Env extends { ITX: Service<ItxEntrypoint> } = { ITX: Service<ItxEntrypoint> },
 > extends WorkerEntrypoint<Env> {
@@ -185,4 +192,11 @@ export abstract class ConfigWorker<
   /** THE AUTHOR HOOK — one event at a time, in offset order. Append reactions through the itx scope;
    *  make them idempotent (a redelivery must be a no-op). Default: ignore the event. */
   processEvent(_args: ConfigEventArgs): void | Promise<void> {}
+
+  /** THE WEB ROOT — the Request a project host with no app label rode in on (`x-iterate-app` absent;
+   *  the edge's `itx.worker` dispatch). Route by hostname to `this.env.ITX.get().apps.<x>.fetch(request)`
+   *  or answer it here. Default: not found. */
+  override fetch(_request: Request): Response | Promise<Response> {
+    return new Response("Not found\n", { status: 404 });
+  }
 }

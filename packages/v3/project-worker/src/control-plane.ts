@@ -1,5 +1,5 @@
 // control-plane.ts — THE CONTROL PLANE, in-process behind the project worker's front door (worker.ts
-// keeps /api, /expression, /version, /demo and delegates everything else to `controlPlane`). Three
+// keeps the project hosts, /api, /version, /demo and delegates everything else to `controlPlane`). Three
 // concepts, one file; the schema is control-plane.sql; the session cookie it sets is verified in
 // principal.ts beside every other credential:
 //   directory — `directory(db)`: ONE D1 store, users → orgs → projects — the control plane IS the
@@ -518,7 +518,7 @@ async function resolveExternalToken({
 }
 
 // ── app ── THE CONTROL PLANE, mounted IN-PROCESS as the project worker's front-door catch-all (src/worker.ts
-// keeps /api, /expression, /version, /demo and delegates everything else to `controlPlane` below).
+// keeps the project hosts, /api, /version, /demo and delegates everything else to `controlPlane` below).
 // The whole handler is wrapped in an OAuth 2.1 Authorization Server whose routing is the library's;
 // the AS owns only a thin edge — /oauth/token, /oauth/register, the .well-known metadata, and the
 // bearer check on /mcp (the mcp section). EVERYTHING ELSE (login, session, console, /authorize

@@ -1,8 +1,8 @@
 // e2e/support/client.ts — THE E2E client: open a capnweb session to the one shared worker (URL and
 // admin secret from global-setup, via WORKER_BASE_URL and ADMIN_API_SECRET) for a FRESH ctx per test,
 // exactly like a production client. This is the whole "how a test reaches the worker" surface, plus
-// the handful of idioms every file used to copy (poll-until, must-reject, the delivery collector, the
-// eyeball WebSocket round trip).
+// the handful of idioms every file used to copy (poll-until, must-reject, the delivery collector).
+// A project host — the one HTTP way into a project — is support/project-host.ts.
 
 import { newWebSocketRpcSession } from "capnweb";
 import type { SessionCredentials } from "../../src/session.ts";
@@ -29,27 +29,8 @@ export const adminCredentials = (as?: { email: string }): SessionCredentials => 
   ...(as && { as }),
 });
 
-/** The same secret as a lane's bearer — what a raw request to `/expression` is admitted with. */
-export const adminBearer = (): { authorization: string } => ({
-  authorization: `Bearer ${adminApiSecret()}`,
-});
-
 /** A URL on the one shared worker — for the raw HTTP doors that have no itx method (/version, /demo). */
 export const workerUrl = (path: string): string => new URL(path, baseUrl()).toString();
-
-/** The plain-HTTP fetch lane: `/expression?context=<ctx>&itx=<itx expression>` (the worker copies the
- *  expression into `x-itx-expression` for the DO). */
-export const expressionUrl = (
-  ctx: string,
-  itxExpression: string,
-  scheme: "http" | "ws" = "http",
-): string => {
-  const u = new URL("/expression", baseUrl());
-  u.protocol = `${scheme}:`;
-  u.searchParams.set("context", ctx);
-  u.searchParams.set("itx", itxExpression);
-  return u.toString();
-};
 
 let counter = 0;
 /** A unique project ctx per call, so tests never collide on a Durable Object (each ctx is its own). */
@@ -240,47 +221,4 @@ export function collector() {
     offsets: () => invocations.flatMap((i) => i.events.map((e) => e.offset as number)),
     types: () => invocations.flatMap((i) => i.events.map((e) => e.type as string)),
   };
-}
-
-/** One full eyeball WebSocket round trip: open → send → first message → close. Never throws — the
- *  caller asserts on the outcome. `headers` ride the handshake (node's WebSocket takes them; a
- *  browser's cannot) — the admin bearer a `/expression` upgrade is admitted with. */
-export function wsRoundTrip(
-  url: string,
-  send: string,
-  timeoutMs = 10_000,
-  headers: Record<string, string> = {},
-): Promise<{ opened: boolean; echo?: string; closeCode?: number; error?: string }> {
-  return new Promise((resolve) => {
-    const out: { opened: boolean; echo?: string; closeCode?: number; error?: string } = {
-      opened: false,
-    };
-    // node's WebSocket (undici) takes `{ headers }` as its second argument; @types/node types only
-    // the protocols there
-    const ws = new WebSocket(url, { headers } as never);
-    const timer = setTimeout(() => {
-      try {
-        ws.close();
-      } catch {
-        /* already closed */
-      }
-      resolve({ ...out, error: out.error ?? `timeout after ${timeoutMs}ms` });
-    }, timeoutMs);
-    ws.addEventListener("open", () => {
-      out.opened = true;
-      ws.send(send);
-    });
-    ws.addEventListener("message", (ev) => {
-      out.echo = String((ev as MessageEvent).data);
-      ws.close(1000, "done");
-    });
-    ws.addEventListener("error", (ev) => {
-      out.error = String((ev as { message?: unknown }).message ?? "websocket error");
-    });
-    ws.addEventListener("close", (ev) => {
-      clearTimeout(timer);
-      out.closeCode = (ev as CloseEvent).code;
-      resolve(out);
-    });
-  });
 }

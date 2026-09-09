@@ -4548,3 +4548,28 @@ pin naming its mechanism, or declined with the reason above. The red pins are th
   header stays internal), `<app>--<project>` / `<app>.<project>` / custom hostnames with a trusted
   `x-iterate-app`, `project` as id or slug on hosts, and the secret placeholder as apps/os's
   `getSecret("/secrets/NAME")`.
+
+## 2026-09-09 — the public /expression lane deleted; project hosts in apps/os's shapes with a trusted app header; the secret placeholder is apps/os's getSecret(…)
+
+- FROM JONAS'S TUTORIAL ANNOTATIONS (63c115290). The public `/expression` route — its `?context=`/
+  `?itx=` parsing, the 400s, the email-mode admission, the CSP-sandboxed answer — is gone; a config
+  worker's `fetch` routes by hostname instead. The `x-itx-expression` header stays as the internal
+  channel (host → DO, the session's terminal fetch, `env.ITX.fetch`); the hop budget stays for the
+  project-host lane (an app fetching its own host, 508 on the fourth pass). Every row that used the
+  lane moved to a project host; one (`connectToCapnweb` behind a host) is deployed-only because the
+  DO's egress cannot resolve `*.localhost` on macOS, with a workers-lane twin through `SELF`.
+- THE HOST SHAPES: `<app>--<project>.<base>`, `<app>.<project>.<base>`, and the apex `<project>.<base>`
+  with no app (apps/os's set; custom hostnames are a later build — one comment, two tutorial marks);
+  `<project>` is an id or a slug, resolved through the directory at the edge (one string today; the
+  resolution point is where they would diverge). The edge sets a trusted `x-iterate-app` to the label
+  or deletes it — ALWAYS overwritten, never read inbound. A no-app host dispatches `itx.worker` and
+  lands on the new `ConfigWorker.fetch(request)` (default 404): the config worker's own front door.
+- THE PLACEHOLDER: `getSecret("/secrets/NAME")` and `getSecret("/secrets/NAME", { field: "a.b" })` in
+  a URL or header of a request `itx.fetch` sends — the grammar mirrored from apps/os (double quotes,
+  whitespace-tolerant, matched percent-encoded in a path or query, spliced as one component; `field`
+  walks JSON; a non-JSON value or a missing path is a 502 naming the placeholder). The project API
+  key stays outside `/secrets/`: `getSecret("/secrets/project-api-key")` is a 502, pinned.
+- 32 files, +1,049 / −719 (source +48 net; the growth is tests — 158 lines of it a raw node:http
+  WebSocket upgrade carrying a Host header, which Node's fetch and WebSocket refuse to set, so the
+  host WebSocket rows run locally instead of deployed-only). GATES: tsc ×3 · oxlint · knip · unit 514
+  · workers 57 · local e2e 177. The deployed proof: the line below.

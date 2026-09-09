@@ -12,33 +12,33 @@
 //     the project itself), 15 minutes by default, 24 hours at most, `cd` carrying the door; a
 //     project-token session is a delegation: it mints nothing and rotates nothing (FORBIDDEN); a
 //     bad token and an expired token are INVALID_CREDENTIALS over /api;
-//   • THE LANES: this project's secret as `Authorization: Bearer` admits `/expression` and stamps
-//     `x-itx-principal` on what the app sees; on a project host the same, the bearer stripped;
-//     another project's secret is nobody — 401 on `/expression`, an unstamped pass-through on a
-//     host; the control plane's session cookie stamps nothing on a host;
+//   • THE LANE: this project's secret as `Authorization: Bearer` on a project host stamps
+//     `x-itx-principal` on what the app sees and never reaches it; another project's secret is
+//     nobody — an unstamped pass-through; the control plane's session cookie stamps nothing;
 //   • THE PROJECT HOST: `/.itx/session?token=` turns a token for THIS project into the host cookie
 //     and the cookie into the principal the app sees, a foreign token is 401, `POST ?logout` clears
 //     it (a GET is 405, a foreign origin's POST 403), the redirect never leaves the host; a host for
-//     a project the directory does not know is 421.
-// The worker's default fetch is called directly with this lane's env plus a project-host base
-// (wrangler.test.jsonc sets none): worker.ts's app config memoizes per env object.
+//     a project the directory does not know is 421;
+//   • THE HOST SHAPES: `<app>--<project>`, `<app>.<project>` and the apex `<project>` under the base
+//     (src/worker.ts `projectHostOf`) — the two app shapes reach the same `itx.apps.<app>` with the
+//     trusted `x-iterate-app` ALWAYS overwritten; the apex names no app and reaches the config
+//     worker's `fetch` (sdk/index.ts `ConfigWorker`: the bundled default is 404, an override routes).
+// The worker's default fetch is called directly with this lane's env (wrangler.test.jsonc: project
+// hosts hang under `projects.test`).
 
 import { createExecutionContext, env } from "cloudflare:test";
 import { newWebSocketRpcSession } from "capnweb";
 import { afterAll, beforeAll, expect, test } from "vitest";
 import { signProjectToken, verifyProjectToken } from "../src/principal.ts";
 import worker from "../src/worker.ts";
-import { applyDirectorySchema } from "./support.ts";
+import { applyDirectorySchema, SRC_ECHO_APP } from "./support.ts";
 
 /** This lane's token secret (wrangler.test.jsonc) — what a token minted over /api verifies with. */
 const TOKEN_SECRET = String(
   (env as unknown as Record<string, unknown>).APP_CONFIG_PROJECT_TOKEN_SECRET,
 );
-/** This lane's env, with the one var the project-host doors need. ONE object: the app config memo. */
-const laneEnv = {
-  ...(env as unknown as Record<string, unknown>),
-  APP_CONFIG_PROJECT_HOSTNAME_BASE: "projects.test",
-};
+/** This lane's env — ONE object: the app config memo (worker.ts `appConfigOf`). */
+const laneEnv = env as unknown as Record<string, unknown>;
 const ADMIN = {
   type: "admin-secret",
   secret: String((env as unknown as Record<string, unknown>).APP_CONFIG_ADMIN_API_SECRET),
@@ -211,42 +211,16 @@ test("over /api: a bad token and an expired token are INVALID_CREDENTIALS", asyn
   ).toBe("INVALID_CREDENTIALS");
 });
 
-/** An app that answers with what the platform handed it: the principal stamp and the bearer. */
-const SRC_ECHO = {
-  "cap.js": `import { WorkerEntrypoint } from "cloudflare:workers";
-export default class Echo extends WorkerEntrypoint {
-  fetch(request) {
-    return Response.json({
-      principal: JSON.parse(request.headers.get("x-itx-principal") || "null"),
-      authorization: request.headers.get("authorization"),
-    });
-  }
-}`,
-};
-
-test("the lanes: this project's secret as the bearer admits /expression and stamps project:<id>; on a project host the app sees the stamp and never the bearer; another project's secret is 401 on /expression and an unstamped pass-through on the host; the control plane's cookie stamps nothing on a host", async () => {
+test("the lane: this project's secret as the bearer on a project host stamps project:<id> and never reaches the app; another project's secret is an unstamped pass-through; a stranger's bearer too; the control plane's cookie stamps nothing", async () => {
   const admin = (await api()).authenticate(ADMIN);
   const itx = await admin.projects.create({ project: "doors-lane" });
   await admin.projects.create({ project: "doors-lane-other" });
-  await itx.provide("itx.apps.echo", ["itx", "workers", ["get", { source: SRC_ECHO }]]);
+  await itx.provide("itx.apps.echo", ["itx", "workers", ["get", { source: SRC_ECHO_APP }]]);
   const key = await itx.rotateApiKey();
   const foreignKey = await admin.projects.get("doors-lane-other").rotateApiKey();
 
-  // /expression: admission, then the stamp the app sees
-  const expression = (authorization: string) =>
-    call("https://control.test/expression?context=doors-lane&itx=itx.apps.echo", {
-      headers: { authorization },
-    });
-  const admitted = await expression(`Bearer ${key}`);
-  expect(admitted.status, await admitted.clone().text()).toBe(200);
-  expect(await admitted.json()).toEqual({
-    principal: { actor: "project:doors-lane" },
-    authorization: null,
-  });
-  expect((await expression(`Bearer ${foreignKey}`)).status).toBe(401);
-  expect((await expression("Bearer not-a-key")).status).toBe(401);
-
-  // a project host: the same stamp; another project's key is the app's own bearer, passed through
+  // the stamp the app sees; another project's key, or no key at all, is the app's own bearer,
+  // passed through
   const host = (authorization: string) =>
     call("https://echo--doors-lane.projects.test/", { headers: { authorization } });
   const seen = await host(`Bearer ${key}`);
@@ -254,10 +228,17 @@ test("the lanes: this project's secret as the bearer admits /expression and stam
   expect(await seen.json()).toEqual({
     principal: { actor: "project:doors-lane" },
     authorization: null,
+    app: "echo",
   });
   expect(await (await host(`Bearer ${foreignKey}`)).json()).toEqual({
     principal: null,
     authorization: `Bearer ${foreignKey}`,
+    app: "echo",
+  });
+  expect(await (await host("Bearer not-a-key")).json()).toEqual({
+    principal: null,
+    authorization: "Bearer not-a-key",
+    app: "echo",
   });
 
   // the control plane's session cookie is `/api`'s credential, never a lane's: a signed-in user who
@@ -270,13 +251,57 @@ test("the lanes: this project's secret as the bearer admits /expression and stam
   const seenByStranger = await call("https://echo--doors-lane.projects.test/", {
     headers: { cookie: stranger },
   });
-  expect(await seenByStranger.json()).toEqual({ principal: null, authorization: null });
+  expect(await seenByStranger.json()).toEqual({
+    principal: null,
+    authorization: null,
+    app: "echo",
+  });
+});
+
+/** A config worker whose `fetch` routes the apex host by hostname — the tutorial's shape — echoing
+ *  the (absent) app label so the edge's delete is visible. */
+const SRC_CONFIG_ROUTER = {
+  "cap.js": `import { ConfigWorker } from "./processor.js";
+export default class extends ConfigWorker {
+  fetch(request) {
+    if (new URL(request.url).hostname === "doors-shapes.projects.test")
+      return Response.json({ root: true, app: request.headers.get("x-iterate-app") });
+    return new Response("no app here", { status: 404 });
+  }
+}`,
+};
+
+test("the host shapes: `<app>--<project>` and `<app>.<project>` reach the same app with the trusted x-iterate-app ALWAYS overwritten; the apex names no app and reaches the config worker's fetch — 404 by default, an override routes it and sees no app label", async () => {
+  const admin = (await api()).authenticate(ADMIN);
+  const itx = await admin.projects.create({ project: "doors-shapes" });
+  await itx.provide("itx.apps.echo", ["itx", "workers", ["get", { source: SRC_ECHO_APP }]]);
+  const forged = { headers: { "x-iterate-app": "other" } }; // a visitor picking an app: overwritten
+  for (const host of ["echo--doors-shapes", "echo.doors-shapes"]) {
+    const seen = await call(`https://${host}.projects.test/`, forged);
+    expect(seen.status, await seen.clone().text()).toBe(200);
+    expect(await seen.json()).toEqual({ principal: null, authorization: null, app: "echo" });
+  }
+  // the apex: the bundled ConfigWorker's fetch — not found
+  const apex = await call("https://doors-shapes.projects.test/", forged);
+  expect(apex.status).toBe(404);
+  expect(await apex.text()).toContain("Not found");
+  // a project's own config worker routes the apex; the label a visitor sent is gone
+  await itx.provide("itx.worker", [
+    "itx",
+    "workers",
+    ["get", { source: SRC_CONFIG_ROUTER, cacheKey: "config:doors-shapes" }],
+  ]);
+  const routed = await call("https://doors-shapes.projects.test/", forged);
+  expect(routed.status, await routed.clone().text()).toBe(200);
+  expect(await routed.json()).toEqual({ root: true, app: null });
+  // a label with no row stays the lane's 404
+  expect((await call("https://other--doors-shapes.projects.test/")).status).toBe(404);
 });
 
 test("the session door on a project host: /.itx/session?token= turns a token for THIS project into the host cookie, the cookie into the principal the app sees; a foreign token is 401; POST ?logout clears it (a GET is 405, a foreign origin's POST 403); the redirect never leaves the host; an unknown project's host is 421", async () => {
   const admin = (await api()).authenticate(ADMIN);
   const itx = await admin.projects.create({ project: "doors-host" });
-  await itx.provide("itx.apps.echo", ["itx", "workers", ["get", { source: SRC_ECHO }]]);
+  await itx.provide("itx.apps.echo", ["itx", "workers", ["get", { source: SRC_ECHO_APP }]]);
   const token = await itx.mintToken();
   const host = (path: string, headers: Record<string, string> = {}, method = "GET") =>
     call(`https://echo--doors-host.projects.test${path}`, { headers, method });
@@ -291,6 +316,7 @@ test("the session door on a project host: /.itx/session?token= turns a token for
   expect(await (await host("/", { cookie: `${cookie}; theme=dark` })).json()).toEqual({
     principal: { actor: "admin" },
     authorization: null,
+    app: "echo",
   });
   // a token for another project is refused at the door
   const foreign = await admin.projects.get("doors-host-other").mintToken();

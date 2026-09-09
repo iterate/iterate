@@ -148,7 +148,7 @@ export default class Mine extends WorkerEntrypoint {
   // an inline source runs as a worker (itx round-trip inside)
   expect(out).toBe(`from-inline:${ctx}`);
 
-  // 3. a fetch-shaped target through the SESSION (no /expression door): the terminal
+  // 3. a fetch-shaped target through the SESSION (no HTTP door): the terminal
   //    `.fetch(request)` rides the DO's fetch channel with the expression in x-itx-expression — one
   //    routing fork, no verb; `itx.site` is an ordinary rewrite rule onto the loaded entrypoint
   await itx.provide("itx.site", ["itx", "workers", ["get", { source: SOURCES.site }]]);

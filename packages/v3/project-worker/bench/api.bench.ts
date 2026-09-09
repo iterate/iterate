@@ -1,7 +1,7 @@
 // bench/api.bench.ts — THE scenarios, each a client-perceived number over capnweb at /api (what a
-// product client sees) unless it says FETCH LANE (one HTTP request per call, so the deployed
-// worker's tail attributes cpuTime/wallTime per call — bench/tail-summary.ts). Every scenario
-// names what it isolates:
+// product client sees) unless it says HTTP BATCH (capnweb's one-shot batch at the same /api — one
+// POST per call, so the deployed worker's tail attributes cpuTime/wallTime per call —
+// bench/tail-summary.ts). Every scenario names what it isolates:
 //   boot      — a FRESH context's first call (DO constructor + created/woken + core state) on a warm
 //               session, against the warm-context round trip beneath it
 //   latency   — the steady round trips: built-in, durable append, ephemeral append, read, rule chain
@@ -9,28 +9,24 @@
 //   delivery  — append → a lent callback's push (the push lane) and → a processor's reduce (the facet lane)
 //   facet     — a processor's COLD materialization on a fresh context (loader + class + first call)
 
+// eslint-disable-next-line iterate/no-capnweb-http-batch -- a bench of the one-shot shape (a cron's), on purpose
+import { newHttpBatchRpcSession } from "capnweb";
 import { bench, describe } from "vitest";
-import {
-  adminBearer,
-  adminCredentials,
-  freshCtx,
-  openItx,
-  session,
-  workerUrl,
-} from "../e2e/support/client.ts";
+import { adminCredentials, freshCtx, openItx, session, workerUrl } from "../e2e/support/client.ts";
 import { enableFixtureProcessor } from "../e2e/support/sources.ts";
 
 const TIME = Number(process.env.BENCH_TIME_MS ?? 4000);
 const opts = { time: TIME, warmupTime: 500, warmupIterations: 2 };
 
 const invoke = (itx: any, expression: unknown) => itx.invoke(expression);
-const fetchLane = async (ctx: string, itxExpression: string): Promise<unknown> => {
-  const u = new URL("/expression", workerUrl("/"));
-  u.searchParams.set("context", ctx);
-  u.searchParams.set("itx", itxExpression);
-  const r = await fetch(u, { headers: adminBearer() });
-  return r.text();
-};
+/** One HTTP request per call: a fresh one-shot batch session — authenticate, get, invoke, all in
+ *  the ONE POST (a cron's shape). */
+const httpBatch = (ctx: string, itxExpression: string): Promise<unknown> =>
+  // eslint-disable-next-line iterate/no-capnweb-http-batch -- see above
+  newHttpBatchRpcSession<any>(workerUrl("/api"))
+    .authenticate(adminCredentials())
+    .projects.get(ctx)
+    .invoke(itxExpression);
 
 describe("boot", () => {
   let s: any;
@@ -66,16 +62,16 @@ describe("boot", () => {
     },
   );
   bench(
-    "FETCH LANE fresh context, whoami (one HTTP request → one tail event)",
+    "HTTP BATCH fresh context, whoami (one HTTP request → one tail event)",
     async () => {
-      await fetchLane(freshCtx("bootfetch"), "itx.whoami()");
+      await httpBatch(freshCtx("bootfetch"), "itx.whoami()");
     },
     opts,
   );
   bench(
-    "FETCH LANE warm context, whoami",
+    "HTTP BATCH warm context, whoami",
     async () => {
-      await fetchLane("prj_benchwarmfetch", "itx.whoami()");
+      await httpBatch("prj_benchwarmfetch", "itx.whoami()");
     },
     opts,
   );
@@ -126,9 +122,9 @@ describe("latency", () => {
     { ...opts, setup: ready },
   );
   bench(
-    "FETCH LANE durable append, 1 event",
+    "HTTP BATCH durable append, 1 event",
     async () => {
-      await fetchLane("prj_benchlatfetch", "itx.append({ type: 'bench/ping', payload: { n: 1 } })");
+      await httpBatch("prj_benchlatfetch", "itx.append({ type: 'bench/ping', payload: { n: 1 } })");
     },
     opts,
   );

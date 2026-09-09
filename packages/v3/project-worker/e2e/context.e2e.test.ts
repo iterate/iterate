@@ -3,8 +3,8 @@
 // stub (`itx.slack.chat.postMessage({...})`, `itx.kv.put('k','v')`): only fixed members are real
 // methods along the path; the prototype hop (context/expression.ts) turns every unknown segment into
 // ONE accumulated `invoke(expression)` dispatch. Pins:
-//   • a ':' in the ctx at the /expression door is a 400 naming the wall — the edge parses the context
-//     name before it names a DO (the codec's charset gate itself: context/durable-object-names.test.ts)
+//   • a project label outside the DNS grammar is not a project host — the edge names no DO for it
+//     (the control plane's 404); the codec's own charset gate is the unit lane's
 //   • `kv.list` returns EVERY key, not the first KV page
 //   • `cd('')` is SELF — an in-process call on this very context, never a self-RPC hop or a twin DO
 //   • a default-deny miss and a paused-stream refusal each carry their machine-readable `code` end to
@@ -17,29 +17,22 @@
 //     onRpcBroken) hidden at EVERY depth — pinned behaviorally: the log and a tally never move
 
 import { expect, test } from "vitest";
-import {
-  append,
-  codeOf,
-  expressionUrl,
-  freshCtx,
-  openItx,
-  readHead,
-  rejection,
-  until,
-} from "./support/client.ts";
+import { append, codeOf, freshCtx, openItx, readHead, rejection, until } from "./support/client.ts";
+import { fetchProjectHost, projectHostnameBase } from "./support/project-host.ts";
 import { enableFixtureProcessor } from "./support/sources.ts";
 import { SlackReplayTarget, Tools } from "./support/targets.ts";
 
 // ── the built-in roots and the error grammar ──
 
-test("a ':' in the ctx at the /expression door is a 400 naming the wall — the edge parses the context name before it names a DO", async () => {
-  // DurableObjectNameCodec.parse gates the projectId to [A-Za-z0-9_-] (the ONE place every DO name is
-  // parsed; context/durable-object-names.test.ts pins the gate). The edge runs it on `?context=`
-  // before any object is addressed, so a ":"-nested project — whose prefixed kv key would alias
-  // another project's — is refused at the door and never materialized; the prefix IS the isolation wall.
-  const viaDoor = await fetch(expressionUrl("prj_x:evil", "itx.whoami"));
-  expect(viaDoor.status).toBe(400);
-  expect(await viaDoor.text()).toContain("invalid projectId");
+test("a project label outside the DNS grammar is not a project host: the edge names no DO for it — the control plane's 404", async () => {
+  // A project host is the one HTTP way into a project, and `projectHostOf` (src/worker.ts) admits a
+  // DNS label only — `prj_evil` (an `_`, legal in a DO name) is no project host, so the request falls
+  // through to the control plane's catch-all (its 404 for an app's path; `/` would be the console)
+  // and no Durable Object is ever named or minted for it; the DO-name codec's own charset gate (`:`
+  // and the rest) is src/iterate-context.test.ts.
+  const answer = await fetchProjectHost(`site--prj_evil.${projectHostnameBase()}`, "/w?repo=x");
+  expect(answer.status, answer.text).toBe(404);
+  expect(answer.text).toContain("Not found");
 });
 
 test("kv list returns EVERY key, not silently the first 1000", async () => {

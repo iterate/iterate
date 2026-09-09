@@ -146,54 +146,55 @@ describe("appConfigOf — once per env object", () => {
   });
 });
 
-// ── project host ── the hostname convention as a table: `{ hostname, base, becomes }` rows.
+// ── project host ── the hostname convention as a table: `{ hostname, base, becomes }` rows — the
+// three shapes (`<app>--<project>`, `<app>.<project>`, the apex `<project>` ⇒ no app), what is not a
+// project host, and a blank base.
 
 const rows: { hostname: string; base: string; becomes: ReturnType<typeof projectHostOf> }[] = [
-  // the convention
+  // the three shapes, one answer
   {
     hostname: "site--prj-1.iterate.app",
     base: "iterate.app",
-    becomes: { app: "site", projectId: "prj-1" },
+    becomes: { app: "site", project: "prj-1" },
   },
   {
-    hostname: "prj-1.iterate.app",
+    hostname: "site.prj-1.iterate.app",
     base: "iterate.app",
-    becomes: { app: "default", projectId: "prj-1" },
-  }, // the apex is the label `default`
-  {
-    hostname: "default--prj-1.iterate.app",
-    base: "iterate.app",
-    becomes: { app: "default", projectId: "prj-1" },
+    becomes: { app: "site", project: "prj-1" },
   },
+  { hostname: "prj-1.iterate.app", base: "iterate.app", becomes: { app: null, project: "prj-1" } }, // the apex: no app — the config worker
   {
     hostname: "my-site--a1.iterate.app",
     base: "iterate.app",
-    becomes: { app: "my-site", projectId: "a1" },
+    becomes: { app: "my-site", project: "a1" },
   },
   {
     hostname: "Site--PRJ-1.Iterate.App",
     base: "iterate.app",
-    becomes: { app: "site", projectId: "prj-1" },
+    becomes: { app: "site", project: "prj-1" },
   },
   {
     hostname: "site--prj-1.localhost",
     base: "localhost",
-    becomes: { app: "site", projectId: "prj-1" },
+    becomes: { app: "site", project: "prj-1" },
   },
   {
     hostname: "site--prj-1.iterate.app.", // a fully-qualified Host
     base: "iterate.app",
-    becomes: { app: "site", projectId: "prj-1" },
+    becomes: { app: "site", project: "prj-1" },
   },
   // not a project host
   { hostname: "project-worker.iterate.workers.dev", base: "iterate.app", becomes: null },
   { hostname: "iterate.app", base: "iterate.app", becomes: null },
-  { hostname: "a.site--prj-1.iterate.app", base: "iterate.app", becomes: null }, // deeper than one label
+  { hostname: "a.site.prj-1.iterate.app", base: "iterate.app", becomes: null }, // deeper than `<app>.<project>`
   { hostname: "site--prj_1.iterate.app", base: "iterate.app", becomes: null }, // `_` is not a DNS label
   { hostname: "site--prj--1.iterate.app", base: "iterate.app", becomes: null }, // a second `--`
+  { hostname: "site--x.prj-1.iterate.app", base: "iterate.app", becomes: null }, // an app label has single hyphens
   { hostname: "3d--prj-1.iterate.app", base: "iterate.app", becomes: null }, // an app label is an identifier
+  { hostname: "3d.prj-1.iterate.app", base: "iterate.app", becomes: null },
   { hostname: "--prj-1.iterate.app", base: "iterate.app", becomes: null },
   { hostname: "site--.iterate.app", base: "iterate.app", becomes: null },
+  { hostname: ".prj-1.iterate.app", base: "iterate.app", becomes: null },
   { hostname: "site--prj-1.iterate.app", base: "", becomes: null }, // blank base ⇒ no ingress
 ];
 for (const { hostname, base, becomes } of rows)

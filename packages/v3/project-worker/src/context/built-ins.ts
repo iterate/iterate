@@ -82,13 +82,16 @@ export interface BuiltInScope extends LibraryRoots {
     delete(key: string): Promise<{ ok: true }>;
     list(prefix?: string): Promise<{ keys: string[] }>;
   };
-  /** Project secrets for egress: `{{secret:project:NAME}}` in an outbound request's URL or headers
-   *  substitutes to the value at the egress door (`fetch`). WRITE-ONLY — `set`, `delete`, and a
-   *  `list` of names and origins, never a value (the same physical-write carve-out as `kv.put`). A
-   *  secret `set` with an `origin` is sent to that origin ONLY: a mis-typed URL cannot mail a
-   *  credential to a stranger. Every change appends `events.iterate.com/secrets/changed` with the
-   *  name (and origin, or `deleted`) — the value never enters the log — attributed like any append
-   *  (`source.principal`). A name is the placeholder grammar, `[a-zA-Z0-9._-]+`. */
+  /** Project secrets for egress: `getSecret("/secrets/NAME")` in an outbound request's URL or
+   *  headers substitutes to the value at the egress door (`fetch`), and `getSecret("/secrets/NAME",
+   *  { field: "a.b" })` to one dotted field of a JSON value — apps/os's placeholder grammar
+   *  (iterate-context-durable-object.ts `substituteProjectSecrets`). WRITE-ONLY — `set`, `delete`,
+   *  and a `list` of names and origins, never a value (the same physical-write carve-out as
+   *  `kv.put`). A secret `set` with an `origin` is sent to that origin ONLY: a mis-typed URL cannot
+   *  mail a credential to a stranger. Every change appends `events.iterate.com/secrets/changed` with
+   *  the name (and origin, or `deleted`) — the value never enters the log — attributed like any
+   *  append (`source.principal`). A name is what the placeholder can spell, `[a-zA-Z0-9._-]+`; the
+   *  project's own API key lives outside this catalog (principal.ts) and no placeholder reaches it. */
   secrets: {
     set(name: string, value: string, options?: { origin?: string }): Promise<{ ok: true }>;
     delete(name: string): Promise<{ ok: true }>;
@@ -121,7 +124,7 @@ export interface BuiltInScope extends LibraryRoots {
   /** Another context of THIS project, every call routed through ITS table (`resolveContextPath`
    *  resolves the path, as the edge `cd` does). */
   cd(path: string): InvokeHandle;
-  /** Egress: `{{secret:project:NAME}}` placeholders substituted, then the terminal `fetch` — the
+  /** Egress: `getSecret("/secrets/NAME")` placeholders substituted, then the terminal `fetch` — the
    *  same door a loaded worker's `globalOutbound` and the edge `itx.fetch(request)` land on. */
   fetch(request: Request): Promise<Response>;
   /** The rpc-stub REGISTRY — physical, never event-sourced: a client's live capnweb value lent under
@@ -254,7 +257,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
   const secretKey = (name: string): string => {
     if (!/^[a-zA-Z0-9._-]+$/.test(name))
       throw new Error(
-        `secrets: a name is [a-zA-Z0-9._-]+ (the {{secret:project:NAME}} grammar), got ${JSON.stringify(name)}`,
+        `secrets: a name is [a-zA-Z0-9._-]+ (what getSecret("/secrets/NAME") can spell), got ${JSON.stringify(name)}`,
       );
     return `secret:${projectId}:${name}`;
   };
