@@ -4371,7 +4371,8 @@ pin naming its mechanism, or declined with the reason above. The red pins are th
   budget for both lanes, the per-row pending budget subsumed, the core reduce as two pure functions
   (+3 net: the structure landed, its prose moves in the comment pass). GATES: tsc ×3 · oxlint · knip ·
   `pnpm test` 88 files / 728 passed / 18 expected-fail / 17 deployed-only skips. DEPLOYED (version
-  758ff0f9): the line below.
+  758ff0f9): 49 files / 201 passed / 4 expected-fail; the one failure the kv-list platform reset
+  (measured on 2026-09-09, above), green alone.
 - THE TUTORIAL: `docs/tutorial-the-iterate-context-layer-by-layer.md` (1,796 lines, 13 chapters, 65
   bricks), written fresh against today's surface in the brick-by-brick voice; every client snippet is a
   call the e2e lane makes, cited by file; the 2026-09-06 tutorial is history. Its writer's list of
