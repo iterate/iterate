@@ -4540,7 +4540,9 @@ pin naming its mechanism, or declined with the reason above. The red pins are th
   `describeReach`, one claims-shape style, one `ProjectDoorsInput` alias, the control plane's `Env`
   extends the DO's, the "no lane candidate" sentence once, three docstrings, the backcompat prose
   gone. Net +57 (three new pins are the growth). The reviewer's verdict: the spec (rev 3 §1–§5, §7)
-  is met, §3 with `rotateApiKey` for "born at create + reveal".
+  is met, §3 with `rotateApiKey` for "born at create + reveal". GATES: tsc ×3 · oxlint · knip ·
+  unit 510 · workers 55 · local e2e 177. DEPLOYED (f2db7f58f, version 433bfeee): 22 files / 193
+  passed / 4 expected-fail — ALL GREEN.
 - THE TUTORIAL (63c115290): Jonas's eleven Plannotator annotations applied; five passages carry a
   "Landing" mark for the next build — the public `/expression` route deleted (the `x-itx-expression`
   header stays internal), `<app>--<project>` / `<app>.<project>` / custom hostnames with a trusted
