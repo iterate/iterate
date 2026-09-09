@@ -7,6 +7,7 @@
 import { expect, test } from "vitest";
 import { makeProcessorHarness } from "iterate/processors/testing";
 import type { ConsumedInput } from "iterate/processors";
+import { aiTextResponse } from "@iterate-com/shared/test-support/resilient-ai-interceptor";
 import { AgentProcessorContract } from "./agent-processor-contract.ts";
 import { AgentProcessor, type AgentProcessorDeps } from "./agent-processor-implementation.ts";
 
@@ -15,9 +16,9 @@ const SETTLED = "events.iterate.com/agent/llm-request-settled";
 const RESPONSE_CHUNKS = "events.iterate.com/agent/llm-response-chunks";
 
 test("an intercepted/* turn is served by the interceptor: prompt in, text out, usage estimated, chunks journaled", async () => {
-  const seen: { source: string; model: string; body: { messages: { content: string }[] } }[] = [];
+  const seen: any[] = [];
   const h = makeInterceptedModelHarness(async (input) => {
-    seen.push(input as never);
+    seen.push(input);
     return "well well well, look who needs a deterministic model";
   });
 
@@ -26,8 +27,19 @@ test("an intercepted/* turn is served by the interceptor: prompt in, text out, u
     ["advanceTime", 10_000],
   );
 
-  expect(seen).toMatchObject([{ source: "agent-turn", model: "intercepted/main" }]);
-  expect(seen[0]!.body.messages.some((m) => m.content.includes("Hello fake model"))).toBe(true);
+  expect(seen).toMatchObject([
+    {
+      source: "agent-turn",
+      model: "intercepted/main",
+      request: {
+        kind: "workers-ai",
+      },
+    },
+  ]);
+  expect(JSON.stringify(seen)).not.toContain("must-not-leak");
+  expect(
+    seen[0].request.body.messages.some((m: any) => m.content.includes("Hello fake model")),
+  ).toBe(true);
 
   const requested = h.events(REQUESTED)[0]!;
   expect(h.events(SETTLED)).toMatchObject([
@@ -169,7 +181,22 @@ function makeInterceptedModelHarness(
     createProcessor: (deps) =>
       new AgentProcessor({
         ...deps,
-        ...(consultAiInterceptor === undefined ? {} : { consultAiInterceptor }),
+        ai: {
+          run: async () => {
+            throw new Error("An intercepted model must never dial");
+          },
+        },
+        cloudflareAiGatewayTransport: () => ({
+          kind: "byok",
+          gatewayId: "default",
+          openaiApiKey: "must-not-leak",
+        }),
+        ...(consultAiInterceptor === undefined
+          ? {}
+          : {
+              consultAiInterceptor: async (input) =>
+                aiTextResponse((await consultAiInterceptor(input)) as any, input),
+            }),
       }),
     path: "/agents/test",
   });

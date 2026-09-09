@@ -32,6 +32,12 @@ import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
 import { CapabilityHostProcessorContract } from "../capability-host/capability-host-processor-contract.ts";
 import { AgentBinding, AgentSummary, AgentSummaryUpdated } from "./agent-presence.ts";
 
+/** Normalized usage reported by an agent model invocation. */
+export type AgentLlmUsage = z.infer<ReturnType<typeof llmTokenUsageSchema>>;
+
+/** Successful model text and its optional provider evidence. Failures throw. */
+export type AgentLlmCompletion = { text: string; usage?: AgentLlmUsage; rawResponse?: unknown };
+
 export const AgentProcessorContract = defineProcessorContract({
   slug: "agent",
   version: "7.0.0",

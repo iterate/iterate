@@ -88,7 +88,7 @@ import { timedStep } from "./lib/step-timing.ts";
 import { buildCollectSecretUrl } from "./lib/collect-secret-link.ts";
 import { buildProjectStreamViewerUrl } from "./lib/stream-viewer-url.ts";
 import { buildProjectWorkerUrl } from "./lib/project-host-routing.ts";
-import type { Env } from "./env.ts";
+import { sendAiRequest, prepareWorkersAiRequest } from "./domains/agents/workers-ai-transport.ts";
 import {
   canonicalizeStreamPath,
   DurableObjectNameCodec,
@@ -456,7 +456,6 @@ import { WorkspaceProcessorContract } from "./domains/workspaces/workspace-proce
 import { normalizeConfigRepoTemplateReference } from "./lib/config-repo-template-reference.ts";
 import {
   AI_INTERCEPTOR_CAPABILITY_NAME,
-  isInterceptedModel,
   type ProjectAiIntercept,
   type ProjectAiInterceptor,
 } from "./lib/model-interception.ts";
@@ -3264,8 +3263,6 @@ function assertDeviceId(deviceId: string): void {
   }
 }
 
-type AiRunOptions = NonNullable<Parameters<Env["AI"]["run"]>[2]>;
-
 /** One project file, addressed by path. */
 class FileHandleRpcTarget extends IterateRpcTarget<"FileHandle"> {
   constructor(readonly props: { auth: ItxAuth; path: string; projectId: string }) {
@@ -3376,7 +3373,7 @@ class AiRpcTarget extends IterateRpcTarget<"Ai"> {
       auth: ItxAuth;
       ctx: CfExecutionContext;
       projectId: string;
-      gateway?: AiRunOptions["gateway"];
+      gateway?: CfAiRunOptions["gateway"];
     },
   ) {
     super();
@@ -3398,28 +3395,34 @@ class AiRpcTarget extends IterateRpcTarget<"Ai"> {
    * — e.g. `{ gateway: { id: "default", skipCache: true } }` — passed through
    * to `env.AI.run`; its `gateway` wins over any constructor-provided one.
    * An `intercepted/*` model never reaches Cloudflare: the live interceptor installed
-   * with `intercept(handler)` serves it, and its return value comes back
-   * verbatim (no handler installed → a loud error). */
-  run<T = unknown>(model: string, body: unknown, options?: CfAiRunOptions): Promise<T> {
-    if (isInterceptedModel(model)) {
-      // Same contract as the env.AI.run cast below: `run<T>` is
-      // caller-instantiated by design — the caller names the shape it will
-      // read, uninstantiated stays the honest `unknown` — and on this branch
-      // the caller also authored the handler producing the value, so no
-      // runtime schema exists to check it against.
-      return projectStub(env.PROJECT, this.props.projectId).consultAiInterceptor({
-        source: "ai-run",
-        model,
-        body,
-      }) as Promise<T>;
-    }
+   * with `intercept(handler)` supplies a provider response decoded in the same
+   * way as a real call (no handler installed → a loud error). */
+  async run<T = unknown>(model: string, body: unknown, options?: CfAiRunOptions): Promise<T> {
     const gateway = options?.gateway ?? this.props.gateway;
-    const merged = gateway === undefined ? options : { ...options, gateway };
-    return env.AI.run(
-      model,
-      body as Record<string, unknown>,
-      merged as AiRunOptions | undefined,
-    ) as Promise<T>;
+    const callOptions = gateway ? { ...options, gateway } : options || {};
+    const response = await sendAiRequest(
+      {
+        ai: env.AI,
+        source: { source: "ai-run" },
+        consultInterceptor: (request) =>
+          projectStub(env.PROJECT, this.props.projectId).consultAiInterceptor(request),
+      },
+      prepareWorkersAiRequest({ model, body, options: callOptions }),
+    );
+    // run<T> is caller-instantiated: the chosen model determines the output shape.
+    if (callOptions.returnRawResponse) return response as T;
+    if (!response.ok || !response.body) {
+      const detail = await response.text();
+      throw new Error(
+        `Workers AI request failed with status ${response.status}: ${detail.slice(0, 500)}`,
+      );
+    }
+    // Match the Workers AI binding: JSON is decoded, all other media remain a stream.
+    // The caller chooses T because model-specific outputs have no common runtime schema.
+    if (response.headers.get("content-type") === "application/json")
+      return response.json() as Promise<T>;
+    // Binary and SSE model outputs are both represented by their response body stream.
+    return response.body as T;
   }
 
   /** Install a live handler for `intercepted/*` models (last writer wins); returns a
@@ -3427,9 +3430,9 @@ class AiRpcTarget extends IterateRpcTarget<"Ai"> {
    * `model: "intercepted/<x>"` and every `run("intercepted/<x>", …)` call are served by your
    * handler — an in-memory function on YOUR side of the connection — instead
    * of a real provider. The handler receives
-   * `{ source: "agent-turn" | "ai-run", model, body }`; for agent turns it
-   * returns assistant text (a string, or `{ text, usage? }`), for ai-run its
-   * return value is handed back verbatim. Live means session-bound, with the
+   * `{ source: "agent-turn" | "ai-run", model, request }` with the prepared
+   * request and no provider credentials. Return `{ status, headers, body }`
+   * containing the provider’s JSON or SSE response. Live means session-bound, with the
    * mount invariant: the interception lives exactly as long as your session
    * connection, and if the platform's half dies while your socket is open,
    * the socket closes (4901) — reconnect and intercept() again.

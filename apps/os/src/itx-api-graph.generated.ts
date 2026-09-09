@@ -227,7 +227,7 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "Ai",
     kind: "interface",
     sourceText:
-      '/** Workers AI binding exposed through itx as a project/agent capability. */\nexport interface Ai {\n  __describe(): Promise<Description>;\n  /** List the Workers AI model catalog. */\n  models(): Promise<unknown>;\n  /** Run one model invocation (`run("@cf/meta/llama-3.1-8b-instruct", { prompt })`).\n   * For outputs the caller cannot produce itself — images, audio, transcription,\n   * embeddings, classification at volume. An LLM agent shouldn\'t run a text\n   * model over content it is about to read or relay (summarize, draft, answer):\n   * return the data and write that yourself.\n   * Outputs are model-shaped: instantiate `run<T>` with the response shape you\n   * read (`run<{ response?: string }>(…)`); uninstantiated it stays the honest\n   * `unknown`. The optional third argument is the binding\'s own options object\n   * — e.g. `{ gateway: { id: "default", skipCache: true } }` — passed through\n   * to `env.AI.run`; its `gateway` wins over any constructor-provided one.\n   * An `intercepted/*` model never reaches Cloudflare: the live interceptor installed\n   * with `intercept(handler)` serves it, and its return value comes back\n   * verbatim (no handler installed → a loud error). */\n  run<T = unknown>(model: string, body: unknown, options?: CfAiRunOptions): Promise<T>;\n  /** Install a live handler for `intercepted/*` models (last writer wins); returns a\n   * release handle. For deterministic testing: an agent configured with\n   * `model: "intercepted/<x>"` and every `run("intercepted/<x>", …)` call are served by your\n   * handler — an in-memory function on YOUR side of the connection — instead\n   * of a real provider. The handler receives\n   * `{ source: "agent-turn" | "ai-run", model, body }`; for agent turns it\n   * returns assistant text (a string, or `{ text, usage? }`), for ai-run its\n   * return value is handed back verbatim. Live means session-bound, with the\n   * mount invariant: the interception lives exactly as long as your session\n   * connection, and if the platform\'s half dies while your socket is open,\n   * the socket closes (4901) — reconnect and intercept() again.\n   *\n   * Under the hood this is sugar over the capability machinery: the handler\n   * mounts as a LIVE capability at the root scope\'s `aiInterceptor` path,\n   * behind the shipped hibernating Provider Pager — which is where all of the\n   * above lifecycle comes from. Provide-at-same-path replaces (the last\n   * writer wins), and the returned handle revokes exactly its own mount,\n   * never a newer one. Non-fake models are never interceptable — a journaled\n   * `openai/*` turn is always the real provider. */\n  intercept(handler: ProjectAiInterceptor): Promise<ProjectAiIntercept>;\n  /** Calling with no arguments lists the file formats the converter accepts. */\n  toMarkdown(): Promise<CfMarkdownSupportedFormat[]>;\n  /** Convert one document (`{ name, blob }`) to Markdown — `blob` accepts\n   * bytes or base64 (a Blob made in a script cannot cross the RPC\n   * boundary). An in-hand HTML string (a fetched page, an email body)\n   * converts via `new TextEncoder().encode(html)` with a `.html` name;\n   * never strip HTML by hand.\n   * `{ conversionOptions: { output: { format: "text" } } }` returns plain\n   * text with link targets and image URLs stripped — the compact choice for\n   * emails and newsletters, whose bytes are mostly tracking links. */\n  toMarkdown(\n    document: CfMarkdownDocument,\n    options?: CfMarkdownConversionOptions,\n  ): Promise<CfMarkdownConversionResult>;\n  /** Convert a batch of documents to Markdown; results come back in input order. */\n  toMarkdown(\n    documents: CfMarkdownDocument[],\n    options?: CfMarkdownConversionOptions,\n  ): Promise<CfMarkdownConversionResult[]>;\n}',
+      '/** Workers AI binding exposed through itx as a project/agent capability. */\nexport interface Ai {\n  __describe(): Promise<Description>;\n  /** List the Workers AI model catalog. */\n  models(): Promise<unknown>;\n  /** Run one model invocation (`run("@cf/meta/llama-3.1-8b-instruct", { prompt })`).\n   * For outputs the caller cannot produce itself — images, audio, transcription,\n   * embeddings, classification at volume. An LLM agent shouldn\'t run a text\n   * model over content it is about to read or relay (summarize, draft, answer):\n   * return the data and write that yourself.\n   * Outputs are model-shaped: instantiate `run<T>` with the response shape you\n   * read (`run<{ response?: string }>(…)`); uninstantiated it stays the honest\n   * `unknown`. The optional third argument is the binding\'s own options object\n   * — e.g. `{ gateway: { id: "default", skipCache: true } }` — passed through\n   * to `env.AI.run`; its `gateway` wins over any constructor-provided one.\n   * An `intercepted/*` model never reaches Cloudflare: the live interceptor installed\n   * with `intercept(handler)` supplies a provider response decoded in the same\n   * way as a real call (no handler installed → a loud error). */\n  run<T = unknown>(model: string, body: unknown, options?: CfAiRunOptions): Promise<T>;\n  /** Install a live handler for `intercepted/*` models (last writer wins); returns a\n   * release handle. For deterministic testing: an agent configured with\n   * `model: "intercepted/<x>"` and every `run("intercepted/<x>", …)` call are served by your\n   * handler — an in-memory function on YOUR side of the connection — instead\n   * of a real provider. The handler receives\n   * `{ source: "agent-turn" | "ai-run", model, request }` with the prepared\n   * request and no provider credentials. Return `{ status, headers, body }`\n   * containing the provider’s JSON or SSE response. Live means session-bound, with the\n   * mount invariant: the interception lives exactly as long as your session\n   * connection, and if the platform\'s half dies while your socket is open,\n   * the socket closes (4901) — reconnect and intercept() again.\n   *\n   * Under the hood this is sugar over the capability machinery: the handler\n   * mounts as a LIVE capability at the root scope\'s `aiInterceptor` path,\n   * behind the shipped hibernating Provider Pager — which is where all of the\n   * above lifecycle comes from. Provide-at-same-path replaces (the last\n   * writer wins), and the returned handle revokes exactly its own mount,\n   * never a newer one. Non-fake models are never interceptable — a journaled\n   * `openai/*` turn is always the real provider. */\n  intercept(handler: ProjectAiInterceptor): Promise<ProjectAiIntercept>;\n  /** Calling with no arguments lists the file formats the converter accepts. */\n  toMarkdown(): Promise<CfMarkdownSupportedFormat[]>;\n  /** Convert one document (`{ name, blob }`) to Markdown — `blob` accepts\n   * bytes or base64 (a Blob made in a script cannot cross the RPC\n   * boundary). An in-hand HTML string (a fetched page, an email body)\n   * converts via `new TextEncoder().encode(html)` with a `.html` name;\n   * never strip HTML by hand.\n   * `{ conversionOptions: { output: { format: "text" } } }` returns plain\n   * text with link targets and image URLs stripped — the compact choice for\n   * emails and newsletters, whose bytes are mostly tracking links. */\n  toMarkdown(\n    document: CfMarkdownDocument,\n    options?: CfMarkdownConversionOptions,\n  ): Promise<CfMarkdownConversionResult>;\n  /** Convert a batch of documents to Markdown; results come back in input order. */\n  toMarkdown(\n    documents: CfMarkdownDocument[],\n    options?: CfMarkdownConversionOptions,\n  ): Promise<CfMarkdownConversionResult[]>;\n}',
     summary: "Workers AI binding exposed through itx as a project/agent capability.",
     memberSummaries: {
       models: "List the Workers AI model catalog.",
@@ -1394,10 +1394,10 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "ProjectAiInterceptor",
     kind: "typeAlias",
     sourceText:
-      '/**\n * Live replacement for intercepted/* model calls. For `source: "agent-turn"` the\n * return value must be assistant text — a plain string, or\n * `{ text, usage? }` to also report token usage (report inflated numbers to\n * drive compaction deterministically). For `source: "ai-run"` the return value\n * is handed back to the `itx.ai.run` caller verbatim.\n */\nexport type ProjectAiInterceptor = (input: ProjectAiInterceptorInput) => Promise<unknown>;',
-    summary: "Live replacement for intercepted/* model calls.",
+      "/** Replace only the provider call; response classification and decoding still run. */\nexport type ProjectAiInterceptor = (\n  input: ProjectAiInterceptorInput,\n) => Promise<InterceptedAiResponse>;",
+    summary: "Replace only the provider call; response classification and decoding still run.",
     memberSummaries: {},
-    referencedTypeNames: ["ProjectAiInterceptorInput"],
+    referencedTypeNames: ["ProjectAiInterceptorInput", "InterceptedAiResponse"],
   },
   {
     name: "CfMarkdownSupportedFormat",
@@ -2253,8 +2253,18 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "ProjectAiInterceptorInput",
     kind: "typeAlias",
     sourceText:
-      '/**\n * One intercepted/* invocation as the interceptor sees it. `source` discriminates the\n * two egress paths: an agent conversation turn carries the provider-neutral\n * chat projection, a direct `itx.ai.run` call carries the caller\'s body\n * argument verbatim (honestly `unknown` — the caller chose its shape).\n */\nexport type ProjectAiInterceptorInput =\n  | {\n      source: "agent-turn";\n      agentPath: string;\n      model: string;\n      body: {\n        messages: { role: "system" | "developer" | "user" | "assistant"; content: string }[];\n      };\n    }\n  | {\n      source: "ai-run";\n      model: string;\n      body: unknown;\n    };',
-    summary: "One intercepted/* invocation as the interceptor sees it.",
+      '/** Original model name and the complete credential-free request that would be dispatched. */\nexport type ProjectAiInterceptorInput = {\n  model: string;\n  request: AiRequest;\n} & ({ source: "agent-turn"; agentPath: string } | { source: "ai-run" });',
+    summary:
+      "Original model name and the complete credential-free request that would be dispatched.",
+    memberSummaries: {},
+    referencedTypeNames: ["AiRequest"],
+  },
+  {
+    name: "InterceptedAiResponse",
+    kind: "typeAlias",
+    sourceText:
+      "/** Serialized provider response consumed by the normal response decoder. */\nexport type InterceptedAiResponse = {\n  status: number;\n  headers: Record<string, string>;\n  body: string | null;\n};",
+    summary: "Serialized provider response consumed by the normal response decoder.",
     memberSummaries: {},
     referencedTypeNames: [],
   },
@@ -2653,6 +2663,15 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     referencedTypeNames: ["StreamEventBatch", "ReportStreamWakeDeliveryResult"],
   },
   {
+    name: "AiRequest",
+    kind: "typeAlias",
+    sourceText:
+      "/** The two concrete outbound APIs, after host policy and request preparation. No credentials. */\nexport type AiRequest = OpenAiHttpRequest | WorkersAiRequest;",
+    summary: "The two concrete outbound APIs, after host policy and request preparation.",
+    memberSummaries: {},
+    referencedTypeNames: ["OpenAiHttpRequest", "WorkersAiRequest"],
+  },
+  {
     name: "TypedStreamEventInput",
     kind: "typeAlias",
     sourceText:
@@ -2836,6 +2855,24 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     summary: "One-shot acknowledgement capability owned by a single durable wake batch.",
     memberSummaries: {},
     referencedTypeNames: ["StreamWakeDeliveryResult"],
+  },
+  {
+    name: "OpenAiHttpRequest",
+    kind: "typeAlias",
+    sourceText:
+      'export type OpenAiHttpRequest = {\n  kind: "openai-http";\n  gatewayId: string;\n  endpoint: string;\n  headers: Record<string, string>;\n  body: Record<string, unknown>;\n};',
+    summary: "",
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
+    name: "WorkersAiRequest",
+    kind: "typeAlias",
+    sourceText:
+      'export type WorkersAiRequest = {\n  kind: "workers-ai";\n  model: string;\n  body: Record<string, unknown>;\n  options: CfAiRunOptions & {\n    returnRawResponse: true;\n  };\n};',
+    summary: "",
+    memberSummaries: {},
+    referencedTypeNames: ["CfAiRunOptions"],
   },
   {
     name: "CfImageTransformOptions",
