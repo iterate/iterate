@@ -3,8 +3,7 @@
 // is the whole "how a test reaches the worker" surface, plus the handful of idioms every file used
 // to copy (poll-until, must-reject, the delivery collector, the eyeball WebSocket round trip).
 
-// eslint-disable-next-line iterate/no-capnweb-http-batch -- httpBatch() below exists to PROVE the /api one-shot batch door (session-doors.e2e); everything else is WS
-import { newHttpBatchRpcSession, newWebSocketRpcSession } from "capnweb";
+import { newWebSocketRpcSession } from "capnweb";
 
 const baseUrl = (): string => {
   const u = process.env.WORKER_BASE_URL;
@@ -68,13 +67,6 @@ export function rawSession(prepare?: (ws: WebSocket) => void): { session: any; w
  *  login mode, which every lane runs (src/session.ts); it is the only door — there is no bare one. */
 export function openItx(ctx: string): any {
   return session().authenticate().projects.get(ctx);
-}
-
-/** A ONE-SHOT HTTP-batch session — a CLI-shaped client, no WebSocket anywhere. Every call chained
- *  off it flushes as a single POST to /api. Same shape: `.authenticate().projects.get(ctx)`. */
-export function httpBatch(): any {
-  // eslint-disable-next-line iterate/no-capnweb-http-batch -- the batch door itself is under test (session-doors.e2e proves a socketless CLI client works)
-  return newHttpBatchRpcSession(new URL("/api", baseUrl()).toString());
 }
 
 /** Dispose every session (and close every raw socket) opened since the last call — wired to

@@ -2,9 +2,9 @@
 // table is a MAP by canonical match: 5 concurrent re-sets of ONE match end with exactly one rule (the
 // last-committed target), a null DELETES it (default-deny — nothing "beneath" to fall back to), and a
 // fresh set works; a NON-CANONICAL match spelling is stored CANONICAL and rewrites; 300 event-sourced
-// rules keep both the newest rule and a built-in root under 150ms; a chain of rules naming rules 30
-// deep resolves under the depth-32 budget and 33 deep fails loudly; malformed rule events are skipped
-// without wedging later rules; a longer match under a target's prefix captures the deeper call.
+// rules keep both the newest rule and a built-in root under 150ms; malformed rule events are skipped
+// without wedging later rules. (The resolver's own rows — the depth budget, longest match wins, a
+// longer match under a target's prefix — are context/itx-expression-rewriting.test.ts.)
 
 import { expect, test } from "vitest";
 import { append, codeOf, freshCtx, openItx, readAll, rejection } from "./support/client.ts";
@@ -101,24 +101,6 @@ test("300 rules: invoking the NEWEST rule and a built-in root both stay under 15
   expect(rootMs, `built-in root (whoami) median ${rootMs.toFixed(1)}ms`).toBeLessThan(150);
 }, 90_000);
 
-test("a chain of rules naming rules 30 deep resolves under the depth-32 budget; 33 deep fails loudly", async () => {
-  const ctx = freshCtx("chain");
-  const itx = openItx(ctx);
-  // chain0 → itx.whoami; chainK → itx.chain(K-1). One commit configures all 33 rules.
-  const chain = Array.from({ length: 33 }, (_, i) => ({
-    type: REWRITE_RULE_CONFIGURED,
-    payload: { match: `itx.chain${i}`, target: i === 0 ? "itx.whoami" : `itx.chain${i - 1}` },
-  }));
-  await append(itx, ...chain);
-
-  // 30 rewrites (chain29 → … → chain0 → whoami) resolve within the budget…
-  const resolved = await itx.invoke(["itx", ["chain29"]]);
-  expect(resolved).toMatchObject({ projectId: ctx, path: "/" });
-
-  // …33 rewrites trip the guard LOUDLY (never a spin, never a stack overflow).
-  await expect(itx.invoke(["itx", ["chain32"]])).rejects.toThrow(/depth 32/);
-}, 60_000);
-
 test("malformed rewrite-rule events are skipped without wedging later rules", async () => {
   const ctx = freshCtx("badrule");
   const itx = openItx(ctx);
@@ -141,18 +123,4 @@ test("malformed rewrite-rule events are skipped without wedging later rules", as
   const missErr = await rejection(itx.invoke(["itx", ["broken"]]));
   expect(codeOf(missErr)).toBe("NO_ITX_EXPRESSION_MATCH");
   expect(await itx.rewriteRules.get("itx.broken")).toBeNull();
-});
-
-test("a rule is a REWRITE: a longer match under the target's prefix captures the deeper call", async () => {
-  const ctx = freshCtx("rewrite");
-  const itx = openItx(ctx);
-  await itx.provide("itx.store", "itx.kv");
-  await itx.provide("itx.store.deep", "itx.whoami"); // longer than `itx.store`: claims `.deep`
-  await itx.provide("itx.db", "itx.store");
-  // `itx.db.deep()` rewrites to `itx.store.deep()`, which the longer match claims — the kv value's
-  // (non-existent) `deep` is never walked.
-  expect(await itx.invoke("itx.db.deep()")).toMatchObject({ projectId: ctx, path: "/" });
-  // the shorter match still reaches kv through two rewrites
-  await itx.invoke("itx.db.put('k', 'v')");
-  expect(await itx.invoke("itx.store.get('k')")).toBe("v");
 });

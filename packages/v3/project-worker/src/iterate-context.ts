@@ -444,15 +444,14 @@ export class IterateContext extends RpcTarget {
    *  known. Two contexts overriding each other stays a trusted-client misconfiguration. */
   #refuseAnOverrideNamingItsOwnContext(matchString: string, event: StreamEventInput): void {
     if (matchString !== "itx") return;
-    const target = (event.payload as { target: string | null }).target;
-    if (target === null) return;
-    const steps = toItxExpression(target);
+    const steps = (event.payload as { target: ItxExpression | null }).target; // the PARSED form
+    if (steps === null) return;
     const cdStep = steps[1] === "builtins" ? steps[2] : steps[1];
     if (!Array.isArray(cdStep) || cdStep[0] !== "cd" || typeof cdStep[1] !== "string") return;
     const ownPath = this.#durableObjectAddress.path;
     if (resolveContextPath(ownPath, cdStep[1]) === ownPath)
       throw new Error(
-        `a whole-context override may not name its own context: "itx ⇒ ${target}" at ${JSON.stringify(ownPath)} would route every call back into itself`,
+        `a whole-context override may not name its own context: "itx ⇒ ${print(steps, { holes: true })}" at ${JSON.stringify(ownPath)} would route every call back into itself`,
       );
   }
 

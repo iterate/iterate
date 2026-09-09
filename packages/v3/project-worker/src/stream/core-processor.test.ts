@@ -711,3 +711,31 @@ describe("the secrets catalog — by name, the origin only, never a value", () =
       expect(reduceAll(events).secrets).toEqual(becomes);
     });
 });
+
+describe("the platform rows a null MASKS (kept) vs a plain delete", () => {
+  const configured = (offset: number, match: string, target: string | null) =>
+    at(offset, "events.iterate.com/itx/rewrite-rule-configured", { match, target });
+  test("`itx.worker ⇒ null` is KEPT as a mask — the resolver's default config worker is a platform row, so a project that says no must not fall back to the no-op silently", () => {
+    const s = reduceAll([configured(1, "itx.worker", "itx.kv"), configured(2, "itx.worker", null)]);
+    expect(s.itxExpressionRewriteRules["itx.worker"]).toEqual({
+      match: ["itx", "worker"],
+      target: null,
+    });
+    // a name with no platform row beneath is simply deleted
+    const gone = reduceAll([configured(1, "itx.mine", "itx.kv"), configured(2, "itx.mine", null)]);
+    expect(gone.itxExpressionRewriteRules).toEqual({});
+  });
+
+  // RED (`test.fails` — a known defect, too costly to fix now): the platform-equivalent target
+  // `itx.<x…> ⇒ itx.builtins.<x…>` is DELETED whatever lies above it, so under a broader mask
+  // (`itx ⇒ null`, `itx.kv ⇒ null`) one prefix can never be re-opened — yet longest-match promises
+  // it. The fix stores the row when a shorter row claims the prefix and deletes only when nothing
+  // lies above — a table-aware delete.
+  test.fails("a platform-equivalent target beneath a broader mask re-opens exactly that prefix", () => {
+    const s = reduceAll([
+      configured(1, "itx.kv", null),
+      configured(2, "itx.kv.get", "itx.builtins.kv.get"),
+    ]);
+    expect(Object.keys(s.itxExpressionRewriteRules).sort()).toEqual(["itx.kv", "itx.kv.get"]);
+  });
+});

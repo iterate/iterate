@@ -83,20 +83,26 @@ import {
  *  MASK: the row matches like any other and refuses the call (rule 5). */
 export type ItxExpressionRewriteRule = { match: ItxExpressionPrefix; target: ItxExpression | null };
 
-/** THE CONFIG WORKER short name. `itx.worker` is a PLATFORM DEFAULT (below): every stream subscribes
+/** THE CONFIG WORKER's platform row. `itx.worker` is a PLATFORM DEFAULT: every stream subscribes
  *  `itx.cd('/').worker.processEventBatch` (the DO constructor), so `itx.worker` must ALWAYS resolve or
- *  that subscription would halt on a project that never set one up. The default loads a bundled NO-OP;
- *  a context OVERRIDES it with its own rule (picked before this fallback) pointing at its source in KV
- *  — `itx.provide("itx.worker", "itx.workers.get({ source: itx.kv.get('/repos/config/worker.ts'), cacheKey })")`. */
-/** The bundled no-op ConfigWorker the `itx.worker` default loads — its processEventBatch does nothing,
- *  so a project with no config worker set up delivers quietly (its config subscription never halts).
- *  Overridden the moment userspace provides its own `itx.worker`. */
+ *  that subscription would halt on a project that never set one up. The default loads this bundled
+ *  NO-OP ConfigWorker (its processEventBatch does nothing, so a project with no config worker set up
+ *  delivers quietly); a context OVERRIDES it with its own rule, picked before this fallback —
+ *  `itx.provide("itx.worker", "itx.workers.get({ source: itx.repos.readFile('config','worker.ts') })")`
+ *  — or MASKS it with `null` (kept as a row: core-processor.ts), which is default-deny, never the no-op. */
 const DEFAULT_CONFIG_WORKER_SPEC = {
   source: {
     "cap.js":
       'import { ConfigWorker } from "./processor.js";\nexport default class extends ConfigWorker { async processEventBatch() {} }',
   },
   cacheKey: "config:default",
+} as const;
+/** The row as `rewriteRules.list()` shows it (the source elided — it is the bundle above). */
+export const CONFIG_WORKER_PLATFORM_ROW = {
+  match: "itx.worker",
+  target:
+    "itx.workers.get({ source: <the bundled no-op ConfigWorker>, cacheKey: 'config:default' })",
+  origin: "platform",
 } as const;
 
 /** The proxy's own verbs — a match may not start with one (rule 6). */
@@ -269,6 +275,11 @@ export function resolveItxExpression(
       // THE DEFAULT CONFIG WORKER ROW: `itx.worker ⇒ itx.workers.get({ source: <bundled no-op>, … })`,
       // reached only when NO context rule matched `itx.worker` (a userspace override is picked above).
       // Keeps the steps after `.worker` (`.processEventBatch`), then resolves on through `itx.workers`.
+      // A CALL at `worker` (`itx.worker(1)`) has nowhere to put its arguments — refused, never dropped.
+      if (Array.isArray(current[1]))
+        throw new Error(
+          `${JSON.stringify(print(current))}: itx.worker is a name, not a call (its arguments would be dropped)`,
+        );
       current = ["itx", "workers", ["get", DEFAULT_CONFIG_WORKER_SPEC], ...current.slice(2)];
       chain.push(current);
       continue;
@@ -319,6 +330,14 @@ export function rewriteRuleConfiguredEvent(
   if (targetExpression && targetExpression[0] !== "itx")
     throw new Error(
       `a rewrite rule's target must be rooted at "itx" (a bare built-in root is unspellable — targets resolve through the rules; the physical spelling is "itx.builtins.…")`,
+    );
+  if (
+    matchPrefix.length === 1 &&
+    targetExpression &&
+    itxExpressionStepName(targetExpression[1]) !== "builtins"
+  )
+    throw new Error(
+      `a whole-context override (match "itx") must target the physical spelling "itx.builtins.…" — ${JSON.stringify(print(targetExpression, { holes: true }))} would re-enter the table it just claimed, every call`,
     );
   if (targetExpression && targetExpression.slice(0, -1).some(containsItxExpressionHole))
     throw new Error(

@@ -27,10 +27,9 @@ function recordingNamespace(allRepos: string[] = []) {
     },
     get: async (name) => {
       calls.push({ method: "get", name });
-      // A real-shaped handle that ALSO carries the UNSAFE `fork(dest)` — `get` must re-expose the
-      // safe fields (`lastPushAt`, `createToken`) but NEVER this method.
+      // A real-shaped handle that ALSO carries the UNSAFE `fork(dest)` — `get` must re-expose
+      // `createToken` but NEVER this method.
       return {
-        lastPushAt: `pushed-${name}`,
         createToken: async (scope: "read" | "write", ttlSeconds: number) => ({
           plaintext: `${scope}-${name}-${ttlSeconds}`,
         }),

@@ -62,14 +62,6 @@ export type SubscriptionListEntry = {
   halted?: { afterOffset: number; attempts: number; error?: string };
 };
 
-/** THE built-in scope, as ONE interface — the physical-layer roots: `itx.builtins.<root>` runs
- *  against them directly; `itx.<root>` reaches them through the implicit platform row unless the
- *  context's table says otherwise (itx-expression-rewriting.ts, rule 5: rules FIRST). The library's
- *  verbs come in by `extends` (library/index.ts).
- *  This is the clean-room's whole kernel surface. It is a PLAIN OBJECT, not an RpcTarget class, on
- *  purpose: the resolver gates on `Object.hasOwn`, so a prototype-method class would leave every
- *  root unreachable. Exported for ONE reader: the edge `IterateContext`'s TYPE merges it in
- *  (iterate-context.ts), so what rides the dotted hop is typed where a client holds it. */
 /** Cloudflare Artifacts ("git for agents", beta) — the per-namespace binding, CONTROL PLANE ONLY, and
  *  typed minimally here (not in `@cloudflare/workers-types` yet; reconcile against `wrangler types`
  *  when the namespace is provisioned). `create` returns the repo's initial git credential; `get`
@@ -85,11 +77,11 @@ export interface ArtifactsNamespace {
 export interface ArtifactCreateResult {
   token: string;
 }
-/** The REAL repo handle `get()` yields (a live RPC stub). `createToken`/`lastPushAt` are scoped to this
- *  one repo and safe; `fork(name, …)` is NOT — its name is unprefixed and would escape the project — so
- *  the scoped handle `itx.cfArtifacts.get` returns (`ScopedArtifactRepo`) re-exposes only `createToken`. */
+/** The REAL repo handle `get()` yields (a live RPC stub), typed to what is read: `createToken` is
+ *  scoped to this one repo and safe; `fork(name, …)` is NOT — its name is unprefixed and would escape
+ *  the project — so the scoped handle `itx.cfArtifacts.get` returns (`ScopedArtifactRepo`) re-exposes
+ *  only `createToken`. */
 export interface ArtifactRepoHandle {
-  lastPushAt: string | null;
   createToken(scope: "read" | "write", ttlSeconds: number): Promise<ArtifactToken>;
   fork(name: string, options?: { setDefaultBranch?: string }): Promise<ArtifactCreateResult>;
 }
@@ -150,6 +142,14 @@ export function projectScopedArtifacts(
   };
 }
 
+/** THE built-in scope, as ONE interface — the physical-layer roots: `itx.builtins.<root>` runs
+ *  against them directly; `itx.<root>` reaches them through the implicit platform row unless the
+ *  context's table says otherwise (itx-expression-rewriting.ts, rule 5: rules FIRST). The library's
+ *  verbs come in by `extends` (library/index.ts).
+ *  This is the clean-room's whole kernel surface. It is a PLAIN OBJECT, not an RpcTarget class, on
+ *  purpose: the resolver gates on `Object.hasOwn`, so a prototype-method class would leave every
+ *  root unreachable. Exported for ONE reader: the edge `IterateContext`'s TYPE merges it in
+ *  (iterate-context.ts), so what rides the dotted hop is typed where a client holds it. */
 export interface BuiltInScope extends LibraryRoots {
   /** THE RESERVED ROOT, typed: `itx.builtins.<root>` is the physical spelling of every root below —
    *  the fixed point of rewriting, never shadowed by a context's rows (itx-expression-rewriting.ts
@@ -448,13 +448,14 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
             ["set", name, value, options],
           ]) as Promise<{ ok: true }>;
         const origin = options?.origin === undefined ? undefined : new URL(options.origin).origin;
-        await env.SECRETS_KV.put(secretKey(name), String(value), {
-          metadata: { ...(origin && { origin }) },
-        });
+        // The change is appended FIRST: a refused append (a paused stream) leaves the value untouched;
+        // a KV failure after it leaves a catalog row whose value egress cannot find — loud, not silent.
+        const key = secretKey(name);
         await append({
           type: "events.iterate.com/secrets/changed",
           payload: { name, ...(origin && { origin }) },
         });
+        await env.SECRETS_KV.put(key, String(value), { metadata: { ...(origin && { origin }) } });
         return { ok: true };
       },
       delete: async (name) => {
@@ -462,11 +463,12 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
           return rootContext.invoke(["itx", "builtins", "secrets", ["delete", name]]) as Promise<{
             ok: true;
           }>;
-        await env.SECRETS_KV.delete(secretKey(name));
+        const key = secretKey(name);
         await append({
           type: "events.iterate.com/secrets/changed",
           payload: { name, deleted: true },
         });
+        await env.SECRETS_KV.delete(key);
         return { ok: true };
       },
       list: async () =>
@@ -494,12 +496,16 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
     // whole-context override included; the physical spelling is `cd(p).builtins.append(…)`, which is
     // the fixed point there and reads no table. Codec-named, so only THIS project is reachable; the
     // path resolves against THIS context (absolute, or relative with `.`/`..`).
+    // WHO crosses with the call: a sibling context runs it under the caller's principal (a Workers-RPC
+    // hop, where the ambient store does not reach), so an event appended there is attributed too.
     cd: (contextPath: string) =>
-      new InvokeHandle((itxExpressionSteps) =>
-        deps
-          .context(resolveContextPath(path, contextPath)) // a ReachableContext — real-typed seam
-          .invoke(["itx", ...itxExpressionSteps]),
-      ),
+      new InvokeHandle((itxExpressionSteps) => {
+        const context = deps.context(resolveContextPath(path, contextPath)); // a ReachableContext
+        const principal = deps.principal();
+        return principal
+          ? context.invokeAs(principal, ["itx", ...itxExpressionSteps])
+          : context.invoke(["itx", ...itxExpressionSteps]);
+      }),
     fetch: (request: Request) => deps.egress(request),
     rpcStubs: deps.rpcStubs,
     facets: deps.facets,

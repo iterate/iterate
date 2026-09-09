@@ -4,7 +4,7 @@
 // times, and each page lends a fresh `LentRpcStub` over the SAME session stub. capnweb has no
 // `offRpcBroken`, so a registration per lend would accumulate a listener per page for the session's
 // life — worst on the longest-lived, most active devices. The ONE registration lives in
-// `lendRpcStubOverPager`; the borrowed stubs share its `{ value }` broken flag.
+// `lendRpcStubOverPager`; the lent stubs share its `{ reason }` lend-ended holder.
 import { afterEach, expect, test, vi } from "vitest";
 
 // LentRpcStub extends RpcTarget from "cloudflare:workers", which node cannot resolve —

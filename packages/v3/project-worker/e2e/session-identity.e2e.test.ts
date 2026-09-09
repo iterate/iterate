@@ -49,3 +49,14 @@ test("a project token: whoami, source.principal on every append (unforgeable), t
   // no token: the anonymous session, as ever
   expect(await api.authenticate().whoami()).toBeNull();
 });
+
+test("the built-in cd carries the principal to a SIBLING context — an event appended through `itx.cd('/x').append(…)` is attributed like one appended at the root", async () => {
+  const projectId = freshCtx("cd-who");
+  const principal = { actor: "user_ada", email: "ada@example.com" };
+  const itx = session()
+    .authenticate({ projectToken: await mintProjectToken({ projectId, ...principal }) })
+    .projects.get(projectId);
+  await itx.invoke("itx.cd('/sibling').append({ type: 'note', payload: { via: 'cd' } })");
+  const note = (await readAll(itx.cd("/sibling"))).find((e) => e.type === "note");
+  expect(note?.source?.principal).toEqual(principal);
+});

@@ -2,20 +2,16 @@ import { deflate, Inflate } from "pako";
 
 /**
  * A minimal git protocol-v2 wire client for the Artifacts git endpoint —
- * exactly the primitives the lazy repo read path needs, nothing more.
+ * exactly what `repos.ts`'s one-file read/write needs, nothing more: `ls-refs`
+ * for the branch tip, a shallow `fetch` of the tip's snapshot, `receive-pack`
+ * for one commit, and the object/pack codecs between.
  *
  * The endpoint ("gitty/1.0") was probed empirically; the load-bearing
  * behaviors this module relies on:
  *
  * - `ls-refs` resolves HEAD and branch tips.
- * - `fetch` accepts wants for ANY object id (not just ref tips): a want for a
- *   blob returns a pack with exactly that blob — the hydration primitive.
- * - `deepen 1` bounds the commit walk to the wanted tip.
- * - A `have` naming a tree INSIDE the want's closure is ACKed and excluded
- *   WITH its whole closure — so "want <new-head>, have <every known dir
- *   tree>" returns only changed subtrees and their blobs. Haves outside the
- *   closure are silently ignored: degradation is over-fetch, never
- *   corruption.
+ * - `deepen 1` bounds the commit walk to the wanted tip; the snapshot carries
+ *   every blob reachable from it.
  * - `filter` is advertised nowhere and silently ignored — never rely on it.
  * - Wants for missing oids are silently dropped: callers must verify receipt.
  * - Packs are self-contained (no thin-pack requested) but interleave types
@@ -210,8 +206,8 @@ function inflateAt(pack: Uint8Array, offset: number): { consumed: number; out: U
   if (!inflator.ended) throw new Error("truncated zlib stream in pack");
   // pako does not expose consumed-byte accounting publicly; we rely on its
   // zlib-mirror `strm.avail_in`. Assert the shape so a pako upgrade fails
-  // HERE with a clear message (callers fall back to the clone lane) instead
-  // of corrupting pack cursor arithmetic silently.
+  // HERE with a clear message instead of corrupting pack cursor arithmetic
+  // silently.
   const strm = (inflator as unknown as { strm?: { avail_in?: number } }).strm;
   if (strm === undefined || typeof strm.avail_in !== "number") {
     throw new Error("pako Inflate no longer exposes strm.avail_in — pack parsing cannot proceed");
@@ -457,14 +453,9 @@ export async function buildPack(
 
 // -- protocol v2 requests --------------------------------------------------------
 
-function encodeFetchRequest(input: {
-  deepen?: number;
-  haves?: string[];
-  wants: string[];
-}): Uint8Array {
+function encodeFetchRequest(input: { deepen?: number; wants: string[] }): Uint8Array {
   const parts = [pktLine("command=fetch"), DELIM];
   for (const want of input.wants) parts.push(pktLine(`want ${want}`));
-  for (const have of input.haves ?? []) parts.push(pktLine(`have ${have}`));
   if (input.deepen !== undefined) parts.push(pktLine(`deepen ${input.deepen}`));
   parts.push(pktLine("no-progress"));
   parts.push(pktLine("done"));
@@ -482,33 +473,24 @@ function encodeLsRefsRequest(input: { prefixes: string[] }): Uint8Array {
 export interface LsRefsEntry {
   name: string;
   oid: string;
-  symrefTarget?: string;
 }
 
+/** Each `<oid> <name> [attributes…]` line as `{ name, oid }` — the attributes (peeled, symref
+ *  targets) are not read. */
 function parseLsRefs(body: Uint8Array): LsRefsEntry[] {
   const refs: LsRefsEntry[] = [];
   for (const frame of pktFrames(body)) {
     if (frame.kind !== "line") continue;
-    const [oid, name, ...attributes] = pktText(frame.payload).split(" ");
+    const [oid, name] = pktText(frame.payload).split(" ");
     if (oid === undefined || name === undefined) continue;
-    const entry: LsRefsEntry = { name, oid };
-    for (const attribute of attributes) {
-      if (attribute.startsWith("symref-target:")) entry.symrefTarget = attribute.slice(14);
-    }
-    refs.push(entry);
+    refs.push({ name, oid });
   }
   return refs;
 }
 
-interface FetchResponse {
-  acks: string[];
-  pack: Uint8Array;
-  shallow: string[];
-}
-
-function demuxFetchResponse(body: Uint8Array): FetchResponse {
-  const acks: string[] = [];
-  const shallow: string[] = [];
+/** The pack out of a v2 fetch response: sideband channel 1 after the `packfile` marker; channel 3 is
+ *  a fatal from the server. The `acknowledgments`/`shallow-info` sections before it are skipped. */
+function demuxFetchResponse(body: Uint8Array): Uint8Array {
   const packChunks: Uint8Array[] = [];
   let inPack = false;
   for (const frame of pktFrames(body)) {
@@ -521,12 +503,9 @@ function demuxFetchResponse(body: Uint8Array): FetchResponse {
       }
       continue;
     }
-    const line = pktText(frame.payload);
-    if (line === "packfile") inPack = true;
-    else if (line.startsWith("ACK ")) acks.push(line.slice(4));
-    else if (line.startsWith("shallow ")) shallow.push(line.slice(8));
+    if (pktText(frame.payload) === "packfile") inPack = true;
   }
-  return { acks, pack: concat(packChunks), shallow };
+  return concat(packChunks);
 }
 
 // -- receive-pack (push) ----------------------------------------------------------
@@ -537,14 +516,14 @@ function encodeReceivePackRequest(input: {
   pack: Uint8Array;
   ref: string;
 }): Uint8Array {
-  const update = `${input.oldOid} ${input.newOid} ${input.ref}\0report-status side-band-64k agent=iterate-lazy-git/1`;
+  const update = `${input.oldOid} ${input.newOid} ${input.ref}\0report-status side-band-64k agent=iterate-repos/1`;
   return concat([pktLine(update), FLUSH, input.pack]);
 }
 
-export type PushReport =
-  | { kind: "applied" }
-  | { detail: string; kind: "rejected" }
-  | { detail: string; kind: "indeterminate" };
+/** `applied` is a PROOF the server moved our ref (`unpack ok` + `ok <ref>`); anything else — an
+ *  explicit `ng`, an unpack failure, a report with no status line for our ref — is `rejected` with
+ *  the server's words in `detail`. */
+export type PushReport = { kind: "applied" } | { detail: string; kind: "rejected" };
 
 function parseReceivePackResponse(body: Uint8Array, expectedRef: string): PushReport {
   // The report may arrive sidebanded (channel 1 wraps an inner pkt stream) or
@@ -579,18 +558,13 @@ function parseReceivePackResponse(body: Uint8Array, expectedRef: string): PushRe
       notes.push(`unexpected ref in report: ${line}`);
     }
   }
-  // The classification contract: `rejected` is a PROOF the server did not
-  // move our ref (an explicit ng, or an unpack failure — nothing could have
-  // applied). `applied` is a proof it did. Everything else — truncated
-  // report, missing status line, someone else's ref — is `indeterminate`,
-  // and the caller must reconcile against the ref itself.
   if (unpackLine !== undefined && unpackLine !== "unpack ok") {
     return { detail: unpackLine, kind: "rejected" };
   }
   if (expectedRefNg !== undefined) return { detail: expectedRefNg, kind: "rejected" };
   if (unpackLine === "unpack ok" && expectedRefOk) return { kind: "applied" };
   notes.push(expectedRefOk ? "ok without unpack status" : `no status line for ${expectedRef}`);
-  return { detail: notes.join("; "), kind: "indeterminate" };
+  return { detail: notes.join("; "), kind: "rejected" };
 }
 
 // -- transport ---------------------------------------------------------------------
@@ -598,11 +572,7 @@ function parseReceivePackResponse(body: Uint8Array, expectedRef: string): PushRe
 export interface GitWireTransport {
   lsRefs(prefixes: string[]): Promise<LsRefsEntry[]>;
   /** Send a v2 fetch; returns verified objects from the response pack. */
-  fetchObjects(input: {
-    deepen?: number;
-    haves?: string[];
-    wants: string[];
-  }): Promise<RawGitObject[]>;
+  fetchObjects(input: { deepen?: number; wants: string[] }): Promise<RawGitObject[]>;
   push(input: {
     newOid: string;
     oldOid: string;
@@ -613,23 +583,19 @@ export interface GitWireTransport {
 
 /**
  * HTTP transport against one Artifacts remote. `token` is the repo access
- * token (the same credential the clone lane uses as a basic-auth password).
+ * token Artifacts minted (`createToken` / `create`), sent as a basic-auth
+ * password.
  */
-export function createGitWireTransport(input: {
-  fetchImpl?: typeof fetch;
-  remote: string;
-  token: string;
-}): GitWireTransport {
-  const fetchImpl = input.fetchImpl ?? fetch;
+export function createGitWireTransport(input: { remote: string; token: string }): GitWireTransport {
   const authorization = `Basic ${btoa(`x:${input.token}`)}`;
   const post = async (service: string, body: Uint8Array): Promise<Uint8Array> => {
-    const response = await fetchImpl(`${input.remote}/${service}`, {
+    const response = await fetch(`${input.remote}/${service}`, {
       body: body as BodyInit,
       headers: {
         authorization,
         "content-type": `application/x-${service}-request`,
         "git-protocol": "version=2",
-        "user-agent": "git/2.45.0 (iterate-lazy-git)",
+        "user-agent": "git/2.45.0 (iterate-repos)",
       },
       method: "POST",
     });
@@ -640,9 +606,7 @@ export function createGitWireTransport(input: {
   };
   return {
     fetchObjects: async (request) =>
-      parsePack(
-        demuxFetchResponse(await post("git-upload-pack", encodeFetchRequest(request))).pack,
-      ),
+      parsePack(demuxFetchResponse(await post("git-upload-pack", encodeFetchRequest(request)))),
     lsRefs: async (prefixes) =>
       parseLsRefs(await post("git-upload-pack", encodeLsRefsRequest({ prefixes }))),
     push: async (request) =>

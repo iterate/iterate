@@ -117,7 +117,10 @@ The one codec every door speaks. String half ⇄ structured half.
 - **The reserved root** is `itx.builtins`: the physical scope (section 5) and the FIXED POINT of
   rewriting (section 7). `itx.builtins.kv.get('x')` runs as is and reads no rule; `itx.kv.get('x')`
   reaches the same door through the implicit platform row `itx.kv ⇒ itx.builtins.kv` unless the
-  context's own table says otherwise. A rule's match may not be rooted there; a target may.
+  context's own table says otherwise. A rule's match may not be rooted there; a target may. One more
+  platform row is not a built-in root: `itx.worker ⇒ itx.workers.get(<the bundled no-op ConfigWorker>)`,
+  the config worker every stream subscribes — `rewriteRules.list()` shows it, a project overrides it
+  with its own source, and a `null` at it MASKS (default-deny), never the no-op.
 - The **anonymous call step** `""` calls the value itself: `itx.builtins.rpcStubs.get('cam')(1)` is
   `["itx","builtins","rpcStubs",["get","cam"],["",1]]`. It is what a rule spells when a lent stub
   is called with args.

@@ -57,11 +57,11 @@ test("cd('x') and cd('/x') are the SAME sibling stream", async () => {
 });
 
 test("cd('') resolves to THIS context (self) and answers rather than wedging", async () => {
-  // The root's own path is "/" but cd('') normalizes to "/" AFTER the own-path fast-path check, so
-  // the empty spelling reaches SELF through a Workers-RPC self-stub instead of the in-process
-  // closure. Pin: the self-call answers (workerd delivers self-RPC re-entrantly) and lands in the
-  // SAME log — if this ever deadlocks or splits the log, the fast-path comparison must normalize
-  // BEFORE comparing.
+  // `resolveContextPath("/", "")` is "/" — the root's own path — and the DO's `context(p)` hands
+  // back ITSELF for its own path (iterate-context-durable-object.ts), so the empty spelling is an
+  // in-process call on this very context, landing in the SAME log. Pinned with a deadline so a
+  // regression to a self-RPC hop (or a twin DO) shows as a wedge or a split log, never as a 60 s
+  // test timeout.
   const itx = openItx(freshCtx("self"));
   const raced = await Promise.race([
     itx.invoke("itx.cd('').append({type:'self-ping'})"),

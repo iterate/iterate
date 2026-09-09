@@ -51,7 +51,6 @@ export function projectScopedRepos(input: {
   projectId: string;
   accountId: string;
   namespaceName: string;
-  fetchImpl?: typeof fetch;
 }): ReposScope {
   const prefix = `${input.projectId}.`;
 
@@ -65,29 +64,42 @@ export function projectScopedRepos(input: {
    *  write token) or, if it already exists, mints a write token. */
   const transportFor = async (repo: string, scope: "read" | "write") => {
     let token: string;
-    if (scope === "write") {
-      try {
-        // Fresh repo → its initial write token. Artifacts defaults the branch to `main` (our REF).
-        ({ token } = await input.namespace.create(prefix + repo));
-      } catch {
-        ({ plaintext: token } = await (
-          await input.namespace.get(prefix + repo)
-        ).createToken("write", TOKEN_TTL_SECONDS));
-      }
-    } else {
+    try {
       ({ plaintext: token } = await (
         await input.namespace.get(prefix + repo)
-      ).createToken("read", TOKEN_TTL_SECONDS));
+      ).createToken(scope, TOKEN_TTL_SECONDS));
+    } catch (error) {
+      // A repo that does not exist yet is CREATED on first write — its initial token is a write
+      // token, and Artifacts defaults the branch to `main` (our REF). Anything else (an outage, an
+      // auth failure) surfaces as what it is.
+      if (scope !== "write" || !isRepoNotFound(error)) throw error;
+      ({ token } = await input.namespace.create(prefix + repo));
     }
     return createGitWireTransport({
       remote: `https://${input.accountId}.artifacts.cloudflare.net/git/${input.namespaceName}/${prefix}${repo}.git`,
       token,
-      fetchImpl: input.fetchImpl,
     });
   };
 
   const tipOid = (refs: { name: string; oid: string }[]): string | undefined =>
     refs.find((r) => r.name === REF)?.oid;
+
+  /** The tip commit's tree entries. A pack that omits the commit or its tree is an OUTAGE, not an
+   *  empty tree — git drops wants for missing oids silently, so the caller verifies receipt here. */
+  const tipTreeEntries = async (
+    transport: Awaited<ReturnType<typeof transportFor>>,
+    tip: string,
+  ): Promise<TreeEntry[]> => {
+    const objects = await transport.fetchObjects({ wants: [tip], deepen: 1 });
+    const byOid = new Map<string, RawGitObject>(objects.map((o) => [o.oid, o]));
+    const commit = byOid.get(tip);
+    if (commit?.type !== "commit")
+      throw new Error(`itx.repos: the pack omitted the tip commit ${tip} of ${REF}`);
+    const tree = byOid.get(parseCommit(commit.payload).tree);
+    if (tree?.type !== "tree")
+      throw new Error(`itx.repos: the pack omitted the tree of the tip commit ${tip}`);
+    return parseTree(tree.payload);
+  };
 
   return {
     readFile: async (repo, path) => {
@@ -101,15 +113,16 @@ export function projectScopedRepos(input: {
       }
       const tip = tipOid(await transport.lsRefs([REF]));
       if (tip === undefined) return null; // unborn repo (no commit on main)
-      const objects = await transport.fetchObjects({ wants: [tip], deepen: 1 });
-      const byOid = new Map<string, RawGitObject>(objects.map((o) => [o.oid, o]));
-      const commit = byOid.get(tip);
-      if (commit?.type !== "commit") return null;
-      const tree = byOid.get(parseCommit(commit.payload).tree);
-      if (tree?.type !== "tree") return null;
-      const entry = parseTree(tree.payload).find((e) => e.name === name);
-      const blob = entry && byOid.get(entry.oid);
-      if (blob?.type !== "blob") return null; // absent (a shallow snapshot carries every reachable blob)
+      const entries = await tipTreeEntries(transport, tip);
+      const entry = entries.find((e) => e.name === name);
+      if (!entry) return null; // absent: the tip's tree does not name it
+      const blob = (await transport.fetchObjects({ wants: [entry.oid], deepen: 1 })).find(
+        (o) => o.oid === entry.oid,
+      );
+      if (blob?.type !== "blob")
+        throw new Error(
+          `itx.repos: the pack for ${repo} omitted the blob of ${name} (${entry.oid})`,
+        );
       return textDecoder.decode(blob.payload);
     },
 
@@ -120,20 +133,14 @@ export function projectScopedRepos(input: {
       const blobOid = await hashObject("blob", blob);
 
       // Merge onto the tip's tree if the repo already has a commit; otherwise this is the first commit.
+      // (A tip whose commit or tree the pack omits THROWS in tipTreeEntries — never a fresh root
+      // commit that would repoint `main` at an orphan.)
       const tip = tipOid(await transport.lsRefs([REF]));
-      let entries: TreeEntry[] = [];
-      const parents: string[] = [];
-      if (tip !== undefined) {
-        const objects = await transport.fetchObjects({ wants: [tip], deepen: 1 });
-        const byOid = new Map<string, RawGitObject>(objects.map((o) => [o.oid, o]));
-        const commit = byOid.get(tip);
-        if (commit?.type === "commit") {
-          const tree = byOid.get(parseCommit(commit.payload).tree);
-          if (tree?.type === "tree")
-            entries = parseTree(tree.payload).filter((e) => e.name !== name);
-          parents.push(tip);
-        }
-      }
+      const entries: TreeEntry[] =
+        tip === undefined
+          ? []
+          : (await tipTreeEntries(transport, tip)).filter((e) => e.name !== name);
+      const parents = tip === undefined ? [] : [tip];
       entries.push({ mode: "100644", name, oid: blobOid });
 
       const treeBytes = encodeTree(entries);

@@ -13,8 +13,9 @@
 //   the key not borrowed, the DO sends `{type:"page"}` down the pager, the edge answers with
 //   `lendRpcStub`, and layer 1 takes over. Between pages the DO holds only hibernatable sockets.
 //
-// `invokeRpcStub` IS the two layers as two `if`s: have we got it? call it · else is there a pager
-// for it? page it · else RPC_STUB_OFFLINE.
+// `invokeRpcStub` IS the two layers: have we got it? call it · else is there a pager for it? page
+// it, then call · else RPC_STUB_OFFLINE — and a call that BROKE the stub drops it on the way out,
+// so the next call pages again instead of riding a dead leg until the idle return.
 //
 // WHAT A STUB IS HERE: its KEY — an opaque string the lender picks (the edge's `provide` sugar uses
 // whatever key it likes — a reconnect re-lends under the same key; the registry never parses

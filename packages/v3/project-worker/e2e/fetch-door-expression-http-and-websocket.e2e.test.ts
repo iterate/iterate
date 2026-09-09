@@ -42,13 +42,13 @@ test("/expression serves a LOADED WORKER behind a rewrite rule: GET → 200 HTML
   expect(typeof snap.state.incarnation).toBe("number");
 });
 
-/** A fetch-shaped live rpc stub that records what it saw and answers a distinctive Response. */
+/** A fetch-shaped live rpc stub that records what it saw (method, path AND query, body — the
+ *  request must cross intact, not just some response come back) and answers a distinctive Response. */
 class HttpDevice extends RpcTarget {
   saw: string[] = [];
   async fetch(request: Request) {
-    this.saw.push(
-      `${request.method} ${new URL(request.url).pathname} body=${await request.text()}`,
-    );
+    const url = new URL(request.url);
+    this.saw.push(`${request.method} ${url.pathname}${url.search} body=${await request.text()}`);
     return new Response("pong-from-node-provider", {
       status: 201,
       headers: { "x-device": "node-live-cap" },
@@ -68,7 +68,7 @@ test("lent stub HTTP fetch: an eyeball POST reaches the Node provider's fetch() 
   expect(res.status).toBe(201);
   expect(await res.text()).toBe("pong-from-node-provider");
   expect(res.headers.get("x-device")).toBe("node-live-cap");
-  expect(device.saw).toEqual(["POST /expression body=ping"]);
+  expect(device.saw).toEqual([`POST /expression?context=${ctx}&itx=itx.ws-device body=ping`]);
 });
 
 /** The device: a fetch-shaped live rpc stub that upgrades WebSockets — the workerd fetch-handler
@@ -101,8 +101,8 @@ test("lent stub WebSocket fetch: a plain eyeball WebSocket opens (101), echoes, 
 });
 
 // The workerd-provider half of the same lane is pinned in __workers-tests__/ws-fetch-live-101
-// .test.ts (the dedicated fetch-upgrade leg; the DO mints the eyeball pair natively). The tunnel
-// (proxy-to-localhost) shape of this lent stub is fetch-door-tunnel-to-localhost.e2e.test.ts.
+// .test.ts (the dedicated fetch-upgrade leg; the DO mints the eyeball pair natively). A tunnel
+// (`iterate tunnel bla 3000`) is this same lent stub proxying to localhost — the same three hops.
 
 test("/expression refuses to re-enter itself: `itx=itx.fetch` (an expression fetching its own lane, the same query every hop) answers 508 after a few hops, never loops", async () => {
   const ctx = freshCtx("lane-reentry");

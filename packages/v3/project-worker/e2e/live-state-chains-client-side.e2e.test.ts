@@ -2,21 +2,69 @@
 // "I am the diff relative to rev X"; the stream keeps NO per-key state — a delta is an ordinary
 // ephemeral event like any other. Live state is not a subscription MODE: a client subscribes to the
 // one event type (`consumes: ["events.iterate.com/live-state/changed"]`), receives every key's deltas
-// in ordinary event batches, and keeps its key (`deltasFor`). The client does: subscribe → read the
-// producer's door {rev, state} → apply payloads whose `from` matches its rev, re-read the door on any
-// mismatch. Proves: the client loop converges byte-identical with the door, the steady path needs
-// zero re-reads, revisions chain exactly (mini-app AND processor flavors), out-of-order/duplicate
-// frames are harmless, the change events are unconsumable, REDUCED ⊕ RUNTIME state rides ONE
-// projection through the shippable client store (src/client), and a malformed delta is the
-// subscriber's to skip — never a rejected append.
+// in ordinary event batches, and keeps its key. The client is THE SHIPPED ONE (src/client:
+// `connectLiveState` over `createLiveStateStore`): subscribe → read the producer's door {rev, state}
+// → apply payloads whose `from` matches the held rev, re-read the door on any mismatch. Proves: the
+// client loop converges byte-identical with the door, the steady path needs zero re-reads, revisions
+// chain exactly (mini-app AND processor flavors), out-of-order/duplicate frames are harmless, the
+// change events are unconsumable, REDUCED ⊕ RUNTIME state rides ONE projection through the same
+// store, and a malformed delta is the subscriber's to skip — never a rejected append.
 
 import { expect, test } from "vitest";
-import { connectLiveState } from "../src/client/live-state-client.ts";
+import { connectLiveState, type LiveStateItx } from "../src/client/live-state-client.ts";
+import type { LiveStateDelta, LiveStateSeed } from "../src/client/live-state-store.ts";
 import { append, freshCtx, openItx, until } from "./support/client.ts";
-import { deltasFor, LIVE_STATE_CHANGED, liveClient } from "./support/live-client.ts";
 import { SOURCES } from "./support/sources.ts";
 
 const clone = <T>(v: T): T => JSON.parse(JSON.stringify(v)) as T;
+
+/** The shipped client over a session whose delivery the test can SEE and DRIVE: every frame for the
+ *  key is recorded on its way into the store (so `dropped` is frames − applied − reseeds, and an old
+ *  frame can be replayed), and `inject` hands the store a frame exactly as the wire would (a
+ *  duplicate, a gap). `applied` is the store's notifications less the heals (a heal seeds — and
+ *  notifies — too); `reseeds` is the client's `onResync("healed")` count. */
+async function watchedLiveState<S>(
+  itx: any,
+  input: { key: string; name: string; door: () => Promise<LiveStateSeed<S>> },
+) {
+  const frames: LiveStateDelta[] = [];
+  const counts = { reseeds: 0, notifications: 0 };
+  let deliver: (events: unknown[], range: unknown) => void = () => undefined;
+  const tapped: LiveStateItx = {
+    subscribe: (subscription) => {
+      deliver = (events, range) => {
+        for (const e of events) {
+          const delta = clone((e as { payload: LiveStateDelta }).payload);
+          if (delta.key === input.key) frames.push(delta);
+        }
+        subscription.target(events, range);
+      };
+      return itx.subscribe({ ...subscription, target: deliver });
+    },
+  };
+  const { store } = await connectLiveState<S>(tapped, {
+    ...input,
+    onResync: (result) => {
+      if (result !== "healed") throw result;
+      counts.reseeds++;
+    },
+  });
+  store.subscribe(() => counts.notifications++); // after the first seed: applied patches + heals
+  return {
+    store,
+    frames,
+    inject: (delta: LiveStateDelta) => deliver([{ payload: delta }], {}),
+    get applied() {
+      return counts.notifications - counts.reseeds;
+    },
+    get reseeds() {
+      return counts.reseeds;
+    },
+    get dropped() {
+      return frames.length - this.applied - this.reseeds;
+    },
+  };
+}
 
 test("live state chains client-side from the door — mini-app + processor flavors", async () => {
   const itx = openItx(freshCtx("live"));
@@ -28,72 +76,64 @@ test("live state chains client-side from the door — mini-app + processor flavo
     ["get", "chatroom", { source: SOURCES.chatroom, className: "ChatroomDurableObject" }],
   ]);
 
-  const chat = liveClient(async () => clone(await itx.invoke("itx.chat.state()")));
-  await itx.subscribe({
+  const chat = await watchedLiveState<{ messages: { text: string }[] }>(itx, {
+    key: "chat",
     name: "chatwatch",
-    target: deltasFor(chat, "chat"),
-    consumes: [LIVE_STATE_CHANGED],
+    door: async () => clone(await itx.invoke("itx.chat.state()")),
   });
-  await chat.seed();
-  const chatSeedRev = chat.rev!; // an incarnation EPOCH, not 0 — reborn holders never re-use old revs
+  const chatSeedRev = chat.store.rev()!; // an incarnation EPOCH, not 0 — reborn holders never re-use old revs
   expect(typeof chatSeedRev).toBe("number");
-  expect((chat.doc as { messages: unknown[] }).messages.length).toBe(0);
+  expect(chat.store.get()!.messages.length).toBe(0);
 
   await itx.invoke(["itx", "chat", ["post", "jonas", "hi"]]);
   await itx.invoke(["itx", "chat", ["post", "jonas", "again"]]);
-  await until("two messages", () => (chat.doc as { messages?: unknown[] })?.messages?.length === 2);
+  await until("two messages", () => chat.store.get()?.messages.length === 2);
   // steady path: two patches applied, ZERO re-reads; client rev chained epoch→+1→+2
   expect(chat.applied).toBe(2);
   expect(chat.reseeds).toBe(0);
-  expect(chat.rev).toBe(chatSeedRev + 2);
-  expect((chat.doc as { messages: { text: string }[] }).messages[1].text).toBe("again");
+  expect(chat.store.rev()).toBe(chatSeedRev + 2);
+  expect(chat.store.get()!.messages[1].text).toBe("again");
 
-  const door = clone(await itx.invoke("itx.chat.state()")) as {
-    rev: number;
-    state: unknown;
-  };
+  const door = clone(await itx.invoke("itx.chat.state()")) as { rev: number; state: unknown };
   // door and patched client doc are byte-identical
-  expect(door.rev).toBe(chat.rev);
-  expect(JSON.stringify(door.state)).toBe(JSON.stringify(chat.doc));
+  expect(door.rev).toBe(chat.store.rev());
+  expect(JSON.stringify(door.state)).toBe(JSON.stringify(chat.store.get()));
 
   // out-of-order / duplicate frames are harmless: replay an old payload, then a gapped one
-  chat.consume(clone(chat.frames.find((f) => f.from !== undefined)!)); // replay a real old frame
-  await until("dup dropped", () => chat.dropped >= 1);
-  expect((chat.doc as { messages: unknown[] }).messages.length).toBe(2);
+  chat.inject(clone(chat.frames[0]!)); // replay a real old frame — at-or-behind the held rev
+  expect(chat.dropped).toBe(1);
+  expect(chat.store.get()!.messages.length).toBe(2);
 
-  chat.consume({ key: "chat", from: chat.rev! + 5, to: chat.rev! + 6, patch: [] });
+  const rev = chat.store.rev()!;
+  chat.inject({ key: "chat", from: rev + 5, to: rev + 6, patch: [] });
   await until("gap healed", () => chat.reseeds >= 1);
   // a gapped frame triggers one door re-read and converges
-  expect(JSON.stringify(chat.doc)).toBe(JSON.stringify(door.state));
-  expect(chat.rev).toBe(chatSeedRev + 2);
+  expect(JSON.stringify(chat.store.get())).toBe(JSON.stringify(door.state));
+  expect(chat.store.rev()).toBe(chatSeedRev + 2);
+  expect(chat.applied).toBe(2);
 
   // ── processor flavor: chunky's reduce, door = liveSnapshot() ──
   await itx.enableProcessor("chunky", {
     source: SOURCES.chunky,
     className: "ChunkyDurableObject",
   });
-  const proc = liveClient(async () =>
-    clone(await itx.invoke("itx.facets.get('chunky').liveSnapshot()")),
-  );
-  await itx.subscribe({
+  const proc = await watchedLiveState<{ marks: number; chunks: number }>(itx, {
+    key: "chunky",
     name: "chunkywatch",
-    target: deltasFor(proc, "chunky"),
-    consumes: [LIVE_STATE_CHANGED],
+    door: async () => clone(await itx.invoke("itx.facets.get('chunky').liveSnapshot()")),
   });
-  await proc.seed();
-  const seedRev = proc.rev!;
+  const seedRev = proc.store.rev()!;
   expect(typeof seedRev).toBe("number");
-  expect((proc.doc as { marks: number }).marks).toBe(0);
+  expect(proc.store.get()!.marks).toBe(0);
 
   await itx.invoke(`itx.append({ type: 'mark' })`);
-  await until("mark reduced", () => ((proc.doc as { marks?: number })?.marks ?? 0) >= 1);
+  await until("mark reduced", () => (proc.store.get()?.marks ?? 0) >= 1);
   await itx.invoke(`itx.append({ type: 'mark' })`);
-  await until("second mark", () => ((proc.doc as { marks?: number })?.marks ?? 0) >= 2);
+  await until("second mark", () => (proc.store.get()?.marks ?? 0) >= 2);
   // processor patches chained from the seed rev, zero re-reads; the doc matches the projection
   expect(proc.applied).toBe(2);
   expect(proc.reseeds).toBe(0);
-  expect((proc.doc as { marks: number; chunks: number }).marks).toBe(2);
-  expect((proc.doc as { marks: number; chunks: number }).chunks).toBe(0);
+  expect(proc.store.get()).toEqual({ marks: 2, chunks: 0 });
 
   // ── the loop guard: nothing consumed the change events ──
   const snap = await itx.invoke("itx.facets.get('chunky').snapshot()");
@@ -162,7 +202,7 @@ test("a payload-less live-state/changed event never rejects an append that alrea
   const seen: unknown[] = [];
   await itx.subscribe({
     name: "watch",
-    consumes: [LIVE_STATE_CHANGED],
+    consumes: ["events.iterate.com/live-state/changed"],
     target: (events: { payload?: { key?: string } }[]) => {
       for (const e of events)
         if (e.payload?.key === "avatar") seen.push(JSON.parse(JSON.stringify(e.payload)));
@@ -170,13 +210,16 @@ test("a payload-less live-state/changed event never rejects an append that alrea
   });
   // The lane itself works: a WELL-FORMED change payload for the watched key is delivered.
   await append(itx, {
-    type: LIVE_STATE_CHANGED,
+    type: "events.iterate.com/live-state/changed",
     ephemeral: true,
     payload: { key: "avatar", from: 0, to: 1, patch: [] },
   });
   await until("well-formed change delivered", () => seen.length >= 1);
   // A BARE change event (no payload) still commits-and-resolves.
-  const [bare] = await append(itx, { type: LIVE_STATE_CHANGED, ephemeral: true });
+  const [bare] = await append(itx, {
+    type: "events.iterate.com/live-state/changed",
+    ephemeral: true,
+  });
   expect(bare.offset).toBeGreaterThan(0);
   expect(seen).toHaveLength(1); // the bare event reached the tab as an event and was filtered there
 });

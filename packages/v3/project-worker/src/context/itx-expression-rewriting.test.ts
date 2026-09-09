@@ -499,6 +499,7 @@ describe("rewriteRuleConfiguredEvent — ONE event, both halves canonical, loud 
       target: "itx.whoami",
       throws: /may not be rooted at "itx\.builtins"/,
     },
+    { match: "itx", target: "itx.cam", throws: /whole-context override .* "itx\.builtins/ }, // a short target would be its own next match
     ...["cd", "invoke", "provide", "subscribe", "enableProcessor", "disableProcessor"].map(
       (verb) => ({
         match: `itx.${verb}`,

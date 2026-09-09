@@ -1,19 +1,11 @@
-// rpc-stubs-reconnect-same-path.e2e.test.ts — THE RECONNECT-AND-RESUME RESILIENCE PROPERTY, live.
-//
-// An rpc-stub PROVIDER is ephemeral: its capnweb WebSocket terminates at a STATELESS `/api` worker,
-// and Cloudflare documents that a plain worker cannot durably hold a WebSocket (the isolate can be
-// recycled, taking the socket + the in-memory callback it holds with it — capnweb-in-a-DO is the open
-// workerd#6087, whose own workaround IS a stateless proxy worker). So a provider dropping is EXPECTED;
-// the platform's answer is RECONNECT at the same spelling, not server durability.
-//
-// This proves it against the real deployment: a provider goes OFFLINE (its session is disposed → the
-// WS closes → the DO drops the stub from the `itx.rpcStubs` registry, and capnweb disposes the
-// provided handle, which UN-SETS the rewrite rule `itx.p ⇒ itx.rpcStubs.get('itx.p')`) and
-// re-provides at the SAME key — which re-lends under the same registry key and appends ONE more
-// rewrite-rule-configured event (the map holds one rule again). The stub is callable AGAIN through
-// the same dotted spelling. In between, the match answers NO_ITX_EXPRESSION_MATCH — a dead session
-// leaves no offline row behind. This is the property the live hibernation proofs tried to force by
-// waiting on Cloudflare — proven here deterministically by controlling the disconnect.
+// rpc-stubs-reconnect-same-path.e2e.test.ts — RECONNECT AT THE SAME SPELLING, live. An rpc-stub
+// PROVIDER is ephemeral (its capnweb WebSocket terminates at a STATELESS `/api` worker), so a
+// provider dropping is EXPECTED and the platform's answer is re-provide at the same match, not server
+// durability. The dead-provider half — its stub leaves presence, its rule is un-set, the match is
+// default-deny, a same-key re-provide replaces the transport and appends ONE more rule event — is
+// rpc-stubs-lend-recall-and-offline.e2e. What is pinned HERE is the same shape one layer up (a live
+// SUBSCRIBER re-subscribing under its name) and THE LEASE IS THE HANDLE: after a reconnect, disposing
+// the STALE handle tears down nothing of its replacement.
 
 import { RpcTarget } from "capnweb";
 import { expect, test } from "vitest";
@@ -24,15 +16,10 @@ import {
   presence,
   rejection,
   rpcStubRewriteRuleMatches,
-  session,
   sleep,
   subscriptions,
   until,
 } from "./support/client.ts";
-
-// Disposing our own provider session mid-test surfaces the capnweb peer-close as an unhandled
-// rejection — the deliberate disconnect, not a failure. The e2e config's onUnhandledError filter
-// absorbs exactly that transport noise (e2e/vitest.config.ts); everything else stays fatal.
 
 class Tools extends RpcTarget {
   #tag: string;
@@ -45,91 +32,7 @@ class Tools extends RpcTarget {
   }
 }
 
-const RULE_CONFIGURED = "events.iterate.com/itx/rewrite-rule-configured";
-/** The durable log's rewrite-rule events at `itx.p`, as their targets — the reconnect adds ONE. */
-const ruleTargetsAtP = (page: {
-  events: { type: string; payload?: { match?: string; target?: string | null } }[];
-}) =>
-  page.events
-    .filter((e) => e.type === RULE_CONFIGURED && e.payload?.match === "itx.p")
-    .map((e) => e.payload?.target ?? null);
-
-test("a provider drops and re-provides at the same key — default-deny in between (the rule died with the session), callable again, ONE rule event", async () => {
-  // the consumer stays connected throughout and addresses the provider BY SPELLING (the rewrite
-  // match IS the rpc-stub key the stub is lent under). Every session in this test shares ONE ctx
-  // (one project DO).
-  const ctx = freshCtx("recon");
-  const itx = openItx(ctx);
-  const ruleAtP = async (): Promise<unknown> =>
-    (await itx.invoke("itx.facets.get('core').snapshot()")).state.itxExpressionRewriteRules[
-      "itx.p"
-    ];
-
-  // 1. provider provides a live stub under itx.p with the rule itx.p ⇒ itx.rpcStubs.get('itx.p') →
-  //    callable through the spelling.
-  let providerSession = session();
-  await providerSession.authenticate().projects.get(ctx).provide("itx.p", new Tools("v1"));
-  const online = await until("callable online", async () =>
-    (await itx.invoke("itx.p.echo('a')")) === "echo-v1:a" ? true : undefined,
-  );
-  expect(online).toBe(true); // 1. provider online: itx.p.echo() answers
-  expect(await ruleAtP()).toEqual({
-    match: ["itx", "p"],
-    target: ["itx", "builtins", "rpcStubs", ["get", "itx.p"]],
-  });
-
-  // 2. provider goes OFFLINE — dispose its session (WS closes → the DO drops the itx.p transport;
-  //    capnweb disposes the handle → the rule is UN-SET). The match answers NO_ITX_EXPRESSION_MATCH
-  //    — default-deny: no rule lingers pointing at a dead key.
-  (providerSession as Partial<Disposable>)[Symbol.dispose]?.();
-  const offline = await until("provider offline and its rule gone", async () => {
-    try {
-      await itx.invoke("itx.p.echo('b')");
-      return undefined; // still answering — keep polling
-    } catch (e) {
-      return codeOf(e) === "NO_ITX_EXPRESSION_MATCH" ? (e as { code?: string }) : undefined;
-    }
-  });
-  expect(codeOf(offline)).toBe("NO_ITX_EXPRESSION_MATCH"); // 2. default-deny, not a lingering offline rule
-  expect(await ruleAtP()).toBeUndefined(); // the rule went with the session
-  await until("the stub gone from presence", async () => !(await presence(itx)).includes("itx.p"));
-  const logBefore = await itx.invoke("itx.readEvents(0, 500)");
-  // set, then REMOVED (the platform-equivalent spelling `itx.builtins.p` — the DO restores whatever
-  // platform row lies beneath a dead stub's match; here there is none, so the row is simply gone)
-  expect(ruleTargetsAtP(logBefore)).toEqual([
-    ["itx", "builtins", "rpcStubs", ["get", "itx.p"]],
-    ["itx", "builtins", "p"],
-  ]);
-
-  // 3. provider RE-PROVIDES at the SAME key with a fresh instance — this re-lends under the same
-  //    registry key and appends ONE more rule event (no dedupe; the map holds one rule again).
-  providerSession = session();
-  await providerSession.authenticate().projects.get(ctx).provide("itx.p", new Tools("v2"));
-
-  // 4. THE CONTRACT: the stub is callable AGAIN through the same spelling — it resolves to the
-  //    reconnected provider (v2), with no re-addressing by the caller.
-  const after = await until("callable after reconnect", async () => {
-    const r = await itx.invoke("itx.p.echo('c')");
-    return r === "echo-v2:c" ? r : undefined;
-  });
-  expect(after).toBe("echo-v2:c"); // 3. reconnect at the SAME key: callable again
-
-  // 5. RECONNECT APPENDS EXACTLY ONE EVENT — the rule's re-set — and the map holds one rule at itx.p.
-  const logAfter = await itx.invoke("itx.readEvents(0, 500)");
-  expect(ruleTargetsAtP(logAfter)).toEqual([
-    ["itx", "builtins", "rpcStubs", ["get", "itx.p"]],
-    ["itx", "builtins", "p"],
-    ["itx", "builtins", "rpcStubs", ["get", "itx.p"]],
-  ]);
-  expect(logAfter.events.length).toBe(logBefore.events.length + 1);
-  expect(await ruleAtP()).toEqual({
-    match: ["itx", "p"],
-    target: ["itx", "builtins", "rpcStubs", ["get", "itx.p"]],
-  });
-  expect((await rpcStubRewriteRuleMatches(itx)).filter((m) => m === "itx.p")).toEqual(["itx.p"]);
-});
-
-// The same property one layer up (was resub-zombie.e2e): a LIVE SUBSCRIBER is a stub lent under
+// The reconnect one layer up (was resub-zombie.e2e): a LIVE SUBSCRIBER is a stub lent under
 // `subscription:<name>` plus one subscription row naming it. Re-subscribing the same name
 // re-lends under the same key — the session disposes the first relay (its transport is REPLACED, the
 // first callback physically unreachable) — and appends ONE more subscription-configured (same name

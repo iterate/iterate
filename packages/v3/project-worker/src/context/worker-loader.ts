@@ -185,8 +185,9 @@ export async function loadConfinedWorker(
   let getModules: () => Promise<WorkerModules> | WorkerModules;
   if (isWorkerModules(source)) {
     const modules = requireMainModule(source);
-    // The content hash — djb2 over the modules' JSON, memoized by identity: stable, so the cacheKey
-    // and the facet's version marker change exactly when the source does.
+    // The content hash — djb2 + FNV-1a + length over the modules' JSON (contentHashOfWorkerModules),
+    // memoized by identity: stable, so the cacheKey and the facet's version marker change exactly
+    // when the source does.
     sourceVersion = cacheKey ?? contentHashOfWorkerModules(modules);
     getModules = () => modules;
   } else {

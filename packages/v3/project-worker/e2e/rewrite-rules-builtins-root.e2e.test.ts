@@ -1,8 +1,8 @@
 // rewrite-rules-builtins-root.e2e.test.ts — THE RESERVED ROOT, end to end. `itx.builtins.<root>` is
 // the physical scope and the fixed point of rewriting; every short name `itx.<root>` is the implicit
 // platform row `itx.<root> ⇒ itx.builtins.<root>`, consulted only after the context's own rows. So:
-// a provided stub at a built-in's name SHADOWS it (Misha's deterministic `itx.ai`) and disposing the
-// handle gives the real one back; `provide(match, null)` at a built-in's name is a MASK (the call is
+// a provided stub at a built-in's name SHADOWS it (Misha's deterministic `itx.ai` — pinned on the real
+// root in ai-root-shadow-and-fable.e2e); `provide(match, null)` at a built-in's name is a MASK (the call is
 // refused, the physical door still answers) that the handle's dispose lifts; a bare `itx` row at a
 // context overrides the WHOLE context, `cd(p).builtins.append(…)` still reaching its log;
 // `rewriteRules.list()` shows the platform rows with their origin; `rewriteRules.resolve(call)` is the
@@ -35,39 +35,6 @@ class Override extends RpcTarget {
     return "the override";
   }
 }
-
-test("MISHA'S TEST: a provided stub at a built-in's name shadows it; the physical spelling is untouched; disposing the handle restores the real one", async () => {
-  const ctx = freshCtx("shadow");
-  const itx = openItx(ctx);
-  const real = await itx.whoami();
-  expect(real).toMatchObject({ projectId: ctx, path: "/" });
-
-  const fake = await itx.provide("itx.whoami", () => ({
-    projectId: "fake",
-    path: "/deterministic",
-  }));
-  expect(await itx.whoami()).toEqual({ projectId: "fake", path: "/deterministic" });
-  expect(await itx.invoke("itx.whoami()")).toEqual({ projectId: "fake", path: "/deterministic" });
-  expect(await itx.builtins.whoami()).toEqual(real); // the physical door is never shadowed
-  expect(await itx.rewriteRules.get("itx.whoami")).toEqual({
-    match: "itx.whoami",
-    target: "itx.builtins.rpcStubs.get('itx.whoami')", // rewriteRules.get() PRINTS
-    origin: "context",
-  });
-
-  fake[Symbol.dispose]();
-  // The DO REMOVES the rule when the stub's last pager closes — the platform row shows through again.
-  await until("the real whoami is back", async () => {
-    const row = await itx.rewriteRules.get("itx.whoami");
-    return row?.origin === "platform" ? row : undefined;
-  });
-  expect(await itx.whoami()).toEqual(real);
-  expect(await itx.rewriteRules.get("itx.whoami")).toEqual({
-    match: "itx.whoami",
-    target: "itx.builtins.whoami",
-    origin: "platform",
-  });
-});
 
 // A dead stub's un-set removes what NAMES its key, decided against a frozen table
 // (context/itx-expression-rewriting.test.ts) — so a user's alias to the shadowed root survives, in
@@ -138,6 +105,12 @@ test("rewriteRules.list() is the EFFECTIVE table: platform rows with their origi
     origin: "platform",
   });
   expect(before.every((row: { origin: string }) => row.origin === "platform")).toBe(true);
+  // the config worker's default is a platform row too — listed, and a `null` at it MASKS it
+  expect(before).toContainEqual({
+    match: "itx.worker",
+    target: expect.stringMatching(/^itx\.workers\.get\(/),
+    origin: "platform",
+  });
   await itx.provide("itx.kv", "itx.builtins.whoami");
   const after = await itx.rewriteRules.list();
   expect(after.filter((row: { match: string }) => row.match === "itx.kv")).toEqual([
@@ -278,13 +251,12 @@ test("the door: a match rooted at itx.builtins, or at a proxy verb, is refused; 
 
 test("the door: a whole-context override may not name its OWN context (every call would route back into itself, a fresh resolve per hop); a sibling context is fine", async () => {
   const itx = openItx(freshCtx("own-context-override")).cd("/x");
-  for (const target of [
-    "itx.builtins.cd('/x')",
-    "itx.cd('/x')",
-    "itx.builtins.cd('.')",
-    "itx.cd('../x')",
-  ])
+  for (const target of ["itx.builtins.cd('/x')", "itx.builtins.cd('.')"])
     expect((await rejection(itx.provide("itx", target))).message).toMatch(/own context/);
+  // …and a whole-context override must target the PHYSICAL spelling at all — `itx.cd('/x')` would
+  // re-enter the table it just claimed, every call (the door refuses that before looking further)
+  for (const target of ["itx.cd('/x')", "itx.cd('../x')"])
+    expect((await rejection(itx.provide("itx", target))).message).toMatch(/physical spelling/);
   const sibling = await itx.provide("itx", "itx.builtins.cd('/y')");
   sibling[Symbol.dispose]();
 });

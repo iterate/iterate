@@ -641,4 +641,9 @@ export interface ReachableContext {
   append(...events: StreamEventInput[]): Promise<StreamEvent[]>;
   read(afterOffset?: number, limit?: number): Promise<StreamPage>;
   invoke(call: ItxExpressionInput): Promise<unknown>;
+  /** `invoke` under a principal — what a caller's `cd(path)` carries across to a sibling. */
+  invokeAs(
+    principal: { actor: string; email?: string },
+    call: ItxExpressionInput,
+  ): Promise<unknown>;
 }

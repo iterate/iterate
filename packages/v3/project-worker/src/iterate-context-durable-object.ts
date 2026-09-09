@@ -86,6 +86,7 @@ import { DurableObjectNameCodec } from "./context/durable-object-names.ts";
 import { itxEntrypointFor } from "./itx-entrypoint.ts";
 import { appConfigOf, type AppConfigEnv } from "./app-config.ts";
 import {
+  CONFIG_WORKER_PLATFORM_ROW,
   ItxExpressionResolver,
   rewriteRuleRemovedEvent,
   rowsNamingRpcStub,
@@ -358,8 +359,9 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   }
 
   /** THE EFFECTIVE rule table, read: the context's own rows (masks as `target: null`, a template's
-   *  `@` spelled) plus the implicit platform row for every built-in root the context has not re-set —
-   *  none at all under a bare `itx` row, which claims every call before a platform row could. */
+   *  `@` spelled) plus the implicit platform rows the context has not re-set — one per built-in root
+   *  and the config worker's (`itx.worker`, itx-expression-rewriting.ts) — none at all under a bare
+   *  `itx` row, which claims every call before a platform row could. */
   #rewriteRuleList(): RewriteRuleListEntry[] {
     const contextRows = Object.values(this.#stream.coreReducedState.itxExpressionRewriteRules).map(
       (rule): RewriteRuleListEntry => ({
@@ -369,16 +371,17 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       }),
     );
     const reset = new Set(contextRows.map((row) => row.match));
-    const shadowedRoots = reset.has("itx") ? [] : BUILT_IN_ROOTS;
-    const platformRows = shadowedRoots
-      .filter((root) => !reset.has(`itx.${root}`))
-      .map(
+    if (reset.has("itx")) return contextRows;
+    const platformRows: RewriteRuleListEntry[] = [
+      ...BUILT_IN_ROOTS.map(
         (root): RewriteRuleListEntry => ({
           match: `itx.${root}`,
           target: `itx.builtins.${root}`,
           origin: "platform",
         }),
-      );
+      ),
+      CONFIG_WORKER_PLATFORM_ROW,
+    ].filter((row) => !reset.has(row.match));
     return [...contextRows, ...platformRows];
   }
 

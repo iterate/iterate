@@ -12,8 +12,8 @@
 // event type — exactly like any facet processor's.
 
 import { expect, test } from "vitest";
-import { freshCtx, openItx, until } from "./support/client.ts";
-import { deltasFor, LIVE_STATE_CHANGED, type Delta } from "./support/live-client.ts";
+import type { LiveStateDelta } from "../src/client/live-state-store.ts";
+import { collector, freshCtx, openItx, until } from "./support/client.ts";
 
 test("any door materializes a fresh context: readEvents(0) starts with created then woken; the first append lands past them; core's reduced state carries identity + incarnation", async () => {
   const ctx = freshCtx("woken");
@@ -58,30 +58,24 @@ test("the inline reduced state is live under ONE key, `core`: a rewrite rule and
   const itx = openItx(freshCtx("inlinelive"));
   await itx.invoke(`itx.append({ type: 'seed' })`);
 
-  // ONE event type carries every key's deltas; each watcher keeps its key (deltasFor). Two other
-  // keys — the names of core's slices — are watched too: they must stay silent (nothing publishes
-  // under any key but `core`).
-  const coreDeltas: Delta[] = [];
-  const otherKeys: Delta[] = [];
+  // ONE event type carries every key's deltas; a subscriber keeps its key. One collector sees them
+  // all, so it can also prove nothing publishes under any key but `core` (its slices — rewrite rules,
+  // subscriptions — are never keys of their own).
+  const deltas = collector();
   await itx.subscribe({
     name: "corewatch",
-    target: deltasFor({ consume: (d) => coreDeltas.push(d) }, "core"),
-    consumes: [LIVE_STATE_CHANGED],
+    target: deltas.fn,
+    consumes: ["events.iterate.com/live-state/changed"],
   });
-  for (const key of ["rewrite-rules", "subscriptions"])
-    await itx.subscribe({
-      name: `other-${key}`,
-      target: deltasFor({ consume: (d) => otherKeys.push(d) }, key),
-      consumes: [LIVE_STATE_CHANGED],
-    });
-  const seen = coreDeltas.length; // the subscribes above are themselves core changes
+  const delivered = (): LiveStateDelta[] =>
+    deltas.invocations.flatMap((i) => i.events.map((e) => e.payload as LiveStateDelta));
 
   // a REWRITE RULE (a rewrite) → a delta keyed "core" whose patch touches /itxExpressionRewriteRules
   await itx.provide("itx.zzz", "itx.whoami");
   const ruleDelta = await until("core delta for the rewrite rule", () =>
-    coreDeltas
-      .slice(seen)
-      .find((d) => d.patch?.some((op) => op.path.startsWith("/itxExpressionRewriteRules"))),
+    delivered().find((d) =>
+      d.patch?.some((op) => op.path.startsWith("/itxExpressionRewriteRules")),
+    ),
   );
   expect(ruleDelta.key).toBe("core");
   expect(ruleDelta.to).toBe(ruleDelta.from + 1); // each emission chains its producer revision
@@ -89,13 +83,11 @@ test("the inline reduced state is live under ONE key, `core`: a rewrite rule and
   // a SUBSCRIPTION ROW (a subscribe) → a delta keyed "core" whose patch touches /subscriptions
   await itx.subscribe({ name: "bystander", target: "itx.whoami", consumes: ["never"] });
   const rowDelta = await until("core delta for the row", () =>
-    coreDeltas
-      .slice(seen)
-      .find((d) => d.patch?.some((op) => op.path.startsWith("/subscriptions/bystander"))),
+    delivered().find((d) => d.patch?.some((op) => op.path.startsWith("/subscriptions/bystander"))),
   );
   expect(rowDelta.key).toBe("core");
   expect(rowDelta.to).toBe(rowDelta.from + 1);
 
   // and nothing ever published under any other key
-  expect(otherKeys).toEqual([]);
+  expect(new Set(delivered().map((d) => d.key))).toEqual(new Set(["core"]));
 });

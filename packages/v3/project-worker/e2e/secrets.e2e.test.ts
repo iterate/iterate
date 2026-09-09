@@ -141,11 +141,10 @@ test("the catalog is the PROJECT's: a secret set from one context is listed from
   ]);
 });
 
-// RED (`test.fails` — a known defect, too costly to fix now): `set` writes KV and THEN appends the
-// change; a paused stream refuses the append after the value already changed, so the credential is
-// live with no catalog row (and `list()` denies it). Making the two one recoverable step is a new
-// mechanism (an intent event first, the KV write as its committed effect).
-test.fails("a set refused by a paused stream leaves no value behind — egress cannot substitute what the catalog never listed", async () => {
+// The change is appended BEFORE the value is written: a paused stream refuses the append and the
+// credential is untouched — the catalog and the store agree. (A KV failure after the append is the
+// other order — a catalog row whose value egress cannot find, a loud 502, never a silent live secret.)
+test("a set refused by a paused stream leaves no value behind — egress cannot substitute what the catalog never listed", async () => {
   const itx = openItx(freshCtx("secrets-paused"));
   await itx.append({ type: "events.iterate.com/stream/paused" });
   await expect(itx.secrets.set("ghost", "v")).rejects.toThrow();

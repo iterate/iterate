@@ -42,18 +42,9 @@ const ruleEventsAt = async (itx: any, match: string): Promise<{ target: string |
     .filter((e) => e.type === RULE_CONFIGURED && e.payload?.match === match)
     .map((e) => ({ target: e.payload.target as string | null }));
 
-test("calling a match no rule was configured for rejects with code NO_ITX_EXPRESSION_MATCH (default-deny)", async () => {
-  // A never-configured match is indistinguishable from any other unmatched call — default-deny.
-  // RPC_STUB_OFFLINE narrows to "rule exists, no stub under its key" (the hand-configured-rule and
-  // mid-invoke tests below).
-  const itx = openItx(freshCtx("offline"));
-  const err = await rejection(
-    itx.invoke("itx.neverExisted.hello()"),
-    "invoke on a never-configured match",
-  );
-  // The code must survive the DO → edge → capnweb hops (lib/errors.ts contract).
-  expect(codeOf(err)).toBe("NO_ITX_EXPRESSION_MATCH");
-});
+// (A never-configured match is default-deny like any other unmatched call — NO_ITX_EXPRESSION_MATCH
+// across the /api hop is context-built-ins-and-error-codes.e2e; RPC_STUB_OFFLINE narrows to "rule
+// exists, no stub under its key": the hand-configured-rule and mid-invoke tests below.)
 
 test("a pager header from OUTSIDE never reaches the DO's attach door: the edge strips every inbound x-itx-* on the fetch lane", async () => {
   // ONE-SHOT attach: the pager header IS the attach request (the key + the events that name it,

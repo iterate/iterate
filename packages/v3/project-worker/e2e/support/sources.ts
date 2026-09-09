@@ -8,18 +8,6 @@ import type { WorkerSource } from "../../src/context/worker-loader.ts";
 /** THE fixture sources, keyed by fixture NAME — each value is the worker's modules, handed over
  *  literally at every load site (`itx.workers.get({ source: SOURCES.probe })`, `facets.get(name, { source: … })`). */
 export const SOURCES: Record<string, WorkerSource> = {
-  counter: {
-    "cap.js": `import { DurableObject } from "cloudflare:workers";
-export class CounterDurableObject extends DurableObject {
-  async increment(by) { const n = ((await this.ctx.storage.get("n")) ?? 0) + by; await this.ctx.storage.put("n", n); return n; }
-  async value() { return (await this.ctx.storage.get("n")) ?? 0; }
-  async whoAmI() { return await (await this.env.ITX.get()).whoami(); }
-  get counters() {
-    const self = this;
-    return { async add(by) { return self.increment(by); } };
-  }
-}`,
-  },
   chatroom: {
     "cap.js": `import { DurableObject } from "cloudflare:workers";
 import { LiveState } from "./processor.js";
@@ -263,14 +251,13 @@ export default class Site extends WorkerEntrypoint {
  *  className })` with the fixture's modules handed over inline — a processor is a named facet whose
  *  `processEventBatch` is subscribed. `className` names the HOST (`<Name>DurableObject`, the one-line
  *  `StreamProcessorDurableObject` subclass), never the pure `StreamProcessor` it hosts. `tally`,
- *  `chunky`, `presence`, `user-tally`, `breaker` are the fixtures. */
+ *  `user-tally`, `breaker` are the fixtures enabled this way (`chunky` and `presence` are enabled
+ *  with their `consumes` spelled out at the one site each has). */
 export async function enableFixtureProcessor(itx: any, name: string): Promise<void> {
   await itx.enableProcessor(name, { source: SOURCES[name], className: FIXTURE_CLASS[name] });
 }
 const FIXTURE_CLASS: Record<string, string> = {
   tally: "TallyDurableObject",
-  chunky: "ChunkyDurableObject",
-  presence: "PresenceDurableObject",
   "user-tally": "UserTallyDurableObject",
   breaker: "BreakerDurableObject",
 };

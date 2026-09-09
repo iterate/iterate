@@ -216,7 +216,11 @@ function makeProjectWorkerWorkspace(): WorkspaceConfig {
       "vitest.config.ts",
       "vitest.global-setup.ts",
       "sqlfu.config.ts",
-      "e2e/**/*.ts",
+      // the e2e lane's test files and the two vitest hooks are entries; e2e/support/** is project code,
+      // so an unused support export is reported
+      "e2e/**/*.e2e.test.ts",
+      "e2e/support/global-setup.ts",
+      "e2e/support/setup.ts",
       "__workers-tests__/**/*.ts",
       "bench/**/*.ts",
       "playwright.config.ts",

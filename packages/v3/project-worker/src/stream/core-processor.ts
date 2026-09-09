@@ -214,8 +214,10 @@ function withHostedFacetMarkersFollowingRules(
  *  A bare `itx` masks everything; a match under a built-in root masks that root's calls it claims. */
 function matchShadowsAPlatformRow(match: ItxExpressionPrefix): boolean {
   if (match.length === 1) return true;
-  const step = match[1];
-  return isBuiltInRoot(itxExpressionStepName(step));
+  const name = itxExpressionStepName(match[1]);
+  // `itx.worker` is a platform row too — the resolver's default config worker (itx-expression-
+  // rewriting.ts); a `null` there MASKS it, else the project falls back to the no-op silently.
+  return isBuiltInRoot(name) || name === "worker";
 }
 
 /** One subscription row (by name; a same-named configure REPLACES). */

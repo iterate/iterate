@@ -4123,4 +4123,51 @@ and re-run after). Jonas: "keep trying to clean up or improve or find opportunit
   living docs refreshed to the one-worker truth (the FALLBACK/DummyControlPlane/solo prose gone,
   contract 8.0.0, the session catalog, `secrets`, `serveMcp`, `afterOffset`; +430/−200).
 - GATES: tsc ×3 · oxlint · knip · `pnpm test` 87 files / 704 passed / 15 expected-fail (the three
-  new red pins among them) / 17 deployed-only skips. Deployed proof: the next line.
+  new red pins among them) / 17 deployed-only skips. DEPLOYED (8dcd707cd as adf74635): 199–202 passed
+  across two runs, every failure a Cloudflare-side signature — "internal error; reference = …",
+  "Network connection lost.", "Internal error in Durable Object storage caused object to be reset",
+  and the accepted-limit memory scenario NOT resetting for once — on different tests each run. The
+  platform was unstable that night; the proof is re-run after pass 2.
+
+## 2026-09-09 — review pass 2: the context review lands; the stream review, third try
+
+The Fable context reviewer (the codec, the rules, the loader, git-wire, the fetch door, the e2e
+lane) reported; the stream reviewer was cut off by a session limit twice and re-launched.
+
+- BUGS FIXED (small): `itx.repos` read a pack that OMITTED the tip commit or its tree as "no such
+  file" — a short pack would blank the config worker's source — and `writeFile` then pushed a fresh
+  ROOT commit over the tip, orphaning `main`; both now throw (only a missing blob is "absent"), and
+  `writeFile` gets the repo first and creates it only on not-found (an outage was reported as
+  whatever the retry said). The built-in `cd` dropped the caller's principal for a SIBLING context
+  (a Workers-RPC hop the ambient store does not cross) — `ReachableContext.invokeAs`, picked by the
+  principal; pinned. `secrets.set`/`delete` now append the change BEFORE the physical write — a
+  paused stream refuses and leaves the value untouched (the red pin turned green; the other order,
+  a KV failure after the append, is a catalog row egress cannot find: a loud 502). A whole-context
+  override (`itx ⇒ …`) must target the physical spelling — `itx ⇒ itx.cam` was accepted at the door
+  and died only at the resolver's depth cap. `itx.worker` is a PLATFORM ROW in every reading now:
+  `null` at it MASKS (default-deny) instead of deleting and falling back to the no-op silently,
+  `rewriteRules.list()` shows it, and a call at it (`itx.worker(1)`) is refused rather than its
+  arguments dropped.
+- RED PIN: the platform-equivalent target beneath a broader mask (`itx.kv ⇒ null`, then
+  `itx.kv.get ⇒ itx.builtins.kv.get`) is deleted, so one prefix can never be re-opened though
+  longest-match promises it — a table-aware delete, later.
+- LESS CODE: the dead package `knip.json` (the root config is the authority; they had drifted); the
+  root knip entry no longer treats `e2e/**/*.ts` as entries, so an unused e2e/support export is
+  reported; `ArtifactRepoHandle.lastPushAt` (typed, never read). The e2e lane's second copies —
+  `support/live-client.ts` beside the real client, the surface tour, the tunnel file, claims pinned
+  twice across the rpc-stub files, resolver rows re-pinned over the wire — and git-wire's unread
+  protocol surface: a Fable implementer, reported below.
+- CLARITY: the orphaned docblocks in built-ins.ts and itx-expression-rewriting.ts re-attached; the
+  edge's `target` cast typed as the parsed form it is.
+- THE E2E DEDUP (a Fable implementer, −587 LOC net, 53 → 51 files): `e2e/support/live-client.ts` —
+  a second client half of live state beside the shipped one — deleted, its two callers rewritten
+  over `connectLiveState` (every original assertion kept); the surface tour deleted (every section
+  re-pinned a claim another file owns; its `/version` step moved to session-doors); the tunnel file
+  deleted (its platform claims live in the fetch-door file; its one extra claim, the URL query
+  reaching the provider, folded there); the claims pinned twice across the rpc-stub files and the
+  resolver rows re-pinned over the wire deleted; `httpBatch` inlined into its one caller; git-wire's
+  unread protocol surface (`symrefTarget`, `acks`/`shallow`, `haves`, the `fetchImpl` seam, the
+  three-way `PushReport`) deleted and its header rewritten to what it serves.
+- GATES: tsc ×3 · oxlint · knip · `pnpm test` 86 files / 702 passed / 15 expected-fail / 17
+  deployed-only skips (one timing bound — a built-in root's median 162 ms against 150 — tripped
+  under the reviewer's parallel load and passed alone). Deployed proof: the next line.
