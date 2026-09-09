@@ -389,7 +389,7 @@ type ProcessorFacetStub = {
   provideCapability(
     input: CapabilityProvidedPayload,
     options?: { afterAppend?(record: CapabilityRecord): void | Promise<void> },
-  ): Promise<{ path: string[]; providedAtOffset: number }>;
+  ): Promise<{ path: string[]; providedAtOffset: number } & Disposable>;
   revokeCapability(input: { path: string[]; providedAtOffset?: number }): Promise<void>;
   describeCapabilities(): Promise<unknown[]>;
   connectCapabilityProviderPager(options: {
@@ -1742,7 +1742,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       const replaced = state.capabilities.find((record) =>
         sameCapabilityPath(record.path, input.path),
       );
-      return await facet.provideCapability(input, {
+      using provision = await facet.provideCapability(input, {
         afterAppend: (record) => {
           // The append has already displaced this row. Retire its relay even
           // if binding the replacement fails; otherwise the old ownership
@@ -1762,6 +1762,9 @@ export class StreamDurableObject extends DurableObject<Env> {
           }
         },
       });
+      // Forwarding the facet's hidden disposer would keep this RPC context
+      // alive until the caller disposed it. Registration returns only data.
+      return { path: provision.path, providedAtOffset: provision.providedAtOffset };
     });
   }
 
@@ -3268,6 +3271,8 @@ export class StreamDurableObject extends DurableObject<Env> {
    * Best-effort like every connection-close observation.
    */
   async webSocketClose(ws: WebSocket): Promise<void> {
+    // Complete the Pager handshake so the relay's WebSocket read loop can finish.
+    ws.close();
     // A closed Capability Provider Pager is its provider's real departure:
     // journal the disconnect so reduction retires every mount it owned.
     const connectedAtOffset = this.#capabilityProviderPagers.connectedAtOffset(ws);
