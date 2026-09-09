@@ -287,3 +287,9 @@ iterate_kit_add_core_test(iterate-kit-xmos-control-test xmos_control_test.c)
 
 iterate_kit_add_audio_test(
   iterate-kit-starvation-ledger-test starvation_ledger_test.c)
+
+# Pure pixel arithmetic from the board ring; hardware entry points are ESP-only.
+iterate_kit_add_test(iterate-kit-led-ring-pixels-test led_ring_pixels_test.c
+  ../platforms/iterate_esp_idf/components/board/led_ring.c
+  INCLUDES ../platforms/iterate_esp_idf/components/board/include
+  LINK iterate-kit-core)

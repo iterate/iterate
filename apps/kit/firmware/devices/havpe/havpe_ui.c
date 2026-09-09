@@ -15,18 +15,14 @@
  */
 #include "havpe_ui.h"
 
-#include <string.h>
-
 #include "driver/gpio.h"
 #include "esp_log.h"
 #include "esp_timer.h"
-#include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
 #include "havpe_modes.h"
 #include "iterate/kit/button.h"
 #include "iterate/kit/conversation_lights.h"
 #include "iterate/kit/conversation_overlay.h"
-#include "led_strip.h"
+#include "iterate/kit/platforms/led_ring.h"
 
 static const char tag[] = "havpe-ui";
 
@@ -34,16 +30,12 @@ enum {
   LED_COUNT = ITERATE_KIT_CONVERSATION_LIGHT_COUNT,
   LED_GPIO = 21,
   LED_POWER_GPIO = 45,
-  /* The rail needs to settle before the first RMT refresh is honest. */
-  LED_POWER_ENABLE_MS = 20,
   BUTTON_GPIO = 0,
   /* The rotary ring around the top face: same pins and quadrature grain as
    * the official firmware's `dial` (pin_a GPIO16, pin_b GPIO18,
    * resolution 2). */
   DIAL_A_GPIO = 16,
   DIAL_B_GPIO = 18,
-  /* 20 Hz ceiling on ring refreshes. */
-  RING_REFRESH_MIN_US = 50000,
   /* How long a dial gesture owns the ring before the state animation
    * returns — the official firmware's own 1 s "Volume Display" dwell. */
   OVERLAY_HOLD_US = 1000000,
@@ -63,7 +55,7 @@ enum ring_overlay {
 };
 
 static struct {
-  led_strip_handle_t strip;
+  bool started;
   struct iterate_kit_voice_view view;
   enum ring_overlay overlay;
   /* Volume percent or mode index, depending on the overlay kind. */
@@ -73,10 +65,6 @@ static struct {
    * until the composition's restore sets it. */
   uint8_t mode;
   bool dirty;
-  /* False until the ring has actually been written once; see the tick. */
-  bool painted;
-  int64_t last_refresh_us;
-  struct iterate_kit_rgb8 shown[LED_COUNT];
 } ui;
 
 static struct iterate_kit_button button;
@@ -99,38 +87,17 @@ static uint64_t now_ms(void) {
 }
 
 bool havpe_ui_init(void) {
-  const gpio_config_t power_config = {
-    .pin_bit_mask = 1ULL << LED_POWER_GPIO,
-    .mode = GPIO_MODE_OUTPUT,
-    .pull_up_en = GPIO_PULLUP_DISABLE,
-    .pull_down_en = GPIO_PULLDOWN_DISABLE,
-    .intr_type = GPIO_INTR_DISABLE,
+  const struct iterate_kit_led_ring ring = {
+    .gpio = LED_GPIO,
+    .pixels = LED_COUNT,
+    .order = LED_PIXEL_FORMAT_GRB,
+    .power_gpio = LED_POWER_GPIO,
   };
-  if (gpio_config(&power_config) != ESP_OK ||
-      gpio_set_level(LED_POWER_GPIO, 1) != ESP_OK) {
-    ESP_LOGE(tag, "ring power rail configuration failed");
-    return false;
-  }
-  vTaskDelay(pdMS_TO_TICKS(LED_POWER_ENABLE_MS));
-
-  const led_strip_config_t strip_config = {
-    .strip_gpio_num = LED_GPIO,
-    .max_leds = LED_COUNT,
-    .led_pixel_format = LED_PIXEL_FORMAT_GRB,
-    .led_model = LED_MODEL_WS2812,
-    .flags = {.invert_out = false},
-  };
-  const led_strip_rmt_config_t rmt_config = {
-    .clk_src = RMT_CLK_SRC_DEFAULT,
-    .resolution_hz = 10 * 1000 * 1000,
-    .mem_block_symbols = 0,
-    .flags = {.with_dma = false},
-  };
-  if (led_strip_new_rmt_device(&strip_config, &rmt_config, &ui.strip) !=
-      ESP_OK) {
+  if (!iterate_kit_led_ring_start(&ring)) {
     ESP_LOGE(tag, "ring bring-up failed");
     return false;
   }
+  ui.started = true;
 
   const gpio_config_t button_config = {
     .pin_bit_mask = 1ULL << BUTTON_GPIO,
@@ -190,21 +157,6 @@ void havpe_ui_present(const struct iterate_kit_voice_view *view) {
   }
 }
 
-void havpe_ui_show_volume(uint8_t percent) {
-  ui.overlay = OVERLAY_VOLUME;
-  ui.overlay_value = percent > 100U ? 100U : percent;
-  ui.overlay_until_us = esp_timer_get_time() + OVERLAY_HOLD_US;
-  ui.dirty = true;
-}
-
-void havpe_ui_show_mode(uint8_t mode) {
-  if (mode >= HAVPE_MODE_COUNT) return;
-  ui.overlay = OVERLAY_MODE;
-  ui.overlay_value = mode;
-  ui.overlay_until_us = esp_timer_get_time() + OVERLAY_HOLD_US;
-  ui.dirty = true;
-}
-
 void havpe_ui_set_mode(uint8_t mode) {
   if (mode >= HAVPE_MODE_COUNT || ui.mode == mode) return;
   ui.mode = mode;
@@ -258,8 +210,29 @@ static void render_quadrant(
   }
 }
 
+void havpe_ui_show_volume(uint8_t percent) {
+  ui.overlay = OVERLAY_VOLUME;
+  ui.overlay_value = percent > 100U ? 100U : percent;
+  ui.overlay_until_us = esp_timer_get_time() + OVERLAY_HOLD_US;
+  struct iterate_kit_rgb8 pixels[LED_COUNT];
+  render_volume(pixels);
+  iterate_kit_led_ring_borrow(pixels, (uint32_t)(OVERLAY_HOLD_US / 1000));
+  ui.dirty = true;
+}
+
+void havpe_ui_show_mode(uint8_t mode) {
+  if (mode >= HAVPE_MODE_COUNT) return;
+  ui.overlay = OVERLAY_MODE;
+  ui.overlay_value = mode;
+  ui.overlay_until_us = esp_timer_get_time() + OVERLAY_HOLD_US;
+  struct iterate_kit_rgb8 pixels[LED_COUNT];
+  render_quadrant(pixels, ui.overlay_value, MODE_QUADRANT_BRIGHT);
+  iterate_kit_led_ring_borrow(pixels, (uint32_t)(OVERLAY_HOLD_US / 1000));
+  ui.dirty = true;
+}
+
 void havpe_ui_tick(void) {
-  if (ui.strip == NULL) return;
+  if (!ui.started) return;
   const int64_t now_us = esp_timer_get_time();
   /* The dial is sampled here, every pass, whatever the ring is doing —
    * see the note at the `dial` struct for why not the 25 ms control poll. */
@@ -284,60 +257,16 @@ void havpe_ui_tick(void) {
    */
   const bool breathing = iterate_kit_conversation_needs_attention(&state);
   if (!ui.dirty && !breathing) return;
-  if (now_us - ui.last_refresh_us < RING_REFRESH_MIN_US) return;
-  {
+  if (ui.overlay == OVERLAY_NONE) iterate_kit_led_ring_borrow(NULL, 0U);
+  if (ui.overlay == OVERLAY_NONE && !breathing && !ui.view.wants_call &&
+      !ui.view.call_active && ui.mode < HAVPE_MODE_COUNT) {
+    /* Idle has a face: the adopted mode's dim quadrant. The board borrows
+     * exactly this presentation; a call or fault owns the very next one. */
     struct iterate_kit_rgb8 pixels[LED_COUNT];
-    /*
-     * ONE CALL, and it is the same one the screens make for their status
-     * rail. Everything this ring knows about what device state looks like
-     * lives on the other side of it — except the two dial overlays, which
-     * borrow the ring for one second of direct feedback and then give it
-     * back.
-     */
-    if (ui.overlay == OVERLAY_VOLUME) {
-      render_volume(pixels);
-    } else if (ui.overlay == OVERLAY_MODE) {
-      render_quadrant(pixels, ui.overlay_value, MODE_QUADRANT_BRIGHT);
-    } else if (!breathing && !ui.view.wants_call && !ui.view.call_active &&
-               ui.mode < HAVPE_MODE_COUNT) {
-      /*
-       * IDLE HAS A FACE. No session and nothing wrong: the ring shows the
-       * adopted mode's quadrant, dim — the microphone is sending nothing,
-       * and the one fact worth a glance is which posture the next press
-       * will take. The session states own every other frame: waking is the
-       * amber comet (breathing above), a live call is the shared lights.
-       */
-      render_quadrant(pixels, ui.mode, MODE_QUADRANT_DIM);
-    } else {
-      iterate_kit_conversation_lights_animate(
-          &state, (uint32_t)(now_us / 1000), pixels);
-    }
-    /*
-     * `shown` starts black, so "equal to what is shown" is a lie until the
-     * first successful refresh — and any state whose colour happened to be
-     * black would clear `dirty` and never light the ring at all, which is
-     * unfalsifiable from the outside on a board with no screen. Paint once,
-     * then compare.
-     */
-    if (ui.painted && memcmp(pixels, ui.shown, sizeof(pixels)) == 0) {
-      ui.dirty = false;
-      return;
-    }
-    for (int index = 0; index < LED_COUNT; ++index) {
-      (void)led_strip_set_pixel(
-          ui.strip,
-          index,
-          pixels[index].red,
-          pixels[index].green,
-          pixels[index].blue);
-    }
-    if (led_strip_refresh(ui.strip) == ESP_OK) {
-      ui.painted = true;
-      memcpy(ui.shown, pixels, sizeof(pixels));
-      ui.last_refresh_us = now_us;
-      ui.dirty = false;
-    }
+    render_quadrant(pixels, ui.mode, MODE_QUADRANT_DIM);
+    iterate_kit_led_ring_borrow(pixels, 0U);
   }
+  if (iterate_kit_led_ring_present(&state, now_us)) ui.dirty = false;
 }
 
 void havpe_button_poll(void) {

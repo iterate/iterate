@@ -1,4 +1,5 @@
 dependencies:
+  espressif/led_strip: "==2.5.5"
   capnweb:
     git: https://github.com/iterate/capnweb.git
     path: c
