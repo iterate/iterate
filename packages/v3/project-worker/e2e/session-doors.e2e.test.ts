@@ -53,14 +53,13 @@ export default class Mine extends WorkerEntrypoint {
   expect(html).toContain("dynamic web capability");
 });
 
-test("/version answers `<label> <environmentName> <deployId>` — the deploy stamp a smoke waits for", async () => {
-  // CODE_VERSION (worker.ts) first, then the configuration (src/app-config.ts): the e2e lane names
-  // itself "e2e"; a deployed worker names its environment. The deploy id is Cloudflare's version id
-  // of the deploy — local workerd mints one too — or "unversioned" where the binding is absent.
+test("/version answers `<deployId> <environmentName>` — the deploy stamp a smoke waits for", async () => {
+  // The deploy id is Cloudflare's version id of the deploy (what `wrangler deploy` prints) — local
+  // workerd mints one too — or "unversioned" where the binding is absent; then the configuration
+  // (src/app-config.ts): the e2e lane names itself "e2e", a deployed worker names its environment.
   const versionRes = await fetch(workerUrl("/version"));
   expect(versionRes.status).toBe(200);
-  const [label, environmentName, deployId, ...rest] = (await versionRes.text()).trim().split(" ");
-  expect(label).toMatch(/^live-\d+$/);
+  const [deployId, environmentName, ...rest] = (await versionRes.text()).trim().split(" ");
   expect(rest).toEqual([]);
   expect(deployId).toMatch(/^(?:[0-9a-f-]{36}|unversioned)$/);
   if (projectHostsAreLocal()) expect(environmentName).toBe("e2e");

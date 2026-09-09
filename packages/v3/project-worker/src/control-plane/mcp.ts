@@ -1,18 +1,17 @@
 // The /mcp API route — the ONLY OAuth-protected boundary. The provider validated the bearer (an OAuth
 // access token) BEFORE this runs and put the granted props on ctx.props; in `open` login mode index.ts
 // short-circuits here with the anonymous identity. An MCP server (@modelcontextprotocol/server) mounts
-// here, scoped to that identity: `whoami` reflects the project the token was granted at /authorize.
+// here, scoped to that identity: every tool acts as the USER the grant names (/authorize, app.ts).
 
 import { createMcpHandler, fromJsonSchema, McpServer } from "@modelcontextprotocol/server";
 import { CfWorkerJsonSchemaValidator } from "@modelcontextprotocol/server/validators/cf-worker";
 import { directory } from "./directory.ts";
 import type { Env, Handler } from "./env.ts";
 
-/** The props the provider put on ctx after validating the bearer. */
+/** The props the provider put on ctx after validating the bearer: the user the grant names. */
 interface AuthProps {
   sub: string;
   email: string;
-  projectId?: string;
 }
 
 const validator = new CfWorkerJsonSchemaValidator();
@@ -35,22 +34,10 @@ function buildServer(env: Env, props: AuthProps): McpServer {
   s.registerTool(
     "whoami",
     {
-      description:
-        "Who this token authenticates as, and the org/project it was granted at authorization.",
+      description: "Who this token authenticates as: the user it was granted to at authorization.",
       inputSchema: input({}),
     },
-    async () =>
-      text(
-        JSON.stringify(
-          {
-            email: props.email,
-            sub: props.sub,
-            projectId: props.projectId ?? null,
-          },
-          null,
-          2,
-        ),
-      ),
+    async () => text(JSON.stringify({ email: props.email, sub: props.sub }, null, 2)),
   );
 
   s.registerTool(

@@ -15,8 +15,10 @@
 // login mode the anonymous user, in `email` mode the session cookie a browser's same-origin socket
 // carried (none ⇒ UNAUTHENTICATED); `authenticate({ projectToken })` is a principal bound to ONE
 // project (src/principal.ts). Authority is org membership (control-plane/directory.ts): in `email`
-// mode `projects.get` admits members only; in `open` mode every project is the anonymous org's and
-// the door stays open (the trusted-client doctrine every local proof relies on).
+// mode `projects.get` admits members only — membership being whatever `/login` was told (the demo
+// login form verifies nothing, so `email` mode is attribution, not authentication); in `open` mode
+// every project is the anonymous org's and the door stays open (the trusted-client doctrine every
+// local proof relies on).
 //
 // Every class here is a server-side capnweb RpcTarget (the client is JUST capnweb — see
 // iterate-context.ts). None of them touches a Durable Object: `projects.get(id)` is addressing (plus
@@ -26,13 +28,12 @@ import { RpcTarget } from "capnweb";
 import type { LoginMode } from "./app-config.ts";
 import { DurableObjectNameCodec } from "./context/durable-object-names.ts";
 import type { Directory, Project } from "./control-plane/directory.ts";
+import type { Session as ControlPlaneSession } from "./control-plane/session.ts";
 import { IterateContext, type IterateContextNamespace, type WaitUntil } from "./iterate-context.ts";
 import { codedError } from "./lib/errors.ts";
 import { verifyProjectToken, type Principal } from "./principal.ts";
 import { SessionTeardown } from "./session-teardown.ts";
 
-/** A control-plane user: the cookie's, or the anonymous one in `open` mode. */
-export type SessionUser = { id: string; email: string };
 /** Who a session is: a principal, bound to ONE project when it came from a project token. */
 export type SessionPrincipal = Principal & { projectId?: string };
 
@@ -42,8 +43,9 @@ export interface SessionInput {
   waitUntil: WaitUntil;
   directory: Directory;
   loginMode: LoginMode;
-  /** The request's control-plane user — the anonymous one (`open`), the cookie's (`email`), or none. */
-  user: SessionUser | null;
+  /** The request's control-plane user (control-plane/session.ts `identity`) — the anonymous one
+   *  (`open`), the cookie's (`email`), or none. */
+  user: ControlPlaneSession | null;
   /** The secret project tokens verify with (blank ⇒ none does). */
   projectTokenSecret: string;
 }
@@ -95,7 +97,7 @@ export class UnauthenticatedSession extends RpcTarget {
       this.#input,
       this.#sessionTeardown,
       user,
-      loginMode === "open" ? null : { actor: user.id, email: user.email },
+      loginMode === "open" ? null : { actor: user.sub, email: user.email },
     );
   }
 }
@@ -109,7 +111,7 @@ class Session extends RpcTarget {
   constructor(
     input: SessionInput,
     sessionTeardown: SessionTeardown,
-    user: SessionUser | null,
+    user: ControlPlaneSession | null,
     principal: SessionPrincipal | null,
   ) {
     super();
@@ -135,7 +137,7 @@ class Session extends RpcTarget {
 class ProjectCollection extends RpcTarget {
   readonly #input: SessionInput;
   readonly #sessionTeardown: SessionTeardown;
-  readonly #user: SessionUser | null;
+  readonly #user: ControlPlaneSession | null;
   readonly #principal: SessionPrincipal | null;
   /** The principal a context stamps on events: the session's, minus the token's binding. */
   readonly #contextPrincipal: Principal | null;
@@ -143,7 +145,7 @@ class ProjectCollection extends RpcTarget {
   constructor(
     input: SessionInput,
     sessionTeardown: SessionTeardown,
-    user: SessionUser | null,
+    user: ControlPlaneSession | null,
     principal: SessionPrincipal | null,
   ) {
     super();
@@ -158,7 +160,7 @@ class ProjectCollection extends RpcTarget {
 
   /** The projects this session's user can reach — a member of the owning org — with their role. */
   list(): Promise<Project[]> {
-    return this.#input.directory.listProjects(this.#signedInUser().id);
+    return this.#input.directory.listProjects(this.#signedInUser().sub);
   }
 
   /** Create the project named `slug` (slugified: that IS its id) in the user's org — the first by
@@ -167,7 +169,7 @@ class ProjectCollection extends RpcTarget {
   async create(input: { slug: string }): Promise<IterateContext> {
     const user = this.#signedInUser();
     const { directory } = this.#input;
-    const org = await directory.ensureOrg(user.id, `${user.email}'s org`);
+    const org = await directory.ensureOrg(user.sub, `${user.email}'s org`);
     const project = await directory.createProject(org.id, input.slug);
     return this.#context(project.id);
   }
@@ -189,7 +191,7 @@ class ProjectCollection extends RpcTarget {
         );
     } else if (this.#input.loginMode === "email") {
       const user = this.#signedInUser();
-      const projects = await this.#input.directory.listProjects(user.id);
+      const projects = await this.#input.directory.listProjects(user.sub);
       if (!projects.some((project) => project.id === address.projectId))
         throw codedError(
           "FORBIDDEN",
@@ -211,7 +213,7 @@ class ProjectCollection extends RpcTarget {
 
   /** The catalog's writer and reader: a control-plane user. A project-token session has none — it
    *  holds one project and reaches it with `get`. */
-  #signedInUser(): SessionUser {
+  #signedInUser(): ControlPlaneSession {
     if (!this.#user)
       throw codedError(
         "FORBIDDEN",

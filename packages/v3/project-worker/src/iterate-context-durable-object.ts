@@ -916,14 +916,12 @@ export class IterateContextDurableObject extends DurableObject<Env> {
           : new Response(`fetch lane: ${JSON.stringify(result)}\n`);
       } catch (error) {
         // Default-deny is a 404 with the message alone — a project host makes this lane public, and a
-        // visitor's "no such app" carries no stack; anything else is a 500 with the stack for the log.
+        // visitor's "no such app" is no issue; anything else is a 500 with the message alone too,
+        // its stack REPORTED (Workers Logs), never served: a project host is public.
         const status = errorCode(error) === "NO_ITX_EXPRESSION_MATCH" ? 404 : 500;
-        const message =
-          error instanceof Error
-            ? status === 404
-              ? error.message
-              : (error.stack ?? error.message)
-            : String(error);
+        if (status === 500)
+          reportIssue("iterate-context.fetch-lane", error, { itxExpression: itxExpressionHeader });
+        const message = error instanceof Error ? error.message : String(error);
         return new Response(`fetch lane error: ${message}\n`, { status });
       }
     }

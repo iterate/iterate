@@ -562,8 +562,8 @@ secret on a deployment, a var in the e2e lane; blank ⇒ no token verifies), `AP
 - `APP_CONFIG_ARTIFACTS_NAMESPACE` (`itx.repos`' git remotes), `APP_CONFIG_LOGIN_MODE`
   (`loginMode`, required: `open` | `email`), `APP_CONFIG_SESSION_SECRET` (`sessionSecret`, the control
   plane's cookie); plus `deployId` (`CF_VERSION_METADATA.id`, "unversioned" where the binding is
-  absent), folded into every loader cacheKey. `/version` answers the hand-bumped `CODE_VERSION` label,
-  the environment name and the deploy id: `<label> poc <version id>`, e.g. `live-57 poc 7474bb76-…`.
+  absent), folded into every loader cacheKey. `/version` answers the deploy id and the environment
+  name: `<version id> poc`, e.g. `7474bb76-… poc` (the stamp a deploy smoke waits for).
 
 **Tests** (`vitest.config.ts`, the ONE config): four projects — `unit` (in-process node,
 `src/**/*.test.ts`), `workers` (inside workerd via `@cloudflare/vitest-plugin` over
@@ -726,7 +726,7 @@ LibraryRoots`, the resolver walks from the record with one built-in predicate, t
   per isolate by a row table, loud on a bad or unknown variable, plus the deploy identity from the
   version-metadata binding. Two fields exist because two things read them (`environmentName`,
   `deployId`); constants stay constants (the inventory is the module header). `/version` answers
-  `<label> <environmentName> <deployId>`.
+  `<deployId> <environmentName>`.
 - **A root-applied non-callable is the coded `NOT_A_METHOD`**, like the dotted case (dispatch.ts): the
   delivery loop treats it as deterministic and halts an uncallable cursor target at the first failure.
 

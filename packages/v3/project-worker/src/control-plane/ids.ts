@@ -1,6 +1,6 @@
-// Id + slug helpers: a minted `org_` id (distinct from the org slug) and a slugify that matches
-// @iterate-com/shared/slug's normalization (lowercase, non-alphanumeric → dash, trimmed). A PROJECT has
-// no minted id — its slug IS its id (directory.ts).
+// Id + slug helpers: a minted `org_` id, and a slugify that matches @iterate-com/shared/slug's
+// normalization (lowercase, non-alphanumeric → dash, trimmed). A PROJECT has no minted id — its slug
+// IS its id (directory.ts); an org has no slug at all.
 
 export const slugify = (s: string) =>
   s

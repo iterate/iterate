@@ -12,11 +12,14 @@
 // library runs in the context, where the principal is the current call's. A fresh, stateless server
 // per request (`createMcpHandler`, the control plane's shape), and NO bearer is required: a request
 // with none — or with another project's token — is served and stamps nothing (the ingress refuses
-// no one; library-mcp-server.e2e.test.ts). The principal is attribution; what an unattributed call
-// may reach is the project's own rules' decision. Written against `itx` alone (the library rule,
-// index.ts): `itx.cd('.')` is this
-// context through its own table, and its handle's `invoke(steps)` is the one door on the dotted
-// surface that takes an expression as DATA — the same door a loaded worker holds.
+// no one; library-mcp-server.e2e.test.ts). The principal is attribution only: an unattributed call
+// reaches everything the context can spell — every platform root, `itx.builtins.*` included, which
+// no rule can mask — so a mount is the whole context to whoever can reach the host (in `email`
+// login mode a hole the ingress does not close; pinned red in __workers-tests__/control-plane.test.ts,
+// a design call: this library cannot see the login mode). Written against `itx` alone (the library
+// rule, index.ts): `itx.cd('.')` is this context through its own table, and its handle's
+// `invoke(steps)` is the one door on the dotted surface that takes an expression as DATA — the same
+// door a loaded worker holds.
 
 import {
   createMcpHandler,

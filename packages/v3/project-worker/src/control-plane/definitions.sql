@@ -3,7 +3,7 @@
 -- OAUTH_KV (tokens/grants/clients); this D1 is OURS.
 --
 -- Org-centric (like apps/os): users belong to orgs, projects belong to orgs, access is org membership
--- — so "create an org + project during MCP /authorize" is a first-class flow rather than a bolt-on.
+-- — the console, `/api` (`projects.create`) and `/mcp` create projects through the one directory door.
 --
 -- Idempotent (IF NOT EXISTS) on purpose: the e2e lane applies it into a fresh local D1 on every run and
 -- `pnpm db:schema:remote` re-applies it to the deployed D1 as a no-op.
@@ -14,14 +14,13 @@ create table if not exists users (
   created_at text not null default current_timestamp
 );
 
--- THE ONE ANONYMOUS IDENTITY of `open` login mode (control-plane/app.ts ANONYMOUS, and /mcp's
+-- THE ONE ANONYMOUS IDENTITY of `open` login mode (control-plane/session.ts ANONYMOUS, and /mcp's
 -- open-mode short-circuit). Seeded here so its org membership's FOREIGN KEY holds on every path.
 insert or ignore into users (id, email) values ('user_anonymous', 'anonymous');
 
 create table if not exists orgs (
-  id text primary key,            -- org_<hex>  (minted, distinct from slug)
+  id text primary key,            -- org_<hex>  (minted)
   name text not null,
-  slug text not null unique,      -- globally-unique org slug
   created_at text not null default current_timestamp
 );
 

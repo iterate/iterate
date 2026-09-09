@@ -27,7 +27,15 @@ const SPEC: OpenApiDocument = {
     "/raw": { put: { operationId: "putRaw", requestBody: {} } },
     "/text": { get: { operationId: "getText" } },
     "/call": { get: { operationId: "call" } }, // reserved: reachable through call('call') only
-    "/session": { get: { operationId: "whoami", parameters: [{ name: "session", in: "cookie" }] } },
+    "/session": {
+      get: {
+        operationId: "whoami",
+        parameters: [
+          { name: "session", in: "cookie" },
+          { name: "theme", in: "cookie" },
+        ],
+      },
+    },
     "/then": { get: { operationId: "then" } }, // reserved too: a thenable connection would never settle
   },
 };
@@ -97,6 +105,13 @@ describe("connectToOpenApi", () => {
       url: "https://api.example/v1/session",
       header: ["cookie", "session=s%201"],
     }, // a cookie parameter rides the cookie header
+    {
+      op: "whoami",
+      input: { session: "s 1", theme: "dark" },
+      method: "GET",
+      url: "https://api.example/v1/session",
+      header: ["cookie", "session=s%201; theme=dark"],
+    }, // two cookie parameters are ONE `; `-joined header (RFC 6265), never `, `-joined
     { op: "getPet", input: {}, method: "GET", url: "", throws: /getPet needs "id"/ },
     {
       op: "listPets",

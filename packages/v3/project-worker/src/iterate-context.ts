@@ -335,12 +335,15 @@ export class IterateContext extends RpcTarget {
       // only recalls the lend — and only its OWN (the lease is the handle; a stale one is inert).
       return new SubscriptionHandle(name, () => lease.dispose());
     }
-    // An expression (or a removal): whatever THIS session lent under the name stops meaning it.
-    this.#sessionTeardown.dispose(sessionTeardownKey);
+    // An expression (or a removal): the row is appended FIRST — a refusal (STREAM_PAUSED) changes
+    // nothing — and only then does whatever THIS session lent under the name stop meaning it: the
+    // DO's un-set on the pager close finds a row that no longer names the stub and removes nothing,
+    // so it can never take the fresh row with it (the same order as `provide`).
     const target = input.target as ItxExpressionInput | null;
     const [committed] = (await this.#append(
       subscriptionConfiguredEvent({ name, target, ...consumes }),
     )) as StreamEvent[];
+    this.#sessionTeardown.dispose(sessionTeardownKey);
     return new SubscriptionHandle(name, () => {
       // An expression target has no pager, so the handle un-sets the row itself — ONLY the row this
       // call wrote (same name REPLACES: a later subscribe under the name, this session's or another's,
@@ -440,12 +443,12 @@ export class IterateContext extends RpcTarget {
       );
   }
 
-  /** The SessionTeardown key for a lent stub: `"<iterateContextName> <rpcStubKey>"`. The teardown is
-   *  SESSION-lived and shared by every IterateContext the session hands out (across projects), while
-   *  a stub key is only unique PER CONTEXT. A space separator is unambiguous: a context name has no
-   *  spaces. */
+  /** The SessionTeardown key for a lent stub: `JSON.stringify([iterateContextName, rpcStubKey])`.
+   *  The teardown is SESSION-lived and shared by every IterateContext the session hands out (across
+   *  projects), while a stub key is only unique PER CONTEXT; the JSON pair is unambiguous whatever
+   *  either half holds (a path segment may carry a space, a match may pin a string arg). */
   #sessionTeardownKey(rpcStubKey: string): string {
-    return `${this.#durableObjectAddress.name} ${rpcStubKey}`;
+    return JSON.stringify([this.#durableObjectAddress.name, rpcStubKey]);
   }
 }
 

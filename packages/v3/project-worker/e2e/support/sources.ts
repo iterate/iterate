@@ -70,9 +70,7 @@ const contract = defineProcessorContract({
   slug: "chunky",
   version: "1.0.0",
   description: "Counts named ephemeral chunks beside durable marks.",
-  stateSchema: z.object({ chunks: z.number().default(0), marks: z.number().default(0) }),
-  events: {},
-  consumes: ["chunk", "mark"],
+  stateSchema: z.object({ chunks: z.number().default(0), marks: z.number().default(0) }),  consumes: ["chunk", "mark"],
   emits: [],
 });
 class ChunkyProcessor extends StreamProcessor {
@@ -98,9 +96,7 @@ const contract = defineProcessorContract({
   slug: "presence",
   version: "1.0.0",
   description: "Reduced tick count beside a runtime lastPokeMs the reduce never sees.",
-  stateSchema: z.object({ ticks: z.number().default(0) }),
-  events: {},
-  consumes: ["tick", "poke"],
+  stateSchema: z.object({ ticks: z.number().default(0) }),  consumes: ["tick", "poke"],
   emits: [],
 });
 class PresenceProcessor extends StreamProcessor {
@@ -126,9 +122,7 @@ const contract = defineProcessorContract({
   slug: "user-tally",
   version: "1.0.0",
   description: "Counts committed events by type — the userspace SDK demo.",
-  stateSchema: z.object({ counts: z.record(z.string(), z.number()).default({}) }),
-  events: {},
-  consumes: ["*"],
+  stateSchema: z.object({ counts: z.record(z.string(), z.number()).default({}) }),  consumes: ["*"],
   emits: [],
 });
 class UserTallyProcessor extends StreamProcessor {
@@ -149,9 +143,7 @@ const contract = defineProcessorContract({
   slug: "tally",
   version: "1.0.0",
   description: "Counts committed events by type — the facet-spine demo processor.",
-  stateSchema: z.object({ counts: z.record(z.string(), z.number()).default({}) }),
-  events: {},
-  consumes: ["*"],
+  stateSchema: z.object({ counts: z.record(z.string(), z.number()).default({}) }),  consumes: ["*"],
   emits: [],
 });
 class TallyProcessor extends StreamProcessor {
@@ -183,9 +175,7 @@ const contract = defineProcessorContract({
   slug: "breaker",
   version: "1.0.0",
   description: "A token-bucket breaker: one token per durable event, refilled by event time; crossing zero pauses the stream.",
-  stateSchema: z.object({ tokens: z.number().default(CAPACITY), lastAtMs: z.number().default(0) }),
-  events: {},
-  consumes: ["*"],
+  stateSchema: z.object({ tokens: z.number().default(CAPACITY), lastAtMs: z.number().default(0) }),  consumes: ["*"],
   emits: ["events.iterate.com/stream/paused"],
 });
 class BreakerProcessor extends StreamProcessor {

@@ -78,8 +78,15 @@ export class CapnwebConnection extends InvokeHandle {
     });
     this.#closeSession = closeSession;
   }
-  [Symbol.dispose](): void {
+  /** Close the WebSocket session (the next call reopens it); a batch connection holds nothing. A
+   *  DECLARED member on purpose: the dotted fallback beneath `InvokeHandle` answers every unknown
+   *  name with a REMOTE path, so a probe for `close` (`releaseConnections`, index.ts) must find this
+   *  one — else it would call `close()` on the remote main and leave the local socket open. */
+  close(): void {
     this.#closeSession();
+  }
+  [Symbol.dispose](): void {
+    this.close();
   }
 }
 

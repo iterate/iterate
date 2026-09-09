@@ -26,7 +26,6 @@ const contractOf = (slug: string, version: string, consumes: readonly string[]) 
     version,
     description: "",
     stateSchema: z.object({ n: z.number().default(0) }),
-    events: {},
     consumes,
     emits: [],
   });

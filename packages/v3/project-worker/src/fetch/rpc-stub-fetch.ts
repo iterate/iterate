@@ -66,8 +66,9 @@ export function itxExpressionEndingInFetch(expr: ItxExpression): ItxExpression {
 //   Transport side (dialRpcStubFetch): dial the provider's real fetch. A socketless
 //   Response returns over the RPC leg as-is (it serializes fine). A socket-bearing one CANNOT —
 //   so the socket is accepted right there, ONE dedicated "upgrade leg" WebSocket is opened back
-//   into the DO (a fetch upgrade carrying `x-itx-fetch-upgrade` → acceptFetchUpgradeLeg, gated on
-//   the pending upgradeId), frames are wired provider⇄leg, and a plain marker returns instead.
+//   into the DO (a fetch upgrade carrying `x-itx-fetch-upgrade` → acceptFetchUpgradeLeg, correlated
+//   with the eyeball by the upgradeId tag alone — an unguessable UUID; nothing gates the door),
+//   frames are wired provider⇄leg, and a plain marker returns instead.
 //
 //   DO side again: on the marker, mint the eyeball's WebSocketPair natively (the DO ↔ eyeball
 //   hop is a real fetch — socket-legal) and forward frames eyeball⇄leg by tag. Both DO-side

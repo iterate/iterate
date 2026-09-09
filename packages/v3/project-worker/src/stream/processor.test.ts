@@ -26,11 +26,6 @@ const CounterContract = defineProcessorContract({
   version: "1.0.0",
   description: "counts ticks; emits a milestone every 3",
   stateSchema: z.object({ ticks: z.number().default(0) }),
-  events: {
-    "events.iterate.com/counter/milestone": {
-      payloadSchema: z.object({ at: z.number() }),
-    },
-  },
   consumes: ["events.iterate.com/counter/ticked"],
   emits: ["events.iterate.com/counter/milestone"],
 });
@@ -57,13 +52,11 @@ class CounterProcessor extends StreamProcessor<{ ticks: number }> {
     });
     if (args.state.ticks % 3 === 0)
       args.blockProcessorWhile(() =>
-        args.append(
-          this.contract.buildEvent({
-            type: "events.iterate.com/counter/milestone",
-            payload: { at: args.state.ticks },
-            idempotencyKey: this.idempotencyKey(`milestone-${args.state.ticks}`),
-          }),
-        ),
+        args.append({
+          type: "events.iterate.com/counter/milestone",
+          payload: { at: args.state.ticks },
+          idempotencyKey: this.idempotencyKey(`milestone-${args.state.ticks}`),
+        }),
       );
   }
 }
@@ -92,23 +85,10 @@ describe("contract", () => {
         version: "1",
         description: "",
         stateSchema: z.object({ required: z.string() }),
-        events: {},
         consumes: [],
         emits: [],
       }),
     ).toThrow(/parse \{\}/);
-  });
-
-  test("buildEvent validates payload against the owned schema", () => {
-    expect(() =>
-      CounterContract.buildEvent({
-        type: "events.iterate.com/counter/milestone",
-        payload: { at: "x" },
-      }),
-    ).toThrow();
-    expect(() =>
-      CounterContract.buildEvent({ type: "events.iterate.com/other", payload: {} }),
-    ).toThrow(/not owned/);
   });
 });
 
@@ -169,7 +149,6 @@ describe("the concurrency contract", () => {
       version: "1",
       description: "",
       stateSchema: z.object({}),
-      events: {},
       consumes: ["e"],
       emits: [],
     });
@@ -234,7 +213,6 @@ describe("the concurrency contract", () => {
       version: "1",
       description: "",
       stateSchema: z.object({ seen: z.number().default(0) }),
-      events: {},
       consumes: ["e"],
       emits: [],
     });
@@ -310,7 +288,6 @@ const CaughtUpContract = defineProcessorContract({
   version: "1.0.0",
   description: "counts delivery.caughtUp firings — the at-head-pass probe",
   stateSchema: z.object({ n: z.number().default(0) }),
-  events: {},
   consumes: ["*"],
   emits: [],
 });
@@ -366,7 +343,6 @@ describe("ephemeral events", () => {
     version: "1",
     description: "",
     stateSchema: z.object({ seen: z.array(z.string()).default([]) }),
-    events: {},
     consumes: ["loud", "chunk"], // "chunk" arrives ephemeral — NAMED, so it is consumed
     emits: [],
   });
@@ -386,7 +362,6 @@ describe("ephemeral events", () => {
     version: "1",
     description: "",
     stateSchema: z.object({ seen: z.array(z.string()).default([]) }),
-    events: {},
     consumes: ["*"], // star NEVER sweeps ephemerals
     emits: [],
   });
@@ -486,7 +461,6 @@ describe("review round 1 regressions", () => {
       version: "1",
       description: "",
       stateSchema: z.object({}),
-      events: { echoed: { payloadSchema: z.object({}) } },
       consumes: ["ping"],
       emits: ["echoed"],
     });
@@ -514,7 +488,6 @@ describe("reduce cache + re-reduce", () => {
         version,
         description: "",
         stateSchema: z.object({ n: z.number().default(0) }),
-        events: {},
         consumes: ["events.iterate.com/counter/ticked"],
         emits: [],
       });
@@ -573,7 +546,6 @@ describe("emit rules + idempotency", () => {
       version: "1",
       description: "",
       stateSchema: z.object({}),
-      events: {},
       consumes: ["e"],
       emits: [],
     });
@@ -606,7 +578,6 @@ describe("live state (the delta patches on the wire)", () => {
     version: "1.0.0",
     description: "counts events; projects a trimmed live shape",
     stateSchema: z.object({ count: z.number().default(0), secret: z.string().default("hidden") }),
-    events: {},
     consumes: ["tick"],
     emits: [],
   });
@@ -682,7 +653,6 @@ describe("live state (the delta patches on the wire)", () => {
       version: "1.0.0",
       description: "consumes but never changes its projection",
       stateSchema: z.object({ seen: z.number().default(0) }),
-      events: {},
       consumes: ["tick"],
       emits: [],
     });
@@ -716,7 +686,6 @@ describe("live state (the delta patches on the wire)", () => {
       version: "1.0.0",
       description: "tries to consume the platform live-state type",
       stateSchema: z.object({ seen: z.number().default(0) }),
-      events: {},
       consumes: ["*", "events.iterate.com/live-state/changed"],
       emits: [],
     });
@@ -766,7 +735,6 @@ describe("live state (the delta patches on the wire)", () => {
       description:
         "reduce owns nothing; processEvent moves a runtime field the projection reduces in",
       stateSchema: z.object({}),
-      events: {},
       consumes: ["tick"],
       emits: [],
     });
@@ -803,7 +771,6 @@ describe("live state (the delta patches on the wire)", () => {
       version: "1.0.0",
       description: "consumes ticks, reduces nothing, projects the (unchanged) state verbatim",
       stateSchema: z.object({ n: z.number().default(0) }),
-      events: {},
       consumes: ["tick"],
       emits: [],
     });
@@ -833,7 +800,6 @@ describe("live state emission failure is contained", () => {
       version: "1.0.0",
       description: "keeps a BigInt in state — the projection cannot serialize",
       stateSchema: z.object({ n: z.number().default(0) }),
-      events: {},
       consumes: ["tick"],
       emits: [],
     });
@@ -872,7 +838,6 @@ const CountContract = (version: string) =>
     version,
     description: "counts ticks, records an effect per consumed event",
     stateSchema: z.object({ ticks: z.number().default(0) }),
-    events: {},
     consumes: ["tick"],
     emits: [],
   });
@@ -899,7 +864,6 @@ const EffectOnlyContract = defineProcessorContract({
   version: "1.0.0",
   description: "pure side-effect processor: reduce never changes state",
   stateSchema: z.object({}),
-  events: {},
   consumes: ["*"],
   emits: [],
 });

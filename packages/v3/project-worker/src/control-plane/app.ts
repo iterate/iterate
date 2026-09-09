@@ -1,7 +1,7 @@
 // The default handler — everything that is NOT the OAuth token/metadata endpoints or the /mcp API route.
 // This is the FIRST-PARTY world: the login form, the session, the home page/console, and the OAuth
-// /authorize consent page (which reuses the same session AND lets you create an org + project on the
-// spot). No first-party surface is ever an OAuth client; they all just carry the session cookie.
+// /authorize consent page (which reuses the same session and grants the client the USER — what /mcp
+// acts as). No first-party surface is ever an OAuth client; they all just carry the session cookie.
 
 import { appConfigOf } from "../app-config.ts";
 import { sameOriginPath } from "../project-host.ts";
@@ -74,7 +74,8 @@ async function home(_request: Request, env: Env, session: Session): Promise<Resp
   );
 }
 
-/** The OAuth /authorize consent page — reuses the session AND lets the caller emerge with an org+project. */
+/** The OAuth /authorize consent page — reuses the session; approving grants the client the USER
+ *  (`props.sub` / `props.email`, what every /mcp tool acts as). */
 async function authorize(request: Request, env: Env, session: Session | null): Promise<Response> {
   let oauthRequest;
   try {
@@ -84,95 +85,31 @@ async function authorize(request: Request, env: Env, session: Session | null): P
   }
   const client = await env.OAUTH_PROVIDER.lookupClient(oauthRequest.clientId);
   const clientName = client?.clientName ?? oauthRequest.clientId;
-  const dir = directory(env.DB);
 
   // No session → show the login form; on success it returns here (next = this authorize URL).
   if (!session) {
-    return page("Sign in", loginForm(request.url, `to authorize ${esc(clientName)}`));
+    return page("Sign in", loginForm(request.url, `to authorize ${clientName}`));
   }
 
-  // POST (approve): resolve the project (create org+project if the user chose "new"), then mint the grant
-  // with props scoped to that project.
+  // POST (approve): mint the grant as the user.
   if (request.method === "POST") {
-    const form = await request.formData();
-    const choice = String(form.get("projectId") ?? "");
-    let projectId: string;
-    if (choice && choice !== "__new__") {
-      // the posted choice must be one of the user's own projects — the radio is the browser's word
-      if (!(await dir.listProjects(session.sub)).some((project) => project.id === choice))
-        return authorizeConsent(
-          request,
-          oauthRequest,
-          clientName,
-          session,
-          dir,
-          "Not your project.",
-        );
-      projectId = choice;
-    } else {
-      const slug = slugify(String(form.get("slug") ?? ""));
-      if (!slug)
-        return authorizeConsent(
-          request,
-          oauthRequest,
-          clientName,
-          session,
-          dir,
-          "Enter a project slug.",
-        );
-      const orgName = String(form.get("orgName") ?? "").trim() || `${session.email}'s org`;
-      const org = await dir.ensureOrg(session.sub, orgName);
-      projectId = (await dir.createProject(org.id, slug)).id;
-    }
     const scope = oauthRequest.scope.length ? oauthRequest.scope : ["project"];
     const { redirectTo } = await env.OAUTH_PROVIDER.completeAuthorization({
       request: oauthRequest,
       userId: session.sub,
       metadata: { clientName },
       scope,
-      props: {
-        sub: session.sub,
-        email: session.email,
-        projectId,
-      },
+      props: { sub: session.sub, email: session.email },
     });
     return Response.redirect(redirectTo, 302);
   }
 
-  return authorizeConsent(request, oauthRequest, clientName, session, dir);
-}
-
-/** Render the consent page: pick an existing project OR create an org+project inline. */
-async function authorizeConsent(
-  request: Request,
-  oauthRequest: { scope: string[] },
-  clientName: string,
-  session: Session,
-  dir: ReturnType<typeof directory>,
-  error = "",
-): Promise<Response> {
-  const projects = await dir.listProjects(session.sub);
-  const existing = projects
-    .map(
-      (p) =>
-        `<label><input type="radio" name="projectId" value="${esc(p.id)}"> <code>${esc(p.id)}</code></label>`,
-    )
-    .join("");
   return page(
     "Authorize",
     `<h1>Authorize ${esc(clientName)}</h1>
 <p><strong>${esc(clientName)}</strong> wants to connect as <strong>${esc(session.email)}</strong>.</p>
 <p class="muted">Scopes: <code>${esc(oauthRequest.scope.join(" ") || "project")}</code></p>
-${error ? `<p><strong>${esc(error)}</strong></p>` : ""}
-<form method="post" action="${esc(request.url)}">
-  ${existing ? `<fieldset><legend>Grant access to an existing project</legend>${existing}</fieldset>` : ""}
-  <fieldset><legend>…or create a new org + project</legend>
-    <label><input type="radio" name="projectId" value="__new__"${existing ? "" : " checked"}> Create new</label>
-    <input type="text" name="orgName" placeholder="Org name (optional)">
-    <input type="text" name="slug" placeholder="new-project-slug">
-  </fieldset>
-  <button type="submit">Approve</button>
-</form>
+<form method="post" action="${esc(request.url)}"><button type="submit">Approve</button></form>
 <form method="post" action="/logout"><button>Switch account</button></form>`,
   );
 }

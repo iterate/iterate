@@ -62,6 +62,16 @@ describe("parseAppConfig", () => {
       vars: { ...MINIMAL, APP_CONFIG_LOGIN_MODE: "magic-link" },
       throws: /^APP_CONFIG_LOGIN_MODE: expected "email" or "open", got "magic-link"$/,
     },
+    // email mode signs a cookie: a blank secret would sign none (a zero-length HMAC key throws) and
+    // verify none (principal.ts) — refused at first use, not a silent lock-out
+    {
+      vars: { ...MINIMAL, APP_CONFIG_LOGIN_MODE: "email" },
+      throws: /^APP_CONFIG_SESSION_SECRET: required in "email" login mode, but unset or blank$/,
+    },
+    {
+      vars: { ...MINIMAL, APP_CONFIG_LOGIN_MODE: "email", APP_CONFIG_SESSION_SECRET: "  " },
+      throws: /^APP_CONFIG_SESSION_SECRET: required in "email" login mode, but unset or blank$/,
+    },
     // a wrangler var may be a JSON object; a var wants a string
     {
       vars: { ...MINIMAL, APP_CONFIG_ENVIRONMENT_NAME: { not: "a string" } },

@@ -229,6 +229,25 @@ test("pause refuses durable AND ephemeral appends, mixed batches wholesale — c
   expect(after.offset).toBeGreaterThan(0);
 });
 
+test("a subscribe REFUSED by a paused stream leaves the live same-name subscription lent — the row is appended before the session recalls what it lent under the name", async () => {
+  // iterate-context.ts `subscribe`: an expression target appends its row FIRST and only then
+  // recalls the callback this session lent under `subscription:<name>` — a refusal changes nothing.
+  // The other order recalled the callback (its pager closed, the stub returned) and THEN met the
+  // refusal: a refused subscribe had silently destroyed the subscription it failed to replace.
+  const itx = openItx(freshCtx("pausesub"));
+  await itx.subscribe({ name: "watch", target: () => undefined });
+  expect(await itx.rpcStubs.list()).toContain("subscription:watch");
+  await append(itx, {
+    type: "events.iterate.com/stream/paused",
+    payload: { reason: "maintenance" },
+  });
+  const refused = await rejection(itx.subscribe({ name: "watch", target: "itx.kv.get('k')" }));
+  expect(refused.message).toContain("stream paused");
+  expect(await itx.rpcStubs.list()).toContain("subscription:watch"); // still lent: nothing was recalled
+  await append(itx, { type: "events.iterate.com/stream/resumed", payload: {} });
+  expect(await itx.rpcStubs.list()).toContain("subscription:watch"); // and the resume un-sets nothing: the key has its transport
+});
+
 // ── read paging: the scanned-offset-range proof ──
 
 test("read paging: a full page stops at its last row; a short page proves the durable log through its mark, never the ephemeral tail", async () => {

@@ -16,6 +16,7 @@ import { createExecutionContext, env } from "cloudflare:test";
 import { newWebSocketRpcSession } from "capnweb";
 import { afterAll, beforeAll, expect, test } from "vitest";
 import definitionsSql from "../src/control-plane/definitions.sql?raw";
+import { signProjectToken } from "../src/principal.ts";
 import worker from "../src/worker.ts";
 
 const openMode = env as unknown as Record<string, unknown>;
@@ -223,7 +224,6 @@ test("open mode (this lane's configuration): every visitor is the anonymous user
   expect(JSON.parse((await mcpResult(whoami)).content[0].text)).toEqual({
     email: "anonymous",
     sub: "user_anonymous",
-    projectId: null,
   });
   const listed = await mcp(
     openMode,
@@ -271,4 +271,68 @@ test("the fetch lane (/expression): in email mode a non-member is 401 (a member'
       })
     ).status,
   ).not.toBe(401); // admitted — what the lane answers for a non-fetch-shaped target is its own business
+});
+
+// THE MACHINE LANE ON A PROJECT HOST in email mode: `itx.serveMcp()` mounted as `itx.apps.mcp`,
+// reached as `mcp--<p>.<base>` — the project-host spelling of the fetch lane (worker.ts), with the
+// lane's directory admission and the DO dialled inside this lane. Mounted once, for the control and
+// the pin.
+const emailHostMode = {
+  ...emailMode,
+  APP_CONFIG_PROJECT_HOSTNAME_BASE: "projects.test",
+  APP_CONFIG_PROJECT_TOKEN_SECRET: "mcp-host-secret",
+};
+let mcpLaneMounted: Promise<void> | undefined;
+/** `tools/call itx.invoke("itx.builtins.secrets.list()")` on the mounted MCP host, under `headers`. */
+async function mcpLaneToolsCall(headers: Record<string, string>): Promise<Response> {
+  await (mcpLaneMounted ??= (async () => {
+    const ada = await signIn(emailHostMode, "mcp-ada@example.com");
+    const itx = await (
+      await api(emailHostMode, ada)
+    )
+      .authenticate()
+      .projects.create({ slug: "mcp-lane" });
+    await itx.provide("itx.apps.mcp", "itx.serveMcp()");
+  })());
+  return worker.fetch(
+    new Request("https://mcp--mcp-lane.projects.test/", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        accept: "application/json, text/event-stream",
+        "mcp-protocol-version": "2025-06-18",
+        ...headers,
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: { name: "itx.invoke", arguments: { expression: "itx.builtins.secrets.list()" } },
+      }),
+    }),
+    emailHostMode as never,
+    createExecutionContext(),
+  );
+}
+
+test("email mode: mcp--<p>.<base> serves a tools/call bearing the project's token (the control for the pin below)", async () => {
+  const token = await signProjectToken(
+    { projectId: "mcp-lane", actor: "user_mcp-ada@example.com", expiresAt: Date.now() + 60_000 },
+    "mcp-host-secret",
+  );
+  const withBearer = await mcpLaneToolsCall({ authorization: `Bearer ${token}` });
+  expect(withBearer.status, await withBearer.text()).toBe(200);
+});
+
+// PINNED RED — a design call the owner makes, not fixed here. The project host admits everyone by
+// design (a site is public), and `itx.serveMcp()` mounted as an app hands `itx.invoke` to whoever
+// reaches the host: an anonymous tools/call reaches every platform root and `itx.builtins.*`, which
+// no rule can mask — in `email` login mode the WHOLE context, while the `/expression` spelling of the
+// same lane admits members only (the fetch-lane test above). The library cannot see the login mode
+// (it is written against `itx` alone), so the refusal belongs either to the ingress (a per-app
+// admission the host does not have) or to the handle reading its Request's principal stamp under a
+// mode it is told.
+test.fails("email mode: mcp--<p>.<base> refuses a tools/call carrying no principal", async () => {
+  const anonymous = await mcpLaneToolsCall({});
+  expect(anonymous.status, await anonymous.text()).toBe(401);
 });

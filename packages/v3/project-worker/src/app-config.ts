@@ -39,7 +39,8 @@ export interface AppConfig {
   readonly artifactsNamespace: string;
   /** The control plane's login mode. Required. */
   readonly loginMode: LoginMode;
-  /** The HMAC secret the control plane's session cookie is signed with (control-plane/session.ts). */
+  /** The HMAC secret the control plane's session cookie is signed with (control-plane/session.ts).
+   *  Required in `email` login mode: a blank secret signs no cookie and verifies none. */
   readonly sessionSecret: string;
   /** Cloudflare's version id of the running deployment (`CF_VERSION_METADATA.id`; local workerd mints
    *  one too); "unversioned" where the binding is absent or blank. In every loader cacheKey and at
@@ -76,6 +77,11 @@ export function parseAppConfig(vars: object, deployId = "unversioned"): AppConfi
     throw new Error(
       `APP_CONFIG_LOGIN_MODE: expected "email" or "open", got ${JSON.stringify(loginMode)}`,
     );
+  const sessionSecret = read("APP_CONFIG_SESSION_SECRET");
+  if (loginMode === "email" && !sessionSecret)
+    throw new Error(
+      'APP_CONFIG_SESSION_SECRET: required in "email" login mode, but unset or blank',
+    );
   return {
     environmentName,
     projectHostnameBase: read("APP_CONFIG_PROJECT_HOSTNAME_BASE"),
@@ -83,7 +89,7 @@ export function parseAppConfig(vars: object, deployId = "unversioned"): AppConfi
     artifactsAccountId: read("APP_CONFIG_ARTIFACTS_ACCOUNT_ID"),
     artifactsNamespace: read("APP_CONFIG_ARTIFACTS_NAMESPACE"),
     loginMode,
-    sessionSecret: read("APP_CONFIG_SESSION_SECRET"),
+    sessionSecret,
     deployId,
   };
 }

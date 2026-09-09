@@ -104,6 +104,34 @@ describe("buildLibrary — live connections are memoized per context", () => {
     expect(await b.callTool("echo", {})).toBe("ok");
   });
 
+  test("releaseConnections closes a WebSocket capnweb connection LOCALLY — `close` is the connection's own member, never the dotted proxy's remote call", async () => {
+    // What egress's 101 would carry: a WebSocket-shaped object capnweb's session can drive.
+    const closed: [number | undefined, string | undefined][] = [];
+    const sent: string[] = [];
+    const webSocket = {
+      readyState: 1,
+      accept() {},
+      send(data: string) {
+        sent.push(String(data));
+      },
+      close(code?: number, reason?: string) {
+        closed.push([code, reason]);
+      },
+      addEventListener() {},
+      removeEventListener() {},
+    };
+    const itx = { fetch: async () => ({ status: 101, webSocket }) } as unknown as LibraryItx;
+    const { roots, releaseConnections } = buildLibrary(itx);
+    await roots.connectToCapnweb("wss://ws.example/rpc");
+    releaseConnections();
+    await new Promise((r) => setTimeout(r, 10));
+    // the LOCAL session was shut down (capnweb closes the socket on disposing the main stub) and
+    // nothing rode the wire — the dotted fallback beneath InvokeHandle would have made `close` a
+    // remote call on the far side's main object instead, leaving this socket open
+    expect(closed).toHaveLength(1);
+    expect(sent).toEqual([]);
+  });
+
   test("a connect that FAILS is not memoized — the next call retries", async () => {
     let attempts = 0;
     const itx = {

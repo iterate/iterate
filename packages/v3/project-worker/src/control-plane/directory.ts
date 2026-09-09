@@ -23,7 +23,6 @@ export interface User {
 export interface Org {
   id: string; // org_<hex>
   name: string;
-  slug: string;
   role?: string;
 }
 export interface Project {
@@ -45,20 +44,18 @@ export function directory(db: D1Database) {
       return { id: row.id, email: row.email };
     },
 
-    /** Create an org (minted org_ id + a collision-proof slug) and make the creator its owner. The slug is
-     *  suffixed with the id tail so two orgs of the same name never collide on the unique constraint. */
+    /** Create an org (a minted org_ id; the name is free text, two orgs may share one) and make the
+     *  creator its owner. */
     async createOrg(userId: string, name: string): Promise<Org> {
-      const id = newOrgId();
-      const slug = `${slugify(name).slice(0, 32) || "org"}-${id.slice(-6)}`;
-      const org = await createOrg(client, { id, name, slug });
+      const org = await createOrg(client, { id: newOrgId(), name });
       await addOrgMember(client, { orgId: org.id, userId, role: "owner" });
-      return { id: org.id, name: org.name, slug: org.slug, role: "owner" };
+      return { id: org.id, name: org.name, role: "owner" };
     },
 
     /** Orgs the user belongs to. */
     async listOrgs(userId: string): Promise<Org[]> {
       const rows = await listOrgsForUser(client, { userId });
-      return rows.map((r) => ({ id: r.id, name: r.name, slug: r.slug, role: r.role }));
+      return rows.map((r) => ({ id: r.id, name: r.name, role: r.role }));
     },
 
     /** Create a project inside an org: `name` slugified IS the id, GLOBALLY unique — a name already

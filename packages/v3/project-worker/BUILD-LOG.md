@@ -4274,3 +4274,39 @@ rig with the real `Stream` + `SubscriptionDelivery`, then applied by the same ag
   fail; the one failure is the 1001-key kv list losing its socket mid-way ("Network connection
   lost") — the second full deployed run in a row to drop it, green alone both times: a platform
   signature on 1001 puts over one socket, recorded, not code.
+
+## 2026-09-09 — review pass 4: the edge half (worker, session, control plane, library, client, sdk)
+
+A Fable read of the half no pass had read closely, two claims first reproduced by probe (a workerd
+miniflare for the lane, node for the library), then applied by the same agent:
+
+- BUG (the dangerous one): the `/expression` lane verified a project-token bearer in email mode and
+  then FORWARDED it to loaded code, stamping no principal — an app could `authenticate({ projectToken })`
+  as the visitor, the exact hazard the project host guards against for the cookie; a signed-in member's
+  lane calls were unattributed too. The two lanes were the same code twice, drifting: now ONE
+  `laneIdentityOf` (bearer for THIS project > host cookie > the email-mode session user, stamped as
+  `/api` stamps it; a foreign bearer is dropped and the cookie still stamps) and ONE `laneRequestTo`
+  (strip inbound `x-itx-*`, the platform cookie, a verified bearer; set expression, hops, principal).
+- BUG: the idle quiesce never closed a WebSocket capnweb connection — `held.close` on a
+  `CapnwebConnection` was the dotted-hop PROXY, so the release dispatched a remote `close()` and left
+  the local socket open: one leaked, DO-pinning socket per quiesce. `close()` is declared now.
+- BUG: `subscribe(expression)` recalled the same-name live callback BEFORE the append — on a paused
+  stream the append was refused and the callback already gone. Append first (as `provide` does).
+- BUG: `email` mode accepted a blank session secret (a zero-length HMAC key: `/login` 500s, every cookie
+  rejected — a silent lock-out) and the deployed secret was a COMMITTED var. Refused at parse; the var
+  is a wrangler secret now, rotated on this deploy.
+- BUG: OpenAPI cookie parameters joined with `, ` (RFC 6265 wants `; `); the fetch lane's 500 put the
+  stack in a public body (the message only now; the stack to the issue log).
+- RED PIN (a design call, not made): in `email` mode a project host carrying `serveMcp()` admits an
+  anonymous `tools/call` of ANY expression — `itx.builtins.secrets.list()` included — because the host
+  admits everyone by design and the library cannot see the login mode. Pinned in the workers lane.
+- LESS CODE: the OAuth consent's project picker granted nothing (`props.projectId` read only by
+  `whoami`) — deleted, the grant is the user; two shapes of "who" folded into the control plane's
+  `Session`; the SDK contract's `events`/`EventDefinition`/`buildEvent` (no caller; the core's twin went
+  in pass 3); `orgs.slug` (minted, stored, read by nothing — the deployed D1 rebuilt without it);
+  `CODE_VERSION = "live-57"`, a hand-bumped second deploy id (`/version` answers Cloudflare's).
+- CLARITY: ten comments describing what the code no longer does (a gate that never existed on the
+  fetch-upgrade leg, "verbatim" on a stripped request, "authority is org membership" for a form that
+  verifies nothing, a double-escaped consent note, …). The teardown key is `JSON.stringify([name, key])`
+  — a context path may hold a space.
+- 34 files, +371 / −343; source ≈ −110 net, the rest tests, pins and docs.

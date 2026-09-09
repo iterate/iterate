@@ -20,7 +20,7 @@ const PRESENCE_SRC = `import { StreamProcessor, StreamProcessorDurableObject, de
 const contract = defineProcessorContract({
   slug: "presence", version: "1.0.0",
   description: "Reduced tick count beside a runtime lastPokeMs.",
-  stateSchema: z.object({ ticks: z.number().default(0) }), events: {},
+  stateSchema: z.object({ ticks: z.number().default(0) }),
   consumes: ["tick", "poke"], emits: [],
 });
 class PresenceProcessor extends StreamProcessor {

@@ -11,7 +11,11 @@ import {
 } from "capnweb";
 import { IterateContextDurableObject, type Env } from "./iterate-context-durable-object.ts";
 import { directory } from "./control-plane/directory.ts";
-import { currentSession, identity } from "./control-plane/session.ts";
+import {
+  currentSession,
+  identity,
+  type Session as ControlPlaneSession,
+} from "./control-plane/session.ts";
 import controlPlane from "./control-plane/index.ts";
 import type { Env as ControlPlaneEnv } from "./control-plane/env.ts";
 
@@ -24,7 +28,7 @@ import {
   type DurableObjectAddress,
 } from "./context/durable-object-names.ts";
 import { UnauthenticatedSession } from "./session.ts";
-import { appConfigOf } from "./app-config.ts";
+import { appConfigOf, type AppConfig } from "./app-config.ts";
 import {
   PROJECT_SESSION_PATH,
   projectHostOf,
@@ -33,12 +37,79 @@ import {
   sameOriginPath,
   withoutProjectSessionCookie,
 } from "./project-host.ts";
-import { ITX_PRINCIPAL_HEADER, verifyProjectToken } from "./principal.ts";
+import {
+  ITX_PRINCIPAL_HEADER,
+  verifyProjectToken,
+  type Principal,
+  type ProjectTokenClaims,
+} from "./principal.ts";
 
 /** The fetch lane's re-entry count: `/expression?itx=itx.fetch` egresses to its own URL and lands
  *  here again with the same query; the header counts the passes and the lane refuses past a few. */
 const ITX_EXPRESSION_LANE_HOPS_HEADER = "x-itx-expression-hops";
 const ITX_EXPRESSION_LANE_MAX_HOPS = 4;
+
+/** WHO a lane's request is, as both lanes into a context read it. `principal` is the verified stamp
+ *  the context runs the call under: a project token for THIS project as `Authorization: Bearer`
+ *  (the machine lane — an MCP client, a script) or as the host cookie (a browser), the bearer
+ *  winning when both are present; else, in `email` login mode, the control plane's session user,
+ *  stamped as `/api` stamps it (session.ts). `bearerClaims` is the project token the bearer
+ *  carried, for ANY project — the platform's credential, which an app never sees (a token for
+ *  another project stamps nothing, and the cookie still may). `user` is the control plane's session
+ *  user in `email` mode, or null — what the `/expression` lane's membership check reads. */
+type LaneIdentity = {
+  principal: Principal | null;
+  bearerClaims: ProjectTokenClaims | null;
+  user: ControlPlaneSession | null;
+};
+
+async function laneIdentityOf(
+  request: Request,
+  projectId: string,
+  { projectTokenSecret, loginMode, sessionSecret }: AppConfig,
+): Promise<LaneIdentity> {
+  const bearerToken = /^Bearer\s+(\S+)$/i.exec(request.headers.get("authorization") ?? "")?.[1];
+  const bearerClaims = bearerToken
+    ? await verifyProjectToken(bearerToken, projectTokenSecret)
+    : null;
+  const cookieToken = projectSessionCookieOf(request.headers.get("cookie"));
+  const tokenClaims =
+    bearerClaims?.projectId === projectId
+      ? bearerClaims
+      : cookieToken
+        ? await verifyProjectToken(cookieToken, projectTokenSecret)
+        : null;
+  const user = loginMode === "email" ? await currentSession(request, sessionSecret) : null;
+  const principal =
+    tokenClaims?.projectId === projectId
+      ? { actor: tokenClaims.actor, ...(tokenClaims.email && { email: tokenClaims.email }) }
+      : user
+        ? { actor: user.sub, email: user.email }
+        : null;
+  return { principal, bearerClaims, user };
+}
+
+/** The Request a lane hands the context DO — the same Request, its URL, method, body and a
+ *  WebSocket upgrade intact, with the headers made the platform's: every inbound `x-itx-*` gone (a
+ *  pager or fetch-upgrade header from outside would enter the DO's internal protocol), the cookie
+ *  header replaced by `appCookies` (null ⇒ none — what the capability may see), a project-token
+ *  bearer removed (an app's own bearer scheme passes through untouched), then the expression, the
+ *  hop count and the principal's stamp. */
+function laneRequestTo(
+  request: Request,
+  lane: { itxExpression: string; hops: number; appCookies: string | null; identity: LaneIdentity },
+): Request {
+  const headers = new Headers(request.headers);
+  for (const name of [...headers.keys()]) if (name.startsWith("x-itx-")) headers.delete(name);
+  if (lane.appCookies) headers.set("cookie", lane.appCookies);
+  else headers.delete("cookie");
+  if (lane.identity.bearerClaims) headers.delete("authorization");
+  headers.set(ITX_EXPRESSION_FETCH_HEADER, lane.itxExpression);
+  headers.set(ITX_EXPRESSION_LANE_HOPS_HEADER, String(lane.hops));
+  if (lane.identity.principal)
+    headers.set(ITX_PRINCIPAL_HEADER, JSON.stringify(lane.identity.principal));
+  return new Request(request, { headers });
+}
 
 // Native workerd RPC promises pipeline exactly like capnweb ones — thread them unawaited through
 // the step walk too (dispatch.ts can't import cloudflare:workers itself: the unit lane runs it in
@@ -59,9 +130,6 @@ registerPipelinedRpcBrand(CapnwebRpcStub as unknown as abstract new () => unknow
 export { IterateContextDurableObject };
 export { ItxEntrypoint } from "./itx-entrypoint.ts";
 
-// Bumped every deploy so a smoke test can wait for THIS build to propagate (workers.dev lags ~1-2min/colo).
-const CODE_VERSION = "live-57";
-
 export default {
   async fetch(request: Request, env: WorkerEnv, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
@@ -79,18 +147,12 @@ export default {
 
     // PROJECT-HOST INGRESS (project-host.ts): a request on `<label>--<projectId>.<base>` IS the app
     // `itx.apps.<label>` of that project's ROOT context, the Request riding into the fetch lane
-    // below with its URL, the app's own cookies and a WebSocket upgrade intact (the platform's
-    // session cookie is dropped), so a served page's relative links work. Inbound `x-itx-*` are stripped first: the lane's headers are the platform's,
-    // never a visitor's. Everything on a project host is the app's; the platform's own doors (`/api`,
-    // `/expression`, `/version`) live on the worker's hostname.
-    const {
-      projectHostnameBase,
-      projectTokenSecret,
-      loginMode,
-      sessionSecret,
-      environmentName,
-      deployId,
-    } = appConfigOf(env);
+    // below with its URL, the app's own cookies and a WebSocket upgrade intact (laneRequestTo), so
+    // a served page's relative links work. Everything on a project host is the app's; the
+    // platform's own doors (`/api`, `/expression`, `/version`) live on the worker's hostname.
+    const appConfig = appConfigOf(env);
+    const { projectHostnameBase, projectTokenSecret, loginMode, environmentName, deployId } =
+      appConfig;
     const projectHost = projectHostOf(url.hostname, projectHostnameBase);
     if (projectHost) {
       // ADMISSION, before any Durable Object is dialled: a context is created on first touch, so a
@@ -125,44 +187,24 @@ export default {
           },
         });
       }
-      const headers = new Headers(request.headers);
-      for (const name of [...headers.keys()]) if (name.startsWith("x-itx-")) headers.delete(name);
-      headers.set(ITX_EXPRESSION_FETCH_HEADER, `itx.apps.${projectHost.app}`);
-      headers.set(ITX_EXPRESSION_LANE_HOPS_HEADER, String(hops));
-      // WHO: a valid project token for this project stamps the principal the app (and the lane's
-      // call) sees — the host cookie (a browser), or `Authorization: Bearer <projectToken>` (THE
-      // MACHINE LANE: an MCP client, a script), the bearer winning when both are present. The token
-      // itself never reaches the app (loaded code): only its verified stamp does — the platform's
-      // cookie is dropped, and so is a bearer that IS a project token (an app's own bearer scheme
-      // passes through untouched, exactly as a visitor's other cookies do).
-      const cookieHeader = request.headers.get("cookie");
-      const appCookies = withoutProjectSessionCookie(cookieHeader);
-      if (appCookies) headers.set("cookie", appCookies);
-      else headers.delete("cookie");
-      const bearerToken = /^Bearer\s+(\S+)$/i.exec(request.headers.get("authorization") ?? "")?.[1];
-      const bearerClaims = bearerToken
-        ? await verifyProjectToken(bearerToken, projectTokenSecret)
-        : null;
-      if (bearerClaims) headers.delete("authorization");
-      // a bearer that is not a project token is the app's own; the cookie still stamps
-      const cookieToken = projectSessionCookieOf(cookieHeader);
-      const claims =
-        bearerClaims ??
-        (cookieToken ? await verifyProjectToken(cookieToken, projectTokenSecret) : null);
-      if (claims && claims.projectId === projectId)
-        headers.set(
-          ITX_PRINCIPAL_HEADER,
-          JSON.stringify({ actor: claims.actor, ...(claims.email && { email: claims.email }) }),
-        );
+      // WHO (laneIdentityOf) and WHAT THE APP SEES (laneRequestTo): the visitor's own cookies reach
+      // the app; the platform's project-session cookie and a project-token bearer never do — only
+      // the verified stamp.
       return env.ITERATE_CONTEXT.getByName(
         DurableObjectNameCodec.stringify({ projectId, path: "/" }),
-      ).fetch(new Request(request, { headers }));
+      ).fetch(
+        laneRequestTo(request, {
+          itxExpression: `itx.apps.${projectHost.app}`,
+          hops,
+          appCookies: withoutProjectSessionCookie(request.headers.get("cookie")) || null,
+          identity: await laneIdentityOf(request, projectId, appConfig),
+        }),
+      );
     }
 
-    // `<label> <environmentName> <deployId>`: the hand-bumped label first (a smoke greps it), then the
-    // configuration (app-config.ts) — which deployment, and Cloudflare's version id of this deploy.
-    if (url.pathname === "/version")
-      return new Response(`${CODE_VERSION} ${environmentName} ${deployId}\n`);
+    // `<deployId> <environmentName>`: Cloudflare's version id of this deploy — the stamp a smoke
+    // waits for (`wrangler deploy` prints it) — and which deployment this is (app-config.ts).
+    if (url.pathname === "/version") return new Response(`${deployId} ${environmentName}\n`);
 
     // /demo — the hosted live-state demo — is a STATIC ASSET (public/demo.html, built by
     // build-sdk.mjs; wrangler.jsonc `assets`): the platform serves it before this handler runs.
@@ -185,7 +227,7 @@ export default {
           waitUntil: (p) => ctx.waitUntil(p),
           directory: directory(env.DB),
           loginMode,
-          user: user && { id: user.sub, email: user.email },
+          user,
           projectTokenSecret,
         }),
       );
@@ -212,21 +254,15 @@ export default {
       } catch (error) {
         return new Response(`${(error as Error).message}\n`, { status: 400 });
       }
+      const identity = await laneIdentityOf(request, address.projectId, appConfig);
       // ADMISSION: in `email` login mode the caller must be a member of the project — the control
       // plane's cookie (this IS the platform host) or a project-token bearer for it; `open` mode is
       // open here exactly as `/api` is (the trusted-client doctrine every local proof relies on).
       if (loginMode === "email") {
-        const bearerToken = /^Bearer\s+(\S+)$/i.exec(
-          request.headers.get("authorization") ?? "",
-        )?.[1];
-        const bearerClaims = bearerToken
-          ? await verifyProjectToken(bearerToken, projectTokenSecret)
-          : null;
-        const user = bearerClaims ? null : await currentSession(request, sessionSecret);
         const admitted =
-          bearerClaims?.projectId === address.projectId ||
-          (user !== null &&
-            (await directory(env.DB).listProjects(user.sub)).some(
+          identity.bearerClaims?.projectId === address.projectId ||
+          (identity.user !== null &&
+            (await directory(env.DB).listProjects(identity.user.sub)).some(
               (project) => project.id === address.projectId,
             ));
         if (!admitted)
@@ -234,15 +270,10 @@ export default {
             status: 401,
           });
       }
-      // The lane's headers are the platform's, never a caller's: every inbound `x-itx-*` goes (a
-      // pager or fetch-upgrade header from outside would enter the DO's internal protocol), and so do
-      // the cookies (an app served on the platform host never sees the platform's own).
-      const headers = new Headers(request.headers);
-      for (const name of [...headers.keys()]) if (name.startsWith("x-itx-")) headers.delete(name);
-      headers.delete("cookie");
-      headers.set(ITX_EXPRESSION_FETCH_HEADER, itxExpression);
-      headers.set(ITX_EXPRESSION_LANE_HOPS_HEADER, String(hops));
-      return env.ITERATE_CONTEXT.getByName(address.name).fetch(new Request(request, { headers }));
+      // No cookie reaches the capability: every cookie on the platform host is the platform's own.
+      return env.ITERATE_CONTEXT.getByName(address.name).fetch(
+        laneRequestTo(request, { itxExpression, hops, appCookies: null, identity }),
+      );
     }
 
     // Everything else on the platform host is the CONTROL PLANE, in-process (src/control-plane): login

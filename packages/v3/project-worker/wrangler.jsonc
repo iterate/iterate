@@ -92,9 +92,9 @@
     // — the `itx.repos` layer builds it from these when it does git over HTTPS.
     "APP_CONFIG_ARTIFACTS_ACCOUNT_ID": "04b3b57291ef2626c6a8daa9d47065a7",
     "APP_CONFIG_ARTIFACTS_NAMESPACE": "project-worker-repos",
-    // The in-process control plane: `open` = the no-login floor (this pass's stub); a committed demo
-    // session secret (a wrangler secret in a real deploy).
+    // The in-process control plane: `open` = the no-login floor; `email` = the login form, which
+    // REQUIRES the session-cookie secret (APP_CONFIG_SESSION_SECRET is a wrangler secret, like the
+    // project-token secret — never a committed var).
     "APP_CONFIG_LOGIN_MODE": "open",
-    "APP_CONFIG_SESSION_SECRET": "b3f1c0a7d2e94f6581ac37bde90f24a15c68d7e3049fba21c5e6d8790a1b2c3d",
   },
 }

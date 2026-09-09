@@ -237,8 +237,8 @@ browser socket carried (none ⇒ `UNAUTHENTICATED`); `authenticate({ projectToke
 is a principal bound to ONE project (`get` of any other is `FORBIDDEN`; `list`
 and `create` need a signed-in user). In `email` mode `get` admits members of the
 owning org only. One
-session may hold contexts of many projects; the session's `SessionTeardown` is keyed
-`"<iterateContextName> <rpcStubKey>"`, so two contexts lending under the same key never
+session may hold contexts of many projects; the session's `SessionTeardown` is keyed by the
+JSON pair `[iterateContextName, rpcStubKey]`, so two contexts lending under the same key never
 recall each other's stubs.
 
 Every call has two spellings, and both land on the same door:
@@ -954,16 +954,15 @@ type ProcessorContract<State> = {
   initialState: () => State;
 };
 
-/** zod schemas in, ProcessorContract + buildEvent out. stateSchema must parse {}. */
+/** A zod state schema in, a ProcessorContract out. stateSchema must parse {}. */
 function defineProcessorContract<S extends z.ZodType>(c: {
   slug: string;
   version: string;
   description: string;
   stateSchema: S;
-  events: Record<string, { description?: string; payloadSchema: z.ZodType }>;
   consumes: readonly string[];
   emits: readonly string[];
-}): ProcessorContract<z.infer<S>> & { stateSchema: S; buildEvent(e): StreamEventInput };
+}): ProcessorContract<z.infer<S>> & { stateSchema: S };
 
 type ReduceArgs<State> = { event: StreamEvent; state: State };
 type ProcessEventArgs<State> = {
@@ -1002,7 +1001,6 @@ const contract = defineProcessorContract({
   version: "1.0.0",
   description: "Reduced tick count beside a runtime lastPokeMs.",
   stateSchema: z.object({ ticks: z.number().default(0) }),
-  events: {},
   consumes: ["tick", "poke"],
   emits: [],
 });
@@ -1087,7 +1085,6 @@ const contract = defineProcessorContract({
     tokens: z.number().default(CAPACITY),
     lastAtMs: z.number().nullable().default(null),
   }),
-  events: {},
   consumes: ["*"],
   emits: ["events.iterate.com/stream/paused"],
 });

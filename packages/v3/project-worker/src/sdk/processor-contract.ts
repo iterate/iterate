@@ -8,14 +8,6 @@
 
 import { z } from "zod";
 import type { ProcessorContract } from "../stream/processor.ts";
-import type { StreamEventInput } from "../stream/events.ts";
-
-/** One owned event type: its payload schema (and prose for humans/docs) — userspace contracts carry
- *  real zod schemas, same as built-ins. */
-export type EventDefinition = {
-  description?: string;
-  payloadSchema: z.ZodType;
-};
 
 export function defineProcessorContract<StateSchema extends z.ZodType>(contract: {
   slug: string;
@@ -23,18 +15,9 @@ export function defineProcessorContract<StateSchema extends z.ZodType>(contract:
   description: string;
   /** Must parse `{}` — the initial state is `stateSchema.parse({})` (all fields defaulted). */
   stateSchema: StateSchema;
-  events: Record<string, EventDefinition>;
   consumes: readonly string[];
   emits: readonly string[];
-}): ProcessorContract<z.infer<StateSchema>> & {
-  stateSchema: StateSchema;
-  /** Build a typed input for an owned event (validates the payload against its schema). */
-  buildEvent: (event: {
-    type: string;
-    payload?: unknown;
-    idempotencyKey?: string;
-  }) => StreamEventInput;
-} {
+}): ProcessorContract<z.infer<StateSchema>> & { stateSchema: StateSchema } {
   const initial = contract.stateSchema.safeParse({});
   if (!initial.success)
     throw new Error(`contract "${contract.slug}": stateSchema must parse {} (default every field)`);
@@ -46,17 +29,5 @@ export function defineProcessorContract<StateSchema extends z.ZodType>(contract:
     emits: contract.emits,
     stateSchema: contract.stateSchema,
     initialState: () => contract.stateSchema.parse({}) as z.infer<StateSchema>,
-    buildEvent: (event) => {
-      const def = contract.events[event.type];
-      if (!def)
-        throw new Error(
-          `contract "${contract.slug}": buildEvent event type "${event.type}" is not owned`,
-        );
-      return {
-        type: event.type,
-        payload: def.payloadSchema.parse(event.payload ?? {}) as Record<string, unknown>,
-        ...(event.idempotencyKey && { idempotencyKey: event.idempotencyKey }),
-      };
-    },
   };
 }

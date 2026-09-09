@@ -31,13 +31,13 @@ export namespace upsertUser {
 }
 
 const createOrgSql = `
-INSERT INTO orgs (id, name, slug) VALUES (?, ?, ?)
-RETURNING id, name, slug;
+INSERT INTO orgs (id, name) VALUES (?, ?)
+RETURNING id, name;
 `.trim();
 const createOrgQuery = (params: createOrg.Params) => ({
   name: "createOrg",
   sql: createOrgSql,
-  args: [params.id, params.name, params.slug],
+  args: [params.id, params.name],
 });
 
 export const createOrg = Object.assign(
@@ -52,12 +52,10 @@ export namespace createOrg {
   export type Params = {
     id: string;
     name: string;
-    slug: string;
   };
   export type Result = {
     id: string;
     name: string;
-    slug: string;
   };
 }
 
@@ -87,7 +85,7 @@ export namespace addOrgMember {
 }
 
 const listOrgsForUserSql = `
-SELECT o.id, o.name, o.slug, m.role
+SELECT o.id, o.name, m.role
 FROM orgs o
 JOIN org_members m ON m.org_id = o.id
 WHERE m.user_id = ?
@@ -116,7 +114,6 @@ export namespace listOrgsForUser {
   export type Result = {
     id: string;
     name: string;
-    slug: string;
     role: string;
   };
 }

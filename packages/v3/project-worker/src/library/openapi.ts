@@ -92,6 +92,7 @@ export class OpenApiConnection extends RpcTarget {
     let resolvedPath = operation.path;
     const url = new URL(this.#requestBaseUrl);
     const headers = new Headers(this.#headers);
+    const cookieParameters: string[] = [];
     for (const parameter of operation.parameters) {
       const value = fields[parameter.name];
       if (parameter.in === "path") {
@@ -108,10 +109,17 @@ export class OpenApiConnection extends RpcTarget {
         if (value != null) headers.set(parameter.name, String(value));
       } else if (parameter.in === "cookie") {
         if (value != null)
-          headers.append("cookie", `${parameter.name}=${encodeURIComponent(String(value))}`);
+          cookieParameters.push(`${parameter.name}=${encodeURIComponent(String(value))}`);
       } else continue;
       delete fields[parameter.name];
     }
+    // ONE Cookie header, `; `-joined (RFC 6265) after any cookie the connection's own headers carry
+    // — `Headers.append` would join the pairs with `, `, which no server reads as two cookies.
+    if (cookieParameters.length > 0)
+      headers.set(
+        "cookie",
+        [headers.get("cookie"), ...cookieParameters].filter(Boolean).join("; "),
+      );
     url.pathname = url.pathname.replace(/\/$/, "") + resolvedPath;
     const leftover = Object.keys(fields);
     let body: string | undefined;
