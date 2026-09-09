@@ -38,7 +38,8 @@ export class FeedFacet extends ProcessorFacet<Env> {
         });
         registry.register(processor, { resetForStream: () => processor.resetForStream() });
         const reads = registry.reads(processor);
-        presentation = () => processor.presentation(reads.currentState);
+        presentation = () =>
+          processor.presentation(reads.currentState, reads.currentStreamId ?? null);
       },
     };
   }

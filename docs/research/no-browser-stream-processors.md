@@ -188,6 +188,14 @@ stream identity, and explicit source/publication watermarks. Keep full history
 and private reducer bookkeeping out of this payload. Bound text/activity size
 as well as item count.
 
+The implementation retains at most 65,536 UTF-16 units of LLM preview text
+across the current activity, prioritizing newer requests. A shortened preview
+is explicitly labelled. The complete live message also has a 1,000,000-byte
+serialized budget: oversized code, results, queued input or presence produce
+an explicit `omitted` presentation with identity, publication cursor and
+runtime intact. These limits apply only to the preview; durable reduction,
+publications and completed request inspection retain recorded content.
+
 The agent's model-call owner already receives every provider chunk and retains
 partial response text. It is the simplest place to maintain a volatile current
 text view and notify live state directly. The registry has `refreshLive()` for
@@ -199,7 +207,7 @@ all streaming behaviour. [Model call][llm], [processor matching][processor],
 [registry live-state API][registry].
 
 Define recovery deliberately: a reconnect to a still-running owner can receive
-its complete current text snapshot. After owner eviction, vanished chunks are
+its bounded current text snapshot. After owner eviction, vanished chunks are
 not durable history; the existing request recovery/settlement path determines
 the result. Rebuild committed presentation from durable facts and surface the
 actual request status. Do not persist a growing response in every processor
@@ -212,9 +220,14 @@ the same socket. If the server removes a live item before its durable feed
 publication reaches the local store, the UI can briefly lose it; the reverse
 order can duplicate it.
 
-Live snapshots carry `publicationOffset`, the latest committed feed publication.
-The browser retains its previous server snapshot until its event mirror reaches
-that offset. If the journal arrives first, an indexed item-ID query hides the
+Live snapshots carry `streamId` and `publicationOffset`, the latest committed
+feed publication. The browser requires its `stream_sync` identity to match and
+its committed `through_offset` to reach that offset. A snapshot from the
+previous lifetime is discarded when the mirror is replaced. The mirror's
+existing generation also renews the live subscription, so a healthy transport
+cannot keep watching a deleted source after recreation.
+Within one lifetime, the browser retains its previous server snapshot until
+the replacement's publications arrive. If the journal arrives first, an indexed item-ID query hides the
 matching live activity. Both arrival orders therefore replace the live activity
 with its settled row without a second client history store or any browser
 reduction. The server exposes settled volatile state only after its publication

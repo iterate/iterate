@@ -10,6 +10,7 @@ import { Button } from "@iterate-com/ui/components/button";
 import { SourceCodeBlock } from "@iterate-com/ui/components/source-code-block";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@iterate-com/ui/components/tabs";
 import { cn } from "@iterate-com/ui/lib/utils";
+import { LlmPreviewNotice } from "./feed-preview-notice.tsx";
 import { useStreamQuery } from "~/domains/streams/client-libraries/browser/hooks/use-stream-query.ts";
 import type { StreamBrowserDatabase } from "~/domains/streams/client-libraries/browser/stream-browser-db.ts";
 import { buildRoundMetaYaml, resultYaml } from "~/lib/agent-round-meta-yaml.ts";
@@ -242,6 +243,7 @@ function LlmOnlyRound({
           {llm.responseText}
         </div>
       )}
+      <LlmPreviewNotice truncated={llm.previewTruncated} />
       {llm.errorMessage == null ? null : (
         <pre className="max-w-2xl whitespace-pre-wrap px-1.5 font-mono text-xs text-destructive">
           {llm.errorMessage}
