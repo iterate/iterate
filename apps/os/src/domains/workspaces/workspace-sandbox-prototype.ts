@@ -22,6 +22,11 @@ export const PrototypeWorkspaceExecInput = z.object({
 });
 export type PrototypeWorkspaceExecInput = z.infer<typeof PrototypeWorkspaceExecInput>;
 
+export const PrototypeReadMetrics = z.object({
+  fileReads: z.number().int().nonnegative(),
+  readBytes: z.number().int().nonnegative(),
+});
+
 export interface PrototypeWorkspaceFile {
   path: string;
   mode: string;
@@ -29,6 +34,7 @@ export interface PrototypeWorkspaceFile {
   version: string;
   /** Present only for an unchanged committed file; private/live overlays clear it. */
   repoPath?: string;
+  readToken?: string;
 }
 
 /** Git blob IDs work for both the committed base and the private overlay. */

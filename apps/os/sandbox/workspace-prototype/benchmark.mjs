@@ -1,6 +1,7 @@
 // Manual acceptance benchmark, run after the proof has warmed npm's package cache.
 import { readFileSync, writeFileSync, mkdtempSync, mkdirSync, readdirSync, rmSync } from "node:fs";
 import { spawnSync } from "node:child_process";
+import { readFile } from "node:fs/promises";
 
 const sourceReads = [];
 for (let pass = 0; pass < 2; pass++) {
@@ -8,6 +9,9 @@ for (let pass = 0; pass < 2; pass++) {
   for (let index = 0; index < 100; index++) readFileSync(`unread/${index}.txt`);
   sourceReads.push(performance.now() - start);
 }
+const parallelStart = performance.now();
+await Promise.all(Array.from({ length: 100 }, (_, index) => readFile(`unread/${index + 100}.txt`)));
+const parallelColdReadMs = performance.now() - parallelStart;
 const native = mkdtempSync("/tmp/workspace-native-benchmark-");
 writeFileSync(`${native}/package.json`, readFileSync("package.json"));
 mkdirSync(`${native}/node_modules`);
@@ -31,6 +35,7 @@ console.info(
       sourceReadCount: 100,
       coldReadMs: sourceReads[0],
       warmReadMs: sourceReads[1],
+      parallelColdReadMs,
       installs,
     },
   }),

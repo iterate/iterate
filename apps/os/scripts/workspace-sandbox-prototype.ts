@@ -176,7 +176,7 @@ export async function proof() {
     });
     console.info(JSON.stringify({ benchmark }, null, 2));
     assert.equal(benchmark.exitCode, 0, benchmark.stderr);
-    assert.equal(benchmark.metrics.fileReads, 100);
+    assert.equal(benchmark.metrics.fileReads, 200);
     assert.equal(benchmark.metrics.fileWrites, 0);
     console.info("Discarding the container and recovering uncommitted work in a new one");
     await sandbox.destroy();

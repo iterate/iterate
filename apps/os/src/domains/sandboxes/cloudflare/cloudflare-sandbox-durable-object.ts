@@ -26,9 +26,15 @@ import { withWebSocketHandshakeHeaders } from "../../secrets/websocket-handshake
 import {
   prototypeFileVersion,
   PrototypeRelativePath,
+  PrototypeReadMetrics,
   PrototypeWorkspaceExecInput,
   type PrototypeWorkspaceFile,
 } from "../../workspaces/workspace-sandbox-prototype.ts";
+import {
+  signPrototypeBlobRead,
+  verifyPrototypeBlobRead,
+} from "../../workspaces/workspace-prototype-read-capability.ts";
+import { prototypeWorkspaceResponse } from "../../workspaces/workspace-prototype-response.ts";
 import { normalizeWorkspacePath } from "../../workspaces/utils.ts";
 import { resolveAbsolutePath } from "../../workspaces/paths.ts";
 import { sandboxCreationEvents } from "../sandbox-defaults.ts";
@@ -269,14 +275,44 @@ async function resolveEgressProjectId(
  */
 function sandboxOutboundFor(instanceType: SandboxInstanceType): OutboundHandler<Env> {
   return async (request, env, ctx) => {
-    if (new URL(request.url).hostname === "workspace.internal") {
-      // This capability is tied to the actual container identity, never a caller-supplied project.
-      // The canonical instance-type table names only Sandbox namespaces.
-      const binding = SANDBOX_INSTANCE_TYPE_BINDINGS[instanceType].binding as keyof Env;
-      const namespace = env[binding] as DurableObjectNamespace<SandboxDurableObject>;
-      return namespace
-        .get(namespace.idFromString(ctx.containerId))
-        .prototypeWorkspaceFetch(request);
+    const url = new URL(request.url);
+    if (url.hostname === "workspace.internal") {
+      return prototypeWorkspaceResponse(request, async () => {
+        if (url.pathname === "/blob") {
+          if (request.method !== "GET") return new Response("Method not allowed", { status: 405 });
+          const grant = verifyPrototypeBlobRead(
+            env.SECRET_ENCRYPTION_KEY,
+            request.headers.get("Authorization")?.replace(/^Bearer /i, "") ?? "",
+            {
+              containerId: ctx.containerId,
+              projectId: url.searchParams.get("projectId"),
+              repoPath: url.searchParams.get("repoPath"),
+              oid: url.searchParams.get("oid"),
+              expiresAt: Number(url.searchParams.get("expiresAt")),
+            },
+            ctx.containerId,
+          );
+          if (!grant) return new Response("Invalid or expired read grant", { status: 403 });
+          const bytes = await env.REPO.getByName(
+            DurableObjectNameCodec.stringify({ path: grant.repoPath, projectId: grant.projectId }),
+          ).prototypeReadBlob(grant.oid);
+          if (bytes === null) return new Response("Manifest blob has been pruned", { status: 409 });
+          console.info("workspace prototype immutable read", {
+            containerId: ctx.containerId,
+            projectId: grant.projectId,
+            readBytes: bytes.byteLength,
+          });
+          // The repo's verified object store returns an ordinary ArrayBuffer over Workers RPC.
+          return new Response(bytes as Uint8Array<ArrayBuffer>);
+        }
+        // This capability is tied to the actual container identity, never a caller-supplied project.
+        // The canonical instance-type table names only Sandbox namespaces.
+        const binding = SANDBOX_INSTANCE_TYPE_BINDINGS[instanceType].binding as keyof Env;
+        const namespace = env[binding] as DurableObjectNamespace<SandboxDurableObject>;
+        return namespace
+          .get(namespace.idFromString(ctx.containerId))
+          .prototypeWorkspaceFetch(request);
+      });
     }
     const projectId = await resolveEgressProjectId(env, ctx.containerId, instanceType);
     const response = await projectStub(env.PROJECT, projectId).fetch(
@@ -358,6 +394,7 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
   #prototypeWorkspace: {
     input: PrototypeWorkspaceExecInput;
     files: Map<string, PrototypeWorkspaceFile>;
+    readUrl: string;
     metrics: {
       fileReads: number;
       readBytes: number;
@@ -377,6 +414,7 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
     const active = {
       input,
       files: new Map<string, PrototypeWorkspaceFile>(),
+      readUrl: "",
       metrics: { fileReads: 0, readBytes: 0, fileWrites: 0, writtenBytes: 0, deletes: 0 },
     };
     this.#prototypeWorkspace = active;
@@ -389,18 +427,46 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
         }),
       );
       const files = await workspace.prototypeManifest(input.under);
+      const expiresAt = Date.now() + input.timeoutMs;
+      const readUrl = new URL("http://workspace.internal/blob");
+      readUrl.searchParams.set("projectId", this.#identity().projectId);
+      readUrl.searchParams.set("expiresAt", String(expiresAt));
+      active.readUrl = readUrl.href;
       for (const file of files) {
         if (
           input.localDirectories.some((dir) => file.path === dir || file.path.startsWith(`${dir}/`))
         ) {
           throw new Error(`Container-local mount would hide workspace file: ${file.path}`);
         }
-        active.files.set(file.path, file);
+        active.files.set(
+          file.path,
+          file.repoPath
+            ? {
+                ...file,
+                readToken: signPrototypeBlobRead(this.env.SECRET_ENCRYPTION_KEY, {
+                  containerId: this.ctx.id.toString(),
+                  projectId: this.#identity().projectId,
+                  repoPath: file.repoPath,
+                  oid: file.version.slice(4),
+                  expiresAt,
+                }),
+              }
+            : file,
+        );
       }
       const result = await this.exec("node /tmp/iterate-workspace-prototype/run.mjs", {
         timeout: input.timeoutMs,
       });
-      const proof = { ...active.metrics, manifestFiles: active.files.size };
+      // The mount counts all verified network fetches, including direct proxy reads.
+      // Its final marker follows command output and is emitted only after daemon shutdown.
+      const marker = result.stdout
+        .split("\n")
+        .findLast((line) => line.startsWith('{"prototypeReads":'));
+      if (!marker && result.exitCode === 0) throw new Error("Prototype mount omitted read metrics");
+      const reads = marker
+        ? PrototypeReadMetrics.parse(JSON.parse(marker).prototypeReads)
+        : { fileReads: 0, readBytes: 0 };
+      const proof = { ...active.metrics, ...reads, manifestFiles: active.files.size };
       console.info("workspace sandbox prototype", { ...proof, exitCode: result.exitCode });
       return { ...result, metrics: proof };
     } finally {
@@ -414,7 +480,11 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
     if (!active) return new Response("No active workspace command", { status: 403 });
     const url = new URL(request.url);
     if (url.pathname === "/manifest" && request.method === "GET") {
-      return Response.json({ ...active.input, files: [...active.files.values()] });
+      return Response.json({
+        ...active.input,
+        readUrl: active.readUrl,
+        files: [...active.files.values()],
+      });
     }
     if (url.pathname !== "/file") return new Response("Not found", { status: 404 });
     const parsed = PrototypeRelativePath.safeParse(url.searchParams.get("path"));

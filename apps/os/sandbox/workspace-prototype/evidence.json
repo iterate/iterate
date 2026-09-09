@@ -1,7 +1,7 @@
 {
   "environment": "preview_2",
-  "osVersion": "5518a1ef-7bb3-4025-b27a-99c80fbf5f68",
-  "project": "workspace-prototype-1788972259663",
+  "osVersion": "46bf945c-30db-43de-80d6-77a80b2e2024",
+  "project": "workspace-prototype-1788975652939",
   "commit": {
     "amended": false,
     "branch": "main",
@@ -11,13 +11,13 @@
       "/repos/prototype/remove.txt",
       "/repos/prototype/source.txt"
     ],
-    "commitOid": "c7f862730cb0b8452b09b1ae1563c207503794cf",
+    "commitOid": "fbedae258d5b941620b920d491619a472a4dd56d",
     "mount": "/repos/prototype",
     "repoPath": "/repos/prototype"
   },
   "checks": {
     "metadata": {
-      "sdkDurationMs": 2082,
+      "sdkDurationMs": 944,
       "exitCode": 0,
       "metrics": {
         "fileReads": 0,
@@ -29,7 +29,7 @@
       }
     },
     "edit": {
-      "sdkDurationMs": 1327,
+      "sdkDurationMs": 886,
       "exitCode": 0,
       "metrics": {
         "fileReads": 3,
@@ -41,7 +41,7 @@
       }
     },
     "read": {
-      "sdkDurationMs": 430,
+      "sdkDurationMs": 410,
       "exitCode": 0,
       "metrics": {
         "fileReads": 1,
@@ -53,7 +53,7 @@
       }
     },
     "cached": {
-      "sdkDurationMs": 391,
+      "sdkDurationMs": 329,
       "exitCode": 0,
       "metrics": {
         "fileReads": 0,
@@ -65,7 +65,7 @@
       }
     },
     "dependencies": {
-      "sdkDurationMs": 20660,
+      "sdkDurationMs": 15627,
       "exitCode": 0,
       "metrics": {
         "fileReads": 1,
@@ -77,11 +77,11 @@
       }
     },
     "benchmark": {
-      "sdkDurationMs": 38358,
+      "sdkDurationMs": 38613,
       "exitCode": 0,
       "metrics": {
-        "fileReads": 100,
-        "readBytes": 420290,
+        "fileReads": 200,
+        "readBytes": 840690,
         "fileWrites": 0,
         "writtenBytes": 0,
         "deletes": 0,
@@ -89,30 +89,31 @@
       },
       "measurements": {
         "sourceReadCount": 100,
-        "coldReadMs": 6474.330114,
-        "warmReadMs": 30.500028000000384,
+        "coldReadMs": 3762.847065,
+        "warmReadMs": 21.834909000000152,
+        "parallelColdReadMs": 2299.4854729999997,
         "installs": [
           {
             "native": true,
-            "milliseconds": 6204.6137499999995
+            "milliseconds": 6198.675211
           },
           {
             "native": false,
-            "milliseconds": 6902.783418999999
+            "milliseconds": 7020.171831999998
           },
           {
             "native": false,
-            "milliseconds": 6895.144869
+            "milliseconds": 6690.888852
           },
           {
             "native": true,
-            "milliseconds": 8100.753568
+            "milliseconds": 7912.786457999995
           }
         ]
       }
     },
     "recovery": {
-      "sdkDurationMs": 2175,
+      "sdkDurationMs": 2997,
       "exitCode": 0,
       "metrics": {
         "fileReads": 2,
@@ -123,5 +124,51 @@
         "manifestFiles": 2025
       }
     }
+  },
+  "controlledReadComparison": {
+    "osVersion": "f27cc649-79e9-4e3e-8608-542589c41b45",
+    "description": "Same container; 100 new distinct files each sample; before response materialization/retry guard.",
+    "samples": [
+      {
+        "direct": true,
+        "sdkDurationMs": 3493,
+        "coldReadMs": 2673.21829,
+        "warmReadMs": 15.812948999999662
+      },
+      {
+        "direct": false,
+        "sdkDurationMs": 5968,
+        "coldReadMs": 5270.925036,
+        "warmReadMs": 17.3672889999998
+      },
+      {
+        "direct": false,
+        "sdkDurationMs": 5726,
+        "coldReadMs": 4917.374575999999,
+        "warmReadMs": 12.894400000000132
+      },
+      {
+        "direct": true,
+        "sdkDurationMs": 3785,
+        "coldReadMs": 2650.6583819999996,
+        "warmReadMs": 23.749958999999762
+      }
+    ],
+    "noopCommands": {
+      "count": 30,
+      "minMs": 624,
+      "medianMs": 834.5,
+      "maxMs": 977
+    }
+  },
+  "telemetry": {
+    "from": "2026-09-09T17:40:30Z",
+    "errorEvents": 0,
+    "readRetries": 0,
+    "immutableProxyFetches": 202,
+    "immutableProxyBytes": 840778,
+    "explanation": "200 benchmark blobs + 78-byte package.json + 10-byte removed source; private reads use the workspace path.",
+    "sampleTraceId": "e8b9f5ef1988969b2ae36e107b664f62",
+    "to": "2026-09-09T17:43:27.110000+00:00"
   }
 }

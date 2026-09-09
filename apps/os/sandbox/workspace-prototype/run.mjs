@@ -18,7 +18,8 @@ const mounts = [];
 let temp, lower, merged, upper, daemon, daemonExit, daemonError;
 let synchronized = false,
   pendingOwned = false,
-  userCommandSpawned = false;
+  userCommandSpawned = false,
+  daemonMounted = false;
 
 function run(command, args) {
   const result = spawnSync(command, args, { stdio: "inherit" });
@@ -64,6 +65,7 @@ try {
     );
   pendingOwned = true;
   temp = await mkdtemp(`${state}/run-`);
+  const metricsPath = join(temp, "metrics.json");
   lower = join(temp, "lower");
   merged = join(temp, "merged");
   upper = join(pending, "upper");
@@ -81,6 +83,10 @@ try {
       join(state, "blobs"),
       "--url",
       endpoint,
+      "--read-url",
+      input.readUrl ?? "",
+      "--metrics",
+      metricsPath,
     ],
     { stdio: "inherit" },
   );
@@ -96,6 +102,7 @@ try {
     await setTimeout(25);
   }
   mounts.push(lower);
+  daemonMounted = true;
   overlay = spawn(
     "fuse-overlayfs",
     ["-f", "-o", `lowerdir=${lower},upperdir=${upper},workdir=${pending}/work`, merged],
@@ -182,7 +189,7 @@ try {
       method: change.bytes === null ? "DELETE" : "PUT",
       body: change.bytes,
     });
-    if (!result.ok)
+    if (result.status !== 204)
       throw new Error(
         `Workspace write ${change.path}: HTTP ${result.status}: ${await result.text()}`,
       );
@@ -221,6 +228,22 @@ try {
   } catch (error) {
     cleanupError ??= error;
   }
+  let prototypeReads;
+  if (!cleanupError && daemonMounted) {
+    try {
+      const metrics = JSON.parse(await readFile(join(temp, "metrics.json"), "utf8"));
+      if (
+        !Number.isSafeInteger(metrics.fileReads) ||
+        metrics.fileReads < 0 ||
+        !Number.isSafeInteger(metrics.readBytes) ||
+        metrics.readBytes < 0
+      )
+        cleanupError = new Error("invalid FUSE metrics");
+      else prototypeReads = { fileReads: metrics.fileReads, readBytes: metrics.readBytes };
+    } catch (error) {
+      cleanupError ??= error;
+    }
+  }
   if (!cleanupError && temp) {
     try {
       await rm(temp, { recursive: true });
@@ -252,6 +275,7 @@ try {
   }
   if (cleanupError || (userCommandSpawned && !synchronized))
     console.error(`Unsynchronized changes and their original manifest remain in ${pending}`);
+  if (prototypeReads) console.info(JSON.stringify({ prototypeReads }));
 }
 if (commandError && cleanupError)
   throw new AggregateError([commandError, cleanupError], "Command and mount cleanup failed");

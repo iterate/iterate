@@ -19,6 +19,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -26,19 +27,25 @@ import (
 	"github.com/hanwen/go-fuse/v2/fuse"
 )
 
+var readBase = flag.String("read-url", "", "direct immutable read URL")
+
 var client = &http.Client{Timeout: 30 * time.Second}
 
 type entry struct {
-	Path    string `json:"path"`
-	Size    int64  `json:"size"`
-	Mode    string `json:"mode"`
-	Version string `json:"version"`
+	Path      string `json:"path"`
+	Size      int64  `json:"size"`
+	Mode      string `json:"mode"`
+	Version   string `json:"version"`
+	RepoPath  string `json:"repoPath,omitempty"`
+	ReadToken string `json:"readToken,omitempty"`
 }
+type metrics struct{ fileReads, readBytes atomic.Uint64 }
 type file struct {
 	fs.Inode
 	e           entry
 	mode        uint32
 	cache, base string
+	metrics     *metrics
 	mu          sync.Mutex
 	data        []byte
 }
@@ -46,6 +53,7 @@ type root struct {
 	fs.Inode
 	entries     []entry
 	cache, base string
+	metrics     *metrics
 }
 
 func valid(e entry) (uint32, error) {
@@ -77,7 +85,7 @@ func (r *root) OnAdd(ctx context.Context) {
 				p = c
 			}
 		}
-		n := &file{e: e, mode: m, cache: r.cache, base: r.base}
+		n := &file{e: e, mode: m, cache: r.cache, base: r.base, metrics: r.metrics}
 		p.AddChild(parts[len(parts)-1], p.NewPersistentInode(ctx, n, fs.StableAttr{Mode: m}), true)
 	}
 }
@@ -139,12 +147,33 @@ func (f *file) contents() ([]byte, error) {
 	} else if !errors.Is(err, os.ErrNotExist) {
 		log.Printf("workspace FUSE cache read for %q; refetching: %v", f.e.Path, err)
 	}
-	u, _ := url.Parse(f.base + "/file")
-	q := u.Query()
-	q.Set("path", f.e.Path)
-	q.Set("version", f.e.Version)
-	u.RawQuery = q.Encode()
-	resp, err := client.Get(u.String())
+	readURL := ""
+	if f.e.ReadToken != "" {
+		u, err := url.Parse(*readBase)
+		if err != nil {
+			return nil, err
+		}
+		q := u.Query()
+		q.Set("repoPath", f.e.RepoPath)
+		q.Set("oid", strings.TrimPrefix(f.e.Version, "git:"))
+		u.RawQuery = q.Encode()
+		readURL = u.String()
+	} else {
+		u, _ := url.Parse(f.base + "/file")
+		q := u.Query()
+		q.Set("path", f.e.Path)
+		q.Set("version", f.e.Version)
+		u.RawQuery = q.Encode()
+		readURL = u.String()
+	}
+	req, err := http.NewRequest(http.MethodGet, readURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	if f.e.ReadToken != "" {
+		req.Header.Set("Authorization", "Bearer "+f.e.ReadToken)
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -159,6 +188,8 @@ func (f *file) contents() ([]byte, error) {
 	if err = f.check(b); err != nil {
 		return nil, err
 	}
+	f.metrics.fileReads.Add(1)
+	f.metrics.readBytes.Add(uint64(len(b)))
 	if err = os.MkdirAll(f.cache, 0700); err != nil {
 		return nil, err
 	}
@@ -201,7 +232,7 @@ func (f *file) check(b []byte) error {
 }
 
 func main() {
-	manifest, mount, cache, base := flag.String("manifest", "", "manifest JSON"), flag.String("mount", "", "mount point"), flag.String("cache", "", "content cache"), flag.String("url", "http://workspace.internal", "workspace server URL")
+	manifest, mount, cache, base, metricsPath := flag.String("manifest", "", "manifest JSON"), flag.String("mount", "", "mount point"), flag.String("cache", "", "content cache"), flag.String("url", "http://workspace.internal", "workspace server URL"), flag.String("metrics", "", "metrics output JSON")
 	flag.Parse()
 	if *manifest == "" || *mount == "" || *cache == "" {
 		log.Fatal("--manifest, --mount and --cache are required")
@@ -230,7 +261,8 @@ func main() {
 			descendants[parent] = true
 		}
 	}
-	s, err := fs.Mount(*mount, &root{entries: entries, cache: *cache, base: strings.TrimRight(*base, "/")}, &fs.Options{})
+	stats := &metrics{}
+	s, err := fs.Mount(*mount, &root{entries: entries, cache: *cache, base: strings.TrimRight(*base, "/"), metrics: stats}, &fs.Options{})
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -238,4 +270,13 @@ func main() {
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 	go func() { <-sig; _ = s.Unmount() }()
 	s.Wait()
+	if *metricsPath != "" {
+		b, err := json.Marshal(map[string]uint64{"fileReads": stats.fileReads.Load(), "readBytes": stats.readBytes.Load()})
+		if err == nil {
+			err = os.WriteFile(*metricsPath, b, 0600)
+		}
+		if err != nil {
+			log.Fatal(err)
+		}
+	}
 }
