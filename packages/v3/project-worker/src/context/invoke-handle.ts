@@ -1,29 +1,25 @@
-// context/invoke-handle.ts — THE DOTTED DOOR: how a surface that declares only fixed methods
-// (`IterateContext`: invoke / provide / subscribe / …; a mid-chain handle: invoke / applyRoot) is
-// spoken as deep dotted access — `itx.slack.chat.postMessage({...})`, `itx.kv.put('k','v')`,
-// `handle.demo.timer.callLater()` — with every unknown segment accumulating into ONE
-// `invoke(expression)` dispatch, `[...root, ...prefix, [method, ...args]]`. Declared members always
-// win. Three pieces, one file: the reserved names, the function-backed PATH PROXY, and the
-// PROTOTYPE HOP that installs the fallback on a class; then `InvokeHandle`, the genuine RpcTarget a
-// mid-chain capability is handed back as, and `walkStepsOnRpcStub`, the step walk over a capnweb stub.
+// context/invoke-handle.ts — THE DOTTED DOOR: how a surface that declares only fixed methods is
+// spoken as deep dotted access (`itx.slack.chat.postMessage({...})`), every unknown segment
+// accumulating into ONE `invoke(expression)` dispatch, `[...root, ...prefix, [method, ...args]]`.
+// Declared members always win. The pieces: the reserved names, the function-backed PATH PROXY, the
+// PROTOTYPE HOP that installs the fallback on a class, `InvokeHandle` (the genuine RpcTarget a
+// mid-chain capability is handed back as), and `walkStepsOnRpcStub`.
 //
-// WHY A PROTOTYPE HOP AND NOT A PROXY AROUND THE INSTANCE (the design this clean room tried FIRST
-// and reverted): workerd RPC classifies a call's RESULT for promise pipelining with native brand
-// checks that a JS Proxy can never pass (`serializeJsValueWithPipeline` in workerd's worker-rpc.c++
-// → falls to `NonPipelinable`; upstream: cloudflare/workerd#6873). So a surface returned FROM A
-// METHOD must hand back a REAL, unproxied instance or every pipelined call on it dies with "The RPC
-// receiver does not implement the method ...". A mid-chain call returns its handle ACROSS an RPC
-// boundary (`itx.facets.get('b').hello()` is two dispatches — `get('b')` returns the handle, then
-// `.hello()` is called ON it), and capnweb's RpcTarget IS the native `cloudflare:workers` RpcTarget on
-// workerd, so a real RpcTarget passes on both hops and the second call pipelines. The hop squares
-// that with dynamic dispatch by inserting one proxied link BETWEEN `Class.prototype` and its parent:
+// WHY A PROTOTYPE HOP AND NOT A PROXY AROUND THE INSTANCE (tried FIRST and reverted): workerd RPC
+// classifies a call's RESULT for promise pipelining with native brand checks a JS Proxy can never
+// pass (`serializeJsValueWithPipeline` in worker-rpc.c++ → `NonPipelinable`; cloudflare/workerd#6873).
+// So a surface returned FROM A METHOD must hand back a REAL, unproxied instance or every pipelined
+// call on it dies with "The RPC receiver does not implement the method ...". A mid-chain call
+// returns its handle ACROSS an RPC boundary (`itx.facets.get('b').hello()` is two dispatches), and
+// capnweb's RpcTarget IS the native `cloudflare:workers` RpcTarget on workerd, so a real RpcTarget
+// passes on both hops. The hop squares that with dynamic dispatch by inserting one proxied link
+// BETWEEN `Class.prototype` and its parent:
 //
 //   instance ──proto──▶ Class.prototype ──proto──▶ Proxy(hop) ──proto──▶ parent
 //
-// - The instance is a genuine, natively-branded RpcTarget → workerd's pipeline classifier accepts
-//   it (SingleStub), so `x.get(p).method()` chains work in one expression.
-// - Declared members (own prototype methods/getters) resolve BEFORE the hop — built-ins win, so a
-//   dynamic capability can never shadow a declared name (the deliberate trade-off).
+// - The instance is a genuine, natively-branded RpcTarget → the pipeline classifier accepts it.
+// - Declared members resolve BEFORE the hop — built-ins win, so a dynamic capability can never
+//   shadow a declared name (the deliberate trade-off).
 // - Unknown string keys reach the hop's `get` trap and become path proxies, dispatched via the
 //   receiver's own `invoke`; the receiver IS the invoker, so it wires with zero glue.
 // - Instances stay clean of own properties, so Workers RPC's instance-property protection needs
@@ -107,9 +103,8 @@ function createItxExpressionPathProxy(
       const descriptor = Reflect.getOwnPropertyDescriptor(target, key);
       if (descriptor) return descriptor;
       if (typeof key === "symbol" || RESERVED.has(key)) return undefined;
-      // Cap'n Web's server-side path traversal probes own descriptors before reading a segment.
-      // Dynamic roots need to look discoverable here so calls like
-      // itx.slack.chat.postMessage(...) reach the apply trap.
+      // Cap'n Web's server-side path traversal probes own descriptors before reading a segment, so
+      // dynamic roots must look discoverable here to reach the apply trap.
       return { configurable: true, enumerable: true, value: valueFor(key), writable: false };
     },
     has(target, key) {
@@ -119,10 +114,8 @@ function createItxExpressionPathProxy(
   });
 }
 
-/** Install the dotted fallback on a class's PROTOTYPE CHAIN (the hop drawn in the header): declared
- *  members win through normal property lookup, and only missing roots become path proxies that
- *  dispatch through the receiver's own `invoke` with the scope `root` (`["itx"]` for the edge
- *  context, `[]` for a handle). Call ONCE per class. Constructor inheritance (`super()`) is
+/** Install the hop drawn in the header on a class's PROTOTYPE CHAIN, with the scope `root` (`["itx"]`
+ *  for the edge context, `[]` for a handle). Call ONCE per class. Constructor inheritance is
  *  untouched — only `Class.prototype`'s parent link changes, and the hop forwards everything it does
  *  not intercept. */
 export function installPrototypeInvokeFallback<T extends abstract new (...args: never[]) => object>(
@@ -153,45 +146,35 @@ export function installPrototypeInvokeFallback<T extends abstract new (...args: 
   Object.setPrototypeOf(cls.prototype, hop);
 }
 
-/** A branded, pipelinable handle for a MID-CHAIN capability (a live row's transport bridge,
- *  `facets.get(name)`, `cd(path)`, `workers.get(spec)` / `facets.get(name, { source, className })`)
- *  whose unknown dotted members reduce into ONE dispatch of the itx-expression STEPS relative to it.
- *  `dispatch` routes those steps into the underlying object — a borrowed rpc stub
- *  (`RpcStubDirectory.invokeRpcStub`), a facet's method walk (the DO's facet door), a sibling
- *  context, or a stateful loaded class. Declared members (`invoke` / `applyRoot`) win over the
- *  fallback, so a capability cannot be named either — the two reserved words this wrapper adds.
- *  Providers stay plain `RpcTarget` subclasses (which capnweb already requires to pass a capability
- *  by reference); the client stays just capnweb. */
+/** A branded, pipelinable handle for a MID-CHAIN capability (`facets.get(name)`, `cd(path)`,
+ *  `workers.get(spec)`, a lent stub) whose unknown dotted members reduce into ONE dispatch of the
+ *  itx-expression STEPS relative to it; the constructor's `dispatch` routes those steps into the
+ *  underlying object. Declared members (`invoke` / `applyRoot`) win over the fallback, so a
+ *  capability cannot be named either — the two reserved words this wrapper adds. */
 export class InvokeHandle extends RpcTarget {
   readonly #dispatchItxExpressionSteps: (itxExpressionSteps: ItxExpression) => unknown;
   constructor(dispatchItxExpressionSteps: (itxExpressionSteps: ItxExpression) => unknown) {
     super();
     this.#dispatchItxExpressionSteps = dispatchItxExpressionSteps;
   }
-  /** THE reduce door the prototype hop dispatches onto (the receiver IS the invoker — this instance).
-   *  The expression is RELATIVE to this handle (empty scope root — the hop is installed with `[]`). */
+  /** THE reduce door the prototype hop dispatches onto; the expression is RELATIVE to this handle. */
   invoke(itxExpressionSteps: ItxExpression): unknown {
     return this.#dispatchItxExpressionSteps(itxExpressionSteps);
   }
-  /** Root-apply: call the bare capability this handle fronts — the ANONYMOUS call step. `callOn`
-   *  (dispatch.ts) uses this when a rewritten call's target IS an InvokeHandle and args are applied
-   *  to it — `handle(events, range)` ⇒ the lent callback the handle delivers to. */
+  /** Call the bare capability this handle fronts — the ANONYMOUS call step (`callOn` in dispatch.ts
+   *  uses it when a rewritten call's target IS a handle: `handle(events, range)`). */
   applyRoot(args: unknown[]): unknown {
     return this.#dispatchItxExpressionSteps([["", ...args]]);
   }
 }
 installPrototypeInvokeFallback(InvokeHandle, []);
 
-/** Walk itx-expression steps off a capnweb stub (a session's lent client stub, a remote API's main
- *  object): a property step reads through the stub, a call step calls the method, the ANONYMOUS call
- *  step (`""`) calls the value itself (a bare function lent as a capability). NO await inside the
- *  loop: on a capnweb stub every step is a PIPELINED path — a property read yields a stub for the
- *  property, a call yields a promise that is itself a stub — so an n-step chain costs ONE round trip,
- *  flushed by the caller's single await; a rejection anywhere in the chain lands there too. A DIRECT
- *  call on the stub, never `.apply`: reading `.apply` off a capnweb stub's method is itself a
- *  pipelined remote path (dispatch.ts's DataCloneError learning). Lives HERE, beside the handle, and
- *  not with `walkSteps` in dispatch.ts: the library tier may import this module and the codec only
- *  (library/boundary.test.ts), and library/capnweb.ts walks a remote's stub with it. */
+/** Walk itx-expression steps off a capnweb stub; the ANONYMOUS call step (`""`) calls the value
+ *  itself (a bare function lent as a capability). NO await inside the loop: on a capnweb stub every
+ *  step is a PIPELINED path, so an n-step chain costs ONE round trip, flushed by the caller's single
+ *  await. A DIRECT call on the stub, never `.apply`: reading `.apply` off a capnweb stub's method is
+ *  itself a pipelined remote path (dispatch.ts's DataCloneError learning). Lives HERE and not beside
+ *  `walkSteps` in dispatch.ts because the library tier may import this module and the codec only. */
 export function walkStepsOnRpcStub(stub: unknown, steps: ItxExpression): unknown {
   let value: unknown = stub;
   for (const step of steps) {
@@ -207,13 +190,9 @@ export function walkStepsOnRpcStub(stub: unknown, steps: ItxExpression): unknown
   return value;
 }
 
-// ── the two BRANDS the subscription delivery loop reads ──
-// A subscription's target evaluates to SOMETHING; the loop asks the value what it is. These two
-// kinds OWN THEIR PROGRESS, so a push needs no cursor on the stream side: a facet keeps its own
-// checkpoint and gap-repairs from the log (stream/processor.ts), a live client owns its offset (it
-// chains delivered ranges and heals with readEvents). Anything else — a Worker-Loader entrypoint, a
-// sibling context, a remote — cannot, and the stream keeps a cursor for it (subscription-delivery.ts).
-// Nothing is declared on any event; the brand is minted where the built-in mints the handle.
+// ── the two BRANDS the subscription delivery loop reads: the kinds that OWN THEIR PROGRESS, so a push
+// needs no cursor on the stream side (subscription-delivery.ts). Nothing is declared on any event;
+// the brand is minted where the built-in mints the handle. ──
 
 /** `itx.facets.get(name)` / `itx.facets.get(name, { source, className })` — a facet of this context. */
 export class FacetHandle extends InvokeHandle {}

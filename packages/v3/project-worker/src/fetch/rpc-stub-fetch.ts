@@ -68,10 +68,8 @@ export function itxExpressionEndingInFetch(expr: ItxExpression): ItxExpression {
 
 /** A LIVE call that is the terminal fetch carrying the one Request — `[..., ["fetch", request]]`, or
  *  `[..., "fetch"]` with the Request as the one runtime arg (`invoke("itx.laptop.fetch", request)`)
- *  — split into the steps before `fetch` and the Request; null for any other call. The edge routes
- *  it down the DO's fetch channel (iterate-context.ts) and the directory into
- *  `RpcStubFetchServer.serve` (rpc-stub-directory.ts): the fetch channel is the only hop kind that
- *  carries a socket-bearing Response back (doctrine points 1 & 4). */
+ *  — split into the steps before `fetch` and the Request; null for any other call. Its readers (the
+ *  edge, the directory) route it down a real fetch hop: doctrine point 4. */
 export function terminalFetchOf(
   expression: ItxExpression,
   args: unknown[],
@@ -167,7 +165,7 @@ type ClientWebSocket = {
 
 /** TRANSPORT SIDE of an rpc-stub fetch (runs where the client's stub is legally touchable —
  *  today that is the capnweb session's request context; a NATIVE provider's socket answer still
- *  dies on its own RPC leg, pinned in fetch-door-dynamic-live-ws.e2e.test.ts — a future dial-back fix must
+ *  dies on its own RPC leg, pinned in fetch-door.e2e.test.ts — a future dial-back fix must
  *  deliver the upgradeId to the provider WITHOUT riding the Request headers verbatim, because a
  *  provider that forwards its received Request would smuggle the header back into our own
  *  upgrade-leg door). Dials the provider's real fetch and branches ONLY on the answer:

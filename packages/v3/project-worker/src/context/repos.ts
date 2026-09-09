@@ -44,8 +44,8 @@ export interface ArtifactsNamespace {
 interface ArtifactCreateResult {
   token: string;
 }
-/** The REAL repo handle `get()` yields (a live RPC stub), typed to what is read: `createToken`, and
- *  the `fork` that `ScopedArtifactRepo` withholds. */
+/** The REAL repo handle `get()` yields (a live RPC stub), typed to what is read (`ArtifactsScope` says
+ *  why `fork` is withheld). */
 export interface ArtifactRepoHandle {
   createToken(scope: "read" | "write", ttlSeconds: number): Promise<ArtifactToken>;
   fork(name: string, options?: { setDefaultBranch?: string }): Promise<ArtifactCreateResult>;
@@ -62,8 +62,7 @@ interface ArtifactListResult {
 }
 /** What `itx.cfArtifacts.get` returns: a genuine capnweb `RpcTarget`, so a client can pipeline
  *  `get(name).createToken(...)` ACROSS the /api hop exactly like the real binding's handle — a plain
- *  object cannot (its `createToken` closure is NonPipelinable and fails to serialize; invoke-handle.ts).
- *  It re-exposes ONLY `createToken`, delegated to the already-prefixed repo (`ArtifactsScope`). */
+ *  object cannot (its `createToken` closure is NonPipelinable and fails to serialize; invoke-handle.ts). */
 export class ScopedArtifactRepo extends RpcTarget {
   readonly #handle: ArtifactRepoHandle;
   constructor(handle: ArtifactRepoHandle) {
@@ -153,8 +152,9 @@ export function projectScopedRepos(input: {
     return path;
   };
 
-  /** A read/write transport for one repo. Read mints via `get`; write creates the repo (fresh → initial
-   *  write token) or, if it already exists, mints a write token. */
+  /** A read/write transport for one repo: a token minted on the existing repo, or — a write on a
+   *  repo that does not exist yet — the initial write token of a `create` (Artifacts defaults the
+   *  branch to `main`, our REF). Anything else (an outage, an auth failure) surfaces as what it is. */
   const transportFor = async (repo: string, scope: "read" | "write") => {
     let token: string;
     try {
@@ -162,9 +162,6 @@ export function projectScopedRepos(input: {
         await input.namespace.get(prefix + repo)
       ).createToken(scope, TOKEN_TTL_SECONDS));
     } catch (error) {
-      // A repo that does not exist yet is CREATED on first write — its initial token is a write
-      // token, and Artifacts defaults the branch to `main` (our REF). Anything else (an outage, an
-      // auth failure) surfaces as what it is.
       if (scope !== "write" || !isRepoNotFound(error)) throw error;
       ({ token } = await input.namespace.create(prefix + repo));
     }

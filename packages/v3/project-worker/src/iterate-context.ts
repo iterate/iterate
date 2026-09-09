@@ -7,45 +7,16 @@
 // — a client's whole dependency is the capnweb package. Anything that would need client-side smarts
 // belongs HERE, behind an RpcTarget method.
 //
-// The DO owns every contract. This class declares only what the edge must do itself, in the order
-// the tutorial builds them:
-//   • `cd`      — pure addressing, zero DO hops; returns an EDGE context so a later lend lands in
-//                 THIS session;
-//   • `invoke`  — the landing door of the prototype hop at the bottom (`itx.a.b(x)` reduces to ONE
-//                 expression) plus the one fetch-lane fork; `invoke(call, ...args)` applies LIVE args
-//                 (a Request, a callback) to the value the expression denotes; every built-in root
-//                 (`itx.append(…)`, `itx.readEvents(…)`, `itx.waitForEvent(…)`, `itx.kv.get(…)`,
-//                 `itx.rpcStubs.list()`, `itx.rewriteRules.list()`, …) and the reserved physical root
-//                 `itx.builtins.…` ride it with ZERO code here;
-//   • `provide` — THE ONE FRONT DOOR: make `match` mean `target`. A target that is a client's rpc stub
-//                 (a function, an RpcTarget) must live in this stateless worker, never in the DO
-//                 (DON'T-PIN, below), so the lend happens here — under the key = the canonical match —
-//                 plus the pure-data rule `match ⇒ itx.builtins.rpcStubs.get('<match>')`; an expression
-//                 target is that rule alone; `null` is a DENY (a mask over a platform row, `itx.kv`; a
-//                 deletion elsewhere). A rule or subscription naming a lent key is REMOVED by the DO
-//                 when the key's last pager closes — the physical fact decides, not this session's
-//                 teardown — and removal restores the platform row beneath (a fake `itx.ai` gives the
-//                 real one back);
-//   • `subscribe` / `enableProcessor` / `disableProcessor` — each is visibly "build the event, append
-//                 it": the DO has `append` and no configuration verbs. `subscribe` is declared here
-//                 because its target may be a client's rpc stub. When it is (as when `provide` lends),
-//                 the event RIDES THE PAGER UPGRADE and the DO appends it as it accepts the pager —
-//                 one round trip, and the DO owns both ends of what names a lent stub;
-// `provide` and `subscribe` hand back a DISPOSABLE handle (`using`): disposing un-does the act. capnweb
-// also disposes every exported handle when the session ends, so a rule or subscription made through
-// the verb is SESSION-SCOPED; one that must outlive the session is the raw event —
-// `itx.append(rewriteRuleConfiguredEvent(match, target))` — the verb minus the handle.
-//
-// HOW A CLIENT REACHES ONE: `/api` → `UnauthenticatedSession.authenticate()` → `Session.projects.get(id)`
-// → that project's ROOT `IterateContext` (session.ts). Contexts within a project are reached from a
-// context with `cd(path)` (absolute by convention, relative resolves).
-//
-// DON'T-PIN: the client's capnweb stub lives HERE, in this stateless worker, which OWNS it for the
-// session. `provide` opens an RPC-STUB PAGER WebSocket to the DO (context/rpc-stub-relay.ts +
-// context/rpc-stub-directory.ts): a standing offer to lend the key back on demand. When the DO wants
-// the client — a delivery, a request/response call — it PAGES this worker, which LENDS it a fresh
-// Workers-RPC stub over `lendRpcStub`. The DO keeps that stub borrowed while traffic flows and returns
-// it at its idle quiesce. So the DO holds no stub while idle and hibernates with any number of clients.
+// The DO owns every contract. This class declares only what the edge must do itself: `cd` (pure
+// addressing), `invoke` (the landing door of the prototype hop at the bottom, plus the one fetch-lane
+// fork), `provide` and `subscribe` (declared here because their target may be a client's rpc stub,
+// which must live in this stateless worker and never in the DO — the DON'T-PIN rule,
+// context/rpc-stub-relay.ts) and the two processor verbs. Each verb builds ONE event and appends it;
+// every built-in root rides the hop with ZERO code here. `provide` and `subscribe` hand back a
+// DISPOSABLE handle, so what they make is SESSION-SCOPED (capnweb disposes every exported handle at
+// session end); the raw event — `itx.append(rewriteRuleConfiguredEvent(match, target))` — is the verb
+// minus the handle and outlives the session. A client reaches a root context through session.ts and
+// the rest with `cd(path)`.
 
 import { RpcTarget } from "capnweb";
 import type { IterateContextDurableObject } from "./iterate-context-durable-object.ts";
@@ -86,11 +57,9 @@ import { subscriptionConfiguredEvent } from "./stream/subscriptions.ts";
 export type IterateContextNamespace = DurableObjectNamespace<IterateContextDurableObject>;
 export type WaitUntil = (p: Promise<unknown>) => void;
 
-/** What `provide` hands back: dispose it — or let the session end; capnweb disposes every exported
- *  handle then — and the rule at `match` is un-set: for a lent stub, by recalling the stub (the DO
- *  un-sets what named it when its last pager closes); for an expression or a deny, by appending the
- *  removal spelling (`itx.builtins.<match…>`, never `null`) when the row is still its own. The caller
- *  already holds the match it passed, so the handle carries nothing else. */
+/** What `provide` hands back: dispose it — or let the session end — and the act is un-done (a lent
+ *  stub recalled, a rule or deny removed while the row is still its own). The caller already holds
+ *  the match it passed, so the handle carries nothing else. */
 class RewriteRuleHandle extends RpcTarget {
   readonly #undo: () => void;
   constructor(undo: () => void) {
@@ -134,9 +103,9 @@ export class IterateContext extends RpcTarget {
   readonly #durableObjectAddress: DurableObjectAddress;
   readonly #sessionTeardown: SessionTeardown;
   readonly #waitUntil: WaitUntil;
-  /** WHO holds this context: the session's verified principal (session.ts), or null for the
-   *  anonymous session, a loaded worker's `env.ITX`. Every dispatch runs under it (`invokeAs`, the
-   *  fetch fork's header), so every event it appends carries `source.principal`. */
+  /** WHO holds this context: the session's verified principal (session.ts), or null (the anonymous
+   *  session, a loaded worker's `env.ITX`). Every dispatch runs under it, so every event it appends
+   *  carries `source.principal`. */
   readonly #principal: Principal | null;
 
   constructor(
@@ -235,8 +204,6 @@ export class IterateContext extends RpcTarget {
     const matchString = canonicalItxExpressionPrefix(match);
     const sessionTeardownKey = this.#sessionTeardownKey(matchString);
     if (target === null || typeof target === "string" || Array.isArray(target)) {
-      // Pure data: `null` is a deliberate DENY (a MASK where a platform row lies beneath — `itx.kv`
-      // refuses, `itx.builtins.kv` still answers — a deletion elsewhere); an expression is a rewrite.
       // Appended FIRST, then whatever THIS session lent under the match is recalled: the DO's un-set
       // on the pager close finds a row that no longer names the stub and removes nothing, so it can
       // never take the fresh mask or rule with it.
@@ -244,17 +211,11 @@ export class IterateContext extends RpcTarget {
       this.#refuseAnOverrideNamingItsOwnContext(matchString, event);
       await this.#append(event);
       this.#sessionTeardown.dispose(sessionTeardownKey);
-      // Disposing LIFTS the deny or REMOVES the rewrite — while the row is still this handle's own:
-      // the removal carries the PARSED target this event wrote, and the reduce compares inside the
-      // commit (a stale undo over a replacement is a no-op).
       const expectedTarget = (event.payload as { target: ItxExpression | null }).target;
       return new RewriteRuleHandle(() => this.#removeRuleInBackground(matchString, expectedTarget));
     }
-    // Built BEFORE the lend so a match the codec refuses throws with nothing lent. The rule rides the
-    // pager upgrade: the DO appends it in the turn it accepts the pager — ONE round trip, and the DO
-    // owns BOTH ends of a lent stub's rule (set on attach, REMOVED on the key's last pager close — a
-    // fake `itx.ai` gives the real one back). A refusal (STREAM_PAUSED) is the upgrade's answer: it
-    // propagates from here with nothing lent. The target is the PHYSICAL registry, `itx.builtins.…`.
+    // Built BEFORE the lend so a match the codec refuses throws with nothing lent; the rule rides the
+    // pager upgrade and the DO appends it as it accepts the pager (context/rpc-stub-directory.ts).
     const ruleEvent = rewriteRuleConfiguredEvent(matchString, [
       "itx",
       "builtins",
@@ -269,10 +230,8 @@ export class IterateContext extends RpcTarget {
       this.#waitUntil,
     );
     // Registered with the session so a dying session recalls it even when the handle was never
-    // disposed; re-providing the same match replaces the entry (the old pager was "replaced" anyway).
-    // The rule is NOT un-set by this session: the DO un-sets whatever names the key when its LAST
-    // pager closes (a reconnect replaces the pager, so a late-dying old session cannot clobber the
-    // new one's rule).
+    // disposed (session-teardown.ts: a re-provide replaces the entry). The rule is NOT un-set by this
+    // session — the DO un-sets what names the key when its LAST pager closes.
     const lease = this.#sessionTeardown.add(sessionTeardownKey, pager);
     return new RewriteRuleHandle(() => lease.dispose()); // the lease IS the handle: a stale one is inert
   }
@@ -303,10 +262,8 @@ export class IterateContext extends RpcTarget {
       ...(input.afterOffset !== undefined && { afterOffset: input.afterOffset }),
     };
     if (input.target !== null && typeof input.target !== "string" && !Array.isArray(input.target)) {
-      // A LIVE callback: the row (built first — a name the reduce rejects throws with nothing lent)
-      // rides the pager upgrade and the DO appends it as it accepts the pager — one round trip, the
-      // DO owning both ends of the row's life (set on attach, un-set on the key's last pager close). A
-      // refusal (STREAM_PAUSED) is the upgrade's answer and propagates from here with nothing lent.
+      // A LIVE callback: the row rides the pager upgrade exactly as `provide`'s rule does (built
+      // first, so a name the reduce rejects throws with nothing lent).
       const row = subscriptionConfiguredEvent({
         name,
         target: ["itx", "builtins", "rpcStubs", ["get", rpcStubKey]],
@@ -320,23 +277,19 @@ export class IterateContext extends RpcTarget {
         this.#waitUntil,
       );
       const lease = this.#sessionTeardown.add(sessionTeardownKey, pager);
-      // The row is un-set by the DO when the key's last pager closes (see provide): the handle
-      // only recalls the lend — and only its OWN (the lease is the handle; a stale one is inert).
+      // The handle only recalls its own lend (the lease is the handle; a stale one is inert); the DO
+      // un-sets the row on the key's last pager close.
       return new SubscriptionHandle(name, () => lease.dispose());
     }
-    // An expression (or a removal): the row is appended FIRST — a refusal (STREAM_PAUSED) changes
-    // nothing — and only then does whatever THIS session lent under the name stop meaning it: the
-    // DO's un-set on the pager close finds a row that no longer names the stub and removes nothing,
-    // so it can never take the fresh row with it (the same order as `provide`).
+    // An expression (or a removal): appended FIRST, then this session's lend under the name is
+    // recalled — the same order as `provide`, for the same reason.
     const target = input.target as ItxExpressionInput | null;
     const [committed] = (await this.#append(
       subscriptionConfiguredEvent({ name, target, ...consumes }),
     )) as StreamEvent[];
     this.#sessionTeardown.dispose(sessionTeardownKey);
     return new SubscriptionHandle(name, () => {
-      // An expression target has no pager, so the handle un-sets the row itself — ONLY the row this
-      // call wrote (same name REPLACES: a later subscribe under the name, this session's or another's,
-      // owns the row now, and a stale undo must never take it — nor the facet it may host).
+      // no pager to recall: the handle un-sets the row itself — only the one this call wrote
       if (target !== null) this.#removeSubscriptionInBackground(name, committed.offset);
     });
   }
@@ -380,20 +333,18 @@ export class IterateContext extends RpcTarget {
     await this.#append(subscriptionConfiguredEvent({ name, target: null }));
   }
 
-  /** THE ONE WRITE: every verb above builds an event and appends it here — `itx.append(event)` through
-   *  the same door a client's dotted `itx.append(...)` takes. (The cast: workers-types collapses a stub
-   *  method's `unknown` result to `never`.) */
+  /** THE ONE WRITE: every verb above builds an event and appends it here, spelled `itx.builtins.append`
+   *  — the platform never spells a short name (context/itx-expression-rewriting.ts), so a context's own
+   *  rows redirect the user's calls, never this. */
   #append(event: StreamEventInput): Promise<unknown> {
-    // THE PLATFORM NEVER SPELLS A SHORT NAME: `itx.builtins.append` is the fixed point — a context's
-    // own rows (a whole-context override, a mask at `itx.append`) redirect the user's calls, never this.
     return this.#invokeOnDurableObject(["itx", "builtins", ["append", event]]);
   }
 
   /** An undo's REMOVAL of a rule: un-set ONLY the row this handle wrote — the removal carries the
    *  target it wrote (`ifTarget`) and the core reduce applies it only while the row's target is still
-   *  that (a later provide at the same match, a live provider's, another session's, owns the row now);
-   *  spelled as the removal (back to the platform row beneath, if any), never as a mask. ONE append,
-   *  fire-and-forget under waitUntil (a disposer cannot await), a refusal ignored. */
+   *  that (a later provide at the same match owns the row now); spelled as the removal (back to the
+   *  platform row beneath, if any), never as a mask. Fire-and-forget under waitUntil (a disposer
+   *  cannot await), a refusal ignored. */
   #removeRuleInBackground(matchString: string, expectedTarget: ItxExpression | null): void {
     this.#waitUntil(
       this.#append(rewriteRuleRemovedEvent(matchString, expectedTarget)).catch(() => undefined),
@@ -402,8 +353,7 @@ export class IterateContext extends RpcTarget {
 
   /** An undo's REMOVAL of a subscription row: un-set ONLY the row this handle wrote — its identity is
    *  the offset of the event the handle's call committed (`ifConfiguredAtOffset`); a later same-name
-   *  subscribe owns the name and the reduce ignores the stale removal. ONE append, fire-and-forget
-   *  under waitUntil, a refusal ignored. */
+   *  subscribe owns the name and the reduce ignores the stale removal. Fire-and-forget, as above. */
   #removeSubscriptionInBackground(name: string, configuredAtOffset: number): void {
     this.#waitUntil(
       this.#append(
@@ -432,17 +382,15 @@ export class IterateContext extends RpcTarget {
       );
   }
 
-  /** The SessionTeardown key for a lent stub: `JSON.stringify([iterateContextName, rpcStubKey])`.
-   *  The teardown is SESSION-lived and shared by every IterateContext the session hands out (across
-   *  projects), while a stub key is only unique PER CONTEXT; the JSON pair is unambiguous whatever
-   *  either half holds (a path segment may carry a space, a match may pin a string arg). */
+  /** The SessionTeardown key for a lent stub. The teardown is SESSION-lived and shared by every
+   *  IterateContext the session hands out, while a stub key is only unique PER CONTEXT — so the key is
+   *  the JSON pair, unambiguous whatever either half holds (a match may pin a string arg). */
   #sessionTeardownKey(rpcStubKey: string): string {
     return JSON.stringify([this.#durableObjectAddress.name, rpcStubKey]);
   }
 }
 
 // THE NATURAL DOTTED SURFACE: an unknown segment (`itx.slack`, `itx.kv`, `itx.append`) reduces into
-// ONE `invoke(expression)` dispatch through the prototype hop (context/invoke-handle.ts — the workerd
-// brand-check reason it is a hop and not a Proxy AROUND the instance), the declared methods above
-// always winning. Runs once at module load, after the class body.
+// ONE `invoke(expression)` dispatch through the prototype hop (context/invoke-handle.ts says why a hop
+// and not a Proxy AROUND the instance), the declared methods above always winning.
 installPrototypeInvokeFallback(IterateContext, ["itx"]);

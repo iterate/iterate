@@ -1,17 +1,13 @@
-// stream/events.ts — the stream event envelope (plain types) + idempotency rules. Zod-FREE on
-// purpose: this module is on the edge/DO script's graph, so it carries no runtime validator (the
-// zod contract helper `defineProcessorContract` lives on the SDK side, sdk/processor-contract.ts).
-// The envelope itself is two plain types the append door checks by hand.
+// stream/events.ts — the stream event envelope + idempotency rules. Zod-FREE on purpose: this module
+// is on the edge/DO script's graph, so it carries no runtime validator (sdk/processor-contract.ts
+// has the zod half).
 
 import { jsonEqual } from "../lib/patch.ts";
-// THE one deep-equal lives in patch.ts (the live-state diff needs it dependency-free); the
-// idempotency-body compare below is the same test, re-exported here for the SDK bundle.
+// THE one deep-equal lives in patch.ts; re-exported here for the SDK bundle.
 export { jsonEqual };
 
-/** What `append` accepts: the event body, before the stream assigns its committed identity. Plain
- *  types — the door (stream.ts `append`, step 1) checks ONE rule by hand: `type` is a non-empty
- *  string. (An ephemeral's `idempotencyKey` dedupes like any other but is never stored — ephemerals
- *  never reach the idempotency column.) */
+/** What `append` accepts: the event body, before the stream assigns its committed identity. The
+ *  door checks ONE rule by hand: `type` is a non-empty string. */
 export type StreamEventInput = {
   /** Convention: `events.iterate.com/<domain>/<fact>`. */
   type: string;
@@ -33,10 +29,9 @@ export type StreamEventInput = {
   /** OPTIONAL PRECONDITION (apps/os): land at exactly this offset or refuse the whole batch with
    *  OFFSET_CONFLICT — "nothing has happened since I last looked". Never stored in the body. */
   offset?: number;
-  /** An EPHEMERAL event rides the stream to live subscribers but is NEVER persisted: it consumes
-   *  an offset (which survives as a valid gap), triggers zero reduce/cursor writes, and its body is
-   *  gone the moment the incarnation ends — it cannot be redelivered by anyone. A durable OMITS the
-   *  field: the type admits only `true` (the door reads the flag's truthiness and checks nothing). */
+  /** An EPHEMERAL event rides the stream to live subscribers but is NEVER persisted: it consumes an
+   *  offset, triggers zero writes, and its body is gone the moment the incarnation ends — nobody can
+   *  redeliver it (stream.ts, the zero-write contract). A durable OMITS the field. */
   ephemeral?: true;
 };
 

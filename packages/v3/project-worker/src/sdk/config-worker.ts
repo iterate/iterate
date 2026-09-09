@@ -1,34 +1,29 @@
 // sdk/config-worker.ts — THE CONFIG WORKER base class, bundled into `processor.js` (sdk/index.ts).
 // A project's ONE event handler: every context subscribes `itx.cd('/').worker.processEventBatch`, so
-// the "/" context's config worker is called with every stream's committed batch — the apps/os
-// project-worker shape. SOURCE-IN-KV is the repo stand-in: the code lives at the KV key
-// `/repos/config/worker.ts` and is loaded through the `itx.worker` rewrite
-// (`itx.worker ⇒ itx.workers.get({ source: itx.builtins.kv.get('/repos/config/worker.ts'), cacheKey,
-// className: 'ConfigWorker' })` — the KV value IS the module, reproduced from a data structure exactly
-// as a repo reproduces it from an entrypoint reference).
-//
-// An author writes, in that KV module:
+// the "/" context's config worker is called with every stream's committed batch. `itx.worker` is a
+// platform row (itx-expression-rewriting.ts) a project re-points at its own source —
+// `itx.provide("itx.worker", "itx.workers.get({ source: itx.repos.readFile('config','worker.ts'), cacheKey })")`
+// — with no className: the module's DEFAULT export is the class, as in the bundled no-op default.
+// An author writes:
 //
 //   import { ConfigWorker } from "./processor.js";
-//   export class Config extends ConfigWorker {
+//   export default class extends ConfigWorker {
 //     async processEvent({ event, itx }) {
 //       if (event.type === "events.iterate.com/ping") await itx.builtins.append({ type: "…/pong" });
 //     }
 //   }
 //
 // STATELESS by design — it owns no stream and no checkpoint. The SUBSCRIBING context keeps the cursor
-// (at-least-once, redelivered on a retry), so `processEvent` must be IDEMPOTENT: an `idempotencyKey`
-// on an appended reaction makes a redelivery a no-op. `range` is the contiguous `(after, through]`
-// window the batch proves, for a handler that keeps its own external cursor.
+// (at-least-once), so `processEvent` must be IDEMPOTENT: an `idempotencyKey` on an appended reaction
+// makes a redelivery a no-op. `range` is the contiguous `(after, through]` window the batch proves.
 
 import { WorkerEntrypoint } from "cloudflare:workers";
 import type { ItxEntrypoint } from "../itx-entrypoint.ts";
 import type { StreamEvent } from "../stream/events.ts";
 import type { ScannedRange } from "../stream/processor.ts";
 
-/** The itx scope handed to `processEvent`: `env.ITX.get()` for this batch — the genuine `IterateContext`
- *  RpcTarget (dotted access, `itx.builtins.append(…)` / `itx.cd('/x').append(…)`), disposed after the
- *  batch so it does not pin the parent DO past the turn (the 4A.2 release). */
+/** The itx scope handed to `processEvent`: `env.ITX.get()` for this batch — the genuine
+ *  `IterateContext` RpcTarget, disposed after the batch so it does not pin the parent DO past the turn. */
 export type ConfigWorkerItx = ReturnType<Service<ItxEntrypoint>["get"]>;
 
 /** One committed event handed to the config worker, with the batch's range and the batch's itx scope. */

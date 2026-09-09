@@ -1,10 +1,7 @@
-// sdk/index.ts — THE userspace SDK surface, bundled (zod included) into every loaded processor
-// isolate as `processor.js` by build-sdk.mjs. Userspace writes exactly what built-ins write:
+// sdk/index.ts — THE userspace SDK surface, bundled (zod included — the owner's call) into every
+// loaded isolate as `processor.js` by build-sdk.mjs:
 //
 //   import { StreamProcessor, StreamProcessorDurableObject, defineProcessorContract, z } from "./processor.js";
-//
-// One contract shape, one pure author class + one host class, schemas everywhere (owner's call:
-// isolates absolutely get zod and full contract schemas as part of the SDK).
 
 export {
   StreamProcessorDurableObject,
@@ -23,20 +20,15 @@ export { defineProcessorContract } from "./processor-contract.ts";
 export { jsonEqual, type StreamEvent, type StreamEventInput } from "../stream/events.ts";
 export { z } from "zod";
 // capnweb's CLIENT constructors, so userspace can dial a remote capnweb API from inside its isolate
-// through the context's own egress — `itx.provide("itx.os", "itx.workers.get({ source, className: 'Remote',
-// { props: { url } })")` — and `newWorkersRpcResponse`, the SERVER half, so a loaded worker can serve a
-// capnweb API over its `fetch` (its targets extend `RpcTarget` from "cloudflare:workers"; the
-// platform's own `itx.connectToCapnweb` is the client that dials it). The HTTP batch is exported ON
-// PURPOSE beside the WebSocket session: a
-// stateless entrypoint answering one method with one remote call has no session to hold across
-// calls, and a one-shot POST is the honest shape for it (the lint rule targets long-lived workers).
+// through the context's own egress, and `newWorkersRpcResponse`, the SERVER half, so a loaded worker
+// can serve a capnweb API over its `fetch`. The HTTP batch is exported ON PURPOSE beside the
+// WebSocket session: a stateless entrypoint answering one method with one remote call has no session
+// to hold across calls, and a one-shot POST is the honest shape (the lint rule targets long-lived workers).
 // eslint-disable-next-line iterate/no-capnweb-http-batch -- userspace one-shot remote calls; see above
 export { newHttpBatchRpcSession, newWebSocketRpcSession, newWorkersRpcResponse } from "capnweb";
 export { applyPatch, diff, type PatchOp } from "../lib/patch.ts";
 
-// LIVE STATE — the one holder used two ways: a processor's base owns one internally (reduced state
-// is live by default, override `projectLiveState` to reduce in runtime fields), and a mini-app DO that
-// is NOT a processor (a chatroom, a lobby) owns one directly — the sink is one line over the scope,
-// `new LiveState({ append: (e) => env.ITX.get().append(e) }, "chat", {…})` (a field initializer cannot await) —
-// mutate with `set`, expose `snapshot()` as the client seed door. See stream/live-state.ts.
+// LIVE STATE for a mini-app DO that is NOT a processor (a processor's base owns one internally):
+// `new LiveState({ append: (e) => env.ITX.get().append(e) }, "chat", {…})` — a field initializer
+// cannot await — then `set` to mutate and `snapshot()` as the client seed door (stream/live-state.ts).
 export { LiveState, type LiveStateSink } from "../stream/live-state.ts";

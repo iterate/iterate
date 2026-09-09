@@ -2,7 +2,7 @@
 // UNCONTROLLED degradation: every way this context can still fail in a manner the PLATFORM decides
 // for us — a message we did not write, a wedge with no operator door, a retry that never ends —
 // beyond out-of-memory (local workerd enforces no memory limit; the memory pins live in
-// src/stream/memory-budget.test.ts and e2e/stream-memory-budget.e2e.test.ts). Each row stages one
+// src/stream/memory-budget.test.ts and e2e/stream-isolate-ceilings-deployed.e2e.test.ts). Each row stages one
 // scenario against a REAL `IterateContextDurableObject` inside workerd (runInDurableObject for its
 // storage, evictDurableObject for a fresh incarnation, runDurableObjectAlarm for the ladder) and
 // pins EXACTLY what it dies of today: the observed message, verbatim.

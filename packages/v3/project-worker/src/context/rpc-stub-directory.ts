@@ -13,20 +13,14 @@
 //   the key not borrowed, the DO sends `{type:"page"}` down the pager, the edge answers with
 //   `lendRpcStub`, and layer 1 takes over. Between pages the DO holds only hibernatable sockets.
 //
-// `invokeRpcStub` IS the two layers: have we got it? call it · else is there a pager for it? page
-// it, then call · else RPC_STUB_OFFLINE — and a call that BROKE the stub drops it on the way out,
-// so the next call pages again instead of riding a dead leg until the idle return.
-//
-// WHAT A STUB IS HERE: its KEY — an opaque string the lender picks (the edge's `provide` sugar uses
-// whatever key it likes — a reconnect re-lends under the same key; the registry never parses
-// it; connection metadata may attach to a pager record later). A PAGER IS ITS SOCKET: a NEW pager
-// under an existing key attaches beside the old one, then wins (the reconnect swap). PRESENCE
-// (`listRpcStubKeys`) is the keys borrowed or pager-backed right now.
+// WHAT A STUB IS HERE: its KEY — an opaque string the lender picks; the registry never parses it. A
+// PAGER IS ITS SOCKET: a NEW pager under an existing key attaches beside the old one, then wins (the
+// reconnect swap).
 //
 // ONE-SHOT pager attach: the pager upgrade's `x-itx-rpc-stub-pager` header carries the KEY and the
 // EVENTS THAT NAME IT (a rewrite rule, a subscription row); this side accepts the socket and appends
 // those events in the SAME synchronous turn — the SET half of "the DO owns both ends of a lent
-// stub's rule" (the un-set half is the key's last pager close, onPresence). A refused append (a
+// stub's rule" (the un-set half is the key's last pager close, `onPresence`). A refused append (a
 // paused stream) un-accepts: the socket closes silently, nothing was named, and the refusal — its
 // CODE — is the upgrade's answer. So a `provide(stub)` costs the edge ONE round trip to this DO.
 
@@ -87,8 +81,7 @@ export type BorrowedRpcStub = RpcStubFetchTransport & {
 };
 
 /** One pager socket's durable record — its attachment (survives hibernation). The key alone: the
- *  socket is its own identity (an attachment from an earlier deploy may carry more; only the key
- *  is read). */
+ *  socket is its own identity. */
 type RpcStubPagerRecord = { rpcStubKey: string };
 
 /** THE one disposer for any RPC-ish stub (borrowed Workers-RPC legs here, the session's own capnweb
@@ -116,8 +109,7 @@ export class RpcStubDirectory {
    *  terminal-fetch call into its serve(). */
   readonly #rpcStubFetch: RpcStubFetchServer;
 
-  // LAYER 1 — the borrowed rpc stubs, by key, in memory ONLY and kept WARM: steady traffic pays ONE
-  // page, then every delivery is a plain RPC call. Returned at the DO's idle quiesce — never per
+  // LAYER 1 — the borrowed rpc stubs, in memory ONLY; returned at the DO's idle quiesce — never per
   // call, never on a timer (a pending timer would itself pin the DO out of hibernation).
   readonly #borrowedRpcStubs = new Map<string, BorrowedRpcStub>();
 
@@ -168,10 +160,10 @@ export class RpcStubDirectory {
     }
   }
 
-  /** THE one call door behind `itx.rpcStubs.get(rpcStubKey)` — resolved calls (`itx.<match>.m()`
-   *  through a rewrite rule naming it) and the delivery loop's push (an anonymous call step = the
-   *  bare lent callable itself). The stub stays borrowed afterwards — steady traffic is pure RPC, no
-   *  socket round-trips — unless the call broke it (below). Fire-and-forget callers just don't await. */
+  /** THE one call door behind `itx.rpcStubs.get(rpcStubKey)` — resolved calls and the delivery loop's
+   *  push (an anonymous call step = the bare lent callable itself): have it? call it · else page it,
+   *  then call · else RPC_STUB_OFFLINE. The stub stays borrowed afterwards — steady traffic is pure
+   *  RPC — unless the call broke it (below). */
   async invokeRpcStub(rpcStubKey: string, itxExpressionSteps: ItxExpression): Promise<unknown> {
     let borrowed = this.#borrowedRpcStubs.get(rpcStubKey); // 1. have we got it? call it
     if (!borrowed && this.#rpcStubPagerFor(rpcStubKey))
@@ -179,20 +171,18 @@ export class RpcStubDirectory {
     if (!borrowed)
       throw codedError("RPC_STUB_OFFLINE", `rpc stub ${JSON.stringify(rpcStubKey)} is offline`);
     try {
-      // THE TERMINAL-FETCH BRANCH (fetch/rpc-stub-fetch.ts, doctrine point 1 — dies with its
-      // WORKAROUND fence): a terminal `fetch` carrying the one live Request rides the rpc-stub fetch
-      // path; the borrowed stub is the transport. Everything else is a plain dotted dispatch. Either
-      // way, a lender that dies mid-call is re-coded to RPC_STUB_OFFLINE at the relay, where the
-      // break is LOCAL — the CODE, never a message, crosses this hop (lib/errors.ts).
+      // The terminal-fetch branch dies with fetch/rpc-stub-fetch.ts's WORKAROUND fence. Either way a
+      // lender that dies mid-call is re-coded to RPC_STUB_OFFLINE at the relay, where the break is
+      // LOCAL (context/rpc-stub-relay.ts).
       const terminalFetch = terminalFetchOf(itxExpressionSteps, []);
       if (terminalFetch)
         return await this.#rpcStubFetch.serve(borrowed, terminalFetch.steps, terminalFetch.request);
       return await borrowed.invoke(itxExpressionSteps);
     } catch (error) {
       // A BROKEN STUB IS DROPPED, NEVER KEPT (v4 §2.7): every later call on it would fail the same
-      // way until the idle return, while its pager may already be able to lend a live one — so the
-      // NEXT call pages again. Only the stub THIS call rode: a re-lend that landed meanwhile is the
-      // live one, and a late failure of the old leg must not drop it. The failed call is not retried.
+      // way until the idle return, while its pager may already lend a live one — so the NEXT call
+      // pages again. Only the stub THIS call rode: a re-lend that landed meanwhile is the live one.
+      // The failed call is not retried.
       if (isBrokenRpcStubError(error) && this.#borrowedRpcStubs.get(rpcStubKey) === borrowed) {
         this.#borrowedRpcStubs.delete(rpcStubKey);
         disposeRpcStub(borrowed);
@@ -217,10 +207,9 @@ export class RpcStubDirectory {
 
   // ── LAYER 2: the pager upgrade (attach + the events that name the key) → pages → close ──
 
-  /** PARTIAL FETCH (compose first in the DO's fetch): the pager upgrade — the header carries the
-   *  key and the events that name it. `null` = not this door's request. Accept, append, stamp: ONE
-   *  synchronous turn, nothing interleaves, so a refused append leaves no socket, no presence and no
-   *  row — the refusal (its code) is the whole answer, and the relay lends nothing. */
+  /** PARTIAL FETCH (compose first in the DO's fetch): the pager upgrade (the header, above); `null` =
+   *  not this door's request. Accept, append, stamp in ONE synchronous turn, so a refused append
+   *  leaves no socket, no presence and no row. */
   acceptRpcStubPagerWebSocket(request: Request): Response | null {
     const header = request.headers.get(RPC_STUB_PAGER_WEBSOCKET_HEADER);
     if (header === null) return null;
@@ -235,15 +224,13 @@ export class RpcStubDirectory {
     }
     const { rpcStubKey, appendEvents } = attachRequest;
     const hadPager = this.#rpcStubPagerFor(rpcStubKey) !== undefined;
-    // Accepted and stamped in ONE synchronous turn, so every pager socket this side ever sees
-    // carries its record — through hibernation too (the attachment is what survives).
+    // Accepted and stamped in the same turn, so every pager socket this side ever sees carries its
+    // record — through hibernation too.
     const pair = new WebSocketPair();
     this.#ctx.acceptWebSocket(pair[1], [RPC_STUB_PAGER_WEBSOCKET_TAG]);
     pair[1].serializeAttachment({ rpcStubKey } satisfies RpcStubPagerRecord);
-    // THE SET HALF: the events that name this key (`match ⇒ itx.builtins.rpcStubs.get('<key>')`, a
-    // subscription row) land now, with the pager already accepted — so a push the commit fans out
-    // finds the pager to page, exactly as when the edge appended after the upgrade. Still the same
-    // turn: the fan-out's first await is after this function returns.
+    // THE SET HALF, with the pager already accepted — so a push the commit fans out finds the pager
+    // to page. Still the same turn: the fan-out's first await is after this function returns.
     try {
       if (appendEvents.length > 0) this.#appendEvents(appendEvents);
     } catch (error) {
@@ -255,11 +242,10 @@ export class RpcStubDirectory {
       }
       return rpcStubPagerRefusalResponse(error);
     }
-    // ONE pager per key, enforced when a pager becomes VISIBLE: a CONCURRENT provide at the same key
-    // may still be opening its own pager, invisible to any earlier scan — so when THIS pager opens,
-    // drop every OTHER same-key socket now (the newest wins). "replaced" ⇒ a swap, not a real close:
-    // a page in flight for the key SURVIVES it — parked out of the drop's reach, then re-sent down
-    // this pager, which can answer it (its own 10 s timeout stays the backstop).
+    // ONE pager per key, enforced when a pager becomes VISIBLE (a CONCURRENT provide at the same key
+    // may still be opening its own, invisible to any earlier scan): drop every OTHER same-key socket
+    // now — the newest wins. "replaced" is a swap, not a real close: a page in flight SURVIVES it —
+    // parked out of the drop's reach, then re-sent down this pager (its timeout stays the backstop).
     const pageInFlight = this.#rpcStubPagesInFlight.get(rpcStubKey);
     if (pageInFlight) this.#rpcStubPagesInFlight.delete(rpcStubKey);
     for (const ws of this.#rpcStubPagerSockets())
@@ -274,14 +260,12 @@ export class RpcStubDirectory {
   }
 
   /** A pager WebSocket closed (wire this to webSocketClose/webSocketError, AFTER the DO's own
-   *  rpc-stub-fetch close routing): the pager is gone, and the stub it lent goes back with it. A
-   *  rewrite rule naming the key is un-set by the DO on the key's LAST pager close (onPresence). */
+   *  rpc-stub-fetch close routing): the pager is gone, and the stub it lent goes back with it. */
   rpcStubPagerClosed(ws: WebSocket): void {
     if (this.#closedRpcStubPagerSockets.has(ws)) return;
     this.#closedRpcStubPagerSockets.add(ws);
     const { rpcStubKey } = this.#rpcStubPagerRecord(ws);
-    // Another pager for this key is open (a reconnect that attached before this socket dropped):
-    // the "replaced" swap already returned the old stub; the borrowed one now is the new session's.
+    // another pager for this key is open (a reconnect): the swap already returned the old stub
     if (this.#rpcStubPagerFor(rpcStubKey)) return;
     this.#returnRpcStubAndFailItsPage(rpcStubKey);
     this.#onPresence("detached", rpcStubKey);
@@ -335,8 +319,7 @@ export class RpcStubDirectory {
       .getWebSockets(RPC_STUB_PAGER_WEBSOCKET_TAG)
       .filter((ws) => ws.readyState === WebSocket.OPEN);
   }
-  /** Every attached pager — DERIVED from the surviving sockets, so a fresh DO incarnation reads them
-   *  straight back with nothing to reconcile. */
+  /** DERIVED from the surviving sockets, so a fresh DO incarnation reads them straight back. */
   #rpcStubPagerRecords(): RpcStubPagerRecord[] {
     return this.#rpcStubPagerSockets().map((ws) => this.#rpcStubPagerRecord(ws));
   }
@@ -345,8 +328,6 @@ export class RpcStubDirectory {
       (ws) => this.#rpcStubPagerRecord(ws).rpcStubKey === rpcStubKey,
     );
   }
-  /** The record a pager socket carries (stamped in the same synchronous turn the socket was
-   *  accepted, so it is never missing). */
   #rpcStubPagerRecord(ws: WebSocket): RpcStubPagerRecord {
     return ws.deserializeAttachment() as RpcStubPagerRecord;
   }
@@ -374,8 +355,7 @@ export class RpcStubDirectory {
       this.#rpcStubPagesInFlight.set(rpcStubKey, page);
       const ws = this.#rpcStubPagerFor(rpcStubKey)!;
       try {
-        // THE ONE message a pager ever carries (DO → edge): "I ought to have your rpc stub but I
-        // don't — lend it." Everything else rides Workers RPC on the borrowed stub.
+        // THE ONE message a pager ever carries (DO → edge); everything else rides the borrowed stub
         ws.send(JSON.stringify({ type: "page" }));
       } catch {
         ws.close(1011, "page send failed");

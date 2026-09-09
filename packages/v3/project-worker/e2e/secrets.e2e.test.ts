@@ -155,5 +155,5 @@ test("a set refused by a paused stream leaves no value behind — egress cannot 
       headers: { authorization: "{{secret:project:ghost}}" },
     }),
   );
-  expect(res.status).toBe(502); // no value ⇒ the door refuses; today the value is there and the request leaves
+  expect(res.status).toBe(502); // the refused set stored no value, so the door finds none for `ghost` and refuses before the terminal fetch — the request never leaves
 });

@@ -2,7 +2,7 @@
   "name": "project-worker",
   "private": true,
   "type": "module",
-  "description": "The clean-room platform — ONE worker, one package: worker.ts (the stateless capnweb edge + ingress router) + IterateContextDurableObject (iterate-context-durable-object.ts) + control-plane/ (OAuth AS + D1 directory + /mcp, always in-process) + context/ fetch/ stream/ sdk/ lib/ shared/",
+  "description": "The clean-room platform — ONE worker, one package: worker.ts (the stateless capnweb edge + ingress router) + IterateContextDurableObject (iterate-context-durable-object.ts) + control-plane/ (OAuth AS + D1 directory + /mcp, always in-process) + context/ fetch/ stream/ sdk/ lib/ library/ client/",
   "exports": {
     "./types": "./src/types.ts",
     "./client": "./src/client/live-state-client.ts"

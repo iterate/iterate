@@ -1,16 +1,19 @@
-// cfartifacts.e2e.test.ts — `itx.cfArtifacts` against the REAL Cloudflare Artifacts binding on the
-// DEPLOYED worker (env.ARTIFACTS → the `project-worker-repos` namespace). Proves the two things the
-// unit test (src/context/built-ins-artifacts.test.ts) can only prove over a fake: the binding is
-// actually wired, and the project-scoping (prefix + local list filter) holds end-to-end across /api.
-//
-// DEPLOYED-TARGET ONLY: Artifacts has no local implementation, so these tests skip when the target is
-// a local worker (plain `pnpm e2e`) — otherwise they'd reach real Cloudflare from a local run. Run
-// them with `WORKER_BASE_URL=https://project-worker.iterate.workers.dev pnpm e2e cfartifacts`.
-//
-// NOTE the get→createToken CHAIN: `get` returns an RpcTarget whose `createToken` is pipelined
-// server-side in ONE expression. And `list` returns ONE namespace-wide page + a cursor (the binding
-// does not filter by name), so membership is asserted over ALL pages (`allRepoNames`), never page one
-// alone. Every repo created here is deleted in a `finally` (the project-teardown path).
+// cfartifacts.e2e.test.ts — `itx.cfArtifacts` and `itx.repos` against the REAL Cloudflare Artifacts
+// binding on the DEPLOYED worker (env.ARTIFACTS → the `project-worker-repos` namespace): what the unit
+// test over a fake (src/context/built-ins-artifacts.test.ts) cannot prove — the binding is wired and the
+// project scoping holds end to end across /api. DEPLOYED-TARGET ONLY: Artifacts has no local
+// implementation, so every row skips against a local worker (plain `pnpm e2e`) — run them with
+// `WORKER_BASE_URL=https://project-worker.iterate.workers.dev pnpm e2e cfartifacts`. Every repo created
+// here is deleted in a `finally` (the project-teardown path; repos and cfArtifacts address the same
+// repo). Pins:
+//   • create / get(repo).createToken (an RpcTarget's method, pipelined server-side in ONE expression) /
+//     list / delete: the repo is stored as `<projectId>.<repo>` and listed by its bare name; `list`
+//     returns ONE namespace-wide page + a cursor (the binding does not filter by name), so membership
+//     is asserted over ALL pages, never page one alone
+//   • isolation: one project never sees another's repos
+//   • `itx.repos.writeFile → readFile` round-trips a file through real git-over-HTTPS (context/git-wire):
+//     an absent repo or path reads null (no throw across the tree walk), the first write CREATES the repo
+//     and commits on main (parentless), a second write commits onto the tip's tree
 
 import { expect } from "vitest";
 import { freshCtx, openItx } from "./support/client.ts";
@@ -73,3 +76,37 @@ deployedOnly("cfArtifacts isolation: one project never sees another's repos", as
     await a.cfArtifacts.delete(repo);
   }
 });
+
+// ── `itx.repos`: the git-over-HTTPS layer that holds a config worker's source ──
+
+deployedOnly(
+  "itx.repos writeFile → readFile round-trips a file through real git-over-HTTPS",
+  async () => {
+    const itx = openItx(freshCtx("repos"));
+    const repo = `cfg-${rnd()}`;
+    const source = `export default { note: "from a real Artifacts repo ${rnd()}" };\n`;
+
+    try {
+      // An unborn/absent repo reads as null (no throw across the whole tree walk).
+      expect(await itx.repos.readFile(repo, "worker.ts")).toBeNull();
+
+      // First write CREATES the repo and commits worker.ts on main (parentless first commit).
+      const first = await itx.repos.writeFile(repo, "worker.ts", source);
+      expect(first.commitOid).toMatch(/^[0-9a-f]{40}$/);
+
+      // Read it back — tip commit → tree → the blob's bytes, verbatim.
+      expect(await itx.repos.readFile(repo, "worker.ts")).toBe(source);
+
+      // A second write updates the same path (merge onto the tip's tree, parent = the first commit).
+      const source2 = `${source}// v2\n`;
+      const second = await itx.repos.writeFile(repo, "worker.ts", source2);
+      expect(second.commitOid).not.toBe(first.commitOid);
+      expect(await itx.repos.readFile(repo, "worker.ts")).toBe(source2);
+
+      // A path that was never written is absent (null), even though the repo has a commit.
+      expect(await itx.repos.readFile(repo, "missing.ts")).toBeNull();
+    } finally {
+      await itx.cfArtifacts.delete(repo); // teardown — repos and cfArtifacts address the same repo
+    }
+  },
+);

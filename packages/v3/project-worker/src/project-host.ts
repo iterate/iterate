@@ -4,12 +4,10 @@
 // bare `itx.apps`: a row at the bare prefix would catch every label without a row of its own and hand
 // the apex app a stray step. Every host is exactly one row, and the log never names a hostname: one
 // rule row (`provide("itx.apps.site", …)`) serves the app on every host the project has. A project id
-// is a DNS label by construction (the directory slugifies it); the in-process directory admits it
-// (worker.ts). The edge half (worker.ts `laneRequestTo`) strips inbound `x-itx-*`, the platform's own
-// cookie (below) and a project-token bearer, and rides the Request otherwise unchanged into the fetch
-// lane, so relative links, the app's host-scoped cookies and WebSocket upgrades all work. The one
-// door the platform itself answers on a project host — the session cookie's — is here too
-// (`projectSessionResponse`), beside the cookie it sets.
+// is a DNS label by construction (the directory slugifies it); the in-process directory admits it and
+// the Request rides into the fetch lane (worker.ts `laneRequestTo`). The one door the platform itself
+// answers on a project host — the session cookie's — is here too (`projectSessionResponse`), beside
+// the cookie it sets.
 
 import { verifyProjectToken } from "./principal.ts";
 

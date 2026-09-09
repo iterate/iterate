@@ -108,11 +108,10 @@ function laneRequestTo(
   return new Request(request, { headers });
 }
 
-// Native workerd RPC promises pipeline exactly like capnweb ones — thread them unawaited through
-// the step walk too (dispatch.ts can't import cloudflare:workers itself: the unit lane runs it in
-// Node). A call step yields an RpcPromise; a PROPERTY step on one yields an RpcProperty — both
-// pipeline, so both register. Done once at module load, before any request can dispatch. The cast
-// bridges a workers-types gap: the runtime exports both (verified by probe) but the .d.ts doesn't.
+// The native workerd brands the step walk threads unawaited (dispatch.ts `PIPELINED_RPC_BRANDS` —
+// it cannot import cloudflare:workers itself). A call step yields an RpcPromise; a PROPERTY step on
+// one yields an RpcProperty — both pipeline, so both register. The cast bridges a workers-types gap:
+// the runtime exports both (verified by probe) but the .d.ts doesn't.
 const { RpcPromise: NativeRpcPromise, RpcProperty: NativeRpcProperty } =
   cloudflareWorkers as unknown as Record<"RpcPromise" | "RpcProperty", abstract new () => unknown>;
 registerPipelinedRpcBrand(NativeRpcPromise);
@@ -142,11 +141,10 @@ export default {
         { status: 508 },
       );
 
-    // PROJECT-HOST INGRESS (project-host.ts): a request on `<label>--<projectId>.<base>` IS the app
-    // `itx.apps.<label>` of that project's ROOT context, the Request riding into the fetch lane
-    // below with its URL, the app's own cookies and a WebSocket upgrade intact (laneRequestTo), so
-    // a served page's relative links work. Everything on a project host is the app's; the
-    // platform's own doors (`/api`, `/expression`, `/version`) live on the worker's hostname.
+    // PROJECT-HOST INGRESS (project-host.ts): a request on a project host IS the app it names, the
+    // Request riding into the fetch lane with its URL, the app's own cookies and a WebSocket upgrade
+    // intact. Everything on a project host is the app's; the platform's own doors live on the
+    // worker's hostname.
     const appConfig = appConfigOf(env);
     const { projectHostnameBase, projectTokenSecret, loginMode, environmentName, deployId } =
       appConfig;
@@ -161,13 +159,9 @@ export default {
         return new Response(`421: no project ${JSON.stringify(projectId)} is served here\n`, {
           status: 421,
         });
-      // THE SESSION DOOR on a project host (`/.itx/session`, project-host.ts): a project token for
-      // THIS project becomes the host-scoped cookie; every other path is the app's.
       const sessionResponse = await projectSessionResponse(url, projectId, projectTokenSecret);
       if (sessionResponse) return sessionResponse;
-      // WHO (laneIdentityOf) and WHAT THE APP SEES (laneRequestTo): the visitor's own cookies reach
-      // the app; the platform's project-session cookie and a project-token bearer never do — only
-      // the verified stamp.
+      // the visitor's own cookies reach the app; the platform's cookie and bearer never do
       return env.ITERATE_CONTEXT.getByName(
         DurableObjectNameCodec.stringify({ projectId, path: "/" }),
       ).fetch(
@@ -188,10 +182,8 @@ export default {
     // build-sdk.mjs; wrangler.jsonc `assets`): the platform serves it before this handler runs.
 
     // THE ONE capnweb ENTRYPOINT (the hard rule): capnweb terminates HERE, in the stateless worker;
-    // the DO is reached only over Workers RPC. A client dials `/api` and holds an
-    // `UnauthenticatedSession`: `authenticate().projects.get(projectId)` → the project's root itx.
-    // WHO dials (session.ts): in `open` login mode everyone is the anonymous user; in `email` mode the
-    // control plane's session cookie on THIS request — a browser's same-origin socket carries it.
+    // the DO is reached only over Workers RPC. WHO dials (session.ts): in `open` login mode everyone
+    // is the anonymous user; in `email` mode the control plane's session cookie on THIS request.
     if (url.pathname === "/api") {
       const user = await identity(request, env);
       // newWorkersRpcResponse serves BOTH a WebSocket upgrade AND a one-shot HTTP batch —
@@ -213,11 +205,9 @@ export default {
 
     // THE FETCH LANE — the plain-HTTP door onto fetch-shaped capabilities (WS upgrades and all), for
     // callers with no capnweb session (curl, a browser tab, a webhook): `?context=` names the
-    // context (a project id = its root, or a full context name), `?itx=` the itx expression. The
-    // expression rides to the context DO in `x-itx-expression`. capnweb clients need no door: a
-    // terminal `itx.x.fetch(request)` takes the same lane from inside the session.
-    // `/expression/<path>` too: the Request rides to the target verbatim, so a server behind the lane
-    // (an OpenAPI service loaded as a worker) sees a real path.
+    // context (a project id = its root, or a full context name), `?itx=` the itx expression, which
+    // rides to the context DO in `x-itx-expression`. `/expression/<path>` too: the Request rides to
+    // the target verbatim, so a server behind the lane sees a real path.
     if (url.pathname === "/expression" || url.pathname.startsWith("/expression/")) {
       const context = url.searchParams.get("context");
       const itxExpression = url.searchParams.get("itx");
@@ -266,10 +256,8 @@ export default {
       });
     }
 
-    // Everything else on the platform host is the CONTROL PLANE, in-process (src/control-plane): login
-    // + session, the OAuth AS (/authorize, /token, /.well-known, /register), /mcp, project creation
-    // (/projects), and the console at /. The project-worker's own doors (/api, /expression, /version,
-    // /demo) took precedence above. One worker, one front door.
+    // Everything else on the platform host is the CONTROL PLANE, in-process (src/control-plane/app.ts
+    // lists its doors). One worker, one front door.
     return controlPlane.fetch(request, env, ctx);
   },
 };

@@ -1,25 +1,17 @@
-// subscriptions.ts — THE SUBSCRIPTIONS TABLE's one COMMAND. The rows THEMSELVES are `core` state
-// (stream/core-processor.ts reduces subscription-configured/-delivery-halted/-delivery-resumed into
-// `state.subscriptions`); the READER is the delivery loop (subscription-delivery.ts), which evaluates
-// each row's target after every commit and asks the value whether it owns its progress (a facet, a
-// lent rpc stub ⇒ push) or not (⇒ the stream keeps a cursor, at-least-once).
-//
-// A subscription is pure data — a NAME, a TARGET expression whose terminal is callable with
-// `(events, range)`, an optional `consumes` filter, and an optional `afterOffset` (where the cursor
-// lane starts: 0 = the whole log; absent = from the configure offset). `configured` REPLACES a
-// same-named row; a `null` target REMOVES it. The one function here BUILDS that event; the caller
-// appends it. The halted fact is appended by the delivery loop; the resumed fact by an operator's
-// plain `itx.append`.
+// subscriptions.ts — THE SUBSCRIPTIONS TABLE's one COMMAND (the rows are core state; the reader is
+// subscription-delivery.ts). A subscription is pure data — a NAME, a TARGET expression whose
+// terminal is callable with `(events, range)`, an optional `consumes` filter, and an optional
+// `afterOffset` (where the cursor lane starts: 0 = the whole log; absent = from the configure
+// offset). `configured` REPLACES a same-named row; a `null` target REMOVES it. The halted fact is
+// appended by the delivery loop; the resumed fact by an operator's plain `itx.append`.
 
 import { normalizedItxExpression, print, type ItxExpressionInput } from "../context/expression.ts";
 import { parseSubscriptionName } from "./core-processor.ts";
 import type { StreamEventInput } from "./events.ts";
 
-/** The `subscription-configured` event for (or replacing, or with `target: null` removing)
- *  `input.name`. The target must be rooted at `itx`; it is stored in the PARSED form (below), which
- *  the reduce takes as it is. `ifConfiguredAtOffset` (with a null target) is a handle's undo: the
- *  reduce drops the row ONLY while it is still the one configured at that offset — a same-name
- *  replace since then owns the name and the stale undo is a no-op, decided inside the commit. */
+/** The `subscription-configured` event for `input.name`. `ifConfiguredAtOffset` (with a null
+ *  target) is a handle's undo: the reduce drops the row ONLY while it is still the one configured at
+ *  that offset (core-processor.ts). */
 export function subscriptionConfiguredEvent(input: {
   name: string;
   target: ItxExpressionInput | null;
@@ -33,11 +25,9 @@ export function subscriptionConfiguredEvent(input: {
     throw new Error(
       `a subscription's afterOffset is a non-negative integer offset (got ${JSON.stringify(afterOffset)})`,
     );
-  // BOTH halves through the codec's one door: a string is parsed (short by rule — the 2 KiB cap), an
-  // array is shape-checked in place, so a target the reduce could not read (the reserved literal
-  // `{ "@": true }` carried as data, a name step that is not an identifier) fails LOUD here, in the
+  // Through the codec's one door, so a target the reduce could not read fails LOUD here, in the
   // parser's words. STORED AS THE PARSED FORM: a target carries a facet's whole source as data, and
-  // the reduce must never re-parse that through the string codec (wave 0, issue 2).
+  // the reduce must never re-parse that through the string codec (its 2 KiB cap).
   const target = input.target === null ? null : normalizedItxExpression(input.target);
   if (target && target[0] !== "itx")
     throw new Error(

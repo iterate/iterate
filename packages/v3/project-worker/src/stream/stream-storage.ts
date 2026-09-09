@@ -1,10 +1,7 @@
-// stream-storage.ts — THE STREAM'S TABLES, typed: every SQL statement the stream runs lives here
-// behind methods that take and return real types (the apps/os `StreamEventLog` shape), over the
-// ONE platform handle — `ctx.storage.sql` (sync SQLite, a lazy cursor), `transactionSync` (the
-// savepoint that rolls a commit back on a throw) and `setAlarm`. Workerd's kv is itself a SQLite
-// table, so the stream keeps none of its own: its incarnation counter, its core checkpoint and its
-// subscription cursors are rows in tables it owns, the whole seam is SQL, and a node:sqlite
-// stand-in satisfies it in a screen (node-sqlite-durable-object-storage.ts).
+// stream-storage.ts — THE STREAM'S TABLES, typed: every SQL statement the stream runs lives here,
+// over the ONE platform handle — `ctx.storage.sql`, `transactionSync` and `setAlarm`. Workerd's kv
+// is itself a SQLite table, so the stream keeps none of its own: the whole seam is SQL, and a
+// node:sqlite stand-in satisfies it in a screen (node-sqlite-durable-object-storage.ts).
 //
 //   events                offset · body · idempotency_key   one row per durable event
 //   event_chunks          offset · chunk_index · chunk      a body over EVENT_CHUNK_SIZE, sliced —
@@ -101,10 +98,8 @@ export class StreamStorage {
     return this.#storage.setAlarm(atMs);
   }
 
-  /** THE SELF-WAKE STREAK — a durable count of consecutive alarm-only incarnations with no public
-   *  door touched (the billing circuit-breaker; stream.ts gates its alarm arming on it). One
-   *  `stream_meta` row, read once at construction and written only when it MOVES, so normal request
-   *  operation (streak always 0) pays no extra write. */
+  /** The self-wake streak (stream.ts SELF_WAKE_HALT_STREAK): one `stream_meta` row, read once at
+   *  construction and written only when it MOVES, so normal request operation pays no extra write. */
   readSelfWakeStreak(): number {
     const row = this.#sql
       .exec<{ value: string }>("SELECT value FROM stream_meta WHERE key = 'selfWakeStreak'")

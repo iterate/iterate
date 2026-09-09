@@ -9,21 +9,16 @@
 //   who is sent each commit   stream/subscription-configured { name, target|null, ifConfiguredAtOffset? }|
 //                             -delivery-halted|-delivery-resumed            → subscriptions (the delivery loop)
 //
-// ONE reduce, no effects, no verbs — a pure fold (`reduceCoreEvent`) with a batch door (`reduceCoreEventBatch`), NOT a hosted
-// `StreamProcessor` (nothing pushes it, nothing checkpoints it but the Stream): owned by the Stream
-// itself (stream.ts `#coreReducedState`, reduced inside every commit) because
-// its readers are the append door, the dispatcher and the delivery loop, all synchronous. The COMMANDS that append these events live
-// beside the code that reads each slice (context/itx-expression-rewriting.ts for the rules,
-// stream/subscriptions.ts for rows); the READERS are pure functions over the state. Control is
+// ONE reduce, no effects, no verbs — a pure fold (`reduceCoreEvent`) with a batch door
+// (`reduceCoreEventBatch`), NOT a hosted `StreamProcessor`: owned by the Stream itself and reduced
+// inside every commit, because its readers (the append door, the dispatcher, the delivery loop) are
+// all synchronous. The COMMANDS that append these events live beside the code that reads each slice
+// (context/itx-expression-rewriting.ts for the rules, stream/subscriptions.ts for rows). Control is
 // ORDINARY EVENTS: `itx.append({ type: 'events.iterate.com/stream/paused', payload: { reason } })`
-// pauses, `stream/resumed` resumes — so a POLICY processor (a token-bucket breaker, a quota) runs as
-// an ordinary facet and trips the stream by appending `paused` with its reason. Core knows nothing
-// about it; e2e/support/sources.ts's BreakerProcessor is that pattern.
-//
-// created/woken are appended by the DO's CONSTRUCTOR (Stream.appendCreatedAndWokenEvents), synchronously, before any door
-// opens — the apps/os shape: the log's first event is the birth certificate, every incarnation's
-// first event is its wake record. The platform's own records and the pause/resume pair are exempt
-// from pause — a paused stream must always accept its own resume.
+// pauses — so a POLICY processor (a token-bucket breaker, a quota) runs as an ordinary facet and
+// trips the stream by appending `paused`. Core knows nothing about it; e2e/support/sources.ts's
+// BreakerProcessor is that pattern. created/woken come from the DO constructor
+// (Stream.appendCreatedAndWokenEvents); the pause exemptions are Stream.append's.
 
 import {
   normalizedItxExpression,
@@ -53,12 +48,11 @@ export type HostingFacetSpec = {
   cacheKey?: string;
 };
 
-/** The hosting spec inside a FULL configured target, RESOLVED to the fixed point
- *  (`itx.builtins.facets.get(name, { source, className, cacheKey? }).…`) — present ONLY in the raw log
- *  event's target, before the reduce elides the source. `#invokeFacet` reads it back from the log on a
- *  first-materialization memo miss (M1). Undefined if the target is not a facet-host (an address-only
- *  `…facets.get(name).…`). Resolution is what makes a user's short spelling (`itx.facets.get(…)`, or a
- *  rule of their own naming the door) host exactly like the platform's. */
+/** The hosting spec inside a target RESOLVED to the fixed point
+ *  (`itx.builtins.facets.get(name, { source, className, cacheKey? }).…`) — present ONLY in the raw
+ *  log event's target, before the reduce elides the source (M1). Undefined for an address-only
+ *  target. Resolution is what makes a user's short spelling, or a rule of their own naming the door,
+ *  host exactly like the platform's. */
 export function facetSpecFromHostingTarget(
   resolvedTarget: ItxExpression,
 ): HostingFacetSpec | undefined {
@@ -151,13 +145,11 @@ function facetAddressedBy(resolvedTarget: ItxExpression): string | undefined {
     : undefined;
 }
 
-/** THE DRAFT TABLES OF ONE BATCH (`reduceCoreEventBatch`): a table is copied ONCE per batch — on its first
- *  touch, when it is not yet a draft — and mutated in place from then on, so a page of N control
- *  events costs O(rows + N), not N copies of the whole table (the O(rows²) constructor re-reduce
- *  memory-budget.test.ts pins). The set is fresh per batch and never holds a published table, so the
- *  state a caller handed in — and every state a previous batch produced — stays immutable; only the
- *  batch's own intermediate states share a draft, and nothing observes those. Without a batch (the
- *  single-event `reduceCoreEvent`) every touch copies: the reduce is pure. */
+/** THE DRAFT TABLES OF ONE BATCH: a table is copied ONCE per batch, on its first touch, and mutated
+ *  in place from then on, so a page of N control events costs O(rows + N), not N copies of the whole
+ *  table (the O(rows²) constructor re-reduce memory-budget.test.ts pins). The set is fresh per batch
+ *  and never holds a published table, so the state a caller handed in stays immutable; only the
+ *  batch's own intermediate states share a draft, and nothing observes those. */
 type DraftTables = WeakSet<object> | undefined;
 function draftOf<Table extends object>(table: Table, draftTables: DraftTables): Table {
   if (draftTables?.has(table)) return table;
@@ -167,13 +159,11 @@ function draftOf<Table extends object>(table: Table, draftTables: DraftTables): 
 }
 
 /** THE MARKERS FOLLOW THE RULES: after the table changed, a row whose target is NOT builtins-rooted
- *  may host a different facet than its `hostedFacet` says — the rule that makes it host landed
- *  AFTER the row, or was re-pointed at another facet — while the delivery loop re-resolves at every
- *  push and the removal effect trusts the marker; they must agree. So every rule commit re-derives
- *  the marker of every such row through the NEW table: a target that resolves to a hosting spelling
- *  marks that facet; one that resolves to an ADDRESS of the facet it is marked with keeps its marker
- *  (its own spec was elided, M1); anything else drops it. A builtins-rooted row's marker is final
- *  (no rule can move it); an unresolvable row (a mask, a prefix nothing names yet) keeps what it has. */
+ *  may host a different facet than its `hostedFacet` says, while the delivery loop re-resolves at
+ *  every push and the removal effect trusts the marker — they must agree. So every rule commit
+ *  re-derives the marker of every such row through the NEW table: a hosting spelling marks that
+ *  facet; an ADDRESS of the facet it is marked with keeps its marker (its own spec was elided, M1);
+ *  anything else drops it. A builtins-rooted row's marker is final; an unresolvable row keeps what it has. */
 function withHostedFacetMarkersFollowingRules(
   state: CoreState,
   draftTables: DraftTables,
@@ -223,11 +213,9 @@ export type Subscription = {
    *  whole log); absent = `configuredAtOffset`, "from now". A target that owns its progress (a
    *  facet, a lent stub) ignores it. */
   afterOffset?: number;
-  /** Set when this row HOSTS a facet (a target that RESOLVES to `itx.builtins.facets.get(name,
-   *  spec)…`, M1): the facet's name, class and cacheKey, but NOT the source — the source stays in the
-   *  durable log event (and the `facet:<name>` kv memo), never in this reduced state, so a 100 KB
-   *  processor no longer bloats the checkpoint blob that is rewritten on every core change. A row
-   *  that only ADDRESSES a running facet has no `hostedFacet`. */
+  /** Set when this row HOSTS a facet (M1): the facet's name, class and cacheKey, but NOT the source —
+   *  that stays in the durable log event and the `facet:<name>` kv memo, so a 100 KB processor never
+   *  bloats the checkpoint blob rewritten on every core change. An address-only row has none. */
   hostedFacet?: { name: string; className: string; cacheKey?: string };
   /** A CURSOR target that exhausted its retries (the loop appended the halted fact). */
   halted?: { afterOffset: number; attempts: number; error?: string };
@@ -235,11 +223,9 @@ export type Subscription = {
   resumed?: { afterOffset?: number; atOffset: number };
 };
 
-/** THE CORE STATE — the context's own state, reduced inline at the commit point. HAND-WRITTEN (no
- *  zod on the edge/DO script): these events are the platform's own, trusted, and the reduce reads
- *  them by hand, so the 310 KB zod runtime validator earned its removal. `paused` and the two tables
- *  are always present (the initial state defaults them); the identity fields fill in from
- *  created/woken. */
+/** THE CORE STATE — the context's own state, reduced inline at the commit point. HAND-WRITTEN, no
+ *  zod on the edge/DO script: these events are the platform's own, trusted, so the 310 KB runtime
+ *  validator earned its removal. */
 export type CoreState = {
   /** From the birth certificate (stream/created, offset 1). */
   projectId?: string;
@@ -261,11 +247,9 @@ export type CoreState = {
   secrets: Record<string, { origin?: string }>;
 };
 
-/** A subscription/registry name is ONE segment, [A-Za-z0-9_-]: the facet name for a processor, the
- *  registry key's tail for a live callback — and never a key of `Object.prototype` (`__proto__`,
- *  `constructor`, …): the tables are plain records indexed by name, so such a name would read or
- *  write the prototype instead of a row. Refused here and at the append door (stream.ts, beside
- *  `core`). (Was a zod `.regex` on the SDK; hand-checked here now.) */
+/** A subscription name is ONE segment, [A-Za-z0-9_-] — and never a key of `Object.prototype`: the
+ *  tables are plain records indexed by name, so such a name would read or write the prototype
+ *  instead of a row. Refused here and at the append door (stream.ts, beside `core`). */
 const SUBSCRIPTION_NAME_PATTERN = /^[A-Za-z0-9_-]+$/;
 export function parseSubscriptionName(name: string): string {
   if (typeof name !== "string" || !SUBSCRIPTION_NAME_PATTERN.test(name) || name in Object.prototype)
@@ -275,14 +259,12 @@ export function parseSubscriptionName(name: string): string {
   return name;
 }
 
-/** THE CORE CONTRACT — what the Stream reads (stream.ts): the checkpoint's slug and reducer version,
- *  and the literal every-field-defaulted initial state. The command builders that mint core events
- *  (itx-expression-rewriting.ts `rewriteRuleConfiguredEvent`, subscriptions.ts
- *  `subscriptionConfiguredEvent`) construct their literal payloads and validate rooting themselves;
- *  the reduce below is the one list of the types it consumes. */
+/** THE CORE CONTRACT — what the Stream reads: the checkpoint's slug and reducer version (a bump
+ *  re-reduces the log from offset 0 in the DO constructor), and the every-field-defaulted initial
+ *  state. The reduce below is the one list of the types it consumes. */
 export const CoreContract = {
   slug: "core",
-  version: "8.0.0", // 8.0.0: the secrets catalog (names + origins, reduced from `secrets/changed`). 7.0.0: a subscription row carries its optional `afterOffset` (where the cursor lane starts). 6.0.0 (the builtins root): `null` rows kept as MASKS under a built-in root, the platform-equivalent target deletes, hosting detected on the RESOLVED target, hostedFacet carries the facet's `name`. 5.0.0 (M1): a hosted facet's SOURCE is elided from the reduced target (kept in the log + facet:<name> kv)
+  version: "8.0.0",
   initialState: (): CoreState => ({
     paused: null,
     itxExpressionRewriteRules: {},
@@ -291,12 +273,10 @@ export const CoreContract = {
   }),
 };
 
-/** THE BATCH DOOR — a commit's fresh events, a page of the constructor's re-reduce (the Stream's
- *  two callers): the events in order over `state`, each table copied once for the whole batch
- *  (`draftOf`). A throwing event is handed to `onError` and skipped — its state is the previous
- *  event's (the reduce touches a draft only after everything that can throw), so one bad
- *  hand-appended event never wedges the batch. The state handed in is never mutated: a
- *  mid-transaction throw rolls back to it cleanly. */
+/** THE BATCH DOOR: the events in order over `state`, each table copied once for the whole batch
+ *  (`draftOf`). A throwing event is handed to `onError` and skipped — the reduce touches a draft
+ *  only after everything that can throw, so one bad hand-appended event never wedges the batch,
+ *  and the state handed in is never mutated: a mid-transaction throw rolls back to it cleanly. */
 export function reduceCoreEventBatch(
   events: StreamEvent[],
   state: CoreState,
@@ -314,12 +294,9 @@ export function reduceCoreEventBatch(
 }
 
 /** THE CORE REDUCE of one event — a pure fold, `undefined` = keep the state (identity is the host's
- *  change signal). Without `draftTables` (the tests' single-event fold) every touch copies; inside a
- *  batch the tables are that batch's drafts (`reduceCoreEventBatch`). Ephemeral control events are
- *  IGNORED (they would vanish from any rebuild). A malformed payload (a match with an argless call
- *  step, a target that does not parse) THROWS here like any reduce would — BEFORE any draft is
- *  touched — and the batch door contains it (`onError`: Stream reports the issue and keeps the
- *  state), so one bad hand-appended event never wedges a later commit. */
+ *  change signal). Without `draftTables` (the tests' single-event fold) every touch copies.
+ *  Ephemeral control events are IGNORED (they would vanish from any rebuild). A malformed payload
+ *  THROWS here like any reduce would — BEFORE any draft is touched — and the batch door contains it. */
 export function reduceCoreEvent(
   { event, state }: ReduceArgs<CoreState>,
   draftTables?: DraftTables,
@@ -339,8 +316,7 @@ export function reduceCoreEvent(
       const next = payload.deleted
         ? undefined
         : { ...(typeof payload.origin === "string" && { origin: payload.origin }) };
-      // A no-op is `undefined`, not a fresh object (the rules table below says why): deleting what
-      // is not there, or re-setting the same origin, rewrites no checkpoint and publishes no delta.
+      // A no-op is `undefined`, not a fresh object (the rules case says why).
       if (next ? jsonEqual(state.secrets[name], next) : state.secrets[name] === undefined)
         return undefined;
       const secrets = draftOf(state.secrets, draftTables);
@@ -369,14 +345,12 @@ export function reduceCoreEvent(
       const matchString = payload.match as string;
       const matchPrefix = parseItxExpressionPrefix(matchString);
       const existing = state.itxExpressionRewriteRules[matchString];
-      // THE COMPARE-AND-SET of a handle's undo (`rewriteRuleRemovedEvent(match, ifTarget)`): the
-      // removal applies only while the row's target is still the one the handle wrote — a
-      // replacement (another session's, a live provider's) owns the match now and a stale undo is
-      // a no-op. Decided here, inside the commit, so there is no read-then-append window.
+      // THE COMPARE-AND-SET of a handle's undo (`ifTarget`): the removal applies only while the row's
+      // target is still the one the handle wrote — a replacement owns the match now and a stale undo
+      // is a no-op. Decided inside the commit, so there is no read-then-append window.
       if ("ifTarget" in payload && (!existing || !jsonEqual(existing.target, payload.ifTarget)))
         return undefined;
-      // The rules table with `matchString` set (or removed), the batch's draft mutated — and every
-      // change to the table re-derives the subscriptions' hosting markers through it.
+      // Every change to the rules table re-derives the subscriptions' hosting markers through it.
       const withRule = (rule: ItxExpressionRewriteRule | undefined): CoreState => {
         const rules = draftOf(state.itxExpressionRewriteRules, draftTables);
         if (rule)
@@ -407,9 +381,8 @@ export function reduceCoreEvent(
     case "events.iterate.com/stream/subscription-configured": {
       const name = payload.name as string;
       if (payload.target === null) {
-        // The same compare-and-set for a subscription handle's undo: `ifConfiguredAtOffset` names
-        // the row the handle wrote (its identity — the configure's own offset); a same-name replace
-        // since then owns the name, and the stale removal is a no-op.
+        // The same compare-and-set for a subscription handle's undo: `ifConfiguredAtOffset` is the
+        // identity of the row the handle wrote.
         if (
           "ifConfiguredAtOffset" in payload &&
           state.subscriptions[name]?.configuredAtOffset !== payload.ifConfiguredAtOffset
@@ -419,10 +392,7 @@ export function reduceCoreEvent(
       }
       const consumes = payload.consumes as string[] | undefined;
       const afterOffset = payload.afterOffset as number | undefined;
-      // M1: a hosting target (one that RESOLVES to `itx.builtins.facets.get(name, spec)…`) keeps its
-      // spelling but sheds its SOURCE here — the source is durable in this very event (and the
-      // facet's kv memo), so the reduced state, and the checkpoint blob it is written into on every
-      // core change, stay small.
+      // M1: a hosting target keeps its spelling but sheds its SOURCE here (`hostedFacet` says why).
       const configuredTarget = normalizedItxExpression(payload.target as ItxExpressionInput); // stored as the parsed form
       const { target, hostedFacet } = elideHostedFacetSource(
         configuredTarget,

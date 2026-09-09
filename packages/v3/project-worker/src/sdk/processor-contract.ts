@@ -1,10 +1,6 @@
-// sdk/processor-contract.ts — the zod CONTRACT helper, authored on the SDK side (bundled into
-// processor.js for userspace processors). Kept OUT of the edge/DO script on purpose: zod is ~310 KB
-// of runtime, and the platform's own core contract needs none of it (it is hand-built in
-// stream/core-processor.ts and its events are trusted). Userspace still gets full zod here — a
-// processor author writes `defineProcessorContract({ stateSchema: z.object(...), ... })`.
-//
-// API mirrors apps/os (`packages/iterate/src/processors/schemas.ts`) so processors port both ways.
+// sdk/processor-contract.ts — the zod CONTRACT helper, on the SDK side only: zod is ~310 KB of
+// runtime the edge/DO script never needs (the core contract is hand-built, stream/core-processor.ts).
+// Mirrors apps/os (`packages/iterate/src/processors/schemas.ts`) so processors port both ways.
 
 import { z } from "zod";
 import type { ProcessorContract } from "../stream/processor.ts";

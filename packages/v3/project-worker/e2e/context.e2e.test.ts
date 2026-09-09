@@ -1,17 +1,98 @@
-// context-dotted-calls-fall-back-to-the-invoke-door.e2e.test.ts — the NATURAL DOTTED CLIENT SURFACE. A
-// client speaks deep dotted itx expressions as PLAIN PROPERTY ACCESS on the capnweb stub —
-// `itx.slack.chat.postMessage({...})`, `itx.kv.put('k','v')` — even though only fixed members are
-// real methods anywhere along the path: the prototype hop (context/invoke-handle.ts) turns every
-// unknown segment into ONE accumulated `invoke(expression)` dispatch. Proves the root and depth-2
-// built-ins, a lent rpc stub through its rewrite rule's match, that a wrong guess REJECTS (raw — the
-// NOT_A_METHOD re-grammar was removed, an apps/os error-normalizer nicety with no clean-room
-// consumer), then-safety (an await settles instead of dispatching), stringify-safety, and that the
-// reserved transport words (then/dup/onRpcBroken) never dispatch as itx expressions at ANY depth.
+// context.e2e.test.ts — the CONTEXT across the /api hop: its built-in roots, the error grammar, and the
+// natural dotted client surface — deep dotted itx expressions as PLAIN PROPERTY ACCESS on the capnweb
+// stub (`itx.slack.chat.postMessage({...})`, `itx.kv.put('k','v')`): only fixed members are real
+// methods along the path; the prototype hop (context/invoke-handle.ts) turns every unknown segment into
+// ONE accumulated `invoke(expression)` dispatch. Pins:
+//   • a ':' in the ctx at the /expression door is a 400 naming the wall — the edge parses the context
+//     name before it names a DO (the codec's charset gate itself: context/durable-object-names.test.ts)
+//   • `kv.list` returns EVERY key, not the first KV page
+//   • `cd('')` is SELF — an in-process call on this very context, never a self-RPC hop or a twin DO
+//   • a default-deny miss and a paused-stream refusal each carry their machine-readable `code` end to
+//     end (lib/errors.ts: classify by code, never by message — own props survive DO → relay → client)
+//   • the explicit door `invoke(['itx', ['whoami']])`, the root dotted call, depth-2 built-ins, a dotted
+//     write beside an expression read (ONE log), a lent rpc stub through its rule's match
+//   • a wrong guess REJECTS raw (no NOT_A_METHOD re-grammar), through the dotted and the explicit door
+//   • then-safety (an awaited chain node settles into a live handle; a settled stub is not a thenable),
+//     stringify-safety (toJSON never dispatches), and the reserved transport words (then / dup /
+//     onRpcBroken) hidden at EVERY depth — pinned behaviorally: the log and a tally never move
 
 import { expect, test } from "vitest";
-import { freshCtx, openItx, readHead, rejection, until } from "./support/client.ts";
+import {
+  append,
+  codeOf,
+  expressionUrl,
+  freshCtx,
+  openItx,
+  readHead,
+  rejection,
+  until,
+} from "./support/client.ts";
 import { enableFixtureProcessor } from "./support/sources.ts";
 import { SlackReplayTarget, Tools } from "./support/targets.ts";
+
+// ── the built-in roots and the error grammar ──
+
+test("a ':' in the ctx at the /expression door is a 400 naming the wall — the edge parses the context name before it names a DO", async () => {
+  // DurableObjectNameCodec.parse gates the projectId to [A-Za-z0-9_-] (the ONE place every DO name is
+  // parsed; context/durable-object-names.test.ts pins the gate). The edge runs it on `?context=`
+  // before any object is addressed, so a ":"-nested project — whose prefixed kv key would alias
+  // another project's — is refused at the door and never materialized; the prefix IS the isolation wall.
+  const viaDoor = await fetch(expressionUrl("prj_x:evil", "itx.whoami"));
+  expect(viaDoor.status).toBe(400);
+  expect(await viaDoor.text()).toContain("invalid projectId");
+});
+
+test("kv list returns EVERY key, not silently the first 1000", async () => {
+  // Cloudflare KV caps a list page at 1000 keys; `kv.list()` paginates on the cursor until
+  // `list_complete`, so key 1001+ is never a permanent orphan for a sweep/GC/inventory caller.
+  const itx = openItx(freshCtx("kvlist"));
+  const total = 1001;
+  const names = Array.from({ length: total }, (_, i) => `k${String(i).padStart(4, "0")}`);
+  for (let i = 0; i < names.length; i += 100) {
+    await Promise.all(names.slice(i, i + 100).map((n) => itx.kv.put(n, "1")));
+  }
+  const listed = await itx.invoke(["itx", "kv", ["list"]]);
+  expect(listed.keys).toHaveLength(total);
+}, 60_000);
+
+test("cd('') resolves to THIS context (self) and answers rather than wedging", async () => {
+  // `resolveContextPath("/", "")` is "/" — the root's own path — and the DO's `context(p)` hands
+  // back ITSELF for its own path (iterate-context-durable-object.ts), so the empty spelling is an
+  // in-process call on this very context, landing in the SAME log. Pinned with a deadline so a
+  // regression to a self-RPC hop (or a twin DO) shows as a wedge or a split log, never as a 60 s
+  // test timeout.
+  const itx = openItx(freshCtx("self"));
+  const raced = await Promise.race([
+    itx.invoke("itx.cd('').append({type:'self-ping'})"),
+    new Promise((_, reject) =>
+      setTimeout(
+        () => reject(new Error("self-context call wedged >10s (self-RPC deadlock)")),
+        10_000,
+      ),
+    ),
+  ]);
+  expect((raced as any[])[0].type).toBe("self-ping");
+  const page = await itx.invoke(["itx", ["readEvents", 0, 50]]);
+  expect(page.events.map((e: any) => e.type)).toContain("self-ping");
+});
+
+test("a default-deny miss carries code NO_ITX_EXPRESSION_MATCH across the /api hop", async () => {
+  const itx = openItx(freshCtx("codemiss"));
+  const err = await rejection(itx.invoke(["itx", "nope", ["thing"]]));
+  expect(codeOf(err)).toBe("NO_ITX_EXPRESSION_MATCH");
+  expect(err.message).toMatch(/no rewrite rule matches/);
+});
+
+test("a paused-stream refusal carries code STREAM_PAUSED across the /api hop", async () => {
+  // enforcement refusals ride the same coded channel end to end
+  const itx = openItx(freshCtx("codepause"));
+  await append(itx, { type: "events.iterate.com/stream/paused", payload: { reason: "operator" } });
+  const err = await rejection(append(itx, { type: "mark", payload: { n: 1 } }));
+  expect(codeOf(err)).toBe("STREAM_PAUSED");
+  expect(err.message).toContain("stream paused");
+});
+
+// ── the natural dotted client surface ──
 
 /** Attach a slack bridge to `ctx` and hand back an ordinary second client: provider session +
  *  consumer session over the same context. The bridge is a LIVE rpc stub lent under the key

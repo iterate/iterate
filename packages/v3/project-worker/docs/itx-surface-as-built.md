@@ -370,7 +370,7 @@ form, `EXPRESSION_TOO_LONG` says so), an array is shape-checked in place (`asser
 a bad spelling fails at the door, never silently in the reduce. `subscription-configured`'s target is
 stored the same way. `rewriteRules.list()` still PRINTS targets for the reader.
 
-**A live stub behind a pinned match** (`rewrite-rules-argument-pinned.e2e`, spelled on `itx.llm` because
+**A live stub behind a pinned match** (`rewrite-rules.e2e`, spelled on `itx.llm` because
 `itx.ai` is a root whose `null` would mask): `provide("itx.llm.run('special')", fn)`, then
 `itx.llm.run('special', inputs)` runs as `itx.builtins.rpcStubs.get("itx.llm.run('special')")(inputs)`,
 so `fn(inputs)`. No key to invent: the key is the match.
@@ -388,7 +388,7 @@ itx.rpcStubs.get('greeterA').hello()
 itx.builtins.rpcStubs.get('greeterA').hello()   ← the fixed point: runs
 ```
 
-**Misha's test** (`ai-root-shadow-and-fable.e2e`; `rewrite-rules-builtins-root.e2e` runs it on `whoami`):
+**Misha's test** (`ai-root-shadow-and-fable.e2e`; `rewrite-rules.e2e` runs it on `whoami`):
 `provide("itx.ai", fake)` shadows `itx.ai` for
 the context, `itx.builtins.ai` is the real one throughout, and disposing the handle (or the test
 session ending) restores the platform row.
@@ -773,7 +773,7 @@ LibraryRoots`, the resolver walks from the record with one built-in predicate, t
   as `x-itx-principal` and the app attributes what it appends itself), and membership stays the
   control plane's — the token names one project, minted after the check, so the worker calls no
   directory. `authenticate()` bare stays anonymous: attribution, not authority.
-- Proofs: `e2e/session-identity.e2e.test.ts` (whoami; `source.principal` on a note and on the
+- Proofs: `e2e/session.e2e.test.ts` (whoami; `source.principal` on a note and on the
   session's own rule row; a forged one overwritten, an anonymous one stripped; `FORBIDDEN`;
   `INVALID_CREDENTIALS` for a bad and an expired token) and the session-door test in
   `e2e/ingress-project-host.e2e.test.ts` (the cookie, the header the app sees, a forged header

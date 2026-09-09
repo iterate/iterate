@@ -1,46 +1,19 @@
 // iterate-context-durable-object.ts — `IterateContextDurableObject`: THE CONTEXT, one DO per
-// `{projectId, path}` (codec-named `{projectId}.iterate{path}`). The DO is the parent —
-// STREAM + THE CORE REDUCE + SUBSCRIPTION DELIVERY + FACETS + TRANSPORT + DOORS:
+// `{projectId, path}` (codec-named `{projectId}.iterate{path}`), the parent of everything a context
+// holds: the stream with its core reduce (stream/stream.ts), subscription delivery
+// (stream/subscription-delivery.ts), the facets (`ctx.facets`, context/worker-loader.ts), the rpc
+// stubs (context/rpc-stub-directory.ts), and the fetch door (the pager upgrade, the fetch lane,
+// egress). Each module's header says what it does; this file is the wiring and the doors.
 //
-//   • the STREAM — a `Stream` (stream/stream.ts), DI'd with this DO's storage: the whole commit
-//     pipeline (validation + the pause check + idempotency + offsets + chunking + waitForEvent +
-//     the alarm armer), `appendCreatedAndWokenEvents()` — the constructor's created/woken records — and
-//     `coreReducedState`, the stream's own reduced state. The DO's append/read are thin wrappers (a
-//     wait is the built-in `itx.waitForEvent`, through `invoke`); the stream's
-//     one injected callback (onCommit) closes over this class — nothing in stream/stream.ts reaches back;
-//   • the CORE REDUCE — ONE reduce-only processor (core-processor.ts) reduced INSIDE the commit
-//     transaction, always on: who this context is, which incarnation runs, whether appends are
-//     paused, the ITX-EXPRESSION REWRITE RULES every call goes through (itx-expression-rewriting.ts
-//     reads them) and the SUBSCRIPTION rows every commit is sent to (subscriptions.ts builds their
-//     events). Runtime
-//     state IS reduced state — observability is its snapshot (`itx.facets.get('core')`);
-//   • SUBSCRIPTION DELIVERY — ONE loop (subscription-delivery.ts) run from onCommit: evaluate each
-//     subscription's target and look at the value — a facet or a live stub owns its progress and
-//     is pushed; anything else gets a cursor the stream keeps, at-least-once, retries on this DO's
-//     own alarm;
-//   • the FACETS — every loaded `DurableObject` class hosted here through `ctx.facets` with its
-//     identity in `ctx.props` (a processor is a facet whose `processEventBatch` is subscribed);
-//   • the RPC STUBS — two layers (rpc-stub-directory.ts): a BORROWED table anyone can lend into
-//     under an opaque key, returned at the idle quiesce; and PAGERS — one hibernatable WebSocket per
-//     key from the stateless edge relay, a standing offer to lend the key back on demand — so ANY
-//     number of connected clients leave this DO free to hibernate. PRESENCE is `itx.rpcStubs.list()`
-//     plus two EPHEMERAL events as it changes (`rpc-stub/attached` / `rpc-stub/detached`) — the log
-//     never claims a socket is open;
-//   • the FETCH DOOR — the one place a 101 can enter: `x-itx-rpc-stub-pager` accepts a pager
-//     WebSocket AND appends the events that name its key in the same turn (the edge's `provide(stub)`
-//     is ONE round trip here), `x-itx-expression` resolves the fetch lane, anything else is EGRESS
-//     (secret placeholder substitution, then the terminal fetch).
-//
-// PURE WORKERS-RPC: capnweb never terminates here (hard rule) — the stateless `/api` worker
-// relays. Dispatch is ONE door: `invoke(call)` — parse → rewrite through the rules → evaluate →
-// replay, all against the inline core state; this class only delegates. Every OTHER change to this
-// context is an appended event: the edge's `provide`/`subscribe`/`enableProcessor` verbs build one
-// and call `append` (a lent stub's rule or row rides its pager upgrade and is appended as the pager
-// is accepted — same door, one round trip) — there are no configuration verbs here. The events this
-// class appends on its own initiative: the birth `config` subscription (the constructor), the un-set
-// of whatever named an rpc stub whose last pager closed (onPresence), and the self-wake-halted fact
-// (alarm); the two effects it runs off a committed event: deleting the facet a removed subscription
-// hosted, and refreshing the startup memo of the facet a hosting subscription configures.
+// PURE WORKERS-RPC: capnweb never terminates here — the stateless `/api` worker relays. Dispatch is
+// ONE door, `invoke(call)`; every OTHER change to this context is an appended event (the edge's
+// `provide`/`subscribe`/`enableProcessor` verbs build one and call `append`; a lent stub's rule or
+// row rides its pager upgrade and is appended as the pager is accepted) — there are no
+// configuration verbs here. The events this class appends on its own initiative: the birth `config`
+// subscription (the constructor), the un-set of whatever named an rpc stub whose last pager closed
+// (onPresence), and the self-wake-halted fact (alarm); the two effects it runs off a committed
+// event: deleting the facet a removed subscription hosted, and refreshing the startup memo of the
+// facet a hosting subscription configures.
 
 import { AsyncLocalStorage } from "node:async_hooks";
 import { DurableObject } from "cloudflare:workers";
@@ -128,7 +101,7 @@ const CORE_SLUG = CoreContract.slug;
 /** The bindings THE DO reads (wrangler.jsonc): the DO namespace, the Worker Loader, the kv namespaces,
  *  Workers AI, Artifacts — and, from `AppConfigEnv`, the version-metadata binding and the `APP_CONFIG_*`
  *  vars app-config.ts parses. The in-process control plane's bindings (D1, OAuth KV, …) live in
- *  control-plane/env.ts; the one worker's env is the intersection of both (src/worker.ts). */
+ *  control-plane/app.ts; the one worker's env is the intersection of both (src/worker.ts). */
 export interface Env extends AppConfigEnv {
   ITERATE_CONTEXT: DurableObjectNamespace<IterateContextDurableObject>;
   LOADER: WorkerLoader;
@@ -142,61 +115,49 @@ export interface Env extends AppConfigEnv {
 }
 
 export class IterateContextDurableObject extends DurableObject<Env> {
-  /** WHO THIS DO IS — the first line, the apps/os shape: the DO name parsed ONCE into `{ name,
-   *  projectId, path }` (`name` is the codec string itself). A context is only ever reached
-   *  `getByName`; an id-addressed instance fails right here, before it can touch anything. */
+  /** WHO THIS DO IS: the DO name parsed ONCE into `{ name, projectId, path }`. A context is only
+   *  ever reached `getByName`; an id-addressed instance fails right here, before it can touch anything. */
   readonly #durableObjectAddress = parseIterateContextDurableObjectName(this.ctx.id.name);
-  /** The `env.ITX` / `globalOutbound` stub every worker this context loads receives — a loopback onto
-   *  this worker's own ItxEntrypoint with this context's name as its one prop. Minted once: it names
-   *  the context, not an incarnation, and a warm loader never re-reads it anyway. */
+  /** The `env.ITX` / `globalOutbound` stub every worker this context loads receives (itx-entrypoint.ts).
+   *  Minted once: it names the context, not an incarnation, and a warm loader never re-reads it. */
   readonly #itxEntrypoint = itxEntrypointFor(this.ctx, this.#durableObjectAddress.name);
-  /** This deployment's configuration (app-config.ts) — parsed once per isolate; a malformed var
-   *  throws here, in the constructor, naming it. */
+  /** This deployment's configuration (app-config.ts) — a malformed var throws here, naming it. */
   readonly #appConfig = appConfigOf(this.env);
-  /** The rpc-stub fetch subsystem (fetch/rpc-stub-fetch.ts) — the DO wires its three halves
-   *  directly: the upgrade-leg door (fetch), frame forwarding (webSocketMessage), and peer close
-   *  (webSocketClose); the rpc-stub directory borrows it for serve(). */
+  /** fetch/rpc-stub-fetch.ts — wired to the fetch door and the two WebSocket handlers below. */
   readonly #rpcStubFetch = new RpcStubFetchServer(this.ctx);
   readonly #rpcStubs = new RpcStubDirectory({
     rpcStubFetch: this.#rpcStubFetch,
     ctx: this.ctx,
-    // THE SET HALF of "the DO owns both ends of a lent stub's rule": the events a pager attach
-    // carries (the edge's `provide(stub)` / `subscribe(fn)` hand over the rule / the row it built)
-    // land through the same door as any append, in the turn the pager is accepted. The un-set half
-    // is `#unsetWhatNamesRpcStub` below.
-    // the events that ride a pager upgrade are a client's: their `source.principal` is dropped (the
-    // DO owns that field — a lent stub's rule is unattributed today)
+    // The SET half of "the DO owns both ends of a lent stub's rule": the events a pager attach
+    // carries land through the same door as any append, in the turn the pager is accepted (the
+    // un-set half is `#unsetWhatNamesRpcStub`). They are a client's events: `source.principal` is
+    // dropped — the DO owns that field, and a lent stub's rule is unattributed.
     appendEvents: (events) =>
       void this.#appendAndRunCommittedEffects(events.map((event) => stampPrincipal(event, null))),
-    // PRESENCE, as it changes: an EPHEMERAL fact a live watcher can subscribe to (`consumes:
-    // ["events.iterate.com/rpc-stub/attached", …]`), never a durable row — presence is physical
-    // (`itx.rpcStubs.list()`), and the log must never claim a socket is open. A refusal (a paused
-    // stream) is nothing to report: the watcher re-seeds from list().
+    // PRESENCE is physical (`itx.rpcStubs.list()`); its changes are EPHEMERAL facts, never durable
+    // rows — the log must never claim a socket is open. A refusal (a paused stream) is nothing to
+    // report: a watcher re-seeds from list().
     onPresence: (kind, rpcStubKey) => {
       void this.append({
         type: `events.iterate.com/rpc-stub/${kind}`,
         ephemeral: true,
         payload: { rpcStubKey },
       }).catch(() => undefined);
-      // THE STUB IS GONE, SO IS WHAT NAMED IT: when a key's LAST pager closes, every rewrite rule and
-      // every subscription whose target RESOLVES to `itx.builtins.rpcStubs.get('<key>')` is un-set — the durable half
-      // of "a provided stub's rule dies with the stub". Decided HERE and not in the lender's session
-      // teardown because only this side knows the truth: a reconnect REPLACES the pager (never a
-      // detach), so the reconnected session's rule survives a late-dying old session, while a
-      // genuine last close un-sets it exactly once.
+      // THE STUB IS GONE, SO IS WHAT NAMED IT: a key's LAST pager closing un-sets every rule and
+      // row whose target RESOLVES to `itx.builtins.rpcStubs.get('<key>')`. Decided HERE and not in
+      // the lender's session teardown because only this side knows the truth: a reconnect REPLACES
+      // the pager (never a detach), so the reconnected session's rule survives a late-dying old
+      // session, while a genuine last close un-sets it exactly once.
       if (kind === "detached") this.#unsetWhatNamesRpcStub(rpcStubKey);
     },
   });
 
   #unsetWhatNamesRpcStub(rpcStubKey: string): void {
-    // Decided against ONE frozen table BEFORE any append (`rowsNamingRpcStub`,
-    // itx-expression-rewriting.ts): a caller's short spelling names the key exactly as the platform's
-    // `itx.builtins.rpcStubs.get('k')`, an alias to a shadowed root resolves to the platform row
-    // beneath and is kept, and the answer never depends on the order the rows were configured in or
-    // on a row removed a moment earlier. Then appended one by one, each on its own, so a row the
-    // removal spelling cannot express (a raw-appended match at `itx.builtins.…`) stops none of the
-    // others. A rule is REMOVED (back to the platform row beneath, if any — a dead fake `itx.ai`
-    // restores the real one), never masked: `null` is the caller's deliberate deny.
+    // ONE frozen census BEFORE any append (`rowsNamingRpcStub`): the answer never depends on the
+    // order the rows were configured in or on a row removed a moment earlier. Then appended one by
+    // one, so a row the removal spelling cannot express (a raw-appended match at `itx.builtins.…`)
+    // stops none of the others. A rule is REMOVED (back to the platform row beneath, if any — a
+    // dead fake `itx.ai` restores the real one), never masked: `null` is the caller's deliberate deny.
     const { ruleMatches, subscriptionNames } = rowsNamingRpcStub({
       rpcStubKey,
       ...this.#rowsForRpcStubCensus(),
@@ -240,33 +201,25 @@ export class IterateContextDurableObject extends DurableObject<Env> {
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
-    // Auto-answer the edge relay's 30s keepalive at the RUNTIME level — the message never reaches a
-    // handler, so it keeps the pager sockets warm (defeats the ~100s idle-close) WITHOUT waking
-    // this DO, leaving hibernation intact. Set ONCE here: it is DO-wide and persisted (it also
-    // covers fetch-upgrade EYEBALL sockets, which is why the literal is deliberately distinctive —
-    // a plain "ping" would silently hijack any client frame that equals it; ws-fetch-live-101
-    // caught exactly that).
+    // The edge relay's 30s keepalive is answered at the RUNTIME level: the pager sockets stay warm
+    // (past the ~100s idle-close) WITHOUT waking this DO. DO-wide and persisted, so it also covers
+    // fetch-upgrade EYEBALL sockets — which is why the literal is deliberately distinctive: a plain
+    // "ping" would silently hijack any client frame that equals it (ws-fetch-live-101 caught that).
     this.ctx.setWebSocketAutoResponse(
       new WebSocketRequestResponsePair(
         RPC_STUB_PAGER_KEEPALIVE_REQUEST,
         RPC_STUB_PAGER_KEEPALIVE_RESPONSE,
       ),
     );
-    // THE WAKE RECORD, synchronously, before any door opens (the apps/os shape): the first
-    // incarnation appends `stream/created { projectId, path }`, every incarnation `stream/woken` —
-    // so the core reduce knows who it is and which incarnation runs before the first append, read
-    // or facet call, and the wake fan-out re-establishes deliveries after hibernation.
+    // The wake record, before any door opens (Stream.appendCreatedAndWokenEvents).
     this.#stream.appendCreatedAndWokenEvents();
-    // EVERY STREAM SUBSCRIBES THE "/" CONTEXT'S CONFIG WORKER (the apps/os project-worker shape): the
-    // root's `itx.worker.processEventBatch` is delivered every committed event, cross-context, at-least-
-    // once. `consumes: ["*"]` is honest — the config worker sees everything, `woken` included, so a
-    // fresh context's first batch arms the cursor lane's insurance alarm (one billed wake per real
-    // wake, which finds the delivery acked and, with nothing to quiesce, arms nothing more — alarm()).
-    // A DOWN config worker cannot wake-loop forever: its retry ladder is bounded (15 attempts), and
-    // the self-wake breaker (stream.ts SELF_WAKE_HALT_STREAK) halts alarm-arming after a few
-    // no-public-door wakes regardless. `itx.worker` always resolves (a bundled no-op default until a
-    // project writes its source to KV — itx-expression-rewriting.ts), so this never halts on a
-    // config-less project. Idempotent — one row per context whatever the incarnation.
+    // EVERY STREAM SUBSCRIBES THE "/" CONTEXT'S CONFIG WORKER: `itx.worker.processEventBatch` is
+    // delivered every committed event, cross-context, at-least-once. `consumes: ["*"]` is honest —
+    // the config worker sees everything, `woken` included. A DOWN config worker cannot wake-loop
+    // forever: the ladder is bounded and the self-wake breaker (stream.ts SELF_WAKE_HALT_STREAK)
+    // halts arming regardless; `itx.worker` always resolves (a bundled no-op default,
+    // itx-expression-rewriting.ts), so a config-less project never halts. Idempotent — one row per
+    // context whatever the incarnation.
     this.#stream.append({
       ...subscriptionConfiguredEvent({
         name: "config",
@@ -277,10 +230,8 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     });
   }
 
-  /** THE STREAM — the commit point AND the core reduce (stream/stream.ts: `append` is the pipeline
-   *  top to bottom — may-this-land, offsets, reduce + commit, after — and `coreReducedState` is the stream's own
-   *  reduced state, reduced inside every commit). The name check already happened above (`#durableObjectAddress`).
-   *  Its one callback, `onCommit`, is the post-commit fan-out: the ONE delivery loop. */
+  /** THE STREAM (stream/stream.ts): the commit pipeline and the core reduce. Its one callback,
+   *  `onCommit`, is the post-commit fan-out — the delivery loop. */
   readonly #stream = new Stream({
     storage: this.ctx.storage,
     path: this.#durableObjectAddress.path,
@@ -289,21 +240,17 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       this.#subscriptionDelivery.onCommit(freshEvents, afterOffset, throughOffset),
   });
 
-  /** Commit events: idempotency-checked, offsets assigned from ONE shared sequence (ephemeral
-   *  events consume offsets but never touch the log — their bodies exist only in this batch and
-   *  in whatever pushes deliver them; after a reboot their offsets survive as valid gaps), then
-   *  every subscription is served (the delivery loop). A thin wrapper: the whole pipeline lives in
-   *  Stream.append; the tail runs #recordActivityForQuietClock on every LANDED append regardless of offset growth
-   *  (a REFUSED one doesn't: arming the quiet-clock alarm is a storage write a rejected probe must
-   *  not pay). */
+  /** The append door — a thin wrapper over Stream.append. The activity note runs on every LANDED
+   *  append; a REFUSED one pays nothing (arming the quiet-clock alarm is a storage write a rejected
+   *  probe must not pay). */
   async append(...events: StreamEventInput[]): Promise<StreamEvent[]> {
     this.#notePublicDoor();
     return this.#appendAndRunCommittedEffects(events);
   }
 
-  /** The append door's body, SYNCHRONOUS end to end (Stream.append is): the commit, the activity
-   *  note, the one committed-event effect. Two callers: `append` above, and the pager attach
-   *  (rpc-stub-directory.ts), which needs the refusal in the same turn it accepted the socket. */
+  /** SYNCHRONOUS end to end (Stream.append is): the commit, the activity note, the committed-event
+   *  effects. Two callers: `append`, and the pager attach (rpc-stub-directory.ts), which needs the
+   *  refusal in the same turn it accepted the socket. */
   #appendAndRunCommittedEffects(events: StreamEventInput[]): StreamEvent[] {
     const subscriptionsBeforeCommit = this.#stream.coreReducedState.subscriptions;
     const committedEvents = this.#stream.append(...events);
@@ -317,13 +264,12 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     return committedEvents;
   }
 
-  /** THE ONE EFFECT of a hosting configuration: a row that HOSTS a facet (the reduce marked it
-   *  `hostedFacet`, its source elided from the reduced target — M1) refreshes the facet's startup
-   *  memo from the event that configured it, source and all. The memo is the ONLY place a
-   *  materialization reads the source from, so a re-enable with NEW source under the same name and
-   *  class is a new loader identity on the facet's next call (#invokeFacet restarts it in place, its
-   *  storage preserved) — without this the old memo kept running the old code. A target that cannot
-   *  resolve right now (the marker was kept conservatively) is left to the next call's recovery. */
+  /** THE ONE EFFECT of a hosting configuration: the facet's startup memo is refreshed from the
+   *  event that configured it, source and all (the reduced row has none — M1). The memo is the ONLY
+   *  place a materialization reads the source from, so a re-enable with NEW source under the same
+   *  name and class is a new loader identity on the facet's next call (#invokeFacet restarts it in
+   *  place, storage preserved) — without this the old memo kept running the old code. A target that
+   *  cannot resolve right now is left to the next call's recovery. */
   #refreshFacetStartupMemosFromHostingConfigurations(committedEvents: StreamEvent[]): void {
     for (const event of committedEvents) {
       if (event.type !== "events.iterate.com/stream/subscription-configured") continue;
@@ -354,20 +300,16 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     }
   }
 
-  /** THE ONE EFFECT of a subscription removal: a row whose target HOSTED a facet — one that RESOLVED
-   *  to `itx.builtins.facets.get(name, spec)…` (the platform's spelling from `enableProcessor`, or a
-   *  user's short one; the reduce marks it `hostedFacet`) — takes the facet with it, storage included, so `subscription-configured { name, target: null }` IS the
-   *  disablement (raw event or verb alike) and a re-enable rebuilds from the log. A row that only
-   *  ADDRESSED a running facet (`itx.facets.get(name)…`, no spec) deletes nothing: it never owned it.
-   *  Done here, after the commit and before the append returns, because only the pre-commit state
-   *  knows what the removed row targeted. */
+  /** THE ONE EFFECT of a subscription removal: a row that HOSTED a facet (`hostedFacet` set) takes
+   *  the facet with it, storage included — `subscription-configured { name, target: null }` IS the
+   *  disablement, raw event or verb alike, and a re-enable rebuilds from the log. A row that only
+   *  ADDRESSED a running facet deletes nothing: it never owned it. Done after the commit and before
+   *  the append returns, because only the pre-commit state knows what the removed row targeted. */
   #deleteFacetsWhoseHostingSubscriptionWasRemoved(
     committedEvents: StreamEvent[],
     subscriptionsBeforeCommit: CoreState["subscriptions"],
   ): void {
-    // The facet a row HOSTS: a row with `hostedFacet` set (M1 — the source is elided from the target,
-    // so the marker, read off the RESOLVED target at configure time, is what says "hosts" and names
-    // the facet). An address-only row has no `hostedFacet`.
+    // M1: the marker, not the (source-less) target, says which facet a row hosts.
     const hostedFacetName = (row: Subscription): string | undefined => row.hostedFacet?.name;
     for (const event of committedEvents) {
       if (event.type !== "events.iterate.com/stream/subscription-configured") continue;
@@ -383,8 +325,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     }
   }
 
-  /** One BUDGETED page of the log (Stream.read: at most `limit` rows and at most the server's byte
-   *  budget of bodies; the page says whether it was cut). */
+  /** One BUDGETED page of the log (Stream.read). */
   async read(afterOffset = 0, limit = 500): Promise<StreamPage> {
     this.#notePublicDoor();
     return this.#stream.read(afterOffset, limit); // sync on the Stream, async at this cross-hop door
@@ -417,11 +358,9 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     return [...contextRows, ...platformRows];
   }
 
-  /** THE LIBRARY (library/index.ts), owned here: its verbs closed over this context's own `itx` — a
-   *  genuine InvokeHandle over `invoke`, so a library call's `itx.fetch(...)` resolves through THIS
-   *  context's rules (a test may shadow `itx.fetch`) and lands on egress with zero hops, the same
-   *  shape a loaded worker holds after `env.ITX.get()` — and the live connections it opened, which
-   *  the idle quiesce releases beside the borrowed stubs (a held connection pins this actor awake). */
+  /** THE LIBRARY (library/index.ts): its verbs closed over a genuine InvokeHandle over `invoke`, so a
+   *  library call's `itx.fetch(...)` resolves through THIS context's rules (a test may shadow
+   *  `itx.fetch`) with zero hops. Its live connections pin this actor awake; the idle quiesce releases them. */
   readonly #library = buildLibrary(
     new InvokeHandle((steps) => this.invoke(["itx", ...steps])) as unknown as LibraryItx,
   );
@@ -453,9 +392,9 @@ export class IterateContextDurableObject extends DurableObject<Env> {
           ),
     egress: (request) => this.#egress(request),
     principal: () => this.#principalStorage.getStore() ?? null,
-    // THE LIVE-STUB REGISTRY, DO half: `get(key)` is the transport's pipelinable handle (a GENUINE
-    // RpcTarget so `itx.rpcStubs.get('k').hello()` pipelines the mid-chain `.hello()` on every lane
-    // — workerd's classifier rejects a Proxy, #6873), branded RpcStubHandle for the delivery loop.
+    // `get(key)` is a GENUINE RpcTarget so `itx.rpcStubs.get('k').hello()` pipelines the mid-chain
+    // `.hello()` on every lane (workerd's classifier rejects a Proxy, #6873), branded RpcStubHandle
+    // for the delivery loop.
     rpcStubs: {
       // Re-note AFTER the call: this invoke may have borrowed the stub, and a borrowed stub is
       // exactly what the quiet clock exists to return — the arm must not wait for the next call.
@@ -481,8 +420,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     },
     rewriteRules: {
       list: () => this.#rewriteRuleList(),
-      // The table is keyed by the CANONICAL spelling; a caller's spelling (`get('itx.ai.run("x")')`)
-      // is canonicalized the same way `provide` canonicalized the match. An unparseable one is no row.
+      // Canonicalized the same way `provide` canonicalized the match; an unparseable one is no row.
       get: (match) => {
         let key: string;
         try {
@@ -500,9 +438,9 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     library: this.#library.roots,
   });
 
-  /** THE DISPATCHER (context/itx-expression-rewriting.ts), built once over the physical built-ins —
-   *  `itx.builtins`, the reserved root (declared ABOVE: a class field initializes in order); every
-   *  entry closes over this context's identity, so cross-project access is unspellable. */
+  /** THE DISPATCHER (context/itx-expression-rewriting.ts) over `#builtIns` — declared ABOVE, since a
+   *  class field initializes in order. Every built-in closes over this context's identity, so
+   *  cross-project access is unspellable. */
   readonly #itxExpressionResolver = new ItxExpressionResolver({
     rewriteRules: () => Object.values(this.#stream.coreReducedState.itxExpressionRewriteRules),
     builtIns: this.#builtIns,
@@ -512,11 +450,9 @@ export class IterateContextDurableObject extends DurableObject<Env> {
 
   readonly #subscriptionDelivery = new SubscriptionDelivery({
     stream: this.#stream,
-    // A target is evaluated through the ONE resolver — through every rewrite rule, one naming another
-    // included — so what comes back is exactly what a caller would get: a FacetHandle, an RpcStubHandle,
-    // an entrypoint handle, a value. The RESOLVER's run door, not this class's `invoke`: the loop's
-    // own evaluation is not activity (a finished delivery is — the loop records it), so the alarm's
-    // row-driven pass, which classifies every row's target once, can never postpone its own quiesce.
+    // The RESOLVER's door, not this class's `invoke`: the loop's own evaluation is not activity (a
+    // finished delivery is — the loop records it), so the alarm's row-driven pass, which classifies
+    // every row's target once, can never postpone its own quiesce.
     evaluateItxExpression: (itxExpression) => this.#itxExpressionResolver.invoke(itxExpression),
     recordActivityForQuietClock: () => this.#recordActivityForQuietClock(),
   });
@@ -551,61 +487,49 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   #lastActivityMs = 0;
   #recordActivityForQuietClock(): void {
     this.#lastActivityMs = Date.now();
-    // NOTHING TO QUIESCE, NO ALARM: the quiet clock exists to abort idle facets and give borrowed
-    // stubs back (alarm()). With neither, arming it is one storage write plus one billed wake for
-    // nothing — a bare probe (`itx.facets.get('core').snapshot()` rides invoke → here) must not pay
-    // that. `#lastActivityMs` still updates, so the first facet materialization (#invokeFacet's
-    // `finally` re-notes after `#liveFacetNames` grows) or borrow arms with an honest quiet-period start.
+    // NOTHING TO QUIESCE, NO ALARM: with no live facet and no borrowed stub, arming is one storage
+    // write plus one billed wake for nothing — a bare probe must not pay that. `#lastActivityMs`
+    // still updates, so the first materialization or borrow arms with an honest quiet-period start.
     if (this.#liveFacetNames.size === 0 && !this.#rpcStubs.hasBorrowedRpcStubs()) return;
     this.#stream.armAlarmNoLaterThan(this.#lastActivityMs + IDLE_QUIESCE_AFTER_MS);
   }
 
-  /** THE BILLING CIRCUIT-BREAKER's other half (stream.ts holds the durable streak). Set the moment
-   *  any RPC into this DO is answered this incarnation (append/read/invoke/waitForEvent/fetch) — as
-   *  opposed to an alarm-only pass (delivery, quiesce). "Any RPC" includes the wake's own facet
-   *  loopbacks: a processor pushed by the constructor's `woken` reads or appends through
-   *  `itx.builtins` and lands here, so a context hosting a `*`-consuming processor counts its wakes
-   *  as doors (accepted: the loop that would mask needs an eviction between alarms, which a live
-   *  facet prevents). `#notePublicDoor` clears the self-wake streak (Stream.notePublicDoor), so a
-   *  context in use never halts and one that halted resumes at once. */
+  /** The self-wake breaker's other half (stream.ts SELF_WAKE_HALT_STREAK holds the durable streak):
+   *  set the moment any RPC into this DO is answered this incarnation, as opposed to an alarm-only
+   *  pass. "Any RPC" includes the wake's own facet loopbacks — a processor pushed by the
+   *  constructor's `woken` reads or appends through `itx.builtins` and lands here, so a context
+   *  hosting a `*`-consuming processor counts its wakes as doors (accepted: the loop that would
+   *  mask needs an eviction between alarms, which a live facet prevents). */
   #publicDoorTouched = false;
   #notePublicDoor(): void {
     this.#publicDoorTouched = true;
     this.#stream.notePublicDoor();
   }
 
-  /** EVERY facet materialized this incarnation, by name. The quiesce alarm aborts the whole set in
-   *  one loop so no LIVE facet pins this actor awake. In memory on purpose: facets die with the
-   *  incarnation, and a fresh call re-materializes from the durable startup memo (the facet's own
-   *  storage having survived). */
+  /** EVERY facet materialized this incarnation — the set the quiesce alarm aborts so no LIVE facet
+   *  pins this actor awake. In memory on purpose: facets die with the incarnation, and a fresh call
+   *  re-materializes from the durable startup memo. */
   readonly #liveFacetNames = new Set<string>();
   /** Each facet's startup memo (`facet:<name>` in kv), read ONCE per incarnation: every push then
    *  hands the loader the SAME object, so its identity-keyed content hash (worker-loader.ts) runs once
-   *  per source per incarnation, not once per push. Replaced when a hosting spec changes it; dropped
-   *  with the facet. */
+   *  per source per incarnation, not once per push. */
   readonly #facetStartupMemoByName = new Map<string, FacetSpec>();
-  // The in-flight count the quiesce alarm respects (aborting a facet mid-REDUCE is exactly the
-  // stall a reduce would have to repair from the log — never cause it).
+  /** The in-flight count the quiesce respects: aborting a facet mid-REDUCE is exactly the stall a
+   *  reduce would have to repair from the log — never cause it. */
   #facetWorkInFlight = 0;
 
   async alarm(): Promise<void> {
     this.#stream.noteAlarmFired();
-    // The stream-kept cursors' due retries — and anything an eviction left behind mid-delivery, the
-    // pass re-deriving its obligations from the ROWS, never from what memory or kv happened to hold —
-    // run here, AWAITED so a re-arm for a later retry lands before this actor hibernates. A cursor
-    // delivery pins nothing local (a facet it calls into is counted by #facetWorkInFlight for the
-    // call), so the quiesce below needs no count of its own. The cursor lane arms this alarm itself
-    // while a delivery is owed (subscription-delivery.ts); the quiet clock below arms it for facets
-    // and borrowed stubs.
+    // The cursor lane's due retries, and anything an eviction left mid-delivery — AWAITED so a
+    // re-arm for a later retry lands before this actor hibernates. A cursor delivery pins nothing
+    // local (a facet it calls into is counted by #facetWorkInFlight), so the quiesce below needs no
+    // count of its own. The cursor lane arms this alarm itself while a delivery is owed; the quiet
+    // clock arms it for facets and borrowed stubs.
     await this.#subscriptionDelivery.deliverEveryCursorSubscription();
-    // THE BILLING CIRCUIT-BREAKER (wave-0 3b, Jonas: "we need runaway billing controls"): an alarm
-    // pass with NO public door touched this incarnation is a SELF-WAKE. N in a row — a retry ladder
-    // grinding on a context no one is using, or any arm that fires and re-arms with nothing to show
-    // for it — halts the alarm (Stream.armAlarmNoLaterThan then no-ops) until a real request clears
-    // the streak, so a loop bills at most N. Recorded once, when it first crosses: one durable fact +
-    // one log line. A halted context FALLS THROUGH to the quiesce below: it will not wake itself
-    // again, so it must not stay pinned (billed for duration) by what this wake materialized — the
-    // facet the constructor's `woken` pushed, a stub a delivery borrowed.
+    // The self-wake breaker (stream.ts SELF_WAKE_HALT_STREAK): an alarm pass with NO public door
+    // touched this incarnation is a self-wake. Recorded once, when the streak first crosses. A
+    // halted context FALLS THROUGH to the quiesce below: it will not wake itself again, so it must
+    // not stay pinned (billed for duration) by what this wake materialized.
     if (!this.#publicDoorTouched) {
       const { streak, justHalted } = this.#stream.noteSelfWake();
       if (justHalted) {
@@ -636,30 +560,28 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       for (const facetName of this.#liveFacetNames)
         this.#abortFacetIfRunning(facetName, "idle quiesce");
       this.#liveFacetNames.clear(); // aborted facets re-materialize on their next call
-      // Same doctrine for the borrowed stubs: holding one pins this actor awake, and a page
-      // always borrows it back — return them with the idle facets. And for the library's live
-      // connections (an MCP session, an open capnweb WebSocket): released here, reopened on use.
+      // Borrowed stubs and the library's live connections pin this actor the same way: returned
+      // and released here, borrowed and reopened on use.
       this.#rpcStubs.returnBorrowedRpcStubs();
       this.#library.releaseConnections();
     } else if (this.#liveFacetNames.size > 0 || this.#rpcStubs.hasBorrowedRpcStubs()) {
-      // Not quiet yet, and something to quiesce — look again when the quiet period would end; but
-      // never in the PAST (work in flight for over a minute would otherwise re-fire this alarm in a
-      // tight, billed loop). With NOTHING to quiesce there is no re-arm — the same rule as
-      // #recordActivityForQuietClock; re-arming regardless was one extra billed wake per real wake
-      // and, with an eviction in between, the every-minute `woken` loop the breaker was measured on.
+      // Look again when the quiet period would end — never in the PAST (work in flight for over a
+      // minute would otherwise re-fire this alarm in a tight, billed loop). With NOTHING to quiesce
+      // there is no re-arm (the #recordActivityForQuietClock rule): re-arming regardless was the
+      // every-minute `woken` loop the breaker was measured on.
       this.#stream.armAlarmNoLaterThan(
         Math.max(this.#lastActivityMs + IDLE_QUIESCE_AFTER_MS, Date.now() + 10_000),
       );
     }
   }
 
-  // ── FACETS: loaded DurableObject classes hosted here (a processor is one whose
-  // processEventBatch is subscribed) ──
+  // ── FACETS: loaded DurableObject classes hosted here ──
 
   /** THE facet door — `itx.facets.get(name).m()` (address a running facet) and
-   *  `itx.facets.get(name, { source, className }).m()` (load and host) both land here. Facet stubs are non-transferable, so the walk happens where the stub lives. Top
-   *  to bottom: the startup memo → the load → the racing-delete check → the class + version marker →
-   *  the call under the watchdog → copy + dispose the answer. */
+   *  `itx.facets.get(name, { source, className }).m()` (load and host) both land here; facet stubs
+   *  are non-transferable, so the walk happens where the stub lives. Top to bottom: the startup memo
+   *  → the load → the racing-delete check → the class + loaded identity → the call under the
+   *  watchdog → copy + dispose the answer. */
   async #invokeFacet(
     name: string,
     spec: FacetSpec | undefined,
@@ -688,11 +610,8 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       ).value;
     }
     const facetStartupMemo = this.#facetStartupMemoFor(name, spec);
-    // Counted so a CONCURRENT alarm's quiesce never aborts the facet mid-call.
     this.#facetWorkInFlight++;
     try {
-      // THE LOAD — the loader caches by the key (cacheKey | content hash), so a warm facet's isolate
-      // is reused and a producer expression runs only on a cold one.
       const { worker, loaderId } = await loadConfinedWorker({
         env: this.env,
         deployId: this.#appConfig.deployId,
@@ -704,17 +623,15 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         invoke: (call) => this.invoke(call),
         where: `facet "${name}"`,
       });
-      // The load awaited: a removal (`disableProcessor`'s null row) may have deleted this facet meanwhile — its
-      // facetStartupMemo is gone, and materializing now would resurrect the deleted facet as an orphan this
-      // actor never quiesces. Refuse instead; the caller's row is gone too.
+      // A removal may have deleted this facet while the load awaited: materializing now would
+      // resurrect it as an orphan this actor never quiesces. Refuse; the caller's row is gone too.
       if (!this.ctx.storage.kv.get(`facet:${name}`))
         throw codedError("NO_FACET", `no facet "${name}" — deleted while its source loaded`);
-      // THE CLASS, minted with its identity (`ctx.props`), and THE LOADED IDENTITY (`facet:<name>:
-      // loader-id`, the loader id the class came from): when it moves — a source change within a
-      // deploy (new content hash, a new cacheKey), a deploy, a workaround generation after a dead load
-      // (worker-loader.ts) — the facet restarts in place, its storage surviving. The abort matters for
-      // the dead-load case too: workerd hands back the SAME facet container on every `facets.get`,
-      // even one whose class never started, and only an abort clears it.
+      // THE LOADED IDENTITY (`facet:<name>:loader-id`): when it moves — a source change, a deploy,
+      // a workaround generation after a dead load (worker-loader.ts) — the facet restarts in place,
+      // its storage surviving. The abort matters for the dead-load case too: workerd hands back the
+      // SAME facet container on every `facets.get`, even one whose class never started, and only an
+      // abort clears it.
       const klass = worker.getDurableObjectClass(facetStartupMemo.className, {
         props: { iterateContextName: this.#durableObjectAddress.name, name },
       });
@@ -727,12 +644,10 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         this.ctx.storage.kv.put(`facet:${name}:loader-id`, loaderId);
       const facet = this.ctx.facets.get(name, () => ({ class: klass }));
       this.#liveFacetNames.add(name); // live from here
-      // THE CALL. A top-level `.fetch` rides the facet's own fetch — the one channel that carries a
-      // 101 natively (fetch/rpc-stub-fetch.ts doctrine, points 1 & 4); a method walks
-      // receiver-preservingly (walkSteps). THE WATCHDOG: a call that never answers would hold
-      // `#facetWorkInFlight` — and with it the quiesce, and with THAT this actor — forever; past 60 s
-      // the facet is aborted (its pending call rejects, the counter drains, the next call
-      // re-materializes it from its facetStartupMemo).
+      // A top-level `.fetch` rides the facet's own fetch — the one channel that carries a 101
+      // natively (fetch/rpc-stub-fetch.ts doctrine, points 1 & 4); a method walks
+      // receiver-preservingly. The watchdog (FACET_CALL_WATCHDOG_MS) aborts a facet that never
+      // answers: its pending call rejects, the counter drains, the next call re-materializes it.
       const [first] = itxExpressionSteps;
       const call =
         itxExpressionSteps.length === 1 && Array.isArray(first) && first[0] === "fetch"
@@ -756,13 +671,11 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         }
         throw error;
       }
-      // A facet's answer arrives as a Workers-RPC RESULT: when it is an object, it carries a
-      // disposer that holds the call's resources — a reference on the FACET — until disposed or
-      // GC'd. GC is too late for the quiesce: every `snapshot()` left such a result behind, so an
-      // aborted facet stayed referenced and this actor could not be evicted (pinned, billed) until
-      // the garbage collector happened by. So copy the DATA out and release the result at once. An
-      // answer that is not data (a stub, a stream, a Response from some other method) cannot be
-      // cloned — it is handed through as is and is the caller's to dispose.
+      // A Workers-RPC RESULT object carries a disposer that references the FACET until disposed or
+      // GC'd — and GC is too late for the quiesce: an aborted facet stayed referenced through every
+      // `snapshot()` result left behind, and this actor could not be evicted (pinned, billed). So
+      // copy the DATA out and release the result at once; an answer that cannot be cloned (a stub,
+      // a stream, a Response) is handed through as is and is the caller's to dispose.
       if (typeof result === "object" && result !== null && Symbol.dispose in result) {
         let copy: unknown;
         try {
@@ -780,12 +693,10 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     }
   }
 
-  /** THE STARTUP MEMO `facet:<name>` = the FacetSpec in this DO's kv (the source is its modules,
-   *  literally, or the producer expression — stored as given), read once per incarnation into
-   *  #facetStartupMemoByName and resolved here for one call: a hosting `spec` writes it (when it
-   *  changed) BEFORE the load, so `itx.facets.get(name)` alone re-materializes the facet after an
-   *  eviction; a bare name reads it; a name with neither is recovered from the durable log (M1,
-   *  below); an unknown name is NO_FACET. Synchronous, so nothing can slip in between the checks. */
+  /** THE STARTUP MEMO `facet:<name>` (the FacetSpec in this DO's kv) for one call: a hosting `spec`
+   *  writes it (when it changed) BEFORE the load, so `itx.facets.get(name)` alone re-materializes the
+   *  facet after an eviction; a bare name reads it; a name with neither is recovered from the durable
+   *  log (M1, below); an unknown name is NO_FACET. Synchronous, so nothing slips in between the checks. */
   #facetStartupMemoFor(name: string, spec: FacetSpec | undefined): FacetSpec {
     let facetStartupMemo =
       this.#facetStartupMemoByName.get(name) ??
@@ -802,9 +713,9 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     }
     if (!facetStartupMemo) {
       // M1: a hosting row keeps NO source in core state — recover it from the DURABLE log event that
-      // configured it (its `configuredAtOffset`), write the memo once, and proceed. The memo survives
-      // eviction (kv), so this log read happens at most once per facet per deployment, never per push.
-      // The row that HOSTS this facet (its marker names it — the subscription's own name may differ).
+      // configured it and write the memo once. The memo survives eviction (kv), so this log read
+      // happens at most once per facet per deployment, never per push. The hosting row's marker
+      // names the facet (the subscription's own name may differ).
       const row = Object.values(this.#stream.coreReducedState.subscriptions).find(
         (candidate) => candidate.hostedFacet?.name === name,
       );
@@ -843,9 +754,8 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     }
   }
 
-  /** Delete a facet, storage included — the removal effect of `subscription-configured { target: null }`
-   *  (`disableProcessor` ends here; there is no delete verb). A re-load into the same name is a clean
-   *  rebuild, never a resume from orphaned state. */
+  /** Delete a facet, storage included (there is no delete verb: a removed hosting row ends here). A
+   *  re-load into the same name is a clean rebuild, never a resume from orphaned state. */
   #deleteFacet(name: string): void {
     if (name === CORE_SLUG)
       throw new Error(`"${name}" is the core reduce — always on, never a facet`);
@@ -856,25 +766,21 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     this.#liveFacetNames.delete(name);
   }
 
-  // ── dispatch (ONE path: the rewrite rules — the core reduce's own state, zero distance) ──
+  // ── dispatch: ONE door, the rewrite rules ──
 
-  /** Resolve + run one call through the current rewrite rules. The ONE dispatch door — `IterateContext`
-   *  builds the call client-side and hands it here (the ARRAY half can carry call args a dotted STRING
-   *  never could — callbacks, Dates, bytes: `["itx","tools",["transform",21,cb]]`). `args`, when
-   *  given, are LIVE args applied to the value the expression denotes — the string is the pure part,
-   *  the args the live part (`invoke("itx.kv.get", "k")` ≡ `itx.kv.get("k")`; the fetch lane's
-   *  Request is the same door). */
+  /** Resolve + run one call through the current rewrite rules. The ARRAY form carries call args a
+   *  dotted STRING never could (callbacks, Dates, bytes: `["itx","tools",["transform",21,cb]]`);
+   *  `args`, when given, are LIVE args applied to the value the expression denotes
+   *  (`invoke("itx.kv.get", "k")` ≡ `itx.kv.get("k")`; the fetch lane's Request is the same door). */
   async invoke(call: ItxExpressionInput, ...args: unknown[]): Promise<unknown> {
     this.#notePublicDoor();
     this.#recordActivityForQuietClock();
     return this.#itxExpressionResolver.invoke(call, ...args);
   }
 
-  /** WHO IS CALLING, for the duration of one call: the edge's `IterateContext` of a session that
-   *  authenticated with a project token dispatches through here, and every append the call makes
-   *  carries `source.principal` (the built-in append root reads the store). A DO-only Workers-RPC
-   *  verb — a loaded worker's `env.ITX` is the entrypoint stub, which has no such door — so the
-   *  stamp is the platform's and a client cannot forge it. */
+  /** WHO IS CALLING, for the duration of one call: every append the call makes carries
+   *  `source.principal`. A DO-only Workers-RPC verb — a loaded worker's `env.ITX` has no such door —
+   *  so the stamp is the platform's and a client cannot forge it. */
   async invokeAs(
     principal: Principal,
     call: ItxExpressionInput,
@@ -888,15 +794,11 @@ export class IterateContextDurableObject extends DurableObject<Env> {
 
   async fetch(request: Request): Promise<Response> {
     this.#notePublicDoor();
-    // The doors, in order — each answers or declines:
-    //   1. the rpc-stub pager and the rpc-stub fetch upgrade leg (the rpc-stub machinery);
-    //   2. THE ITX-EXPRESSION FETCH LANE — `x-itx-expression` names an itx expression (JSON from a
-    //      session's terminal `fetch(request)`, dotted text from the edge's `/expression?itx=`),
-    //      resolved as a terminal-fetch call through the rules with the live Request as its one
-    //      runtime arg; a
-    //      101 flows back untouched; errors map to statuses by CODE. The routing header itself is
-    //      stripped so it never reaches the capability or, below, egress;
-    //   3. everything else is EGRESS (secret substitution, then the terminal fetch).
+    // The doors, in order — each answers or declines: the rpc-stub pager and the rpc-stub fetch
+    // upgrade leg; THE FETCH LANE (`x-itx-expression` names an itx expression — JSON from a session's
+    // terminal `fetch(request)`, dotted text from the edge's `/expression?itx=` — resolved as a
+    // terminal-fetch call with the live Request as its one runtime arg; the routing header is
+    // stripped so it never reaches the capability or egress); everything else is EGRESS.
     const pager = this.#rpcStubs.acceptRpcStubPagerWebSocket(request);
     if (pager) return pager;
     const upgradeLeg = this.#rpcStubFetch.acceptFetchUpgradeLeg(request);
@@ -922,9 +824,8 @@ export class IterateContextDurableObject extends DurableObject<Env> {
           ? result
           : new Response(`fetch lane: ${JSON.stringify(result)}\n`);
       } catch (error) {
-        // Default-deny is a 404 with the message alone — a project host makes this lane public, and a
-        // visitor's "no such app" is no issue; anything else is a 500 with the message alone too,
-        // its stack REPORTED (Workers Logs), never served: a project host is public.
+        // A project host makes this lane public: default-deny is a 404 (a visitor's "no such app" is
+        // no issue), anything else a 500 — the message alone either way, the stack REPORTED, never served.
         const status = errorCode(error) === "NO_ITX_EXPRESSION_MATCH" ? 404 : 500;
         if (status === 500)
           reportIssue("iterate-context.fetch-lane", error, { itxExpression: itxExpressionHeader });
@@ -935,17 +836,8 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     return this.#egress(request);
   }
 
-  // OBSERVABILITY has no dedicated verb: runtime state IS reduced state. Identity, incarnation,
-  // pause, the rewrite rules and the subscription rows are ONE snapshot — `itx.facets.get('core').snapshot()`;
-  // subscriptions joined with their cursors are `itx.subscriptions.list()`. A snapshot reads the
-  // core reduce only, and arms no alarm (the quiet clock arms only while a facet is live or a stub is
-  // borrowed).
-  // PRESENCE — which stubs have a transport RIGHT NOW — is physical, never event-derivable:
-  // `itx.rpcStubs.list()` on the itx surface, and the socket census below for the probes.
-
-  /** IN-MEMORY TRANSPORT FACTS ({rpcStubPagers, borrowedRpcStubs, rpcStubPagesInFlight, dormant}) —
-   *  a DO-only Workers-RPC verb for the hibernation/quiesce probes, deliberately OFF the itx surface:
-   *  socket facts, not event-derivable state (`itx.rpcStubs.list()` is the presence half). */
+  /** IN-MEMORY TRANSPORT FACTS for the hibernation/quiesce probes — a DO-only Workers-RPC verb,
+   *  deliberately OFF the itx surface: socket facts, not event-derivable state. */
   rpcStubTransportState(): ReturnType<RpcStubDirectory["rpcStubTransportState"]> {
     return this.#rpcStubs.rpcStubTransportState();
   }
@@ -989,8 +881,8 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   }
 
   webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): void {
-    // Fetch-upgrade frames forwarded between their two DO-side sockets (eyeball ⇄ upgrade leg);
-    // a plain pager socket's inbound payloads carry nothing we act on.
+    // Fetch-upgrade frames only (eyeball ⇄ upgrade leg); a pager socket's inbound payloads carry
+    // nothing this DO acts on.
     this.#rpcStubFetch.handleWebSocketMessage(ws, message);
   }
   webSocketClose(ws: WebSocket, code: number, reason: string): void {
@@ -1001,14 +893,12 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     this.webSocketClose(ws, 1006, "transport error");
   }
 
-  // ── the rpc-stub Workers-RPC verbs — transport plumbing, OFF the itx surface (the directory owns
-  // the lifecycle — see rpc-stub-directory.ts) ──
+  // ── the rpc-stub Workers-RPC verb — transport plumbing, OFF the itx surface (rpc-stub-directory.ts) ──
 
-  /** LAYER 1: lend a stub under an opaque key — anyone with a route to this DO may (the edge's page
-   *  answer lands here too). `stub` is a Workers-RPC stub — a callable Proxy on the wire; structural
-   *  validation is impossible by design, so it rides permissively and the directory types it.
-   *  (LAYER 2, the pager, has no verb: it is the `x-itx-rpc-stub-pager` upgrade at `fetch` — key and
-   *  the events that name it in one request, rpc-stub-directory.ts.) */
+  /** Lend a stub under an opaque key — anyone with a route to this DO may. `stub` is a Workers-RPC
+   *  stub, a callable Proxy on the wire: structural validation is impossible by design, so it rides
+   *  permissively and the directory types it. (The pager has no verb: it is the
+   *  `x-itx-rpc-stub-pager` upgrade at `fetch`.) */
   lendRpcStub(input: { rpcStubKey: string; stub: unknown }): void {
     this.#rpcStubs.lendRpcStub({
       rpcStubKey: input.rpcStubKey,

@@ -176,7 +176,7 @@ export class BreakerDurableObject extends StreamProcessorDurableObject {
 }`,
   },
   // A capnweb server as a LOADED WORKER, served behind the fetch lane: pins the SDK's
-  // `newWorkersRpcResponse` export (library-connectors-behind-the-lane.e2e) and, through `path()`,
+  // `newWorkersRpcResponse` export (library-connectors.e2e) and, through `path()`,
   // that a `/expression/<path>` suffix reaches the service verbatim.
   capnwebServer: {
     "cap.js": `import { WorkerEntrypoint, RpcTarget } from "cloudflare:workers";

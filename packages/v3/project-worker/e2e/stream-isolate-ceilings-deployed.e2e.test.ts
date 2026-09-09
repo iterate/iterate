@@ -1,50 +1,92 @@
-// stream-uncontrolled-degradation.e2e.test.ts — THE CRASH HUNT against a REAL Durable Object: the
-// ways a client can still drive the clean-room platform into UNCONTROLLED degradation (an isolate
-// reset) on the DEPLOYED worker, past the memory hygiene that landed 2026-09-04 (byte-budgeted reads,
-// the 8 MiB append ceiling, the 8 MiB per-row delivery backlog). Those bound ONE request; this file
-// hunts what CONCURRENCY and FAN-OUT still get past them. Run it deployed, ONE file at a time (a
-// laptop's network flakes under parallel files):
+// stream-isolate-ceilings-deployed.e2e.test.ts — THE ISOLATE CEILINGS against a REAL Durable Object.
+// Local workerd enforces no memory limit (NullIsolateLimitEnforcer), so the proof that counts is the
+// DEPLOYED worker, where the 128 MiB isolate is real:
 //
-//   WORKER_BASE_URL=https://project-worker.iterate.workers.dev \
-//     pnpm e2e stream-uncontrolled-degradation
+//   WORKER_BASE_URL=https://project-worker.iterate.workers.dev pnpm e2e stream-isolate-ceilings
 //
-// ⚠️  WARNING — THIS FILE DELIBERATELY RESETS DURABLE OBJECTS (and hammers the shared /api edge). It
-// must NEVER point at anything but the throwaway POC worker (project-worker.iterate.workers.dev):
-// every row uses a FRESH ctx = its own DO, and a reset only clears in-memory state (the durable log
-// survives — the fan-out limit row proves the ctx is not poisoned by a reset). Do not run it against
-// a real deployment.
-//
-// THE HOUSE CONVENTION (stream-memory-budget.e2e.ts): a known-red proof is `test.fails` whose body
-// asserts the HEALTHY expectation ("no isolate reset"); a ceiling that HOLDS is a plain `test`. Two
-// resets are accepted client-behaviour limits deliberately not defended, each a plain reset-tolerant
-// `test` that asserts recovery and REPORTS the reset count: CONCURRENT READERS (the read-admission
-// ceiling was removed on 2026-09-07 to keep `read()` synchronous; whether 24 readers reset the
-// isolate is the platform's GC timing — see the row) and the large-ephemeral FAN-OUT. Local
-// workerd runs NullIsolateLimitEnforcer (NO memory limit), so the reset behaviour only proves out on
-// the DEPLOYED worker; locally the file skips.
-//
-// WHAT WAS OBSERVED (deployed, live-43, 2026-09-04). Every reset arrives as
-// `Durable Object's isolate exceeded its memory limit and was reset.` with `.overloaded` +
-// `.durableObjectReset` stamped, and the ctx recovers on the very next call (the log is durable):
-//   • LIMIT concurrent readers      — 24 sessions paging one 144 MiB log at once reset the parent (24 × ~6 MiB pages coexist):
-//              the per-read byte budget bounds ONE read, not their sum — an accepted limit (reported, not asserted), the ctx recovers next call;
-//   • edge slow live client        — a stalled subscriber's pushes are DROPPED past the DO in-flight budget; the producer floods on, no reset;
-//   • LIMIT large ephemeral fan-out — 30 × 7 MiB ephemerals to N co-located facets MAY reset the parent (0 facets absorbed,
-//              3+ reset): the dominant term is CO-LOCATED FACET memory in the shared isolate, which the parent's JS cannot bound
-//              (three DO-side attempts did not close it) — DOCUMENTED as a client-behaviour limit; the reset is transient, the ctx recovers;
-//   • edge concurrent big appends   — 8 × 28 MiB at once: no DO resets; 0–1 sessions lose their socket (1006);
-//   • hold poison facet             — a hoarding reduce wedges on the coded checkpoint ceiling, the parent survives;
-//   • hold loaded-isolate OOM       — a runaway WorkerEntrypoint OOMs its OWN isolate, the parent survives.
+// The MEMORY PINS run everywhere (locally they prove only the platform's OTHER ceiling: a read page
+// over 32 MiB cannot leave the DO over Workers RPC — "Serialized RPC arguments or return values are
+// limited to 32MiB"; the node twin with a heap-capped child is src/stream/memory-budget.test.ts). The
+// CRASH HUNT is deployed-only and DELIBERATELY RESETS DURABLE OBJECTS (and hammers the shared /api
+// edge): it must NEVER point at anything but the throwaway POC worker — every row uses a FRESH ctx =
+// its own DO, a reset clears only in-memory state (the durable log survives), and a laptop's network
+// flakes under parallel files, so run it ONE file at a time. ONE seeded context (24 × 6 MiB = 144 MiB,
+// more than the isolate) serves every read-driven row; a DO reset between them is fine — the next call
+// re-materializes the context. Pins:
+//   • read: a client pages the 144 MiB log — every page fits the isolate and the RPC cap (the server
+//     decides the page size), every body byte-identical
+//   • CONCURRENT READERS (an accepted limit, deliberately not defended): 24 sessions paging the log at
+//     once MAY reset the DO — the per-read byte budget bounds one read, not their sum; the reset count
+//     is REPORTED, recovery on the next call is asserted
+//   • facet catch-up: a processor enabled over the 144 MiB log reduces every event through its
+//     loopback read; append: one event past the platform ceiling is refused at the door,
+//     EVENT_TOO_LARGE, nothing written, no offset burnt
+//   • SLOW LIVE CLIENT: a subscriber whose callback never resolves has its pushes DROPPED past the DO's
+//     in-flight budget (DELIVERY_IN_FLIGHT_BUDGET_CHARS) — the producer floods on, the DO never resets
+//   • LARGE EPHEMERAL FAN-OUT (a documented limit): 30 × 7 MiB ephemerals to 10 co-located facets MAY
+//     reset the parent — facet memory in the shared isolate the parent's JS cannot bound — but the ctx
+//     is serviceable immediately after, never poisoned
+//   • CONCURRENT BIG APPENDS: 8 × 28 MiB at once — no DO resets, every landed batch is whole, at most
+//     one session lost to the shared /api edge closing its socket (1006)
+//   • POISON FACET: a hoarding reduce outgrows the 2 MB checkpoint cell and WEDGES, coded
+//     REDUCE_CHECKPOINT_TOO_LARGE on every call, the parent fully serviceable — never a reset
+//   • LOADED-ISOLATE OOM: a runaway WorkerEntrypoint OOMs its OWN isolate (`.overloaded`, no
+//     `.durableObjectReset`) and the parent DO is untouched
+// Every reset arrives as `Durable Object's isolate exceeded its memory limit and was reset.` with
+// `.overloaded` + `.durableObjectReset` stamped, and the ctx recovers on the very next call.
 
-import { beforeAll, expect } from "vitest";
-import { append, codeOf, freshCtx, openItx } from "./support/client.ts";
-import { deployedOnly, projectHostsAreLocal } from "./support/project-host.ts";
+import { beforeAll, expect, test } from "vitest";
+import { append, codeOf, freshCtx, openItx, rejection } from "./support/client.ts";
+import { deployedOnly } from "./support/project-host.ts";
+import { enableFixtureProcessor } from "./support/sources.ts";
 
-/** Local workerd enforces no memory limit, so every row here is DEPLOYED-ONLY: locally the file
- *  skips (and its 300 MiB of uploads would only starve the parallel lane's other files). */
-const deployed = deployedOnly;
+// ── the shared 144 MiB seed ──
 
 const MiB = 1024 * 1024;
+const EVENT_COUNT = 24;
+const EVENT_CHARS = 6 * MiB;
+/** The seeded blob for event `n` — deterministic, so a read-back can be checked byte for byte. */
+const blobFor = (n: number): string => String.fromCharCode(97 + (n % 26)).repeat(EVENT_CHARS);
+
+let seededCtx: string;
+let seededOffsets: number[] = [];
+
+beforeAll(async () => {
+  seededCtx = freshCtx("membudget");
+  const itx = openItx(seededCtx);
+  seededOffsets = [];
+  for (let n = 0; n < EVENT_COUNT; n++) {
+    const [event] = await append(itx, { type: "blob", payload: { n, blob: blobFor(n) } });
+    seededOffsets.push(event.offset as number);
+  }
+}, 600_000);
+
+// ── the memory pins ──
+
+test(
+  "read: a client pages a 144 MiB log — every page fits the isolate and the RPC cap, every body byte-identical",
+  { timeout: 300_000 },
+  async () => {
+    const itx = openItx(seededCtx);
+    const seen = new Map<number, string>();
+    let pages = 0;
+    for (let after = 0; ; ) {
+      const page = await itx.invoke(["itx", ["readEvents", after, 500]]);
+      pages++;
+      for (const event of page.events as { offset: number; type: string; payload: any }[])
+        if (event.type === "blob") seen.set(event.offset, event.payload.blob);
+      if (page.scannedThroughOffset <= after) break;
+      after = page.scannedThroughOffset;
+    }
+    expect([...seen.keys()].sort((a, b) => a - b)).toEqual(seededOffsets);
+    for (let n = 0; n < EVENT_COUNT; n++)
+      expect(seen.get(seededOffsets[n]) === blobFor(n), `event ${n} byte-identical`).toBe(true);
+    expect(pages).toBeGreaterThan(1); // the server decided the page size, not the caller's limit
+  },
+);
+
+// ── the crash hunt's helpers and INLINE fixture sources ──
+
 /** A blob of `chars` code units — the payload that fills a body toward the 8 MiB append ceiling. */
 const blob = (chars: number): string => "q".repeat(chars);
 
@@ -104,21 +146,6 @@ export default class Oomer extends WorkerEntrypoint {
 }`,
 };
 
-// ── the shared 144 MiB seed for the read-driven rows (a reset between them is fine: the log is
-// durable and the next call re-materializes the context) ──
-
-const SEED_EVENT_COUNT = 24;
-const SEED_EVENT_CHARS = 6 * MiB;
-let seededCtx: string;
-
-beforeAll(async () => {
-  if (projectHostsAreLocal()) return;
-  seededCtx = freshCtx("degrade-seed");
-  const itx = openItx(seededCtx);
-  for (let n = 0; n < SEED_EVENT_COUNT; n++)
-    await append(itx, { type: "blob", payload: { n, blob: blob(SEED_EVENT_CHARS) } });
-}, 600_000);
-
 // ─────────────────────────────── RED: the reproducible resets ───────────────────────────────
 
 // RED BY DESIGN — an ACCEPTED client-behaviour limit, deliberately NOT defended (2026-09-07). WHY
@@ -140,7 +167,7 @@ beforeAll(async () => {
 // peaks near the 128 MiB isolate, and the GC's timing decides (a deployed run on 2026-09-09 saw no
 // reset at all). So the row asserts only the claim this code OWNS — recovery — and REPORTS the reset
 // count; it is not a `.fails` pin, because a flip here would signal luck, never a ceiling.
-deployed(
+deployedOnly(
   "CONCURRENT READERS (accepted limit): 24 sessions paging one 144 MiB log at once may reset the DO — the per-read byte budget bounds one read, not their sum; the ctx recovers on the next call",
   { timeout: 300_000 },
   async () => {
@@ -160,12 +187,41 @@ deployed(
   },
 );
 
+test(
+  "facet catch-up: a processor enabled over a 144 MiB log reduces every event through its loopback read",
+  { timeout: 300_000 },
+  async () => {
+    const itx = openItx(seededCtx);
+    await enableFixtureProcessor(itx, "user-tally"); // consumes "*": counts committed events by type
+    const snapshot = await itx.invoke("itx.facets.get('user-tally').snapshot()");
+    expect(snapshot.state?.counts?.blob).toBe(EVENT_COUNT);
+  },
+);
+
+test(
+  "append: one event past the platform ceiling is refused at the door with EVENT_TOO_LARGE, nothing written",
+  { timeout: 120_000 },
+  async () => {
+    const itx = openItx(freshCtx("membudget-door"));
+    const [marker] = await append(itx, { type: "marker" });
+    const error = await rejection(
+      append(itx, { type: "blob", payload: { blob: "z".repeat(9 * MiB) } }),
+      "a 9 MiB append",
+      60_000,
+    );
+    expect(codeOf(error)).toBe("EVENT_TOO_LARGE");
+    expect(error.message).toMatch(/32 ?MiB/); // the message says WHY: the platform's RPC ceiling
+    const [next] = await append(itx, { type: "after" });
+    expect(next.offset).toBe(marker.offset + 1); // the refused batch burned no offset, wrote nothing
+  },
+);
+
 // A stalled live subscriber (a callback that never returns) no longer resets the PRODUCER: past the
 // DO's in-flight budget (subscription-delivery.ts DELIVERY_IN_FLIGHT_BUDGET_CHARS) its pushes are
 // DROPPED with a warn (the client heals by read), so the producer floods on. BORN RED: each
 // fire-and-forget push stayed in flight, retaining its bytes on the DO until it reset at ~125 × 1 MiB
 // (flipped 2026-09-04, the per-context ledger).
-deployed(
+deployedOnly(
   "SLOW LIVE CLIENT: a subscriber whose callback never resolves has its pushes dropped past the DO in-flight budget — the producer floods on, the DO never resets",
   { timeout: 300_000 },
   async () => {
@@ -207,7 +263,7 @@ deployed(
 // parent's JS cannot bound. Likely needs a platform-level lever (a facet-push concurrency-of-one
 // gate that also waits on the facet-side turn, a smaller ephemeral ceiling for fan-out, or accepting
 // it as a client-behavior limit per the trusted-client doctrine). The WANTED (no reset) is the target.
-deployed(
+deployedOnly(
   "LARGE EPHEMERAL FAN-OUT (documented limit): a burst of 30 × 7 MiB ephemerals fanned to 10 facets MAY reset the parent — co-located facet memory in the shared isolate — but the reset is TRANSIENT: the ctx is serviceable immediately after (core snapshot + a small append both land), never poisoned",
   { timeout: 300_000 },
   async () => {
@@ -259,7 +315,7 @@ deployed(
 // no DO resets, every commit that landed is whole, and any loss is that one edge close (the
 // assertion message names each). The audit's "least-isolated tenant" (oom-audit item 4/27); the
 // fix is an edge-side in-flight budget, on the menu.
-deployed(
+deployedOnly(
   "CONCURRENT BIG APPENDS: 8 sessions each commit a 28 MiB batch (4 × 7 MiB) to its own ctx at once — a session may lose its socket to the shared /api edge (1006), but no DO ever resets and every landed batch is whole",
   { timeout: 300_000 },
   async () => {
@@ -299,7 +355,7 @@ deployed(
   },
 );
 
-deployed(
+deployedOnly(
   "POISON FACET: a processor whose reduce hoards every payload outgrows the 2 MB checkpoint cell — snapshot() rejects coded REDUCE_CHECKPOINT_TOO_LARGE on EVERY call (a poison-loop facet, cleared only by disableProcessor), but the parent DO stays fully serviceable (a controlled WEDGE, never a reset)",
   { timeout: 300_000 },
   async () => {
@@ -327,7 +383,7 @@ deployed(
   },
 );
 
-deployed(
+deployedOnly(
   "LOADED-ISOLATE OOM: a stateless WorkerEntrypoint that allocates unboundedly OOMs its OWN loaded isolate — the caller gets `Worker exceeded memory limit.` (.overloaded, NO .durableObjectReset) and the parent DO is untouched (a ceiling that HOLDS at the loaded-isolate boundary)",
   { timeout: 120_000 },
   async () => {

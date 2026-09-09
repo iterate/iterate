@@ -1,18 +1,34 @@
-// rewrite-rules-builtins-root.e2e.test.ts — THE RESERVED ROOT, end to end. `itx.builtins.<root>` is
-// the physical scope and the fixed point of rewriting; every short name `itx.<root>` is the implicit
-// platform row `itx.<root> ⇒ itx.builtins.<root>`, consulted only after the context's own rows. So:
-// a provided stub at a built-in's name SHADOWS it (Misha's deterministic `itx.ai` — pinned on the real
-// root in ai-root-shadow-and-fable.e2e); `provide(match, null)` at a built-in's name is a MASK (the call is
-// refused, the physical door still answers) that the handle's dispose lifts; a bare `itx` row at a
-// context overrides the WHOLE context, `cd(p).builtins.append(…)` still reaching its log;
-// `rewriteRules.list()` shows the platform rows with their origin; `rewriteRules.resolve(call)` is the
-// pure chain and `invoke(call) ≡ invoke(resolve(call).at(-1))`; `invoke(call, ...args)` applies live
-// args; the door refuses a match at `itx.builtins`, at a proxy verb, or a whole-context override
-// naming its own context; a dead stub's un-set leaves a user's alias to the shadowed root alone.
+// rewrite-rules.e2e.test.ts — the REWRITE-RULE TABLE end to end (context/itx-expression-rewriting.ts
+// through the real DO). `itx.builtins.<root>` is the physical scope and the fixed point of rewriting;
+// every short name `itx.<root>` is the implicit platform row `itx.<root> ⇒ itx.builtins.<root>`,
+// consulted only after the context's own rows. (The resolver's own rows — the depth budget, longest
+// match wins, a longer match under a target's prefix — are context/itx-expression-rewriting.test.ts;
+// the table as a MAP and a null's delete are __workers-tests__/do-doors.test.ts +
+// src/stream/core-processor.test.ts.) Pins:
+//   • a provided stub at a built-in's name SHADOWS it (the real root: ai-root-shadow-and-fable.e2e); a
+//     dead stub's un-set leaves a user's alias to the shadowed root alone, in either configuration order
+//   • `provide(match, null)` at a built-in's name is a MASK the handle's dispose lifts; the physical
+//     door still answers; the platform-equivalent target deletes the row
+//   • `rewriteRules.list()` is the EFFECTIVE table with each row's origin (no platform rows under a
+//     whole-context override); `get(match)` canonicalizes the caller's spelling; `resolve(call)` is the
+//     pure chain and `invoke(call) ≡ invoke(resolve(call).at(-1))`; `invoke(call, ...args)` applies
+//     live args
+//   • THE WHOLE-CONTEXT OVERRIDE: a bare `itx` row sends every short-named call to a live capability,
+//     `cd(p).builtins.append(…)` still reaching its log; it may not name its OWN context
+//   • the door refuses a match at `itx.builtins` or at a proxy verb; the platform never spells a short
+//     name, so a row at `itx.rpcStubs` or `itx.facets` redirects nothing the platform relies on
+//   • an EXPRESSION handle's dispose removes the row it wrote (compare-and-set on the printed target);
+//     RED (`test.fails`): while the stream is paused the removal is refused and forgotten
+//   • a match may PIN literal args on a call step: `itx.llm.run('special')` beats `itx.llm.run`, the
+//     pinned args are consumed, a client's stub can sit behind a pinned match, un-set by that spelling
+//   • the table under concurrency: 5 re-sets of ONE match leave one row, the last committed; a
+//     NON-CANONICAL match is stored CANONICAL; 300 rules keep the newest rule and a built-in root under
+//     150 ms; malformed rule events are skipped without wedging later rules
 
 import { RpcTarget } from "capnweb";
 import { expect, test } from "vitest";
 import {
+  append,
   codeOf,
   freshCtx,
   openItx,
@@ -22,6 +38,8 @@ import {
   sleep,
   until,
 } from "./support/client.ts";
+
+// ── the reserved root ──
 
 /** A whole context's worth of capability, lent live (a plain object would ride by VALUE; a stub must
  *  be an RpcTarget or a bare function). */
@@ -277,4 +295,144 @@ test.fails("disposing an EXPRESSION provide handle while the stream is paused re
     async () => ((await itx.rewriteRules.get("itx.paused")) === null ? true : undefined),
     3_000,
   );
+});
+
+// ── a match with PINNED arguments (rules 1–3; `llm` is no built-in root, so nothing lies beneath these
+// rows — `itx.ai` would fall to its platform row): `itx.llm.run('special')` is a more specific rule
+// than `itx.llm.run`, matched by structural equality of the leading args and CONSUMED by the match
+// (partial application) — the target sees only the unpinned args ──
+
+test("itx.llm.run('special') rewrites past the plain itx.llm.run rule; pinned args are consumed; a client's rpc stub can sit behind a pinned match", async () => {
+  const ctx = freshCtx("pinned");
+  const itx = openItx(ctx);
+  await itx.provide("itx.llm.run", "itx.kv.get"); // the plain rule: itx.llm.run(k) → itx.kv.get(k)
+  await itx.provide("itx.llm.run('special')", "itx.whoami"); // pinned: itx.llm.run('special') → itx.whoami()
+  await itx.invoke("itx.kv.put('other', 'from-kv')");
+  expect(await itx.invoke("itx.llm.run('special')")).toMatchObject({ projectId: ctx });
+  expect(await itx.invoke("itx.llm.run('other')")).toBe("from-kv");
+  // a live capnweb value behind a pinned match — the pinned arg never reaches it
+  await itx.provide(
+    "itx.llm.run('live')",
+    (...unpinned: unknown[]) => `live:${JSON.stringify(unpinned)}`,
+  );
+  expect(await itx.invoke("itx.llm.run('live', 7)")).toBe("live:[7]");
+  // the table is a MAP keyed by the CANONICAL pinned spelling; each row carries the parsed match
+  const snap: any = await itx.invoke("itx.facets.get('core').snapshot()");
+  expect(Object.keys(snap.state.itxExpressionRewriteRules)).toEqual(
+    expect.arrayContaining(["itx.llm.run('special')", "itx.llm.run('live')"]),
+  );
+  expect(snap.state.itxExpressionRewriteRules["itx.llm.run('special')"].match).toEqual([
+    "itx",
+    "llm",
+    ["run", "special"],
+  ]);
+  // un-setting by the canonical pinned spelling deletes exactly that rule; the plain rule (rule 3:
+  // less specific) matches the call from now on
+  await itx.provide("itx.llm.run('special')", null);
+  expect(await itx.invoke("itx.llm.run('special')")).toBeNull(); // the plain rule → kv.get('special') → null
+});
+
+// ── the table under stress ──
+
+const REWRITE_RULE_CONFIGURED = "events.iterate.com/itx/rewrite-rule-configured";
+
+test("the table is a MAP under concurrency: 5 concurrent re-sets of ONE match leave exactly one row — the last-committed target — and the match follows it", async () => {
+  const itx = openItx(freshCtx("map"));
+  // five distinguishable client rpc stubs, each behind its own rule
+  for (let i = 0; i < 5; i++) await itx.provide(`itx.probe${i}`, () => i);
+
+  // five concurrent re-sets of itx.race — one event each, one row survives: the LAST committed
+  await Promise.all(Array.from({ length: 5 }, (_, i) => itx.provide("itx.race", `itx.probe${i}`)));
+  const configured = (await readAll(itx)).filter(
+    (e) => e.type === REWRITE_RULE_CONFIGURED && e.payload?.match === "itx.race",
+  );
+  expect(configured).toHaveLength(5); // every re-set appended exactly one event
+  const lastTarget = (configured.at(-1)!.payload.target as string[]).join("."); // at rest the parsed form; `get()` prints
+  expect(await itx.rewriteRules.get("itx.race")).toEqual({
+    match: "itx.race",
+    target: lastTarget,
+    origin: "context",
+  });
+  expect(
+    (await itx.rewriteRules.list()).filter((r: { match: string }) => r.match === "itx.race"),
+  ).toHaveLength(1); // a map: same-match rules never coexist
+  expect(await itx.invoke(["itx", ["race"]])).toBe(Number(lastTarget.slice("itx.probe".length)));
+});
+
+test("a NON-CANONICAL match spelling through the provide door is stored CANONICAL and rewrites", async () => {
+  // The one-canonicalizer pin: the provide door canonicalizes ONCE at the top, so the reduce stores
+  // exactly the match every later door (dispatch, un-set by match) compares against — a stray space
+  // can never mint a row no call reaches.
+  const ctx = freshCtx("canon");
+  const itx = openItx(ctx);
+  await itx.provide(" itx.ghost", "itx.whoami");
+  const snap = await itx.invoke("itx.facets.get('core').snapshot()");
+  expect(snap.state.itxExpressionRewriteRules["itx.ghost"]).toMatchObject({
+    match: ["itx", "ghost"],
+    target: ["itx", "whoami"],
+  }); // stored CANONICAL, parsed
+  expect(await itx.invoke(["itx", ["ghost"]])).toMatchObject({ projectId: ctx }); // and rewritten
+  await itx.provide("itx.ghost", null); // the canonical spelling is what the un-set finds
+  const err = await rejection(itx.invoke(["itx", ["ghost"]]));
+  expect(codeOf(err)).toBe("NO_ITX_EXPRESSION_MATCH");
+  expect(err.message).toContain("no rewrite rule matches");
+});
+
+test("300 rules: invoking the NEWEST rule and a built-in root both stay under 150ms", async () => {
+  const ctx = freshCtx("rules300");
+  const itx = openItx(ctx);
+  // Rules are event-sourced — append all 300 rewrite-rule-configured events in ONE commit.
+  const rules = Array.from({ length: 300 }, (_, i) => ({
+    type: REWRITE_RULE_CONFIGURED,
+    payload: { match: `itx.m${i}`, target: ["itx", "whoami"] },
+  }));
+  const committed = await append(itx, ...rules);
+  expect(committed).toHaveLength(300);
+
+  const time = async (fn: () => Promise<unknown>, iters = 12): Promise<number> => {
+    const samples: number[] = [];
+    for (let i = 0; i < iters; i++) {
+      const t0 = performance.now();
+      await fn();
+      samples.push(performance.now() - t0);
+    }
+    return [...samples].sort((a, b) => a - b)[Math.floor(samples.length / 2)]; // median
+  };
+
+  // Warm both lanes once (table rehydration / DO wake are not what we are measuring).
+  const viaNewest = await itx.invoke(["itx", ["m299"]]);
+  expect(viaNewest).toMatchObject({ projectId: ctx, path: "/" }); // it really reaches whoami
+  await itx.invoke(["itx", ["whoami"]]);
+
+  const newestMs = await time(() => itx.invoke(["itx", ["m299"]]));
+  const rootMs = await time(() => itx.invoke(["itx", ["whoami"]]));
+  console.log(
+    `[300 rules] newest-rule median ${newestMs.toFixed(1)}ms, built-in root median ${rootMs.toFixed(1)}ms`,
+  );
+  expect(newestMs, `newest rule (m299) median ${newestMs.toFixed(1)}ms`).toBeLessThan(150);
+  expect(rootMs, `built-in root (whoami) median ${rootMs.toFixed(1)}ms`).toBeLessThan(150);
+}, 90_000);
+
+test("malformed rewrite-rule events are skipped without wedging later rules", async () => {
+  const ctx = freshCtx("badrule");
+  const itx = openItx(ctx);
+  // an unparseable target — the reduce throws, the host contains it
+  await append(itx, {
+    type: REWRITE_RULE_CONFIGURED,
+    payload: { match: "itx.broken", target: "((((" },
+  });
+  // NO payload at all
+  await append(itx, { type: REWRITE_RULE_CONFIGURED });
+  // wrong shapes inside the payload
+  await append(itx, {
+    type: REWRITE_RULE_CONFIGURED,
+    payload: { match: 42, target: ["not", "a", "string"] },
+  });
+  // the table still takes rules and resolves them — the checkpoint didn't wedge
+  await itx.provide("itx.hello", "itx.whoami");
+  expect(await itx.invoke(["itx", ["hello"]])).toMatchObject({ projectId: ctx });
+  // and the malformed rule is dead weight, not a row (default-deny still answers there)
+  const missErr = await rejection(itx.invoke(["itx", ["broken"]]));
+  expect(codeOf(missErr)).toBe("NO_ITX_EXPRESSION_MATCH");
+  expect(await itx.rewriteRules.get("itx.broken")).toBeNull();
 });

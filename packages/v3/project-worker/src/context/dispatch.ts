@@ -10,11 +10,11 @@ import { codedError } from "../lib/errors.ts";
 import { print, type ItxExpression } from "./expression.ts";
 import { InvokeHandle } from "./invoke-handle.ts";
 
-// Promise brands the step walk threads UNAWAITED (see walkSteps): property access and calls
-// pipeline on them natively, so the whole chain reduces into one round trip and the caller's terminal
-// await is the single flush. worker.ts registers the native cloudflare:workers RpcPromise/RpcProperty
-// at boot — that import can't live here because the unit lane runs this module in Node, where the
-// list stays empty and every step is simply awaited.
+// Promise brands the step walk threads UNAWAITED: property access and calls pipeline on them
+// natively, so the whole chain reduces into one round trip and the caller's terminal await is the
+// single flush. worker.ts registers the native cloudflare:workers brands and capnweb's at boot — that
+// import can't live here because the unit lane runs this module in Node, where the list stays empty
+// and every step is simply awaited.
 const PIPELINED_RPC_BRANDS: (abstract new (...args: never[]) => unknown)[] = [];
 /** Register a pipelinable promise brand (the workerd entrypoint's two calls at boot). */
 export function registerPipelinedRpcBrand(brand: abstract new (...args: never[]) => unknown): void {
@@ -32,11 +32,10 @@ function stepGet(value: object, key: string): unknown {
 /**
  * THE step walk: property steps `Reflect.get` with the receiver carried; call steps `Reflect.apply`
  * ON that receiver (detaching a method from a Workers-RPC receiver breaks it); an ordinary promise
- * is awaited between steps, a branded RPC promise (PIPELINED_RPC_BRANDS) is not — so a chain over
- * Workers RPC stays pipelined into one round trip. `where` names the walk in errors.
+ * is awaited between steps, a branded one (PIPELINED_RPC_BRANDS, above) is not.
  *
- * ⚠️  DataCloneError LEARNING (a full investigation — see FACET-RPC-INVESTIGATION.md): invoke
- * facet/RPC-stub methods with `Reflect.apply(fn, receiver, args)`, NEVER `stub[m].apply(stub,
+ * ⚠️  DataCloneError LEARNING (a full investigation — docs/history/2026-08-05-facet-rpc-investigation.md):
+ * invoke facet/RPC-stub methods with `Reflect.apply(fn, receiver, args)`, NEVER `stub[m].apply(stub,
  * args)`. Reading `.apply` off an RPC stub's method proxy is a capnweb PIPELINED REMOTE PATH;
  * calling it passes the stub as an argument, so workerd serializes it — and a Worker-Loader facet
  * stub may never be serialized (`requireAllowsTransfer()` throws unconditionally) → `DataCloneError:
@@ -48,11 +47,6 @@ export async function walkSteps(
 ): Promise<{ value: unknown; receiver: unknown }> {
   let { value, receiver } = start;
   for (const [stepIndex, step] of steps.entries()) {
-    // A pipelinable RPC promise (native workerd — PIPELINED_RPC_BRANDS) must NOT be awaited
-    // mid-chain: property access and calls pipeline on it natively, so the whole chain reduces into
-    // one round trip and the caller's terminal await settles it (a facet's `.get(n).method()`, a
-    // loaded entrypoint's `.run()`). Everything else (plain promises, thenables) keeps the
-    // await-every-step behavior.
     if (!pipelined(value)) value = await value;
     if (value == null)
       throw new Error(
@@ -85,11 +79,10 @@ export async function walkSteps(
 }
 
 /** Apply `args` to a resolved value on its carried receiver, or a LOUD error if it is not callable
- *  (never the silent arg-drop apps/os shipped). An `InvokeHandle` (a mid-chain capability handle —
- *  a live stub's transport bridge, a facet handle, a borrowed callback stub the delivery loop pushes to) is NOT a JS function
- *  (it is a real RpcTarget so dotted access pipelines — context/invoke-handle.ts), so ROOT-calling it
- *  means dispatching those args at its EMPTY path: `handle(events,range)` ⇒ the bare callback the
- *  handle fronts. This is the one bridge between "callable capability" and "pipelinable RpcTarget". */
+ *  (never the silent arg-drop apps/os shipped). An `InvokeHandle` is NOT a JS function (a real
+ *  RpcTarget so dotted access pipelines — context/invoke-handle.ts), so ROOT-calling it dispatches
+ *  those args at its EMPTY path: `handle(events,range)` ⇒ the bare callback the handle fronts. The one
+ *  bridge between "callable capability" and "pipelinable RpcTarget". */
 export async function callOn(value: unknown, receiver: unknown, args: unknown[]): Promise<unknown> {
   if (typeof value === "function") return Reflect.apply(value, receiver, args);
   if (value instanceof InvokeHandle) return value.applyRoot(args);

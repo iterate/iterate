@@ -1,28 +1,21 @@
-// session.ts — the gate and the catalog: what `/api` hands a client BEFORE it holds a context.
-//
-// THE SESSION SHAPE (apps/os's): a client dials `/api` and holds an `UnauthenticatedSession` whose
-// only door is `authenticate()` → a `Session` → `projects` → `list()`, `get(projectId)`,
-// `create({ slug })` — get and create vend the project's ROOT `IterateContext` ("/"). Contexts within
-// a project are reached from a context with `cd(path)` (absolute by convention, relative resolves).
-// One session may hold contexts of many projects; the SessionTeardown (below) is keyed by canonical
-// context name so they never undo each other's lends.
+// session.ts — the gate and the catalog: what `/api` hands a client BEFORE it holds a context (the
+// apps/os shape): `UnauthenticatedSession.authenticate()` → `Session` → `projects` → `list()`,
+// `get(projectId)`, `create({ slug })` — get and create vend the project's ROOT `IterateContext`, and
+// `cd(path)` reaches the rest. One session may hold contexts of many projects; the SessionTeardown is
+// keyed by context name so they never undo each other's lends.
 //
 //   using api = newWebSocketRpcSession("wss://<worker>/api");
 //   const itx = api.authenticate().projects.get("my-project");
 //   const fresh = await api.authenticate().projects.create({ slug: "another" });
 //
-// WHO: `authenticate()` with no credentials is the request's control-plane identity — in `open`
-// login mode the anonymous user, in `email` mode the session cookie a browser's same-origin socket
-// carried (none ⇒ UNAUTHENTICATED); `authenticate({ projectToken })` is a principal bound to ONE
-// project (src/principal.ts). Authority is org membership (control-plane/directory.ts): in `email`
-// mode `projects.get` admits members only — membership being whatever `/login` was told (the demo
-// login form verifies nothing, so `email` mode is attribution, not authentication); in `open` mode
-// every project is the anonymous org's and the door stays open (the trusted-client doctrine every
-// local proof relies on).
+// Authority is org membership (control-plane/directory.ts) — membership being whatever `/login` was
+// told (the demo login form verifies nothing, so `email` mode is attribution, not authentication);
+// in `open` mode every project is the anonymous org's and the door stays open (the trusted-client
+// doctrine every local proof relies on).
 //
-// Every class here is a server-side capnweb RpcTarget (the client is JUST capnweb — see
-// iterate-context.ts). None of them touches a Durable Object: `projects.get(id)` is addressing (plus
-// the directory's membership answer); the first door that reaches a context materializes it.
+// Every class here is a server-side capnweb RpcTarget (the client is JUST capnweb — iterate-context.ts).
+// None of them touches a Durable Object: `projects.get(id)` is addressing (plus the directory's
+// membership answer); the first door that reaches a context materializes it.
 
 import { RpcTarget } from "capnweb";
 import type { LoginMode } from "./app-config.ts";
@@ -68,11 +61,11 @@ export class UnauthenticatedSession extends RpcTarget {
   }
 
   /** THE introduction door (the `authenticate()` pattern: the only way to hold authority is to be
-   *  handed it by a gate that checked something). A project token ⇒ a session that knows who it is,
-   *  bound to the token's one project (a token that does not verify is refused, coded, the same way
-   *  whatever is wrong with it). No credentials ⇒ the request's control-plane user: in `open` mode the
-   *  anonymous one — carrying NO principal, identity being attribution and there being none; in `email`
-   *  mode the session cookie's user, or UNAUTHENTICATED. */
+   *  handed it by a gate that checked something). A project token ⇒ a session bound to the token's
+   *  one project (a token that does not verify is refused, coded, whatever is wrong with it). No
+   *  credentials ⇒ the request's control-plane user: in `open` mode the anonymous one — carrying NO
+   *  principal, identity being attribution and there being none; in `email` mode the session
+   *  cookie's user, or UNAUTHENTICATED. */
   async authenticate(credentials?: { projectToken?: string }): Promise<Session> {
     if (credentials?.projectToken) {
       const claims = await verifyProjectToken(

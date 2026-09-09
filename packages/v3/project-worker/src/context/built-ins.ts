@@ -2,24 +2,13 @@
 // is context/built-in-roots.ts). Three kinds of key, one record: the AXIOMS (the log, the stub
 // registry, the rule table, the two hosts, addressing), the BINDINGS (`kv`, `secrets`, `ai`,
 // `cfArtifacts`, `repos` — a Cloudflare binding only this env holds, exposed or scoped) and THE
-// LIBRARY (`connectTo*`, `serveMcp`, src/library/ — code a user could write, taking only `itx`). THE RECORD IS `itx.builtins`, the reserved root: a call
-// `itx.builtins.<root>…` runs against it directly and never reads the rule table; a short
-// `itx.<root>…` reaches it through the IMPLICIT PLATFORM ROW `itx.<root> ⇒ itx.builtins.<root>` unless
-// the context's own table says otherwise (itx-expression-rewriting.ts, rule 5) — so a test may shadow
-// `itx.ai`, a context may mask `itx.kv`, and `itx.builtins.…` is always the physical door. The
-// platform never spells a short name.
-//
-// LOADING DYNAMIC CODE — two doors, ONE PER HOST KIND, each a `get` on a noun:
-//   • `itx.workers.get({ source, className?, props? }).method(...)` — a STATELESS `WorkerEntrypoint`
-//     (its own isolate, no storage). No name: a stateless worker has no identity beyond its spec, so
-//     the spec IS the address (naming one is a rewrite rule's job).
-//   • `itx.facets.get(name, { source, className }).method(...)` — a `DurableObject` class hosted as
-//     the durable FACET `name` of this stream (own storage) — the mirror of `ctx.facets.get(name,
-//     startupCallback)`. Without the spec, `itx.facets.get(name)` ADDRESSES a facet that is already
-//     running (a processor, a named instance) — same door, no source.
-// Both bottom out in Cloudflare's Worker Loader (`env.LOADER.get(cacheKey, …)` then
-// `worker.getEntrypoint()` / `worker.getDurableObjectClass()`); the two-step is folded into one door
-// per host on purpose.
+// LIBRARY (`connectTo*`, `serveMcp`, src/library/ — code a user could write, taking only `itx`).
+// THE RECORD IS `itx.builtins`, the reserved root: `itx.builtins.<root>…` runs against it directly
+// and never reads the rule table; a short `itx.<root>…` reaches it through the IMPLICIT PLATFORM ROW
+// unless the context's own table says otherwise (itx-expression-rewriting.ts, rule 5) — so a test may
+// shadow `itx.ai`, a context may mask `itx.kv`, and `itx.builtins.…` is always the physical door.
+// Dynamic code has two doors, one per host kind: `workers.get(spec)` (stateless) and
+// `facets.get(name, spec)` (durable) — the `BuiltInScope` members below say what each takes.
 
 import type { ReachableContext, StreamPage, WaitForEventFilter } from "../stream/stream.ts";
 import { stampPrincipal, type Principal } from "../principal.ts";
@@ -72,19 +61,15 @@ export type SubscriptionListEntry = {
   halted?: { afterOffset: number; attempts: number; error?: string };
 };
 
-/** THE built-in scope, as ONE interface — the physical-layer roots: `itx.builtins.<root>` runs
- *  against them directly; `itx.<root>` reaches them through the implicit platform row unless the
- *  context's table says otherwise (itx-expression-rewriting.ts, rule 5: rules FIRST). The library's
- *  verbs come in by `extends` (library/index.ts).
- *  This is the clean-room's whole kernel surface. It is a PLAIN OBJECT, not an RpcTarget class, on
- *  purpose: the resolver gates on `Object.hasOwn`, so a prototype-method class would leave every
- *  root unreachable. Exported for ONE reader: the edge `IterateContext`'s TYPE merges it in
- *  (iterate-context.ts), so what rides the dotted hop is typed where a client holds it. */
+/** THE built-in scope, as ONE interface — the clean-room's whole kernel surface; the library's verbs
+ *  come in by `extends` (library/index.ts). The record is a PLAIN OBJECT of own-enumerable closures,
+ *  not an RpcTarget class, on purpose: the resolver gates on `Object.hasOwn`, so a prototype-method
+ *  class would leave every root unreachable. Exported for ONE reader: the edge `IterateContext`'s TYPE
+ *  merges it in (iterate-context.ts), so what rides the dotted hop is typed where a client holds it. */
 export interface BuiltInScope extends LibraryRoots {
-  /** THE RESERVED ROOT, typed: `itx.builtins.<root>` is the physical spelling of every root below —
-   *  the fixed point of rewriting, never shadowed by a context's rows (itx-expression-rewriting.ts
-   *  rule 5). Not a key of the record (the resolver strips it); here so a strongly typed holder — the
-   *  SDK host's engine port, a loaded worker's `env.ITX.get()` — can spell `itx.builtins.append(…)`. */
+  /** THE RESERVED ROOT, typed: the physical spelling of every root below. Not a key of the record
+   *  (the resolver strips it); here so a strongly typed holder (a loaded worker's `env.ITX.get()`)
+   *  can spell `itx.builtins.append(…)`. */
   builtins: Omit<BuiltInScope, "builtins">;
   /** Identify this context. */
   whoami(): { projectId: string; path: string };
@@ -113,13 +98,11 @@ export interface BuiltInScope extends LibraryRoots {
    *  model with `@` (`itx.fable ⇒ itx.ai.run('@cf/…', @)`). A test shadows it with `provide("itx.ai",
    *  fake)`; the physical door stays `itx.builtins.ai`. */
   ai: Ai;
-  /** THE ESCAPE HATCH: Cloudflare Artifacts, project-scoped (repos.ts `ArtifactsScope` — the ONE
-   *  bound namespace behind the project's `${projectId}.` prefix wall) — same shape as `itx.ai`
-   *  proxying `env.AI`. The nicer `itx.repos` is built ON TOP of it. */
+  /** THE ESCAPE HATCH: the raw Cloudflare Artifacts binding, project-scoped (repos.ts
+   *  `ArtifactsScope`); `itx.repos` is built on top of it. */
   cfArtifacts: ArtifactsScope;
-  /** THE PRIMARY REPO DOOR — `itx.repos` (repos.ts): a repo's file BYTES, git-over-HTTPS, built ON TOP
-   *  of `cfArtifacts` + `context/git-wire`. Minimal today: `readFile`/`writeFile` one root-level path
-   *  on `main` — enough to move the config worker's source out of KV
+  /** THE PRIMARY REPO DOOR (repos.ts `ReposScope`): a repo's file BYTES over git-over-HTTPS —
+   *  `readFile`/`writeFile` one root-level path on `main`, enough to hold the config worker's source
    *  (`itx.provide("itx.worker", "…itx.repos.readFile(…)")`). */
   repos: ReposScope;
   /** Append to this context's append-only event log (the facets that REDUCE it are
@@ -133,9 +116,8 @@ export interface BuiltInScope extends LibraryRoots {
    *  afterOffset default = the head, 30s/120s timeout → WAIT_TIMEOUT). A root, so the edge declares
    *  nothing for it. */
   waitForEvent(filter?: WaitForEventFilter): Promise<StreamEvent>;
-  /** Navigate to another context of THIS project, routed through its own table. Absolute by
-   *  convention ("/agents/x"); relative ("agents/x", "../inbox") resolves against this context's
-   *  path — the same resolver the edge `cd` uses (resolveContextPath). */
+  /** Another context of THIS project, every call routed through ITS table (`resolveContextPath`
+   *  resolves the path, as the edge `cd` does). */
   cd(path: string): InvokeHandle;
   /** Egress: `{{secret:project:NAME}}` placeholders substituted, then the terminal `fetch` — the
    *  same door a loaded worker's `globalOutbound` and the edge `itx.fetch(request)` land on. */
@@ -154,13 +136,11 @@ export interface BuiltInScope extends LibraryRoots {
     /** PRESENCE — the keys borrowed or pager-backed right now. */
     list(): string[];
   };
-  /** The itx-expression rewrite-rule table, read — THE EFFECTIVE table: the context's own rows (a
-   *  slice of core; `origin: "context"`, a mask shown as `target: null`) plus the implicit platform
-   *  rows `itx.<root> ⇒ itx.builtins.<root>` (`origin: "platform"`) for every root the context has
-   *  not re-set. Written by `itx.provide(match, target | null)` on the edge (sugar over the ONE
-   *  `itx/rewrite-rule-configured` event), never a verb here. `resolve(call)` is the PURE half of
-   *  `invoke`: the chain of rewrites, each printed, from the call to the builtins-rooted call that
-   *  would run — nothing is dispatched; the law is `invoke(call) ≡ invoke(resolve(call).at(-1))`. */
+  /** The rewrite-rule table, read — THE EFFECTIVE table: the context's own rows (`origin:
+   *  "context"`, a mask shown as `target: null`) plus the implicit platform rows (`origin:
+   *  "platform"`) for every root the context has not re-set. Written by `itx.provide` on the edge,
+   *  never a verb here. `resolve(call)` is the PURE half of `invoke`: the chain of rewrites, each
+   *  printed, nothing dispatched — `invoke(call) ≡ invoke(resolve(call).at(-1))`. */
   rewriteRules: {
     list(): RewriteRuleListEntry[];
     get(match: string): RewriteRuleListEntry | null;
@@ -196,10 +176,6 @@ export interface BuiltInScope extends LibraryRoots {
       props?: unknown;
     }): InvokeHandle;
   };
-  /** Run a stateless lambda STRING — sugar: wrap into a `WorkerEntrypoint`, then
-   *  `workers.get({ source }).run(...)`. The one bare-lambda ergonomic (same as apps/os). */
-  // ── THE LIBRARY (src/library/) — `connectToMcp`, `connectToOpenApi`, `connectToCapnweb` — is
-  // the `extends LibraryRoots` above: first-party code that takes ONLY `itx`. ──
 }
 
 // THE ONE LIST: `keyof BuiltInScope` (minus the reserved root itself, which names the record, not a
@@ -219,15 +195,14 @@ interface BuildBuiltInsDeps {
   path: string;
   /** The codec name of the context these roots belong to (loader cache keys). */
   iterateContextName: string;
-  /** The bindings the built-ins reach: the loader, the project kv, Workers AI and Artifacts (the
-   *  workers lane binds neither AI nor Artifacts; nothing there calls them). */
+  /** The bindings the built-ins reach (the workers lane binds neither AI nor Artifacts; nothing
+   *  there calls them). */
   env: {
     LOADER: WorkerLoader;
     ITX_KV: KVNamespace;
     /** The per-project secret store egress substitutes from (`secret:<projectId>:<name>`). */
     SECRETS_KV: KVNamespace;
     AI: Ai;
-    /** Cloudflare Artifacts, the ONE bound namespace — `itx.cfArtifacts` scopes it per project. */
     ARTIFACTS: ArtifactsNamespace;
   };
   /** The deploy identity every loader cacheKey folds in (app-config.ts). */
@@ -249,25 +224,20 @@ interface BuildBuiltInsDeps {
   /** WHO is calling right now — the principal the DO runs this call under (`invokeAs`, the fetch
    *  lane's header), null for an anonymous session, a processor, a loaded worker. */
   principal: () => Principal | null;
-  /** The rpcStubs view — PARENT-LOCAL closures over the context's transport table (the pager
-   *  sockets live in the DO and can never move). */
+  /** The rpcStubs view — closures over the DO's transport table (the pager sockets can never move). */
   rpcStubs: BuiltInScope["rpcStubs"];
-  /** The subscriptions view — the core slice ⋈ the delivery loop's cursors. */
   subscriptions: BuiltInScope["subscriptions"];
-  /** The rewrite-rule view — the core slice, printed. */
   rewriteRules: BuiltInScope["rewriteRules"];
-  /** The stream's waitForEvent (the own context's — a wait never crosses a hop). */
+  /** The own context's — a wait never crosses a hop. */
   waitForEvent: BuiltInScope["waitForEvent"];
-  /** `facets.get(name, spec?)` — the public door, verbatim: address a running facet by name, or host
-   *  `spec` as the facet `name` (accepted trade: a busy stateful facet pins its stream). */
+  /** The facet door, verbatim (accepted trade: a busy stateful facet pins its stream). */
   facets: BuiltInScope["facets"];
   /** The `ItxEntrypoint` stub a loaded worker gets as `env.ITX` and `globalOutbound` — the loopback
    *  minted once for this context (the DO's `#itxEntrypoint`; itx-entrypoint.ts for why it is never a
    *  raw getByName stub). */
   itxEntrypoint: Fetcher;
-  /** THE LIBRARY's roots (library/index.ts `buildLibrary(itx).roots`): built by the DO over its own
-   *  `itx` handle, so a library call's `itx.fetch(...)` resolves through THIS context's rules (a test
-   *  may shadow `itx.fetch`) and lands on egress with zero hops. */
+  /** THE LIBRARY's roots (library/index.ts `buildLibrary(itx).roots`), built by the DO over its own
+   *  `itx` handle so a library call's `itx.fetch(...)` resolves through THIS context's rules. */
   library: LibraryRoots;
 }
 
@@ -297,8 +267,8 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
   const onRootContext = <T>(call: ItxExpressionStep, here: () => Promise<T>): Promise<T> =>
     rootContext ? (rootContext.invoke(["itx", "builtins", "secrets", call]) as Promise<T>) : here();
 
-  // Each root implements one member of the BuiltInScope interface above (the canonical doc of the
-  // kernel surface); the comments here add only what the interface can't say — the WHY of a code branch.
+  // Each root implements one member of `BuiltInScope` above (the canonical doc of the surface); the
+  // comments here add only the WHY of a code branch.
   return {
     whoami: () => ({ projectId, path }),
     kv: {
@@ -353,9 +323,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
         }),
       list: () => onRootContext(["list"], async () => deps.secrets()),
     },
-    // The binding object itself — dispatch walks its methods (`run`, `models`, `gateway`, …).
-    ai: env.AI,
-    // THE ESCAPE HATCH: Cloudflare Artifacts, project-scoped (projectScopedArtifacts, below).
+    ai: env.AI, // the binding object itself — dispatch walks its methods
     cfArtifacts: projectScopedArtifacts(env.ARTIFACTS, projectId),
     repos: projectScopedRepos({
       namespace: env.ARTIFACTS,
@@ -363,14 +331,9 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
       accountId: deps.artifactsAccountId,
       namespaceName: deps.artifactsNamespace,
     }),
-    // Own-enumerable closures (NOT prototype methods) — the resolver's `Object.hasOwn` gate is why.
     append,
     readEvents: (afterOffset?: number, limit?: number) => ownContext().read(afterOffset, limit),
     waitForEvent: deps.waitForEvent,
-    // `cd` routes EVERY call through the target context's own table — a sibling's rows apply, its
-    // whole-context override included; the physical spelling is `cd(p).builtins.append(…)`, which is
-    // the fixed point there and reads no table. Codec-named, so only THIS project is reachable; the
-    // path resolves against THIS context (absolute, or relative with `.`/`..`).
     // WHO crosses with the call: a sibling context runs it under the caller's principal (a Workers-RPC
     // hop, where the ambient store does not reach), so an event appended there is attributed too.
     cd: (contextPath: string) =>
@@ -386,15 +349,11 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
     facets: deps.facets,
     subscriptions: deps.subscriptions,
     rewriteRules: deps.rewriteRules,
-    // THE stateless host — `itx.workers.get(spec)`: a genuine InvokeHandle (so `workers.get(spec).run()`
-    // pipelines on every lane, workerd#6873) over a fresh confined isolate (no DO, no storage,
-    // `env.ITX` bound) hosting the loaded WorkerEntrypoint, and ONE method on it by name — `run`,
-    // `fetch`, `processEventBatch`, whatever the class declares. A terminal `fetch(request)` is this
-    // same call: `entrypoint.fetch(request)` IS the entrypoint's fetch channel, socket-bearing
-    // Responses included (fetch/rpc-stub-fetch.ts doctrine, points 1 & 4). The source EXPORTS the
-    // entrypoint (no host-injected wrapper — Cloudflare's `worker.getEntrypoint()` underneath).
-    // Re-resolves per call, but the loader caches by the key (cacheKey | content hash) so a warm
-    // isolate is reused and a producer expression never re-runs.
+    // A genuine InvokeHandle so `workers.get(spec).run()` pipelines on every lane (workerd#6873). A
+    // terminal `fetch(request)` is this same call: `entrypoint.fetch(request)` IS the entrypoint's
+    // fetch channel, socket-bearing Responses included (fetch/rpc-stub-fetch.ts doctrine, point 4).
+    // Re-resolves per call; the loader caches by key, so a warm isolate is reused and a producer
+    // expression never re-runs.
     workers: {
       get: (spec: {
         source: WorkerSource;
@@ -430,8 +389,6 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
           return Reflect.apply(fn, entrypoint, args);
         }),
     },
-    // THE LIBRARY: its verbs closed over the context's own `itx` handle, built and owned by the DO
-    // (library/index.ts — it also owns the live connections' release at the idle quiesce).
-    ...deps.library,
+    ...deps.library, // THE LIBRARY (library/index.ts), built and owned by the DO
   } satisfies Omit<BuiltInScope, "builtins">;
 }

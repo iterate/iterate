@@ -3,14 +3,11 @@
 
 /** WHAT THIS SESSION MUST UNDO AT ITS END — ONE entry per key: a lend relay (the session's copy of
  *  a client stub plus its pager socket, held so neither is GC'd) and anything else scoped to the
- *  session (an anonymous subscription's removal). THE CALLER OWNS THE KEY: one session spans every
- *  IterateContext it hands out, and an rpc stub key is only unique PER CONTEXT, so IterateContext
- *  keys by the JSON pair `[iterateContextName, rpcStubKey]` (see #sessionTeardownKey) — the bare key
- *  would let two contexts lending at the same path recall each other's stub. Re-adding the SAME key is a
- *  TRANSPORT REPLACEMENT (a re-lend at the same context + path — a reconnect): by the time the new
- *  relay's pager is open, the DO has already dropped the old transport as "replaced", so disposing
- *  the incumbent here is a harmless double-close that just keeps this map from accumulating dead
- *  relays. */
+ *  session. THE CALLER OWNS THE KEY (iterate-context.ts `#sessionTeardownKey` pairs the context name
+ *  with the stub key). Re-adding the SAME key is a TRANSPORT REPLACEMENT (a reconnect): by the time
+ *  the new relay's pager is open, the DO has already dropped the old transport as "replaced", so
+ *  disposing the incumbent here is a harmless double-close that keeps this map from accumulating
+ *  dead relays. */
 export class SessionTeardown {
   readonly #undoByKey = new Map<string, { dispose(): void }>();
   /** Register `undo` under `key`, REPLACING what sat there (disposed now). Returns the LEASE — the

@@ -1,12 +1,30 @@
-// cursor-delivery-halts-ladders-and-resumes.e2e.test.ts — THE CURSOR LANE live. A subscription whose
-// target cannot own its progress — a Worker-Loader entrypoint's `processEventBatch(events, range)`,
-// the stateless "project worker" — is delivered at-least-once from a cursor THE STREAM keeps
+// cursor-delivery.e2e.test.ts — THE CURSOR LANE live. A subscription whose target cannot own its
+// progress — a Worker-Loader entrypoint's `processEventBatch(events, range)`, the stateless "project
+// worker" — is delivered at-least-once from a cursor THE STREAM keeps
 // (`itx.subscriptions.get(name).cursor`): the awaited call is the ack; a plain throw climbs the one
-// retry ladder (1s·2ⁿ ≤ 30min, 15 attempts) on the DO's own alarm; `retryable: false` HALTS at once
+// retry ladder (1s·2ⁿ ≤ 30 min, 15 attempts) on the DO's own alarm; `retryable: false` HALTS at once
 // with a `subscription-delivery-halted` fact; recovery is the operator's ONE event,
-// `subscription-delivery-resumed { name, afterOffset? }` — un-halt, and seek. Nothing is declared:
-// the loop evaluates the target and looks at the value (an entrypoint handle ⇒ cursor; a live stub
-// or a facet ⇒ push, no cursor). No lanes, no forwarder facet, no policy knobs.
+// `subscription-delivery-resumed { name, afterOffset? }` — un-halt, and seek. Nothing is declared: the
+// loop evaluates the target and looks at the value (an entrypoint handle ⇒ cursor; a live stub or a
+// facet ⇒ push, no cursor). No lanes, no forwarder facet, no policy knobs. Pins:
+//   • the digest worker delivered from a stream-kept cursor; poison halts with the fact (one attempt,
+//     one audit row, fresh traffic never resurrects it); `resumed { afterOffset }` un-halts, seeks past
+//     the poison and IS the wake
+//   • a plain throw climbs the ladder on the alarm and is redelivered within seconds, attempt back to
+//     0; a resume appended MID-DELIVERY wins; a resume while HEALTHY is cursor surgery applied at the
+//     row's next pump; a resume BEYOND head never deadens the row
+//   • the view: a push target's row has NO cursor; a resumed fact for an unknown name changes nothing
+//   • consumes ['*'] delivers every durable event with the cursor at `through` and the ladder idle;
+//     ephemerals DO reach a caught-up cursor target (they ride the pushed batch, never the log) — a
+//     fresh row's first batch after unrelated commits included
+//   • removing a row mid-delivery leaves no ghost halt and no resurrected cursor; one halted row never
+//     blocks its neighbor; cursor subscriptions enable no processor and mint no facet; subscribe never
+//     probes the receiver (an unusable target fails at its FIRST delivery); a push and a cursor
+//     subscriber see the SAME offsets in order
+//   • reentrancy: a cursor delivery targeting this stream's own append neither deadlocks nor runs away
+//   • `subscribe({ afterOffset })`: the cursor is born at `afterOffset` (0 = the whole log) instead of
+//     at the configure offset, and the configure is its wake — events that landed BEFORE the
+//     subscription are delivered, at-least-once, from the stream-kept cursor; nothing else changes
 
 import { RpcTarget } from "capnweb";
 import { expect, test } from "vitest";
@@ -569,4 +587,54 @@ test("reentrancy: a cursor delivery targeting this stream's own append neither d
   expect(post.offset).toBeGreaterThan(seed.offset);
   await itx.subscribe({ name: "reenter", target: null });
   expect(await row(itx, "reenter")).toBeNull();
+});
+
+// ─────────────────────────────── history: `subscribe({ afterOffset })` ───────────────────────────────
+
+test("subscribe({ afterOffset: 0 }) delivers the marks that landed BEFORE the subscription; the same subscribe without it delivers only what lands after", async () => {
+  const itx = openItx(freshCtx("afteroffset"));
+  await itx.provide("itx.digest", ["itx", "workers", ["get", { source: SOURCES.digest }]]);
+
+  // 1. three marks with NO subscription in place
+  for (let i = 0; i < 3; i++) await itx.append({ type: "mark" });
+
+  // 2. the control — subscribe from NOW: the three are never delivered; a fourth mark lands and is
+  await itx.subscribe({
+    name: "digest",
+    target: "itx.digest.processEventBatch",
+    consumes: ["mark"],
+  });
+  const [fourth] = await itx.append({ type: "mark" });
+  await until(
+    "digest=1 (only the mark after the subscribe)",
+    async () => (await digested(itx)) === 1,
+    30_000,
+  );
+  const fromNow = await until("cursor past the fourth mark", async () => {
+    const row = await itx.subscriptions.get("digest");
+    return row?.cursor && row.cursor.confirmedOffset >= fourth.offset ? row : undefined;
+  });
+  expect(fromNow.halted).toBeUndefined();
+
+  // 3. the claim — the same name RE-SUBSCRIBED (a fresh row, a fresh cursor) asking for the whole log:
+  //    all four marks are delivered again, from offset 0 — 1 → 5 — and the cursor lands at the head
+  await itx.subscribe({
+    name: "digest",
+    target: "itx.digest.processEventBatch",
+    consumes: ["mark"],
+    afterOffset: 0,
+  });
+  await until(
+    "digest=5 (the four marks, from offset 0)",
+    async () => (await digested(itx)) === 5,
+    30_000,
+  );
+  const fromHistory = await until("cursor past the fourth mark again", async () => {
+    const row = await itx.subscriptions.get("digest");
+    return row?.cursor && row.cursor.confirmedOffset >= fourth.offset ? row : undefined;
+  });
+  expect(fromHistory.configuredAtOffset).toBeGreaterThan(fromNow.configuredAtOffset); // a new row
+  expect(fromHistory.cursor.attempt).toBe(0);
+  expect(fromHistory.halted).toBeUndefined();
+  expect(await digested(itx)).toBe(5); // exactly the four, once each
 });

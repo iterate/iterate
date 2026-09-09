@@ -1,11 +1,9 @@
-// reduce-checkpoint.ts — THE ONE spelling of a persisted reduce checkpoint, shared by BOTH hosts:
-// the stream's own core reduce (stream.ts — written inside every commit's transaction) and the
-// facet-hosted `ProcessorEngine` (processor.ts — driven away from the commit point). ONE ROW per
-// slug in `reduce_checkpoints`: the reducer version, the offset reduced through, and the state as
-// JSON (NULL = the reduce never changed it = `initialState()` — a pure side-effect processor
-// reusing its cursor never re-fires its effect history). ONE statement per write, so a checkpoint
-// can never tear (a cursor landing while its state did not); the state column is rewritten only
-// when the reduce changed it (`COALESCE`), so an unchanged batch never rewrites the blob.
+// reduce-checkpoint.ts — THE ONE spelling of a persisted reduce checkpoint, shared by BOTH hosts (the
+// stream's core reduce and the facet-hosted `ProcessorEngine`). ONE ROW per slug: the reducer
+// version, the offset reduced through, and the state as JSON (NULL = the reduce never changed it =
+// `initialState()` — a pure side-effect processor reusing its cursor never re-fires its effect
+// history). ONE statement per write, so a checkpoint can never tear; the state column is rewritten
+// only when the reduce changed it (`COALESCE`).
 //
 // THE CELL CEILING: a checkpoint is one SQLite cell — 2 MB in production, SQLITE_TOOBIG past it. A
 // state whose JSON would not fit is refused BEFORE the write with a coded error, so the caller sees
@@ -14,8 +12,7 @@
 
 import { codedError } from "../lib/errors.ts";
 
-/** The most chars a checkpoint's JSON state may be — under the documented 2 MB cell, with room for
- *  the row's other columns. */
+/** Under the 2 MB cell, with room for the row's other columns. */
 const REDUCE_CHECKPOINT_STATE_MAX_CHARS = 2 * 1024 * 1024 - 4096;
 
 /** Sync SQLite as the platform hands it over (`ctx.storage.sql`): a query is a LAZY cursor —

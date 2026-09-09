@@ -4,9 +4,11 @@
 // stub to the `itx.rpcStubs` built-in under the key = the canonical match (it lives until the handle
 // is disposed or its session ends); an ITX-EXPRESSION REWRITE RULE is pure data —
 // `match ⇒ itx.rpcStubs.get('<match>')`, ONE `itx/rewrite-rule-configured` event in a MAP keyed by
-// match (set replaces, null deletes). Provided together they are session-scoped as a pair:
-// disposing the handle (or the session dying) recalls the stub AND un-sets its rule, so a call on
-// the match answers NO_ITX_EXPRESSION_MATCH afterwards — default-deny, nothing lingers.
+// match (a set replaces; the un-set appends the REMOVAL spelling, target `itx.builtins.<match…>`,
+// which restores the row to the platform default beneath — none, for a user's name). Provided
+// together they are session-scoped as a pair: disposing the handle (or the session dying) recalls
+// the stub AND un-sets its rule, so a call on the match answers NO_ITX_EXPRESSION_MATCH afterwards —
+// default-deny, nothing lingers.
 // RPC_STUB_OFFLINE is narrower: the rule EXISTS but the key has no stub — an in-flight call whose
 // provider dies mid-call, or a hand-configured rule (`itx.provide("itx.x", "itx.rpcStubs.get('itx.k')")`)
 // whose key nobody lent. PRESENCE is physical: `itx.rpcStubs.list()` — the keys with an open
@@ -18,7 +20,6 @@
 import { expect, test } from "vitest";
 import {
   codeOf,
-  expressionUrl,
   freshCtx,
   openItx,
   presence,
@@ -43,19 +44,9 @@ const ruleEventsAt = async (itx: any, match: string): Promise<{ target: string |
     .map((e) => ({ target: e.payload.target as string | null }));
 
 // (A never-configured match is default-deny like any other unmatched call — NO_ITX_EXPRESSION_MATCH
-// across the /api hop is context-built-ins-and-error-codes.e2e; RPC_STUB_OFFLINE narrows to "rule
-// exists, no stub under its key": the hand-configured-rule and mid-invoke tests below.)
-
-test("a pager header from OUTSIDE never reaches the DO's attach door: the edge strips every inbound x-itx-* on the fetch lane", async () => {
-  // ONE-SHOT attach: the pager header IS the attach request (the key + the events that name it,
-  // URI-encoded JSON) — the edge relay's, and only the relay's. A visitor's copy of it is stripped
-  // at /expression before the DO's door walk, so the door's own refusal ("malformed …", pinned
-  // DO-level in __workers-tests__/rpc-stub-pager-attach.test.ts) is never what a visitor sees.
-  const res = await fetch(expressionUrl(freshCtx("pager-outside"), "itx.whoami"), {
-    headers: { "x-itx-rpc-stub-pager": "424242" },
-  });
-  expect(await res.text()).not.toContain("x-itx-rpc-stub-pager");
-});
+// across the /api hop is context.e2e; RPC_STUB_OFFLINE narrows to "rule exists, no stub under its
+// key": the hand-configured-rule and mid-invoke tests below. That a visitor's `x-itx-*` headers never
+// reach the DO's attach door is __workers-tests__/control-plane.test.ts + ingress-project-host.e2e.)
 
 test("same-key re-provide replaces the transport while online and appends ONE more rule event — the map still holds one rule, the match follows the survivor", async () => {
   const ctx = freshCtx("replace");
@@ -129,8 +120,9 @@ test("disposing a client session recalls its stubs (presence) AND un-sets their 
     async () => !(await presence(observer)).includes("itx.ghosttool"),
   );
   // THE RULE IS SESSION-SCOPED: capnweb disposed the ProvidedRpcStub handle with the session, and
-  // its recall appended `rewrite-rule-configured { match, target: null }`. Calls on the match are
-  // default-deny again — NO_ITX_EXPRESSION_MATCH, never a lingering offline row.
+  // its recall appended `rewrite-rule-configured { match, target: itx.builtins.<match…> }` — the
+  // removal spelling, restoring the row to the platform default beneath (none here). Calls on the
+  // match are default-deny again — NO_ITX_EXPRESSION_MATCH, never a lingering offline row.
   await until(
     "the rule un-set",
     async () => !(await rpcStubRewriteRuleMatches(observer)).includes("itx.ghosttool"),
@@ -338,7 +330,7 @@ test("concurrent provides at one key collapse to ONE live transport; the map hol
 
 // (The pager attach itself — one upgrade carrying the key and the rule, atomic with the append — is
 // pinned DO-level, where the socket census is readable: __workers-tests__/rpc-stub-pager-attach.test.ts;
-// its ORDER relative to presence, at the surface: rpc-stubs-attach-carries-the-rule.e2e.test.ts.)
+// its ORDER relative to presence, at the surface: rpc-stubs-reconnect-and-attach.e2e.test.ts.)
 
 // ── the same shape one layer up: a live SUBSCRIBER's stub + row ──
 

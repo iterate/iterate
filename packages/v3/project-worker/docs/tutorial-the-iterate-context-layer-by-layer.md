@@ -89,7 +89,7 @@ const ctx = "prj_demo";
 const itx = openItx(ctx);
 const who = await itx.invoke(["itx", ["whoami"]]);
 // { projectId: "prj_demo", path: "/" }
-// e2e/context-dotted-calls-fall-back-to-the-invoke-door.e2e.test.ts
+// e2e/context.e2e.test.ts
 ```
 
 You do not need a WebSocket for that. capnweb also serves a one-shot HTTP batch at the same `/api`:
@@ -101,7 +101,7 @@ import { newHttpBatchRpcSession } from "capnweb";
 const batch = newHttpBatchRpcSession(new URL("/api", WORKER_BASE_URL).toString());
 const who = await batch.authenticate().projects.get(ctx).invoke(["itx", ["whoami"]]);
 // who.projectId === ctx — a batch cannot hold a live capability (the edge must outlive the response): reads and writes only
-// e2e/session-doors.e2e.test.ts
+// e2e/session.e2e.test.ts
 ```
 
 ### The three primitives, met once each
@@ -125,11 +125,11 @@ unknown segments into ONE `invoke(expression)` (`installPrototypeInvokeFallback`
 const who = await openItx(ctx).whoami(); // { projectId: ctx, path: "/" }
 expect(await itx.kv.put("k", "v")).toMatchObject({ ok: true });
 expect(await itx.kv.get("k")).toBe("v");
-// e2e/context-dotted-calls-fall-back-to-the-invoke-door.e2e.test.ts
+// e2e/context.e2e.test.ts
 ```
 
 `/version` answers `<deployId> <environmentName>`, the stamp a deploy smoke waits for
-(`e2e/session-doors.e2e.test.ts`).
+(`e2e/session.e2e.test.ts`).
 
 **What this brick leaves on the table:** a context that answers `whoami` and stores a key has
 nothing of yours in it. Nothing you run can be called from the cloud.
@@ -154,7 +154,7 @@ await laptop.provide("itx.runOnMyComputer", async (cmd: string, args: string[]) 
 });
 
 expect(await otherClient.runOnMyComputer("ls", ["-la"])).toBe("stdout of ls -la");
-// e2e/rpc-stubs-bare-function-across-clients.e2e.test.ts
+// e2e/rpc-stubs-values.e2e.test.ts
 ```
 
 Two things happened, and one verb made both. The function is physical — a capnweb reference your
@@ -201,7 +201,7 @@ async provide(match, target) {
 ```
 
 On the log the rule's offset is BELOW the key's ephemeral `rpc-stub/attached` event: the DO appended
-the rule while accepting the pager, before it announced presence (`e2e/rpc-stubs-attach-carries-the-rule.e2e.test.ts`).
+the rule while accepting the pager, before it announced presence (`e2e/rpc-stubs-reconnect-and-attach.e2e.test.ts`).
 
 ### The dotted surface reduces to `invoke`
 
@@ -220,7 +220,7 @@ expect(posted.ok).toBe(true);
 await itx.invoke(["itx", "slack", "chat", ["postMessage", { channel: "#general", text: "via explicit door" }]]);
 const listed = await itx.invoke(`itx.slack.conversations.list({ limit: 10 })`);
 expect(listed.channels.length).toBe(2);
-// e2e/rpc-stubs-slack-bridge.e2e.test.ts
+// e2e/rpc-stubs-values.e2e.test.ts
 ```
 
 Every hop is native — capnweb → the edge → Workers RPC → the DO → the rules → `itx.builtins.rpcStubs.get('itx.slack')`
@@ -236,11 +236,11 @@ hop:
 await itxA.provide("itx.tools", new ToolsA()); // transform(x, cb) { return `A:${await cb(x * 2)}` }
 const cbResult = await itxB.invoke(["itx", "tools", ["transform", 21, async (n: number) => n + 1]]);
 expect(cbResult).toBe("A:43"); // A called B's callback (42 → 43) and returned
-// e2e/rpc-stubs-rich-values.e2e.test.ts
+// e2e/rpc-stubs-values.e2e.test.ts
 ```
 
 The same lane works from cloud code: a loaded worker (chapter 7) writes `itx.demo.timer.callLater(250,
-cb)` on `env.ITX.get()` and the callback runs back inside it (`e2e/rpc-stubs-callback-fires-back.e2e.test.ts`).
+cb)` on `env.ITX.get()` and the callback runs back inside it (`e2e/rpc-stubs-values.e2e.test.ts`).
 
 ### Disposing recalls; the session ending recalls; presence is physical
 
@@ -276,7 +276,7 @@ expect(await itx.invoke("itx.laterTool.hello()")).toBe("hello-from-later");
 
 Re-providing the same match replaces the transport (the old pager closes "replaced") and appends one
 more rule event; the map still holds one rule. Disposing a STALE handle after a reconnect tears down
-nothing of its replacement — the lease is the handle (`e2e/rpc-stubs-reconnect-same-path.e2e.test.ts`).
+nothing of its replacement — the lease is the handle (`e2e/rpc-stubs-reconnect-and-attach.e2e.test.ts`).
 
 ### Lends are per context
 
@@ -292,7 +292,7 @@ await a.provide("itx.clash", (x: number) => x + 1);
 await b.provide("itx.clash", (x: number) => x + 100);
 expect(await a.invoke("itx.clash(1)")).toBe(2);
 expect(await b.invoke("itx.clash(1)")).toBe(101);
-// e2e/session-lends-per-context.e2e.test.ts
+// e2e/session.e2e.test.ts
 ```
 
 **What this brick leaves on the table:** the name you called the stub by was a string we never
@@ -324,7 +324,7 @@ args the live part:
 await itx.kv.put("k", "v");
 expect(await itx.invoke("itx.kv.get", "k")).toBe("v"); // a name-final call plus its live arg
 expect(await itx.invoke("itx.whoami()")).toMatchObject({ projectId: ctx }); // no args: the call as spelled
-// e2e/rewrite-rules-builtins-root.e2e.test.ts
+// e2e/rewrite-rules.e2e.test.ts
 ```
 
 And the ANONYMOUS call step, method `""`, calls the value itself. It is what a rule spells when a
@@ -339,7 +339,7 @@ spec. Deleting the name IS revocation. A string is what a person types; the pars
 platform stores. Both go through the codec's one door — a string is parsed once and PRINTED back
 canonically (whitespace, quotes and key order normalized), an array is shape-checked in place — so
 `itx.rewriteRules.get(match)` finds a row however you spell the match
-(`e2e/rewrite-rules-builtins-root.e2e.test.ts`). One sizing rule follows: a STRING expression is
+(`e2e/rewrite-rules.e2e.test.ts`). One sizing rule follows: a STRING expression is
 capped at 2 KiB (`EXPRESSION_TOO_LONG`); anything bigger — a worker's source — rides the array half,
 plain data that never meets the JSON5 parser. Two reserved spellings belong to chapter 3: `@`, the
 caller's input, and the root `itx.builtins`, the physical scope.
@@ -355,7 +355,7 @@ await itx.invoke("itx.cd('x').append({type:'ping-x'})");
 const page = await itx.invoke("itx.cd('/x').readEvents(0, 50)");
 expect(page.events.map((e) => e.type)).toContain("ping-x"); // cd('x') and cd('/x') are ONE context
 const [self] = await itx.invoke("itx.cd('').append({type:'self-ping'})"); // '' is THIS context
-// e2e/context-built-ins-and-error-codes.e2e.test.ts
+// e2e/context.e2e.test.ts
 ```
 
 There are two `cd` doors on purpose. The edge `IterateContext.cd(path)` returns an EDGE context, so
@@ -371,7 +371,7 @@ project-prefixed KV key can never alias another project's.
 The prototype hop hides JS and transport machinery at every depth — `then`, `dup`, `onRpcBroken`,
 `toString`, `constructor` and their kin — so a protocol probe can never conjure a dispatcher: awaiting
 a dangling chain node settles to a live handle, `JSON.stringify` of one fires nothing, a settled stub
-is not a thenable (`e2e/context-dotted-calls-fall-back-to-the-invoke-door.e2e.test.ts`).
+is not a thenable (`e2e/context.e2e.test.ts`).
 
 **What this brick leaves on the table:** every call so far resolved to a built-in or to a lent
 stub. Nothing durable names anything: your laptop's function has a name only while your socket is
@@ -391,7 +391,7 @@ with `match` runs as the same call with `match` replaced by `target`:
 await itx.provide("itx.notify", "itx.slack.chat.postMessage"); // a rule onto the live bridge
 const rewritten = await itx.invoke(`itx.notify({ channel: '#alerts', text: 'rewritten!' })`);
 expect(rewritten.ok).toBe(true);
-// e2e/rpc-stubs-slack-bridge.e2e.test.ts
+// e2e/rpc-stubs-values.e2e.test.ts
 ```
 
 Rules chain, and `itx.rewriteRules.resolve(call)` shows the chain — the pure half of `invoke`, each
@@ -412,7 +412,7 @@ for (const call of ["itx.store.get('k')", "itx.whoami()", "itx.builtins.kv.get('
   const chain = await itx.rewriteRules.resolve(call);
   expect(await itx.invoke(chain.at(-1))).toEqual(await itx.invoke(call));
 }
-// e2e/rewrite-rules-builtins-root.e2e.test.ts
+// e2e/rewrite-rules.e2e.test.ts
 ```
 
 ### The seven rules, in plain words
@@ -468,14 +468,14 @@ const after = await itx.rewriteRules.list();
 expect(after.filter((row) => row.match === "itx.kv")).toEqual([
   { match: "itx.kv", target: "itx.builtins.whoami", origin: "context" }, // replaced the platform row in the listing
 ]);
-// e2e/rewrite-rules-builtins-root.e2e.test.ts
+// e2e/rewrite-rules.e2e.test.ts
 ```
 
 The platform never spells a short name: every expression it writes — the proxy's own append, a lent
 stub's rule, a processor's row — is rooted at `itx.builtins`, so a row you put at `itx.rpcStubs`
 redirects YOUR calls and nothing the platform relies on. Mask `itx.rpcStubs` with `null`, and
 `provide("itx.tool", fn)` still lands and serves while `itx.builtins.rpcStubs.list()` still answers
-(`e2e/rewrite-rules-builtins-root.e2e.test.ts`).
+(`e2e/rewrite-rules.e2e.test.ts`).
 
 ### Masks: `provide(match, null)`
 
@@ -494,11 +494,11 @@ expect(await itx.kv.get("k")).toBe("v");
 expect((await rejection(itx.kv.put("k", "w"))).code).toBe("NO_ITX_EXPRESSION_MATCH"); // …the partial one stands
 await itx.provide("itx.kv.put", "itx.builtins.kv.put"); // the platform-equivalent target DELETES the row
 expect(await itx.rewriteRules.get("itx.kv.put")).toBeNull();
-// e2e/rewrite-rules-builtins-root.e2e.test.ts
+// e2e/rewrite-rules.e2e.test.ts
 ```
 
 Under a name with nothing beneath, `null` simply deletes and the match is default-deny
-(`e2e/rewrite-rules-map-and-chains.e2e.test.ts`).
+(`e2e/rewrite-rules.e2e.test.ts`).
 
 ### Pinned arguments
 
@@ -513,7 +513,7 @@ expect(await itx.invoke("itx.llm.run('special')")).toMatchObject({ projectId: ct
 expect(await itx.invoke("itx.llm.run('other')")).toBe("from-kv");
 await itx.provide("itx.llm.run('live')", (...unpinned) => `live:${JSON.stringify(unpinned)}`);
 expect(await itx.invoke("itx.llm.run('live', 7)")).toBe("live:[7]"); // the pinned arg never reaches the stub
-// e2e/rewrite-rules-argument-pinned.e2e.test.ts
+// e2e/rewrite-rules.e2e.test.ts
 ```
 
 ### `@`, the caller's input
@@ -555,7 +555,7 @@ const rules = Array.from({ length: 300 }, (_, i) => ({
 }));
 expect(await itx.append(...rules)).toHaveLength(300);
 expect(await itx.invoke(["itx", ["m299"]])).toMatchObject({ projectId: ctx, path: "/" });
-// e2e/rewrite-rules-map-and-chains.e2e.test.ts
+// e2e/rewrite-rules.e2e.test.ts
 ```
 
 The event stores the match as its canonical string and the target in the parsed form (a target may
@@ -581,7 +581,7 @@ await until(async () => (await itx.rewriteRules.get("itx.ai"))?.origin === "plat
 What names a dead stub is decided against one frozen table: every rule and every subscription whose
 target RESOLVES to `itx.builtins.rpcStubs.get('<key>')` goes. So a user's alias to a shadowed root
 (`itx.me ⇒ itx.whoami`, with a fake at `itx.whoami`) survives the fake dying in either configuration
-order and resolves to the platform row beneath (`e2e/rewrite-rules-builtins-root.e2e.test.ts`).
+order and resolves to the platform row beneath (`e2e/rewrite-rules.e2e.test.ts`).
 
 ### The compare-and-set undo: a handle only ever removes the row it wrote
 
@@ -602,7 +602,7 @@ if ("ifTarget" in payload && (!existing || !jsonEqual(existing.target, payload.i
 ```
 
 So a session that provided `itx.m ⇒ itx.kv` and let go after another session's live provider took
-the match over un-sets nothing (`e2e/rpc-stubs-reconnect-same-path.e2e.test.ts`). Two known reds sit
+the match over un-sets nothing (`e2e/rpc-stubs-reconnect-and-attach.e2e.test.ts`). Two known reds sit
 beside this, `test.fails` in the lane: two sessions providing the IDENTICAL expression rule share one
 identity, so disposing the first removes the second's row; and a handle disposed while the stream is
 paused loses its removal for good (the undo runs in `waitUntil` and discards the refusal).
@@ -625,7 +625,7 @@ const [committed] = await itx.append({ type: "mark", payload: { n: 1 } });
 expect(committed.offset).toBeGreaterThanOrEqual(1);
 const page = await itx.invoke(["itx", ["readEvents"]]); // { events, scannedThroughOffset, atHead }
 expect(page.events.some((e) => e.type === "mark")).toBe(true);
-// e2e/context-dotted-calls-fall-back-to-the-invoke-door.e2e.test.ts
+// e2e/context.e2e.test.ts
 ```
 
 An event in is `{ type, payload?, metadata?, source?, idempotencyKey?, offset?, ephemeral? }`; an
@@ -660,7 +660,7 @@ await itxB.invoke(`itx.append({ type: 'ping', payload: { n: 1 } })`); // a secon
 const got = await pending;
 expect(got.payload).toEqual({ n: 1 });
 expect(got.offset).toBeGreaterThan(head);
-// e2e/stream-wait-for-event.e2e.test.ts
+// e2e/stream.e2e.test.ts
 ```
 
 ### Offsets, idempotency keys, expected offsets
@@ -679,7 +679,7 @@ const batch = await itx.append(
 expect(batch[1].offset).toBe(orig.offset); // the hit answers with the ORIGINAL identity
 expect(batch[2].offset).toBe(batch[0].offset + 1); // the hit did not burn an offset in between
 // the same key with a DIFFERENT body: 'idempotency key "kc" already names a different event' — the whole batch rolled back
-// e2e/stream-idempotency-pause-paging.e2e.test.ts
+// e2e/stream.e2e.test.ts
 ```
 
 An event may also carry an expected `offset`: land exactly there or refuse the batch with
@@ -687,7 +687,7 @@ An event may also carry an expected `offset`: land exactly there or refuse the b
 no e2e file spells it). Concurrent appends from two sessions keep offsets unique; one event's body
 is capped at 8 MiB (`EVENT_TOO_LARGE`, nothing written, no offset burned); a 5 MiB body commits as
 one dense event, chunked in storage and invisible to paging
-(`e2e/stream-memory-budget.e2e.test.ts`, `e2e/stream-chunked-bodies.e2e.test.ts`).
+(`e2e/stream-isolate-ceilings-deployed.e2e.test.ts`, `e2e/stream.e2e.test.ts`).
 
 ### Ephemerals share the sequence
 
@@ -704,13 +704,13 @@ for (let i = 0; i < 3; i++) {
   expect(c.offset).toBeGreaterThan(lastOffset); // strictly increasing on the SHARED sequence
   lastOffset = c.offset;
 }
-// e2e/subscriptions-ephemeral-opt-in.e2e.test.ts
+// e2e/push-delivery.e2e.test.ts
 ```
 
 The contract every offset-keyed consumer honours: an ephemeral's offset is unique WITHIN an
 incarnation, and a later incarnation may hand the same number to a durable — so a short page's
 `scannedThroughOffset` is the durable mark, never the in-memory head, and nothing a reader persists
-can name an offset a later incarnation could reuse (`e2e/stream-idempotency-pause-paging.e2e.test.ts`).
+can name an offset a later incarnation could reuse (`e2e/stream.e2e.test.ts`).
 
 ### The birth records, and the stream's own state
 
@@ -728,7 +728,7 @@ expect(page.events.map((e) => [e.type, e.offset])).toEqual([
   ["events.iterate.com/stream/subscription-configured", 4],
 ]);
 expect((await itx.invoke(`itx.append({ type: 'hello' })`))[0].offset).toBe(6);
-// e2e/stream-woken-and-inline-live-state.e2e.test.ts
+// e2e/stream.e2e.test.ts
 ```
 
 THE CORE REDUCE is the stream's own state, reduced inside every commit. One reduce-only processor
@@ -741,7 +741,7 @@ Runtime state IS reduced state, and its snapshot is a facet-shaped door:
 const snap = await itx.invoke("itx.facets.get('core').snapshot()"); // { offset, state }
 expect(snap.state).toMatchObject({ projectId: ctx, path: "/", incarnation });
 expect(snap.state.itxExpressionRewriteRules["itx.solo"]).toEqual({ match: ["itx", "solo"], target: ["itx", "builtins", "rpcStubs", ["get", "itx.solo"]] });
-// e2e/stream-woken-and-inline-live-state.e2e.test.ts · e2e/rpc-stubs-lend-recall-and-offline.e2e.test.ts
+// e2e/stream.e2e.test.ts · e2e/rpc-stubs-lend-recall-and-offline.e2e.test.ts
 ```
 
 ### Pause and resume are ordinary events
@@ -756,7 +756,7 @@ const err = await rejection(itx.append({ type: "mark", payload: { n: 1 } }));
 expect(err.code).toBe("STREAM_PAUSED"); // "stream paused: maintenance"
 await itx.append({ type: "events.iterate.com/stream/resumed", payload: {} });
 const [after] = await itx.append({ type: "mark", payload: { resumed: true } });
-// e2e/stream-idempotency-pause-paging.e2e.test.ts · e2e/context-built-ins-and-error-codes.e2e.test.ts
+// e2e/stream.e2e.test.ts · e2e/context.e2e.test.ts
 ```
 
 Who DECIDES to pause is not core's business: a breaker is a facet processor (chapter 6) that appends
@@ -814,7 +814,7 @@ const [d1, d2] = c.invocations;
 expect(d1.events.map((e) => e.offset)).toEqual([hit1.offset]);
 expect(d2.events.map((e) => e.offset)).toEqual([hit2.offset]);
 expect(d2.range.after).toBe(d1.range.through); // THE contract: ranges CHAIN across the gap
-// e2e/push-delivery-ranges-chain.e2e.test.ts
+// e2e/push-delivery.e2e.test.ts
 ```
 
 `range` is `{ after, through }`, the half-open window the delivery covers; a chain of them, each
@@ -823,7 +823,7 @@ with `readEvents`. A throwing callback never hurts the producer and is never ret
 live client is fire-and-forget. `subscribe({ name, target: null })` removes the row; an unnamed
 subscribe mints a unique `sub-<uuid>` name, a getter on the handle (`await s1.name`); disposing the
 handle, or the session ending, removes the row and recalls the callback; re-subscribing the same name
-REPLACES — one row, one more event (`e2e/rpc-stubs-reconnect-same-path.e2e.test.ts`).
+REPLACES — one row, one more event (`e2e/rpc-stubs-reconnect-and-attach.e2e.test.ts`).
 
 ### The rows are a slice of core
 
@@ -869,7 +869,7 @@ const row = await itx.subscriptions.get("digest");
 expect(row.cursor.attempt).toBe(0); // THE STREAM keeps this row's cursor…
 expect(row.target).toBe("itx.digest.processEventBatch"); // …stored as written; classified by what it EVALUATES to
 expect((await itx.subscriptions.get("tab")).cursor).toBeUndefined(); // a push target: no cursor
-// e2e/cursor-delivery-halts-ladders-and-resumes.e2e.test.ts
+// e2e/cursor-delivery.e2e.test.ts
 ```
 
 ### The ladder, the halt, the resume
@@ -890,7 +890,7 @@ expect(await digested(itx)).toBe(3); // nothing more was delivered
 // un-halt AND seek past the poison; the stuck mark lands on its own
 await itx.append({ type: "events.iterate.com/stream/subscription-delivery-resumed", payload: { name: "digest", afterOffset: poisoned.offset } });
 await until(async () => (await digested(itx)) === 5);
-// e2e/cursor-delivery-halts-ladders-and-resumes.e2e.test.ts
+// e2e/cursor-delivery.e2e.test.ts
 ```
 
 One halted row never blocks its neighbour; a resumed `afterOffset` beyond the head does not deaden
@@ -909,7 +909,7 @@ for (let i = 0; i < 3; i++) await itx.append({ type: "mark" }); // three marks, 
 await itx.subscribe({ name: "digest", target: "itx.digest.processEventBatch", consumes: ["mark"] }); // from now: a fourth mark → digested 1
 await itx.subscribe({ name: "digest", target: "itx.digest.processEventBatch", consumes: ["mark"], afterOffset: 0 });
 await until(async () => (await digested(itx)) === 5); // the whole log: all four again, once each
-// e2e/subscriptions-after-offset.e2e.test.ts
+// e2e/cursor-delivery.e2e.test.ts
 ```
 
 ### The one `consumes` rule
@@ -927,7 +927,7 @@ const [note] = await itx.append({ type: "note" });
 await until(() => optedIn.offsets().includes(chunk.offset) && dflt.offsets().includes(note.offset));
 expect(optedIn.types()).toEqual(["chunk"]);
 expect(dflt.types()).not.toContain("chunk");
-// e2e/push-delivery-ranges-chain.e2e.test.ts
+// e2e/push-delivery.e2e.test.ts
 ```
 
 A cursor target that is caught up receives the ephemerals it named too — they ride the pushed
@@ -959,15 +959,15 @@ export class CounterDurableObject extends DurableObject {
 await itx.invoke(`itx.facets.get('c1', { source: ${SRC_COUNTER}, className: 'CounterDurableObject' }).bump()`);
 expect(await itx.invoke(`itx.facets.get('c1', { source: ${SRC_COUNTER}, className: 'CounterDurableObject' }).bump()`)).toBe(2);
 expect(await itx.invoke(`itx.facets.get('c1').value()`)).toBe(2); // ADDRESS BY NAME: the same running instance; 'c2' would be independent state
-// e2e/workers-and-facets-sources.e2e.test.ts
+// e2e/workers-and-facets.e2e.test.ts
 ```
 
 A facet's identity is `ctx.props` — `{ iterateContextName, name }` — minted by the parent, the only
 party that knows it. Its `env.ITX` is the loopback a loaded worker gets (chapter 7); a facet may even
-`storage.put` it and use the restored handle later (`e2e/facets-persistent-stub.e2e.test.ts`).
+`storage.put` it and use the restored handle later (`e2e/workers-and-facets.e2e.test.ts`).
 Mid-chain handles are genuine, branded `RpcTarget`s, so `itx.facets.get('counterA',
 spec).demo.timer.callLater(ms, cb)` pipelines into one dispatch from a client and from a loaded
-worker alike (`e2e/facets-mid-chain-pipelining.e2e.test.ts`).
+worker alike (`e2e/workers-and-facets.e2e.test.ts`).
 
 ### A processor is two classes
 
@@ -1012,7 +1012,7 @@ const row = (await itx.subscriptions.list()).find((r) => r.name === "tally");
 expect(row.target).toBe("itx.builtins.facets.get('tally').processEventBatch"); // the platform's spelling, source elided
 expect(row.hostedFacet).toEqual({ name: "tally", className: "TallyDurableObject" });
 expect(row.cursor).toBeUndefined(); // a facet owns its checkpoint
-// e2e/processor-facet-reduces-and-address.e2e.test.ts
+// e2e/processor-facets.e2e.test.ts
 ```
 
 ### The doors a processor exposes
@@ -1033,7 +1033,7 @@ at its own deadline, and a facet address is an ordinary expression a rule can na
 await itx.invoke(`itx.facets.get('tally').waitUntilProcessed({ offset: 1, timeoutMs: 5000 })`);
 await itx.provide("itx.counts", "itx.facets.get('tally')");
 expect((await itx.invoke(["itx", "counts", ["snapshot"]])).state.counts.mark).toBe(1);
-// e2e/processor-facet-reduces-and-address.e2e.test.ts
+// e2e/processor-facets.e2e.test.ts
 ```
 
 ### `disableProcessor` is one event, and the facet goes with it
@@ -1050,7 +1050,7 @@ await itx.append({
 await itx.append({ type: "events.iterate.com/stream/subscription-configured", payload: { name: "tally", target: null } });
 await expect(itx.invoke("itx.facets.get('tally').snapshot()")).rejects.toThrow(/no facet/); // NO_FACET
 await itx.enableProcessor("tally", { source: SOURCES.tally, className: "TallyDurableObject" }); // a clean rebuild from the log
-// e2e/processor-facet-enable-disable-lineage.e2e.test.ts
+// e2e/processor-facets.e2e.test.ts
 ```
 
 Same name replaces — a re-enable while warm is one more configured event, the row a map entry, the
@@ -1072,7 +1072,7 @@ const paused = await itx.waitForEvent({ type: "events.iterate.com/stream/paused"
 expect(paused.payload).toEqual({ reason: "breaker: durable events exceeded the bucket" });
 expect(paused.source.processor).toMatchObject({ slug: "breaker", version: "1.0.0" }); // provenance: the log says WHO paused it
 expect((await rejection(itx.append({ type: "more" }))).code).toBe("STREAM_PAUSED"); // until the operator's `stream/resumed`
-// e2e/processor-facet-breaker-pauses-the-stream.e2e.test.ts
+// e2e/processor-facets.e2e.test.ts
 ```
 
 Core knows nothing about breakers.
@@ -1125,7 +1125,7 @@ half; it is exercised by the `/demo` page and `specs/live-state-demo.spec.ts`, n
 facet-shaped address — `snapshot()`, `liveSnapshot()`, `waitUntilProcessed()` — publishing under the
 one key `core`: a rewrite rule and a subscription row both reach a live-state subscriber as `core`
 deltas whose patches touch `/itxExpressionRewriteRules` and `/subscriptions/<name>`
-(`e2e/stream-woken-and-inline-live-state.e2e.test.ts`).
+(`e2e/stream.e2e.test.ts`).
 
 **What this brick leaves on the table:** every class so far was handed over inline, as a string
 in the call. Where does code LIVE, how is one build loaded once, and how does a project get its one
@@ -1153,7 +1153,7 @@ export default class Mine extends WorkerEntrypoint {
 }`,
 };
 expect(await itx.invoke(["itx", "workers", ["get", { source: SRC_MINE }], ["run"]])).toBe(`from-inline:${ctx}`);
-// e2e/session-doors.e2e.test.ts
+// e2e/session.e2e.test.ts
 ```
 
 A source is the worker's MODULES, literally — `{ "cap.js": code, … }`, `cap.js` the main module —
@@ -1164,7 +1164,7 @@ userspace, exactly this shape: a `Remote extends WorkerEntrypoint` whose method 
 `newHttpBatchRpcSession(this.ctx.props.url)` (the SDK exports capnweb's client constructors) and
 chains `.authenticate().projects.get(this.ctx.props.projectId).whoami()` in one POST, mounted with
 `provide("itx.remoteApi", ["itx", "workers", ["get", { source, className: "Remote", props: { url,
-projectId } }]])` and called as `itx.remoteApi.whoami()` (`e2e/workers-remote-capnweb.e2e.test.ts`).
+projectId } }]])` and called as `itx.remoteApi.whoami()` (`e2e/workers-and-facets.e2e.test.ts`).
 
 ### `env.ITX` inside loaded code
 
@@ -1187,7 +1187,7 @@ export class ItxEntrypoint extends WorkerEntrypoint<Env, { iterateContextName: s
 
 `await this.env.ITX.get()` is the real `IterateContext`; loaded code writes the same dotted lines a
 client does, and `waitForEvent`, `append`, `demo.timer.callLater(cb)` all work from inside
-(`e2e/stream-wait-for-event.e2e.test.ts`, `e2e/rpc-stubs-callback-fires-back.e2e.test.ts`). The
+(`e2e/stream.e2e.test.ts`, `e2e/rpc-stubs-values.e2e.test.ts`). The
 context it forwards to is a PROP of the stub, not a binding the loaded code could reach around.
 
 ### The loader's cacheKey contract
@@ -1207,7 +1207,7 @@ expect(await itx.invoke(["itx", "workers", ["get", spec], ["run", 2]])).toBe("gr
 expect(codeStore.produced).toEqual(["greet"]); // produced ONCE; the second call rode the warm isolate
 await itx.invoke(["itx", "workers", ["get", { source: "itx.codeStore.get('greet')", cacheKey: "greet@v2" }], ["run", 3]]);
 expect(codeStore.produced).toEqual(["greet", "greet"]); // a new key is a new isolate
-// e2e/workers-and-facets-sources.e2e.test.ts
+// e2e/workers-and-facets.e2e.test.ts
 ```
 
 The same for a facet: hosted from a producer, its state persists, the producer ran once, and the
@@ -1278,7 +1278,7 @@ const root = openItx(project); // the KV source and the `itx.worker` override as
 const child = root.cd("/child"); // auto-subscribes itx.cd('/').worker.processEventBatch at birth
 const [ping] = await child.append({ type: "events.iterate.com/funnel-ping" });
 await until(async () => (await readAll(root)).some((e) => e.type === "events.iterate.com/funnel-pong" && e.payload?.at === ping.offset));
-// e2e/config-worker-funnel.e2e.test.ts
+// e2e/config-worker.e2e.test.ts
 ```
 
 ### `itx.repos` and `itx.cfArtifacts`: where code lives
@@ -1295,7 +1295,7 @@ const first = await itx.repos.writeFile(repo, "worker.ts", source); // creates t
 expect(first.commitOid).toMatch(/^[0-9a-f]{40}$/);
 expect(await itx.repos.readFile(repo, "worker.ts")).toBe(source);
 await itx.cfArtifacts.delete(repo); // repos and cfArtifacts address the same repo
-// e2e/repos.e2e.test.ts (deployed only)
+// e2e/cfartifacts.e2e.test.ts (deployed only)
 const tok = await a.cfArtifacts.get(repo).createToken("read", 300); // pipelined server-side
 // e2e/cfartifacts.e2e.test.ts (deployed only)
 ```
@@ -1306,7 +1306,7 @@ changed — the `itx.worker` rewrite is the seam:
 ```ts
 await itx.repos.writeFile("config", "worker.ts", CONFIG_WORKER_SRC);
 await itx.provide("itx.worker", ["itx", "workers", ["get", { source: `itx.repos.readFile('config','worker.ts')`, cacheKey: "config:repo:v1" }]]);
-// e2e/config-worker-from-repo.e2e.test.ts (deployed only)
+// e2e/config-worker.e2e.test.ts (deployed only)
 ```
 
 **What this brick leaves on the table:** everything so far spoke capnweb or Workers RPC. The web
@@ -1349,7 +1349,7 @@ expect(await res.text()).toContain("bound to https://api.example.com"); // and "
 const missing = await openItx(ctx).fetch(new Request("https://egress.invalid/hunt", { headers: { "x-hunt-auth": "Bearer {{secret:project:GHOST}}" } }));
 expect(missing.status).toBe(502);
 expect(await missing.text()).toContain('header "x-hunt-auth"'); // WHERE it sat, so the caller can fix it
-// e2e/secrets.e2e.test.ts · e2e/fetch-door-egress-missing-secret-502.e2e.test.ts
+// e2e/secrets.e2e.test.ts · e2e/fetch-door.e2e.test.ts
 ```
 
 The door (`src/fetch/egress.ts`) scans the URL first, then every header, splices a URL value as ONE
@@ -1373,7 +1373,7 @@ expect(await page.text()).toContain("dynamic web capability");
 expect(page.headers.get("content-security-policy")).toBe("sandbox allow-scripts allow-forms"); // CSP-sandboxed: an opaque origin
 const ws = await wsRoundTrip(expressionUrl(ctx, "itx.site", "ws"), "hello-from-eyeball"); // a WebSocket upgrade, 101
 expect(ws.echo).toBe("site-echo:hello-from-eyeball");
-// e2e/fetch-door-expression-http-and-websocket.e2e.test.ts
+// e2e/fetch-door.e2e.test.ts
 ```
 
 The answer is loaded code's document served on the PLATFORM's origin, so it is CSP-sandboxed: its
@@ -1388,16 +1388,16 @@ class HttpDevice extends RpcTarget {
 }
 await session().authenticate().projects.get(ctx).provide("itx.ws-device", new HttpDevice());
 expect((await fetch(expressionUrl(ctx, "itx.ws-device", "http"), { method: "POST", body: "ping" })).status).toBe(201);
-// e2e/fetch-door-expression-http-and-websocket.e2e.test.ts
+// e2e/fetch-door.e2e.test.ts
 ```
 
 Inside a session the second door is the dotted terminal `.fetch(request)`: `invoke` forks a call
 whose terminal step is `fetch` carrying a live Request onto the DO's fetch channel, the only hop kind
 that carries a socket-bearing Response back — `await itx.site.fetch(new Request("https://itx.site/"))`
-answers the loaded worker's 200 over capnweb (`e2e/session-doors.e2e.test.ts`).
+answers the loaded worker's 200 over capnweb (`e2e/session.e2e.test.ts`).
 
 From loaded code, `env.ITX.fetch` is a real Fetcher — set `x-itx-expression` yourself and the same
-lane serves it (`e2e/fetch-door-dynamic-live-ws.e2e.test.ts`, the plain case). The lane refuses to
+lane serves it (`e2e/fetch-door.e2e.test.ts`, the plain case). The lane refuses to
 re-enter itself: `itx=itx.fetch` is 508 after a few hops, and a hop count the platform never wrote is
 over budget on arrival.
 
@@ -1440,7 +1440,7 @@ to be deleted the day workerd and capnweb serialize WebSockets over plain RPC. T
 here, `test.fails` in the lane: a dynamic worker providing a fetch-shaped stub over `env.ITX.get()`
 cannot answer a 101 (`DataCloneError` on its Workers-RPC return leg), and such a stub dies with its
 providing invocation, the rule outliving it as `RPC_STUB_OFFLINE`
-(`e2e/fetch-door-dynamic-live-ws.e2e.test.ts`).
+(`e2e/fetch-door.e2e.test.ts`).
 
 **What this brick leaves on the table:** fetch gives you raw HTTP. Talking to an MCP server, an
 OpenAPI service or a remote capnweb API by hand — sessions, tool lists, operation ids — is work that
@@ -1474,7 +1474,7 @@ expect(await pets.getPet({ id: "pet-1" })).toMatchObject({ id: "pet-1", name: "B
 const batchHeaders = await bearerFor("capnweb-batch@example.com");
 const shop = await itx.connectToCapnweb(`${PETSHOP}/capnweb`, { transport: "batch", headers: batchHeaders }); // one POST per chain
 expect((await shop.listPets()).owner).toBe("capnweb-batch@example.com");
-// e2e/library-connectors-mcp-openapi-capnweb.e2e.test.ts (against the deployed pet shop)
+// e2e/library-connectors.e2e.test.ts (against the deployed pet shop)
 ```
 
 Composition with rules is the documented shape: `provide('itx.tools', "itx.connectToMcp(url, {
@@ -1483,7 +1483,7 @@ remote's 401 reaches the caller as the connector's refusal. `connectToCapnweb` o
 session through egress pipelines a chain and is held across calls (deployed only: local workerd's
 outbound fetch cannot upgrade). A loaded worker can also SERVE a capnweb API — the SDK exports
 `newWorkersRpcResponse` — and `connectToCapnweb` dials it back through `/expression/<path>`, the path
-arriving verbatim (`e2e/library-connectors-behind-the-lane.e2e.test.ts`).
+arriving verbatim (`e2e/library-connectors.e2e.test.ts`).
 
 ### `serveMcp()`: this context as an MCP server
 
@@ -1559,7 +1559,7 @@ expect(await authenticated.whoami()).toEqual({ projectId, ...principal });
 expect((await rejection(authenticated.projects.get(`${projectId}-other`).whoami())).code).toBe("FORBIDDEN"); // the token names ONE project
 expect((await rejection(api.authenticate({ projectToken: `${token}x` }).whoami())).code).toBe("INVALID_CREDENTIALS");
 expect(await api.authenticate().whoami()).toBeNull(); // no token: the anonymous session, as ever
-// e2e/session-identity.e2e.test.ts
+// e2e/session.e2e.test.ts
 ```
 
 `projects.list()` and `create()` refuse outright on a token session — a token names one project; the
@@ -1583,7 +1583,7 @@ expect(events.find((e) => e.type === "events.iterate.com/itx/rewrite-rule-config
 expect(events.find((e) => e.type === "note" && e.payload?.n === 2)?.source?.principal).toBeUndefined();
 await itx.invoke("itx.cd('/sibling').append({ type: 'note', payload: { via: 'cd' } })"); // the built-in cd carries it
 expect((await readAll(itx.cd("/sibling"))).find((e) => e.type === "note")?.source?.principal).toEqual(principal);
-// e2e/session-identity.e2e.test.ts
+// e2e/session.e2e.test.ts
 ```
 
 The stamp is `stampPrincipal` in `src/principal.ts`: drop whatever `source.principal` the client
@@ -1687,7 +1687,7 @@ push's `after` moves up, the span the subscriber heals from the log.
 One control exists beyond these: a context whose alarm fires five times in a row with no public door
 touched in between has woken itself for nothing, and `stream/self-wake-halted { streak }` is appended
 once and the alarm stops arming until a real request clears the streak
-(`e2e/stream-wake-loop.e2e.test.ts` is the opt-in deployed observation).
+(`e2e/stream.e2e.test.ts` is the opt-in deployed observation).
 
 ### Where it is proven
 
@@ -1696,7 +1696,7 @@ every value still callable on wake — is deterministic inside workerd
 (`__workers-tests__/hibernation-at-scale.test.ts`); the alarm's two duties in order are
 `__workers-tests__/alarm-quiesce.test.ts`. Both use `cloudflare:test`'s eviction, which times out on
 a warm DO exactly as production refuses to evict a pinned one. Isolate limits are measured deployed
-only, in `e2e/stream-memory-budget.e2e.test.ts` and `e2e/stream-uncontrolled-degradation.e2e.test.ts`.
+only, in `e2e/stream-isolate-ceilings-deployed.e2e.test.ts` and `e2e/stream-isolate-ceilings-deployed.e2e.test.ts`.
 
 **What this brick leaves on the table:** nothing to build. What is left is the map.
 
@@ -1756,18 +1756,18 @@ Every client snippet above is lifted from, or composed of calls made by, these f
 | Chapter | e2e files |
 | --- | --- |
 | preamble | `e2e/support/client.ts` |
-| 0 | `e2e/session-doors.e2e.test.ts`, `e2e/context-dotted-calls-fall-back-to-the-invoke-door.e2e.test.ts` |
-| 1 | `e2e/rpc-stubs-bare-function-across-clients.e2e.test.ts`, `e2e/rpc-stubs-attach-carries-the-rule.e2e.test.ts`, `e2e/rpc-stubs-slack-bridge.e2e.test.ts`, `e2e/rpc-stubs-rich-values.e2e.test.ts`, `e2e/rpc-stubs-callback-fires-back.e2e.test.ts`, `e2e/rpc-stubs-lend-recall-and-offline.e2e.test.ts`, `e2e/rpc-stubs-reconnect-same-path.e2e.test.ts`, `e2e/session-lends-per-context.e2e.test.ts` |
-| 2 | `e2e/rpc-stubs-slack-bridge.e2e.test.ts`, `e2e/rewrite-rules-builtins-root.e2e.test.ts`, `e2e/session-lends-per-context.e2e.test.ts`, `e2e/context-built-ins-and-error-codes.e2e.test.ts`, `e2e/context-dotted-calls-fall-back-to-the-invoke-door.e2e.test.ts` |
-| 3 | `e2e/rpc-stubs-slack-bridge.e2e.test.ts`, `e2e/rewrite-rules-builtins-root.e2e.test.ts`, `e2e/rewrite-rules-map-and-chains.e2e.test.ts`, `e2e/rewrite-rules-argument-pinned.e2e.test.ts`, `e2e/ai-root-shadow-and-fable.e2e.test.ts`, `e2e/rpc-stubs-reconnect-same-path.e2e.test.ts` |
-| 4 | `e2e/context-dotted-calls-fall-back-to-the-invoke-door.e2e.test.ts`, `e2e/support/client.ts`, `e2e/stream-wait-for-event.e2e.test.ts`, `e2e/stream-idempotency-pause-paging.e2e.test.ts`, `e2e/stream-memory-budget.e2e.test.ts`, `e2e/stream-chunked-bodies.e2e.test.ts`, `e2e/subscriptions-ephemeral-opt-in.e2e.test.ts`, `e2e/stream-woken-and-inline-live-state.e2e.test.ts`, `e2e/rpc-stubs-lend-recall-and-offline.e2e.test.ts`, `e2e/context-built-ins-and-error-codes.e2e.test.ts` |
-| 5 | `e2e/push-delivery-ranges-chain.e2e.test.ts`, `e2e/rpc-stubs-reconnect-same-path.e2e.test.ts`, `e2e/rpc-stubs-lend-recall-and-offline.e2e.test.ts`, `e2e/cursor-delivery-halts-ladders-and-resumes.e2e.test.ts`, `e2e/subscriptions-after-offset.e2e.test.ts` |
-| 6 | `e2e/workers-and-facets-sources.e2e.test.ts`, `e2e/facets-persistent-stub.e2e.test.ts`, `e2e/facets-mid-chain-pipelining.e2e.test.ts`, `e2e/support/sources.ts`, `e2e/processor-facet-reduces-and-address.e2e.test.ts`, `e2e/processor-facet-enable-disable-lineage.e2e.test.ts`, `e2e/processor-facet-breaker-pauses-the-stream.e2e.test.ts`, `e2e/live-state-chains-client-side.e2e.test.ts`, `e2e/stream-woken-and-inline-live-state.e2e.test.ts` |
-| 7 | `e2e/session-doors.e2e.test.ts`, `e2e/workers-remote-capnweb.e2e.test.ts`, `e2e/stream-wait-for-event.e2e.test.ts`, `e2e/rpc-stubs-callback-fires-back.e2e.test.ts`, `e2e/workers-and-facets-sources.e2e.test.ts`, `e2e/config-worker.e2e.test.ts`, `e2e/config-worker-funnel.e2e.test.ts`, `e2e/repos.e2e.test.ts` (deployed only), `e2e/cfartifacts.e2e.test.ts` (deployed only), `e2e/config-worker-from-repo.e2e.test.ts` (deployed only) |
-| 8 | `e2e/secrets.e2e.test.ts`, `e2e/fetch-door-egress-missing-secret-502.e2e.test.ts`, `e2e/fetch-door-expression-http-and-websocket.e2e.test.ts`, `e2e/session-doors.e2e.test.ts`, `e2e/fetch-door-dynamic-live-ws.e2e.test.ts`, `e2e/ingress-project-host.e2e.test.ts` |
-| 9 | `e2e/library-connectors-mcp-openapi-capnweb.e2e.test.ts` (against the deployed pet shop; the WebSocket transports deployed only), `e2e/library-connectors-behind-the-lane.e2e.test.ts`, `e2e/library-mcp-server.e2e.test.ts` |
-| 10 | `e2e/session-identity.e2e.test.ts`, `e2e/secrets.e2e.test.ts`, `e2e/ingress-project-host.e2e.test.ts`, `e2e/library-mcp-server.e2e.test.ts` |
-| 11 | `e2e/stream-wake-loop.e2e.test.ts` (opt-in, deployed only), `__workers-tests__/hibernation-at-scale.test.ts`, `__workers-tests__/alarm-quiesce.test.ts` |
+| 0 | `e2e/session.e2e.test.ts`, `e2e/context.e2e.test.ts` |
+| 1 | `e2e/rpc-stubs-values.e2e.test.ts`, `e2e/rpc-stubs-reconnect-and-attach.e2e.test.ts`, `e2e/rpc-stubs-values.e2e.test.ts`, `e2e/rpc-stubs-values.e2e.test.ts`, `e2e/rpc-stubs-values.e2e.test.ts`, `e2e/rpc-stubs-lend-recall-and-offline.e2e.test.ts`, `e2e/rpc-stubs-reconnect-and-attach.e2e.test.ts`, `e2e/session.e2e.test.ts` |
+| 2 | `e2e/rpc-stubs-values.e2e.test.ts`, `e2e/rewrite-rules.e2e.test.ts`, `e2e/session.e2e.test.ts`, `e2e/context.e2e.test.ts`, `e2e/context.e2e.test.ts` |
+| 3 | `e2e/rpc-stubs-values.e2e.test.ts`, `e2e/rewrite-rules.e2e.test.ts`, `e2e/rewrite-rules.e2e.test.ts`, `e2e/rewrite-rules.e2e.test.ts`, `e2e/ai-root-shadow-and-fable.e2e.test.ts`, `e2e/rpc-stubs-reconnect-and-attach.e2e.test.ts` |
+| 4 | `e2e/context.e2e.test.ts`, `e2e/support/client.ts`, `e2e/stream.e2e.test.ts`, `e2e/stream.e2e.test.ts`, `e2e/stream-isolate-ceilings-deployed.e2e.test.ts`, `e2e/stream.e2e.test.ts`, `e2e/push-delivery.e2e.test.ts`, `e2e/stream.e2e.test.ts`, `e2e/rpc-stubs-lend-recall-and-offline.e2e.test.ts`, `e2e/context.e2e.test.ts` |
+| 5 | `e2e/push-delivery.e2e.test.ts`, `e2e/rpc-stubs-reconnect-and-attach.e2e.test.ts`, `e2e/rpc-stubs-lend-recall-and-offline.e2e.test.ts`, `e2e/cursor-delivery.e2e.test.ts`, `e2e/cursor-delivery.e2e.test.ts` |
+| 6 | `e2e/workers-and-facets.e2e.test.ts`, `e2e/workers-and-facets.e2e.test.ts`, `e2e/workers-and-facets.e2e.test.ts`, `e2e/support/sources.ts`, `e2e/processor-facets.e2e.test.ts`, `e2e/processor-facets.e2e.test.ts`, `e2e/processor-facets.e2e.test.ts`, `e2e/live-state-chains-client-side.e2e.test.ts`, `e2e/stream.e2e.test.ts` |
+| 7 | `e2e/session.e2e.test.ts`, `e2e/workers-and-facets.e2e.test.ts`, `e2e/stream.e2e.test.ts`, `e2e/rpc-stubs-values.e2e.test.ts`, `e2e/workers-and-facets.e2e.test.ts`, `e2e/config-worker.e2e.test.ts`, `e2e/config-worker.e2e.test.ts`, `e2e/cfartifacts.e2e.test.ts` (deployed only), `e2e/cfartifacts.e2e.test.ts` (deployed only), `e2e/config-worker.e2e.test.ts` (deployed only) |
+| 8 | `e2e/secrets.e2e.test.ts`, `e2e/fetch-door.e2e.test.ts`, `e2e/fetch-door.e2e.test.ts`, `e2e/session.e2e.test.ts`, `e2e/fetch-door.e2e.test.ts`, `e2e/ingress-project-host.e2e.test.ts` |
+| 9 | `e2e/library-connectors.e2e.test.ts` (against the deployed pet shop; the WebSocket transports deployed only), `e2e/library-connectors.e2e.test.ts`, `e2e/library-mcp-server.e2e.test.ts` |
+| 10 | `e2e/session.e2e.test.ts`, `e2e/secrets.e2e.test.ts`, `e2e/ingress-project-host.e2e.test.ts`, `e2e/library-mcp-server.e2e.test.ts` |
+| 11 | `e2e/stream.e2e.test.ts` (opt-in, deployed only), `__workers-tests__/hibernation-at-scale.test.ts`, `__workers-tests__/alarm-quiesce.test.ts` |
 
 The server snippets are abridged from the files named in each code block's first comment. The rule
 table of chapter 3 was checked by running `src/context/itx-expression-rewriting.test.ts` and

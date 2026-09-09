@@ -1,16 +1,13 @@
-// stream/test-support.ts — the in-memory stand-ins the unit lane drives the processor engine and
-// the inline reduces with. Imported by the `*.test.ts` files, never by production code. ONE copy:
-// every test that needs a stream or a facet's storage imports these, so the commit semantics the
-// tests assume cannot drift between files.
+// stream/test-support.ts — the in-memory stand-ins the unit lane drives the processor engine with.
+// Imported by the `*.test.ts` files, never by production code — ONE copy, so the commit semantics
+// the tests assume cannot drift between files.
 //
-// `memoryStream` mirrors the DO's commit semantics: one shared offset sequence (an ephemeral
-// consumes an offset but never lands in the durable log), idempotency at the door (same key + same
-// body → the existing event; a different body → the conflict error), the scanned-offset-range proof
-// on both pushes and reads, and THE PUMP — a fire-and-forget `processEventBatch` to every engine
-// registered in `engines` after each append (awaited, it would deadlock a processor that appends
-// during its own batch). A short page's proof is the in-memory head (`Math.max(after, head)`), so
-// the engine's stale-push and ephemeral-window rules are exercised directly; the real Stream stops
-// at the DURABLE mark (stream.test.ts pins that against real SQL).
+// `memoryStream` mirrors the Stream's commit semantics (one shared offset sequence, idempotency at
+// the door, the scanned-range proof) plus THE PUMP — a fire-and-forget `processEventBatch` to every
+// engine in `engines` after each append (awaited, it would deadlock a processor that appends during
+// its own batch). A short page's proof is the in-memory head, so the engine's stale-push and
+// ephemeral-window rules are exercised directly; the real Stream stops at the DURABLE mark
+// (stream.test.ts pins that against real SQL).
 import {
   idempotencyConflictMessage,
   sameIdempotentEvent,

@@ -1,31 +1,23 @@
 // stream-processor-durable-object.ts — THE SDK HOST: the `DurableObject` shell that hosts ONE
-// `StreamProcessor` as a facet of its context. An author writes two classes — the processor, pure
-// (`class PresenceProcessor extends StreamProcessor { contract; reduce(); processEvent() }`, unit-tested with
-// `new PresenceProcessor()`), and its host, one line long:
+// `StreamProcessor` as a facet of its context. An author writes the pure processor and its host,
+// one line long:
 //
 //   export class PresenceDurableObject extends StreamProcessorDurableObject {
 //     processor = new PresenceProcessor();
 //   }
 //
-// The platform hosts the host through the ordinary
-// `itx.facets.get('presence', { source, className: 'PresenceDurableObject' })` — exactly the way
-// any stateful class is hosted; a processor is a named facet that additionally gets pushed every
-// commit. `processor` is a FIELD so it can take what its effects need from this object
-// (`new Notifier(this.env.ITX)`), and so the same class is constructed bare in a test.
+// hosted through the ordinary `itx.facets.get('presence', { source, className: 'PresenceDurableObject' })`
+// — a processor is a named facet that additionally gets pushed every commit. `processor` is a FIELD
+// so it can take what its effects need from this object (`new Notifier(this.env.ITX)`), and so the
+// same class is constructed bare in a test.
 //
-// IDENTITY is `ctx.props` — `{ iterateContextName, name }` minted by the parent at `getDurableObjectClass(C,
-// { props })`, the only party that knows it (pinned in __workers-tests__/facet-props.test.ts); nothing
-// else names a processor. THE STREAM is the itx scope behind `env.ITX.get()` — the loaded isolate's
-// binding to its owning context (itx-entrypoint.ts); the engine's `append`/`read` ride it like any
-// other dotted call (one pipelined round trip: `env.ITX.get().append(…)`).
-//
-// The engine — stream/processor.ts's `ProcessorEngine` — is built on first use with this object's storage
-// and `env.ITX`; this class is that wiring plus the doors, ~a screen. Bundled into `processor.js`
-// (build-sdk.mjs), so userspace imports it from "./processor.js".
+// IDENTITY is `ctx.props` — `{ iterateContextName, name }`, minted by the parent, the only party
+// that knows it (pinned in __workers-tests__/facet-props.test.ts). THE STREAM is the itx scope
+// behind `env.ITX.get()` (itx-entrypoint.ts); the engine's `append`/`read` ride it like any other
+// dotted call.
 //
 // NEVER define alarm(): facets have none (workerd#6810 — the runtime answers "Facets currently
-// cannot set alarms."); a timer, when one is needed, will be a scheduled append on the context, not
-// an alarm here.
+// cannot set alarms."); a timer, when one is needed, is a scheduled append on the context.
 
 import { DurableObject } from "cloudflare:workers";
 import { ProcessorEngine, type ScannedRange, type StreamProcessor } from "../stream/processor.ts";
@@ -48,9 +40,8 @@ export abstract class StreamProcessorDurableObject<
 
   // ── what an author reaches (the itx scope is `this.env.ITX.get()`, typed; identity is `this.ctx.props`) ──
 
-  /** Emit a delta for the current projection if it changed — after a runtime field on the processor
-   *  moved OUTSIDE a batch (an RPC method on this object). Inside `processEvent` the engine
-   *  re-projects after the batch on its own. */
+  /** After a runtime field on the processor moved OUTSIDE a batch (an RPC method on this object);
+   *  inside `processEvent` the engine re-projects on its own. */
   protected publishLiveState(): void {
     this.#engine.publishLiveState();
   }
@@ -94,12 +85,10 @@ export abstract class StreamProcessorDurableObject<
     }));
   }
 
-  /** ONE pipelined round trip on the itx scope, then RELEASE it (§2.2). `env.ITX.get()` builds an
-   *  IterateContext RpcTarget, and both it and the call pipelined on it PIN THE PARENT DO until GC
-   *  (the "GC is too late" defect #invokeFacet fixes in the other direction: an un-disposed result
-   *  keeps the actor billed). Hold the pipelined chain, await the answer (plain data — the wire
-   *  already copied it), then dispose the call AND the get — one round trip still, no dangling
-   *  capability. */
+  /** ONE pipelined round trip on the itx scope, then RELEASE it: `env.ITX.get()` and the call
+   *  pipelined on it PIN THE PARENT DO until GC (the "GC is too late" defect the DO's facet door
+   *  fixes in the other direction). Await the answer — plain data, the wire already copied it —
+   *  then dispose the call AND the get. */
   async #withItx<T>(call: (itx: ItxScope) => T): Promise<Awaited<T>> {
     const itx = this.env.ITX.get();
     const result = call(itx);

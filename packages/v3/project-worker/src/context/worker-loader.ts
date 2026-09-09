@@ -1,9 +1,8 @@
 // worker-loader.ts — THE loader: `loadConfinedWorker` turns a SOURCE into a loaded worker through
-// Cloudflare's `env.LOADER` (a `WorkerLoader`) — pick the cache key, mint the confined isolate under
-// it — and stops at the `WorkerStub`. The CALLER then chooses the host: `worker.getEntrypoint(name?)`
-// for a stateless `WorkerEntrypoint` (built-ins.ts `workers.get`), or `worker.getDurableObjectClass(
-// name)` hosted as a durable facet of the context (iterate-context-durable-object.ts `facets.get(name,
-// spec)`).
+// Cloudflare's `env.LOADER` — pick the cache key, mint the confined isolate under it — and stops at
+// the `WorkerStub`. The CALLER then chooses the host: `worker.getEntrypoint(name?)` for a stateless
+// `WorkerEntrypoint` (`itx.workers.get`), or `worker.getDurableObjectClass(name)` hosted as a durable
+// facet of the context (`itx.facets.get(name, spec)`).
 //
 // THE CACHE KEY, Cloudflare's own contract (developers.cloudflare.com/dynamic-workers/api-reference):
 // `LOADER.get(id, getCode)` runs `getCode` only when no isolate is warm under `id` — "although it is
@@ -16,18 +15,11 @@
 // (apps/os derives its key from a repo's content hash and caches the BUILD artifact in KV under it;
 // that tier belongs to a build capability, not here.)
 //
-// A loaded worker's `env.ITX` is a Workers-RPC service binding to the `ItxEntrypoint`. It reaches
-// the genuine itx scope with `env.ITX.get()` — a real `IterateContext` RpcTarget — and then writes plain
-// dotted access (`itx.demo.timer.callLater(cb)`), identical to what a capnweb client writes after
-// `projects.get(id)`. There is no client-side wrapper: the scope IS a real RpcTarget, so mid-chain
-// handles and callbacks pipeline natively over both lanes (no accumulating Proxy, no reduce shim).
-//
-// A loaded SOURCE EXPORTS its own host object — a `WorkerEntrypoint` (reached with
-// `itx.workers.get({ source, className? })`) or a `DurableObject` class (hosted with
-// `itx.facets.get(name, { source, className })`) — one door per host kind over Cloudflare's own
-// `worker.getEntrypoint()` / `worker.getDurableObjectClass()` + `ctx.facets.get(name, startup)`. There is
-// NO host-injected wrapper and no bare-lambda door: the code the author wrote IS what runs, and it
-// always enters through an EXPORTED entrypoint.
+// A loaded worker's `env.ITX` is a Workers-RPC service binding to the `ItxEntrypoint`; `env.ITX.get()`
+// is the genuine itx scope, a real RpcTarget, so mid-chain handles and callbacks pipeline natively —
+// no client-side wrapper. A loaded SOURCE EXPORTS its own host object (a `WorkerEntrypoint` or a
+// `DurableObject` class): there is NO host-injected wrapper and no bare-lambda door — the code the
+// author wrote IS what runs, and it always enters through an EXPORTED entrypoint.
 
 import { PROCESSOR_SDK_MODULE } from "../generated/processor-sdk.ts";
 import { codedError } from "../lib/errors.ts";
@@ -90,28 +82,23 @@ export const facetSpecOf = ({ source, cacheKey, className }: FacetSpec): FacetSp
 const isWorkerModules = (source: unknown): source is WorkerModules =>
   typeof source === "object" && source !== null && !Array.isArray(source);
 
-/** WORKAROUND — workerd keeps a named isolate whose startup FAILED (a `getCode` that threw, code that
- *  failed to start) in its isolate map for the process's life, so every later `LOADER.get(id)` replays
- *  the failure: server.c++ `WorkerStubImpl` never gets a `service`, and only an abort removes the map
- *  entry (still so on upstream main, 2026-09-03; the fix belongs there — drop the entry on startup
- *  failure the way abort does). Until a workerd release carries it: a producer that threw marks its
- *  loader id DEAD; the next attempt runs the producer OUTSIDE the loader (a failure there reaches no
- *  map entry and mints nothing) and, once the modules are in hand, loads them LITERALLY under the next
- *  GENERATION of the id (`<id>#<n>`). One extra identity per dead→recovered transition, never per
- *  attempt; the happy path still produces inside `getCode`, on a cold isolate only. Memory-only: a
- *  platform-isolate reset costs one replayed failure before recovering. Code that fails to START is
- *  outside this (same key ⇒ same code — the author's bug) and is replayed until upstream lands. */
+/** WORKAROUND — workerd keeps a named isolate whose startup FAILED (a `getCode` that threw) in its
+ *  isolate map for the process's life, so every later `LOADER.get(id)` replays the failure: server.c++
+ *  `WorkerStubImpl` never gets a `service`, and only an abort removes the map entry (still so on
+ *  upstream main, 2026-09-03; the fix belongs there). Until a workerd release carries it: a producer
+ *  that threw marks its loader id DEAD; the next attempt runs the producer OUTSIDE the loader (a
+ *  failure there mints nothing) and loads the modules LITERALLY under the next GENERATION of the id
+ *  (`<id>#<n>`). One extra identity per dead→recovered transition, never per attempt. Memory-only: a
+ *  platform-isolate reset costs one replayed failure. Code that fails to START is outside this (same
+ *  key ⇒ same code — the author's bug) and is replayed until upstream lands. */
 const loaderIdGenerations = new Map<string, { generation: number; dead: boolean }>();
 
-/** The content hash of a literal module map, memoized by the map's IDENTITY. A facet push is a
- *  bare-name call (`itx.facets.get(name).processEventBatch` — the row's source is elided, M1) and
- *  the DO hands the SAME startup-memo object per facet per incarnation (`#facetStartupMemoByName`,
- *  iterate-context-durable-object.ts), so the per-character hash (on the producer's append RTT in
- *  workerd) runs ONCE per source per incarnation instead of once per push. SYNCHRONOUS on purpose (it runs in
- *  the commit path, where `crypto.subtle` cannot), so it is two independent 32-bit hashes (djb2 and
- *  FNV-1a) plus the length: djb2 alone collides on two-character differences (`"Aa"` and `"B@"` hash
- *  alike), and one shared hash is one shared isolate — the v4 review's finding. Not a defence against
- *  a crafted collision (the trusted-client doctrine); a guard against an accidental one. */
+/** The content hash of a literal module map, memoized by the map's IDENTITY: the DO hands the SAME
+ *  startup-memo object per facet per incarnation, so the per-character hash runs ONCE per source per
+ *  incarnation instead of once per push. SYNCHRONOUS on purpose (the commit path, where
+ *  `crypto.subtle` cannot run), so it is two independent 32-bit hashes (djb2 and FNV-1a) plus the
+ *  length: djb2 alone collides on two-character differences (`"Aa"` and `"B@"`), and one shared hash
+ *  is one shared isolate. A guard against an accidental collision, not a crafted one (trusted clients). */
 const contentHashByWorkerModules = new WeakMap<WorkerModules, string>();
 function contentHashOfWorkerModules(modules: WorkerModules): string {
   let hash = contentHashByWorkerModules.get(modules);
@@ -155,12 +142,9 @@ type LoadConfinedWorkerOptions = {
 };
 
 /**
- * THE one loading step: source → the cache key → the confined worker (SDK injected, the modules
- * produced inside Cloudflare's `getCode` when the source is an expression). It stops at the loaded
+ * THE one loading step: source → the cache key → the confined worker. It stops at the loaded
  * `worker` handle — "load the code" and "choose the host" are visibly separate. `loaderId` is the
- * id the worker was loaded under — the LOADED IDENTITY the facet door stores as its restart marker
- * (a source change within a deploy, a deploy, or a workaround generation restarts the facet in
- * place, its storage surviving).
+ * LOADED IDENTITY the facet door stores as its restart marker.
  *
  * ⚠️  THE cacheKey IS A DOLLAR AMOUNT. Cloudflare bills EVERY DISTINCT value ever passed to
  * `LOADER.get` as a Dynamic Worker at $0.002/worker/day. apps/os PR #2504: a per-request random
@@ -170,9 +154,8 @@ type LoadConfinedWorkerOptions = {
  * offset. (The tension the nonce papered over is real — a loaded isolate captures the minting host's
  * `env.ITX`/`globalOutbound`, which can die with the host's incarnation; we accept the rare re-dial
  * failure and re-key on DEPLOY, not per use.) The confinement contract, stated once: a loaded
- * worker's WHOLE world — `env.ITX` (a service binding to the ItxEntrypoint; `.get()` yields the real
- * itx scope) and every global fetch — is its owning context, so sibling calls and egress route
- * through the host's dispatch with no second path.
+ * worker's WHOLE world — `env.ITX` and every global fetch — is its owning context, so sibling calls
+ * and egress route through the host's dispatch with no second path.
  */
 export async function loadConfinedWorker(
   opts: LoadConfinedWorkerOptions,
@@ -188,9 +171,6 @@ export async function loadConfinedWorker(
   let getModules: () => Promise<WorkerModules> | WorkerModules;
   if (isWorkerModules(source)) {
     const modules = requireMainModule(source);
-    // The content hash — djb2 + FNV-1a + length over the modules' JSON (contentHashOfWorkerModules),
-    // memoized by identity: stable, so the cacheKey and the facet's version marker change exactly
-    // when the source does.
     sourceVersion = cacheKey ?? contentHashOfWorkerModules(modules);
     getModules = () => modules;
   } else {
@@ -204,15 +184,11 @@ export async function loadConfinedWorker(
       return requireMainModule(typeof produced === "string" ? { "cap.js": produced } : produced);
     };
   }
-  // 2. the confined worker under the billed cacheKey (see the header). `getCode` runs on a cold
-  //    isolate only — a producer expression is evaluated exactly there, unless the id is DEAD
-  //    (`loaderIdGenerations`): then the modules are produced here, outside the loader, and loaded
-  //    literally under the next generation of the id.
-  // A JSON array, never `a:b:c`: an owner or a caller's cacheKey may itself contain ":" (a context
-  // path is any string; a build id can be anything), and a joined string would let two different
-  // (owner, key) pairs name ONE isolate — the cross-context authority transfer `facetLoaderOwner`
-  // exists to prevent, reopened one field over. Changing the spelling restarts every facet once on
-  // its next wake (a new restart marker), storage surviving — the same as a deploy does.
+  // 2. the confined worker under the billed cacheKey. A JSON array, never `a:b:c`: an owner or a
+  //    caller's cacheKey may itself contain ":", and a joined string would let two different
+  //    (owner, key) pairs name ONE isolate — the cross-context authority transfer `facetLoaderOwner`
+  //    exists to prevent, reopened one field over. Changing the spelling restarts every facet once
+  //    on its next wake (a new restart marker), storage surviving — the same as a deploy does.
   const loaderIdBase = JSON.stringify([opts.kind, opts.deployId, opts.owner, sourceVersion]);
   let { generation, dead } = loaderIdGenerations.get(loaderIdBase) ?? {
     generation: 0,
@@ -235,22 +211,17 @@ export async function loadConfinedWorker(
       loaderIdGenerations.set(loaderIdBase, { generation, dead: true });
       throw error;
     }
-    // The processor SDK ("processor.js", ~370 KB) is injected only when a module IMPORTS it — a
-    // stateless worker that never does skips compiling it (the review measured the SDK at ~40× a
-    // typical fixture). The failure mode is loud: a forgotten import fails at module link, by
-    // name. The itx scope is reached via `env.ITX.get()`, not an injected module.
+    // The processor SDK ("processor.js", ~370 KB — ~40× a typical fixture) is injected only when a
+    // module IMPORTS it. The failure mode is loud: a forgotten import fails at module link, by name.
     const importsProcessorSdk = Object.values(modules).some((code) =>
       /["']\.\/processor\.js["']/.test(code),
     );
     return {
-      // What every loaded isolate runs under. PURE-PLAY: no node:* — userspace code stays portable
-      // across workerd builds (nodejs_compat is on by default at this date for the platform worker
-      // itself; the loaded half opts out). `allow_irrevocable_stub_storage` (experimental) lets
-      // loaded code store its `env.ITX` stub and replay it (facets-persistent-stub.e2e pins it) —
-      // every worker in the chain needs it, so the parent config carries it too. No `limits`
-      // (cpuMs / subRequests): trusted clients. Note the platform bound of 10 distinct dynamic
-      // workers with in-flight requests per DO — the idle quiesce is what keeps a context's facet
-      // isolates under it.
+      // PURE-PLAY: no node:*, so userspace code stays portable across workerd builds.
+      // `allow_irrevocable_stub_storage` (experimental) lets loaded code store its `env.ITX` stub
+      // and replay it (workers-and-facets.e2e pins it) — every worker in the chain needs it, so
+      // the parent config carries it too. No `limits`: trusted clients. The platform bounds a DO to
+      // 10 distinct dynamic workers with in-flight requests — the idle quiesce keeps a context under it.
       compatibilityDate: "2026-09-01",
       compatibilityFlags: [
         "no_nodejs_compat",

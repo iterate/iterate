@@ -3,7 +3,7 @@
 // run as a real workload (memory-budget-scenarios.ts: the real Stream / ProcessorEngine /
 // SubscriptionDelivery over node:sqlite) in a Node child process capped at the isolate budget.
 // Local workerd enforces no memory limit, so that child is the only local instrument; the deployed
-// twin is e2e/stream-memory-budget.e2e.test.ts (the proof that counts — a real DO on Cloudflare).
+// twin is e2e/stream-isolate-ceilings-deployed.e2e.test.ts (the proof that counts — a real DO on Cloudflare).
 //
 // `test.fails` is the house convention for a known-red proof: the lane stays green, and flipping a
 // row back to `test` is how a fix is proven — every row here was born red (BUILD-LOG 2026-09-04
