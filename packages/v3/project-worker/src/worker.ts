@@ -1,7 +1,10 @@
 // The PROJECT WORKER — the stateless edge AND the front door. capnweb terminates at `/api`; a project
 // host forwards to the IterateContextDurableObject over Workers RPC (the DO does the real work and stays
-// hibernatable); the control plane (OAuth AS + D1 directory + /mcp) runs IN-PROCESS here (src/control-plane)
+// hibernatable); the control plane (OAuth AS + D1 directory + /mcp) runs IN-PROCESS here (control-plane.ts)
 // — one worker, one front door. A project host names its project; the directory confirms it exists.
+// Two pure halves ride with the edge:
+//   app config   — `appConfigOf` / `parseAppConfig`: THE WORKER'S CONFIGURATION, one typed object per isolate
+//   project host — `projectHostOf` + the project-session cookie door: which project and which app a hostname names
 
 import * as cloudflareWorkers from "cloudflare:workers";
 import {
@@ -10,30 +13,21 @@ import {
   RpcStub as CapnwebRpcStub,
 } from "capnweb";
 import { IterateContextDurableObject, type Env } from "./iterate-context-durable-object.ts";
-import { directory } from "./control-plane/directory.ts";
 import {
+  directory,
   currentSession,
   identity,
   type Session as ControlPlaneSession,
-} from "./control-plane/session.ts";
-import { controlPlane, type Env as ControlPlaneEnv } from "./control-plane/app.ts";
+  controlPlane,
+  type Env as ControlPlaneEnv,
+} from "./control-plane.ts";
 
 /** The one worker's env: the DO's bindings plus the in-process control plane's (D1, OAuth KV, …). */
 type WorkerEnv = Env & ControlPlaneEnv;
-import { registerPipelinedRpcBrand } from "./context/dispatch.ts";
-import { ITX_EXPRESSION_FETCH_HEADER } from "./fetch/rpc-stub-fetch.ts";
-import {
-  DurableObjectNameCodec,
-  type DurableObjectAddress,
-} from "./context/durable-object-names.ts";
+import { registerPipelinedRpcBrand } from "./context/expression.ts";
+import { ITX_EXPRESSION_FETCH_HEADER } from "./context/rpc-stubs.ts";
+import { DurableObjectNameCodec, type DurableObjectAddress } from "./iterate-context.ts";
 import { UnauthenticatedSession } from "./session.ts";
-import { appConfigOf, type AppConfig } from "./app-config.ts";
-import {
-  projectHostOf,
-  projectSessionCookieOf,
-  projectSessionResponse,
-  withoutProjectSessionCookie,
-} from "./project-host.ts";
 import {
   ITX_PRINCIPAL_HEADER,
   verifyProjectToken,
@@ -108,7 +102,7 @@ function laneRequestTo(
   return new Request(request, { headers });
 }
 
-// The native workerd brands the step walk threads unawaited (dispatch.ts `PIPELINED_RPC_BRANDS` —
+// The native workerd brands the step walk threads unawaited (expression.ts `PIPELINED_RPC_BRANDS` —
 // it cannot import cloudflare:workers itself). A call step yields an RpcPromise; a PROPERTY step on
 // one yields an RpcProperty — both pipeline, so both register. The cast bridges a workers-types gap:
 // the runtime exports both (verified by probe) but the .d.ts doesn't.
@@ -117,14 +111,14 @@ const { RpcPromise: NativeRpcPromise, RpcProperty: NativeRpcProperty } =
 registerPipelinedRpcBrand(NativeRpcPromise);
 registerPipelinedRpcBrand(NativeRpcProperty);
 // capnweb's own promises pipeline the same way, and the library's `itx.connectToCapnweb` puts them
-// in the walk (library/capnweb.ts): a remote chain `.a().b(x)` must stay unawaited between steps or
+// in the walk (library.ts): a remote chain `.a().b(x)` must stay unawaited between steps or
 // a one-shot batch session dies after its first message. A capnweb RpcStub is not a promise; it
 // registers so a stub-valued step is never awaited either (awaiting one is a no-op anyway).
 registerPipelinedRpcBrand(CapnwebRpcPromise as unknown as abstract new () => unknown);
 registerPipelinedRpcBrand(CapnwebRpcStub as unknown as abstract new () => unknown);
 
 export { IterateContextDurableObject };
-export { ItxEntrypoint } from "./itx-entrypoint.ts";
+export { ItxEntrypoint } from "./iterate-context.ts";
 
 export default {
   async fetch(request: Request, env: WorkerEnv, ctx: ExecutionContext): Promise<Response> {
@@ -141,7 +135,7 @@ export default {
         { status: 508 },
       );
 
-    // PROJECT-HOST INGRESS (project-host.ts): a request on a project host IS the app it names, the
+    // PROJECT-HOST INGRESS (the project host section below): a request on a project host IS the app it names, the
     // Request riding into the fetch lane with its URL, the app's own cookies and a WebSocket upgrade
     // intact. Everything on a project host is the app's; the platform's own doors live on the
     // worker's hostname.
@@ -175,7 +169,7 @@ export default {
     }
 
     // `<deployId> <environmentName>`: Cloudflare's version id of this deploy — the stamp a smoke
-    // waits for (`wrangler deploy` prints it) — and which deployment this is (app-config.ts).
+    // waits for (`wrangler deploy` prints it) — and which deployment this is (the app config section below).
     if (url.pathname === "/version") return new Response(`${deployId} ${environmentName}\n`);
 
     // /demo — the hosted live-state demo — is a STATIC ASSET (public/demo.html, built by
@@ -256,8 +250,228 @@ export default {
       });
     }
 
-    // Everything else on the platform host is the CONTROL PLANE, in-process (src/control-plane/app.ts
+    // Everything else on the platform host is the CONTROL PLANE, in-process (src/control-plane.ts
     // lists its doors). One worker, one front door.
     return controlPlane.fetch(request, env, ctx);
   },
 };
+
+// ── app config ── THE WORKER'S CONFIGURATION: one typed object per isolate, read from the `APP_CONFIG_*`
+// wrangler vars plus the platform-supplied deploy identity (the version-metadata binding). Loud on
+// anything malformed, at first use — never a silent default.
+//
+// Configuration is what differs between deployments of the SAME code: the vars below and the deploy
+// id. A constant (timeouts, budgets, key conventions, the loaded-worker compatibility flags) is a
+// property of the code and lives beside its consumer. A var nothing reads does not exist; an
+// `APP_CONFIG_*` var this file does not name is refused, so a typo can never configure nothing silently.
+
+const APP_CONFIG_VARS = [
+  "APP_CONFIG_ENVIRONMENT_NAME",
+  "APP_CONFIG_PROJECT_HOSTNAME_BASE",
+  "APP_CONFIG_PROJECT_TOKEN_SECRET",
+  "APP_CONFIG_ARTIFACTS_ACCOUNT_ID",
+  "APP_CONFIG_ARTIFACTS_NAMESPACE",
+  "APP_CONFIG_LOGIN_MODE",
+  "APP_CONFIG_SESSION_SECRET",
+] as const;
+type AppConfigVarName = (typeof APP_CONFIG_VARS)[number];
+
+/** How a human proves who they are to the control plane: `email` — the login form takes an email and
+ *  the control plane owns the session; `open` — no login, the one seeded anonymous identity. */
+export type LoginMode = "email" | "open";
+
+export interface AppConfig {
+  /** Which deployment this is, as a word a human reads at `/version`: "poc" (the deployment), "test"
+   *  (the workers lane), "e2e" (the e2e lane). Required. */
+  readonly environmentName: string;
+  /** The base every project host hangs under — `<app>--<slug>.<base>` (the project host section); blank ⇒ no
+   *  project-host ingress (the workers lane). */
+  readonly projectHostnameBase: string;
+  /** The HMAC secret project tokens are signed with (principal.ts) — a wrangler SECRET on a deployment,
+   *  a var in the e2e lane; blank ⇒ no project token verifies (a cookie session is independent of it). */
+  readonly projectTokenSecret: string;
+  /** The Cloudflare account + Artifacts namespace `itx.repos` builds git remotes from
+   *  (`https://<account>.artifacts.cloudflare.net/git/<namespace>/<repo>.git`); blank where no
+   *  Artifacts binding exists (the workers lane). */
+  readonly artifactsAccountId: string;
+  readonly artifactsNamespace: string;
+  /** The control plane's login mode. Required. */
+  readonly loginMode: LoginMode;
+  /** The HMAC secret the control plane's session cookie is signed with (control-plane.ts).
+   *  Required in `email` login mode: a blank secret signs no cookie and verifies none. */
+  readonly sessionSecret: string;
+  /** Cloudflare's version id of the running deployment (`CF_VERSION_METADATA.id`; local workerd mints
+   *  one too); "unversioned" where the binding is absent or blank. In every loader cacheKey and at
+   *  `/version`. */
+  readonly deployId: string;
+}
+
+/** The slice of `env` the configuration reads: the version-metadata binding and the vars, each an
+ *  optional string. The worker's `Env` extends this. */
+export type AppConfigEnv = { CF_VERSION_METADATA?: { id: string } } & {
+  [Name in AppConfigVarName]?: string;
+};
+
+/** Parse the configuration out of `vars` (a worker env, or any record — only `APP_CONFIG_*` keys are
+ *  read). Pure; the door every test goes through. */
+export function parseAppConfig(vars: object, deployId = "unversioned"): AppConfig {
+  const record = vars as Record<string, unknown>;
+  for (const name of Object.keys(record))
+    if (name.startsWith("APP_CONFIG_") && !(APP_CONFIG_VARS as readonly string[]).includes(name))
+      throw new Error(
+        `${name}: unknown configuration variable (known: ${APP_CONFIG_VARS.join(", ")})`,
+      );
+  const read = (name: AppConfigVarName): string => {
+    const raw = record[name];
+    if (raw !== undefined && typeof raw !== "string")
+      throw new Error(`${name}: expected a string variable, got ${JSON.stringify(raw)}`);
+    return (raw ?? "").trim();
+  };
+  const environmentName = read("APP_CONFIG_ENVIRONMENT_NAME");
+  if (!environmentName)
+    throw new Error("APP_CONFIG_ENVIRONMENT_NAME: required, but unset or blank");
+  const loginMode = read("APP_CONFIG_LOGIN_MODE");
+  if (loginMode !== "email" && loginMode !== "open")
+    throw new Error(
+      `APP_CONFIG_LOGIN_MODE: expected "email" or "open", got ${JSON.stringify(loginMode)}`,
+    );
+  const sessionSecret = read("APP_CONFIG_SESSION_SECRET");
+  if (loginMode === "email" && !sessionSecret)
+    throw new Error(
+      'APP_CONFIG_SESSION_SECRET: required in "email" login mode, but unset or blank',
+    );
+  return {
+    environmentName,
+    projectHostnameBase: read("APP_CONFIG_PROJECT_HOSTNAME_BASE"),
+    projectTokenSecret: read("APP_CONFIG_PROJECT_TOKEN_SECRET"),
+    artifactsAccountId: read("APP_CONFIG_ARTIFACTS_ACCOUNT_ID"),
+    artifactsNamespace: read("APP_CONFIG_ARTIFACTS_NAMESPACE"),
+    loginMode,
+    sessionSecret,
+    deployId,
+  };
+}
+
+const appConfigByEnv = new WeakMap<object, AppConfig>();
+
+/** The configuration of the isolate `env` belongs to — parsed on first use, then the same object every
+ *  time (a WeakMap on the env object: a worker's `env` and a DO's `this.env` are stable for the
+ *  isolate's life). A malformed variable throws HERE, on the first request or the first DO
+ *  construction, naming the variable. */
+export function appConfigOf(env: AppConfigEnv): AppConfig {
+  let appConfig = appConfigByEnv.get(env);
+  if (!appConfig) {
+    appConfig = parseAppConfig(env, env.CF_VERSION_METADATA?.id?.trim() || "unversioned");
+    appConfigByEnv.set(env, appConfig);
+  }
+  return appConfig;
+}
+
+// ── project host ── PROJECT-HOST INGRESS, the pure half: which project and which app a hostname names
+// ("a label is the address"). `<app>--<projectId>.<base>` serves `itx.apps.<app>` of the project's
+// ROOT context; the apex `<projectId>.<base>` serves the app `default` — `itx.apps.default`, never a
+// bare `itx.apps`: a row at the bare prefix would catch every label without a row of its own and hand
+// the apex app a stray step. Every host is exactly one row, and the log never names a hostname: one
+// rule row (`provide("itx.apps.site", …)`) serves the app on every host the project has. A project id
+// is a DNS label by construction (the directory slugifies it); the in-process directory admits it and
+// the Request rides into the fetch lane (worker.ts `laneRequestTo`). The one door the platform itself
+// answers on a project host — the session cookie's — is here too (`projectSessionResponse`), beside
+// the cookie it sets.
+
+/** The cookie a project host holds a project token in (a browser's lane; `/.itx/session` sets it). */
+const PROJECT_SESSION_COOKIE = "itx-project-session";
+/** The one path the platform answers on a project host — `?token=<projectToken>&next=<path>` sets
+ *  the cookie and redirects to `next`; `?logout` clears it. Everything else is the app's. */
+const PROJECT_SESSION_PATH = "/.itx/session";
+
+/** The project token a request's cookie carries, or null. */
+export function projectSessionCookieOf(cookieHeader: string | null): string | null {
+  for (const part of (cookieHeader ?? "").split(";")) {
+    const [name, ...value] = part.trim().split("=");
+    if (name === PROJECT_SESSION_COOKIE && value.length) return value.join("=");
+  }
+  return null;
+}
+
+/** The cookie header with the platform's own cookie removed — what an app (loaded code) may see:
+ *  the token in it would let the app act as the visitor (`authenticate({ projectToken })`). */
+export function withoutProjectSessionCookie(cookieHeader: string | null): string {
+  return (cookieHeader ?? "")
+    .split(";")
+    .map((part) => part.trim())
+    .filter((part) => part && !part.startsWith(`${PROJECT_SESSION_COOKIE}=`))
+    .join("; ");
+}
+
+/** `next` as a path on `origin`, else "/" — a redirect never leaves the host: `//evil.example`,
+ *  `/\evil.example` and an absolute URL all resolve to a foreign origin and fall back to "/". The
+ *  control plane's login redirect uses it too (control-plane.ts). */
+export function sameOriginPath(next: string, origin: string): string {
+  try {
+    const url = new URL(next, origin);
+    return url.origin === origin ? url.pathname + url.search : "/";
+  } catch {
+    return "/";
+  }
+}
+
+/** The `Set-Cookie` value that stores `token` for `maxAgeSeconds` (≤ 0 clears it): host-scoped,
+ *  HttpOnly, Secure (a browser exempts localhost), SameSite=Lax so a top-level navigation from the
+ *  control plane's login carries it. */
+const projectSessionSetCookie = (token: string, maxAgeSeconds: number): string =>
+  `${PROJECT_SESSION_COOKIE}=${maxAgeSeconds > 0 ? token : ""}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${Math.max(0, Math.floor(maxAgeSeconds))}`;
+
+/** THE SESSION DOOR on a project host (PARTIAL: null when `url` is not its path): a project token
+ *  (principal.ts) for `projectId` — `?token=` — becomes the host-scoped cookie and the browser goes
+ *  on to `next` (303); `?logout` clears the cookie; a token that does not verify for this project
+ *  is a 401. */
+export async function projectSessionResponse(
+  url: URL,
+  projectId: string,
+  projectTokenSecret: string,
+): Promise<Response | null> {
+  if (url.pathname !== PROJECT_SESSION_PATH) return null;
+  const location = sameOriginPath(url.searchParams.get("next") ?? "/", url.origin);
+  if (url.searchParams.has("logout"))
+    return new Response(null, {
+      status: 303,
+      headers: { location, "set-cookie": projectSessionSetCookie("", 0) },
+    });
+  const token = url.searchParams.get("token") ?? "";
+  const claims = await verifyProjectToken(token, projectTokenSecret);
+  if (!claims || claims.projectId !== projectId)
+    return new Response("the project token did not verify for this project\n", { status: 401 });
+  return new Response(null, {
+    status: 303,
+    headers: {
+      location,
+      "set-cookie": projectSessionSetCookie(token, (claims.expiresAt - Date.now()) / 1000),
+    },
+  });
+}
+
+/** A DNS label: lowercase letters and digits, single hyphens inside. */
+const DNS_LABEL = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+/** An app label: a DNS label that is also an itx identifier (it becomes a step, `itx.apps.<label>`). */
+const APP_LABEL = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
+
+/** The app + project a host names, or null when `hostname` is not a project host under `base` (a
+ *  blank `base` ⇒ no project-host ingress at all). `<app>--<projectId>.<base>` serves `itx.apps.<app>`
+ *  of that project; the apex `<projectId>.<base>` serves app `default`. Pure: whether the project
+ *  EXISTS is the directory's answer (worker.ts). */
+export function projectHostOf(
+  hostname: string,
+  base: string,
+): { app: string; projectId: string } | null {
+  if (!base) return null;
+  const host = hostname.toLowerCase().replace(/\.$/, ""); // a fully-qualified Host (`site--p.base.`) too
+  const suffix = `.${base.toLowerCase()}`;
+  if (!host.endsWith(suffix)) return null;
+  const label = host.slice(0, -suffix.length);
+  if (label.includes(".")) return null; // ONE label under the base; a deeper name is not a project host
+  const separator = label.indexOf("--");
+  const app = separator === -1 ? null : label.slice(0, separator);
+  const projectId = separator === -1 ? label : label.slice(separator + 2);
+  if (!DNS_LABEL.test(projectId) || (app !== null && !APP_LABEL.test(app))) return null;
+  return { app: app ?? "default", projectId };
+}

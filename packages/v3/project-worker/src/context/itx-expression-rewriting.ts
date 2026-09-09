@@ -2,11 +2,12 @@
 // REWRITE RULE is `{ match, target }`: a call that starts with `match` runs as the same call with
 // `match` replaced by `target`. Rewriting repeats until the call is rooted at THE RESERVED ROOT,
 // `itx.builtins` — the physical scope (kv, whoami, rpcStubs, facets, …; context/built-ins.ts) — and
-// that call is what actually runs (./dispatch.ts walks it). The rules THEMSELVES are `core` state —
+// that call is what actually runs (expression.ts's `walkSteps` walks it). The rules THEMSELVES are `core` state —
 // stream/core-processor.ts reduces `itx/rewrite-rule-configured` into `state.itxExpressionRewriteRules`,
 // a MAP by canonical match (set replaces; `null` MASKS a name that has a platform row beneath it and
 // deletes any other). This module is the rules of matching, the ONE event that writes the table, and
 // the resolver that reads it. Every matching rule is one table row in itx-expression-rewriting.test.ts.
+//   built-in roots — `BUILT_IN_ROOTS` / `isBuiltInRoot`: THE RESERVED ROOT'S KEYS, as one constant
 //
 // THE RULES
 //   1. A match is an itx-expression PREFIX: dotted names; any step may be a CALL STEP pinning literal
@@ -28,7 +29,7 @@
 //      (the whole facet-push path, every platform-spelled append). Any other `itx.…` call, RULES
 //      FIRST: a matching row (rule 3) whose target is `null` is a MASK — the call is refused,
 //      default-deny, even though a platform row lies beneath; a matching row with a target rewrites
-//      and the loop repeats; NO matching row and a root that is a built-in (context/built-in-roots.ts)
+//      and the loop repeats; NO matching row and a root that is a built-in (`BUILT_IN_ROOTS`, below)
 //      is THE IMPLICIT PLATFORM ROW `itx.<root> ⇒ itx.builtins.<root>` — applied, and the call is at
 //      the fixed point; anything else is refused. 32 rewrites is the budget (a self-referential rule
 //      errors, never spins). The platform rows are never materialized on this path; `list()` and
@@ -59,12 +60,11 @@
 // the match as its canonical STRING (the table's key) and the target in the PARSED form; the core
 // reduce parses the match once and takes the target as it is.
 
-import { codedError } from "../lib/errors.ts";
-import { jsonEqual } from "../lib/patch.ts";
-import type { StreamEventInput } from "../stream/events.ts";
-import { isBuiltInRoot } from "./built-in-roots.ts";
-import { callOn, walkSteps } from "./dispatch.ts";
+import { codedError, jsonEqual } from "../lib.ts";
+import type { StreamEventInput } from "../stream/processor.ts";
 import {
+  callOn,
+  walkSteps,
   normalizedItxExpression,
   containsItxExpressionHole,
   isItxExpressionHole,
@@ -80,6 +80,49 @@ import {
 /** One rewrite rule: a canonical match prefix and the target it rewrites to (both parsed once, at
  *  reduce; a call step pins literal args, `itx.ai.run('gpt-5')` — expression.ts). A `null` target is a
  *  MASK: the row matches like any other and refuses the call (rule 5). */
+
+// ── built-in roots ── THE RESERVED ROOT'S KEYS, as one constant. `itx.builtins.<root>` is
+// the physical scope (context/built-ins.ts `BuiltInScope` — kv, append, rpcStubs, facets, …), and
+// every short name `itx.<root>` is the IMPLICIT PLATFORM ROW `itx.<root> ⇒ itx.builtins.<root>`
+// (rule 5, above). Kept apart from the record on purpose: the core reduce
+// (stream/core-processor.ts) needs this list to tell a MASK (`itx.kv ⇒ null`, kept — it shadows a
+// platform row) from a plain deletion, and the DO's `rewriteRules.list()` needs it to show the
+// platform rows; neither may import the record itself (it closes over bindings and the loader).
+// built-ins.ts asserts, at the type level, that this list and `keyof BuiltInScope` are the same set.
+
+export const BUILT_IN_ROOTS = [
+  "whoami",
+  "kv",
+  "secrets",
+  "ai",
+  "cfArtifacts",
+  "repos",
+  "append",
+  "readEvents",
+  "waitForEvent",
+  "cd",
+  "fetch",
+  "rpcStubs",
+  "rewriteRules",
+  "facets",
+  "subscriptions",
+  "workers",
+  // THE LIBRARY (library.ts): first-party verbs that take only `itx` — could be userspace
+  "connectToMcp",
+  "connectToOpenApi",
+  "connectToCapnweb",
+  "serveMcp",
+] as const;
+
+export type BuiltInRoot = (typeof BUILT_IN_ROOTS)[number];
+
+const BUILT_IN_ROOT_SET: ReadonlySet<string> = new Set<string>(BUILT_IN_ROOTS);
+
+/** Is `root` one of the reserved root's keys — i.e. does `itx.<root>` have a platform row? */
+export function isBuiltInRoot(root: unknown): root is BuiltInRoot {
+  return typeof root === "string" && BUILT_IN_ROOT_SET.has(root);
+}
+
 export type ItxExpressionRewriteRule = { match: ItxExpressionPrefix; target: ItxExpression | null };
 
 /** THE CONFIG WORKER's platform row. `itx.worker` is a PLATFORM DEFAULT: every stream subscribes
@@ -239,7 +282,7 @@ function applyItxExpressionRewriteRule(
  *  a mask (default-deny), and a depth error after 32 rewrites. `rules` is a THUNK read at most once,
  *  and NOT AT ALL when the call is already builtins-rooted: a fixed-point dispatch never materializes
  *  the table. The implicit platform row is applied here, never stored; "is this root built in" is the
- *  leaf list's one predicate (context/built-in-roots.ts). */
+ *  leaf list's one predicate (`isBuiltInRoot`, above). */
 export function resolveItxExpression(
   rules: () => readonly ItxExpressionRewriteRule[],
   call: ItxExpression,
@@ -481,7 +524,7 @@ export class ItxExpressionResolver {
   }
 
   /** Resolve + run one call: the chain's last element, walked against the physical scope from the
-   *  record (dispatch.ts walkSteps — the root after `builtins` is the first step). Runtime `extraArgs`
+   *  record (expression.ts `walkSteps` — the root after `builtins` is the first step). Runtime `extraArgs`
    *  are LIVE args (a Request, a callback — not expression data; the fetch lane and the public
    *  `invoke(call, ...args)` hand them in): when the call ends in a NAME they are FOLDED INTO it BEFORE
    *  resolving — `invoke("itx.kv.get", "k")` IS `itx.kv.get("k")`, so a template fills, a pinned row

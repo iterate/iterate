@@ -12,7 +12,7 @@
 //
 // `signClaims` / `verifyClaims` is THE ONE signed-claims codec — `<payload>.<sig>`, payload =
 // base64url(UTF-8 JSON), sig = base64url(HMAC-SHA256(payload)) — the control plane's session cookie
-// (control-plane/session.ts) is the same codec under its own secret.
+// (control-plane.ts) is the same codec under its own secret.
 
 /** Who is acting: a stable actor id (the control plane's user id) and, when known, an email. */
 export type Principal = { actor: string; email?: string };
@@ -64,7 +64,7 @@ async function hmacKey(secret: string, usage: "sign" | "verify"): Promise<Crypto
 }
 
 /** Sign any JSON claims with `secret` — a project token's `ProjectTokenClaims` (e2e/support/principal.ts
- *  mints them), the control plane's session (control-plane/session.ts). */
+ *  mints them), the control plane's session (control-plane.ts). */
 export async function signClaims(claims: unknown, secret: string): Promise<string> {
   const payload = base64url(encoder.encode(JSON.stringify(claims)));
   const signature = await crypto.subtle.sign(

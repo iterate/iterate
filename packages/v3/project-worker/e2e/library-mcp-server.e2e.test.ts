@@ -1,4 +1,4 @@
-// library-mcp-server.e2e.test.ts — THE MACHINE LANE (src/library/mcp-server.ts + the bearer at
+// library-mcp-server.e2e.test.ts — THE MACHINE LANE (src/library.ts's mcp server section + the bearer at
 // ingress, worker.ts): `itx.serveMcp()` mounted as an app (`provide("itx.apps.mcp",
 // "itx.serveMcp()")`) is an MCP server at `mcp--<projectId>.<base>/` — `initialize`, `tools/list`
 // with the one tool `itx.invoke`, and a `tools/call` that is an ordinary itx invocation through the

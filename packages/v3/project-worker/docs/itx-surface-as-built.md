@@ -134,7 +134,7 @@ The one codec every door speaks. String half ⇄ structured half.
   to the value the expression denotes (`invoke("itx.kv.get", "k")` ≡ `itx.kv.get("k")`; the fetch
   lane's Request rides the same door).
 - **The dotted surface is a prototype hop**, not a Proxy around the instance
-  (`src/context/invoke-handle.ts`, `installPrototypeInvokeFallback`). Declared methods
+  (`src/context/expression.ts`, `installPrototypeInvokeFallback`). Declared methods
   win; every unknown segment accumulates and lands on `invoke` as ONE expression. It is a
   prototype hop so workerd's pipelining brand-check still passes (workerd#6873).
 
@@ -161,7 +161,7 @@ member, `[Symbol.dispose]`, plus a `name` getter on `SubscriptionHandle`. Dispos
 exported handle when the session ends, so **a verb's effect is session-scoped; the raw event
 is durable**.
 
-`ClientRpcStub` (`src/context/rpc-stub-relay.ts`) is the type of what a client hands over:
+`ClientRpcStub` (`src/context/rpc-stubs.ts`) is the type of what a client hands over:
 `{ dup(): ClientRpcStub; [k: string]: unknown }`. On the wire it is a callable capnweb Proxy, so
 a bare `async function` and an `RpcTarget` subclass both work.
 
@@ -204,7 +204,7 @@ runs against it directly and never reads the rule table. A short call `itx.<root
 through the IMPLICIT PLATFORM ROW `itx.<root> ⇒ itx.builtins.<root>` (never stored; applied by the
 resolver when no context row matches), so a context may shadow a root (`provide("itx.ai", fake)`),
 mask one (`provide("itx.kv", null)`), or override itself whole (`provide("itx", stub)`), and
-`itx.builtins.…` is always the physical door. The one list of roots is `src/context/built-in-roots.ts`,
+`itx.builtins.…` is always the physical door. The one list of roots is `src/context/itx-expression-rewriting.ts`,
 type-checked against `keyof BuiltInScope`. **The platform never spells a short name**: the proxy's
 own append, a lent stub's rule, a processor's row are all `itx.builtins.…`, so a user's row at
 `itx.facets` or `itx.rpcStubs` redirects the user's calls and nothing the platform relies on.
@@ -219,16 +219,16 @@ own append, a lent stub's rule, a processor's row are all `itx.builtins.…`, so
 | `readEvents(afterOffset?, limit?)`                    | `→ { events, scannedThroughOffset, atHead }` — a page is cut by the server's byte budget (8 MiB, less while other readers are outstanding) or by `limit`; `atHead` says the durable mark was reached                                                                                                                                                                                                      | the stream                                                        |
 | `waitForEvent(filter?)`                               | `{ type?, afterOffset?, timeoutMs? } → StreamEvent`                                                                                                                                                                                                                                                                                                                                                       | the stream                                                        |
 | `cd(path)`                                            | `→ InvokeHandle` onto a sibling context, every call through ITS table (`cd(p).builtins.append(…)` is its physical door)                                                                                                                                                                                                                                                                                   | `ITERATE_CONTEXT.getByName`                                       |
-| `fetch(request)`                                      | egress (`src/fetch/egress.ts`, the DO's `#egress`): `{{secret:project:NAME}}` substituted in the URL (spliced as ONE component, path placeholders too) and the headers — a placeholder with no stored secret, or a secret bound to another origin, is a 502 (`ProjectSecretRefused`) to the caller, never the destination — then the terminal `fetch`. No next door.                                      | `SECRETS_KV`, then `fetch`                                        |
-| `rpcStubs`                                            | `.get(rpcStubKey) → RpcStubHandle` · `.list() → string[]` (presence)                                                                                                                                                                                                                                                                                                                                      | `RpcStubDirectory`                                                |
-| `rewriteRules`                                        | `.list() → { match, target, origin }[]` (the EFFECTIVE table: context rows, masks as `target: null`, and the platform rows, `origin: "platform" \| "context"`) · `.get(match)` · `.resolve(call) → string[]` (the pure chain; `invoke(call) ≡ invoke(resolve(call).at(-1))`)                                                                                                                              | core state + the platform rows                                    |
-| `facets`                                              | `.get(name) → FacetHandle` (a RUNNING facet) · `.get(name, { source, cacheKey?, className })` (load and host it) — no delete: a facet leaves with the row that hosted it (section 9)                                                                                                                                                                                                                      | `ctx.facets`; mirrors `ctx.facets.get(name, startupCallback)`     |
-| `subscriptions`                                       | `.list() → SubscriptionListEntry[]` · `.get(name)`                                                                                                                                                                                                                                                                                                                                                        | core state ⋈ the loop's cursors                                   |
+| `fetch(request)`                                      | egress (`src/iterate-context-durable-object.ts`, the DO's `#egress`): `{{secret:project:NAME}}` substituted in the URL (spliced as ONE component, path placeholders too) and the headers — a placeholder with no stored secret, or a secret bound to another origin, is a 502 (`ProjectSecretRefused`) to the caller, never the destination — then the terminal `fetch`. No next door.                                      | `SECRETS_KV`, then `fetch`                                        |
+| `rpcStubs`                                            | `.get(rpcStubKey) → RpcStubHandle` · `.list() → string[]` (presence) | `RpcStubDirectory`                                                |
+| `rewriteRules`                                        | `.list() → { match, target, origin }[]` (the EFFECTIVE table: context rows, masks as `target: null`, and the platform rows, `origin: "platform" \| "context"`) · `.get(match)` · `.resolve(call) → string[]` (the pure chain; `invoke(call) ≡ invoke(resolve(call).at(-1))`) | core state + the platform rows                                    |
+| `facets`                                              | `.get(name) → FacetHandle` (a RUNNING facet) · `.get(name, { source, cacheKey?, className })` (load and host it) — no delete: a facet leaves with the row that hosted it (section 9) | `ctx.facets`; mirrors `ctx.facets.get(name, startupCallback)`     |
+| `subscriptions`                                       | `.list() → SubscriptionListEntry[]` · `.get(name)` | core state ⋈ the loop's cursors                                   |
 | `workers`                                             | `.get({ source, cacheKey?, className?, props? }) → InvokeHandle`, a stateless WorkerEntrypoint; any exported method                                                                                                                                                                                                                                                                                       | Worker Loader; the stateless twin of `facets.get`                 |
-| `connectToMcp(url, { headers? })`                     | THE LIBRARY: an MCP server over Streamable HTTP → `McpConnection`: `.callTool(name, args)` `.listTools()` `.tools()` `.close()` + one method per tool                                                                                                                                                                                                                                                     | `src/library/mcp.ts`, over `itx.fetch` only                       |
-| `connectToOpenApi(specOrUrl, { baseUrl?, headers? })` | THE LIBRARY: an OpenAPI 3 service → `OpenApiConnection`: `.call(operationId, input)` `.operations()` + one method per `operationId` (one input object: path, query, header, body fields)                                                                                                                                                                                                                  | `src/library/openapi.ts`, over `itx.fetch` only                   |
-| `connectToCapnweb(url, { headers?, transport? })`     | THE LIBRARY: a remote capnweb API's main object as a pipelinable handle — a WebSocket session through egress, or `{ transport: "batch" }` = one POST per chain                                                                                                                                                                                                                                            | `src/library/capnweb.ts`, over `itx.fetch` only                   |
-| `serveMcp()`                                          | THE LIBRARY, the machine lane: THIS context as an MCP server → `McpServerHandle`: `.fetch(request)`, the Streamable HTTP endpoint with ONE tool `itx.invoke({ expression, args? })` evaluated as itx evaluates it, under the request's principal. Mount: `provide("itx.apps.mcp", "itx.serveMcp()")` → `mcp--<projectId>.<base>/` (a project token as `Authorization: Bearer` stamps the principal there) | `src/library/mcp-server.ts`, over `itx.cd('.')` only              |
+| `connectToMcp(url, { headers? })`                     | THE LIBRARY: an MCP server over Streamable HTTP → `McpConnection`: `.callTool(name, args)` `.listTools()` `.tools()` `.close()` + one method per tool                                                                                                                                                                                                                                                     | `src/library.ts`, over `itx.fetch` only                       |
+| `connectToOpenApi(specOrUrl, { baseUrl?, headers? })` | THE LIBRARY: an OpenAPI 3 service → `OpenApiConnection`: `.call(operationId, input)` `.operations()` + one method per `operationId` (one input object: path, query, header, body fields)                                                                                                                                                                                                                  | `src/library.ts`, over `itx.fetch` only                   |
+| `connectToCapnweb(url, { headers?, transport? })`     | THE LIBRARY: a remote capnweb API's main object as a pipelinable handle — a WebSocket session through egress, or `{ transport: "batch" }` = one POST per chain                                                                                                                                                                                                                                            | `src/library.ts`, over `itx.fetch` only                   |
+| `serveMcp()`                                          | THE LIBRARY, the machine lane: THIS context as an MCP server → `McpServerHandle`: `.fetch(request)`, the Streamable HTTP endpoint with ONE tool `itx.invoke({ expression, args? })` evaluated as itx evaluates it, under the request's principal. Mount: `provide("itx.apps.mcp", "itx.serveMcp()")` → `mcp--<projectId>.<base>/` (a project token as `Authorization: Bearer` stamps the principal there) | `src/library.ts`, over `itx.cd('.')` only              |
 
 **Two groups of built-ins, one record.** Everything above `connectToMcp` is a ROOT, implemented
 against `ctx` or `env` (the log, the stub registry, the rule table, the two hosts, the bindings).
@@ -238,7 +238,7 @@ local `InvokeHandle` over this context's own `invoke`, so a library call's `itx.
 through this context's rules (a test shadows `itx.fetch` to fake a remote) and lands on egress with
 no hop. That signature is the litmus test ("could this be written in a userspace worker?") and the
 whole layering: a library module could move to userspace unchanged, and the surface shows no level.
-`src/library/boundary.test.ts` pins it — no runtime import from the stream, the DO, the fetch module
+`src/library.test.ts` pins it — no runtime import from the stream, the DO, the fetch module
 or `context/` except `invoke-handle.ts`. A held capnweb WebSocket connection pins the context awake
 like a busy facet; a batch connection and the two HTTP connectors hold nothing. `connectToGraphql`
 is the obvious next member of the family and does not exist yet.
@@ -250,7 +250,7 @@ inside `getCode`, so only when no isolate is warm under `kind:deploy:context:cac
 means same code, the caller's contract; a producer without a key is refused at the door, since
 hashing the expression would run stale code. Literal modules key by their content hash.
 
-Two brands the delivery loop reads (`src/context/invoke-handle.ts`): `FacetHandle` and
+Two brands the delivery loop reads (`src/context/expression.ts`): `FacetHandle` and
 `RpcStubHandle`, both `InvokeHandle` (a genuine RpcTarget whose unknown members reduce into
 one relative dispatch, so mid-chain calls pipeline). Reserved words on any handle: `invoke`,
 `applyRoot`.
@@ -263,7 +263,7 @@ Same resolver (`resolveContextPath`), two evaluation sites. Deleting either brea
 
 ---
 
-## 6. Vocabulary (a): rpc stubs (`src/context/rpc-stub-directory.ts` · `rpc-stub-relay.ts`)
+## 6. Vocabulary (a): rpc stubs (`src/context/rpc-stubs.ts` · `rpc-stub-relay.ts`)
 
 Two layers, in the order the tutorial builds them.
 
@@ -411,7 +411,7 @@ write (`REDUCE_CHECKPOINT_TOO_LARGE`); a stored row whose body is not JSON surfa
 in-flight and pending push bytes (one 8 MiB in-flight budget, one 8 MiB pending total) and drops a stalled client's pushes
 rather than buffer them; a deterministic refusal (a coded `NOT_A_METHOD`, a `NO_ITX_EXPRESSION_MATCH`)
 HALTS a cursor row at its first attempt instead of climbing the retry ladder. Every SQL statement
-the stream runs lives in ONE typed module, `src/stream/stream-storage.ts`, over `ctx.storage.sql`
+the stream runs lives in ONE typed module, `src/stream/stream.ts`, over `ctx.storage.sql`
 (`node-sqlite-durable-object-storage.ts` is its 41-line node shim for the unit lane).
 
 ONE reduce runs INLINE at the commit point: `reduceCoreEventBatch` (core-processor.ts)
@@ -424,24 +424,24 @@ copies). Its state is everything the DO needs synchronously:
 | ----------------------------------------------------------- | --------------------------------------------------- | ----------------------------------------------------------------------------------------- |
 | `stream/created`                                            | `{ projectId, path }`                               | `projectId`, `path`, `createdAt`                                                          |
 | `stream/woken`                                              | `{ incarnation }`                                   | `incarnation`                                                                             |
-| `stream/paused` · `stream/resumed`                          | `{ reason }` · `{}`                                 | `paused: { reason } \| null` (one `if` in `Stream.append`)                                |
+| `stream/paused` · `stream/resumed` | `{ reason }` · `{}` | `paused: { reason } \| null` (one `if` in `Stream.append`)                                |
 | `itx/rewrite-rule-configured`                               | `{ match, target \| null }`                         | `itxExpressionRewriteRules` (a record by match)                                           |
 | `stream/subscription-configured`                            | `{ name, target \| null, consumes?, afterOffset? }` | `subscriptions` (a record by name)                                                        |
 | `stream/subscription-delivery-halted` · `-delivery-resumed` | `{ name, afterOffset, … }`                          | a row's `halted` / `resumed`                                                              |
-| `secrets/changed`                                           | `{ name, origin? }` · `{ name, deleted: true }`     | `secrets` (a record by name: the origin, never a value — what `itx.secrets.list()` reads) |
+| `secrets/changed`                                           | `{ name, origin? }` · `{ name, deleted: true }` | `secrets` (a record by name: the origin, never a value — what `itx.secrets.list()` reads) |
 
 All prefixed `events.iterate.com/`. Control is ORDINARY events: a breaker processor pauses
 the stream by appending `stream/paused`. Runtime state IS reduced state:
 `itx.facets.get('core').snapshot()`. The whole state is plain JSON (hand-written types — no zod on this script — records and arrays),
 so the checkpoint and the live-state snapshot carry it as is.
 
-Event envelope (`src/stream/events.ts`, plain TS types):
+Event envelope (`src/stream/processor.ts`, plain TS types):
 `{ type, payload?, metadata?, source?, idempotencyKey?, offset?, ephemeral? }` in;
 `+ offset, createdAt, path` out.
 
 ---
 
-## 9. Subscriptions and delivery (`src/stream/subscriptions.ts` · `subscription-delivery.ts`)
+## 9. Subscriptions and delivery (`src/stream/core-processor.ts` · `subscription-delivery.ts`)
 
 A subscription is pure data: a name, a target expression whose terminal is callable with
 `(events, range)`, an optional `consumes` filter, an optional `afterOffset` (where the cursor lane
@@ -470,7 +470,7 @@ running facet (`itx.facets.get(name)…`, no spec) deletes nothing. So the raw e
 
 ## 10. Processors, loaded code, lifetimes, fetch
 
-**Processors** (`stream/processor.ts` · `sdk/stream-processor-durable-object.ts`).
+**Processors** (`stream/processor.ts` · `sdk/index.ts`).
 Two classes. `StreamProcessor` is pure: a contract plus `reduce` / `processEvent` /
 `projectLiveState`, no constructor args, unit-testable bare. Its host is a
 `StreamProcessorDurableObject` with one field, `processor = new PresenceProcessor()`.
@@ -478,7 +478,7 @@ Hosted like any class: `itx.facets.get('presence', { source, className: 'Presenc
 identity in `ctx.props` as `{ iterateContextName, name }`. A processor IS a subscription whose
 target is that chain plus `.processEventBatch`. Durable configuration, no handle.
 
-**Loaded code's world** (`src/itx-entrypoint.ts`). Every loaded worker's `env.ITX`
+**Loaded code's world** (`src/iterate-context.ts`). Every loaded worker's `env.ITX`
 and `globalOutbound` are one stub of `ItxEntrypoint`, minted with `{ iterateContextName }` as
 its prop. It has TWO doors and nothing else: `get()` BUILDS the same `IterateContext` RpcTarget
 a capnweb client holds (every stream verb rides it: the processor engine appends with
@@ -501,14 +501,14 @@ initializer is one line over the scope:
 | a processor                  | `enableProcessor`                       | its `null` event (verb or raw), which also deletes the facet it hosted                                                                      |
 | anything spelled as an event | `itx.append(event)`                     | its `null` event                                                                                                                            |
 
-**Fetch** (`src/fetch/rpc-stub-fetch.ts`, parked). A fetch-shaped capability is
+**Fetch** (`src/context/rpc-stubs.ts`, parked). A fetch-shaped capability is
 always called through a terminal `.fetch(request)`. Three doors: the plain-HTTP lane
 `/expression?context=<id>&itx=<expression>` (the worker copies the expression into
 `x-itx-expression`), a terminal `.fetch` inside a session, which `invoke` forks onto the DO's
 fetch channel, and the PROJECT HOST (below). Everything unusual in the file is fenced WORKAROUND for
 the day workerd and capnweb serialize sockets over plain RPC.
 
-**Project hosts** (`src/project-host.ts`, the pure half; `worker.ts`, the edge branch). A label is
+**Project hosts** (`src/worker.ts`, the pure half; `worker.ts`, the edge branch). A label is
 the address (`docs/plan-one-fetch-rules.md` D1): a request on `<label>--<projectId>.<base>` IS the
 app `itx.apps.<label>` of that project's root context, and the apex `<projectId>.<base>` is the label
 `default` (`itx.apps.default` — never a bare `itx.apps`, whose row would be a prefix of every label
@@ -521,7 +521,7 @@ log never names a hostname; a label with no row is the lane's 404. `<base>` is
 `project-worker.iterate.com` (a wildcard DNS record and the route in wrangler.jsonc). ADMISSION comes
 first: a context is created on first touch, so before the edge dials a Durable Object for a project
 host it asks the in-process directory whether the project exists — ONE D1 read,
-`directory(env.DB).getProject(projectId)` (`src/control-plane/directory.ts`) — and an unknown project
+`directory(env.DB).getProject(projectId)` (`src/control-plane.ts`) — and an unknown project
 is 421 (a stranger's label under the wildcard mints nothing). A project's id IS its DNS-safe slug
 (`projects.create({ slug })` slugifies it): the directory row, the DO name and the host label are one
 name. A pretty name or a custom domain is a directory row, later. Everything on a project host is the
@@ -548,7 +548,7 @@ session is a signed cookie (`itx-control-plane-session`), and `/mcp` (three tool
 anonymous identity everywhere, `/mcp` included) or `email` (the form; the control plane owns the
 session).
 
-**Configuration** (`src/app-config.ts`). ONE typed object per isolate, parsed once from the
+**Configuration** (`src/worker.ts`). ONE typed object per isolate, parsed once from the
 `APP_CONFIG_*` wrangler vars (the apps/os shape, without its schema library) plus the version-metadata
 binding, loud on a bad variable: the error names it and the shape it wanted, at the first request or
 the first DO construction. An `APP_CONFIG_*` variable the module does not name is refused, so a typo
@@ -595,23 +595,23 @@ skipped on 45 files (the deployed-only ones run against the deployed worker).
 
 | Layer                    | Files (raw lines, comments included)                                                                                                                                                             | Lines |
 | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----: |
-| the edge                 | `worker.ts` · `session.ts` · `session-teardown.ts` · `iterate-context.ts` · `itx-entrypoint.ts` · `project-host.ts` · `principal.ts` · `types.ts`                                                | 1,250 |
-| the control plane        | `control-plane/app.ts` · `directory.ts` · `session.ts` · `mcp.ts` · `definitions.sql` |   ≈ 470 |
+| the edge                 | `worker.ts` · `session.ts` · `iterate-context.ts` · `principal.ts` · `types.ts` | 1,250 |
+| the control plane        | `control-plane.ts` · `directory.ts` · `session.ts` · `mcp.ts` · `definitions.sql` |   ≈ 470 |
 | the DO                   | `iterate-context-durable-object.ts`                                                                                                                                                              |   949 |
-| expressions + dispatch   | `context/expression.ts` · `dispatch.ts` · `invoke-handle.ts`                                                                                                            |   623 |
-| built-ins + loader       | `context/built-ins.ts` · `worker-loader.ts` · `durable-object-names.ts`                                                                                                                          |   859 |
-| artifacts + repos        | `context/repos.ts` · `git-wire.ts`                                                                                                                                                               |   820 |
-| (a) rpc stubs            | `context/rpc-stub-directory.ts` · `rpc-stub-relay.ts`                                                                                                                                            |   654 |
-| (b) rewrite rules        | `context/itx-expression-rewriting.ts` · `built-in-roots.ts`                                                                                                                                      |   525 |
-| the stream + core        | `stream/stream.ts` · `stream-storage.ts` · `node-sqlite-durable-object-storage.ts` · `core-processor.ts` · `events.ts` · `reduce-checkpoint.ts` · `test-support.ts`                              | 1,708 |
-| the library              | `library/index.ts` · `mcp.ts` · `openapi.ts` · `capnweb.ts` · `mcp-server.ts`                                                                                                                    |   898 |
-| configuration            | `app-config.ts`                                                                                                                                                                                  |   104 |
-| subscriptions + delivery | `stream/subscriptions.ts` · `subscription-delivery.ts`                                                                                                                                           |   819 |
-| processors + live state  | `stream/processor.ts` · `live-state.ts` · `sdk/*`                                                                                                                                                | 1,002 |
-| fetch (parked) + egress  | `fetch/rpc-stub-fetch.ts` · `fetch/egress.ts`                                                                                                                                                    |   339 |
-| lib, client demo         | `lib/*` · `client/*` (the generated bundles excluded)                                                                                                                                            |   679 |
+| expressions + dispatch   | `context/expression.ts` · `dispatch.ts` · `invoke-handle.ts` |   623 |
+| built-ins + loader       | `context/built-ins.ts` · `worker-loader.ts` · `durable-object-names.ts` |   859 |
+| artifacts + repos        | `context/repos.ts` · `git-wire.ts` |   820 |
+| (a) rpc stubs            | `context/rpc-stubs.ts` · `rpc-stub-relay.ts` |   654 |
+| (b) rewrite rules        | `context/itx-expression-rewriting.ts` · `built-in-roots.ts` |   525 |
+| the stream + core        | `stream/stream.ts` · `stream-storage.ts` · `node-sqlite-durable-object-storage.ts` · `core-processor.ts` · `events.ts` · `reduce-checkpoint.ts` · `test-support.ts` | 1,708 |
+| the library              | `library.ts` · `mcp.ts` · `openapi.ts` · `capnweb.ts` · `mcp-server.ts` |   898 |
+| configuration            | `worker.ts`                                                                                                                                                                                  |   104 |
+| subscriptions + delivery | `stream/core-processor.ts` · `subscription-delivery.ts` |   819 |
+| processors + live state  | `stream/processor.ts` · `live-state.ts` · `sdk/*` | 1,002 |
+| fetch (parked) + egress  | `context/rpc-stubs.ts` · `iterate-context-durable-object.ts` |   339 |
+| lib, client demo         | `lib/*` · `client/*` (the generated bundles excluded) |   679 |
 
-Error codes (`src/lib/errors.ts`): `NO_ITX_EXPRESSION_MATCH`, `RPC_STUB_OFFLINE`,
+Error codes (`src/lib.ts`): `NO_ITX_EXPRESSION_MATCH`, `RPC_STUB_OFFLINE`,
 `IDEMPOTENCY_CONFLICT`, `OFFSET_CONFLICT`, `STREAM_PAUSED`, `NOT_A_METHOD`, `NO_FACET`,
 `WAIT_TIMEOUT`, `TIMEOUT`, `EVENT_TOO_LARGE`, `REDUCE_CHECKPOINT_TOO_LARGE`, `EVENT_UNREADABLE`,
 `RESERVED_SUBSCRIPTION_NAME`, `INVALID_CONTEXT`, `EXPRESSION_TOO_LONG`, `FACET_SOURCE_TOO_LARGE`,
@@ -658,7 +658,7 @@ Record<string, string>`, `"cap.js"` the main module), and the old inline wrapper
 ### Decided on 2026-09-04, done (the builtins arc)
 
 - **The reserved root.** `itx.builtins` is the physical scope and the fixed point; rules resolve
-  FIRST, the platform rows are implicit (`src/context/built-in-roots.ts` is the one list); `null`
+  FIRST, the platform rows are implicit (`src/context/itx-expression-rewriting.ts` is the one list); `null`
   masks under a built-in root and deletes elsewhere; the platform-equivalent target deletes;
   two new door guards (a match at `itx.builtins`, a match at a proxy verb); the platform spells
   `itx.builtins.…` in every expression it writes; the built-in `cd`'s append/read bypass is gone.
@@ -722,7 +722,7 @@ LibraryRoots`, the resolver walks from the record with one built-in predicate, t
 
 ### Decided on 2026-09-04, done (arc four)
 
-- **Configuration is ONE typed object** (`src/app-config.ts`, section 10): `APP_CONFIG_*` vars parsed once
+- **Configuration is ONE typed object** (`src/worker.ts`, section 10): `APP_CONFIG_*` vars parsed once
   per isolate by a row table, loud on a bad or unknown variable, plus the deploy identity from the
   version-metadata binding. Two fields exist because two things read them (`environmentName`,
   `deployId`); constants stay constants (the inventory is the module header). `/version` answers
@@ -732,7 +732,7 @@ LibraryRoots`, the resolver walks from the record with one built-in predicate, t
 
 ### Decided on 2026-09-06, done (project-host ingress — the assessment's Gap 1)
 
-- **A label is the address** (section 10, "Project hosts"; `src/project-host.ts` + the edge branch in
+- **A label is the address** (section 10, "Project hosts"; `src/worker.ts` + the edge branch in
   `worker.ts`): `<label>--<projectId>.<base>` serves `itx.apps.<label>` of the project's root context
   with the Request verbatim; the apex is the label `default`. The DO is untouched — the fetch lane
   already resolves the expression, appends the terminal `.fetch`, maps `NO_ITX_EXPRESSION_MATCH` to

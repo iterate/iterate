@@ -9,7 +9,7 @@
 //
 //   eyeball SELF.fetch /expression → worker sets x-itx-expression → the DO's itx-expression fetch
 //   lane → the rewrite rule at `itx.wsdev` (pure data: target `itx.rpcStubs.get('itx.wsdev')`, the
-//   registry naming the lent provider) → fetch/rpc-stub-fetch.ts: the DO asks the borrowed
+//   registry naming the lent provider) → context/rpc-stubs.ts: the DO asks the borrowed
 //   stub to dial (an RPC call that EXECUTES in the relay's session context; its return is the
 //   honest ack), the relay dials the provider's fetch() over capnweb and opens ONE dedicated
 //   fetch-upgrade leg back into the DO, the DO mints the eyeball's WebSocketPair natively, and

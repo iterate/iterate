@@ -1,6 +1,6 @@
 /// <reference types="node" />
 // stream.test.ts — the `Stream` class (stream/stream.ts) over node:sqlite storage
-// (node-sqlite-durable-object-storage.ts — the same SQL the DO's storage runs; nothing here needs
+// (test-support.ts's nodeSqliteDurableObjectStorage — the same SQL the DO's storage runs; nothing here needs
 // workerd): waitForEvent's wait/settle/timeout mechanics, what construction writes, the wake record
 // (`appendCreatedAndWokenEvents()` — an explicit call here; in production the DO constructor's
 // first act), the pause check and the reserved `core` at the append door, the zero-write ephemeral
@@ -8,12 +8,10 @@
 // BARE Stream with no-op host deps — no wake record unless the test appends one.
 
 import { expect, test } from "vitest";
-import { errorCode } from "../lib/errors.ts";
-import type { StreamEvent } from "./events.ts";
-import { nodeSqliteDurableObjectStorage } from "./node-sqlite-durable-object-storage.ts";
-import type { SqlStorageHandle } from "./reduce-checkpoint.ts";
-import { Stream } from "./stream.ts";
-import type { DurableObjectStorageSlice } from "./stream-storage.ts";
+import { errorCode } from "../lib.ts";
+import type { StreamEvent, SqlStorageHandle } from "./processor.ts";
+import { nodeSqliteDurableObjectStorage } from "./test-support.ts";
+import { Stream, type DurableObjectStorageSlice } from "./stream.ts";
 
 /** THE ONE way a test constructs a Stream: over a fresh node:sqlite store unless given one (a
  *  second incarnation reuses the first's). `batches` records each `fresh` batch the fan-out was fed

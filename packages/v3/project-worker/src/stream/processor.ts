@@ -3,7 +3,11 @@
 // it with `new`), and `ProcessorEngine`, which drives ONE such instance against a stream and a
 // storage; the SDK's `StreamProcessorDurableObject` builds one per hosted facet. The author surface
 // mirrors apps/os so processors port both ways. Node-testable; bundled into every loaded isolate as
-// `processor.js` (sdk/index.ts), so nothing here imports cloudflare:workers.
+// `processor.js` (sdk/index.ts), so nothing here imports cloudflare:workers. Four concepts ride with it:
+//   events             — `StreamEventInput` / `StreamEvent`, the envelope, and the idempotency rules
+//   reduce checkpoint  — `ReduceCheckpointTable`, THE ONE spelling of a persisted reduce checkpoint
+//   live state         — `LiveState`, one value, its revision chain and the diff→emit delta
+//   processor contract — `defineProcessorContract`, the zod contract helper (zod stays off the worker script)
 //
 // THE CONCURRENCY CONTRACT:
 //   1. ONE SERIAL CHAIN per processor — batches never interleave.
@@ -25,17 +29,15 @@
 // so a pure-ephemeral flood costs this class ZERO storage writes.
 //
 // `reduce` is a PURE reduce (new object out, its arguments immutable), CHECKPOINTED
-// (reduce-checkpoint.ts) with the offset and contract version it was reduced under; bumping
+// (`ReduceCheckpointTable` below) with the offset and contract version it was reduced under; bumping
 // `contract.version` re-reduces from offset 0 through `reduce` only, never re-running side effects —
 // over durable rows only, which is why durable product truth must never derive from an ephemeral.
 
-import { reportIssue } from "../lib/errors.ts";
-import { LiveState } from "./live-state.ts";
-import type { ReduceCheckpointTable } from "./reduce-checkpoint.ts";
-import type { StreamEvent, StreamEventInput } from "./events.ts";
+import { z } from "zod";
+import { reportIssue, jsonEqual, codedError, diff } from "../lib.ts";
 
 /** What a processor declares: its checkpoint slug and reducer version, what it consumes and emits,
- *  and its initial state (sdk/processor-contract.ts builds one from zod schemas). */
+ *  and its initial state (`defineProcessorContract` below builds one from zod schemas). */
 export type ProcessorContract<State = unknown> = {
   slug: string;
   /** Bumping this re-reduces state from offset 0 (reduce only — side effects never re-run). */
@@ -510,4 +512,347 @@ export class ProcessorEngine<State> {
       else this.#waitUntilProcessedWaiters.push(w);
     }
   }
+}
+
+// ── events ── the stream event envelope + idempotency rules. Zod-FREE: the envelope carries no
+// runtime validator (the processor contract section below has the zod half).
+
+// THE one deep-equal lives in patch.ts; re-exported here for the SDK bundle.
+export { jsonEqual };
+
+/** What `append` accepts: the event body, before the stream assigns its committed identity. The
+ *  door checks ONE rule by hand: `type` is a non-empty string. */
+export type StreamEventInput = {
+  /** Convention: `events.iterate.com/<domain>/<fact>`. */
+  type: string;
+  payload?: Record<string, unknown>;
+  metadata?: Record<string, unknown>;
+  /** Provenance: which processor (while processing what) appended this — stamped by the engine's
+   *  `append` — and WHO: the session's verified principal (src/principal.ts), set by the DO's append
+   *  root from the session's project token and never taken from a client. */
+  source?: {
+    processor?: {
+      slug: string;
+      version: string;
+      whileProcessing?: { offset: number; type: string };
+    };
+    principal?: { actor: string; email?: string };
+  };
+  /** Same key + same body = dedupe (the existing event is returned); different body = loud error. */
+  idempotencyKey?: string;
+  /** OPTIONAL PRECONDITION (apps/os): land at exactly this offset or refuse the whole batch with
+   *  OFFSET_CONFLICT — "nothing has happened since I last looked". Never stored in the body. */
+  offset?: number;
+  /** An EPHEMERAL event rides the stream to live subscribers but is NEVER persisted: it consumes an
+   *  offset, triggers zero writes, and its body is gone the moment the incarnation ends — nobody can
+   *  redeliver it (stream.ts, the zero-write contract). A durable OMITS the field. */
+  ephemeral?: true;
+};
+
+/** A committed event: the input plus the identity the stream assigned at its commit point. */
+export type StreamEvent = Omit<StreamEventInput, "offset"> & {
+  offset: number;
+  createdAt: string;
+  path: string;
+};
+
+// ── idempotency (apps/os semantics, message text kept greppable across RPC hops) ──
+
+export function idempotencyConflictMessage(idempotencyKey: string, existingOffset: number): string {
+  return `idempotency key "${idempotencyKey}" already names a different event at offset ${existingOffset}`;
+}
+
+/** Structural equality of the parts an idempotent retry must not change. */
+export function sameIdempotentEvent(
+  existingEvent: StreamEventInput,
+  requestedEvent: StreamEventInput,
+): boolean {
+  return (
+    existingEvent.type === requestedEvent.type &&
+    jsonEqual(existingEvent.payload, requestedEvent.payload) &&
+    jsonEqual(existingEvent.metadata, requestedEvent.metadata)
+  );
+}
+
+// ── reduce checkpoint ── THE ONE spelling of a persisted reduce checkpoint, shared by BOTH hosts (the
+// stream's core reduce and the facet-hosted `ProcessorEngine`). ONE ROW per slug: the reducer
+// version, the offset reduced through, and the state as JSON (NULL = the reduce never changed it =
+// `initialState()` — a pure side-effect processor reusing its cursor never re-fires its effect
+// history). ONE statement per write, so a checkpoint can never tear; the state column is rewritten
+// only when the reduce changed it (`COALESCE`).
+//
+// THE CELL CEILING: a checkpoint is one SQLite cell — 2 MB in production, SQLITE_TOOBIG past it. A
+// state whose JSON would not fit is refused BEFORE the write with a coded error, so the caller sees
+// why instead of the platform's raw message, and nothing lands. No cloudflare:workers import on
+// purpose: this module rides the SDK bundle into every facet isolate.
+
+/** Under the 2 MB cell, with room for the row's other columns. */
+const REDUCE_CHECKPOINT_STATE_MAX_CHARS = 2 * 1024 * 1024 - 4096;
+
+/** Sync SQLite as the platform hands it over (`ctx.storage.sql`): a query is a LAZY cursor —
+ *  iterate it, or `toArray()`. Spelled structurally so a node:sqlite stand-in satisfies it. */
+export type SqlStorageHandle = {
+  exec<T extends Record<string, SqlStorageValue>>(
+    query: string,
+    ...bindings: unknown[]
+  ): Iterable<T> & { toArray(): T[] };
+};
+
+/** A persisted checkpoint as read back: the version it was reduced under (the caller gates on it),
+ *  the offset reduced through, and the state — `undefined` when the reduce never changed it. */
+export type ReduceCheckpoint<State> = {
+  reducerVersion: string;
+  reducedThroughOffset: number;
+  state: State | undefined;
+};
+
+/** What BOTH hosts read and write their checkpoints through — the stream's storage and a facet's
+ *  own (the unit lane drives it over node:sqlite, stream/test-support.ts). */
+export class ReduceCheckpointTable {
+  readonly #sql: SqlStorageHandle;
+
+  /** `createTable: false` when the caller knows the table exists (the stream's storage skips every
+   *  CREATE on a re-wake); a facet host constructs one per incarnation and lets it create. */
+  constructor(sql: SqlStorageHandle, options: { createTable: boolean } = { createTable: true }) {
+    this.#sql = sql;
+    if (options.createTable) ReduceCheckpointTable.createTable(sql);
+  }
+
+  static createTable(sql: SqlStorageHandle): void {
+    sql.exec(
+      `CREATE TABLE IF NOT EXISTS reduce_checkpoints (
+         slug TEXT PRIMARY KEY,
+         reducer_version TEXT NOT NULL,
+         reduced_through_offset INTEGER NOT NULL,
+         state TEXT
+       )`,
+    );
+  }
+
+  read<State>(slug: string): ReduceCheckpoint<State> | undefined {
+    const row = this.#sql
+      .exec<{ reducer_version: string; reduced_through_offset: number; state: string | null }>(
+        "SELECT reducer_version, reduced_through_offset, state FROM reduce_checkpoints WHERE slug = ?",
+        slug,
+      )
+      .toArray()[0];
+    if (!row) return undefined;
+    return {
+      reducerVersion: String(row.reducer_version),
+      reducedThroughOffset: Number(row.reduced_through_offset),
+      state: row.state === null ? undefined : (JSON.parse(String(row.state)) as State),
+    };
+  }
+
+  /** ALWAYS the cursor; the state ONLY when `stateChanged` — one write either way. */
+  write<State>(
+    slug: string,
+    cursor: { reducerVersion: string; reducedThroughOffset: number },
+    state: State,
+    stateChanged: boolean,
+  ): void {
+    const serializedState = stateChanged ? (JSON.stringify(state) ?? null) : null;
+    // Stamped `retryable: false` (the flag workerd itself uses): the same state serializes to the
+    // same size on every retry — a delivery loop halts on it instead of climbing its ladder.
+    if (serializedState !== null && serializedState.length > REDUCE_CHECKPOINT_STATE_MAX_CHARS)
+      throw Object.assign(
+        codedError(
+          "REDUCE_CHECKPOINT_TOO_LARGE",
+          `checkpoint "${slug}": the reduced state serializes to ${serializedState.length} chars, over the ${REDUCE_CHECKPOINT_STATE_MAX_CHARS}-char ceiling of one storage cell (2 MB) — a reduce must keep a summary, not the events; nothing was written`,
+          { slug, chars: serializedState.length, maxChars: REDUCE_CHECKPOINT_STATE_MAX_CHARS },
+        ),
+        { retryable: false },
+      );
+    this.#sql.exec(
+      `INSERT INTO reduce_checkpoints (slug, reducer_version, reduced_through_offset, state)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(slug) DO UPDATE SET
+           reducer_version = excluded.reducer_version,
+           reduced_through_offset = excluded.reduced_through_offset,
+           state = COALESCE(excluded.state, reduce_checkpoints.state)`,
+      slug,
+      cursor.reducerVersion,
+      cursor.reducedThroughOffset,
+      serializedState,
+    );
+  }
+}
+
+// ── live state ── THE live-state primitive: one value, its revision chain, and the diff→emit
+// dance Phoenix LiveView does, over the project's stream. Used two ways: a mini-app DO owns one
+// directly as its store; the ProcessorEngine owns one per processor and `set`s the projection after
+// every batch (sdk/index.ts shows both).
+//
+// MUTATION AND NOTIFICATION ARE INSEPARABLE: `set(next)` diffs the held value → next; on a real
+// change it bumps the revision and appends the ephemeral `live-state/changed` delta carrying
+// `{key, from, to, patch}` onto the stream. `snapshot()` is the SEED DOOR. The stream keeps no
+// per-subscriber state — the CLIENT owns its chain: seed through the door, apply a payload whose
+// `from` matches its held rev, re-read the door on any mismatch (live-state-chains-client-side.e2e).
+//
+// The revision is seeded from a per-incarnation EPOCH (not 0): a reborn holder mints a fresh epoch,
+// so every stale client rev mismatches and re-reads the door instead of applying a patch onto a
+// diverged base. Lossy by contract — a dropped delta append is a chain gap the client heals, never
+// state loss. HARD RULE: no processor can ever REDUCE the delta (processor.ts `reducesEvent`), so a
+// state-change notification can never feed a reduce; a SUBSCRIPTION may name the type to watch it.
+
+/** A delta whose patch is over this many chars is not sent: a whole-array replace of a large
+ *  projection would cost every watcher the projection per set, and past the event ceiling the door
+ *  would refuse it outright. The delta rides with `patch: null` instead — the rev moved, re-seed. */
+const LIVE_STATE_PATCH_MAX_CHARS = 1024 * 1024;
+
+/** The only thing a LiveState needs from its host: somewhere to append the delta. A
+ *  `ProcessorStream` and the itx scope both satisfy it. */
+export type LiveStateSink = {
+  append(event: { type: string; ephemeral?: true; payload?: Record<string, unknown> }): unknown;
+};
+
+export class LiveState<S> {
+  readonly #liveStateSink: LiveStateSink;
+  readonly #liveStateKey: string;
+  #state: S;
+  /** The DIFF BASE: the last value that serialized — what a client that applied every delta holds.
+   *  Kept apart from `#state` so a value the wire cannot carry, adopted without an emit, never
+   *  becomes the base every later diff would throw against. */
+  #lastSerializedState: S;
+  #liveStateRev: number;
+  /** THE DELTA APPEND CHAIN — at most one delta append in flight, so commit order = mint order for a
+   *  CROSS-HOP sink: `env.ITX.get().append(e)` mints a FRESH capability per call, so two deltas
+   *  issued in different turns race across the hop and the second can commit first — ~14% of rapid
+   *  pairs on the deployed edge (never locally, the hop is sub-ms). Nothing is dropped by a reorder,
+   *  but it costs every watcher the full door re-read the deltas exist to avoid. A lone delta (the
+   *  chain idle) is issued synchronously; only when an append is already in flight does the next
+   *  queue behind it. Nobody waits on this. */
+  #liveStateDeltaAppendChain: Promise<unknown> = Promise.resolve();
+  #liveStateDeltaAppendInFlight = false;
+  /** Whether to order delta appends across turns (above). TRUE by default, so a mini-app holder gets
+   *  it without opting in. FALSE for the core reduce, whose sink is the stream's OWN synchronous
+   *  `append` (same isolate, no reorder possible): there the delta must land densely inside the
+   *  commit that triggered it, never deferred a microtask. */
+  readonly #orderDeltaAppends: boolean;
+
+  constructor(
+    sink: LiveStateSink,
+    key: string,
+    initial: S,
+    options?: { orderDeltaAppends?: boolean },
+  ) {
+    this.#liveStateSink = sink;
+    this.#liveStateKey = key;
+    this.#state = initial;
+    this.#lastSerializedState = initial;
+    this.#liveStateRev = Date.now() * 4096 + Math.floor(Math.random() * 4096);
+    this.#orderDeltaAppends = options?.orderDeltaAppends ?? true;
+  }
+
+  /** The current value (reflects every `set`). */
+  get(): S {
+    return this.#state;
+  }
+
+  /** THE seed door: `{rev, state}` read together (single-threaded ⇒ atomically), which is what lets
+   *  a client chain patches exactly instead of guessing which changes its snapshot already contains. */
+  snapshot(): { rev: number; state: S } {
+    return { rev: this.#liveStateRev, state: this.#state };
+  }
+
+  /** Replace the value: diff the last serialized base → next; on a real change bump the revision
+   *  and append the delta. Build a NEW value (don't mutate `next` in place) — the diff is over JSON.
+   *  A diff/append failure degrades to a LOST notification (the client re-seeds on the chain gap),
+   *  never a throw the caller sees. */
+  set(next: S): void {
+    // The SAME object is the same JSON (the contract forbids in-place mutation, which is what makes
+    // identity a proof of equality): no diff, no delta, no rev move — the common case for a
+    // processor whose projection is its unchanged reduced state.
+    if (next === this.#lastSerializedState) return;
+    // A `next` the wire cannot carry (a BigInt, a cycle) throws in the diff: adopt it anyway, and
+    // STILL advance the rev — the bump mints the chain gap that forces a stale client's re-seed
+    // (without it, a later emit's `from` would match the client's held rev and it would apply a
+    // patch computed against a base it never received: silent corruption). The serialized base
+    // stays put, so the next serializable value emits as a diff from what the client last saw.
+    let patch;
+    try {
+      patch = diff(this.#lastSerializedState, next);
+    } catch {
+      this.#state = next;
+      this.#liveStateRev += 1;
+      return;
+    }
+    this.#state = next;
+    this.#lastSerializedState = next;
+    if (!patch) return;
+    const from = this.#liveStateRev;
+    const to = from + 1; // a LOCAL: a later set's rev must not be read into this delta's payload
+    this.#liveStateRev = to;
+    const wirePatch = JSON.stringify(patch).length > LIVE_STATE_PATCH_MAX_CHARS ? null : patch;
+    const emitDelta = () =>
+      this.#liveStateSink.append({
+        type: "events.iterate.com/live-state/changed",
+        ephemeral: true,
+        payload: { key: this.#liveStateKey, from, to, patch: wirePatch },
+      });
+    // A dropped delta — a sync throw or a rejection — is a chain gap the client heals (the rev
+    // already advanced); it must never reach the caller.
+    if (!this.#orderDeltaAppends) {
+      // The same-isolate sink: synchronously and densely, every time (`#orderDeltaAppends`).
+      try {
+        void Promise.resolve(emitDelta()).catch(() => {});
+      } catch {
+        /* the gap, contained */
+      }
+      return;
+    }
+    if (this.#liveStateDeltaAppendInFlight) {
+      // A rapid cross-hop pair: queue behind the in-flight append, in mint order.
+      this.#liveStateDeltaAppendChain = this.#liveStateDeltaAppendChain
+        .then(emitDelta)
+        .catch(() => {});
+      return;
+    }
+    // The chain is idle: emit SYNCHRONOUSLY; the flag tracks a cross-hop sink's pending promise.
+    this.#liveStateDeltaAppendInFlight = true;
+    this.#liveStateDeltaAppendChain = (() => {
+      try {
+        return Promise.resolve(emitDelta()).catch(() => {});
+      } catch {
+        return Promise.resolve(); // a synchronously-throwing sink: the gap, contained
+      }
+    })().finally(() => {
+      this.#liveStateDeltaAppendInFlight = false;
+    });
+  }
+
+  /** Every delta minted so far has reached the sink (or failed into the chain gap) — the test seam
+   *  for LiveState's now-asynchronous append (the delta append chain). Production never awaits it. */
+  deltasSettled(): Promise<unknown> {
+    return this.#liveStateDeltaAppendChain;
+  }
+}
+
+// ── processor contract ── the zod CONTRACT helper. zod is ~310 KB of runtime the edge/DO script
+// never needs (the core contract is hand-built, stream/core-processor.ts): only this helper reaches
+// it, so esbuild tree-shakes zod off the worker script (zod ships `sideEffects: false`, and the
+// script measured the same size with and without this section) — it rides the SDK bundle alone.
+// Mirrors apps/os (`packages/iterate/src/processors/schemas.ts`) so processors port both ways.
+
+export function defineProcessorContract<StateSchema extends z.ZodType>(contract: {
+  slug: string;
+  version: string;
+  description: string;
+  /** Must parse `{}` — the initial state is `stateSchema.parse({})` (all fields defaulted). */
+  stateSchema: StateSchema;
+  consumes: readonly string[];
+  emits: readonly string[];
+}): ProcessorContract<z.infer<StateSchema>> & { stateSchema: StateSchema } {
+  const initial = contract.stateSchema.safeParse({});
+  if (!initial.success)
+    throw new Error(`contract "${contract.slug}": stateSchema must parse {} (default every field)`);
+  return {
+    slug: contract.slug,
+    version: contract.version,
+    description: contract.description,
+    consumes: contract.consumes,
+    emits: contract.emits,
+    stateSchema: contract.stateSchema,
+    initialState: () => contract.stateSchema.parse({}) as z.infer<StateSchema>,
+  };
 }

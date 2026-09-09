@@ -2,8 +2,9 @@
 // `{projectId, path}` (codec-named `{projectId}.iterate{path}`), the parent of everything a context
 // holds: the stream with its core reduce (stream/stream.ts), subscription delivery
 // (stream/subscription-delivery.ts), the facets (`ctx.facets`, context/worker-loader.ts), the rpc
-// stubs (context/rpc-stub-directory.ts), and the fetch door (the pager upgrade, the fetch lane,
+// stubs (context/rpc-stubs.ts), and the fetch door (the pager upgrade, the fetch lane,
 // egress). Each module's header says what it does; this file is the wiring and the doors.
+//   egress — `substituteProjectSecrets`: `{{secret:project:NAME}}` substitution at the egress door, WS-safe
 //
 // PURE WORKERS-RPC: capnweb never terminates here — the stateless `/api` worker relays. Dispatch is
 // ONE door, `invoke(call)`; every OTHER change to this context is an appended event (the edge's
@@ -17,7 +18,6 @@
 
 import { AsyncLocalStorage } from "node:async_hooks";
 import { DurableObject } from "cloudflare:workers";
-import { ProjectSecretRefused, substituteProjectSecrets } from "./fetch/egress.ts";
 import {
   assertFacetSourceWithinCeiling,
   facetLoaderOwner,
@@ -30,10 +30,10 @@ import {
   facetSpecFromHostingTarget,
   type CoreState,
   type Subscription,
+  subscriptionConfiguredEvent,
 } from "./stream/core-processor.ts";
-import { codedError, errorCode, reportIssue } from "./lib/errors.ts";
-import { withTimeout } from "./lib/timeout.ts";
-import type { StreamEvent, StreamEventInput } from "./stream/events.ts";
+import { codedError, errorCode, reportIssue, withTimeout } from "./lib.ts";
+import type { StreamEvent, StreamEventInput } from "./stream/processor.ts";
 import {
   normalizedItxExpression,
   canonicalItxExpressionPrefix,
@@ -41,25 +41,24 @@ import {
   print,
   type ItxExpression,
   type ItxExpressionInput,
+  walkSteps,
+  FacetHandle,
+  InvokeHandle,
+  RpcStubHandle,
 } from "./context/expression.ts";
 import {
   ITX_EXPRESSION_FETCH_HEADER,
   itxExpressionEndingInFetch,
   RpcStubFetchServer,
-} from "./fetch/rpc-stub-fetch.ts";
-import { walkSteps } from "./context/dispatch.ts";
-import { FacetHandle, InvokeHandle, RpcStubHandle } from "./context/invoke-handle.ts";
-import { buildLibrary, type LibraryItx } from "./library/index.ts";
-import { Stream, type StreamPage } from "./stream/stream.ts";
-import {
   RpcStubDirectory,
   RPC_STUB_PAGER_KEEPALIVE_REQUEST,
   RPC_STUB_PAGER_KEEPALIVE_RESPONSE,
   type BorrowedRpcStub,
-} from "./context/rpc-stub-directory.ts";
-import { DurableObjectNameCodec } from "./context/durable-object-names.ts";
-import { itxEntrypointFor } from "./itx-entrypoint.ts";
-import { appConfigOf, type AppConfigEnv } from "./app-config.ts";
+} from "./context/rpc-stubs.ts";
+import { buildLibrary, type LibraryItx } from "./library.ts";
+import { Stream, type StreamPage } from "./stream/stream.ts";
+import { DurableObjectNameCodec, itxEntrypointFor } from "./iterate-context.ts";
+import { appConfigOf, type AppConfigEnv } from "./worker.ts";
 import {
   CONFIG_WORKER_PLATFORM_ROW,
   ItxExpressionResolver,
@@ -67,9 +66,8 @@ import {
   rowsNamingRpcStub,
   rpcStubKeysNamed,
   type ItxExpressionRewriteRule,
+  BUILT_IN_ROOTS,
 } from "./context/itx-expression-rewriting.ts";
-import { BUILT_IN_ROOTS } from "./context/built-in-roots.ts";
-import { subscriptionConfiguredEvent } from "./stream/subscriptions.ts";
 import { ITX_PRINCIPAL_HEADER, stampPrincipal, type Principal } from "./principal.ts";
 import {
   buildBuiltIns,
@@ -100,8 +98,8 @@ const CORE_SLUG = CoreContract.slug;
 
 /** The bindings THE DO reads (wrangler.jsonc): the DO namespace, the Worker Loader, the kv namespaces,
  *  Workers AI, Artifacts — and, from `AppConfigEnv`, the version-metadata binding and the `APP_CONFIG_*`
- *  vars app-config.ts parses. The in-process control plane's bindings (D1, OAuth KV, …) live in
- *  control-plane/app.ts; the one worker's env is the intersection of both (src/worker.ts). */
+ *  vars worker.ts's `parseAppConfig` parses. The in-process control plane's bindings (D1, OAuth KV, …) live in
+ *  control-plane.ts; the one worker's env is the intersection of both (src/worker.ts). */
 export interface Env extends AppConfigEnv {
   ITERATE_CONTEXT: DurableObjectNamespace<IterateContextDurableObject>;
   LOADER: WorkerLoader;
@@ -118,12 +116,12 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   /** WHO THIS DO IS: the DO name parsed ONCE into `{ name, projectId, path }`. A context is only
    *  ever reached `getByName`; an id-addressed instance fails right here, before it can touch anything. */
   readonly #durableObjectAddress = parseIterateContextDurableObjectName(this.ctx.id.name);
-  /** The `env.ITX` / `globalOutbound` stub every worker this context loads receives (itx-entrypoint.ts).
+  /** The `env.ITX` / `globalOutbound` stub every worker this context loads receives (iterate-context.ts `ItxEntrypoint`).
    *  Minted once: it names the context, not an incarnation, and a warm loader never re-reads it. */
   readonly #itxEntrypoint = itxEntrypointFor(this.ctx, this.#durableObjectAddress.name);
-  /** This deployment's configuration (app-config.ts) — a malformed var throws here, naming it. */
+  /** This deployment's configuration (worker.ts `appConfigOf`) — a malformed var throws here, naming it. */
   readonly #appConfig = appConfigOf(this.env);
-  /** fetch/rpc-stub-fetch.ts — wired to the fetch door and the two WebSocket handlers below. */
+  /** context/rpc-stubs.ts — wired to the fetch door and the two WebSocket handlers below. */
   readonly #rpcStubFetch = new RpcStubFetchServer(this.ctx);
   readonly #rpcStubs = new RpcStubDirectory({
     rpcStubFetch: this.#rpcStubFetch,
@@ -249,7 +247,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   }
 
   /** SYNCHRONOUS end to end (Stream.append is): the commit, the activity note, the committed-event
-   *  effects. Two callers: `append`, and the pager attach (rpc-stub-directory.ts), which needs the
+   *  effects. Two callers: `append`, and the pager attach (rpc-stubs.ts), which needs the
    *  refusal in the same turn it accepted the socket. */
   #appendAndRunCommittedEffects(events: StreamEventInput[]): StreamEvent[] {
     const subscriptionsBeforeCommit = this.#stream.coreReducedState.subscriptions;
@@ -358,7 +356,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     return [...contextRows, ...platformRows];
   }
 
-  /** THE LIBRARY (library/index.ts): its verbs closed over a genuine InvokeHandle over `invoke`, so a
+  /** THE LIBRARY (library.ts): its verbs closed over a genuine InvokeHandle over `invoke`, so a
    *  library call's `itx.fetch(...)` resolves through THIS context's rules (a test may shadow
    *  `itx.fetch`) with zero hops. Its live connections pin this actor awake; the idle quiesce releases them. */
   readonly #library = buildLibrary(
@@ -645,7 +643,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       const facet = this.ctx.facets.get(name, () => ({ class: klass }));
       this.#liveFacetNames.add(name); // live from here
       // A top-level `.fetch` rides the facet's own fetch — the one channel that carries a 101
-      // natively (fetch/rpc-stub-fetch.ts doctrine, points 1 & 4); a method walks
+      // natively (context/rpc-stubs.ts doctrine, points 1 & 4); a method walks
       // receiver-preservingly. The watchdog (FACET_CALL_WATCHDOG_MS) aborts a facet that never
       // answers: its pending call rejects, the counter drains, the next call re-materializes it.
       const [first] = itxExpressionSteps;
@@ -893,7 +891,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     this.webSocketClose(ws, 1006, "transport error");
   }
 
-  // ── the rpc-stub Workers-RPC verb — transport plumbing, OFF the itx surface (rpc-stub-directory.ts) ──
+  // ── the rpc-stub Workers-RPC verb — transport plumbing, OFF the itx surface (rpc-stubs.ts) ──
 
   /** Lend a stub under an opaque key — anyone with a route to this DO may. `stub` is a Workers-RPC
    *  stub, a callable Proxy on the wire: structural validation is impossible by design, so it rides
@@ -905,4 +903,65 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       stub: input.stub as BorrowedRpcStub,
     });
   }
+}
+
+// ── egress ── `{{secret:project:NAME}}` substitution at the egress door, WS-SAFE: it only
+// rebuilds the URL and the Headers and constructs `new Request(request, { headers })`, which preserves
+// the method, the `Upgrade` header and the body — so a 101 flows straight back through it.
+
+// The placeholder as written, or as the URL parser percent-encodes it in a path segment.
+const SECRET_TOKEN = /(?:\{\{|%7B%7B)secret:project:([a-zA-Z0-9._-]+)(?:\}\}|%7D%7D)/g;
+
+/** A placeholder whose secret is not stored, or whose secret is bound to another origin (the DO's
+ *  resolver throws it) — the egress door answers it with a 502, to the caller, never the destination. */
+export class ProjectSecretRefused extends Error {}
+
+/**
+ * Substitute every `{{secret:project:<name>}}` token in the request URL AND headers. An existing
+ * secret must never survive as a literal placeholder wherever it appears (a URL
+ * `?access_token={{secret:project:token}}` would otherwise send the credential's NAME to the
+ * destination and the value nowhere); a placeholder with NO stored secret throws
+ * `ProjectSecretRefused` naming the token and where it sat — to the caller, never the destination.
+ * In the URL the value is spliced as ONE component (`encodeURIComponent`), so a secret can never add
+ * a query parameter or a fragment. Returns a NEW Request when anything changed, else the original.
+ *
+ * NOTE: the BODY is not scanned (substituting a streaming body means buffering it and recomputing
+ * content-length) — a secret spelled inside a request body forwards as a literal placeholder.
+ */
+export async function substituteProjectSecrets(
+  request: Request,
+  resolve: (name: string) => Promise<string | null> | string | null,
+): Promise<Request> {
+  // Substitute the tokens in one string; null = no token in it (leave as-is).
+  const substitute = async (value: string, where: string, encode: boolean) => {
+    if (!value.includes("secret:project:")) return null;
+    let out = "";
+    let last = 0;
+    let any = false;
+    for (const m of value.matchAll(SECRET_TOKEN)) {
+      const secret = await resolve(m[1]);
+      if (secret == null)
+        throw new ProjectSecretRefused(
+          `egress: no stored project secret for {{secret:project:${m[1]}}} in ${where}`,
+        );
+      out += value.slice(last, m.index) + (encode ? encodeURIComponent(secret) : secret);
+      last = m.index + m[0].length;
+      any = true;
+    }
+    return any ? out + value.slice(last) : null;
+  };
+
+  // URL first: rebuild onto the new URL (carrying method/headers/body/upgrade), then headers on top.
+  const url = await substitute(request.url, "the request URL", true);
+  const base = url !== null ? new Request(url, request) : request;
+  const headers = new Headers(base.headers);
+  let changed = false;
+  for (const [name, value] of base.headers) {
+    const substituted = await substitute(value, `header "${name}"`, false);
+    if (substituted !== null) {
+      headers.set(name, substituted);
+      changed = true;
+    }
+  }
+  return changed ? new Request(base, { headers }) : base;
 }

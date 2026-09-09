@@ -9,13 +9,13 @@
 //   OPEN login mode (this lane's own configuration): every visitor is the anonymous user — no
 //   principal, every project's door open, a /login cookie cannot make a second identity — and /mcp
 //   is tokenless.
-// The worker's default fetch is called directly so each mode gets its own env (app-config.ts
+// The worker's default fetch is called directly so each mode gets its own env (worker.ts's app config
 // memoizes the configuration per env object).
 
 import { createExecutionContext, env } from "cloudflare:test";
 import { newWebSocketRpcSession } from "capnweb";
 import { afterAll, beforeAll, expect, test } from "vitest";
-import definitionsSql from "../src/control-plane/definitions.sql?raw";
+import definitionsSql from "../src/control-plane.sql?raw";
 import { signClaims } from "../src/principal.ts";
 import worker from "../src/worker.ts";
 

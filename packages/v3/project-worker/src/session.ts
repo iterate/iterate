@@ -3,12 +3,13 @@
 // `get(projectId)`, `create({ slug })` — get and create vend the project's ROOT `IterateContext`, and
 // `cd(path)` reaches the rest. One session may hold contexts of many projects; the SessionTeardown is
 // keyed by context name so they never undo each other's lends.
+//   session teardown — `SessionTeardown`: what a session must undo at its end, one entry per key
 //
 //   using api = newWebSocketRpcSession("wss://<worker>/api");
 //   const itx = api.authenticate().projects.get("my-project");
 //   const fresh = await api.authenticate().projects.create({ slug: "another" });
 //
-// Authority is org membership (control-plane/directory.ts) — membership being whatever `/login` was
+// Authority is org membership (control-plane.ts) — membership being whatever `/login` was
 // told (the demo login form verifies nothing, so `email` mode is attribution, not authentication);
 // in `open` mode every project is the anonymous org's and the door stays open (the trusted-client
 // doctrine every local proof relies on).
@@ -18,14 +19,16 @@
 // membership answer); the first door that reaches a context materializes it.
 
 import { RpcTarget } from "capnweb";
-import type { LoginMode } from "./app-config.ts";
-import { DurableObjectNameCodec } from "./context/durable-object-names.ts";
-import type { Directory, Project } from "./control-plane/directory.ts";
-import type { Session as ControlPlaneSession } from "./control-plane/session.ts";
-import { IterateContext, type IterateContextNamespace, type WaitUntil } from "./iterate-context.ts";
-import { codedError } from "./lib/errors.ts";
+import type { LoginMode } from "./worker.ts";
+import {
+  DurableObjectNameCodec,
+  IterateContext,
+  type IterateContextNamespace,
+  type WaitUntil,
+} from "./iterate-context.ts";
+import type { Directory, Project, Session as ControlPlaneSession } from "./control-plane.ts";
+import { codedError } from "./lib.ts";
 import { verifyProjectToken, type Principal } from "./principal.ts";
-import { SessionTeardown } from "./session-teardown.ts";
 
 /** Who a session is: a principal, bound to ONE project when it came from a project token. */
 export type SessionPrincipal = Principal & { projectId?: string };
@@ -36,7 +39,7 @@ export interface SessionInput {
   waitUntil: WaitUntil;
   directory: Directory;
   loginMode: LoginMode;
-  /** The request's control-plane user (control-plane/session.ts `identity`) — the anonymous one
+  /** The request's control-plane user (control-plane.ts `identity`) — the anonymous one
    *  (`open`), the cookie's (`email`), or none. */
   user: ControlPlaneSession | null;
   /** The secret project tokens verify with (blank ⇒ none does). */
@@ -213,5 +216,46 @@ class ProjectCollection extends RpcTarget {
         "a project token names one project — projects.get(id); list() and create() need a signed-in user",
       );
     return this.#user;
+  }
+}
+
+// ── session teardown ── WHAT A SESSION MUST UNDO AT ITS END, as a leaf (no imports): the one-entry-per-key
+// register every IterateContext of a session shares, testable in the node lane.
+
+/** WHAT THIS SESSION MUST UNDO AT ITS END — ONE entry per key: a lend relay (the session's copy of
+ *  a client stub plus its pager socket, held so neither is GC'd) and anything else scoped to the
+ *  session. THE CALLER OWNS THE KEY (iterate-context.ts `#sessionTeardownKey` pairs the context name
+ *  with the stub key). Re-adding the SAME key is a TRANSPORT REPLACEMENT (a reconnect): by the time
+ *  the new relay's pager is open, the DO has already dropped the old transport as "replaced", so
+ *  disposing the incumbent here is a harmless double-close that keeps this map from accumulating
+ *  dead relays. */
+export class SessionTeardown {
+  readonly #undoByKey = new Map<string, { dispose(): void }>();
+  /** Register `undo` under `key`, REPLACING what sat there (disposed now). Returns the LEASE — the
+   *  one thing a handle should hold: its dispose runs `undo` only while `undo` is still the current
+   *  entry, so a stale handle (re-provide at the same match, then dispose the OLD handle) can never tear
+   *  down its replacement (the v4 review's kernel finding 2.6). */
+  add(key: string, undo: { dispose(): void }): { dispose(): void } {
+    this.#undoByKey.get(key)?.dispose();
+    this.#undoByKey.set(key, undo);
+    return {
+      dispose: () => {
+        if (this.#undoByKey.get(key) !== undo) return; // replaced — the replacement owns the key now
+        this.#undoByKey.delete(key);
+        undo.dispose();
+      },
+    };
+  }
+  /** Dispose whatever sits under `key` now — the SESSION's own act (a `provide(match, null)`, a
+   *  `subscribe` re-spelled as an expression), never a handle's. */
+  dispose(key: string): void {
+    const undo = this.#undoByKey.get(key);
+    if (!undo) return;
+    this.#undoByKey.delete(key);
+    undo.dispose();
+  }
+  disposeAll(): void {
+    for (const undo of this.#undoByKey.values()) undo.dispose();
+    this.#undoByKey.clear();
   }
 }

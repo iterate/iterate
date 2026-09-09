@@ -22,12 +22,12 @@ Every callable thing is a live object plus a small piece of durable data that ge
 
 | Built-in / kind                                                                                                 | The durable data                                                                        | Who restores it                                                                                         | Where                                                                  |
 | --------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
-| a context (`cd`, the DO)                                                                                        | its codec name (`prj_x.iterate/path`)                                                   | Cloudflare (`getByName`)                                                                                | `context/durable-object-names.ts`, `iterate-context-durable-object.ts` |
-| `env.ITX` (a loaded worker's world)                                                                             | the props `{ iterateContextName }`                                                      | Cloudflare (`ctx.exports`, persistent stubs)                                                            | `itx-entrypoint.ts`                                                    |
+| a context (`cd`, the DO)                                                                                        | its codec name (`prj_x.iterate/path`)                                                   | Cloudflare (`getByName`)                                                                                | `iterate-context.ts`, `iterate-context-durable-object.ts` |
+| `env.ITX` (a loaded worker's world)                                                                             | the props `{ iterateContextName }`                                                      | Cloudflare (`ctx.exports`, persistent stubs)                                                            | `iterate-context.ts`                                                    |
 | `workers.get({ source, cacheKey?, className?, props? })` / `facets.get(name, { source, cacheKey?, className })` | cacheKey + source; a facet's `props { iterateContextName, name }` and startup memo      | Cloudflare (Worker Loader, `ctx.facets`)                                                                | `context/worker-loader.ts`, the DO's `#invokeFacet`                    |
-| **`rpcStubs`** (a lent rpc stub)                                                                                | a pager WebSocket attachment `{ transportId, rpcStubKey }`                              | **us** — `{type:"page"}` pages the edge worker, which lends a fresh Workers-RPC stub over `lendRpcStub` | `context/rpc-stub-directory.ts`, `context/rpc-stub-relay.ts`           |
+| **`rpcStubs`** (a lent rpc stub)                                                                                | a pager WebSocket attachment `{ transportId, rpcStubKey }`                              | **us** — `{type:"page"}` pages the edge worker, which lends a fresh Workers-RPC stub over `lendRpcStub` | `context/rpc-stubs.ts`, `context/rpc-stubs.ts`           |
 | the stream (`append` / `readEvents` / `waitForEvent`)                                                              | the log (SQLite)                                                                        | —                                                                                                       | `stream/stream.ts`                                                     |
-| `kv`, `secrets`, `whoami`, `fetch`                                                                              | KV / SECRETS_KV (write-only) / the address / the terminal `fetch` (secrets substituted) | —                                                                                                       | `context/built-ins.ts`, `fetch/egress.ts`                              |
+| `kv`, `secrets`, `whoami`, `fetch`                                                                              | KV / SECRETS_KV (write-only) / the address / the terminal `fetch` (secrets substituted) | —                                                                                                       | `context/built-ins.ts`, `iterate-context-durable-object.ts`                              |
 | `rewriteRules`, `subscriptions` (read views)                                                                    | slices of the core reduce (layer 1)                                                     | —                                                                                                       | `context/built-ins.ts`, the DO                                         |
 
 The first three rows are Cloudflare features. `rpcStubs` is ours — a poor-man's sturdy ref whose
@@ -106,7 +106,7 @@ REPLACES; `target: null` removes the row and, for a cursor target, its cursor; `
 the cursor lane starts — 0 = the whole log, absent = from the configure),
 `subscription-delivery-halted` (appended by the loop), `subscription-delivery-resumed` (appended by
 an operator; un-halt, optional seek). The core reduce reduces them into `state.subscriptions`;
-`stream/subscriptions.ts` is the ONE command that builds the first (`subscriptionConfiguredEvent`).
+`stream/core-processor.ts` is the ONE command that builds the first (`subscriptionConfiguredEvent`).
 Pure data; the layer knows only the stream and the codec.
 
 `subscription-delivery.ts`: after every commit, for each subscription whose `consumes` matches,
@@ -134,7 +134,7 @@ handle, or the session ending, removes the row; the durable spelling is the raw 
 A processor is two classes. `StreamProcessor` (`stream/processor.ts`) is the PURE one the author
 writes — a contract plus `reduce` (pure switch), `processEvent` (effect switch), `projectLiveState`;
 no constructor arguments, so `new PresenceProcessor().reduce(...)` is a unit test. Its host is a
-`StreamProcessorDurableObject` (`sdk/stream-processor-durable-object.ts`, bundled into
+`StreamProcessorDurableObject` (`sdk/index.ts`, bundled into
 `processor.js`) with one field, `processor = new PresenceProcessor()`; the host builds a `ProcessorEngine`
 (serial chain, checkpoint, gap repair from the scanned-range proof, at-head pass, version re-reduce,
 live-state publishing) over its facet kv and `env.ITX`. A processor class ends in `Processor`, a Durable Object
@@ -165,7 +165,7 @@ THE DO: every DO built-in root (`itx.append`, `itx.readEvents`, `itx.waitForEven
 with the expression in `x-itx-expression`). The class declares only what must be edge code: `cd`
 (pure addressing, an EDGE context), `invoke` (the hop's landing door), `provide` (THE ONE FRONT
 DOOR — a live target is the ONE PHYSICAL ACT: the client's capnweb stub must live here, never in the
-DO, so the lend happens here through the DON'T-PIN pager relay `context/rpc-stub-relay.ts`'s
+DO, so the lend happens here through the DON'T-PIN pager relay `context/rpc-stubs.ts`'s
 `lendRpcStubOverPager`; an expression target is the rule alone), and `subscribe` /
 `enableProcessor` / `disableProcessor` — each visibly "build the event, append it";
 the DO has `append` and no configuration verbs. Every lend is undone at session end by the

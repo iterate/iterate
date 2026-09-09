@@ -1,6 +1,20 @@
-// session-teardown.test.ts — the SessionTeardown lease: a handle disposes only what it registered.
-import { expect, test } from "vitest";
-import { SessionTeardown } from "./session-teardown.ts";
+// session.test.ts — the session's pure half: the SessionTeardown lease (a handle disposes only what it registered).
+
+import { expect, test, vi } from "vitest";
+
+// The module under test reaches classes from "cloudflare:workers" (RpcTarget, DurableObject,
+// WorkerEntrypoint, the pipelining brands), which node cannot resolve — mock JUST those base classes
+// (no-op shells); the module's own logic runs unmodified.
+vi.mock("cloudflare:workers", () => ({
+  RpcTarget: class {},
+  DurableObject: class {},
+  WorkerEntrypoint: class {},
+  RpcPromise: class {},
+  RpcProperty: class {},
+}));
+import { SessionTeardown } from "./session.ts";
+
+// ── session teardown ── the SessionTeardown lease: a handle disposes only what it registered.
 
 const undo = (log: string[], label: string) => ({ dispose: () => void log.push(label) });
 

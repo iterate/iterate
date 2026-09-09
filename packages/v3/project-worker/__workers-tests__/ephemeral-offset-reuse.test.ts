@@ -9,7 +9,7 @@
 import { evictDurableObject, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { expect, test } from "vitest";
 import type { ItxExpression } from "../src/context/expression.ts";
-import { subscriptionConfiguredEvent } from "../src/stream/subscriptions.ts";
+import { subscriptionConfiguredEvent } from "../src/stream/core-processor.ts";
 import { quiesce, stub } from "./support.ts";
 
 const COUNTER_SRC = /* js */ `

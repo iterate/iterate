@@ -1,14 +1,14 @@
 // context.e2e.test.ts — the CONTEXT across the /api hop: its built-in roots, the error grammar, and the
 // natural dotted client surface — deep dotted itx expressions as PLAIN PROPERTY ACCESS on the capnweb
 // stub (`itx.slack.chat.postMessage({...})`, `itx.kv.put('k','v')`): only fixed members are real
-// methods along the path; the prototype hop (context/invoke-handle.ts) turns every unknown segment into
+// methods along the path; the prototype hop (context/expression.ts) turns every unknown segment into
 // ONE accumulated `invoke(expression)` dispatch. Pins:
 //   • a ':' in the ctx at the /expression door is a 400 naming the wall — the edge parses the context
 //     name before it names a DO (the codec's charset gate itself: context/durable-object-names.test.ts)
 //   • `kv.list` returns EVERY key, not the first KV page
 //   • `cd('')` is SELF — an in-process call on this very context, never a self-RPC hop or a twin DO
 //   • a default-deny miss and a paused-stream refusal each carry their machine-readable `code` end to
-//     end (lib/errors.ts: classify by code, never by message — own props survive DO → relay → client)
+//     end (lib.ts: classify by code, never by message — own props survive DO → relay → client)
 //   • the explicit door `invoke(['itx', ['whoami']])`, the root dotted call, depth-2 built-ins, a dotted
 //     write beside an expression read (ONE log), a lent rpc stub through its rule's match
 //   • a wrong guess REJECTS raw (no NOT_A_METHOD re-grammar), through the dotted and the explicit door
@@ -213,8 +213,8 @@ test("JSON.stringify of a dangling chain node must not dispatch, and the node st
   expect(await node.hello()).toBe("hello-from-rec"); // still a live handle afterwards
 });
 
-// PINS context/invoke-handle.ts's reserved-word promise AGAINST THE LIVE SURFACE (unit half:
-// invoke-handle.test.ts "hides reserved path segments from function-backed path proxies").
+// PINS context/expression.ts's reserved-word promise AGAINST THE LIVE SURFACE (unit half:
+// expression.test.ts "hides reserved path segments from function-backed path proxies").
 // RESERVED hides JS/transport machinery ('then', 'dup', 'onRpcBroken', …) at
 // the prototype hop AND inside every path proxy it hands out, so a protocol probe can never conjure
 // a dispatcher. Observable stakes on the live itx: a probe that DID dispatch would commit through

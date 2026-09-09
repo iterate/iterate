@@ -7,7 +7,7 @@
   //     The generated SDK bundle (src/generated/*) is built by vitest.global-setup.ts.
   //  2. no `ai` binding (see the note by the bindings below); the in-process control plane's D1 +
   //     OAuth KV are fresh local namespaces with no schema — control-plane.test.ts applies
-  //     definitions.sql itself (the e2e lane does the same in its global-setup).
+  //     control-plane.sql itself (the e2e lane does the same in its global-setup).
   //
   // KEPT identical on purpose: compatibility_date + flags, the declarative DO export, the LOADER
   // worker-loader binding, the DO binding, and the KV bindings (ids are meaningless locally —
@@ -38,7 +38,7 @@
     { "binding": "ITX_KV", "id": "08df862920b04446b3503c22f9888b04" },
     { "binding": "OAUTH_KV", "id": "oauth-test" },
   ],
-  // Configuration (src/app-config.ts): the workers lane is its own deployment name; open login mode.
+  // Configuration (src/worker.ts `parseAppConfig`): the workers lane is its own deployment name; open login mode.
   "vars": {
     "APP_CONFIG_ENVIRONMENT_NAME": "test",
     "APP_CONFIG_LOGIN_MODE": "open",

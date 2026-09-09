@@ -132,7 +132,7 @@ export default class Mine extends WorkerEntrypoint {
 test("/version answers `<deployId> <environmentName>` — the deploy stamp a smoke waits for", async () => {
   // The deploy id is Cloudflare's version id of the deploy (what `wrangler deploy` prints) — local
   // workerd mints one too — or "unversioned" where the binding is absent; then the configuration
-  // (src/app-config.ts): the e2e lane names itself "e2e", a deployed worker names its environment.
+  // (src/worker.ts `parseAppConfig`): the e2e lane names itself "e2e", a deployed worker names its environment.
   const versionRes = await fetch(workerUrl("/version"));
   expect(versionRes.status).toBe(200);
   const [deployId, environmentName, ...rest] = (await versionRes.text()).trim().split(" ");

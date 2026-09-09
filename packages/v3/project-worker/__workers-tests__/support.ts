@@ -7,7 +7,7 @@ import { runDurableObjectAlarm, SELF } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { newWebSocketRpcSession, RpcTarget } from "capnweb";
 import { afterAll, vi } from "vitest";
-import { DurableObjectNameCodec } from "../src/context/durable-object-names.ts";
+import { DurableObjectNameCodec } from "../src/iterate-context.ts";
 import type { IterateContextDurableObject } from "../src/iterate-context-durable-object.ts";
 
 /** The context DO for a ctx name (a project id or a full codec name), through the ITERATE_CONTEXT

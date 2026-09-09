@@ -6,16 +6,24 @@
 // the halt and records the seek) and the secrets catalog (names + origins, never a value). No clock, no effects: the same log always reduces to the same state, an ephemeral
 // event never reduces (the checkpoint must rebuild from the durable log alone), and a malformed
 // hand-appended event THROWS at the reduce — the host contains it (stream.test.ts pins the skip). The DOORS that build these events are pinned beside their modules
-// (context/itx-expression-rewriting.test.ts, stream/subscriptions.test.ts).
+// (context/itx-expression-rewriting.test.ts, the subscriptions section below).
 import { describe, expect, test } from "vitest";
-import { parse, print } from "../context/expression.ts";
+import {
+  parse,
+  print,
+  type ItxExpression,
+  type ItxExpressionInput,
+} from "../context/expression.ts";
 import {
   CoreContract,
   reduceCoreEvent,
   reduceCoreEventBatch,
   type CoreState,
+  type Subscription,
+  subscriptionConfiguredEvent,
 } from "./core-processor.ts";
-import type { StreamEvent } from "./events.ts";
+import type { StreamEvent } from "./processor.ts";
+import { memoryStream } from "./test-support.ts";
 
 /** A committed DURABLE event at `offset`; createdAt derives from the offset so identity pins read. */
 const at = (offset: number, type: string, payload?: Record<string, unknown>): StreamEvent => ({
@@ -797,5 +805,179 @@ describe("the platform rows a null MASKS (kept) vs a plain delete", () => {
       configured(2, "itx.kv.get", "itx.builtins.kv.get"),
     ]);
     expect(Object.keys(s.itxExpressionRewriteRules).sort()).toEqual(["itx.kv", "itx.kv.get"]);
+  });
+});
+
+// ── subscriptions ── the subscriptions table's one COMMAND (src/stream/core-processor.ts): `subscriptionConfiguredEvent`
+// BUILDS the event the caller appends — a configure, a replace, or (target null) a removal; a refusal
+// (a dotted name, a target not rooted at itx) THROWS at the door, nothing appended (the reserved
+// `core` is the APPEND door's refusal — stream.test.ts). A subscription is PURE DATA — a name, a target expression stored as its printed string,
+// an optional `consumes` filter; nothing here knows HOW a target is served (subscription-delivery.ts
+// decides that by evaluating it). The rows THEMSELVES are `core` state, reduced here through
+// `reduceCoreEvent` exactly as the DO does; the reduce's own pins (replace / drop / halted /
+// resumed) live in core-processor.test.ts.
+
+const setup = () => {
+  const { stream, events } = memoryStream();
+  // INLINE, exactly like the DO: the rows are core state, reduced from the durable log per call.
+  const rows = (): Record<string, Subscription> =>
+    events.reduce(
+      (st, e) => reduceCoreEvent({ event: e, state: st }) ?? st,
+      CoreContract.initialState(),
+    ).subscriptions;
+  /** The edge's `subscribe`: build the event, append it. */
+  const configure = (input: {
+    name: string;
+    target: ItxExpressionInput | null;
+    consumes?: string[];
+    afterOffset?: number;
+  }) => {
+    const event = subscriptionConfiguredEvent(input);
+    stream.append(event);
+    return event;
+  };
+  /** Append a raw event as the stream would — a fact the delivery loop appends (`delivery-halted`
+   *  has no door on this module). */
+  const append = (type: string, payload: Record<string, unknown>): StreamEvent =>
+    (stream.append({ type, payload }) as StreamEvent[])[0];
+  return { events, rows, configure, append };
+};
+
+describe("configure — ONE event: set, replace, or remove", () => {
+  test("builds ONE subscription-configured with the target STORED AS THE PARSED FORM; appended, the row's identity is that event's offset", () => {
+    const { configure, events, rows } = setup();
+    const event = configure({
+      name: "tally",
+      target: ["itx", "facets", ["get", "tally"], "processEventBatch"],
+      consumes: ["mark", "tick"],
+    });
+    expect(event).toEqual({
+      type: "events.iterate.com/stream/subscription-configured",
+      payload: {
+        name: "tally",
+        target: ["itx", "facets", ["get", "tally"], "processEventBatch"], // the parsed form at rest — a target may carry a whole source as data
+        consumes: ["mark", "tick"],
+      },
+    });
+    expect(events).toHaveLength(1);
+    expect(rows().tally.configuredAtOffset).toBe(events[0].offset);
+  });
+
+  test("omits `consumes` from the payload when none was given", () => {
+    const { configure } = setup();
+    expect(configure({ name: "all", target: "itx.digest.processEventBatch" }).payload).toEqual({
+      name: "all",
+      target: ["itx", "digest", "processEventBatch"], // a string target is parsed ONCE, at the door
+    });
+  });
+
+  test.each([
+    {
+      afterOffset: 0,
+      becomes: "carried: { afterOffset: 0 } — the whole log",
+      payloadHas: { afterOffset: 0 },
+    },
+    { afterOffset: 7, becomes: "carried: { afterOffset: 7 }", payloadHas: { afterOffset: 7 } },
+    { afterOffset: undefined, becomes: "omitted from the payload and the row", payloadHas: {} },
+  ])("`afterOffset` $afterOffset is $becomes", ({ afterOffset, payloadHas }) => {
+    const { configure, rows } = setup();
+    const event = configure({ name: "h", target: "itx.digest.processEventBatch", afterOffset });
+    expect(event.payload).toEqual({
+      name: "h",
+      target: ["itx", "digest", "processEventBatch"],
+      ...payloadHas,
+    });
+    expect(rows().h).toEqual({
+      target: ["itx", "digest", "processEventBatch"],
+      configuredAtOffset: rows().h.configuredAtOffset,
+      ...payloadHas,
+    });
+  });
+
+  test.each([-1, 1.5, Number.NaN, "0"])(
+    "an `afterOffset` that is not a non-negative integer (%s) is refused at the door — a throw, nothing appended",
+    (afterOffset) => {
+      const { configure, events } = setup();
+      expect(() =>
+        configure({ name: "h", target: "itx.digest.f", afterOffset: afterOffset as number }),
+      ).toThrow(/afterOffset is a non-negative integer/);
+      expect(events).toHaveLength(0);
+    },
+  );
+
+  test("the SAME NAME REPLACES the row — target and filter of the newest configure, never a stack", () => {
+    const { configure, events, rows } = setup();
+    configure({ name: "w", target: "itx.a.processEventBatch", consumes: ["x"] });
+    configure({ name: "w", target: "itx.b.processEventBatch" });
+    expect(events).toHaveLength(2);
+    expect(Object.keys(rows())).toEqual(["w"]);
+    expect(print(rows().w.target)).toBe("itx.b.processEventBatch");
+    expect(rows().w).not.toHaveProperty("consumes"); // the replacement's filter, not the old one's
+    expect(rows().w.configuredAtOffset).toBe(events[1].offset);
+  });
+
+  test("a HALTED row re-configured identically gets a fresh row that carries no halt", () => {
+    const { configure, append, rows } = setup();
+    configure({ name: "digest", target: "itx.digest.processEventBatch" });
+    append("events.iterate.com/stream/subscription-delivery-halted", {
+      name: "digest",
+      afterOffset: 1,
+      attempts: 15,
+    });
+    expect(rows().digest.halted).toBeDefined();
+    configure({ name: "digest", target: "itx.digest.processEventBatch" });
+    expect(rows().digest).not.toHaveProperty("halted");
+  });
+
+  test("a NULL target is the removal: the same event, target null (and no consumes); an unknown name is a no-op through the reduce", () => {
+    const { configure, events, rows } = setup();
+    configure({ name: "tab", target: "itx.rpcStubs.get('subscription:tab')" });
+    expect(configure({ name: "tab", target: null, consumes: ["ignored"] })).toEqual({
+      type: "events.iterate.com/stream/subscription-configured",
+      payload: { name: "tab", target: null },
+    });
+    expect(rows()).toEqual({});
+    configure({ name: "never-there", target: null });
+    expect(events).toHaveLength(3);
+    expect(rows()).toEqual({});
+  });
+
+  test("the target must be rooted at `itx` (a bare built-in root is unspellable) — a throw, nothing appended", () => {
+    const { configure, events } = setup();
+    expect(() => configure({ name: "evil", target: "kv.get('a')" })).toThrow(
+      /must be rooted at "itx"/,
+    );
+    expect(() => configure({ name: "evil", target: ["kv", ["get", "a"]] })).toThrow(
+      /must be rooted at "itx"/,
+    );
+    expect(events).toHaveLength(0);
+  });
+
+  test("a name is ONE segment, [A-Za-z0-9_-]+, never a key of Object.prototype — a dotted, spaced, `__proto__` or `constructor` name is refused at the door, nothing appended", () => {
+    const { configure, events } = setup();
+    expect(() => configure({ name: "a.b", target: "itx.whoami" })).toThrow(/one segment/);
+    expect(() => configure({ name: "has space", target: "itx.whoami" })).toThrow(/one segment/);
+    expect(() => configure({ name: "a.b", target: null })).toThrow(/one segment/);
+    // a key of Object.prototype would name the table's prototype, never a row
+    expect(() => configure({ name: "__proto__", target: "itx.whoami" })).toThrow(
+      /Object.prototype/,
+    );
+    expect(() => configure({ name: "constructor", target: "itx.whoami" })).toThrow(
+      /Object.prototype/,
+    );
+    expect(events).toHaveLength(0);
+  });
+
+  test("the stored target IS the parsed form: an array target is stored as given (shape-checked, never printed) and the row reduces to it — so the reserved literal `{ '@': true }` is DATA here (the markers belong to a rule's target only)", () => {
+    const { configure, rows } = setup();
+    const targets: ItxExpression[] = [
+      ["itx", "facets", ["get", { "a b": 1e21 }], "processEventBatch"],
+      ["itx", "x", ["y", { "@": true }]],
+    ];
+    for (const [i, target] of targets.entries()) {
+      const event = configure({ name: `odd${i}`, target });
+      expect((event.payload as { target: unknown }).target).toEqual(target);
+      expect(rows()[`odd${i}`].target).toEqual(target);
+    }
   });
 });

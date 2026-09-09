@@ -30,7 +30,13 @@ export default defineConfig({
     globalSetup: ["./vitest.global-setup.ts"],
     projects: [
       {
-        test: { name: "unit", include: ["src/**/*.test.ts"] },
+        test: {
+          name: "unit",
+          include: ["src/**/*.test.ts"],
+          // The edge and DO modules reach the control plane, whose OAuth provider imports
+          // cloudflare:workers; inlined so the unit tests' `vi.mock("cloudflare:workers")` covers it.
+          server: { deps: { inline: ["@cloudflare/workers-oauth-provider"] } },
+        },
       },
       {
         plugins: [

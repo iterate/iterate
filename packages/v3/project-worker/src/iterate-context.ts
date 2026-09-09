@@ -11,22 +11,32 @@
 // addressing), `invoke` (the landing door of the prototype hop at the bottom, plus the one fetch-lane
 // fork), `provide` and `subscribe` (declared here because their target may be a client's rpc stub,
 // which must live in this stateless worker and never in the DO — the DON'T-PIN rule,
-// context/rpc-stub-relay.ts) and the two processor verbs. Each verb builds ONE event and appends it;
+// context/rpc-stubs.ts) and the two processor verbs. Each verb builds ONE event and appends it;
 // every built-in root rides the hop with ZERO code here. `provide` and `subscribe` hand back a
 // DISPOSABLE handle, so what they make is SESSION-SCOPED (capnweb disposes every exported handle at
 // session end); the raw event — `itx.append(rewriteRuleConfiguredEvent(match, target))` — is the verb
 // minus the handle and outlives the session. A client reaches a root context through session.ts and
 // the rest with `cd(path)`.
+//   durable object names — `DurableObjectNameCodec` / `resolveContextPath`: the ONE place a context DO name is formatted and parsed
+//   ItxEntrypoint        — a loaded worker's WHOLE WORLD: `env.ITX.get()` and `globalOutbound`, both addressing the DO
 
 import { RpcTarget } from "capnweb";
-import type { IterateContextDurableObject } from "./iterate-context-durable-object.ts";
-import { ITX_EXPRESSION_FETCH_HEADER, terminalFetchOf } from "./fetch/rpc-stub-fetch.ts";
+import { WorkerEntrypoint } from "cloudflare:workers";
+import type { IterateContextDurableObject, Env } from "./iterate-context-durable-object.ts";
+import {
+  ITX_EXPRESSION_FETCH_HEADER,
+  terminalFetchOf,
+  lendRpcStubOverPager,
+  type ClientRpcStub,
+  type IterateContextDurableObjectStub,
+} from "./context/rpc-stubs.ts";
 import {
   canonicalItxExpressionPrefix,
   normalizedItxExpression,
   type ItxExpression,
   type ItxExpressionInput,
   print,
+  installPrototypeInvokeFallback,
 } from "./context/expression.ts";
 import {
   rewriteRuleConfiguredEvent,
@@ -37,22 +47,12 @@ import {
   facetSpecOf,
   type FacetSpec,
 } from "./context/worker-loader.ts";
-import { installPrototypeInvokeFallback } from "./context/invoke-handle.ts";
 import type { BuiltInScope } from "./context/built-ins.ts";
-import {
-  DurableObjectNameCodec,
-  resolveContextPath,
-  type DurableObjectAddress,
-} from "./context/durable-object-names.ts";
-import {
-  lendRpcStubOverPager,
-  type ClientRpcStub,
-  type IterateContextDurableObjectStub,
-} from "./context/rpc-stub-relay.ts";
-import type { SessionTeardown } from "./session-teardown.ts";
+import { SessionTeardown } from "./session.ts";
 import { ITX_PRINCIPAL_HEADER, type Principal } from "./principal.ts";
-import type { StreamEvent, StreamEventInput } from "./stream/events.ts";
-import { subscriptionConfiguredEvent } from "./stream/subscriptions.ts";
+import type { StreamEvent, StreamEventInput } from "./stream/processor.ts";
+import { subscriptionConfiguredEvent } from "./stream/core-processor.ts";
+import { codedError } from "./lib.ts";
 
 export type IterateContextNamespace = DurableObjectNamespace<IterateContextDurableObject>;
 export type WaitUntil = (p: Promise<unknown>) => void;
@@ -168,7 +168,7 @@ export class IterateContext extends RpcTarget {
    *  ONE routing fork: a call whose TERMINAL step is `fetch(request)` carrying a live Request rides
    *  the DO's FETCH CHANNEL with the expression in the `x-itx-expression` header, not `invoke` — the
    *  fetch channel is the only hop kind that carries a socket-bearing Response back (a 101 from a
-   *  tunnel or a WS-serving worker; fetch/rpc-stub-fetch.ts doctrine, points 1 & 4). */
+   *  tunnel or a WS-serving worker; context/rpc-stubs.ts doctrine, points 1 & 4). */
   invoke(call: ItxExpressionInput, ...args: unknown[]): Promise<unknown> {
     const itxExpression = normalizedItxExpression(call);
     const terminalFetch = terminalFetchOf(itxExpression, args);
@@ -215,7 +215,7 @@ export class IterateContext extends RpcTarget {
       return new RewriteRuleHandle(() => this.#removeRuleInBackground(matchString, expectedTarget));
     }
     // Built BEFORE the lend so a match the codec refuses throws with nothing lent; the rule rides the
-    // pager upgrade and the DO appends it as it accepts the pager (context/rpc-stub-directory.ts).
+    // pager upgrade and the DO appends it as it accepts the pager (context/rpc-stubs.ts).
     const ruleEvent = rewriteRuleConfiguredEvent(matchString, [
       "itx",
       "builtins",
@@ -230,7 +230,7 @@ export class IterateContext extends RpcTarget {
       this.#waitUntil,
     );
     // Registered with the session so a dying session recalls it even when the handle was never
-    // disposed (session-teardown.ts: a re-provide replaces the entry). The rule is NOT un-set by this
+    // disposed (`SessionTeardown`: a re-provide replaces the entry). The rule is NOT un-set by this
     // session — the DO un-sets what names the key when its LAST pager closes.
     const lease = this.#sessionTeardown.add(sessionTeardownKey, pager);
     return new RewriteRuleHandle(() => lease.dispose()); // the lease IS the handle: a stale one is inert
@@ -391,6 +391,117 @@ export class IterateContext extends RpcTarget {
 }
 
 // THE NATURAL DOTTED SURFACE: an unknown segment (`itx.slack`, `itx.kv`, `itx.append`) reduces into
-// ONE `invoke(expression)` dispatch through the prototype hop (context/invoke-handle.ts says why a hop
+// ONE `invoke(expression)` dispatch through the prototype hop (context/expression.ts says why a hop
 // and not a Proxy AROUND the instance), the declared methods above always winning.
 installPrototypeInvokeFallback(IterateContext, ["itx"]);
+
+// ── durable object names ── the ONE place a context DO name is formatted and parsed
+// (mirrors apps/os domains/durable-object-names.ts, minimal: no query props, no global host
+// yet). A context is addressed by a faux URL `{projectId}.iterate{path}`:
+//
+//   prj_demo.iterate/                     → project root
+//   prj_demo.iterate/agents/support-bot   → an agent context
+//
+// The projectId is always the host prefix, so a name alone says which project the context
+// belongs to — the basis of isolation.
+
+const DURABLE_OBJECT_HOST_SUFFIX = ".iterate";
+// The projectId is the kv/secret prefix AND a loader-cacheKey component — a ":" (or worse) in it
+// collapses the isolation wall (prj_x + key "a:b" would address the same cell as project prj_x:a
+// + key "b"). Gate it at the ONE place every name is parsed.
+const PROJECT_ID = /^[A-Za-z0-9_-]+$/;
+
+/** A parsed DO address. `name` is its own canonical string form — parse once, carry both
+ *  halves together (no separate re-stringify field at call sites). */
+export type DurableObjectAddress = { projectId: string; path: string; name: string };
+
+/** Resolve a `cd` target against a context's own path — the one resolver both `cd` doors (the
+ *  edge method and the built-in root) share. Absolute ("/agents/x") stands alone; relative
+ *  ("agents/x", "../inbox", ".") joins onto `base`. `.` and `..` resolve; the root cannot be
+ *  escaped ("/.." is "/"). The result is canonical: leading slash, no trailing slash but for "/". */
+export function resolveContextPath(basePath: string, contextPath: string): string {
+  const segments: string[] = [];
+  for (const seg of `${contextPath.startsWith("/") ? "" : basePath}/${contextPath}`.split("/")) {
+    if (seg === "" || seg === ".") continue;
+    if (seg === "..") segments.pop();
+    else segments.push(seg);
+  }
+  return `/${segments.join("/")}`;
+}
+
+export const DurableObjectNameCodec = {
+  /** Formats the project-scoped Durable Object name `{projectId}.iterate{path}` — the path in the
+   *  CANONICAL form `cd` resolves to (`resolveContextPath`), so `/a`, `/a/`, `/a/./` and `a` are ONE
+   *  name and no door (the `?context=` query included) can mint a twin DO for a logical context. */
+  stringify({ projectId, path }: { projectId: string; path: string }): string {
+    return `${projectId}${DURABLE_OBJECT_HOST_SUFFIX}${resolveContextPath("/", path)}`;
+  },
+  /** Parses a Durable Object name. A bare name (no `.iterate`) is that project's root — what
+   *  `projects.get("prj_x")` and the `/expression` lane's `?context=prj_x` hand in. */
+  parse(name: string): DurableObjectAddress {
+    const i = name.indexOf(DURABLE_OBJECT_HOST_SUFFIX);
+    const parts =
+      i === -1
+        ? { projectId: name, path: "/" }
+        : {
+            projectId: name.slice(0, i),
+            path: resolveContextPath("/", name.slice(i + DURABLE_OBJECT_HOST_SUFFIX.length)),
+          };
+    if (!PROJECT_ID.test(parts.projectId))
+      throw codedError(
+        "INVALID_CONTEXT",
+        `invalid projectId ${JSON.stringify(parts.projectId)}: only [A-Za-z0-9_-] (a ":" would breach the kv/secret isolation wall)`,
+      );
+    return { ...parts, name: DurableObjectNameCodec.stringify(parts) };
+  },
+};
+
+// ── ItxEntrypoint ── a loaded worker's WHOLE WORLD. Every confined dynamic worker's `env.ITX` and
+// `globalOutbound` are one stub of THIS entrypoint, minted via `ctx.exports.ItxEntrypoint({ props:
+// { iterateContextName } })` — never a raw `env.ITERATE_CONTEXT.getByName` DO stub — so the context it forwards
+// to is a PROP of the stub, not a binding the loaded code could reach around.
+//
+// TWO doors, nothing else — `get()` (the itx scope) and `fetch` (`globalOutbound`) — both addressing
+// the DO through `env.ITERATE_CONTEXT`, this worker's own binding to its namespace.
+
+export class ItxEntrypoint extends WorkerEntrypoint<Env, { iterateContextName: string }> {
+  /** THE handoff: the genuine itx scope — the SAME `IterateContext` RpcTarget a capnweb client gets
+   *  from `projects.get(id)` (capnweb's RpcTarget IS the native `cloudflare:workers` RpcTarget on
+   *  workerd), so loaded code writes plain dotted access and mid-chain handles pipeline natively. A
+   *  fresh SessionTeardown per call: this hop lends nothing session-long (a loaded worker's callbacks
+   *  ride as Workers-RPC stubs through the call args, never the pager). Re-resolved per call — never
+   *  a stub held across calls (the back-channel rule). */
+  get(): IterateContext {
+    return new IterateContext(
+      this.env.ITERATE_CONTEXT,
+      DurableObjectNameCodec.parse(this.ctx.props.iterateContextName),
+      new SessionTeardown(),
+      (p) => this.ctx.waitUntil(p),
+    );
+  }
+
+  /** globalOutbound: every RAW Request a loaded worker sends — a plain `fetch(url)` (egress) or a
+   *  fetch-lane call it addressed itself with `x-itx-expression` — goes to the context DO's fetch
+   *  door unchanged, because THAT door is where raw Requests are sorted. Not
+   *  `get().invoke(["itx",["fetch",…]])`: the edge's terminal-fetch fork would overwrite a lane header
+   *  the loaded worker already set. */
+  override fetch(request: Request): Promise<Response> {
+    // A loaded worker speaks for the project, never for a person: the principal header is the
+    // edge's stamp (worker.ts, iterate-context.ts), stripped here so loaded code cannot forge one.
+    const headers = new Headers(request.headers);
+    headers.delete(ITX_PRINCIPAL_HEADER);
+    return this.env.ITERATE_CONTEXT.getByName(this.ctx.props.iterateContextName).fetch(
+      new Request(request, { headers }),
+    );
+  }
+}
+
+/** Mint the loopback stub for one context — `ctx.exports.ItxEntrypoint({ props })` on the DO's own
+ *  state (workers-types puts the worker's export table on it). `Cloudflare.Exports` is `{}` without a
+ *  generated `GlobalProps`, hence the cast. */
+export function itxEntrypointFor(ctx: DurableObjectState, iterateContextName: string): Fetcher {
+  const { exports } = ctx as unknown as {
+    exports: { ItxEntrypoint(opts: { props: { iterateContextName: string } }): Fetcher };
+  };
+  return exports.ItxEntrypoint({ props: { iterateContextName } });
+}

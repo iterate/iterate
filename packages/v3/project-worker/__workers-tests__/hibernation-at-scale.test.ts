@@ -4,7 +4,7 @@
 //   Hundreds of clients connect into ONE stream (each providing a live capnweb value under its own
 //   rpcStubKey — a rewrite rule at the same spelling, a hibernatable stub pager WebSocket), the
 //   stream DO EVICTS — losing every borrowed stub it held in memory — and on wake it can STILL call
-//   every client's value: page → borrowed stub → invoke (context/rpc-stub-directory.ts).
+//   every client's value: page → borrowed stub → invoke (context/rpc-stubs.ts).
 //
 // The property made deterministic: a live deployment waits minutes for Cloudflare's own
 // eviction; here cloudflare:test's evictDurableObject() forces the

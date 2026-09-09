@@ -1,6 +1,6 @@
 // cfartifacts.e2e.test.ts — `itx.cfArtifacts` and `itx.repos` against the REAL Cloudflare Artifacts
 // binding on the DEPLOYED worker (env.ARTIFACTS → the `project-worker-repos` namespace): what the unit
-// test over a fake (src/context/built-ins-artifacts.test.ts) cannot prove — the binding is wired and the
+// test over a fake (src/context/repos.test.ts) cannot prove — the binding is wired and the
 // project scoping holds end to end across /api. DEPLOYED-TARGET ONLY: Artifacts has no local
 // implementation, so every row skips against a local worker (plain `pnpm e2e`) — run them with
 // `WORKER_BASE_URL=https://project-worker.iterate.workers.dev pnpm e2e cfartifacts`. Every repo created
@@ -11,7 +11,7 @@
 //     returns ONE namespace-wide page + a cursor (the binding does not filter by name), so membership
 //     is asserted over ALL pages, never page one alone
 //   • isolation: one project never sees another's repos
-//   • `itx.repos.writeFile → readFile` round-trips a file through real git-over-HTTPS (context/git-wire):
+//   • `itx.repos.writeFile → readFile` round-trips a file through real git-over-HTTPS (context/repos.ts's git wire):
 //     an absent repo or path reads null (no throw across the tree walk), the first write CREATES the repo
 //     and commits on main (parentless), a second write commits onto the tip's tree
 

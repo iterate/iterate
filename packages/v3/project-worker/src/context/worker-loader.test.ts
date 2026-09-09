@@ -9,8 +9,19 @@
 // `getCode` (a cold isolate only) and is refused without a cacheKey. The last row pins the workerd
 // WORKAROUND (worker-loader.ts `loaderIdGenerations`): a producer that threw marks its id dead, the
 // next attempt produces outside the loader and loads literally under the id's next generation.
-import { expect, test } from "vitest";
-import { DurableObjectNameCodec } from "./durable-object-names.ts";
+import { expect, test, vi } from "vitest";
+
+// The module under test reaches classes from "cloudflare:workers" (RpcTarget, DurableObject,
+// WorkerEntrypoint, the pipelining brands), which node cannot resolve — mock JUST those base classes
+// (no-op shells); the module's own logic runs unmodified.
+vi.mock("cloudflare:workers", () => ({
+  RpcTarget: class {},
+  DurableObject: class {},
+  WorkerEntrypoint: class {},
+  RpcPromise: class {},
+  RpcProperty: class {},
+}));
+import { DurableObjectNameCodec } from "../iterate-context.ts";
 import {
   assertFacetSourceWithinCeiling,
   FACET_SOURCE_MAX_CHARS,

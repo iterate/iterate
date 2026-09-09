@@ -1,4 +1,4 @@
-// ingress-project-host.e2e.test.ts — PROJECT-HOST INGRESS (src/project-host.ts + worker.ts): an app
+// ingress-project-host.e2e.test.ts — PROJECT-HOST INGRESS (src/worker.ts): an app
 // is served at `/` on `<label>--<projectId>.<base>` with the URL verbatim, so its relative asset
 // loads from the same host; inbound `x-itx-*` never reach it; the apex `<projectId>.<base>` is the
 // label `default`; a label with no rule is a 404; and — deployed only, the local lane cannot set Host on a

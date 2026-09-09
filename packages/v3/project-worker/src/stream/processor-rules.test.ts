@@ -8,9 +8,10 @@
 // (`new X()`), driven by a `ProcessorEngine` — the engine is what wakes, snapshots and takes pushes.
 import { describe, expect, test } from "vitest";
 import { z } from "zod";
-import { defineProcessorContract } from "../sdk/processor-contract.ts";
-import type { StreamEvent, StreamEventInput } from "./events.ts";
 import {
+  defineProcessorContract,
+  type StreamEvent,
+  type StreamEventInput,
   ProcessorEngine,
   StreamProcessor,
   type ProcessEventArgs,

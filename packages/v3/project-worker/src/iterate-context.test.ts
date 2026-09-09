@@ -1,9 +1,23 @@
-// context/durable-object-names.test.ts — the codec's projectId charset gate, applied at parse:
+// iterate-context.test.ts — the context's pure half: the durable-object name codec.
+
+import { expect, test, vi } from "vitest";
+
+// The module under test reaches classes from "cloudflare:workers" (RpcTarget, DurableObject,
+// WorkerEntrypoint, the pipelining brands), which node cannot resolve — mock JUST those base classes
+// (no-op shells); the module's own logic runs unmodified.
+vi.mock("cloudflare:workers", () => ({
+  RpcTarget: class {},
+  DurableObject: class {},
+  WorkerEntrypoint: class {},
+  RpcPromise: class {},
+  RpcProperty: class {},
+}));
+import { DurableObjectNameCodec } from "./iterate-context.ts";
+
+// ── durable object names ── the codec's projectId charset gate, applied at parse:
 // `[A-Za-z0-9_-]` only, because a ":" in a projectId would breach the `${projectId}:` kv/secret
 // isolation wall (project A addressing project B's cell). The dotted `.iterate/<path>` half is
 // unpoliced — a ":" in a PATH segment survives, the kv prefix is the projectId alone.
-import { expect, test } from "vitest";
-import { DurableObjectNameCodec } from "./durable-object-names.ts";
 
 test("every projectId shape the codebase actually uses parses cleanly", () => {
   for (const id of ["prj_demo", "prj_x", "me", "prj_fd_lsbad", "prj_am-forge", "PRJ_UP", "a1"]) {

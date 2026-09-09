@@ -5,7 +5,7 @@
 // Target surface: IterateContextDurableObject.alarm()/#recordActivityForQuietClock/#liveFacetNames/#facetWorkInFlight
 // (src/iterate-context-durable-object.ts), the delivery loop's cursor lane +
 // `deliverEveryCursorSubscription` (src/stream/subscription-delivery.ts), and the rpc-stub directory
-// (src/context/rpc-stub-directory.ts).
+// (src/context/rpc-stubs.ts).
 //
 // THE ALARM DOES TWO THINGS, IN ORDER — this file pins both:
 //   1. `deliverEveryCursorSubscription`: every CURSOR subscription (a target that cannot own its
@@ -33,7 +33,7 @@
 import { evictDurableObject, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { expect, test, vi } from "vitest";
 import type { ItxExpression } from "../src/context/expression.ts";
-import { subscriptionConfiguredEvent } from "../src/stream/subscriptions.ts";
+import { subscriptionConfiguredEvent } from "../src/stream/core-processor.ts";
 import { Echo, openSession, quiesce, stub } from "./support.ts";
 
 /** A tiny userspace processor: counts every durable event. The tally fixture's shape

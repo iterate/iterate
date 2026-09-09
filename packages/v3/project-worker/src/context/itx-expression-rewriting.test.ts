@@ -13,10 +13,15 @@ import {
   reduceCoreEvent,
   type ItxExpressionRewriteRule,
 } from "../stream/core-processor.ts";
-import type { StreamEvent } from "../stream/events.ts";
+import type { StreamEvent } from "../stream/processor.ts";
 import { memoryStream } from "../stream/test-support.ts";
-import { parse, parseItxExpressionPrefix, print, type ItxExpressionInput } from "./expression.ts";
-import { InvokeHandle } from "./invoke-handle.ts";
+import {
+  parse,
+  parseItxExpressionPrefix,
+  print,
+  type ItxExpressionInput,
+  InvokeHandle,
+} from "./expression.ts";
 import {
   ItxExpressionResolver,
   matchItxExpressionPrefix,
@@ -611,7 +616,7 @@ const fakeBuiltIns = () => {
     whoami: () => ({ projectId: "prj_t", path: "/" }),
     // the Workers AI binding's shape, verbatim: run(model, inputs, options?) and gateway(id).run(req)
     // — plus a `chat` the rows alias to (a REAL root name: the resolver's platform rows come from the
-    // leaf list, context/built-in-roots.ts)
+    // leaf list, context/itx-expression-rewriting.ts)
     ai: {
       run: (model: string, inputs?: unknown, options?: unknown) => ({ model, inputs, options }),
       gateway: (id: string) => ({ run: (request: unknown) => ({ gateway: id, request }) }),

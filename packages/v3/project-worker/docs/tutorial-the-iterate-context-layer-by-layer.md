@@ -119,7 +119,7 @@ for the next match — chapter 4.
 `enableProcessor`, `disableProcessor`). Everything else you write on `itx` — `itx.whoami()`,
 `itx.kv.put('k','v')`, `itx.slack.chat.postMessage(…)` — is a prototype hop that accumulates the
 unknown segments into ONE `invoke(expression)` (`installPrototypeInvokeFallback`,
-`src/context/invoke-handle.ts`). The two spellings are the same call:
+`src/context/expression.ts`). The two spellings are the same call:
 
 ```ts
 const who = await openItx(ctx).whoami(); // { projectId: ctx, path: "/" }
@@ -172,7 +172,7 @@ returned at the idle quiesce) and the PAGERS (one hibernatable WebSocket per key
 offer to lend the key back on demand):
 
 ```ts
-// context/rpc-stub-directory.ts — the DO side, abridged
+// context/rpc-stubs.ts — the DO side, abridged
 async invokeRpcStub(rpcStubKey: string, itxExpressionSteps: ItxExpression): Promise<unknown> {
   let borrowed = this.#borrowedRpcStubs.get(rpcStubKey); // 1. have we got it? call it
   if (!borrowed && this.#rpcStubPagerFor(rpcStubKey))
@@ -1017,7 +1017,7 @@ expect(row.cursor).toBeUndefined(); // a facet owns its checkpoint
 
 ### The doors a processor exposes
 
-The host (`src/sdk/stream-processor-durable-object.ts`) is one abstract field, `processor`, and four
+The host (`src/sdk/index.ts`) is one abstract field, `processor`, and four
 doors over a `ProcessorEngine`: `processEventBatch(events, range)` (the push door),
 `snapshot()` → `{ offset, state }` (caught up through the log first), `liveSnapshot()` → `{ rev,
 state }` (the live-state seed), and `waitUntilProcessed({ offset, timeoutMs? })` (the barrier,
@@ -1104,7 +1104,7 @@ event type, keeps its key, applies a payload whose `from` matches its held rev, 
 on any mismatch. The shipped client does exactly that:
 
 ```ts
-import { connectLiveState } from "project-worker/client"; // the package's `./client` export; the lane imports src/client/live-state-client.ts
+import { connectLiveState } from "project-worker/client"; // the package's `./client` export; the lane imports src/client/live-state.ts
 
 await itx.provide("itx.chat", ["itx", "facets", ["get", "chatroom", { source: SOURCES.chatroom, className: "ChatroomDurableObject" }]]);
 const { store } = await connectLiveState(itx, { key: "chat", name: "chatwatch", door: async () => await itx.invoke("itx.chat.state()") });
@@ -1116,7 +1116,7 @@ await until(() => store.get()?.messages.length === 1);
 
 Deltas are unconsumable — no processor can ever reduce the change type, so a notification about
 state can never feed a reduce. The React binding, `useLiveState(itx, { key, door })` in
-`src/client/react.tsx`, is `connectLiveState` over `useSyncExternalStore` and is the whole browser
+`src/client/demo.tsx`, is `connectLiveState` over `useSyncExternalStore` and is the whole browser
 half; it is exercised by the `/demo` page and `specs/live-state-demo.spec.ts`, not by the e2e lane.
 
 ### The core reduce is the same shape, inline
@@ -1172,7 +1172,7 @@ Every loaded worker's `env.ITX` and its `globalOutbound` are one stub of `ItxEnt
 the one prop `iterateContextName`. Two doors and nothing else:
 
 ```ts
-// itx-entrypoint.ts — a loaded worker's WHOLE WORLD, abridged
+// iterate-context.ts — a loaded worker's WHOLE WORLD, abridged
 export class ItxEntrypoint extends WorkerEntrypoint<Env, { iterateContextName: string }> {
   /** THE handoff: the genuine itx scope — the SAME `IterateContext` RpcTarget a capnweb client gets. */
   get(): IterateContext { return new IterateContext(this.env.ITERATE_CONTEXT, DurableObjectNameCodec.parse(this.ctx.props.iterateContextName), new SessionTeardown(), (p) => this.ctx.waitUntil(p)); }
@@ -1237,7 +1237,7 @@ this.#stream.append({
    `processEvent` must be idempotent:
 
 ```ts
-// sdk/config-worker.ts — abridged
+// sdk/index.ts — abridged
 export abstract class ConfigWorker<Env> extends WorkerEntrypoint<Env> {
   async processEventBatch(events: StreamEvent[], range: ScannedRange): Promise<void> {
     const itx = this.env.ITX.get();
@@ -1352,7 +1352,7 @@ expect(await missing.text()).toContain('header "x-hunt-auth"'); // WHERE it sat,
 // e2e/secrets.e2e.test.ts · e2e/fetch-door.e2e.test.ts
 ```
 
-The door (`src/fetch/egress.ts`) scans the URL first, then every header, splices a URL value as ONE
+The door (`src/iterate-context-durable-object.ts`) scans the URL first, then every header, splices a URL value as ONE
 component so a secret can never add a query parameter, and preserves method, `Upgrade` and body, so a
 101 flows through it. The catalog is the PROJECT's: a secret set from `/a` is listed from `/b` and
 the root, and the change events live in the root's log. Deployed, the value arrives at the bound
@@ -1430,7 +1430,7 @@ through the host to the app.
 
 ### The fetch-upgrade leg, in one paragraph
 
-Two platform facts force everything unusual in `src/fetch/rpc-stub-fetch.ts`: workerd's Workers RPC
+Two platform facts force everything unusual in `src/context/rpc-stubs.ts`: workerd's Workers RPC
 cannot serialize a socket-bearing Response, and capnweb could not carry sockets across a session (the
 platform forked it). For a LENT stub whose `fetch` answers a 101, the DO calls the borrowed stub's
 fetch in the lender's own context; a socket-bearing Response is accepted there, ONE "upgrade leg"
@@ -1512,7 +1512,7 @@ A connector reached THROUGH a rule is a connect per call as an expression — a 
 open WebSocket that no intermediate holder disposes. So the library keeps every connection it opened,
 by `(verb, url, options)`, hands the same one back while it lives, and releases them all at the
 context's idle quiesce — a held connection pins the context awake exactly like a borrowed stub
-(`buildLibrary` in `src/library/index.ts`: a `Map` from the key-sorted JSON of `(verb, url, options)`
+(`buildLibrary` in `src/library.ts`: a `Map` from the key-sorted JSON of `(verb, url, options)`
 to the connection promise, a failed connect not kept, and `releaseConnections()` calling `close()`
 where there is one, else the disposer). A connection closed by a holder or broken by the far side
 reopens itself on its next use, so a memoized one is never dead; `serveMcp()` is not memoized — it
@@ -1706,17 +1706,17 @@ only, in `e2e/stream-isolate-ceilings-deployed.e2e.test.ts` and `e2e/stream-isol
 
 | Chapter | What it built | Where it lives |
 | --- | --- | --- |
-| 0 | the session, `/api`, `whoami`, the dotted hop | `src/worker.ts`, `src/session.ts`, `src/iterate-context.ts`, `src/context/invoke-handle.ts` (the prototype hop) |
-| 1 | rpc stubs: lend, borrow, page, recall, presence | `src/context/rpc-stub-directory.ts`, `src/context/rpc-stub-relay.ts`, `src/session-teardown.ts` |
-| 2 | itx expressions, the codec, `cd` | `src/context/expression.ts`, `src/context/dispatch.ts`, `src/context/invoke-handle.ts`, `src/context/durable-object-names.ts` |
-| 3 | rewrite rules, the seven rules, `itx.builtins`, masks, `@` | `src/context/itx-expression-rewriting.ts`, `src/context/built-in-roots.ts`, `src/context/built-ins.ts` |
-| 4 | the stream, offsets, idempotency, ephemerals, the core reduce | `src/stream/stream.ts`, `src/stream/stream-storage.ts`, `src/stream/events.ts`, `src/stream/core-processor.ts` |
-| 5 | subscriptions, push vs cursor, the ladder, `consumes` | `src/stream/subscriptions.ts`, `src/stream/subscription-delivery.ts` |
-| 6 | facets, processors, live state | the DO's `#invokeFacet`, `src/stream/processor.ts`, `src/sdk/stream-processor-durable-object.ts`, `src/stream/live-state.ts`, `src/client/` |
-| 7 | loaded workers, `env.ITX`, the loader, the config worker, repos | `src/context/worker-loader.ts`, `src/itx-entrypoint.ts`, `src/sdk/config-worker.ts`, `src/context/repos.ts`, `src/context/git-wire.ts` |
-| 8 | egress with secrets, `/expression`, project hosts, the upgrade leg | `src/fetch/egress.ts`, `src/fetch/rpc-stub-fetch.ts`, `src/project-host.ts`, `src/worker.ts` |
-| 9 | the library and `serveMcp` | `src/library/index.ts`, `mcp.ts`, `openapi.ts`, `capnweb.ts`, `mcp-server.ts` |
-| 10 | identity, tokens, the control plane | `src/principal.ts`, `src/session.ts`, `src/control-plane/` |
+| 0 | the session, `/api`, `whoami`, the dotted hop | `src/worker.ts`, `src/session.ts`, `src/iterate-context.ts`, `src/context/expression.ts` (the prototype hop) |
+| 1 | rpc stubs: lend, borrow, page, recall, presence | `src/context/rpc-stubs.ts`, `src/session.ts` |
+| 2 | itx expressions, the codec, `cd` | `src/context/expression.ts`, `src/iterate-context.ts` |
+| 3 | rewrite rules, the seven rules, `itx.builtins`, masks, `@` | `src/context/itx-expression-rewriting.ts`, `src/context/built-ins.ts` |
+| 4 | the stream, offsets, idempotency, ephemerals, the core reduce | `src/stream/stream.ts`, `src/stream/processor.ts`, `src/stream/core-processor.ts` |
+| 5 | subscriptions, push vs cursor, the ladder, `consumes` | `src/stream/core-processor.ts`, `src/stream/subscription-delivery.ts` |
+| 6 | facets, processors, live state | the DO's `#invokeFacet`, `src/stream/processor.ts`, `src/sdk/index.ts`, `src/client/` |
+| 7 | loaded workers, `env.ITX`, the loader, the config worker, repos | `src/context/worker-loader.ts`, `src/iterate-context.ts`, `src/sdk/index.ts`, `src/context/repos.ts` |
+| 8 | egress with secrets, `/expression`, project hosts, the upgrade leg | `src/iterate-context-durable-object.ts`, `src/context/rpc-stubs.ts`, `src/worker.ts` |
+| 9 | the library and `serveMcp` | `src/library.ts` |
+| 10 | identity, tokens, the control plane | `src/principal.ts`, `src/session.ts`, `src/control-plane.ts` |
 | 11 | pagers, the quiesce, alarms, the watchdog, the breaker | `src/iterate-context-durable-object.ts`, `src/stream/stream.ts` |
 
 The invariants a reader should now be able to state:
@@ -1757,14 +1757,14 @@ Every client snippet above is lifted from, or composed of calls made by, these f
 | --- | --- |
 | preamble | `e2e/support/client.ts` |
 | 0 | `e2e/session.e2e.test.ts`, `e2e/context.e2e.test.ts` |
-| 1 | `e2e/rpc-stubs-values.e2e.test.ts`, `e2e/rpc-stubs-reconnect-and-attach.e2e.test.ts`, `e2e/rpc-stubs-values.e2e.test.ts`, `e2e/rpc-stubs-values.e2e.test.ts`, `e2e/rpc-stubs-values.e2e.test.ts`, `e2e/rpc-stubs-lend-recall-and-offline.e2e.test.ts`, `e2e/rpc-stubs-reconnect-and-attach.e2e.test.ts`, `e2e/session.e2e.test.ts` |
-| 2 | `e2e/rpc-stubs-values.e2e.test.ts`, `e2e/rewrite-rules.e2e.test.ts`, `e2e/session.e2e.test.ts`, `e2e/context.e2e.test.ts`, `e2e/context.e2e.test.ts` |
-| 3 | `e2e/rpc-stubs-values.e2e.test.ts`, `e2e/rewrite-rules.e2e.test.ts`, `e2e/rewrite-rules.e2e.test.ts`, `e2e/rewrite-rules.e2e.test.ts`, `e2e/ai-root-shadow-and-fable.e2e.test.ts`, `e2e/rpc-stubs-reconnect-and-attach.e2e.test.ts` |
-| 4 | `e2e/context.e2e.test.ts`, `e2e/support/client.ts`, `e2e/stream.e2e.test.ts`, `e2e/stream.e2e.test.ts`, `e2e/stream-isolate-ceilings-deployed.e2e.test.ts`, `e2e/stream.e2e.test.ts`, `e2e/push-delivery.e2e.test.ts`, `e2e/stream.e2e.test.ts`, `e2e/rpc-stubs-lend-recall-and-offline.e2e.test.ts`, `e2e/context.e2e.test.ts` |
-| 5 | `e2e/push-delivery.e2e.test.ts`, `e2e/rpc-stubs-reconnect-and-attach.e2e.test.ts`, `e2e/rpc-stubs-lend-recall-and-offline.e2e.test.ts`, `e2e/cursor-delivery.e2e.test.ts`, `e2e/cursor-delivery.e2e.test.ts` |
-| 6 | `e2e/workers-and-facets.e2e.test.ts`, `e2e/workers-and-facets.e2e.test.ts`, `e2e/workers-and-facets.e2e.test.ts`, `e2e/support/sources.ts`, `e2e/processor-facets.e2e.test.ts`, `e2e/processor-facets.e2e.test.ts`, `e2e/processor-facets.e2e.test.ts`, `e2e/live-state-chains-client-side.e2e.test.ts`, `e2e/stream.e2e.test.ts` |
-| 7 | `e2e/session.e2e.test.ts`, `e2e/workers-and-facets.e2e.test.ts`, `e2e/stream.e2e.test.ts`, `e2e/rpc-stubs-values.e2e.test.ts`, `e2e/workers-and-facets.e2e.test.ts`, `e2e/config-worker.e2e.test.ts`, `e2e/config-worker.e2e.test.ts`, `e2e/cfartifacts.e2e.test.ts` (deployed only), `e2e/cfartifacts.e2e.test.ts` (deployed only), `e2e/config-worker.e2e.test.ts` (deployed only) |
-| 8 | `e2e/secrets.e2e.test.ts`, `e2e/fetch-door.e2e.test.ts`, `e2e/fetch-door.e2e.test.ts`, `e2e/session.e2e.test.ts`, `e2e/fetch-door.e2e.test.ts`, `e2e/ingress-project-host.e2e.test.ts` |
+| 1 | `e2e/rpc-stubs-values.e2e.test.ts`, `e2e/rpc-stubs-reconnect-and-attach.e2e.test.ts`, `e2e/rpc-stubs-lend-recall-and-offline.e2e.test.ts`, `e2e/session.e2e.test.ts` |
+| 2 | `e2e/rpc-stubs-values.e2e.test.ts`, `e2e/rewrite-rules.e2e.test.ts`, `e2e/session.e2e.test.ts`, `e2e/context.e2e.test.ts` |
+| 3 | `e2e/rpc-stubs-values.e2e.test.ts`, `e2e/rewrite-rules.e2e.test.ts`, `e2e/ai-root-shadow-and-fable.e2e.test.ts`, `e2e/rpc-stubs-reconnect-and-attach.e2e.test.ts` |
+| 4 | `e2e/context.e2e.test.ts`, `e2e/support/client.ts`, `e2e/stream.e2e.test.ts`, `e2e/stream-isolate-ceilings-deployed.e2e.test.ts`, `e2e/push-delivery.e2e.test.ts`, `e2e/rpc-stubs-lend-recall-and-offline.e2e.test.ts` |
+| 5 | `e2e/push-delivery.e2e.test.ts`, `e2e/rpc-stubs-reconnect-and-attach.e2e.test.ts`, `e2e/rpc-stubs-lend-recall-and-offline.e2e.test.ts`, `e2e/cursor-delivery.e2e.test.ts` |
+| 6 | `e2e/workers-and-facets.e2e.test.ts`, `e2e/support/sources.ts`, `e2e/processor-facets.e2e.test.ts`, `e2e/live-state-chains-client-side.e2e.test.ts`, `e2e/stream.e2e.test.ts` |
+| 7 | `e2e/session.e2e.test.ts`, `e2e/workers-and-facets.e2e.test.ts`, `e2e/stream.e2e.test.ts`, `e2e/rpc-stubs-values.e2e.test.ts`, `e2e/config-worker.e2e.test.ts`, `e2e/cfartifacts.e2e.test.ts` (deployed only), `e2e/config-worker.e2e.test.ts` (deployed only) |
+| 8 | `e2e/secrets.e2e.test.ts`, `e2e/fetch-door.e2e.test.ts`, `e2e/session.e2e.test.ts`, `e2e/ingress-project-host.e2e.test.ts` |
 | 9 | `e2e/library-connectors.e2e.test.ts` (against the deployed pet shop; the WebSocket transports deployed only), `e2e/library-connectors.e2e.test.ts`, `e2e/library-mcp-server.e2e.test.ts` |
 | 10 | `e2e/session.e2e.test.ts`, `e2e/secrets.e2e.test.ts`, `e2e/ingress-project-host.e2e.test.ts`, `e2e/library-mcp-server.e2e.test.ts` |
 | 11 | `e2e/stream.e2e.test.ts` (opt-in, deployed only), `__workers-tests__/hibernation-at-scale.test.ts`, `__workers-tests__/alarm-quiesce.test.ts` |
@@ -1782,13 +1782,13 @@ table of chapter 3 was checked by running `src/context/itx-expression-rewriting.
   (`FACET_SOURCE_TOO_LARGE`) are stated from source and their unit tables
   (`src/context/expression.test.ts`, `src/context/worker-loader.test.ts`); no e2e file drives either
   refusal.
-- **`useLiveState`** (chapter 6) is described from `src/client/react.tsx` and is exercised by
+- **`useLiveState`** (chapter 6) is described from `src/client/demo.tsx` and is exercised by
   `specs/live-state-demo.spec.ts` (Playwright over `/demo`), not by the e2e lane.
 - **The `email` login mode** (chapter 10) is described from `src/session.ts`, `src/worker.ts` and
   `src/control-plane/`; the e2e lane runs `open` mode throughout, and the `email`-mode admissions are
   pinned only in `__workers-tests__/control-plane.test.ts`.
 - **The fetch-upgrade leg's mechanism** (chapter 8) is described from the doctrine header of
-  `src/fetch/rpc-stub-fetch.ts`; the e2e lane proves the capnweb-provider half end to end and marks
+  `src/context/rpc-stubs.ts`; the e2e lane proves the capnweb-provider half end to end and marks
   the dynamic-worker-provider half `test.fails`; the workerd-provider half is
   `__workers-tests__/ws-fetch-live-101.test.ts`.
 - **The self-wake breaker's streak of five** is stated from `src/stream/stream.ts`

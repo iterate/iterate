@@ -1,11 +1,13 @@
-// client/live-state-client.test.ts — `connectLiveState` (client/live-state-client.ts) over a fake
+// client/live-state.test.ts — the client half's transport pins (the store's own reduce is exercised through it).
+
+import { expect, test } from "vitest";
+import { connectLiveState, type LiveStateDelta, type LiveStateSeed } from "./live-state.ts";
+
+// ── live state client ── `connectLiveState` (client/live-state.ts) over a fake
 // itx session and a door whose reads the test resolves BY HAND, so the heal window is a thing the
-// test controls rather than a race it hopes for. The store's own reduce is client/live-state-store.ts;
+// test controls rather than a race it hopes for. The store's own reduce is the section above;
 // this is the transport: the first paint's door read, gap heals SINGLE-FLIGHT, and a delta that
 // lands WHILE a heal is in flight (the seed being read may predate it).
-import { expect, test } from "vitest";
-import { connectLiveState } from "./live-state-client.ts";
-import type { LiveStateDelta, LiveStateSeed } from "./live-state-store.ts";
 
 type Seed = LiveStateSeed<{ n: number }>;
 

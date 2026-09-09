@@ -1,5 +1,5 @@
 // rpc-stubs-lend-recall-and-offline.e2e.test.ts — the two-layer stub machinery LIVE
-// (src/context/rpc-stub-directory.ts + rpc-stub-relay.ts + iterate-context.ts). TWO different
+// (src/context/rpc-stubs.ts + rpc-stubs.ts + iterate-context.ts). TWO different
 // things, two lifetimes: an RPC STUB is physical — `itx.provide(match, stub)` LENDS a client's rpc
 // stub to the `itx.rpcStubs` built-in under the key = the canonical match (it lives until the handle
 // is disposed or its session ends); an ITX-EXPRESSION REWRITE RULE is pure data —
@@ -160,7 +160,7 @@ test("a hand-configured rule naming a key nobody lent answers RPC_STUB_OFFLINE �
 // An in-flight invoke on a provider that dies mid-call must reject with the CODED offline error —
 // the rule existed when the call went out; the transport died under it. The relay re-codes the
 // provider's raw dying-transport error to RPC_STUB_OFFLINE LOCALLY so the CODE (never a message)
-// crosses the Workers-RPC hop back to the caller (lib/errors.ts: classify by code).
+// crosses the Workers-RPC hop back to the caller (lib.ts: classify by code).
 test("killing the provider session mid-invoke rejects the in-flight call promptly with code RPC_STUB_OFFLINE — then the rule goes with the session", async () => {
   const ctx = freshCtx("midinvoke");
   const observer = openItx(ctx);

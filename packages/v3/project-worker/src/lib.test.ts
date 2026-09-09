@@ -2,7 +2,7 @@
 // applyPatch(a, diff(a, b)) always deep-equals b — every shape below proves it, then asserts
 // the op shapes we promised (append fast path, wholesale array replace, key remove).
 import { describe, expect, test } from "vitest";
-import { applyPatch, diff } from "./patch.ts";
+import { applyPatch, diff } from "./lib.ts";
 
 const roundtrip = (a: unknown, b: unknown) => {
   const ops = diff(a, b);

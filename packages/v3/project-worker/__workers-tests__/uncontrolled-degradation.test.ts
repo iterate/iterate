@@ -35,9 +35,9 @@ import { evictDurableObject, runDurableObjectAlarm, runInDurableObject } from "c
 import { afterAll, expect, test, vi } from "vitest";
 import type { ItxExpression } from "../src/context/expression.ts";
 import { rewriteRuleConfiguredEvent } from "../src/context/itx-expression-rewriting.ts";
-import { errorCode } from "../src/lib/errors.ts";
+import { errorCode } from "../src/lib.ts";
 const codeOf = errorCode;
-import { subscriptionConfiguredEvent } from "../src/stream/subscriptions.ts";
+import { subscriptionConfiguredEvent } from "../src/stream/core-processor.ts";
 import { stub, until } from "./support.ts";
 
 const MiB = 1024 * 1024;
@@ -78,7 +78,7 @@ async function rejectionOf(fn: () => unknown): Promise<ObservedError | undefined
   }
 }
 
-/** Every `reportIssue` line (lib/errors.ts prints ONE console.error object per issue, `event:
+/** Every `reportIssue` line (lib.ts prints ONE console.error object per issue, `event:
  *  "issue"`) the DO emits while a row runs — the DO shares this isolate, so its console is ours.
  *  Issue lines are captured (not printed: they are the noise these rows are about); anything else
  *  console.error'd passes through. */
@@ -173,7 +173,7 @@ const bigWorkerRuleTarget = (tag: string, chars: number): ItxExpression => [
 ];
 
 // The core checkpoint is one storage cell: a configure whose state would not fit is refused CODED
-// (REDUCE_CHECKPOINT_TOO_LARGE — reduce-checkpoint.ts measures the state BEFORE the write), naming
+// (REDUCE_CHECKPOINT_TOO_LARGE — ReduceCheckpointTable measures the state BEFORE the write), naming
 // the cell, the size, the ceiling and "nothing was written". BORN RED: SQLite's own `string or blob
 // too big: SQLITE_TOOBIG` crossed the hop with no code, no cap named, from a write already inside
 // the transaction (flipped with the one-row checkpoint, BUILD-LOG 2026-09-04). The ceiling is the

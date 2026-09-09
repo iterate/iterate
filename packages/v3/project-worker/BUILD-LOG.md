@@ -4404,3 +4404,33 @@ pin naming its mechanism, or declined with the reason above. The red pins are th
   GREEN, the kv-list burst included.
 - NEXT, running: the file consolidation Jonas asked for ("get to about half") — 57 source files → 23,
   one per concept, pure moves; the docs' file maps follow it.
+
+## 2026-09-09 — the file consolidation: 57 source files → 25, one per concept
+
+- WHAT JONAS ASKED: "reduce the sheer number of files in the implementation — get to about half, it's
+  too unwieldy." One Fable implementer, sequential, tsc-green after each folder; pure moves, no
+  behaviour change, no new abstraction, no markdown touched (the docs' file maps rewritten by hand
+  after).
+- THE MAP, as landed: `worker.ts` absorbs the project-host codec and the app config; `session.ts` the
+  teardown; `iterate-context.ts` the DO-name codec and the loopback entrypoint; the DO absorbs egress;
+  `context/expression.ts` absorbs the walk and the dotted door; the rewriting file absorbs the roots
+  list; `context/rpc-stubs.ts` is the directory, the relay and the fetch-upgrade leg; `context/repos.ts`
+  absorbs git-wire; `lib.ts` is errors, patch and timeout; `stream/stream.ts` absorbs the typed tables;
+  `stream/core-processor.ts` the subscription event; `stream/processor.ts` (still PURE — zod tree-shakes
+  off the worker) absorbs the checkpoint, live state, the event types and the contract; `stream/
+  test-support.ts` the node:sqlite stand-in; `sdk/index.ts` is the two workerd hosts plus the re-exports;
+  `control-plane.ts` (beside `control-plane.sql`) is the four control-plane files; `library.ts` the five
+  connectors; `client/live-state.ts` the client and its store; `demo.tsx` the hook. Folders `lib/`,
+  `fetch/`, `control-plane/`, `library/` are gone.
+- TWO KEPT APART, with reasons: `principal.ts` — the node e2e lane imports its codec, and folded into
+  `session.ts` its graph would carry `cloudflare:workers` (through the entrypoint), which node cannot
+  load; `client/presence-processor-source.ts` — its other consumer, the e2e sources, drags the loader's
+  types into the DOM-typed demo build. Tests merged alongside: 32 files → 19, 302 → 301 rows (the one
+  dropped is the "there are library modules" guard, meaningless for one file). Fifteen symbols lost
+  their `export` (exported only for a now-same-file sibling). Two runtime import cycles arrived with
+  the map (worker ↔ DO/control plane for the config; session ↔ proxy for the teardown) — lazy on both
+  sides; the workers lane boots through them, the local e2e lane proves the bundle does.
+- COUNTS: 12,039 source lines in 25 files (net +76: map lines, section markers, five `vi.mock` blocks);
+  the worker bundle 1,739,894 → 1,739,285 bytes. GATES: tsc ×3 · `node build-sdk.mjs` · oxlint · knip ·
+  unit 19 files / 492 passed / 5 expected-fail · workers 10 files / 45 passed / 9 expected-fail. The
+  full `pnpm test` and the deployed proof: the line below.

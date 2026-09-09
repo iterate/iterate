@@ -22,7 +22,7 @@
 // author wrote IS what runs, and it always enters through an EXPORTED entrypoint.
 
 import { PROCESSOR_SDK_MODULE } from "../generated/processor-sdk.ts";
-import { codedError } from "../lib/errors.ts";
+import { codedError } from "../lib.ts";
 import {
   normalizedItxExpression,
   type ItxExpression,
@@ -120,12 +120,12 @@ function contentHashOfWorkerModules(modules: WorkerModules): string {
 /** What `loadConfinedWorker` needs. */
 type LoadConfinedWorkerOptions = {
   env: { LOADER: WorkerLoader };
-  /** The deploy identity every loader id folds in (app-config.ts `deployId`: CF_VERSION_METADATA.id,
+  /** The deploy identity every loader id folds in (worker.ts `AppConfig.deployId`: CF_VERSION_METADATA.id,
    *  "unversioned" locally) — a facet built from an isolate a PRIOR deployment minted cannot be called
    *  by the new parent, so a redeploy must mint fresh isolates. */
   deployId: string;
   /** The `ItxEntrypoint` stub a loaded worker gets as `env.ITX` and `globalOutbound` — the loopback
-   *  minted for the owning context (itx-entrypoint.ts). */
+   *  minted for the owning context (iterate-context.ts `ItxEntrypoint`). */
   itxEntrypoint: Fetcher;
   /** `worker` = a stateless isolate (`itx.workers.get`); `facet` = a durable class hosted as a facet
    *  (`itx.facets.get`). A CLOSED union so a new cacheKey family is a deliberate type change. */

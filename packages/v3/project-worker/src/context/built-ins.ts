@@ -1,5 +1,5 @@
 // built-ins.ts — THE BUILT-INS: a plain record whose KEYS are the physical-layer roots (the one list
-// is context/built-in-roots.ts). Three kinds of key, one record: the AXIOMS (the log, the stub
+// is context/itx-expression-rewriting.ts). Three kinds of key, one record: the AXIOMS (the log, the stub
 // registry, the rule table, the two hosts, addressing), the BINDINGS (`kv`, `secrets`, `ai`,
 // `cfArtifacts`, `repos` — a Cloudflare binding only this env holds, exposed or scoped) and THE
 // LIBRARY (`connectTo*`, `serveMcp`, src/library/ — code a user could write, taking only `itx`).
@@ -12,23 +12,25 @@
 
 import type { ReachableContext, StreamPage, WaitForEventFilter } from "../stream/stream.ts";
 import { stampPrincipal, type Principal } from "../principal.ts";
-import type { StreamEvent, StreamEventInput } from "../stream/events.ts";
-import type { LibraryRoots } from "../library/index.ts";
+import type { StreamEvent, StreamEventInput } from "../stream/processor.ts";
+import type { LibraryRoots } from "../library.ts";
+import { resolveContextPath } from "../iterate-context.ts";
 import {
   loadConfinedWorker,
   type FacetSpec,
   type WorkerCacheKey,
   type WorkerSource,
 } from "./worker-loader.ts";
-import { resolveContextPath } from "./durable-object-names.ts";
 import {
   print,
   type ItxExpression,
   type ItxExpressionInput,
   type ItxExpressionStep,
+  FacetHandle,
+  InvokeHandle,
+  RpcStubHandle,
 } from "./expression.ts";
-import { FacetHandle, InvokeHandle, RpcStubHandle } from "./invoke-handle.ts";
-import type { BuiltInRoot } from "./built-in-roots.ts";
+import type { BuiltInRoot } from "./itx-expression-rewriting.ts";
 import {
   projectScopedArtifacts,
   projectScopedRepos,
@@ -62,7 +64,7 @@ export type SubscriptionListEntry = {
 };
 
 /** THE built-in scope, as ONE interface — the clean-room's whole kernel surface; the library's verbs
- *  come in by `extends` (library/index.ts). The record is a PLAIN OBJECT of own-enumerable closures,
+ *  come in by `extends` (library.ts). The record is a PLAIN OBJECT of own-enumerable closures,
  *  not an RpcTarget class, on purpose: the resolver gates on `Object.hasOwn`, so a prototype-method
  *  class would leave every root unreachable. Exported for ONE reader: the edge `IterateContext`'s TYPE
  *  merges it in (iterate-context.ts), so what rides the dotted hop is typed where a client holds it. */
@@ -179,7 +181,7 @@ export interface BuiltInScope extends LibraryRoots {
 }
 
 // THE ONE LIST: `keyof BuiltInScope` (minus the reserved root itself, which names the record, not a
-// key of it) and context/built-in-roots.ts's `BUILT_IN_ROOTS` are the same set — a root added to
+// key of it) and context/itx-expression-rewriting.ts's `BUILT_IN_ROOTS` are the same set — a root added to
 // either without the other fails to typecheck right here.
 type RootsAreTheSameSet = [Exclude<keyof BuiltInScope, "builtins">] extends [BuiltInRoot]
   ? [BuiltInRoot] extends [Exclude<keyof BuiltInScope, "builtins">]
@@ -205,9 +207,9 @@ interface BuildBuiltInsDeps {
     AI: Ai;
     ARTIFACTS: ArtifactsNamespace;
   };
-  /** The deploy identity every loader cacheKey folds in (app-config.ts). */
+  /** The deploy identity every loader cacheKey folds in (worker.ts `AppConfig`). */
   deployId: string;
-  /** The Artifacts account + namespace `itx.repos` builds git remotes from (app-config.ts). */
+  /** The Artifacts account + namespace `itx.repos` builds git remotes from (worker.ts `AppConfig`). */
   artifactsAccountId: string;
   artifactsNamespace: string;
   /** The secrets catalog — names and origins, from the core reduce (strongly consistent; a KV list
@@ -233,10 +235,10 @@ interface BuildBuiltInsDeps {
   /** The facet door, verbatim (accepted trade: a busy stateful facet pins its stream). */
   facets: BuiltInScope["facets"];
   /** The `ItxEntrypoint` stub a loaded worker gets as `env.ITX` and `globalOutbound` — the loopback
-   *  minted once for this context (the DO's `#itxEntrypoint`; itx-entrypoint.ts for why it is never a
+   *  minted once for this context (the DO's `#itxEntrypoint`; iterate-context.ts's `ItxEntrypoint` for why it is never a
    *  raw getByName stub). */
   itxEntrypoint: Fetcher;
-  /** THE LIBRARY's roots (library/index.ts `buildLibrary(itx).roots`), built by the DO over its own
+  /** THE LIBRARY's roots (library.ts `buildLibrary(itx).roots`), built by the DO over its own
    *  `itx` handle so a library call's `itx.fetch(...)` resolves through THIS context's rules. */
   library: LibraryRoots;
 }
@@ -351,7 +353,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
     rewriteRules: deps.rewriteRules,
     // A genuine InvokeHandle so `workers.get(spec).run()` pipelines on every lane (workerd#6873). A
     // terminal `fetch(request)` is this same call: `entrypoint.fetch(request)` IS the entrypoint's
-    // fetch channel, socket-bearing Responses included (fetch/rpc-stub-fetch.ts doctrine, point 4).
+    // fetch channel, socket-bearing Responses included (context/rpc-stubs.ts doctrine, point 4).
     // Re-resolves per call; the loader caches by key, so a warm isolate is reused and a producer
     // expression never re-runs.
     workers: {
@@ -389,6 +391,6 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
           return Reflect.apply(fn, entrypoint, args);
         }),
     },
-    ...deps.library, // THE LIBRARY (library/index.ts), built and owned by the DO
+    ...deps.library, // THE LIBRARY (library.ts), built and owned by the DO
   } satisfies Omit<BuiltInScope, "builtins">;
 }

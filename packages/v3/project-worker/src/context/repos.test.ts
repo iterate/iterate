@@ -1,4 +1,16 @@
-// built-ins-artifacts.test.ts — `itx.cfArtifacts`, the RAW Cloudflare Artifacts binding, project-
+// context/repos.test.ts — the repos' unit pins: `itx.cfArtifacts` (the raw binding, project-scoped,
+// pure over an injected namespace) and the git wire's one refusal that matters to `itx.repos`.
+
+import { expect, test, afterEach, vi } from "vitest";
+import {
+  projectScopedArtifacts,
+  ScopedArtifactRepo,
+  type ArtifactRepoHandle,
+  type ArtifactsNamespace,
+  createGitWireTransport,
+} from "./repos.ts";
+
+// ── cfArtifacts ── `itx.cfArtifacts`, the RAW Cloudflare Artifacts binding, project-
 // scoped and SHAPED like the real binding (create/get/list return the real shapes). Two isolation
 // properties are what matter, and both are enforced HERE, not by the binding:
 //   1. NAMES are forced under the caller's `${projectId}.` prefix — a `.` delimiter, because project
@@ -8,14 +20,6 @@
 //   2. `get` returns the real handle's shape MINUS `fork` — whose runtime `fork(name)` (walked by the
 //      itx dispatcher regardless of the narrowed type) takes an unprefixed name and escapes the wall.
 // Pure over an injected namespace: no DO, no bindings, no network.
-
-import { expect, test } from "vitest";
-import {
-  projectScopedArtifacts,
-  ScopedArtifactRepo,
-  type ArtifactRepoHandle,
-  type ArtifactsNamespace,
-} from "./repos.ts";
 
 function recordingNamespace(allRepos: string[] = []) {
   const calls: { method: string; name: string }[] = [];
@@ -82,4 +86,19 @@ test("the '.' delimiter is collision-free for hyphenated project IDs; list filte
 
   const ab = projectScopedArtifacts(namespace, "prj_a-b");
   expect((await ab.list()).repos.map((r) => r.name)).toEqual(["secret"]);
+});
+
+// ── git wire ── the wire's one refusal that matters to `itx.repos`: a TRUNCATED pkt-line body is
+// an outage, never an empty ref list (an empty list reads as "unborn repo" → "no file", which would
+// silently blank the config worker's source).
+
+afterEach(() => vi.unstubAllGlobals());
+
+test("a pkt-line body cut mid-header rejects instead of yielding an empty ref list", async () => {
+  vi.stubGlobal("fetch", async () => new Response("00", { status: 200 }));
+  const transport = createGitWireTransport({
+    remote: "https://account.artifacts.example/git/ns/prj.config.git",
+    token: "t",
+  });
+  await expect(transport.tipOf("refs/heads/main")).rejects.toThrow(/truncated pkt-line/);
 });

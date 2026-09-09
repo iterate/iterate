@@ -222,7 +222,7 @@ test("itx.slack — a live bridge replays the natural dotted spelling onto the S
 
   // 1. THE HEADLINE: the NATURAL DOTTED spelling every client writes — plain property access on the
   //    capnweb stub — replayed end to end (slack → chat → postMessage). This is the prototype-hop
-  //    dotted surface (context/invoke-handle.ts): unknown segments accumulate into ONE
+  //    dotted surface (context/expression.ts): unknown segments accumulate into ONE
   //    invoke dispatch. No client SDK, just capnweb.
   const posted = await itx.slack.chat.postMessage({ channel: "#general", text: "hello from itx" });
   expect(posted?.ok).toBe(true);

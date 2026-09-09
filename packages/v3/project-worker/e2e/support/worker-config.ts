@@ -25,7 +25,7 @@ export function e2eWorkerConfig(): Unstable_RawConfig {
     main: join(PACKAGE_DIR, String(rawConfig.main)),
     assets: { ...rawConfig.assets, directory: join(PACKAGE_DIR, "public") },
     build: { ...rawConfig.build, cwd: PACKAGE_DIR },
-    // Configuration (src/app-config.ts): the e2e lane is its own deployment name, and its project
+    // Configuration (src/worker.ts `parseAppConfig`): the e2e lane is its own deployment name, and its project
     // hosts hang under `localhost` (support/project-host.ts reaches them with a Host header).
     vars: {
       ...rawConfig.vars,

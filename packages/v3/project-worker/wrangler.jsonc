@@ -19,7 +19,7 @@
   "account_id": "04b3b57291ef2626c6a8daa9d47065a7",
   "observability": { "enabled": true, "logs": { "head_sampling_rate": 1 } },
   "workers_dev": true,
-  // PROJECT HOSTS (src/project-host.ts): every `<label>--<projectId>.<base>` under the wildcard is
+  // PROJECT HOSTS (src/worker.ts `projectHostOf`): every `<label>--<projectId>.<base>` under the wildcard is
   // an app of that project. The wildcard DNS record (`*.project-worker.iterate.com` AAAA 100::,
   // proxied — originless, the route terminates it) lives in the zone; the route is this line.
   "routes": [{ "pattern": "*.project-worker.iterate.com/*", "zone_name": "iterate.com" }],
@@ -63,7 +63,7 @@
     "IterateContextDurableObject": { "type": "durable-object", "storage": "sqlite" },
   },
 
-  // The in-process control plane's directory (src/control-plane/definitions.sql: users, orgs,
+  // The in-process control plane's directory (src/control-plane.sql: users, orgs,
   // org_members, projects — a project's id IS its slug).
   "d1_databases": [
     {
@@ -82,7 +82,7 @@
     { "binding": "OAUTH_KV", "id": "b8efbdc3253840fa95331a80efbeb03d" },
   ],
 
-  // Configuration (src/app-config.ts): `APP_CONFIG_*` vars — the ONE door, parsed once per isolate,
+  // Configuration (src/worker.ts `parseAppConfig`): `APP_CONFIG_*` vars — the ONE door, parsed once per isolate,
   // loud on a bad or unknown one. Bindings are declared above; a var is what differs between
   // deployments of the same code. (APP_CONFIG_PROJECT_TOKEN_SECRET is a wrangler secret.)
   "vars": {

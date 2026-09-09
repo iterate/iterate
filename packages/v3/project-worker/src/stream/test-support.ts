@@ -1,3 +1,4 @@
+/// <reference types="node" />
 // stream/test-support.ts — the in-memory stand-ins the unit lane drives the processor engine with.
 // Imported by the `*.test.ts` files, never by production code — ONE copy, so the commit semantics
 // the tests assume cannot drift between files.
@@ -8,15 +9,19 @@
 // its own batch). A short page's proof is the in-memory head, so the engine's stale-push and
 // ephemeral-window rules are exercised directly; the real Stream stops at the DURABLE mark
 // (stream.test.ts pins that against real SQL).
+//   node:sqlite durable object storage — `nodeSqliteDurableObjectStorage`, the `DurableObjectStorageSlice` over
+//   node:sqlite, so the REAL Stream runs in plain Node
+import { DatabaseSync } from "node:sqlite";
 import {
   idempotencyConflictMessage,
   sameIdempotentEvent,
   type StreamEvent,
   type StreamEventInput,
-} from "./events.ts";
-import { nodeSqliteDurableObjectStorage } from "./node-sqlite-durable-object-storage.ts";
-import type { ProcessorEngine, ProcessorStream } from "./processor.ts";
-import { ReduceCheckpointTable } from "./reduce-checkpoint.ts";
+  type ProcessorEngine,
+  type ProcessorStream,
+  ReduceCheckpointTable,
+} from "./processor.ts";
+import type { DurableObjectStorageSlice } from "./stream.ts";
 
 export function memoryStream(path = "/") {
   const durableEvents: StreamEvent[] = []; // the durable log — what `read` answers
@@ -83,7 +88,7 @@ export function memoryStream(path = "/") {
   };
 }
 
-/** A facet's checkpoint table (reduce-checkpoint.ts `ReduceCheckpointTable`) over an in-memory
+/** A facet's checkpoint table (processor.ts `ReduceCheckpointTable`) over an in-memory
  *  node:sqlite database — the real table, so the unit lane checkpoints exactly as a facet does —
  *  with `writes` counting every write: rule 4 ("one durable commit per batch") and the ephemeral
  *  zero-write rule are pinned by counting it. */
@@ -106,3 +111,41 @@ export function memoryStorage(): WriteCountingReduceCheckpointTable {
 
 /** Let fire-and-forget pushes land. */
 export const settle = (ms = 25) => new Promise((r) => setTimeout(r, ms));
+
+// ── node:sqlite durable object storage ── the `DurableObjectStorageSlice` over node:sqlite, so the
+// REAL Stream runs in plain Node (the memory pins: local workerd enforces no isolate memory limit,
+// a capped V8 does). Faithful where memory is concerned: `exec` hands back node:sqlite's LAZY row
+// iterator, as workerd's cursor is, and `transactionSync` is a real BEGIN/ROLLBACK, so a throw
+// inside a commit undoes its rows. The cell ceiling workerd enforces (2 MB, SQLITE_TOOBIG) is not
+// reproduced here: the typed modules refuse before it, coded (processor.ts `ReduceCheckpointTable`).
+
+export function nodeSqliteDurableObjectStorage(): DurableObjectStorageSlice {
+  const db = new DatabaseSync(":memory:");
+  return {
+    sql: {
+      exec<T extends Record<string, SqlStorageValue>>(query: string, ...bindings: unknown[]) {
+        const statement = db.prepare(query);
+        const bound = bindings as (string | number | null)[];
+        // A write runs NOW (an un-consumed `iterate()` never executes); a read stays lazy.
+        if (statement.columns().length === 0) {
+          statement.run(...bound);
+          return Object.assign([] as T[], { toArray: () => [] as T[] });
+        }
+        const rows = statement.iterate(...bound) as IterableIterator<T>;
+        return Object.assign(rows, { toArray: () => [...rows] });
+      },
+    },
+    transactionSync: <T>(closure: () => T): T => {
+      db.exec("BEGIN");
+      try {
+        const result = closure();
+        db.exec("COMMIT");
+        return result;
+      } catch (error) {
+        db.exec("ROLLBACK");
+        throw error;
+      }
+    },
+    setAlarm: async () => {},
+  };
+}

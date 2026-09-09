@@ -2,7 +2,7 @@
 // workers lane — the only lane that can speak the DO's transport plumbing directly AND read its
 // socket census, `rpcStubTransportState`).
 //
-// Target surface: RpcStubDirectory layer 2 (src/context/rpc-stub-directory.ts). The pager upgrade's
+// Target surface: RpcStubDirectory layer 2 (src/context/rpc-stubs.ts). The pager upgrade's
 // `x-itx-rpc-stub-pager` header carries the KEY and the EVENTS THAT NAME IT; the DO accepts the
 // socket and appends those events in the same turn — the SET half of "the DO owns both ends of a
 // lent stub's rule" (the un-set half is the key's last pager close). So a `provide(stub)` is ONE
@@ -21,8 +21,8 @@ import { rewriteRuleConfiguredEvent } from "../src/context/itx-expression-rewrit
 import {
   encodeRpcStubPagerAttachRequest,
   RPC_STUB_PAGER_WEBSOCKET_HEADER,
-} from "../src/context/rpc-stub-directory.ts";
-import type { StreamEventInput } from "../src/stream/events.ts";
+} from "../src/context/rpc-stubs.ts";
+import type { StreamEventInput } from "../src/stream/processor.ts";
 import { Echo, openSession, stub, until } from "./support.ts";
 
 /** Open a pager upgrade straight at the DO's fetch door (what lendRpcStubOverPager does relay-side):

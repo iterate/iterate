@@ -2,10 +2,10 @@
   "name": "project-worker",
   "private": true,
   "type": "module",
-  "description": "The clean-room platform — ONE worker, one package: worker.ts (the stateless capnweb edge + ingress router) + IterateContextDurableObject (iterate-context-durable-object.ts) + control-plane/ (OAuth AS + D1 directory + /mcp, always in-process) + context/ fetch/ stream/ sdk/ lib/ library/ client/",
+  "description": "The clean-room platform — ONE worker, one package: worker.ts (the stateless capnweb edge + ingress router) + IterateContextDurableObject (iterate-context-durable-object.ts) + control-plane.ts (OAuth AS + D1 directory + /mcp, always in-process) + context/ stream/ sdk/ client/ + lib.ts + library.ts",
   "exports": {
     "./types": "./src/types.ts",
-    "./client": "./src/client/live-state-client.ts"
+    "./client": "./src/client/live-state.ts"
   },
   "scripts": {
     "dev": "wrangler dev",
@@ -15,7 +15,7 @@
     "e2e": "vitest run --project e2e",
     "spec": "node build-sdk.mjs && playwright test",
     "bench": "vitest bench --run --project bench",
-    "db:schema:remote": "wrangler d1 execute control-plane-directory --remote --file src/control-plane/definitions.sql"
+    "db:schema:remote": "wrangler d1 execute control-plane-directory --remote --file src/control-plane.sql"
   },
   "dependencies": {
     "@cloudflare/workers-oauth-provider": "^0.8.3",

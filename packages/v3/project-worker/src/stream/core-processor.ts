@@ -13,12 +13,13 @@
 // (`reduceCoreEventBatch`), NOT a hosted `StreamProcessor`: owned by the Stream itself and reduced
 // inside every commit, because its readers (the append door, the dispatcher, the delivery loop) are
 // all synchronous. The COMMANDS that append these events live beside the code that reads each slice
-// (context/itx-expression-rewriting.ts for the rules, stream/subscriptions.ts for rows). Control is
+// (context/itx-expression-rewriting.ts for the rules, `subscriptionConfiguredEvent` below for rows). Control is
 // ORDINARY EVENTS: `itx.append({ type: 'events.iterate.com/stream/paused', payload: { reason } })`
 // pauses — so a POLICY processor (a token-bucket breaker, a quota) runs as an ordinary facet and
 // trips the stream by appending `paused`. Core knows nothing about it; e2e/support/sources.ts's
 // BreakerProcessor is that pattern. created/woken come from the DO constructor
 // (Stream.appendCreatedAndWokenEvents); the pause exemptions are Stream.append's.
+//   subscriptions — `subscriptionConfiguredEvent`, THE SUBSCRIPTIONS TABLE's one command (the rows are core state)
 
 import {
   normalizedItxExpression,
@@ -27,16 +28,16 @@ import {
   parseItxExpressionPrefix,
   type ItxExpression,
   type ItxExpressionPrefix,
+  print,
 } from "../context/expression.ts";
-import { isBuiltInRoot } from "../context/built-in-roots.ts";
 import {
+  isBuiltInRoot,
   isBuiltInsRooted,
   resolveItxExpression,
   type ItxExpressionRewriteRule,
 } from "../context/itx-expression-rewriting.ts";
-import { jsonEqual } from "../lib/patch.ts";
-import type { StreamEvent } from "./events.ts";
-import type { ReduceArgs } from "./processor.ts";
+import { jsonEqual } from "../lib.ts";
+import type { StreamEvent, ReduceArgs, StreamEventInput } from "./processor.ts";
 
 export type { ItxExpressionRewriteRule } from "../context/itx-expression-rewriting.ts";
 
@@ -251,7 +252,7 @@ export type CoreState = {
  *  tables are plain records indexed by name, so such a name would read or write the prototype
  *  instead of a row. Refused here and at the append door (stream.ts, beside `core`). */
 const SUBSCRIPTION_NAME_PATTERN = /^[A-Za-z0-9_-]+$/;
-export function parseSubscriptionName(name: string): string {
+function parseSubscriptionName(name: string): string {
   if (typeof name !== "string" || !SUBSCRIPTION_NAME_PATTERN.test(name) || name in Object.prototype)
     throw new Error(
       `a subscription name is one segment: [A-Za-z0-9_-]+, never a key of Object.prototype (got ${JSON.stringify(name)})`,
@@ -435,4 +436,50 @@ export function reduceCoreEvent(
     default:
       return undefined;
   }
+}
+
+// ── subscriptions ── THE SUBSCRIPTIONS TABLE's one COMMAND (the rows are core state; the reader is
+// subscription-delivery.ts). A subscription is pure data — a NAME, a TARGET expression whose
+// terminal is callable with `(events, range)`, an optional `consumes` filter, and an optional
+// `afterOffset` (where the cursor lane starts: 0 = the whole log; absent = from the configure
+// offset). `configured` REPLACES a same-named row; a `null` target REMOVES it. The halted fact is
+// appended by the delivery loop; the resumed fact by an operator's plain `itx.append`.
+
+/** The `subscription-configured` event for `input.name`. `ifConfiguredAtOffset` (with a null
+ *  target) is a handle's undo: the reduce drops the row ONLY while it is still the one configured at
+ *  that offset (core-processor.ts). */
+export function subscriptionConfiguredEvent(input: {
+  name: string;
+  target: ItxExpressionInput | null;
+  consumes?: string[];
+  afterOffset?: number;
+  ifConfiguredAtOffset?: number;
+}): StreamEventInput {
+  const name = parseSubscriptionName(input.name);
+  const { afterOffset } = input;
+  if (afterOffset !== undefined && !(Number.isInteger(afterOffset) && afterOffset >= 0))
+    throw new Error(
+      `a subscription's afterOffset is a non-negative integer offset (got ${JSON.stringify(afterOffset)})`,
+    );
+  // Through the codec's one door, so a target the reduce could not read fails LOUD here, in the
+  // parser's words. STORED AS THE PARSED FORM: a target carries a facet's whole source as data, and
+  // the reduce must never re-parse that through the string codec (its 2 KiB cap).
+  const target = input.target === null ? null : normalizedItxExpression(input.target);
+  if (target && target[0] !== "itx")
+    throw new Error(
+      `a subscription target must be rooted at "itx" (got ${JSON.stringify(print(target))})`,
+    );
+  return {
+    type: "events.iterate.com/stream/subscription-configured",
+    payload: {
+      name,
+      target,
+      ...(target && input.consumes && { consumes: input.consumes }),
+      ...(target && afterOffset !== undefined && { afterOffset }),
+      ...(!target &&
+        input.ifConfiguredAtOffset !== undefined && {
+          ifConfiguredAtOffset: input.ifConfiguredAtOffset,
+        }),
+    },
+  };
 }

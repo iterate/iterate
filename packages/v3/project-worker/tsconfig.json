@@ -14,5 +14,5 @@
   },
   "include": ["src"],
   // The browser client .tsx (React + DOM) is checked by tsconfig.client.json, not here.
-  "exclude": ["src/client/react.tsx", "src/client/demo.tsx"]
+  "exclude": ["src/client/demo.tsx"]
 }

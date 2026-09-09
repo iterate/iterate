@@ -1,10 +1,27 @@
-// fetch/egress.test.ts — `substituteProjectSecrets` (fetch/egress.ts), the substitution the DO's
+// iterate-context-durable-object.test.ts — the DO's pure half: the egress secret substitution.
+
+import { expect, test, vi } from "vitest";
+
+// The module under test reaches classes from "cloudflare:workers" (RpcTarget, DurableObject,
+// WorkerEntrypoint, the pipelining brands), which node cannot resolve — mock JUST those base classes
+// (no-op shells); the module's own logic runs unmodified.
+vi.mock("cloudflare:workers", () => ({
+  RpcTarget: class {},
+  DurableObject: class {},
+  WorkerEntrypoint: class {},
+  RpcPromise: class {},
+  RpcProperty: class {},
+}));
+import {
+  ProjectSecretRefused,
+  substituteProjectSecrets,
+} from "./iterate-context-durable-object.ts";
+
+// ── egress ── `substituteProjectSecrets` (iterate-context-durable-object.ts), the substitution the DO's
 // egress terminal runs before `fetch`: every `{{secret:project:NAME}}` token in the URL and the
 // headers is replaced by its value; a token with no stored secret throws, naming the token and where
 // it sat; substituted values are never rescanned; a NEW Request only when something changed (the
 // rebuild is WS-safe — method, Upgrade and body survive it).
-import { expect, test } from "vitest";
-import { ProjectSecretRefused, substituteProjectSecrets } from "./egress.ts";
 
 const secrets: Record<string, string> = { a: "alpha", b: "bravo", "api.key_v-2": "REAL" };
 const resolve = (name: string) => secrets[name] ?? null;

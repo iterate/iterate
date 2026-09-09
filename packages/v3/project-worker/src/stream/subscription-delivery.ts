@@ -1,7 +1,7 @@
 // subscription-delivery.ts — THE ONE DELIVERY LOOP, run from the stream's post-commit hook: for every
 // subscription row, filter the batch by `consumes`, evaluate the target, and look at what came back:
 //
-//   • a FacetHandle or an RpcStubHandle (context/invoke-handle.ts) OWNS ITS PROGRESS — a facet keeps
+//   • a FacetHandle or an RpcStubHandle (context/expression.ts) OWNS ITS PROGRESS — a facet keeps
 //     its own checkpoint and gap-repairs from the log, a live client owns its offset and heals with
 //     read — so it gets a PUSH of `(events, { after, through })`, one delivery chain per subscription;
 //   • anything else cannot own progress, so THE STREAM KEEPS A CURSOR for it (a `subscription_cursors`
@@ -22,16 +22,17 @@
 // next delivered range. A cursor target additionally receives ephemerals when it is caught up (they
 // ride the pushed batch; they are not in the log), never when it is behind.
 
-import type { ItxExpression } from "../context/expression.ts";
-import { callOn, walkSteps } from "../context/dispatch.ts";
-import { FacetHandle, RpcStubHandle } from "../context/invoke-handle.ts";
-import { errorCode, reportIssue } from "../lib/errors.ts";
-import { withTimeout } from "../lib/timeout.ts";
-import type { StreamEvent } from "./events.ts";
-import { consumesEvent, type ScannedRange } from "./processor.ts";
+import {
+  type ItxExpression,
+  callOn,
+  walkSteps,
+  FacetHandle,
+  RpcStubHandle,
+} from "../context/expression.ts";
+import { errorCode, reportIssue, withTimeout } from "../lib.ts";
+import { type StreamEvent, consumesEvent, type ScannedRange } from "./processor.ts";
 import type { Subscription } from "./core-processor.ts";
-import type { Stream } from "./stream.ts";
-import type { SubscriptionCursor } from "./stream-storage.ts";
+import type { Stream, SubscriptionCursor } from "./stream.ts";
 
 /** A cursor delivery's awaited call is bounded by this; it is also how far ahead the lane arms the
  *  alarm before the call — by the time it fires the call has acked (the cursor row is written) or
@@ -70,7 +71,7 @@ const CURSOR_READ_BUDGET_CHARS = 8 * 1024 * 1024;
 const PENDING_PUSHES_TOTAL_BUDGET_CHARS = 8 * 1024 * 1024;
 
 /** A failure that can only repeat — halt the row now, not after the ladder: the flag workerd itself
- *  stamps (`retryable: false`, reduce-checkpoint.ts stamps it too) or one of OUR codes that a
+ *  stamps (`retryable: false`, processor.ts's ReduceCheckpointTable stamps it too) or one of OUR codes that a
  *  retry cannot change (a target that is not callable, nothing matching the target's expression,
  *  a checkpoint or an event over its ceiling). */
 const deterministicFailure = (error: unknown): boolean =>

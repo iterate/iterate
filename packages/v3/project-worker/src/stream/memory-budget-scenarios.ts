@@ -19,17 +19,19 @@
 
 import { memoryUsage } from "node:process";
 import { deserialize, serialize } from "node:v8";
-import { FacetHandle } from "../context/invoke-handle.ts";
-import { errorCode } from "../lib/errors.ts";
-import { CoreContract } from "./core-processor.ts";
-import type { StreamEvent } from "./events.ts";
-import { nodeSqliteDurableObjectStorage } from "./node-sqlite-durable-object-storage.ts";
-import { ProcessorEngine, StreamProcessor, type ReduceArgs } from "./processor.ts";
-import { ReduceCheckpointTable } from "./reduce-checkpoint.ts";
-import { Stream } from "./stream.ts";
-import type { DurableObjectStorageSlice } from "./stream-storage.ts";
+import { FacetHandle } from "../context/expression.ts";
+import { errorCode } from "../lib.ts";
+import { CoreContract, subscriptionConfiguredEvent } from "./core-processor.ts";
+import {
+  type StreamEvent,
+  ProcessorEngine,
+  StreamProcessor,
+  type ReduceArgs,
+  ReduceCheckpointTable,
+} from "./processor.ts";
+import { nodeSqliteDurableObjectStorage } from "./test-support.ts";
+import { Stream, type DurableObjectStorageSlice } from "./stream.ts";
 import { SubscriptionDelivery } from "./subscription-delivery.ts";
-import { subscriptionConfiguredEvent } from "./subscriptions.ts";
 
 /** The Workers-RPC ceiling on one serialized argument list or return value (workerd, hard). */
 const WORKERS_RPC_MESSAGE_MAX_BYTES = 32 * 1024 * 1024;
@@ -361,7 +363,7 @@ const scenarios: Record<string, (args: Record<string, number>) => Promise<void>>
 
   /** A processor whose live-state PROJECTION is large and changes every batch — a runtime buffer it
    *  projects, which nothing caps but the delta's append ceiling (the checkpoint stays tiny). Every
-   *  set stringifies AND parses both sides (lib/patch.ts) and a one-item edit in an array replaces
+   *  set stringifies AND parses both sides (lib.ts) and a one-item edit in an array replaces
    *  the WHOLE array in the delta, which then rides every watcher's queue (bounded per row). Measures
    *  the transient per set and whether the delta still fits the append door. */
   async "live-state-large-projection"(args) {

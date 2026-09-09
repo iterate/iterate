@@ -110,7 +110,7 @@ answer. Effort is calibrated on 2026-09-06: ~300 code lines with tests, docs and
 plane>`. CONTROL PLANE: mint a project token for a member (a browser redirect to `/.itx/session?token=`; an MCP
   client through the existing AS, one `project_token` tool). `auth.ts` is deleted, not ported. `LibraryItx` widens to
   `fetch | cd`; the boundary test admits `context/expression.ts`.
-- **Sketch:** (1) `src/library/mcp-server.ts` + root row + boundary (~120); (2) the bearer at ingress (~8);
+- **Sketch:** (1) `src/library.ts` + root row + boundary (~120); (2) the bearer at ingress (~8);
   (3) proof: `e2e/library-mcp-server.e2e.test.ts` deployed — a `tools/call` is an ordinary `itx.…` invocation, its
   event carries the bearer's principal, an unauthenticated call carries none and gets the 401 discovery header;
   (4) control plane minting (~40, separate package).

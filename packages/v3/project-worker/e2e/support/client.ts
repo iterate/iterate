@@ -177,7 +177,7 @@ export const until = async <T>(
 };
 
 /** Await a promise that MUST reject promptly; hands back the error for inspection (its `code` is
- *  the machine-readable channel, lib/errors.ts). Throws if it fulfils, or is still pending at the
+ *  the machine-readable channel, lib.ts). Throws if it fulfils, or is still pending at the
  *  deadline — a hang is a bug, never a wait. */
 export async function rejection(
   p: Promise<unknown>,
@@ -198,7 +198,7 @@ export async function rejection(
   return out.e as Error & { code?: string };
 }
 
-/** The machine-readable error channel (lib/errors.ts): classify by code, never by message. */
+/** The machine-readable error channel (lib.ts): classify by code, never by message. */
 export const codeOf = (e: unknown): string | undefined =>
   typeof e === "object" && e !== null && "code" in e
     ? String((e as { code: unknown }).code)

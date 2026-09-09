@@ -34,11 +34,11 @@ export default async function setup(project: TestProject): Promise<() => Promise
   const { url } = await server.listen();
   // THE DIRECTORY SCHEMA into the local D1 the harness bound — applied through the worker's OWN binding
   // (`getEnv().DB`), so it lands in exactly the namespace the worker reads (a separate `wrangler d1
-  // execute --local` persists elsewhere). definitions.sql is the one source (idempotent: IF NOT EXISTS),
+  // execute --local` persists elsewhere). control-plane.sql is the one source (idempotent: IF NOT EXISTS),
   // read from disk here; no schema code lives in the worker. D1's exec() is line-oriented, so each
   // `;`-terminated statement is collapsed to one line and run as a prepared batch.
   const { DB } = await server.getWorker<{ DB: D1Database }>().getEnv();
-  const statements = readFileSync(join(PACKAGE_DIR, "src/control-plane/definitions.sql"), "utf8")
+  const statements = readFileSync(join(PACKAGE_DIR, "src/control-plane.sql"), "utf8")
     .replace(/--.*$/gm, "")
     .split(";")
     .map((statement) => statement.replace(/\s+/g, " ").trim())

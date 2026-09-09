@@ -1,7 +1,22 @@
-// app-config.test.ts — THE TABLE for app-config.ts: what the vars become, what is refused (by name),
+// worker.test.ts — the edge's pure halves as tables: the app config (what the vars become, what is refused,
+// the per-env memo) and the project-host convention (`{ hostname, base, becomes }` rows).
+
+import { describe, expect, test, vi } from "vitest";
+
+// The module under test reaches classes from "cloudflare:workers" (RpcTarget, DurableObject,
+// WorkerEntrypoint, the pipelining brands), which node cannot resolve — mock JUST those base classes
+// (no-op shells); the module's own logic runs unmodified.
+vi.mock("cloudflare:workers", () => ({
+  RpcTarget: class {},
+  DurableObject: class {},
+  WorkerEntrypoint: class {},
+  RpcPromise: class {},
+  RpcProperty: class {},
+}));
+import { appConfigOf, parseAppConfig, projectHostOf } from "./worker.ts";
+
+// ── app config ── THE TABLE for the app config: what the vars become, what is refused (by name),
 // and the per-env memo. Each row is `{ vars, becomes | throws }`.
-import { describe, expect, test } from "vitest";
-import { appConfigOf, parseAppConfig } from "./app-config.ts";
 
 /** The smallest valid configuration. */
 const MINIMAL = { APP_CONFIG_ENVIRONMENT_NAME: "poc", APP_CONFIG_LOGIN_MODE: "open" };
@@ -115,3 +130,58 @@ describe("appConfigOf — once per env object", () => {
     );
   });
 });
+
+// ── project host ── the hostname convention as a table: `{ hostname, base, becomes }` rows.
+
+const rows: { hostname: string; base: string; becomes: ReturnType<typeof projectHostOf> }[] = [
+  // the convention
+  {
+    hostname: "site--prj-1.iterate.app",
+    base: "iterate.app",
+    becomes: { app: "site", projectId: "prj-1" },
+  },
+  {
+    hostname: "prj-1.iterate.app",
+    base: "iterate.app",
+    becomes: { app: "default", projectId: "prj-1" },
+  }, // the apex is the label `default`
+  {
+    hostname: "default--prj-1.iterate.app",
+    base: "iterate.app",
+    becomes: { app: "default", projectId: "prj-1" },
+  },
+  {
+    hostname: "my-site--a1.iterate.app",
+    base: "iterate.app",
+    becomes: { app: "my-site", projectId: "a1" },
+  },
+  {
+    hostname: "Site--PRJ-1.Iterate.App",
+    base: "iterate.app",
+    becomes: { app: "site", projectId: "prj-1" },
+  },
+  {
+    hostname: "site--prj-1.localhost",
+    base: "localhost",
+    becomes: { app: "site", projectId: "prj-1" },
+  },
+  {
+    hostname: "site--prj-1.iterate.app.", // a fully-qualified Host
+    base: "iterate.app",
+    becomes: { app: "site", projectId: "prj-1" },
+  },
+  // not a project host
+  { hostname: "project-worker.iterate.workers.dev", base: "iterate.app", becomes: null },
+  { hostname: "iterate.app", base: "iterate.app", becomes: null },
+  { hostname: "a.site--prj-1.iterate.app", base: "iterate.app", becomes: null }, // deeper than one label
+  { hostname: "site--prj_1.iterate.app", base: "iterate.app", becomes: null }, // `_` is not a DNS label
+  { hostname: "site--prj--1.iterate.app", base: "iterate.app", becomes: null }, // a second `--`
+  { hostname: "3d--prj-1.iterate.app", base: "iterate.app", becomes: null }, // an app label is an identifier
+  { hostname: "--prj-1.iterate.app", base: "iterate.app", becomes: null },
+  { hostname: "site--.iterate.app", base: "iterate.app", becomes: null },
+  { hostname: "site--prj-1.iterate.app", base: "", becomes: null }, // blank base ⇒ no ingress
+];
+for (const { hostname, base, becomes } of rows)
+  test(`${hostname} under ${JSON.stringify(base)} ⇒ ${JSON.stringify(becomes)}`, () => {
+    expect(projectHostOf(hostname, base)).toEqual(becomes);
+  });

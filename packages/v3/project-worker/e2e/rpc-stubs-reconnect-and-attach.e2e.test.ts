@@ -6,7 +6,7 @@
 // rpc-stubs-lend-recall-and-offline.e2e). The DO owns BOTH ends of a lent stub's rule (and of a live
 // subscriber's row): the edge's `provide(match, stub)` / `subscribe({ target: fn })` build the event
 // that names the key and hand it to the DO INSIDE the pager upgrade, which appends it in the turn it
-// accepts the pager (src/context/rpc-stub-directory.ts) and un-sets it when the key's last pager
+// accepts the pager (src/context/rpc-stubs.ts) and un-sets it when the key's last pager
 // closes — one edge→DO round trip, the set and the un-set decided on one side. Pins:
 //   • a live SUBSCRIBER re-subscribing under its name replaces the transport (ONE row, ONE more
 //     configured event, the first callback physically unreachable); `subscribe({ name, target: null })`

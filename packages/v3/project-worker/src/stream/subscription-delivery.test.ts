@@ -26,16 +26,13 @@
 //     invoke its replacement.
 
 import { describe, expect, test, vi } from "vitest";
-import { print, type ItxExpression } from "../context/expression.ts";
-import { FacetHandle } from "../context/invoke-handle.ts";
-import { codedError } from "../lib/errors.ts";
-import type { StreamEvent } from "./events.ts";
-import { nodeSqliteDurableObjectStorage } from "./node-sqlite-durable-object-storage.ts";
-import type { ScannedRange } from "./processor.ts";
-import { Stream } from "./stream.ts";
-import type { DurableObjectStorageSlice } from "./stream-storage.ts";
+import { print, type ItxExpression, FacetHandle } from "../context/expression.ts";
+import { codedError } from "../lib.ts";
+import type { StreamEvent, ScannedRange } from "./processor.ts";
+import { nodeSqliteDurableObjectStorage } from "./test-support.ts";
+import { Stream, type DurableObjectStorageSlice } from "./stream.ts";
 import { SubscriptionDelivery } from "./subscription-delivery.ts";
-import { subscriptionConfiguredEvent } from "./subscriptions.ts";
+import { subscriptionConfiguredEvent } from "./core-processor.ts";
 
 const MiB = 1024 * 1024;
 const settle = () => new Promise((r) => setImmediate(r));

@@ -8,7 +8,7 @@
 // verbs: every change to a context is an appended event, so a Workers-RPC caller configures a
 // rewrite rule exactly as the edge's `provide` does — `append(rewriteRuleConfiguredEvent(match,
 // target))` (context/itx-expression-rewriting.ts) — and a subscription with
-// `append(subscriptionConfiguredEvent(…))` (stream/subscriptions.ts). The pins:
+// `append(subscriptionConfiguredEvent(…))` (stream/core-processor.ts). The pins:
 //
 //   • the QUIET CLOCK's reason to exist: a probe (`itx.facets.get('core').snapshot()`) on a
 //     never-touched ctx MATERIALIZES it (the constructor's `Stream.appendCreatedAndWokenEvents()`
@@ -36,7 +36,7 @@ import {
   rewriteRuleConfiguredEvent,
   rewriteRuleRemovedEvent,
 } from "../src/context/itx-expression-rewriting.ts";
-import { subscriptionConfiguredEvent } from "../src/stream/subscriptions.ts";
+import { subscriptionConfiguredEvent } from "../src/stream/core-processor.ts";
 import { openSession, stub, until } from "./support.ts";
 
 /** One rewrite-rule row as the core snapshot serializes it (the rules are `core` state — a RECORD

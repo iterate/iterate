@@ -11,8 +11,12 @@
 // store, and a malformed delta is the subscriber's to skip — never a rejected append.
 
 import { expect, test } from "vitest";
-import { connectLiveState, type LiveStateItx } from "../src/client/live-state-client.ts";
-import type { LiveStateDelta, LiveStateSeed } from "../src/client/live-state-store.ts";
+import {
+  connectLiveState,
+  type LiveStateItx,
+  type LiveStateDelta,
+  type LiveStateSeed,
+} from "../src/client/live-state.ts";
 import { append, freshCtx, openItx, until } from "./support/client.ts";
 import { SOURCES } from "./support/sources.ts";
 
