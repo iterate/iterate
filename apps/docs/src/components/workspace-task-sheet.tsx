@@ -45,7 +45,6 @@ const WorkspaceTaskEditor = lazy(() =>
 export function WorkspaceTaskSheet({
   task,
   address,
-  guest,
   columns,
   allTags,
   changeStatus,
@@ -66,8 +65,6 @@ export function WorkspaceTaskSheet({
 }: {
   task: BoardTask | null;
   address: BoardAddress;
-  /** Guest lens: reads, comments, and edits — owner acts stay hidden. */
-  guest: boolean;
   columns: string[];
   allTags: string[];
   changeStatus: TaskChangeStatus | undefined;
@@ -86,7 +83,7 @@ export function WorkspaceTaskSheet({
   commentIdentity: import("@iterate-com/workspace-documents/types").CommentIdentity | null;
   /** Apply a transform to the current local document through the live editor. */
   onApplyTransform: (transform: (source: string) => string) => boolean;
-  /** Owner act (commits the mount) — absent for guests. */
+  /** Assign the task to an agent (commits the mount). */
   onAssignAgent?: () => Promise<void>;
   onLiveContent: (path: string, content: string) => void;
   onChangeState: (state: string) => void;
@@ -106,7 +103,6 @@ export function WorkspaceTaskSheet({
             key={task.path}
             task={task}
             address={address}
-            guest={guest}
             columns={columns}
             allTags={allTags}
             changeStatus={changeStatus}
@@ -134,7 +130,6 @@ export function WorkspaceTaskSheet({
 function SheetBody({
   task,
   address,
-  guest,
   columns,
   allTags,
   changeStatus,
@@ -155,7 +150,6 @@ function SheetBody({
 }: {
   task: BoardTask;
   address: BoardAddress;
-  guest: boolean;
   columns: string[];
   allTags: string[];
   changeStatus: TaskChangeStatus | undefined;
@@ -174,7 +168,7 @@ function SheetBody({
   commentIdentity: import("@iterate-com/workspace-documents/types").CommentIdentity | null;
   /** Apply a transform to the current local document through the live editor. */
   onApplyTransform: (transform: (source: string) => string) => boolean;
-  /** Owner act (commits the mount) — absent for guests. */
+  /** Assign the task to an agent (commits the mount). */
   onAssignAgent?: () => Promise<void>;
   onLiveContent: (path: string, content: string) => void;
   onChangeState: (state: string) => void;
@@ -222,7 +216,7 @@ function SheetBody({
           <TagPicker value={task.labels} options={allTags} onChange={onChangeLabels} />
           <div className="ml-auto flex items-center gap-1">
             <span className="font-mono text-[11px] text-muted-foreground">{status}</span>
-            {task.agent === null && !guest && onAssignAgent !== undefined && (
+            {task.agent === null && onAssignAgent !== undefined && (
               <Button
                 variant="ghost"
                 size="sm"

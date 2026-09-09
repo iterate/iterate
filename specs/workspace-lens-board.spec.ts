@@ -94,7 +94,6 @@ test("workspace lens board demo", async ({ page }) => {
   // breadcrumbs, the agent's uncommitted joke tasks, no Commit control.
   await page.goto(boardHref);
   await passProjectGate(page);
-  await page.getByText("GUEST").waitFor({ timeout: 60_000 }); // timeout: board lens cold load on the live preview — past the spinner-waiter's 30s ceiling
   await page.getByText("/repos/config").first().waitFor();
   await page.getByRole("button", { name: /joke/i }).first().click();
   await page.getByRole("combobox", { name: "Task state" }).waitFor({ timeout: 30_000 }); // timeout: manual demo-lane budget — the task drawer renders with no spinner-waiter-visible loading UI

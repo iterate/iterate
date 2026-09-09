@@ -165,3 +165,9 @@ heuristic both delete.
 Landed 2026-09-09: the birth batch's `workspace-catalog` subscription copies
 `workspace/created` to `/`, the project reducer records it via
 `recordDomainObject`, and `itx.workspaces.list()` reads `state.workspaces`.
+
+**Decided 2026-09-09 (Jonas): no ownership, no jam.** Nothing records or cares
+who a workspace belongs to — Commit is available on every workspace, agents'
+own included. The `/jam` route, Invite AI, and the scratch namespace are gone;
+"New workspace" in the sidebar names a workspace (pre-filled with three random
+words) at `/workspaces/<name>`.
