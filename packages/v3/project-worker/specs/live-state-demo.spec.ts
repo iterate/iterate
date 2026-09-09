@@ -7,6 +7,13 @@
 
 import { expect, test } from "@playwright/test";
 
+// The demo dials /api with the console's login cookie (`authenticate({ type: "from-server-cookie" })`)
+// and opens the visitor's own demo project, so every visit signs in first — the console's form,
+// through the browser context so the cookie lands where the page's socket will carry it.
+test.beforeEach(async ({ page }) => {
+  await page.request.post("/login", { form: { email: "demo@example.com", next: "/" } });
+});
+
 test("the worker serves a self-contained /demo page that mounts and dials /api", async ({
   page,
 }) => {

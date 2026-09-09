@@ -37,7 +37,7 @@ import {
   rewriteRuleRemovedEvent,
 } from "../src/context/itx-expression-rewriting.ts";
 import { subscriptionConfiguredEvent } from "../src/stream/core-processor.ts";
-import { openSession, stub, until } from "./support.ts";
+import { adminCredentials, openSession, stub, until } from "./support.ts";
 
 /** One rewrite-rule row as the core snapshot serializes it (the rules are `core` state — a RECORD
  *  by canonical match; both halves are the parsed ItxExpression, so `print` them to compare against
@@ -180,7 +180,7 @@ test("un-setting a rule is pure data — the lent stub's transport is untouched:
   // A PHYSICAL stub: a capnweb session lends a client's rpc stub under `itx.livecap` (its pager socket is
   // one transport in the DO's census) with the pure-data rule `itx.livecap ⇒
   // itx.rpcStubs.get('itx.livecap')` configured alongside it.
-  const itx = await (await openSession()).authenticate().projects.get(ctx);
+  const itx = await (await openSession()).authenticate(adminCredentials()).projects.get(ctx);
   const provided = await itx.provide("itx.livecap", new Alive());
   expect(typeof provided[Symbol.dispose]).toBe("function"); // a DISPOSABLE handle — no offsets, no identities
   expect(await s.invoke("itx.livecap.ping()")).toBe("alive");
@@ -206,7 +206,7 @@ test("un-setting a rule is pure data — the lent stub's transport is untouched:
 test("disposing the provide HANDLE is the other half: the stub is recalled — its pager leaves the census, presence shrinks — AND the rule it was provided with is un-set", async () => {
   const ctx = "prj_doors_disposehandle";
   const s = stub(ctx);
-  const itx = await (await openSession()).authenticate().projects.get(ctx);
+  const itx = await (await openSession()).authenticate(adminCredentials()).projects.get(ctx);
   const provided = await itx.provide("itx.doomed", new Alive());
   expect(await s.invoke("itx.doomed.ping()")).toBe("alive");
   expect(Object.keys(await rewriteRulesOf(ctx))).toEqual(["itx.doomed"]);

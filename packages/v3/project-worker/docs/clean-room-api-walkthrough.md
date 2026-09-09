@@ -209,27 +209,33 @@ imported as `capnweb`). There is no client SDK. The session shape is apps/os's.
 import { newWebSocketRpcSession, newHttpBatchRpcSession } from "capnweb";
 
 using api = newWebSocketRpcSession("wss://<worker>/api");
-const itx = api.authenticate().projects.get("prj_demo"); // the project ROOT, path "/"
+const session = api.authenticate({ type: "from-server-cookie" }); // the console's login cookie rode the handshake
+const itx = session.projects.get("prj_demo"); // the project ROOT, path "/"
 const agent = itx.cd("/agents/x"); // a context within the project
 const inbox = agent.cd("../inbox"); // relative resolves; absolute by convention
-const fresh = await api.authenticate().projects.create({ slug: "another" }); // a new project's root
-const mine = await api.authenticate().projects.list(); // [{ id, orgId, role? }, …]
+const fresh = await session.projects.create({ project: "another" }); // a new project's root
+const mine = await session.projects.list(); // [{ id, orgId, role? }, …]
 
 // One-shot and socketless (CLI, cron): every call chained off the session flushes as ONE POST.
 // A batch session cannot hold live callbacks (nothing outlives the response).
-const cli = newHttpBatchRpcSession("https://<worker>/api").authenticate().projects.get("prj_demo");
+const cli = newHttpBatchRpcSession("https://<worker>/api")
+  .authenticate({ type: "project-token", token })
+  .projects.get("prj_demo");
 ```
 
-`projects.get` takes a project id (the root context's full name is accepted too);
-a non-root context name is refused, reach those with `cd`. `projects.create`
-slugifies the name — the slug IS the project's id, globally unique
-(`PROJECT_NAME_TAKEN` names another org's) — in the user's org, created on first
-use. WHO: `authenticate()` bare is the request's control-plane identity — in `open`
-login mode the anonymous user, in `email` mode the session cookie a same-origin
-browser socket carried (none ⇒ `UNAUTHENTICATED`); `authenticate({ projectToken })`
-is a principal bound to ONE project (`get` of any other is `FORBIDDEN`; `list`
-and `create` need a signed-in user). In `email` mode `get` admits members of the
-owning org only. One
+`projects.get(project)` takes a project (`ProjectIdOrSlug` — one DNS-safe name; the root
+context's full name is accepted too); a non-root context name is refused, reach
+those with `cd`. `projects.create({ project })` slugifies the name — the slug IS the
+project's id, globally unique (`PROJECT_NAME_TAKEN` names another org's) — in the
+user's org, created on first use. WHO: `authenticate(credentials)` takes one of four
+kinds (`SessionCredentials`): `from-server-cookie` — the control plane's session cookie
+that rode the handshake, honoured on a same-origin request only (a foreign `Origin`, or
+no cookie, ⇒ `UNAUTHENTICATED`); `project-token` — a principal bound to ONE project
+(`get` of any other is `FORBIDDEN`; `list` and `create` need a signed-in user);
+`admin-secret` — the deployment's `APP_CONFIG_ADMIN_API_SECRET`, `{ actor: "admin" }`
+on every project (with `as: { sub, email }` that user's session, no login);
+`project-secret` — refused `UNSUPPORTED_CREDENTIAL` until step 2 of the auth plan. A
+user's `get` admits members of the owning org only. One
 session may hold contexts of many projects; the session's `SessionTeardown` is keyed by the
 JSON pair `[iterateContextName, rpcStubKey]`, so two contexts lending under the same key never
 recall each other's stubs.
@@ -257,25 +263,33 @@ args (a callback function, a Date, bytes, a `Request`).
 `src/session.ts`
 
 ```ts
-/** A control-plane user: the cookie's, or the anonymous one in `open` mode. */
-/** Who a session is: a principal, bound to ONE project when it came from a project token. */
+/** One DNS-safe name — the directory row, the DO name, the host label; a project's id IS its slug. */
+type ProjectIdOrSlug = string;
+/** What a client hands `authenticate`: where its identity already is, or the secret that proves it. */
+type SessionCredentials =
+  | { type: "from-server-cookie" } // the login cookie on the handshake, same origin only
+  | { type: "project-token"; token: string } // short-lived, ONE user on ONE project
+  | { type: "project-secret"; project: ProjectIdOrSlug; secret: string } // the project itself (step 2)
+  | { type: "admin-secret"; secret: string; as?: { sub: string; email: string } }; // every project; `as` impersonates
+/** Who a session is: a principal, bound to ONE project when it came from a project token; the
+ *  admin secret's is `{ actor: "admin" }`. */
 type SessionPrincipal = Principal & { projectId?: string }; // Principal = { actor: string; email?: string }
 
 class UnauthenticatedSession extends RpcTarget {
-  /** THE introduction door. A project token ⇒ a session that knows who it is, bound to the token's
-   *  one project (a token that does not verify is INVALID_CREDENTIALS, whatever is wrong with it).
-   *  No credentials ⇒ the request's control-plane user: in `open` mode the anonymous one — carrying
-   *  NO principal; in `email` mode the session cookie's user, or UNAUTHENTICATED. */
-  authenticate(credentials?: { projectToken?: string }): Promise<Session>;
+  /** THE introduction door. Each kind has its check and its refusal, coded: the cookie on a
+   *  cross-origin browser request, or no cookie at all, is UNAUTHENTICATED; a token or a secret that
+   *  does not verify is INVALID_CREDENTIALS, whatever is wrong with it; a kind this deployment does
+   *  not serve yet is UNSUPPORTED_CREDENTIAL. The admin's `as` upserts the user's row like /login. */
+  authenticate(credentials: SessionCredentials): Promise<Session>;
   /** capnweb calls this when the session ends: every stub this session lent is recalled
    *  (its pager closed), and every handle it exported is disposed — see 4.2. */
   [Symbol.dispose](): void;
 }
 
 class Session extends RpcTarget {
-  /** Who this session is: the cookie's user, the token's principal (and its project), or null for
-   *  the anonymous one. */
-  whoami(): SessionPrincipal | null;
+  /** Who this session is: the user (the cookie's, the admin's `as`), the token's principal (and its
+   *  project), or `{ actor: "admin" }`. */
+  whoami(): SessionPrincipal;
   /** The project catalog. A getter, not a field: capnweb exposes prototype members only. */
   get projects(): ProjectCollection;
 }
@@ -284,18 +298,20 @@ class Session extends RpcTarget {
 type Project = { id: string; orgId: string; role?: string };
 
 class ProjectCollection extends RpcTarget {
-  /** The projects this session's user can reach — a member of the owning org — with their role. */
+  /** The projects the user can reach — a member of the owning org — with their role; for the admin
+   *  secret, every project in the directory (no role). */
   list(): Promise<Project[]>;
-  /** Create the project named `slug` (slugified: that IS its id) in the user's org — their first,
-   *  created on first use — and vend its root context. A name ANY org already holds is refused,
-   *  coded (PROJECT_NAME_TAKEN); the user's own again is idempotent. */
-  create(input: { slug: string }): Promise<IterateContext>;
-  /** The project's root context ("/"). A project id only — a context name belongs to `cd`. A session
-   *  with a project token holds the token's ONE project; in `email` mode a user's session holds the
-   *  projects of their orgs (one directory read); in `open` mode the door is open — any project.
-   *  The DO itself is materialized by the first door that reaches it (its constructor appends
-   *  `stream/created` + `stream/woken`, section 5.5). */
-  get(projectId: string): Promise<IterateContext>;
+  /** Create the project named `project` (slugified: that IS its id) in the user's org — their first,
+   *  created on first use — or in the deployment's own `org_admin` for the admin secret, and vend its
+   *  root context. A name ANY org already holds is refused, coded (PROJECT_NAME_TAKEN); the same
+   *  org's again is idempotent. */
+  create(input: { project: ProjectIdOrSlug }): Promise<IterateContext>;
+  /** The project's root context ("/"). A project only — a context name belongs to `cd`. A session
+   *  with a project token holds the token's ONE project; a user's session holds the projects of
+   *  their orgs (one directory read); the admin secret's holds any. The DO itself is materialized
+   *  by the first door that reaches it (its constructor appends `stream/created` + `stream/woken`,
+   *  section 5.5). */
+  get(project: ProjectIdOrSlug): Promise<IterateContext>;
   // list() and create() on a token session are FORBIDDEN: a token names one project.
 }
 ```
@@ -1417,16 +1433,16 @@ Injected into loaded isolates, never deployed as a class:
 
 The control plane (`src/control-plane/`, the catch-all — one worker, one front door): an OAuth 2.1
 Authorization Server (`@cloudflare/workers-oauth-provider`) owning `/authorize`, `/token`,
-`/register`, `/.well-known/*` and token validation on `/mcp` (its ONLY protected route; tokenless in
-`open` login mode, the anonymous identity); everything else falls through to `app.ts` — the console
+`/register`, `/.well-known/*` and token validation on `/mcp` (its ONLY protected route); everything
+else falls through to `app` — the console
 at `/`, the email login form (`POST /login`, `/logout`; the session is the signed
 `itx-control-plane-session` cookie, `signClaims` under `APP_CONFIG_SESSION_SECRET`), `POST /projects`
 (the console's form; a program creates projects over `/api`, `projects.create`), the `/authorize`
 consent page (approve, or switch account — the grant is the user; the tools act on the user's projects). `/mcp` serves three tools:
 `whoami`, `list_projects`, `create_project`. The directory (`directory.ts`, D1 through `prepare().bind()`,
 `definitions.sql`): users → orgs via `org_members` → projects; access is org membership; a project's
-id is ONE DNS-safe slug — the directory row, the DO name and the host label. `APP_CONFIG_LOGIN_MODE`:
-`open` (no login, the one seeded anonymous user `user_anonymous`) or `email`.
+id is ONE DNS-safe slug — the directory row, the DO name and the host label. The admin secret's
+projects live in `org_admin`, the deployment's own org (no members).
 
 Bindings (`wrangler.jsonc`):
 
@@ -1441,12 +1457,12 @@ Bindings (`wrangler.jsonc`):
 | `DB`                  | D1                                           | the control plane's directory (`definitions.sql`)                                                                                                                                                                                                                                 |
 | `OAUTH_KV`            | KV                                           | the OAuth AS's store (grants, tokens, DCR clients)                                                                                                                                                                                                                                |
 | `CF_VERSION_METADATA` | version metadata                             | `worker.ts` reads it into `deployId`: every loader cacheKey, and `/version`                                                                                                                                                                                                   |
-| `APP_CONFIG_*` vars   | configuration (`src/worker.ts`)          | parsed once per isolate into one typed object, an unknown var refused: `ENVIRONMENT_NAME`, `PROJECT_HOSTNAME_BASE`, `PROJECT_TOKEN_SECRET` (a wrangler secret on a deployment), `ARTIFACTS_ACCOUNT_ID`, `ARTIFACTS_NAMESPACE`, `LOGIN_MODE` (`open` \| `email`), `SESSION_SECRET` |
+| `APP_CONFIG_*` vars   | configuration (`src/worker.ts`)          | parsed once per isolate into one typed object, an unknown var refused: `ENVIRONMENT_NAME`, `PROJECT_HOSTNAME_BASE`, `PROJECT_TOKEN_SECRET` (a wrangler secret on a deployment), `ARTIFACTS_ACCOUNT_ID`, `ARTIFACTS_NAMESPACE`, `SESSION_SECRET` and `ADMIN_API_SECRET` (both required; wrangler secrets on a deployment) |
 
 The route `*.project-worker.iterate.com/*` (a wildcard DNS record in the zone) is the project hosts;
 `public/` is served as static assets (`/demo`). The e2e lane boots this same config, patched
 (`e2e/support/worker-config.ts`: absolute paths, `APP_CONFIG_ENVIRONMENT_NAME=e2e`,
-`APP_CONFIG_PROJECT_HOSTNAME_BASE=localhost`, a var for the token secret); the workers lane runs
+`APP_CONFIG_PROJECT_HOSTNAME_BASE=localhost`, vars for the three secrets); the workers lane runs
 `wrangler.test.jsonc` (no build block, no `AI`).
 
 The loader cacheKey is the JSON array `[kind, deploy, owner, cacheKey ?? contentHash]` (never a `:`-joined string — an owner or a key may contain `:`): the caller's
@@ -1616,7 +1632,7 @@ itself.
 | Word                  | Meaning here                                                                                                                                                                                                                                                                          |
 | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | context               | one `IterateContextDurableObject`, named `{projectId}.iterate{path}`; a stream + a rewrite-rule table + a subscriptions table + the rpc-stub directory                                                                                                                                |
-| session               | what `/api` hands you: `UnauthenticatedSession → authenticate() → Session → projects.list()/get(id)/create({ slug })`; a session is not a context, it is how you reach one — and who you are (`whoami()`: the control plane's user, or a project token's principal)                   |
+| session               | what `/api` hands you: `UnauthenticatedSession → authenticate(credentials) → Session → projects.list()/get(project)/create({ project })`; a session is not a context, it is how you reach one — and who you are (`whoami()`: the control plane's user, a project token's principal, or the admin) |
 | itx expression        | `["itx", ...steps]` (`ItxExpression`) or its string form; either half is an `ItxExpressionInput`; the persisted currency of every target                                                                                                                                              |
 | itx-expression prefix | a rewrite rule's `match`: dotted names, any step may pin literal args — `itx.greet`, `itx.ai.run('gpt-5')`; `canonicalItxExpressionPrefix` is its one spelling, the table's key                                                                                                       |
 | rewrite rule          | `{ match, target }`: a call starting with `match` runs as the same call with `match` replaced by `target`; one map entry per canonical match, written by `itx/rewrite-rule-configured { match, target \| null }`; nothing else rides it                                               |

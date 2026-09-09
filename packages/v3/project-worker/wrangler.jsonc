@@ -84,7 +84,10 @@
 
   // Configuration (src/worker.ts `parseAppConfig`): `APP_CONFIG_*` vars — the ONE door, parsed once per isolate,
   // loud on a bad or unknown one. Bindings are declared above; a var is what differs between
-  // deployments of the same code. (APP_CONFIG_PROJECT_TOKEN_SECRET is a wrangler secret.)
+  // deployments of the same code. The three secrets — APP_CONFIG_PROJECT_TOKEN_SECRET,
+  // APP_CONFIG_SESSION_SECRET (the control plane's session cookie) and APP_CONFIG_ADMIN_API_SECRET
+  // (the admin secret: `authenticate({ type: "admin-secret" })`, the lanes' admin bearer) — are
+  // wrangler secrets, never committed vars; the last two are required.
   "vars": {
     "APP_CONFIG_ENVIRONMENT_NAME": "poc",
     "APP_CONFIG_PROJECT_HOSTNAME_BASE": "project-worker.iterate.com",
@@ -92,9 +95,5 @@
     // — the `itx.repos` layer builds it from these when it does git over HTTPS.
     "APP_CONFIG_ARTIFACTS_ACCOUNT_ID": "04b3b57291ef2626c6a8daa9d47065a7",
     "APP_CONFIG_ARTIFACTS_NAMESPACE": "project-worker-repos",
-    // The in-process control plane: `open` = the no-login floor; `email` = the login form, which
-    // REQUIRES the session-cookie secret (APP_CONFIG_SESSION_SECRET is a wrangler secret, like the
-    // project-token secret — never a committed var).
-    "APP_CONFIG_LOGIN_MODE": "open",
   },
 }

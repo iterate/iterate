@@ -3,7 +3,12 @@
 // client is JUST capnweb (iterate-context.ts), so a typed proxy of these classes is the whole SDK.
 
 export type { IterateContext } from "./iterate-context.ts";
-export type { SessionPrincipal, UnauthenticatedSession } from "./session.ts";
+export type {
+  ProjectIdOrSlug,
+  SessionCredentials,
+  SessionPrincipal,
+  UnauthenticatedSession,
+} from "./session.ts";
 export type { Principal, ProjectTokenClaims } from "./principal.ts";
 export type { BuiltInScope } from "./context/built-ins.ts";
 export type { ItxExpression, ItxExpressionInput } from "./context/expression.ts";

@@ -30,6 +30,7 @@ import { DurableObjectNameCodec, type DurableObjectAddress } from "./iterate-con
 import { UnauthenticatedSession } from "./session.ts";
 import {
   ITX_PRINCIPAL_HEADER,
+  verifyAdminSecret,
   verifyProjectToken,
   type Principal,
   type ProjectTokenClaims,
@@ -40,29 +41,36 @@ import {
 const ITX_EXPRESSION_LANE_HOPS_HEADER = "x-itx-expression-hops";
 const ITX_EXPRESSION_LANE_MAX_HOPS = 4;
 
-/** WHO a lane's request is, as both lanes into a context read it. `principal` is the verified stamp
- *  the context runs the call under: a project token for THIS project as `Authorization: Bearer`
- *  (the machine lane — an MCP client, a script) or as the host cookie (a browser), the bearer
- *  winning when both are present; else, in `email` login mode, the control plane's session user,
- *  stamped as `/api` stamps it (session.ts). `bearerClaims` is the project token the bearer
- *  carried, for ANY project — the platform's credential, which an app never sees (a token for
- *  another project stamps nothing, and the cookie still may). `user` is the control plane's session
- *  user in `email` mode, or null — what the `/expression` lane's membership check reads. */
+/** WHO a lane's request is, as both lanes into a context read it — the same credential kinds
+ *  `authenticate` takes (session.ts), read off a request. `principal` is the verified stamp the
+ *  context runs the call under: a project token for THIS project as `Authorization: Bearer` (the
+ *  machine lane — an MCP client, a script) or as the host cookie (a browser), the bearer winning
+ *  when both are present; else the admin secret as the bearer (`{ actor: "admin" }`); else the
+ *  control plane's session user, stamped as `/api` stamps it. `bearerClaims` is the project token
+ *  the bearer carried, for ANY project, and `bearerIsAdminSecret` says the bearer was the admin
+ *  secret — either is the platform's credential, which an app never sees (a token for another
+ *  project stamps nothing, and the cookie still may). `user` is the control plane's session user,
+ *  or null — what the `/expression` lane's membership check reads. */
 type LaneIdentity = {
   principal: Principal | null;
   bearerClaims: ProjectTokenClaims | null;
+  bearerIsAdminSecret: boolean;
   user: ControlPlaneSession | null;
 };
 
 async function laneIdentityOf(
   request: Request,
   projectId: string,
-  { projectTokenSecret, loginMode, sessionSecret }: AppConfig,
+  { projectTokenSecret, adminApiSecret, sessionSecret }: AppConfig,
 ): Promise<LaneIdentity> {
   const bearerToken = /^Bearer\s+(\S+)$/i.exec(request.headers.get("authorization") ?? "")?.[1];
   const bearerClaims = bearerToken
     ? await verifyProjectToken(bearerToken, projectTokenSecret)
     : null;
+  const bearerIsAdminSecret =
+    bearerToken !== undefined &&
+    bearerClaims === null &&
+    (await verifyAdminSecret(bearerToken, adminApiSecret));
   const cookieToken = projectSessionCookieOf(request.headers.get("cookie"));
   const tokenClaims =
     bearerClaims?.projectId === projectId
@@ -70,22 +78,24 @@ async function laneIdentityOf(
       : cookieToken
         ? await verifyProjectToken(cookieToken, projectTokenSecret)
         : null;
-  const user = loginMode === "email" ? await currentSession(request, sessionSecret) : null;
+  const user = await currentSession(request, sessionSecret);
   const principal =
     tokenClaims?.projectId === projectId
       ? { actor: tokenClaims.actor, ...(tokenClaims.email && { email: tokenClaims.email }) }
-      : user
-        ? { actor: user.sub, email: user.email }
-        : null;
-  return { principal, bearerClaims, user };
+      : bearerIsAdminSecret
+        ? { actor: "admin" }
+        : user
+          ? { actor: user.sub, email: user.email }
+          : null;
+  return { principal, bearerClaims, bearerIsAdminSecret, user };
 }
 
 /** The Request a lane hands the context DO — the same Request, its URL, method, body and a
  *  WebSocket upgrade intact, with the headers made the platform's: every inbound `x-itx-*` gone (a
  *  pager or fetch-upgrade header from outside would enter the DO's internal protocol), the cookie
- *  header replaced by `appCookies` (null ⇒ none — what the capability may see), a project-token
- *  bearer removed (an app's own bearer scheme passes through untouched), then the expression, the
- *  hop count and the principal's stamp. */
+ *  header replaced by `appCookies` (null ⇒ none — what the capability may see), a platform bearer
+ *  (a project token, the admin secret) removed (an app's own bearer scheme passes through
+ *  untouched), then the expression, the hop count and the principal's stamp. */
 function laneRequestTo(
   request: Request,
   lane: { itxExpression: string; hops: number; appCookies: string | null; identity: LaneIdentity },
@@ -94,7 +104,8 @@ function laneRequestTo(
   for (const name of [...headers.keys()]) if (name.startsWith("x-itx-")) headers.delete(name);
   if (lane.appCookies) headers.set("cookie", lane.appCookies);
   else headers.delete("cookie");
-  if (lane.identity.bearerClaims) headers.delete("authorization");
+  if (lane.identity.bearerClaims || lane.identity.bearerIsAdminSecret)
+    headers.delete("authorization");
   headers.set(ITX_EXPRESSION_FETCH_HEADER, lane.itxExpression);
   headers.set(ITX_EXPRESSION_LANE_HOPS_HEADER, String(lane.hops));
   if (lane.identity.principal)
@@ -140,7 +151,7 @@ export default {
     // intact. Everything on a project host is the app's; the platform's own doors live on the
     // worker's hostname.
     const appConfig = appConfigOf(env);
-    const { projectHostnameBase, projectTokenSecret, loginMode, environmentName, deployId } =
+    const { projectHostnameBase, projectTokenSecret, adminApiSecret, environmentName, deployId } =
       appConfig;
     const projectHost = projectHostOf(url.hostname, projectHostnameBase);
     if (projectHost) {
@@ -176,10 +187,10 @@ export default {
     // build-sdk.mjs; wrangler.jsonc `assets`): the platform serves it before this handler runs.
 
     // THE ONE capnweb ENTRYPOINT (the hard rule): capnweb terminates HERE, in the stateless worker;
-    // the DO is reached only over Workers RPC. WHO dials (session.ts): in `open` login mode everyone
-    // is the anonymous user; in `email` mode the control plane's session cookie on THIS request.
+    // the DO is reached only over Workers RPC. WHO dials is `authenticate(credentials)`'s answer
+    // (session.ts): the control plane's session cookie on THIS request, a project token, or the
+    // admin secret.
     if (url.pathname === "/api") {
-      const user = await identity(request, env);
       // newWorkersRpcResponse serves BOTH a WebSocket upgrade AND a one-shot HTTP batch —
       // a CLI script or cron does one POST, no socket handshake. (Batch sessions cannot hold
       // live capabilities: a live provide needs the relay to outlive the response —
@@ -190,9 +201,10 @@ export default {
           contextNamespace: env.ITERATE_CONTEXT,
           waitUntil: (p) => ctx.waitUntil(p),
           directory: directory(env.DB),
-          loginMode,
-          user,
+          request,
+          user: await identity(request, env),
           projectTokenSecret,
+          adminApiSecret,
         }),
       );
     }
@@ -217,21 +229,19 @@ export default {
         return new Response(`${(error as Error).message}\n`, { status: 400 });
       }
       const identity = await laneIdentityOf(request, address.projectId, appConfig);
-      // ADMISSION: in `email` login mode the caller must be a member of the project — the control
-      // plane's cookie (this IS the platform host) or a project-token bearer for it; `open` mode is
-      // open here exactly as `/api` is (the trusted-client doctrine every local proof relies on).
-      if (loginMode === "email") {
-        const admitted =
-          identity.bearerClaims?.projectId === address.projectId ||
-          (identity.user !== null &&
-            (await directory(env.DB).listProjects(identity.user.sub)).some(
-              (project) => project.id === address.projectId,
-            ));
-        if (!admitted)
-          return new Response("401: sign in as a member of this project, or bear its token\n", {
-            status: 401,
-          });
-      }
+      // ADMISSION: the caller must be a member of the project — the control plane's cookie (this IS
+      // the platform host) — or bear its token or the admin secret.
+      const admitted =
+        identity.bearerClaims?.projectId === address.projectId ||
+        identity.bearerIsAdminSecret ||
+        (identity.user !== null &&
+          (await directory(env.DB).listProjects(identity.user.sub)).some(
+            (project) => project.id === address.projectId,
+          ));
+      if (!admitted)
+        return new Response("401: sign in as a member of this project, or bear its token\n", {
+          status: 401,
+        });
       // No cookie reaches the capability: every cookie on the platform host is the platform's own.
       const response = await env.ITERATE_CONTEXT.getByName(address.name).fetch(
         laneRequestTo(request, { itxExpression, hops, appCookies: null, identity }),
@@ -271,14 +281,10 @@ const APP_CONFIG_VARS = [
   "APP_CONFIG_PROJECT_TOKEN_SECRET",
   "APP_CONFIG_ARTIFACTS_ACCOUNT_ID",
   "APP_CONFIG_ARTIFACTS_NAMESPACE",
-  "APP_CONFIG_LOGIN_MODE",
   "APP_CONFIG_SESSION_SECRET",
+  "APP_CONFIG_ADMIN_API_SECRET",
 ] as const;
 type AppConfigVarName = (typeof APP_CONFIG_VARS)[number];
-
-/** How a human proves who they are to the control plane: `email` — the login form takes an email and
- *  the control plane owns the session; `open` — no login, the one seeded anonymous identity. */
-export type LoginMode = "email" | "open";
 
 export interface AppConfig {
   /** Which deployment this is, as a word a human reads at `/version`: "poc" (the deployment), "test"
@@ -295,11 +301,14 @@ export interface AppConfig {
    *  Artifacts binding exists (the workers lane). */
   readonly artifactsAccountId: string;
   readonly artifactsNamespace: string;
-  /** The control plane's login mode. Required. */
-  readonly loginMode: LoginMode;
-  /** The HMAC secret the control plane's session cookie is signed with (control-plane.ts).
-   *  Required in `email` login mode: a blank secret signs no cookie and verifies none. */
+  /** The HMAC secret the control plane's session cookie is signed with (control-plane.ts) — a
+   *  wrangler SECRET on a deployment, a var in the test lanes. Required: a blank secret signs no
+   *  cookie and verifies none. */
   readonly sessionSecret: string;
+  /** The deployment's admin secret — `authenticate({ type: "admin-secret" })` (session.ts) and the
+   *  lanes' admin bearer (`laneIdentityOf`): every project. A wrangler SECRET on a deployment, a var
+   *  in the test lanes. Required: a blank secret would match nothing. */
+  readonly adminApiSecret: string;
   /** Cloudflare's version id of the running deployment (`CF_VERSION_METADATA.id`; local workerd mints
    *  one too); "unversioned" where the binding is absent or blank. In every loader cacheKey and at
    *  `/version`. */
@@ -330,24 +339,18 @@ export function parseAppConfig(vars: object, deployId = "unversioned"): AppConfi
   const environmentName = read("APP_CONFIG_ENVIRONMENT_NAME");
   if (!environmentName)
     throw new Error("APP_CONFIG_ENVIRONMENT_NAME: required, but unset or blank");
-  const loginMode = read("APP_CONFIG_LOGIN_MODE");
-  if (loginMode !== "email" && loginMode !== "open")
-    throw new Error(
-      `APP_CONFIG_LOGIN_MODE: expected "email" or "open", got ${JSON.stringify(loginMode)}`,
-    );
   const sessionSecret = read("APP_CONFIG_SESSION_SECRET");
-  if (loginMode === "email" && !sessionSecret)
-    throw new Error(
-      'APP_CONFIG_SESSION_SECRET: required in "email" login mode, but unset or blank',
-    );
+  if (!sessionSecret) throw new Error("APP_CONFIG_SESSION_SECRET: required, but unset or blank");
+  const adminApiSecret = read("APP_CONFIG_ADMIN_API_SECRET");
+  if (!adminApiSecret) throw new Error("APP_CONFIG_ADMIN_API_SECRET: required, but unset or blank");
   return {
     environmentName,
     projectHostnameBase: read("APP_CONFIG_PROJECT_HOSTNAME_BASE"),
     projectTokenSecret: read("APP_CONFIG_PROJECT_TOKEN_SECRET"),
     artifactsAccountId: read("APP_CONFIG_ARTIFACTS_ACCOUNT_ID"),
     artifactsNamespace: read("APP_CONFIG_ARTIFACTS_NAMESPACE"),
-    loginMode,
     sessionSecret,
+    adminApiSecret,
     deployId,
   };
 }
@@ -412,6 +415,21 @@ export function sameOriginPath(next: string, origin: string): string {
     return url.origin === origin ? url.pathname + url.search : "/";
   } catch {
     return "/";
+  }
+}
+
+/** Whether `request` may spend the cookies it carries: its `Origin` header is this origin, or absent
+ *  (a non-browser client — curl, a script). A browser stamps the page's origin on every WebSocket
+ *  handshake and cross-site fetch, so a foreign origin means a foreign site drove the request with
+ *  the visitor's cookie riding along; `from-server-cookie` (session.ts) is honoured only when this
+ *  says yes. A malformed `Origin` (the literal `null` of a sandboxed document included) is foreign. */
+export function isSameOriginBrowserRequest(request: Pick<Request, "url" | "headers">): boolean {
+  const origin = request.headers.get("origin");
+  if (origin === null) return true;
+  try {
+    return new URL(origin).origin === new URL(request.url).origin;
+  } catch {
+    return false;
   }
 }
 

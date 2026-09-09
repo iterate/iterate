@@ -32,6 +32,16 @@ export class Echo extends RpcTarget {
   }
 }
 
+/** This lane's admin secret (wrangler.test.jsonc `APP_CONFIG_ADMIN_API_SECRET`). */
+const adminApiSecret = (): string =>
+  String((env as unknown as { APP_CONFIG_ADMIN_API_SECRET: string }).APP_CONFIG_ADMIN_API_SECRET);
+/** THE lane's credentials (src/session.ts): the admin secret — every project, `{ actor: "admin" }`. */
+export const adminCredentials = () => ({ type: "admin-secret" as const, secret: adminApiSecret() });
+/** The same secret as a lane's bearer — what a raw request to `/expression` is admitted with. */
+export const adminBearer = (): { authorization: string } => ({
+  authorization: `Bearer ${adminApiSecret()}`,
+});
+
 // capnweb sessions live for the whole file; disposed at teardown (sessions left open turn into
 // unhandled-rejection noise).
 const sessions: unknown[] = [];

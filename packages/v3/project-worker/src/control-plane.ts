@@ -153,6 +153,26 @@ ORDER BY p.id ASC;`,
         .bind(id)
         .first<Project>();
     },
+
+    /** EVERY project in the directory, no role — the admin secret's catalog (src/session.ts). */
+    async listAllProjects(): Promise<Project[]> {
+      const { results } = await db
+        .prepare(`SELECT id, org_id AS orgId FROM projects ORDER BY id ASC;`)
+        .all<Project>();
+      return results;
+    },
+
+    /** The deployment's own org — `org_admin`, created on first use, no members: where the admin
+     *  secret's `projects.create` puts a project (a user reaches one only through the admin secret
+     *  or its `as`). */
+    async adminOrg(): Promise<Org> {
+      await db
+        .prepare(
+          `INSERT INTO orgs (id, name) VALUES ('org_admin', 'admin') ON CONFLICT DO NOTHING;`,
+        )
+        .run();
+      return { id: "org_admin", name: "admin" };
+    },
   };
 
   return dir;
@@ -175,16 +195,10 @@ export interface Session {
   iat: number;
 }
 
-/** THE ONE ANONYMOUS IDENTITY of `open` login mode — `user_anonymous`, a directory row seeded by
- *  definitions.sql (so its org membership's FOREIGN KEY holds on every path, /mcp included). */
-const ANONYMOUS: Session = { sub: "user_anonymous", email: "anonymous", iat: 0 };
-
-/** WHO a request is, for every door on the platform host (the console, `/api`, the fetch lane): in
- *  `open` mode ALWAYS the anonymous identity (a cookie cannot make a second one, so every door agrees
- *  on who owns what); in `email` mode the session cookie's user, or nobody. */
+/** WHO a request is, for every door on the platform host (the console, `/api`, the fetch lane): the
+ *  session cookie's user, or nobody. */
 export async function identity(request: Request, env: AppConfigEnv): Promise<Session | null> {
-  const { sessionSecret, loginMode } = appConfigOf(env);
-  return loginMode === "open" ? ANONYMOUS : currentSession(request, sessionSecret);
+  return currentSession(request, appConfigOf(env).sessionSecret);
 }
 
 const COOKIE = "itx-control-plane-session";
@@ -229,9 +243,9 @@ function clearSessionCookie(): string {
 }
 
 // ── mcp ── the /mcp API route: the ONLY OAuth-protected boundary. The provider validated the bearer (an OAuth
-// access token) BEFORE this runs and put the granted props on ctx.props; in `open` login mode app.ts
-// short-circuits here with the anonymous identity. An MCP server (@modelcontextprotocol/server) mounts
-// here, scoped to that identity: every tool acts as the USER the grant names (/authorize, app.ts).
+// access token) BEFORE this runs and put the granted props on ctx.props. An MCP server
+// (@modelcontextprotocol/server) mounts here, scoped to that identity: every tool acts as the USER the
+// grant names (/authorize, the app section below).
 
 /** The props the provider put on ctx after validating the bearer: the user the grant names. */
 interface AuthProps {
@@ -281,15 +295,15 @@ function buildServer(env: Env, props: AuthProps): McpServer {
     {
       description:
         "Create a project in your first org (creating that org if you have none) and return it — how you 'emerge with a project' from MCP.",
-      inputSchema: input({ slug: { type: "string" }, orgName: { type: "string" } }, ["slug"]),
+      inputSchema: input({ project: { type: "string" }, orgName: { type: "string" } }, ["project"]),
     },
     async (raw: unknown) => {
       const a = raw as Record<string, unknown>;
       try {
-        const slug = str(a, "slug");
-        if (!slug) return text("create_project needs a slug", true);
+        const name = str(a, "project");
+        if (!name) return text("create_project needs a project name", true);
         const org = await dir.ensureOrg(props.sub, str(a, "orgName") || `${props.email}'s org`);
-        const project = await dir.createProject(org.id, slug);
+        const project = await dir.createProject(org.id, name);
         return text(`created project '${project.id}' in org '${org.name}' (${org.id})`);
       } catch (e) {
         return text(e instanceof Error ? e.message : String(e), true);
@@ -324,8 +338,8 @@ const mcpHandler: Handler = {
 //   • external MCP clients  → OAuth on /mcp, self-describing via CIMD  (0 hand-registered clients)
 
 /** The control plane's bindings — a slice of the one worker's env (src/worker.ts intersects it with the
- *  DO's `Env`). Its configuration (the login mode, the session secret) is the worker's, through
- *  `appConfigOf(env)` (src/worker.ts). `OAUTH_PROVIDER` is injected by the OAuthProvider wrapper at
+ *  DO's `Env`). Its configuration (the session secret) is the worker's, through `appConfigOf(env)`
+ *  (src/worker.ts). `OAUTH_PROVIDER` is injected by the OAuthProvider wrapper at
  *  request time. */
 export interface Env extends AppConfigEnv {
   /** Provider-owned store: grants, tokens, DCR clients. Required by @cloudflare/workers-oauth-provider. */
@@ -380,7 +394,7 @@ ${note ? `<p>${esc(note)}</p>` : ""}
   <input type="email" name="email" placeholder="you@example.com" autofocus required>
   <button type="submit">Continue</button>
 </form>
-<p class="muted">Enter an email and you become that user. (Demo login mode.)</p>`;
+<p class="muted">Enter an email and you become that user. (The demo login verifies nothing.)</p>`;
 }
 
 async function home(_request: Request, env: Env, session: Session): Promise<Response> {
@@ -509,7 +523,10 @@ const app: Handler = {
   },
 };
 
-const provider = new OAuthProvider<Env>({
+/** The control plane's front door: the OAuth 2.1 AS around `app` — `/token`, `/register`, the
+ *  `.well-known` documents and the bearer check on `/mcp` are the provider's; everything else falls
+ *  through to `app`. */
+export const controlPlane: Handler = new OAuthProvider<Env>({
   apiRoute: "/mcp", // the ONLY OAuth-protected boundary
   apiHandler: mcpHandler,
   defaultHandler: app, // login + session + /authorize consent + console
@@ -520,19 +537,3 @@ const provider = new OAuthProvider<Env>({
   clientIdMetadataDocumentEnabled: true, // CIMD — clients register themselves by URL (proved on HTTPS)
   clientRegistrationEndpoint: "/register", // DCR — the spec-sanctioned MAY-fallback (the local http proof)
 });
-
-/** The control plane's front door. `open` login mode (APP_CONFIG_LOGIN_MODE): no OAuth, so `/mcp` is
- *  TOKENLESS — short-circuit before the provider's apiRoute would 401, running the MCP server with the
- *  single anonymous identity. `email` mode goes through the provider unchanged. */
-export const controlPlane: Handler = {
-  async fetch(request, env, ctx) {
-    if (appConfigOf(env).loginMode === "open" && new URL(request.url).pathname === "/mcp") {
-      (ctx as ExecutionContext & { props: unknown }).props = {
-        sub: ANONYMOUS.sub,
-        email: ANONYMOUS.email,
-      };
-      return mcpHandler.fetch(request, env, ctx);
-    }
-    return provider.fetch(request, env, ctx);
-  },
-};

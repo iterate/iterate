@@ -1,5 +1,6 @@
 // worker.test.ts — the edge's pure halves as tables: the app config (what the vars become, what is refused,
-// the per-env memo) and the project-host convention (`{ hostname, base, becomes }` rows).
+// the per-env memo), the same-origin check `from-server-cookie` rides on, and the project-host
+// convention (`{ hostname, base, becomes }` rows).
 
 import { describe, expect, test, vi } from "vitest";
 
@@ -13,13 +14,22 @@ vi.mock("cloudflare:workers", () => ({
   RpcPromise: class {},
   RpcProperty: class {},
 }));
-import { appConfigOf, parseAppConfig, projectHostOf } from "./worker.ts";
+import {
+  appConfigOf,
+  isSameOriginBrowserRequest,
+  parseAppConfig,
+  projectHostOf,
+} from "./worker.ts";
 
 // ── app config ── THE TABLE for the app config: what the vars become, what is refused (by name),
 // and the per-env memo. Each row is `{ vars, becomes | throws }`.
 
-/** The smallest valid configuration. */
-const MINIMAL = { APP_CONFIG_ENVIRONMENT_NAME: "poc", APP_CONFIG_LOGIN_MODE: "open" };
+/** The smallest valid configuration: the name and the two required secrets. */
+const MINIMAL = {
+  APP_CONFIG_ENVIRONMENT_NAME: "poc",
+  APP_CONFIG_SESSION_SECRET: "cookie-secret",
+  APP_CONFIG_ADMIN_API_SECRET: "admin-secret",
+};
 /** What MINIMAL becomes: every optional var blank, the deploy id defaulted. */
 const MINIMAL_CONFIG = {
   environmentName: "poc",
@@ -27,8 +37,8 @@ const MINIMAL_CONFIG = {
   projectTokenSecret: "",
   artifactsAccountId: "",
   artifactsNamespace: "",
-  loginMode: "open",
-  sessionSecret: "",
+  sessionSecret: "cookie-secret",
+  adminApiSecret: "admin-secret",
   deployId: "unversioned",
 };
 
@@ -36,7 +46,11 @@ describe("parseAppConfig", () => {
   const rows: { vars: Record<string, unknown>; becomes?: unknown; throws?: RegExp }[] = [
     // parses, and trims
     {
-      vars: { APP_CONFIG_ENVIRONMENT_NAME: " poc ", APP_CONFIG_LOGIN_MODE: " open " },
+      vars: {
+        ...MINIMAL,
+        APP_CONFIG_ENVIRONMENT_NAME: " poc ",
+        APP_CONFIG_ADMIN_API_SECRET: " admin-secret ",
+      },
       becomes: MINIMAL_CONFIG,
     },
     // every var read; bindings and unrelated vars are ignored
@@ -47,20 +61,15 @@ describe("parseAppConfig", () => {
         APP_CONFIG_PROJECT_TOKEN_SECRET: "s3",
         APP_CONFIG_ARTIFACTS_ACCOUNT_ID: "acct",
         APP_CONFIG_ARTIFACTS_NAMESPACE: "repos",
-        APP_CONFIG_LOGIN_MODE: "email",
-        APP_CONFIG_SESSION_SECRET: "cookie-secret",
         LOADER: {},
         OTHER: "ignored",
       },
       becomes: {
-        environmentName: "poc",
+        ...MINIMAL_CONFIG,
         projectHostnameBase: "iterate.app",
         projectTokenSecret: "s3",
         artifactsAccountId: "acct",
         artifactsNamespace: "repos",
-        loginMode: "email",
-        sessionSecret: "cookie-secret",
-        deployId: "unversioned",
       },
     },
     // refusals, each naming the variable and the shape
@@ -69,34 +78,36 @@ describe("parseAppConfig", () => {
       vars: { ...MINIMAL, APP_CONFIG_ENVIRONMENT_NAME: "   " },
       throws: /^APP_CONFIG_ENVIRONMENT_NAME: required, but unset or blank$/,
     },
+    // the session secret signs the cookie: a blank one would sign none (a zero-length HMAC key
+    // throws) and verify none (principal.ts) — refused at first use, not a silent lock-out
     {
-      vars: { APP_CONFIG_ENVIRONMENT_NAME: "poc" },
-      throws: /^APP_CONFIG_LOGIN_MODE: expected "email" or "open", got ""$/,
+      vars: { ...MINIMAL, APP_CONFIG_SESSION_SECRET: undefined },
+      throws: /^APP_CONFIG_SESSION_SECRET: required, but unset or blank$/,
     },
     {
-      vars: { ...MINIMAL, APP_CONFIG_LOGIN_MODE: "magic-link" },
-      throws: /^APP_CONFIG_LOGIN_MODE: expected "email" or "open", got "magic-link"$/,
+      vars: { ...MINIMAL, APP_CONFIG_SESSION_SECRET: "  " },
+      throws: /^APP_CONFIG_SESSION_SECRET: required, but unset or blank$/,
     },
-    // email mode signs a cookie: a blank secret would sign none (a zero-length HMAC key throws) and
-    // verify none (principal.ts) — refused at first use, not a silent lock-out
+    // the admin secret: a blank one would match nothing — a deployment nobody can administer
     {
-      vars: { ...MINIMAL, APP_CONFIG_LOGIN_MODE: "email" },
-      throws: /^APP_CONFIG_SESSION_SECRET: required in "email" login mode, but unset or blank$/,
+      vars: { ...MINIMAL, APP_CONFIG_ADMIN_API_SECRET: undefined },
+      throws: /^APP_CONFIG_ADMIN_API_SECRET: required, but unset or blank$/,
     },
     {
-      vars: { ...MINIMAL, APP_CONFIG_LOGIN_MODE: "email", APP_CONFIG_SESSION_SECRET: "  " },
-      throws: /^APP_CONFIG_SESSION_SECRET: required in "email" login mode, but unset or blank$/,
+      vars: { ...MINIMAL, APP_CONFIG_ADMIN_API_SECRET: "" },
+      throws: /^APP_CONFIG_ADMIN_API_SECRET: required, but unset or blank$/,
     },
     // a wrangler var may be a JSON object; a var wants a string
     {
       vars: { ...MINIMAL, APP_CONFIG_ENVIRONMENT_NAME: { not: "a string" } },
       throws: /^APP_CONFIG_ENVIRONMENT_NAME: expected a string variable/,
     },
-    // an APP_CONFIG_* variable this worker does not name is a typo, refused with the known names
+    // an APP_CONFIG_* variable this worker does not name is a typo, refused with the known names —
+    // the deleted login mode among them
     {
-      vars: { ...MINIMAL, APP_CONFIG_ENVIRONMENT_NAEM: "typo" },
+      vars: { ...MINIMAL, APP_CONFIG_LOGIN_MODE: "open" },
       throws:
-        /^APP_CONFIG_ENVIRONMENT_NAEM: unknown configuration variable \(known: APP_CONFIG_ENVIRONMENT_NAME, APP_CONFIG_PROJECT_HOSTNAME_BASE, APP_CONFIG_PROJECT_TOKEN_SECRET, APP_CONFIG_ARTIFACTS_ACCOUNT_ID, APP_CONFIG_ARTIFACTS_NAMESPACE, APP_CONFIG_LOGIN_MODE, APP_CONFIG_SESSION_SECRET\)$/,
+        /^APP_CONFIG_LOGIN_MODE: unknown configuration variable \(known: APP_CONFIG_ENVIRONMENT_NAME, APP_CONFIG_PROJECT_HOSTNAME_BASE, APP_CONFIG_PROJECT_TOKEN_SECRET, APP_CONFIG_ARTIFACTS_ACCOUNT_ID, APP_CONFIG_ARTIFACTS_NAMESPACE, APP_CONFIG_SESSION_SECRET, APP_CONFIG_ADMIN_API_SECRET\)$/,
     },
   ];
   for (const { vars, becomes, throws } of rows)
@@ -129,6 +140,28 @@ describe("appConfigOf — once per env object", () => {
       /^APP_CONFIG_ENVIRONMENT_NAME: required, but unset or blank$/,
     );
   });
+});
+
+// ── same-origin ── the check `from-server-cookie` rides on (session.ts): `{ origin, becomes }` rows
+// for a request to https://worker.example/api.
+
+describe("isSameOriginBrowserRequest", () => {
+  const rows: { origin: string | null; becomes: boolean }[] = [
+    { origin: null, becomes: true }, // no Origin: a non-browser client
+    { origin: "https://worker.example", becomes: true }, // the page is this origin
+    { origin: "https://evil.example", becomes: false }, // another site drove the browser
+    { origin: "http://worker.example", becomes: false }, // the scheme is part of the origin
+    { origin: "https://worker.example:8443", becomes: false }, // so is the port
+    { origin: "null", becomes: false }, // an opaque origin (a sandboxed document) is foreign
+    { origin: "not a url", becomes: false },
+  ];
+  for (const { origin, becomes } of rows)
+    test(`Origin ${JSON.stringify(origin)} ⇒ ${becomes}`, () => {
+      const headers = new Headers(origin === null ? {} : { origin });
+      expect(isSameOriginBrowserRequest({ url: "https://worker.example/api", headers })).toBe(
+        becomes,
+      );
+    });
 });
 
 // ── project host ── the hostname convention as a table: `{ hostname, base, becomes }` rows.

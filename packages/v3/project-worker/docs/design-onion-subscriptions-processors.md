@@ -21,10 +21,10 @@
   the core; rewrite rules, subscriptions, and processors are successive layers that only use what is
   below them. Sugar is kept visibly apart from axioms. `itx.connections` could one day be one more
   layer over `rpcStubs`. Not built here.
-- **Sessions like apps/os**: `authenticate().projects.get(id)` returns the root context; `cd` takes
-  absolute paths by convention (relative and `..` also resolve); plural collections end in
-  `Collection`. (No `list`/`create` when this was written; as built since 2026-09-08 the catalog has
-  `list()` and `create({ slug })`, over the in-process directory — §6.)
+- **Sessions like apps/os**: `authenticate(credentials).projects.get(project)` returns the root
+  context; `cd` takes absolute paths by convention (relative and `..` also resolve); plural
+  collections end in `Collection`. (No `list`/`create` when this was written; as built since
+  2026-09-08 the catalog has `list()` and `create({ project })`, over the in-process directory — §6.)
 - **A processor is a `DurableObject` subclass** of an SDK base, hosted through the ordinary
   `itx.facets.get(name, { source, className })` (as built 2026-09-02; the `load(src)
 .getDurableObjectClass(C).get(name)` chain this doc sketched was folded into that one door). No
@@ -79,7 +79,7 @@ as built, a source may instead be an expression that PRODUCES the modules, but o
 
 ```ts
 using api = newWebSocketRpcSession("wss://<worker>/api");
-const itx = api.authenticate().projects.get("prj_123"); // the project ROOT context
+const itx = api.authenticate({ type: "from-server-cookie" }).projects.get("prj_123"); // the project ROOT context
 const agent = itx.cd("/agents/support"); // absolute by convention; relative and ".." also resolve
 
 const greetSource = { "cap.js": GREET_SRC };
@@ -526,20 +526,21 @@ await itx.append({
 
 ```ts
 class UnauthenticatedSession extends RpcTarget {
-  /** No credentials ⇒ the request's control-plane identity (open mode: the anonymous user, no principal;
-   *  email mode: the session cookie, else UNAUTHENTICATED); a project token ⇒ a principal bound to ONE project. */
-  authenticate(credentials?: { projectToken?: string }): Promise<Session>;
+  /** One of four credential kinds (src/session.ts SessionCredentials): from-server-cookie (the login cookie
+   *  on the handshake, same origin only, else UNAUTHENTICATED), project-token (a principal bound to ONE
+   *  project), admin-secret (every project; `as` impersonates a user), project-secret (step 2 of the auth plan). */
+  authenticate(credentials: SessionCredentials): Promise<Session>;
   [Symbol.dispose](): void;
 } // what /api serves; dispose: relays + anonymous subscriptions
 class Session extends RpcTarget {
-  whoami(): SessionPrincipal | null; // { actor, email?, projectId? } — null for the anonymous session
+  whoami(): SessionPrincipal; // { actor, email?, projectId? } — { actor: "admin" } for the admin secret
   get projects(): ProjectCollection;
 } // a GETTER: capnweb exposes prototype members only
 class ProjectCollection extends RpcTarget {
-  list(): Promise<Project[]>; // { id, orgId, role? } — the projects of the user's orgs
-  get(projectId: string): Promise<IterateContext>; // the ROOT context; addressing + the directory's membership answer (FORBIDDEN)
-  create(input: { slug: string }): Promise<IterateContext>; // the slug IS the id; PROJECT_NAME_TAKEN
-} // list/create need a signed-in user: a token session holds its one project
+  list(): Promise<Project[]>; // { id, orgId, role? } — the projects of the user's orgs; every project for the admin
+  get(project: ProjectIdOrSlug): Promise<IterateContext>; // the ROOT context; addressing + the directory's membership answer (FORBIDDEN)
+  create(input: { project: ProjectIdOrSlug }): Promise<IterateContext>; // the slug IS the id; PROJECT_NAME_TAKEN
+} // list/create need a signed-in user or the admin: a token session holds its one project
 
 // iterate-context.ts — A PROXY IN FRONT OF THE DO. Declares only what must be edge code, in the order the tutorial builds them;
 // every DO built-in root (append · readEvents · waitForEvent · fetch · whoami · kv · secrets · ai · cfArtifacts · repos · rpcStubs.get/list · rewriteRules · facets · subscriptions · workers · connectToMcp · connectToOpenApi · connectToCapnweb · serveMcp)

@@ -10,21 +10,31 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { createTestHarness } from "wrangler";
 import type { TestProject } from "vitest/node";
-import { e2eWorkerConfig, PACKAGE_DIR } from "./worker-config.ts";
+import { E2E_ADMIN_API_SECRET, e2eWorkerConfig, PACKAGE_DIR } from "./worker-config.ts";
 
 declare module "vitest" {
   interface ProvidedContext {
     /** Base URL of the one E2E worker, e.g. http://127.0.0.1:1234 — every test opens capnweb here. */
     workerBaseUrl: string;
+    /** The worker's admin secret — what the lane's default session authenticates with
+     *  (support/client.ts): the local worker's (worker-config.ts), a deployed worker's
+     *  `APP_CONFIG_ADMIN_API_SECRET` handed to the run as ADMIN_API_SECRET (never in the tree). */
+    adminApiSecret: string;
   }
 }
 
 export default async function setup(project: TestProject): Promise<() => Promise<void>> {
   // DEPLOYED-TARGET MODE — the proof that counts: `WORKER_BASE_URL=https://project-worker.<sub>.workers.dev
-  // pnpm e2e` runs the SAME suite against the deployed worker, no local boot.
+  // ADMIN_API_SECRET=… pnpm e2e` runs the SAME suite against the deployed worker, no local boot.
   const deployedWorkerBaseUrl = process.env.WORKER_BASE_URL;
   if (deployedWorkerBaseUrl) {
+    const adminApiSecret = process.env.ADMIN_API_SECRET;
+    if (!adminApiSecret)
+      throw new Error(
+        "ADMIN_API_SECRET unset — the deployed worker's APP_CONFIG_ADMIN_API_SECRET, which every e2e session authenticates with",
+      );
     project.provide("workerBaseUrl", deployedWorkerBaseUrl);
+    project.provide("adminApiSecret", adminApiSecret);
     return async () => {};
   }
   const server = createTestHarness({
@@ -45,6 +55,7 @@ export default async function setup(project: TestProject): Promise<() => Promise
     .filter(Boolean);
   await DB.batch(statements.map((statement) => DB.prepare(statement)));
   project.provide("workerBaseUrl", url.href);
+  project.provide("adminApiSecret", E2E_ADMIN_API_SECRET);
   return async () => {
     await server.close();
   };

@@ -23,6 +23,7 @@ import {
   until,
 } from "./support/client.ts";
 import { startLoggedWorker, type LoggedWorker } from "./support/log-harness.ts";
+import { E2E_ADMIN_API_SECRET } from "./support/worker-config.ts";
 import { enableFixtureProcessor } from "./support/sources.ts";
 
 let worker: LoggedWorker;
@@ -152,7 +153,9 @@ test("MEASURED FINDING: a push subscriber that stops reading mid-flood is NOT cl
   // that socket's relay session; the socket's death must become the stub's death.
   const wsB = stallableWebSocket(`ws://${worker.url.host}/api`);
   const sessionB: any = newWebSocketRpcSession(wsB as any);
-  const victim = sessionB.authenticate().projects.get(ctx);
+  const victim = sessionB
+    .authenticate({ type: "admin-secret", secret: E2E_ADMIN_API_SECRET })
+    .projects.get(ctx);
   const c = collector();
   await victim.subscribe({ name: "victim", consumes: ["flood"], target: c.fn });
   // one probe proves the lane end-to-end BEFORE the stall

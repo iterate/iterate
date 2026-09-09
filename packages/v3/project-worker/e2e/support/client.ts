@@ -1,15 +1,38 @@
-// e2e/support/client.ts — THE E2E client: open a capnweb session to the one shared worker (URL from
-// global-setup, via WORKER_BASE_URL) for a FRESH ctx per test, exactly like a production client. This
-// is the whole "how a test reaches the worker" surface, plus the handful of idioms every file used
-// to copy (poll-until, must-reject, the delivery collector, the eyeball WebSocket round trip).
+// e2e/support/client.ts — THE E2E client: open a capnweb session to the one shared worker (URL and
+// admin secret from global-setup, via WORKER_BASE_URL and ADMIN_API_SECRET) for a FRESH ctx per test,
+// exactly like a production client. This is the whole "how a test reaches the worker" surface, plus
+// the handful of idioms every file used to copy (poll-until, must-reject, the delivery collector, the
+// eyeball WebSocket round trip).
 
 import { newWebSocketRpcSession } from "capnweb";
+import type { SessionCredentials } from "../../src/session.ts";
 
 const baseUrl = (): string => {
   const u = process.env.WORKER_BASE_URL;
   if (!u) throw new Error("WORKER_BASE_URL unset — the e2e globalSetup/setup did not run");
   return u;
 };
+
+/** The worker's admin secret (global-setup: the local worker's, or a deployed run's ADMIN_API_SECRET). */
+const adminApiSecret = (): string => {
+  const secret = process.env.ADMIN_API_SECRET;
+  if (!secret) throw new Error("ADMIN_API_SECRET unset — the e2e globalSetup/setup did not run");
+  return secret;
+};
+
+/** THE lane's credentials (src/session.ts `SessionCredentials`): the admin secret — every project,
+ *  `{ actor: "admin" }`; with `as`, that user's session (the projects of their orgs) — what a
+ *  membership row authenticates with. */
+export const adminCredentials = (as?: { sub: string; email: string }): SessionCredentials => ({
+  type: "admin-secret",
+  secret: adminApiSecret(),
+  ...(as && { as }),
+});
+
+/** The same secret as a lane's bearer — what a raw request to `/expression` is admitted with. */
+export const adminBearer = (): { authorization: string } => ({
+  authorization: `Bearer ${adminApiSecret()}`,
+});
 
 /** A URL on the one shared worker — for the raw HTTP doors that have no itx method (/version, /demo). */
 export const workerUrl = (path: string): string => new URL(path, baseUrl()).toString();
@@ -42,8 +65,9 @@ const wsApi = (): string => {
 const openSessions: any[] = [];
 const openSockets: WebSocket[] = [];
 
-/** A raw capnweb session — an `UnauthenticatedSession` stub: `authenticate().projects.get(ctx)` is
- *  the itx. For flows that need the session itself (its identity, its `[Symbol.dispose]`). */
+/** A raw capnweb session — an `UnauthenticatedSession` stub: `authenticate(adminCredentials())
+ *  .projects.get(ctx)` is the itx. For flows that need the session itself (its identity, its
+ *  `[Symbol.dispose]`). */
 export function session(): any {
   const s = newWebSocketRpcSession(wsApi());
   openSessions.push(s);
@@ -62,11 +86,11 @@ export function rawSession(prepare?: (ws: WebSocket) => void): { session: any; w
   return { session: s, ws };
 }
 
-/** THE default door: a fresh session's itx for a project ctx (its root context). `.authenticate()`
- *  with no credentials is the request's identity — the anonymous user under the worker's `open`
- *  login mode, which every lane runs (src/session.ts); it is the only door — there is no bare one. */
+/** THE default door: a fresh session's itx for a project ctx (its root context), authenticated with
+ *  the admin secret — any project, no directory row needed (src/session.ts); it is the only door —
+ *  there is no bare one. */
 export function openItx(ctx: string): any {
-  return session().authenticate().projects.get(ctx);
+  return session().authenticate(adminCredentials()).projects.get(ctx);
 }
 
 /** Dispose every session (and close every raw socket) opened since the last call — wired to
@@ -219,17 +243,21 @@ export function collector() {
 }
 
 /** One full eyeball WebSocket round trip: open → send → first message → close. Never throws — the
- *  caller asserts on the outcome. */
+ *  caller asserts on the outcome. `headers` ride the handshake (node's WebSocket takes them; a
+ *  browser's cannot) — the admin bearer a `/expression` upgrade is admitted with. */
 export function wsRoundTrip(
   url: string,
   send: string,
   timeoutMs = 10_000,
+  headers: Record<string, string> = {},
 ): Promise<{ opened: boolean; echo?: string; closeCode?: number; error?: string }> {
   return new Promise((resolve) => {
     const out: { opened: boolean; echo?: string; closeCode?: number; error?: string } = {
       opened: false,
     };
-    const ws = new WebSocket(url);
+    // node's WebSocket (undici) takes `{ headers }` as its second argument; @types/node types only
+    // the protocols there
+    const ws = new WebSocket(url, { headers } as never);
     const timer = setTimeout(() => {
       try {
         ws.close();

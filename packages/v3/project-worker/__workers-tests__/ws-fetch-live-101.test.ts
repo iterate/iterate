@@ -29,7 +29,7 @@
 import { SELF } from "cloudflare:test";
 import { RpcTarget } from "capnweb";
 import { expect, test } from "vitest";
-import { openSession } from "./support.ts";
+import { adminBearer, adminCredentials, openSession } from "./support.ts";
 
 /** The live provider: a fetch-shaped value that CAN fabricate a 101 (we are in workerd).
  *  Plain requests get a 200 page; upgrade requests get a WebSocketPair whose server side echoes
@@ -53,13 +53,14 @@ class LiveSite extends RpcTarget {
 /** Provide a fresh LiveSite over a live capnweb session under `itx.wsdev`, with the rewrite rule
  *  at the same spelling — the ONE door. */
 async function provideLiveSite(ctx: string): Promise<LiveSite> {
-  const itx = await (await openSession()).authenticate().projects.get(ctx);
+  const itx = await (await openSession()).authenticate(adminCredentials()).projects.get(ctx);
   const site = new LiveSite();
   await itx.provide("itx.wsdev", site);
   return site;
 }
 
-/** The edge's plain-HTTP fetch door: `?context=` names the context, `?itx=` the itx expression. */
+/** The edge's plain-HTTP fetch door: `?context=` names the context, `?itx=` the itx expression;
+ *  every request into it bears the admin secret (the lane admits a member, a token or the admin). */
 const expressionUrl = (ctx: string) => `https://test.local/expression?context=${ctx}&itx=itx.wsdev`;
 
 // ─────────────── the passing halves: plain fetch works; the failing hop is NAMED ───────────────
@@ -67,7 +68,7 @@ const expressionUrl = (ctx: string) => `https://test.local/expression?context=${
 test("plain fetch through a LENT RPC STUB: the eyeball's GET reaches the workerd provider and its 200 rides back out", async () => {
   const ctx = "prj_ws101_plain";
   const site = await provideLiveSite(ctx);
-  const page = await SELF.fetch(expressionUrl(ctx));
+  const page = await SELF.fetch(expressionUrl(ctx), { headers: adminBearer() });
   const body = await page.text();
   console.log("[ws101] plain GET:", page.status, JSON.stringify(body).slice(0, 400));
   expect(page.status).toBe(200);
@@ -86,7 +87,9 @@ test("lent-stub WebSocket fetch: the eyeball's upgrade gets the provider's GENUI
   const ctx = "prj_ws101_correct";
   const site = await provideLiveSite(ctx);
   // THE CORRECT BEHAVIOR: a genuine 101 bearing a usable WebSocket…
-  const res = await SELF.fetch(expressionUrl(ctx), { headers: { Upgrade: "websocket" } });
+  const res = await SELF.fetch(expressionUrl(ctx), {
+    headers: { Upgrade: "websocket", ...adminBearer() },
+  });
   expect(res.status).toBe(101);
   expect(site.observations).toContain('fetch invoked: GET upgrade="websocket"');
   expect(site.observations).toContain("fabricated a genuine 101 with a webSocket");

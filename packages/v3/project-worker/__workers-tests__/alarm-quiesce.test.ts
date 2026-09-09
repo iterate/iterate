@@ -34,7 +34,7 @@ import { evictDurableObject, runDurableObjectAlarm, runInDurableObject } from "c
 import { expect, test, vi } from "vitest";
 import type { ItxExpression } from "../src/context/expression.ts";
 import { subscriptionConfiguredEvent } from "../src/stream/core-processor.ts";
-import { Echo, openSession, quiesce, stub } from "./support.ts";
+import { adminCredentials, Echo, openSession, quiesce, stub } from "./support.ts";
 
 /** A tiny userspace processor: counts every durable event. The tally fixture's shape
  *  (e2e/support/sources.ts), reduced to one number — the pure `CounterProcessor` plus its host
@@ -352,9 +352,9 @@ test("A BORROW RACES THE QUIESCE ALARM: a stub invoke fired concurrently with th
   // borrows a stub while the 60s alarm fires resolves with the right per-client answer (the stub it
   // is borrowing is not returned out from under it).
   const ctx = "prj_pagein";
-  const clientItx = await (await openSession()).authenticate().projects.get(ctx);
+  const clientItx = await (await openSession()).authenticate(adminCredentials()).projects.get(ctx);
   for (let i = 0; i < 4; i++) await clientItx.provide(`itx.p${i}`, new Echo(i));
-  const caller = await (await openSession()).authenticate().projects.get(ctx);
+  const caller = await (await openSession()).authenticate(adminCredentials()).projects.get(ctx);
 
   // THERE MUST BE AN ALARM TO RACE. Lending four stubs arms nothing — the quiet clock arms only
   // while a facet is live or a stub is BORROWED — so warm one stub first and read the schedule
@@ -387,11 +387,11 @@ test("SCALE DROP + QUIESCE + EVICT + WAKE: a DISPOSED live provide stays gone; t
   // post-wake fan-out reaches every survivor and only the survivors.
   const ctx = "prj_scale_drop";
   const K = 6;
-  const clientItx = await (await openSession()).authenticate().projects.get(ctx);
+  const clientItx = await (await openSession()).authenticate(adminCredentials()).projects.get(ctx);
   const providedRpcStubs: any[] = [];
   for (let i = 0; i < K; i++)
     providedRpcStubs.push(await clientItx.provide(`itx.k${i}`, new Echo(i)));
-  const caller = await (await openSession()).authenticate().projects.get(ctx);
+  const caller = await (await openSession()).authenticate(adminCredentials()).projects.get(ctx);
 
   // The drop must come from the PROVIDER'S OWN handle: disposing it recalls the stub THIS session
   // lent under `itx.k3` (its pager socket closes) AND un-sets the rule at `itx.k3`. A

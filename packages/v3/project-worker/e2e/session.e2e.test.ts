@@ -1,9 +1,13 @@
 // session.e2e.test.ts — the /api SESSION: its identity (src/principal.ts, session.ts, the DO's append
 // root), its doors, and the ONE SessionTeardown every context it hands out shares. Pins:
 //   • a project token: `whoami`, `source.principal` on every append — set by the DO, so a client's own
-//     is overwritten and an anonymous session's is stripped; the platform's own rows carry it too
-//   • the token names ONE project (FORBIDDEN elsewhere); a bad or expired token is INVALID_CREDENTIALS;
-//     no token is the anonymous session intra-project code holds
+//     is overwritten (the admin session's becomes `{ actor: "admin" }`); the platform's own rows
+//     carry it too
+//   • the token names ONE project (FORBIDDEN elsewhere); a bad or expired token is INVALID_CREDENTIALS
+//   • the admin secret: `{ actor: "admin" }` on any project, every project listed; a wrong secret is
+//     INVALID_CREDENTIALS; `as` is that user's session — confined to their orgs' projects, creating
+//     in their own org; `from-server-cookie` with no cookie is UNAUTHENTICATED; `project-secret` is
+//     UNSUPPORTED_CREDENTIAL until step 2 of the auth plan
 //   • the built-in cd carries the principal to a SIBLING context
 //   • one-shot HTTP batch at /api (a socketless CLI client), an inline-source worker, a fetch-shaped
 //     target through the session as a dotted `.fetch(request)` behind a rewrite rule (the commissioned
@@ -17,6 +21,7 @@
 import { newHttpBatchRpcSession } from "capnweb";
 import { expect, test } from "vitest";
 import {
+  adminCredentials,
   codeOf,
   freshCtx,
   openItx,
@@ -27,7 +32,7 @@ import {
   workerUrl,
 } from "./support/client.ts";
 import { mintProjectToken } from "./support/principal.ts";
-import { projectHostsAreLocal } from "./support/project-host.ts";
+import { freshDnsSafeProjectId, projectHostsAreLocal } from "./support/project-host.ts";
 import { SOURCES } from "./support/sources.ts";
 
 // ── identity ──
@@ -37,47 +42,96 @@ test("a project token: whoami, source.principal on every append (unforgeable), t
   const principal = { actor: "user_ada", email: "ada@example.com" };
   const token = await mintProjectToken({ projectId, ...principal });
   const api = session();
-  const authenticated = api.authenticate({ projectToken: token });
+  const authenticated = api.authenticate({ type: "project-token", token: token });
   expect(await authenticated.whoami()).toEqual({ projectId, ...principal });
 
   // every append the session makes carries the principal — the DO sets it, a client's own is overwritten
   const itx = authenticated.projects.get(projectId);
   await itx.append({ type: "note", payload: { n: 1 }, source: { principal: { actor: "forged" } } });
   await itx.provide("itx.demo", "itx.builtins.kv"); // the platform's own row, appended by the edge for this session
-  // an anonymous session's client-supplied principal is stripped
-  const anonymous = openItx(projectId);
-  await anonymous.append({
+  // the admin session's client-supplied principal is overwritten with the admin's
+  const admin = openItx(projectId);
+  await admin.append({
     type: "note",
     payload: { n: 2 },
     source: { principal: { actor: "forged" } },
   });
-  const events = await readAll(anonymous);
+  const events = await readAll(admin);
   const note1 = events.find((e) => e.type === "note" && e.payload?.n === 1);
   const rule = events.find((e) => e.type === "events.iterate.com/itx/rewrite-rule-configured");
   const note2 = events.find((e) => e.type === "note" && e.payload?.n === 2);
   expect(note1?.source?.principal).toEqual(principal);
   expect(rule?.source?.principal).toEqual(principal);
-  expect(note2?.source?.principal).toBeUndefined();
+  expect(note2?.source?.principal).toEqual({ actor: "admin" });
 
   // the token names ONE project
   const other = await rejection(authenticated.projects.get(`${projectId}-other`).whoami());
   expect(codeOf(other), other.message).toBe("FORBIDDEN");
   // a bad token, an expired token: refused the same way
-  const bad = await rejection(api.authenticate({ projectToken: `${token}x` }).whoami());
+  const bad = await rejection(
+    api.authenticate({ type: "project-token", token: `${token}x` }).whoami(),
+  );
   expect(codeOf(bad), bad.message).toBe("INVALID_CREDENTIALS");
   const expired = await mintProjectToken({ projectId, ...principal, expiresAt: Date.now() - 1 });
-  expect(codeOf(await rejection(api.authenticate({ projectToken: expired }).whoami()))).toBe(
-    "INVALID_CREDENTIALS",
+  expect(
+    codeOf(await rejection(api.authenticate({ type: "project-token", token: expired }).whoami())),
+  ).toBe("INVALID_CREDENTIALS");
+});
+
+test('the admin secret: `{ actor: "admin" }` on any project and every project listed; `as` is that user\'s session, confined to their orgs; a wrong secret, a cookie this socket never carried and the project-secret kind are refused, coded', async () => {
+  const api = session();
+  const admin = api.authenticate(adminCredentials());
+  expect(await admin.whoami()).toEqual({ actor: "admin" });
+  // any project, no directory row needed; a created one lands in the deployment's own org
+  const projectId = freshDnsSafeProjectId("admin");
+  expect(await admin.projects.get(`${projectId}-never-created`).whoami()).toEqual({
+    projectId: `${projectId}-never-created`,
+    path: "/",
+  });
+  expect(await (await admin.projects.create({ project: projectId })).whoami()).toEqual({
+    projectId,
+    path: "/",
+  });
+  const listed = (await admin.projects.list()) as { id: string; orgId: string; role?: string }[];
+  expect(listed.find((p) => p.id === projectId)).toEqual({ id: projectId, orgId: "org_admin" });
+
+  // `as`: the user's session — their projects only, created in their own org, without a login
+  const email = `${projectId}@example.com`;
+  const ada = api.authenticate(adminCredentials({ sub: `user_${email}`, email }));
+  expect(await ada.whoami()).toEqual({ actor: `user_${email}`, email });
+  const adminOnly = await rejection(ada.projects.get(projectId).whoami());
+  expect(codeOf(adminOnly), adminOnly.message).toBe("FORBIDDEN");
+  const own = `${projectId}-own`;
+  expect(await (await ada.projects.create({ project: own })).whoami()).toEqual({
+    projectId: own,
+    path: "/",
+  });
+  expect(await ada.projects.get(own).whoami()).toEqual({ projectId: own, path: "/" });
+  expect((await ada.projects.list()).map((p: { id: string }) => p.id)).toEqual([own]);
+  expect(listed.some((p) => p.id === own)).toBe(false); // listed before it existed
+  expect((await admin.projects.list()).some((p: { id: string }) => p.id === own)).toBe(true);
+
+  // the refusals
+  const wrong = await rejection(
+    api.authenticate({ type: "admin-secret", secret: "not-the-secret" }).whoami(),
   );
-  // no token: the anonymous session, as ever
-  expect(await api.authenticate().whoami()).toBeNull();
+  expect(codeOf(wrong), wrong.message).toBe("INVALID_CREDENTIALS");
+  const noCookie = await rejection(api.authenticate({ type: "from-server-cookie" }).whoami());
+  expect(codeOf(noCookie), noCookie.message).toBe("UNAUTHENTICATED");
+  const secret = await rejection(
+    api.authenticate({ type: "project-secret", project: projectId, secret: "x" }).whoami(),
+  );
+  expect(codeOf(secret), secret.message).toBe("UNSUPPORTED_CREDENTIAL");
 });
 
 test("the built-in cd carries the principal to a SIBLING context — an event appended through `itx.cd('/x').append(…)` is attributed like one appended at the root", async () => {
   const projectId = freshCtx("cd-who");
   const principal = { actor: "user_ada", email: "ada@example.com" };
   const itx = session()
-    .authenticate({ projectToken: await mintProjectToken({ projectId, ...principal }) })
+    .authenticate({
+      type: "project-token",
+      token: await mintProjectToken({ projectId, ...principal }),
+    })
     .projects.get(projectId);
   await itx.invoke("itx.cd('/sibling').append({ type: 'note', payload: { via: 'cd' } })");
   const note = (await readAll(itx.cd("/sibling"))).find((e) => e.type === "note");
@@ -91,11 +145,11 @@ test("one-shot HTTP batch whoami at /api, an inline-source worker, and a dotted 
   const ctx = freshCtx("edge");
 
   // 1. ONE-SHOT HTTP BATCH: a CLI-shaped client — no WebSocket anywhere. Every call chained off the
-  //    session flushes as a single POST to /api; the shape is the same `.authenticate().projects.get(ctx)`.
+  //    session flushes as a single POST to /api; the shape is the same `.authenticate(adminCredentials()).projects.get(ctx)`.
   // eslint-disable-next-line iterate/no-capnweb-http-batch -- the batch door is what this proves: a socketless CLI client works
   const batch: any = newHttpBatchRpcSession(workerUrl("/api"));
   const who = await batch
-    .authenticate()
+    .authenticate(adminCredentials())
     .projects.get(ctx)
     .invoke(["itx", ["whoami"]]);
   // one-shot HTTP batch: whoami without a socket
@@ -150,7 +204,7 @@ test("/version answers `<deployId> <environmentName>` — the deploy stamp a smo
 test("TWO CONTEXTS of one session provide live fns under the SAME rpc-stub key — both stay callable", async () => {
   const ctx = freshCtx("ctxclash");
   const s = session();
-  const a = s.authenticate().projects.get(ctx); // the root context ("/")
+  const a = s.authenticate(adminCredentials()).projects.get(ctx); // the root context ("/")
   const b = a.cd("/sub"); // another context of the project — SAME session, so the SAME SessionTeardown
 
   await a.provide("itx.clash", (x: number) => x + 1);

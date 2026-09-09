@@ -1,6 +1,7 @@
-// principal.test.ts — the project token as a table: what verifies, what does not.
+// principal.test.ts — the project token as a table: what verifies, what does not; and the admin
+// secret's compare.
 import { expect, test } from "vitest";
-import { signClaims, verifyProjectToken } from "./principal.ts";
+import { signClaims, verifyAdminSecret, verifyProjectToken } from "./principal.ts";
 
 const SECRET = "test-secret";
 const NOW = 1_800_000_000_000;
@@ -57,4 +58,18 @@ const refusals: { title: string; token: () => Promise<string>; secret?: string; 
 for (const { title, token, secret = SECRET, now = NOW } of refusals)
   test(`refused: ${title}`, async () => {
     expect(await verifyProjectToken(await token(), secret, now)).toBeNull();
+  });
+
+// ── the admin secret ── `verifyAdminSecret(candidate, secret)`: `{ candidate, secret, becomes }` rows.
+const adminRows: { candidate: string; secret: string; becomes: boolean }[] = [
+  { candidate: "s3cret", secret: "s3cret", becomes: true },
+  { candidate: "s3cret ", secret: "s3cret", becomes: false }, // exact, untrimmed
+  { candidate: "s3cre", secret: "s3cret", becomes: false }, // a prefix
+  { candidate: "", secret: "s3cret", becomes: false },
+  { candidate: "s3cret", secret: "", becomes: false }, // a blank secret matches nothing
+  { candidate: "", secret: "", becomes: false },
+];
+for (const { candidate, secret, becomes } of adminRows)
+  test(`verifyAdminSecret(${JSON.stringify(candidate)}, ${JSON.stringify(secret)}) ⇒ ${becomes}`, async () => {
+    expect(await verifyAdminSecret(candidate, secret)).toBe(becomes);
   });

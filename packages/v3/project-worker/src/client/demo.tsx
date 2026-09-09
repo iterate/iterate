@@ -28,7 +28,7 @@ import {
 export type LiveStateStatus = "connecting" | "live" | "error";
 
 /** Subscribe to a producer's live state and render its latest value. Pass a ready `itx` (a capnweb
- *  `api.authenticate().projects.get(id)`), the producer's `key`, and a `door` thunk that reads `{rev, state}`
+ *  `api.authenticate(credentials).projects.get(id)`), the producer's `key`, and a `door` thunk that reads `{rev, state}`
  *  (`() => itx.invoke("itx.facets.get('slug').liveSnapshot()")`). Re-subscribes when the
  *  session, `key`, or `name` changes; unmount (and every re-subscribe) disposes the previous
  *  server-side subscription. */
@@ -105,14 +105,16 @@ export function useLiveState<S>(
   return { value, rev: store?.rev() ?? null, status, error };
 }
 
-const CTX = "prj_demo_livestate";
-
+/** Dial /api with the console's login cookie (it rode the handshake; the visitor signed in at `/`)
+ *  and open the visitor's own demo project — `demo-<email>`, created in their org on first visit. */
 async function connectAndEnable(): Promise<any> {
   const url = new URL("/api", location.href);
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
-  const itx = await (newWebSocketRpcSession(url.toString()) as any)
-    .authenticate()
-    .projects.get(CTX);
+  const session = (newWebSocketRpcSession(url.toString()) as any).authenticate({
+    type: "from-server-cookie",
+  });
+  const { email } = await session.whoami();
+  const itx = await session.projects.create({ project: `demo-${email}` });
   await itx.enableProcessor("presence", {
     source: PRESENCE_PROCESSOR_SOURCE, // the modules, literally — nothing seeded anywhere first
     className: "PresenceDurableObject",

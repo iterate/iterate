@@ -23,7 +23,7 @@ import {
   RPC_STUB_PAGER_WEBSOCKET_HEADER,
 } from "../src/context/rpc-stubs.ts";
 import type { StreamEventInput } from "../src/stream/processor.ts";
-import { Echo, openSession, stub, until } from "./support.ts";
+import { adminCredentials, Echo, openSession, stub, until } from "./support.ts";
 
 /** Open a pager upgrade straight at the DO's fetch door (what lendRpcStubOverPager does relay-side):
  *  the header IS the attach request — the key and the events that name it. */
@@ -102,9 +102,9 @@ test("ATOMIC: a paused stream refuses the attach with 409 + code STREAM_PAUSED, 
 
 test("HAPPY PATH: provide over /api opens the pager (the rule riding it); a separate caller's invoke pages, borrows and answers", async () => {
   const ctx = "prj_pager_happy";
-  const clientItx = await (await openSession()).authenticate().projects.get(ctx);
+  const clientItx = await (await openSession()).authenticate(adminCredentials()).projects.get(ctx);
   await clientItx.provide("itx.live", new Echo(7));
-  const caller = await (await openSession()).authenticate().projects.get(ctx);
+  const caller = await (await openSession()).authenticate(adminCredentials()).projects.get(ctx);
   const out = await caller.invoke("itx.live.echo('hi')");
   expect(out).toBe("echo-7:hi");
 });

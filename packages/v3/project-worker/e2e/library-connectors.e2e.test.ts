@@ -24,7 +24,14 @@
 //     WebSocket on the deployed egress
 
 import { beforeAll, describe, expect, test } from "vitest";
-import { expressionUrl, freshCtx, openItx, workerUrl } from "./support/client.ts";
+import {
+  adminBearer,
+  adminCredentials,
+  expressionUrl,
+  freshCtx,
+  openItx,
+  workerUrl,
+} from "./support/client.ts";
 import { deployedOnly } from "./support/project-host.ts";
 import { SOURCES } from "./support/sources.ts";
 
@@ -38,7 +45,11 @@ test("a loaded worker serves capnweb behind /expression/<path>, dialed with conn
   ]);
   const url = new URL(expressionUrl(ctx, "itx.rpcService.fetch"));
   url.pathname = "/expression/rpc/v1";
-  const connection = await itx.connectToCapnweb(url.toString(), { transport: "batch" });
+  // the lane admits the admin bearer (the context dials its own worker's /expression from inside)
+  const connection = await itx.connectToCapnweb(url.toString(), {
+    transport: "batch",
+    headers: adminBearer(),
+  });
   expect(await connection.hello("lane")).toBe("hello lane");
   // the path suffix reached the loaded worker untouched
   expect(await connection.path()).toBe("/expression/rpc/v1");
@@ -224,7 +235,7 @@ describe("against the deployed pet shop", () => {
     const other = freshCtx("lib-other");
     const itx = openItx(freshCtx("lib-self-dial"));
     const whoami = await itx.invoke(
-      `itx.connectToCapnweb(${JSON.stringify(workerUrl("/api"))}, { transport: 'batch' }).authenticate().projects.get(${JSON.stringify(other)}).whoami()`,
+      `itx.connectToCapnweb(${JSON.stringify(workerUrl("/api"))}, { transport: 'batch' }).authenticate(${JSON.stringify(adminCredentials())}).projects.get(${JSON.stringify(other)}).whoami()`,
     );
     expect(whoami).toEqual({ projectId: other, path: "/" });
   });
@@ -236,7 +247,7 @@ describe("against the deployed pet shop", () => {
       const itx = openItx(freshCtx("lib-self-dial-ws"));
       const api = workerUrl("/api").replace(/^http/, "ws");
       const whoami = await itx.invoke(
-        `itx.connectToCapnweb(${JSON.stringify(api)}).authenticate().projects.get(${JSON.stringify(other)}).whoami()`,
+        `itx.connectToCapnweb(${JSON.stringify(api)}).authenticate(${JSON.stringify(adminCredentials())}).projects.get(${JSON.stringify(other)}).whoami()`,
       );
       expect(whoami).toEqual({ projectId: other, path: "/" });
     },

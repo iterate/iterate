@@ -10,7 +10,14 @@
 //   facet     — a processor's COLD materialization on a fresh context (loader + class + first call)
 
 import { bench, describe } from "vitest";
-import { freshCtx, openItx, session, workerUrl } from "../e2e/support/client.ts";
+import {
+  adminBearer,
+  adminCredentials,
+  freshCtx,
+  openItx,
+  session,
+  workerUrl,
+} from "../e2e/support/client.ts";
 import { enableFixtureProcessor } from "../e2e/support/sources.ts";
 
 const TIME = Number(process.env.BENCH_TIME_MS ?? 4000);
@@ -21,7 +28,7 @@ const fetchLane = async (ctx: string, itxExpression: string): Promise<unknown> =
   const u = new URL("/expression", workerUrl("/"));
   u.searchParams.set("context", ctx);
   u.searchParams.set("itx", itxExpression);
-  const r = await fetch(u);
+  const r = await fetch(u, { headers: adminBearer() });
   return r.text();
 };
 
@@ -31,7 +38,10 @@ describe("boot", () => {
   bench(
     "fresh context, first whoami (warm session)",
     async () => {
-      await invoke(s.authenticate().projects.get(freshCtx("boot")), ["itx", ["whoami"]]);
+      await invoke(s.authenticate(adminCredentials()).projects.get(freshCtx("boot")), [
+        "itx",
+        ["whoami"],
+      ]);
     },
     {
       ...opts,
@@ -236,7 +246,7 @@ describe("facet cold start", () => {
   bench(
     "fresh context: enableProcessor(tally) + first waitUntilProcessed (cold loader + class + first call)",
     async () => {
-      const itx = s.authenticate().projects.get(freshCtx("cold"));
+      const itx = s.authenticate(adminCredentials()).projects.get(freshCtx("cold"));
       await enableFixtureProcessor(itx, "tally");
       await itx.invoke(
         `itx.facets.get('tally').waitUntilProcessed({ offset: 1, timeoutMs: 30000 })`,

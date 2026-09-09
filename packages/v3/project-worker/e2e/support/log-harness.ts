@@ -6,7 +6,7 @@
 
 import { newWebSocketRpcSession } from "capnweb";
 import { createTestHarness } from "wrangler";
-import { e2eWorkerConfig, PACKAGE_DIR } from "./worker-config.ts";
+import { E2E_ADMIN_API_SECRET, e2eWorkerConfig, PACKAGE_DIR } from "./worker-config.ts";
 
 export type LoggedWorker = {
   /** Base URL of this worker, e.g. http://127.0.0.1:1234. */
@@ -33,7 +33,10 @@ export async function startLoggedWorker(): Promise<LoggedWorker> {
   };
   return {
     url,
-    itx: (ctx) => openSession().authenticate().projects.get(ctx),
+    itx: (ctx) =>
+      openSession()
+        .authenticate({ type: "admin-secret", secret: E2E_ADMIN_API_SECRET })
+        .projects.get(ctx),
     logs: () => JSON.stringify(server.getLogs()),
     stop: async () => {
       for (const s of sessions) {

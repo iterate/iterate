@@ -26,7 +26,7 @@
 
 import { RpcTarget } from "capnweb";
 import { expect, test } from "vitest";
-import { freshCtx, openItx, until, workerUrl } from "./support/client.ts";
+import { adminCredentials, freshCtx, openItx, until, workerUrl } from "./support/client.ts";
 import { SOURCES } from "./support/sources.ts";
 
 // ── the two doors and their sources ──
@@ -228,15 +228,16 @@ test("facets.get: a facet whose producer threw once materializes on the next att
 
 // The whole remote-dialing worker, handed over inline. Each method builds ONE capnweb chain with no
 // intervening awaits (the one-shot batch flushes on the first await), so even the call → property →
-// call → call chain (`authenticate().projects.get(id).whoami()`, the `itx.os.projects.get(id).rename(…)`
-// shape) rides one POST.
+// call → call chain (`authenticate(credentials).projects.get(id).whoami()`, the
+// `itx.os.projects.get(id).rename(…)` shape) rides one POST. The credentials ride in ctx.props like
+// the url does.
 const SRC_REMOTE = {
   "cap.js": /* js */ `
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { newHttpBatchRpcSession } from "./processor.js";
 export class Remote extends WorkerEntrypoint {
   #api() { return newHttpBatchRpcSession(this.ctx.props.url); }
-  whoami() { return this.#api().authenticate().projects.get(this.ctx.props.projectId).whoami(); }
+  whoami() { return this.#api().authenticate(this.ctx.props.credentials).projects.get(this.ctx.props.projectId).whoami(); }
 }
 `,
 };
@@ -252,7 +253,7 @@ test("a userspace worker dials a remote capnweb API with the url in ctx.props, b
       {
         source: SRC_REMOTE,
         className: "Remote",
-        props: { url: workerUrl("/api"), projectId: other },
+        props: { url: workerUrl("/api"), projectId: other, credentials: adminCredentials() },
       },
     ],
   ]);

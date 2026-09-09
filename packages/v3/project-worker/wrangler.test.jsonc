@@ -38,10 +38,11 @@
     { "binding": "ITX_KV", "id": "08df862920b04446b3503c22f9888b04" },
     { "binding": "OAUTH_KV", "id": "oauth-test" },
   ],
-  // Configuration (src/worker.ts `parseAppConfig`): the workers lane is its own deployment name; open login mode.
+  // Configuration (src/worker.ts `parseAppConfig`): the workers lane is its own deployment name; the
+  // two required secrets are test values (control-plane.test.ts signs in and authenticates with them).
   "vars": {
     "APP_CONFIG_ENVIRONMENT_NAME": "test",
-    "APP_CONFIG_LOGIN_MODE": "open",
-    "APP_CONFIG_SESSION_SECRET": "test",
+    "APP_CONFIG_SESSION_SECRET": "test-session-secret",
+    "APP_CONFIG_ADMIN_API_SECRET": "test-admin-api-secret",
   },
 }

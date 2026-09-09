@@ -50,7 +50,10 @@ test("an authenticated session's set is attributed — the change carries the pr
   const projectId = freshCtx("secrets-who");
   const principal = { actor: "user_ada", email: "ada@example.com" };
   const itx = session()
-    .authenticate({ projectToken: await mintProjectToken({ projectId, ...principal }) })
+    .authenticate({
+      type: "project-token",
+      token: await mintProjectToken({ projectId, ...principal }),
+    })
     .projects.get(projectId);
   await itx.secrets.set("token", "t0p");
   const change = (await readAll(itx)).find((e) => e.type === CHANGED);

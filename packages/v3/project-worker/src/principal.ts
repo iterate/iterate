@@ -2,13 +2,13 @@
 // `{ projectId, actor, email?, expiresAt }` minted by a holder of the secret — today the e2e support
 // (e2e/support/principal.ts); the control plane mints none yet — and verified here with the shared
 // secret (`APP_CONFIG_PROJECT_TOKEN_SECRET`). The principal it yields rides the session
-// (`authenticate({ projectToken })` → `session.whoami()`), is stamped by the DO onto every event that
-// session appends (`source.principal`, unforgeable: the DO owns the field), and reaches an app on a
-// project host as the `x-itx-principal` header after the token check (cookie or bearer, worker.ts).
-// On an EVENT the principal is ATTRIBUTION; at the SESSION it is also authority (session.ts): a
-// project token binds its session to the token's one project, and in `email` login mode
-// `projects.get` admits org members only. A session with no token in `open` mode stays the
-// anonymous one intra-project code has always held (the trusted-client doctrine).
+// (`authenticate({ type: "project-token", token })` → `session.whoami()`), is stamped by the DO onto
+// every event that session appends (`source.principal`, unforgeable: the DO owns the field), and
+// reaches an app on a project host as the `x-itx-principal` header after the token check (cookie or
+// bearer, worker.ts). On an EVENT the principal is ATTRIBUTION; at the SESSION it is also authority
+// (session.ts): a project token binds its session to the token's one project, a control-plane user's
+// session admits the projects of their orgs, and the ADMIN SECRET (`verifyAdminSecret`,
+// `APP_CONFIG_ADMIN_API_SECRET`) is `{ actor: "admin" }` on every project.
 //
 // `signClaims` / `verifyClaims` is THE ONE signed-claims codec — `<payload>.<sig>`, payload =
 // base64url(UTF-8 JSON), sig = base64url(HMAC-SHA256(payload)) — the control plane's session cookie
@@ -115,6 +115,20 @@ export async function verifyProjectToken(
     expiresAt: claims.expiresAt,
     ...(claims.email && { email: claims.email }),
   };
+}
+
+/** Whether `candidate` IS `secret` — the admin secret's check (`APP_CONFIG_ADMIN_API_SECRET`: at
+ *  `authenticate({ type: "admin-secret" })` and as a lane's bearer, worker.ts). Both are SHA-256
+ *  hashed and the digests compared byte by byte with no early exit, so neither the length nor a
+ *  matching prefix leaks by timing. A blank secret matches nothing. */
+export async function verifyAdminSecret(candidate: string, secret: string): Promise<boolean> {
+  if (!secret) return false;
+  const digest = async (text: string) =>
+    new Uint8Array(await crypto.subtle.digest("SHA-256", encoder.encode(text)));
+  const [a, b] = await Promise.all([digest(candidate), digest(secret)]);
+  let difference = 0;
+  for (let i = 0; i < a.length; i++) difference |= a[i]! ^ b[i]!;
+  return difference === 0;
 }
 
 const isProjectTokenClaims = (value: unknown): value is ProjectTokenClaims =>

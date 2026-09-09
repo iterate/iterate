@@ -28,6 +28,7 @@
 import { RpcTarget } from "capnweb";
 import { expect, test } from "vitest";
 import {
+  adminCredentials,
   append,
   codeOf,
   freshCtx,
@@ -63,7 +64,7 @@ for (const order of ["alias first", "stub first"] as const)
     const itx = openItx(ctx);
     const real = await itx.whoami();
     const stubSession = session();
-    const stubItx = stubSession.authenticate().projects.get(ctx);
+    const stubItx = stubSession.authenticate(adminCredentials()).projects.get(ctx);
     const alias = () => itx.provide("itx.me", "itx.whoami");
     const fake = () => stubItx.provide("itx.whoami", () => "the fake");
     for (const step of order === "alias first" ? [alias, fake] : [fake, alias]) await step();

@@ -36,7 +36,7 @@
 
 import { evictDurableObject } from "cloudflare:test";
 import { beforeAll, expect, test } from "vitest";
-import { Echo, openSession, quiesce, stub } from "./support.ts";
+import { adminCredentials, Echo, openSession, quiesce, stub } from "./support.ts";
 
 const CTX = "prj_hibscale";
 const CLIENTS = 200;
@@ -83,7 +83,7 @@ beforeAll(async () => {
   // registry, opens its own stub pager WebSocket into the DO, and configures the pure-data rule
   // `itx.cN ⇒ itx.rpcStubs.get('itx.cN')` — the registry is presence, the table is the rule; event
   // volume is fine).
-  const clientItx = await (await openSession()).authenticate().projects.get(CTX);
+  const clientItx = await (await openSession()).authenticate(adminCredentials()).projects.get(CTX);
   const BATCH = 25; // concurrent provides per wave — enough parallelism without a thundering herd
   for (let base = 0; base < CLIENTS; base += BATCH) {
     await Promise.all(
@@ -93,7 +93,7 @@ beforeAll(async () => {
       }),
     );
   }
-  callerItx = await (await openSession()).authenticate().projects.get(CTX);
+  callerItx = await (await openSession()).authenticate(adminCredentials()).projects.get(CTX);
 }, 120_000);
 
 test("SCALE ATTACH: 200 clients lend 200 stubs, the DO stays dormant, spot invokes hit the right client", async () => {

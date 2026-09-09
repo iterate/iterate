@@ -56,7 +56,7 @@ the array half (`["itx", "kv", ["get", "x"]]`) is the same call and is what a do
 
 ```ts
 using api = newWebSocketRpcSession("wss://<worker>/api");
-const itx = api.authenticate().projects.get("prj_demo"); // the root context "/"
+const itx = api.authenticate({ type: "from-server-cookie" }).projects.get("prj_demo"); // the root context "/"
 const support = itx.cd("/agents/support"); // pure addressing, no DO hop
 
 // ── 1. rpc stubs: provide a live stub — it is lent under the key = its match ──
@@ -166,34 +166,39 @@ is durable**.
 a bare `async function` and an `RpcTarget` subclass both work.
 
 How a client reaches one (`src/session.ts`, the apps/os session shape):
-`UnauthenticatedSession.authenticate(credentials?: { projectToken?: string })` → `Session`
-(`whoami()` → `SessionPrincipal | null`, and the getter `projects`) → `ProjectCollection`:
-`list()` → `Project[]` (`{ id, orgId, role? }` — the projects of the orgs the user belongs to),
-`get(projectId)` → the root `IterateContext` (a project id only; a context name belongs to `cd`),
-`create({ slug })` → the root `IterateContext` of the project it made in the user's org (their
-first, created on first use; the slug IS the id, globally unique — `PROJECT_NAME_TAKEN` names another
-org's). Nothing here touches a DO: `get` is addressing plus the directory's membership answer.
+`UnauthenticatedSession.authenticate(credentials: SessionCredentials)` → `Session`
+(`whoami()` → `SessionPrincipal`, and the getter `projects`) → `ProjectCollection`:
+`list()` → `Project[]` (`{ id, orgId, role? }` — the projects of the orgs the user belongs to; every
+project, no role, for the admin secret), `get(project)` → the root `IterateContext` (a project only —
+`ProjectIdOrSlug`, one DNS-safe name; a context name belongs to `cd`), `create({ project })` → the
+root `IterateContext` of the project it made in the user's org (their first, created on first use;
+the slug IS the id, globally unique — `PROJECT_NAME_TAKEN` names another org's) or, for the admin
+secret, in `org_admin`. Nothing here touches a DO: `get` is addressing plus the directory's
+membership answer.
 
-**Who** (`src/principal.ts`, `src/session.ts`). `authenticate()` with no credentials is the request's
-control-plane identity: in `open` login mode the anonymous user (`user_anonymous`, a seeded directory
-row) carrying NO principal — the session intra-project code has always held; identity is attribution,
-not authority (the trusted-client doctrine); in `email` mode the control plane's session cookie the
-request carried (a browser's same-origin socket), else `UNAUTHENTICATED`. `authenticate({ projectToken })`
-verifies a PROJECT TOKEN — `{ projectId, actor, email?, expiresAt }` signed HMAC-SHA256 with
+**Who** (`src/principal.ts`, `src/session.ts`). `SessionCredentials` is a union of four kinds, and
+`authenticate` has a check and a coded refusal for each. `from-server-cookie`: the control plane's
+session cookie the request carried — a browser cannot set a header on a WebSocket, so the cookie
+rides the handshake and the call names it; honoured only when the request's `Origin` is this origin
+or absent (`isSameOriginBrowserRequest`, `src/worker.ts`), else `UNAUTHENTICATED`, as is no cookie.
+`project-token`: a PROJECT TOKEN — `{ projectId, actor, email?, expiresAt }` signed HMAC-SHA256 with
 `APP_CONFIG_PROJECT_TOKEN_SECRET` (the one signed-claims codec; the control plane's session cookie is
 the same codec under `APP_CONFIG_SESSION_SECRET`), minted by whoever fronts the users after their
-membership check — and answers a session that knows who it is: `session.whoami()` →
-`{ actor, email?, projectId }`, `projects.get(id)` refuses any other project (`FORBIDDEN`), and
-`list()`/`create()` refuse outright (`FORBIDDEN`: a token names one project). A token that does not
-verify is `INVALID_CREDENTIALS`, whatever is wrong with it. In `email` mode `projects.get` admits
-members of the owning org only (`FORBIDDEN` otherwise); in `open` mode every project is the anonymous
-org's and the door stays open. The principal rides every dispatch the session
-makes (`IterateContextDurableObject.invokeAs`, a DO-only Workers-RPC verb, or the `x-itx-principal`
-header on a terminal fetch), and the built-in append root stamps it as `source.principal` on every
-event — the DO's field: a client's own `source.principal` is overwritten, an anonymous session's is
-stripped, a loaded worker's `env.ITX` (the entrypoint stub) has no such door. The platform's own rows
-(a `provide`, a `subscribe`) carry it too. On a project host the same token becomes the host-scoped
-cookie through `/.itx/session`, or rides as `Authorization: Bearer` (section 10).
+membership check — a session that knows who it is: `session.whoami()` → `{ actor, email?,
+projectId }`, `projects.get` refuses any other project (`FORBIDDEN`), and `list()`/`create()` refuse
+outright (`FORBIDDEN`: a token names one project); a token that does not verify is
+`INVALID_CREDENTIALS`, whatever is wrong with it. `admin-secret`: `APP_CONFIG_ADMIN_API_SECRET`
+compared in constant time (`verifyAdminSecret`, both SHA-256 hashed) — `{ actor: "admin" }` on every
+project, or with `as: { sub, email }` that user's session without a login (the directory row upserted
+as `/login` does); a wrong secret is `INVALID_CREDENTIALS`. `project-secret`: in the type, refused
+`UNSUPPORTED_CREDENTIAL` until step 2 of the auth plan. A user's `projects.get` admits members of
+the owning org only (`FORBIDDEN` otherwise). The principal rides every dispatch the session makes
+(`IterateContextDurableObject.invokeAs`, a DO-only Workers-RPC verb, or the `x-itx-principal` header
+on a terminal fetch), and the built-in append root stamps it as `source.principal` on every event —
+the DO's field: a client's own `source.principal` is overwritten, a loaded worker's `env.ITX` (the
+entrypoint stub) has no such door. The platform's own rows (a `provide`, a `subscribe`) carry it too.
+On a project host the same token becomes the host-scoped cookie through `/.itx/session`, or rides as
+`Authorization: Bearer` (section 10); the admin secret is a bearer there too.
 
 ---
 
@@ -523,7 +528,7 @@ first: a context is created on first touch, so before the edge dials a Durable O
 host it asks the in-process directory whether the project exists — ONE D1 read,
 `directory(env.DB).getProject(projectId)` (`src/control-plane.ts`) — and an unknown project
 is 421 (a stranger's label under the wildcard mints nothing). A project's id IS its DNS-safe slug
-(`projects.create({ slug })` slugifies it): the directory row, the DO name and the host label are one
+(`projects.create({ project })` slugifies it): the directory row, the DO name and the host label are one
 name. A pretty name or a custom domain is a directory row, later. Everything on a project host is the
 app's; the platform's own doors stay on the worker's hostname. WHO, on a project host:
 `/.itx/session?token=<projectToken>&next=<path>` turns a token for THIS project into the host-scoped
@@ -534,19 +539,20 @@ stamps `x-itx-principal` (the JSON principal) on the Request the app sees, and t
 under it; the token itself never reaches the app: the platform's cookie is stripped from the cookie
 header, and a bearer that IS a project token is dropped (an app's own bearer scheme passes through
 untouched, as a visitor's other cookies do); a visitor's own `x-itx-principal` is stripped with every
-inbound `x-itx-*`; a token for another project is a 401 at the session door. Who logs in and mints the
-token is the control plane's; the ingress only verifies.
+inbound `x-itx-*`; a token for another project is a 401 at the session door. The admin secret as the
+bearer is `{ actor: "admin" }` on any project, and is dropped the same way. Who logs in and mints the
+token is the control plane's; the ingress only verifies. `/expression` on the platform host admits a
+member's control-plane cookie, a project token for the project, or the admin secret — else 401.
 
 **The control plane** (`src/control-plane/`, IN-PROCESS: everything on the worker's hostname that is
 not `/api`, `/expression`, `/version` or `/demo` is its catch-all — one worker, one front door). An
 OAuth 2.1 Authorization Server (`@cloudflare/workers-oauth-provider`: `/authorize`, `/token`,
-`/register`, `/.well-known/*`; `/mcp` its ONLY protected route, tokenless in `open` mode), a D1
+`/register`, `/.well-known/*`; `/mcp` its ONLY protected route), a D1
 directory over D1 (`definitions.sql`: users → orgs via `org_members` → projects; access is org
 membership), a console at `/` with an email login form (`/login`, `/logout`, `POST /projects`) whose
 session is a signed cookie (`itx-control-plane-session`), and `/mcp` (three tools: `whoami`,
-`list_projects`, `create_project`). `APP_CONFIG_LOGIN_MODE` is `open` (no login: the one seeded
-anonymous identity everywhere, `/mcp` included) or `email` (the form; the control plane owns the
-session).
+`list_projects`, `create_project`, the last taking `project`). The admin secret's projects live in
+`org_admin`, the deployment's own org (no members; `directory.adminOrg`).
 
 **Configuration** (`src/worker.ts`). ONE typed object per isolate, parsed once from the
 `APP_CONFIG_*` wrangler vars (the apps/os shape, without its schema library) plus the version-metadata
@@ -559,9 +565,9 @@ workers lane, "e2e" in the e2e lane), `APP_CONFIG_PROJECT_HOSTNAME_BASE` (`proje
 blank ⇒ no project-host ingress), `APP_CONFIG_PROJECT_TOKEN_SECRET` (`projectTokenSecret`, a wrangler
 secret on a deployment, a var in the e2e lane; blank ⇒ no token verifies), `APP_CONFIG_ARTIFACTS_ACCOUNT_ID`
 
-- `APP_CONFIG_ARTIFACTS_NAMESPACE` (`itx.repos`' git remotes), `APP_CONFIG_LOGIN_MODE`
-  (`loginMode`, required: `open` | `email`), `APP_CONFIG_SESSION_SECRET` (`sessionSecret`, the control
-  plane's cookie); plus `deployId` (`CF_VERSION_METADATA.id`, "unversioned" where the binding is
+- `APP_CONFIG_ARTIFACTS_NAMESPACE` (`itx.repos`' git remotes), `APP_CONFIG_SESSION_SECRET`
+  (`sessionSecret`, the control plane's cookie; required), `APP_CONFIG_ADMIN_API_SECRET`
+  (`adminApiSecret`, the admin secret; required) — both wrangler secrets on a deployment; plus `deployId` (`CF_VERSION_METADATA.id`, "unversioned" where the binding is
   absent), folded into every loader cacheKey. `/version` answers the deploy id and the environment
   name: `<version id> poc`, e.g. `7474bb76-… poc` (the stamp a deploy smoke waits for).
 
@@ -772,9 +778,10 @@ LibraryRoots`, the resolver walks from the record with one built-in predicate, t
   `env.ITX` carries NO principal (it speaks for the project; the request's principal reaches the app
   as `x-itx-principal` and the app attributes what it appends itself), and membership stays the
   control plane's — the token names one project, minted after the check, so the worker calls no
-  directory. `authenticate()` bare stays anonymous: attribution, not authority.
+  directory. (The bare `authenticate()` of that day — the anonymous session — is gone: every
+  session now names a credential, section 4.)
 - Proofs: `e2e/session.e2e.test.ts` (whoami; `source.principal` on a note and on the
-  session's own rule row; a forged one overwritten, an anonymous one stripped; `FORBIDDEN`;
+  session's own rule row; a forged one overwritten; `FORBIDDEN`;
   `INVALID_CREDENTIALS` for a bad and an expired token) and the session-door test in
   `e2e/ingress-project-host.e2e.test.ts` (the cookie, the header the app sees, a forged header
   stripped, a foreign token's 401, logout). `src/principal.test.ts` is the token table.
@@ -788,9 +795,11 @@ LibraryRoots`, the resolver walks from the record with one built-in predicate, t
   to, its local stand-in and its own test lane — and the shared package are DELETED. The control plane runs in-process as
   `src/worker.ts`'s catch-all (`src/control-plane/`, section 10): an OAuth AS, a D1 directory of
   users, orgs and projects (a project's id IS its DNS-safe name), `/mcp`, a console with an email login
-  form; `APP_CONFIG_LOGIN_MODE` open | email. Ingress admits a project host by ONE directory read.
-- The session is the catalog (section 4): `authenticate()` is the request's control-plane identity or a
-  project token; `Session.whoami()`; `projects.list()` / `get(id)` / `create({ slug })`.
+  form (the `open` login mode of that day is gone since 2026-09-09: every session names a
+  credential — the cookie, a project token, the admin secret). Ingress admits a project host by ONE
+  directory read.
+- The session is the catalog (section 4): `authenticate(credentials)`; `Session.whoami()`;
+  `projects.list()` / `get(project)` / `create({ project })`.
 - Egress is terminal (section 5, `fetch`): secrets substituted in the URL and headers, a missing or
   origin-bound secret a 502, then `fetch` — no next door. `itx.secrets` writes them.
 - The e2e lane boots the same worker from `e2e/support/worker-config.ts`; one `vitest.config.ts`, four

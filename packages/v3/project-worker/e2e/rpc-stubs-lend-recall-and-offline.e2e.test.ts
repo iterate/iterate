@@ -19,6 +19,7 @@
 
 import { expect, test } from "vitest";
 import {
+  adminCredentials,
   codeOf,
   freshCtx,
   openItx,
@@ -104,7 +105,10 @@ test("disposing a client session recalls its stubs (presence) AND un-sets their 
   const observer = openItx(ctx);
   const sA = session();
   // ONE door: the provide lends the stub under the key AND configures itx.ghosttool ⇒ itx.rpcStubs.get('itx.ghosttool').
-  await sA.authenticate().projects.get(ctx).provide("itx.ghosttool", new Tools("ghost"));
+  await sA
+    .authenticate(adminCredentials())
+    .projects.get(ctx)
+    .provide("itx.ghosttool", new Tools("ghost"));
   expect(await observer.invoke(["itx", "ghosttool", ["hello"]])).toBe("hello-from-ghost");
   await until("the transport present", async () =>
     (await presence(observer)).includes("itx.ghosttool"),
@@ -166,7 +170,7 @@ test("killing the provider session mid-invoke rejects the in-flight call promptl
   const observer = openItx(ctx);
   const hangTools = new HangTools();
   const { session: sA, ws: wsA } = rawSession();
-  await sA.authenticate().projects.get(ctx).provide("itx.hanger", hangTools);
+  await sA.authenticate(adminCredentials()).projects.get(ctx).provide("itx.hanger", hangTools);
   await until("itx.hanger transport present", async () =>
     (await presence(observer)).includes("itx.hanger"),
   );
@@ -243,7 +247,10 @@ test("fan-out via the rpc-stub rewrite rules + map: a dead member leaves the set
   const observer = openItx(ctx);
   await openItx(ctx).provide("itx.alive", new Tools("alive"));
   const { session: sDead, ws: wsDead } = rawSession();
-  await sDead.authenticate().projects.get(ctx).provide("itx.doomed", new Tools("doomed"));
+  await sDead
+    .authenticate(adminCredentials())
+    .projects.get(ctx)
+    .provide("itx.doomed", new Tools("doomed"));
   // A rule to a key nobody lends: in the set, offline forever.
   await observer.provide("itx.ghost", "itx.rpcStubs.get('ghost')");
   // A lent live SUBSCRIBER: physically present (its stub under subscription:<name>) but a
@@ -423,7 +430,7 @@ test("storm of provide/dispose/subscribe/null-target/disconnect: presence AND th
     //     session) — the stub dies with its session, and so does its rule.
     const s = session();
     await s
-      .authenticate()
+      .authenticate(adminCredentials())
       .projects.get(ctx)
       .provide(`itx.k${i}`, new Tools(`k${i}`));
     (s as any)[Symbol.dispose]?.();
@@ -496,7 +503,7 @@ test("churn 20×: no ghost deliveries; presence AND the tables return to baselin
   const ctx = freshCtx("churn");
   const observer = openItx(ctx); // outlives the churning session
   const s = session();
-  const itx = await s.authenticate().projects.get(ctx);
+  const itx = await s.authenticate(adminCredentials()).projects.get(ctx);
   const baselinePresence = (await presence(observer)).length;
   const baselineRules = (await rpcStubRewriteRuleMatches(observer)).length;
   let delivered = 0;

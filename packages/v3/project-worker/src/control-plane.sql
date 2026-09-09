@@ -14,12 +14,8 @@ create table if not exists users (
   created_at text not null default current_timestamp
 );
 
--- THE ONE ANONYMOUS IDENTITY of `open` login mode (control-plane.ts ANONYMOUS, and /mcp's
--- open-mode short-circuit). Seeded here so its org membership's FOREIGN KEY holds on every path.
-insert or ignore into users (id, email) values ('user_anonymous', 'anonymous');
-
 create table if not exists orgs (
-  id text primary key,            -- org_<hex>  (minted)
+  id text primary key,            -- org_<hex> (minted), or org_admin — the deployment's own, no members (control-plane.ts adminOrg)
   name text not null,
   created_at text not null default current_timestamp
 );

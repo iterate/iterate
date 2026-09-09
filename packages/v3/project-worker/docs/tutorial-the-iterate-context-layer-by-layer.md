@@ -27,15 +27,16 @@ import { newWebSocketRpcSession } from "capnweb";
 const wsApi = new URL("/api", WORKER_BASE_URL); // the one worker under test: a local boot, or the deployed one
 wsApi.protocol = "ws:";
 
-/** A fresh session's itx for a project — its ROOT context. */
+/** A fresh session's itx for a project — its ROOT context. The lane authenticates with the
+ *  deployment's admin secret (every project); a browser would name its login cookie instead. */
 export function openItx(projectId: string) {
   const api = newWebSocketRpcSession(wsApi.toString()); // an UnauthenticatedSession stub
-  return api.authenticate().projects.get(projectId); // the project's root IterateContext
+  return api.authenticate({ type: "admin-secret", secret }).projects.get(projectId); // the project's root IterateContext
 }
-// e2e/support/client.ts (session, openItx)
+// e2e/support/client.ts (session, adminCredentials, openItx)
 ```
 
-Nothing is awaited on the way in: `authenticate()`, `.projects`, `.get(id)` are one pipelined
+Nothing is awaited on the way in: `authenticate(credentials)`, `.projects`, `.get(project)` are one pipelined
 capnweb chain, and the first call on the result flushes it. There are exactly three primitives —
 the **context** (things you can call, in both directions), **fetch** (in both directions), and the
 **stream** — and everything after chapter 0 is composition.
@@ -57,28 +58,32 @@ the rpc-stub pagers and the egress door.
 The hard rule: capnweb never terminates in the Durable Object. The edge is a proxy in front of the
 DO and reaches it only over Workers RPC. Everything you hold is minted at the edge.
 
-### A client is a capnweb peer, and the door is `authenticate()`
+### A client is a capnweb peer, and the door is `authenticate(credentials)`
 
-`/api` serves an `UnauthenticatedSession` whose only door is `authenticate()`. It answers a
-`Session`: a catalog that vends contexts, never a context itself. `Session.projects.get(projectId)`
-and `Session.projects.create({ slug })` vend a project's ROOT context — the `IterateContext` you
-will call `itx` from here on.
+`/api` serves an `UnauthenticatedSession` whose only door is `authenticate(credentials)`. It answers
+a `Session`: a catalog that vends contexts, never a context itself. `Session.projects.get(project)`
+and `Session.projects.create({ project })` vend a project's ROOT context — the `IterateContext` you
+will call `itx` from here on. The credential names where the identity already is, or the secret
+that proves it (chapter 10 has the four kinds).
 
 ```ts
 // session.ts — what /api hands a client BEFORE it holds a context (abridged)
+export type SessionCredentials =
+  | { type: "from-server-cookie" } // a browser: the login cookie rode the handshake, same origin only
+  | { type: "project-token"; token: string } // one user on one project
+  | { type: "project-secret"; project: ProjectIdOrSlug; secret: string } // the project itself (step 2 of the auth plan)
+  | { type: "admin-secret"; secret: string; as?: { sub: string; email: string } }; // every project; `as` impersonates
 export class UnauthenticatedSession extends RpcTarget {
-  async authenticate(credentials?: { projectToken?: string }): Promise<Session> { /* … */ }
-  // a token ⇒ a Session bound to its ONE project (INVALID_CREDENTIALS if it does not verify);
-  // no credentials ⇒ the request's control-plane identity (the anonymous user in `open` mode)
+  async authenticate(credentials: SessionCredentials): Promise<Session> { /* … */ }
 }
 class Session extends RpcTarget {
-  whoami(): SessionPrincipal | null { /* … */ }
+  whoami(): SessionPrincipal { /* … */ }
   get projects(): ProjectCollection { /* … */ } // a GETTER: capnweb exposes prototype members only
 }
 class ProjectCollection extends RpcTarget {
   list(): Promise<Project[]> { /* … */ }
-  create(input: { slug: string }): Promise<IterateContext> { /* … */ }
-  get(projectId: string): Promise<IterateContext> { /* … */ }
+  create(input: { project: ProjectIdOrSlug }): Promise<IterateContext> { /* … */ }
+  get(project: ProjectIdOrSlug): Promise<IterateContext> { /* … */ }
 }
 ```
 
@@ -99,7 +104,7 @@ a CLI or a cron does one POST, and every call chained off the session flushes in
 import { newHttpBatchRpcSession } from "capnweb";
 
 const batch = newHttpBatchRpcSession(new URL("/api", WORKER_BASE_URL).toString());
-const who = await batch.authenticate().projects.get(ctx).invoke(["itx", ["whoami"]]);
+const who = await batch.authenticate(adminCredentials()).projects.get(ctx).invoke(["itx", ["whoami"]]);
 // who.projectId === ctx — a batch cannot hold a live capability (the edge must outlive the response): reads and writes only
 // e2e/session.e2e.test.ts
 ```
@@ -251,7 +256,7 @@ exported handle when the session ends, so a dying session recalls everything it 
 ```ts
 const observer = openItx(ctx);
 const sA = session();
-await sA.authenticate().projects.get(ctx).provide("itx.ghosttool", new Tools("ghost"));
+await sA.authenticate(adminCredentials()).projects.get(ctx).provide("itx.ghosttool", new Tools("ghost"));
 expect(await observer.invoke(["itx", "ghosttool", ["hello"]])).toBe("hello-from-ghost");
 expect(await observer.rpcStubs.list()).toContain("itx.ghosttool");
 
@@ -286,7 +291,7 @@ session's teardown keys by `[iterateContextName, rpcStubKey]`:
 
 ```ts
 const s = session();
-const a = s.authenticate().projects.get(ctx); // the root context
+const a = s.authenticate(adminCredentials()).projects.get(ctx); // the root context
 const b = a.cd("/sub"); // another context of the project, same session
 await a.provide("itx.clash", (x: number) => x + 1);
 await b.provide("itx.clash", (x: number) => x + 100);
@@ -1162,9 +1167,10 @@ and it exports its own host: a `WorkerEntrypoint` for `workers.get`, a `DurableO
 `WorkerStubEntrypointOptions.props`, read back as `this.ctx.props`. Dialing a REMOTE capnweb API is
 userspace, exactly this shape: a `Remote extends WorkerEntrypoint` whose method opens
 `newHttpBatchRpcSession(this.ctx.props.url)` (the SDK exports capnweb's client constructors) and
-chains `.authenticate().projects.get(this.ctx.props.projectId).whoami()` in one POST, mounted with
-`provide("itx.remoteApi", ["itx", "workers", ["get", { source, className: "Remote", props: { url,
-projectId } }]])` and called as `itx.remoteApi.whoami()` (`e2e/workers-and-facets.e2e.test.ts`).
+chains `.authenticate(this.ctx.props.credentials).projects.get(this.ctx.props.projectId).whoami()`
+in one POST, mounted with `provide("itx.remoteApi", ["itx", "workers", ["get", { source, className:
+"Remote", props: { url, projectId, credentials } }]])` and called as `itx.remoteApi.whoami()`
+(`e2e/workers-and-facets.e2e.test.ts`).
 
 ### `env.ITX` inside loaded code
 
@@ -1386,8 +1392,8 @@ laptop, and upgrades WebSockets with capnweb's universal `WebSocketPair`:
 class HttpDevice extends RpcTarget {
   async fetch(request: Request) { return new Response("pong-from-node-provider", { status: 201 }); }
 }
-await session().authenticate().projects.get(ctx).provide("itx.ws-device", new HttpDevice());
-expect((await fetch(expressionUrl(ctx, "itx.ws-device", "http"), { method: "POST", body: "ping" })).status).toBe(201);
+await session().authenticate(adminCredentials()).projects.get(ctx).provide("itx.ws-device", new HttpDevice());
+expect((await fetch(expressionUrl(ctx, "itx.ws-device", "http"), { method: "POST", body: "ping", headers: adminBearer() })).status).toBe(201);
 // e2e/fetch-door.e2e.test.ts
 ```
 
@@ -1397,9 +1403,11 @@ that carries a socket-bearing Response back — `await itx.site.fetch(new Reques
 answers the loaded worker's 200 over capnweb (`e2e/session.e2e.test.ts`).
 
 From loaded code, `env.ITX.fetch` is a real Fetcher — set `x-itx-expression` yourself and the same
-lane serves it (`e2e/fetch-door.e2e.test.ts`, the plain case). The lane refuses to
-re-enter itself: `itx=itx.fetch` is 508 after a few hops, and a hop count the platform never wrote is
-over budget on arrival.
+lane serves it (`e2e/fetch-door.e2e.test.ts`, the plain case). The lane admits a member's cookie,
+a project token or the admin secret as the bearer (chapter 10), and cannot re-enter itself:
+`itx=itx.fetch` is cut at the second hop — the platform's bearer never rides into loaded code, so
+the re-entry arrives with no credential and is 401 — and a hop count the platform never wrote is
+over budget on arrival (508).
 
 ### Project hosts: a label is the address
 
@@ -1411,7 +1419,7 @@ hostname.
 
 ```ts
 const projectId = freshDnsSafeProjectId("ingress"); // a project's id IS its DNS-safe slug
-await session().authenticate().projects.create({ slug: projectId }); // the directory must know it
+await session().authenticate(adminCredentials()).projects.create({ project: projectId }); // the directory must know it
 const itx = openItx(projectId);
 await itx.provide("itx.apps.site", ["itx", "workers", ["get", { source: SRC_SITE }]]);
 const page = await fetchProjectHost(`site--${projectId}.${base}`, "/w?repo=x");
@@ -1518,21 +1526,35 @@ where there is one, else the disposer). A connection closed by a holder or broke
 reopens itself on its next use, so a memoized one is never dead; `serveMcp()` is not memoized — it
 holds no connection.
 
-**What this brick leaves on the table:** every call so far was anonymous. A tool call on the MCP
-lane, an event appended from a browser tab, a `provide` from a laptop — who did that?
+**What this brick leaves on the table:** every call so far ran as the lane's admin. A tool call on
+the MCP lane, an event appended from a browser tab, a `provide` from a laptop — who did that?
 
 ---
 
 ## 10. identity: who is calling
 
-### Two login modes
+### One door, four credential kinds
 
-`APP_CONFIG_LOGIN_MODE` is `open` or `email`. In `open` mode every door is open and everyone is the
-one seeded anonymous identity (`user_anonymous`) — the trusted-client doctrine every local proof
-relies on, and what the e2e lane runs. In `email` mode the control plane owns a signed session cookie
-(`itx-control-plane-session`): `/login` is a form that verifies nothing (enter an email and you become
-that user — attribution, not authentication), `projects.get` admits members of the owning org only,
-`/expression` admits members or a bearer for the project, and `/mcp` is behind the OAuth AS.
+`authenticate(credentials)` takes a `SessionCredentials` — where the identity already is, or the
+secret that proves it — and every lane reads the same kinds off a request:
+
+- `from-server-cookie`: the control plane owns a signed session cookie (`itx-control-plane-session`);
+  `/login` is a form that verifies nothing (enter an email and you become that user — attribution,
+  not authentication). A browser cannot set a header on a WebSocket, so the cookie rides the
+  handshake and the call NAMES it — never implicit. It counts on a same-origin request only
+  (`isSameOriginBrowserRequest`, `src/worker.ts`: the `Origin` header is this origin, or absent);
+  a foreign site's socket carries the cookie too and is refused `UNAUTHENTICATED` — the one guard
+  that makes an ambient cookie safe over RPC. `projects.get` admits members of the owning org only.
+- `project-token`: one user on one project, below.
+- `admin-secret`: the deployment's `APP_CONFIG_ADMIN_API_SECRET` (a wrangler secret) — `{ actor:
+  "admin" }`, every project, `list()` is the whole directory, `create()` lands in `org_admin`. With
+  `as: { sub, email }` it is that user's session without a login (the row upserted like `/login`
+  does), which is how a confinement test signs in. The e2e lane runs on it.
+- `project-secret`: the project itself (a device, a headless app) — step 2 of the auth plan; the
+  kind is in the type and refused `UNSUPPORTED_CREDENTIAL` until then.
+
+`/expression` admits a member's cookie, a project token or the admin secret as the bearer; `/mcp`
+is behind the OAuth AS.
 
 ### The control plane
 
@@ -1543,22 +1565,26 @@ route is `/mcp`; and `/mcp` with three tools, `whoami`, `list_projects`, `create
 the user the grant names. The directory is D1 — users → orgs → projects, access is org membership —
 and a project's id IS its DNS-safe slug: the directory row, the DO name and the host label are one name.
 
-### Project tokens, and `Session.whoami`
+### Project tokens, the admin secret, and `Session.whoami`
 
 A PROJECT TOKEN is a signed claim `{ projectId, actor, email?, expiresAt }` — HMAC-SHA256 under
 `APP_CONFIG_PROJECT_TOKEN_SECRET`, minted by whoever fronts the users after their membership check.
-`authenticate({ projectToken })` answers a session that knows who it is and is bound to the token's
-one project:
+`authenticate({ type: "project-token", token })` answers a session that knows who it is and is bound
+to the token's one project; the admin secret answers `{ actor: "admin" }`, and `as` a user:
 
 ```ts
 const principal = { actor: "user_ada", email: "ada@example.com" };
 const token = await mintProjectToken({ projectId, ...principal }); // e2e/support/principal.ts signs with the lane's secret
 const api = session();
-const authenticated = api.authenticate({ projectToken: token });
+const authenticated = api.authenticate({ type: "project-token", token });
 expect(await authenticated.whoami()).toEqual({ projectId, ...principal });
 expect((await rejection(authenticated.projects.get(`${projectId}-other`).whoami())).code).toBe("FORBIDDEN"); // the token names ONE project
-expect((await rejection(api.authenticate({ projectToken: `${token}x` }).whoami())).code).toBe("INVALID_CREDENTIALS");
-expect(await api.authenticate().whoami()).toBeNull(); // no token: the anonymous session, as ever
+expect((await rejection(api.authenticate({ type: "project-token", token: `${token}x` }).whoami())).code).toBe("INVALID_CREDENTIALS");
+const admin = api.authenticate(adminCredentials()); // { type: "admin-secret", secret }
+expect(await admin.whoami()).toEqual({ actor: "admin" });
+const ada = api.authenticate(adminCredentials({ sub: "user_ada@example.com", email: "ada@example.com" }));
+expect((await rejection(ada.projects.get(projectId).whoami())).code).toBe("FORBIDDEN"); // the admin's project, not hers
+expect((await rejection(api.authenticate({ type: "from-server-cookie" }).whoami())).code).toBe("UNAUTHENTICATED"); // no cookie on this socket
 // e2e/session.e2e.test.ts
 ```
 
@@ -1570,17 +1596,17 @@ catalog's reader and writer is a control-plane user.
 The principal rides every dispatch the session makes (`invokeAs`, a DO-only Workers-RPC verb; the
 `x-itx-principal` header on a terminal fetch), and the DO's append root stamps it as
 `source.principal` on every event. It is the DO's field: a client's own `source.principal` is
-overwritten, an anonymous session's is stripped, and the platform's own rows carry it too:
+overwritten — the admin session's with `{ actor: "admin" }` — and the platform's own rows carry it too:
 
 ```ts
 const itx = authenticated.projects.get(projectId);
 await itx.append({ type: "note", payload: { n: 1 }, source: { principal: { actor: "forged" } } });
 await itx.provide("itx.demo", "itx.builtins.kv"); // the platform's own row, appended for this session
-await openItx(projectId).append({ type: "note", payload: { n: 2 }, source: { principal: { actor: "forged" } } }); // anonymous
+await openItx(projectId).append({ type: "note", payload: { n: 2 }, source: { principal: { actor: "forged" } } }); // the admin
 const events = await readAll(openItx(projectId));
 expect(events.find((e) => e.type === "note" && e.payload?.n === 1)?.source?.principal).toEqual(principal);
 expect(events.find((e) => e.type === "events.iterate.com/itx/rewrite-rule-configured")?.source?.principal).toEqual(principal);
-expect(events.find((e) => e.type === "note" && e.payload?.n === 2)?.source?.principal).toBeUndefined();
+expect(events.find((e) => e.type === "note" && e.payload?.n === 2)?.source?.principal).toEqual({ actor: "admin" });
 await itx.invoke("itx.cd('/sibling').append({ type: 'note', payload: { via: 'cd' } })"); // the built-in cd carries it
 expect((await readAll(itx.cd("/sibling"))).find((e) => e.type === "note")?.source?.principal).toEqual(principal);
 // e2e/session.e2e.test.ts
@@ -1784,9 +1810,9 @@ table of chapter 3 was checked by running `src/context/itx-expression-rewriting.
   refusal.
 - **`useLiveState`** (chapter 6) is described from `src/client/demo.tsx` and is exercised by
   `specs/live-state-demo.spec.ts` (Playwright over `/demo`), not by the e2e lane.
-- **The `email` login mode** (chapter 10) is described from `src/session.ts`, `src/worker.ts` and
-  `src/control-plane/`; the e2e lane runs `open` mode throughout, and the `email`-mode admissions are
-  pinned only in `__workers-tests__/control-plane.test.ts`.
+- **The cookie credential** (chapter 10) is described from `src/session.ts`, `src/worker.ts` and
+  `src/control-plane.ts`; the e2e lane runs on the admin secret throughout, and the cookie's
+  admissions (the same-origin check, membership) are pinned in `__workers-tests__/control-plane.test.ts`.
 - **The fetch-upgrade leg's mechanism** (chapter 8) is described from the doctrine header of
   `src/context/rpc-stubs.ts`; the e2e lane proves the capnweb-provider half end to end and marks
   the dynamic-worker-provider half `test.fails`; the workerd-provider half is

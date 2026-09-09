@@ -13,6 +13,7 @@
 
 import { expect, test } from "vitest";
 import {
+  adminCredentials,
   codeOf,
   freshCtx,
   openItx,
@@ -127,12 +128,12 @@ function expectOneRoundTrip(frames: WireFrame[], label: string): void {
 
 // ═══════════════════════════════ 1. PIPELINING of itx expressions on stubs ═══════════════════════════════
 
-test("pipelining: authenticate().projects.get(ctx).invoke(whoami) with zero awaits = ONE round trip", async () => {
+test("pipelining: authenticate(credentials).projects.get(ctx).invoke(whoami) with zero awaits = ONE round trip", async () => {
   const ctx = freshCtx("pipe1");
   const w = wireSession();
   // The whole chain, no intermediate awaits — three pipelined calls, one pull, one answer.
   const who: any = await w.session
-    .authenticate()
+    .authenticate(adminCredentials())
     .projects.get(ctx)
     .invoke(["itx", ["whoami"]]);
   expect(who).toMatchObject({ projectId: ctx, path: "/" });
@@ -157,7 +158,7 @@ test("pipelining: invokes on the NOT-YET-RESOLVED itx from cd() = ONE round trip
   const ctx = freshCtx("pipe2");
   const w = wireSession();
   // NOT awaited — pure addressing: root context, then cd to a sub-context of the same project.
-  const itxPromise = w.session.authenticate().projects.get(ctx).cd("/pipelined");
+  const itxPromise = w.session.authenticate(adminCredentials()).projects.get(ctx).cd("/pipelined");
   const who: any = await itxPromise.invoke(["itx", ["whoami"]]);
   expect(who).toMatchObject({ projectId: ctx, path: "/pipelined" });
   const frames = w.frames.slice();
@@ -178,7 +179,7 @@ test("pipelining: invokes on the NOT-YET-RESOLVED itx from cd() = ONE round trip
 test("pipelining: subscribe({ target: fn }) + subscribe({ name: <its UNRESOLVED name>, target: null }) = ONE round trip; the row is gone and the callback recalled", async () => {
   const ctx = freshCtx("pipe3");
   const w = wireSession();
-  const itx = await w.session.authenticate().projects.get(ctx);
+  const itx = await w.session.authenticate(adminCredentials()).projects.get(ctx);
   const mark = w.mark();
   {
     // ONE door, one burst: the subscribe is NOT awaited; the removal names the row by pipelining
@@ -217,7 +218,7 @@ test("pipelining: subscribe({ target: fn }) + subscribe({ name: <its UNRESOLVED 
 test("frames per call: ONE settled invoke = exactly 2 outbound (push+pull) + 1 inbound (resolve)", async () => {
   const ctx = freshCtx("percall");
   const w = wireSession();
-  const itx = await w.session.authenticate().projects.get(ctx); // settle the stub first
+  const itx = await w.session.authenticate(adminCredentials()).projects.get(ctx); // settle the stub first
   await sleep(200);
   const mark = w.mark();
   const who: any = await itx.invoke(["itx", ["whoami"]]);
@@ -242,7 +243,7 @@ test("frames per call: ONE settled invoke = exactly 2 outbound (push+pull) + 1 i
 test("one-directional delivery: 100 ephemeral chunks arrive as inbound frames; the subscriber socket never sends push/pull — it only ever ANSWERS", async () => {
   const ctx = freshCtx("oneway");
   const w = wireSession();
-  const itx = await w.session.authenticate().projects.get(ctx);
+  const itx = await w.session.authenticate(adminCredentials()).projects.get(ctx);
   const received: number[] = [];
   await itx.subscribe({
     name: "wire",
@@ -286,7 +287,7 @@ test("one-directional delivery: batches keep flowing with the subscriber's outbo
   // rate, not at the client's round-trip rate).
   const ctx = freshCtx("stall");
   const w = wireSession();
-  const itx = await w.session.authenticate().projects.get(ctx);
+  const itx = await w.session.authenticate(adminCredentials()).projects.get(ctx);
   const received: number[] = [];
   await itx.subscribe({
     name: "wire",
@@ -321,7 +322,7 @@ test("deep chaining: 3+ segment dotted paths through a live provider (getter →
   await openItx(ctx).provide("itx.slack", slack);
 
   const w = wireSession();
-  const itx = await w.session.authenticate().projects.get(ctx);
+  const itx = await w.session.authenticate(adminCredentials()).projects.get(ctx);
   await until("the slack bridge is attached", async () =>
     (await presence(itx)).includes("itx.slack"),
   );
@@ -358,7 +359,10 @@ test("disposal: `using` on the /api session stub recalls its lent stubs at scope
   const observer = openItx(ctx);
   {
     using scoped = session();
-    await scoped.authenticate().projects.get(ctx).provide("itx.scoped", new Tools("scoped"));
+    await scoped
+      .authenticate(adminCredentials())
+      .projects.get(ctx)
+      .provide("itx.scoped", new Tools("scoped"));
     await until("the stub present while the scope lives", async () =>
       (await presence(observer)).includes("itx.scoped"),
     );
@@ -379,7 +383,7 @@ test("disposal: `using` on the /api session stub recalls its lent stubs at scope
 
 test("disposal: dup() survives disposal of the original; the LAST dispose kills the stub with the pinned error", async () => {
   const w = wireSession();
-  const itx: any = await w.session.authenticate().projects.get(freshCtx("dup"));
+  const itx: any = await w.session.authenticate(adminCredentials()).projects.get(freshCtx("dup"));
   const dup = itx.dup();
   itx[Symbol.dispose]();
   // The duplicate still works — refcounted, not killed by the sibling's disposal.
@@ -394,7 +398,9 @@ test("disposal: dup() survives disposal of the original; the LAST dispose kills 
 
 test("disposal: onRpcBroken fires on dirty transport death (the relay relies on this)", async () => {
   const w = wireSession();
-  const itx: any = await w.session.authenticate().projects.get(freshCtx("broken"));
+  const itx: any = await w.session
+    .authenticate(adminCredentials())
+    .projects.get(freshCtx("broken"));
   const broken: unknown[] = [];
   itx.onRpcBroken((e: unknown) => broken.push(e));
   (w.session as any).onRpcBroken((e: unknown) => broken.push(e));

@@ -11,8 +11,10 @@
 //   • a lent stub's plain HTTP fetch (eyeball → /expression → DO fetch lane → rule → the rpcStubs
 //     registry → relay → capnweb → the Node provider and back, the request crossing intact) and its
 //     WebSocket upgrade (101, echo, close through the Node provider)
-//   • the lane refuses to re-enter itself (`itx=itx.fetch` answers 508 after a few hops, never loops); a
-//     hop count the platform never wrote (`NaN`) is over budget on arrival; the deleted routes /call,
+//   • every row into `/expression` bears the admin secret (the lane admits a member's cookie, a project
+//     token or the admin secret); the lane cannot re-enter itself (`itx=itx.fetch` is cut at the second
+//     hop — the platform's bearer never rides into loaded code, so the re-entry is 401, never a loop);
+//     a hop count the platform never wrote (`NaN`) is over budget on arrival; the deleted routes /call,
 //     /ws, /cap fall through to the control plane's 404, an upgrade to /ws gets no 101
 //   • egress: a `{{secret:project:NAME}}` token that survives substitution means no such secret is
 //     stored, and forwarding it would leak the secret's NAME and send a garbage credential — the door
@@ -29,6 +31,8 @@
 import { RpcTarget, upgradeWebSocketResponse, WebSocketPair } from "capnweb";
 import { expect, test } from "vitest";
 import {
+  adminBearer,
+  adminCredentials,
   expressionUrl,
   freshCtx,
   openItx,
@@ -47,14 +51,19 @@ test("/expression serves a LOADED WORKER behind a rewrite rule: GET → 200 HTML
   const itx = openItx(ctx);
   await itx.provide("itx.site", ["itx", "workers", ["get", { source: SOURCES.site }]]);
 
-  const page = await fetch(expressionUrl(ctx, "itx.site", "http"));
+  const page = await fetch(expressionUrl(ctx, "itx.site", "http"), { headers: adminBearer() });
   expect(page.status).toBe(200);
   expect(await page.text()).toContain("dynamic web capability");
   // Loaded code's document, served on the PLATFORM's origin: CSP-sandboxed to an opaque origin, so
   // its script can never reach `/api` with the visitor's session (scripts and forms still run).
   expect(page.headers.get("content-security-policy")).toBe("sandbox allow-scripts allow-forms");
 
-  const ws = await wsRoundTrip(expressionUrl(ctx, "itx.site", "ws"), "hello-from-eyeball", 15_000);
+  const ws = await wsRoundTrip(
+    expressionUrl(ctx, "itx.site", "ws"),
+    "hello-from-eyeball",
+    15_000,
+    adminBearer(),
+  );
   expect(ws.error).toBeUndefined();
   expect(ws.opened).toBe(true);
   expect(ws.echo).toBe("site-echo:hello-from-eyeball");
@@ -83,11 +92,15 @@ class HttpDevice extends RpcTarget {
 test("lent stub HTTP fetch: an eyeball POST reaches the Node provider's fetch() and its Response rides back out", async () => {
   const ctx = freshCtx("caplivehttp");
   const device = new HttpDevice();
-  await session().authenticate().projects.get(ctx).provide("itx.ws-device", device);
+  await session()
+    .authenticate(adminCredentials())
+    .projects.get(ctx)
+    .provide("itx.ws-device", device);
 
   const res = await fetch(expressionUrl(ctx, "itx.ws-device", "http"), {
     method: "POST",
     body: "ping",
+    headers: adminBearer(),
   });
   expect(res.status).toBe(201);
   expect(await res.text()).toBe("pong-from-node-provider");
@@ -112,12 +125,22 @@ class WsDevice extends RpcTarget {
 
 test("lent stub WebSocket fetch: a plain eyeball WebSocket opens (101), echoes, and closes through the Node provider", async () => {
   const ctx = freshCtx("caplivews");
-  await session().authenticate().projects.get(ctx).provide("itx.ws-device", new WsDevice());
+  await session()
+    .authenticate(adminCredentials())
+    .projects.get(ctx)
+    .provide("itx.ws-device", new WsDevice());
   // Sanity: the rule still answers plain HTTP (so the assertions below are about the UPGRADE).
-  const plain = await fetch(expressionUrl(ctx, "itx.ws-device", "http"));
+  const plain = await fetch(expressionUrl(ctx, "itx.ws-device", "http"), {
+    headers: adminBearer(),
+  });
   expect(await plain.text()).toBe("http-fallback");
 
-  const ws = await wsRoundTrip(expressionUrl(ctx, "itx.ws-device", "ws"), "hello-device");
+  const ws = await wsRoundTrip(
+    expressionUrl(ctx, "itx.ws-device", "ws"),
+    "hello-device",
+    10_000,
+    adminBearer(),
+  );
   expect(ws.error).toBeUndefined();
   expect(ws.opened).toBe(true);
   expect(ws.echo).toBe("device-echo:hello-device");
@@ -128,13 +151,14 @@ test("lent stub WebSocket fetch: a plain eyeball WebSocket opens (101), echoes, 
 // .test.ts (the dedicated fetch-upgrade leg; the DO mints the eyeball pair natively). A tunnel
 // (`iterate tunnel bla 3000`) is this same lent stub proxying to localhost — the same three hops.
 
-test("/expression refuses to re-enter itself: `itx=itx.fetch` (an expression fetching its own lane, the same query every hop) answers 508 after a few hops, never loops", async () => {
+test("/expression cannot re-enter itself: `itx=itx.fetch` (an expression fetching its own lane, the same query every hop) is cut at the second hop — the admin bearer never rides into loaded code, so the re-entry arrives with no credential and is 401, never a loop", async () => {
   const ctx = freshCtx("lane-reentry");
   const response = await fetch(expressionUrl(ctx, "itx.fetch"), {
+    headers: adminBearer(),
     signal: AbortSignal.timeout(8000),
   });
-  expect(response.status).toBe(508);
-  expect(await response.text()).toMatch(/re-entered itself/);
+  expect(response.status).toBe(401);
+  expect(await response.text()).toMatch(/sign in as a member/);
 });
 
 test("a hop count the platform never wrote (an app spelling `NaN` to defeat the budget) is over budget on arrival: 508, never a loop", async () => {
