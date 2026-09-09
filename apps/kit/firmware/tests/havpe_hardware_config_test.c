@@ -1,4 +1,5 @@
 #include "iterate/kit/platforms/aic3204.h"
+#include "iterate/kit/platforms/board.h"
 
 #include <assert.h>
 #include <stddef.h>
@@ -30,14 +31,14 @@ static void preserves_the_first_party_codec_sequence(void) {
     {0x00, 0x00}, {0x3f, 0xd4}, {0x41, 0x00}, {0x42, 0x00},
     {0x40, 0x00},
   };
-  const struct iterate_kit_register_script *script = iterate_kit_aic3204_initial_script();
+  const struct iterate_kit_register_script *script = &iterate_kit_aic3204_scripts[0];
   assert(script->count == sizeof(expected_initial) / sizeof(expected_initial[0]));
   assert(memcmp(script->writes, expected_initial, sizeof(expected_initial)) == 0);
   assert(script->settle_ms == 2500U);
   assert(script->i2c_address == 0x18U);
   assert(script->when == ITERATE_KIT_SCRIPT_BEFORE_I2S);
 
-  script = iterate_kit_aic3204_power_up_script();
+  script = &iterate_kit_aic3204_scripts[1];
   assert(script->count == sizeof(expected_power_up) / sizeof(expected_power_up[0]));
   assert(memcmp(script->writes, expected_power_up, sizeof(expected_power_up)) == 0);
   assert(script->settle_ms == 0U);
@@ -109,8 +110,11 @@ static void volume_register_table(void) {
     {0, 0x82}, {1, 0x83}, {25, 0xa1}, {50, 0xc1},
     {75, 0xe0}, {99, 0xfe}, {100, 0x00}, {101, 0x00}, {255, 0x00},
   };
+  const struct iterate_kit_volume_register volume = {.full_code = 0, .floor_code = -126};
   for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
-    assert(iterate_kit_aic3204_volume_register(cases[i].percent) == cases[i].code);
+    uint8_t applied = 0;
+    assert(iterate_kit_board_volume_code(&volume, 100, cases[i].percent, &applied) == cases[i].code);
+    assert(applied == (cases[i].percent > 100U ? 100U : cases[i].percent));
   }
 }
 

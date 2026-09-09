@@ -97,16 +97,6 @@ bool iterate_kit_tas2780_set_volume(struct iterate_kit_tas2780 *amp, uint8_t per
   return true;
 }
 
-bool iterate_kit_tas2780_mute(struct iterate_kit_tas2780 *amp, bool muted) {
-  if (amp == NULL || !amp->initialized) return false;
-  const uint8_t dvc = muted ? ITERATE_KIT_TAS2780_DVC_MUTE :
-      iterate_kit_tas2780_dvc_for_percent(amp->volume);
-  if (!iterate_kit_tas2780_write(amp, 0x00, 0x00) ||
-      !iterate_kit_tas2780_write(amp, 0x1A, dvc)) return false;
-  amp->muted = muted;
-  return true;
-}
-
 bool iterate_kit_tas2780_shutdown(struct iterate_kit_tas2780 *amp) {
   return amp != NULL && amp->device != NULL &&
       iterate_kit_tas2780_write(amp, 0x00, 0x00) &&

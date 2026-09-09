@@ -241,8 +241,9 @@ endfunction()
 
 iterate_kit_add_test(iterate-kit-havpe-hardware-config-test
   havpe_hardware_config_test.c ../platforms/iterate_esp_idf/components/board/codecs/aic3204.c
-  INCLUDES ../platforms/iterate_esp_idf/components/board/include
-  LINK iterate-kit-core)
+  ../platforms/iterate_esp_idf/components/board/board.c
+  INCLUDES fakes/board ../platforms/iterate_esp_idf/components/board/include
+  LINK iterate-kit-voice iterate-kit-audio iterate-kit-core)
 
 iterate_kit_add_test(iterate-kit-havpe-hardware-config-aec-override-test
   havpe_hardware_config_aec_override_test.c

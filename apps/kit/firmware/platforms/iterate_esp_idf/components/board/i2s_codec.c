@@ -53,7 +53,10 @@ void iterate_kit_i2s_codec_note_failure(bool capture) {
   portEXIT_CRITICAL(&codec_lock);
 }
 
-void iterate_kit_i2s_codec_set_before_write(void (*wait)(void *)) {
+/** Install the table amplifier wait before hardware tasks start. The playback
+ * task waits outside the codec lock and before reserving deadline credit.
+ */
+static void iterate_kit_i2s_codec_set_before_write(void (*wait)(void *)) {
   before_write = wait;
 }
 
@@ -639,7 +642,6 @@ bool iterate_kit_i2s_codec_finish(struct iterate_kit_audio_codec *out) {
   const uint16_t ring_ms = (uint16_t)((uint64_t)channel_facts.dma_frames *
       channel_facts.dma_descriptors * 1000U / channel_facts.playback.clk_cfg.sample_rate_hz);
   if (!channel_facts.amplifier_gated && !set_table_amplifier(true)) return false;
-  iterate_kit_i2s_codec_set_before_write(wait_for_table_amplifier);
   if (!iterate_kit_i2s_codec_start_over(read_channels, write_channels, NULL, ring_ms, out)) return false;
   table_started = true;
   return true;

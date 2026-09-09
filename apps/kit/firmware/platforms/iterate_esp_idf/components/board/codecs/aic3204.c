@@ -84,14 +84,6 @@ const struct iterate_kit_register_script iterate_kit_aic3204_scripts[2] = {
   },
 };
 
-const struct iterate_kit_register_script *iterate_kit_aic3204_initial_script(void) {
-  return &iterate_kit_aic3204_scripts[0];
-}
-
-const struct iterate_kit_register_script *iterate_kit_aic3204_power_up_script(void) {
-  return &iterate_kit_aic3204_scripts[1];
-}
-
 enum iterate_kit_xmos_stage
 iterate_kit_xmos_uplink_stage(void) {
   /*
@@ -194,28 +186,4 @@ iterate_kit_xmos_uplink_stage(void) {
    */
   return (enum iterate_kit_xmos_stage)
       ITERATE_KIT_VOICE_PE_XMOS_UPLINK_STAGE;
-}
-
-/*
- * Percent to the AIC3204's two DAC channel-gain registers (0x41, 0x42), in
- * half-decibel steps on page 0.
- *
- * 100 IS 0 dB, NOT THE CHIP'S +24 dB CEILING. Positive digital gain here made
- * the provider transcribe this device's own speaker output almost verbatim on
- * the XMOS processed channel — the gain exhausted acoustic and AEC headroom
- * before the DSP could cancel anything. 0 dB is also the loudest setting that
- * cannot electrically clip a full-scale provider sample, and PCM reaches this
- * boundary unscaled. So the knob spans silence to 0 dB, which is the whole of
- * the safe range; anything above it is a different measurement, not a setting.
- *
- * The scale is in dB rather than linear percent because the ear is: halfway
- * along this control is -31.5 dB, which is quiet but not inaudible.
- */
-uint8_t iterate_kit_aic3204_volume_register(uint8_t percent) {
-  if (percent > 100U) percent = 100U;
-  enum { MINIMUM_HALF_DB = -126 }; /* -63 dB, the register floor */
-  const int8_t half_db = percent == 0U
-      ? (int8_t)MINIMUM_HALF_DB
-      : (int8_t)(MINIMUM_HALF_DB + ((int)-MINIMUM_HALF_DB * (int)percent) / 100);
-  return (uint8_t)half_db;
 }

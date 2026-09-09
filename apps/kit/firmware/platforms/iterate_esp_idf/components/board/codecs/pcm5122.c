@@ -32,30 +32,7 @@ bool iterate_kit_pcm5122_init(i2c_master_dev_handle_t device) {
   return true;
 }
 
-bool iterate_kit_pcm5122_set_volume(i2c_master_dev_handle_t device, uint8_t percent, uint8_t *applied) {
-  if (device == NULL || applied == NULL) return false;
-  const uint8_t volume = percent > 100U ? 100U : percent;
-  const uint8_t dvol = iterate_kit_pcm5122_dvol_for_percent(volume);
-  if (!iterate_kit_pcm5122_write(device, 0x00, 0x00) ||
-      !iterate_kit_pcm5122_write(device, 0x3D, dvol) ||
-      !iterate_kit_pcm5122_write(device, 0x3E, dvol)) return false;
-  *applied = volume;
-  return true;
-}
-
 bool iterate_kit_pcm5122_mute(i2c_master_dev_handle_t device, bool muted) {
   return device != NULL && iterate_kit_pcm5122_write(device, 0x00, 0x00) &&
       iterate_kit_pcm5122_write(device, 0x03, muted ? 0x11 : 0x00);
-}
-
-bool iterate_kit_pcm5122_read_gpio(i2c_master_dev_handle_t device, uint8_t pin, bool *level) {
-  /* GPIN1..GPIN5 sit at bits 1..5 of register 0x77 (TI SLAS763C, table 114);
-   * bits 0, 6 and 7 are reserved and GPIO6 has no input bit. The deleted
-   * FutureProofHomes driver masked (pin - 1) and so read the neighbour. */
-  if (device == NULL || level == NULL || pin < 1U || pin > 5U) return false;
-  uint8_t gpio;
-  if (!iterate_kit_pcm5122_write(device, 0x00, 0x00) ||
-      !iterate_kit_pcm5122_read(device, 0x77, &gpio)) return false;
-  *level = (gpio & (1U << pin)) != 0;
-  return true;
 }

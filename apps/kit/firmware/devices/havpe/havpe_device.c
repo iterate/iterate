@@ -525,6 +525,21 @@ static const struct iterate_kit_board board = {
   .boot = boot, .boot_count = sizeof(boot) / sizeof(boot[0]),
   .scripts = iterate_kit_aic3204_scripts, .script_count = 2,
   .audio = &audio_facts,
+/*
+ * Percent to the AIC3204's two DAC channel-gain registers (0x41, 0x42), in
+ * half-decibel steps on page 0.
+ *
+ * 100 IS 0 dB, NOT THE CHIP'S +24 dB CEILING. Positive digital gain here made
+ * the provider transcribe this device's own speaker output almost verbatim on
+ * the XMOS processed channel — the gain exhausted acoustic and AEC headroom
+ * before the DSP could cancel anything. 0 dB is also the loudest setting that
+ * cannot electrically clip a full-scale provider sample, and PCM reaches this
+ * boundary unscaled. So the knob spans silence to 0 dB, which is the whole of
+ * the safe range; anything above it is a different measurement, not a setting.
+ *
+ * The scale is in dB rather than linear percent because the ear is: halfway
+ * along this control is -31.5 dB, which is quiet but not inaudible.
+ */
   .volume = {.i2c_address = 0x18, .page_register = 0, .page = 0,
     .registers = {0x41, 0x42}, .register_count = 2, .full_code = 0, .floor_code = -126},
   .ring = {.gpio = 21, .pixels = 12, .order = LED_PIXEL_FORMAT_GRB, .power_gpio = 45},

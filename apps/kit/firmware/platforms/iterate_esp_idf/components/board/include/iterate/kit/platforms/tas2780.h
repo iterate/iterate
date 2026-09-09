@@ -33,8 +33,6 @@ bool iterate_kit_tas2780_activate(struct iterate_kit_tas2780 *amp);
 /** Clamp to 100, write DVC (retain mute), then publish applied on success.
  * applied must be non-NULL. tas2780.cpp:547-598; step 17 percent mapping. */
 bool iterate_kit_tas2780_set_volume(struct iterate_kit_tas2780 *amp, uint8_t percent, uint8_t *applied);
-/** Write 0xC9 while muted; restore saved volume when unmuted. tas2780.cpp:547-572. */
-bool iterate_kit_tas2780_mute(struct iterate_kit_tas2780 *amp, bool muted);
 /** Write MODE_CTRL=0x82; false means shutdown was not confirmed. tas2780.cpp:385-392. */
 bool iterate_kit_tas2780_shutdown(struct iterate_kit_tas2780 *amp);
 /** Read 0x49/0x4A/0x4B/0x4F; cache and output only a complete successful read.
