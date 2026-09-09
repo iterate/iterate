@@ -11,7 +11,11 @@ import type {
   WorkspaceGitSurface,
   WorkspaceSurface,
 } from "@iterate-com/workspace-documents/types";
-import { requireDocumentPath, requireWorkspacePath } from "./config-bridge.ts";
+import {
+  requireDocumentPath,
+  requireWorkspaceFilePath,
+  requireWorkspacePath,
+} from "./config-bridge.ts";
 import type { AppEnv } from "./env.ts";
 import {
   BOARD_WORKSPACE_PREFIX,
@@ -223,7 +227,7 @@ class DocsProjectApi extends RpcTarget implements DocsProject {
     if (agentPath === null) {
       throw new Error(`only a jam workspace can invite an agent; ${workspace} is not one`);
     }
-    const document = path === undefined ? null : resolveDocumentPath(workspace, path);
+    const document = path === undefined ? null : resolveWorkspaceFilePath(workspace, path);
     // Same birth-if-needed sequence as assignAgent; the brief goes out every
     // time so a re-invite re-points an existing agent.
     await this.#withPlatform((project) =>
@@ -486,6 +490,16 @@ async function briefAgent(agent: PlatformAgent, brief: string): Promise<void> {
 /** Relative document paths join onto the workspace's own stream path; absolute paths are used verbatim. */
 export function resolveDocumentPath(workspacePath: string, value: string): string {
   const path = requireDocumentPath(value);
+  return path.startsWith("/") ? path : `${workspacePath}/${path}`;
+}
+
+/**
+ * Any file of the workspace, not only a document (the tree opens every
+ * file): relative joins onto the workspace's own directory, absolute must be
+ * a fully qualified stream path under /workspaces/ or /repos/.
+ */
+export function resolveWorkspaceFilePath(workspacePath: string, value: string): string {
+  const path = requireWorkspaceFilePath(value);
   return path.startsWith("/") ? path : `${workspacePath}/${path}`;
 }
 

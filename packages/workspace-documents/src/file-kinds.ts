@@ -65,7 +65,12 @@ export function workspaceFileKind(path: string): WorkspaceFileKind {
   return { kind: "text", language: TEXT_LANGUAGES[extension] ?? "text" };
 }
 
-/** A typed file name as a document: `.md` is implied when no document extension was given. */
+/**
+ * A typed file name as the file to create: a name with no extension at all
+ * is a Markdown document (`notes` → `notes.md`); any extension, document or
+ * not, is kept as typed (`worker.ts` stays `worker.ts`).
+ */
 export function withDocumentExtension(path: string): string {
-  return workspaceFileKind(path).kind === "document" ? path : `${path}.md`;
+  const basename = path.split("/").pop() ?? path;
+  return basename.includes(".") ? path : `${path}.md`;
 }

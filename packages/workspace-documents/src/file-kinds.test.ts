@@ -18,6 +18,9 @@ describe("workspace file kinds", () => {
     ["review.md", "review.md"],
     ["page.html", "page.html"],
     ["notes/2026", "notes/2026.md"],
+    ["worker.ts", "worker.ts"],
+    ["src/config.json", "src/config.json"],
+    [".env", ".env"],
   ])("%s is named %s", (typed, becomes) => {
     expect(withDocumentExtension(typed)).toBe(becomes);
   });
