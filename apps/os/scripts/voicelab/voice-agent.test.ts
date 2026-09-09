@@ -3677,6 +3677,39 @@ describe("say, and the announced farewell", () => {
   });
 
   /*
+   * THE GRACE STARTS WHEN THE PROVIDER IS ASKED, NOT WHEN THE SAY IS PARKED.
+   * A line pended behind a protected note answer is waiting its turn; ending
+   * the call at 8 s would cut off the answer still holding the floor.
+   */
+  it("a hang-up say waiting behind a note answer is not given up on until it is asked for", async () => {
+    const h = makeHarness();
+    await callIsLive(h);
+    await h.append({
+      type: "events.iterate.com/voice-agent/colleague-note",
+      payload: { text: "The shop is done." },
+    });
+    await h.settle();
+    h.provider.responseCreated();
+    h.provider.answerAudio(200, "item_note");
+    await h.append({
+      type: "events.iterate.com/voice-agent/say",
+      payload: { text: "Closing this call now.", reason: "operator: done", thenHangUp: true },
+    });
+    await h.settle();
+    expect(h.provider.sentOfType("response.create")).toHaveLength(1);
+    /* The note answer holds the floor well past the grace: nothing ends. */
+    await stepTime(h, IDLE_FAREWELL_GRACE_MS + 5_000);
+    expect(eventsOfType(h, "conversation-end-requested")).toHaveLength(0);
+    /* It settles; the say is asked for; THIS provider never starts it. */
+    h.provider.answerComplete();
+    await h.settle();
+    expect(h.provider.sentOfType("response.create")).toHaveLength(2);
+    await stepTime(h, IDLE_FAREWELL_GRACE_MS + 5_000);
+    expect(eventsOfType(h, "conversation-end-requested")).toHaveLength(1);
+    expect(endReason(h)).toBe("operator: done; the line was never spoken");
+  });
+
+  /*
    * A NOTE BEHIND A PENDING SAY. The re-create at response.done comes back
    * as ONE kind; a note that lands after a thenHangUp say has pended must
    * not turn that re-create into a note, or the hang-up is never armed and

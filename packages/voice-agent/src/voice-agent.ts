@@ -1951,8 +1951,10 @@ interface Dial {
    * moved onto `hangUpAfterAnswerDrains` at the say's own `response.created`
    * so the line PLAYS first. Still set after the reaper's grace: never started. */
   sayHangUpReason: string | null;
-  /** Which thenHangUp say the parked reason belongs to: its start grace
-   * checks it, so a later say's grace is the only one that can bury the call. */
+  /** Who asked for the hang-up say — the obituary's key class. */
+  sayHangUpBy: string | null;
+  /** Which request-to-speak the running start grace belongs to, so only the
+   * latest grace can bury the call. */
   sayHangUpEpisode: number;
   /** A grace has ended this call; the idle tick must not say goodbye again. */
   buried: boolean;
@@ -1999,6 +2001,7 @@ const freshDial = (
   pendingNoteResponse: false,
   pendingFollowUpKind: "note",
   sayHangUpReason: null,
+  sayHangUpBy: null,
   sayHangUpEpisode: 0,
   buried: false,
   idleFarewells: 0,
@@ -2739,30 +2742,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
               ? event.payload.reason
               : `asked to hang up${asker === null ? "" : ` by ${asker}`}`;
           dial.sayHangUpReason = reason;
-          const episode = ++dial.sayHangUpEpisode;
-          const parkedAtMs = this.deps.nowAtFacetMs();
-          /*
-           * EVERY HANG-UP SAY GETS A START GRACE, not only the reaper's. A
-           * parked reason makes the idle tick defer; a provider that never
-           * starts the line would otherwise leave it parked for ever and the
-           * call unreapable. Past the grace, still parked, the call is ended
-           * without the line — unless the listener came back meanwhile.
-           */
-          runInBackground(async () => {
-            await this.deps.sleep(IDLE_FAREWELL_GRACE_MS);
-            if (this.#dial !== dial || dial.sayHangUpEpisode !== episode) return;
-            if (dial.sayHangUpReason === null) return; /* started, or un-decided */
-            dial.sayHangUpReason = null;
-            /* Backstop for the press-inside-the-grace case #bargeAnswer covers. */
-            if (this.#lastDeviceInputAtStreamMsMirror > parkedAtMs) return;
-            dial.buried = true;
-            await this.#requestEnd(
-              dial.conversationId,
-              asker === "idle-reaper" ? "idle" : "hang-up",
-              `${reason}; the line was never spoken`,
-              append,
-            );
-          });
+          dial.sayHangUpBy = asker;
         }
         this.#sendControl(
           dial,
@@ -3639,6 +3619,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
               dial.followUpKind = dial.pendingFollowUpKind;
               dial.pendingFollowUpKind = "note";
               this.#sendControl(dial, { type: "response.create" }, append);
+              if (dial.followUpKind === "say") this.#armSayStartGrace(dial, append);
             }
             return;
           }
@@ -4111,6 +4092,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
       dial.followUpResponsePending = true;
       dial.followUpKind = kind;
       this.#sendControl(dial, { type: "response.create" }, append);
+      if (kind === "say") this.#armSayStartGrace(dial, append);
     } else if (
       dial.answer.phase === "streaming" &&
       (dial.answer.kind === "status" || dial.answer.kind === "turn")
@@ -4153,6 +4135,38 @@ export class VoiceAgentProcessor extends StreamProcessor<
    */
   #pendFollowUp(dial: Dial, kind: "note" | "say"): void {
     if (kind === "say") dial.pendingFollowUpKind = "say";
+  }
+
+  /**
+   * EVERY HANG-UP SAY GETS A START GRACE, not only the reaper's — armed when
+   * the provider is ASKED for the line, not when the say was parked: a line
+   * pended behind a note or tool answer is waiting its turn, not failing to
+   * start. A parked reason makes the idle tick defer, so a provider that
+   * never starts the line would otherwise leave the call unreapable. Past
+   * the grace, still parked, the call is ended without the line — unless
+   * the listener came back meanwhile.
+   */
+  #armSayStartGrace(dial: Dial, append: ProcessEventArgs<VoiceAgentContract>["append"]): void {
+    const reason = dial.sayHangUpReason;
+    if (reason === null) return;
+    const by = dial.sayHangUpBy;
+    const episode = ++dial.sayHangUpEpisode;
+    const askedAtMs = this.deps.nowAtFacetMs();
+    this.runInBackground(async () => {
+      await this.deps.sleep(IDLE_FAREWELL_GRACE_MS);
+      if (this.#dial !== dial || dial.sayHangUpEpisode !== episode) return;
+      if (dial.sayHangUpReason === null) return; /* started, or un-decided */
+      dial.sayHangUpReason = null;
+      /* Backstop for the press-inside-the-grace case #bargeAnswer covers. */
+      if (this.#lastDeviceInputAtStreamMsMirror > askedAtMs) return;
+      dial.buried = true;
+      await this.#requestEnd(
+        dial.conversationId,
+        by === "idle-reaper" ? "idle" : "hang-up",
+        `${reason}; the line was never spoken`,
+        append,
+      );
+    });
   }
 
   /** The last note's text and when it was injected — the belt behind the
