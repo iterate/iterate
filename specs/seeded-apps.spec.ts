@@ -361,12 +361,6 @@ test("review a workspace document in the seeded Docs app", async ({ baseURL, pag
   await appendAtEnd(page, "\n\nReviewed in Docs.");
   await editor.getByText("Reviewed in Docs.").waitFor({ timeout: 10_000 }); // timeout: tight manual budget — rich syntax projection has no spinnerWaiter-visible UI
 
-  // Track changes stays on the rich editor instead of forcing a source view.
-  await page.getByRole("button", { name: "Track changes" }).click();
-  await editor.locator(".cm-redline-ins").filter({ hasText: "Reviewed in Docs." }).waitFor();
-  await page.getByRole("button", { name: "Track changes" }).click();
-  expect(await editor.locator(".cm-redline-ins").count()).toBe(0);
-
   // The 15-minute project session renews from the page itself (the request
   // the app's keepalive makes), through the config worker's gate, for the
   // same member: a fresh expiry, no sign-in page.

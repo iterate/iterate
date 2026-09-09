@@ -8,7 +8,6 @@ export function WorkspaceTaskEditor({
   address,
   displayName,
   path,
-  redline,
   focusHeadline,
   onLiveContent,
   onStatus,
@@ -18,7 +17,6 @@ export function WorkspaceTaskEditor({
   address: BoardAddress;
   displayName?: string;
   path: string;
-  redline: boolean;
   focusHeadline?: "select" | "end" | { caret: number };
   apiRef?: { current: CollabEditorApi | null };
   onLiveContent: (path: string, content: string) => void;
@@ -34,7 +32,6 @@ export function WorkspaceTaskEditor({
       displayName={displayName}
       path={path}
       workspacePath={`${repoPath}/${path}`}
-      redline={redline}
       emptyPlaceholder="Write the task as Markdown…"
       focusHeadline={focusHeadline}
       apiRef={apiRef}

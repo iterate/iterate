@@ -358,7 +358,7 @@ export class WorkspaceCore {
 
   /** The BASE of a path — its mount's content at HEAD, ignoring the overlay
    * and whiteouts entirely. This is what uncommitted work diffs against
-   * (redlines, merge views); null for unmounted/scratch paths. */
+   * (merge views); null for unmounted/scratch paths. */
   async readBase(path: string): Promise<string | null> {
     const mounts = await this.#mounts();
     if (isVirtualDirectoryPath(mounts, path)) return null;

@@ -675,12 +675,6 @@ export class WorkspaceV2DurableObject extends DurableObject<Env> {
     return this.#collab.versions();
   }
 
-  /** Attributed tracked changes since the last commit (redline segments). */
-  async collabChanges(path: string) {
-    await this.#assertCreated();
-    return this.#collab.changes(this.#resolvePath(path));
-  }
-
   // Board-level viewer presence: who has the BOARD open (sheet or not),
   // heartbeat-refreshed, in-memory (rebuilds from heartbeats after eviction).
   readonly #boardClients = new Map<string, { at: number; name: string }>();
@@ -738,22 +732,12 @@ export class WorkspaceV2DurableObject extends DurableObject<Env> {
     await this.#effectiveMounts({ refresh: true });
     const resolved =
       input.scope === undefined ? input : { ...input, scope: this.#resolvePath(input.scope) };
-    // Settle → commit → stamp as ONE fence: no flush timer, open, or
-    // configure can interleave, and baselines advance mount-scoped to
-    // exactly what the commit contained (a commit never spans mounts;
-    // stamping another mount's session would erase its redline). ownsPath
-    // routes against the EXACT table the commit classified with — the core
-    // returns it — never a live table a concurrent refresh (getConfig, a
-    // routing miss, a repo created mid-commit) could move under the stamp.
-    let classifiedMounts: Record<string, WorkspaceMount> = {};
-    return this.#collab.commitBarrier(
-      async () => {
-        const { mounts, ...result } = await this.#core.gitCommit(resolved);
-        classifiedMounts = mounts;
-        return result;
-      },
-      (path, mount) => routeMount(classifiedMounts, path)?.mountPath === mount,
-    );
+    // Settle → commit as ONE fence: no flush timer, open, or configure can
+    // interleave between the settled overlay and the commit that reads it.
+    return this.#collab.commitBarrier(async () => {
+      const { mounts: _classifiedMounts, ...result } = await this.#core.gitCommit(resolved);
+      return result;
+    });
   }
 
   async gitLog(input: WorkspaceGitLogInput = {}): Promise<WorkspaceGitLogEntry[]> {

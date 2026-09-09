@@ -40,8 +40,7 @@ const WorkspaceTaskEditor = lazy(() =>
 );
 /**
  * The task detail sheet on the WORKSPACE lane: the shared collab-editor
- * state machine (rebase model over the vessel WS) with the redline layers
- * where the Yjs sheet had y-collab.
+ * state machine (rebase model over the vessel WS).
  */
 export function WorkspaceTaskSheet({
   task,
@@ -53,7 +52,6 @@ export function WorkspaceTaskSheet({
   onRename,
   focusHeadline,
   editorEpoch,
-  redline,
   liveSource,
   editorApiRef,
   commentIdentity,
@@ -79,8 +77,6 @@ export function WorkspaceTaskSheet({
   /** Bumped when the session was ended server-side (revert) — remounts the
    * editor so it reseeds instead of showing the dead session's text. */
   editorEpoch?: number;
-  /** Track changes: the redline layer on the editor (board setting). */
-  redline?: boolean;
   /** Live document text when a session is open (Preview must not lag). */
   liveSource?: () => string | null;
   editorApiRef?: {
@@ -117,7 +113,6 @@ export function WorkspaceTaskSheet({
             onRename={onRename}
             focusHeadline={focusHeadline}
             editorEpoch={editorEpoch}
-            redline={redline}
             liveSource={liveSource}
             editorApiRef={editorApiRef}
             commentIdentity={commentIdentity}
@@ -146,7 +141,6 @@ function SheetBody({
   onRename,
   focusHeadline,
   editorEpoch,
-  redline,
   liveSource,
   editorApiRef,
   commentIdentity,
@@ -171,8 +165,6 @@ function SheetBody({
   /** Bumped when the session was ended server-side (revert) — remounts the
    * editor so it reseeds instead of showing the dead session's text. */
   editorEpoch?: number;
-  /** Track changes: the redline layer on the editor (board setting). */
-  redline?: boolean;
   /** Live document text when a session is open (Preview must not lag). */
   liveSource?: () => string | null;
   editorApiRef?: {
@@ -310,7 +302,6 @@ function SheetBody({
               address={address}
               displayName={commentIdentity?.authorDisplay ?? commentIdentity?.author}
               path={task.path}
-              redline={redline ?? true}
               focusHeadline={focusHeadline}
               apiRef={editorApiRef}
               onLiveContent={onLiveContent}

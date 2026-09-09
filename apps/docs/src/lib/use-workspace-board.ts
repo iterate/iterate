@@ -281,7 +281,7 @@ export function useWorkspaceBoard(address: BoardAddress) {
 
   // Board-viewer heartbeat: announce on join (and every 25s — the server
   // ages entries at 45s), clear on leave. Identity via whoami; the clientId
-  // wears the display slug so colors/labels match redlines and carets.
+  // wears the display slug so colors/labels match the carets.
   // react-doctor-disable-next-line react-doctor/effect-needs-cleanup
   useEffect(() => {
     // (The interval IS cleaned up: it is allocated inside the whoami .then,

@@ -1938,7 +1938,7 @@ export interface CfVideosCapability {
  * versions, optimistic clients rebasing unconfirmed edits). Sessions are
  * durable; the workspace's ordinary filesystem RPC reads/writes route through
  * live sessions automatically, so this surface is only for LIVE participants
- * (editors) and redline consumers.
+ * (editors).
  */
 export interface WorkspaceCollab {
   __describe(): Promise<Description>;
@@ -2011,8 +2011,6 @@ export interface WorkspaceCollab {
   ): Promise<void>;
   /** Head versions of every live session (a cheap board change cursor). */
   versions(): Promise<Record<string, number>>;
-  /** Attributed tracked changes since the last commit (redline segments). */
-  changes(path: string): Promise<CollabChangesResult>;
   /** Fresh caret presence per live session — "who has this file open". */
   presenceSummary(): Promise<CollabPresenceFlat>;
   /** Everyone with the BOARD open (heartbeats): clientId -> display name. */
@@ -2068,17 +2066,6 @@ export interface StreamSubscription {
    * Stream DO's facade serves a facet row from its facet and replays the
    * read verbs onto an expression row's own `processor` node. */
   processor: StreamProcessorRpc;
-}
-
-/** Attributed tracked changes since the last commit: author-tagged inserted
- * spans and deleted-text markers in current-head coordinates, plus the ONE
- * baseline both redline layers render against. */
-export interface CollabChangesResult {
-  baseContent: string;
-  baseVersion: number;
-  deleted: { at: number; clientId: string; createdAt?: number; text: string }[];
-  headVersion: number;
-  inserted: { clientId: string; createdAt?: number; from: number; to: number }[];
 }
 
 /** Fresh caret presence as index-matched flat arrays (one entry per
