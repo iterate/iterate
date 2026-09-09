@@ -3,6 +3,7 @@ import { ChangeSet } from "@codemirror/state";
 import { MAX_DOC_BYTES } from "./collab-engine.ts";
 import { CollabHost, type CollabSettledFs } from "./collab-host.ts";
 import { fakeSessionStore } from "./collab-store.fixtures.ts";
+import { prototypeFileVersion } from "./workspace-sandbox-prototype.ts";
 
 function fakeFs(initial: Record<string, string> = {}) {
   const files = new Map(Object.entries(initial));
@@ -41,6 +42,24 @@ function pushOne(
 }
 
 describe("collab host", () => {
+  test("sandbox replacement rejects intervening editor changes and accepted bytes survive eviction", async () => {
+    const { store } = fakeSessionStore();
+    const { fs } = fakeFs({ [PATH]: SEED });
+    const host = new CollabHost({ fs, store });
+    const opened = await host.open(PATH);
+    await pushOne(host, opened, "editor ", SEED.length);
+    await expect(
+      host.prototypeReplace(PATH, prototypeFileVersion(new TextEncoder().encode(SEED)), "sandbox"),
+    ).resolves.toBe("conflict");
+    expect(await host.readFile(PATH)).toBe(`editor ${SEED}`);
+    await host.prototypeReplace(
+      PATH,
+      prototypeFileVersion(new TextEncoder().encode(`editor ${SEED}`)),
+      "sandbox",
+    );
+    expect(await new CollabHost({ fs, store }).readFile(PATH)).toBe("sandbox");
+  });
+
   test("acked edits survive eviction INTO a commit: reconcile flushes with no live memory", async () => {
     const { store } = fakeSessionStore();
     const { files, fs } = fakeFs({ [PATH]: SEED });

@@ -1,5 +1,6 @@
 import { countOccurrences, replaceLiteralOccurrences } from "../repos/edit-utils.ts";
 import { resolveAbsolutePath } from "./paths.ts";
+import { prototypeFileVersion } from "./workspace-sandbox-prototype.ts";
 import type { EditWorkspaceFileInput, EditWorkspaceFileResult } from "./types.ts";
 import {
   CollabEngine,
@@ -388,6 +389,27 @@ export class CollabHost {
     await this.#opened(path);
     await this.#engine.applyExternal(path, (doc) => minimalSplice(doc, content), author);
     return true;
+  }
+
+  /** Compare and replace within the same write queue as collaborative edits. */
+  async prototypeReplace(
+    path: string,
+    expected: string | null,
+    content: string,
+  ): Promise<"applied" | "conflict"> {
+    if (!this.isLive(path)) return "conflict";
+    await this.#opened(path);
+    let matched = true;
+    await this.#engine.applyExternal(path, (doc) => {
+      const current = doc.toString();
+      if (current === content) return null;
+      if (prototypeFileVersion(new TextEncoder().encode(current)) !== expected) {
+        matched = false;
+        return null;
+      }
+      return minimalSplice(doc, content);
+    });
+    return matched ? "applied" : "conflict";
   }
 
   /** Canonical edit semantics against the live head. Null = not live. */

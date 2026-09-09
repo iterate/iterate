@@ -1226,6 +1226,23 @@ export class RepoDurableObject extends DurableObject<Env> {
     return content === undefined ? null : { commitOid, content, path };
   }
 
+  /** Prototype mount metadata: SQLite sizes and object IDs, without reading blobs. */
+  async prototypeFileMetadata() {
+    await this.#lazyFreshHead();
+    const files = this.ctx.storage.sql
+      .exec<{ path: string; mode: string; size: number | null; version: string }>(
+        `SELECT m.path, m.mode, o.size, 'git:' || m.blob_oid AS version
+       FROM git_manifest m LEFT JOIN git_objects o ON o.oid = m.blob_oid
+       WHERE m.branch = ? AND m.mode != '160000' ORDER BY m.path`,
+        REPO_DEFAULT_BRANCH,
+      )
+      .toArray();
+    return files.map((file) => {
+      if (file.size === null) throw new Error(`Missing Git object metadata for ${file.path}`);
+      return { ...file, size: file.size };
+    });
+  }
+
   /** All committed file paths at HEAD (served from the lazy snapshot's manifest). */
   async listFiles(): Promise<{ commitOid: string; paths: string[] }> {
     try {

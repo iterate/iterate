@@ -17,6 +17,10 @@ import type { WorkspaceMount } from "./workspace-processor-contract.ts";
 import { encodeRepoContent } from "./utils.ts";
 import { resolveAbsolutePath, WORKSPACE_DIRECTORY } from "./paths.ts";
 import { filterPublishablePaths } from "./overlay-ignore.ts";
+import {
+  prototypeFileVersion,
+  type PrototypeWorkspaceFile,
+} from "./workspace-sandbox-prototype.ts";
 
 // Overlay whiteouts: mount paths hidden by a local delete, kept as ONE kv
 // record (a path -> true map) so status can enumerate deletions without a kv
@@ -523,6 +527,68 @@ export class WorkspaceCore {
   }
 
   // -- lifecycle ----------------------------------------------------------------
+
+  /** Prototype only. The repo callback returns metadata, never a content snapshot. */
+  async prototypeManifest(
+    under: string,
+    repoMetadata: (repoPath: string) => Promise<PrototypeWorkspaceFile[]>,
+  ): Promise<PrototypeWorkspaceFile[]> {
+    const mounts = await this.#mounts();
+    const entries = new Map<string, PrototypeWorkspaceFile>();
+    for (const [mountPath, mount] of Object.entries(mounts)) {
+      if (!isPathUnder(mountPath, under) && !isPathUnder(under, mountPath)) continue;
+      for (const file of await repoMetadata(mount.repoPath)) {
+        const path = `${mountPath}/${file.path}`;
+        if (!isPathUnder(path, under) || this.isMaskedFromMount(path)) continue;
+        if (routeMount(mounts, path)?.mount !== mount || isVirtualDirectoryPath(mounts, path))
+          continue;
+        entries.set(path, { ...file, path });
+      }
+    }
+    for (const path of await this.#localFilePaths()) {
+      if (!isPathUnder(path, under)) continue;
+      const bytes = await this.#workspace.readFileBytes(path);
+      if (bytes === null) throw new Error(`Prototype overlay changed while listing: ${path}`);
+      entries.set(path, {
+        path,
+        mode: entries.get(path)?.mode ?? "100644",
+        size: bytes.byteLength,
+        version: prototypeFileVersion(bytes),
+      });
+    }
+    return [...entries.values()];
+  }
+
+  /** Compare and replace under the same serialization as ordinary overlay writes. */
+  async prototypeReplace(
+    path: string,
+    expected: string | null,
+    bytes: Uint8Array | null,
+  ): Promise<"applied" | "conflict"> {
+    return this.#serializeWrite(async () => {
+      await this.#assertWritable(path);
+      const current = await this.readFileBytes(path);
+      const version = current === null ? null : prototypeFileVersion(current);
+      const next = bytes === null ? null : prototypeFileVersion(bytes);
+      if (version === next) return "applied"; // Replay after transport loss.
+      if (version !== expected) return "conflict";
+      if (bytes === null) {
+        // Mask first so a concurrent read cannot resurrect the committed file.
+        const wasMasked = this.isMaskedFromMount(path);
+        this.#addWhiteout(path);
+        try {
+          await this.#workspace.deleteFile(path);
+        } catch (error) {
+          if (!wasMasked) this.#clearWhiteout(path);
+          throw error;
+        }
+      } else {
+        await this.#workspace.writeFileBytes(path, bytes);
+        this.#clearWhiteout(path);
+      }
+      return "applied";
+    });
+  }
 
   /**
    * Wipe the local layer and every whiteout — the workspace shows exactly its

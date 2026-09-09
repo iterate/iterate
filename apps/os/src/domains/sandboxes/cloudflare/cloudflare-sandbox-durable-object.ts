@@ -23,6 +23,14 @@ import { describeNode } from "../../itx/utils.ts";
 import { projectStub } from "../../projects/egress.ts";
 import { withStreamContext } from "../../projects/stream-context.ts";
 import { withWebSocketHandshakeHeaders } from "../../secrets/websocket-handshake.ts";
+import {
+  prototypeFileVersion,
+  PrototypeRelativePath,
+  PrototypeWorkspaceExecInput,
+  type PrototypeWorkspaceFile,
+} from "../../workspaces/workspace-sandbox-prototype.ts";
+import { normalizeWorkspacePath } from "../../workspaces/utils.ts";
+import { resolveAbsolutePath } from "../../workspaces/paths.ts";
 import { sandboxCreationEvents } from "../sandbox-defaults.ts";
 import {
   SandboxProcessorContract,
@@ -261,6 +269,15 @@ async function resolveEgressProjectId(
  */
 function sandboxOutboundFor(instanceType: SandboxInstanceType): OutboundHandler<Env> {
   return async (request, env, ctx) => {
+    if (new URL(request.url).hostname === "workspace.internal") {
+      // This capability is tied to the actual container identity, never a caller-supplied project.
+      // The canonical instance-type table names only Sandbox namespaces.
+      const binding = SANDBOX_INSTANCE_TYPE_BINDINGS[instanceType].binding as keyof Env;
+      const namespace = env[binding] as DurableObjectNamespace<SandboxDurableObject>;
+      return namespace
+        .get(namespace.idFromString(ctx.containerId))
+        .prototypeWorkspaceFetch(request);
+    }
     const projectId = await resolveEgressProjectId(env, ctx.containerId, instanceType);
     const response = await projectStub(env.PROJECT, projectId).fetch(
       withStreamContext(request, { kind: "scope", scopePath: "/" }),
@@ -338,6 +355,113 @@ const IDENTITY_STORAGE_KEY = "iterate-sandbox-identity";
  *    a sandbox cannot reach the internet except through project policy.
  */
 export abstract class SandboxDurableObject extends Sandbox<Env> {
+  #prototypeWorkspace: {
+    input: PrototypeWorkspaceExecInput;
+    files: Map<string, PrototypeWorkspaceFile>;
+    metrics: {
+      fileReads: number;
+      readBytes: number;
+      fileWrites: number;
+      writtenBytes: number;
+      deletes: number;
+    };
+  } | null = null;
+
+  /** Throwaway mount experiment. Bootstrap its two executables with the prototype CLI first. */
+  async prototypeWorkspaceExec(raw: PrototypeWorkspaceExecInput) {
+    const input = PrototypeWorkspaceExecInput.parse(raw);
+    input.workspacePath = normalizeWorkspacePath(input.workspacePath);
+    input.under = resolveAbsolutePath(input.under);
+    if (this.#prototypeWorkspace)
+      throw new Error("A prototype workspace command is already running");
+    const active = {
+      input,
+      files: new Map<string, PrototypeWorkspaceFile>(),
+      metrics: { fileReads: 0, readBytes: 0, fileWrites: 0, writtenBytes: 0, deletes: 0 },
+    };
+    this.#prototypeWorkspace = active;
+    try {
+      await this.#ensureReady();
+      const workspace = this.env.WORKSPACE_V2.getByName(
+        DurableObjectNameCodec.stringify({
+          path: input.workspacePath,
+          projectId: this.#identity().projectId,
+        }),
+      );
+      const files = await workspace.prototypeManifest(input.under);
+      for (const file of files) {
+        if (
+          input.localDirectories.some((dir) => file.path === dir || file.path.startsWith(`${dir}/`))
+        ) {
+          throw new Error(`Container-local mount would hide workspace file: ${file.path}`);
+        }
+        active.files.set(file.path, file);
+      }
+      const result = await this.exec("node /tmp/iterate-workspace-prototype/run.mjs", {
+        timeout: input.timeoutMs,
+      });
+      const proof = { ...active.metrics, manifestFiles: active.files.size };
+      console.info("workspace sandbox prototype", { ...proof, exitCode: result.exitCode });
+      return { ...result, metrics: proof };
+    } finally {
+      this.#prototypeWorkspace = null;
+    }
+  }
+
+  /** Container egress reaches only its currently attached workspace; no credentials in the image. */
+  async prototypeWorkspaceFetch(request: Request): Promise<Response> {
+    const active = this.#prototypeWorkspace;
+    if (!active) return new Response("No active workspace command", { status: 403 });
+    const url = new URL(request.url);
+    if (url.pathname === "/manifest" && request.method === "GET") {
+      return Response.json({ ...active.input, files: [...active.files.values()] });
+    }
+    if (url.pathname !== "/file") return new Response("Not found", { status: 404 });
+    const parsed = PrototypeRelativePath.safeParse(url.searchParams.get("path"));
+    if (!parsed.success) return new Response("Invalid path", { status: 400 });
+    const path = parsed.data;
+    if (active.input.localDirectories.some((dir) => path === dir || path.startsWith(`${dir}/`))) {
+      return new Response("Container-local directory", { status: 403 });
+    }
+    const workspace = this.env.WORKSPACE_V2.getByName(
+      DurableObjectNameCodec.stringify({
+        path: active.input.workspacePath,
+        projectId: this.#identity().projectId,
+      }),
+    );
+    const absolute = `${active.input.under === "/" ? "" : active.input.under}/${path}`;
+    const original = active.files.get(path);
+    if (request.method === "GET") {
+      if (!original || original.version !== url.searchParams.get("version")) {
+        return new Response("File is outside this manifest", { status: 404 });
+      }
+      const bytes = await workspace.readFileBytes(absolute);
+      if (bytes === null || prototypeFileVersion(bytes) !== original.version) {
+        return new Response("Workspace changed during sandbox command", { status: 409 });
+      }
+      active.metrics.fileReads++;
+      active.metrics.readBytes += bytes.byteLength;
+      // Durable Object RPC transports ordinary ArrayBuffers, never SharedArrayBuffer.
+      return new Response(bytes as Uint8Array<ArrayBuffer>);
+    }
+    if (request.method !== "PUT" && request.method !== "DELETE")
+      return new Response("Method not allowed", { status: 405 });
+    const bytes = request.method === "DELETE" ? null : new Uint8Array(await request.arrayBuffer());
+    const outcome = await workspace.prototypeReplace(absolute, original?.version ?? null, bytes);
+    if (outcome === "conflict")
+      return new Response(`Workspace changed during sandbox command: ${path}`, { status: 409 });
+    if (outcome === "unsupported")
+      return new Response(
+        `Close the collaborative editor before deleting or writing binary content to ${path}`,
+        { status: 422 },
+      );
+    if (bytes === null) active.metrics.deletes++;
+    else {
+      active.metrics.fileWrites++;
+      active.metrics.writtenBytes += bytes.byteLength;
+    }
+    return new Response(null, { status: 204 });
+  }
   /** Report this incarnation's code version without starting its container. */
   deploymentVersion(): string {
     return workerVersion(this.env);

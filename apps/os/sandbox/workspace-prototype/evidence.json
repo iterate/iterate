@@ -1,0 +1,127 @@
+{
+  "environment": "preview_2",
+  "osVersion": "093da0a7-0e18-4909-8b7f-b8ca003a9e7b",
+  "project": "workspace-prototype-1788971359053",
+  "commit": {
+    "amended": false,
+    "branch": "main",
+    "changedPaths": [
+      "/repos/prototype/created.txt",
+      "/repos/prototype/new-in-do.txt",
+      "/repos/prototype/remove.txt",
+      "/repos/prototype/source.txt"
+    ],
+    "commitOid": "0954c31a386053fc386063eae6e1327b88e25c24",
+    "mount": "/repos/prototype",
+    "repoPath": "/repos/prototype"
+  },
+  "checks": {
+    "metadata": {
+      "sdkDurationMs": 1975,
+      "exitCode": 0,
+      "metrics": {
+        "fileReads": 0,
+        "readBytes": 0,
+        "fileWrites": 0,
+        "writtenBytes": 0,
+        "deletes": 0,
+        "manifestFiles": 2025
+      }
+    },
+    "edit": {
+      "sdkDurationMs": 1280,
+      "exitCode": 0,
+      "metrics": {
+        "fileReads": 3,
+        "readBytes": 30,
+        "fileWrites": 2,
+        "writtenBytes": 21,
+        "deletes": 1,
+        "manifestFiles": 2025
+      }
+    },
+    "read": {
+      "sdkDurationMs": 737,
+      "exitCode": 0,
+      "metrics": {
+        "fileReads": 1,
+        "readBytes": 15,
+        "fileWrites": 0,
+        "writtenBytes": 0,
+        "deletes": 0,
+        "manifestFiles": 2025
+      }
+    },
+    "cached": {
+      "sdkDurationMs": 1168,
+      "exitCode": 0,
+      "metrics": {
+        "fileReads": 0,
+        "readBytes": 0,
+        "fileWrites": 0,
+        "writtenBytes": 0,
+        "deletes": 0,
+        "manifestFiles": 2025
+      }
+    },
+    "dependencies": {
+      "sdkDurationMs": 18756,
+      "exitCode": 0,
+      "metrics": {
+        "fileReads": 1,
+        "readBytes": 78,
+        "fileWrites": 0,
+        "writtenBytes": 0,
+        "deletes": 0,
+        "manifestFiles": 2025
+      }
+    },
+    "benchmark": {
+      "sdkDurationMs": 44369,
+      "exitCode": 0,
+      "metrics": {
+        "fileReads": 100,
+        "readBytes": 420290,
+        "fileWrites": 0,
+        "writtenBytes": 0,
+        "deletes": 0,
+        "manifestFiles": 2025
+      },
+      "measurements": {
+        "sourceReadCount": 100,
+        "coldReadMs": 16536.991286,
+        "warmReadMs": 23.400580000001355,
+        "installs": [
+          {
+            "native": true,
+            "milliseconds": 5644.607211000002
+          },
+          {
+            "native": false,
+            "milliseconds": 6611.712466000001
+          },
+          {
+            "native": false,
+            "milliseconds": 6709.856119000004
+          },
+          {
+            "native": true,
+            "milliseconds": 5402.995155000004
+          }
+        ]
+      }
+    },
+    "recovery": {
+      "sdkDurationMs": 914,
+      "exitCode": 0,
+      "metrics": {
+        "fileReads": 2,
+        "readBytes": 23,
+        "fileWrites": 0,
+        "writtenBytes": 0,
+        "deletes": 0,
+        "manifestFiles": 2025
+      }
+    }
+  }
+}

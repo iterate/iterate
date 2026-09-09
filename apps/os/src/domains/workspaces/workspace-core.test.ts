@@ -2,6 +2,7 @@ import { minimatch } from "minimatch";
 import { describe, expect, test } from "vitest";
 import type { Workspace } from "@cloudflare/shell";
 import type { WorkspaceMount } from "./workspace-processor-contract.ts";
+import { prototypeFileVersion } from "./workspace-sandbox-prototype.ts";
 import {
   isPathUnder,
   literalDirectoryOfGlob,
@@ -131,6 +132,52 @@ function fakeRepo(tree: Record<string, string>) {
 // The workspace's fixed /workspace directory: the ONLY subtree where
 // unmounted private scratch may be written.
 const SCRATCH_ROOT = "/workspace";
+
+describe("sandbox prototype", () => {
+  test("metadata includes private bytes and whiteouts without reading any committed contents", async () => {
+    const { core, config } = subject();
+    await core.writeFile("/config/worker.ts", "private");
+    await core.deleteFile("/config/tasks/one.md");
+    config.repo.readFile = async () => {
+      throw new Error("metadata must not read committed blobs");
+    };
+    const files = await core.prototypeManifest("/config", async (repoPath) => {
+      expect(repoPath).toBe("/repos/config");
+      return [
+        { path: "worker.ts", size: 17, mode: "100644", version: "git:base" },
+        { path: "tasks/one.md", size: 5, mode: "100644", version: "git:deleted" },
+      ];
+    });
+    expect(files).toEqual([
+      {
+        path: "/config/worker.ts",
+        size: 7,
+        mode: "100644",
+        version: prototypeFileVersion(new TextEncoder().encode("private")),
+      },
+    ]);
+  });
+
+  test("two writers cannot both replace the same version; replay and deletion preserve state", async () => {
+    const { core } = subject();
+    const path = "/config/worker.ts";
+    const initial = await core.readFileBytes(path);
+    const expected = prototypeFileVersion(initial!);
+    const first = new TextEncoder().encode("first");
+    const second = new TextEncoder().encode("second");
+    const outcomes = await Promise.all([
+      core.prototypeReplace(path, expected, first),
+      core.prototypeReplace(path, expected, second),
+    ]);
+    expect(outcomes).toEqual(["applied", "conflict"]);
+    await core.prototypeReplace(path, expected, first);
+    expect(await core.readFile(path)).toBe("first");
+    await core.prototypeReplace(path, prototypeFileVersion(first), null);
+    expect(await core.readFile(path)).toBeNull();
+    expect(await core.readBase(path)).toBe("export default {}");
+    expect(await core.listAllFiles()).not.toContain(path);
+  });
+});
 
 const MOUNTS: Record<string, WorkspaceMount> = {
   "/config": { policy: "commit-to-main", repoPath: "/repos/config" },

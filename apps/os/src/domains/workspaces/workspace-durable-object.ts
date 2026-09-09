@@ -44,6 +44,10 @@ import { resolveAbsolutePath, WORKSPACE_DIRECTORY } from "./paths.ts";
 import type { CollabPull, CollabPush, CollabPushResult } from "./collab-engine.ts";
 import { CollabHost, type CollabPresenceFlat } from "./collab-host.ts";
 import { sqliteCollabStore } from "./collab-store.ts";
+import {
+  prototypeFileVersion,
+  type PrototypeWorkspaceFile,
+} from "./workspace-sandbox-prototype.ts";
 
 const PROCESSOR_SLUG = WorkspaceProcessorContract.slug;
 
@@ -460,6 +464,63 @@ export class WorkspaceV2DurableObject extends DurableObject<Env> {
   });
 
   // -- filesystem ----------------------------------------------------------------
+
+  /** Prototype: list one composed subtree without sending its contents to the container. */
+  async prototypeManifest(under: string): Promise<PrototypeWorkspaceFile[]> {
+    await this.#assertCreated();
+    under = this.#resolvePath(under);
+    await this.#effectiveMounts({ refresh: true });
+    const files = new Map(
+      (
+        await this.#core.prototypeManifest(under, (repoPath) =>
+          this.env.REPO.getByName(
+            DurableObjectNameCodec.stringify({
+              path: repoPath,
+              projectId: this.#name.projectId,
+            }),
+          ).prototypeFileMetadata(),
+        )
+      ).map((file) => [file.path, file]),
+    );
+    for (const path of this.#collab.livePaths()) {
+      if (!isPathUnder(path, under)) continue;
+      const bytes = await this.#collab.readFileBytes(path);
+      if (bytes === null) throw new Error(`Prototype live file changed while listing: ${path}`);
+      files.set(path, {
+        path,
+        mode: files.get(path)?.mode ?? "100644",
+        size: bytes.byteLength,
+        version: prototypeFileVersion(bytes),
+      });
+    }
+    const prefix = under === "/" ? "/" : `${under}/`;
+    return [...files.values()].map((file) => ({ ...file, path: file.path.slice(prefix.length) }));
+  }
+
+  /** Prototype writes are individually conditional and durable before acknowledgement. */
+  async prototypeReplace(
+    path: string,
+    expected: string | null,
+    bytes: Uint8Array | null,
+  ): Promise<"applied" | "conflict" | "unsupported"> {
+    await this.#assertCreated();
+    path = this.#resolvePath(path);
+    await this.#freshenRouting([path]);
+    return this.#collab.barrier(async () => {
+      // Coordinate session birth with the live/settled routing decision.
+      if (this.#collab.isLive(path)) {
+        if (bytes === null) return "unsupported";
+        let content: string;
+        try {
+          content = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+        } catch {
+          return "unsupported";
+        }
+        return this.#collab.prototypeReplace(path, expected, content);
+      }
+      return this.#core.prototypeReplace(path, expected, bytes);
+    });
+  }
 
   async readFile(path: string): Promise<string | null> {
     await this.#assertCreated();
