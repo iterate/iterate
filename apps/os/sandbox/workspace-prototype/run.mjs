@@ -13,20 +13,12 @@ const scope = createHash("sha256").update(`${input.workspacePath}\0${input.under
 const state = `/tmp/iterate-workspace-prototype/state/${scope}`;
 const pending = `/workspace/.iterate-workspace-prototype/${scope}`;
 await mkdir(state, { recursive: true });
-await mkdir(pending, { recursive: true });
-if ((await readdir(pending)).length) {
-  throw new Error(`Unsynchronized files remain in ${pending}; recover them before another command`);
-}
-const temp = await mkdtemp(`${state}/run-`);
-const lower = join(temp, "lower"),
-  merged = join(temp, "merged"),
-  upper = join(pending, "upper");
-for (const path of [lower, merged, upper, join(pending, "work")]) await mkdir(path);
-await writeFile(join(pending, "manifest.json"), JSON.stringify(input));
-await writeFile(join(temp, "files.json"), JSON.stringify(input.files));
 const original = new Map(input.files.map((file) => [file.path, file]));
 const mounts = [];
-let synchronized = false;
+let temp, lower, merged, upper, daemon, daemonExit, daemonError;
+let synchronized = false,
+  pendingOwned = false,
+  userCommandSpawned = false;
 
 function run(command, args) {
   const result = spawnSync(command, args, { stdio: "inherit" });
@@ -44,27 +36,8 @@ async function unmount(path) {
   throw new Error(`Mount remains busy after bounded cleanup: ${path}`);
 }
 
-const daemon = spawn(
-  "/tmp/iterate-workspace-prototype/fuse",
-  [
-    "--manifest",
-    join(temp, "files.json"),
-    "--mount",
-    lower,
-    "--cache",
-    join(state, "blobs"),
-    "--url",
-    endpoint,
-  ],
-  { stdio: "inherit" },
-);
-let daemonError;
-const daemonExit = new Promise((resolve) => daemon.once("exit", resolve));
-daemon.once("error", (error) => {
-  daemonError = error;
-});
 async function stopDaemon() {
-  if (daemon.exitCode !== null || daemon.pid === undefined) return;
+  if (!daemon || daemon.exitCode !== null || daemon.pid === undefined) return;
   daemon.kill("SIGTERM");
   if (
     !(await Promise.race([daemonExit.then(() => true), setTimeout(5_000, false, { ref: false })]))
@@ -84,6 +57,37 @@ async function stopOverlay() {
 }
 let commandError, cleanupError;
 try {
+  pendingOwned = (await mkdir(pending, { recursive: true })) !== undefined;
+  if ((await readdir(pending)).length)
+    throw new Error(
+      `Unsynchronized files remain in ${pending}; recover them before another command`,
+    );
+  pendingOwned = true;
+  temp = await mkdtemp(`${state}/run-`);
+  lower = join(temp, "lower");
+  merged = join(temp, "merged");
+  upper = join(pending, "upper");
+  for (const path of [lower, merged, upper, join(pending, "work")]) await mkdir(path);
+  await writeFile(join(pending, "manifest.json"), JSON.stringify(input));
+  await writeFile(join(temp, "files.json"), JSON.stringify(input.files));
+  daemon = spawn(
+    "/tmp/iterate-workspace-prototype/fuse",
+    [
+      "--manifest",
+      join(temp, "files.json"),
+      "--mount",
+      lower,
+      "--cache",
+      join(state, "blobs"),
+      "--url",
+      endpoint,
+    ],
+    { stdio: "inherit" },
+  );
+  daemonExit = new Promise((resolve) => daemon.once("exit", resolve));
+  daemon.once("error", (error) => {
+    daemonError = error;
+  });
   const deadline = Date.now() + 10_000;
   while (spawnSync("mountpoint", ["-q", lower]).status !== 0) {
     if (daemonError) throw daemonError;
@@ -119,6 +123,7 @@ try {
   }
   const started = performance.now();
   const command = spawn("bash", ["-lc", input.command], { cwd: merged, stdio: "inherit" });
+  userCommandSpawned = command.pid !== undefined;
   const exitCode = await new Promise((resolve, reject) => {
     command.once("error", reject);
     command.once("exit", (code, signal) =>
@@ -216,21 +221,36 @@ try {
   } catch (error) {
     cleanupError ??= error;
   }
-  if (!cleanupError) {
+  if (!cleanupError && temp) {
     try {
       await rm(temp, { recursive: true });
     } catch (error) {
       cleanupError = error;
     }
   }
-  if (!cleanupError && synchronized) {
+  if (!cleanupError && pendingOwned && (synchronized || !userCommandSpawned)) {
     try {
       await rm(pending, { recursive: true });
     } catch (error) {
       cleanupError = error;
     }
   }
-  if (cleanupError || !synchronized)
+  if (pendingOwned && (cleanupError || (userCommandSpawned && !synchronized))) {
+    try {
+      await writeFile(
+        join(pending, "failure.json"),
+        JSON.stringify({
+          commandSpawned: userCommandSpawned,
+          synchronized,
+          commandError: commandError?.message,
+          cleanupError: cleanupError?.message,
+        }),
+      );
+    } catch (error) {
+      cleanupError ??= error;
+    }
+  }
+  if (cleanupError || (userCommandSpawned && !synchronized))
     console.error(`Unsynchronized changes and their original manifest remain in ${pending}`);
 }
 if (commandError && cleanupError)
