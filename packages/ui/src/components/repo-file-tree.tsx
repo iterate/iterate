@@ -55,6 +55,7 @@ export function RepoFileTree({
   actions,
   className,
   header,
+  headerClassName,
   untitledExtension = "txt",
 }: {
   headPaths: string[];
@@ -65,6 +66,8 @@ export function RepoFileTree({
   className?: string;
   /** Rendered at the left of the toolbar row (a label, a breadcrumb). */
   header?: ReactNode;
+  /** Match the toolbar height to the surrounding app header. */
+  headerClassName?: string;
   /** The extension a freshly named file gets before the user types a name. */
   untitledExtension?: string;
 }) {
@@ -170,7 +173,7 @@ export function RepoFileTree({
 
   return (
     <div className={cn("flex min-h-0 flex-col", className)}>
-      <div className="flex shrink-0 items-center gap-0.5 border-b px-2 py-1">
+      <div className={cn("flex shrink-0 items-center gap-0.5 border-b px-2 py-1", headerClassName)}>
         {header === undefined ? null : <div className="min-w-0 flex-1">{header}</div>}
         <Button
           variant="ghost"

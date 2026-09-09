@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useEffectEvent, useRef, useState } from "react";
+import { toast } from "@iterate-com/ui/components/sonner";
 import type { TaskChangeSummary } from "../state.ts";
 import { fallbackCommitMessage } from "../tasks-model.ts";
 
@@ -55,9 +56,12 @@ export function useTaskCommit({
         const typed = (manualMessage ?? "").trim();
         await onCommit(typed === "" ? undefined : typed);
         setCommitMessage("");
-      } catch {
-        // Push the next autosave attempt out so a hard failure does not spin.
-        setAutoSaveDueAt(Date.now() + TASK_AUTO_SAVE_MS);
+      } catch (cause) {
+        // A failed publish needs attention; never retry it forever in the background.
+        setAutoSaveDueAt(undefined);
+        toast.error("Commit failed. Auto-commit paused.", {
+          description: cause instanceof Error ? cause.message : String(cause),
+        });
       } finally {
         commitInFlightRef.current = false;
       }

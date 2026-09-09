@@ -1,7 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import { ChevronDownIcon, GitCommitVerticalIcon, SparklesIcon, Undo2Icon } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
 import { Checkbox } from "@iterate-com/ui/components/checkbox";
+import { Field, FieldLabel } from "@iterate-com/ui/components/field";
 import { Input } from "@iterate-com/ui/components/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@iterate-com/ui/components/popover";
 import { cn } from "@iterate-com/ui/lib/utils";
@@ -68,8 +69,10 @@ export function CommitControls({
   onWriteCommitMessage: () => void;
   onDiscardAll: () => void;
 }) {
+  const autoCommitId = useId();
   const dirty = taskChanges.length > 0;
   const busy = commitPending || generatingMessage;
+  const commitDisabled = busy || !canCommit || !dirty;
   const [open, setOpen] = useState(false);
   // A successful commit (or discard) empties the change set: the review
   // popover has nothing left to say, so it closes — and STAYS closed until
@@ -82,41 +85,32 @@ export function CommitControls({
   }
 
   return (
-    <div className="flex items-center gap-2">
+    <>
       <Popover open={open} onOpenChange={setOpen}>
         <PopoverTrigger
-          render={
-            <Button
-              variant={dirty ? "default" : "outline"}
-              size="sm"
-              className="h-8"
-              disabled={!dirty}
-            />
-          }
+          render={<Button variant={dirty ? "default" : "outline"} size="sm" className="h-8" />}
         >
-          <GitCommitVerticalIcon aria-hidden className="size-3.5" />
+          <GitCommitVerticalIcon aria-hidden data-icon="inline-start" />
           Commit{dirty ? ` (${taskChanges.length})` : ""}
           {dirty && !commitPending && autoSaveDueAt !== undefined ? (
             <AutoSaveCountdown dueAt={autoSaveDueAt} />
           ) : null}
-          <ChevronDownIcon aria-hidden className="size-3" />
+          <ChevronDownIcon aria-hidden data-icon="inline-start" />
         </PopoverTrigger>
-        <PopoverContent align="end" className="w-96 p-3">
+        <PopoverContent align="end" className="w-96 max-w-[calc(100vw-1rem)] p-3">
           <div className="flex flex-col gap-2.5">
-            <label
-              htmlFor="auto-commit-toggle"
-              className="flex items-center gap-2 text-xs font-medium"
-            >
+            <Field orientation="horizontal">
               <Checkbox
-                id="auto-commit-toggle"
+                id={autoCommitId}
+                aria-label="Auto-commit after 60s"
                 checked={autoCommit}
                 onCheckedChange={(checked) => onAutoCommitChange(checked === true)}
               />
-              Auto-commit after 60s of quiet
-            </label>
+              <FieldLabel htmlFor={autoCommitId}>Auto-commit after 60s</FieldLabel>
+            </Field>
             <p className="text-xs text-muted-foreground">
-              {taskChanges.length} uncommitted task {taskChanges.length === 1 ? "file" : "files"}.
-              An empty message auto-generates one.
+              {taskChanges.length} uncommitted {taskChanges.length === 1 ? "file" : "files"}. An
+              empty message auto-generates one.
             </p>
             <ul className="flex max-h-44 flex-col gap-1 overflow-y-auto rounded-md border bg-muted/30 p-2">
               {taskChanges.map((change) => (
@@ -141,33 +135,33 @@ export function CommitControls({
               disabled={busy}
               className="h-8 text-xs"
             />
-            <div className="flex items-center gap-1.5">
+            <div className="flex flex-wrap items-center gap-1.5">
               <Button
                 variant="ghost"
                 size="sm"
-                disabled={busy || !canCommit}
+                disabled={commitDisabled}
                 onClick={onWriteCommitMessage}
                 className="text-muted-foreground"
               >
-                <SparklesIcon aria-hidden className="size-3.5" />
+                <SparklesIcon aria-hidden data-icon="inline-start" />
                 {generatingMessage ? "Writing…" : "Write message"}
               </Button>
               <Button
                 variant="ghost"
                 size="sm"
-                disabled={busy}
+                disabled={busy || !dirty}
                 className="text-muted-foreground hover:text-destructive"
                 onClick={() => {
-                  if (window.confirm("Discard all uncommitted task changes?")) onDiscardAll();
+                  if (window.confirm("Discard all uncommitted changes?")) onDiscardAll();
                 }}
               >
-                <Undo2Icon aria-hidden className="size-3.5" />
+                <Undo2Icon aria-hidden data-icon="inline-start" />
                 Discard all
               </Button>
               <Button
                 size="sm"
                 className="ml-auto"
-                disabled={busy || !canCommit || !dirty}
+                disabled={commitDisabled}
                 onClick={onMakeCommit}
               >
                 {commitPending ? "Committing…" : "Commit"}
@@ -176,7 +170,7 @@ export function CommitControls({
           </div>
         </PopoverContent>
       </Popover>
-    </div>
+    </>
   );
 }
 
@@ -217,7 +211,7 @@ export function DeletedTasksStrip({
         <span
           key={change.path}
           title={change.path}
-          className="inline-flex items-center gap-1.5 rounded-full border py-0.5 pr-1 pl-2.5 text-xs text-muted-foreground"
+          className="inline-flex flex-wrap items-center gap-1.5 rounded-full border py-0.5 pr-1 pl-2.5 text-xs text-muted-foreground"
         >
           <span className="size-1.5 rounded-full bg-red-500" aria-hidden />
           <span className="line-through">{change.title}</span>

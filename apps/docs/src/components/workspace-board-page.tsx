@@ -27,6 +27,7 @@ import {
   taskColumnState,
   taskPathForTitle,
 } from "../tasks-model.ts";
+import { WorkspacePresence } from "./workspace-presence.tsx";
 import {
   BoardBreadcrumbs,
   FilterControl,
@@ -46,41 +47,6 @@ export type BoardSearch = {
   q: string;
   task: string;
 };
-
-/** The corner presence strip: everyone with this board open — yourself
- * included, ringed in your own author color, even when alone. */
-function BoardPresence({
-  self,
-  clients,
-}: {
-  self: { clientId: string; name: string } | null;
-  clients: { clientId: string; name: string }[];
-}) {
-  const everyone = [
-    ...(self !== null && !clients.some((client) => client.clientId === self.clientId)
-      ? [self]
-      : []),
-    ...clients,
-  ];
-  if (everyone.length === 0) return null;
-  return (
-    <div className="mr-1 flex items-center -space-x-1.5">
-      {everyone.slice(0, 6).map((client) => (
-        <span
-          key={client.clientId}
-          title={client.name}
-          style={{ borderColor: authorColor(client.clientId, 1) }}
-          className="flex size-6 items-center justify-center rounded-full border-2 bg-background text-[10px] font-semibold uppercase"
-        >
-          {client.name.trim().slice(0, 1) || "?"}
-        </span>
-      ))}
-      {everyone.length > 6 ? (
-        <span className="pl-2 text-xs text-muted-foreground">+{everyone.length - 6}</span>
-      ) : null}
-    </div>
-  );
-}
 
 /**
  * The tasks board on the WORKSPACE mechanism: every read and write is the
@@ -107,10 +73,8 @@ export function WorkspaceBoardPage({
   const { repoPath, workspacePath } = address;
   const guest = isGuestWorkspacePath(workspacePath, repoPath);
   const board = useWorkspaceBoard(address);
-  // Auto-commit defaults OFF on the workspace board: every commit advances
-  // the redline baseline, and a 60s autosave would wipe "what everyone did"
-  // minute by minute. Committing is an explicit act here.
-  const [autoCommit, setAutoCommit] = useState(false);
+  // Owners auto-commit by default; guest views never publish another workspace.
+  const [autoCommit, setAutoCommit] = useState(true);
   const [eventsOpen, setEventsOpen] = useState(false);
   // Bumped on revert: the platform ends the file's session, so the open
   // editor must remount and reseed from the reverted content.
@@ -522,7 +486,7 @@ export function WorkspaceBoardPage({
 
   return (
     <>
-      <header className="flex h-11 shrink-0 items-center gap-2 border-b bg-background px-3">
+      <header className="flex h-14 shrink-0 items-center gap-2 border-b bg-background px-3">
         <SidebarTrigger className="-ml-1 md:hidden" />
         <BoardBreadcrumbs
           workspace={
@@ -539,7 +503,7 @@ export function WorkspaceBoardPage({
           </span>
         )}
         <div className="ml-auto flex shrink-0 items-center gap-1.5">
-          <BoardPresence self={board.self} clients={board.boardClients} />
+          <WorkspacePresence self={board.self} clients={board.boardClients} />
           <div className="hidden items-center gap-1.5 sm:flex">
             <WithTooltip label="Stream events">
               <Button

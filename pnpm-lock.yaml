@@ -1751,6 +1751,9 @@ importers:
       '@codemirror/lang-html':
         specifier: ^6.4.11
         version: 6.4.11
+      '@codemirror/lang-javascript':
+        specifier: ^6.2.5
+        version: 6.2.5
       '@codemirror/lang-markdown':
         specifier: ^6.5.0
         version: 6.5.0
@@ -1974,7 +1977,6 @@ packages:
         optional: true
       '@codemirror/legacy-modes':
         optional: true
-
 
   '@babel/code-frame@7.10.4':
     resolution: {integrity: sha512-vG6SvB6oYEhvgisZNFRmRCUkLz11c7rp+tbNTynGqc6mS1d5ATd/sGyV6W0KZZnXRKMTzZDRgQT3Ou9jhpAfUg==}
@@ -14253,7 +14255,6 @@ snapshots:
       '@codemirror/lang-json': 6.0.2
       '@codemirror/lang-sql': 6.10.0
       '@codemirror/lang-yaml': 6.1.2
-
 
   '@babel/code-frame@7.10.4':
     dependencies:

@@ -2,10 +2,10 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { EditorView, keymap, placeholder } from "@codemirror/view";
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
+import { syntaxHighlighting, defaultHighlightStyle } from "@codemirror/language";
 import { html } from "@codemirror/lang-html";
-import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
-import { highlightMarkdown } from "@atomic-editor/editor";
 import { ReviewComposer } from "@iterate-com/ui/components/document-comments";
+import { workspaceMarkdown } from "./workspace-markdown.ts";
 import { useCollabEditor } from "./use-collab-editor.ts";
 import type { CollabEditorApi, EditorReviewConfig } from "./collab-editor-api.ts";
 import { richMarkdown } from "./rich-markdown.ts";
@@ -73,9 +73,8 @@ export function WorkspaceDocumentEditor({
   const extensions = useMemo(
     () => [
       history(),
-      mode === "html"
-        ? html()
-        : markdown({ base: markdownLanguage, extensions: highlightMarkdown }),
+      syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
+      mode === "html" ? html() : workspaceMarkdown(),
       keymap.of([
         {
           key: "Mod-Enter",

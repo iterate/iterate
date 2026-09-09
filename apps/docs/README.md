@@ -36,7 +36,8 @@ commit.
 ## Review model
 
 - The default Preview tab renders Markdown or workspace-authored HTML.
-- Source opens the shared CodeMirror collaborative editor.
+- Source opens the shared CodeMirror collaborative editor. Both rich and source
+  editing highlight fenced `ts`, `typescript`, `tsx`, `js`, `javascript`, and `jsx` blocks.
 - **Track changes** opens Source with author-colored insertions, deletion
   markers, and hover attribution. The control is available from Preview too.
 - The comments rail always ends with **Comment on the whole document**.
@@ -61,11 +62,13 @@ script containing RFM, separate from the HTML body.
 `/jam` mints a fresh scratch workspace on the config repo, seeds one document
 under `jams/`, and opens it with the file tree beside the editor. The URL you
 land on IS the jam: share it, and everyone on it edits the same live files.
-**Invite AI** in the tree column births an agent at `/agents/jams/<id>` and
+**Invite AI** in the header toolbar births an agent at `/agents/jams/<id>` and
 briefs it with the workspace path. Its edits show up in the open editor as
-they land, and it reads your keystrokes through the same workspace. Nothing
-commits by itself unless you switch on auto-commit in the Commit popover: the
-workspace holds the jam until someone presses Commit.
+they land, and it reads your keystrokes through the same workspace. Owner workspaces auto-commit after 60 seconds by default. Use the shared
+Tasks **Commit** dropdown in the header to review changes, commit immediately,
+or turn auto-commit off, including before making any changes. A failed commit
+pauses the timer and reports the error; retry manually or toggle auto-commit
+to resume. Guest views never publish another owner’s workspace.
 
 ## Install into a project
 

@@ -79,9 +79,8 @@ export function AppSidebar() {
           remounts when opened — the same placement as apps/os. */}
       <CloseMobileSidebarOnNavigate />
       <Sidebar collapsible="icon">
-        {/* Collapsed: nudge the logo down so its center lines up with the page
-          header row — the same transition the os and tasks sidebars use. */}
-        <SidebarHeader className="transition-[padding] group-data-[collapsible=icon]:pt-3">
+        {/* Keep the workspace logo centered on the same row as the page header. */}
+        <SidebarHeader className="h-14 justify-center">
           <WorkspaceSwitcher workspacePath={workspacePath} boardView={boardView} />
         </SidebarHeader>
         <SidebarContent>
