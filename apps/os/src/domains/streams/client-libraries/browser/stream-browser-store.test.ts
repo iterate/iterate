@@ -239,11 +239,13 @@ describe("browser durable event synchronization", () => {
   it("re-copies history after another tab resets the shared database", async () => {
     const h = setup([event(1)]);
     await vi.waitFor(() => expect(h.store.getSnapshot().connectionStatus).toBe("receiving-events"));
+    expect(h.store.getSnapshot().clearVersion).toBe(0);
     h.db.exec(
       "DELETE FROM events; DELETE FROM event_type_counts; UPDATE stream_sync SET through_offset = 0, owner = 'reset'",
     );
     h.resetFromAnotherTab();
     await vi.waitFor(() => expect(h.openConnection).toHaveBeenCalledTimes(2), { timeout: 2000 });
     expect(h.db.prepare("SELECT offset FROM events").all()).toEqual([{ offset: 1 }]);
+    expect(h.store.getSnapshot().clearVersion).toBe(0);
   });
 });

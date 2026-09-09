@@ -173,7 +173,9 @@ function createStreamMirror(
   }
 
   const offDatabaseChange = streamDatabase.onChange((change) => {
-    if (change.kind === "clear" || change.kind === "reset") {
+    // Source identity/cursor replacement invalidates submitted offsets and drafts.
+    // A local cache reset keeps the same source and must preserve composer state.
+    if (change.kind === "clear") {
       publish({ clearVersion: snapshot.clearVersion + 1 });
     }
     if (change.kind === "reset") {

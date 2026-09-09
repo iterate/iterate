@@ -270,7 +270,7 @@ function BrowserDatabaseProjectStreamView({
 
       {layout === "fullPanel" ? null : (
         <StreamComposerFooter
-          key={store.streamDatabase.databasePath}
+          key={`${store.streamDatabase.databasePath}:${snapshot.clearVersion}`}
           autoFocusMessage={autoFocusMessageComposer}
           defaultComposerMode={defaultComposerMode}
           interrupt={interrupt}
