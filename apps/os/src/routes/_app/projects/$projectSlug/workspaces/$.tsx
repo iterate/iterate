@@ -103,7 +103,7 @@ function ProjectWorkspaceDetailContent() {
     </>
   );
   const panel = (
-    <div className="flex min-h-0 flex-1">
+    <div className="flex h-full min-h-0 min-w-0 flex-1 flex-row">
       <WorkspaceTree
         key={workspacePath}
         files={files}
@@ -111,7 +111,7 @@ function ProjectWorkspaceDetailContent() {
         selectedPath={selectedPath}
         onSelect={onSelect}
         onDocumentRevised={onDocumentRevised}
-        className="w-72 shrink-0 border-r bg-background"
+        className="h-full w-72 shrink-0 border-r bg-background"
       />
       <div className="flex min-w-0 flex-1 flex-col">
         {selectedPath === undefined ? (

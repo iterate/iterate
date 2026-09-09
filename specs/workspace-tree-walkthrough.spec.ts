@@ -9,8 +9,8 @@ import { test } from "./test-support/test.ts";
  *      mounted at repos/config beside the workspace's own directory.
  *   3. Edit the starter note (live collab editor), open a repo file
  *      read-only, watch the Commit control arm for the config mount.
- *   4. Change a repo file through the note's neighbour, toggle the diff
- *      against HEAD.
+ *   4. Edit a repo document; the config mount's Commit control arms;
+ *      toggle the diff against HEAD.
  *   5. OS: the same workspace at /projects/<slug>/workspaces/<path> —
  *      the shared tree, file view, and commit controls over the live stub.
  *
@@ -40,10 +40,19 @@ test("workspace tree walkthrough", async ({ page }) => {
   // 2. Docs: a fresh scratch workspace, the whole workspace in the tree.
   await page.goto(`${docsHost}/`);
   await passProjectGate(page);
+  // The picker lists workspaces over the app's socket once hydrated: a
+  // click that lands before then hits a server-rendered button with no
+  // handler yet, so wait for the list to replace its loading row.
+  await page
+    .getByRole("button", { name: /^\/workspaces\// })
+    .first()
+    .waitFor();
   await page.getByRole("button", { name: "New workspace" }).click();
   await page.getByRole("heading", { name: /notes\.md$/ }).waitFor({ timeout: 60_000 }); // timeout: docs vessel cold load + collab attach on the preview — past the spinner-waiter's 30s ceiling
-  // Tree rows carry their path; the compacted mount row is repos/config.
-  await page.locator('[data-item-path="repos/config"]').waitFor();
+  // Tree rows carry their path (directories in pierre's trailing-slash form);
+  // the compacted mount row comes first among everything under it.
+  const configRow = page.locator('[data-item-path^="repos/config"]').first();
+  await configRow.waitFor();
   await page.locator('[data-item-path^="workspaces/scratch/"]').first().waitFor();
 
   // 3. Type into the starter note; the own directory shows the addition,
@@ -55,17 +64,15 @@ test("workspace tree walkthrough", async ({ page }) => {
   await openRepoTreeFile(page, "repos/config/worker.ts");
   await page.getByRole("heading", { name: /worker\.ts$/ }).waitFor();
 
-  // 4. Add a file to the config mount from the tree: the mount's Commit
-  //    control arms, and the diff toggle shows the change against HEAD.
-  await page.locator('[data-item-path="repos/config"]').click({ button: "right" });
-  await page.getByRole("button", { name: "New file" }).first().click();
-  await page.keyboard.type("hello");
-  await page.keyboard.press("Enter");
-  await page.getByRole("heading", { name: /hello\.md$/ }).waitFor();
+  // 4. Edit a repo document: the config mount's Commit control arms, and
+  //    the diff toggle shows the change against HEAD.
+  await openRepoTreeFile(page, "repos/config/AGENTS.md");
+  await page.getByRole("heading", { name: /AGENTS\.md$/ }).waitFor();
   await page.getByText(/^live · v/).waitFor({ timeout: 60_000 }); // timeout: a second collab attach on the preview — past the spinner-waiter's 30s ceiling
   await page.locator(".cm-content").first().click();
-  await page.keyboard.type("# Hello from the workspace tree\n");
-  await page.getByRole("button", { name: /^Commit/ }).waitFor();
+  await page.keyboard.press("End");
+  await page.keyboard.type("\n\nEdited from the workspace tree.\n");
+  await page.getByRole("button", { name: /^Commit/ }).waitFor({ timeout: 15_000 }); // timeout: the control arms on the next status poll (5s cadence) after the session flushes — no loading UI for the spinner-waiter in between
   await page.getByRole("button", { name: "Show diff against HEAD" }).click();
   await page.getByText("against HEAD").waitFor();
   await page.getByRole("button", { name: "Show file" }).click();
@@ -74,8 +81,12 @@ test("workspace tree walkthrough", async ({ page }) => {
   const workspacePath = new URL(page.url()).searchParams.get("workspace") ?? "";
   await page.goto(`${osHost}/projects/${project}/workspaces`);
   await page.getByRole("link", { name: workspacePath }).click();
-  await openRepoTreeFile(page, "repos/config/hello.md");
-  await page.getByRole("heading", { name: /hello\.md$/ }).waitFor();
+  // The tree header names the workspace once the route rendered; the mount
+  // row follows once the first status lands (a loading row bridges both).
+  await page.locator("span[title]", { hasText: workspacePath }).waitFor();
+  await page.locator('[data-item-path^="repos/config"]').first().waitFor();
+  await openRepoTreeFile(page, "repos/config/AGENTS.md");
+  await page.getByRole("heading", { name: /AGENTS\.md$/ }).waitFor();
   await page.getByRole("button", { name: "Show diff against HEAD" }).click();
   await page.getByText("against HEAD").waitFor();
 });

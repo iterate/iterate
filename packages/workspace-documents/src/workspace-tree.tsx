@@ -1,5 +1,6 @@
 import { lazy, Suspense, useCallback } from "react";
 import type { RepoTreeActions } from "@iterate-com/ui/components/repo-file-tree";
+import { cn } from "@iterate-com/ui/lib/utils";
 import { withDocumentExtension } from "./file-kinds.ts";
 import type { useWorkspaceFiles } from "./workspace-files.ts";
 
@@ -88,8 +89,29 @@ export function WorkspaceTree({
   };
 
   return (
-    <div className={className}>
-      <Suspense fallback={<div className="h-14 border-b" />}>
+    // A column with a bounded height: the virtualized tree sizes its rows
+    // from its container, so a host gives this a height (h-full, h-svh).
+    <div className={cn("flex min-h-0 flex-col", className)}>
+      {/* The first status has not landed: nothing is known about the
+          workspace yet, and a visible loading state is what waits key on. */}
+      {files.headPaths === null ? (
+        <div
+          className="shrink-0 border-b px-3 py-2 text-xs text-muted-foreground"
+          data-spinner="true"
+        >
+          Loading workspace…
+        </div>
+      ) : null}
+      <Suspense
+        fallback={
+          <div
+            className="h-14 border-b px-3 py-4 text-xs text-muted-foreground"
+            data-spinner="true"
+          >
+            Loading tree…
+          </div>
+        }
+      >
         <RepoFileTree
           className="min-h-0 flex-1"
           headerClassName="h-14"
