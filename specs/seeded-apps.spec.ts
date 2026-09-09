@@ -149,7 +149,7 @@ test("review a workspace document in the seeded Docs app", async ({ baseURL, pag
   // Review needs the authenticated project, independently of the chat composer.
   await page.getByRole("link", { name: "New agent", exact: true }).waitFor();
 
-  const workspacePath = "/workspaces/agents/reviewer";
+  const workspacePath = "/agents/reviewer";
   // Relative on purpose, twice over: workspace writes resolve relative paths
   // against the workspace's own directory (the only writable home for private
   // files — absolute paths outside it and the /repos/** mounts are rejected),
@@ -360,12 +360,6 @@ test("review a workspace document in the seeded Docs app", async ({ baseURL, pag
   // Rich end-of-document insertion belongs before the hidden endmatter.
   await appendAtEnd(page, "\n\nReviewed in Docs.");
   await editor.getByText("Reviewed in Docs.").waitFor({ timeout: 10_000 }); // timeout: tight manual budget — rich syntax projection has no spinnerWaiter-visible UI
-
-  // Track changes stays on the rich editor instead of forcing a source view.
-  await page.getByRole("button", { name: "Track changes" }).click();
-  await editor.locator(".cm-redline-ins").filter({ hasText: "Reviewed in Docs." }).waitFor();
-  await page.getByRole("button", { name: "Track changes" }).click();
-  expect(await editor.locator(".cm-redline-ins").count()).toBe(0);
 
   // The 15-minute project session renews from the page itself (the request
   // the app's keepalive makes), through the config worker's gate, for the

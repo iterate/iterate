@@ -2,7 +2,7 @@
 
 #include "cli_speaker.h"
 #include "iterate/kit/voice_device_profile.h"
-#include "iterate/kit/voice_playback_clock.h"
+#include "iterate/kit/voice_playout.h"
 
 #include <assert.h>
 #include <stdio.h>
@@ -69,7 +69,8 @@ struct rig_result {
 
 struct rig {
   struct cli_paced_sink sink;
-  struct iterate_kit_voice_playback_clock clock;
+  struct iterate_kit_voice_playout playout;
+  uint64_t now_ms;
   uint64_t next_due_ms;
   struct rig_result result;
 };
@@ -336,34 +337,75 @@ static void rig_deliver_answer(uint32_t frames)
   }
 }
 
-static bool rig_feed_once(struct rig *rig, uint64_t now_ms)
+static uint32_t rig_ring_queued_bytes(void *context)
 {
-  assert(rig != NULL);
-  if (!iterate_kit_voice_playback_clock_ready(
-          &rig->clock, (uint32_t)rig_speaker.used)) {
-    ++rig->result.dry_ticks;
-    return false;
-  }
+  (void)context;
+  return (uint32_t)rig_speaker.used;
+}
+
+static enum iterate_kit_voice_playout_read rig_ring_read(
+    void *context, const uint8_t **frame, size_t *length)
+{
+  (void)context;
   if (cli_speaker_read(&rig_speaker, rig_frame, sizeof(rig_frame)) !=
       CLI_SPEAKER_OK) {
-    ++rig->result.dry_ticks;
-    if (iterate_kit_voice_playback_clock_empty(&rig->clock, now_ms) ==
-        ITERATE_KIT_VOICE_PLAYBACK_CONCEAL) {
-      ++rig->result.conceal_frames;
-      rig_record(rig, 1U);
-      (void)cli_paced_sink_offer(&rig->sink);
-    }
-    return false;
+    return ITERATE_KIT_VOICE_PLAYOUT_READ_DRY;
   }
-  if (iterate_kit_voice_playback_clock_frame(
-          &rig->clock, (uint32_t)rig_speaker.used,
-          0U, now_ms) != ITERATE_KIT_VOICE_PLAYBACK_PLAY) {
-    return false;
-  }
-  ++rig->result.frames_played;
+  *frame = rig_frame;
+  *length = sizeof(rig_frame);
+  return ITERATE_KIT_VOICE_PLAYOUT_READ_FRAME;
+}
+
+static uint64_t rig_sink_now_ms(void *context)
+{
+  const struct rig *rig = context;
+  assert(rig != NULL);
+  return rig->now_ms;
+}
+
+static enum iterate_kit_voice_playout_write rig_sink_write(
+    void *context, const uint8_t *frame, size_t length)
+{
+  struct rig *rig = context;
+  assert(rig != NULL && frame != NULL);
+  assert(length == sizeof(rig_frame));
+  (void)length;
+  rig_record(rig, 1U);
+  (void)cli_paced_sink_offer(&rig->sink);
+  return ITERATE_KIT_VOICE_PLAYOUT_WRITE_OK;
+}
+
+static bool rig_sink_conceal(void *context)
+{
+  struct rig *rig = context;
+  assert(rig != NULL);
   rig_record(rig, 1U);
   (void)cli_paced_sink_offer(&rig->sink);
   return true;
+}
+
+/*
+ * The CLI's own ring and converter, driven by the SHARED playout step — the
+ * one the board runs too — so this rig witnesses the step against real CLI
+ * modules rather than re-implementing the sequence beside it.
+ */
+static bool rig_feed_once(struct rig *rig, uint64_t now_ms)
+{
+  assert(rig != NULL);
+  const struct iterate_kit_voice_playout_ring ring = {
+    .context = rig,
+    .queued_bytes = rig_ring_queued_bytes,
+    .read = rig_ring_read,
+  };
+  const struct iterate_kit_voice_playout_sink sink = {
+    .context = rig,
+    .now_ms = rig_sink_now_ms,
+    .write = rig_sink_write,
+    .conceal = rig_sink_conceal,
+  };
+  rig->now_ms = now_ms;
+  return iterate_kit_voice_playout_step(&rig->playout, &ring, &sink) ==
+      ITERATE_KIT_VOICE_PLAYOUT_PLAYED;
 }
 
 static void rig_poll_playback(struct rig *rig, uint64_t now_ms)
@@ -402,7 +444,7 @@ static void rig_run(const struct rig_plan *plan, struct rig_result *out)
   assert(plan != NULL && out != NULL);
   memset(&rig_state, 0, sizeof(rig_state));
   cli_speaker_clear(&rig_speaker);
-  iterate_kit_voice_playback_clock_init(&rig_state.clock);
+  iterate_kit_voice_playout_init(&rig_state.playout);
   const struct cli_paced_sink_config config = {
     .frames_per_second = plan->pace_fps,
     .depth_frames = 0U,
@@ -418,6 +460,10 @@ static void rig_run(const struct rig_plan *plan, struct rig_result *out)
     rig_poll_playback(&rig_state, now_ms);
     now_ms += rig_step_ms(plan, now_ms);
   }
+  rig_state.result.frames_played = rig_state.playout.stats.frames_played;
+  rig_state.result.conceal_frames = rig_state.playout.stats.conceal_frames;
+  rig_state.result.dry_ticks = rig_state.playout.stats.waits_priming +
+      rig_state.playout.stats.waits_dry;
   rig_state.result.converter_underruns = rig_state.sink.underrun_frames;
   rig_state.result.converter_refusals = rig_state.sink.refused_frames;
   rig_state.result.converter_emitted =

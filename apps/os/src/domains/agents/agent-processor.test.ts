@@ -1449,7 +1449,7 @@ describe("AgentProcessor script execution", () => {
       // and answers with the fully-qualified path it wrote.
       writeWorkspaceFile: async (input) => {
         written.push(input);
-        return { absolutePath: `/workspaces/agents/main/${input.path}` };
+        return { absolutePath: `/workspace/${input.path}` };
       },
     });
     await h.play(
@@ -1490,7 +1490,7 @@ describe("AgentProcessor script execution", () => {
     );
     // The notice names exactly the fully-qualified path the dep answered with.
     expect(rendered!.payload.content).toContain(
-      `saved in your workspace at "/workspaces/agents/main/${written[0]!.path}"`,
+      `saved in your workspace at "/workspace/${written[0]!.path}"`,
     );
     // Raw string result: no json fence label, no JSON escaping.
     expect(rendered!.payload.content).not.toContain("```json");
@@ -1663,7 +1663,7 @@ describe("AgentProcessor script execution", () => {
   it("an oversized result's render points at the preamble's typed loader instead of .data", async () => {
     const h = makeAgentHarness(undefined, {
       writeWorkspaceFile: async (input) => ({
-        absolutePath: `/workspaces/agents/main/${input.path}`,
+        absolutePath: `/workspace/${input.path}`,
       }),
     });
     await h.play(
@@ -1745,7 +1745,7 @@ describe("AgentProcessor script execution", () => {
     const h = makeAgentHarness(undefined, {
       writeWorkspaceFile: async (input) => {
         written.push(input);
-        return { absolutePath: `/workspaces/agents/main/${input.path}` };
+        return { absolutePath: `/workspace/${input.path}` };
       },
     });
     await h.play(
@@ -1788,7 +1788,7 @@ describe("AgentProcessor script execution", () => {
       item.payload.content.startsWith("Your script returned"),
     );
     expect(rendered!.payload.content).toContain(
-      `saved in your workspace at "/workspaces/agents/main/${written[0]!.path}"`,
+      `saved in your workspace at "/workspace/${written[0]!.path}"`,
     );
     // Spilled for HISTORY (tiny historyLimit) but small enough to embed in
     // the preamble: the row has `.data`, not `.load` — the recipe must match.
@@ -1810,7 +1810,7 @@ describe("AgentProcessor script execution", () => {
     const h = makeAgentHarness(undefined, {
       writeWorkspaceFile: async (input) => {
         written.push(input);
-        return { absolutePath: `/workspaces/agents/main/${input.path}` };
+        return { absolutePath: `/workspace/${input.path}` };
       },
     });
     await h.play(

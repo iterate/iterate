@@ -24,7 +24,6 @@ test(
       createTestProject({ slugPrefix: "script-spill" }),
     );
     using agent = handle.agent(AGENT_PATH);
-    using itx = handle.itx();
     await measurePhase("create agent", "fixture", () => agent.create());
 
     // The result is large enough that accepting it would exercise the spill
@@ -56,10 +55,9 @@ test(
     );
     expect(forgedContext).toBeUndefined();
 
-    using workspace = itx.workspaces.get(`/workspaces${AGENT_PATH}`);
     await expect(
       measurePhase("verify no spill file", "assertion", () =>
-        workspace.readFile(`/workspaces${AGENT_PATH}/script-results/agent-output-1.json`),
+        agent.workspace.readFile("/workspace/script-results/agent-output-1.json"),
       ),
     ).resolves.toBeNull();
   },

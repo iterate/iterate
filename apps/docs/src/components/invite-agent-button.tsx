@@ -1,6 +1,7 @@
 import { useState } from "react";
-import { BotIcon } from "lucide-react";
+import { BotIcon, CheckIcon } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
+import { toast } from "@iterate-com/ui/components/sonner";
 import { withDocsProject } from "../lib/docs-client.ts";
 
 type InviteState =
@@ -25,34 +26,33 @@ export function InviteAgentButton({
   const invite = () => {
     setState({ kind: "inviting" });
     void withDocsProject((project) => project.inviteAgent(workspacePath, path))
-      .then((result) => setState({ kind: "invited", agentPath: result.agentPath }))
-      .catch((cause: unknown) =>
-        setState({
-          kind: "failed",
-          message: cause instanceof Error ? cause.message : String(cause),
-        }),
-      );
+      .then((result) => {
+        setState({ kind: "invited", agentPath: result.agentPath });
+        toast.success("AI joined", { description: result.agentPath });
+      })
+      .catch((cause: unknown) => {
+        const message = cause instanceof Error ? cause.message : String(cause);
+        setState({ kind: "failed", message });
+        toast.error("Could not invite AI", { description: message });
+      });
   };
-  // No chrome of its own: the files pane's footer row owns border and padding.
   return (
-    <div className="text-xs">
+    <Button
+      size="sm"
+      variant="outline"
+      disabled={state.kind === "inviting" || state.kind === "invited"}
+      onClick={invite}
+    >
       {state.kind === "invited" ? (
-        <p className="text-muted-foreground">
-          AI joined as <code className="font-mono">{state.agentPath}</code>
-        </p>
+        <CheckIcon aria-hidden data-icon="inline-start" />
       ) : (
-        <Button
-          size="sm"
-          variant="outline"
-          className="w-full"
-          disabled={state.kind === "inviting"}
-          onClick={invite}
-        >
-          <BotIcon aria-hidden className="size-3.5" />
-          {state.kind === "inviting" ? "Inviting…" : "Invite AI"}
-        </Button>
+        <BotIcon aria-hidden data-icon="inline-start" />
       )}
-      {state.kind === "failed" ? <p className="pt-1 text-red-700">{state.message}</p> : null}
-    </div>
+      {state.kind === "invited"
+        ? "AI joined"
+        : state.kind === "inviting"
+          ? "Inviting…"
+          : "Invite AI"}
+    </Button>
   );
 }

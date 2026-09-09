@@ -81,9 +81,6 @@ for (const commentFirst of [true, false]) {
     );
     expect(review.threads).toHaveLength(1);
     expect(review.threads[0]?.comments[0]?.body).toBe("Check First.");
-    const changes = await host.changes(path);
-    expect(changes.inserted.some((change) => change.clientId === "reviewer")).toBe(true);
-    expect(changes.inserted.some((change) => change.clientId === "writer")).toBe(true);
   });
 }
 

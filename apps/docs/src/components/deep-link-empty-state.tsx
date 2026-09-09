@@ -7,25 +7,17 @@ import { SidebarTrigger } from "@iterate-com/ui/components/sidebar";
 import { withDocsProject } from "../lib/docs-client.ts";
 
 /**
- * Docs home — the workspace picker. Pick (or type) a workspace path, then
- * one of its documents; or mint an ephemeral scratch workspace seeded with
- * a starter note. Deep links (?workspace=&path=) keep working unchanged;
- * this page exists for the human who arrives without one.
+ * Docs home — the workspace picker: every workspace of the project (agents'
+ * included), a path you know, or a fresh scratch workspace seeded with a
+ * starter note. Opening one lands on its file tree; deep links
+ * (?workspace=&path=) keep working unchanged.
  */
-export function DeepLinkEmptyState({ workspacePath }: { workspacePath?: string }) {
+export function DeepLinkEmptyState() {
   const navigate = useNavigate();
   const [workspaces, setWorkspaces] = useState<{ path: string; createdAt: string }[] | null>(null);
   const [listError, setListError] = useState<string | null>(null);
-  const [chosen, setChosen] = useState(workspacePath ?? "");
-
-  // The sidebar switcher navigates here with `?workspace=` (or clears it via
-  // View all workspaces) while this page is already mounted — follow the
-  // address both ways, don't keep the stale choice.
-  useEffect(() => {
-    setChosen(workspacePath ?? "");
-  }, [workspacePath]);
-  const [documents, setDocuments] = useState<string[] | null>(null);
-  const [documentsError, setDocumentsError] = useState<string | null>(null);
+  const [chosen, setChosen] = useState("");
+  const canOpen = chosen.startsWith("/workspaces/") || chosen.startsWith("/agents/");
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
 
@@ -43,41 +35,13 @@ export function DeepLinkEmptyState({ workspacePath }: { workspacePath?: string }
     };
   }, []);
 
-  useEffect(() => {
-    if (!chosen.startsWith("/workspaces/")) {
-      setDocuments(null);
-      setDocumentsError(null);
-      return;
-    }
-    let cancelled = false;
-    setDocuments(null);
-    setDocumentsError(null);
-    // Debounced: a keystroke mid-path is not a workspace address yet —
-    // fetching every prefix flashes "not found" errors and walks the tree
-    // once per attempt. List-row clicks land here too, a beat later.
-    const timer = setTimeout(() => {
-      void withDocsProject((project) => project.documents(chosen))
-        .then((list) => {
-          if (!cancelled) setDocuments(list);
-        })
-        .catch((error: unknown) => {
-          if (!cancelled) setDocumentsError(error instanceof Error ? error.message : String(error));
-        });
-    }, 350);
-    return () => {
-      cancelled = true;
-      clearTimeout(timer);
-    };
-  }, [chosen]);
-
-  const open = (workspace: string, path: string) =>
-    void navigate({ to: "/", search: { workspace, path } });
-
   const createScratch = () => {
     setCreating(true);
     setCreateError(null);
     void withDocsProject((project) => project.createWorkspace())
-      .then(({ workspacePath, path }) => open(workspacePath, path))
+      .then(({ workspacePath, path }) =>
+        navigate({ to: "/", search: { workspace: workspacePath, path } }),
+      )
       .catch((error: unknown) => {
         setCreateError(error instanceof Error ? error.message : String(error));
         setCreating(false);
@@ -95,8 +59,9 @@ export function DeepLinkEmptyState({ workspacePath }: { workspacePath?: string }
             </div>
             <h1 className="text-xl font-semibold tracking-tight">Workspaces</h1>
             <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-              Pick a workspace — every document lives in one. Agents share theirs through review
-              links; New workspace mints you an ephemeral one.
+              Every file lives in a workspace: every project repo mounted under repos/, the
+              workspace&rsquo;s own files beside them. Agents have one each; New workspace mints you
+              an ephemeral one.
             </p>
           </div>
           <div className="flex flex-col items-end gap-1">
@@ -114,37 +79,27 @@ export function DeepLinkEmptyState({ workspacePath }: { workspacePath?: string }
           <label htmlFor="workspace-path" className="text-xs font-medium text-muted-foreground">
             Open a workspace path you know
           </label>
-          <Input
-            id="workspace-path"
-            value={chosen}
-            onChange={(event) => setChosen(event.currentTarget.value.trim())}
-            placeholder="/workspaces/agents/…"
-            spellCheck={false}
-            className="mt-1 font-mono text-sm"
-          />
-          {documentsError !== null && <p className="mt-1 text-xs text-red-700">{documentsError}</p>}
-          {documents !== null && (
-            <ul className="mt-2 divide-y rounded-lg border bg-background">
-              {documents.length === 0 ? (
-                <li className="px-4 py-2.5 text-sm text-muted-foreground">
-                  No documents in this workspace&rsquo;s own directory yet — agents create them, or
-                  open a mount file through a deep link.
-                </li>
-              ) : (
-                documents.map((path) => (
-                  <li key={path}>
-                    <button
-                      type="button"
-                      onClick={() => open(chosen, path)}
-                      className="w-full px-4 py-2.5 text-left font-mono text-sm transition-colors hover:bg-muted/50"
-                    >
-                      {path}
-                    </button>
-                  </li>
-                ))
-              )}
-            </ul>
-          )}
+          <form
+            className="mt-1 flex gap-2"
+            onSubmit={(event) => {
+              event.preventDefault();
+              if (canOpen) {
+                void navigate({ to: "/", search: { workspace: chosen } });
+              }
+            }}
+          >
+            <Input
+              id="workspace-path"
+              value={chosen}
+              onChange={(event) => setChosen(event.currentTarget.value.trim())}
+              placeholder="/agents/…"
+              spellCheck={false}
+              className="font-mono text-sm"
+            />
+            <Button type="submit" variant="outline" disabled={!canOpen}>
+              Open
+            </Button>
+          </form>
         </div>
 
         <section className="rounded-xl border bg-background shadow-xs">

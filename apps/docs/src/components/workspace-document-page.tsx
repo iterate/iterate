@@ -1,15 +1,13 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  CheckIcon,
-  Code2Icon,
-  CopyIcon,
-  FileTextIcon,
-  MessageSquarePlusIcon,
-  PenLineIcon,
-  SparklesIcon,
-} from "lucide-react";
-import { Button } from "@iterate-com/ui/components/button";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@iterate-com/ui/components/tooltip";
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { SidebarTrigger } from "@iterate-com/ui/components/sidebar";
 import { Spinner } from "@iterate-com/ui/components/spinner";
 import { DocumentComments } from "@iterate-com/ui/components/document-comments";
@@ -19,21 +17,16 @@ import {
   annotationsSourceForHtmlDocument,
   transformHtmlDocumentAnnotations,
 } from "@iterate-com/workspace-documents/html-annotations";
-import { authorColor, authorLabel } from "@iterate-com/workspace-documents/collab";
 import { commentIdentityFor } from "@iterate-com/workspace-documents/identity";
 import { useDocumentReview } from "@iterate-com/workspace-documents/review";
 import { Drawer, DrawerContent, DrawerTitle } from "@iterate-com/ui/components/drawer";
-import type { WorkspaceDocumentTransport } from "@iterate-com/workspace-documents/types";
-import {
-  isSessionTransportError,
-  withDocsProject,
-  withDocsProjectOnce,
-} from "../lib/docs-client.ts";
+import { isSessionTransportError, withDocsProject } from "../lib/docs-client.ts";
+import { workspaceTransport } from "../lib/project-rpc.ts";
 import { withRetries } from "../lib/retry.ts";
 import type { DocsUser, WorkspaceDocumentSnapshot } from "../lib/docs-api.ts";
 import { DocumentError } from "./document-error.tsx";
 import { HtmlDocumentPreview } from "./html-document-preview.tsx";
-import { ViewButton } from "./view-button.tsx";
+import { DocumentToolbar } from "./document-toolbar.tsx";
 
 const WorkspaceDocumentEditor = lazy(async () => {
   const module = await import("@iterate-com/workspace-documents/editor");
@@ -43,9 +36,11 @@ const WorkspaceDocumentEditor = lazy(async () => {
 export function WorkspaceDocumentPage({
   workspacePath,
   path,
+  actions,
 }: {
   workspacePath: string;
   path: string;
+  actions?: ReactNode;
 }) {
   const [loaded, setLoaded] = useState<{
     snapshot: WorkspaceDocumentSnapshot;
@@ -61,9 +56,7 @@ export function WorkspaceDocumentPage({
   const [source, setSource] = useState("");
   const [view, setView] = useState<"rich" | "source">("rich");
   const [status, setStatus] = useState("connecting…");
-  const [showChanges, setShowChanges] = useState(false);
   const [commentsOpen, setCommentsOpen] = useState(false);
-  const [copied, setCopied] = useState(false);
   // Everyone with a live caret on this document, self first — delivered by
   // the editor's collab session whenever the presence generation advances
   // (join announces + 25s heartbeats keep idle readers present).
@@ -82,11 +75,24 @@ export function WorkspaceDocumentPage({
     // waking, a colo hiccup): the shared client re-dials, and this waits
     // out a network that is still coming back. An application error (no
     // such document) is final at once.
+    // A relative path is a document in the workspace's own directory; an
+    // absolute one is a fully qualified platform path (a mount file). The
+    // resolved form is the collab session's identity, shared with agents.
+    const resolvedPath = path.startsWith("/") ? path : `/workspace/${path}`;
     void withRetries(
       () =>
         withDocsProject(async (project) => {
-          const workspace = project.workspace(workspacePath);
-          const [snapshot, user] = await Promise.all([workspace.inspect(path), project.whoami()]);
+          const [content, user] = await Promise.all([
+            project.workspace(workspacePath).readFile(resolvedPath),
+            project.whoami(),
+          ]);
+          if (content === null) throw new Error(`document "${resolvedPath}" does not exist`);
+          const snapshot: WorkspaceDocumentSnapshot = {
+            content,
+            format: /\.html?$/i.test(resolvedPath) ? "html" : "markdown",
+            path: resolvedPath,
+            workspacePath,
+          };
           return { snapshot, user };
         }),
       { attempts: 3, delayMs: (attempt) => attempt * 1_500, shouldRetry: isSessionTransportError },
@@ -106,14 +112,7 @@ export function WorkspaceDocumentPage({
     };
   }, [path, workspacePath, loadAttempt]);
 
-  const transport = useMemo<WorkspaceDocumentTransport>(
-    () => ({
-      run: (operation) => withDocsProject((project) => operation(project.workspace(workspacePath))),
-      runOnce: (operation) =>
-        withDocsProjectOnce((project) => operation(project.workspace(workspacePath))),
-    }),
-    [workspacePath],
-  );
+  const transport = useMemo(() => workspaceTransport(workspacePath), [workspacePath]);
 
   const onLiveContent = useCallback((_path: string, content: string) => {
     setSource(content);
@@ -170,13 +169,6 @@ export function WorkspaceDocumentPage({
     },
   };
 
-  const copyLink = () => {
-    void navigator.clipboard.writeText(window.location.href).then(() => {
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 1_500);
-    });
-  };
-
   if (loadError !== null) {
     return (
       <DocumentError
@@ -199,124 +191,38 @@ export function WorkspaceDocumentPage({
     );
   }
 
-  const displayName =
-    loaded.user.name ?? loaded.user.email ?? loaded.user.userId ?? identity?.authorDisplay;
+  const displayName = identity?.authorDisplay ?? identity?.author;
 
   // div, not main: SidebarInset already renders the main landmark.
   return (
     <div className="flex min-h-svh flex-col bg-background lg:h-svh lg:overflow-hidden">
-      {/* The tasks bar's language: one slim h-11 strip, the document path as
-          the only text (sidebar carries workspace + view), icon-only
-          controls with tooltips, status shown only while it is news. */}
-      <header className="flex h-11 shrink-0 items-center gap-2 border-b bg-background px-3">
-        <SidebarTrigger className="-ml-1 md:hidden" />
-        <FileTextIcon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
-        <h1 className="min-w-0 truncate font-mono text-xs">
-          {loaded.snapshot.path.startsWith(`${workspacePath}/`)
-            ? loaded.snapshot.path.slice(workspacePath.length + 1)
-            : loaded.snapshot.path}
-        </h1>
-        <div className="ml-auto flex shrink-0 items-center gap-1.5">
-          <DocumentPresence peers={peers} />
-          {/* live is the expected state — visually silent, but kept in the
-              accessibility tree (it is the only place the sync state lives). */}
-          <span
-            className={
-              status.startsWith("live")
-                ? "sr-only"
-                : "hidden max-w-40 truncate text-[11px] text-muted-foreground md:block"
+      <DocumentToolbar
+        path={
+          loaded.snapshot.path.startsWith("/workspace/")
+            ? loaded.snapshot.path.slice("/workspace/".length)
+            : loaded.snapshot.path
+        }
+        format={loaded.snapshot.format}
+        peers={peers}
+        status={status}
+        onReconnect={() => {
+          setStatus("connecting…");
+          setEditorEpoch((epoch) => epoch + 1);
+        }}
+        canComment={Boolean(review.comments.onAction)}
+        onComment={() => {
+          if (window.matchMedia("(max-width: 1023px)").matches) {
+            if (commentsOpen) mobileCommentsRef.current?.focusDocumentComment();
+            else {
+              focusMobileComposer.current = true;
+              setCommentsOpen(true);
             }
-          >
-            {status}
-          </span>
-          {/* The editor could not open, or its sync loop gave up (a long
-              outage): remount it. Its teardown pushes whatever it still
-              holds over the shared session (which may have been re-dialed
-              since), and the fresh editor reopens from the server. */}
-          {status.startsWith("disconnected") || status.startsWith("failed") ? (
-            <Button
-              size="sm"
-              variant="outline"
-              className="h-8 text-xs"
-              onClick={() => {
-                setStatus("connecting…");
-                setEditorEpoch((epoch) => epoch + 1);
-              }}
-            >
-              Reconnect
-            </Button>
-          ) : null}
-          <WithTooltip
-            label={
-              review.comments.onAction ? "Comment on document" : "Comments are currently read-only"
-            }
-          >
-            <Button
-              size="sm"
-              className="h-8 w-8 px-0"
-              aria-label="Comment on document"
-              disabled={!review.comments.onAction}
-              onClick={() => {
-                if (window.matchMedia("(max-width: 1023px)").matches) {
-                  if (commentsOpen) mobileCommentsRef.current?.focusDocumentComment();
-                  else {
-                    focusMobileComposer.current = true;
-                    setCommentsOpen(true);
-                  }
-                } else commentsRef.current?.focusDocumentComment();
-              }}
-            >
-              <MessageSquarePlusIcon aria-hidden className="size-3.5" />
-            </Button>
-          </WithTooltip>
-          <WithTooltip label={showChanges ? "Hide changes" : "Track changes"}>
-            <Button
-              variant={showChanges ? "secondary" : "outline"}
-              size="icon-sm"
-              aria-label="Track changes"
-              aria-pressed={showChanges}
-              onClick={() => setShowChanges((value) => !value)}
-            >
-              <SparklesIcon />
-            </Button>
-          </WithTooltip>
-          <WithTooltip label={copied ? "Copied!" : "Copy share link"}>
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-8 w-8 px-0"
-              aria-label="Copy share link"
-              onClick={copyLink}
-            >
-              {copied ? (
-                <CheckIcon aria-hidden className="size-3.5" />
-              ) : (
-                <CopyIcon aria-hidden className="size-3.5" />
-              )}
-            </Button>
-          </WithTooltip>
-          <div className="flex rounded-lg border bg-muted/30 p-0.5">
-            <WithTooltip label="Rich editing">
-              <ViewButton
-                active={view === "rich"}
-                label="Rich editing"
-                onClick={() => setView("rich")}
-              >
-                <PenLineIcon aria-hidden className="size-3.5" />
-              </ViewButton>
-            </WithTooltip>
-            <WithTooltip label={`Source (${loaded.snapshot.format})`}>
-              <ViewButton
-                active={view === "source"}
-                label="Source"
-                onClick={() => setView("source")}
-              >
-                <Code2Icon aria-hidden className="size-3.5" />
-              </ViewButton>
-            </WithTooltip>
-          </div>
-        </div>
-      </header>
+          } else commentsRef.current?.focusDocumentComment();
+        }}
+        view={view}
+        onViewChange={setView}
+        actions={actions}
+      />
 
       <div className="grid min-h-0 flex-1 lg:grid-cols-[minmax(0,1fr)_23rem]">
         <section className="relative flex min-h-[60svh] min-w-0 flex-col bg-background lg:min-h-0">
@@ -346,10 +252,10 @@ export function WorkspaceDocumentPage({
                 transport={transport}
                 displayName={displayName}
                 path={path}
+                workspacePath={loaded.snapshot.path}
                 mode={loaded.snapshot.format}
                 presentation={view}
                 review={loaded.snapshot.format === "markdown" ? editorReview : undefined}
-                redline={showChanges}
                 emptyPlaceholder={
                   loaded.snapshot.format === "html" ? "Write HTML…" : "Write in Markdown…"
                 }
@@ -388,43 +294,5 @@ export function WorkspaceDocumentPage({
         </Drawer>
       </div>
     </div>
-  );
-}
-
-/**
- * The presence avatar strip, ported from the tasks board: everyone with a
- * live caret on this document — yourself included, first, ringed in your own
- * author color — with the display name decoded from each session's clientId.
- */
-function DocumentPresence({ peers }: { peers: { self: string; clientIds: string[] } | null }) {
-  if (peers === null) return null;
-  const everyone = [peers.self, ...peers.clientIds.filter((clientId) => clientId !== peers.self)];
-  return (
-    <div className="mr-1 flex items-center -space-x-1.5">
-      {everyone.slice(0, 6).map((clientId) => (
-        <span
-          key={clientId}
-          title={authorLabel(clientId)}
-          style={{ borderColor: authorColor(clientId, 1) }}
-          className="flex size-6 items-center justify-center rounded-full border-2 bg-background text-[10px] font-semibold uppercase"
-        >
-          {authorLabel(clientId).trim().slice(0, 1) || "?"}
-        </span>
-      ))}
-      {everyone.length > 6 ? (
-        <span className="pl-2 text-xs text-muted-foreground">+{everyone.length - 6}</span>
-      ) : null}
-    </div>
-  );
-}
-
-/** Icon-only controls get their labels back as hover tooltips — the same
- * pattern as the tasks bar; shared properly when the apps combine. */
-function WithTooltip({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <Tooltip>
-      <TooltipTrigger render={<span className="inline-flex" />}>{children}</TooltipTrigger>
-      <TooltipContent side="bottom">{label}</TooltipContent>
-    </Tooltip>
   );
 }

@@ -9,7 +9,6 @@ import { parsePromptSections, type StreamEventInput } from "iterate/processors";
 import { PROJECT_REPO_INITIAL_FILES } from "../repos/config-repo-template.generated.ts";
 import { buildFacetProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
 import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
-import { agentWorkspacePath } from "../workspaces/utils.ts";
 import { CapabilityHostProcessorContract } from "../capability-host/capability-host-processor-contract.ts";
 import {
   capabilityHostCreationEvents,
@@ -368,9 +367,9 @@ export function agentCreationForPath<
     payload: {
       path: ["workspace"],
       type: "itx-call",
-      expression: ["workspaces", ["get", agentWorkspacePath(agentPath)]],
+      expression: ["workspaces", ["get", agentPath]],
       instructions:
-        `THIS agent's own workspace — your private working copy of the project's one path namespace: a mount-routed, copy-on-write filesystem living in a Durable Object (no container, no clone, always warm). Every project repo is mounted at its own path — the config repo at "/repos/config", any repo at its "/repos/<name>", freshly created repos just appear. Reads see each repo's latest main until you shadow a path; writes/edits/deletes stay private until committed (readFile/writeFile/edit/glob/listAllFiles). Paths are absolute and fully qualified; RELATIVE paths resolve to your own directory "${agentWorkspacePath(agentPath)}" — private scratch, never committable, not visible to anyone else. ` +
+        `THIS agent's own workspace — your private working copy of the project's one path namespace: a mount-routed, copy-on-write filesystem living in a Durable Object (no container, no clone, always warm). Every project repo is mounted at its own path — the config repo at "/repos/config", any repo at its "/repos/<name>", freshly created repos just appear. Reads see each repo's latest main until you shadow a path; writes/edits/deletes stay private until committed (readFile/writeFile/edit/glob/listAllFiles). Paths are absolute and fully qualified; RELATIVE paths resolve to "/workspace" — private scratch, never committable, not visible to anyone else. ` +
         'To ship changes: await itx.workspace.git.commit({ message, scope: "/repos/<name>" }) — ONE repo\'s changes become a commit straight on ITS main branch (config-repo commits redeploy the project worker/website automatically; no branches, no push). scope is required whenever more than one repo is dirty. Deviate a mount via getConfig/configure (e.g. { policy: "read-only" } on reference clones).',
     },
   });
@@ -435,7 +434,7 @@ export function agentCreationForPath<
           ? `- Project id: ${projectId}`
           : `- Project: ${JSON.stringify(project.name)} (slug ${project.slug}, id ${projectId})${project.workerUrl === undefined ? "" : ` — the project worker/website serves ${project.workerUrl}`}`,
         `- Your agent stream path: ${agentPath} (your itx scope; your transcript lives here)`,
-        `- Your workspace directory: ${agentWorkspacePath(agentPath)} — private scratch; relative workspace paths resolve there. Every project repo is mounted in your workspace at its own path.`,
+        `- Your workspace directory: /workspace — private scratch; relative workspace paths resolve there. Every project repo is mounted in your workspace at its own path.`,
         // One seed list, marked non-exhaustive, and ONE rule for choosing
         // between the two write doors — the model was repeating this line
         // verbatim to users as the repo's full contents.

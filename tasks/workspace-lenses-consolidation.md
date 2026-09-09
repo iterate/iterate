@@ -133,6 +133,24 @@ docs, {workspace, repo, task?} board). Remaining from the /goal list: the
 pierre-style tree + diff views (item 3's extraction) and the root-folder
 constraint.
 
+**DONE (2026-09-09): the workspace is the tree.** A workspace is its path and
+nothing else: the board is a view on ANY workspace (`/w?workspace=<path>&repo=`),
+the minted `/workspaces/tasks/<id>~<repo-hash>` naming is gone, and "New
+workspace" on the board home is an ordinary scratch workspace opened on a
+repo's task files; the Docs vessel forwards the platform
+workspace surface verbatim (fs, `git`, `collab` as sub-targets) and the shared
+transport type is that surface; the Docs view shows the WHOLE workspace
+(every mount plus the own directory) with listings loaded per mount and one
+Commit control per dirty mount; the tree, files hook, read-only file view,
+diff-against-HEAD (CodeMirror merge view), commit controls and file kinds
+live in `@iterate-com/workspace-documents`; apps/os renders them at
+`/projects/<slug>/workspaces/<path>` over the live itx stub, with an "Open
+workspace" link on the agent details sheet. Platform: `itx.workspaces.list()`
+and prefix-scoped globs. Remaining: the collaborative document page and the
+board are still Docs-only; a jam still births a second workspace for its
+agent (the recorded decision — jam in the agent's own workspace — is not
+implemented); a `readDir` for per-folder lazy listing inside a big mount.
+
 ## Platform follow-up: a real `workspaces.list()`
 
 The picker currently enumerates via `streams.list()` filtered to
@@ -143,3 +161,7 @@ The honest fix is the sandbox pattern: teach the project reducer
 `workspace/created` (via `recordDomainObject`, like repos/secrets/devices)
 and add `itx.workspaces.list()`; then the vessel filter and the prefix
 heuristic both delete.
+
+Landed 2026-09-09: the birth batch's `workspace-catalog` subscription copies
+`workspace/created` to `/`, the project reducer records it via
+`recordDomainObject`, and `itx.workspaces.list()` reads `state.workspaces`.

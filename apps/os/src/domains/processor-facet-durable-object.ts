@@ -88,7 +88,6 @@ import { describeSecretState } from "./secrets/secret-durable-object.ts";
 import { describeDeviceState } from "./devices/device-durable-object.ts";
 import { WorkspaceProcessor } from "./workspaces/workspace-processor-implementation.ts";
 import { mintProjectFileUrl, MODEL_FILE_URL_TTL_SECONDS } from "./files/project-files.ts";
-import { agentWorkspacePath } from "./workspaces/utils.ts";
 import { DynamicWorkerRunner } from "./workers/worker-runner.ts";
 
 const EXPO_PUSH_SEND_TIMEOUT_MS = 15_000;
@@ -329,6 +328,9 @@ export class ProcessorFacet extends ProcessorFacetBase<Env> {
         break;
       case "agent":
         this.#registerAgent(identity, stream, registry);
+        // Agent and workspace lifecycle facts share this stream; their
+        // subscriptions and reduced state remain independently named.
+        this.#registerWorkspace(identity, stream, registry);
         break;
       case "email-router":
         this.#registerEmailRouter(identity, stream, registry);
@@ -595,7 +597,7 @@ export class ProcessorFacet extends ProcessorFacetBase<Env> {
             };
       },
       // Oversized script results spill into the agent's OWN workspace
-      // directory (private scratch under its stream path — never
+      // directory (/workspace, private scratch — never
       // committable), so the model can page through the file instead of
       // blowing its context window.
       writeWorkspaceFile: async ({
@@ -605,10 +607,10 @@ export class ProcessorFacet extends ProcessorFacetBase<Env> {
         content: string;
         path: string;
       }) => {
-        const absolutePath = `${agentWorkspacePath(path)}/${filePath}`;
+        const absolutePath = `/workspace/${filePath}`;
         await this.env.WORKSPACE_V2.getByName(
           DurableObjectNameCodec.stringify({
-            path: agentWorkspacePath(path),
+            path,
             projectId,
           }),
         ).writeFile(absolutePath, content);

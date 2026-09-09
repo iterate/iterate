@@ -9,7 +9,7 @@ import { DEFAULT_REPO_PATH, SCRATCH_WORKSPACE_PREFIX } from "./board-shared.ts";
 import { DOCUMENT_REVIEW_INSTRUCTIONS } from "./document-review-instructions.ts";
 
 /** The repo mount a jam's tree shows and its seed document lives in. */
-export const JAM_REPO_PATH = DEFAULT_REPO_PATH;
+const JAM_REPO_PATH = DEFAULT_REPO_PATH;
 
 /** The app-neutral scratch namespace every jam (and "New workspace") mints under. */
 export function jamWorkspacePath(id: string): string {
@@ -33,22 +33,9 @@ export function jamAgentPath(workspacePath: string): string | null {
   return /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(id) ? `/agents/jams/${id}` : null;
 }
 
-const DOCUMENT_EXTENSION = /\.(?:md|markdown|html?)$/i;
-
-/** Whether a path is a document the editor and comment store support. */
-export function isDocumentPath(path: string): boolean {
-  return DOCUMENT_EXTENSION.test(path);
-}
-
-/** A typed file name as a document: `.md` is implied when no supported extension was given. */
-export function withDocumentExtension(path: string): string {
-  return isDocumentPath(path) ? path : `${path}.md`;
-}
-
 /**
  * The kickoff brief an invited agent receives: where the jam lives, how to
- * read and write through the workspace (never the repo), and that nothing
- * commits by itself.
+ * read and write through the workspace (never the repo), and how the human view controls commits.
  */
 export function jamInvitation(workspacePath: string, path: string | null): string {
   const example = path ?? `${JAM_REPO_PATH}/README.md`;
@@ -60,11 +47,11 @@ export function jamInvitation(workspacePath: string, path: string | null): strin
     `  const ws = itx.workspaces.get(${JSON.stringify(workspacePath)});`,
     `  await ws.readFile(${JSON.stringify(example)});`,
     `  await ws.edit({ path, oldString, newString }); // or ws.writeFile(path, content)`,
-    `- Files live under ${JAM_REPO_PATH}/ inside the workspace. readFile returns the live text of a file someone has open, keystrokes included; your writes appear in their editor immediately.`,
+    `- Every project repo is mounted at its own /repos/<name> path inside the workspace (the config repo at ${JAM_REPO_PATH}); the workspace's own files live under /workspace/. readFile returns the live text of a file someone has open, keystrokes included; your writes appear in their editor immediately.`,
     path === null
-      ? '- Nobody has a file open yet; list the workspace with ws.glob("/repos/config/**/*.md") and wait for instructions.'
+      ? `- Nobody has a file open yet; list the config repo with ws.glob(${JSON.stringify(`${JAM_REPO_PATH}/**/*`)}) or this workspace's own files with ws.glob(${JSON.stringify("/workspace/**/*")}) (never listAllFiles — it walks every mounted repo), and wait for instructions.`
       : `- The file open right now is ${path}. Say hello: append one short line to it saying you have joined, then wait for instructions in that file or here.`,
     DOCUMENT_REVIEW_INSTRUCTIONS,
-    "- Nothing is committed automatically and you must not commit; the people in the jam decide when it lands on main.",
+    "- You must not commit. The people's view publishes a repo's changes to its main about a minute after the last edit unless they turn auto-commit off; they can also commit or discard by hand. Landing on main is their call.",
   ].join("\n");
 }

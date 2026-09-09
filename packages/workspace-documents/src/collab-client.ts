@@ -7,12 +7,7 @@ import {
 } from "@codemirror/collab";
 import { ChangeSet, type Extension } from "@codemirror/state";
 import { ViewPlugin, type EditorView, type ViewUpdate } from "@codemirror/view";
-import type {
-  CollabChanges,
-  CollabPresence,
-  CollabWaitResult,
-  WorkspaceDocumentTransport,
-} from "./types.ts";
+import type { CollabPresence, CollabWaitResult, WorkspaceTransport } from "./types.ts";
 
 /**
  * The browser's end of the no-Yjs collab lane (PoC): @codemirror/collab's
@@ -58,29 +53,8 @@ export class CollabConnection {
    * cursor plugin's set/clear lifecycle cannot orphan the page's strip. */
   onPeers: ((clients: CollabPresence["clients"]) => void) | null = null;
   presenceGeneration = 0;
-  /** The raw ops of the delivery currently being dispatched, in canonical
-   * server order with true clientIds. receiveUpdates builds a finished
-   * Transaction (no annotation can be added), so the redline fold reads the
-   * delivery through this side channel DURING the dispatch — set just
-   * before, consumed once by takeDeliveredOps(), cleared after. */
-  #deliveredOps: { changes: unknown; clientId: string }[] | null = null;
-
-  stageDeliveredOps(ops: { changes: unknown; clientId: string }[]): void {
-    this.#deliveredOps = ops;
-  }
-
-  hasDeliveredOps(): boolean {
-    return this.#deliveredOps !== null;
-  }
-
-  takeDeliveredOps(): { changes: unknown; clientId: string }[] | null {
-    const ops = this.#deliveredOps;
-    this.#deliveredOps = null;
-    return ops;
-  }
-
   constructor(
-    readonly transport: WorkspaceDocumentTransport,
+    readonly transport: WorkspaceTransport,
     readonly filePath: string,
     readonly displayName = "someone",
   ) {
@@ -88,9 +62,9 @@ export class CollabConnection {
   }
 
   async open(): Promise<{ content: string; version: number }> {
-    // Identity first: the client id embeds the display name for attribution.
+    // Identity first: the client id embeds the display name for presence.
     this.clientId = freshClientId(this.displayName);
-    const opened = await this.transport.run((lane) => lane.open(this.filePath));
+    const opened = await this.transport.run((workspace) => workspace.collab.open(this.filePath));
     this.epoch = opened.epoch;
     this.confirmed = 0;
     return opened;
@@ -101,8 +75,8 @@ export class CollabConnection {
       changes: update.changes.toJSON(),
       clientSeq: this.confirmed + index,
     }));
-    return this.transport.run((lane) =>
-      lane.push({
+    return this.transport.run((workspace) =>
+      workspace.collab.push({
         baseVersion,
         clientId: this.clientId,
         epoch: this.epoch,
@@ -119,8 +93,8 @@ export class CollabConnection {
       changes: update.changes.toJSON(),
       clientSeq: this.confirmed + index,
     }));
-    return this.transport.runOnce((lane) =>
-      lane.push({
+    return this.transport.runOnce((workspace) =>
+      workspace.collab.push({
         baseVersion,
         clientId: this.clientId,
         epoch: this.epoch,
@@ -131,8 +105,14 @@ export class CollabConnection {
   }
 
   async wait(afterVersion: number): Promise<CollabWaitResult> {
-    const result = await this.transport.run((lane) =>
-      lane.wait(this.filePath, this.epoch, afterVersion, this.clientId, this.presenceGeneration),
+    const result = await this.transport.run((workspace) =>
+      workspace.collab.wait(
+        this.filePath,
+        this.epoch,
+        afterVersion,
+        this.clientId,
+        this.presenceGeneration,
+      ),
     );
     if (result.status === "ops" && result.presence !== undefined) {
       this.presenceGeneration = result.presence.generation;
@@ -149,12 +129,8 @@ export class CollabConnection {
    * (presence is decoration; a dropped update self-heals on the next move). */
   present(selection: { anchor: number; head: number } | null): void {
     void this.transport
-      .runOnce((lane) => lane.present(this.filePath, this.clientId, selection))
+      .runOnce((workspace) => workspace.collab.present(this.filePath, this.clientId, selection))
       .catch(() => {});
-  }
-
-  async changes(): Promise<CollabChanges> {
-    return this.transport.run((lane) => lane.changes(this.filePath));
   }
 
   /** Fold delivered ops into the confirmed baseline and count own ones. */
@@ -290,12 +266,7 @@ export function peerExtension(connection: CollabConnection, startVersion: number
               return;
             }
             if (result.ops.length === 0) continue;
-            connection.stageDeliveredOps(result.ops);
-            try {
-              this.view.dispatch(receiveUpdates(this.view.state, connection.absorb(result.ops)));
-            } finally {
-              connection.takeDeliveredOps(); // drop if no layer consumed it
-            }
+            this.view.dispatch(receiveUpdates(this.view.state, connection.absorb(result.ops)));
             if (this.recovering) {
               // History was intact after all — catching up via ops advanced
               // our base past the miss, so pushing can resume (the snapshot

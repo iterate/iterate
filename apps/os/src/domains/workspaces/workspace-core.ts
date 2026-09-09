@@ -15,7 +15,7 @@ import type {
 } from "./types.ts";
 import type { WorkspaceMount } from "./workspace-processor-contract.ts";
 import { encodeRepoContent } from "./utils.ts";
-import { resolveAbsolutePath } from "./paths.ts";
+import { resolveAbsolutePath, WORKSPACE_DIRECTORY } from "./paths.ts";
 import { filterPublishablePaths } from "./overlay-ignore.ts";
 
 // Overlay whiteouts: mount paths hidden by a local delete, kept as ONE kv
@@ -95,20 +95,28 @@ type WorkspaceCoreOptions = {
    * re-derived per call, never held across them.
    */
   repo: (repoPath: string) => MountRepoAccess;
-  /**
-   * The workspace's own directory — its stream path (e.g.
-   * `/workspaces/agents/foo`). The ONLY subtree where unmounted private
-   * files may be written; everything else is either a mounted repo or not
-   * writable at all, so a typo'd path fails loudly instead of silently
-   * becoming stray scratch.
-   */
-  scratchRoot: string;
   /** The local layer: this workspace's own private virtual filesystem. */
   workspace: Workspace;
 };
 
 /** One mount resolved against a concrete path: mount point, mount, repo-relative path. */
 type ResolvedMount = { mount: WorkspaceMount; mountPath: string; repoRelativePath: string };
+
+/** Whether `path` is `ancestor` itself or lies below it (`/` is above everything). */
+export function isPathUnder(path: string, ancestor: string): boolean {
+  return ancestor === "/" || path === ancestor || path.startsWith(`${ancestor}/`);
+}
+
+// The directory a glob pattern can only ever match under: its literal lead
+// up to the last slash before the first glob magic — `/repos/config/**/*`
+// gives `/repos/config`, a bare `/**` gives `/`. What `listAllFiles({ under })`
+// gets. (A line comment: the example pattern would close a block comment.)
+export function literalDirectoryOfGlob(pattern: string): string {
+  const magic = pattern.search(/[*?[\]{}()!+@]/);
+  const literal = magic === -1 ? pattern : pattern.slice(0, magic);
+  const slash = literal.lastIndexOf("/");
+  return slash <= 0 ? "/" : literal.slice(0, slash);
+}
 
 /**
  * The workspace semantics as a host-agnostic library object: ONE private
@@ -126,14 +134,12 @@ export class WorkspaceCore {
   readonly #kv: WorkspaceKv;
   readonly #mounts: () => Promise<Record<string, WorkspaceMount>>;
   readonly #repo: (repoPath: string) => MountRepoAccess;
-  readonly #scratchRoot: string;
   readonly #workspace: Workspace;
 
   constructor(options: WorkspaceCoreOptions) {
     this.#kv = options.kv;
     this.#mounts = options.mounts;
     this.#repo = options.repo;
-    this.#scratchRoot = resolveAbsolutePath(options.scratchRoot);
     this.#workspace = options.workspace;
   }
 
@@ -237,7 +243,7 @@ export class WorkspaceCore {
    *   would commit as an empty repo path).
    * - A path inside a mounted repo is writable (the write is a private
    *   shadow; the mount's POLICY gates commit, not the overlay).
-   * - A path under the workspace's own directory (its stream path) is private
+   * - A path under /workspace is private
    *   scratch — always writable, never committable.
    * - Everything else is rejected loudly: an unmounted absolute path is
    *   almost always a typo (a repo that does not exist, another workspace's
@@ -253,9 +259,9 @@ export class WorkspaceCore {
       );
     }
     if (routeMount(mounts, resolved) !== null) return;
-    if (resolved.startsWith(`${this.#scratchRoot}/`)) return;
+    if (resolved.startsWith(`${WORKSPACE_DIRECTORY}/`)) return;
     throw new Error(
-      `Workspace path is not writable: "${path}". Private files live under your workspace directory ("${this.#scratchRoot}/..."; relative paths resolve there), repo files under a mounted repo path (${summarizeMountPoints(mounts)}).`,
+      `Workspace path is not writable: "${path}". Private files live under your workspace directory ("${WORKSPACE_DIRECTORY}/..."; relative paths resolve there), repo files under a mounted repo path (${summarizeMountPoints(mounts)}).`,
     );
   }
 
@@ -342,7 +348,7 @@ export class WorkspaceCore {
 
   /** The BASE of a path — its mount's content at HEAD, ignoring the overlay
    * and whiteouts entirely. This is what uncommitted work diffs against
-   * (redlines, merge views); null for unmounted/scratch paths. */
+   * (merge views); null for unmounted/scratch paths. */
   async readBase(path: string): Promise<string | null> {
     const mounts = await this.#mounts();
     if (isVirtualDirectoryPath(mounts, path)) return null;
@@ -480,11 +486,25 @@ export class WorkspaceCore {
    * the local layer plus each mount's HEAD tree, minus whiteouts. Paths under
    * no mount are the workspace's private scratch and appear too.
    */
-  async listAllFiles(): Promise<string[]> {
+  /**
+   * Every file of the merged view, or of ONE subtree with `under`: a mount
+   * outside that subtree is never enumerated. That is what keeps a glob
+   * scoped to `/repos/config/**` cheap with a big repo mounted beside it —
+   * the listing of a 40k-file mount IS the cost of every enumeration.
+   */
+  async listAllFiles(options: { under?: string } = {}): Promise<string[]> {
+    const under = options.under === undefined ? "/" : resolveAbsolutePath(options.under);
     const mounts = await this.#mounts();
-    const merged = new Set(await this.#localFilePaths());
+    const merged = new Set(
+      (await this.#localFilePaths()).filter((path) => isPathUnder(path, under)),
+    );
     for (const [mountPath, mount] of Object.entries(mounts)) {
-      for (const path of await this.#mountFilePaths(resolveAbsolutePath(mountPath), mount)) {
+      const resolvedMountPath = resolveAbsolutePath(mountPath);
+      if (!isPathUnder(resolvedMountPath, under) && !isPathUnder(under, resolvedMountPath)) {
+        continue;
+      }
+      for (const path of await this.#mountFilePaths(resolvedMountPath, mount)) {
+        if (!isPathUnder(path, under)) continue;
         if (this.isMaskedFromMount(path)) continue;
         // A deeper mount shadows this one's files under its point.
         if (routeMount(mounts, path)?.mount !== mount) continue;

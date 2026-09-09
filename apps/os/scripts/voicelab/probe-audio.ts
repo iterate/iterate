@@ -71,7 +71,7 @@ export interface StreamHandle {
     connectionKey: string;
     eventTypes: string[];
     processEventBatch: (batch: { events?: { type: string; payload?: unknown }[] }) => void;
-  }): Promise<unknown>;
+  }): Promise<{ close(): void }>;
   append(
     ...events: { type: string; ephemeral?: true; payload: Record<string, unknown> }[]
   ): Promise<unknown>;

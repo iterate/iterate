@@ -11,7 +11,7 @@ import { Table, TableBody, TableCell, TableRow } from "@iterate-com/ui/component
 import { Tabs, TabsList, TabsTrigger } from "@iterate-com/ui/components/tabs";
 import { useItxQuery } from "iterate/sdk/itx/react";
 import { projectMarkdownPreview } from "@iterate-com/ui/lib/markdown-frontmatter";
-import { changedLinesGutter } from "./change-gutter.ts";
+import { changedLinesGutter } from "@iterate-com/workspace-documents/change-gutter";
 import { HtmlPreview } from "./html-preview.tsx";
 import { isPreviewablePath, repoFileKind } from "./repo-file-kinds.ts";
 import { useRepoFileJsonSchema } from "./repo-json-schema.ts";

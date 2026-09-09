@@ -524,7 +524,7 @@ return await itx.projects.get(pid).__describe();
     id: "workspace-edit-and-push",
     title: "Edit repo files in a workspace, then commit them to main",
     description:
-      "A workspace is your private working copy of the project's one path namespace — a mount-routed, copy-on-write filesystem in a Durable Object (no container, no clone, always warm). Address it with itx.workspaces.get(\"/workspaces/<name>\"), then call handle.create({}) explicitly; addressing alone never births it. Every project repo is mounted at its own /repos/** path (the config repo at \"/repos/config\"; freshly created repos just appear), so reads see each repo's latest main until a local write shadows a path. Changes stay private until git.commit({ message, scope }) — which commits ONE repo's changes straight to ITS main branch (config-repo commits redeploy the project worker/website automatically; no branches, no push step) and clears just that subtree. scope names the repo mount and is required when several are dirty. Files under the workspace's OWN path are private scratch, never committable; relative paths resolve there.",
+      'A workspace is your private working copy of the project\'s one path namespace — a mount-routed, copy-on-write filesystem in a Durable Object (no container, no clone, always warm). Address it with itx.workspaces.get("/workspaces/<name>"), then call handle.create({}) explicitly; addressing alone never births it. Every project repo is mounted at its own /repos/** path (the config repo at "/repos/config"; freshly created repos just appear), so reads see each repo\'s latest main until a local write shadows a path. Changes stay private until git.commit({ message, scope }) — which commits ONE repo\'s changes straight to ITS main branch (config-repo commits redeploy the project worker/website automatically; no branches, no push step) and clears just that subtree. scope names the repo mount and is required when several are dirty. Files under /workspace are private scratch, never committable; relative paths resolve there.',
     runtimes: ALL_RUNTIMES,
     fn: async (itx, vars: { workspacePath?: string }) => {
       // The path IS the identity: same path, same filesystem. An agent's own
@@ -591,8 +591,8 @@ return await itx.projects.get(pid).__describe();
         contentType: "text/plain",
       });
       const stored = await itx.files.get("/examples/transfer.txt").bytes();
-      await workspace.writeFileBytes(workspacePath + "/imported/transfer.txt", stored);
-      const inWorkspace = await workspace.readFile(workspacePath + "/imported/transfer.txt");
+      await workspace.writeFileBytes("/workspace/imported/transfer.txt", stored);
+      const inWorkspace = await workspace.readFile("/workspace/imported/transfer.txt");
 
       // workspace -> files: publish a repo file (the config repo's seeded
       // package.json, mounted at its /repos/** path) to project file storage

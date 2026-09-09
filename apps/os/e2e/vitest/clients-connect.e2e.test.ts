@@ -1,6 +1,9 @@
 import { expect, test } from "vitest";
-import { RpcTarget } from "capnweb";
-import { adminSecret, withItxSession } from "./test-helpers.ts";
+import { cloudflareWorkerVersionOverrideHeaders } from "@iterate-com/shared/test-support/cloudflare-worker-version-overrides";
+import { newWebSocketRpcSession, RpcTarget } from "capnweb";
+import WebSocket from "ws";
+import type { UnauthenticatedOs } from "../../src/itx-api.generated.ts";
+import { adminSecret, buildUrl, withItxSession } from "./test-helpers.ts";
 
 // The clients proof: `projects.connect` = `get` + presence, built entirely on
 // the shipped capability system. A client is a capability-host scope at a
@@ -116,16 +119,17 @@ test("disconnecting flips the catalog to connected: false; reconnecting flips it
   };
 
   {
-    // First life: connect in a scoped session, prove connected, then let the
-    // session (and with it the provider's socket) die.
+    // First life: connect in a scoped session, prove connected, then dispose
+    // its owned project handle before the session. The raw-termination test
+    // below covers ungraceful transport loss.
     using firstSession = withItxSession();
     using _robotProject = await connectRobot(firstSession);
     const connected = await settleClient(project, "/clients/desk-robot", (c) => c.connected);
     expect(connected).toMatchObject({ path: "/clients/desk-robot", connected: true });
   }
 
-  // The platform journals the provider's disconnect when its socket dies —
-  // the catalog must flip to connected: false without any polite goodbye.
+  // The platform journals the disposed provider's disconnect, so the catalog
+  // must flip to connected: false.
   const gone = await settleClient(project, "/clients/desk-robot", (c) => !c.connected);
   expect(gone).toMatchObject({ path: "/clients/desk-robot", connected: false });
   expect(gone?.lastDisconnectedAt).toBeDefined();
@@ -141,6 +145,78 @@ test("disconnecting flips the catalog to connected: false; reconnecting flips it
   using host = project.clients.get("/clients/desk-robot");
   // @ts-expect-error - dynamic capability member
   expect(await host.capabilities.servos.wave()).toEqual({ marker, waved: true });
+});
+
+test("an abruptly terminated client transport still durably disconnects its live capability", async () => {
+  const marker = crypto.randomUUID();
+  using observerSession = withItxSession();
+  using observerItx = observerSession.authenticate({
+    type: "admin-secret",
+    secret: adminSecret(),
+  });
+  using project = await observerItx.projects.get(`clients-abrupt-disconnect-${marker}`).create({});
+  const { projectId } = await project.__describe();
+
+  // This uses the public /api WebSocket directly so terminate() simulates an
+  // ungraceful transport loss, rather than a local stub disposal.
+  const socket = new WebSocket(buildUrl({ path: "/api", protocol: "ws" }), {
+    handshakeTimeout: 15_000,
+    headers: cloudflareWorkerVersionOverrideHeaders(process.env),
+  });
+  try {
+    await new Promise<void>((resolve, reject) => {
+      socket.once("open", resolve);
+      socket.once("error", reject);
+    });
+    // ws implements the same WebSocket transport expected by Cap'n Web; its
+    // package types are Node-specific while Cap'n Web accepts the browser form.
+    using providerSession = newWebSocketRpcSession<UnauthenticatedOs>(
+      socket as unknown as Parameters<typeof newWebSocketRpcSession>[0],
+    );
+    using providerItx = providerSession.authenticate({
+      type: "admin-secret",
+      secret: adminSecret(),
+    });
+    using _providerProject = await providerItx.projects.connect(projectId, {
+      path: "/clients/abrupt",
+      description: "Abruptly disconnected e2e client",
+      capabilities: { marker: () => marker },
+    });
+
+    const connected = await settleClient(project, "/clients/abrupt", (client) => client.connected);
+    expect(connected).toMatchObject({ path: "/clients/abrupt", connected: true });
+
+    const closed = new Promise<void>((resolve) => socket.once("close", () => resolve()));
+    socket.terminate();
+    await closed;
+
+    const disconnected = await settleClient(
+      project,
+      "/clients/abrupt",
+      (client) => !client.connected,
+    );
+    expect(disconnected).toMatchObject({ path: "/clients/abrupt", connected: false });
+    expect(disconnected?.lastDisconnectedAt).toBeDefined();
+
+    using recoveredSession = withItxSession();
+    using recoveredItx = recoveredSession.authenticate({
+      type: "admin-secret",
+      secret: adminSecret(),
+    });
+    using _recoveredProject = await recoveredItx.projects.connect(projectId, {
+      path: "/clients/abrupt",
+      description: "Recovered e2e client",
+      capabilities: { marker: () => ({ marker, recovered: true }) },
+    });
+    const recovered = await settleClient(project, "/clients/abrupt", (client) => client.connected);
+    expect(recovered).toMatchObject({ path: "/clients/abrupt", connected: true });
+
+    using host = project.clients.get("/clients/abrupt");
+    // @ts-expect-error - dynamic capability member
+    expect(await host.capabilities.marker()).toEqual({ marker, recovered: true });
+  } finally {
+    if (socket.readyState < WebSocket.CLOSING) socket.terminate();
+  }
 });
 
 /** Settle loop over the clients catalog until `accept` passes (or timeout). */

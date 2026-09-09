@@ -1,4 +1,5 @@
 import { DurableObjectNameCodec, normalizePath } from "../durable-object-names.ts";
+import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
 import { buildFacetProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
 import { isCanonicalRepoPath, resolveAbsolutePath } from "./paths.ts";
 import {
@@ -12,19 +13,9 @@ import {
 // projectId — it just has to be a legal projectId so stringify/parse run.
 const ROUND_TRIP_PROJECT_ID = "prj_roundtrip";
 
-// Every workspace lives under this collection prefix, matching the addressing
-// convention used by `/secrets/...`, `/repos/...`, and `/sandboxes/...`.
+// Standalone workspace identities use this prefix; agent workspaces use the
+// agent's own /agents/** identity. Neither is the /workspace file directory.
 export const WORKSPACE_PATH_PREFIX = "/workspaces";
-
-/**
- * Where an agent's own workspace (`itx.workspace`) lives: the agent path under
- * the workspace prefix — `/agents/bla` → `/workspaces/agents/bla`. One
- * function so the birth-certificate mount and anything else addressing an
- * agent's workspace can never disagree on the mapping.
- */
-export function agentWorkspacePath(agentPath: string): string {
-  return normalizeWorkspacePath(`${WORKSPACE_PATH_PREFIX}${normalizePath(agentPath)}`);
-}
 
 /**
  * The workspace path is durable identity (it becomes the Durable Object name
@@ -37,12 +28,11 @@ export function agentWorkspacePath(agentPath: string): string {
  */
 export function normalizeWorkspacePath(path: string): string {
   const normalized = normalizePath(path);
-  if (!normalized.startsWith(`${WORKSPACE_PATH_PREFIX}/`)) {
+  if (!normalized.startsWith(`${WORKSPACE_PATH_PREFIX}/`) && !normalized.startsWith("/agents/")) {
     throw new Error(
-      `workspace paths live under ${WORKSPACE_PATH_PREFIX}/ (an agent's workspace at ` +
-        `${WORKSPACE_PATH_PREFIX}<agent path>, standalone ones under ` +
+      `workspace paths live under /agents/ (the same path as the agent) or ` +
         `${WORKSPACE_PATH_PREFIX}/<anything>; there is no root workspace — repos are ` +
-        `mounted into each workspace instead), got "${normalized}"`,
+        `mounted into each workspace instead; got "${normalized}"`,
     );
   }
   const roundTripped = DurableObjectNameCodec.parse(
@@ -111,6 +101,9 @@ export function normalizeWorkspaceMountKeys<
         `mount path "/" is not allowed — the workspace root is the project namespace; repos mount at their own /repos/** paths`,
       );
     }
+    if (path === "/workspace" || path.startsWith("/workspace/")) {
+      throw new Error(`mount path "${key}" overlaps the reserved /workspace directory`);
+    }
     if (path.split("/").includes(".git")) {
       throw new Error(`mount path "${key}" contains a reserved .git segment`);
     }
@@ -134,10 +127,12 @@ export function normalizeWorkspaceMountKeys<
  * The complete atomic workspace birth batch: the `workspace/created`
  * existence marker, an optional initial `workspace/configured` overlay patch
  * (deviations from the derived table — every project repo at its own
- * /repos/** path), and the processor subscription. The created and configured
- * keys contain identity only: identical retries dedupe, while a retry with a
- * different initial overlay fails through the stream's
- * same-key-different-body check.
+ * /repos/** path), the processor subscription, and the catalog subscription
+ * that copies the birth to the project root `/` — what
+ * `itx.workspaces.list()` reads, the same `repo-catalog` pattern repos use.
+ * The created and configured keys contain identity only: identical retries
+ * dedupe, while a retry with a different initial overlay fails through the
+ * stream's same-key-different-body check.
  */
 export function workspaceCreationEvents(input: {
   mounts?: Record<string, WorkspaceMountOverlay>;
@@ -168,6 +163,26 @@ export function workspaceCreationEvents(input: {
     buildFacetProcessorSubscriptionConfiguredEvent({
       idempotencyKey: `stream/subscription-configured:${WorkspaceProcessorContract.slug}`,
       name: WorkspaceProcessorContract.slug,
+    }),
+    // The workspace processor is reduce-only, so the catalog copy is a
+    // subscription rather than a processor side effect. It is configured in
+    // the same batch as created, hence delivery starts at the beginning.
+    CoreProcessorContract.buildEvent({
+      type: "events.iterate.com/stream/subscription-configured",
+      idempotencyKey: `workspace-catalog-subscription:${input.projectId}:${input.path}`,
+      payload: {
+        name: "workspace-catalog",
+        description: "Copy the workspace's birth to the project catalog.",
+        filter: { eventTypes: ["events.iterate.com/workspace/created"] },
+        receiver: {
+          action: "copy-to-stream",
+          receivingStreamPath: "/",
+          delivery: {
+            start: "beginning",
+            onFailingEvent: "halt",
+          },
+        },
+      },
     }),
   ];
 }

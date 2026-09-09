@@ -183,7 +183,8 @@ function BrowserDatabaseProjectStreamView({
     streamSource,
     streamPath,
   });
-  const { resolvedStreamSource, store, snapshot, eventCount, feed, presentedFeed } = streamData;
+  const { resolvedStreamSource, store, snapshot, eventCount, presentedFeed, streamTransportReady } =
+    streamData;
 
   useClaimReplyPresented({ database: store.streamDatabase, projectId, streamPath });
   const agentUiState = presentedFeed?.agent ?? null;
@@ -222,11 +223,6 @@ function BrowserDatabaseProjectStreamView({
     streamPath,
   });
 
-  // Readers share another tab's event connection; a writer needs both its
-  // mirror and live state connected before another submission can be observed.
-  const streamTransportReady =
-    feed.status === "live" &&
-    (snapshot.databaseRole === "reader" || snapshot.connectionStatus === "receiving-events");
   // Busy = work is actively running, independent of chat-message timing.
   const agentBusy = isAgentUiActivityWorking(agentUiState?.live ?? null, agentRuntime);
   const presence = agentUiState?.presence ?? [];
@@ -564,7 +560,20 @@ function useProjectStreamData({
     { makeConnection: makeFeedConnection },
   );
   const presentedFeed = useEventSynchronizedLiveState(store.streamDatabase, feed.value);
-  return { resolvedStreamSource, ...browserStore, eventCount, feed, presentedFeed };
+  // Readers share another tab's event connection; a writer needs both its
+  // mirror and live state connected before another submission can be observed.
+  const streamTransportReady =
+    feed.status === "live" &&
+    (browserStore.snapshot.databaseRole === "reader" ||
+      browserStore.snapshot.connectionStatus === "receiving-events");
+  return {
+    resolvedStreamSource,
+    ...browserStore,
+    eventCount,
+    feed,
+    presentedFeed,
+    streamTransportReady,
+  };
 }
 
 /**

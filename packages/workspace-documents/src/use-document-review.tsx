@@ -120,21 +120,22 @@ export function useDocumentReview({
     else threads.push(value);
   }
 
+  const errorMessages: string[] = [];
+  for (const diagnostic of review.diagnostics) {
+    if (diagnostic.severity === "error") errorMessages.push(diagnostic.message);
+  }
   const comments: DocumentCommentsProps = {
     threads,
-    notice: review.diagnostics.some((diagnostic) => diagnostic.severity === "error") ? (
-      <p role="alert" className="p-3 text-sm text-destructive">
-        {review.diagnostics
-          .filter((diagnostic) => diagnostic.severity === "error")
-          .map((diagnostic) => diagnostic.message)
-          .join(" ")}{" "}
-        Open Source to repair the review markup.
-      </p>
-    ) : busy ? (
-      <p role="status" className="p-3 text-sm text-muted-foreground">
-        Connecting to the document…
-      </p>
-    ) : undefined,
+    notice:
+      errorMessages.length > 0 ? (
+        <p role="alert" className="p-3 text-sm text-destructive">
+          {errorMessages.join(" ")} Open Source to repair the review markup.
+        </p>
+      ) : busy ? (
+        <p role="status" className="p-3 text-sm text-muted-foreground">
+          Connecting to the document…
+        </p>
+      ) : undefined,
     selectedThreadId: selectedIds[0] ?? null,
     onSelectThread: (id) => setSelectedIds(id ? [id] : []),
     onAction: canWrite ? onAction : undefined,

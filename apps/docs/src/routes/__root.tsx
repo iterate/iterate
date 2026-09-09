@@ -1,6 +1,7 @@
 import { useEffect, type ReactNode } from "react";
 import { createRootRoute, HeadContent, Outlet, Scripts } from "@tanstack/react-router";
 import { SidebarInset, SidebarProvider } from "@iterate-com/ui/components/sidebar";
+import { Toaster } from "@iterate-com/ui/components/sonner";
 import { TooltipProvider } from "@iterate-com/ui/components/tooltip";
 import appCss from "../styles.css?url";
 import { startBrowserProjectSessionKeepalive } from "../lib/project-session.ts";
@@ -43,6 +44,7 @@ function RootComponent() {
             <Outlet />
           </SidebarInset>
         </SidebarProvider>
+        <Toaster />
       </TooltipProvider>
     </RootDocument>
   );
