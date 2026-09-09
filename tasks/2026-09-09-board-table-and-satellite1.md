@@ -463,7 +463,10 @@ Order, each gate before the next:
   self-trigger. Three measured fixes: mute polarity, mic slot, stream posture.
 - CLI: boards / device --name / transcript / itx run all work on templestein.
 - Wake word: model partition + WakeNet "Jarvis" build; first flash boot-looped
-  on esp-sr `model_clean` before the first detect (guarded).
+  on esp-sr `model_clean` before the first detect (guarded). PROVEN hands-free
+  on the HA Voice PE: "Jarvis" from the Mac → detection → chime → call up in
+  2.1 s → spoken prompt transcribed verbatim → answered. 6.9 ms per 32 ms
+  chunk, 0 overruns.
 - Fable reviews: round 1 (Phases 0–1 + chips) and round 2 (table + boards +
   Satellite1) applied; round 3 (whole branch) in progress.
 - Open: the Satellite1 stopped answering on USB after a failed flash (the
