@@ -63,9 +63,9 @@ static void selects_a_truthful_raw_and_server_vad_xmos_pair(void) {
   uint8_t command[4] = {0xffU, 0xffU, 0xffU, 0xffU};
   assert(
       iterate_kit_voice_pe_xmos_uplink_stage() ==
-      ITERATE_KIT_VOICE_PE_XMOS_STAGE_NS);
+      ITERATE_KIT_XMOS_STAGE_NS);
   assert(
-      iterate_kit_voice_pe_xmos_pipeline_command(
+      iterate_kit_xmos_pipeline_command(
           0U,
           iterate_kit_voice_pe_xmos_uplink_stage(),
           command,
@@ -76,9 +76,9 @@ static void selects_a_truthful_raw_and_server_vad_xmos_pair(void) {
   assert(command[3] == 3U);
 
   assert(
-      iterate_kit_voice_pe_xmos_pipeline_command(
+      iterate_kit_xmos_pipeline_command(
           1U,
-          ITERATE_KIT_VOICE_PE_XMOS_STAGE_NONE,
+          ITERATE_KIT_XMOS_STAGE_NONE,
           command,
           sizeof(command)) == ITERATE_KIT_OK);
   assert(command[0] == 241U);
@@ -87,78 +87,21 @@ static void selects_a_truthful_raw_and_server_vad_xmos_pair(void) {
   assert(command[3] == 0U);
 
   assert(
-      iterate_kit_voice_pe_xmos_pipeline_command(
+      iterate_kit_xmos_pipeline_command(
           2U,
-          ITERATE_KIT_VOICE_PE_XMOS_STAGE_AEC,
+          ITERATE_KIT_XMOS_STAGE_AEC,
           command,
           sizeof(command)) == ITERATE_KIT_INVALID_ARGUMENT);
   assert(
-      iterate_kit_voice_pe_xmos_pipeline_command(
+      iterate_kit_xmos_pipeline_command(
           0U,
-          ITERATE_KIT_VOICE_PE_XMOS_STAGE_COUNT,
+          ITERATE_KIT_XMOS_STAGE_COUNT,
           command,
           sizeof(command)) == ITERATE_KIT_INVALID_ARGUMENT);
-}
-
-/*
- * A successful I2C write only proves that bytes left the ESP32. It does not
- * prove which XMOS firmware accepted them or that the live pipeline changed.
- * These literal read contracts let boot fail closed on an incompatible
- * firmware or silently ignored stage write instead of collecting misleading
- * AEC evidence from an unknown signal path.
- */
-static void verifies_xmos_firmware_and_pipeline_readback(void) {
-  uint8_t command[3] = {0xffU, 0xffU, 0xffU};
-  struct iterate_kit_voice_pe_xmos_version version = {0U, 0U, 0U};
-  assert(
-      iterate_kit_voice_pe_xmos_version_command(
-          command, sizeof(command)) == ITERATE_KIT_OK);
-  assert(command[0] == 240U);
-  assert(command[1] == (uint8_t)(88U | 0x80U));
-  assert(command[2] == 4U);
-  const uint8_t version_response[] = {0U, 1U, 3U, 1U};
-  assert(
-      iterate_kit_voice_pe_parse_xmos_version(
-          version_response,
-          sizeof(version_response),
-          &version) == ITERATE_KIT_OK);
-  assert(version.major == 1U);
-  assert(version.minor == 3U);
-  assert(version.patch == 1U);
-  assert(iterate_kit_voice_pe_xmos_version_is_supported(&version));
-
-  assert(
-      iterate_kit_voice_pe_xmos_pipeline_read_command(
-          1U, command, sizeof(command)) == ITERATE_KIT_OK);
-  assert(command[0] == 241U);
-  assert(command[1] == (uint8_t)(0x40U | 0x80U));
-  assert(command[2] == 2U);
-  const uint8_t stage_response[] = {
-    0U,
-    ITERATE_KIT_VOICE_PE_XMOS_STAGE_NONE,
-  };
-  assert(
-      iterate_kit_voice_pe_xmos_pipeline_response_matches(
-          stage_response,
-          sizeof(stage_response),
-          ITERATE_KIT_VOICE_PE_XMOS_STAGE_NONE));
-
-  const uint8_t rejected_response[] = {1U, 0U};
-  assert(
-      iterate_kit_voice_pe_parse_xmos_version(
-          rejected_response,
-          sizeof(rejected_response),
-          &version) == ITERATE_KIT_INVALID_ARGUMENT);
-  assert(
-      !iterate_kit_voice_pe_xmos_pipeline_response_matches(
-          rejected_response,
-          sizeof(rejected_response),
-          ITERATE_KIT_VOICE_PE_XMOS_STAGE_NONE));
 }
 
 int main(void) {
   preserves_the_first_party_codec_sequence();
   selects_a_truthful_raw_and_server_vad_xmos_pair();
-  verifies_xmos_firmware_and_pipeline_readback();
   return 0;
 }

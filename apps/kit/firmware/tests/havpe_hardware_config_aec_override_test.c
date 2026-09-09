@@ -13,6 +13,6 @@
 int main(void) {
   assert(
       iterate_kit_voice_pe_xmos_uplink_stage() ==
-      ITERATE_KIT_VOICE_PE_XMOS_STAGE_AEC);
+      ITERATE_KIT_XMOS_STAGE_AEC);
   return 0;
 }

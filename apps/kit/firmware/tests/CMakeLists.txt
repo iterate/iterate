@@ -228,13 +228,15 @@ function(iterate_kit_add_havpe_pure_test NAME)
 endfunction()
 
 iterate_kit_add_havpe_pure_test(iterate-kit-havpe-hardware-config-test
-  havpe_hardware_config_test.c ../devices/havpe/voice_pe_hardware_config.c)
+  havpe_hardware_config_test.c ../devices/havpe/voice_pe_hardware_config.c
+  LINK iterate-kit-core)
 
 iterate_kit_add_havpe_pure_test(
   iterate-kit-havpe-hardware-config-aec-override-test
   havpe_hardware_config_aec_override_test.c
   ../devices/havpe/voice_pe_hardware_config.c
-  DEFINES ITERATE_KIT_VOICE_PE_XMOS_UPLINK_STAGE=1)
+  DEFINES ITERATE_KIT_VOICE_PE_XMOS_UPLINK_STAGE=1
+  LINK iterate-kit-core)
 
 iterate_kit_add_test(iterate-kit-pcm-format-test pcm_format_test.c
   LINK iterate-kit-audio)
@@ -280,3 +282,5 @@ iterate_kit_add_stackchan_pure_test(
 
 iterate_kit_add_test(iterate-kit-voice-view-lights-test voice_view_lights_test.c
   STD 11 LINK iterate-kit-voice iterate-kit-esp-idf-fakes)
+
+iterate_kit_add_core_test(iterate-kit-xmos-control-test xmos_control_test.c)

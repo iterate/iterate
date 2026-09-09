@@ -21,7 +21,8 @@ set(ITERATE_KIT_CORE_SOURCES
   src/websocket_frame_writer.c
   src/websocket_rx.c
   src/websocket_text.c
-  src/websocket_tx.c)
+  src/websocket_tx.c
+  src/xmos_control.c)
 
 if(COMMAND idf_component_register)
   idf_component_register(

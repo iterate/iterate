@@ -657,9 +657,9 @@ enum iterate_kit_status havpe_audio_set_volume(
 uint8_t havpe_audio_volume(void) { return speaker_volume_percent; }
 
 static esp_err_t configure_xmos_pipeline(
-    uint8_t channel, enum iterate_kit_voice_pe_xmos_stage stage) {
+    uint8_t channel, enum iterate_kit_xmos_stage stage) {
   uint8_t command[4];
-  if (iterate_kit_voice_pe_xmos_pipeline_command(
+  if (iterate_kit_xmos_pipeline_command(
           channel, stage, command, sizeof(command)) != ITERATE_KIT_OK) {
     return ESP_ERR_INVALID_ARG;
   }
@@ -670,7 +670,7 @@ static esp_err_t configure_xmos_pipeline(
   }
   uint8_t read_command[3];
   uint8_t response[2] = {0xffU, 0xffU};
-  if (iterate_kit_voice_pe_xmos_pipeline_read_command(
+  if (iterate_kit_xmos_pipeline_read_command(
           channel, read_command, sizeof(read_command)) != ITERATE_KIT_OK) {
     return ESP_ERR_INVALID_ARG;
   }
@@ -684,7 +684,7 @@ static esp_err_t configure_xmos_pipeline(
   if (status != ESP_OK) {
     return status;
   }
-  return iterate_kit_voice_pe_xmos_pipeline_response_matches(
+  return iterate_kit_xmos_pipeline_response_matches(
              response, sizeof(response), stage)
       ? ESP_OK
       : ESP_ERR_INVALID_RESPONSE;
@@ -695,7 +695,7 @@ enum iterate_kit_status havpe_audio_read_vnr(uint8_t *vnr) {
   uint8_t response[2] = {0xffU, 0xffU};
   if (vnr == NULL) return ITERATE_KIT_INVALID_ARGUMENT;
   if (xmos_device == NULL) return ITERATE_KIT_UNAVAILABLE;
-  if (iterate_kit_voice_pe_xmos_vnr_command(command, sizeof(command)) !=
+  if (iterate_kit_xmos_vnr_command(command, sizeof(command)) !=
       ITERATE_KIT_OK) {
     return ITERATE_KIT_INVALID_ARGUMENT;
   }
@@ -705,15 +705,15 @@ enum iterate_kit_status havpe_audio_read_vnr(uint8_t *vnr) {
           xmos_device, response, sizeof(response), I2C_TIMEOUT_MS) != ESP_OK) {
     return ITERATE_KIT_IO_ERROR;
   }
-  return iterate_kit_voice_pe_parse_xmos_vnr(response, sizeof(response), vnr);
+  return iterate_kit_xmos_parse_vnr(response, sizeof(response), vnr);
 }
 
 static esp_err_t verify_xmos_version(
-    struct iterate_kit_voice_pe_xmos_version *version) {
+    struct iterate_kit_xmos_version *version) {
   uint8_t command[3];
   uint8_t response[4] = {0xffU, 0xffU, 0xffU, 0xffU};
   if (version == NULL ||
-      iterate_kit_voice_pe_xmos_version_command(command, sizeof(command)) !=
+      iterate_kit_xmos_version_command(command, sizeof(command)) !=
           ITERATE_KIT_OK) {
     return ESP_ERR_INVALID_ARG;
   }
@@ -727,9 +727,9 @@ static esp_err_t verify_xmos_version(
   if (status != ESP_OK) {
     return status;
   }
-  if (iterate_kit_voice_pe_parse_xmos_version(
+  if (iterate_kit_xmos_parse_version(
           response, sizeof(response), version) != ITERATE_KIT_OK ||
-      !iterate_kit_voice_pe_xmos_version_is_supported(version)) {
+      !iterate_kit_xmos_version_is_supported(version)) {
     return ESP_ERR_INVALID_VERSION;
   }
   return ESP_OK;
@@ -935,7 +935,7 @@ bool havpe_audio_init(void) {
     return false;
   }
   {
-    struct iterate_kit_voice_pe_xmos_version xmos_version;
+    struct iterate_kit_xmos_version xmos_version;
     if (verify_xmos_version(&xmos_version) != ESP_OK) {
       ESP_LOGE(tag, "XMOS version verification failed — failing closed");
       return false;
@@ -948,12 +948,12 @@ bool havpe_audio_init(void) {
         xmos_version.patch);
   }
   pipeline_stage[0] = (uint8_t)iterate_kit_voice_pe_xmos_uplink_stage();
-  pipeline_stage[1] = (uint8_t)ITERATE_KIT_VOICE_PE_XMOS_STAGE_NONE;
+  pipeline_stage[1] = (uint8_t)ITERATE_KIT_XMOS_STAGE_NONE;
   if (configure_xmos_pipeline(
-          0U, (enum iterate_kit_voice_pe_xmos_stage)pipeline_stage[0]) !=
+          0U, (enum iterate_kit_xmos_stage)pipeline_stage[0]) !=
           ESP_OK ||
       configure_xmos_pipeline(
-          1U, (enum iterate_kit_voice_pe_xmos_stage)pipeline_stage[1]) !=
+          1U, (enum iterate_kit_xmos_stage)pipeline_stage[1]) !=
           ESP_OK) {
     ESP_LOGE(tag, "XMOS pipeline configuration failed — failing closed");
     return false;
@@ -1092,11 +1092,11 @@ enum iterate_kit_status havpe_audio_set_pipeline_stage(
    * (channel 0 processed, channel 1 raw) compares two different microphones,
    * which cannot settle the question either way.
    */
-  if (channel > 1U || stage >= (uint8_t)ITERATE_KIT_VOICE_PE_XMOS_STAGE_COUNT) {
+  if (channel > 1U || stage >= (uint8_t)ITERATE_KIT_XMOS_STAGE_COUNT) {
     return ITERATE_KIT_INVALID_ARGUMENT;
   }
   if (configure_xmos_pipeline(
-          channel, (enum iterate_kit_voice_pe_xmos_stage)stage) != ESP_OK) {
+          channel, (enum iterate_kit_xmos_stage)stage) != ESP_OK) {
     return ITERATE_KIT_IO_ERROR;
   }
   pipeline_stage[channel] = stage;
