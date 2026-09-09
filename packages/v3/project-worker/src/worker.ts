@@ -31,6 +31,7 @@ import { UnauthenticatedSession } from "./session.ts";
 import {
   ITX_PRINCIPAL_HEADER,
   verifyAdminSecret,
+  verifyProjectSecret,
   verifyProjectToken,
   type Principal,
   type ProjectTokenClaims,
@@ -45,16 +46,19 @@ const ITX_EXPRESSION_LANE_MAX_HOPS = 4;
  *  `authenticate` takes (session.ts), read off a request. `principal` is the verified stamp the
  *  context runs the call under: a project token for THIS project as `Authorization: Bearer` (the
  *  machine lane — an MCP client, a script) or as the host cookie (a browser), the bearer winning
- *  when both are present; else the admin secret as the bearer (`{ actor: "admin" }`); else the
- *  control plane's session user, stamped as `/api` stamps it. `bearerClaims` is the project token
- *  the bearer carried, for ANY project, and `bearerIsAdminSecret` says the bearer was the admin
- *  secret — either is the platform's credential, which an app never sees (a token for another
- *  project stamps nothing, and the cookie still may). `user` is the control plane's session user,
- *  or null — what the `/expression` lane's membership check reads. */
+ *  when both are present; else the admin secret as the bearer (`{ actor: "admin" }`); else THIS
+ *  project's secret as the bearer (`{ actor: "project:<projectId>" }` — a device, a headless app);
+ *  else the control plane's session user, stamped as `/api` stamps it. `bearerClaims` is the
+ *  project token the bearer carried, for ANY project; `bearerIsAdminSecret` says the bearer was the
+ *  admin secret; `bearerIsProjectSecret` that it was this project's secret — each is the platform's
+ *  credential, which an app never sees (a token or a secret of another project stamps nothing, and
+ *  the cookie still may). `user` is the control plane's session user, or null — what the
+ *  `/expression` lane's membership check reads. */
 type LaneIdentity = {
   principal: Principal | null;
   bearerClaims: ProjectTokenClaims | null;
   bearerIsAdminSecret: boolean;
+  bearerIsProjectSecret: boolean;
   user: ControlPlaneSession | null;
 };
 
@@ -62,6 +66,7 @@ async function laneIdentityOf(
   request: Request,
   projectId: string,
   { projectTokenSecret, adminApiSecret, sessionSecret }: AppConfig,
+  secretsKv: KVNamespace,
 ): Promise<LaneIdentity> {
   const bearerToken = /^Bearer\s+(\S+)$/i.exec(request.headers.get("authorization") ?? "")?.[1];
   const bearerClaims = bearerToken
@@ -71,6 +76,11 @@ async function laneIdentityOf(
     bearerToken !== undefined &&
     bearerClaims === null &&
     (await verifyAdminSecret(bearerToken, adminApiSecret));
+  // the verifiers run in the order the credential union lists them, each only when the last said no
+  const bearerProjectPrincipal =
+    bearerToken !== undefined && bearerClaims === null && !bearerIsAdminSecret
+      ? await verifyProjectSecret(projectId, bearerToken, secretsKv)
+      : null;
   const cookieToken = projectSessionCookieOf(request.headers.get("cookie"));
   const tokenClaims =
     bearerClaims?.projectId === projectId
@@ -84,18 +94,22 @@ async function laneIdentityOf(
       ? { actor: tokenClaims.actor, ...(tokenClaims.email && { email: tokenClaims.email }) }
       : bearerIsAdminSecret
         ? { actor: "admin" }
-        : user
-          ? { actor: user.sub, email: user.email }
-          : null;
-  return { principal, bearerClaims, bearerIsAdminSecret, user };
+        : (bearerProjectPrincipal ?? (user ? { actor: user.sub, email: user.email } : null));
+  return {
+    principal,
+    bearerClaims,
+    bearerIsAdminSecret,
+    bearerIsProjectSecret: bearerProjectPrincipal !== null,
+    user,
+  };
 }
 
 /** The Request a lane hands the context DO — the same Request, its URL, method, body and a
  *  WebSocket upgrade intact, with the headers made the platform's: every inbound `x-itx-*` gone (a
  *  pager or fetch-upgrade header from outside would enter the DO's internal protocol), the cookie
  *  header replaced by `appCookies` (null ⇒ none — what the capability may see), a platform bearer
- *  (a project token, the admin secret) removed (an app's own bearer scheme passes through
- *  untouched), then the expression, the hop count and the principal's stamp. */
+ *  (a project token, the admin secret, this project's secret) removed (an app's own bearer scheme
+ *  passes through untouched), then the expression, the hop count and the principal's stamp. */
 function laneRequestTo(
   request: Request,
   lane: { itxExpression: string; hops: number; appCookies: string | null; identity: LaneIdentity },
@@ -104,7 +118,11 @@ function laneRequestTo(
   for (const name of [...headers.keys()]) if (name.startsWith("x-itx-")) headers.delete(name);
   if (lane.appCookies) headers.set("cookie", lane.appCookies);
   else headers.delete("cookie");
-  if (lane.identity.bearerClaims || lane.identity.bearerIsAdminSecret)
+  if (
+    lane.identity.bearerClaims ||
+    lane.identity.bearerIsAdminSecret ||
+    lane.identity.bearerIsProjectSecret
+  )
     headers.delete("authorization");
   headers.set(ITX_EXPRESSION_FETCH_HEADER, lane.itxExpression);
   headers.set(ITX_EXPRESSION_LANE_HOPS_HEADER, String(lane.hops));
@@ -174,7 +192,7 @@ export default {
           itxExpression: `itx.apps.${projectHost.app}`,
           hops,
           appCookies: withoutProjectSessionCookie(request.headers.get("cookie")) || null,
-          identity: await laneIdentityOf(request, projectId, appConfig),
+          identity: await laneIdentityOf(request, projectId, appConfig, env.SECRETS_KV),
         }),
       );
     }
@@ -188,8 +206,8 @@ export default {
 
     // THE ONE capnweb ENTRYPOINT (the hard rule): capnweb terminates HERE, in the stateless worker;
     // the DO is reached only over Workers RPC. WHO dials is `authenticate(credentials)`'s answer
-    // (session.ts): the control plane's session cookie on THIS request, a project token, or the
-    // admin secret.
+    // (session.ts): the control plane's session cookie on THIS request, a project token, a project
+    // secret, or the admin secret.
     if (url.pathname === "/api") {
       // newWorkersRpcResponse serves BOTH a WebSocket upgrade AND a one-shot HTTP batch —
       // a CLI script or cron does one POST, no socket handshake. (Batch sessions cannot hold
@@ -205,6 +223,7 @@ export default {
           user: await identity(request, env),
           projectTokenSecret,
           adminApiSecret,
+          secretsKv: env.SECRETS_KV,
         }),
       );
     }
@@ -228,20 +247,22 @@ export default {
       } catch (error) {
         return new Response(`${(error as Error).message}\n`, { status: 400 });
       }
-      const identity = await laneIdentityOf(request, address.projectId, appConfig);
+      const identity = await laneIdentityOf(request, address.projectId, appConfig, env.SECRETS_KV);
       // ADMISSION: the caller must be a member of the project — the control plane's cookie (this IS
-      // the platform host) — or bear its token or the admin secret.
+      // the platform host) — or bear its token, its secret or the admin secret.
       const admitted =
         identity.bearerClaims?.projectId === address.projectId ||
         identity.bearerIsAdminSecret ||
+        identity.bearerIsProjectSecret ||
         (identity.user !== null &&
           (await directory(env.DB).listProjects(identity.user.sub)).some(
             (project) => project.id === address.projectId,
           ));
       if (!admitted)
-        return new Response("401: sign in as a member of this project, or bear its token\n", {
-          status: 401,
-        });
+        return new Response(
+          "401: sign in as a member of this project, or bear its token or its secret\n",
+          { status: 401 },
+        );
       // No cookie reaches the capability: every cookie on the platform host is the platform's own.
       const response = await env.ITERATE_CONTEXT.getByName(address.name).fetch(
         laneRequestTo(request, { itxExpression, hops, appCookies: null, identity }),

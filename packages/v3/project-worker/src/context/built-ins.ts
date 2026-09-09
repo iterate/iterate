@@ -2,7 +2,7 @@
 // is context/itx-expression-rewriting.ts). Three kinds of key, one record: the AXIOMS (the log, the stub
 // registry, the rule table, the two hosts, addressing), the BINDINGS (`kv`, `secrets`, `ai`,
 // `cfArtifacts`, `repos` — a Cloudflare binding only this env holds, exposed or scoped) and THE
-// LIBRARY (`connectTo*`, `serveMcp`, src/library/ — code a user could write, taking only `itx`).
+// LIBRARY (`connectTo*`, library.ts — code a user could write, taking only `itx`).
 // THE RECORD IS `itx.builtins`, the reserved root: `itx.builtins.<root>…` runs against it directly
 // and never reads the rule table; a short `itx.<root>…` reaches it through the IMPLICIT PLATFORM ROW
 // unless the context's own table says otherwise (itx-expression-rewriting.ts, rule 5) — so a test may

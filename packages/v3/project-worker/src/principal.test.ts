@@ -1,7 +1,13 @@
-// principal.test.ts — the project token as a table: what verifies, what does not; and the admin
-// secret's compare.
+// principal.test.ts — the project token as a table: what verifies, what does not; the admin secret's
+// compare; and the project secret — minted as a key whose hash alone is stored, verified against it.
 import { expect, test } from "vitest";
-import { signClaims, verifyAdminSecret, verifyProjectToken } from "./principal.ts";
+import {
+  rotateProjectApiKey,
+  signClaims,
+  verifyAdminSecret,
+  verifyProjectSecret,
+  verifyProjectToken,
+} from "./principal.ts";
 
 const SECRET = "test-secret";
 const NOW = 1_800_000_000_000;
@@ -73,3 +79,80 @@ for (const { candidate, secret, becomes } of adminRows)
   test(`verifyAdminSecret(${JSON.stringify(candidate)}, ${JSON.stringify(secret)}) ⇒ ${becomes}`, async () => {
     expect(await verifyAdminSecret(candidate, secret)).toBe(becomes);
   });
+
+// ── the project secret ── `rotateProjectApiKey(projectId, kv)` / `verifyProjectSecret(project, secret,
+// kv)` over a Map-backed KV: the key's shape, the stored hash's shape and key, then `{ project,
+// secret, becomes }` rows around one minted key.
+
+/** A KV namespace as the two functions use it — `get` and `put` over a Map the test can inspect. */
+const kvOf = () => {
+  const rows = new Map<string, string>();
+  const kv = {
+    get: async (key: string) => rows.get(key) ?? null,
+    put: async (key: string, value: string) => {
+      rows.set(key, value);
+    },
+  } as unknown as KVNamespace;
+  return { rows, kv };
+};
+const BASE64URL_32_BYTES = /^[A-Za-z0-9_-]{43}$/;
+
+test("rotateProjectApiKey: 32 random bytes as base64url; only the SHA-256 hash is stored, base64url, under project-api-key:<projectId> — outside the secret:<projectId>: prefix", async () => {
+  const { rows, kv } = kvOf();
+  const key = await rotateProjectApiKey("prj-1", kv);
+  expect(key).toMatch(BASE64URL_32_BYTES);
+  expect([...rows.keys()]).toEqual(["project-api-key:prj-1"]);
+  const stored = rows.get("project-api-key:prj-1")!;
+  expect(stored).toMatch(BASE64URL_32_BYTES); // a digest is 32 bytes too
+  expect(stored).not.toBe(key);
+  expect(await rotateProjectApiKey("prj-1", kv)).not.toBe(key); // every mint is fresh
+});
+
+const secretRows: {
+  title: string;
+  project: string;
+  secret: (key: string) => string;
+  becomes: boolean;
+}[] = [
+  { title: "the right key", project: "prj-1", secret: (key) => key, becomes: true },
+  {
+    title: "a wrong key (one character off)",
+    project: "prj-1",
+    secret: (key) => `${key.slice(0, -1)}${key.endsWith("A") ? "B" : "A"}`,
+    becomes: false,
+  },
+  {
+    title: "a prefix of the key",
+    project: "prj-1",
+    secret: (key) => key.slice(0, -1),
+    becomes: false,
+  },
+  {
+    title: "the right key for the wrong project",
+    project: "prj-2",
+    secret: (key) => key,
+    becomes: false,
+  },
+  { title: "an empty key", project: "prj-1", secret: () => "", becomes: false },
+];
+for (const { title, project, secret, becomes } of secretRows)
+  test(`verifyProjectSecret: ${title} ⇒ ${becomes ? '{ actor: "project:prj-1" }' : "null"}`, async () => {
+    const { kv } = kvOf();
+    const key = await rotateProjectApiKey("prj-1", kv);
+    expect(await verifyProjectSecret(project, secret(key), kv)).toEqual(
+      becomes ? { actor: "project:prj-1" } : null,
+    );
+  });
+
+test("a rotation retires the previous key at once; a project never rotated has no key; a stored hash of the wrong length or not base64url verifies nothing", async () => {
+  const { rows, kv } = kvOf();
+  expect(await verifyProjectSecret("prj-1", "anything", kv)).toBeNull();
+  const first = await rotateProjectApiKey("prj-1", kv);
+  const second = await rotateProjectApiKey("prj-1", kv);
+  expect(await verifyProjectSecret("prj-1", first, kv)).toBeNull();
+  expect(await verifyProjectSecret("prj-1", second, kv)).toEqual({ actor: "project:prj-1" });
+  rows.set("project-api-key:prj-1", "AAAA"); // three bytes, not a digest
+  expect(await verifyProjectSecret("prj-1", second, kv)).toBeNull();
+  rows.set("project-api-key:prj-1", "!!!!"); // not base64url at all
+  expect(await verifyProjectSecret("prj-1", second, kv)).toBeNull();
+});

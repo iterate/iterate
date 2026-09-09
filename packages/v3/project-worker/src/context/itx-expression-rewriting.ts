@@ -111,7 +111,6 @@ export const BUILT_IN_ROOTS = [
   "connectToMcp",
   "connectToOpenApi",
   "connectToCapnweb",
-  "serveMcp",
 ] as const;
 
 export type BuiltInRoot = (typeof BUILT_IN_ROOTS)[number];

@@ -71,7 +71,7 @@ that proves it (chapter 10 has the four kinds).
 export type SessionCredentials =
   | { type: "from-server-cookie" } // a browser: the login cookie rode the handshake, same origin only
   | { type: "project-token"; token: string } // one user on one project
-  | { type: "project-secret"; project: ProjectIdOrSlug; secret: string } // the project itself (step 2 of the auth plan)
+  | { type: "project-secret"; project: ProjectIdOrSlug; secret: string } // the project itself: a device, a headless app
   | { type: "admin-secret"; secret: string; as?: { sub: string; email: string } }; // every project; `as` impersonates
 export class UnauthenticatedSession extends RpcTarget {
   async authenticate(credentials: SessionCredentials): Promise<Session> { /* … */ }
@@ -1493,27 +1493,6 @@ outbound fetch cannot upgrade). A loaded worker can also SERVE a capnweb API —
 `newWorkersRpcResponse` — and `connectToCapnweb` dials it back through `/expression/<path>`, the path
 arriving verbatim (`e2e/library-connectors.e2e.test.ts`).
 
-### `serveMcp()`: this context as an MCP server
-
-The other direction. `itx.serveMcp()` is a handle whose one member is `fetch(request)`, the MCP
-Streamable HTTP endpoint with ONE tool, `itx.invoke({ expression, args? })`, evaluated exactly as
-`itx` evaluates it — through this context's rules, under the request's principal. Mount it as an app
-and it serves at `mcp--<projectId>.<base>/`:
-
-```ts
-await itx.provide("itx.apps.mcp", "itx.serveMcp()");
-const host = `mcp--${projectId}.${projectHostnameBase()}`;
-expect((await mcp(host, "tools/list", {})).message.result.tools.map((t) => t.name)).toEqual(["itx.invoke"]);
-expect((await invokeTool(host, { expression: "itx.kv.put('k', 'v')" })).result).toEqual({ ok: true });
-expect((await invokeTool(host, { expression: "itx.kv.get", args: ["k"] })).result).toBe("v"); // args appended; the parsed form works too
-expect(await itx.kv.get("k")).toBe("v"); // the same kv the session sees
-const missing = await invokeTool(host, { expression: "itx.nope.run()" });
-expect(missing.isError).toBe(true); // an expression error is a tool FAILURE, a 200 — never a 500
-// e2e/library-mcp-server.e2e.test.ts
-```
-
-MCP is not a parallel capability API: a tool call reaches what an expression reaches, nothing more.
-
 ### Memoized per context, released at the quiesce
 
 A connector reached THROUGH a rule is a connect per call as an expression — a fresh MCP session, an
@@ -1523,11 +1502,10 @@ context's idle quiesce — a held connection pins the context awake exactly like
 (`buildLibrary` in `src/library.ts`: a `Map` from the key-sorted JSON of `(verb, url, options)`
 to the connection promise, a failed connect not kept, and `releaseConnections()` calling `close()`
 where there is one, else the disposer). A connection closed by a holder or broken by the far side
-reopens itself on its next use, so a memoized one is never dead; `serveMcp()` is not memoized — it
-holds no connection.
+reopens itself on its next use, so a memoized one is never dead.
 
-**What this brick leaves on the table:** every call so far ran as the lane's admin. A tool call on
-the MCP lane, an event appended from a browser tab, a `provide` from a laptop — who did that?
+**What this brick leaves on the table:** every call so far ran as the lane's admin. An event
+appended from a browser tab, a `provide` from a laptop, an MCP client's tool call — who did that?
 
 ---
 
@@ -1550,20 +1528,43 @@ secret that proves it — and every lane reads the same kinds off a request:
   "admin" }`, every project, `list()` is the whole directory, `create()` lands in `org_admin`. With
   `as: { sub, email }` it is that user's session without a login (the row upserted like `/login`
   does), which is how a confinement test signs in. The e2e lane runs on it.
-- `project-secret`: the project itself (a device, a headless app) — step 2 of the auth plan; the
-  kind is in the type and refused `UNSUPPORTED_CREDENTIAL` until then.
+- `project-secret`: the project itself (a device, a headless app) — its own long-lived key, minted
+  by `projects.get(project).rotateApiKey()`, below. The session is `{ actor: "project:<id>" }`,
+  bound to that one project exactly like a token's.
 
-`/expression` admits a member's cookie, a project token or the admin secret as the bearer; `/mcp`
-is behind the OAuth AS.
+`/expression` admits a member's cookie, a project token, the project's secret or the admin secret as
+the bearer; `/mcp` is behind the OAuth AS.
 
-### The control plane
+### The control plane, and MCP through the one login
 
 Everything on the worker's hostname that is not `/api`, `/expression`, `/version` or `/demo` is the
 control plane, in-process: the console at `/` (`/login`, `/logout`, `POST /projects`); the OAuth 2.1
-Authorization Server (`/authorize`, `/token`, `/register`, `/.well-known/*`) whose ONLY protected
-route is `/mcp`; and `/mcp` with three tools, `whoami`, `list_projects`, `create_project`, acting as
-the user the grant names. The directory is D1 — users → orgs → projects, access is org membership —
-and a project's id IS its DNS-safe slug: the directory row, the DO name and the host label are one name.
+Authorization Server (`/authorize`, `/oauth/token`, `/oauth/register`, `/.well-known/*`) whose ONLY
+protected route — and ONE resource, `<origin>/mcp` — is `/mcp`. The directory is D1 — users → orgs →
+projects, access is org membership — and a project's id IS its DNS-safe slug: the directory row, the
+DO name and the host label are one name.
+
+`/mcp` is the ONE MCP server for every project, and it authenticates through that one login. An MCP
+client discovers the AS from `/.well-known/oauth-protected-resource/mcp`, registers (CIMD by URL, or
+DCR), and sends the user to `/authorize`; the consent page is the project selection — her projects
+as checkboxes, all checked — and approving mints a grant whose props name her and the checked
+projects. The token then reaches four tools: `whoami`, `list_projects`, `create_project`, and
+`itx.invoke({ project?, expression, args? })` — the expression evaluated through THAT project's root
+context, in-process, under her principal (`invokeAs`), so what it appends carries her; `project` is
+optional when the grant reaches exactly one, required for the admin secret (which reaches every
+project as a bearer, `resolveExternalToken`), refused outside the grant. A project's own secret is a
+bearer too, on `/mcp?project=<id>`, and acts as `project:<id>`. MCP is not a parallel capability
+API: a tool call reaches what an expression reaches, for any project the grant names:
+
+```ts
+const { accessToken } = await grantFlow(env, adaCookie, { resource: `${ORIGIN}/mcp`, choose: (ids) => ids.filter((id) => id !== "oa-three") });
+expect(tools.map((t) => t.name)).toEqual(["whoami", "list_projects", "create_project", "itx.invoke"]);
+expect((await invoke({ project: "oa-one", expression: "itx.whoami()" })).result).toEqual({ projectId: "oa-one", path: "/" });
+expect(appended.result[0].source.principal).toEqual({ actor: "user_oauth-ada@example.com", email: "oauth-ada@example.com" });
+expect((await invoke({ project: "oa-three", expression: "itx.whoami()" })).text).toContain("outside this token's grant");
+expect((await invoke({ expression: "itx.whoami()" })).text).toMatch(/pass project — this token reaches oa-one, oa-two/);
+// __workers-tests__/control-plane.test.ts
+```
 
 ### Project tokens, the admin secret, and `Session.whoami`
 
@@ -1588,8 +1589,50 @@ expect((await rejection(api.authenticate({ type: "from-server-cookie" }).whoami(
 // e2e/session.e2e.test.ts
 ```
 
-`projects.list()` and `create()` refuse outright on a token session — a token names one project; the
-catalog's reader and writer is a control-plane user.
+A bound session lists its one project and cannot `create()` — the catalog's writer is a control-plane
+user (or the admin).
+
+### The project secret, and minting tokens
+
+Two doors ride the root context `projects.get(project)` vends, so `get`'s admission — a member, the
+admin, the project's own secret — is their gate, and neither touches a Durable Object.
+
+`rotateApiKey()` mints the project's own key: 32 random bytes as base64url, answered ONCE. Only the
+SHA-256 hash is stored, in `SECRETS_KV` under `project-api-key:<projectId>` — outside the
+`secret:<projectId>:` prefix egress substitutes from, so no `{{secret:project:…}}` placeholder can
+ever mail it out. A reveal IS a rotation: the previous key stops verifying at once, and a project
+has no key until the first call. `authenticate({ type: "project-secret", project, secret })` hashes
+the candidate and compares in constant time (`verifyProjectSecret`, `src/principal.ts`); the session
+it opens IS the project:
+
+```ts
+const key = await mintProjectApiKey(projectId); // e2e/support/principal.ts: projects.get(project).rotateApiKey() on the admin session
+const device = api.authenticate({ type: "project-secret", project: projectId, secret: key });
+expect(await device.whoami()).toEqual({ projectId, actor: `project:${projectId}` });
+await device.projects.get(projectId).append({ type: "reading", payload: { celsius: 21 } }); // stamped { actor: "project:<id>" }
+expect((await device.projects.list()).map((p) => p.id)).toEqual([projectId]); // bound: list is the one project…
+expect((await rejection(device.projects.get(`${projectId}-other`).whoami())).code).toBe("FORBIDDEN"); // …get elsewhere refused
+const next = await device.projects.get(projectId).rotateApiKey(); // any handle that reaches the project may rotate
+expect((await rejection(api.authenticate({ type: "project-secret", project: projectId, secret: key }).whoami())).code).toBe("INVALID_CREDENTIALS"); // the old key died
+// e2e/session.e2e.test.ts
+```
+
+`mintToken({ ttlSeconds? })` signs a project token for that project as whoever holds the handle —
+the admin, a member, the project itself — 15 minutes by default, 24 hours at most; it is what the
+console links a project host through (`/.itx/session?token=`, below), and what a script presents
+as a bearer:
+
+```ts
+const adminToken = await itx.mintToken(); // the admin's handle ⇒ { projectId, actor: "admin" }
+expect(await api.authenticate({ type: "project-token", token: adminToken }).whoami()).toEqual({ projectId, actor: "admin" });
+const hers = await ada.projects.get(own).mintToken({ ttlSeconds: 60 }); // a member's ⇒ her principal, her project
+const asItself = await api.authenticate({ type: "project-secret", project: projectId, secret: next }).projects.get(projectId).mintToken();
+expect(await api.authenticate({ type: "project-token", token: asItself }).whoami()).toEqual({ projectId, actor: `project:${projectId}` });
+// e2e/session.e2e.test.ts
+```
+
+A handle no session vended — a loaded worker's `env.ITX` — has neither door (`FORBIDDEN`): loaded
+code speaks for the project and signs as nobody.
 
 ### The principal is stamped on events, and carried by `cd`
 
@@ -1623,8 +1666,11 @@ attributed the same way (`e2e/secrets.e2e.test.ts`).
 `/.itx/session?token=<projectToken>&next=<path>` turns a token for THIS project into the host-scoped
 `itx-project-session` cookie (HttpOnly, Secure, SameSite=Lax, until the token expires) and redirects,
 never off the host; `?logout` clears it. A valid token — the cookie (a browser) or
-`Authorization: Bearer <projectToken>` (the machine lane: an MCP client, a script; the bearer wins) —
-stamps `x-itx-principal` on the Request the app sees. The token itself never reaches the app:
+`Authorization: Bearer <projectToken>` (a script; the bearer wins) —
+stamps `x-itx-principal` on the Request the app sees. The token itself never reaches the app. The
+project's own secret as the bearer is THE DEVICE LANE (the kit's provisioning partition carries the
+project slug and this key): the app sees `{ actor: "project:<id>" }`, never the key; another
+project's secret is nobody here and passes through as the app's own bearer would:
 
 ```ts
 const door = await fetchProjectHost(host, `/.itx/session?token=${token}&next=/w`);
@@ -1634,14 +1680,16 @@ const seen = JSON.parse((await fetchProjectHost(host, "/echo", { cookie: `${cook
 expect(seen.principal).toEqual(principal); // the verified stamp…
 expect(seen.cookie).toBe("theme=dark"); // …never the platform's cookie; the visitor's own cookies still reach the app
 expect((await fetchProjectHost(host, `/.itx/session?token=${foreign}&next=/`)).status).toBe(401); // another project's token; a visitor's own x-itx-principal is stripped
+const device = JSON.parse((await fetchProjectHost(host, "/echo", { authorization: `Bearer ${await mintProjectApiKey(projectId)}` })).text);
+expect(device.principal).toEqual({ actor: `project:${projectId}` }); // the device lane…
+expect(device.authorization).toBeNull(); // …the platform's credential, stripped
 // e2e/ingress-project-host.e2e.test.ts
 ```
 
-On the MCP lane, a bearer for this project stamps `source.principal` on what a `tools/call` appends;
-no bearer, or a bearer for another project, stamps nothing and is not refused — the app decides who
-may call, the platform only attributes (`e2e/library-mcp-server.e2e.test.ts`). The principal is
-attribution only: an unattributed call on a mounted `serveMcp()` reaches everything the context can
-spell, `itx.builtins.*` included — a mount is the whole context to whoever can reach the host.
+On `/mcp`, the bearer's principal — the grant's user, `admin`, `project:<id>` — is what a
+`tools/call` appends under (the control plane section above); there is no unauthenticated MCP
+door: the provider refuses a request with no bearer, or a token for another resource, before a
+tool runs.
 
 **What this brick leaves on the table:** nothing about correctness. What is left is cost: a
 context with a thousand clients attached, a hosted facet, a memoized MCP session and a retry ladder
@@ -1741,7 +1789,7 @@ only, in `e2e/stream-isolate-ceilings-deployed.e2e.test.ts` and `e2e/stream-isol
 | 6 | facets, processors, live state | the DO's `#invokeFacet`, `src/stream/processor.ts`, `src/sdk/index.ts`, `src/client/` |
 | 7 | loaded workers, `env.ITX`, the loader, the config worker, repos | `src/context/worker-loader.ts`, `src/iterate-context.ts`, `src/sdk/index.ts`, `src/context/repos.ts` |
 | 8 | egress with secrets, `/expression`, project hosts, the upgrade leg | `src/iterate-context-durable-object.ts`, `src/context/rpc-stubs.ts`, `src/worker.ts` |
-| 9 | the library and `serveMcp` | `src/library.ts` |
+| 9 | the library | `src/library.ts` |
 | 10 | identity, tokens, the control plane | `src/principal.ts`, `src/session.ts`, `src/control-plane.ts` |
 | 11 | pagers, the quiesce, alarms, the watchdog, the breaker | `src/iterate-context-durable-object.ts`, `src/stream/stream.ts` |
 
@@ -1791,8 +1839,8 @@ Every client snippet above is lifted from, or composed of calls made by, these f
 | 6 | `e2e/workers-and-facets.e2e.test.ts`, `e2e/support/sources.ts`, `e2e/processor-facets.e2e.test.ts`, `e2e/live-state-chains-client-side.e2e.test.ts`, `e2e/stream.e2e.test.ts` |
 | 7 | `e2e/session.e2e.test.ts`, `e2e/workers-and-facets.e2e.test.ts`, `e2e/stream.e2e.test.ts`, `e2e/rpc-stubs-values.e2e.test.ts`, `e2e/config-worker.e2e.test.ts`, `e2e/cfartifacts.e2e.test.ts` (deployed only), `e2e/config-worker.e2e.test.ts` (deployed only) |
 | 8 | `e2e/secrets.e2e.test.ts`, `e2e/fetch-door.e2e.test.ts`, `e2e/session.e2e.test.ts`, `e2e/ingress-project-host.e2e.test.ts` |
-| 9 | `e2e/library-connectors.e2e.test.ts` (against the deployed pet shop; the WebSocket transports deployed only), `e2e/library-connectors.e2e.test.ts`, `e2e/library-mcp-server.e2e.test.ts` |
-| 10 | `e2e/session.e2e.test.ts`, `e2e/secrets.e2e.test.ts`, `e2e/ingress-project-host.e2e.test.ts`, `e2e/library-mcp-server.e2e.test.ts` |
+| 9 | `e2e/library-connectors.e2e.test.ts` (against the deployed pet shop; the WebSocket transports deployed only) |
+| 10 | `e2e/session.e2e.test.ts`, `e2e/secrets.e2e.test.ts`, `e2e/ingress-project-host.e2e.test.ts`, `__workers-tests__/control-plane.test.ts` (the `/mcp` rows) |
 | 11 | `e2e/stream.e2e.test.ts` (opt-in, deployed only), `__workers-tests__/hibernation-at-scale.test.ts`, `__workers-tests__/alarm-quiesce.test.ts` |
 
 The server snippets are abridged from the files named in each code block's first comment. The rule

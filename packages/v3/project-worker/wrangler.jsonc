@@ -15,7 +15,10 @@
   // allow_irrevocable_stub_storage (experimental, undocumented): lets loaded code STORE its env.ITX
   // stub in its own durable storage and replay it (e2e/workers-and-facets.e2e.test.ts pins it); every worker
   // in the chain needs it, so the loaded isolates carry it too (context/worker-loader.ts).
-  "compatibility_flags": ["allow_irrevocable_stub_storage"],
+  // global_fetch_strictly_public: the OAuth provider's Client ID Metadata Documents (control-plane.ts
+  // `clientIdMetadataDocumentEnabled`) — its fetch of a client's metadata URL must reach the public
+  // internet only, never same-zone routing; without the flag the provider advertises no CIMD.
+  "compatibility_flags": ["allow_irrevocable_stub_storage", "global_fetch_strictly_public"],
   "account_id": "04b3b57291ef2626c6a8daa9d47065a7",
   "observability": { "enabled": true, "logs": { "head_sampling_rate": 1 } },
   "workers_dev": true,

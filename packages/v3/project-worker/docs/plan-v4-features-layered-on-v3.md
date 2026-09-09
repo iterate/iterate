@@ -11,7 +11,7 @@
 > fixes; the FQDN host; the json5 patch is gone), 1.7 (the directory, slugs = ids; custom domains not),
 > 1.10-A (`reduceBatch`, `using` on the SDK host, `core` reserved), 1.10-B (§2.3 halt-once, §2.6 the
 > lease is the handle, §2.7 poisoned-stub drop), 1.1 (`itx.secrets` + origin binding), 1.2
-> (`itx.serveMcp()` + the bearer on project hosts), 1.3 (`src/types.ts`), 1.11's
+> (the bearer on project hosts; the per-project MCP mount was replaced on 2026-09-09 by the one `/mcp` for every project), 1.3 (`src/types.ts`), 1.11's
 > `subscribe({ afterOffset })`. The files half of 1.4 arrived as `itx.repos` over Cloudflare
 > Artifacts (real git) rather than a facet. Sign-in is the control plane's (`authenticate()` +
 > `projects.list/get/create`), which settles decision 5. OPEN: 1.5 build/check, 1.6's structural

@@ -115,13 +115,14 @@ packages/v3/project-worker/
                                  codec), stampPrincipal (source.principal), x-itx-principal
     types.ts                     the `./types` export: the session and context types, hand-written
     control-plane.ts             THE CONTROL PLANE, in-process (the catch-all): the OAuth AS wrapper
-                                 (/authorize /token /register /.well-known, /mcp its one protected route),
-                                 the login form, the session cookie, the console, /projects, the /authorize
-                                 consent, the D1 directory (users → orgs → projects; a project's id IS its
-                                 slug), /mcp (whoami, list_projects, create_project); control-plane.sql is
-                                 the schema
+                                 (/authorize /oauth/token /oauth/register /.well-known, /mcp its one
+                                 protected route and its one resource), the login form, the session cookie,
+                                 the console, /projects, the /authorize consent with project selection,
+                                 the D1 directory (users → orgs → projects; a project's id IS its slug),
+                                 /mcp — the ONE MCP server for every project (whoami, list_projects,
+                                 create_project, itx.invoke); control-plane.sql is the schema
     iterate-context.ts           IterateContext, the client-facing RpcTarget: a PROXY in front of the DO —
-                                 cd · invoke · provide · subscribe · enableProcessor · disableProcessor;
+                                 cd · invoke · provide · subscribe · enableProcessor · disableProcessor · mintToken · rotateApiKey;
                                  RewriteRuleHandle / SubscriptionHandle (disposable); the DO-name codec
                                  (DurableObjectNameCodec, resolveContextPath); ItxEntrypoint (what a loaded
                                  worker's env.ITX is)
@@ -129,12 +130,12 @@ packages/v3/project-worker/
                                  rpc stubs + the fetch doors + egress (substituteProjectSecrets:
                                  {{secret:project:NAME}} in the URL + headers). One class.
     lib.ts                       codedError / errorCode / reportIssue · diff / applyPatch / jsonEqual · withTimeout
-    library.ts                   THE LIBRARY: connectToMcp, connectToOpenApi, connectToCapnweb, serveMcp
-                                 (this context as an MCP server, one tool itx.invoke); the memo table
+    library.ts                   THE LIBRARY: connectToMcp, connectToOpenApi, connectToCapnweb; the memo
+                                 table
     context/                     chapter 1 — the context: rpc stubs, expressions, rewrite rules
       built-ins.ts               the kernel roots: whoami, kv, secrets, ai, cfArtifacts, repos, append, readEvents,
                                  waitForEvent, cd, fetch, rpcStubs, rewriteRules, facets, subscriptions, workers,
-                                 connectToMcp, connectToOpenApi, connectToCapnweb, serveMcp (library.ts)
+                                 connectToMcp, connectToOpenApi, connectToCapnweb (library.ts)
       expression.ts              the codec: "itx.a.b(1)" ⇄ ["itx","a",["b",1]]; ItxExpression /
                                  ItxExpressionInput / ItxExpressionPrefix; walkSteps / callOn (execute a
                                  rewritten call's steps on a live object graph); the dotted door — the
@@ -231,11 +232,14 @@ user's org, created on first use. WHO: `authenticate(credentials)` takes one of 
 kinds (`SessionCredentials`): `from-server-cookie` — the control plane's session cookie
 that rode the handshake, honoured on a same-origin request only (a foreign `Origin`, or
 no cookie, ⇒ `UNAUTHENTICATED`); `project-token` — a principal bound to ONE project
-(`get` of any other is `FORBIDDEN`; `list` and `create` need a signed-in user);
-`admin-secret` — the deployment's `APP_CONFIG_ADMIN_API_SECRET`, `{ actor: "admin" }`
+(`get` of any other is `FORBIDDEN`; `list` is that project; `create` needs a signed-in
+user); `admin-secret` — the deployment's `APP_CONFIG_ADMIN_API_SECRET`, `{ actor: "admin" }`
 on every project (with `as: { sub, email }` that user's session, no login);
-`project-secret` — refused `UNSUPPORTED_CREDENTIAL` until step 2 of the auth plan. A
-user's `get` admits members of the owning org only. One
+`project-secret` — the project's own key, `{ actor: "project:<id>" }`, bound like a
+token's. The root context `get` vends carries the two project doors:
+`itx.mintToken({ ttlSeconds? })` signs a project token as the session's principal, and
+`itx.rotateApiKey()` mints the project's key (only its hash is stored — a reveal IS a
+rotation). A user's `get` admits members of the owning org only. One
 session may hold contexts of many projects; the session's `SessionTeardown` is keyed by the
 JSON pair `[iterateContextName, rpcStubKey]`, so two contexts lending under the same key never
 recall each other's stubs.
@@ -269,17 +273,17 @@ type ProjectIdOrSlug = string;
 type SessionCredentials =
   | { type: "from-server-cookie" } // the login cookie on the handshake, same origin only
   | { type: "project-token"; token: string } // short-lived, ONE user on ONE project
-  | { type: "project-secret"; project: ProjectIdOrSlug; secret: string } // the project itself (step 2)
+  | { type: "project-secret"; project: ProjectIdOrSlug; secret: string } // the project itself: `rotateApiKey` minted it
   | { type: "admin-secret"; secret: string; as?: { sub: string; email: string } }; // every project; `as` impersonates
-/** Who a session is: a principal, bound to ONE project when it came from a project token; the
- *  admin secret's is `{ actor: "admin" }`. */
+/** Who a session is: a principal, bound to ONE project when it came from a project token or the
+ *  project secret; the admin secret's is `{ actor: "admin" }`. */
 type SessionPrincipal = Principal & { projectId?: string }; // Principal = { actor: string; email?: string }
 
 class UnauthenticatedSession extends RpcTarget {
   /** THE introduction door. Each kind has its check and its refusal, coded: the cookie on a
    *  cross-origin browser request, or no cookie at all, is UNAUTHENTICATED; a token or a secret that
-   *  does not verify is INVALID_CREDENTIALS, whatever is wrong with it; a kind this deployment does
-   *  not serve yet is UNSUPPORTED_CREDENTIAL. The admin's `as` upserts the user's row like /login. */
+   *  does not verify is INVALID_CREDENTIALS, whatever is wrong with it. The admin's `as` upserts
+   *  the user's row like /login. */
   authenticate(credentials: SessionCredentials): Promise<Session>;
   /** capnweb calls this when the session ends: every stub this session lent is recalled
    *  (its pager closed), and every handle it exported is disposed — see 4.2. */
@@ -288,7 +292,8 @@ class UnauthenticatedSession extends RpcTarget {
 
 class Session extends RpcTarget {
   /** Who this session is: the user (the cookie's, the admin's `as`), the token's principal (and its
-   *  project), or `{ actor: "admin" }`. */
+   *  project), the project itself (`{ projectId, actor: "project:<projectId>" }`), or
+   *  `{ actor: "admin" }`. */
   whoami(): SessionPrincipal;
   /** The project catalog. A getter, not a field: capnweb exposes prototype members only. */
   get projects(): ProjectCollection;
@@ -298,21 +303,22 @@ class Session extends RpcTarget {
 type Project = { id: string; orgId: string; role?: string };
 
 class ProjectCollection extends RpcTarget {
-  /** The projects the user can reach — a member of the owning org — with their role; for the admin
-   *  secret, every project in the directory (no role). */
+  /** The projects the user can reach — a member of the owning org — with their role; the one project
+   *  a bound session names (its row, no role); for the admin secret, every project (no role). */
   list(): Promise<Project[]>;
   /** Create the project named `project` (slugified: that IS its id) in the user's org — their first,
    *  created on first use — or in the deployment's own `org_admin` for the admin secret, and vend its
    *  root context. A name ANY org already holds is refused, coded (PROJECT_NAME_TAKEN); the same
    *  org's again is idempotent. */
   create(input: { project: ProjectIdOrSlug }): Promise<IterateContext>;
-  /** The project's root context ("/"). A project only — a context name belongs to `cd`. A session
-   *  with a project token holds the token's ONE project; a user's session holds the projects of
-   *  their orgs (one directory read); the admin secret's holds any. The DO itself is materialized
-   *  by the first door that reaches it (its constructor appends `stream/created` + `stream/woken`,
-   *  section 5.5). */
+  /** The project's root context ("/") — and, on it, the two project doors `mintToken` and
+   *  `rotateApiKey` (4.2), gated by this very admission. A project only — a context name belongs
+   *  to `cd`. A bound session (a project token, the project secret) holds its ONE project; a
+   *  user's session holds the projects of their orgs (one directory read); the admin secret's
+   *  holds any. The DO itself is materialized by the first door that reaches it (its constructor
+   *  appends `stream/created` + `stream/woken`, section 5.5). */
   get(project: ProjectIdOrSlug): Promise<IterateContext>;
-  // list() and create() on a token session are FORBIDDEN: a token names one project.
+  // create() on a bound session is FORBIDDEN: a token or the project secret names one project.
 }
 ```
 
@@ -380,6 +386,18 @@ class IterateContext extends RpcTarget {
   /** `subscription-configured { name, target: null }` — ONE event; the DO deletes the facet the
    *  removed row hosted, storage included: a re-enable is a clean rebuild. */
   disableProcessor(name: string): Promise<void>;
+
+  // ── the project doors: what the session that vended this context may do FOR THE PROJECT, no DO touched ──
+  /** A PROJECT TOKEN for this project as this context's principal — `ProjectTokenClaims` signed
+   *  with `APP_CONFIG_PROJECT_TOKEN_SECRET`: what `/.itx/session?token=` on a project host turns
+   *  into its cookie, what a script presents as a bearer. Reaching this context IS the gate (a
+   *  member, the admin, or the project's own secret — then the actor is `project:<projectId>`).
+   *  15 minutes by default, 24 hours at most; a handle no session vended (`env.ITX`) is FORBIDDEN. */
+  mintToken(input?: { ttlSeconds?: number }): Promise<string>;
+  /** The project's API KEY, minted fresh and answered ONCE: only its SHA-256 hash is stored
+   *  (`SECRETS_KV` `project-api-key:<projectId>`), so a reveal IS a rotation and the previous key
+   *  stops verifying at once; a project has no key until the first call. The same gate. */
+  rotateApiKey(): Promise<string>;
 
   // ── everything else: the DO's built-in roots and every rewrite rule ──
   /** Any undeclared dotted access reduces into invoke: itx.append({...}), itx.readEvents(0),
@@ -665,8 +683,6 @@ interface BuiltInScope {
     options?: OpenApiConnectOptions,
   ): Promise<OpenApiConnection>;
   connectToCapnweb(url: string, options?: CapnwebConnectOptions): Promise<CapnwebConnection>;
-  // this context as an MCP server: `.fetch(request)`, one tool `itx.invoke({ expression, args? })`
-  serveMcp(): McpServerHandle;
 }
 
 /** Where code comes from: the worker's MODULES, literally — module name → code, `"cap.js"` the
@@ -1431,18 +1447,29 @@ Injected into loaded isolates, never deployed as a class:
 | -------------- | -------------------------------------- | ------------------------------------------------------ |
 | `processor.js` | `src/sdk/index.ts` via `build-sdk.mjs` | the userspace SDK (section 5.3), present in every load |
 
-The control plane (`src/control-plane/`, the catch-all — one worker, one front door): an OAuth 2.1
-Authorization Server (`@cloudflare/workers-oauth-provider`) owning `/authorize`, `/token`,
-`/register`, `/.well-known/*` and token validation on `/mcp` (its ONLY protected route); everything
-else falls through to `app` — the console
-at `/`, the email login form (`POST /login`, `/logout`; the session is the signed
-`itx-control-plane-session` cookie, `signClaims` under `APP_CONFIG_SESSION_SECRET`), `POST /projects`
-(the console's form; a program creates projects over `/api`, `projects.create`), the `/authorize`
-consent page (approve, or switch account — the grant is the user; the tools act on the user's projects). `/mcp` serves three tools:
-`whoami`, `list_projects`, `create_project`. The directory (`directory.ts`, D1 through `prepare().bind()`,
-`definitions.sql`): users → orgs via `org_members` → projects; access is org membership; a project's
-id is ONE DNS-safe slug — the directory row, the DO name and the host label. The admin secret's
-projects live in `org_admin`, the deployment's own org (no members).
+The control plane (`src/control-plane.ts`, the catch-all — one worker, one front door): an OAuth 2.1
+Authorization Server (`@cloudflare/workers-oauth-provider`, built per request from the request's
+origin — the provider wants its one resource as an absolute URL) owning `/oauth/token`,
+`/oauth/register` (DCR; CIMD for clients that self-describe by URL), `/.well-known/*` and the bearer
+check on `/mcp` (its ONLY protected route, and its ONE resource: `<origin>/mcp`, this origin the
+authorization server — every token is bound to it, a foreign one refused); everything else falls
+through to `app` — the console at `/`, the email login form (`POST /login`, `/logout`; the session is
+the signed `itx-control-plane-session` cookie, `signClaims` under `APP_CONFIG_SESSION_SECRET`),
+`POST /projects` (the console's form; a program creates projects over `/api`, `projects.create`),
+and the `/authorize` consent page — THE PROJECT SELECTION: the user's projects as checkboxes, all
+checked; approving grants the client the user on the checked ones (`props: { sub, email, projects }`;
+a user with nothing to choose from grants a `projects`-less grant that follows their membership).
+`/mcp` is the ONE MCP server for every project, four tools: `whoami` (the props), `list_projects`
+(what the bearer reaches), `create_project({ project })`, and `itx.invoke({ project?, expression,
+args? })` — the expression evaluated through THAT project's root context in-process under the
+bearer's principal (the DO's `invokeAs`), `project` optional when the grant reaches exactly one,
+required for the admin secret, refused outside the grant (apps/os's `resolveToolProject`); an
+expression error is an `isError` result led by its code. Two more bearers ride the provider's
+`resolveExternalToken`: the admin secret (`{ actor: "admin" }`, every project) and a project's own
+secret on `/mcp?project=<id>` (`{ actor: "project:<id>" }`, that project). The directory (D1 through
+`prepare().bind()`, `control-plane.sql`): users → orgs via `org_members` → projects; access is org
+membership; a project's id is ONE DNS-safe slug — the directory row, the DO name and the host label.
+The admin secret's projects live in `org_admin`, the deployment's own org (no members).
 
 Bindings (`wrangler.jsonc`):
 

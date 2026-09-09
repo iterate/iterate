@@ -6,8 +6,13 @@
 //   • the token names ONE project (FORBIDDEN elsewhere); a bad or expired token is INVALID_CREDENTIALS
 //   • the admin secret: `{ actor: "admin" }` on any project, every project listed; a wrong secret is
 //     INVALID_CREDENTIALS; `as` is that user's session — confined to their orgs' projects, creating
-//     in their own org; `from-server-cookie` with no cookie is UNAUTHENTICATED; `project-secret` is
-//     UNSUPPORTED_CREDENTIAL until step 2 of the auth plan
+//     in their own org; `from-server-cookie` with no cookie is UNAUTHENTICATED; a `project-secret`
+//     for a project that never rotated a key is INVALID_CREDENTIALS
+//   • the project secret: `rotateApiKey()` mints it (a reveal IS a rotation; the previous key dies);
+//     `authenticate({ type: "project-secret" })` IS the project — `{ actor: "project:<id>" }` on every
+//     append, bound to its one project (FORBIDDEN elsewhere, `list()` is that project, `create()` is
+//     FORBIDDEN); `mintToken()` on the admin's, a member's and the project's own handle signs a token
+//     the project-token door accepts, carrying the minter's principal
 //   • the built-in cd carries the principal to a SIBLING context
 //   • one-shot HTTP batch at /api (a socketless CLI client), an inline-source worker, a fetch-shaped
 //     target through the session as a dotted `.fetch(request)` behind a rewrite rule (the commissioned
@@ -31,7 +36,7 @@ import {
   sleep,
   workerUrl,
 } from "./support/client.ts";
-import { mintProjectToken } from "./support/principal.ts";
+import { mintProjectApiKey, mintProjectToken } from "./support/principal.ts";
 import { freshDnsSafeProjectId, projectHostsAreLocal } from "./support/project-host.ts";
 import { SOURCES } from "./support/sources.ts";
 
@@ -78,7 +83,7 @@ test("a project token: whoami, source.principal on every append (unforgeable), t
   ).toBe("INVALID_CREDENTIALS");
 });
 
-test('the admin secret: `{ actor: "admin" }` on any project and every project listed; `as` is that user\'s session, confined to their orgs; a wrong secret, a cookie this socket never carried and the project-secret kind are refused, coded', async () => {
+test('the admin secret: `{ actor: "admin" }` on any project and every project listed; `as` is that user\'s session, confined to their orgs; a wrong secret, a cookie this socket never carried and a project secret no rotation minted are refused, coded', async () => {
   const api = session();
   const admin = api.authenticate(adminCredentials());
   expect(await admin.whoami()).toEqual({ actor: "admin" });
@@ -121,7 +126,79 @@ test('the admin secret: `{ actor: "admin" }` on any project and every project li
   const secret = await rejection(
     api.authenticate({ type: "project-secret", project: projectId, secret: "x" }).whoami(),
   );
-  expect(codeOf(secret), secret.message).toBe("UNSUPPORTED_CREDENTIAL");
+  expect(codeOf(secret), secret.message).toBe("INVALID_CREDENTIALS"); // no key until the first rotateApiKey
+});
+
+test("the project secret: rotateApiKey mints it and the previous key dies; the session it opens IS the project — bound to it, listing it, stamping project:<id>; mintToken signs a token the project-token door accepts, as the admin, a member, and the project itself", async () => {
+  const api = session();
+  const admin = api.authenticate(adminCredentials());
+  const projectId = freshDnsSafeProjectId("secret");
+  const itx = await admin.projects.create({ project: projectId });
+
+  // a reveal IS a rotation: the key comes back once, only its hash is kept
+  const key = await mintProjectApiKey(projectId);
+  expect(key).toMatch(/^[A-Za-z0-9_-]{43}$/);
+  const device = api.authenticate({ type: "project-secret", project: projectId, secret: key });
+  expect(await device.whoami()).toEqual({ projectId, actor: `project:${projectId}` });
+  // every append the device makes is the project's — the DO's stamp, a client's own overwritten
+  await device.projects.get(projectId).append({
+    type: "reading",
+    payload: { celsius: 21 },
+    source: { principal: { actor: "forged" } },
+  });
+  expect((await readAll(itx)).find((e) => e.type === "reading")?.source?.principal).toEqual({
+    actor: `project:${projectId}`,
+  });
+  // bound to its one project
+  expect((await device.projects.list()).map((p: { id: string }) => p.id)).toEqual([projectId]);
+  const elsewhere = await rejection(device.projects.get(`${projectId}-other`).whoami());
+  expect(codeOf(elsewhere), elsewhere.message).toBe("FORBIDDEN");
+  const create = await rejection(device.projects.create({ project: `${projectId}-new` }));
+  expect(codeOf(create), create.message).toBe("FORBIDDEN");
+  const wrong = await rejection(
+    api.authenticate({ type: "project-secret", project: projectId, secret: `${key}x` }).whoami(),
+  );
+  expect(codeOf(wrong), wrong.message).toBe("INVALID_CREDENTIALS");
+
+  // a rotation — from any handle that reaches the project, the device's own included — retires the key
+  const next = await device.projects.get(projectId).rotateApiKey();
+  expect(next).not.toBe(key);
+  const stale = await rejection(
+    api.authenticate({ type: "project-secret", project: projectId, secret: key }).whoami(),
+  );
+  expect(codeOf(stale), stale.message).toBe("INVALID_CREDENTIALS");
+  expect(
+    await api.authenticate({ type: "project-secret", project: projectId, secret: next }).whoami(),
+  ).toEqual({ projectId, actor: `project:${projectId}` });
+
+  // mintToken: a project token as whoever holds the handle — 15 minutes by default, 24 hours at most
+  const adminToken = await itx.mintToken();
+  expect(await api.authenticate({ type: "project-token", token: adminToken }).whoami()).toEqual({
+    projectId,
+    actor: "admin",
+  });
+  const email = `${projectId}@example.com`;
+  const ada = api.authenticate(adminCredentials({ sub: `user_${email}`, email }));
+  const own = `${projectId}-own`;
+  await ada.projects.create({ project: own });
+  const hers = await ada.projects.get(own).mintToken({ ttlSeconds: 60 });
+  expect(await api.authenticate({ type: "project-token", token: hers }).whoami()).toEqual({
+    projectId: own,
+    actor: `user_${email}`,
+    email,
+  });
+  const notHers = await rejection(ada.projects.get(projectId).mintToken()); // `get` refuses first
+  expect(codeOf(notHers), notHers.message).toBe("FORBIDDEN");
+  const asItself = await api
+    .authenticate({ type: "project-secret", project: projectId, secret: next })
+    .projects.get(projectId)
+    .mintToken();
+  expect(await api.authenticate({ type: "project-token", token: asItself }).whoami()).toEqual({
+    projectId,
+    actor: `project:${projectId}`,
+  });
+  const tooLong = await rejection(itx.mintToken({ ttlSeconds: 24 * 60 * 60 + 1 }));
+  expect(tooLong.message).toMatch(/between 1 second and 24 hours/);
 });
 
 test("the built-in cd carries the principal to a SIBLING context — an event appended through `itx.cd('/x').append(…)` is attributed like one appended at the root", async () => {

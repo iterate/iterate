@@ -140,7 +140,6 @@ interface BuiltInScope {
   connectToMcp(url, options?): Promise<McpConnection>; // THE LIBRARY: first-party code that takes only itx
   connectToOpenApi(specOrUrl, options?): Promise<OpenApiConnection>;
   connectToCapnweb(url, options?): Promise<CapnwebConnection>;
-  serveMcp(): McpServerHandle; // THIS context as an MCP server: `.fetch(request)`, ONE tool `itx.invoke({ expression, args? })`; mount: provide("itx.apps.mcp", "itx.serveMcp()")
   waitForEvent(filter?: WaitForEventFilter): Promise<StreamEvent>;
   /** Absolute by convention ("/agents/x"); relative and ".." also resolve. Same resolver as the edge `cd`. */
   cd(path: string): InvokeHandle;
@@ -528,7 +527,7 @@ await itx.append({
 class UnauthenticatedSession extends RpcTarget {
   /** One of four credential kinds (src/session.ts SessionCredentials): from-server-cookie (the login cookie
    *  on the handshake, same origin only, else UNAUTHENTICATED), project-token (a principal bound to ONE
-   *  project), admin-secret (every project; `as` impersonates a user), project-secret (step 2 of the auth plan). */
+   *  project), admin-secret (every project; `as` impersonates a user), project-secret (the project itself, bound the same way). */
   authenticate(credentials: SessionCredentials): Promise<Session>;
   [Symbol.dispose](): void;
 } // what /api serves; dispose: relays + anonymous subscriptions
@@ -543,7 +542,7 @@ class ProjectCollection extends RpcTarget {
 } // list/create need a signed-in user or the admin: a token session holds its one project
 
 // iterate-context.ts — A PROXY IN FRONT OF THE DO. Declares only what must be edge code, in the order the tutorial builds them;
-// every DO built-in root (append · readEvents · waitForEvent · fetch · whoami · kv · secrets · ai · cfArtifacts · repos · rpcStubs.get/list · rewriteRules · facets · subscriptions · workers · connectToMcp · connectToOpenApi · connectToCapnweb · serveMcp)
+// every DO built-in root (append · readEvents · waitForEvent · fetch · whoami · kv · secrets · ai · cfArtifacts · repos · rpcStubs.get/list · rewriteRules · facets · subscriptions · workers · connectToMcp · connectToOpenApi · connectToCapnweb)
 // and every rewrite rule ride the prototype hop into ONE invoke(expression) with ZERO code here.
 class IterateContext extends RpcTarget {
   cd(path: string): IterateContext; // pure addressing, zero DO hops; returns an EDGE context

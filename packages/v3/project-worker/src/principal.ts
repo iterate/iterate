@@ -1,14 +1,17 @@
 // principal.ts — WHO is calling, as the platform carries it. A PROJECT TOKEN is a signed claim
-// `{ projectId, actor, email?, expiresAt }` minted by a holder of the secret — today the e2e support
-// (e2e/support/principal.ts); the control plane mints none yet — and verified here with the shared
-// secret (`APP_CONFIG_PROJECT_TOKEN_SECRET`). The principal it yields rides the session
-// (`authenticate({ type: "project-token", token })` → `session.whoami()`), is stamped by the DO onto
-// every event that session appends (`source.principal`, unforgeable: the DO owns the field), and
-// reaches an app on a project host as the `x-itx-principal` header after the token check (cookie or
-// bearer, worker.ts). On an EVENT the principal is ATTRIBUTION; at the SESSION it is also authority
-// (session.ts): a project token binds its session to the token's one project, a control-plane user's
-// session admits the projects of their orgs, and the ADMIN SECRET (`verifyAdminSecret`,
-// `APP_CONFIG_ADMIN_API_SECRET`) is `{ actor: "admin" }` on every project.
+// `{ projectId, actor, email?, expiresAt }` minted by a holder of the secret — `mintToken` on a
+// project's handle (iterate-context.ts), the e2e support (e2e/support/principal.ts) — and verified
+// here with the shared secret (`APP_CONFIG_PROJECT_TOKEN_SECRET`). The principal it yields rides the
+// session (`authenticate({ type: "project-token", token })` → `session.whoami()`), is stamped by the
+// DO onto every event that session appends (`source.principal`, unforgeable: the DO owns the field),
+// and reaches an app on a project host as the `x-itx-principal` header after the token check (cookie
+// or bearer, worker.ts). On an EVENT the principal is ATTRIBUTION; at the SESSION it is also
+// authority (session.ts): a project token binds its session to the token's one project, a
+// control-plane user's session admits the projects of their orgs, the ADMIN SECRET
+// (`verifyAdminSecret`, `APP_CONFIG_ADMIN_API_SECRET`) is `{ actor: "admin" }` on every project, and
+// a PROJECT SECRET — the project's own long-lived key (`rotateProjectApiKey` mints it, only its hash
+// is kept; `verifyProjectSecret` checks a candidate) — is `{ actor: "project:<projectId>" }` on that
+// one project: a device, a headless app, speaking AS the project.
 //
 // `signClaims` / `verifyClaims` is THE ONE signed-claims codec — `<payload>.<sig>`, payload =
 // base64url(UTF-8 JSON), sig = base64url(HMAC-SHA256(payload)) — the control plane's session cookie
@@ -117,18 +120,69 @@ export async function verifyProjectToken(
   };
 }
 
-/** Whether `candidate` IS `secret` — the admin secret's check (`APP_CONFIG_ADMIN_API_SECRET`: at
- *  `authenticate({ type: "admin-secret" })` and as a lane's bearer, worker.ts). Both are SHA-256
- *  hashed and the digests compared byte by byte with no early exit, so neither the length nor a
- *  matching prefix leaks by timing. A blank secret matches nothing. */
-export async function verifyAdminSecret(candidate: string, secret: string): Promise<boolean> {
-  if (!secret) return false;
-  const digest = async (text: string) =>
-    new Uint8Array(await crypto.subtle.digest("SHA-256", encoder.encode(text)));
-  const [a, b] = await Promise.all([digest(candidate), digest(secret)]);
+const sha256 = async (text: string): Promise<Uint8Array> =>
+  new Uint8Array(await crypto.subtle.digest("SHA-256", encoder.encode(text)));
+
+/** Whether two digests are the same bytes — every byte compared, no early exit, so neither a
+ *  matching prefix nor its length leaks by timing (both secret checks below go through here). */
+const digestsEqual = (a: Uint8Array, b: Uint8Array): boolean => {
+  if (a.length !== b.length) return false;
   let difference = 0;
   for (let i = 0; i < a.length; i++) difference |= a[i]! ^ b[i]!;
   return difference === 0;
+};
+
+/** Whether `candidate` IS `secret` — the admin secret's check (`APP_CONFIG_ADMIN_API_SECRET`: at
+ *  `authenticate({ type: "admin-secret" })` and as a lane's bearer, worker.ts). Both are SHA-256
+ *  hashed and the digests compared in constant time. A blank secret matches nothing. */
+export async function verifyAdminSecret(candidate: string, secret: string): Promise<boolean> {
+  if (!secret) return false;
+  const [a, b] = await Promise.all([sha256(candidate), sha256(secret)]);
+  return digestsEqual(a, b);
+}
+
+// ── the project secret ── the project's own long-lived key, kept as a HASH in SECRETS_KV.
+
+/** The SECRETS_KV key a project's API-key hash sits under — OUTSIDE the `secret:<projectId>:` prefix
+ *  egress substitutes from (iterate-context-durable-object.ts `#egress`, context/built-ins.ts
+ *  `secretKey`): no `{{secret:project:NAME}}` placeholder can spell it, so the key that
+ *  authenticates AS the project can never be substituted into an outbound request by the project's
+ *  own code. */
+const projectApiKeyHashKey = (projectId: string): string => `project-api-key:${projectId}`;
+
+/** Mint `projectId`'s API key — 32 random bytes as base64url — and store its SHA-256 hash under
+ *  `project-api-key:<projectId>`, REPLACING the previous one: the previous key stops verifying at
+ *  once where the rotation was made (KV's other locations follow within 60 s, its cache TTL). The
+ *  key itself is returned ONCE and never stored, so a "reveal" IS a rotation
+ *  (`IterateContext.rotateApiKey`). A project has no key until its first rotation. */
+export async function rotateProjectApiKey(
+  projectId: string,
+  secretsKv: KVNamespace,
+): Promise<string> {
+  const apiKey = base64url(crypto.getRandomValues(new Uint8Array(32)));
+  await secretsKv.put(projectApiKeyHashKey(projectId), base64url(await sha256(apiKey)));
+  return apiKey;
+}
+
+/** The principal a project secret grants — `{ actor: "project:<project>" }`, for exactly `project`
+ *  — when `secret`'s SHA-256 is the hash stored for it (`rotateProjectApiKey`); else null, whatever
+ *  is wrong: no key stored (never rotated, or no such project), a wrong or superseded key, another
+ *  project's key. The digests are compared in constant time. At `authenticate({ type:
+ *  "project-secret" })` (session.ts) and as a lane's bearer for the lane's own project (worker.ts). */
+export async function verifyProjectSecret(
+  project: string,
+  secret: string,
+  secretsKv: KVNamespace,
+): Promise<Principal | null> {
+  const storedHash = await secretsKv.get(projectApiKeyHashKey(project));
+  if (!storedHash) return null;
+  let storedDigest: Uint8Array;
+  try {
+    storedDigest = bytesFromBase64url(storedHash);
+  } catch {
+    return null;
+  }
+  return digestsEqual(await sha256(secret), storedDigest) ? { actor: `project:${project}` } : null;
 }
 
 const isProjectTokenClaims = (value: unknown): value is ProjectTokenClaims =>

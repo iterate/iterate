@@ -3,11 +3,13 @@
 // loads from the same host; inbound `x-itx-*` never reach it; the apex `<projectId>.<base>` is the
 // label `default`; a label with no rule is a 404; and — deployed only, the local lane cannot set Host on a
 // WebSocket — an upgrade rides through the host to the app. The app is one rule row: the log never
-// names a hostname.
+// names a hostname. WHO, on a host: a project token (the `/.itx/session` cookie, or a bearer) and
+// the project's own secret as a bearer — the device lane — each stamp `x-itx-principal`; the
+// platform's credential never reaches the app.
 
 import { expect, test } from "vitest";
 import { openItx } from "./support/client.ts";
-import { mintProjectToken } from "./support/principal.ts";
+import { mintProjectApiKey, mintProjectToken } from "./support/principal.ts";
 import {
   deployedOnly,
   fetchProjectHost,
@@ -37,6 +39,7 @@ export default class Site extends WorkerEntrypoint {
         itxHeaders: [...request.headers.keys()].filter((name) => name.startsWith("x-itx-")),
         principal: JSON.parse(request.headers.get("x-itx-principal") || "null"),
         cookie: request.headers.get("cookie"),
+        authorization: request.headers.get("authorization"),
       });
     return new Response(
       "<!doctype html><title>site</title><script src=\"app.js\"></script><p>" +
@@ -134,6 +137,32 @@ test("the session door on a project host: a token becomes the cookie, the cookie
   const out = await fetchProjectHost(host, "/.itx/session?logout&next=/");
   expect(out.status).toBe(303);
   expect(out.headers["set-cookie"]).toContain("Max-Age=0");
+});
+
+// THE DEVICE LANE: the project's own secret (`rotateApiKey` — the key a kit's provisioning partition
+// carries beside the project slug) as `Authorization: Bearer` on the project's host. The app sees the
+// project as the principal and never the key; another project's key is nobody here — it passes
+// through untouched, as an app's own bearer scheme would.
+test("the project's secret as the bearer on its host: the app sees principal project:<id> and no bearer; another project's secret stamps nothing", async () => {
+  const projectId = freshDnsSafeProjectId("ingress-device");
+  const other = freshDnsSafeProjectId("ingress-device-other");
+  await registerProject(projectId);
+  await registerProject(other);
+  const itx = openItx(projectId);
+  await itx.provide("itx.apps.site", siteRule());
+  const host = `site--${projectId}.${projectHostnameBase()}`;
+  const key = await mintProjectApiKey(projectId);
+  const seen = JSON.parse(
+    (await fetchProjectHost(host, "/echo", { authorization: `Bearer ${key}` })).text,
+  );
+  expect(seen.principal).toEqual({ actor: `project:${projectId}` });
+  expect(seen.authorization).toBeNull(); // the platform's credential, stripped
+  const foreignKey = await mintProjectApiKey(other);
+  const foreign = JSON.parse(
+    (await fetchProjectHost(host, "/echo", { authorization: `Bearer ${foreignKey}` })).text,
+  );
+  expect(foreign.principal).toBeNull();
+  expect(foreign.authorization).toBe(`Bearer ${foreignKey}`); // not this project's: the app's own bearer, passed through
 });
 
 deployedOnly("deployed: a WebSocket upgrade on the project host reaches the app", async () => {

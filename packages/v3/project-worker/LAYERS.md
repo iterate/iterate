@@ -156,8 +156,10 @@ on exhaustion, appends `stream/paused { reason }`; an operator appends `stream/r
 `session.ts` + `iterate-context.ts`: capnweb terminates in `worker.ts`'s `/api`, never in a DO
 (`session.ts`: `UnauthenticatedSession → authenticate(credentials) → Session → projects.list()/get(project)/create({ project })`
 — `from-server-cookie` is the request's control-plane session cookie on a same-origin request,
-`project-token` a principal bound to one project, `admin-secret` every project (with `as`, a user's
-session without a login); membership is the in-process directory's, `src/control-plane.ts`;
+`project-token` a principal bound to one project, `project-secret` the project itself bound the same
+way, `admin-secret` every project (with `as`, a user's session without a login); membership is the
+in-process directory's, `src/control-plane.ts`; the root context `get` vends carries `mintToken` and
+`rotateApiKey`;
 `iterate-context.ts`: `IterateContext`, `cd(path)` for the rest). The edge is A PROXY IN FRONT OF
 THE DO: every DO built-in root (`itx.append`, `itx.readEvents`, `itx.waitForEvent`, `itx.kv.get`,
 `itx.rpcStubs.list`, `itx.rewriteRules.list`, …) rides the prototype hop into ONE

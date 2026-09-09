@@ -28,10 +28,9 @@ type ErrorCode =
   | "INVALID_CONTEXT" // a context name / project id the codec refuses (iterate-context.ts `DurableObjectNameCodec`) — coded, so it survives the hop
   | "EXPRESSION_TOO_LONG" // a STRING itx expression over ITX_EXPRESSION_STRING_MAX_CHARS — pass the parsed form
   | "FACET_SOURCE_TOO_LARGE" // a facet's literal source over FACET_SOURCE_MAX_CHARS (worker-loader.ts) — refused at the door
-  | "INVALID_CREDENTIALS" // authenticate(): the project token did not verify (bad signature, expired, no secret), or the admin secret did not match
+  | "INVALID_CREDENTIALS" // authenticate(): the project token did not verify (bad signature, expired, no secret), the admin secret did not match, or the project secret is not that project's
   | "UNAUTHENTICATED" // authenticate({ type: "from-server-cookie" }): no session cookie on the request, or a cross-origin browser's request
-  | "UNSUPPORTED_CREDENTIAL" // authenticate(): a credential kind this deployment does not serve yet (`project-secret`)
-  | "FORBIDDEN" // projects.get(project): the session's token names another project, or the user is no member of its org; list/create on a token session
+  | "FORBIDDEN" // projects.get(project): the session is bound to another project (a project token, the project secret), or the user is no member of its org; create on a bound session; mintToken/rotateApiKey on a handle no session vended (a loaded worker's env.ITX)
   | "PROJECT_NAME_TAKEN" // projects.create({ project }): a project of that name exists in another org
   | "RPC_STUB_OFFLINE" // the rpc stub a row names is neither borrowed nor pager-backed right now — or its lend ended mid-call (recalled, returned, broken; the relay re-codes)
   | "NOT_A_METHOD" // the dotted path's terminal segment is not callable on the target

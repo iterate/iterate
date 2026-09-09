@@ -2,7 +2,8 @@
 
 One Cloudflare Worker, one package: `src/worker.ts` is the stateless edge (capnweb at `/api`,
 project-host ingress `<app>--<projectId>.<base>`, the fetch lane) with the control plane in-process
-as its catch-all (`src/control-plane.ts`: OAuth AS + a D1 directory + `/mcp` + the console);
+as its catch-all (`src/control-plane.ts`: OAuth AS + a D1 directory + `/mcp`, the ONE MCP server for
+every project + the console);
 `src/iterate-context-durable-object.ts` is THE CONTEXT — one Durable Object per `{ projectId, path }`
 holding the event log, the core reduce, subscription delivery, the facets, the rpc-stub pagers and
 the egress door. Everything a client does is one dotted expression on `itx`.
@@ -17,7 +18,15 @@ await itx.append({ type: "note", payload: { n: 1 } });
 `authenticate(credentials)` takes one of four kinds (`src/session.ts` `SessionCredentials`):
 `from-server-cookie` (a browser — same origin only), `project-token` (one user on one project),
 `admin-secret` (every project; with `as` a user's session without a login — the e2e lane, tooling),
-`project-secret` (the project itself — step 2 of `docs/plan-auth-one-lane-2026-09-09.md`).
+`project-secret` (the project itself — a device, a headless app; `projects.get(project).rotateApiKey()`
+mints the key, `.mintToken()` a project token).
+
+An MCP client connects to `https://<worker>/mcp` through the same login: the OAuth 2.1 AS is the
+worker itself (`/authorize`, `/oauth/token`, `/oauth/register`, `/.well-known/*`), the consent page
+picks the projects the token may reach, and the tools are `whoami`, `list_projects`,
+`create_project({ project })` and `itx.invoke({ project?, expression, args? })` — one expression,
+evaluated through that project's context under the caller's principal. The admin secret and a
+project's own secret (`/mcp?project=<id>`) are bearers on `/mcp` too.
 
 ## Read next
 

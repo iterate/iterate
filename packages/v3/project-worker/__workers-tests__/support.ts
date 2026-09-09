@@ -1,12 +1,13 @@
 // __workers-tests__/support.ts — what every file in the workers lane (the vitest project that runs
 // INSIDE workerd, next to the worker) shares: the context DO stub by ctx name, a capnweb session
 // over SELF's /api (disposed at teardown — importing this module registers the afterAll), a live
-// value to lend (`Echo`, tagged per instance), the production 60s idle quiesce reproduced on
-// demand, and the one poll-until.
+// value to lend (`Echo`, tagged per instance), the directory schema into this lane's empty D1, the
+// production 60s idle quiesce reproduced on demand, and the one poll-until.
 import { runDurableObjectAlarm, SELF } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { newWebSocketRpcSession, RpcTarget } from "capnweb";
 import { afterAll, vi } from "vitest";
+import definitionsSql from "../src/control-plane.sql?raw";
 import { DurableObjectNameCodec } from "../src/iterate-context.ts";
 import type { IterateContextDurableObject } from "../src/iterate-context-durable-object.ts";
 
@@ -30,6 +31,19 @@ export class Echo extends RpcTarget {
   echo(s: string): string {
     return `echo-${this.#i}:${s}`;
   }
+}
+
+/** THE DIRECTORY SCHEMA (src/control-plane.sql) into this lane's D1 — fresh and empty per file — the
+ *  same split-and-batch the e2e global-setup does; a file whose sessions create or list projects
+ *  runs it in `beforeAll`. Idempotent (IF NOT EXISTS). */
+export async function applyDirectorySchema(): Promise<void> {
+  const db = (env as unknown as { DB: D1Database }).DB;
+  const statements = definitionsSql
+    .replace(/--.*$/gm, "")
+    .split(";")
+    .map((statement) => statement.replace(/\s+/g, " ").trim())
+    .filter(Boolean);
+  await db.batch(statements.map((statement) => db.prepare(statement)));
 }
 
 /** This lane's admin secret (wrangler.test.jsonc `APP_CONFIG_ADMIN_API_SECRET`). */
