@@ -235,7 +235,9 @@ export function peerExtension(connection: CollabConnection, startVersion: number
           }
         } catch (error) {
           this.failures++;
-          connection.onStatus(`push retry ${this.failures}: ${message(error)}`);
+          connection.onStatus(
+            `push retry ${this.failures}: ${error instanceof Error ? error.message : String(error)}`,
+          );
           await sleep(backoff(this.failures));
         }
         this.pushing = false;
@@ -301,15 +303,21 @@ export function peerExtension(connection: CollabConnection, startVersion: number
               this.recovering = false;
               void this.push();
             }
-          } catch (error) {
+          } catch {
             if (this.done) break;
+            // Reconnect for as long as the editor is open, the same way the
+            // push loop already does. A multi-hour multiplayer session
+            // outlives deploys, evictions, and laptop sleeps; the pull
+            // long-poll rides every one of them out rather than declaring the
+            // session dead after a fixed count. Recovery needs no reopen here:
+            // a session reset or eviction rotates the epoch, so the very next
+            // wait() returns a "snapshot" (handled above, with correct acked-op
+            // slicing), and a deleted or replaced file returns "ended". Only a
+            // genuine transport outage lands here, and retrying it is right —
+            // when the network returns, wait() answers again. Backoff is
+            // capped, so a sustained outage settles into one quiet retry every
+            // MAX_BACKOFF_MS.
             this.failures++;
-            if (this.failures > 8) {
-              this.done = true;
-              connection.dead = true;
-              connection.onStatus(`disconnected: ${message(error)}`);
-              return;
-            }
             connection.onStatus(`reconnecting (${this.failures})…`);
             await sleep(backoff(this.failures));
           }
@@ -342,4 +350,3 @@ export function peerExtension(connection: CollabConnection, startVersion: number
 }
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-const message = (error: unknown) => (error instanceof Error ? error.message : String(error));
