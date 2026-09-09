@@ -291,10 +291,15 @@ export class DynamicWorkerRunner {
           : undefined;
       // A clone-version skew is a loader-isolate deserialize failure BEFORE the
       // app runs (the shared isolate outlived its captured bindings), so any
-      // request with no body is safe to replay on a fresh isolate — a bodyless
-      // POST like the auth gate's refresh, and a WebSocket upgrade too, whose
-      // socket does not exist yet when the dispatch throws.
-      const cloneSkewReplayable = request.body === null;
+      // request with nothing to consume is safe to replay on a fresh isolate —
+      // and a WebSocket upgrade too, whose socket does not exist yet when the
+      // dispatch throws. "Nothing to consume" is a null body OR an explicitly
+      // empty one: a browser's bodyless `fetch(url, { method: "POST" })` — the
+      // auth gate's refresh — arrives with `Content-Length: 0` and a non-null
+      // empty stream, and it must replay too or that POST 500s where the same
+      // GET recovers.
+      const cloneSkewReplayable =
+        request.body === null || request.headers.get("content-length") === "0";
       let response: Response;
       try {
         response = await dispatch(request);
