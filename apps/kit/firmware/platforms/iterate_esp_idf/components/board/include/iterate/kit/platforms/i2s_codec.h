@@ -22,6 +22,12 @@ bool iterate_kit_i2s_codec_start_over(
     enum iterate_kit_status (*read)(void *, int16_t *, size_t),
     enum iterate_kit_status (*write)(void *, const int16_t *, size_t),
     void *context, uint16_t ring_ms, struct iterate_kit_audio_codec *out);
+/** Install a board wait before reserving write credit, before start_over.
+ * Waveshare's analogue amplifier settles BEFORE the deadline advances; HAVPE
+ * needs no wait. Called only on the playback hardware task, outside the lock.
+ * context is the start_over context. NULL leaves the blocking writer ready.
+ */
+void iterate_kit_i2s_codec_set_before_write(void (*wait)(void *));
 /** Apply the shared starvation phase under one lock; boards own amp actions. */
 void iterate_kit_i2s_codec_phase(enum iterate_kit_voice_phase phase);
 /** Preempt stream PCM with flash-resident PCM16LE, without mixing or allocation.

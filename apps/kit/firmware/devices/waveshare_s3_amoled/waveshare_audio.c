@@ -29,7 +29,7 @@
  */
 #include "waveshare_audio.h"
 
-#include <stdatomic.h>
+#include "iterate/kit/platforms/i2s_codec.h"
 #include <string.h>
 
 #include "driver/gpio.h"
@@ -42,7 +42,6 @@
 #include "esp_timer.h"
 #include "esp_rom_sys.h"
 #include "freertos/FreeRTOS.h"
-#include "freertos/queue.h"
 #include "freertos/task.h"
 
 /* Bring-up probe: treat the board's microphone as PDM rather than analog. */
@@ -90,60 +89,7 @@ static uint8_t speaker_volume_percent = WAVESHARE_AUDIO_VOLUME_DEFAULT;
 /* Retained for the post-open register dump (bring-up diagnostics only). */
 static const audio_codec_ctrl_if_t *registers_ctrl_if;
 
-struct audio_frame {
-  int16_t samples[WAVESHARE_AUDIO_FRAME_SAMPLES];
-  size_t sample_count;
-};
-
-static QueueHandle_t capture_queue;
-static QueueHandle_t playback_queue;
-/* Startup capture is not loss until the portable consumer has started. */
-static atomic_bool capture_consumer_started;
-static volatile uint32_t capture_overruns;
-static volatile uint32_t capture_driver_failures;
-static volatile uint32_t playback_driver_failures;
-
-static enum iterate_kit_status codec_read(
-    void *context,
-    int16_t *capture,
-    int16_t *reference,
-    size_t capacity_samples,
-    size_t *sample_count) {
-  struct audio_frame frame;
-  (void)context;
-  (void)reference;
-  if (capture_queue == NULL || capacity_samples < WAVESHARE_AUDIO_FRAME_SAMPLES) {
-    return ITERATE_KIT_INVALID_ARGUMENT;
-  }
-  atomic_store_explicit(
-      &capture_consumer_started, true, memory_order_release);
-  if (xQueueReceive(capture_queue, &frame, 0) != pdTRUE) {
-    return ITERATE_KIT_UNAVAILABLE;
-  }
-  memcpy(capture, frame.samples, frame.sample_count * sizeof(*capture));
-  *sample_count = frame.sample_count;
-  return ITERATE_KIT_OK;
-}
-
-static enum iterate_kit_status codec_write(
-    void *context, const int16_t *playback, size_t sample_count) {
-  struct audio_frame frame;
-  (void)context;
-  if (playback_queue == NULL || sample_count == 0U ||
-      sample_count > WAVESHARE_AUDIO_FRAME_SAMPLES) {
-    return ITERATE_KIT_INVALID_ARGUMENT;
-  }
-  memcpy(frame.samples, playback, sample_count * sizeof(*playback));
-  frame.sample_count = sample_count;
-  return xQueueSend(playback_queue, &frame, 0) == pdTRUE
-      ? ITERATE_KIT_OK
-      : ITERATE_KIT_BACKPRESSURE;
-}
-
-static const struct iterate_kit_audio_codec_ops codec_ops = {
-  .read = codec_read,
-  .write = codec_write,
-};
+static struct iterate_kit_audio_codec shared_codec;
 
 static const struct iterate_kit_audio_codec_properties codec_properties = {
   .capture_sample_rate_hz = WAVESHARE_AUDIO_SAMPLE_RATE_HZ,
@@ -157,28 +103,7 @@ static const struct iterate_kit_audio_codec_properties codec_properties = {
 
 /* --- local sounds ---------------------------------------------------------- */
 
-/*
- * THE BOARD'S OWN VOICE: the wake chime and "call ended", straight from flash.
- *
- * Everything else this speaker plays arrives over the stream, seconds after
- * the gesture that asked for it — which is exactly the problem these solve: a
- * press that answers within a frame instead of after a dial. So they bypass
- * the stream entirely and cut in at the last seam before the DAC, where the
- * playback hardware task drains them BEFORE it looks at the queue.
- * Preemption, not mixing, on purpose: a chime stepping on the first
- * milliseconds of an answer is acceptable and a mixer is not simpler than
- * this. The stream's frames are not lost — the depth-one queue holds one and
- * the portable playback task absorbs the rest as backpressure it already
- * knows how to wait out.
- *
- * Allocation-free: the PCM lives in .rodata (flash), the cursor walks it in
- * 20 ms slices, and the lock is held only to move a few words — the flash
- * read itself happens outside the critical section.
- */
 static portMUX_TYPE sound_lock = portMUX_INITIALIZER_UNLOCKED;
-static const uint8_t *sound_pcm; /* NULL when idle; guarded by sound_lock */
-static uint32_t sound_bytes;
-static uint32_t sound_cursor;
 /*
  * Until when the amplifier must be left up for a local sound. The loop
  * re-raises PHASE_QUIET on every idle pass and this board answers it by
@@ -203,49 +128,70 @@ void waveshare_audio_play_sound(const uint8_t *pcm, uint32_t bytes) {
       (int64_t)(bytes / 2U) * 1000000 / WAVESHARE_AUDIO_SAMPLE_RATE_HZ +
       (int64_t)(AMPLIFIER_SETTLE_MS + DMA_RING_MS) * 1000;
   portENTER_CRITICAL(&sound_lock);
-  sound_pcm = pcm;
-  sound_bytes = bytes & ~1U; /* whole PCM16 samples only */
-  sound_cursor = 0U;
   sound_amp_hold_until_us = esp_timer_get_time() + hold_us;
   portEXIT_CRITICAL(&sound_lock);
+  iterate_kit_i2s_codec_play_sound(pcm, bytes);
 }
 
 bool waveshare_audio_sound_active(void) {
   bool active;
   portENTER_CRITICAL(&sound_lock);
-  active = sound_pcm != NULL ||
+  active = iterate_kit_i2s_codec_sound_active() ||
       esp_timer_get_time() < sound_amp_hold_until_us;
   portEXIT_CRITICAL(&sound_lock);
   return active;
 }
 
-/*
- * ONLY THESE TASKS CALL THE BLOCKING ESP CODEC DRIVER.
- *
- * That ownership is what makes the public seam honestly nonblocking. Capture
- * keeps the newest complete capture-clock-contiguous frame in a depth-one
- * mailbox; playback accepts at most one complete frame beyond the one the
- * hardware task is currently handing to DMA. Neither direction can grow an
- * unbounded latency queue.
+/* The avatar is an in-firmware reader of descriptor debt, even though apps/os
+ * has no dma* reader. Keep only its owed-time ISR; starvation and its saturated
+ * counters belong to the shared deadline ledger. No descriptor deficit metrics.
  */
-static void capture_hardware_task(void *argument) {
-  struct audio_frame frame = {.sample_count = WAVESHARE_AUDIO_FRAME_SAMPLES};
-  (void)argument;
-  for (;;) {
-    if (esp_codec_dev_read(
-            codec_dev, frame.samples, sizeof(frame.samples)) !=
-        ESP_CODEC_DEV_OK) {
-      ++capture_driver_failures;
-      vTaskDelay(1U);
-      continue;
-    }
-    if (atomic_load_explicit(
-            &capture_consumer_started, memory_order_acquire) &&
-        uxQueueMessagesWaiting(capture_queue) > 0U) {
-      ++capture_overruns;
-    }
-    (void)xQueueOverwrite(capture_queue, &frame);
+static DRAM_ATTR portMUX_TYPE dma_ledger_lock = portMUX_INITIALIZER_UNLOCKED;
+static volatile int32_t dma_owed_ms;
+static bool dma_watch;
+
+static bool IRAM_ATTR on_dma_sent(
+    i2s_chan_handle_t handle, i2s_event_data_t *event, void *context) {
+  (void)handle;
+  (void)context;
+  if (event == NULL || event->dma_buf == NULL) return false;
+  portENTER_CRITICAL_ISR(&dma_ledger_lock);
+  if (dma_watch) {
+    dma_owed_ms -= DMA_DESCRIPTOR_MS;
+    if (dma_owed_ms < 0) dma_owed_ms = 0;
   }
+  portEXIT_CRITICAL_ISR(&dma_ledger_lock);
+  return false;
+}
+
+int32_t waveshare_audio_dma_owed_ms(void) {
+  return dma_owed_ms;
+}
+
+void waveshare_audio_phase(enum iterate_kit_voice_phase phase) {
+  iterate_kit_i2s_codec_phase(phase);
+  portENTER_CRITICAL(&dma_ledger_lock);
+  switch (phase) {
+    case ITERATE_KIT_VOICE_PHASE_FEEDING:
+      if (!dma_watch) dma_owed_ms = 0;
+      dma_watch = true;
+      break;
+    case ITERATE_KIT_VOICE_PHASE_WAITING:
+    case ITERATE_KIT_VOICE_PHASE_DRAINING:
+    case ITERATE_KIT_VOICE_PHASE_FLUSHED:
+      dma_watch = false;
+      break;
+    default:
+      break;
+  }
+  portEXIT_CRITICAL(&dma_ledger_lock);
+}
+
+/** esp_codec_dev owns the blocking mono read; task/mailbox policy is shared. */
+static enum iterate_kit_status hardware_read(void *context, int16_t *samples, size_t count) {
+  (void)context;
+  return esp_codec_dev_read(codec_dev, samples, count * sizeof(*samples)) == ESP_CODEC_DEV_OK
+      ? ITERATE_KIT_OK : ITERATE_KIT_IO_ERROR;
 }
 
 /*
@@ -257,46 +203,12 @@ static void capture_hardware_task(void *argument) {
  */
 static volatile int64_t amplifier_settled_at_us;
 
-static void playback_hardware_task(void *argument) {
-  struct audio_frame frame;
-  (void)argument;
-  for (;;) {
-    /*
-     * A local sound outranks the queue — see the note at `sound_pcm`. The
-     * slice bounds are taken under the lock and the flash copy happens
-     * outside it; if the app task replaces the sound mid-slice, this frame
-     * finishes from the superseded PCM and the next one starts the new
-     * sound, which is the preemption behaving as specified.
-     */
-    const uint8_t *sound = NULL;
-    uint32_t sound_offset = 0U;
-    uint32_t sound_take = 0U;
-    portENTER_CRITICAL(&sound_lock);
-    if (sound_pcm != NULL) {
-      const uint32_t remaining = sound_bytes - sound_cursor;
-      sound = sound_pcm;
-      sound_offset = sound_cursor;
-      sound_take = remaining < sizeof(frame.samples)
-          ? remaining
-          : (uint32_t)sizeof(frame.samples);
-      sound_cursor += sound_take;
-      if (sound_cursor >= sound_bytes) sound_pcm = NULL;
-    }
-    portEXIT_CRITICAL(&sound_lock);
-    if (sound != NULL) {
-      memcpy(frame.samples, sound + sound_offset, sound_take);
-      frame.sample_count = sound_take / sizeof(frame.samples[0]);
-    } else if (
-        /*
-         * One frame period instead of portMAX_DELAY, so a chime requested
-         * while the stream is silent starts within 20 ms. An idle wake that
-         * finds neither sound nor frame costs one queue peek.
-         */
-        xQueueReceive(playback_queue, &frame, pdMS_TO_TICKS(20)) != pdTRUE) {
-      continue;
-    }
-    const uint32_t frame_ms = (uint32_t)(
-        frame.sample_count * 1000U / WAVESHARE_AUDIO_SAMPLE_RATE_HZ);
+/** Unlike HAVPE's always-on amp, wait before the shared ledger credits PCM.
+ * Settling on the receive path would stall decoding; prefill is no longer a
+ * wall-clock delay when a whole answer arrives in a burst.
+ */
+static void wait_for_amplifier(void *context) {
+  (void)context;
     /*
      * THE AMPLIFIER HAS TO BE CONDUCTING BEFORE THE FIRST SAMPLE, AND THIS IS
      * THE SECOND TIME THAT HAS NEEDED FIXING.
@@ -325,20 +237,24 @@ static void playback_hardware_task(void *argument) {
         vTaskDelay(pdMS_TO_TICKS((uint32_t)((settle_us + 999) / 1000)));
       }
     }
-    /*
-     * Credit before the blocking write: DMA completion callbacks run from
-     * inside esp_codec_dev_write(), so crediting afterwards fabricates an
-     * underrun. The rollback keeps the ledger conserved on driver failure.
-     */
-    waveshare_audio_reserve_write(frame_ms);
-    if (esp_codec_dev_write(
-            codec_dev,
-            (void *)(uintptr_t)frame.samples,
-            frame.sample_count * sizeof(*frame.samples)) != ESP_CODEC_DEV_OK) {
-      waveshare_audio_rollback_write(frame_ms);
-      ++playback_driver_failures;
-    }
+}
+
+/** Only the shared playback task calls this blocking ES8311 writer. */
+static enum iterate_kit_status hardware_write(void *context, const int16_t *samples, size_t count) {
+  (void)context;
+  const uint32_t ms = (uint32_t)(count * 1000U / WAVESHARE_AUDIO_SAMPLE_RATE_HZ);
+  portENTER_CRITICAL(&dma_ledger_lock);
+  dma_owed_ms += (int32_t)ms;
+  portEXIT_CRITICAL(&dma_ledger_lock);
+  if (esp_codec_dev_write(codec_dev, (void *)(uintptr_t)samples,
+          count * sizeof(*samples)) != ESP_CODEC_DEV_OK) {
+    portENTER_CRITICAL(&dma_ledger_lock);
+    dma_owed_ms -= (int32_t)ms;
+    if (dma_owed_ms < 0) dma_owed_ms = 0;
+    portEXIT_CRITICAL(&dma_ledger_lock);
+    return ITERATE_KIT_IO_ERROR;
   }
+  return ITERATE_KIT_OK;
 }
 
 static bool axp2101_write(
@@ -380,289 +296,9 @@ static bool power_rails_up(void) {
   return true;
 }
 
-/*
- * DMA BUFFERS THE HARDWARE SENT WITH NOTHING IN THEM.
- *
- * Every "starvation" number this device reports is inferred from the stream
- * buffer, which sits one hop upstream of the DMA — so it says the software
- * queue was empty, not that the DAC ever wanted for audio. With a 90 ms ring
- * in front of it those are very different claims, and the whole playout
- * policy has been tuned against the weaker one.
- *
- * This is the strong one: the driver hands each finished descriptor to this
- * callback and, because auto_clear zeroes AFTER it runs, a buffer we never
- * filled arrives here still holding the zeros of its last send. A run where
- * this stays at zero is a run where the listener heard every sample the
- * hardware was asked for, whatever the software counters say.
- *
- * ISR context: no logging, no locks, one increment.
- */
-static volatile uint32_t dma_underruns;
-/*
- * Only while somebody is speaking. Between answers the ring is CORRECTLY
- * full of zeros — that is an idle DAC, not a starved one — and counting
- * those produced 23471 "underruns" in six turns, which is the sound of a
- * metric measuring silence rather than a fault.
- */
-
-static volatile bool dma_watch;
-/*
- * True while the software has stopped handing over audio on purpose. Separate
- * from dma_watch being false, because the difference between "an answer is
- * ending" and "no answer is happening" is worth keeping in the numbers.
- */
-static volatile bool dma_draining;
-/*
- * Underruns in the first descriptors after playback starts, separated from
- * the rest. The two have different causes and only one is worth chasing: an
- * answer's opening plays into a DMA ring that has been idle, so the first
- * buffers were cleared long ago and the very first write cannot reach them
- * before they are sent. Underruns AFTER that are the pipeline failing to keep
- * up, which is the real defect.
- */
-static volatile uint32_t dma_underruns_opening;
-/*
- * Cleared descriptors sent while the source was DRY — the normal end of every
- * answer, and not a fault.
- *
- * The DMA ring is 90 ms deep and the speaker task blocks up to 60 ms for the
- * next frame, so between answers the hardware keeps sending descriptors the
- * software has deliberately stopped filling. Those were landing in
- * dma_underruns: 6-12 of them on every short turn, on turns where every
- * single frame sent was played. A counter that moves on a perfect turn tells
- * nobody anything, so the drain is counted here and starvation stays over
- * there.
- */
-static volatile uint32_t dma_sends_draining;
-/*
- * MILLISECONDS OF AUDIO handed over since feeding began.
- *
- * The opening window used to be six SENDS — one ring's worth of descriptors —
- * which assumed each send was preceded by a full frame. After a barge-in that is
- * false: the discard boundary can split a read, so the replacement answer's
- * first write is a fragment, six sends elapse in 90ms regardless, and the window
- * closes while the ring is still mostly empty. The sends that follow were then
- * charged as starvation. Intermittent exactly as observed, because it depends on
- * whether the discard split a read.
- *
- * An answer is "opening" until a ring's worth of AUDIO has actually been handed
- * over. That is the real condition the window was reaching for.
- */
-static volatile uint32_t dma_written_ms_since_start;
-/*
- * AUDIO HANDED OVER BUT NOT YET SENT, in milliseconds. The starvation test.
- *
- * Replaces a content heuristic that called any descriptor whose first four words
- * were zero an underrun. That counted legitimate silent PCM: the decisive
- * measurement was a "starved" descriptor sent 14.983ms after a successful write
- * — one descriptor time — which cannot be an empty 90ms ring. A 20ms frame does
- * not divide into 15ms descriptors, so the tail of every write is a partly
- * filled descriptor and its opening samples are whatever was there before.
- *
- * Ownership needs no heuristic. Every write adds what it wrote; every send
- * consumes one descriptor. If the hardware sends a descriptor we never paid
- * for, it is sending one we never filled, and that is starvation whatever the
- * samples happen to contain.
- */
-static volatile int32_t dma_owed_ms;
-/*
- * ONE LOCK OVER THE LEDGER, because it is read-modify-written from two contexts.
- *
- * The ISR subtracts a descriptor; the playback task adds a reservation. `+=` and
- * `-=` are not atomic on Xtensa however volatile the variable is, so a callback
- * landing inside reserve_write could lose the credit entirely — which shows up
- * as an intermittent false fault, or worse, a missed one. A spinlock is the
- * right size for three integers touched for a handful of instructions, and it
- * lives in DRAM because the ISR is in IRAM and must not fault on it.
- */
-static DRAM_ATTR portMUX_TYPE dma_ledger_lock = portMUX_INITIALIZER_UNLOCKED;
-
-static bool IRAM_ATTR on_dma_sent(
-    i2s_chan_handle_t handle, i2s_event_data_t *event, void *context) {
-  (void)handle;
-  (void)context;
-  if (event == NULL || event->dma_buf == NULL) return false;
-
-  /*
-   * EVERYTHING UNDER ONE CRITICAL SECTION.
-   *
-   * The watch flag, the ledger, the send index and the classification are one
-   * decision and must be taken together. Reading dma_watch before the lock let
-   * an intentional disarm land in between, so a barge-in could still be charged
-   * as starvation — and the send index could be reset by an arm between the
-   * decrement and the classification that quoted it.
-   */
-  portENTER_CRITICAL_ISR(&dma_ledger_lock);
-  if (dma_watch) {
-    dma_owed_ms -= (int32_t)DMA_DESCRIPTOR_MS;
-    if (dma_owed_ms < 0) {
-      dma_owed_ms = 0; /* Don't accumulate debt across a gap. */
-      if (dma_draining) {
-        ++dma_sends_draining;
-      } else if (dma_written_ms_since_start < DMA_RING_MS) {
-        ++dma_underruns_opening;
-      } else {
-        ++dma_underruns;
-      }
-    }
-  }
-  portEXIT_CRITICAL_ISR(&dma_ledger_lock);
-  return false;
-}
-
-uint32_t waveshare_audio_dma_underruns(void) {
-  return dma_underruns;
-}
-
-int32_t waveshare_audio_dma_owed_ms(void) {
-  return dma_owed_ms;
-}
-
-
-
-
-/*
- * STARVATION MEASURED ON THE WRITING TASK, not inferred from callbacks.
- *
- * The ledger in the ISR can only see a gap if the driver keeps issuing on_sent
- * while nothing is queued, and a 600ms injected starvation moved it by zero —
- * the descriptors it used to catch were the REFILL after the gap, which the
- * ownership model correctly pays for. So the gap is measured where it is
- * unambiguous: at the previous write the ring held `owed` milliseconds of audio,
- * so if more than that has elapsed before the next write, the DAC ran dry for
- * the difference. One task, one clock, no race.
- */
-static volatile uint32_t dma_starved_ms;
-static volatile uint32_t dma_starve_events;
-/*
- * WHEN THE RING WILL BE EMPTY, as an absolute time. The conserved timeline.
- *
- * The first attempt compared the interval since the last write against the
- * ownership REMAINING after the ISR had decremented it, which double-counts what
- * the callbacks already consumed: a normal 20ms interval with 20ms credited and
- * one 15ms callback leaves owed at 5 and reports 15ms of starvation that never
- * happened. A deadline conserves instead of accumulating — every reservation
- * pushes it out by exactly the audio written, callbacks never touch it, and a
- * write is late only when it arrives after the deadline has already passed.
- */
-static volatile int64_t dma_empty_at_us;
-/*
- * The hardware ring may still hold audio nobody will credit again.
- *
- * An intentional cut discards the SOFTWARE buffer; the DMA ring keeps whatever
- * was already queued — up to one ring. Re-arming used to set the empty-deadline
- * to `now`, which asserts an empty ring and is false by up to 90ms, so the first
- * writes after a cut looked late and a barge-in produced spkStarveEvents on a
- * gate that must never move. Set only at a real flush, so an ordinary answer
- * end — where the ring genuinely drained — keeps the exact deadline.
- */
-static volatile bool dma_stale_ring;
-
-uint32_t waveshare_audio_starved_ms(void) {
-  return dma_starved_ms;
-}
-
-uint32_t waveshare_audio_starve_events(void) {
-  return dma_starve_events;
-}
-
-void waveshare_audio_reserve_write(uint32_t ms) {
-  /*
-   * CREDITED BEFORE THE WRITE, NOT AFTER.
-   *
-   * esp_codec_dev_write blocks until DMA accepts the frame, and the on_sent
-   * callbacks fire DURING that block. Crediting afterwards charged every write's
-   * own descriptors against a ledger that did not yet know about them: 265
-   * "opening" underruns for 275 frames played, which is the accounting being
-   * pathological rather than the pipeline. Reserving first means a callback that
-   * fires mid-write sees the audio it is sending.
-   */
-  const int64_t now_us = esp_timer_get_time();
-  int64_t base_us;
-  portENTER_CRITICAL(&dma_ledger_lock);
-  /*
-   * Late only if the ring had already run out. Meaningful only while we were
-   * meant to be feeding — an intentional pause disarms the watch — and only once
-   * the ring has been filled for the first time.
-   */
-  if (dma_watch && !dma_draining && dma_empty_at_us > 0 &&
-      dma_written_ms_since_start >= DMA_RING_MS && now_us > dma_empty_at_us) {
-    dma_starved_ms += (uint32_t)((now_us - dma_empty_at_us) / 1000);
-    ++dma_starve_events;
-  }
-  /* The deadline moves out by exactly the audio this write hands over. */
-  base_us = now_us > dma_empty_at_us ? now_us : dma_empty_at_us;
-  dma_empty_at_us = base_us + (int64_t)ms * 1000;
-  dma_owed_ms += (int32_t)ms;
-  if (dma_written_ms_since_start < 0xffff0000U) dma_written_ms_since_start += ms;
-  portEXIT_CRITICAL(&dma_ledger_lock);
-}
-
-void waveshare_audio_rollback_write(uint32_t ms) {
-  /* The write failed, so the audio never went in: take the credit back. */
-  portENTER_CRITICAL(&dma_ledger_lock);
-  /* Undo the reservation, deadline included: this audio never went in. */
-  dma_empty_at_us -= (int64_t)ms * 1000;
-  dma_owed_ms -= (int32_t)ms;
-  if (dma_owed_ms < 0) dma_owed_ms = 0;
-  if (dma_written_ms_since_start >= ms) dma_written_ms_since_start -= ms;
-  portEXIT_CRITICAL(&dma_ledger_lock);
-}
-
-void waveshare_audio_dma_watch(bool active) {
-  /* One lock over the whole transition — see on_dma_sent. */
-  portENTER_CRITICAL(&dma_ledger_lock);
-  if (active && !dma_watch) {
-    dma_written_ms_since_start = 0U;
-    dma_owed_ms = 0;
-    /*
-     * How much the hardware may still be holding. Zero after a normal drain;
-     * one ring after an intentional flush, because that audio was never
-     * un-queued and will be sent without any new credit.
-     */
-    dma_empty_at_us = esp_timer_get_time() +
-        (dma_stale_ring ? (int64_t)DMA_RING_MS * 1000 : 0);
-    dma_stale_ring = false;
-  }
-  if (active) dma_draining = false;
-  dma_watch = active;
-  portEXIT_CRITICAL(&dma_ledger_lock);
-}
-
-void waveshare_audio_note_flush(void) {
-  /* The software buffer was discarded; the ring was not. See dma_stale_ring. */
-  portENTER_CRITICAL(&dma_ledger_lock);
-  dma_stale_ring = true;
-  portEXIT_CRITICAL(&dma_ledger_lock);
-}
-
-void waveshare_audio_dma_draining(void) {
-  portENTER_CRITICAL(&dma_ledger_lock);
-  /*
-   * Called the moment the source runs dry, BEFORE the task blocks waiting for
-   * a frame that is not coming. The watch stays on so a genuine stall inside
-   * the drain is still visible — it just lands in the draining bucket, where
-   * it describes the end of an answer instead of a defect.
-   */
-  dma_draining = true;
-  portEXIT_CRITICAL(&dma_ledger_lock);
-}
-
-uint32_t waveshare_audio_dma_sends_draining(void) {
-  return dma_sends_draining;
-}
-
-
-
-
-uint32_t waveshare_audio_dma_underruns_opening(void) {
-  return dma_underruns_opening;
-}
-
 bool waveshare_audio_init(void) {
   i2s_chan_handle_t tx = NULL;
   i2s_chan_handle_t rx = NULL;
-  TaskHandle_t capture_task_handle = NULL;
 
   /*
    * One owner for I2C0: the BSP creates it (same SDA 15 / SCL 14) and the
@@ -728,11 +364,6 @@ bool waveshare_audio_init(void) {
         .invert_flags = {0},
       },
     };
-    /*
-     * Registered before enable, so no descriptor completes unobserved. The
-     * codec layer re-initialises these channels on open, but a registered
-     * callback survives that — it lives on the channel, not the mode.
-     */
     const i2s_event_callbacks_t tx_callbacks = {.on_sent = on_dma_sent};
     (void)i2s_channel_register_event_callback(tx, &tx_callbacks, NULL);
     if (i2s_channel_init_std_mode(tx, &std_config) != ESP_OK ||
@@ -875,34 +506,13 @@ bool waveshare_audio_init(void) {
     (void)esp_codec_dev_set_out_vol(codec_dev, WAVESHARE_AUDIO_VOLUME_DEFAULT);
     speaker_volume_percent = WAVESHARE_AUDIO_VOLUME_DEFAULT;
   }
-  capture_queue = xQueueCreate(1U, sizeof(struct audio_frame));
-  playback_queue = xQueueCreate(1U, sizeof(struct audio_frame));
-  if (capture_queue == NULL || playback_queue == NULL) {
-    ESP_LOGE(tag, "audio seam queue allocation failed");
-    return false;
-  }
-  if (xTaskCreatePinnedToCore(
-          capture_hardware_task,
-          "audio-hw-capture",
-          4096U,
-          NULL,
-          19U,
-          &capture_task_handle,
-          1) != pdPASS ||
-      xTaskCreatePinnedToCore(
-          playback_hardware_task,
-          "audio-hw-playback",
-          4096U,
-          NULL,
-          20U,
-          NULL,
-          1) != pdPASS) {
-    if (capture_task_handle != NULL) {
-      vTaskDelete(capture_task_handle);
-    }
+  iterate_kit_i2s_codec_set_before_write(wait_for_amplifier);
+  if (!iterate_kit_i2s_codec_start_over(
+          hardware_read, hardware_write, NULL, DMA_RING_MS, &shared_codec)) {
     ESP_LOGE(tag, "audio hardware task creation failed");
     return false;
   }
+  shared_codec.properties = &codec_properties;
   ESP_LOGI(tag, "ES8311 duplex audio ready at 16 kHz");
   /*
    * Bring-up probes deliberately NOT run here: probe_din reconfigures the
@@ -970,21 +580,5 @@ void waveshare_audio_amplifier(bool on) {
 }
 
 struct iterate_kit_audio_codec waveshare_audio_codec(void) {
-  return (struct iterate_kit_audio_codec){
-    .ops = &codec_ops,
-    .properties = &codec_properties,
-    .context = NULL,
-  };
-}
-
-uint32_t waveshare_audio_capture_overruns(void) {
-  return capture_overruns;
-}
-
-uint32_t waveshare_audio_capture_driver_failures(void) {
-  return capture_driver_failures;
-}
-
-uint32_t waveshare_audio_playback_driver_failures(void) {
-  return playback_driver_failures;
+  return shared_codec;
 }

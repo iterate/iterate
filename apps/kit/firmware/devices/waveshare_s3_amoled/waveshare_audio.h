@@ -7,6 +7,7 @@
 
 #include "driver/i2c_master.h"
 #include "iterate/kit/audio_codec.h"
+#include "iterate/kit/voice_playout.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -32,15 +33,6 @@ bool waveshare_audio_init(void);
  * copies complete 20 ms frames to and from bounded depth-one queues.
  */
 struct iterate_kit_audio_codec waveshare_audio_codec(void);
-
-/** Complete capture frames replaced before the portable task could read them. */
-uint32_t waveshare_audio_capture_overruns(void);
-
-/** Blocking codec-driver reads which failed after hardware ownership began. */
-uint32_t waveshare_audio_capture_driver_failures(void);
-
-/** Blocking codec-driver writes which failed after admission through the seam. */
-uint32_t waveshare_audio_playback_driver_failures(void);
 
 /**
  * Power the class-D amplifier. It is deliberately NOT held on for the life of
@@ -72,82 +64,12 @@ void waveshare_audio_play_sound(const uint8_t *pcm, uint32_t bytes);
  */
 bool waveshare_audio_sound_active(void);
 
-/**
- * DMA buffers the hardware sent with nothing in them.
- *
- * The one starvation measure taken from the hardware rather than inferred
- * from the software queue. See the callback for why that distinction is the
- * whole point.
+/** Descriptor debt used by the avatar to delay the mouth until PCM is heard.
+ * This ISR-backed fact is separate from the shared starvation deadline.
  */
-uint32_t waveshare_audio_dma_underruns(void);
-
-/**
- * Count underruns only while an answer is playing.
- *
- * An idle DAC clocks out zeros by design, so counting them measures silence
- * rather than starvation — 23471 of them in six turns, before this existed.
- */
-void waveshare_audio_dma_watch(bool active);
-
-/**
- * Underruns in the first ring's worth of buffers after playback resumes.
- *
- * Separated because they are unavoidable and uninteresting — the ring has
- * been idle, so its buffers were cleared before the first write could reach
- * them. It is the OTHER counter that measures a pipeline failing to keep up.
- */
-uint32_t waveshare_audio_dma_underruns_opening(void);
-
-/**
- * The source has run dry: descriptors the hardware sends from here are empty
- * because nobody is filling them, which is how every answer ends.
- *
- * Call it BEFORE blocking for a frame that may not come. Without it the whole
- * 90ms ring drains under an active watch and the normal end of an answer reads
- * as 6-12 underruns on a turn where every frame sent was played.
- */
-void waveshare_audio_dma_draining(void);
-
-/** Cleared descriptors sent while dry — normal answer-end, not a fault. */
-uint32_t waveshare_audio_dma_sends_draining(void);
-
-
-/**
- * Reserve credit for `ms` of audio ABOUT to be written.
- *
- * Called before the blocking write, because the DAC's send callbacks fire while
- * that write is in progress and must see the audio they are sending. Roll it
- * back if the write fails.
- */
-void waveshare_audio_reserve_write(uint32_t ms);
-
-/**
- * Milliseconds the DAC spent with an empty ring while we were meant to be
- * feeding it — measured on the writing task, so it does not depend on the DMA
- * driver issuing callbacks during a gap.
- */
-uint32_t waveshare_audio_starved_ms(void);
-
-/** How many separate times that happened. */
-uint32_t waveshare_audio_starve_events(void);
-
-/**
- * An intentional flush just discarded queued audio.
- *
- * Tells the next arm that the hardware ring may still hold up to one ring of
- * audio it will never be credited for, so the empty-deadline must not assume an
- * empty ring. Without it a barge-in reports listener starvation that did not
- * happen.
- */
-void waveshare_audio_note_flush(void);
-
-/** Undo a reservation whose write did not happen. */
-void waveshare_audio_rollback_write(uint32_t ms);
-
-
-/** Audio handed over but not yet sent, in ms. Negative is impossible (clamped). */
 int32_t waveshare_audio_dma_owed_ms(void);
-
+/** Apply the shared phase and retain the avatar's descriptor epoch boundary. */
+void waveshare_audio_phase(enum iterate_kit_voice_phase phase);
 
 /** Ceiling and shipped level; see the note at the setter for the measurement. */
 enum {

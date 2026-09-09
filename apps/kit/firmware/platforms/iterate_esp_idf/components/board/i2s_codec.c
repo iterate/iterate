@@ -25,6 +25,11 @@ static struct iterate_kit_starvation_ledger ledger;
 static enum iterate_kit_status (*hardware_read)(void *, int16_t *, size_t);
 static enum iterate_kit_status (*hardware_write)(void *, const int16_t *, size_t);
 static void *hardware_context;
+static void (*before_write)(void *);
+
+void iterate_kit_i2s_codec_set_before_write(void (*wait)(void *)) {
+  before_write = wait;
+}
 
 static enum iterate_kit_status codec_read(
     void *context,
@@ -196,6 +201,7 @@ static void playback_hardware_task(void *argument) {
         pdTRUE) {
       continue;
     }
+    if (before_write != NULL) before_write(hardware_context);
     const uint32_t frame_ms = (uint32_t)(frame.sample_count * 1000U / 16000U);
     portENTER_CRITICAL(&codec_lock);
     iterate_kit_starvation_ledger_reserve_write(&ledger, frame_ms, esp_timer_get_time());

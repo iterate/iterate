@@ -23,6 +23,7 @@
 
 #include "iterate/kit/audio_processor.h"
 #include "iterate/kit/capabilities/health.h"
+#include "iterate/kit/platforms/i2s_codec.h"
 #include "iterate/kit/devices/waveshare_s3_amoled.h"
 #include "capnweb/capnweb.h"
 #include "iterate/kit/session_grammar.h"
@@ -185,29 +186,10 @@ static void poll(void *context, struct iterate_kit_voice_intent *out) {
 
 static void phase(void *context, enum iterate_kit_voice_phase phase_value) {
   (void)context;
+  waveshare_audio_phase(phase_value);
   switch (phase_value) {
     case ITERATE_KIT_VOICE_PHASE_ARRIVED:
       waveshare_audio_amplifier(true);
-      break;
-    case ITERATE_KIT_VOICE_PHASE_FEEDING:
-      waveshare_audio_dma_watch(true);
-      break;
-    case ITERATE_KIT_VOICE_PHASE_WAITING:
-      waveshare_audio_dma_watch(false);
-      break;
-    case ITERATE_KIT_VOICE_PHASE_DRAINING:
-      waveshare_audio_dma_draining();
-      waveshare_audio_dma_watch(false);
-      break;
-    case ITERATE_KIT_VOICE_PHASE_FLUSHED:
-      /*
-       * DISARM BEFORE DECLARING, not after. The loop calls this before it
-       * throws the audio away; doing the two in the other order leaves a
-       * window in which the device's own intentional cut is recorded as
-       * listener-visible starvation.
-       */
-      waveshare_audio_dma_watch(false);
-      waveshare_audio_note_flush();
       break;
     case ITERATE_KIT_VOICE_PHASE_QUIET:
       /*
@@ -217,6 +199,8 @@ static void phase(void *context, enum iterate_kit_voice_phase phase_value) {
        * still drops on the first pass after the sound finishes.
        */
       if (!waveshare_audio_sound_active()) waveshare_audio_amplifier(false);
+      break;
+    default:
       break;
   }
 }
@@ -278,39 +262,13 @@ static uint8_t volume(void *context) {
 }
 
 /*
- * The twelve counters that are this board's hardware rather than the loop's
+ * The counters that are this board's hardware rather than the loop's
  * state. Same `,"name":value` shape as the shared table, and the same rule: a
  * field that does not fit returns 0 and the whole stats line is dropped,
  * because a truncated document is not a shorter one.
  */
 static size_t health(void *context, char *out, size_t capacity) {
   const struct iterate_kit_health_field fields[] = {
-    {"codecCaptureOverruns", waveshare_audio_capture_overruns()},
-    {"codecCaptureFailures", waveshare_audio_capture_driver_failures()},
-    /*
-     * NOT A STARVATION MEASURE — an epoch-relative ledger deficit, kept for
-     * diagnosis and named so nobody gates on it again.
-     *
-     * The ISR credits audio per feeding epoch and debits a descriptor per send.
-     * An intentional cut discards the software buffer but NOT the DMA ring, so
-     * the ring keeps sending descriptors credited in the PREVIOUS epoch while
-     * the re-arm has reset the ledger to zero. Measured across one barge-in:
-     * written fell 380ms -> 20ms and eleven such descriptors arrived; they were
-     * charged to dmaOpening that time and to this counter (+4, +2) on an
-     * earlier run, differing only in how much new audio had been credited when
-     * they landed. The same physical event under two names is not a gate.
-     *
-     * spkStarvedMs is the authoritative one: wall-clock lateness against an
-     * absolute audio-empty deadline, which stayed at 0 through both cuts.
-     */
-    {"dmaLedgerDeficit", waveshare_audio_dma_underruns()},
-    {"dmaOpening", waveshare_audio_dma_underruns_opening()},
-    /* Normal answer-end drain, kept apart from the ledger deficit on purpose. */
-    {"dmaDraining", waveshare_audio_dma_sends_draining()},
-    /* The task-side starvation measure: ms the ring was empty, and how often. */
-    {"spkStarvedMs", waveshare_audio_starved_ms()},
-    {"spkStarveEvents", waveshare_audio_starve_events()},
-    {"codecPlaybackFailures", waveshare_audio_playback_driver_failures()},
     /*
      * Worth publishing because the lower button's I2C read deliberately fails
      * RELEASED, which makes a button that has quietly stopped working look
@@ -331,8 +289,11 @@ static size_t health(void *context, char *out, size_t capacity) {
     {"faceRenderFails", waveshare_avatar_render_failures()},
   };
   (void)context;
-  return iterate_kit_health_append_fields(
-      out, capacity, fields, sizeof(fields) / sizeof(fields[0]));
+  const size_t used = iterate_kit_i2s_codec_health(out, capacity);
+  if (used == 0U) return 0U;
+  const size_t added = iterate_kit_health_append_fields(
+      out + used, capacity - used, fields, sizeof(fields) / sizeof(fields[0]));
+  return added == 0U ? 0U : used + added;
 }
 
 static const struct iterate_kit_board_ops ops = {
