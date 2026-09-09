@@ -223,6 +223,8 @@ static void capture_hardware_task(void *argument) {
 
 static void playback_hardware_task(void *argument) {
   static struct iterate_kit_i2s_codec_frame frame;
+  static struct iterate_kit_i2s_codec_frame idle_silence;
+  static bool idle_silence_started;
   (void)argument;
   for (;;) {
     if (playback_ready != NULL && !playback_ready(hardware_context)) continue;
@@ -260,6 +262,31 @@ static void playback_hardware_task(void *argument) {
         xQueueReceive(playback_mailbox, &frame, pdMS_TO_TICKS(20)) !=
         pdTRUE) {
       if (playback_idle != NULL) playback_idle(hardware_context);
+      /*
+       * KEEP THE TX RING FED WHEN THERE IS NOTHING TO SAY.
+       *
+       * Between answers this task used to write nothing, and on a bus the
+       * DSP masters the DMA ring drained in 60 ms and the hardware auto-clear
+       * clocked out zeros with a descriptor-boundary hiccup every 10 ms:
+       * playbackQueueOverflows climbed ~95/s while idle on the HA Voice PE,
+       * before and after the consolidation. The XMOS reads its AEC reference
+       * off that same TX stream, and the 2026-08-11 bench tied exactly this
+       * idle underrun to the canceller collapsing from -9.9 dB to -0.4 dB by
+       * the third turn (the 2026-09-09 first table bench measured +0.8 dB,
+       * i.e. no cancellation). The vendor's own ESPHome speaker component
+       * never lets the stream stop (`timeout: never`, zero-fill every pass).
+       * So: one 20 ms frame of silence per idle wake, uncredited in the
+       * ledger (it is not audio the listener is owed) and not observed as
+       * playout (a face must not mouth silence). A board whose write is
+       * fenced returns UNAVAILABLE and nothing happens, as before.
+       */
+      if (!idle_silence_started) {
+        memset(idle_silence.samples, 0, sizeof(idle_silence.samples));
+        idle_silence.sample_count = 320;
+        idle_silence_started = true;
+      }
+      if (before_write != NULL) before_write(hardware_context);
+      (void)hardware_write(hardware_context, idle_silence.samples, idle_silence.sample_count);
       continue;
     }
     if (before_write != NULL) before_write(hardware_context);
