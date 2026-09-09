@@ -44,9 +44,9 @@ const OPAQUE_EXTENSIONS = new Set([
 ]);
 
 /**
- * How the file view opens a path: a document (the collaborative editor with
+ * How a workspace file opens: a document (the collaborative editor with
  * comments), source text in a read-only CodeMirror buffer (with which
- * language), or an opaque file it does not render. Extension-driven — a
+ * language), or an opaque file nothing renders. Extension-driven — a
  * workspace file has no content-type channel.
  */
 export type WorkspaceFileKind =
@@ -63,4 +63,9 @@ export function workspaceFileKind(path: string): WorkspaceFileKind {
   // Everything else opens as text — unknown extensions (Dockerfile, .env,
   // .gitignore, .toml) are overwhelmingly text in project repos.
   return { kind: "text", language: TEXT_LANGUAGES[extension] ?? "text" };
+}
+
+/** A typed file name as a document: `.md` is implied when no document extension was given. */
+export function withDocumentExtension(path: string): string {
+  return workspaceFileKind(path).kind === "document" ? path : `${path}.md`;
 }

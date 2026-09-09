@@ -5,9 +5,11 @@ import { Button } from "@iterate-com/ui/components/button";
 import { commentIdentityFor } from "@iterate-com/workspace-documents/identity";
 import type { CollabEditorApi } from "@iterate-com/workspace-documents/editor-api";
 import { authorColor, authorLabel } from "@iterate-com/workspace-documents/collab";
+import { fallbackCommitMessage } from "@iterate-com/workspace-documents/change-summary";
+import { CommitControls } from "@iterate-com/workspace-documents/commit-controls";
+import { useCommit } from "@iterate-com/workspace-documents/use-commit";
 import { useWorkspaceBoard } from "../lib/use-workspace-board.ts";
 import { whoami, withProject } from "../lib/project-rpc.ts";
-import { useTaskCommit } from "../lib/use-task-commit.ts";
 import { projectBoard } from "../lib/board-engine.ts";
 import {
   taskPathInFolder,
@@ -18,7 +20,6 @@ import {
 import { isGuestWorkspacePath, type BoardAddress } from "../lib/board-shared.ts";
 import {
   columnsForTasks,
-  fallbackCommitMessage,
   isTaskFilePath,
   newTaskFile,
   parseTaskCard,
@@ -36,7 +37,7 @@ import {
   WithTooltip,
 } from "./board-header.tsx";
 import { BoardSettings } from "./board-settings.tsx";
-import { CommitControls, DeletedTasksStrip } from "./commit-controls.tsx";
+import { DeletedTasksStrip } from "./deleted-tasks-strip.tsx";
 import { StreamEventsSheet } from "./stream-events-sheet.tsx";
 import { WorkspaceTaskSheet } from "./workspace-task-sheet.tsx";
 import { Board } from "./board.tsx";
@@ -260,11 +261,11 @@ export function WorkspaceBoardPage({
     [board.taskChanges],
   );
 
-  const commit = useTaskCommit({
+  const commit = useCommit({
     // The workspace lane summarizes deterministically; an AI one-liner can
     // become a vessel capability later.
     api: {
-      generateCommitMessage: async ({ changes }) => fallbackCommitMessage(changes),
+      generateCommitMessage: async ({ changes }) => fallbackCommitMessage(changes, "tasks"),
     },
     enabled: autoCommit && !guest,
     onCommit: async (message) => {
@@ -275,7 +276,7 @@ export function WorkspaceBoardPage({
         // it — afterwards would leave a rename as instant new dirtiness.
         await settleDraft();
         const result = await board.commit(
-          message?.trim() || fallbackCommitMessage(boardRef.current.taskChanges),
+          message?.trim() || fallbackCommitMessage(boardRef.current.taskChanges, "tasks"),
         );
         // The redline baseline advanced: reseat an open editor so committed
         // work stops wearing marks (same lever revert/discard use). The
@@ -292,10 +293,8 @@ export function WorkspaceBoardPage({
         setCommitPending(false);
       }
     },
-    taskChangeSignature: board.taskChanges
-      .map((change) => `${change.status}:${change.path}`)
-      .join("|"),
-    taskChanges: board.taskChanges,
+    changeSignature: board.taskChanges.map((change) => `${change.status}:${change.path}`).join("|"),
+    changes: board.taskChanges,
   });
 
   const moveTask = useCallback(

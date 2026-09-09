@@ -1,26 +1,28 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { FileIcon } from "lucide-react";
-import { SidebarTrigger } from "@iterate-com/ui/components/sidebar";
+import { Button } from "@iterate-com/ui/components/button";
 import { SourceCodeBlock } from "@iterate-com/ui/components/source-code-block";
 import { Spinner } from "@iterate-com/ui/components/spinner";
-import { withDocsProject } from "../lib/docs-client.ts";
-import { workspaceFileKind } from "../lib/file-kinds.ts";
-import { DocumentError } from "./document-error.tsx";
+import { workspaceFileKind } from "./file-kinds.ts";
+import type { WorkspaceTransport } from "./types.ts";
 
 /**
- * A non-document file of the workspace, read-only: source text in the
- * shared CodeMirror block (highlighted by extension), or a note for files
- * the app does not render. Documents (.md/.html) open in the collaborative
- * editor instead; editing everything else is an agent's job for now.
+ * One file of a workspace, read-only: source text in the shared CodeMirror
+ * block (highlighted by extension), or a note for files nothing renders.
+ * Hosts open documents (.md/.html) in the collaborative editor instead;
+ * editing everything else is an agent's job for now.
  */
-export function WorkspaceFilePage({
-  workspacePath,
+export function WorkspaceFileView({
+  transport,
   path,
+  leading,
   actions,
 }: {
-  workspacePath: string;
+  transport: WorkspaceTransport;
   /** Fully qualified. */
   path: string;
+  /** Rendered at the left of the header (a sidebar trigger, say). */
+  leading?: ReactNode;
   actions?: ReactNode;
 }) {
   const kind = workspaceFileKind(path);
@@ -32,7 +34,8 @@ export function WorkspaceFilePage({
     let cancelled = false;
     setContent(null);
     setError(null);
-    void withDocsProject((project) => project.workspace(workspacePath).readFile(path))
+    void transport
+      .run((workspace) => workspace.readFile(path))
       .then((read) => {
         if (cancelled) return;
         if (read === null) setError(`file "${path}" does not exist`);
@@ -44,27 +47,31 @@ export function WorkspaceFilePage({
     return () => {
       cancelled = true;
     };
-  }, [kind.kind, path, workspacePath, attempt]);
+  }, [kind.kind, path, transport, attempt]);
 
-  if (error !== null) {
-    return (
-      <DocumentError
-        workspacePath={workspacePath}
-        path={path}
-        message={error}
-        onRetry={() => setAttempt((current) => current + 1)}
-      />
-    );
-  }
   return (
-    <div className="flex min-h-svh flex-col bg-background lg:h-svh lg:overflow-hidden">
+    <div className="flex min-h-full flex-1 flex-col bg-background">
       <header className="flex min-h-14 shrink-0 items-center gap-2 border-b px-3 py-2">
-        <SidebarTrigger className="-ml-1 md:hidden" />
+        {leading}
         <FileIcon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
         <h1 className="min-w-0 truncate font-mono text-xs">{path}</h1>
         <div className="ml-auto flex items-center gap-1.5">{actions}</div>
       </header>
-      {kind.kind === "opaque" ? (
+      {error !== null ? (
+        <div className="grid min-h-0 flex-1 place-items-center p-6">
+          <div className="flex max-w-xl flex-col gap-3 text-sm">
+            <p className="rounded-lg bg-destructive/5 p-3 text-destructive">{error}</p>
+            <Button
+              variant="outline"
+              size="sm"
+              className="self-start"
+              onClick={() => setAttempt((current) => current + 1)}
+            >
+              Try again
+            </Button>
+          </div>
+        </div>
+      ) : kind.kind === "opaque" ? (
         <div className="grid min-h-0 flex-1 place-items-center text-sm text-muted-foreground">
           This file type is not rendered here.
         </div>

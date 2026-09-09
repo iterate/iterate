@@ -11,7 +11,7 @@ import type {
   CollabChanges,
   CollabPresence,
   CollabWaitResult,
-  WorkspaceDocumentTransport,
+  WorkspaceTransport,
 } from "./types.ts";
 
 /**
@@ -80,7 +80,7 @@ export class CollabConnection {
   }
 
   constructor(
-    readonly transport: WorkspaceDocumentTransport,
+    readonly transport: WorkspaceTransport,
     readonly filePath: string,
     readonly displayName = "someone",
   ) {

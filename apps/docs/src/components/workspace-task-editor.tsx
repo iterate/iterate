@@ -1,8 +1,7 @@
 import { useMemo } from "react";
 import { WorkspaceDocumentEditor } from "@iterate-com/workspace-documents/editor";
 import type { CollabEditorApi } from "@iterate-com/workspace-documents/editor-api";
-import type { WorkspaceDocumentTransport } from "@iterate-com/workspace-documents/types";
-import { withProject, withProjectOnce, workspaceFor } from "../lib/project-rpc.ts";
+import { workspaceTransport } from "../lib/project-rpc.ts";
 import type { BoardAddress } from "../lib/board-shared.ts";
 
 export function WorkspaceTaskEditor({
@@ -27,14 +26,7 @@ export function WorkspaceTaskEditor({
   onRequestClose?: () => void;
 }) {
   const { workspacePath, repoPath } = address;
-  const transport = useMemo<WorkspaceDocumentTransport>(
-    () => ({
-      run: (operation) => withProject((project) => operation(workspaceFor(project, workspacePath))),
-      runOnce: (operation) =>
-        withProjectOnce((project) => operation(workspaceFor(project, workspacePath))),
-    }),
-    [workspacePath],
-  );
+  const transport = useMemo(() => workspaceTransport(workspacePath), [workspacePath]);
 
   return (
     <WorkspaceDocumentEditor

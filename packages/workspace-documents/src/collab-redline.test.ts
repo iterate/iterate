@@ -5,7 +5,7 @@ import { foldAttribution } from "./collab-attribution.ts";
 import { authorLabel } from "./collab-author.ts";
 import { CollabConnection } from "./collab-client.ts";
 import { hasCollabDelivery } from "./collab-redline.ts";
-import type { WorkspaceDocumentTransport } from "./types.ts";
+import type { WorkspaceTransport } from "./types.ts";
 
 describe("authorLabel", () => {
   it("agents read as agent", () => {
@@ -31,11 +31,7 @@ describe("redline delivery detection", () => {
     const acknowledgement = receiveUpdates(optimistic, [
       { changes: first.changes, clientID: "mine" },
     ]);
-    const connection = new CollabConnection(
-      {} as WorkspaceDocumentTransport,
-      "/reviews/plan.md",
-      "mine",
-    );
+    const connection = new CollabConnection({} as WorkspaceTransport, "/reviews/plan.md", "mine");
     connection.stageDeliveredOps([{ changes: first.changes.toJSON(), clientId: "mine" }]);
 
     // The visible document already contains our optimistic edit, so receiving

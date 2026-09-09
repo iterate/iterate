@@ -5,7 +5,6 @@ import {
   jamDocumentPath,
   jamInvitation,
   jamWorkspacePath,
-  withDocumentExtension,
 } from "./jam.ts";
 
 describe("jam naming", () => {
@@ -29,18 +28,6 @@ describe("jam naming", () => {
   test("an agent path never carries a nested or exotic jam id", () => {
     expect(jamAgentPath("/workspaces/scratch/a/b")).toBeNull();
     expect(jamAgentPath("/workspaces/scratch/.hidden")).toBeNull();
-  });
-});
-
-describe("document names", () => {
-  test.each([
-    { typed: "ideas", becomes: "ideas.md" },
-    { typed: "ideas.md", becomes: "ideas.md" },
-    { typed: "plan.markdown", becomes: "plan.markdown" },
-    { typed: "page.html", becomes: "page.html" },
-    { typed: "notes/2026", becomes: "notes/2026.md" },
-  ])("$typed → $becomes", ({ typed, becomes }) => {
-    expect(withDocumentExtension(typed)).toBe(becomes);
   });
 });
 

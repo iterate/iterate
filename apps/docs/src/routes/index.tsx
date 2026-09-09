@@ -1,14 +1,16 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { SidebarTrigger } from "@iterate-com/ui/components/sidebar";
 import { cn } from "@iterate-com/ui/lib/utils";
+import { workspaceFileKind } from "@iterate-com/workspace-documents/file-kinds";
+import { WorkspaceFileView } from "@iterate-com/workspace-documents/workspace-file-view";
+import { useWorkspaceFiles } from "@iterate-com/workspace-documents/workspace-files";
+import { WorkspaceTree } from "@iterate-com/workspace-documents/workspace-tree";
 import { DeepLinkEmptyState } from "../components/deep-link-empty-state.tsx";
 import { WorkspaceDocumentPage } from "../components/workspace-document-page.tsx";
-import { WorkspaceFilePage } from "../components/workspace-file-page.tsx";
-import { WorkspaceFilesPane } from "../components/workspace-files-pane.tsx";
 import { WorkspaceActions } from "../components/workspace-actions.tsx";
-import { workspaceFileKind } from "../lib/file-kinds.ts";
-import { useWorkspaceFiles } from "../lib/use-workspace-files.ts";
+import { DEFAULT_REPO_PATH } from "../lib/board-shared.ts";
+import { workspaceTransport } from "../lib/project-rpc.ts";
 
 export const Route = createFileRoute("/")({
   validateSearch: (
@@ -44,7 +46,8 @@ function WorkspaceFiles({
   workspacePath: string;
   path: string | undefined;
 }) {
-  const files = useWorkspaceFiles({ workspacePath });
+  const transport = useMemo(() => workspaceTransport(workspacePath), [workspacePath]);
+  const files = useWorkspaceFiles({ transport, workspacePath, listAtOnce: [DEFAULT_REPO_PATH] });
   const navigate = useNavigate({ from: Route.fullPath });
   const onSelect = useCallback(
     (path: string | null) =>
@@ -87,9 +90,9 @@ function WorkspaceFiles({
   );
   return (
     <div className="flex min-h-svh flex-col lg:h-svh lg:flex-row">
-      {/* The files pane is the whole page until a file is open; beside it
-          on large screens after that (a phone shows one pane at a time). */}
-      <WorkspaceFilesPane
+      {/* The tree is the whole page until a file is open; beside it on large
+          screens after that (a phone shows one pane at a time). */}
+      <WorkspaceTree
         key={workspacePath}
         files={files}
         workspacePath={workspacePath}
@@ -125,12 +128,14 @@ function WorkspaceFiles({
             actions={actions}
           />
         ) : (
-          <WorkspaceFilePage
-            key={documentKey}
-            workspacePath={workspacePath}
-            path={selectedPath}
-            actions={actions}
-          />
+          <div key={documentKey} className="flex min-h-svh flex-col lg:h-svh lg:overflow-hidden">
+            <WorkspaceFileView
+              transport={transport}
+              path={selectedPath}
+              leading={<SidebarTrigger className="-ml-1 md:hidden" />}
+              actions={actions}
+            />
+          </div>
         )}
       </div>
     </div>

@@ -1,3 +1,4 @@
+import type { WorkspaceTransport } from "@iterate-com/workspace-documents/types";
 import type { DocsUser, DocsWorkspace, WorkspaceListEntry } from "./docs-api.ts";
 import { withDocsProject, withDocsProjectOnce } from "./docs-client.ts";
 
@@ -8,7 +9,7 @@ import { withDocsProject, withDocsProjectOnce } from "./docs-client.ts";
  * under everything.
  */
 export const withProject = withDocsProject;
-export const withProjectOnce = withDocsProjectOnce;
+const withProjectOnce = withDocsProjectOnce;
 
 /**
  * One workspace on a live project stub — the platform surface forwarded
@@ -19,6 +20,19 @@ export function workspaceFor(project: unknown, workspacePath: string): DocsWorks
   return (project as { workspace(workspacePath: string): unknown }).workspace(
     workspacePath,
   ) as DocsWorkspace;
+}
+
+/**
+ * The shared workspace components' door to one workspace: reconnect-aware
+ * `run` for ordinary calls, quiet `runOnce` for teardown flushes that must
+ * never replace the shared session under live polls.
+ */
+export function workspaceTransport(workspacePath: string): WorkspaceTransport {
+  return {
+    run: (operation) => withProject((project) => operation(workspaceFor(project, workspacePath))),
+    runOnce: (operation) =>
+      withProjectOnce((project) => operation(workspaceFor(project, workspacePath))),
+  };
 }
 
 /** The project's repos, for the board home's per-repo sections. */

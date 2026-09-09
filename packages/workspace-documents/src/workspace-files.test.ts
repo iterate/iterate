@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import type { WorkspaceStatus } from "iterate/client";
-import { rootOf, workspaceRoots, workspaceTree } from "./use-workspace-files.ts";
+import { rootOf, workspaceRoots, workspaceTree } from "./workspace-files.ts";
 
 const status: WorkspaceStatus = {
   mounts: [

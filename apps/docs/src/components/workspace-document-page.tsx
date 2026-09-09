@@ -20,12 +20,8 @@ import {
 import { commentIdentityFor } from "@iterate-com/workspace-documents/identity";
 import { useDocumentReview } from "@iterate-com/workspace-documents/review";
 import { Drawer, DrawerContent, DrawerTitle } from "@iterate-com/ui/components/drawer";
-import type { WorkspaceDocumentTransport } from "@iterate-com/workspace-documents/types";
-import {
-  isSessionTransportError,
-  withDocsProject,
-  withDocsProjectOnce,
-} from "../lib/docs-client.ts";
+import { isSessionTransportError, withDocsProject } from "../lib/docs-client.ts";
+import { workspaceTransport } from "../lib/project-rpc.ts";
 import { withRetries } from "../lib/retry.ts";
 import type { DocsUser, WorkspaceDocumentSnapshot } from "../lib/docs-api.ts";
 import { DocumentError } from "./document-error.tsx";
@@ -117,14 +113,7 @@ export function WorkspaceDocumentPage({
     };
   }, [path, workspacePath, loadAttempt]);
 
-  const transport = useMemo<WorkspaceDocumentTransport>(
-    () => ({
-      run: (operation) => withDocsProject((project) => operation(project.workspace(workspacePath))),
-      runOnce: (operation) =>
-        withDocsProjectOnce((project) => operation(project.workspace(workspacePath))),
-    }),
-    [workspacePath],
-  );
+  const transport = useMemo(() => workspaceTransport(workspacePath), [workspacePath]);
 
   const onLiveContent = useCallback((_path: string, content: string) => {
     setSource(content);

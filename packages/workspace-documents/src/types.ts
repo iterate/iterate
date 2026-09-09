@@ -118,7 +118,7 @@ export interface WorkspaceSurface {
  * Reconnect-aware access to one workspace. `runOnce` is deliberately quiet:
  * teardown flushes must never replace the shared connection under live polls.
  */
-export interface WorkspaceDocumentTransport {
+export interface WorkspaceTransport {
   run<T>(operation: (workspace: WorkspaceSurface) => PromiseLike<T>): Promise<T>;
   runOnce<T>(operation: (workspace: WorkspaceSurface) => PromiseLike<T>): Promise<T>;
 }

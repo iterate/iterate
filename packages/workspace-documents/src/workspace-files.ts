@@ -1,10 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { RepoFileStatus } from "@iterate-com/ui/components/repo-file-tree";
 import type { WorkspaceStatus } from "iterate/client";
-import { DEFAULT_REPO_PATH } from "./board-shared.ts";
-import { withDocsProject } from "./docs-client.ts";
-import { workspaceFor } from "./project-rpc.ts";
-import type { DocsWorkspace } from "./docs-api.ts";
+import type { WorkspaceSurface, WorkspaceTransport } from "./types.ts";
 
 /** Files an agent adds or edits show up on this cadence; own edits refresh at once. */
 const STATUS_POLL_MS = 5_000;
@@ -80,28 +77,37 @@ export function workspaceTree(
 }
 
 /**
- * The Docs app's working tree over a WHOLE workspace: every mounted repo at
- * its own /repos/** path plus the workspace's own directory — the same
- * git-shaped picture the apps/os repo IDE draws from its in-browser store,
- * except the store here is the workspace overlay itself, shared with every
- * collaborator and agent and settled by the platform. Status (cheap) polls;
- * listings load per root, on demand: the config repo and the workspace's
- * own directory at once, any other mount when it is opened. Every mutation
- * is the same workspace write an agent makes; commit publishes ONE mount's
- * dirty set to that repo's main. Paths are fully qualified throughout.
+ * The working tree over a WHOLE workspace: every mounted repo at its own
+ * /repos/** path plus the workspace's own directory — the same git-shaped
+ * picture the apps/os repo IDE draws from its in-browser store, except the
+ * store here is the workspace overlay itself, shared with every collaborator
+ * and agent and settled by the platform. Status (cheap) polls; listings load
+ * per root, on demand: the workspace's own directory and the `listAtOnce`
+ * mounts at once, any other mount when it is opened. Every mutation is the
+ * same workspace write an agent makes; commit publishes ONE mount's dirty
+ * set to that repo's main. Paths are fully qualified throughout.
  */
-export function useWorkspaceFiles({ workspacePath }: { workspacePath: string }) {
+export function useWorkspaceFiles({
+  transport,
+  workspacePath,
+  listAtOnce = [],
+}: {
+  transport: WorkspaceTransport;
+  workspacePath: string;
+  /** Mount paths listed as soon as the workspace opens (the config repo, say). */
+  listAtOnce?: readonly string[];
+}) {
   const [status, setStatus] = useState<WorkspaceStatus | null>(null);
   const [listings, setListings] = useState<ReadonlyMap<string, readonly string[]>>(new Map());
   const [error, setError] = useState<string | null>(null);
 
-  // Every workspace call goes through the platform surface for this
-  // workspace (plain get; nothing here creates a workspace).
   const withWorkspace = useCallback(
-    <T>(operation: (workspace: DocsWorkspace) => Promise<T>) =>
-      withDocsProject((project) => operation(workspaceFor(project, workspacePath))),
-    [workspacePath],
+    <T>(operation: (workspace: WorkspaceSurface) => Promise<T>) => transport.run(operation),
+    [transport],
   );
+  // A key, not the array: hosts spell the list inline, and its identity must
+  // not restart the heartbeat every render.
+  const listAtOnceKey = listAtOnce.join("\n");
 
   // Newest wins, per root: a listing that started before a mutation must
   // not land after the post-mutation one and hide the user's own change.
@@ -164,8 +170,9 @@ export function useWorkspaceFiles({ workspacePath }: { workspacePath: string }) 
             root === workspacePath
               ? snapshot.unmounted.length
               : (snapshot.mounts.find((mount) => mount.path === root)?.changes.length ?? 0);
+          const atOnce = new Set(listAtOnceKey === "" ? [] : listAtOnceKey.split("\n"));
           for (const root of roots) {
-            const opensAtOnce = root === workspacePath || root === DEFAULT_REPO_PATH;
+            const opensAtOnce = root === workspacePath || atOnce.has(root);
             const shrank =
               previous !== null && changedCount(next, root) < changedCount(previous, root);
             if (
@@ -188,7 +195,7 @@ export function useWorkspaceFiles({ workspacePath }: { workspacePath: string }) 
       cancelled = true;
       clearInterval(timer);
     };
-  }, [loadRoot, refreshStatus, workspacePath]);
+  }, [listAtOnceKey, loadRoot, refreshStatus, workspacePath]);
 
   /** One mutation, then status + the touched roots again; false (and the error shown) when it failed. */
   const run = useCallback(

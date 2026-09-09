@@ -9,7 +9,7 @@ import { DEFAULT_REPO_PATH, SCRATCH_WORKSPACE_PREFIX } from "./board-shared.ts";
 import { DOCUMENT_REVIEW_INSTRUCTIONS } from "./document-review-instructions.ts";
 
 /** The repo mount a jam's tree shows and its seed document lives in. */
-export const JAM_REPO_PATH = DEFAULT_REPO_PATH;
+const JAM_REPO_PATH = DEFAULT_REPO_PATH;
 
 /** The app-neutral scratch namespace every jam (and "New workspace") mints under. */
 export function jamWorkspacePath(id: string): string {
@@ -31,18 +31,6 @@ export function jamAgentPath(workspacePath: string): string | null {
   if (!isJamWorkspacePath(workspacePath)) return null;
   const id = workspacePath.slice(SCRATCH_WORKSPACE_PREFIX.length);
   return /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(id) ? `/agents/jams/${id}` : null;
-}
-
-const DOCUMENT_EXTENSION = /\.(?:md|markdown|html?)$/i;
-
-/** Whether a path is a document the editor and comment store support. */
-export function isDocumentPath(path: string): boolean {
-  return DOCUMENT_EXTENSION.test(path);
-}
-
-/** A typed file name as a document: `.md` is implied when no supported extension was given. */
-export function withDocumentExtension(path: string): string {
-  return isDocumentPath(path) ? path : `${path}.md`;
 }
 
 /**

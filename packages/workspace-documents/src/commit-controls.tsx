@@ -6,26 +6,27 @@ import { Field, FieldLabel } from "@iterate-com/ui/components/field";
 import { Input } from "@iterate-com/ui/components/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@iterate-com/ui/components/popover";
 import { cn } from "@iterate-com/ui/lib/utils";
-import type { TaskChangeStatus, TaskChangeSummary } from "../state.ts";
+import type { RepoFileStatus } from "@iterate-com/ui/components/repo-file-tree";
+import type { FileChangeSummary } from "./change-summary.ts";
 
-const STATUS_LETTER: Record<TaskChangeStatus, string> = {
+const STATUS_LETTER: Record<RepoFileStatus, string> = {
   added: "A",
   modified: "M",
   deleted: "D",
 };
-const STATUS_CLASS: Record<TaskChangeStatus, string> = {
+const STATUS_CLASS: Record<RepoFileStatus, string> = {
   added: "text-emerald-600",
   modified: "text-amber-600",
   deleted: "text-red-600",
 };
-const STATUS_WORD: Record<TaskChangeStatus, string> = {
+const STATUS_WORD: Record<RepoFileStatus, string> = {
   added: "New",
   modified: "Edited",
   deleted: "Deleted",
 };
 
 /** The A/M/D letter a changed row wears. */
-function ChangeStatusMark({ status }: { status: TaskChangeStatus }) {
+function ChangeStatusMark({ status }: { status: RepoFileStatus }) {
   return (
     <span
       title={STATUS_WORD[status]}
@@ -37,10 +38,10 @@ function ChangeStatusMark({ status }: { status: TaskChangeStatus }) {
 }
 
 /**
- * The board's git surface, restyled to the apps/os dialect: a Commit button
- * with the autosave countdown beside it and a popover reviewing the pending
- * change set — one row per changed file, a message input (empty
- * auto-generates), the AI message helper, and Discard all.
+ * The commit surface of one change set, in the apps/os dialect: a Commit
+ * button with the autosave countdown beside it and a popover reviewing the
+ * pending changes — one row per changed file, a message input (empty
+ * auto-generates), the message helper, and Discard all.
  */
 export function CommitControls({
   taskChanges,
@@ -58,7 +59,7 @@ export function CommitControls({
   onWriteCommitMessage,
   onDiscardAll,
 }: {
-  taskChanges: readonly TaskChangeSummary[];
+  taskChanges: readonly FileChangeSummary[];
   /** The mount the commit lands on (`/repos/config`), when the host knows it. */
   scope?: string | null;
   /** A short mount name on the button, when several mounts are dirty at once. */
@@ -168,7 +169,7 @@ function ChangeList({
   taskChanges,
   scope,
 }: {
-  taskChanges: readonly TaskChangeSummary[];
+  taskChanges: readonly FileChangeSummary[];
   scope: string | null | undefined;
 }) {
   return (
@@ -210,43 +211,5 @@ function AutoSaveCountdown({ dueAt }: { dueAt: number }) {
     <span className="text-[11px] tabular-nums whitespace-nowrap opacity-70">
       {secondsLeft <= 0 ? "…" : `· ${secondsLeft}s`}
     </span>
-  );
-}
-
-/**
- * Deleted cards leave the board instantly, so this strip is where a pending
- * deletion stays visible — and reversible — until it is committed.
- */
-export function DeletedTasksStrip({
-  deletedChanges,
-  onRestore,
-}: {
-  deletedChanges: readonly TaskChangeSummary[];
-  onRestore: (path: string) => void;
-}) {
-  if (deletedChanges.length === 0) return null;
-  return (
-    <div className="flex flex-wrap items-center justify-end gap-2 border-b bg-background px-3 py-1">
-      <span className="text-xs text-muted-foreground">Deleted</span>
-      {deletedChanges.map((change) => (
-        <span
-          key={change.path}
-          title={change.path}
-          className="inline-flex flex-wrap items-center gap-1.5 rounded-full border py-0.5 pr-1 pl-2.5 text-xs text-muted-foreground"
-        >
-          <span className="size-1.5 rounded-full bg-red-500" aria-hidden />
-          <span className="line-through">{change.title}</span>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-5 px-1.5 text-[11px] text-foreground"
-            onClick={() => onRestore(change.path)}
-            title={`Restore ${change.title}`}
-          >
-            restore
-          </Button>
-        </span>
-      ))}
-    </div>
   );
 }

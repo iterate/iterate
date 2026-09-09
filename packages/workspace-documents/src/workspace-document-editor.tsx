@@ -10,7 +10,7 @@ import { useCollabEditor } from "./use-collab-editor.ts";
 import type { CollabEditorApi, EditorReviewConfig } from "./collab-editor-api.ts";
 import { richMarkdown } from "./rich-markdown.ts";
 import type { ReviewComposerMount } from "./rfm-review-extension.ts";
-import type { WorkspaceDocumentTransport } from "./types.ts";
+import type { WorkspaceTransport } from "./types.ts";
 
 /**
  * Shared live Markdown editor: CodeMirror 6 over the workspace collaboration session.
@@ -33,7 +33,7 @@ export function WorkspaceDocumentEditor({
   onRequestClose,
   apiRef,
 }: {
-  transport: WorkspaceDocumentTransport;
+  transport: WorkspaceTransport;
   displayName?: string;
   /** Host-facing document identifier used in callbacks. */
   path: string;

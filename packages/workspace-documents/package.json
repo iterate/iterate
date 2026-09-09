@@ -13,7 +13,15 @@
     "./identity": "./src/comment-identity.ts",
     "./server": "./src/server.ts",
     "./types": "./src/types.ts",
-    "./review": "./src/use-document-review.tsx"
+    "./review": "./src/use-document-review.tsx",
+    "./change-summary": "./src/change-summary.ts",
+    "./commit-controls": "./src/commit-controls.tsx",
+    "./file-kinds": "./src/file-kinds.ts",
+    "./use-commit": "./src/use-commit.ts",
+    "./workspace-changes": "./src/workspace-changes.tsx",
+    "./workspace-file-view": "./src/workspace-file-view.tsx",
+    "./workspace-files": "./src/workspace-files.ts",
+    "./workspace-tree": "./src/workspace-tree.tsx"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
@@ -34,6 +42,7 @@
     "@lezer/common": "^1.5.1",
     "capnweb": "npm:@iterate-com/capnweb@^0.10.0",
     "iterate": "workspace:*",
+    "lucide-react": "^0.553.0",
     "react": "^19.2.7",
     "react-dom": "^19.2.7"
   },

@@ -14,7 +14,7 @@ import type {
   CollabWaitResult,
   CollabChanges,
   WorkspaceCollabSurface,
-  WorkspaceDocumentTransport,
+  WorkspaceTransport,
   WorkspaceSurface,
 } from "@iterate-com/workspace-documents/types";
 import { expect, test, vi } from "vitest";
@@ -26,7 +26,7 @@ type FakeDocumentSession = Pick<
 >;
 
 /** A transport over one fake session: the editor never touches fs or git here. */
-function transportFor(documentSession: FakeDocumentSession): WorkspaceDocumentTransport {
+function transportFor(documentSession: FakeDocumentSession): WorkspaceTransport {
   const workspace = { collab: documentSession } as unknown as WorkspaceSurface;
   return {
     run: async (operation) => await operation(workspace),

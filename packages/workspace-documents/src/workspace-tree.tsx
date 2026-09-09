@@ -1,7 +1,7 @@
 import { lazy, Suspense, useCallback } from "react";
 import type { RepoTreeActions } from "@iterate-com/ui/components/repo-file-tree";
-import { withDocumentExtension } from "../lib/jam.ts";
-import type { useWorkspaceFiles } from "../lib/use-workspace-files.ts";
+import { withDocumentExtension } from "./file-kinds.ts";
+import type { useWorkspaceFiles } from "./workspace-files.ts";
 
 /** A tree row id back to the fully qualified workspace path. */
 function qualified(treePath: string): string {
@@ -16,7 +16,7 @@ const RepoFileTree = lazy(async () => {
 });
 
 /**
- * The file column beside a document: the shared repo tree over the WHOLE
+ * The file column of a workspace: the shared repo tree over the WHOLE
  * workspace — every mounted repo under repos/, the workspace's own directory
  * under workspaces/ — with git-status badges from the overlay and
  * new/rename/delete/discard. Listings load per root: a mount opens (and
@@ -24,7 +24,7 @@ const RepoFileTree = lazy(async () => {
  * The tree speaks paths without their leading slash (its row ids);
  * everything else here is fully qualified.
  */
-export function WorkspaceFilesPane({
+export function WorkspaceTree({
   files,
   workspacePath,
   selectedPath,
