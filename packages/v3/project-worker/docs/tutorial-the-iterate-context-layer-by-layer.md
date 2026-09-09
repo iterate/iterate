@@ -19,7 +19,8 @@ a comment naming the test file it is lifted from (`// e2e/secrets.e2e.test.ts`);
 pieces of the lane is marked `(composed)`. Server snippets are the real code, abridged; an elision
 is marked `// …`. Names in code are fully qualified (`itx.rewriteRules.list()`, never `rules.list()`).
 
-Every snippet assumes this preamble — exactly how the lane opens a session:
+Every snippet assumes this preamble — exactly how the lane opens a session. The demo project is
+`acme-support` throughout:
 
 ```ts
 import { newWebSocketRpcSession } from "capnweb";
@@ -27,17 +28,27 @@ import { newWebSocketRpcSession } from "capnweb";
 const wsApi = new URL("/api", WORKER_BASE_URL); // the one worker under test: a local boot, or the deployed one
 wsApi.protocol = "ws:";
 
-/** A fresh session's itx for a project — its ROOT context. The lane authenticates with the
- *  deployment's admin secret (every project); a browser would name its login cookie instead. */
-export function openItx(projectId: string) {
-  const api = newWebSocketRpcSession(wsApi.toString()); // an UnauthenticatedSession stub
-  return api.authenticate({ type: "admin-secret", secret }).projects.get(projectId); // the project's root IterateContext
+/** A fresh session — an UnauthenticatedSession stub. Hold it with `using`: a capnweb stub is
+ *  disposable, and disposing the session says goodbye — every stub it lent is recalled, every
+ *  handle it holds disposed (chapter 1). */
+export const session = () => newWebSocketRpcSession(wsApi.toString());
+
+/** The lane's credential — the deployment's admin secret, every project; a browser names its
+ *  login cookie instead. */
+export const adminCredentials = () => ({ type: "admin-secret", secret });
+
+/** The lane's shorthand: a project's ROOT context on a fresh session. The lane registers that
+ *  session for disposal in afterEach; in your own code the session is the `using` (below). */
+export function openItx(project: string) {
+  return session().authenticate(adminCredentials()).projects.get(project); // the project's root IterateContext
 }
-// e2e/support/client.ts (session, adminCredentials, openItx)
+// e2e/support/client.ts (session, adminCredentials, openItx) · the `using` row: e2e/session-wire-frames-one-round-trip.e2e.test.ts
 ```
 
 Nothing is awaited on the way in: `authenticate(credentials)`, `.projects`, `.get(project)` are one pipelined
-capnweb chain, and the first call on the result flushes it. There are exactly three primitives —
+capnweb chain, and the first call on the result flushes it. What you dispose is the session, never
+a context: `IterateContext` has no `Symbol.dispose`; the session stub and every `provide` /
+`subscribe` handle do. There are exactly three primitives —
 the **context** (things you can call, in both directions), **fetch** (in both directions), and the
 **stream** — and everything after chapter 0 is composition.
 
@@ -47,13 +58,23 @@ the **context** (things you can call, in both directions), **fetch** (in both di
 
 ### One worker, one package
 
-`src/worker.ts` is the stateless edge: capnweb terminates at `/api`; a plain-HTTP fetch lane
-answers at `/expression`; project hosts `<app>--<projectId>.<base>` are routed by hostname; and
-everything else on the worker's own hostname is the control plane, in-process (`src/control-plane/`:
-an OAuth 2.1 Authorization Server, a D1 directory of users, orgs and projects, `/mcp`, a console
-with a login form). `src/iterate-context-durable-object.ts` is THE CONTEXT: one Durable Object per
-`{ projectId, path }`, holding the event log, the core reduce, subscription delivery, the facets,
-the rpc-stub pagers and the egress door.
+`src/worker.ts` is the stateless edge: capnweb terminates at `/api`; a project host —
+`<app>--<project>.<base>`, `<app>.<project>.<base>`, or a custom hostname the directory knows
+(`<app>.<custom>` too), `<project>` an id or a slug — is routed by hostname into the project's root
+context, the app label riding as a trusted `x-iterate-app` header the edge ALWAYS overwrites; and
+everything else on the worker's own hostname is the control plane, in-process
+(`src/control-plane.ts`: an OAuth 2.1 Authorization Server, a D1 directory of users, orgs and
+projects, `/mcp`, a console with a login form). A project host is the one HTTP way in, and what
+answers it is the project's config worker (chapter 7), whose `fetch` routes by hostname.
+`src/iterate-context-durable-object.ts` is THE CONTEXT: one Durable Object per `{ projectId, path }`,
+holding the event log, the core reduce, subscription delivery, the facets, the rpc-stub pagers and
+the fetch door.
+
+> **Landing:** today the edge serves one host shape, `<app>--<projectId>.<base>` (an id only), and
+> a public `/expression?context=&itx=` fetch lane beside it. The lane is deleted next build; the
+> `<app>.<project>.<base>` and custom-hostname shapes, slug-or-id resolution, the `x-iterate-app`
+> header and the config worker's `fetch` terminal land with it (apps/os's `decideIngressRoute` is
+> the model).
 
 The hard rule: capnweb never terminates in the Durable Object. The edge is a proxy in front of the
 DO and reaches it only over Workers RPC. Everything you hold is minted at the edge.
@@ -90,31 +111,40 @@ class ProjectCollection extends RpcTarget {
 The first thing to call is `whoami`; it answers from the Durable Object's own name:
 
 ```ts
-const ctx = "prj_demo";
-const itx = openItx(ctx);
+using api = session(); // scope exit says goodbye: every stub this session lent is recalled
+const itx = api.authenticate(adminCredentials()).projects.get("acme-support");
 const who = await itx.invoke(["itx", ["whoami"]]);
-// { projectId: "prj_demo", path: "/" }
-// e2e/context.e2e.test.ts
+// { projectId: "acme-support", path: "/" }
+// e2e/context.e2e.test.ts · the `using` row: e2e/session-wire-frames-one-round-trip.e2e.test.ts
 ```
 
-You do not need a WebSocket for that. capnweb also serves a one-shot HTTP batch at the same `/api`:
-a CLI or a cron does one POST, and every call chained off the session flushes in it.
+### The client helpers
+
+There is no client SDK today: the two lines above are what every client writes by hand, and they
+are all the lane's `openItx` does. The stack that should exist is two helpers, one layered on the
+other — an open design, not a decision:
 
 ```ts
-import { newHttpBatchRpcSession } from "capnweb";
-
-const batch = newHttpBatchRpcSession(new URL("/api", WORKER_BASE_URL).toString());
-const who = await batch.authenticate(adminCredentials()).projects.get(ctx).invoke(["itx", ["whoami"]]);
-// who.projectId === ctx — a batch cannot hold a live capability (the edge must outlive the response): reads and writes only
-// e2e/session.e2e.test.ts
+// PROPOSED, not built — the names are placeholders; the layering is the point
+using iterate = await connectToIterate({ baseUrl: "https://<worker>", credentials: { type: "project-token", token } }); // a Session: whoami, projects
+using itx = await connectToIterateProject({ baseUrl, credentials, project: "acme-support" }); // the project's root context, on a session of its own
 ```
+
+`connectToIterate` opens `/api` and authenticates: one session, many projects, the thing you
+dispose. `connectToIterateProject` is that plus `projects.get(project)`, for the client that lives
+in one project; disposing it disposes the session it opened. Both take the `credentials` union
+`authenticate` takes, so a browser, a script and a device differ in one field.
+
+> **Landing:** an open design — today's clients import `capnweb` and write the two lines
+> themselves (`e2e/support/client.ts`).
 
 ### The three primitives, met once each
 
 **The context, called in both directions.** `whoami` was the server side answering; the other
 direction is you handing the server a function and the server calling it — chapter 1. **Fetch, in
 both directions.** A `Request` rides the wire as a value and a `Response` rides back:
-`itx.fetch(request)` is egress, `/expression` is ingress — chapter 8. **The stream.** Every context
+`itx.fetch(request)` is fetch in the context of this project, a project host is fetch INTO it —
+chapter 8. **The stream.** Every context
 is an append-only event log: `itx.append` commits, `itx.readEvents` pages, `itx.waitForEvent` blocks
 for the next match — chapter 4.
 
@@ -127,13 +157,16 @@ unknown segments into ONE `invoke(expression)` (`installPrototypeInvokeFallback`
 `src/context/expression.ts`). The two spellings are the same call:
 
 ```ts
-const who = await openItx(ctx).whoami(); // { projectId: ctx, path: "/" }
+const who = await openItx("acme-support").whoami(); // { projectId: "acme-support", path: "/" }
 expect(await itx.kv.put("k", "v")).toMatchObject({ ok: true });
 expect(await itx.kv.get("k")).toBe("v");
 // e2e/context.e2e.test.ts
 ```
 
 `/version` answers `<deployId> <environmentName>`, the stamp a deploy smoke waits for
+(`e2e/session.e2e.test.ts`). One more door, supported and not front and center: capnweb's one-shot
+HTTP batch (`newHttpBatchRpcSession`) is served at the same `/api` for a cron or a script — one
+POST, every chained call flushed in it, reads and writes only, no live capability
 (`e2e/session.e2e.test.ts`).
 
 **What this brick leaves on the table:** a context that answers `whoami` and stores a key has
@@ -150,16 +183,19 @@ running in the cloud — can call it. A bare async function is enough; capnweb p
 reference.
 
 ```ts
-const laptop = openItx(ctx);
-const otherClient = openItx(ctx);
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+
+const laptop = openItx("acme-support"); // a node process on your machine
+const otherClient = openItx("acme-support"); // anyone else in the project — a browser tab, an agent
 
 await laptop.provide("itx.runOnMyComputer", async (cmd: string, args: string[]) => {
-  await new Promise((r) => setTimeout(r, 5)); // genuinely async, like execFile
-  return `stdout of ${cmd} ${args.join(" ")}`;
+  const { stdout } = await promisify(execFile)(cmd, args); // runs HERE, on the laptop
+  return stdout;
 });
 
-expect(await otherClient.runOnMyComputer("ls", ["-la"])).toBe("stdout of ls -la");
-// e2e/rpc-stubs-values.e2e.test.ts
+const listing = await otherClient.runOnMyComputer("ls", ["-la"]); // the laptop's directory listing, through the cloud
+// e2e/rpc-stubs-values.e2e.test.ts — the lane's stub is a fake (it answers `stdout of ls -la` and spawns nothing); the two calls are these
 ```
 
 Two things happened, and one verb made both. The function is physical — a capnweb reference your
@@ -214,11 +250,11 @@ A lent object can be as deep as you like. The Slack shape — an `RpcTarget` who
 plain objects of functions — is replayed onto exactly the dotted spelling every client writes:
 
 ```ts
-const bridgeItx = openItx(ctx);
+const bridgeItx = openItx("acme-support");
 const slack = new SlackReplayTarget(); // get chat → { postMessage }, get conversations → { list }
 const slackProvided = await bridgeItx.provide("itx.slack", slack);
 
-const itx = openItx(ctx);
+const itx = openItx("acme-support");
 const posted = await itx.slack.chat.postMessage({ channel: "#general", text: "hello from itx" });
 expect(posted.ok).toBe(true);
 // the desugared form the dotted spelling compiles to, and the string half of the codec
@@ -254,18 +290,18 @@ exported handle when the session ends, so a dying session recalls everything it 
 `itx.rpcStubs.list()` — is the keys with an open transport RIGHT NOW, and it shrinks at once:
 
 ```ts
-const observer = openItx(ctx);
-const sA = session();
-await sA.authenticate(adminCredentials()).projects.get(ctx).provide("itx.ghosttool", new Tools("ghost"));
-expect(await observer.invoke(["itx", "ghosttool", ["hello"]])).toBe("hello-from-ghost");
-expect(await observer.rpcStubs.list()).toContain("itx.ghosttool");
-
-sA[Symbol.dispose](); // the client session ends — every handle it holds is disposed
+const observer = openItx("acme-support");
+{
+  using sA = session();
+  await sA.authenticate(adminCredentials()).projects.get("acme-support").provide("itx.ghosttool", new Tools("ghost"));
+  expect(await observer.invoke(["itx", "ghosttool", ["hello"]])).toBe("hello-from-ghost");
+  expect(await observer.rpcStubs.list()).toContain("itx.ghosttool");
+} // ← Symbol.dispose fires here: the client session ends, every handle it holds is disposed
 
 await until(async () => !(await observer.rpcStubs.list()).includes("itx.ghosttool")); // presence shrinks…
 const err = await rejection(observer.invoke(["itx", "ghosttool", ["hello"]]));
 expect(err.code).toBe("NO_ITX_EXPRESSION_MATCH"); // …then the rule is un-set: default-deny again
-// e2e/rpc-stubs-lend-recall-and-offline.e2e.test.ts
+// e2e/session-wire-frames-one-round-trip.e2e.test.ts (the `using` row) · e2e/rpc-stubs-lend-recall-and-offline.e2e.test.ts
 ```
 
 Two codes, two situations. `NO_ITX_EXPRESSION_MATCH` is default-deny: nothing names the call.
@@ -274,7 +310,7 @@ Two codes, two situations. `NO_ITX_EXPRESSION_MATCH` is default-deny: nothing na
 ```ts
 await itx.provide("itx.laterTool", "itx.rpcStubs.get('itx.later')"); // a rule to a key nobody lent
 expect((await rejection(itx.invoke("itx.laterTool.hello()"))).code).toBe("RPC_STUB_OFFLINE");
-await openItx(ctx).provide("itx.later", new Tools("later")); // now someone lends it
+await openItx("acme-support").provide("itx.later", new Tools("later")); // now someone lends it
 expect(await itx.invoke("itx.laterTool.hello()")).toBe("hello-from-later");
 // e2e/rpc-stubs-lend-recall-and-offline.e2e.test.ts
 ```
@@ -290,14 +326,31 @@ context. The root and `/sub` may both lend under `itx.clash`, and both stay call
 session's teardown keys by `[iterateContextName, rpcStubKey]`:
 
 ```ts
-const s = session();
-const a = s.authenticate(adminCredentials()).projects.get(ctx); // the root context
+using s = session();
+const a = s.authenticate(adminCredentials()).projects.get("acme-support"); // the root context
 const b = a.cd("/sub"); // another context of the project, same session
 await a.provide("itx.clash", (x: number) => x + 1);
 await b.provide("itx.clash", (x: number) => x + 100);
 expect(await a.invoke("itx.clash(1)")).toBe(2);
 expect(await b.invoke("itx.clash(1)")).toBe(101);
 // e2e/session.e2e.test.ts
+```
+
+Contexts can still inherit from one another — through the rules, not the registry. A child's
+WHOLE-CONTEXT override, `provide("itx", "itx.builtins.cd('/')")`, sends every call no more specific
+row of the child claims — the built-in roots included — to the project root, resolved through the
+root's rules, so a lend on the root is reachable from every child that says so. The target must be
+the physical spelling `itx.builtins.cd('/')`: the door refuses `itx.cd('/')`, which would re-enter
+the table the row just claimed (chapter 3 has the rule):
+
+```ts
+using s = session();
+const root = s.authenticate(adminCredentials()).projects.get("acme-support");
+await root.provide("itx.tool", new Tools("root")); // lent at the root only
+await root.cd("/x").provide("itx", "itx.builtins.cd('/')"); // /x inherits: every unclaimed call goes to the root, through its rules
+expect(await root.cd("/x").invoke("itx.tool.hello()")).toBe("hello-from-root"); // (composed)
+expect(await root.cd("/x").builtins.whoami()).toEqual({ projectId: "acme-support", path: "/x" }); // the physical door at /x is still /x
+// e2e/rewrite-rules.e2e.test.ts — the whole-context override row (`root.cd("/x").provide("itx", live)`) and the door row (`itx.cd('/x')` refused, "physical spelling"; `itx.builtins.cd('/y')` accepted)
 ```
 
 **What this brick leaves on the table:** the name you called the stub by was a string we never
@@ -328,7 +381,7 @@ args the live part:
 ```ts
 await itx.kv.put("k", "v");
 expect(await itx.invoke("itx.kv.get", "k")).toBe("v"); // a name-final call plus its live arg
-expect(await itx.invoke("itx.whoami()")).toMatchObject({ projectId: ctx }); // no args: the call as spelled
+expect(await itx.invoke("itx.whoami()")).toMatchObject({ projectId: "acme-support" }); // no args: the call as spelled
 // e2e/rewrite-rules.e2e.test.ts
 ```
 
@@ -514,7 +567,7 @@ pinned args are consumed, and a live stub can sit behind a pinned match:
 await itx.provide("itx.llm.run", "itx.kv.get"); // the plain rule: itx.llm.run(k) → itx.kv.get(k)
 await itx.provide("itx.llm.run('special')", "itx.whoami"); // pinned: itx.llm.run('special') → itx.whoami()
 await itx.invoke("itx.kv.put('other', 'from-kv')");
-expect(await itx.invoke("itx.llm.run('special')")).toMatchObject({ projectId: ctx });
+expect(await itx.invoke("itx.llm.run('special')")).toMatchObject({ projectId: "acme-support" });
 expect(await itx.invoke("itx.llm.run('other')")).toBe("from-kv");
 await itx.provide("itx.llm.run('live')", (...unpinned) => `live:${JSON.stringify(unpinned)}`);
 expect(await itx.invoke("itx.llm.run('live', 7)")).toBe("live:[7]"); // the pinned arg never reaches the stub
@@ -559,7 +612,7 @@ const rules = Array.from({ length: 300 }, (_, i) => ({
   payload: { match: `itx.m${i}`, target: ["itx", "whoami"] },
 }));
 expect(await itx.append(...rules)).toHaveLength(300);
-expect(await itx.invoke(["itx", ["m299"]])).toMatchObject({ projectId: ctx, path: "/" });
+expect(await itx.invoke(["itx", ["m299"]])).toMatchObject({ projectId: "acme-support", path: "/" });
 // e2e/rewrite-rules.e2e.test.ts
 ```
 
@@ -622,8 +675,11 @@ chapter appended went somewhere; the next brick is that somewhere.
 
 ### `append`, `readEvents`, `waitForEvent`
 
-Every context is one append-only event log. The three roots are built-ins, so they ride the dotted
-hop with zero edge code:
+Every context is one append-only event log. The three are built-ins under `itx.builtins`, like
+everything the platform implements: `itx.append` is the implicit platform row
+`itx.append ⇒ itx.builtins.append`, exactly as `itx.kv` is `itx.kv ⇒ itx.builtins.kv` (chapter 3) —
+so the short name rides the dotted hop with zero edge code, and the physical spelling
+`itx.builtins.append` always works and never reads the rules:
 
 ```ts
 const [committed] = await itx.append({ type: "mark", payload: { n: 1 } });
@@ -667,6 +723,20 @@ expect(got.payload).toEqual({ n: 1 });
 expect(got.offset).toBeGreaterThan(head);
 // e2e/stream.e2e.test.ts
 ```
+
+The callback form exists today, and it is chapter 5's brick: `subscribe({ target: (events) => …,
+consumes: [type] })` lends the function, and the context pushes it every matching commit:
+
+```ts
+const c = collector(); // records every (events, range) it is handed
+await itxA.subscribe({ name: "pings", consumes: ["ping"], target: c.fn }); // a lent callback, pushed
+await itxB.invoke(`itx.append({ type: 'ping', payload: { n: 2 } })`);
+await until(() => c.types().includes("ping")); // (composed)
+// e2e/push-delivery.e2e.test.ts
+```
+
+The difference in one line: `waitForEvent` is one-shot and blocks the caller; `subscribe` is
+standing and pushed.
 
 ### Offsets, idempotency keys, expected offsets
 
@@ -744,7 +814,7 @@ Runtime state IS reduced state, and its snapshot is a facet-shaped door:
 
 ```ts
 const snap = await itx.invoke("itx.facets.get('core').snapshot()"); // { offset, state }
-expect(snap.state).toMatchObject({ projectId: ctx, path: "/", incarnation });
+expect(snap.state).toMatchObject({ projectId: "acme-support", path: "/", incarnation });
 expect(snap.state.itxExpressionRewriteRules["itx.solo"]).toEqual({ match: ["itx", "solo"], target: ["itx", "builtins", "rpcStubs", ["get", "itx.solo"]] });
 // e2e/stream.e2e.test.ts · e2e/rpc-stubs-lend-recall-and-offline.e2e.test.ts
 ```
@@ -1157,7 +1227,7 @@ export default class Mine extends WorkerEntrypoint {
   }
 }`,
 };
-expect(await itx.invoke(["itx", "workers", ["get", { source: SRC_MINE }], ["run"]])).toBe(`from-inline:${ctx}`);
+expect(await itx.invoke(["itx", "workers", ["get", { source: SRC_MINE }], ["run"]])).toBe("from-inline:acme-support");
 // e2e/session.e2e.test.ts
 ```
 
@@ -1240,7 +1310,8 @@ this.#stream.append({
 
 3. **The author extends `ConfigWorker`** from the SDK and overrides `processEvent`; the platform calls
    `processEventBatch`. Stateless by design — the SUBSCRIBING context keeps the cursor — so
-   `processEvent` must be idempotent:
+   `processEvent` must be idempotent. The same class answers the project's hosts through `fetch`
+   (chapter 8):
 
 ```ts
 // sdk/index.ts — abridged
@@ -1321,14 +1392,19 @@ not read.
 
 ---
 
-## 8. fetch, in both directions
+## 8. fetch: in the context of this project, and into it
 
-### Egress: `itx.fetch(request)` with secrets substituted
+### `itx.fetch(request)`: fetch in the context of this project, secrets substituted
 
-`itx.fetch(request)` is the context's egress terminal. A `{{secret:project:NAME}}` placeholder in
-the request URL or headers is substituted at the door with a value the caller never sees.
-`itx.secrets` is the WRITE-ONLY door to those values — `set`, `delete`, and a `list` of names and
-origins, never a value. Every change appends `events.iterate.com/secrets/changed` without the value:
+`itx.fetch(request)` is fetch in the context of this project — a `Request` sent AS the project:
+to the internet today, to internal hostnames later. Not "egress"; the word is fetch, and the
+context is what it adds. What it adds today is the secret substitution: a
+`getSecret("/secrets/NAME")` placeholder in the request URL or a header is replaced at the door
+with a value the caller never sees, and `getSecret("/secrets/NAME", { field: "a.b" })` picks one
+field out of a JSON secret — apps/os's grammar, verbatim; `/secrets/NAME` is the name
+`itx.secrets.set(NAME, …)` stored. `itx.secrets` is the WRITE-ONLY door to those values — `set`,
+`delete`, and a `list` of names and origins, never a value. Every change appends
+`events.iterate.com/secrets/changed` without the value:
 
 ```ts
 expect(await itx.secrets.list()).toEqual([]);
@@ -1344,78 +1420,62 @@ expect(JSON.stringify(changes)).not.toContain("hunter2");
 ```
 
 A secret set with an `origin` is sent to that origin ONLY. A placeholder with no stored secret, or a
-secret bound to another origin, is a 502 to the CALLER, before the terminal fetch, naming the token
-and where it sat, never the value:
+secret bound to another origin, is a 502 to the CALLER, before the terminal fetch, naming the
+placeholder and where it sat, never the value:
 
 ```ts
 await itx.secrets.set("bound", "v", { origin: "https://api.example.com" });
-const res = await itx.fetch(new Request("https://egress.invalid/", { headers: { authorization: "{{secret:project:bound}}" } }));
+const res = await itx.fetch(new Request("https://egress.invalid/", { headers: { authorization: 'getSecret("/secrets/bound")' } }));
 expect(res.status).toBe(502);
 expect(await res.text()).toContain("bound to https://api.example.com"); // and "not sent to https://egress.invalid"
-const missing = await openItx(ctx).fetch(new Request("https://egress.invalid/hunt", { headers: { "x-hunt-auth": "Bearer {{secret:project:GHOST}}" } }));
+const missing = await openItx("acme-support").fetch(new Request("https://egress.invalid/hunt", { headers: { "x-hunt-auth": 'Bearer getSecret("/secrets/GHOST")' } }));
 expect(missing.status).toBe(502);
 expect(await missing.text()).toContain('header "x-hunt-auth"'); // WHERE it sat, so the caller can fix it
-// e2e/secrets.e2e.test.ts · e2e/fetch-door.e2e.test.ts
+// e2e/secrets.e2e.test.ts · e2e/fetch-door.e2e.test.ts — the lane still spells the placeholder `{{secret:project:bound}}`
 ```
+
+> **Landing:** the placeholder grammar. The door substitutes `{{secret:project:NAME}}` today; it
+> becomes apps/os's `getSecret("/secrets/NAME")` (and the `{ field }` form) in the next build, and
+> the e2e rows above move with it.
 
 The door (`src/iterate-context-durable-object.ts`) scans the URL first, then every header, splices a URL value as ONE
 component so a secret can never add a query parameter, and preserves method, `Upgrade` and body, so a
 101 flows through it. The catalog is the PROJECT's: a secret set from `/a` is listed from `/b` and
 the root, and the change events live in the root's log. Deployed, the value arrives at the bound
-origin — proven by egressing to one of the project's own apps on its real host.
+origin — proven by fetching one of the project's own apps on its real host.
 
-### Ingress: the `/expression` lane
+### Fetch into the project: a project host is the address
 
-A fetch-shaped capability is always called through a terminal `.fetch(request)`. Three doors land
-on it. The plain-HTTP lane `/expression?context=<ctx>&itx=<expression>` is for callers with no
-capnweb session — the worker copies the expression into `x-itx-expression`, the DO resolves it
-through the rules and applies the Request:
+The other direction. A fetch-shaped capability is always called through a terminal
+`.fetch(request)`, and from the web there is ONE way to it: a project host. `<app>--<project>.<base>`
+and `<app>.<project>.<base>` name the app `<app>` of `<project>` — an id or a slug; the apex
+`<project>.<base>` names the app `default`; a custom hostname the directory knows — `acme.com`, or
+`<app>.acme.com` — names the project it is registered to. The edge resolves the project through the
+in-process directory, strips every inbound `x-itx-*` header, sets the trusted `x-iterate-app` — the
+label the host selected, ALWAYS overwritten, deleted when the host selected none, so a visitor can
+never pick an app the host did not — and the principal's stamp (chapter 10), and rides the Request
+VERBATIM into the project's root context, so the URL, host-scoped cookies and WebSocket upgrades
+survive.
 
-```ts
-await itx.provide("itx.site", ["itx", "workers", ["get", { source: SOURCES.site }]]); // a loaded worker whose fetch serves HTML, or a 101
-const page = await fetch(expressionUrl(ctx, "itx.site", "http"));
-expect(page.status).toBe(200);
-expect(await page.text()).toContain("dynamic web capability");
-expect(page.headers.get("content-security-policy")).toBe("sandbox allow-scripts allow-forms"); // CSP-sandboxed: an opaque origin
-const ws = await wsRoundTrip(expressionUrl(ctx, "itx.site", "ws"), "hello-from-eyeball"); // a WebSocket upgrade, 101
-expect(ws.echo).toBe("site-echo:hello-from-eyeball");
-// e2e/fetch-door.e2e.test.ts
-```
-
-The answer is loaded code's document served on the PLATFORM's origin, so it is CSP-sandboxed: its
-script can never reach `/api` with the visitor's session. An app that needs an origin is a project
-host (below). `/expression/<path>` too: the Request rides to the target verbatim. The lane reaches a
-LENT stub just as well — a Node process providing a fetch-shaped `RpcTarget` serves HTTP out of your
-laptop, and upgrades WebSockets with capnweb's universal `WebSocketPair`:
+What answers is the project's config worker (chapter 7): the request lands on
+`itx.worker.fetch(request)`. The bundled default forwards to `itx.apps.<x-iterate-app>.fetch(request)`,
+so an app is one rule row and the log never names a hostname; a project that wants its own routing
+overrides `fetch`:
 
 ```ts
-class HttpDevice extends RpcTarget {
-  async fetch(request: Request) { return new Response("pong-from-node-provider", { status: 201 }); }
+// the config repo's worker.ts — routing by hostname, in the author's own `fetch`
+export default class Config extends ConfigWorker {
+  async fetch(request: Request) {
+    const itx = this.env.ITX.get();
+    const host = new URL(request.url).hostname;
+    if (host === "docs.acme.com") return itx.apps.docs.fetch(request);
+    if (request.headers.get("x-iterate-app") === "site") return itx.apps.site.fetch(request);
+    return new Response("no app here\n", { status: 404 });
+  }
 }
-await session().authenticate(adminCredentials()).projects.get(ctx).provide("itx.ws-device", new HttpDevice());
-expect((await fetch(expressionUrl(ctx, "itx.ws-device", "http"), { method: "POST", body: "ping", headers: adminBearer() })).status).toBe(201);
-// e2e/fetch-door.e2e.test.ts
 ```
 
-Inside a session the second door is the dotted terminal `.fetch(request)`: `invoke` forks a call
-whose terminal step is `fetch` carrying a live Request onto the DO's fetch channel, the only hop kind
-that carries a socket-bearing Response back — `await itx.site.fetch(new Request("https://itx.site/"))`
-answers the loaded worker's 200 over capnweb (`e2e/session.e2e.test.ts`).
-
-From loaded code, `env.ITX.fetch` is a real Fetcher — set `x-itx-expression` yourself and the same
-lane serves it (`e2e/fetch-door.e2e.test.ts`, the plain case). The lane admits a member's cookie,
-a project token or the admin secret as the bearer (chapter 10), and cannot re-enter itself:
-`itx=itx.fetch` is cut at the second hop — the platform's bearer never rides into loaded code, so
-the re-entry arrives with no credential and is 401 — and a hop count the platform never wrote is
-over budget on arrival (508).
-
-### Project hosts: a label is the address
-
-A request on `<app>--<projectId>.<base>` IS the app `itx.apps.<app>` of that project's root
-context. The apex `<projectId>.<base>` is the label `default`. The edge strips inbound `x-itx-*`,
-sets `x-itx-expression` to that spelling, and rides the Request VERBATIM into the lane, so the URL,
-host-scoped cookies and WebSocket upgrades survive. The app is one rule row; the log never names a
-hostname.
+The lane, today, on the one shape the edge serves:
 
 ```ts
 const projectId = freshDnsSafeProjectId("ingress"); // a project's id IS its DNS-safe slug
@@ -1426,15 +1486,47 @@ const page = await fetchProjectHost(`site--${projectId}.${base}`, "/w?repo=x");
 expect(page.status).toBe(200);
 expect(page.text).toContain(`<p>site--${projectId}.${base}/w?repo=x</p>`); // the URL verbatim
 await itx.provide("itx.apps.default", "itx.apps.site"); // the apex `<projectId>.<base>` is the label `default`: 200 from here on
-expect((await fetchProjectHost(`other--${projectId}.${base}`, "/")).status).toBe(404); // a label with no row: the lane's 404
+expect((await fetchProjectHost(`other--${projectId}.${base}`, "/")).status).toBe(404); // a label with no row: 404
 expect((await fetchProjectHost(`site--${unknown}.${base}`, "/")).status).toBe(421); // a project the directory does not know
 // e2e/ingress-project-host.e2e.test.ts
 ```
 
+> **Landing:** today the edge dispatches a project host straight to `itx.apps.<label>` (the
+> `x-itx-expression` header carries the spelling) and serves `<app>--<projectId>.<base>` only, with
+> a public `/expression?context=&itx=` lane beside it that takes any expression. That lane is
+> deleted next build; the config worker's `fetch` terminal, `x-iterate-app`, the
+> `<app>.<project>.<base>` and custom-hostname shapes and slug-or-id resolution land in its place.
+> `x-itx-expression` stays as the internal channel — the header a project host and the proxy's
+> terminal fetch ride into the DO.
+
 Admission comes first: a context is created on first touch, so before the edge dials a Durable
 Object for a project host it asks the in-process directory whether the project exists — one D1 read
-— and a stranger's label under the wildcard mints nothing. Deployed, a WebSocket upgrade rides
-through the host to the app.
+— and a stranger's label under the wildcard mints nothing. A visitor's credential is read as chapter
+10 says — this project's token, its secret or the admin secret as the bearer, or the host cookie a
+token was turned into; never the platform's login cookie — and the platform's own credential is
+stripped before the app sees the Request. A host cannot re-enter itself: an app that fetches its own
+host comes back through the edge with a hop count the platform writes, and the fourth pass is a 508.
+Deployed, a WebSocket upgrade rides through the host to the app.
+
+Inside a session the door is the dotted terminal `.fetch(request)`: `invoke` forks a call whose
+terminal step is `fetch` carrying a live Request onto the DO's fetch channel, the only hop kind that
+carries a socket-bearing Response back — `await itx.site.fetch(new Request("https://itx.site/"))`
+answers the loaded worker's 200 over capnweb (`e2e/session.e2e.test.ts`). The channel reaches a LENT
+stub just as well — a Node process providing a fetch-shaped `RpcTarget` serves HTTP out of your
+laptop, and upgrades WebSockets with capnweb's universal `WebSocketPair` — so a row at
+`itx.apps.device` puts the laptop behind a project host:
+
+```ts
+class HttpDevice extends RpcTarget {
+  async fetch(request: Request) { return new Response("pong-from-node-provider", { status: 201 }); }
+}
+await session().authenticate(adminCredentials()).projects.get("acme-support").provide("itx.device", new HttpDevice());
+expect((await itx.device.fetch(new Request("https://itx.device/", { method: "POST", body: "ping" }))).status).toBe(201); // (composed)
+// e2e/fetch-door.e2e.test.ts (the provider, reached through `/expression` today) · e2e/session.e2e.test.ts (the dotted terminal)
+```
+
+From loaded code, `env.ITX.fetch` is a real Fetcher — set `x-itx-expression` yourself and the same
+channel serves it (`e2e/fetch-door.e2e.test.ts`, the plain case).
 
 ### The fetch-upgrade leg, in one paragraph
 
@@ -1488,10 +1580,22 @@ expect((await shop.listPets()).owner).toBe("capnweb-batch@example.com");
 Composition with rules is the documented shape: `provide('itx.tools', "itx.connectToMcp(url, {
 headers })")`, then `itx.tools.get_pet(…)` resolves to `itx.builtins.connectToMcp(…).get_pet`. A
 remote's 401 reaches the caller as the connector's refusal. `connectToCapnweb` over a WebSocket
-session through egress pipelines a chain and is held across calls (deployed only: local workerd's
+session through `itx.fetch` pipelines a chain and is held across calls (deployed only: local workerd's
 outbound fetch cannot upgrade). A loaded worker can also SERVE a capnweb API — the SDK exports
-`newWorkersRpcResponse` — and `connectToCapnweb` dials it back through `/expression/<path>`, the path
-arriving verbatim (`e2e/library-connectors.e2e.test.ts`).
+`newWorkersRpcResponse` — and `connectToCapnweb` dials it back through a project host,
+`<app>--<project>.<base>/<path>`, the path arriving verbatim (`e2e/library-connectors.e2e.test.ts`).
+
+> **Landing:** the lane dials `/expression/<path>` for this today; it moves to a project host with
+> chapter 8's route deletion.
+
+### Open question: one root, or `kernel` and `lib`?
+
+Today one flat root holds both groups: the kernel roots, implemented against `ctx` and `env`, and
+the library, written against `itx` alone — `itx.builtins.kv` and `itx.builtins.connectToMcp` sit
+side by side, and nothing in the spelling says which is which. The alternative is two namespaces,
+`itx.builtins.kernel.*` and `itx.builtins.lib.*` (or two platform rows, `itx.kernel` and `itx.lib`).
+The trade: one root is one spelling and no level to learn; two make the litmus test visible in the
+name, and let the library move to userspace without a rename. Not decided.
 
 ### Memoized per context, released at the quiesce
 
@@ -1532,12 +1636,15 @@ secret that proves it — and every lane reads the same kinds off a request:
   by `projects.get(project).rotateApiKey()`, below. The session is `{ actor: "project:<id>" }`,
   bound to that one project exactly like a token's.
 
-`/expression` admits a member's cookie, a project token, the project's secret or the admin secret as
-the bearer; `/mcp` is behind the OAuth AS.
+The fetch lane — a project host — is bearer and token only: this project's token, its secret or the
+admin secret as `Authorization: Bearer`, or the host cookie a token was turned into (below). The
+platform's login cookie is never a lane credential (`laneIdentityOf`, `src/worker.ts`): on a lane a
+cross-site navigation would carry it with no `Origin` to check. `/mcp` is behind the OAuth AS and
+takes the same bearers.
 
 ### The control plane, and MCP through the one login
 
-Everything on the worker's hostname that is not `/api`, `/expression`, `/version` or `/demo` is the
+Everything on the worker's hostname that is not `/api`, `/version` or `/demo` is the
 control plane, in-process: the console at `/` (`/login`, `/logout`, `POST /projects`); the OAuth 2.1
 Authorization Server (`/authorize`, `/oauth/token`, `/oauth/register`, `/.well-known/*`) whose ONLY
 protected route — and ONE resource, `<origin>/mcp` — is `/mcp`. The directory is D1 — users → orgs →
@@ -1553,7 +1660,7 @@ projects. The token then reaches four tools: `whoami`, `list_projects`, `create_
 context, in-process, under her principal (`invokeAs`), so what it appends carries her; `project` is
 optional when the grant reaches exactly one, required for the admin secret (which reaches every
 project as a bearer, `resolveExternalToken`), refused outside the grant. A project's own secret is a
-bearer too, on `/mcp?project=<id>`, and acts as `project:<id>`. MCP is not a parallel capability
+bearer too — it names its project with `?project=<id>` on the `/mcp` URL — and acts as `project:<id>`. MCP is not a parallel capability
 API: a tool call reaches what an expression reaches, for any project the grant names:
 
 ```ts
@@ -1576,7 +1683,7 @@ to the token's one project; the admin secret answers `{ actor: "admin" }`, and `
 ```ts
 const principal = { actor: "user_ada", email: "ada@example.com" };
 const token = await mintProjectToken({ projectId, ...principal }); // e2e/support/principal.ts signs with the lane's secret
-const api = session();
+using api = session();
 const authenticated = api.authenticate({ type: "project-token", token });
 expect(await authenticated.whoami()).toEqual({ projectId, ...principal });
 expect((await rejection(authenticated.projects.get(`${projectId}-other`).whoami())).code).toBe("FORBIDDEN"); // the token names ONE project
@@ -1599,8 +1706,8 @@ admin, the project's own secret — is their gate, and neither touches a Durable
 
 `rotateApiKey()` mints the project's own key: 32 random bytes as base64url, answered ONCE. Only the
 SHA-256 hash is stored, in `SECRETS_KV` under `project-api-key:<projectId>` — outside the
-`secret:<projectId>:` prefix egress substitutes from, so no `{{secret:project:…}}` placeholder can
-ever mail it out. A reveal IS a rotation: the previous key stops verifying at once, and a project
+`secret:<projectId>:` prefix `itx.fetch` substitutes from, so no `getSecret("/secrets/…")`
+placeholder can ever mail it out. A reveal IS a rotation: the previous key stops verifying at once, and a project
 has no key until the first call. `authenticate({ type: "project-secret", project, secret })` hashes
 the candidate and compares in constant time (`verifyProjectSecret`, `src/principal.ts`); the session
 it opens IS the project:
@@ -1631,8 +1738,11 @@ expect(await api.authenticate({ type: "project-token", token: asItself }).whoami
 // e2e/session.e2e.test.ts
 ```
 
-A handle no session vended — a loaded worker's `env.ITX` — has neither door (`FORBIDDEN`): loaded
-code speaks for the project and signs as nobody.
+Two handles have neither door (`FORBIDDEN`). One no session vended — a loaded worker's `env.ITX`:
+loaded code speaks for the project and signs as nobody. And a project-TOKEN session's: a token is a
+delegation, minutes long, and mints no further token and rotates no key — the member, the admin, or
+the project-secret session for its own project does (`src/session.ts` hands a token session no
+project doors).
 
 ### The principal is stamped on events, and carried by `cd`
 
@@ -1788,7 +1898,7 @@ only, in `e2e/stream-isolate-ceilings-deployed.e2e.test.ts` and `e2e/stream-isol
 | 5 | subscriptions, push vs cursor, the ladder, `consumes` | `src/stream/core-processor.ts`, `src/stream/subscription-delivery.ts` |
 | 6 | facets, processors, live state | the DO's `#invokeFacet`, `src/stream/processor.ts`, `src/sdk/index.ts`, `src/client/` |
 | 7 | loaded workers, `env.ITX`, the loader, the config worker, repos | `src/context/worker-loader.ts`, `src/iterate-context.ts`, `src/sdk/index.ts`, `src/context/repos.ts` |
-| 8 | egress with secrets, `/expression`, project hosts, the upgrade leg | `src/iterate-context-durable-object.ts`, `src/context/rpc-stubs.ts`, `src/worker.ts` |
+| 8 | fetch in the context of this project (secrets), project hosts, the upgrade leg | `src/iterate-context-durable-object.ts`, `src/context/rpc-stubs.ts`, `src/worker.ts` |
 | 9 | the library | `src/library.ts` |
 | 10 | identity, tokens, the control plane | `src/principal.ts`, `src/session.ts`, `src/control-plane.ts` |
 | 11 | pagers, the quiesce, alarms, the watchdog, the breaker | `src/iterate-context-durable-object.ts`, `src/stream/stream.ts` |
@@ -1813,8 +1923,9 @@ The invariants a reader should now be able to state:
   pure; the host is hosted like any class; disabling is one event and the facet goes with it.
 - **Loaded code's whole world is `env.ITX`.** `get()` is the real `IterateContext`, `fetch` is the
   DO's fetch door; the context is a prop, not a binding.
-- **A fetch-shaped capability is always a terminal `.fetch(request)`.** Egress substitutes secrets and
-  refuses to the caller; ingress is the lane (CSP-sandboxed) or a project host (a label is the address).
+- **A fetch-shaped capability is always a terminal `.fetch(request)`.** `itx.fetch` is fetch in the
+  context of this project — secrets substituted, refusals to the caller; the way in is a project
+  host, answered by the config worker's `fetch`.
 - **Identity is attribution.** The DO stamps `source.principal`; the session is bound by its token;
   membership is the directory's; loaded code speaks for the project.
 - **The DO holds nothing across idle.** Pagers, the quiesce, alarms only while something is owed, a
@@ -1829,9 +1940,9 @@ Every client snippet above is lifted from, or composed of calls made by, these f
 
 | Chapter | e2e files |
 | --- | --- |
-| preamble | `e2e/support/client.ts` |
-| 0 | `e2e/session.e2e.test.ts`, `e2e/context.e2e.test.ts` |
-| 1 | `e2e/rpc-stubs-values.e2e.test.ts`, `e2e/rpc-stubs-reconnect-and-attach.e2e.test.ts`, `e2e/rpc-stubs-lend-recall-and-offline.e2e.test.ts`, `e2e/session.e2e.test.ts` |
+| preamble | `e2e/support/client.ts`, `e2e/session-wire-frames-one-round-trip.e2e.test.ts` (the `using` row) |
+| 0 | `e2e/session.e2e.test.ts`, `e2e/context.e2e.test.ts`, `e2e/session-wire-frames-one-round-trip.e2e.test.ts` |
+| 1 | `e2e/rpc-stubs-values.e2e.test.ts`, `e2e/rpc-stubs-reconnect-and-attach.e2e.test.ts`, `e2e/rpc-stubs-lend-recall-and-offline.e2e.test.ts`, `e2e/session.e2e.test.ts`, `e2e/session-wire-frames-one-round-trip.e2e.test.ts`, `e2e/rewrite-rules.e2e.test.ts` |
 | 2 | `e2e/rpc-stubs-values.e2e.test.ts`, `e2e/rewrite-rules.e2e.test.ts`, `e2e/session.e2e.test.ts`, `e2e/context.e2e.test.ts` |
 | 3 | `e2e/rpc-stubs-values.e2e.test.ts`, `e2e/rewrite-rules.e2e.test.ts`, `e2e/ai-root-shadow-and-fable.e2e.test.ts`, `e2e/rpc-stubs-reconnect-and-attach.e2e.test.ts` |
 | 4 | `e2e/context.e2e.test.ts`, `e2e/support/client.ts`, `e2e/stream.e2e.test.ts`, `e2e/stream-isolate-ceilings-deployed.e2e.test.ts`, `e2e/push-delivery.e2e.test.ts`, `e2e/rpc-stubs-lend-recall-and-offline.e2e.test.ts` |
