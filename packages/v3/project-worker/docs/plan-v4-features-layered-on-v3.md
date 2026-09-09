@@ -4,7 +4,7 @@
 > This plan isolates each as a discrete item — what v4 has (measured), what v3 has, the proposed layering and API on
 > v3, an implementation sketch, an effort estimate, dependencies — and orders them into a tech tree, so each can land
 > as its own arc, proved through the unchanged public door against the deployed worker. Eleven read-only reviews
-> produced the material (`docs/reviews/2026-09-07-v4-*.md`); nothing in v4 was edited, built, tested or deployed.
+> produced the material (`docs/history/reviews/2026-09-07-v4-*.md`); nothing in v4 was edited, built, tested or deployed.
 > Code lines throughout are non-blank, non-comment, non-test, measured with `wc`/`grep`.
 
 > **STATUS (2026-09-08).** LANDED: wave 0 (421 admission — now a real directory, in-process; the loader
@@ -172,7 +172,7 @@ plane>`. CONTROL PLANE: mint a project token for a member (a browser redirect to
   v3's confinement contract (no forced compat flags, no processor SDK), and the Docs example inlines
   `JSON.stringify(built.code)` into a durable rewrite target (v4's research doc: "a real cost"; it collides with the
   memory arc).
-- **v3 has:** `workers.get({ source, cacheKey })` where `source` may be a PRODUCER expression; `docs/reviews/
+- **v3 has:** `workers.get({ source, cacheKey })` where `source` may be a PRODUCER expression; `docs/history/reviews/
 2026-09-02-futures.md:399-410` already decided the bundler is a sidecar ("the 13 MiB wasm and the 128 MiB isolate
   ceiling make that a topology fact").
 - **Layering on v3:** BINDING ROOTS `itx.builtins.build(input)` / `itx.builtins.check(input)` over a `BUNDLER` service

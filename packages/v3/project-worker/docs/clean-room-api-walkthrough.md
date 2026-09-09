@@ -5,13 +5,13 @@
 > in-process). Every interface below is transcribed from
 > source; file paths are given so you can check. The design these steps
 > implemented is `docs/design-onion-subscriptions-processors.md` (and, for the
-> surface itself, `docs/proposals/itx-surface-SYNTHESIS.md`); the tutorial
+> surface itself, `docs/history/proposals/itx-surface-SYNTHESIS.md`); the tutorial
 > that builds the same system from nothing is
-> `docs/tutorial-build-the-iterate-context.md`.
+> `docs/history/2026-09-06-tutorial-build-the-iterate-context.md`.
 >
-> Older documents in this package (`ARCHITECTURE.md`, `docs/iterate-context.md`,
-> `ITX-KERNEL-SHAPE.md`, `docs/state-of-play.md`) describe earlier shapes and
-> carry a banner pointing here. Read them as history.
+> Every earlier plan, review, proposal and log lives under `docs/history/`, dated;
+> read them as history — this file, `docs/itx-surface-as-built.md` and `LAYERS.md`
+> track the code.
 
 ---
 
@@ -134,7 +134,7 @@ packages/v3/project-worker/
     context/                     chapter 1 — the context: rpc stubs, expressions, rewrite rules
       built-ins.ts               the kernel roots: whoami, kv, secrets, ai, cfArtifacts, repos, append, readEvents,
                                  waitForEvent, cd, fetch, rpcStubs, rewriteRules, facets, subscriptions, workers,
-                                 runScript, connectToMcp, connectToOpenApi, connectToCapnweb, serveMcp
+                                 connectToMcp, connectToOpenApi, connectToCapnweb, serveMcp
                                  (src/library/: the LIBRARY tier)
       expression.ts              the codec: "itx.a.b(1)" ⇄ ["itx","a",["b",1]]; ItxExpression /
                                  ItxExpressionInput / ItxExpressionPrefix; canonicalItxExpressionPrefix
@@ -649,9 +649,6 @@ interface BuiltInScope {
     }): InvokeHandle;
   };
 
-  /** Sugar for a bare lambda string: wraps it into a WorkerEntrypoint and runs
-   *  workers.get({ source }).run(...). The lambda receives (itx, ...args). */
-  runScript(script: string, ...args: unknown[]): Promise<unknown>;
   // THE LIBRARY (src/library/): first-party code that takes ONLY `itx` — could be userspace unchanged
   connectToMcp(url: string, options?: McpConnectOptions): Promise<McpConnection>;
   connectToOpenApi(
@@ -814,9 +811,6 @@ await itx.workers.get({ source: greetSource }).run("jonas");
 using greet = await itx.provide("itx.greet", ["itx", "workers", ["get", { source: greetSource }]]);
 await itx.greet.run("jonas"); // now reachable by name, through the rules
 const res = await itx.greet.fetch(new Request("https://x/")); // its fetch: the terminal-fetch rule
-
-// the bare-lambda sugar
-await itx.runScript("async (itx, n) => (await itx.kv.get('counter')) ?? n", 0);
 ```
 
 A stateless entrypoint cannot own progress, so subscribing one is the
@@ -1435,7 +1429,7 @@ Authorization Server (`@cloudflare/workers-oauth-provider`) owning `/authorize`,
 at `/`, the email login form (`POST /login`, `/logout`; the session is the signed
 `itx-control-plane-session` cookie, `signClaims` under `APP_CONFIG_SESSION_SECRET`), `POST /projects`
 (the console's form; a program creates projects over `/api`, `projects.create`), the `/authorize`
-consent page (pick a project or create an org + project on the spot). `/mcp` serves three tools:
+consent page (approve, or switch account — the grant is the user; the tools act on the user's projects). `/mcp` serves three tools:
 `whoami`, `list_projects`, `create_project`. The directory (`directory.ts`, D1 through sqlfu,
 `definitions.sql`): users → orgs via `org_members` → projects; access is org membership; a project's
 id is ONE DNS-safe slug — the directory row, the DO name and the host label. `APP_CONFIG_LOGIN_MODE`:
@@ -1446,7 +1440,7 @@ Bindings (`wrangler.jsonc`):
 | Binding               | Kind                                         | Used for                                                                                                                                                                                                                                                                          |
 | --------------------- | -------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `ITERATE_CONTEXT`     | DO namespace → `IterateContextDurableObject` | every context, `getByName(codec)`                                                                                                                                                                                                                                                 |
-| `LOADER`              | Worker Loader                                | `itx.workers.get`, `runScript`, processors                                                                                                                                                                                                                                        |
+| `LOADER`              | Worker Loader                                | `itx.workers.get`, processors                                                                                                                                                                                                                                                     |
 | `AI`                  | Workers AI                                   | `itx.ai`, the binding verbatim                                                                                                                                                                                                                                                    |
 | `ARTIFACTS`           | Cloudflare Artifacts namespace               | `itx.cfArtifacts` (project-scoped), `itx.repos`                                                                                                                                                                                                                                   |
 | `ITX_KV`              | KV                                           | `itx.kv`, keys prefixed `${projectId}:`                                                                                                                                                                                                                                           |
@@ -1658,13 +1652,13 @@ itself.
 
 ## 11. Read next
 
-- `docs/tutorial-build-the-iterate-context.md` builds the same system from
+- `docs/history/2026-09-06-tutorial-build-the-iterate-context.md` builds the same system from
   nothing in eight bricks and maps each chapter to these files.
 - `LAYERS.md` is the bottom-up layer map (axioms → rewrite rules →
   subscriptions → processors → the edge).
 - `docs/design-onion-subscriptions-processors.md` is the design of record for
   the subscriptions and processors layers, with the decisions table;
-  `docs/proposals/itx-surface-SYNTHESIS.md` is the design of record for the
+  `docs/history/proposals/itx-surface-SYNTHESIS.md` is the design of record for the
   surface (its §9 is "as built").
 - The source headers of `context/built-ins.ts`,
   `context/itx-expression-rewriting.ts`, `iterate-context.ts`,

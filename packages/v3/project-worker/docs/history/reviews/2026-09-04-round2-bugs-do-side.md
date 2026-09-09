@@ -144,7 +144,7 @@ identical to `c09629162`, the last of the ten).
   caller until the watchdog; the RPC that carried it holds the DO awake meanwhile.
 - **Failing test sketch.** `src/library/mcp.test.ts` — "a tool named `then` does not make the
   connection thenable": `TOOLS` + `{ name: "then" }`; `await expect(Promise.race([connectToMcp(itx,
-  url), timeout(500)])).resolves.toBeInstanceOf(McpConnection)`; assert no `tools/call` was sent
+url), timeout(500)])).resolves.toBeInstanceOf(McpConnection)`; assert no `tools/call` was sent
   at connect. Mirror row in `openapi.test.ts` with `operationId: "then"`.
 
 ### 4. MINOR — `hostedFacet` is decided once, at configure time, but the target is re-resolved at every delivery: a row can host a facet it does not own, and the removal effect deletes the wrong one
@@ -233,7 +233,7 @@ identical to `c09629162`, the last of the ten).
   trusted-client misconfiguration the review would accept leaving.
 - **Failing test sketch.** `e2e/rewrite-rules-builtins-root.e2e.test.ts` — "a whole-context
   override naming its own context is refused": `await expect(cd('/x').provide('itx',
-  "itx.builtins.cd('/x')")).rejects.toThrow(/own context/)`; today it resolves and the next
+"itx.builtins.cd('/x')")).rejects.toThrow(/own context/)`; today it resolves and the next
   `cd('/x').whoami()` never answers (guard the assertion with a 5 s race).
 
 ### 7. MINOR, NO-BRAINER — the relay leaks the session's dup when the DO's fetch itself throws
@@ -244,7 +244,7 @@ identical to `c09629162`, the last of the ten).
   throwing (a bad `APP_CONFIG_*` var now does exactly that), an overloaded/reset DO — propagates
   with the dup alive for the session's life.
 - **Suggested fix (4 LOC, NO-BRAINER).** Wrap the fetch: `catch (e) { disposeRpcStub(sessionRpcStub);
-  throw e; }`.
+throw e; }`.
 - **Failing test sketch.** `src/context/rpc-stub-relay.test.ts` — "a DO fetch that rejects releases
   the session's dup": a fake DO whose `fetch` rejects; assert `disposed === true` after the
   rejection (today: false).

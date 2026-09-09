@@ -41,30 +41,30 @@
 
 ## Ranked table (LOC saved per unit of risk)
 
-| id | file(s) | change | LOC saved | risk | no-brainer? |
-|----|---------|--------|-----------|------|-------------|
-| S1 | `src/app-config.ts:44-68`, `src/app-config.test.ts` | delete the four parsers no row names (`integer`, `boolean`, `url`, `json`) and their test rows; keep `string` | ≈60 (25 code + 35 test) | L | safe, not tiny |
-| S2 | `src/context/expression.ts:40-118, 145-155` | ONE string-literal regex replaces `lexStringLiterals`, `printMarkers`' walker, `matchingParen`'s quote loop and `parse`'s inner substitution; `isItxExpressionHole` = `jsonEqual`; fold `MERGE_KEY` into the exported constant | ≈40 | L (measured) | no |
-| S4 | `src/context/built-ins.ts:28-38, 187-202`, `src/library/index.ts:58-67` | `BuiltInScope extends LibraryRoots`; delete the three restated members, the seven-type import and the re-export block | ≈30 | L | no |
-| S3 | `src/library/mcp.ts:110-137`, `src/library/openapi.ts:135-152` | ONE `subclassWithMethods(Base, names, call)`; reserved = `name in Base.prototype`, no hand lists | ≈27 | L | no |
-| S19 | `src/context/itx-expression-rewriting.test.ts:477-547` | the door's refusals as one `{ match, target, throws }` table | ≈30 (test) | L | no |
-| S5 | `src/library/{mcp,openapi,capnweb}.ts` (5 sites) | ONE `refuseUnlessOk(response, what)` in `library/index.ts` | ≈15 | M (3 regex re-pins) | no |
-| S13 | `src/iterate-context.ts:215-230, 388-390` | merge `provide`'s `null` and expression branches (append first, then recall); inline `#appendInBackground` (one caller) | ≈12 | M / L | inline: YES |
-| S6 | `src/library/capnweb.ts:62-72`, `src/context/rpc-stub-relay.ts:64-83` | ONE exported `walkStepsOnRpcStub` in `context/invoke-handle.ts` (inside the library's allow-list) | ≈11 | L | no |
-| S8 | `src/iterate-context-durable-object.ts:511-515, 539-543`, `src/iterate-context.ts:335-339` | ONE `facetSpecOf(spec)` beside `FacetSpec` in worker-loader.ts | ≈10 | L | YES |
-| S7 | `src/iterate-context-durable-object.ts:455-459, 587-591, 621-625` | ONE `#abortFacetIfRunning(name, reason)` | 8 | L | YES |
-| S10 | `src/context/built-ins.ts:247-249, 353-361`, DO `:486` | `facets: deps.facets`; the non-string-name refusal moves to `#invokeFacet`'s first line | 8 | L | YES |
-| S12 | `src/context/itx-expression-rewriting.ts:350-369`, DO `:674-677, 703-706` | `invoke(call, ...extraArgs)`; start `walkSteps` at the record so the root step is not special-cased | 8 | L | YES |
-| S20 | `src/library/mcp.ts:197-225` | `readJsonRpcResponse`: pick the JSON texts, then ONE flatMap | 6 | L | YES |
-| S11 | `src/context/itx-expression-rewriting.ts:220-233`, `src/stream/core-processor.ts:87-92`, test `:37,332,336` | drop `resolveItxExpression`'s `isBuiltInRoot` parameter; import the leaf's predicate | 5 | L | YES |
-| S18 | `apps/dummy-petshop/src/capnweb.ts:28-31` | reuse `PetsContext` (rpc.ts:33) — the third copy of `{ owner; pets }` | 5 | L | YES |
-| S21 | `src/library/openapi.ts:160-161, 202-206` | same-host as one boolean; `{ name, in, required }` without the undefined-strip | 5 | L | YES |
-| S16 | `built-ins.ts:1-3, 23, 88-89`, `library/index.ts:5`, `app-config.ts:3, 7`, `rewriting.ts:261` | one WRONG docstring ("built-in first; no rule"), a stale root list, five history/date narrations | 4 | L | YES |
-| S23 | `rewriting.ts:244-245, 280-281, 352-357`, `core-processor.ts:145` | `itxExpressionStepName(step)` in expression.ts for the four `Array.isArray(step) ? step[0] : step` sites | 4 | L | YES |
-| S9 | `src/iterate-context-durable-object.ts:119-121` | delete `CF_VERSION_METADATA` from `Env` — `AppConfigEnv` (extended at `:112`) already types it | 3 | L | YES |
-| K | `knip.ts`, `package.json:23`; `rewriting.ts:86-99, 103-105, 195` | add the package to the knip workspaces; un-export `PROXY_VERBS`, `isBuiltInsRooted`, `ItxExpressionPrefixMatch`, `applyItxExpressionRewriteRule` | 0 (4 keywords) | L | YES |
-| S17 | `mcp.ts:51`, `openapi.ts:64`, `capnweb.ts:52, 118-121`, `rewriting.ts:163` | qualify `#client`, `#base`, `#dispose`, `#toSend/#received/#aborted`, `theOne` | 0 | L | YES |
-| S22 | `src/worker.ts:79-81`, `src/sdk/index.ts:33`, `build-sdk.mjs` | the `/expression/<path>` suffix and the `newWorkersRpcResponse` export were added FOR fixtures deleted in arc 3b; no test reaches either now — pin each with one row or delete the suffix | 3 or +rows | M | no |
+| id  | file(s)                                                                                                     | change                                                                                                                                                                                                                         | LOC saved               | risk                | no-brainer?    |
+| --- | ----------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------- | ------------------- | -------------- |
+| S1  | `src/app-config.ts:44-68`, `src/app-config.test.ts`                                                         | delete the four parsers no row names (`integer`, `boolean`, `url`, `json`) and their test rows; keep `string`                                                                                                                  | ≈60 (25 code + 35 test) | L                   | safe, not tiny |
+| S2  | `src/context/expression.ts:40-118, 145-155`                                                                 | ONE string-literal regex replaces `lexStringLiterals`, `printMarkers`' walker, `matchingParen`'s quote loop and `parse`'s inner substitution; `isItxExpressionHole` = `jsonEqual`; fold `MERGE_KEY` into the exported constant | ≈40                     | L (measured)        | no             |
+| S4  | `src/context/built-ins.ts:28-38, 187-202`, `src/library/index.ts:58-67`                                     | `BuiltInScope extends LibraryRoots`; delete the three restated members, the seven-type import and the re-export block                                                                                                          | ≈30                     | L                   | no             |
+| S3  | `src/library/mcp.ts:110-137`, `src/library/openapi.ts:135-152`                                              | ONE `subclassWithMethods(Base, names, call)`; reserved = `name in Base.prototype`, no hand lists                                                                                                                               | ≈27                     | L                   | no             |
+| S19 | `src/context/itx-expression-rewriting.test.ts:477-547`                                                      | the door's refusals as one `{ match, target, throws }` table                                                                                                                                                                   | ≈30 (test)              | L                   | no             |
+| S5  | `src/library/{mcp,openapi,capnweb}.ts` (5 sites)                                                            | ONE `refuseUnlessOk(response, what)` in `library/index.ts`                                                                                                                                                                     | ≈15                     | M (3 regex re-pins) | no             |
+| S13 | `src/iterate-context.ts:215-230, 388-390`                                                                   | merge `provide`'s `null` and expression branches (append first, then recall); inline `#appendInBackground` (one caller)                                                                                                        | ≈12                     | M / L               | inline: YES    |
+| S6  | `src/library/capnweb.ts:62-72`, `src/context/rpc-stub-relay.ts:64-83`                                       | ONE exported `walkStepsOnRpcStub` in `context/invoke-handle.ts` (inside the library's allow-list)                                                                                                                              | ≈11                     | L                   | no             |
+| S8  | `src/iterate-context-durable-object.ts:511-515, 539-543`, `src/iterate-context.ts:335-339`                  | ONE `facetSpecOf(spec)` beside `FacetSpec` in worker-loader.ts                                                                                                                                                                 | ≈10                     | L                   | YES            |
+| S7  | `src/iterate-context-durable-object.ts:455-459, 587-591, 621-625`                                           | ONE `#abortFacetIfRunning(name, reason)`                                                                                                                                                                                       | 8                       | L                   | YES            |
+| S10 | `src/context/built-ins.ts:247-249, 353-361`, DO `:486`                                                      | `facets: deps.facets`; the non-string-name refusal moves to `#invokeFacet`'s first line                                                                                                                                        | 8                       | L                   | YES            |
+| S12 | `src/context/itx-expression-rewriting.ts:350-369`, DO `:674-677, 703-706`                                   | `invoke(call, ...extraArgs)`; start `walkSteps` at the record so the root step is not special-cased                                                                                                                            | 8                       | L                   | YES            |
+| S20 | `src/library/mcp.ts:197-225`                                                                                | `readJsonRpcResponse`: pick the JSON texts, then ONE flatMap                                                                                                                                                                   | 6                       | L                   | YES            |
+| S11 | `src/context/itx-expression-rewriting.ts:220-233`, `src/stream/core-processor.ts:87-92`, test `:37,332,336` | drop `resolveItxExpression`'s `isBuiltInRoot` parameter; import the leaf's predicate                                                                                                                                           | 5                       | L                   | YES            |
+| S18 | `apps/dummy-petshop/src/capnweb.ts:28-31`                                                                   | reuse `PetsContext` (rpc.ts:33) — the third copy of `{ owner; pets }`                                                                                                                                                          | 5                       | L                   | YES            |
+| S21 | `src/library/openapi.ts:160-161, 202-206`                                                                   | same-host as one boolean; `{ name, in, required }` without the undefined-strip                                                                                                                                                 | 5                       | L                   | YES            |
+| S16 | `built-ins.ts:1-3, 23, 88-89`, `library/index.ts:5`, `app-config.ts:3, 7`, `rewriting.ts:261`               | one WRONG docstring ("built-in first; no rule"), a stale root list, five history/date narrations                                                                                                                               | 4                       | L                   | YES            |
+| S23 | `rewriting.ts:244-245, 280-281, 352-357`, `core-processor.ts:145`                                           | `itxExpressionStepName(step)` in expression.ts for the four `Array.isArray(step) ? step[0] : step` sites                                                                                                                       | 4                       | L                   | YES            |
+| S9  | `src/iterate-context-durable-object.ts:119-121`                                                             | delete `CF_VERSION_METADATA` from `Env` — `AppConfigEnv` (extended at `:112`) already types it                                                                                                                                 | 3                       | L                   | YES            |
+| K   | `knip.ts`, `package.json:23`; `rewriting.ts:86-99, 103-105, 195`                                            | add the package to the knip workspaces; un-export `PROXY_VERBS`, `isBuiltInsRooted`, `ItxExpressionPrefixMatch`, `applyItxExpressionRewriteRule`                                                                               | 0 (4 keywords)          | L                   | YES            |
+| S17 | `mcp.ts:51`, `openapi.ts:64`, `capnweb.ts:52, 118-121`, `rewriting.ts:163`                                  | qualify `#client`, `#base`, `#dispose`, `#toSend/#received/#aborted`, `theOne`                                                                                                                                                 | 0                       | L                   | YES            |
+| S22 | `src/worker.ts:79-81`, `src/sdk/index.ts:33`, `build-sdk.mjs`                                               | the `/expression/<path>` suffix and the `newWorkersRpcResponse` export were added FOR fixtures deleted in arc 3b; no test reaches either now — pin each with one row or delete the suffix                                      | 3 or +rows              | M                   | no             |
 
 Declined (reasons at the end): D1 the parse→print→parse round trip in the door; D2 extracting
 `#invokeFacet`'s memo/recovery and `#rewriteRuleList` (net 0, readability only); D3 `read` →
@@ -143,12 +143,20 @@ regex `/^[A-Za-z_$][\w$]*$/`, a `class extends Base {}` and a `defineProperty` l
  *  Workers RPC and capnweb traverse, so `conn.echo({…})` works held across calls) — skipping names the
  *  base already declares and names that are not identifiers. */
 export function subclassWithMethods<C extends new (...args: never[]) => object>(
-  Base: C, names: string[], call: (self: InstanceType<C>, name: string, input: unknown) => unknown,
+  Base: C,
+  names: string[],
+  call: (self: InstanceType<C>, name: string, input: unknown) => unknown,
 ): C {
   const Subclass = class extends Base {};
   for (const name of names)
     if (!(name in Subclass.prototype) && /^[A-Za-z_$][\w$]*$/.test(name))
-      Object.defineProperty(Subclass.prototype, name, { value(this: InstanceType<C>, input?: unknown) { return call(this, name, input); }, writable: true, configurable: true });
+      Object.defineProperty(Subclass.prototype, name, {
+        value(this: InstanceType<C>, input?: unknown) {
+          return call(this, name, input);
+        },
+        writable: true,
+        configurable: true,
+      });
   return Subclass;
 }
 ```

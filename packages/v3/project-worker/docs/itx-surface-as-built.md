@@ -5,7 +5,7 @@
 > in-process, one package). Every signature below is transcribed from source; the file is named so
 > you can check. Sections 1–11 are what exists. Section 12 records what the review decided and
 > what is still open, each open item with a concrete proposal. The long-form walkthrough is
-> `docs/clean-room-api-walkthrough.md`. `docs/proposals/itx-surface-SYNTHESIS.md` is HISTORY: its
+> `docs/clean-room-api-walkthrough.md`. `docs/history/proposals/itx-surface-SYNTHESIS.md` is HISTORY: its
 > §§1-8 argue for an API that lost (the verb `rewrite`, never shipped) and only its §9 records
 > what was built.
 
@@ -800,7 +800,7 @@ LibraryRoots`, the resolver walks from the record with one built-in predicate, t
 
 **E. The v4 review (2026-09-07).** `packages/v4/project-worker` reviewed against this surface: the plan to layer
 its features on v3 — items, tech tree, waves, decisions — is PARKED in `docs/plan-v4-features-layered-on-v3.md`
-(raw reviews: `docs/reviews/2026-09-07-v4-*.md`); the defects it found in shipped v3 are
+(raw reviews: `docs/history/reviews/2026-09-07-v4-*.md`); the defects it found in shipped v3 are
 `docs/plan-wave-0-fixes-2026-09-07.md`, the one plan in motion.
 
 **D. `cd` on the edge and in the built-ins.** Explained in section 5; both are needed as long as

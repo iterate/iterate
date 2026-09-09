@@ -11,6 +11,7 @@ measurements still to run, and the ideas already refuted so nobody re-files them
 2026-09-04 after two rounds of measure → change → prove; nothing below is in progress.
 
 Deep detail lives beside this in `docs/perf/`:
+
 - `docs/perf/2026-09-03-autoresearch-log.md` — the running log of every change + numbers.
 - `docs/perf/2026-09-03-stress-ceilings.md` — the quantified ceilings and the raises.
 - `docs/perf/learnings-and-bigger-refactors.md` — sizing, platform facts, capability-dropping options.
@@ -36,18 +37,18 @@ code, in the client SDK. The server is already ready for it.
 
 ## A. Shipped this session (done + proved on the deployed worker — do not redo)
 
-| # | Change | Proven effect |
-|---|---|---|
-| 1 | `/demo` page → Workers static asset | −255 KiB from every isolate |
-| 2 | Built-in-rooted dispatch skips materializing the rules table (L4) | one allocation/call gone |
-| 3 | Warm facet push memoizes its source hash (L1a, WeakMap) | O(source) loop/push gone |
-| 4 | The mark IS the core cursor | −1 storage write per durable commit (−33 %) |
-| 5 | Skip `CREATE TABLE` on a re-wake | −2 statement prepares per wake |
-| 6 | Facet watchdog label built lazily | no `print()` over the batch per push |
-| 7 | `limits.subrequests` + `cpu_ms` raised | long sessions survive; 10× CPU headroom |
-| 8 | Fan-out target-head memo (per row + rule-table identity) | one target eval per generation, not per push |
-| 9 | **zod deleted from the edge/DO script (W3b)** | **Worker Startup Time 18 → 7 ms; upload 1,226 → 695 KiB** |
-| 10 | **M1: inline processor sources out of core state** | **SQLITE_TOOBIG facet ceiling ~20 → thousands; smaller memory + every core-change checkpoint** |
+| #   | Change                                                            | Proven effect                                                                                  |
+| --- | ----------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| 1   | `/demo` page → Workers static asset                               | −255 KiB from every isolate                                                                    |
+| 2   | Built-in-rooted dispatch skips materializing the rules table (L4) | one allocation/call gone                                                                       |
+| 3   | Warm facet push memoizes its source hash (L1a, WeakMap)           | O(source) loop/push gone                                                                       |
+| 4   | The mark IS the core cursor                                       | −1 storage write per durable commit (−33 %)                                                    |
+| 5   | Skip `CREATE TABLE` on a re-wake                                  | −2 statement prepares per wake                                                                 |
+| 6   | Facet watchdog label built lazily                                 | no `print()` over the batch per push                                                           |
+| 7   | `limits.subrequests` + `cpu_ms` raised                            | long sessions survive; 10× CPU headroom                                                        |
+| 8   | Fan-out target-head memo (per row + rule-table identity)          | one target eval per generation, not per push                                                   |
+| 9   | **zod deleted from the edge/DO script (W3b)**                     | **Worker Startup Time 18 → 7 ms; upload 1,226 → 695 KiB**                                      |
+| 10  | **M1: inline processor sources out of core state**                | **SQLITE_TOOBIG facet ceiling ~20 → thousands; smaller memory + every core-change checkpoint** |
 
 ---
 
@@ -63,13 +64,14 @@ are WATCHED.
 **Change (the decided design).** Type each processor's live-state by its key:
 `events.iterate.com/<key>/live-state-changed` (key = the processor slug, or a mini-app's LiveState
 key), instead of one shared `events.iterate.com/live-state/changed` with `payload.key`. Then:
+
 - A watcher subscribes `consumes: ["events.iterate.com/<slug>/live-state-changed"]` — exact-type
   match, precise gating and delivery through the EXISTING `consumesEvent`. No `where`, no JSONata, no
   per-key index beyond the consumed-types union.
 - The parent passes `watched: boolean` (is that type in the consumed-types union, memoized by the
   subscriptions-object identity) to each facet on `processEventBatch`. `LiveState.set` skips the diff
-  + loopback append when unwatched, still advancing the revision + base so a later watcher seeds from
-  the door (`liveSnapshot`).
+  - loopback append when unwatched, still advancing the revision + base so a later watcher seeds from
+    the door (`liveSnapshot`).
 
 **Authoring surface: UNCHANGED.** The contract (`slug`, `stateSchema`, `events`, `consumes`, `emits`)
 and the hooks (`reduce`, `projectLiveState`) do not change; live-state stays an automatic runtime
@@ -162,12 +164,12 @@ do it if a real slow-subscriber crash shows up.
 
 ## C. The ceilings (one DO = one single-threaded isolate)
 
-| Workload | Individual-append ceiling | Batched | Fails by |
-|---|---|---|---|
-| durable appends, one context | ~100/s (output-gate confirm is PER-TURN, ~10 ms) | ~2,900/s (N=100) | output-gate stall |
-| 60k ephemeral PCM frames/s | impossible: ~43k/s at K=1 subscriber, ~6k/s at K=10 | feasible at N=10/tick | 100 % CPU + subrequest cap |
-| 10-person audio (5,000 deliveries/s) | ceiling ~8-10k/s | — | 100 % CPU |
-| 20 default (`*`) facets | ~200 ev/s (~5 ms/event; ~4 ms is the live-state storm) | — | 100 % CPU |
+| Workload                             | Individual-append ceiling                              | Batched               | Fails by                   |
+| ------------------------------------ | ------------------------------------------------------ | --------------------- | -------------------------- |
+| durable appends, one context         | ~100/s (output-gate confirm is PER-TURN, ~10 ms)       | ~2,900/s (N=100)      | output-gate stall          |
+| 60k ephemeral PCM frames/s           | impossible: ~43k/s at K=1 subscriber, ~6k/s at K=10    | feasible at N=10/tick | 100 % CPU + subrequest cap |
+| 10-person audio (5,000 deliveries/s) | ceiling ~8-10k/s                                       | —                     | 100 % CPU                  |
+| 20 default (`*`) facets              | ~200 ev/s (~5 ms/event; ~4 ms is the live-state storm) | —                     | 100 % CPU                  |
 
 **DO OOM (128 MB):** the slow-subscriber backlog (B6). **DO CPU (30 s default, 5 min max — raised):**
 a cold re-reduce over a long log, or the O(rows) fan-out at many rows. Ephemerals touch zero SQLite.

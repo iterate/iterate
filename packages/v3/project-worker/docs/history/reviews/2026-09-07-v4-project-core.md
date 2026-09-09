@@ -9,8 +9,9 @@ are measured: "code lines" = non-blank, non-comment; "raw" = `wc -l`, what `scri
 September 4 brief" (`README.md:3`): a whole second project kernel written from scratch under a hard
 **<5,000 raw implementation lines** budget enforced by `scripts/size.ts:23` (exit 1 at ≥5000). Measured:
 **2,837 code lines in `src/`** across 17 modules; **3,799 raw** implementation lines (`src/` + `public/`
-+ config + scripts — exactly the README's figure); **2,292 raw** E2E; plus 10,521 lines of `notes/` +
-`evidence/` + design docs the counter deliberately excludes.
+
+- config + scripts — exactly the README's figure); **2,292 raw** E2E; plus 10,521 lines of `notes/` +
+  `evidence/` + design docs the counter deliberately excludes.
 
 Modules: `worker.ts` 632 · `egress.ts` 400 · `lending.ts` 325 · `stream.ts` 237 · `repositories.ts` 155 · `processors.ts` 155 · `auth.ts` 149 · `signatures.ts` 124 · `routing.ts` 116 · `runtime.ts` 109 · `model.ts` 99 · `mcp.ts` 96 · `types.ts` 86 · `bundler.ts` 69 · `build.ts` 41 · `ingress.ts` 29 · `encoding.ts` 9. v3 for scale: ~5,300 non-test code lines, 44 non-test `src/` files.
 
@@ -30,7 +31,7 @@ abstract class ScopeTarget extends RpcTarget {   // src/types.ts:99 — `build: 
 
 The address is `project id + context path`; `builtins` is the unrewritable physical root and short
 dotted names resolve by **longest `mount/<dotted-prefix>` setting**, with a 16-hop guard. A dotted facade
-is *proposed only* and must compile to `invoke(["x","y"], …)`. `ARCHITECTURE.md` "Deliberate differences
+is _proposed only_ and must compile to `invoke(["x","y"], …)`. `ARCHITECTURE.md` "Deliberate differences
 from the predecessor" is candid that it has **no** rewrite grammar, argument templates/masks, inspection
 surface or automatic live-mount revocation.
 
@@ -64,7 +65,7 @@ v3's whole egress is 34 code lines (`packages/v3/shared/src/egress.ts`) plus ~22
 project-core `src/egress.ts` adds three things v3 has no answer for: a **canonical HTTPS origin stored
 with each secret**, so a leaked placeholder cannot be replayed at another host; a **revision**, so
 rotation is encrypt-then-CAS and a race is `SECRET_CONFLICT` not a lost write; and a terminal doing
-*freshness recheck → atomic claim → native fetch with no intervening `await`*, leaning on DO output-gate
+_freshness recheck → atomic claim → native fetch with no intervening `await`_, leaning on DO output-gate
 ordering to persist the claim before the request leaves (`notes/egress.md`). The third is genuinely new
 and small. Take these into `shared/src/egress.ts` and `#egress`; leave the rest.
 
@@ -73,16 +74,16 @@ and small. Take these into `shared/src/egress.ts` and `#egress`; leave the rest.
 `docs/assessment-userspace-apps-on-the-clean-room.md:195`). Minimal and doctrine-compatible:
 `repo.commit` is an ordinary event, the revision derives from canonical `{files, parent, message}`,
 blobs are immutable, and the named head is CAS'd **inside the same append transaction**. It passes the
-litmus test one-way only — userspace could keep a file map but could *not* make the head CAS atomic with
+litmus test one-way only — userspace could keep a file map but could _not_ make the head CAS atomic with
 its own append — so it belongs beside `kv` in `built-in-roots.ts` / `built-ins.ts`, not `src/library/`.
 Better than any v3 spelling because v3 has none.
 
-**(c) The MCP *server* door, as a library verb.** `src/library/mcp.ts` (174 code lines) is a
-**client**; nothing serves a project *as* an MCP server, and `src/` has zero OAuth. project-core
+**(c) The MCP _server_ door, as a library verb.** `src/library/mcp.ts` (174 code lines) is a
+**client**; nothing serves a project _as_ an MCP server, and `src/` has zero OAuth. project-core
 `src/mcp.ts` is a 96-line stateless Streamable-HTTP adapter mapping one `iterate` tool onto configured
 capability methods, proved by a real authorization-code/PKCE exchange (`e2e/mcp.test.ts`, 158 lines). A
 server written against `itx` alone passes v3's library litmus test cleanly: `src/library/mcp-server.ts`,
-reached by a rewrite rule on a project host. The OAuth *authorization server* half (`auth.ts` +
+reached by a rewrite rule on a project host. The OAuth _authorization server_ half (`auth.ts` +
 `@cloudflare/workers-oauth-provider`) is control-plane work.
 
 **(d) `CUSTOM_HOSTNAMES` as the shape of the custom-domain hole.** v3 closed Gap 1 on 2026-09-06 with
@@ -111,22 +112,22 @@ but itself" (`:46-62,404`) — not by leasing one of a fixed 64 slots.
 ## 3. Ideas to reject, and why
 
 **The member-array API itself.** `invoke(path: readonly string[], ...args)` takes args only at the
-*terminal* step. v3's `ItxExpression` is already a member array —
+_terminal_ step. v3's `ItxExpression` is already a member array —
 `type ItxExpressionStep = string | [method, ...args]` (`src/context/expression.ts:13-16`) — with args
 at **every** step, which is what makes mid-chain pipelining (`itx.a.b(x).c(y)`) work, a property v3 has
 proved. project-core's surface is strictly less expressive, and its `ARCHITECTURE.md` admits the dotted
 facade it wants must compile to `invoke()` anyway. Taking it would be a regression.
 
-**The `mount/fetch` policy *worker*.** project-core makes routing an installed executable Worker that
+**The `mount/fetch` policy _worker_.** project-core makes routing an installed executable Worker that
 alone receives `env.NEXT`, selecting `{kind:"worker"|"network"}` destinations. Direct collision with
 v3's landed doctrine that **mounts carry no policies** and the rewrite-rule table is the one place a
 target is named (`docs/plan-one-fetch-rules.md`, 2026-09-02 re-alignment: capability-table 5.0.0 is
 `{path, target}` "and nothing else"). It also re-introduces the executable-configuration hop v3
-deleted. Take the *terminal* (§2a), not the policy.
+deleted. Take the _terminal_ (§2a), not the policy.
 
 **Plural Ed25519 provenance and trust levels.** `src/signatures.ts` (124 lines) verifies up to 16
 signatures per event and lets a `trust` setting **reject** an unsigned append at levels 1/2 — identity
-as *authority*, contradicting v3's trusted-client doctrine and its 2026-09-06 decision that the
+as _authority_, contradicting v3's trusted-client doctrine and its 2026-09-06 decision that the
 principal is attribution stamped on `source` (`src/stream/events.ts:19-28`; BUILD-LOG:3628 — "the
 principal IS an event `source`, never `metadata`, which is the client's"). The useful half —
 separating signed claims from platform observations — is already that `source`/`metadata` split.
@@ -149,7 +150,7 @@ this** implicitly — it never tried to be fetch-only.
 
 **`project-core-ws-probe`** found a real, reproducible platform hazard that **v3 does not account
 for.** Minimized: a **named** `LOADER.get(id, getCode)` whose loaded child either returns a WebSocket
-upgrade *or* fetches through an injected `globalOutbound` produces native `exception` / `canceled`
+upgrade _or_ fetches through an injected `globalOutbound` produces native `exception` / `canceled`
 telemetry rows even though every client assertion passes; `LOADER.get(null, …)` is clean in both
 cases; `LOADER.load()` is clean; and `new Response(response.body, response)` does not repair it. It
 also found that an **undisposed returned RPC capability** turns an otherwise-successful
@@ -158,10 +159,10 @@ plain data) turns 20 canceled rows into 20 ok. Every claim is a dated deployed A
 
 This bears on v3 directly: `src/context/worker-loader.ts:194,227` is exactly the red shape —
 `opts.env.LOADER.get(loaderId, …)` under a **named** cacheKey with `globalOutbound: opts.itxEntrypoint`.
-v3's fetch doctrine (`src/fetch/rpc-stub-fetch.ts:1-31`, 137 code lines) is about *serialization*
+v3's fetch doctrine (`src/fetch/rpc-stub-fetch.ts:1-31`, 137 code lines) is about _serialization_
 (`DataCloneError`), not lifetime telemetry, and the BUILD-LOG's nearest disposal entry is edge#13
 (`:3457`, a disposed capnweb dup re-coded `RPC_STUB_OFFLINE`) — a different problem. **So the finding
-is unaccounted for in v3, and v3 is in its blast radius.** What it does *not* establish is
+is unaccounted for in v3, and v3 is in its blast radius.** What it does _not_ establish is
 user-visible harm: every probe exchange returned correct bytes.
 
 ### The four root-level research docs
@@ -169,14 +170,14 @@ user-visible harm: every probe exchange returned correct bytes.
 **`docs/native-rpc-fetch-lifecycle-research.md`** establishes that v4's `rpc-stub-fetch.ts` must
 **not** become an ordinary native Workers-RPC method today: in workerd `c4e03fa1d`, response
 serialization rejects `Response.webSocket` (`http.c++:1351-1379`), so the relay→DO return leg throws
-`DataCloneError` for a 101; Cap'n Web 0.12.2 carries an upgrade over *its* session, so capnweb is no
+`DataCloneError` for a 101; Cap'n Web 0.12.2 carries an upgrade over _its_ session, so capnweb is no
 longer the blocker but the native hop is. It adds four exit criteria for deleting the workaround and an
 inconclusive note on disposing inert call promises. **v3 depends on this being true** —
 `rpc-stub-fetch.ts:20-31` states the same two facts as doctrine point 4 and fences the module as a
 delete-day workaround; `:136-144` records that "a NATIVE provider's socket answer still dies on its own
 RPC leg". It confirms v3's fence and exit condition; nothing in v3 changes.
 
-**`docs/v4-native-websocket-close-repro.md`** establishes a *v4* release gate: on deployment
+**`docs/v4-native-websocket-close-repro.md`** establishes a _v4_ release gate: on deployment
 `0b689aaa`, a loaded worker's `/expression` upgrade returns 101, echoes and closes 1000 correctly, while
 the parent/DO native spans report `exception` with **empty** `exceptions`/`logs` arrays (trace
 `32abc32a…`). It rules out `web_socket_auto_reply_to_close` and the known-benign
@@ -203,15 +204,16 @@ the 144 MiB read-reset class d3 chased in v3's memory-budget arc also reproduces
 
 Against project-core as the upper bound, at v3's density (~300 code lines with tests, docs and a deployed proof in ~3 h):
 
-| Item | project-core LOC | v3 estimate | Hours |
-|---|---|---|---|
-| (a) egress: origin pin + revision CAS + atomic one-shot claim | subset of `egress.ts` 400 | 120–160 code + ~80 table/unit + 1 deployed e2e | 4–5 |
-| (b) `itx.builtins.repos` root (commit/head/read, CAS in the append txn) | `repositories.ts` 155 | 150 code + a `{files,parent,becomes}` table + 1 deployed e2e | 3–4 |
-| (c) `src/library/mcp-server.ts` (server half only) | `mcp.ts` 96 | 110 code + unit + 1 deployed e2e | 3–4 |
-| (d) custom-domain directory row (shape only; needs the control plane) | `ingress.ts` 29 | 40 code in `project-host.ts` + table rows | 1–2 |
-| (e) `subscribe({ afterOffset })` replay | part of `stream.ts` 237 | ~15 code + 1 unit + 1 e2e | 1 |
-| (f) a `size` script | 23 | 25 | 0.5 |
-| (g) reproduce the ws-probe's red against v3's loader | probe 664 (do not port) | ~0 code, 1 diagnostic run | 2 |
+| Item                                                                    | project-core LOC          | v3 estimate                                                  | Hours |
+| ----------------------------------------------------------------------- | ------------------------- | ------------------------------------------------------------ | ----- |
+| (a) egress: origin pin + revision CAS + atomic one-shot claim           | subset of `egress.ts` 400 | 120–160 code + ~80 table/unit + 1 deployed e2e               | 4–5   |
+| (b) `itx.builtins.repos` root (commit/head/read, CAS in the append txn) | `repositories.ts` 155     | 150 code + a `{files,parent,becomes}` table + 1 deployed e2e | 3–4   |
+| (c) `src/library/mcp-server.ts` (server half only)                      | `mcp.ts` 96               | 110 code + unit + 1 deployed e2e                             | 3–4   |
+| (d) custom-domain directory row (shape only; needs the control plane)   | `ingress.ts` 29           | 40 code in `project-host.ts` + table rows                    | 1–2   |
+| (e) `subscribe({ afterOffset })` replay                                 | part of `stream.ts` 237   | ~15 code + 1 unit + 1 e2e                                    | 1     |
+| (f) a `size` script                                                     | 23                        | 25                                                           | 0.5   |
+| (g) reproduce the ws-probe's red against v3's loader                    | probe 664 (do not port)   | ~0 code, 1 diagnostic run                                    | 2     |
+
 Everything in §3 is 0 hours by decision.
 
 ## 6. Dependencies
@@ -224,7 +226,7 @@ Everything in §3 is 0 hours by decision.
   authorization server it was proved with is **not** a dependency. **(e)** is independent and smallest.
 - **(d) custom domains** is blocked on the control plane's directory row, a wildcard DNS record per
   domain, and a zone/route per domain — infrastructure v3 does not own. Blocked on Jonas, not code.
-- **(g) the telemetry check** should run *before* (a)–(c): if the named-loader-cache hazard is real
+- **(g) the telemetry check** should run _before_ (a)–(c): if the named-loader-cache hazard is real
   user-visible harm it changes `worker-loader.ts`'s cacheKey strategy, which everything loaded sits on.
 
 ## 7. Risks and questions for Jonas
@@ -232,7 +234,7 @@ Everything in §3 is 0 hours by decision.
 1. **Is an approval/HITL gate in scope at all?** project-core spends much of `egress.ts` on one-shot,
    fingerprint-bound human approvals; v3 has zero occurrences of "approval" in `src/`. The
    trusted-client doctrine says no malicious-client defence — but an approval gate defends against a
-   *confused agent*, not a malicious client. Different threats. If in scope, only the atomic claim
+   _confused agent_, not a malicious client. Different threats. If in scope, only the atomic claim
    belongs in the platform; the request/grant vocabulary is a userspace processor.
 2. **Do we want a second identity axis?** project-core's trust levels can reject an append; v3 decided
    identity is attribution. I recommend holding that line — but "a security upgrade is an ordinary

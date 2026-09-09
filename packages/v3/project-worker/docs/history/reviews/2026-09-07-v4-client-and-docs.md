@@ -5,14 +5,14 @@
 **The headline finding: v4's browser client library is not a v4 addition.** These are byte-identical
 between the trees (`diff` clean, 2026-09-07):
 
-| file | code lines | status |
-| --- | --- | --- |
-| `src/client/live-state-client.ts` | 83 | IDENTICAL to v3 |
-| `src/client/live-state-store.ts` | 37 | IDENTICAL to v3 |
-| `src/client/react.tsx` | 67 | IDENTICAL to v3 |
-| `src/client/demo.tsx` | 122 | IDENTICAL to v3 |
-| `specs/live-state-demo.spec.ts` | 2 tests | IDENTICAL to v3 |
-| `playwright.config.ts` | 20 | IDENTICAL to v3 |
+| file                              | code lines | status          |
+| --------------------------------- | ---------- | --------------- |
+| `src/client/live-state-client.ts` | 83         | IDENTICAL to v3 |
+| `src/client/live-state-store.ts`  | 37         | IDENTICAL to v3 |
+| `src/client/react.tsx`            | 67         | IDENTICAL to v3 |
+| `src/client/demo.tsx`             | 122        | IDENTICAL to v3 |
+| `specs/live-state-demo.spec.ts`   | 2 tests    | IDENTICAL to v3 |
+| `playwright.config.ts`            | 20         | IDENTICAL to v3 |
 
 `public/demo.html` (build output) and `e2e/live-state-chains-client-side.e2e.test.ts` are identical
 too. So the v4-only client surface is exactly two arcs.
@@ -31,7 +31,7 @@ git-ignored `src/generated/` (`.gitignore:3` — v3 by contrast COMMITS `src/gen
   (`build-types.mjs:166-189`). Consumer: **exactly one line**, `src/client/docs.ts:9`:
   `import type { Itx, UnauthenticatedSession } from "../generated/itx-types/index.d.ts"`.
   Its `index.d.ts` is two lines: `export type { IterateContext as Itx }` and `export { Session,
-  UnauthenticatedSession }`. It also writes `/node_modules/itx/index.d.ts` declaring
+UnauthenticatedSession }`. It also writes `/node_modules/itx/index.d.ts` declaring
   `ItxEnv { ITX: { get(): Promise<IterateContext> } }` — the shape loaded workers see.
 
 How a consumer imports it: they don't, outside this package. `package.json` `exports` is `"." :
@@ -39,14 +39,14 @@ How a consumer imports it: they don't, outside this package. `package.json` `exp
 
 ### (b) The `/docs` collaborative Docs demo
 
-| file | code lines | what |
-| --- | --- | --- |
-| `src/client/docs.ts` | 495 | the whole page: DOM built by one `innerHTML` template, capnweb session, Yjs replica, publish flow |
-| `src/client/docs.html` | 14 | shell with a `__DOCS_BUNDLE__` sentinel |
-| `build-docs.mjs` | 45 | esbuild ×3 → inlines the bundle into `public/docs.html` (591 KB, vs demo.html's 260 KB) |
-| `examples/docs/processor.ts` | 57 | the USERSPACE Yjs processor |
-| `examples/docs/router.ts` | 9 | a userspace ingress router |
-| `e2e/docs-app.e2e.test.ts` | 183 | the vitest proof |
+| file                         | code lines | what                                                                                              |
+| ---------------------------- | ---------- | ------------------------------------------------------------------------------------------------- |
+| `src/client/docs.ts`         | 495        | the whole page: DOM built by one `innerHTML` template, capnweb session, Yjs replica, publish flow |
+| `src/client/docs.html`       | 14         | shell with a `__DOCS_BUNDLE__` sentinel                                                           |
+| `build-docs.mjs`             | 45         | esbuild ×3 → inlines the bundle into `public/docs.html` (591 KB, vs demo.html's 260 KB)           |
+| `examples/docs/processor.ts` | 57         | the USERSPACE Yjs processor                                                                       |
+| `examples/docs/router.ts`    | 9          | a userspace ingress router                                                                        |
+| `e2e/docs-app.e2e.test.ts`   | 183        | the vitest proof                                                                                  |
 
 Plus `examples/docs/README.md` (the narrative). `build-sdk.mjs` gained exactly two lines over v3's:
 `await import("./build-types.mjs")` (line 10) and `await import("./build-docs.mjs")` (line 79).
@@ -60,10 +60,11 @@ name, door: () => scope.invoke("itx.facets.get('docs').liveSnapshot()") })`; and
 `itx.repos.get(path).head()/.commit({parent,message,files})`, `itx.check(source)`, `itx.build(source)`.
 
 **Events appended.** Three types:
+
 - `docs/update` — `{ path: string, update: string }` (base64 Yjs delta), `idempotencyKey` a UUID.
 - `events.iterate.com/docs/activated` — `{ repo, revision, buildKey, documentPath }`.
 - `events.iterate.com/itx/rewrite-rule-configured` — `{ match: "itx.docs", target:
-  "itx.workers.load(<code>, { cacheKey })" }`, appended atomically beside the activation.
+"itx.workers.load(<code>, { cacheKey })" }`, appended atomically beside the activation.
 
 **Config/bindings/infra.** `yjs@^13.6.32` as a runtime dependency (v3 has none); `esbuild` at build
 time; `wrangler.jsonc` `assets: { directory: "./public", binding: "ASSETS" }` — `/docs` is a **static
@@ -102,7 +103,7 @@ line 8) — a platform module compiled into the browser bundle to pre-validate t
 
 ### Where v4 conflicts with v3's doctrines
 
-1. **`/docs` is platform code.** The editor page is a wrangler static asset on the *platform*
+1. **`/docs` is platform code.** The editor page is a wrangler static asset on the _platform_
    hostname (`https://v4.iterate2.app/docs?project=prj_v4_demo`, README:175). Applying the litmus
    test — could this be written in a userspace worker? — yes, entirely; tonight's ingress exists
    precisely so it is. v4 shipped it as platform because it forked before that ingress landed.
@@ -175,33 +176,33 @@ DOM) and the failed-update `retry`/`revert` pair — honest UI for a durable-app
 
 1. **`src/types.ts` + export map.** Add the file and the two `exports` entries. Proof: a sibling
    `src/types.test.ts` asserting every name resolves and `types.ts` has zero runtime imports;
-   `pnpm typecheck` is the gate. Closes Gap 8. *(~15 code lines.)*
+   `pnpm typecheck` is the gate. Closes Gap 8. _(~15 code lines.)_
 2. **`examples/docs/processor.ts` + `yjs` devDependency + `e2e/docs-app.e2e.test.ts`.** Port v4's
    processor verbatim and the first ~110 lines of v4's e2e (converge → replay → live), dropping the
-   commit/check/build/activate tail. Proof, deployed: `WORKER_BASE_URL=https://project-worker.<sub>.workers.dev pnpm e2e -t "Docs"`. *(~57 + ~120 code lines.)*
+   commit/check/build/activate tail. Proof, deployed: `WORKER_BASE_URL=https://project-worker.<sub>.workers.dev pnpm e2e -t "Docs"`. _(~57 + ~120 code lines.)_
 3. **`src/client/docs.ts` + `build-docs.mjs`, minus publish.** Port the page; delete the `save`
    handler, the `parse` import and the `repo` input; import types from `./types.ts`, not a generated
-   graph. Output to `public/docs.html`. Proof: `pnpm spec` locally first. *(~300 + ~35 code lines.)*
+   graph. Output to `public/docs.html`. Proof: `pnpm spec` locally first. _(~300 + ~35 code lines.)_
 4. **Serve the page as `itx.apps.docs` on a project host.** A ~20-line userspace `WorkerEntrypoint`
    whose `fetch` returns the built `docs.html` (404 otherwise), installed with
    `itx.provide("itx.apps.docs", "itx.workers.get({ source })")`. Proof, deployed: a case shaped on
    `e2e/ingress-project-host.e2e.test.ts` — `docs--<projectId>.<base>/` returns the page, and with
-   the `/.itx/session` cookie the append carries `source.principal`. *(~20 + ~40 test.)*
+   the `/.itx/session` cookie the append carries `source.principal`. _(~20 + ~40 test.)_
 5. **`specs/docs.spec.ts` — the two-browser convergence proof.** Two Playwright pages on the same
    project host: type in one, assert the other's textarea converges; reload one, assert it retains.
    Proof: `DEMO_BASE_URL=https://<deployed host> pnpm spec` — the one thing vitest cannot do, and
-   the one v4 claim that is currently manual. *(~40 lines.)*
+   the one v4 claim that is currently manual. _(~40 lines.)_
 
 ## 5. Effort
 
-| step | code lines (v4 = upper bound) | hours |
-| --- | --- | --- |
-| 1 · `types.ts` + export map + proof | ~15 (v4: 190 generated, not comparable) | 1 |
-| 2 · processor + deployed vitest e2e | ~177 (v4: 57 + 183) | 2 |
-| 3 · page + build-docs, publish removed | ~335 (v4: 495 + 45) | 3 |
-| 4 · page as `itx.apps.docs` on a project host | ~60 (v4: 9, and wrong-shaped) | 1.5 |
-| 5 · Playwright two-browser spec | ~40 (v4: 0) | 1 |
-| **total** | **~630 code lines** | **~8.5** |
+| step                                          | code lines (v4 = upper bound)           | hours    |
+| --------------------------------------------- | --------------------------------------- | -------- |
+| 1 · `types.ts` + export map + proof           | ~15 (v4: 190 generated, not comparable) | 1        |
+| 2 · processor + deployed vitest e2e           | ~177 (v4: 57 + 183)                     | 2        |
+| 3 · page + build-docs, publish removed        | ~335 (v4: 495 + 45)                     | 3        |
+| 4 · page as `itx.apps.docs` on a project host | ~60 (v4: 9, and wrong-shaped)           | 1.5      |
+| 5 · Playwright two-browser spec               | ~40 (v4: 0)                             | 1        |
+| **total**                                     | **~630 code lines**                     | **~8.5** |
 
 Against v4's 989 code lines for the same arc, minus `build-types.mjs`'s 190 (deferred with
 `itx.check`) and `router.ts`. Calibrated on tonight's ~300 code lines / ~3 hours with tests, docs and

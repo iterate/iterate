@@ -5,7 +5,7 @@
 > recommendation. Section 7 ends with the honest "what you actually lose" list. Section 8 shows where
 > the candidates disagreed and why each choice went the way it did. Nothing here was code when it was
 > written. Sections 0–6 are kept in line with the code AS BUILT — including the itx-surface rename
-> of 2026-09-02 (`docs/proposals/itx-surface-SYNTHESIS.md`, §9 "as built"): the noun is **rewrite
+> of 2026-09-02 (`docs/history/proposals/itx-surface-SYNTHESIS.md`, §9 "as built"): the noun is **rewrite
 > rule** (`{ match, target }`, ONE event `itx/rewrite-rule-configured { match, target | null }`, a MAP
 > by canonical match), a live value enters through `provide(match, stub | expression | null)` under the
 > key = the canonical match, the dispatch door is `invoke`, and every verb hands back a DISPOSABLE handle. Sections
@@ -179,7 +179,6 @@ interface BuiltInScope {
       props?: unknown;
     }): InvokeHandle;
   }; // run · fetch · processEventBatch · anything it exports
-  runScript(script: string, ...args: unknown[]): Promise<unknown>; // sugar over workers.get({ source }).run — kept for the bare-lambda case
 }
 ```
 
@@ -543,7 +542,7 @@ class ProjectCollection extends RpcTarget {
 } // list/create need a signed-in user: a token session holds its one project
 
 // iterate-context.ts — A PROXY IN FRONT OF THE DO. Declares only what must be edge code, in the order the tutorial builds them;
-// every DO built-in root (append · readEvents · waitForEvent · fetch · whoami · kv · secrets · ai · cfArtifacts · repos · rpcStubs.get/list · rewriteRules · facets · subscriptions · workers · runScript · connectToMcp · connectToOpenApi · connectToCapnweb · serveMcp)
+// every DO built-in root (append · readEvents · waitForEvent · fetch · whoami · kv · secrets · ai · cfArtifacts · repos · rpcStubs.get/list · rewriteRules · facets · subscriptions · workers · connectToMcp · connectToOpenApi · connectToCapnweb · serveMcp)
 // and every rewrite rule ride the prototype hop into ONE invoke(expression) with ZERO code here.
 class IterateContext extends RpcTarget {
   cd(path: string): IterateContext; // pure addressing, zero DO hops; returns an EDGE context
