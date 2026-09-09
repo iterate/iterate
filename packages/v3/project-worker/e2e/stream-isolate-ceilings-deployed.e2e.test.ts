@@ -98,6 +98,23 @@ const isDurableObjectReset = (e: any): boolean =>
   (e.durableObjectReset === true ||
     /isolate exceeded its memory limit and was reset/i.test(String(e.message ?? e)));
 
+/** Retry a call while the platform answers "Durable Object is overloaded. Requests queued for too
+ *  long." — its backpressure after a burst (a queue draining), never a reset and never poisoning; any
+ *  other failure propagates at once. Bounded: ~15 s. */
+async function retryWhileOverloaded<T>(call: () => Promise<T>): Promise<T> {
+  const deadline = Date.now() + 15_000;
+  for (;;) {
+    try {
+      return await call();
+    } catch (error) {
+      if (!/overloaded|queued for too long/i.test(String((error as Error)?.message ?? error)))
+        throw error;
+      if (Date.now() > deadline) throw error;
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+  }
+}
+
 /** Settle a promise to a tagged outcome so a reset never escapes as an unhandled rejection (the e2e
  *  config only forgives WebSocket/RPC-session noise; a `durableObjectReset` message would be fatal). */
 const settle = <T>(p: Promise<T>): Promise<{ ok: true; v: T } | { ok: false; e: any }> =>
@@ -294,13 +311,18 @@ deployedOnly(
       `LARGE EPHEMERAL FAN-OUT: the burst ${reset ? "reset" : "did not reset"} the parent this run`,
     );
     // The controlled part: whatever the burst did, the ctx is serviceable and unpoisoned right after —
-    // the durable log survives an isolate reset (this subsumes the old RECOVERY row).
+    // the durable log survives an isolate reset (this subsumes the old RECOVERY row). "Right after"
+    // allows the platform's own backpressure to drain: while the burst's queue empties, a call may be
+    // refused with "Durable Object is overloaded. Requests queued for too long." — a queue-full
+    // refusal, not a poisoned context — so the recovery is retried for a few seconds.
     const recovered = openItx(ctx);
-    const snapshot = (await recovered.invoke("itx.facets.get('core').snapshot()")) as {
-      offset: number;
-    };
+    const snapshot = await retryWhileOverloaded(
+      () => recovered.invoke("itx.facets.get('core').snapshot()") as Promise<{ offset: number }>,
+    );
     expect(snapshot.offset).toBeGreaterThan(0);
-    const [ev] = await append(recovered, { type: "fan-out-recovery-marker" });
+    const [ev] = await retryWhileOverloaded(() =>
+      append(recovered, { type: "fan-out-recovery-marker" }),
+    );
     expect(ev.offset).toBeGreaterThan(0);
   },
 );

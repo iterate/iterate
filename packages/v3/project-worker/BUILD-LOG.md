@@ -4436,3 +4436,33 @@ pin naming its mechanism, or declined with the reason above. The red pins are th
   `pnpm test` 51 files / 716 passed / 18 expected-fail / 17 deployed-only skips (the local e2e lane
   boots the bundle through the two new cycles). DEPLOYED (0e7df5979, version 0547a39c): 23 files / 195
   passed / 4 expected-fail — ALL GREEN.
+
+## 2026-09-09 — auth, step 1: open mode out; `authenticate(credentials)` is the one door; the admin secret
+
+- THE PLAN: `docs/plan-auth-one-lane-2026-09-09.md` (revision 3, the build spec — Jonas's seven
+  annotations, the apps/os and apps/auth reading, and a research read of the OAuth provider's source,
+  issues and PRs, Cloudflare's own MCP servers and the 2026-07-28 spec). Decisions: no
+  auth.iterate.com here — the provider IS the identity provider; the email form is the login page and
+  Google lands on it; ONE MCP server at `/mcp` for every project (`itx.serveMcp()` goes); project
+  secrets from day one (the kit's devices carry one); `project: ProjectIdOrSlug` everywhere; the e2e
+  lane on an admin secret like apps/os; the browser through `from-server-cookie` — the credential names
+  the cookie already on the WebSocket handshake, honoured only from the same origin (Kenton's in-band
+  pattern with the one guard that makes an ambient cookie safe).
+- STEP 1 (3024b5e9c, one Fable implementer): `open` login mode gone — the anonymous seeded user, the
+  tokenless `/mcp` short-circuit, every mode branch; `authenticate(credentials: SessionCredentials)`
+  with `from-server-cookie` | `project-token` | `project-secret` (typed, arrives in step 2) |
+  `admin-secret` (+ `as` = a user's session without a login; constant-time compare; any project; its
+  projects in the deployment's memberless org); the no-argument form gone; the lanes read the same
+  kinds (an admin bearer admitted on `/expression`, stamped on a project host, stripped before the
+  app); `projects.get(project)`, `projects.create({ project })`; the e2e lane on the admin secret;
+  the demo page on `from-server-cookie`. 42 files, +1,062 / −635 (source +90).
+- THE DEPLOY LESSON: the first deployed run failed 183/183 with "WebSocket connection failed" — not
+  code: `APP_CONFIG_SESSION_SECRET` had never landed on the deployment (pass 4's `secret put` ran inside
+  a chain and did not stick; `open` mode had not required it, step 1 does), so every route answered
+  500 (`error code: 1101`). `wrangler tail` named it in seconds. Now on the worker: the token, session
+  and admin secrets, listed back. Rule: `wrangler secret list` after every put, and before a deploy
+  that makes a var required.
+- DEPLOYED (version 93b8ae08, the secrets in place): 23 files / 195 passed / 4 expected-fail; the one
+  red was the fan-out row's recovery call meeting the platform's backpressure ("Durable Object is
+  overloaded. Requests queued for too long." — a draining queue, not poisoning); the row now retries
+  the recovery through that message for a few seconds.
