@@ -41,6 +41,7 @@ export type InterceptedAiResponse = z.infer<typeof InterceptedAiResponse>;
 /** The two concrete outbound APIs, after host policy and request preparation. No credentials. */
 export type AiRequest = OpenAiHttpRequest | WorkersAiRequest;
 
+/** Prepared OpenAI HTTP request, with authorization supplied only at dispatch. */
 export type OpenAiHttpRequest = {
   kind: "openai-http";
   gatewayId: string;
@@ -49,6 +50,7 @@ export type OpenAiHttpRequest = {
   body: Record<string, unknown>;
 };
 
+/** Prepared Workers AI binding invocation, including its raw-response option. */
 export type WorkersAiRequest = {
   kind: "workers-ai";
   model: string;

@@ -2860,8 +2860,8 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "OpenAiHttpRequest",
     kind: "typeAlias",
     sourceText:
-      'export type OpenAiHttpRequest = {\n  kind: "openai-http";\n  gatewayId: string;\n  endpoint: string;\n  headers: Record<string, string>;\n  body: Record<string, unknown>;\n};',
-    summary: "",
+      '/** Prepared OpenAI HTTP request, with authorization supplied only at dispatch. */\nexport type OpenAiHttpRequest = {\n  kind: "openai-http";\n  gatewayId: string;\n  endpoint: string;\n  headers: Record<string, string>;\n  body: Record<string, unknown>;\n};',
+    summary: "Prepared OpenAI HTTP request, with authorization supplied only at dispatch.",
     memberSummaries: {},
     referencedTypeNames: [],
   },
@@ -2869,8 +2869,8 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "WorkersAiRequest",
     kind: "typeAlias",
     sourceText:
-      'export type WorkersAiRequest = {\n  kind: "workers-ai";\n  model: string;\n  body: Record<string, unknown>;\n  options: CfAiRunOptions & {\n    returnRawResponse: true;\n  };\n};',
-    summary: "",
+      '/** Prepared Workers AI binding invocation, including its raw-response option. */\nexport type WorkersAiRequest = {\n  kind: "workers-ai";\n  model: string;\n  body: Record<string, unknown>;\n  options: CfAiRunOptions & {\n    returnRawResponse: true;\n  };\n};',
+    summary: "Prepared Workers AI binding invocation, including its raw-response option.",
     memberSummaries: {},
     referencedTypeNames: ["CfAiRunOptions"],
   },

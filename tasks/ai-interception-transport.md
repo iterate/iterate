@@ -3,8 +3,8 @@ status: in-progress
 # Intercept prepared AI requests
 
 The Gateway work is saved on `codex/ai-gateway-metadata`. This prerequisite
-extracts its interception changes onto current main. Implementation and focused checks are complete. Preview validation and
-independent review are pending.
+extracts its interception changes onto current main. Implementation and independent
+review are complete. Repository checks and preview validation are finishing.
 
 Intercepted models should exercise the same request preparation and response
 decoding as provider calls. Strip only `intercepted/`; tests choose their model
@@ -38,3 +38,7 @@ response streaming over RPC. Leave the Gateway branch untouched until this lands
   gateway options. Cache masking and asynchronous Web Crypto are unchanged.
 - New main's root-stream restart/reinstall regression retained. Main's file
   mention browser test now reads the prepared request body.
+- Independent review caught empty-string bodies being collapsed into absent
+  bodies; the serialized contract now preserves both. Full tests caught missing
+  API summaries on the two request types; summaries added and all 16 graph
+  tests passed on rerun.

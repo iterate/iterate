@@ -5620,6 +5620,7 @@ export type StreamSubscriptionDescription = {
  */
 export type ReportStreamWakeDeliveryResult = (result: StreamWakeDeliveryResult) => unknown;
 
+/** Prepared OpenAI HTTP request, with authorization supplied only at dispatch. */
 export type OpenAiHttpRequest = {
   kind: "openai-http";
   gatewayId: string;
@@ -5628,6 +5629,7 @@ export type OpenAiHttpRequest = {
   body: Record<string, unknown>;
 };
 
+/** Prepared Workers AI binding invocation, including its raw-response option. */
 export type WorkersAiRequest = {
   kind: "workers-ai";
   model: string;
