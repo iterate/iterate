@@ -25,6 +25,10 @@ export function WorkspaceActions({
 }) {
   const guest = isGuestWorkspacePath(workspacePath);
   const jam = isJamWorkspacePath(workspacePath);
+  const committable =
+    !guest &&
+    files.mounts.some((mount) => mount.scope !== null && mount.policy === "commit-to-main");
+  if (!committable && !jam) return null;
   return (
     <ButtonGroup aria-label="Workspace actions">
       <WorkspaceChanges files={files} canCommit={!guest} onDiscarded={onDiscarded} />
