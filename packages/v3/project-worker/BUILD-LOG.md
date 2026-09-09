@@ -4379,3 +4379,28 @@ pin naming its mechanism, or declined with the reason above. The red pins are th
   places where docs disagreed with the code is applied here (the walkthrough's whole-context ancestry
   example, the as-built's budgets, the report's library row) or queued for the comment pass (a dangling
   `run` docstring in built-ins.ts, config-worker.ts's named-export header, two e2e headers).
+
+## 2026-09-09 — code cuts, round 2: the comment pass and the e2e lane merged by subject
+
+- THE COMMENT PASS (e901189e4; two Fable implementers on disjoint file sets, comment and docstring
+  edits only — stripping comments from HEAD and from the tree and diffing the remainder shows no code
+  change): 1,758 → 1,335 comment lines on the stream, the DO, the SDK, the loader and the dotted door
+  (−423) and −176 on the context, the edge, the library and the control plane. What went: the DO's
+  five-bullet header retelling five other files (now a one-line map with pointers); the self-wake
+  breaker told at eight sites (now once, at its constant); field docs restating field names; step
+  comments narrating the next line; a four-version changelog on one line; headers repeating README
+  and LAYERS; the Artifacts prefix-wall story told five times; a dangling docstring for a deleted
+  root; config-worker.ts's header showing a shape the convention never used. Kept verbatim: the
+  seven rewrite rules, the zero-write ephemeral contract, the cursor lane's deadlock note, every
+  measurement, every workerd issue, every red pin's mechanism. −599 comment lines, ≈ 19 % of them.
+- THE E2E MERGE (same commit; one implementer): 51 files → 23 by subject, −221 lines — ≈ 200 of them
+  rows that re-pinned a claim a unit or workers test already holds (each twin verified before the
+  delete; three rows trimmed to the extra claim they carried), the rest imports; every deployedOnly
+  gate (16) and every red pin (4) survived; the 144 MiB seed is built once for both isolate-ceiling
+  rows; the local lane's wall time is unchanged (27 s). The merged names are updated in the tutorial,
+  the living docs, wrangler.jsonc and the source comments that cited them.
+- GATES: tsc ×3 · oxlint · knip · `pnpm test` 64 files / 721 passed / 18 expected-fail / 17
+  deployed-only skips. DEPLOYED (version c96f0b9c): 23 files / 195 passed / 4 expected-fail — ALL
+  GREEN, the kv-list burst included.
+- NEXT, running: the file consolidation Jonas asked for ("get to about half") — 57 source files → 23,
+  one per concept, pure moves; the docs' file maps follow it.
