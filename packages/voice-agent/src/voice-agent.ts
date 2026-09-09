@@ -3876,17 +3876,33 @@ export class VoiceAgentProcessor extends StreamProcessor<
       dial.sayHangUpReason = farewellReason;
       const episode = ++dial.idleFarewells;
       const farewellAtMs = nowAtFacetMs;
-      await append({
-        type: "events.iterate.com/voice-agent/say",
-        idempotencyKey: this.idempotencyKey(`say:idle:${conversationId}:${episode}`),
-        payload: {
-          conversationId,
-          text: idleFarewell(state.clientTakesTurns),
-          reason: farewellReason,
-          by: "idle-reaper",
-          thenHangUp: true,
-        },
-      });
+      try {
+        await append({
+          type: "events.iterate.com/voice-agent/say",
+          idempotencyKey: this.idempotencyKey(`say:idle:${conversationId}:${episode}`),
+          payload: {
+            conversationId,
+            text: idleFarewell(state.clientTakesTurns),
+            reason: farewellReason,
+            by: "idle-reaper",
+            thenHangUp: true,
+          },
+        });
+      } catch (error) {
+        /*
+         * A REFUSED FAREWELL MUST NOT DISARM THE REAPER. The reason was set
+         * before the append so a say that never comes back round still has
+         * something for the grace to bury — but if the append itself throws,
+         * neither the grace nor the next tick below is ever armed, and with
+         * the reason still set every later tick would defer to a hang-up
+         * that is not coming. Forget this attempt and tick on: the next
+         * deadline tries again under a fresh episode key.
+         */
+        console.error("voice-agent idle farewell could not be queued", { error });
+        dial.sayHangUpReason = null;
+        this.runInBackground(idleTick);
+        return;
+      }
       this.runInBackground(async () => {
         await this.deps.sleep(IDLE_FAREWELL_GRACE_MS);
         if (this.#dial !== dial) return;
@@ -4794,6 +4810,17 @@ export class VoiceAgentProcessor extends StreamProcessor<
     cancel: boolean,
   ): void {
     dial.hangUpAfterAnswerDrains = null;
+    /*
+     * AND A FAREWELL NOT YET STARTED. `sayHangUpReason` is parked on the
+     * dial between a `thenHangUp` say arriving and its `response.created`;
+     * that window is normally under a second, but a press inside it is a
+     * person who wants the call, and the created arm would otherwise arm
+     * the hang-up anyway — the reaper's grace only looks at this AFTER the
+     * provider has had 8 s to start the line, which is too late to stop a
+     * response.create that already went out. Cleared here, the goodbye (if
+     * the provider does say it) is just a line, and the call stays up.
+     */
+    dial.sayHangUpReason = null;
     dial.face?.barge(decidedAtFacetMs);
     /* Read BEFORE the repair moves a streaming answer to "cancelled". */
     const responseWasStreaming = dial.answer.phase === "streaming";

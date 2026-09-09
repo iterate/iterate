@@ -3594,4 +3594,51 @@ describe("say, and the announced farewell", () => {
     await stepTime(h, IDLE_FAREWELL_GRACE_MS + 5_000);
     expect(eventsOfType(h, "conversation-ended")).toHaveLength(0);
   });
+
+  /*
+   * THE WINDOW BETWEEN THE FAREWELL AND ITS RESPONSE. `response.create` has
+   * gone out; the provider has not answered it yet; the listener presses. The
+   * provider then starts the goodbye anyway — that is the normal case, not
+   * the exception — and the hang-up parked for it must NOT be armed by that
+   * created: the press un-decided it. The goodbye is just a line.
+   */
+  it("a press between the farewell and its response keeps the call, goodbye and all", async () => {
+    const h = makeHarness();
+    await callIsLive(h, CLIENT_TAKES_TURNS);
+    await idleDeadline(h);
+    expect(eventsOfType(h, "say")).toHaveLength(1);
+    expect(h.provider.sentOfType("response.create")).toHaveLength(1);
+    await h.append({ type: "events.iterate.com/voice-agent/ptt-start", payload: {} });
+    await h.settle();
+    h.provider.responseCreated();
+    h.provider.answerAudio(200);
+    h.provider.answerComplete();
+    await playOutEverything(h, 400);
+    await stepTime(h, IDLE_FAREWELL_GRACE_MS + 5_000);
+    expect(eventsOfType(h, "conversation-end-requested")).toHaveLength(0);
+    /* And the deadline restarted from the press: seen off again a minute on. */
+    await idleDeadline(h);
+    expect(eventsOfType(h, "say")).toHaveLength(2);
+  });
+
+  /*
+   * A REFUSED FAREWELL DOES NOT DISARM THE REAPER. The reason is parked before
+   * the append; if the append throws, nothing may be left believing a hang-up
+   * is coming, or every later tick defers to it and the call is never reaped.
+   */
+  it("a farewell the stream refuses is retried at the next tick, and the reaper still ends the call", async () => {
+    const h = makeHarness();
+    await callIsLive(h);
+    h.stream.failAppendsOfType = "events.iterate.com/voice-agent/say";
+    await idleDeadline(h);
+    expect(eventsOfType(h, "say")).toHaveLength(0);
+    expect(eventsOfType(h, "conversation-end-requested")).toHaveLength(0);
+    /* The outage passes; the next tick says goodbye. */
+    h.stream.failAppendsOfType = undefined;
+    await stepTime(h, 10_000);
+    expect(eventsOfType(h, "say")).toHaveLength(1);
+    /* And a provider that never starts it still gets the silent end. */
+    await stepTime(h, IDLE_FAREWELL_GRACE_MS + 5_000);
+    expect(endReason(h)).toBe("no input from the device for 60s; the farewell was never spoken");
+  });
 });
