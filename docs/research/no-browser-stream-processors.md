@@ -218,7 +218,10 @@ that offset. If the journal arrives first, an indexed item-ID query hides the
 matching live activity. Both arrival orders therefore replace the live activity
 with its settled row without a second client history store or any browser
 reduction. The server exposes settled volatile state only after its publication
-and offset exist.
+and offset exist. If that activity is already journaled while the next live
+snapshot is still in transit, the server runtime's active-work counts keep a
+visible progress indicator in the feed. Deduplication must not make ongoing
+work appear idle.
 
 ### Deletion scope, measured at this checkout
 
@@ -383,6 +386,11 @@ Required acceptance evidence for implementation:
 - Root checks passed: install, typecheck, lint, knip, format, and test. OS reported
   3,075 passing tests; subsequent focused feed/sync/recovery/inspection tests
   passed 43 tests, plus the nameless-wake regression suite.
+- Preview validation on `a35eefc66`: 30 stream-browser tests and 21 protocol
+  tests passed; OS engine e2e reported 208 passing tests. Its agent-script
+  browser failure exposed a progress gap when the journal beat live state.
+  A rendering regression test reproduced it, and the fixed real-browser test
+  passed three consecutive local runs; the final preview run remains required.
 - Real browser tests covered append/filter/index use, simultaneous cold tabs,
   writer handoff, reload at the tail, kill/reconnect, reset/recopy, and raw rows.
 - Local OS smoke used synthetic agent-domain events through the real ITX API.
@@ -396,8 +404,8 @@ Required acceptance evidence for implementation:
 - Independent reviews covered publication/replay/causal order and browser
   copying/ownership/rendering, followed by reviews of the ordering, source reset,
   and bounded inspection fixes.
-- React Doctor with all normal checks: changed scope **86/100**; three changed
-  UI components **91/100**; full OS **41/100**, unchanged from baseline.
+- React Doctor with all normal checks: changed scope **84/100**, with no reported
+  issues; full OS **41/100**, unchanged from baseline. No rules were disabled.
   Deletions must be staged before this version scans: otherwise its Git-index
   reader attempts to open absent files and reports incomplete maintainability.
 

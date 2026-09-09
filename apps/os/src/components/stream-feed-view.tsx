@@ -1,8 +1,17 @@
-import { memo, useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  memo,
+  useCallback,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ComponentProps,
+} from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { ZERO_AGENT_RUNTIME, type AgentRuntime } from "@iterate-com/shared/agent-events";
 import {
   AgentUiItemSchema,
+  isAgentRuntimeVisiblyActive,
   type AgentUiItem,
   type AgentUiState,
 } from "@iterate-com/ui/components/events/agent-ui-reducer";
@@ -122,7 +131,10 @@ export function StreamFeedView({
   // sizer's height, which is what the stick's ResizeObserver follows and what
   // anchorTo's mid-history compensation measures. Rendering it outside the
   // list would hide its height from both.
-  const liveCount = live == null ? 0 : 1;
+  // Runtime can remain busy after the journal replaces the last live activity,
+  // while its next presentation snapshot is still in transit.
+  const hasLiveWork = filter.agent != null && isAgentRuntimeVisiblyActive(runtime);
+  const liveCount = live != null || hasLiveWork ? 1 : 0;
   const totalCount = itemCount + liveCount;
 
   // Settled rows are append-only at dense positions, so the position is a
@@ -247,7 +259,7 @@ export function StreamFeedView({
         >
           {virtualItems.map((virtualItem) => {
             const index = virtualItem.index;
-            const isLiveItem = live != null && index === itemCount;
+            const isLiveItem = liveCount > 0 && index === itemCount;
             const row = index < itemCount ? rowsByIndex.get(index)?.row : undefined;
             return (
               <div
@@ -258,7 +270,7 @@ export function StreamFeedView({
                 style={{ transform: `translateY(${virtualItem.start}px)` }}
               >
                 {isLiveItem ? (
-                  <AgentLiveActivity
+                  <StreamFeedLiveActivity
                     live={live}
                     runtime={runtime}
                     toggledIds={toggledIds}
@@ -306,6 +318,21 @@ export function StreamFeedView({
           })}
         </div>
       </div>
+    </div>
+  );
+}
+
+function StreamFeedLiveActivity({
+  live,
+  ...props
+}: Omit<ComponentProps<typeof AgentLiveActivity>, "live"> & {
+  live: ComponentProps<typeof AgentLiveActivity>["live"] | null;
+}) {
+  if (live) return <AgentLiveActivity live={live} {...props} />;
+  return (
+    <div className="flex items-center gap-2 py-3 text-sm text-muted-foreground" role="status">
+      <Spinner className="size-4" />
+      Working…
     </div>
   );
 }

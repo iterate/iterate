@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  type ReactNode,
+  type ComponentProps,
+} from "react";
 import { useQuery } from "@tanstack/react-query";
 import { FilterIcon, XIcon } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
@@ -169,14 +176,14 @@ function BrowserDatabaseProjectStreamView({
   streamPath,
 }: ProjectStreamViewProps) {
   const subscriberUser = useStreamSubscriberUser();
-  const { resolvedStreamSource, store, snapshot, eventCount, feed, presentedFeed } =
-    useProjectStreamData({
-      projectId,
-      resetStreamSourceTransport,
-      subscriberUser,
-      streamSource,
-      streamPath,
-    });
+  const streamData = useProjectStreamData({
+    projectId,
+    resetStreamSourceTransport,
+    subscriberUser,
+    streamSource,
+    streamPath,
+  });
+  const { resolvedStreamSource, store, snapshot, eventCount, feed, presentedFeed } = streamData;
 
   useClaimReplyPresented({ database: store.streamDatabase, projectId, streamPath });
   const agentUiState = presentedFeed?.agent ?? null;
@@ -186,13 +193,7 @@ function BrowserDatabaseProjectStreamView({
 
   const { search } = useStreamViewSearch();
   const panels = useStreamViewPanels();
-  const activeMode = streamViewMode(search, streamPath);
   const caps = modeCapabilities(search, streamPath);
-  // Trimmed: a whitespace-only query must read as "no filter", not a LIKE
-  // pattern of spaces that hides every row.
-  const feedSearch = (search.q ?? "").trim();
-  const rawFilter = feedItemsFilterFromSearch(search, streamPath);
-
   // The server is about to append: verify deliveries actually arrive and
   // reconnect within seconds if the event connection died silently — instead of
   // the user's message not appearing until the next paced probe (or a reload).
@@ -201,11 +202,9 @@ function BrowserDatabaseProjectStreamView({
   }, [store]);
 
   const agentRuntimeTransition = suppliedAgentRuntimeTransition ?? presentedFeed?.runtimeChange;
-  const presentedAgentUiState = agentUiState;
   const agentRuntime = agentRuntimeTransition?.runtime;
 
-  const runningLlmRequestId =
-    presentedAgentUiState?.live?.steps.find(isRunningLlmStep)?.llmRequestOffset ?? null;
+  const runningLlmRequestId = agentUiState?.live?.steps.find(isRunningLlmStep)?.llmRequestOffset;
   const interrupt = useAgentInterrupt({
     onInterrupt: messageComposer?.onInterrupt,
     runningLlmRequestId,
@@ -226,20 +225,9 @@ function BrowserDatabaseProjectStreamView({
   // Live state uses this tab's transport even when another tab owns event sync.
   // Database ownership alone says nothing about whether writes can reach the server.
   const streamTransportReady = feed.status === "live";
-  // Cached rows can paint immediately. With an empty local database, the writer
-  // stays pending until reconciliation and the event callback have finished;
-  // a reader can paint the database already owned by another tab.
-  const streamContentsReady =
-    eventCount > 0 ||
-    snapshot.databaseRole === "reader" ||
-    snapshot.connectionStatus === "receiving-events";
-  const connectionLabel =
-    snapshot.connectionError ??
-    feed.error ??
-    (streamContentsReady ? emptyLabel : snapshot.connectionStatus);
   // Busy = work is actively running, independent of chat-message timing.
-  const agentBusy = isAgentUiActivityWorking(presentedAgentUiState?.live ?? null, agentRuntime);
-  const presence = presentedAgentUiState?.presence ?? [];
+  const agentBusy = isAgentUiActivityWorking(agentUiState?.live ?? null, agentRuntime);
+  const presence = agentUiState?.presence ?? [];
   const agentPauseControl = useAgentPauseControl({
     database: store.streamDatabase,
     resolvedStreamSource,
@@ -262,49 +250,18 @@ function BrowserDatabaseProjectStreamView({
       />
     );
 
-  // Mode body: ONE virtualized list over feed_items for every mode — Pretty
-  // shows agent rows, Raw shows raw rows, Pretty+raw both interleaved in
-  // local_index order (raw rows click through to the inspector).
-  const modeBody = (
-    <StreamFeedView
-      // Fresh virtualizer state per stream database + mode (see StreamFeedView docs).
-      key={`${store.streamDatabase.databasePath}:${activeMode}`}
-      database={store.streamDatabase}
-      filter={{
-        agent: caps.agentFeed
-          ? { showDebug: caps.agentShowDebug, searchQuery: feedSearch === "" ? null : feedSearch }
-          : null,
-        raw: caps.rawFeed ? rawFilter : null,
-      }}
-      liveState={caps.agentFeed ? presentedAgentUiState : null}
-      runtime={agentRuntime}
-      {...(caps.eventInspector ? { onInspectEvent: panels.inspectEvent } : {})}
-      {...(caps.agentFeed ? { onInspectLlmRequest: panels.inspectLlmRequest } : {})}
-      {...(caps.agentFeed ? { onInspectScriptExecution: panels.inspectScriptExecution } : {})}
-      emptyLabel={connectionLabel}
-      projectSlug={projectSlug}
-      isPending={caps.agentFeed ? agentUiState == null : !streamContentsReady}
-      pendingLabel={
-        snapshot.connectionError ??
-        feed.error ??
-        (caps.agentFeed ? "Initializing agent" : undefined)
-      }
-    />
-  );
-
-  const queuedUserMessages = caps.agentFeed
-    ? (presentedAgentUiState?.queuedUserMessages ?? [])
-    : [];
-
-  // The feed column — mode body with inspectors on top. The composer joins it
-  // only in the split layout: the fullPanel Events sheet is an inspection
-  // surface, so it gets no composer at all.
   const feedColumn = (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
       <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
-        {modeBody}
+        <ProjectStreamFeed
+          data={streamData}
+          runtime={agentRuntime}
+          emptyLabel={emptyLabel}
+          streamPath={streamPath}
+          projectSlug={projectSlug}
+        />
         <StreamInspectorSheet
-          agentUiState={presentedAgentUiState}
+          agentUiState={agentUiState}
           streamSource={resolvedStreamSource}
           streamPath={streamPath}
           caps={caps}
@@ -314,49 +271,21 @@ function BrowserDatabaseProjectStreamView({
       </div>
 
       {layout === "fullPanel" ? null : (
-        <div className="shrink-0 px-4 pb-2.5 pt-2.5">
-          <div className="mx-auto flex w-full max-w-3xl flex-col gap-1.5">
-            {eventCount > 0 && !streamTransportReady ? (
-              <p
-                className="px-4 text-xs text-muted-foreground"
-                data-testid="stream-cache-status"
-                role="status"
-              >
-                Showing cached events while
-                {snapshot.connectionStatus === "reconnecting" || snapshot.connectionError != null
-                  ? " reconnecting…"
-                  : " connecting…"}
-              </p>
-            ) : null}
-            <div>
-              {/* Queued messages are part of the composer: the panel tucks
-                behind the pill (painted first, overlapped via its negative
-                bottom margin) and grows the composer column, which the feed's
-                stick-to-bottom already follows on viewport resize. */}
-              <QueuedMessagesPanel
-                messages={queuedUserMessages}
-                isInterrupting={interrupt?.isInterrupting ?? false}
-                {...(interrupt == null || !streamTransportReady
-                  ? {}
-                  : { onInterrupt: interrupt.run })}
-              />
-              <StreamViewComposer
-                autoFocusMessage={autoFocusMessageComposer}
-                {...(defaultComposerMode == null
-                  ? caps.agentFeed
-                    ? { defaultMode: "message" as const }
-                    : { defaultMode: "raw" as const }
-                  : { defaultMode: defaultComposerMode })}
-                interrupt={interrupt}
-                {...(messageComposer == null ? {} : { messageComposer })}
-                onNudgeDeliveries={nudgeDeliveries}
-                presence={presence}
-                store={store}
-                disabled={!streamTransportReady}
-              />
-            </div>
-          </div>
-        </div>
+        <StreamComposerFooter
+          autoFocusMessage={autoFocusMessageComposer}
+          defaultComposerMode={defaultComposerMode}
+          interrupt={interrupt}
+          messageComposer={messageComposer}
+          onNudgeDeliveries={nudgeDeliveries}
+          presence={presence}
+          store={store}
+          disabled={!streamTransportReady}
+          agentFeed={caps.agentFeed}
+          agentUiState={agentUiState}
+          eventCount={eventCount}
+          connectionStatus={snapshot.connectionStatus}
+          connectionError={snapshot.connectionError}
+        />
       )}
     </div>
   );
@@ -379,7 +308,7 @@ function BrowserDatabaseProjectStreamView({
       getProcessorRuntimeState={getProcessorRuntimeState}
       projectId={projectId}
       streamPath={streamPath}
-      tokenUsage={caps.agentFeed ? (presentedAgentUiState?.tokenUsage ?? null) : null}
+      tokenUsage={caps.agentFeed ? (agentUiState?.tokenUsage ?? null) : null}
     />
   );
 
@@ -420,6 +349,106 @@ function BrowserDatabaseProjectStreamView({
       </div>
       {streamStateSheet}
     </section>
+  );
+}
+
+/** Reads URL-owned modes and filters against the synchronized stream presentation. */
+function ProjectStreamFeed({
+  data,
+  runtime,
+  emptyLabel,
+  streamPath,
+  projectSlug,
+}: {
+  data: ReturnType<typeof useProjectStreamData>;
+  runtime: AgentUiRuntimeTransition["runtime"] | undefined;
+  emptyLabel: ProjectStreamViewProps["emptyLabel"];
+  streamPath: string;
+  projectSlug: ProjectStreamViewProps["projectSlug"];
+}) {
+  const { store, snapshot, eventCount, feed, presentedFeed } = data;
+  const agentUiState = presentedFeed?.agent ?? null;
+  const { search } = useStreamViewSearch();
+  const panels = useStreamViewPanels();
+  const activeMode = streamViewMode(search, streamPath);
+  const caps = modeCapabilities(search, streamPath);
+  const feedSearch = (search.q ?? "").trim();
+  const rawFilter = feedItemsFilterFromSearch(search, streamPath);
+  // Cached rows can paint immediately. Readers share the writer's database;
+  // an empty writer waits until reconciliation and callback setup complete.
+  const streamContentsReady =
+    eventCount > 0 ||
+    snapshot.databaseRole === "reader" ||
+    snapshot.connectionStatus === "receiving-events";
+  const error = snapshot.connectionError ?? feed.error;
+  return (
+    <StreamFeedView
+      key={`${store.streamDatabase.databasePath}:${activeMode}`}
+      database={store.streamDatabase}
+      filter={{
+        agent: caps.agentFeed
+          ? { showDebug: caps.agentShowDebug, searchQuery: feedSearch || null }
+          : null,
+        raw: caps.rawFeed ? rawFilter : null,
+      }}
+      liveState={agentUiState}
+      runtime={runtime}
+      onInspectEvent={panels.inspectEvent}
+      onInspectLlmRequest={panels.inspectLlmRequest}
+      onInspectScriptExecution={panels.inspectScriptExecution}
+      emptyLabel={error ?? (streamContentsReady ? emptyLabel : snapshot.connectionStatus)}
+      projectSlug={projectSlug}
+      isPending={caps.agentFeed ? agentUiState == null : !streamContentsReady}
+      pendingLabel={error ?? (caps.agentFeed ? "Initializing agent" : undefined)}
+    />
+  );
+}
+
+/** Keeps cached-connection feedback and queued input attached to the composer. */
+function StreamComposerFooter({
+  agentFeed,
+  agentUiState,
+  defaultComposerMode,
+  eventCount,
+  connectionStatus,
+  connectionError,
+  ...composer
+}: Omit<ComponentProps<typeof StreamViewComposer>, "defaultMode"> & {
+  agentFeed: boolean;
+  agentUiState: FeedLiveState["agent"] | null;
+  defaultComposerMode: ProjectStreamViewProps["defaultComposerMode"];
+  eventCount: number;
+  connectionStatus: string;
+  connectionError: string | undefined;
+}) {
+  const defaultMode = defaultComposerMode ?? (agentFeed ? "message" : "raw");
+  const queuedMessages = agentFeed ? (agentUiState?.queuedUserMessages ?? []) : [];
+  return (
+    <div className="shrink-0 px-4 pb-2.5 pt-2.5">
+      <div className="mx-auto flex w-full max-w-3xl flex-col gap-1.5">
+        {eventCount > 0 && composer.disabled ? (
+          <p
+            className="px-4 text-xs text-muted-foreground"
+            data-testid="stream-cache-status"
+            role="status"
+          >
+            Showing cached events while
+            {connectionStatus === "reconnecting" || connectionError != null
+              ? " reconnecting…"
+              : " connecting…"}
+          </p>
+        ) : null}
+        <div>
+          {/* Queued input grows the composer column, which the feed follows on resize. */}
+          <QueuedMessagesPanel
+            messages={queuedMessages}
+            isInterrupting={composer.interrupt?.isInterrupting ?? false}
+            onInterrupt={composer.disabled ? undefined : composer.interrupt?.run}
+          />
+          <StreamViewComposer defaultMode={defaultMode} {...composer} />
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -862,7 +891,7 @@ function isRunningLlmStep(step: AgentUiStep): step is AgentUiLlmStep {
  */
 function useAgentInterrupt(args: {
   onInterrupt: ((llmRequestOffset: number) => Promise<void>) | undefined;
-  runningLlmRequestId: number | null;
+  runningLlmRequestId: number | undefined;
   onNudgeDeliveries: () => void;
 }): StreamInterrupt | null {
   const [isInterrupting, setIsInterrupting] = useState(false);
