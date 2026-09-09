@@ -3,6 +3,11 @@ import type { RepoTreeActions } from "@iterate-com/ui/components/repo-file-tree"
 import { withDocumentExtension } from "../lib/jam.ts";
 import type { useWorkspaceFiles } from "../lib/use-workspace-files.ts";
 
+/** A tree row id back to the fully qualified workspace path. */
+function qualified(treePath: string): string {
+  return `/${treePath}`;
+}
+
 // The tree is a web component (shadow DOM): browser-only, so it stays out
 // of the SSR pass and the shell bundle.
 const RepoFileTree = lazy(async () => {
@@ -11,67 +16,71 @@ const RepoFileTree = lazy(async () => {
 });
 
 /**
- * The file column beside a document: the shared repo tree over the
- * workspace's config-repo documents (git-status badges, new/rename/delete/
- * discard). Paths cross this component
- * repo-relative; the route speaks fully qualified ones.
+ * The file column beside a document: the shared repo tree over the WHOLE
+ * workspace — every mounted repo under repos/, the workspace's own directory
+ * under workspaces/ — with git-status badges from the overlay and
+ * new/rename/delete/discard. Listings load per root: a mount opens (and
+ * lists) when its row is clicked, so a big repo costs nothing until then.
+ * The tree speaks paths without their leading slash (its row ids);
+ * everything else here is fully qualified.
  */
 export function WorkspaceFilesPane({
   files,
-  repoPath,
+  workspacePath,
   selectedPath,
   onSelect,
   onDocumentRevised,
   className,
 }: {
   files: ReturnType<typeof useWorkspaceFiles>;
-  /** The /repos/** mount the tree shows. */
-  repoPath: string;
-  /** The open document's fully qualified path, if any. */
+  workspacePath: string;
+  /** The open file's fully qualified path, if any. */
   selectedPath: string | undefined;
-  /** A fully qualified document path to open, or null to close the open one. */
+  /** A fully qualified path to open, or null to close the open one. */
   onSelect: (path: string | null) => void;
   /** The open document's content was replaced under the editor (a discard):
    * its collab session ended, the route must remount it. */
   onDocumentRevised: () => void;
   className?: string;
 }) {
-  const prefix = `${repoPath}/`;
-  const selected =
-    selectedPath !== undefined && selectedPath.startsWith(prefix)
-      ? selectedPath.slice(prefix.length)
-      : undefined;
+  const selected = selectedPath?.replace(/^\//, "");
   const select = useCallback(
-    (path: string | undefined) => onSelect(path === undefined ? null : `${prefix}${path}`),
-    [onSelect, prefix],
+    (path: string | undefined) => onSelect(path === undefined ? null : qualified(path)),
+    [onSelect],
   );
 
   const actions: RepoTreeActions = {
-    createFile: (path) => {
-      const named = withDocumentExtension(path);
-      void files.createFile(named).then((ok) => {
-        if (ok) select(named);
+    createFile: (treePath) => {
+      // A file typed at the tree's root has no mount to live in: it lands in
+      // the workspace's own directory instead (the only unmounted place the
+      // platform writes). `.md` is implied when no extension was typed.
+      const named = withDocumentExtension(treePath);
+      const path = named.includes("/") ? qualified(named) : `${workspacePath}/${named}`;
+      void files.createFile(path).then((ok) => {
+        if (ok) onSelect(path);
       });
-      return named;
+      return path.slice(1);
     },
     rename: (from, to, isFolder) => {
       const target = isFolder ? to : withDocumentExtension(to);
-      void files.rename(from, target, isFolder).then((ok) => {
+      void files.rename(qualified(from), qualified(target), isFolder).then((ok) => {
         if (ok && selected === from) select(target);
       });
     },
-    remove: (path, isFolder) => {
-      void files.remove(path, isFolder).then((ok) => {
-        const gone = selected === path || (isFolder && selected?.startsWith(`${path}/`) === true);
+    remove: (treePath, isFolder) => {
+      void files.remove(qualified(treePath), isFolder).then((ok) => {
+        const gone =
+          selected === treePath || (isFolder && selected?.startsWith(`${treePath}/`) === true);
         if (ok && gone) select(undefined);
       });
     },
-    discard: (path) => {
+    discard: (treePath) => {
       // Discarding an addition removes the file; discarding anything else
       // puts HEAD's content back under the editor.
+      const path = qualified(treePath);
       const wasAddition = files.changes.get(path) === "added";
       void files.discard(path).then((ok) => {
-        if (!ok || selected !== path) return;
+        if (!ok || selected !== treePath) return;
         if (wasAddition) select(undefined);
         else onDocumentRevised();
       });
@@ -87,17 +96,20 @@ export function WorkspaceFilesPane({
           header={
             <span
               className="block truncate font-mono text-xs text-muted-foreground"
-              title={repoPath}
+              title={workspacePath}
             >
-              {repoPath}
+              {workspacePath}
             </span>
           }
-          headPaths={files.headPaths ?? []}
-          changes={files.changes}
+          headPaths={(files.headPaths ?? []).map((path) => path.slice(1))}
+          directories={files.directories.map((path) => path.slice(1))}
+          changes={new Map([...files.changes].map(([path, status]) => [path.slice(1), status]))}
           selectedPath={selected}
           onSelect={select}
+          onOpenDirectory={(treePath) => files.ensureLoaded(qualified(treePath))}
           actions={actions}
           untitledExtension="md"
+          flattenEmptyDirectories
         />
       </Suspense>
       {files.error === null ? null : (

@@ -20,13 +20,7 @@ import {
   newBoardId,
   normalizeRepoPath,
 } from "./lib/board-shared.ts";
-import {
-  isDocumentPath,
-  jamAgentPath,
-  jamDocumentPath,
-  jamInvitation,
-  jamWorkspacePath,
-} from "./lib/jam.ts";
+import { jamAgentPath, jamDocumentPath, jamInvitation, jamWorkspacePath } from "./lib/jam.ts";
 import {
   parseTaskCard,
   setTaskCardAgent,
@@ -61,9 +55,11 @@ type PlatformProject = {
       getEvents(args: object): Promise<unknown[]>;
       subscribe(args: object): Promise<unknown>;
     };
+  };
+  workspaces: {
+    get(path: string): WorkspaceSurface & { create(input: object): Promise<unknown> };
     list(): Promise<{ createdAt: string; path: string }[]>;
   };
-  workspaces: { get(path: string): WorkspaceSurface & { create(input: object): Promise<unknown> } };
 };
 
 /** The agent surface the jam invite and the task assignment touch. */
@@ -177,41 +173,10 @@ class DocsProjectApi extends RpcTarget implements DocsProject {
   }
 
   async workspaces(): Promise<WorkspaceListEntry[]> {
-    const streams = await this.#withPlatform((project) => project.streams.list());
-    // Ancestor pruning: every stream announces to every ancestor path, so a
-    // nested workspace drags phantom ancestor streams into the catalog that
-    // were never created as workspaces.
-    const candidates = streams.filter((stream) => stream.path.startsWith("/workspaces/"));
-    const paths = candidates.map((stream) => stream.path);
-    const workspaces: WorkspaceListEntry[] = [];
-    for (const stream of candidates) {
-      if (paths.some((other) => other.startsWith(`${stream.path}/`))) continue;
-      workspaces.push({ path: stream.path, createdAt: stream.createdAt });
-    }
-    return workspaces.sort((left, right) => right.createdAt.localeCompare(left.createdAt));
-  }
-
-  async documents(workspacePath: string): Promise<string[]> {
-    const workspace = requireWorkspacePath(workspacePath);
-    return this.#withPlatform(async (project) => {
-      // ONE tree walk, filtered here to every extension requireDocumentPath
-      // accepts (no more and no less) — the platform glob enumerates the
-      // whole tree per pattern, so four extension globs cost four walks.
-      const everything = await project.workspaces.get(workspace).glob(`${workspace}/**/*`);
-      const documents: string[] = [];
-      for (const path of everything) {
-        const extension = path.slice(path.lastIndexOf(".") + 1).toLowerCase();
-        if (
-          extension === "md" ||
-          extension === "markdown" ||
-          extension === "html" ||
-          extension === "htm"
-        ) {
-          documents.push(path.slice(workspace.length + 1));
-        }
-      }
-      return documents.sort((left, right) => left.localeCompare(right)).slice(0, 200);
-    });
+    const workspaces = await this.#withPlatform((project) => project.workspaces.list());
+    return workspaces
+      .map((workspace) => ({ path: workspace.path, createdAt: workspace.createdAt }))
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
   }
 
   async createWorkspace(
@@ -237,21 +202,6 @@ class DocsProjectApi extends RpcTarget implements DocsProject {
       if (path !== null) await stub.writeFile(`${workspacePath}/${path}`, "# Notes\n\n");
     });
     return { workspacePath, path };
-  }
-
-  async documentsUnder(workspacePath: string, repoPath: string): Promise<string[]> {
-    const workspace = requireWorkspacePath(workspacePath);
-    const mount = normalizeRepoPath(repoPath);
-    if (mount === null) throw new Error("bad repo path");
-    return this.#withPlatform(async (project) => {
-      // One tree walk of the mount (the merged view: overlay over the repo
-      // at HEAD), filtered here to what the editor can open.
-      const everything = await project.workspaces.get(workspace).glob(`${mount}/**/*`);
-      return everything
-        .filter(isDocumentPath)
-        .sort((left, right) => left.localeCompare(right))
-        .slice(0, 500);
-    });
   }
 
   async createJam(): Promise<{ workspacePath: string; path: string }> {

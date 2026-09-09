@@ -44,6 +44,8 @@ function ChangeStatusMark({ status }: { status: TaskChangeStatus }) {
  */
 export function CommitControls({
   taskChanges,
+  scope,
+  label,
   commitMessage,
   onCommitMessageChange,
   commitPending,
@@ -57,6 +59,10 @@ export function CommitControls({
   onDiscardAll,
 }: {
   taskChanges: readonly TaskChangeSummary[];
+  /** The mount the commit lands on (`/repos/config`), when the host knows it. */
+  scope?: string | null;
+  /** A short mount name on the button, when several mounts are dirty at once. */
+  label?: string | null;
   commitMessage: string;
   onCommitMessageChange: (message: string) => void;
   commitPending: boolean;
@@ -91,7 +97,8 @@ export function CommitControls({
           render={<Button variant={dirty ? "default" : "outline"} size="sm" className="h-8" />}
         >
           <GitCommitVerticalIcon aria-hidden data-icon="inline-start" />
-          Commit{dirty ? ` (${taskChanges.length})` : ""}
+          Commit{label ? ` ${label}` : ""}
+          {dirty ? ` (${taskChanges.length})` : ""}
           {dirty && !commitPending && autoSaveDueAt !== undefined ? (
             <AutoSaveCountdown dueAt={autoSaveDueAt} />
           ) : null}
@@ -108,25 +115,7 @@ export function CommitControls({
               />
               <FieldLabel htmlFor={autoCommitId}>Auto-commit after 60s</FieldLabel>
             </Field>
-            <p className="text-xs text-muted-foreground">
-              {taskChanges.length} uncommitted {taskChanges.length === 1 ? "file" : "files"}. An
-              empty message auto-generates one.
-            </p>
-            <ul className="flex max-h-44 flex-col gap-1 overflow-y-auto rounded-md border bg-muted/30 p-2">
-              {taskChanges.map((change) => (
-                <li
-                  key={change.path}
-                  title={change.path}
-                  className="flex items-center gap-2 text-xs"
-                >
-                  <ChangeStatusMark status={change.status} />
-                  <span className="min-w-0 flex-1 truncate">{change.title}</span>
-                  <span className="flex-none text-muted-foreground">
-                    {STATUS_WORD[change.status]}
-                  </span>
-                </li>
-              ))}
-            </ul>
+            <ChangeList taskChanges={taskChanges} scope={scope} />
             <Input
               value={commitMessage}
               onChange={(event) => onCommitMessageChange(event.target.value)}
@@ -170,6 +159,38 @@ export function CommitControls({
           </div>
         </PopoverContent>
       </Popover>
+    </>
+  );
+}
+
+/** The pending change set under review: a count, where it lands, one row per file. */
+function ChangeList({
+  taskChanges,
+  scope,
+}: {
+  taskChanges: readonly TaskChangeSummary[];
+  scope: string | null | undefined;
+}) {
+  return (
+    <>
+      <p className="text-xs text-muted-foreground">
+        {taskChanges.length} uncommitted {taskChanges.length === 1 ? "file" : "files"}
+        {scope ? (
+          <>
+            , committed to <span className="font-mono">{scope}</span> main
+          </>
+        ) : null}
+        . An empty message auto-generates one.
+      </p>
+      <ul className="flex max-h-44 flex-col gap-1 overflow-y-auto rounded-md border bg-muted/30 p-2">
+        {taskChanges.map((change) => (
+          <li key={change.path} title={change.path} className="flex items-center gap-2 text-xs">
+            <ChangeStatusMark status={change.status} />
+            <span className="min-w-0 flex-1 truncate">{change.title}</span>
+            <span className="flex-none text-muted-foreground">{STATUS_WORD[change.status]}</span>
+          </li>
+        ))}
+      </ul>
     </>
   );
 }

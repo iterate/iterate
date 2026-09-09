@@ -4,11 +4,15 @@ Docs is a direct workspace-document viewer, review surface, and Markdown/HTML
 source editor. It is a normal Cloudflare TanStack Start app styled with
 Tailwind and the shared Iterate UI package.
 
-A URL addresses one existing workspace and one existing file; beside the
-editor sits the same file tree as the apps/os repo IDE, over the workspace's
-config-repo documents: git-status badges for the workspace's uncommitted
-changes, new/rename/delete/discard, and a Commit button that publishes the
-mount's dirty set to the repo's main. A relative
+A URL addresses one existing workspace and, optionally, one of its files.
+The file tree is the same pierre tree as the apps/os repo IDE, over the WHOLE
+workspace: every project repo mounted at its own `repos/<name>` path plus the
+workspace's own directory, with git-status badges for the workspace's
+uncommitted changes and new/rename/delete/discard. Documents (`.md`,
+`.markdown`, `.html`, `.htm`) open in the collaborative editor; any other
+text file opens read-only. Each dirty repo gets its own Commit button, which
+publishes that mount's dirty set to the repo's main — a commit never spans
+mounts, and the workspace's own files are never committed. A relative
 `path` resolves against the workspace's own stream path; an absolute `path`
 must be a fully qualified stream path (e.g. `/repos/config/docs/plan.md`):
 
@@ -28,10 +32,9 @@ const url = await itx.worker.docs.link({
 await itx.chat.sendMessage(`[Review the plan](${url})`);
 ```
 
-Supported file extensions are `.md`, `.markdown`, `.html`, and `.htm`. Docs
-reads and edits the workspace overlay directly through the OS workspace
-collaboration capability. It does not create a checkout or invoke a git
-commit.
+Docs reads and edits the workspace overlay directly through the OS workspace
+capability, forwarded verbatim by its vessel (`itx.workspaces.get(path)`:
+fs, `git`, `collab`). It holds no state of its own.
 
 ## Review model
 

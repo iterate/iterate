@@ -60,9 +60,9 @@ export function jamInvitation(workspacePath: string, path: string | null): strin
     `  const ws = itx.workspaces.get(${JSON.stringify(workspacePath)});`,
     `  await ws.readFile(${JSON.stringify(example)});`,
     `  await ws.edit({ path, oldString, newString }); // or ws.writeFile(path, content)`,
-    `- Files live under ${JAM_REPO_PATH}/ inside the workspace. readFile returns the live text of a file someone has open, keystrokes included; your writes appear in their editor immediately.`,
+    `- Every project repo is mounted at its own /repos/<name> path inside the workspace (the config repo at ${JAM_REPO_PATH}); the workspace's own files live under ${workspacePath}/. readFile returns the live text of a file someone has open, keystrokes included; your writes appear in their editor immediately.`,
     path === null
-      ? '- Nobody has a file open yet; list the workspace with ws.glob("/repos/config/**/*.md") and wait for instructions.'
+      ? "- Nobody has a file open yet; list the workspace with ws.listAllFiles() and wait for instructions."
       : `- The file open right now is ${path}. Say hello: append one short line to it saying you have joined, then wait for instructions in that file or here.`,
     DOCUMENT_REVIEW_INSTRUCTIONS,
     "- Nothing is committed automatically and you must not commit; the people in the jam decide when it lands on main.",

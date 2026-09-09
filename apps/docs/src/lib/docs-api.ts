@@ -51,13 +51,8 @@ export interface DocsProject {
   workspace(workspacePath: string): DocsWorkspace;
   /** The project's repo catalog — paths a board can be opened against. */
   repos(): Promise<string[]>;
-  /** Every workspace stream in the project, newest first (the pickers).
-   * Ancestor stream paths that were never created as workspaces are pruned. */
+  /** Every workspace of the project (the platform catalog), newest first. */
   workspaces(): Promise<WorkspaceListEntry[]>;
-  /** The documents (.md/.html) in one workspace's OWN directory,
-   * workspace-relative — the home picker's file list. Mount files open by
-   * absolute path instead; this deliberately does not walk the mounts. */
-  documents(workspacePath: string): Promise<string[]>;
   /**
    * CREATE a workspace — the one deliberate exception to the plain-`get`
    * posture (createJam is the same door with a different seed). Without a
@@ -70,9 +65,6 @@ export interface DocsProject {
     workspacePath: string;
     path: string | null;
   }>;
-  /** The documents (.md/.html) under one /repos/** mount of a workspace's
-   * merged view, as fully qualified paths — the file tree's listing. */
-  documentsUnder(workspacePath: string, repoPath: string): Promise<string[]>;
   /**
    * Start a jam: mint and CREATE a scratch workspace seeded with one
    * document inside the config mount (committable later), and return the
