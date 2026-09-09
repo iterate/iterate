@@ -1382,6 +1382,8 @@ export interface WorkspaceCollection {
   __describe(): Promise<Description>;
   /** A workspace handle at a path. Addressing never creates it. */
   get(path: string): Workspace;
+  /** Known workspaces, read from the project processor's reduced state. */
+  list(): Promise<StreamListItem[]>;
 }
 
 /**
@@ -2291,6 +2293,7 @@ export type ProjectProcessorState = {
   devices: { createdAt: string; path: string }[];
   repos: { createdAt: string; path: string }[];
   secrets: { createdAt: string; path: string }[];
+  workspaces: { createdAt: string; path: string }[];
   streams: { createdAt: string; path: string }[];
   clients: Record<
     string,

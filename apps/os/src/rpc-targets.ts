@@ -2484,9 +2484,10 @@ class WorkspaceCollectionRpcTarget extends IterateRpcTarget<"WorkspaceCollection
   async __describe(): Promise<Description> {
     return describeNode({
       instructions:
-        'Event-sourced, mount-routed workspaces. get("/workspaces/<name>") returns a handle without creating anything; call handle.create({ mounts? }) once before use. Every project repo is mounted at its own /repos/** path automatically (commit-to-main); supplied mounts are overlay DEVIATIONS committed atomically as an initial configured patch. An agent\'s own workspace is its agent path under the prefix (what itx.workspace resolves to).',
+        'Event-sourced, mount-routed workspaces. get("/workspaces/<name>") returns a handle without creating anything; call handle.create({ mounts? }) once before use. list() every created workspace (the project catalog of copied workspace/created facts). Every project repo is mounted at its own /repos/** path automatically (commit-to-main); supplied mounts are overlay DEVIATIONS committed atomically as an initial configured patch. An agent\'s own workspace is its agent path under the prefix (what itx.workspace resolves to).',
       children: {
         get: "A possibly nonexistent workspace handle; call get(path).create({ mounts? }) before use.",
+        list: "Known workspaces: every workspace/created copied to the project catalog.",
       },
       parent: "a project itx (itx.workspaces)",
     });
@@ -2504,6 +2505,11 @@ class WorkspaceCollectionRpcTarget extends IterateRpcTarget<"WorkspaceCollection
       path: normalizeWorkspacePath(path),
       projectId: this.props.projectId,
     });
+  }
+
+  /** Known workspaces, read from the project processor's reduced state. */
+  list(): Promise<StreamListItem[]> {
+    return projectProcessorState(this.props.projectId).then((state) => state.workspaces);
   }
 }
 
@@ -6613,7 +6619,7 @@ const PROJECT_BUILTIN_BLIPS: Record<string, string> = {
   worker: "The default repo-backed project worker.",
   workers: "Dynamic worker refs: get(ref).",
   workspaces:
-    "Event-sourced, mount-routed workspaces by path: get(\"/workspaces/<name>\") returns a possibly nonexistent handle; handle.create({}) commits the atomic birth batch. Every project repo is auto-mounted at its own /repos/** path; private files live under the workspace's own path. git.commit({ scope? }) commits per mount. An agent's own workspace is itx.workspace.",
+    "Event-sourced, mount-routed workspaces by path: get(\"/workspaces/<name>\") returns a possibly nonexistent handle; handle.create({}) commits the atomic birth batch; list() every created workspace. Every project repo is auto-mounted at its own /repos/** path; private files live under the workspace's own path. git.commit({ scope? }) commits per mount. An agent's own workspace is itx.workspace.",
 };
 
 type ExistingProjectRpcTargetProps = {

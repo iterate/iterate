@@ -143,3 +143,7 @@ The honest fix is the sandbox pattern: teach the project reducer
 `workspace/created` (via `recordDomainObject`, like repos/secrets/devices)
 and add `itx.workspaces.list()`; then the vessel filter and the prefix
 heuristic both delete.
+
+Landed 2026-09-09: the birth batch's `workspace-catalog` subscription copies
+`workspace/created` to `/`, the project reducer records it via
+`recordDomainObject`, and `itx.workspaces.list()` reads `state.workspaces`.

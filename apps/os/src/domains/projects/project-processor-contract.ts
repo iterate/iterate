@@ -26,6 +26,7 @@ import { SecretProcessorContract } from "../secrets/secret-processor-contract.ts
 import { CapabilityHostProcessorContract } from "../capability-host/capability-host-processor-contract.ts";
 import { SchedulerProcessorContract } from "../scheduler/scheduler-processor-contract.ts";
 import { DeviceProcessorContract } from "../devices/device-processor-contract.ts";
+import { WorkspaceProcessorContract } from "../workspaces/workspace-processor-contract.ts";
 import { NotificationLifecycleContract } from "../notifications/notification-lifecycle-contract.ts";
 import { internalStreamId } from "../streams/stream-delivery-utils.ts";
 import { parseConfigRepoTemplateReference } from "../../lib/config-repo-template-reference.ts";
@@ -134,6 +135,14 @@ export const ProjectProcessorContract = defineProcessorContract({
         description:
           "Catalog of secret streams, recorded from copied secret/created facts; what " +
           "the secrets collection's list() reads.",
+      }),
+    workspaces: z
+      .array(StreamListItem)
+      .default([])
+      .meta({
+        description:
+          "Catalog of workspace streams, recorded from copied workspace/created facts; what " +
+          "the workspaces collection's list() reads.",
       }),
     streams: z
       .array(StreamListItem)
@@ -515,6 +524,7 @@ export const ProjectProcessorContract = defineProcessorContract({
     "events.iterate.com/repos/created",
     "events.iterate.com/repos/create-failed",
     "events.iterate.com/secret/created",
+    "events.iterate.com/workspace/created",
     "events.iterate.com/stream/created",
     "events.iterate.com/stream/child-stream-created",
     "events.iterate.com/notification/created",
@@ -529,6 +539,7 @@ export const ProjectProcessorContract = defineProcessorContract({
     CapabilityHostProcessorContract,
     SchedulerProcessorContract,
     DeviceProcessorContract,
+    WorkspaceProcessorContract,
     NotificationLifecycleContract,
   ],
   emits: [

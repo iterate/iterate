@@ -23,11 +23,17 @@ COPY of the project's one path namespace, for agents and tooling.
   clears an overlay. `"/"` is never a mount.
 - **Birth is explicit.** `itx.workspaces.get(path)` only addresses a possibly
   nonexistent handle. `await handle.create({ mounts? })` appends one atomic
-  batch: the existence marker, an optional initial overlay patch, and the
-  Workspace processor subscription. Filesystem and configuration methods
-  reject loudly before creation; no read, write, or first touch can birth a
-  workspace. Agent creation explicitly creates the agent's own workspace
-  before the agent handle is returned.
+  batch: the existence marker, an optional initial overlay patch, the
+  Workspace processor subscription, and a `workspace-catalog` subscription
+  that copies `workspace/created` to the project root `/`. Filesystem and
+  configuration methods reject loudly before creation; no read, write, or
+  first touch can birth a workspace. Agent creation explicitly creates the
+  agent's own workspace before the agent handle is returned.
+- **`itx.workspaces.list()` reads the project catalog.** The project reducer
+  records each copied `workspace/created` under its source path (the same
+  `repo-catalog` shape repos use), so the list holds exactly the workspaces
+  that were born — a nested agent workspace never drags never-created
+  ancestor streams into it.
 - **Private files live under the workspace's own path.** The workspace's
   stream path doubles as its scratch directory: writable, never committable,
   invisible to everyone else. RELATIVE paths resolve there. Writes anywhere
