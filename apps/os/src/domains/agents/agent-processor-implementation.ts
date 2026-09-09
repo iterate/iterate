@@ -53,6 +53,16 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
   readonly #codemode = new AgentCodemode(this.#host);
 
   protected override processEvent(args: ProcessEventArgs<AgentProcessorContract>): undefined {
+    const transition = args.state.runtimeChange;
+    if (transition && transition.sinceOffset !== args.previousState.runtimeChange?.sinceOffset) {
+      args.blockProcessorWhile(() =>
+        args.append({
+          type: "events.iterate.com/agent/runtime-changed",
+          payload: transition,
+          idempotencyKey: this.#host.idempotencyKey(`runtime@${transition.sinceOffset}`),
+        }),
+      );
+    }
     if (this.#mentionMaterializer.processEvent(args)) return;
     this.#turnLoop.processEvent(args);
     this.#llm.processEvent(args);

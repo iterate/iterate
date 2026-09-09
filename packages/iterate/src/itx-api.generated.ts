@@ -1446,6 +1446,8 @@ export interface Stream {
    * in the same Durable Object turn. Use this whenever offsets are persisted.
    */
   getEventPage(args?: StreamEventReadInput): Promise<StreamEventPage>;
+  /** Reconstruct a request on the server; rejects above 10,000 events or 16 MiB. */
+  inspectLlmRequest(llmRequestOffset: number): Promise<LlmRequestReplay | null>;
   /**
    * A stateful pager over a read window: repeated `next()` calls walk forward
    * through pages, `[]` means "caught up for now". Dispose it when finished
@@ -1489,6 +1491,8 @@ export interface Stream {
    * would pin the stream), and `runtimeState()` is the transient read.
    */
   liveState: LiveStateRpc<StreamRuntimeDebugState>;
+  /** Server-rendered current presentation; historical items are immutable stream events. */
+  feedLiveState: LiveStateRpc<FeedLiveState>;
   /** Abort the current Durable Object incarnation; the next request boots it again. */
   kill(): Promise<void>;
   /** Arm the stream's shared facet-alarm slot, min-merged to the earliest desired ms. */
@@ -4027,6 +4031,28 @@ export type StreamEventPage = {
   events: StreamEvent[];
 };
 
+/** Server-reconstructed model request, response, and lifecycle information. */
+export type LlmRequestReplay = {
+  messages: LlmRequestReplayMessage[];
+  /** From the llm-request-requested event at the replayed offset. */
+  model: string;
+  requestedAt: string;
+  /** True when the request was built by a DIFFERENT fold version than the one
+   * replaying it (the requested event's contractVersion stamp differs, or —
+   * for pre-stamp requests — is absent): the messages shown are a
+   * reconstruction under the current fold, not byte-exact. */
+  reconstructed: boolean;
+  /** Null when nothing has streamed or settled for this request yet. */
+  response: LlmRequestReplayResponse | null;
+  stats: LlmRequestReplayStats;
+  /** Null while the request is still in flight. */
+  outcome: {
+    status: "success" | "failure" | "cancelled";
+    durationMs: number | null;
+    errorMessage: string | null;
+  } | null;
+};
+
 /** Serializable snapshot plus optional live runtime debug state for a processor. */
 export type ProcessorRuntimeState<State = unknown> = {
   snapshot: { offset: number; state: State };
@@ -4055,6 +4081,129 @@ export type StreamRuntimeDebugState = {
     /** SQLite database size in bytes (event log + delivery rows + chunks). */
     storageSizeBytes: number;
   };
+};
+
+/** Current server-rendered activity, queued messages, presence, and agent runtime. */
+export type FeedLiveState = {
+  agent: {
+    live: {
+      kind: "activity";
+      id: string;
+      status: "done" | "running";
+      steps: (
+        | {
+            kind: "llm";
+            id: string;
+            llmRequestOffset: number;
+            status: "done" | "running";
+            model?: string | undefined;
+            thinkingText: string;
+            responseText: string;
+            responseWindows: string[];
+            assistantEventOffset?: number | undefined;
+            interpreted?: boolean | undefined;
+            inputTokens?: number | undefined;
+            outputTokens?: number | undefined;
+            durationMs?: number | undefined;
+            outcome?: "cancelled" | "completed" | "failed" | undefined;
+            cancelReason?: "expired" | "interrupted-by-user-input" | undefined;
+            errorMessage?: string | undefined;
+            startedAtMs: number;
+          }
+        | {
+            kind: "code";
+            id: string;
+            executionId: string;
+            status: "done" | "running";
+            code: string;
+            result?: unknown;
+            errorMessage?: string | undefined;
+            durationMs?: number | undefined;
+            success?: boolean | undefined;
+            outcomeSource?: "durable" | "inferred" | undefined;
+            startedAtMs: number;
+            expiresAtMs: number;
+            activitySummary?: string | undefined;
+          }
+      )[];
+      startedAtMs: number;
+      endedAtMs?: number | undefined;
+    } | null;
+    queuedUserMessages: {
+      kind: "assistant" | "user";
+      id: string;
+      text: string;
+      timestampMs: number;
+      files?:
+        | { contentType: string; filename: string; path: string; size: number; url: string }[]
+        | undefined;
+      mentions?:
+        | { type: "repo-file"; repoPath: "/repos/config"; path: string; id: string }[]
+        | undefined;
+      mentionResolutions?:
+        | Record<
+            string,
+            {
+              status: "binary" | "missing" | "read-failed" | "resolved";
+              truncated?: boolean | undefined;
+            }
+          >
+        | undefined;
+      via?:
+        | {
+            service: "agent" | "email" | "github" | "slack" | "telegram";
+            sender?: string | undefined;
+          }
+        | undefined;
+    }[];
+    presence: {
+      connectionKey: string;
+      connectionKind: "hosted" | "session";
+      connected: boolean;
+      description?: string | undefined;
+      user?:
+        | {
+            id?: string | undefined;
+            email: string;
+            name?: string | undefined;
+            picture?: string | undefined;
+          }
+        | undefined;
+      processor?:
+        | {
+            slug: string;
+            version: string;
+            description: string;
+            consumes: string[];
+            emits: string[];
+            ownedEvents: { type: string; description?: string | undefined }[];
+          }
+        | undefined;
+    }[];
+    tokenUsage: {
+      totalInputTokens: number;
+      totalOutputTokens: number;
+      totalCachedInputTokens: number;
+      totalReasoningOutputTokens: number;
+      lastReport: {
+        model: string;
+        maxContextTokens: number;
+        inputTokens: number;
+        outputTokens: number;
+      } | null;
+    };
+  };
+  runtimeChange?:
+    | {
+        runtime: {
+          triggers: { pending: number; runnable: number };
+          llmRequests: { scheduled: number; requested: number; started: number };
+          runningScripts: number;
+        };
+        sinceOffset: number;
+        since: string;
+      }
+    | undefined;
 };
 
 /**
@@ -5076,6 +5225,60 @@ export type EditWorkspaceFileInput = {
 export type EditWorkspaceFileResult = {
   occurrenceCount: number;
   path: string;
+};
+
+/** One model input message reconstructed from durable request history. */
+export type LlmRequestReplayMessage = {
+  /** Stable identity: a message IS its position in the replayed request (the
+   * journal is immutable, so the same offset always folds to the same list). */
+  id: string;
+  role: "system" | "developer" | "user" | "assistant";
+  /** Flattened exactly as sent: file attachments become their hint lines. */
+  content: string;
+};
+
+/** Committed response text or explicitly supplied transient chunks for one request. */
+export type LlmRequestReplayResponse = {
+  /** The response text: the committed output when the turn settled with one,
+   * else whatever streamed in before the request failed / was cancelled /
+   * is still in flight. */
+  text: string;
+  /** Streamed reasoning ("thinking") text, where the model reported any. */
+  thinkingText: string;
+  /** "output" = the committed assistant context item; "chunks" = re-assembled
+   * from streamed deltas (partial or pre-settle). */
+  source: "output" | "chunks";
+};
+
+/** Token usage, timing, and gateway metadata recorded for one model request. */
+export type LlmRequestReplayStats = {
+  /** Normalized counts from token-usage-reported; null until the turn
+   * settled successfully (or when the vendor reported no parseable usage). */
+  tokens: {
+    inputTokens: number;
+    outputTokens: number;
+    cachedInputTokens: number | null;
+    reasoningOutputTokens: number | null;
+    maxContextTokens: number;
+  } | null;
+  /** The llm-request-requested event's own append time → the first streamed
+   * chunk landing. There is no separate dial event in this model, so the
+   * window includes any pre-dial delay (debounce leftovers, transport
+   * connect) before streaming began. */
+  timeToFirstChunkMs: number | null;
+  /** First chunk → settled — the generation window; falls back to the
+   * last chunk for requests that never settled. */
+  generationMs: number | null;
+  chunkCount: number;
+  /** Output tokens over the generation window. */
+  outputTokensPerSecond: number | null;
+  /** AI Gateway response-cache verdict (`cf-aig-cache-status`: HIT/MISS…)
+   * where the transport recorded one — a HIT means the whole response was
+   * served from the gateway's cache without touching the model. */
+  gatewayCacheStatus: string | null;
+  /** The settled event's verbatim result.rawResponse — whatever the
+   * transport recorded (usage dialects, gateway cache status, …). */
+  rawResponse: unknown;
 };
 
 /** Durable state reduced from the events in one stream. */

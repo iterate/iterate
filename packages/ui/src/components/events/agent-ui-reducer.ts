@@ -543,6 +543,39 @@ const AgentUiMessageItemSchema = z.strictObject({
   via: AgentUiMessageViaSchema.optional(),
 }) satisfies z.ZodType<AgentUiMessageItem>;
 
+/** The server-published presentation contract shared by all feed renderers. */
+export const AgentUiItemSchema = z.discriminatedUnion("kind", [
+  AgentUiMessageItemSchema,
+  AgentUiActivitySchema,
+  z.strictObject({
+    kind: z.literal("stream-woken"),
+    id: z.string(),
+    text: z.string(),
+    timestampMs: z.number().finite(),
+    count: z.number().int().positive().optional(),
+  }),
+  z.strictObject({
+    kind: z.literal("child-stream-created"),
+    id: z.string(),
+    childPath: z.string(),
+    timestampMs: z.number().finite(),
+  }),
+  z.strictObject({
+    kind: z.enum(["stream-paused", "stream-resumed"]),
+    id: z.string(),
+    text: z.string(),
+    reason: z.string().optional(),
+    timestampMs: z.number().finite(),
+  }),
+  z.strictObject({
+    kind: z.literal("processor-revived"),
+    id: z.string(),
+    processorSlug: z.string().optional(),
+    revivals: z.number().int().nonnegative().optional(),
+    timestampMs: z.number().finite(),
+  }),
+]) satisfies z.ZodType<AgentUiItem>;
+
 const AgentMentionResolutionEvent = z.object({
   sourceOffset: z.number().int().nonnegative(),
   outcomes: z.array(

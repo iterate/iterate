@@ -22,10 +22,7 @@
 // full).
 
 import type { SqlValue } from "~/domains/streams/client-libraries/browser/stream-browser-db.ts";
-import {
-  AGENT_KIND_PREFIX,
-  RAW_KIND_PREFIX,
-} from "~/domains/streams/client-libraries/processors/browser-feed/projector.ts";
+import { AGENT_KIND_PREFIX, RAW_KIND_PREFIX } from "~/domains/streams/feed-item-types.ts";
 import {
   modeCapabilities,
   streamViewMode,

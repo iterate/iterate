@@ -29,7 +29,6 @@ import {
   type StreamBrowserDatabase,
   type StreamEventRow,
 } from "~/domains/streams/client-libraries/browser/stream-browser-db.ts";
-import { BROWSER_STREAM_PROCESSORS } from "~/domains/streams/client-libraries/browser/browser-stream-processors.ts";
 import { useStreamQuery } from "~/domains/streams/client-libraries/browser/hooks/use-stream-query.ts";
 
 export function StreamPage({ streamView }: { streamView: StreamViewSearch }) {
@@ -179,7 +178,6 @@ function useStreamProcessor(args: { streamPath: string; streamProjectId?: string
         streamPath,
         ...(streamProjectId === undefined ? {} : { projectId: streamProjectId }),
         createStreamClient: createCapnwebStreamClient,
-        processors: BROWSER_STREAM_PROCESSORS,
       }),
     [streamPath, streamProjectId],
   );

@@ -84,6 +84,8 @@ import {
   deploymentStatusFromState,
   deploymentStatusesFromProbes,
 } from "./project-deployment-status.ts";
+import type { LlmRequestReplay } from "./lib/llm-request-replay.ts";
+import { inspectLlmRequest } from "./lib/inspect-llm-request.ts";
 import { timedStep } from "./lib/step-timing.ts";
 import { buildCollectSecretUrl } from "./lib/collect-secret-link.ts";
 import { buildProjectStreamViewerUrl } from "./lib/stream-viewer-url.ts";
@@ -381,6 +383,7 @@ import type {
   DeviceEnrollInput,
 } from "./domains/devices/types.ts";
 import type { StreamRuntimeDebugState } from "./domains/streams/stream-runtime-state.ts";
+import type { FeedLiveState } from "./domains/streams/feed-contract.ts";
 import type {
   StreamSubscriptionDescription,
   StreamSubscriptionListEntry,
@@ -804,6 +807,11 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
     return detachPlainRpcResult(result);
   }
 
+  /** Reconstruct a request on the server; rejects above 10,000 events or 16 MiB. */
+  async inspectLlmRequest(llmRequestOffset: number): Promise<LlmRequestReplay | null> {
+    return inspectLlmRequest((input) => this.getEventPage(input), llmRequestOffset);
+  }
+
   /**
    * A stateful pager over a read window: repeated `next()` calls walk forward
    * through pages, `[]` means "caught up for now". Dispose it when finished
@@ -984,6 +992,15 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
         label: `stream ${this.props.path}`,
       }),
     );
+  }
+
+  /** Server-rendered current presentation; historical items are immutable stream events. */
+  get feedLiveState(): LiveStateRpc<FeedLiveState> {
+    return facetProcessorLiveStateRelay<FeedLiveState>({
+      name: "feed",
+      path: this.props.path,
+      projectId: this.props.projectId,
+    });
   }
 
   /** Abort the current Durable Object incarnation; the next request boots it again. */

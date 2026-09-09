@@ -24,7 +24,6 @@ import {
   type StreamBrowserStore,
 } from "~/domains/streams/client-libraries/browser/stream-browser-store.ts";
 import type { StreamBrowserDatabase } from "~/domains/streams/client-libraries/browser/stream-browser-db.ts";
-import { BROWSER_STREAM_PROCESSORS } from "~/domains/streams/client-libraries/browser/browser-stream-processors.ts";
 import { useStreamQuery } from "~/domains/streams/client-libraries/browser/hooks/use-stream-query.ts";
 
 type FeedItemRow = {
@@ -49,7 +48,6 @@ export function EventFeedView({ streamView }: { streamView: StreamViewSearch }) 
         streamPath: streamView.path,
         projectId: streamView.projectId,
         createStreamClient: createCapnwebStreamClient,
-        processors: BROWSER_STREAM_PROCESSORS,
       }),
     [streamView.projectId, streamView.path],
   );
@@ -395,18 +393,17 @@ function FeedItemWindow({
     streamDatabase,
     `SELECT local_index, kind, first_offset, last_offset, event_count, json(data) AS data
      FROM feed_items
-     WHERE local_index >= ? AND local_index < ?
-     ORDER BY local_index ASC`,
-    [firstIndex, lastIndex + 1],
+     ORDER BY local_index ASC, ordinal ASC LIMIT ? OFFSET ?`,
+    [lastIndex - firstIndex + 1, firstIndex],
   );
   const rowsByLocalIndex = useMemo(() => {
     const rows = new Map<number, FeedItemRow>();
-    for (const row of rowQueryResult.data) {
+    for (const [index, row] of rowQueryResult.data.entries()) {
       const parsed = parseFeedItem(row);
-      if (parsed !== undefined) rows.set(parsed.local_index, parsed);
+      if (parsed !== undefined) rows.set(firstIndex + index, parsed);
     }
     return rows;
-  }, [rowQueryResult.data]);
+  }, [firstIndex, rowQueryResult.data]);
 
   return virtualItems.map((virtualItem) => {
     const row = rowsByLocalIndex.get(virtualItem.index);

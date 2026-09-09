@@ -80,10 +80,8 @@ export async function catchUpToLiveReplayBoundary(args: {
 /**
  * Pull every event still available when a browser connection began.
  *
- * The caller supplies an ephemeral-including read, so currently buffered
- * streaming events reach the browser's in-memory projection alongside durable
- * history. Missing offsets are expected: an older ephemeral event may already
- * have been evicted or belong to a previous Durable Object incarnation.
+ * The caller supplies its event selection (normally durable-only). Missing
+ * offsets are expected: ephemeral and filtered events leave gaps in the log.
  */
 export async function catchUpAvailableHistory<T extends { offset: number }>(args: {
   afterOffset: number;

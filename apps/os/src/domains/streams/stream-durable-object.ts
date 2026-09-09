@@ -105,7 +105,10 @@ import {
   type CoreProcessorState,
   type SubscriptionConfiguredPayload,
 } from "./core-processor-contract.ts";
-import { unconfiguredSubscriptionError } from "./utils.ts";
+import {
+  buildFacetProcessorSubscriptionConfiguredEvent,
+  unconfiguredSubscriptionError,
+} from "./utils.ts";
 
 const DEFAULT_GET_EVENTS_LIMIT = 500;
 const MAX_GET_EVENTS_LIMIT = 500;
@@ -910,7 +913,7 @@ export class StreamDurableObject extends DurableObject<Env> {
 
   #liveState!: LiveState<StreamRuntimeDebugState>;
   #liveStateRefreshScheduled = false;
-  readonly name = parseStreamDurableObjectName(this.ctx.id.name);
+  readonly name = readStreamDurableObjectName(this.ctx);
   readonly #log = new StreamEventLog(this.ctx.storage.sql, this.name.path);
   /** Ephemeral event bodies scoped to this one Durable Object incarnation. */
   readonly #ephemeralEvents = new EphemeralEventBuffer();
@@ -1222,6 +1225,20 @@ export class StreamDurableObject extends DurableObject<Env> {
         if ("APP_CONFIG_POSTHOG" in this.env) this.append(posthogSubscriptionEvent());
       }
     }
+    // The deployment's presentation facet is a platform subscription. Installing
+    // it on boot also upgrades existing streams: its durable cursor starts at
+    // zero, so ordinary hosted delivery backfills the complete source history.
+    if (
+      "FeedFacet" in this.ctx.exports &&
+      !this.#coreProcessorState.subscriptions.outbound.byName.feed
+    ) {
+      this.#append({ authority: "core-event" }, [
+        buildFacetProcessorSubscriptionConfiguredEvent({
+          name: "feed",
+          idempotencyKey: "feed/subscription:v1",
+        }),
+      ]);
+    }
     if (this.#invalidCheckpointError !== undefined) {
       console.error("stream core-state checkpoint was invalid; rebuilt from the event log", {
         path: this.name.path,
@@ -1369,7 +1386,7 @@ export class StreamDurableObject extends DurableObject<Env> {
             receiver.source.worker,
             this.#facetRecoveryNonce,
           )
-        : this.#builtinFacetClass();
+        : this.#builtinFacetClass(name);
     // Rebuild the facet whenever its resolved class changed: ctx.facets.get
     // reuses an existing facet and IGNORES a new startup class, so a source
     // commit, a same-source className re-point, and a builtin<->userspace flip
@@ -1385,10 +1402,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       class: resolved.class,
     })) as unknown as ProcessorFacetStub;
     if (!this.#configuredProcessorFacets.has(name)) {
-      const parentName = this.ctx.id.name;
-      if (parentName === undefined) {
-        throw new Error("Stream Durable Object must be addressed by name.");
-      }
+      const parentName = DurableObjectNameCodec.stringify(this.name, { allowNullProjectId: true });
       await facet.configure({
         parentName,
         projectId: this.name.projectId,
@@ -1426,18 +1440,17 @@ export class StreamDurableObject extends DurableObject<Env> {
    * (the sibling `ProcessorFacet` export from `iterate/processors/cloudflare`).
    * Its version is a constant: the built-in class only changes on an OS deploy,
    * which evicts every DO anyway. */
-  #builtinFacetClass(): { class: DurableObjectClass; version: string } {
+  #builtinFacetClass(name: string): { class: DurableObjectClass; version: string } {
     // Loose lookup on purpose: ctx.exports carries every exported entrypoint by
     // name.
-    const facetClass = (this.ctx.exports as Record<string, unknown>).ProcessorFacet as
+    const entrypoint = name === "feed" ? "FeedFacet" : "ProcessorFacet";
+    const facetClass = (this.ctx.exports as Record<string, unknown>)[entrypoint] as
       | DurableObjectClass
       | undefined;
     if (facetClass === undefined) {
-      throw new Error(
-        'facet-processor subscriptions require the OS worker to export the "ProcessorFacet" entrypoint',
-      );
+      throw new Error(`facet-processor subscription ${name} requires the ${entrypoint} entrypoint`);
     }
-    return { class: facetClass, version: "builtin" };
+    return { class: facetClass, version: name === "feed" ? "builtin:FeedFacet" : "builtin" };
   }
 
   /** Lazily built loader for userspace facet sources. Shared scope: the
@@ -3335,9 +3348,15 @@ const StreamAppendInput = StreamEventInputSchema.safeExtend({
   offset: z.number().int().nonnegative().optional(),
 }).strict();
 
-function parseStreamDurableObjectName(name: string | undefined) {
-  if (!name) {
-    throw new Error("Stream Durable Object must be addressed by name.");
-  }
-  return DurableObjectNameCodec.parse(name, { allowNullProjectId: true });
+function readStreamDurableObjectName(ctx: DurableObjectState) {
+  if (ctx.id.name) return DurableObjectNameCodec.parse(ctx.id.name, { allowNullProjectId: true });
+  // Alarm/hibernation wakes can arrive without the original getByName hint.
+  // The committed birth event is the durable identity of this stream.
+  const first = new StreamEventLog(ctx.storage.sql, "/").getByOffset(1);
+  if (!first) throw new Error("A new Stream Durable Object must be addressed by name.");
+  const created = parseCommittedCoreEvent(first, "events.iterate.com/stream/created");
+  return DurableObjectNameCodec.parse(
+    DurableObjectNameCodec.stringify(created.payload, { allowNullProjectId: true }),
+    { allowNullProjectId: true },
+  );
 }

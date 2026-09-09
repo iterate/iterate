@@ -7,26 +7,18 @@ import { Sheet, SheetContent, SheetTitle } from "@iterate-com/ui/components/shee
 import { toast } from "@iterate-com/ui/components/sonner";
 import {
   isAgentUiActivityWorking,
-  reduceAgentUiRuntime,
   type AgentUiLlmStep,
   type AgentUiRuntimeTransition,
-  type AgentUiState,
   type AgentUiStep,
 } from "@iterate-com/ui/components/events/agent-ui-reducer";
-import {
-  connectItx,
-  connectIterateSession,
-  reportTransportSuspicion,
-  useLiveState,
-} from "iterate/sdk/itx/react";
+import { connectItx, connectIterateSession, reportTransportSuspicion } from "iterate/sdk/itx/react";
+import { useLiveState } from "iterate/sdk/capnweb/react";
 import type { Stream } from "../itx-api.generated.ts";
+import type { FeedLiveState } from "~/domains/streams/feed-contract.ts";
 import { useStreamQuery } from "~/domains/streams/client-libraries/browser/hooks/use-stream-query.ts";
 import { useBrowserStreamStore } from "~/domains/streams/client-libraries/browser/hooks/use-browser-stream-store.ts";
 import type { StreamBrowserDatabase } from "~/domains/streams/client-libraries/browser/stream-browser-db.ts";
-import type { StreamBrowserStore } from "~/domains/streams/client-libraries/browser/stream-browser-store.ts";
 import { asBrowserStreamClient } from "~/domains/streams/client-libraries/browser/stream-transport.ts";
-import { BrowserFeedContract } from "~/domains/streams/client-libraries/processors/browser-feed/implementation.ts";
-import { isCurrentBrowserFeedState } from "~/domains/streams/client-libraries/processors/browser-feed/projector.ts";
 import { QueuedMessagesPanel } from "~/components/agent-feed.tsx";
 import { DeferredSurface } from "~/components/deferred-surface.tsx";
 import { StreamFeedView } from "~/components/stream-feed-view.tsx";
@@ -110,10 +102,8 @@ const EMPTY_STREAM_METRICS: BrowserStreamMetricsView = {
  * with the composer below and standard right-edge sheets (inspectors and
  * processor state) on top.
  *
- * This component is the orchestrator: it owns the two browser-hosted
- * processors that store the stream in local SQLite (the raw `events` log
- * and the single `feed_items` projection) and hands their stores/databases to
- * focused child components. All view state (mode, filters, open panels) lives in the URL —
+ * This component renders server-owned feed state and immutable publications
+ * synchronized into local SQLite. All view state (mode, filters, open panels) lives in the URL —
  * see ~/lib/stream-view-search.ts — so children read it themselves; the
  * component stays mounted across ⌘K stream switches (the switcher navigates
  * with an empty search, resetting the view to the new stream's defaults).
@@ -199,7 +189,7 @@ function BrowserDatabaseProjectStreamView({
 
   // Trigger-maintained counts (O(#types)) instead of COUNT(*) (full local-table
   // scan): this query re-runs after every delivered batch and shares the one
-  // OPFS connection with ingest writes — see the raw-events processor schema.
+  // OPFS connection with ingest writes — see the event mirror schema.
   const countResult = useStreamQuery(
     store.streamDatabase,
     `SELECT COALESCE(SUM(n), 0) AS count FROM event_type_counts`,
@@ -209,7 +199,17 @@ function BrowserDatabaseProjectStreamView({
   // so the chat-reply push stays quiet (suppression, not read-state) — the
   // web half of the mobile thread screen's identical claim.
   useClaimReplyPresented({ database: store.streamDatabase, projectId, streamPath });
-  const agentUiState = useAgentUiReducedState(store.streamDatabase, store, snapshot.liveRevision);
+  const makeFeedConnection = useCallback(
+    () => resolvedStreamSource(streamPath),
+    [resolvedStreamSource, streamPath],
+  );
+  const feed = useLiveState(
+    (stream: Stream) => stream.feedLiveState,
+    (state) => state,
+    [streamPath],
+    { makeConnection: makeFeedConnection },
+  );
+  const agentUiState = feed.value?.agent ?? null;
   // Real, browser-measured: transport RTT from RPCs the store already makes,
   // plus the hosted processor's self-measured consumption report.
   const metrics = useBrowserStreamMetrics(store);
@@ -230,30 +230,8 @@ function BrowserDatabaseProjectStreamView({
     void store.nudge();
   }, [store]);
 
-  const liveAgentRuntimeTransition = useLiveState(
-    (itx) => itx.agents.get(streamPath).liveState,
-    (state) => state.runtimeChange,
-    [streamPath],
-    {
-      slug: projectId ?? "",
-      enabled:
-        suppliedAgentRuntimeTransition === undefined &&
-        projectId !== null &&
-        streamPath.startsWith("/agents/"),
-    },
-  ).value;
-  const agentRuntimeTransition =
-    suppliedAgentRuntimeTransition === undefined
-      ? liveAgentRuntimeTransition
-      : (suppliedAgentRuntimeTransition ?? undefined);
-  const agentPresentation = useMemo(() => {
-    if (agentUiState == null || agentRuntimeTransition == null) {
-      return { state: agentUiState, transientItems: [] };
-    }
-    const projected = reduceAgentUiRuntime(agentUiState, agentRuntimeTransition);
-    return { state: projected.endState, transientItems: projected.items };
-  }, [agentUiState, agentRuntimeTransition]);
-  const presentedAgentUiState = agentPresentation.state;
+  const agentRuntimeTransition = suppliedAgentRuntimeTransition ?? feed.value?.runtimeChange;
+  const presentedAgentUiState = agentUiState;
   const agentRuntime = agentRuntimeTransition?.runtime;
 
   const runningLlmRequestId =
@@ -265,7 +243,7 @@ function BrowserDatabaseProjectStreamView({
   });
 
   async function clearClientDatabases() {
-    // One local database now: clear all processor-owned tables and checkpoints, then reload.
+    // One local database now: clear the event cache and synchronization cursor, then reload.
     await store.clearLocalDatabase();
     window.location.reload();
   }
@@ -290,7 +268,9 @@ function BrowserDatabaseProjectStreamView({
     snapshot.databaseRole === "reader" ||
     snapshot.connectionStatus === "receiving-events";
   const connectionLabel =
-    snapshot.connectionError ?? (streamContentsReady ? emptyLabel : snapshot.connectionStatus);
+    snapshot.connectionError ??
+    feed.error ??
+    (streamContentsReady ? emptyLabel : snapshot.connectionStatus);
   // Busy = work is actively running, independent of chat-message timing.
   const agentBusy = isAgentUiActivityWorking(presentedAgentUiState?.live ?? null, agentRuntime);
   const presence = presentedAgentUiState?.presence ?? [];
@@ -331,7 +311,6 @@ function BrowserDatabaseProjectStreamView({
         raw: caps.rawFeed ? rawFilter : null,
       }}
       liveState={caps.agentFeed ? presentedAgentUiState : null}
-      transientAgentItems={caps.agentFeed ? agentPresentation.transientItems : []}
       runtime={agentRuntime}
       {...(caps.eventInspector ? { onInspectEvent: panels.inspectEvent } : {})}
       {...(caps.agentFeed ? { onInspectLlmRequest: panels.inspectLlmRequest } : {})}
@@ -339,7 +318,11 @@ function BrowserDatabaseProjectStreamView({
       emptyLabel={connectionLabel}
       projectSlug={projectSlug}
       isPending={caps.agentFeed ? agentUiState == null : !streamContentsReady}
-      pendingLabel={caps.agentFeed ? "Initializing agent" : undefined}
+      pendingLabel={
+        snapshot.connectionError ??
+        feed.error ??
+        (caps.agentFeed ? "Initializing agent" : undefined)
+      }
     />
   );
 
@@ -356,6 +339,8 @@ function BrowserDatabaseProjectStreamView({
         {modeBody}
         <StreamInspectorSheet
           agentUiState={presentedAgentUiState}
+          streamSource={resolvedStreamSource}
+          streamPath={streamPath}
           caps={caps}
           panels={panels}
           database={store.streamDatabase}
@@ -530,7 +515,7 @@ function useProjectStreamDatabase({
       (streamSource === undefined ? reportTransportSuspicion : undefined),
     [resetStreamSourceTransport, streamSource],
   );
-  // One downloaded batch is passed to both the raw-event writer and browser-feed projector.
+  // One event mirror is shared by every view of this stream in the tab.
   const browserStore = useBrowserStreamStore({
     createStreamClient: streamClientFactory,
     ...(resetTransport === undefined ? {} : { resetTransport }),
@@ -552,11 +537,15 @@ function useProjectStreamDatabase({
  */
 function StreamInspectorSheet({
   agentUiState,
+  streamSource,
+  streamPath,
   caps,
   panels,
   database,
 }: {
-  agentUiState: AgentUiState | null;
+  agentUiState: FeedLiveState["agent"] | null;
+  streamSource: ItxStreamSource;
+  streamPath: string;
   caps: ReturnType<typeof modeCapabilities>;
   panels: ReturnType<typeof useStreamViewPanels>;
   database: StreamBrowserDatabase;
@@ -591,8 +580,10 @@ function StreamInspectorSheet({
             inspector: activeInspector,
             database,
             agentUiState,
+            streamSource,
+            streamPath,
           },
-    [activeInspector, agentUiState, database],
+    [activeInspector, agentUiState, database, streamSource, streamPath],
   );
   const [retainedInspectorContext, setRetainedInspectorContext] = useState(activeInspectorContext);
   const activeInspectorKey =
@@ -649,6 +640,8 @@ function StreamInspectorSheet({
       testId = "llm-request-inspector";
       content = (
         <LlmRequestInspectorContent
+          streamSource={inspectorContext.streamSource}
+          streamPath={inspectorContext.streamPath}
           database={inspectorContext.database}
           {...(liveStep == null ? {} : { liveStep })}
           llmRequestOffset={inspector.offset}
@@ -902,42 +895,6 @@ function useAgentInterrupt(args: {
       }
     },
   };
-}
-
-/**
- * The browser-feed projector persists the durable `agent` slice to
- * `processor_progress`. Genuinely live ephemeral chunks stay in the store's
- * in-memory tail; `liveRevision` makes those batches reactive without ever
- * writing or replaying them. Null until either source has produced state.
- */
-function useAgentUiReducedState(
-  database: StreamBrowserDatabase,
-  store: StreamBrowserStore,
-  liveRevision: number,
-): AgentUiState | null {
-  const result = useStreamQuery(
-    database,
-    // progress_key is part of the primary key, so multiple rows can exist
-    // for the slug (e.g. after a key-format change); read the most advanced one.
-    `SELECT reduced_state FROM processor_progress WHERE processor_slug = ?
-     ORDER BY acknowledged_through_offset DESC LIMIT 1`,
-    [BrowserFeedContract.slug],
-  );
-  return useMemo(() => {
-    // Volatile live batches do not write SQLite; the revision is the reactive
-    // signal that makes this snapshot read run again.
-    void liveRevision;
-    const live = store.agentUiState();
-    if (live !== null) return live;
-    const raw = result.data[0]?.reduced_state;
-    if (typeof raw !== "string") return null;
-    try {
-      const parsed: unknown = JSON.parse(raw);
-      return isCurrentBrowserFeedState(parsed) ? parsed.agent : null;
-    } catch {
-      return null;
-    }
-  }, [liveRevision, result.data, store]);
 }
 
 /**

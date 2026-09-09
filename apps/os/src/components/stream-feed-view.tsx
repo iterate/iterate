@@ -1,7 +1,11 @@
 import { memo, useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { ZERO_AGENT_RUNTIME, type AgentRuntime } from "@iterate-com/shared/agent-events";
-import type { AgentUiItem, AgentUiState } from "@iterate-com/ui/components/events/agent-ui-reducer";
+import {
+  AgentUiItemSchema,
+  type AgentUiItem,
+  type AgentUiState,
+} from "@iterate-com/ui/components/events/agent-ui-reducer";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@iterate-com/ui/components/empty";
 import { Spinner } from "@iterate-com/ui/components/spinner";
 import { cn } from "@iterate-com/ui/lib/utils";
@@ -10,10 +14,7 @@ import type {
   SqlValue,
   StreamBrowserDatabase,
 } from "~/domains/streams/client-libraries/browser/stream-browser-db.ts";
-import {
-  AGENT_KIND_PREFIX,
-  type RawFeedItemData,
-} from "~/domains/streams/client-libraries/processors/browser-feed/projector.ts";
+import { AGENT_KIND_PREFIX, type RawFeedItemData } from "~/domains/streams/feed-item-types.ts";
 import { AgentFeedItemRow, AgentLiveActivity } from "~/components/agent-feed.tsx";
 import { useStickToBottom } from "~/lib/use-stick-to-bottom.ts";
 import {
@@ -26,11 +27,11 @@ import {
 const TAIL_PREFETCH_ROWS = 32;
 /** Cap on rows retained across window shifts (memory bound for long feeds). */
 const MAX_RETAINED_ROWS = 2000;
-const EMPTY_AGENT_ITEMS: readonly AgentUiItem[] = [];
 
 /** One parsed feed_items row, ready to render. */
 type FeedRow = {
   kind: string;
+  error?: string;
   firstOffset: number;
   lastOffset: number;
   eventCount: number;
@@ -67,7 +68,6 @@ export function StreamFeedView({
   isPending = false,
   pendingLabel = "Connecting to the stream",
   liveState,
-  transientAgentItems = EMPTY_AGENT_ITEMS,
   runtime = ZERO_AGENT_RUNTIME,
   onInspectEvent,
   onInspectLlmRequest,
@@ -81,9 +81,7 @@ export function StreamFeedView({
   isPending?: boolean;
   pendingLabel?: string;
   /** Reduced agent state for the live tail; null hides the trailing items. */
-  liveState: AgentUiState | null;
-  /** Runtime-projected settled items which are not journal database rows. */
-  transientAgentItems?: readonly AgentUiItem[];
+  liveState: Pick<AgentUiState, "live"> | null;
   /** Current processor runtime from the agent live-state subscription. */
   runtime?: AgentRuntime;
   /** Opens the raw-event inspector panel at this offset (raw rows only). */
@@ -104,7 +102,6 @@ export function StreamFeedView({
   );
   const itemCount = Number(countResult.data[0]?.count ?? 0);
   const live = filter.agent == null ? null : (liveState?.live ?? null);
-  const transientItems = filter.agent == null ? EMPTY_AGENT_ITEMS : transientAgentItems;
   const scrollRef = useRef<HTMLDivElement>(null);
   // Ids of activity summaries the user expanded. Operation rows inside an
   // expanded activity open their URL-backed inspector instead of nesting a
@@ -116,9 +113,8 @@ export function StreamFeedView({
   // sizer's height, which is what the stick's ResizeObserver follows and what
   // anchorTo's mid-history compensation measures. Rendering it outside the
   // list would hide its height from both.
-  const transientCount = transientItems.length;
   const liveCount = live == null ? 0 : 1;
-  const totalCount = itemCount + transientCount + liveCount;
+  const totalCount = itemCount + liveCount;
 
   // Settled rows are append-only at dense positions, so the position is a
   // stable key for them. The live activity keeps its own key: its index
@@ -128,10 +124,9 @@ export function StreamFeedView({
   const getItemKey = useCallback(
     (index: number) => {
       if (index < itemCount) return index;
-      const transient = transientItems[index - itemCount];
-      return transient == null ? "live" : `transient:${transient.id}`;
+      return "live";
     },
-    [itemCount, transientItems],
+    [itemCount],
   );
 
   const virtualizer = useVirtualizer({
@@ -261,8 +256,7 @@ export function StreamFeedView({
         >
           {virtualItems.map((virtualItem) => {
             const index = virtualItem.index;
-            const transientItem = transientItems[index - itemCount];
-            const isLiveItem = live != null && index === itemCount + transientCount;
+            const isLiveItem = live != null && index === itemCount;
             const row = index < itemCount ? rowsByIndex.get(index)?.row : undefined;
             return (
               <div
@@ -282,16 +276,6 @@ export function StreamFeedView({
                     onInspectScriptExecution={onInspectScriptExecution}
                     database={database}
                   />
-                ) : transientItem != null ? (
-                  <AgentFeedItemRow
-                    item={transientItem}
-                    toggledIds={toggledIds}
-                    onToggle={toggleExpanded}
-                    onInspectLlmRequest={onInspectLlmRequest}
-                    onInspectScriptExecution={onInspectScriptExecution}
-                    projectSlug={projectSlug}
-                    database={database}
-                  />
                 ) : row == null ? (
                   // Not-yet-loaded rows must measure exactly estimateSize
                   // (56px, margins don't count toward offsetHeight): the
@@ -302,6 +286,10 @@ export function StreamFeedView({
                   <div className="h-14 py-2">
                     <div className="h-full rounded-xl bg-muted/40" />
                   </div>
+                ) : row.error ? (
+                  <p className="px-4 py-2 text-sm text-destructive" role="alert">
+                    Invalid feed item at offset {row.firstOffset}: {row.error}
+                  </p>
                 ) : row.agentItem != null ? (
                   <AgentFeedItemRow
                     item={row.agentItem}
@@ -363,7 +351,7 @@ function useRetainedFeedRows({
     database,
     `SELECT local_index, kind, first_offset, last_offset, event_count, json(data) AS data
      FROM feed_items WHERE ${whereSql}
-     ORDER BY local_index ASC LIMIT ? OFFSET ?`,
+     ORDER BY local_index ASC, ordinal ASC LIMIT ? OFFSET ?`,
     [...params, windowSize, queryOffset],
   );
   const retainKey = `${whereSql}:${params.join(" ")}`;
@@ -371,7 +359,7 @@ function useRetainedFeedRows({
     retainKey: string;
     rows: Map<number, { fingerprint: string; row: FeedRow }>;
   } | null>(null);
-  return useMemo(() => {
+  const visibleRows = useMemo(() => {
     const retained =
       lastRowsRef.current?.retainKey === retainKey
         ? lastRowsRef.current.rows
@@ -392,7 +380,8 @@ function useRetainedFeedRows({
       if (rows.get(index)?.fingerprint === fingerprint) return;
       try {
         const isAgent = kind.startsWith(AGENT_KIND_PREFIX);
-        const parsed = JSON.parse(raw) as AgentUiItem | RawFeedItemData;
+        const parsed: unknown = JSON.parse(raw);
+        const agentItem = isAgent ? AgentUiItemSchema.parse(parsed) : null;
         rows.set(index, {
           fingerprint,
           row: {
@@ -400,12 +389,24 @@ function useRetainedFeedRows({
             firstOffset: Number(sqlRow.first_offset),
             lastOffset: Number(sqlRow.last_offset),
             eventCount: Number(sqlRow.event_count),
-            agentItem: isAgent ? (parsed as AgentUiItem) : null,
+            agentItem,
+            // Raw rows are constructed by the local SQL view from complete event records.
             rawData: isAgent ? null : (parsed as RawFeedItemData),
           },
         });
-      } catch {
-        // Skip unparseable rows; the row stays a skeleton.
+      } catch (error) {
+        rows.set(index, {
+          fingerprint,
+          row: {
+            kind,
+            firstOffset: Number(sqlRow.first_offset),
+            lastOffset: Number(sqlRow.last_offset),
+            eventCount: Number(sqlRow.event_count),
+            agentItem: null,
+            rawData: null,
+            error: error instanceof Error ? error.message : String(error),
+          },
+        });
       }
     });
     // Keep memory bounded on very long histories: drop the oldest-inserted
@@ -419,9 +420,12 @@ function useRetainedFeedRows({
         dropped++;
       }
     }
-    lastRowsRef.current = { retainKey, rows };
     return rows;
   }, [rowsResult.data, rowsResult.status, retainKey, queryOffset]);
+  useLayoutEffect(() => {
+    lastRowsRef.current = { retainKey, rows: visibleRows };
+  }, [retainKey, visibleRows]);
+  return visibleRows;
 }
 
 const RawFeedItemRow = memo(function RawFeedItemRow({

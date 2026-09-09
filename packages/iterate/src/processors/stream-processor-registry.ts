@@ -186,6 +186,8 @@ type RegistryEntry = {
  * and `durableObjectProgressStore`), so the instances stay independent.
  */
 export type RegisterProcessorOptions = {
+  /** Clear this processor's related projections synchronously with source-lifetime replacement. */
+  resetForStream?: () => void;
   /** Post-eviction keepalive recovery — REQUIRED for consequential
    * `runInBackground` work (see the module doc). */
   recovery?: boolean;
@@ -580,6 +582,7 @@ export function createStreamProcessorRegistry<Live extends object = Record<strin
           progress: durableObjectProgressStore({
             storage: ctx.storage,
             name,
+            resetForStream: opts?.resetForStream,
           }),
           ...(recovery === undefined ? {} : { recovery }),
         },

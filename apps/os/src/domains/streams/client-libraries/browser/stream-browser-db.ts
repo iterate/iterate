@@ -38,7 +38,9 @@ export type SqlClient = {
   ): Promise<void>;
 };
 
-type StreamDbChange = { kind: "append"; minOffset: number; maxOffset: number } | { kind: "clear" };
+type StreamDbChange =
+  | { kind: "append"; minOffset: number; maxOffset: number }
+  | { kind: "clear" | "reset" };
 
 type RegisteredQuery = {
   sql: string;
@@ -177,67 +179,8 @@ export class StreamBrowserDatabase implements Disposable {
     URL.revokeObjectURL(url);
   }
 
-  /** Clears the given tables (those that exist) and broadcasts a clear so views remount. */
-  async clearTables(tables: readonly string[]) {
-    for (const table of tables) {
-      if (await this.#tableExists(table)) await this.exec(`DELETE FROM ${table}`);
-    }
-    this.#publishChange({ kind: "clear" });
-  }
-
   async compact() {
     await this.exec(`VACUUM`);
-  }
-
-  /**
-   * The server stream ID for which this processor's local rows were written,
-   * or undefined if never recorded. A changed ID means source offsets restarted,
-   * so the processor's tables and progress must be cleared.
-   *
-   * Keyed per processor slug: multiple runtimes share this database and each
-   * compares and clears its own tables independently. A shared key would let
-   * one processor's clear hide another processor's stale rows.
-   */
-  async readProcessorStreamId(processorSlug: string): Promise<string | undefined> {
-    await this.#ensureProcessorMetadataSchema();
-    const [row] = await this.exec(`SELECT value FROM processor_metadata WHERE key = ? LIMIT 1`, [
-      `stream-id:${processorSlug}`,
-    ]);
-    return typeof row?.value === "string" ? row.value : undefined;
-  }
-
-  async writeProcessorStreamId(processorSlug: string, streamId: string): Promise<void> {
-    await this.#ensureProcessorMetadataSchema();
-    await this.exec(
-      `INSERT INTO processor_metadata (key, value) VALUES (?, ?)
-       ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
-      [`stream-id:${processorSlug}`, streamId],
-    );
-  }
-
-  async readProcessorSchemaVersion(processorSlug: string): Promise<number | undefined> {
-    await this.#ensureProcessorMetadataSchema();
-    const [row] = await this.exec(`SELECT value FROM processor_metadata WHERE key = ? LIMIT 1`, [
-      `schema-version:${processorSlug}`,
-    ]);
-    if (typeof row?.value !== "string") return undefined;
-    const version = Number(row.value);
-    return Number.isFinite(version) ? version : undefined;
-  }
-
-  async writeProcessorSchemaVersion(processorSlug: string, schemaVersion: number): Promise<void> {
-    await this.#ensureProcessorMetadataSchema();
-    await this.exec(
-      `INSERT INTO processor_metadata (key, value) VALUES (?, ?)
-       ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
-      [`schema-version:${processorSlug}`, String(schemaVersion)],
-    );
-  }
-
-  async #ensureProcessorMetadataSchema(): Promise<void> {
-    await this.exec(
-      `CREATE TABLE IF NOT EXISTS processor_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)`,
-    );
   }
 
   query(sql: string, params: SqlValue[]): SqliteQueryHandle {
@@ -351,15 +294,6 @@ export class StreamBrowserDatabase implements Disposable {
     }
   }
 
-  async #tableExists(name: string): Promise<boolean> {
-    await this.#ready;
-    const [row] = await this.#execReady(
-      `SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = ?`,
-      [name],
-    );
-    return row !== undefined;
-  }
-
   #publishChange(change: StreamDbChange) {
     this.#channel.postMessage(change);
     this.#onChange(change);
@@ -447,10 +381,10 @@ export class StreamBrowserDatabase implements Disposable {
 // database contains replayable cache data, so a new version may use a new file.
 // "v4" is the itx namespace: older clients on the same origin use "v3", so
 // old and new code cannot open or clear each other's files.
-const DATABASE_CACHE_VERSION = "v4";
+const DATABASE_CACHE_VERSION = "v5";
 
 /** OPFS path for one stream's local SQLite cache. */
-function databasePathFor(projectId: string, streamPath: string) {
+export function databasePathFor(projectId: string, streamPath: string) {
   return `${encodeURIComponent(projectId)}/${DATABASE_CACHE_VERSION}/${databaseSlugForStreamPath(streamPath)}.sqlite3`;
 }
 

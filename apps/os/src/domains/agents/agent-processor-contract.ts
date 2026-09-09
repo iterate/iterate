@@ -433,6 +433,11 @@ export const AgentProcessorContract = defineProcessorContract({
         "becomes offset order becomes document order. Without a key: one turn at its offset.",
       payloadSchema: agentContextItemSchema(),
     },
+    "events.iterate.com/agent/runtime-changed": {
+      description:
+        "The agent's committed runtime transition, used to finalize server-owned feed presentation.",
+      payloadSchema: agentRuntimeTransitionSchema(),
+    },
     "events.iterate.com/agents/context-rewritten": {
       description:
         "Deliberate HISTORY REWRITING — rare, audited, named to discourage casual use: it " +
@@ -757,6 +762,7 @@ export const AgentProcessorContract = defineProcessorContract({
     // platform revival fact, to find and re-run orphaned work after eviction.
   ],
   emits: [
+    "events.iterate.com/agent/runtime-changed",
     "events.iterate.com/agents/context-added",
     // Emitted by userland response interpreters through this vocabulary (the
     // platform components never emit it themselves today); listed so variant
@@ -806,7 +812,7 @@ export type AgentContextItem = AgentProcessorState["contextItems"][number];
 export type AgentFileAttachment = NonNullable<AgentContextAddedPayload["files"]>[number];
 
 /** Exact runtime plus the event which first established it in reduced state.
- * This is processor state exposed through live state, not a stream event. */
+ * Also journaled when it changes so the server feed can settle deterministically. */
 export const AgentRuntimeTransition = agentRuntimeTransitionSchema();
 export type AgentRuntimeTransition = z.infer<typeof AgentRuntimeTransition>;
 
