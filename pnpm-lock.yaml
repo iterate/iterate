@@ -50,6 +50,9 @@ packageExtensionsChecksum: sha256-EkBeg1CZMrkaUS7iAUQMaWo7TBKTiORkYxFouSMhx0U=
 pnpmfileChecksum: sha256-NYwZDqyYRb6nG9kuTlR90d09AzOclRDSF+lgvKeq0To=
 
 patchedDependencies:
+  '@atomic-editor/editor@0.6.2':
+    hash: de2cee03d872873f33c3d6c16aebacb577488abf0484fa7c6fc299d6af5cce38
+    path: patches/@atomic-editor__editor@0.6.2.patch
   '@better-auth/oauth-provider@1.6.9':
     hash: c0ff8564b3560e098f4088aecf42b4304ee36cd37e364108ee4a83031a314fca
     path: patches/@better-auth__oauth-provider@1.6.9.patch
@@ -62,6 +65,9 @@ patchedDependencies:
   '@cloudflare/workers-types@4.20260621.1':
     hash: ae8908e1d45f2ea02ffeabf1230701598cc2878240ef700403ff76df72677af2
     path: patches/@cloudflare__workers-types@4.20260621.1.patch
+  '@codemirror/merge@6.12.2':
+    hash: abd7a6151128bd71ee4e3b13e0acbcd8498e4c290990a300ad25687983b7d407
+    path: patches/@codemirror__merge@6.12.2.patch
   '@journeyapps/wa-sqlite@1.7.0':
     hash: 628f45a8b65f5811216d637fb5cc4584db8f69a125d1ae417c4e49bc38ebca83
     path: patches/@journeyapps__wa-sqlite@1.7.0.patch
@@ -834,7 +840,7 @@ importers:
         version: 6.9.5
       '@codemirror/merge':
         specifier: ^6.12.2
-        version: 6.12.2
+        version: 6.12.2(patch_hash=abd7a6151128bd71ee4e3b13e0acbcd8498e4c290990a300ad25687983b7d407)
       '@codemirror/state':
         specifier: ^6.7.1
         version: 6.7.1
@@ -1705,6 +1711,9 @@ importers:
 
   packages/workspace-documents:
     dependencies:
+      '@atomic-editor/editor':
+        specifier: 0.6.2
+        version: 0.6.2(patch_hash=de2cee03d872873f33c3d6c16aebacb577488abf0484fa7c6fc299d6af5cce38)(@codemirror/autocomplete@6.20.1)(@codemirror/commands@6.10.4)(@codemirror/lang-css@6.3.1)(@codemirror/lang-html@6.4.11)(@codemirror/lang-javascript@6.2.5)(@codemirror/lang-json@6.0.2)(@codemirror/lang-markdown@6.5.0)(@codemirror/lang-sql@6.10.0)(@codemirror/lang-yaml@6.1.2)(@codemirror/language@6.12.2)(@codemirror/search@6.6.0)(@codemirror/state@6.7.1)(@codemirror/view@6.43.6)(@lezer/common@1.5.1)(@lezer/highlight@1.2.3)(@lezer/markdown@1.6.4)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       '@codemirror/collab':
         specifier: ^6.1.1
         version: 6.1.1
@@ -1717,9 +1726,12 @@ importers:
       '@codemirror/lang-markdown':
         specifier: ^6.5.0
         version: 6.5.0
-      '@codemirror/merge':
+      '@codemirror/language':
         specifier: ^6.12.2
         version: 6.12.2
+      '@codemirror/merge':
+        specifier: ^6.12.2
+        version: 6.12.2(patch_hash=abd7a6151128bd71ee4e3b13e0acbcd8498e4c290990a300ad25687983b7d407)
       '@codemirror/state':
         specifier: ^6.7.1
         version: 6.7.1
@@ -1729,6 +1741,9 @@ importers:
       '@iterate-com/ui':
         specifier: workspace:*
         version: link:../ui
+      '@lezer/common':
+        specifier: ^1.5.1
+        version: 1.5.1
       capnweb:
         specifier: npm:@iterate-com/capnweb@0.10.0
         version: '@iterate-com/capnweb@0.10.0'
@@ -1738,6 +1753,9 @@ importers:
       react:
         specifier: ^19.2.7
         version: 19.2.7
+      react-dom:
+        specifier: ^19.2.7
+        version: 19.2.7(react@19.2.7)
     devDependencies:
       '@cloudflare/workers-types':
         specifier: catalog:cloudflare
@@ -1745,6 +1763,9 @@ importers:
       '@types/react':
         specifier: ^19.2.17
         version: 19.2.17
+      '@types/react-dom':
+        specifier: ^19.2.3
+        version: 19.2.3(@types/react@19.2.17)
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
@@ -1865,6 +1886,67 @@ packages:
 
   '@asamuzakjp/nwsapi@2.3.9':
     resolution: {integrity: sha512-n8GuYSrI9bF7FFZ/SjhwevlHc8xaVlb/7HmHelnc/PZXBD2ZR49NnN9sMMuDdEGPeeRQ5d0hqlSlEpgCX3Wl0Q==}
+
+  '@atomic-editor/editor@0.6.2':
+    resolution: {integrity: sha512-b4cZRduNOoZ5sJ7ywaANcnLLKP3EJYfMUm5BgYK3Wb+9jI+KUs04RZHzFMVcdedNjvfqBDbzW6KYAmq5bAayxw==}
+    engines: {node: '>=18'}
+    peerDependencies:
+      '@codemirror/autocomplete': ^6.0.0
+      '@codemirror/commands': ^6.0.0
+      '@codemirror/lang-cpp': ^6.0.0
+      '@codemirror/lang-css': ^6.0.0
+      '@codemirror/lang-go': ^6.0.0
+      '@codemirror/lang-html': ^6.0.0
+      '@codemirror/lang-java': ^6.0.0
+      '@codemirror/lang-javascript': ^6.0.0
+      '@codemirror/lang-json': ^6.0.0
+      '@codemirror/lang-markdown': ^6.0.0
+      '@codemirror/lang-php': ^6.0.0
+      '@codemirror/lang-python': ^6.0.0
+      '@codemirror/lang-rust': ^6.0.0
+      '@codemirror/lang-sql': ^6.0.0
+      '@codemirror/lang-xml': ^6.0.0
+      '@codemirror/lang-yaml': ^6.0.0
+      '@codemirror/language': ^6.0.0
+      '@codemirror/legacy-modes': ^6.0.0
+      '@codemirror/search': ^6.0.0
+      '@codemirror/state': ^6.7.1
+      '@codemirror/view': ^6.43.6
+      '@lezer/common': ^1.0.0
+      '@lezer/highlight': ^1.0.0
+      '@lezer/markdown': ^1.0.0
+      react: ^18.0.0 || ^19.0.0
+      react-dom: ^18.0.0 || ^19.0.0
+    peerDependenciesMeta:
+      '@codemirror/lang-cpp':
+        optional: true
+      '@codemirror/lang-css':
+        optional: true
+      '@codemirror/lang-go':
+        optional: true
+      '@codemirror/lang-html':
+        optional: true
+      '@codemirror/lang-java':
+        optional: true
+      '@codemirror/lang-javascript':
+        optional: true
+      '@codemirror/lang-json':
+        optional: true
+      '@codemirror/lang-php':
+        optional: true
+      '@codemirror/lang-python':
+        optional: true
+      '@codemirror/lang-rust':
+        optional: true
+      '@codemirror/lang-sql':
+        optional: true
+      '@codemirror/lang-xml':
+        optional: true
+      '@codemirror/lang-yaml':
+        optional: true
+      '@codemirror/legacy-modes':
+        optional: true
+
 
   '@babel/code-frame@7.10.4':
     resolution: {integrity: sha512-vG6SvB6oYEhvgisZNFRmRCUkLz11c7rp+tbNTynGqc6mS1d5ATd/sGyV6W0KZZnXRKMTzZDRgQT3Ou9jhpAfUg==}
@@ -14122,6 +14204,29 @@ snapshots:
 
   '@asamuzakjp/nwsapi@2.3.9': {}
 
+  '@atomic-editor/editor@0.6.2(patch_hash=de2cee03d872873f33c3d6c16aebacb577488abf0484fa7c6fc299d6af5cce38)(@codemirror/autocomplete@6.20.1)(@codemirror/commands@6.10.4)(@codemirror/lang-css@6.3.1)(@codemirror/lang-html@6.4.11)(@codemirror/lang-javascript@6.2.5)(@codemirror/lang-json@6.0.2)(@codemirror/lang-markdown@6.5.0)(@codemirror/lang-sql@6.10.0)(@codemirror/lang-yaml@6.1.2)(@codemirror/language@6.12.2)(@codemirror/search@6.6.0)(@codemirror/state@6.7.1)(@codemirror/view@6.43.6)(@lezer/common@1.5.1)(@lezer/highlight@1.2.3)(@lezer/markdown@1.6.4)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)':
+    dependencies:
+      '@codemirror/autocomplete': 6.20.1
+      '@codemirror/commands': 6.10.4
+      '@codemirror/lang-markdown': 6.5.0
+      '@codemirror/language': 6.12.2
+      '@codemirror/search': 6.6.0
+      '@codemirror/state': 6.7.1
+      '@codemirror/view': 6.43.6
+      '@lezer/common': 1.5.1
+      '@lezer/highlight': 1.2.3
+      '@lezer/markdown': 1.6.4
+      react: 19.2.7
+      react-dom: 19.2.7(react@19.2.7)
+    optionalDependencies:
+      '@codemirror/lang-css': 6.3.1
+      '@codemirror/lang-html': 6.4.11
+      '@codemirror/lang-javascript': 6.2.5
+      '@codemirror/lang-json': 6.0.2
+      '@codemirror/lang-sql': 6.10.0
+      '@codemirror/lang-yaml': 6.1.2
+
+
   '@babel/code-frame@7.10.4':
     dependencies:
       '@babel/highlight': 7.25.9
@@ -15240,7 +15345,7 @@ snapshots:
       '@codemirror/view': 6.43.6
       crelt: 1.0.6
 
-  '@codemirror/merge@6.12.2':
+  '@codemirror/merge@6.12.2(patch_hash=abd7a6151128bd71ee4e3b13e0acbcd8498e4c290990a300ad25687983b7d407)':
     dependencies:
       '@codemirror/language': 6.12.2
       '@codemirror/state': 6.7.1

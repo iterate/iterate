@@ -3,9 +3,9 @@ import {
   CheckIcon,
   Code2Icon,
   CopyIcon,
-  EyeIcon,
   FileTextIcon,
   MessageSquarePlusIcon,
+  PenLineIcon,
   SparklesIcon,
 } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
@@ -21,7 +21,6 @@ import {
 } from "@iterate-com/workspace-documents/html-annotations";
 import { authorColor, authorLabel } from "@iterate-com/workspace-documents/collab";
 import { commentIdentityFor } from "@iterate-com/workspace-documents/identity";
-import { DocumentPreview } from "@iterate-com/ui/components/document-preview";
 import { useDocumentReview } from "@iterate-com/workspace-documents/review";
 import { Drawer, DrawerContent, DrawerTitle } from "@iterate-com/ui/components/drawer";
 import type { WorkspaceDocumentTransport } from "@iterate-com/workspace-documents/types";
@@ -60,7 +59,7 @@ export function WorkspaceDocumentPage({
   // which would drop unsent edits on the floor.
   const [editorEpoch, setEditorEpoch] = useState(0);
   const [source, setSource] = useState("");
-  const [view, setView] = useState<"preview" | "source">("preview");
+  const [view, setView] = useState<"rich" | "source">("rich");
   const [status, setStatus] = useState("connecting…");
   const [showChanges, setShowChanges] = useState(false);
   const [commentsOpen, setCommentsOpen] = useState(false);
@@ -153,7 +152,7 @@ export function WorkspaceDocumentPage({
     source: reviewSource.source,
     identity: reviewSource.error ? null : identity,
     busy,
-    onTransform: onCommentTransform,
+    onTransform: editorApiRef.current?.isLive() ? onCommentTransform : undefined,
   });
   if (reviewSource.error)
     review.comments.notice = (
@@ -161,12 +160,14 @@ export function WorkspaceDocumentPage({
         {reviewSource.error}
       </p>
     );
-  const selectAnnotations = (ids: string[]) => {
-    review.preview.onSelectAnnotations?.(ids);
-    if (ids.length && window.matchMedia("(max-width: 1023px)").matches) {
+  const editorReview = {
+    ...review.editor,
+    onSelectThread: (id: string | null) => {
+      review.editor.onSelectThread(id);
+      if (!id || !window.matchMedia("(max-width: 1023px)").matches) return;
       focusMobileComposer.current = false;
       setCommentsOpen(true);
-    }
+    },
   };
 
   const copyLink = () => {
@@ -274,10 +275,7 @@ export function WorkspaceDocumentPage({
               size="icon-sm"
               aria-label="Track changes"
               aria-pressed={showChanges}
-              onClick={() => {
-                setShowChanges((value) => !value);
-                setView("source");
-              }}
+              onClick={() => setShowChanges((value) => !value)}
             >
               <SparklesIcon />
             </Button>
@@ -298,13 +296,13 @@ export function WorkspaceDocumentPage({
             </Button>
           </WithTooltip>
           <div className="flex rounded-lg border bg-muted/30 p-0.5">
-            <WithTooltip label="Preview">
+            <WithTooltip label="Rich editing">
               <ViewButton
-                active={view === "preview"}
-                label="Preview"
-                onClick={() => setView("preview")}
+                active={view === "rich"}
+                label="Rich editing"
+                onClick={() => setView("rich")}
               >
-                <EyeIcon aria-hidden className="size-3.5" />
+                <PenLineIcon aria-hidden className="size-3.5" />
               </ViewButton>
             </WithTooltip>
             <WithTooltip label={`Source (${loaded.snapshot.format})`}>
@@ -322,16 +320,16 @@ export function WorkspaceDocumentPage({
 
       <div className="grid min-h-0 flex-1 lg:grid-cols-[minmax(0,1fr)_23rem]">
         <section className="relative flex min-h-[60svh] min-w-0 flex-col bg-background lg:min-h-0">
-          <div className={view === "preview" ? "flex min-h-0 flex-1" : "hidden"}>
-            {loaded.snapshot.format === "markdown" ? (
-              <DocumentPreview {...review.preview} onSelectAnnotations={selectAnnotations} />
-            ) : (
+          {loaded.snapshot.format === "html" && view === "rich" ? (
+            <div className="flex min-h-0 flex-1">
               <HtmlDocumentPreview source={source} />
-            )}
-          </div>
+            </div>
+          ) : null}
           <div
             className={
-              view === "source" ? "flex min-h-0 flex-1 flex-col [&_.cm-editor]:h-full" : "hidden"
+              loaded.snapshot.format === "markdown" || view === "source"
+                ? "flex min-h-0 flex-1 flex-col [&_.cm-editor]:h-full"
+                : "hidden"
             }
           >
             <Suspense
@@ -349,6 +347,8 @@ export function WorkspaceDocumentPage({
                 displayName={displayName}
                 path={path}
                 mode={loaded.snapshot.format}
+                presentation={view}
+                review={loaded.snapshot.format === "markdown" ? editorReview : undefined}
                 redline={showChanges}
                 emptyPlaceholder={
                   loaded.snapshot.format === "html" ? "Write HTML…" : "Write in Markdown…"

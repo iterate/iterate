@@ -164,3 +164,72 @@ test("a recovery snapshot updates the preview and cancels stale debounced text",
     vi.unstubAllGlobals();
   }
 });
+
+test("presentation changes preserve the live session and selection; an ended session refuses edits", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  const delivery = Promise.withResolvers<CollabWaitResult>();
+  const documentSession: WorkspaceDocumentLane = {
+    open: vi.fn(async () => ({ content: "# Shared", epoch: "first", version: 0 })),
+    wait: () => delivery.promise,
+    push: async () => ({ status: "accepted", version: 1 }),
+    present: async () => {},
+    changes: async () => ({
+      baseContent: "# Shared",
+      baseVersion: 0,
+      headVersion: 0,
+      inserted: [],
+      deleted: [],
+    }),
+  };
+  const transport: WorkspaceDocumentTransport = {
+    run: async (operation) => operation(documentSession),
+    runOnce: async (operation) => operation(documentSession),
+  };
+  const apiRef: { current: CollabEditorApi | null } = { current: null };
+  const extensions: Extension = [];
+  const rich = EditorView.editorAttributes.of({ class: "rich-presentation" });
+  const source: Extension = [];
+  function Editor({ presentation }: { presentation: Extension }) {
+    const { host } = useCollabEditor({
+      transport,
+      path: "/notes.md",
+      extensions,
+      presentation,
+      redline: false,
+      apiRef,
+    });
+    return <div ref={host} />;
+  }
+  const host = document.createElement("div");
+  document.body.appendChild(host);
+  const root = createRoot(host);
+  try {
+    await act(async () => root.render(<Editor presentation={rich} />));
+    const view = EditorView.findFromDOM(host.querySelector(".cm-content")!)!;
+    await act(async () =>
+      view.dispatch({
+        changes: { from: 8, insert: " edit" },
+        selection: { anchor: 12 },
+        userEvent: "input.type",
+      }),
+    );
+    const selection = view.state.selection;
+    await act(async () => root.render(<Editor presentation={source} />));
+    expect(EditorView.findFromDOM(host.querySelector(".cm-content")!)).toBe(view);
+    expect(documentSession.open).toHaveBeenCalledTimes(1);
+    expect(view.state.selection).toBe(selection);
+    expect(view.state.doc.toString()).toBe("# Shared edit");
+    await act(async () => delivery.resolve({ status: "ended" }));
+    expect(view.state.readOnly).toBe(true);
+    expect(view.contentDOM.getAttribute("contenteditable")).toBe("false");
+    expect(apiRef.current?.isLive()).toBe(false);
+    expect(() => apiRef.current?.applyTransform((text) => text + " lost")).toThrow("Reconnect");
+    expect(view.state.doc.toString()).toBe("# Shared edit");
+  } finally {
+    await act(async () => root.unmount());
+    host.remove();
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  }
+});

@@ -79,6 +79,62 @@ for (const commentFirst of [true, false]) {
   });
 }
 
+test("an ordinary AI comment write keeps an unconfirmed human edit in its paragraph", async () => {
+  const { host, push } = await session();
+  const comment = applyReviewOperation(source, {
+    type: "add-selected-comment",
+    expectedSource: source,
+    range: { start: 0, end: "First".length },
+    body: "Check First.",
+    author: "agent",
+    createdAt: "2026-09-08T13:00:00.000Z",
+  });
+  if (!comment.ok) throw new Error(comment.message);
+  const human = ChangeSet.of(
+    {
+      from: source.indexOf("Second") + "Second".length,
+      insert: " collaboratively",
+    },
+    source.length,
+  );
+
+  // An agent read the source, produced a regular whole-file Markdown write,
+  // and a human still holds a local CodeMirror operation from that source.
+  expect(await host.writeFile(path, comment.source, "agent")).toBe(true);
+  expect((await push(human, "writer")).status).toBe("accepted");
+
+  const review = readReview((await host.readFile(path))!);
+  expect(review.diagnostics).toEqual([]);
+  expect(review.projection.markdown.trimEnd()).toBe(
+    "First paragraph.\n\nSecond collaboratively paragraph.",
+  );
+});
+
+test("a 100KiB AI comment write keeps an unconfirmed human edit in its paragraph", async () => {
+  const largeSource = `First paragraph.\n\n${"A filler paragraph. ".repeat(5_000)}\n\nSecond paragraph.\n`;
+  const { host, push } = await session(largeSource);
+  const comment = applyReviewOperation(largeSource, {
+    type: "add-selected-comment",
+    expectedSource: largeSource,
+    range: { start: 0, end: "First".length },
+    body: "Check First.",
+    author: "agent",
+    createdAt: "2026-09-08T13:00:00.000Z",
+  });
+  if (!comment.ok) throw new Error(comment.message);
+  const second = largeSource.lastIndexOf("Second") + "Second".length;
+  const human = ChangeSet.of({ from: second, insert: " collaboratively" }, largeSource.length);
+
+  expect(await host.writeFile(path, comment.source, "agent")).toBe(true);
+  expect((await push(human, "writer")).status).toBe("accepted");
+
+  const review = readReview((await host.readFile(path))!);
+  expect(review.diagnostics).toEqual([]);
+  expect(review.projection.markdown).toBe(
+    largeSource.replace("Second paragraph.", "Second collaboratively paragraph."),
+  );
+});
+
 // Deliberately accepted for client-side RFM editing; see tasks/roughdraft-concurrent-endmatter.md.
 const fails = createFailing(test, /FIRST COMMENT FOOTER RACE/);
 fails("simultaneous first comments should share one valid endmatter", async () => {

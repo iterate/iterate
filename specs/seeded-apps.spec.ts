@@ -178,6 +178,11 @@ test("review a workspace document in the seeded Docs app", async ({ baseURL, pag
       "- [ ] Review the launch copy",
       "- [ ] Confirm the rollout owner",
       "",
+      "| Area | Decision |",
+      "| --- | --- |",
+      "| Launch copy | Draft |",
+      "| Rollout | Pending |",
+      "",
       "## Review focus",
       "",
       "Make review decisions directly in the workspace file.",
@@ -226,42 +231,102 @@ test("review a workspace document in the seeded Docs app", async ({ baseURL, pag
   // provisioning and cold-start setup that this end-to-end proof also covers.
   page.videoMode?.setStartTime();
 
-  // A task-list checkbox is part of its list row, not a detached line above
-  // the copy. This geometric assertion protects the exact rendering failure
-  // that made the first Docs screenshots hard to scan.
-  const checklistItem = page.locator("li[data-task]").filter({ hasText: "Review the launch copy" });
-  const checkboxBox = await checklistItem.locator('input[type="checkbox"]').boundingBox();
-  const labelBox = await checklistItem
-    .getByText("Review the launch copy", { exact: true })
-    .boundingBox();
+  // Docs uses one shared browser context here, so these are two real
+  // concurrent clients for the same signed-in project member. A second
+  // identity would require project-member provisioning that is orthogonal to
+  // the editor protocol; distinct live sessions still exercise rebase,
+  // presence and every server ordering path.
+  const peer = await page.context().newPage();
+  await peer.goto(docsUrl.toString());
+  await peer.getByText(/^live · v\d+$/).waitFor({ timeout: 30_000 }); // timeout: second app-host load and collab attach have no spinnerWaiter-visible progress
+
+  const editor = page.locator(".cm-content");
+  const peerEditor = peer.locator(".cm-content");
+  await editor.waitFor();
+  await peerEditor.waitFor();
+
+  // A task-list checkbox remains aligned with its item in the live rich
+  // CodeMirror view — the raw source text is not a separate preview anymore.
+  const checklistItem = page
+    .locator(".cm-content")
+    .getByText("Review the launch copy", { exact: true });
+  const checkboxBox = await checklistItem.locator("xpath=preceding::input[1]").boundingBox();
+  const labelBox = await checklistItem.boundingBox();
   expect(checkboxBox).not.toBeNull();
   expect(labelBox).not.toBeNull();
   expect(
     Math.abs(checkboxBox!.y + checkboxBox!.height / 2 - (labelBox!.y + labelBox!.height / 2)),
   ).toBeLessThan(5);
 
+  // Source and rich editing are two presentations of the same CodeMirror
+  // state. Toggling cannot serialize or reseed the Markdown buffer.
+  const beforePresentationToggle = await workspace.readFile(documentPath);
   await page.getByRole("button", { name: "Source" }).click();
-  const editor = page.locator(".cm-content");
-  await editor.waitFor();
-  await editor.click();
-  // Select-all + ArrowRight parks the cursor at the end on macOS and Linux;
-  // Cmd/Ctrl+End is not a consistent CodeMirror binding across both.
-  await page.keyboard.press("ControlOrMeta+a");
-  await page.keyboard.press("ArrowRight");
-  await page.keyboard.type("\n\nReviewed in Docs.");
-  await editor.getByText("Reviewed in Docs.", { exact: true }).waitFor({ timeout: 10_000 }); // timeout: tight manual budget — CodeMirror keystroke echo has no loading UI for the spinner-waiter
-  await page.getByRole("button", { name: "Preview" }).click();
-  await page
-    .locator("div.cursor-text")
-    .getByText("Reviewed in Docs.", { exact: true })
-    .waitFor({ timeout: 10_000 }); // timeout: tight manual budget — the Preview repaint has no loading UI for the spinner-waiter
+  await page.getByRole("button", { name: "Rich editing" }).click();
+  await page.getByText("Docs review walkthrough", { exact: true }).waitFor();
+  expect(await workspace.readFile(documentPath)).toBe(beforePresentationToggle);
 
-  // Track changes is discoverable from Preview and opens the source redlines.
+  // Two independent rich editors concurrently change a body passage and two
+  // native table cells. The cells stay ordinary CodeMirror source ranges, so
+  // neither participant replaces a whole table widget.
+  await Promise.all([
+    (async () => {
+      await page.locator(".cm-markdown-table-cell", { hasText: "Draft" }).dblclick();
+      await page.keyboard.type("Approved");
+    })(),
+    (async () => {
+      await peer.locator(".cm-markdown-table-cell", { hasText: "Pending" }).dblclick();
+      await peer.keyboard.type("Scheduled");
+    })(),
+  ]);
+  await peer.getByText("Approved", { exact: true }).waitFor({ timeout: 10_000 }); // timeout: remote CodeMirror update is optimistic UI with no spinnerWaiter-visible progress
+  await page.getByText("Scheduled", { exact: true }).waitFor({ timeout: 10_000 }); // timeout: remote CodeMirror update is optimistic UI with no spinnerWaiter-visible progress
+  await Promise.all([
+    appendAtEnd(page, "\n\nPRIMARY_CONCURRENT_BODY"),
+    appendAtEnd(peer, "\n\nPEER_CONCURRENT_BODY"),
+  ]);
+  await page.getByText("PEER_CONCURRENT_BODY", { exact: true }).waitFor({ timeout: 10_000 }); // timeout: remote CodeMirror update has no spinnerWaiter-visible progress
+  await peer.getByText("PRIMARY_CONCURRENT_BODY", { exact: true }).waitFor({ timeout: 10_000 }); // timeout: remote CodeMirror update has no spinnerWaiter-visible progress
+
+  // The primary user keeps a native selection while the peer inserts text.
+  // Comment submission reads the mapped bookmark from the editor's live doc,
+  // not the React mirror that deliberately trails typing.
+  const reviewSentence = page
+    .locator(".cm-content")
+    .getByText("Make review decisions directly in the workspace file.", { exact: true });
+  await reviewSentence.click({ clickCount: 3 });
+  await appendAtEnd(peer, "\n\nPeer inserted while the passage was selected.");
+  await page.getByRole("button", { name: "Comment on selected text" }).click();
+  await page
+    .getByPlaceholder("Comment on selected text…")
+    .fill("Can we make this promise more concrete?");
+  await page.getByRole("button", { name: "Add comment" }).click();
+
+  // Undo only removes the local operation. A remote insertion that arrived
+  // between local typing and undo remains in both buffers and durable source.
+  await appendAtEnd(page, "\n\nLOCAL_UNDONE");
+  await appendAtEnd(peer, "\n\nREMOTE_KEPT");
+  await page.getByText("REMOTE_KEPT", { exact: true }).waitFor({ timeout: 10_000 }); // timeout: remote CodeMirror update has no spinnerWaiter-visible progress
+  await editor.click();
+  await page.keyboard.press("ControlOrMeta+z");
+  await expect
+    .poll(async () => String(await workspace.readFile(documentPath)), {
+      timeout: 30_000, // timeout: durability arrives through the live collab push, not spinnerWaiter-visible UI
+    })
+    .toContain("REMOTE_KEPT");
+  const afterUndo = (await workspace.readFile(documentPath))!;
+  expect(afterUndo).not.toContain("LOCAL_UNDONE");
+  expect(readReview(afterUndo)).toMatchObject({ diagnostics: [] });
+
+  // Rich end-of-document insertion belongs before the hidden endmatter.
+  await appendAtEnd(page, "\n\nReviewed in Docs.");
+  await page.getByText("Reviewed in Docs.", { exact: true }).waitFor({ timeout: 10_000 }); // timeout: tight manual budget — rich syntax projection has no spinnerWaiter-visible UI
+
+  // Track changes stays on the rich editor instead of forcing a source view.
   await page.getByRole("button", { name: "Track changes" }).click();
   await editor.locator(".cm-redline-ins").filter({ hasText: "Reviewed in Docs." }).waitFor();
   await page.getByRole("button", { name: "Track changes" }).click();
   expect(await editor.locator(".cm-redline-ins").count()).toBe(0);
-  await page.getByRole("button", { name: "Preview" }).click();
 
   // The 15-minute project session renews from the page itself (the request
   // the app's keepalive makes), through the config worker's gate, for the
@@ -284,11 +349,7 @@ test("review a workspace document in the seeded Docs app", async ({ baseURL, pag
       socket.close();
     }
   });
-  await page.getByRole("button", { name: "Source" }).click();
-  await editor.click();
-  await page.keyboard.press("ControlOrMeta+a");
-  await page.keyboard.press("ArrowRight");
-  await page.keyboard.type("\n\nStill here after the socket dropped.");
+  await appendAtEnd(page, "\n\nStill here after the socket dropped.");
   await page.getByText(/^live · v\d+$/).waitFor({ timeout: 30_000 }); // timeout: the pull loop's backoff before its re-dial — the a11y-only badge gives the spinner-waiter nothing to watch
   await expect
     .poll(async () => String(await workspace.readFile(documentPath)), {
@@ -296,7 +357,7 @@ test("review a workspace document in the seeded Docs app", async ({ baseURL, pag
     })
     .toContain("Still here after the socket dropped.");
 
-  await page.getByRole("button", { name: "Preview", exact: true }).click();
+  await page.getByRole("button", { name: "Rich editing", exact: true }).click();
 
   await page.getByRole("button", { name: "Comment on document" }).click();
   await page
@@ -309,15 +370,6 @@ test("review a workspace document in the seeded Docs app", async ({ baseURL, pag
     .waitFor();
   await commentsPanel.getByRole("heading", { name: "Whole document", exact: true }).waitFor();
 
-  const reviewSentence = page
-    .locator("div.cursor-text")
-    .getByText("Make review decisions directly in the workspace file.", { exact: true });
-  // Native paragraph selection can end at offset zero of the next block.
-  await reviewSentence.click({ clickCount: 3 });
-  await page
-    .getByPlaceholder("Comment on the selection…")
-    .fill("Can we make this promise more concrete?");
-  await page.getByRole("button", { name: "Comment", exact: true }).click();
   await commentsPanel
     .getByText("Can we make this promise more concrete?", { exact: true })
     .waitFor();
@@ -341,10 +393,7 @@ test("review a workspace document in the seeded Docs app", async ({ baseURL, pag
 
   await page.reload();
   await page.getByText(/^live · v\d+$/).waitFor();
-  const headingFontSize = await page
-    .getByRole("heading", { name: "Docs review walkthrough" })
-    .evaluate((element) => getComputedStyle(element).fontSize);
-  expect(headingFontSize).toBe("24px");
+  await page.getByText("Docs review walkthrough", { exact: true }).waitFor();
   await page.getByText("Can we make this promise more concrete?", { exact: true }).waitFor();
   await testInfo.attach("roughdraft-desktop", {
     body: await page.screenshot({ animations: "disabled" }),
@@ -360,7 +409,18 @@ test("review a workspace document in the seeded Docs app", async ({ baseURL, pag
     body: await page.screenshot({ animations: "disabled" }),
     contentType: "image/png",
   });
+  await peer.close();
 });
+
+async function appendAtEnd(page: import("@playwright/test").Page, text: string): Promise<void> {
+  const editor = page.locator(".cm-content");
+  await editor.click();
+  // Select-all + ArrowRight parks the cursor at the end on macOS and Linux;
+  // Cmd/Ctrl+End is not a consistent CodeMirror binding across both.
+  await page.keyboard.press("ControlOrMeta+a");
+  await page.keyboard.press("ArrowRight");
+  await page.keyboard.type(text);
+}
 
 /**
  * App hosts are `<app>--<project>.<base>`, one origin per app. Locally the

@@ -26,3 +26,14 @@ export interface CollabEditorApi {
   /** Transform the current local document into ordinary, disjoint text edits. */
   applyTransform(transform: (source: string) => string): void;
 }
+
+/**
+ * Review data supplied by a host to the Markdown editor. The editor keeps
+ * selection positions in CodeMirror; the host owns the comment rail and the
+ * plain-text review operation that persists a submitted comment.
+ */
+export type EditorReviewConfig = {
+  selectedThreadId: string | null;
+  onSelectThread: (id: string | null) => void;
+  onComment?: (range: { from: number; to: number }, body: string) => boolean;
+};
