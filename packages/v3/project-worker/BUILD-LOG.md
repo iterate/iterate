@@ -4493,3 +4493,33 @@ pin naming its mechanism, or declined with the reason above. The red pins are th
   expected-fail (the repinned row green) · `pnpm test` 51 files / 731 passed. DEPLOYED (version
   b7da64e4, on 0.10.3): 22 files / 196 passed / 4 expected-fail — ALL GREEN.
 - REVIEW ROUNDS running: correctness + security, and simplification + cleanup, over the three commits.
+
+## 2026-09-09 — auth, review round 1 applied: one verifier, one Reach, the fetch lanes bearer-only, the token session without doors
+
+- TWO REVIEWERS over steps 1–3 (correctness + security; simplification + cleanup), one implementer
+  applying both (fa0ffde6e). SECURITY, each reproduced against the real worker first: the fetch lane
+  admitted the platform cookie with no site check — a cross-site GET ran ANY expression in the
+  victim's project (the DO evaluates the call steps before finding no terminal fetch); the
+  control-plane cookie is no lane candidate at all now (`from-server-cookie` is `/api`'s), which also
+  stops the platform cookie stamping a non-member as an app's principal. A project-TOKEN session
+  could mint a 24 h token and rotate the project's long-lived key — a token is a 15-minute
+  delegation and its session has no project doors. The console's cookie-authenticated POSTs took any
+  Origin and `/logout` took GET — 403 on a foreign origin, POST only. `authorize()` honours the
+  provider's redirecting `AuthorizationError` (a foreign resource is a 302 back to the client with
+  `error=invalid_target`, no code). `APP_CONFIG_PROJECT_TOKEN_SECRET` is required. `no-store` on the
+  console. Six pins.
+- SIMPLIFICATION: `verifyCredentials` is the one verifier — the lanes try a candidate list (the
+  bearer as token / admin secret / this project's secret; the host cookie as a token) and take the
+  first that verifies FOR THIS PROJECT; `resolveExternalToken` runs the same list (a project token
+  works on `/mcp` now); `Reach` = "every" | { userId } | { projectIds } with `reachableProjects` /
+  `reachesProject` on the directory is every gate; one `createProject(reach, name)`; one
+  `signProjectToken`; the session-cookie codec beside the other verifiers in principal.ts; the
+  open-mode vestiges (`SessionInput.user`, `identity()`) gone; the e2e support mints tokens through the
+  real door, so a deployed run needs no token secret; five e2e rows that re-pinned workers rows gone,
+  three workers rows added. On an http origin (the local lane) the provider carries no pinned
+  resource — 0.10.3 refuses an http issuer; every deployment is https and pinned.
+- GATES: tsc ×3 · oxlint · knip · unit 510 · workers 54 · local e2e 177. DEPLOYED (version
+  bf34bcca): 20 files / 191 passed / 4 expected-fail; the two reds are platform signatures — the
+  kv-list storage reset (measured 2026-09-09) and a DO "reset because its code was updated" inside
+  the deploy's own code-lag window (green alone).
+- ROUND 2 running: a fresh reviewer over the committed result.
