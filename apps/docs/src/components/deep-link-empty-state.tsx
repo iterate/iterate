@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
-import { FileTextIcon, Loader2Icon, PlusIcon, TelescopeIcon } from "lucide-react";
+import { FileTextIcon, Loader2Icon, TelescopeIcon } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
 import { Input } from "@iterate-com/ui/components/input";
 import { SidebarTrigger } from "@iterate-com/ui/components/sidebar";
@@ -8,9 +8,8 @@ import { withDocsProject } from "../lib/docs-client.ts";
 
 /**
  * Docs home — the workspace picker: every workspace of the project (agents'
- * included), a path you know, or a fresh scratch workspace seeded with a
- * starter note. Opening one lands on its file tree; deep links
- * (?workspace=&path=) keep working unchanged.
+ * included), a path you know, or a new one by name. Opening one lands on its
+ * file tree; deep links (?workspace=&path=) keep working unchanged.
  */
 export function DeepLinkEmptyState() {
   const navigate = useNavigate();
@@ -18,8 +17,6 @@ export function DeepLinkEmptyState() {
   const [listError, setListError] = useState<string | null>(null);
   const [chosen, setChosen] = useState("");
   const canOpen = chosen.startsWith("/workspaces/") || chosen.startsWith("/agents/");
-  const [creating, setCreating] = useState(false);
-  const [createError, setCreateError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -35,44 +32,20 @@ export function DeepLinkEmptyState() {
     };
   }, []);
 
-  const createScratch = () => {
-    setCreating(true);
-    setCreateError(null);
-    void withDocsProject((project) => project.createWorkspace())
-      .then(({ workspacePath, path }) =>
-        navigate({ to: "/", search: { workspace: workspacePath, path } }),
-      )
-      .catch((error: unknown) => {
-        setCreateError(error instanceof Error ? error.message : String(error));
-        setCreating(false);
-      });
-  };
-
   return (
     <div className="relative min-h-svh bg-muted/20 px-6 py-10">
       <SidebarTrigger className="absolute top-3 left-3 md:hidden" />
       <div className="mx-auto flex w-full max-w-2xl flex-col gap-6">
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <div className="mb-4 flex size-10 items-center justify-center rounded-xl bg-foreground text-background">
-              <FileTextIcon aria-hidden className="size-5" />
-            </div>
-            <h1 className="text-xl font-semibold tracking-tight">Workspaces</h1>
-            <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-              Every file lives in a workspace: every project repo mounted under repos/, the
-              workspace&rsquo;s own files beside them. Agents have one each; New workspace mints you
-              an ephemeral one.
-            </p>
+        <div>
+          <div className="mb-4 flex size-10 items-center justify-center rounded-xl bg-foreground text-background">
+            <FileTextIcon aria-hidden className="size-5" />
           </div>
-          <div className="flex flex-col items-end gap-1">
-            <Button onClick={createScratch} disabled={creating}>
-              <PlusIcon aria-hidden className="size-4" />
-              {creating ? "Creating…" : "New workspace"}
-            </Button>
-            {createError !== null && (
-              <p className="max-w-56 text-right text-xs text-red-700">{createError}</p>
-            )}
-          </div>
+          <h1 className="text-xl font-semibold tracking-tight">Workspaces</h1>
+          <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
+            Every file lives in a workspace: every project repo mounted under repos/, the
+            workspace&rsquo;s own files beside them. Agents have one each; make your own from the
+            sidebar.
+          </p>
         </div>
 
         <div>
@@ -108,7 +81,10 @@ export function DeepLinkEmptyState() {
             <h2 className="truncate text-sm font-semibold">All workspaces</h2>
           </div>
           {workspaces === null ? (
-            <p className="flex items-center gap-2 px-5 py-4 text-sm text-muted-foreground">
+            <p
+              className="flex items-center gap-2 px-5 py-4 text-sm text-muted-foreground"
+              data-spinner={listError === null ? "true" : undefined}
+            >
               {listError === null ? (
                 <>
                   <Loader2Icon aria-hidden className="size-4 animate-spin" /> Loading…
@@ -117,6 +93,8 @@ export function DeepLinkEmptyState() {
                 listError
               )}
             </p>
+          ) : workspaces.length === 0 ? (
+            <p className="px-5 py-4 text-sm text-muted-foreground">No workspaces yet</p>
           ) : (
             <ul className="divide-y">
               {workspaces.map((entry) => (

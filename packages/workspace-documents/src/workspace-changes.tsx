@@ -8,23 +8,19 @@ import type { WorkspaceMountChanges, useWorkspaceFiles } from "./workspace-files
  * One Commit control per dirty mount of a workspace — a commit never spans
  * mounts, and every project repo is one. Read-only mounts and the
  * workspace's own directory show their changes in the tree but get no
- * control here. Renders nothing when the host withholds committing (a guest
- * view on someone else's workspace) or nothing is dirty.
+ * control here. Renders nothing when nothing is dirty.
  */
 export function WorkspaceChanges({
   files,
-  canCommit,
   onDiscarded,
 }: {
   files: ReturnType<typeof useWorkspaceFiles>;
-  /** Publishing is the workspace owner's act; false withholds every control. */
-  canCommit: boolean;
   /** Every change under one mount was reverted (null: the own directory). */
   onDiscarded: (scope: string | null) => void;
 }) {
-  const committable = canCommit
-    ? files.mounts.filter((mount) => mount.scope !== null && mount.policy === "commit-to-main")
-    : [];
+  const committable = files.mounts.filter(
+    (mount) => mount.scope !== null && mount.policy === "commit-to-main",
+  );
   if (committable.length === 0) return null;
   return (
     <>
@@ -100,7 +96,6 @@ function MountCommit({
       autoSaveDueAt={commit.autoSaveDueAt}
       autoCommit={autoCommit}
       onAutoCommitChange={setAutoCommit}
-      canCommit={true}
       onMakeCommit={commit.makeCommit}
       onWriteCommitMessage={commit.writeCommitMessage}
       onDiscardAll={onDiscardAll}

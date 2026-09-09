@@ -10,7 +10,7 @@ import { refreshProjectSession, type RefreshOutcome } from "./project-session.ts
  * fails. Recovery is the client's job and has three rules:
  *
  * 1. Only a TRANSPORT failure replaces the session. An application error
- *    ("document does not exist", "not the owner") is an answer, and tearing
+ *    ("document does not exist", "bad repo path") is an answer, and tearing
  *    the shared socket down for it would fail every other caller.
  * 2. One failure wave, one re-dial: callers that lost the same session all
  *    ride the replacement instead of each minting their own.

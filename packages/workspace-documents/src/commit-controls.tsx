@@ -54,7 +54,6 @@ export function CommitControls({
   autoSaveDueAt,
   autoCommit,
   onAutoCommitChange,
-  canCommit,
   onMakeCommit,
   onWriteCommitMessage,
   onDiscardAll,
@@ -71,7 +70,6 @@ export function CommitControls({
   autoSaveDueAt: number | undefined;
   autoCommit: boolean;
   onAutoCommitChange: (value: boolean) => void;
-  canCommit: boolean;
   onMakeCommit: () => void;
   onWriteCommitMessage: () => void;
   onDiscardAll: () => void;
@@ -79,7 +77,7 @@ export function CommitControls({
   const autoCommitId = useId();
   const dirty = taskChanges.length > 0;
   const busy = commitPending || generatingMessage;
-  const commitDisabled = busy || !canCommit || !dirty;
+  const commitDisabled = busy || !dirty;
   const [open, setOpen] = useState(false);
   // A successful commit (or discard) empties the change set: the review
   // popover has nothing left to say, so it closes — and STAYS closed until

@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useRouterState } from "@tanstack/react-router";
 import {
   ArrowLeft,
@@ -8,7 +8,6 @@ import {
   FileTextIcon,
   Plus,
   SquareKanbanIcon,
-  ZapIcon,
 } from "lucide-react";
 import { IterateLogo } from "@iterate-com/ui/components/iterate-logo";
 import {
@@ -36,6 +35,7 @@ import {
 } from "@iterate-com/ui/components/sidebar";
 import { withDocsProject } from "../lib/docs-client.ts";
 import { CloseMobileSidebarOnNavigate } from "./close-mobile-sidebar-on-navigate.tsx";
+import { NewWorkspaceForm } from "./new-workspace-form.tsx";
 
 /**
  * The VIEWS a workspace can be seen through — documents and the task board
@@ -113,15 +113,7 @@ export function AppSidebar() {
                     <span>Tasks</span>
                   </SidebarMenuButton>
                 </SidebarMenuItem>
-                <SidebarMenuItem>
-                  <SidebarMenuButton
-                    tooltip="Jam — a fresh workspace on the config repo, edited live with people and AI"
-                    render={<Link to="/jam" />}
-                  >
-                    <ZapIcon aria-hidden />
-                    <span>New jam</span>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
+                <NewWorkspaceItem boardView={boardView} repo={search.repo} />
               </SidebarMenu>
             </SidebarGroupContent>
           </SidebarGroup>
@@ -139,8 +131,7 @@ export function AppSidebar() {
  * The os project switcher, one level down: the header dropdown names the
  * current workspace and switches between them. Workspace items stay in the
  * CURRENT view — the docs picker scoped to that workspace, or the board on
- * it; New workspace mints an ephemeral scratch one and jumps straight into
- * its starter document.
+ * it.
  */
 function WorkspaceSwitcher({
   workspacePath,
@@ -149,15 +140,12 @@ function WorkspaceSwitcher({
   workspacePath: string | undefined;
   boardView: boolean;
 }) {
-  const navigate = useNavigate();
   const { isMobile } = useSidebar();
   const [workspaces, setWorkspaces] = useState<{ path: string; createdAt: string }[] | null>(null);
-  const [creating, setCreating] = useState(false);
-  const [createError, setCreateError] = useState<string | null>(null);
 
   // Fetched fresh on every menu open (the sidebar stays mounted for the
-  // app's whole life, so a mount-time list goes stale the moment a scratch
-  // workspace is minted or an agent births one): the previous list stays
+  // app's whole life, so a mount-time list goes stale the moment a
+  // workspace is created or an agent births one): the previous list stays
   // rendered while the refresh is in flight, so only the first open shows
   // the loading row. A refresh failure keeps the last list; a FIRST-open
   // failure has no list to keep, so the error itself becomes the row —
@@ -178,21 +166,6 @@ function WorkspaceSwitcher({
           setListError(error instanceof Error ? error.message : String(error));
         }
       });
-  };
-
-  const createScratch = () => {
-    setCreating(true);
-    setCreateError(null);
-    void withDocsProject((project) => project.createWorkspace())
-      .then(({ workspacePath: created, path }) =>
-        navigate({ to: "/", search: { workspace: created, path } }),
-      )
-      // The menu has closed by the time this settles — surface the failure
-      // under the trigger, where the eye already is.
-      .catch((error: unknown) => {
-        setCreateError(error instanceof Error ? error.message : String(error));
-      })
-      .finally(() => setCreating(false));
   };
 
   return (
@@ -275,10 +248,6 @@ function WorkspaceSwitcher({
             </DropdownMenuGroup>
             <DropdownMenuSeparator />
             <DropdownMenuGroup>
-              <DropdownMenuItem disabled={creating} onClick={createScratch}>
-                <Plus />
-                <span>{creating ? "Creating…" : "New workspace"}</span>
-              </DropdownMenuItem>
               <DropdownMenuItem render={<Link to="/" search={{}} />}>
                 <ArrowLeft />
                 <span>View all workspaces</span>
@@ -286,13 +255,76 @@ function WorkspaceSwitcher({
             </DropdownMenuGroup>
           </DropdownMenuContent>
         </DropdownMenu>
-        {createError !== null && (
-          <p className="px-2 pt-1 text-xs text-red-700 group-data-[collapsible=icon]:hidden">
-            {createError}
-          </p>
-        )}
       </SidebarMenuItem>
     </SidebarMenu>
+  );
+}
+
+/**
+ * New workspace, in the sidebar: the item opens an inline form pre-filled
+ * with a three-word name; Create lands on the new workspace in the current
+ * view (its tree in Docs, the board on the current repo in Tasks).
+ */
+function NewWorkspaceItem({ boardView, repo }: { boardView: boolean; repo: string | undefined }) {
+  const navigate = useNavigate();
+  const { state, setOpen: setSidebarOpen } = useSidebar();
+  const [open, setOpen] = useState(false);
+  const openTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(
+    () => () => {
+      if (openTimer.current !== null) clearTimeout(openTimer.current);
+    },
+    [],
+  );
+  return (
+    <SidebarMenuItem>
+      <SidebarMenuButton
+        tooltip="New workspace — every project repo mounted, named however you like"
+        isActive={open}
+        onClick={() => {
+          if (open) {
+            setOpen(false);
+            return;
+          }
+          if (state === "collapsed") {
+            // The form has no room in the icon-collapsed sidebar: expand it,
+            // and show the form once the width transition has run (the
+            // sidebar's duration-200) — rendered during it, the form
+            // squeezes into the still-narrow rail.
+            setSidebarOpen(true);
+            openTimer.current = setTimeout(() => setOpen(true), 220);
+            return;
+          }
+          setOpen(true);
+        }}
+      >
+        <Plus aria-hidden />
+        <span>New workspace</span>
+      </SidebarMenuButton>
+      {open ? (
+        <NewWorkspaceForm
+          focusOnMount
+          className="px-2 pt-1.5 pb-1 group-data-[collapsible=icon]:hidden"
+          onCreated={(workspacePath) => {
+            setOpen(false);
+            void navigate(
+              boardView
+                ? {
+                    to: "/w",
+                    search: {
+                      group: "folder",
+                      q: "",
+                      repo: repo ?? "",
+                      task: "",
+                      workspace: workspacePath,
+                    },
+                  }
+                : { to: "/", search: { workspace: workspacePath } },
+            );
+          }}
+        />
+      ) : null}
+    </SidebarMenuItem>
   );
 }
 

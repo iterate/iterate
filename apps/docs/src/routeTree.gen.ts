@@ -15,15 +15,9 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
-import { Route as JamRouteImport } from './routes/jam'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as WIndexRouteImport } from './routes/w.index'
 
-const JamRoute = JamRouteImport.update({
-  id: '/jam',
-  path: '/jam',
-  getParentRoute: () => rootRouteImport,
-} as any)
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
@@ -37,43 +31,32 @@ const WIndexRoute = WIndexRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
-  '/jam': typeof JamRoute
   '/w/': typeof WIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
-  '/jam': typeof JamRoute
   '/w': typeof WIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
-  '/jam': typeof JamRoute
   '/w/': typeof WIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/jam' | '/w/'
+  fullPaths: '/' | '/w/'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/jam' | '/w'
-  id: '__root__' | '/' | '/jam' | '/w/'
+  to: '/' | '/w'
+  id: '__root__' | '/' | '/w/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
-  JamRoute: typeof JamRoute
   WIndexRoute: typeof WIndexRoute
 }
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
-    '/jam': {
-      id: '/jam'
-      path: '/jam'
-      fullPath: '/jam'
-      preLoaderRoute: typeof JamRouteImport
-      parentRoute: typeof rootRouteImport
-    }
     '/': {
       id: '/'
       path: '/'
@@ -93,7 +76,6 @@ declare module '@tanstack/react-router' {
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
-  JamRoute: JamRoute,
   WIndexRoute: WIndexRoute,
 }
 export const routeTree = rootRouteImport

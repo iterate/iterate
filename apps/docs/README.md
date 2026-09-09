@@ -64,18 +64,15 @@ connects that source model to the UI. Docs and Tasks share this experience and
 its collaborative Source editor. HTML document comments use an inert JSON
 script containing RFM, separate from the HTML body.
 
-## Jam
+## Sharing a workspace
 
-`/jam` mints a fresh scratch workspace on the config repo, seeds one document
-under `jams/`, and opens it with the file tree beside the editor. The URL you
-land on IS the jam: share it, and everyone on it edits the same live files.
-**Invite AI** in the header toolbar births an agent at `/agents/jams/<id>` and
-briefs it with the workspace path. Its edits show up in the open editor as
-they land, and it reads your keystrokes through the same workspace. Owner workspaces auto-commit after 60 seconds by default. Use the shared
-Tasks **Commit** dropdown in the header to review changes, commit immediately,
-or turn auto-commit off, including before making any changes. A failed commit
-pauses the timer and reports the error; retry manually or toggle auto-commit
-to resume. Guest views never publish another owner’s workspace.
+The URL of a workspace is the thing to share: everyone on it edits the same
+live files, and an agent invited to it (or born with it — every agent has its
+own at `/workspaces/agents/<agent>`) reads and writes the same overlay.
+**New workspace** in the sidebar names one — pre-filled with three random
+words — and creates it with every project repo mounted. Each dirty repo's
+Commit control auto-commits about a minute after the last change unless
+switched off; a failed commit pauses the timer and reports the error.
 
 ## Install into a project
 
@@ -99,7 +96,7 @@ const docsApp = DocsApp.create(this.env, {
 if (app === "docs") return docsApp.fetch(request);
 ```
 
-`https://docs--<project>.iterate.app` then works, `/jam` included. More in
+`https://docs--<project>.iterate.app` then works. More in
 [Remote apps](../../docs/remote-apps.md).
 
 ## Development

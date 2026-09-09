@@ -37,11 +37,6 @@ export function workspaceTransport(workspacePath: string): WorkspaceTransport {
   };
 }
 
-/** The project's repos, for the board home's per-repo sections. */
-export function listRepos(): Promise<string[]> {
-  return withProject((project) => project.repos());
-}
-
 /** Every workspace stream in the project (the picker), newest first. */
 export function listWorkspaces(): Promise<WorkspaceListEntry[]> {
   return withProject((project) => project.workspaces());

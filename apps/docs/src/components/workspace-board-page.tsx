@@ -17,7 +17,7 @@ import {
   type BoardTask,
   type RowField,
 } from "../lib/board-model.ts";
-import { isGuestWorkspacePath, type BoardAddress } from "../lib/board-shared.ts";
+import type { BoardAddress } from "../lib/board-shared.ts";
 import {
   columnsForTasks,
   isTaskFilePath,
@@ -54,10 +54,8 @@ export type BoardSearch = {
  * platform workspace — the overlay is the diff, commits are workspace
  * commits, and the detail editor is the live rebase-model collab session
 . Mounted by the /w route on an existing workspace of any
- * path (plain get: the board home creates a scratch workspace before it
- * opens one there). On a workspace the app doesn't own the page is a GUEST lens: read,
- * comment, edit — the owner acts (Commit, Discard all, Assign agent) stay
- * hidden, and publishing remains the workspace owner's call.
+ * path (plain get: the board home creates a workspace before it opens one
+ * there).
  */
 // The board page is the app's largest surface by nature; splitting it is the
 // combined workspace-app refactor's job (tasks/workspace-lenses-consolidation.md).
@@ -72,9 +70,8 @@ export function WorkspaceBoardPage({
   patchSearch: (patch: Partial<BoardSearch>) => void;
 }) {
   const { repoPath, workspacePath } = address;
-  const guest = isGuestWorkspacePath(workspacePath);
   const board = useWorkspaceBoard(address);
-  // Owners auto-commit by default; guest views never publish another workspace.
+  // Auto-commit is on by default; the popover's checkbox turns it off.
   const [autoCommit, setAutoCommit] = useState(true);
   const [eventsOpen, setEventsOpen] = useState(false);
   // Bumped on revert: the platform ends the file's session, so the open
@@ -265,7 +262,7 @@ export function WorkspaceBoardPage({
     api: {
       generateCommitMessage: async ({ changes }) => fallbackCommitMessage(changes, "tasks"),
     },
-    enabled: autoCommit && !guest,
+    enabled: autoCommit,
     onCommit: async (message) => {
       setActionError(null);
       setCommitPending(true);
@@ -483,14 +480,6 @@ export function WorkspaceBoardPage({
       <header className="flex h-14 shrink-0 items-center gap-2 border-b bg-background px-3">
         <SidebarTrigger className="-ml-1 md:hidden" />
         <BoardBreadcrumbs workspace={workspacePath} rootPath={repoPath} />
-        {guest && (
-          <span
-            className="shrink-0 rounded-md bg-sky-500/15 px-1.5 py-0.5 text-[10px] font-semibold tracking-wide text-sky-800 uppercase"
-            title={`A lens on ${workspacePath} — read, comment, and edit; publishing stays the workspace owner's act.`}
-          >
-            Guest
-          </span>
-        )}
         <div className="ml-auto flex shrink-0 items-center gap-1.5">
           <WorkspacePresence self={board.self} clients={board.boardClients} />
           <div className="hidden items-center gap-1.5 sm:flex">
@@ -528,28 +517,25 @@ export function WorkspaceBoardPage({
               }
             />
           </div>
-          {!guest && (
-            <CommitControls
-              taskChanges={board.taskChanges}
-              commitMessage={commit.commitMessage}
-              onCommitMessageChange={commit.setCommitMessage}
-              commitPending={commitPending}
-              generatingMessage={commit.generatingMessage}
-              autoSaveDueAt={commit.autoSaveDueAt}
-              autoCommit={autoCommit}
-              onAutoCommitChange={setAutoCommit}
-              canCommit={true}
-              onMakeCommit={commit.makeCommit}
-              onWriteCommitMessage={commit.writeCommitMessage}
-              onDiscardAll={() => {
-                // Discard ends every changed file's session — reseat the open
-                // editor afterwards exactly like a single revert does.
-                void board.discardAll().then((ok) => {
-                  if (ok && search.task !== "") setEditorEpoch((current) => current + 1);
-                });
-              }}
-            />
-          )}
+          <CommitControls
+            taskChanges={board.taskChanges}
+            commitMessage={commit.commitMessage}
+            onCommitMessageChange={commit.setCommitMessage}
+            commitPending={commitPending}
+            generatingMessage={commit.generatingMessage}
+            autoSaveDueAt={commit.autoSaveDueAt}
+            autoCommit={autoCommit}
+            onAutoCommitChange={setAutoCommit}
+            onMakeCommit={commit.makeCommit}
+            onWriteCommitMessage={commit.writeCommitMessage}
+            onDiscardAll={() => {
+              // Discard ends every changed file's session — reseat the open
+              // editor afterwards exactly like a single revert does.
+              void board.discardAll().then((ok) => {
+                if (ok && search.task !== "") setEditorEpoch((current) => current + 1);
+              });
+            }}
+          />
         </div>
       </header>
       {board.error !== null && (
@@ -580,7 +566,6 @@ export function WorkspaceBoardPage({
       <WorkspaceTaskSheet
         task={openTask}
         address={address}
-        guest={guest}
         columns={columns}
         allTags={allTags}
         changeStatus={openTask === null ? undefined : board.changes.get(openTask.path)}
@@ -605,27 +590,23 @@ export function WorkspaceBoardPage({
           api.applyTransform(transform);
           return true;
         }}
-        onAssignAgent={
-          guest
-            ? undefined
-            : async () => {
-                if (openTask === null) return;
-                setActionError(null);
-                try {
-                  // Server-side write + commit — reseed so the card wears its
-                  // durable assignment (and clean status) without waiting on
-                  // a poll tick.
-                  await withProject((project) =>
-                    project.assignAgent({ workspacePath, repoPath, path: openTask.path }),
-                  );
-                  await board.refresh();
-                } catch (cause) {
-                  setActionError(
-                    `assign agent failed: ${cause instanceof Error ? cause.message : String(cause)}`,
-                  );
-                }
-              }
-        }
+        onAssignAgent={async () => {
+          if (openTask === null) return;
+          setActionError(null);
+          try {
+            // Server-side write + commit — reseed so the card wears its
+            // durable assignment (and clean status) without waiting on a
+            // poll tick.
+            await withProject((project) =>
+              project.assignAgent({ workspacePath, repoPath, path: openTask.path }),
+            );
+            await board.refresh();
+          } catch (cause) {
+            setActionError(
+              `assign agent failed: ${cause instanceof Error ? cause.message : String(cause)}`,
+            );
+          }
+        }}
         focusHeadline={
           openTask !== null && openTask.path === draftPath ? draftFocusRef.current : undefined
         }

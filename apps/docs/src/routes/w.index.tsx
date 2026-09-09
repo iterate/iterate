@@ -7,10 +7,8 @@ import { DEFAULT_REPO_PATH, normalizeRepoPath } from "../lib/board-shared.ts";
 /**
  * The board as a VIEW on an existing workspace, addressed purely by its
  * platform path — the deep-link form `docs.link` mints and agents share,
- * and the form the board home navigates to after creating a board
- * workspace. Plain get: nothing is created; outside the app's own
- * namespaces the board is a guest (read, comment, edit — never Commit or
- * Discard all).
+ * and the form the board home navigates to after creating a workspace.
+ * Plain get: nothing is created here.
  *   /w?workspace=/agents/you&repo=/repos/config&task=<path>
  */
 export const Route = createFileRoute("/w/")({
