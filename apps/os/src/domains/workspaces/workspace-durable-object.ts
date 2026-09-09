@@ -31,11 +31,13 @@ import {
 } from "./workspace-processor-contract.ts";
 import { mergeWorkspaceConfigPatch } from "./workspace-processor-implementation.ts";
 import {
+  isPathUnder,
   isVirtualDirectoryPath,
+  literalDirectoryOfGlob,
+  type MountRepoAccess,
   reRoutedPaths,
   routeMount,
   WorkspaceCore,
-  type MountRepoAccess,
 } from "./workspace-core.ts";
 import { effectiveWorkspaceMounts, normalizeWorkspaceMountKeys } from "./utils.ts";
 import { resolveAbsolutePath } from "./paths.ts";
@@ -566,15 +568,16 @@ export class WorkspaceV2DurableObject extends DurableObject<Env> {
     return this.#core.deleteFile(resolved);
   }
 
-  async listAllFiles(): Promise<string[]> {
+  async listAllFiles(options: { under?: string } = {}): Promise<string[]> {
     await this.#assertCreated();
     // Enumerations must see freshly created repos — refresh the derived
     // table up front (these are heavy, rare operations anyway).
     await this.#effectiveMounts({ refresh: true });
+    const under = options.under === undefined ? "/" : resolveAbsolutePath(options.under);
     // Live-only sessions (opened on a missing path, unflushed) are readable
     // and exist — listings must agree with readFile/exists.
-    const merged = new Set(await this.#core.listAllFiles());
-    for (const path of this.#collab.livePaths()) merged.add(path);
+    const merged = new Set(await this.#core.listAllFiles({ under }));
+    for (const path of this.#collab.livePaths()) if (isPathUnder(path, under)) merged.add(path);
     return [...merged].sort();
   }
 
@@ -587,7 +590,9 @@ export class WorkspaceV2DurableObject extends DurableObject<Env> {
     const resolved = resolveAbsolutePath(
       pattern.startsWith("/") ? pattern : `${this.#name.path}/${pattern}`,
     );
-    const all = await this.listAllFiles();
+    // Only the subtree the pattern can match: mounts outside it are never
+    // enumerated (a glob under /repos/config must not list /repos/iterate).
+    const all = await this.listAllFiles({ under: literalDirectoryOfGlob(resolved) });
     return all.filter((path) => minimatch(path, resolved, { dot: true }));
   }
 
