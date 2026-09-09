@@ -4572,4 +4572,9 @@ pin naming its mechanism, or declined with the reason above. The red pins are th
 - 32 files, +1,049 / −719 (source +48 net; the growth is tests — 158 lines of it a raw node:http
   WebSocket upgrade carrying a Host header, which Node's fetch and WebSocket refuse to set, so the
   host WebSocket rows run locally instead of deployed-only). GATES: tsc ×3 · oxlint · knip · unit 514
-  · workers 57 · local e2e 177. The deployed proof: the line below.
+  · workers 57 · local e2e 177. DEPLOYED (f3866998a, version c1c512ef): 21 files / 193 passed / 4
+  expected-fail; the one red was the dotted host shape `<app>.<project>.<base>` failing the TLS
+  handshake — the wildcard certificate covers ONE label under the base and a wildcard never matches
+  two (RFC 6125); the shape needs a certificate per project subdomain, a deploy-side task exactly as
+  apps/os provisions custom hostnames. The dotted sub-claim is pinned in the local lane and the
+  workers lane's parse rows; deployed, the two one-label shapes serve. Green alone after.

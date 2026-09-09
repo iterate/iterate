@@ -17,6 +17,7 @@ import {
   fetchProjectHost,
   freshDnsSafeProjectId,
   projectHostnameBase,
+  projectHostsAreLocal,
   registerProject,
 } from "./support/project-host.ts";
 
@@ -95,10 +96,16 @@ test("an app is served at / on its project host — URL verbatim, relative asset
   expect(seen.itxHeaders).not.toContain("x-itx-expression");
   expect(seen.itxHeaders).not.toContain("x-itx-visitor");
   expect(seen.app).toBe("site");
-  // the second app shape, `<app>.<project>.<base>`: the same row
-  const dotted = await fetchProjectHost(`site.${projectId}.${base}`, "/w");
-  expect(dotted.status, dotted.text).toBe(200);
-  expect(dotted.text).toContain(`<p>site.${projectId}.${base}/w</p>`);
+  // the second app shape, `<app>.<project>.<base>`: the same row. LOCAL ONLY: a wildcard
+  // certificate covers ONE label under the base (`*.project-worker.iterate.com`), and a wildcard
+  // never matches two, so on the deployed worker this shape fails the TLS handshake until a
+  // certificate per project subdomain exists — a deploy-side fact, not the edge's (the workers lane
+  // pins the parse; this pins the whole edge, where it can be reached).
+  if (projectHostsAreLocal()) {
+    const dotted = await fetchProjectHost(`site.${projectId}.${base}`, "/w");
+    expect(dotted.status, dotted.text).toBe(200);
+    expect(dotted.text).toContain(`<p>site.${projectId}.${base}/w</p>`);
+  }
   // the apex names no app: the config worker's fetch answers it — the bundled default is 404, a
   // project's own routes it (here: to the site), and sees no app label
   const bare = await fetchProjectHost(`${projectId}.${base}`, "/");
