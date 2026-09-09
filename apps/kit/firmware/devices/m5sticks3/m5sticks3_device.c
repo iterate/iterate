@@ -22,6 +22,7 @@
 #include "esp_timer.h"
 
 #include "iterate/kit/audio_processor.h"
+#include "iterate/kit/capabilities/health.h"
 #include "iterate/kit/capabilities/arguments.h"
 #include "iterate/kit/devices/m5sticks3.h"
 #include "iterate/kit/session_grammar.h"
@@ -249,11 +250,7 @@ static uint8_t volume(void *context) {
 }
 
 static size_t health(void *context, char *out, size_t capacity) {
-  struct field {
-    const char *name;
-    uint32_t value;
-  };
-  const struct field fields[] = {
+  const struct iterate_kit_health_field fields[] = {
     {"codecCaptureOverruns", m5sticks3_audio_capture_overruns()},
     {"codecCaptureFailures", m5sticks3_audio_capture_driver_failures()},
     {"codecPlaybackFailures", m5sticks3_audio_playback_driver_failures()},
@@ -270,20 +267,9 @@ static size_t health(void *context, char *out, size_t capacity) {
     {"faceFrames", m5sticks3_board_face_frames()},
     {"faceFailures", m5sticks3_board_face_failures()},
   };
-  size_t used = 0U;
-  size_t index;
   (void)context;
-  for (index = 0U; index < sizeof(fields) / sizeof(fields[0]); index++) {
-    const int written = snprintf(
-        out + used,
-        capacity - used,
-        ",\"%s\":%u",
-        fields[index].name,
-        (unsigned int)fields[index].value);
-    if (written <= 0 || (size_t)written >= capacity - used) return 0U;
-    used += (size_t)written;
-  }
-  return used;
+  return iterate_kit_health_append_fields(
+      out, capacity, fields, sizeof(fields) / sizeof(fields[0]));
 }
 
 static const struct iterate_kit_board_ops ops = {

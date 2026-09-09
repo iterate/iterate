@@ -107,6 +107,9 @@ iterate_kit_add_test(iterate-kit-audio-seams-test audio_seams_test.c
 iterate_kit_add_test(iterate-kit-camera-test camera_test.c
   LINK iterate-kit-capabilities)
 
+iterate_kit_add_test(iterate-kit-health-fields-test health_fields_test.c
+  LINK iterate-kit-capabilities)
+
 iterate_kit_add_test(iterate-kit-health-test health_test.c
   LINK iterate-kit-capabilities)
 

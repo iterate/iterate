@@ -37,6 +37,7 @@
 #include "nvs.h"
 
 #include "iterate/kit/audio_processor.h"
+#include "iterate/kit/capabilities/health.h"
 #include "iterate/kit/capabilities/arguments.h"
 #include "iterate/kit/devices/havpe.h"
 #include "iterate/kit/session_grammar.h"
@@ -417,13 +418,9 @@ static size_t modules(
  * truncated document is not a shorter one.
  */
 static size_t health(void *context, char *out, size_t capacity) {
-  struct field {
-    const char *name;
-    uint32_t value;
-  };
   uint8_t vnr = 0U;
   (void)havpe_audio_read_vnr(&vnr);
-  const struct field fields[] = {
+  const struct iterate_kit_health_field fields[] = {
     /*
      * The DSP's own opinion of the uplink, 0-255, read live from the XMOS.
      * Reads as 0 both in silence and when the read fails; the codec failure
@@ -461,20 +458,9 @@ static size_t health(void *context, char *out, size_t capacity) {
      */
     {"dialMode", (uint32_t)mode_state.mode + 1U},
   };
-  size_t used = 0U;
-  size_t index;
   (void)context;
-  for (index = 0U; index < sizeof(fields) / sizeof(fields[0]); index++) {
-    const int written = snprintf(
-        out + used,
-        capacity - used,
-        ",\"%s\":%u",
-        fields[index].name,
-        (unsigned int)fields[index].value);
-    if (written <= 0 || (size_t)written >= capacity - used) return 0U;
-    used += (size_t)written;
-  }
-  return used;
+  return iterate_kit_health_append_fields(
+      out, capacity, fields, sizeof(fields) / sizeof(fields[0]));
 }
 
 static const struct iterate_kit_board_ops ops = {

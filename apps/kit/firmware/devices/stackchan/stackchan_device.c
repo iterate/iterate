@@ -45,6 +45,7 @@
 #include "iterate/kit/conversation_overlay.h"
 #include "iterate/kit/devices/stackchan.h"
 #include "iterate/kit/session_grammar.h"
+#include "iterate/kit/capabilities/health.h"
 #include "iterate/kit/voice/loop.h"
 #include "iterate/kit/voice_device_profile.h"
 
@@ -806,17 +807,11 @@ static size_t modules(
  * truncated document is not a shorter one.
  */
 static size_t health(void *context, char *out, size_t capacity) {
-  struct field {
-    const char *name;
-    uint32_t value;
-  };
   struct iterate_kit_stackchan_avatar_metrics face_metrics;
-  size_t used = 0U;
-  size_t index;
   (void)context;
   iterate_kit_stackchan_avatar_metrics_snapshot(&face_metrics);
   {
-    const struct field fields[] = {
+    const struct iterate_kit_health_field fields[] = {
       {"codecCaptureOverruns", stackchan_audio_capture_overruns()},
       {"codecCaptureFailures", stackchan_audio_capture_driver_failures()},
       /*
@@ -903,18 +898,9 @@ static size_t health(void *context, char *out, size_t capacity) {
       {"imageShowsCompleted",
        iterate_kit_stackchan_avatar_image_shows_completed()},
     };
-    for (index = 0U; index < sizeof(fields) / sizeof(fields[0]); index++) {
-      const int written = snprintf(
-          out + used,
-          capacity - used,
-          ",\"%s\":%u",
-          fields[index].name,
-          (unsigned int)fields[index].value);
-      if (written <= 0 || (size_t)written >= capacity - used) return 0U;
-      used += (size_t)written;
-    }
+    return iterate_kit_health_append_fields(
+        out, capacity, fields, sizeof(fields) / sizeof(fields[0]));
   }
-  return used;
 }
 
 static const struct iterate_kit_board_ops ops = {

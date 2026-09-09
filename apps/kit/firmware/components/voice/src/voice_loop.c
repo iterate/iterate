@@ -2089,10 +2089,6 @@ static size_t health_json(char *out, size_t capacity) {
    * the pairs. Adding a counter is one line, and a line cannot be misaligned
    * with itself.
    */
-  struct field {
-    const char *name;
-    uint32_t value;
-  };
   struct iterate_kit_esp_idf_itx_transport_metrics metrics;
   struct iterate_kit_spsc_ring_metrics outbox_metrics;
   const uint64_t now = now_ms(NULL);
@@ -2115,7 +2111,7 @@ static size_t health_json(char *out, size_t capacity) {
       transport.state == ITERATE_KIT_ESP_IDF_ITX_READY &&
       runtime.voicelab_generation == runtime.connection.generation;
 
-  const struct field fields[] = {
+  const struct iterate_kit_health_field fields[] = {
     {"connectionState", (uint32_t)runtime.connection.state},
     {"seq", runtime.stats_sequence++},
     {"framesSent", runtime.voicelab.frames_sent},
@@ -2380,26 +2376,29 @@ static size_t health_json(char *out, size_t capacity) {
   if (written <= 0 || (size_t)written >= capacity) return 0U;
   used = (size_t)written;
 
-  for (index = 0U; index < sizeof(fields) / sizeof(fields[0]); index++) {
-    written = snprintf(
-        out + used,
-        capacity - used,
-        ",\"%s\":%" PRIu32,
-        fields[index].name,
-        fields[index].value);
-    if (written <= 0 || (size_t)written >= capacity - used) {
-      /*
-       * Name the field that did not fit. "health overflow" alone sends the
-       * reader to the transport, when the answer is always the same: this
-       * buffer is one field too small.
-       */
-      ESP_LOGE(
-          tag, "health json full at \"%s\" (%u bytes)", fields[index].name,
-          (unsigned int)capacity);
-      return 0U;
+  const size_t fields_written = iterate_kit_health_append_fields(
+      out + used, capacity - used, fields, sizeof(fields) / sizeof(fields[0]));
+  if (fields_written == 0U) {
+    /*
+     * Name the field that did not fit. "health overflow" alone sends the
+     * reader to the transport, when the answer is always the same: this
+     * buffer is one field too small. Replay only this failure path to locate
+     * that field while keeping the shared renderer free of platform logging.
+     */
+    for (index = 0U; index < sizeof(fields) / sizeof(fields[0]); index++) {
+      const size_t field_written = iterate_kit_health_append_fields(
+          out + used, capacity - used, &fields[index], 1U);
+      if (field_written == 0U) {
+        ESP_LOGE(
+            tag, "health json full at \"%s\" (%u bytes)", fields[index].name,
+            (unsigned int)capacity);
+        return 0U;
+      }
+      used += field_written;
     }
-    used += (size_t)written;
+    return 0U;
   }
+  used += fields_written;
   /*
    * AND THE BOARD'S OWN, in the same shape and under the same rule.
    *
