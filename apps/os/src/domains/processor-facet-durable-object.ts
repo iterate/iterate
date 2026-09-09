@@ -621,6 +621,12 @@ export class ProcessorFacet extends ProcessorFacetBase<Env> {
     const agentProcessor = registry.register(new AgentProcessor(agentArgs), { recovery: true });
     const agentReads = registry.reads(agentProcessor);
     this.#getLiveState = (): AgentLiveState => ({
+      inputAcknowledgedThroughOffset: Math.min(
+        agentReads.currentAcknowledgedThroughOffset,
+        ...Object.values(agentReads.currentState.pendingInputConsequences).map(
+          (offset) => offset - 1,
+        ),
+      ),
       runtimeChange: agentReads.currentState.runtimeChange,
     });
 

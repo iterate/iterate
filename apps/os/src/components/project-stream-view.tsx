@@ -461,8 +461,8 @@ function useStreamSubscriberUser() {
     return {
       id: authSession.user.id,
       email: authSession.user.email,
-      ...(name === undefined || name === "" ? {} : { name }),
-      ...(picture === undefined || picture === "" ? {} : { picture }),
+      ...(name && { name }),
+      ...(picture && { picture }),
     };
   }, [authSession]);
   return subscriberUser;

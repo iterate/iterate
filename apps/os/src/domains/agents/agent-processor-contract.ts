@@ -34,13 +34,17 @@ import { AgentBinding, AgentSummary, AgentSummaryUpdated } from "./agent-presenc
 
 export const AgentProcessorContract = defineProcessorContract({
   slug: "agent",
-  version: "7.0.0",
+  version: "7.1.0",
   description:
     "Maintains model-visible history, schedules debounced offset-identified LLM turns, runs " +
     "them through the Workers AI transport, and executes scripts through the capability host. " +
     "Response interpretation is a config flag (interpretResponses) — off, project " +
     "code parses assistant output and appends the consequences itself.",
   stateSchema: z.object({
+    pendingInputConsequences: z.record(z.string(), z.number().int().positive()).default({}).meta({
+      description:
+        "Unresolved mention or slash-command consequences, keyed by their expected result identity and carrying the original input offset. Removed when the processor reduces that result.",
+    }),
     birthCertificate: z
       .object({
         createdAtOffset: z
@@ -820,6 +824,10 @@ export type AgentRuntimeTransition = z.infer<typeof AgentRuntimeTransition>;
  * behind `processor.snapshot()`; publishing context/history through live state
  * would duplicate the stream on every conversation update. */
 export const AgentLiveState = z.strictObject({
+  inputAcknowledgedThroughOffset: z.number().int().nonnegative().meta({
+    description:
+      "Inputs through this offset have committed processing and their immediate derived work is represented in this same runtime snapshot. Stops before unresolved mention or slash-command input.",
+  }),
   runtimeChange: AgentRuntimeTransition.optional(),
 });
 /** The transient runtime state pushed by one Agent durable object. */

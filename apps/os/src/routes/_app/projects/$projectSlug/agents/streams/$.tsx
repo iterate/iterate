@@ -42,12 +42,14 @@ function ProjectAgentDetailContent() {
       (state) => state.agents,
       [],
     ).value ?? {};
-  const agentRuntimeTransition = useLiveState(
+  const agentLiveState = useLiveState(
     (itx) => itx.agents.get(streamPath).liveState,
-    (state) => state.runtimeChange,
+    (state) => state,
     [streamPath],
     { slug: project.id },
   ).value;
+
+  const agentRuntimeTransition = agentLiveState?.runtimeChange;
 
   // The stream view subscribes live, so a send needs no cache invalidation —
   // the new events arrive over the socket. Agent setup is represented by
@@ -124,6 +126,7 @@ function ProjectAgentDetailContent() {
           }
           emptyLabel={null}
           messageComposer={{
+            acknowledgedThroughOffset: agentLiveState?.inputAcknowledgedThroughOffset ?? 0,
             onInterrupt: interruptAgentMessage,
             onSubmit: submitAgentMessage,
             onSubmitFiles: submitAgentFiles,

@@ -401,6 +401,12 @@ Required acceptance evidence for implementation:
 - A full local worker restart exposed nameless alarm wakes. Stream boot now
   recovers its address from the committed creation event, including when it
   configures the feed facet; the real Stream DO regression test covers this.
+- Submission remains pending until a server acknowledgement arrives with its
+  resulting runtime. The processor retains only unresolved mention/slash-command
+  consequences; ordinary and no-op input use its committed processing cursor.
+  This closes the initial append-to-runtime gap without browser event reduction.
+  A component regression fails without the acknowledgement check; 147 focused
+  tests pass, and four real browser scenarios each passed twice locally.
 - Independent reviews covered publication/replay/causal order and browser
   copying/ownership/rendering, followed by reviews of the ordering, source reset,
   and bounded inspection fixes.

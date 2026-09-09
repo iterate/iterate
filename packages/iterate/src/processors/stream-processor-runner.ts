@@ -454,6 +454,11 @@ export class StreamProcessorRunner<
     return this.#hasLoaded;
   }
 
+  /** Highest offset whose processing and blocking consequences have committed. */
+  get currentAcknowledgedThroughOffset(): number {
+    return this.#progress?.processing.acknowledgedThroughOffset ?? 0;
+  }
+
   /**
    * The current committed fold, synchronously (the schema default until the
    * first load) — the legacy `StreamProcessor.currentState`,

@@ -836,6 +836,8 @@ describe("StreamProcessorRunner side-effect ordering", () => {
         args.blockProcessorWhile(async () => {
           log.push(`block-start:${offset}`);
           await tick(); // a real async gap — ordering must survive macrotasks
+          // A live-state acknowledgement must never publish an in-flight fold.
+          expect(harness.runner.currentAcknowledgedThroughOffset).toBe(0);
           log.push(`block-end:${offset}`);
         });
       },
@@ -843,7 +845,9 @@ describe("StreamProcessorRunner side-effect ordering", () => {
     const harness = makeHarness({ hooks });
     for (const id of ["a", "b", "c"]) harness.journal.seed({ type: REQUESTED, payload: { id } });
 
+    expect(harness.runner.currentAcknowledgedThroughOffset).toBe(0);
     await harness.deliverBatches([harness.journal.rows().slice()]);
+    expect(harness.runner.currentAcknowledgedThroughOffset).toBe(3);
 
     expect(log).toEqual([
       "process:1",

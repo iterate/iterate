@@ -2714,6 +2714,7 @@ export type CfBrowserQuickActionOptions = Record<string, unknown> &
 
 /** The agent processor's reduced state, inferred from the contract's `stateSchema`. */
 export type AgentProcessorState = {
+  pendingInputConsequences: Record<string, number>;
   birthCertificate: { createdAtOffset: number } | null;
   config: {
     llm: { model: string };
@@ -2887,6 +2888,7 @@ export type AgentProcessorState = {
 
 /** The transient runtime state pushed by one Agent durable object. */
 export type AgentLiveState = {
+  inputAcknowledgedThroughOffset: number;
   runtimeChange?:
     | {
         runtime: {

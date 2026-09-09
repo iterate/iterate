@@ -158,6 +158,8 @@ export type RegisteredProcessorReads<State> = Omit<ProcessorReads<State>, "waitU
   ): Promise<void>;
   /** The runner's committed fold, synchronously (schema default until loaded). */
   readonly currentState: State;
+  /** Committed processing cursor, read atomically with currentState in live assembly. */
+  readonly currentAcknowledgedThroughOffset: number;
   /** Whether `currentState` is a real fold — gate live publishing on it. */
   readonly isLoaded: boolean;
   /**
@@ -619,6 +621,9 @@ export function createStreamProcessorRegistry<Live extends object = Record<strin
         waitUntilEvent: (input) =>
           "offset" in input ? runner.waitUntilEvent(input) : runner.waitUntilEvent(input),
         catchUp: () => runner.catchUp(),
+        get currentAcknowledgedThroughOffset() {
+          return runner.currentAcknowledgedThroughOffset;
+        },
         get currentState() {
           return runner.currentState;
         },
