@@ -177,7 +177,7 @@ test("an abruptly terminated client transport still durably disconnects its live
       type: "admin-secret",
       secret: adminSecret(),
     });
-    using providerProject = await providerItx.projects.connect(projectId, {
+    using _providerProject = await providerItx.projects.connect(projectId, {
       path: "/clients/abrupt",
       description: "Abruptly disconnected e2e client",
       capabilities: { marker: () => marker },
@@ -203,7 +203,7 @@ test("an abruptly terminated client transport still durably disconnects its live
       type: "admin-secret",
       secret: adminSecret(),
     });
-    using recoveredProject = await recoveredItx.projects.connect(projectId, {
+    using _recoveredProject = await recoveredItx.projects.connect(projectId, {
       path: "/clients/abrupt",
       description: "Recovered e2e client",
       capabilities: { marker: () => ({ marker, recovered: true }) },
