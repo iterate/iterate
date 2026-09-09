@@ -2,6 +2,7 @@
 // It shares the event mirror and virtualized tail-following scroll behavior.
 
 import { Link } from "@tanstack/react-router";
+import { z } from "zod";
 import {
   useCallback,
   useLayoutEffect,
@@ -22,13 +23,18 @@ import {
 import type { StreamBrowserDatabase } from "~/domains/streams/client-libraries/browser/stream-browser-db.ts";
 import { useStreamQuery } from "~/domains/streams/client-libraries/browser/hooks/use-stream-query.ts";
 
-type FeedItemRow = {
-  local_index: number;
-  kind: string;
-  first_offset: number;
-  last_offset: number;
-  data: Record<string, unknown>;
-};
+const FeedItemRow = z.object({
+  local_index: z.number(),
+  kind: z.string(),
+  first_offset: z.number(),
+  last_offset: z.number(),
+  data: z
+    .string()
+    .transform((json) => JSON.parse(json))
+    .pipe(z.record(z.string(), z.unknown())),
+});
+type FeedItemRow = z.infer<typeof FeedItemRow>;
+const ChildStreamPayload = z.object({ childPath: z.string().min(1) });
 
 export function EventFeedView({ streamView }: { streamView: StreamViewSearch }) {
   const store = useMemo(
@@ -388,8 +394,7 @@ function FeedItemWindow({
   const rowsByLocalIndex = useMemo(() => {
     const rows = new Map<number, FeedItemRow>();
     for (const [index, row] of rowQueryResult.data.entries()) {
-      const parsed = parseFeedItem(row);
-      if (parsed !== undefined) rows.set(firstIndex + index, parsed);
+      rows.set(firstIndex + index, FeedItemRow.parse(row));
     }
     return rows;
   }, [firstIndex, rowQueryResult.data]);
@@ -580,7 +585,7 @@ function ChildStreamCreatedFeedItem({
   row: FeedItemRow;
   onToggle(): void;
 }) {
-  const childPath = childStreamPathFromRow(row);
+  const childPath = ChildStreamPayload.safeParse(row.data.payload).data?.childPath;
   const childSearch =
     childPath === undefined
       ? undefined
@@ -656,42 +661,8 @@ function FeedItemJson({ row }: { row: FeedItemRow }) {
   );
 }
 
-function childStreamPathFromRow(row: FeedItemRow): string | undefined {
-  const payload = row.data.payload;
-  if (payload === null || typeof payload !== "object") return undefined;
-  const childPath = (payload as Record<string, unknown>).childPath;
-  return typeof childPath === "string" && childPath.length > 0 ? childPath : undefined;
-}
-
 function feedItemEventType(row: FeedItemRow) {
   return typeof row.data.type === "string" ? row.data.type : row.kind;
-}
-
-function parseFeedItem(row: Record<string, unknown>): FeedItemRow | undefined {
-  if (
-    typeof row.local_index !== "number" ||
-    typeof row.kind !== "string" ||
-    typeof row.first_offset !== "number" ||
-    typeof row.last_offset !== "number"
-  ) {
-    return undefined;
-  }
-  let data: Record<string, unknown> = {};
-  if (typeof row.data === "string") {
-    try {
-      const parsed: unknown = JSON.parse(row.data);
-      if (parsed !== null && typeof parsed === "object") data = parsed as Record<string, unknown>;
-    } catch {
-      data = {};
-    }
-  }
-  return {
-    local_index: row.local_index,
-    kind: row.kind,
-    first_offset: row.first_offset,
-    last_offset: row.last_offset,
-    data,
-  };
 }
 
 function FeedComposer({ streamStore }: { streamStore: StreamBrowserStore }) {
