@@ -2,7 +2,7 @@
   "name": "project-worker",
   "private": true,
   "type": "module",
-  "description": "The clean-room platform — ONE worker, one package: worker.ts (the stateless capnweb edge + ingress router) + IterateContextDurableObject (iterate-context-durable-object.ts) + control-plane/ (OAuth AS + D1/sqlfu directory + /mcp, always in-process) + context/ fetch/ stream/ sdk/ lib/ shared/",
+  "description": "The clean-room platform — ONE worker, one package: worker.ts (the stateless capnweb edge + ingress router) + IterateContextDurableObject (iterate-context-durable-object.ts) + control-plane/ (OAuth AS + D1 directory + /mcp, always in-process) + context/ fetch/ stream/ sdk/ lib/ shared/",
   "exports": {
     "./types": "./src/types.ts",
     "./client": "./src/client/live-state-client.ts"
@@ -15,7 +15,6 @@
     "e2e": "vitest run --project e2e",
     "spec": "node build-sdk.mjs && playwright test",
     "bench": "vitest bench --run --project bench",
-    "sqlfu:generate": "sqlfu generate",
     "db:schema:remote": "wrangler d1 execute control-plane-directory --remote --file src/control-plane/definitions.sql"
   },
   "dependencies": {
@@ -24,7 +23,6 @@
     "capnweb": "npm:@iterate-com/capnweb@^0.12.2",
     "json5": "^2.2.3",
     "pako": "^3.0.1",
-    "sqlfu": "0.1.1",
     "zod": "^4.1.5"
   },
   "devDependencies": {
@@ -33,7 +31,6 @@
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
     "esbuild": "^0.27.4",
-    "miniflare": "catalog:cloudflare",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
     "typescript": "^5.9.3",
