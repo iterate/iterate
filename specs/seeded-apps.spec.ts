@@ -271,12 +271,10 @@ test("review a workspace document in the seeded Docs app", async ({ baseURL, pag
   // neither participant replaces a whole table widget.
   await Promise.all([
     (async () => {
-      await page.locator(".cm-markdown-table-cell", { hasText: "Draft" }).dblclick();
-      await page.keyboard.type("Approved");
+      await replaceCellWord(page, "Draft", "Approved");
     })(),
     (async () => {
-      await peer.locator(".cm-markdown-table-cell", { hasText: "Pending" }).dblclick();
-      await peer.keyboard.type("Scheduled");
+      await replaceCellWord(peer, "Pending", "Scheduled");
     })(),
   ]);
   await peer.getByText("Approved", { exact: true }).waitFor({ timeout: 10_000 }); // timeout: remote CodeMirror update is optimistic UI with no spinnerWaiter-visible progress
@@ -420,6 +418,25 @@ async function appendAtEnd(page: import("@playwright/test").Page, text: string):
   await page.keyboard.press("ControlOrMeta+a");
   await page.keyboard.press("ArrowRight");
   await page.keyboard.type(text);
+}
+
+async function replaceCellWord(
+  page: import("@playwright/test").Page,
+  current: string,
+  replacement: string,
+): Promise<void> {
+  const cell = page.locator(".cm-markdown-table-cell", { hasText: current });
+  const bounds = await cell.boundingBox();
+  if (!bounds) throw new Error(`Table cell ${JSON.stringify(current)} is not visible.`);
+  // The cell is wider than its word. Double-click inside the visible text,
+  // not its whitespace, to exercise the browser's native word selection.
+  await cell.dblclick({ position: { x: Math.min(20, bounds.width / 2), y: bounds.height / 2 } });
+  await expect
+    .poll(() => cell.evaluate((element) => element.ownerDocument.getSelection()?.toString()), {
+      timeout: 1_000, // timeout: native selection is synchronous and has no spinnerWaiter-visible progress
+    })
+    .toBe(current);
+  await page.keyboard.type(replacement);
 }
 
 /**

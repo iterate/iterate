@@ -144,6 +144,7 @@ const theme = EditorView.baseTheme({
     display: "inline-block",
     height: "1.15em",
     marginLeft: "-1px",
+    marginRight: "-1px",
     position: "relative",
     verticalAlign: "text-bottom",
   },

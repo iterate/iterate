@@ -73,6 +73,12 @@ positions/staleness/trailing whitespace, unnecessary language replacement,
 Node test bundling, and invalid browser-test assumptions. The review also led
 to one shared operation/error path and removal of dead callback/test aliases.
 
+The first deployed walkthrough exposed a one-pixel remote-caret footprint that
+wrapped at the end of a full-width table row. Cancelling that footprint keeps
+the caret in the row (browser row height: 49.6 px → 31.4 px). The table test
+also now double-clicks the visible word rather than the empty center of its
+wide cell, and checks the native selection before replacing it.
+
 The deployed two-browser walkthrough and rendered multiplayer video are still
 pending. Local project app hosts incorrectly served OS's
 Vite graph for Docs's virtual client entry, before reaching the editor; the
