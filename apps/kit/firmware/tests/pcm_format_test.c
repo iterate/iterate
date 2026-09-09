@@ -1,4 +1,4 @@
-#include "voice_pe_pcm_format.h"
+#include "iterate/kit/pcm_format.h"
 
 #include <assert.h>
 #include <limits.h>
@@ -22,11 +22,11 @@ static void interpolates_without_changing_the_hardware_contract(void) {
   const int16_t input[] = {0, 3000, 6000};
   int32_t output[18] = {0};
   size_t written = 0U;
-  struct iterate_kit_voice_pe_playback_resampler resampler;
-  iterate_kit_voice_pe_playback_resampler_reset(&resampler);
+  struct iterate_kit_pcm_playback_resampler resampler;
+  iterate_kit_pcm_playback_resampler_reset(&resampler);
 
   assert(
-      iterate_kit_voice_pe_expand_playback(
+      iterate_kit_pcm_expand_playback(
           &resampler,
           input,
           sizeof(input) / sizeof(input[0]),
@@ -70,13 +70,13 @@ static void preserves_interpolation_across_lane_edges(void) {
   size_t first_written = 0U;
   size_t second_written = 0U;
   size_t contiguous_written = 0U;
-  struct iterate_kit_voice_pe_playback_resampler split_resampler;
-  struct iterate_kit_voice_pe_playback_resampler contiguous_resampler;
-  iterate_kit_voice_pe_playback_resampler_reset(&split_resampler);
-  iterate_kit_voice_pe_playback_resampler_reset(&contiguous_resampler);
+  struct iterate_kit_pcm_playback_resampler split_resampler;
+  struct iterate_kit_pcm_playback_resampler contiguous_resampler;
+  iterate_kit_pcm_playback_resampler_reset(&split_resampler);
+  iterate_kit_pcm_playback_resampler_reset(&contiguous_resampler);
 
   assert(
-      iterate_kit_voice_pe_expand_playback(
+      iterate_kit_pcm_expand_playback(
           &split_resampler,
           first,
           sizeof(first) / sizeof(first[0]),
@@ -84,7 +84,7 @@ static void preserves_interpolation_across_lane_edges(void) {
           sizeof(split_output) / sizeof(split_output[0]),
           &first_written) == ITERATE_KIT_OK);
   assert(
-      iterate_kit_voice_pe_expand_playback(
+      iterate_kit_pcm_expand_playback(
           &split_resampler,
           second,
           sizeof(second) / sizeof(second[0]),
@@ -92,7 +92,7 @@ static void preserves_interpolation_across_lane_edges(void) {
           sizeof(split_output) / sizeof(split_output[0]) - first_written,
           &second_written) == ITERATE_KIT_OK);
   assert(
-      iterate_kit_voice_pe_expand_playback(
+      iterate_kit_pcm_expand_playback(
           &contiguous_resampler,
           contiguous,
           sizeof(contiguous) / sizeof(contiguous[0]),
@@ -115,36 +115,79 @@ static void preserves_interpolation_across_lane_edges(void) {
  * network. This format test pins channel ownership; the production assessor
  * uses exact same-window sums and explicit near-/far-end phases.
  */
-static void extracts_processed_and_non_aec_capture_channels(void) {
-  const int32_t input[] = {
-      0x12340000, 0x56780000,
-      -65536, INT32_MIN,
-      INT32_MAX, 0,
-  };
-  int16_t processed[3] = {0};
-  int16_t non_aec[3] = {0};
-  size_t written = 0U;
+/** A wire shape and literal words, with their expected portable channels. */
+struct capture_case {
+  struct iterate_kit_pcm_shape shape;
+  int32_t input[18];
+  size_t frames;
+  int16_t processed[3];
+  int16_t diagnostic[3];
+  size_t becomes_count;
+};
 
-  assert(
-      iterate_kit_voice_pe_extract_capture(
-          input,
-          3U,
-          processed,
-          non_aec,
-          3U,
-          &written) == ITERATE_KIT_OK);
-  assert(written == 3U);
-  assert(processed[0] == 0x1234);
-  assert(processed[1] == -1);
-  assert(processed[2] == INT16_MAX);
-  assert(non_aec[0] == 0x5678);
-  assert(non_aec[1] == INT16_MIN);
-  assert(non_aec[2] == 0);
+static void extracts_processed_and_non_aec_capture_channels(void) {
+  const struct capture_case cases[] = {
+    {{32, 2, 0, 1, 1},
+     {0x12340000, 0x56780000, -65536, INT32_MIN, INT32_MAX, 0}, 3,
+     {0x1234, -1, INT16_MAX}, {0x5678, INT16_MIN, 0}, 3},
+    /* Distinct skipped words prove stride selection, not just repetition. */
+    {{32, 2, 1, 0, 3},
+     {0x12340000, 0x56780000, 1, 2, 3, 4,
+      -65536, INT32_MIN, 5, 6, 7, 8,
+      INT32_MAX, 0, 9, 10, 11, 12}, 9,
+     {0x5678, INT16_MIN, 0}, {0x1234, -1, INT16_MAX}, 3},
+  };
+  for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+    int16_t processed[3] = {0};
+    int16_t diagnostic[3] = {0};
+    size_t written = 0U;
+    assert(iterate_kit_pcm_extract_capture(
+        &cases[i].shape, cases[i].input, cases[i].frames,
+        processed, diagnostic, 3U, &written) == ITERATE_KIT_OK);
+    assert(written == cases[i].becomes_count);
+    for (size_t j = 0; j < written; ++j) {
+      assert(processed[j] == cases[i].processed[j]);
+      assert(diagnostic[j] == cases[i].diagnostic[j]);
+    }
+  }
+}
+
+/** Shape validation and the native PCM16 path, without a diagnostic tap. */
+static void validates_shapes_and_extracts_pcm16(void) {
+  const int16_t input[] = {-32768, 0, 32767};
+  const struct {
+    struct iterate_kit_pcm_shape shape;
+    size_t frames;
+    size_t capacity;
+    enum iterate_kit_status becomes_status;
+    size_t becomes_count;
+    int16_t becomes[3];
+  } cases[] = {
+    {{16, 1, 0, -1, 1}, 3, 3, ITERATE_KIT_OK, 3, {-32768, 0, 32767}},
+    {{16, 1, 0, -1, 3}, 3, 3, ITERATE_KIT_OK, 1, {-32768}},
+    {{16, 1, 0, -1, 3}, 2, 3, ITERATE_KIT_INVALID_ARGUMENT, 0, {0}},
+    {{16, 1, 0, -1, 1}, 3, 2, ITERATE_KIT_LIMIT, 0, {0}},
+    {{16, 1, 1, -1, 1}, 3, 3, ITERATE_KIT_INVALID_ARGUMENT, 0, {0}},
+    {{16, 1, 0, 0, 1}, 3, 3, ITERATE_KIT_INVALID_ARGUMENT, 0, {0}},
+    {{16, 1, 0, -1, 0}, 3, 3, ITERATE_KIT_INVALID_ARGUMENT, 0, {0}},
+  };
+  for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+    int16_t output[3] = {123, 123, 123};
+    size_t written = 99;
+    assert(iterate_kit_pcm_extract_capture(&cases[i].shape, input,
+        cases[i].frames, output, NULL, cases[i].capacity, &written) ==
+        cases[i].becomes_status);
+    assert(written == cases[i].becomes_count);
+    for (size_t j = 0; j < 3; ++j) {
+      assert(output[j] == (j < written ? cases[i].becomes[j] : 123));
+    }
+  }
 }
 
 int main(void) {
   interpolates_without_changing_the_hardware_contract();
   preserves_interpolation_across_lane_edges();
   extracts_processed_and_non_aec_capture_channels();
+  validates_shapes_and_extracts_pcm16();
   return 0;
 }

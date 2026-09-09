@@ -1,7 +1,7 @@
-#include "voice_pe_pcm_format.h"
+#include "iterate/kit/pcm_format.h"
 
-void iterate_kit_voice_pe_playback_resampler_reset(
-    struct iterate_kit_voice_pe_playback_resampler *resampler) {
+void iterate_kit_pcm_playback_resampler_reset(
+    struct iterate_kit_pcm_playback_resampler *resampler) {
   if (resampler == NULL) {
     return;
   }
@@ -35,8 +35,8 @@ static void write_stereo_q31(
   destination[offset + 1U] = word;
 }
 
-enum iterate_kit_status iterate_kit_voice_pe_expand_playback(
-    struct iterate_kit_voice_pe_playback_resampler *resampler,
+enum iterate_kit_status iterate_kit_pcm_expand_playback(
+    struct iterate_kit_pcm_playback_resampler *resampler,
     const int16_t *source,
     size_t source_samples,
     int32_t *destination,
@@ -52,7 +52,7 @@ enum iterate_kit_status iterate_kit_voice_pe_expand_playback(
   }
   if (source_samples >
       destination_capacity_samples /
-          ITERATE_KIT_VOICE_PE_PLAYBACK_WORDS_PER_PCM16_SAMPLE) {
+          ITERATE_KIT_PCM_PLAYBACK_WORDS_PER_PCM16_SAMPLE) {
     return ITERATE_KIT_LIMIT;
   }
 
@@ -62,7 +62,7 @@ enum iterate_kit_status iterate_kit_voice_pe_expand_playback(
     const int16_t current = source[source_index];
     const size_t destination_offset =
         source_index *
-        ITERATE_KIT_VOICE_PE_PLAYBACK_WORDS_PER_PCM16_SAMPLE;
+        ITERATE_KIT_PCM_PLAYBACK_WORDS_PER_PCM16_SAMPLE;
     if (!resampler->primed) {
       /*
        * There is no sample before the first generation. Holding only this
@@ -94,7 +94,7 @@ enum iterate_kit_status iterate_kit_voice_pe_expand_playback(
 
   *destination_samples_written =
       source_samples *
-      ITERATE_KIT_VOICE_PE_PLAYBACK_WORDS_PER_PCM16_SAMPLE;
+      ITERATE_KIT_PCM_PLAYBACK_WORDS_PER_PCM16_SAMPLE;
   return ITERATE_KIT_OK;
 }
 
@@ -112,9 +112,10 @@ static int16_t q31_word_to_pcm16(int32_t word) {
   return (int16_t)signed_upper;
 }
 
-enum iterate_kit_status iterate_kit_voice_pe_extract_capture(
-    const int32_t *source_interleaved,
-    size_t source_stereo_frames,
+enum iterate_kit_status iterate_kit_pcm_extract_capture(
+    const struct iterate_kit_pcm_shape *shape,
+    const void *source_interleaved,
+    size_t source_frames,
     int16_t *processed_destination,
     int16_t *non_aec_destination,
     size_t destination_capacity_frames,
@@ -123,20 +124,41 @@ enum iterate_kit_status iterate_kit_voice_pe_extract_capture(
     return ITERATE_KIT_INVALID_ARGUMENT;
   }
   *destination_frames_written = 0U;
-  if (source_interleaved == NULL || source_stereo_frames == 0U ||
-      processed_destination == NULL || non_aec_destination == NULL) {
+  if (shape == NULL || (shape->bits != 16U && shape->bits != 32U) ||
+      (shape->slots != 1U && shape->slots != 2U) ||
+      shape->uplink_slot >= shape->slots || shape->diagnostic_slot < -1 ||
+      shape->diagnostic_slot >= (int8_t)shape->slots ||
+      (shape->ratio != 1U && shape->ratio != 3U) ||
+      source_interleaved == NULL || source_frames == 0U ||
+      source_frames % shape->ratio != 0U ||
+      source_frames > SIZE_MAX / shape->slots ||
+      processed_destination == NULL ||
+      (shape->diagnostic_slot >= 0 && non_aec_destination == NULL)) {
     return ITERATE_KIT_INVALID_ARGUMENT;
   }
-  if (source_stereo_frames > destination_capacity_frames) {
+  const size_t output_frames = source_frames / shape->ratio;
+  if (output_frames > destination_capacity_frames) {
     return ITERATE_KIT_LIMIT;
   }
 
-  for (size_t frame = 0U; frame < source_stereo_frames; ++frame) {
-    processed_destination[frame] =
-        q31_word_to_pcm16(source_interleaved[frame * 2U]);
-    non_aec_destination[frame] =
-        q31_word_to_pcm16(source_interleaved[frame * 2U + 1U]);
+  for (size_t frame = 0U; frame < output_frames; ++frame) {
+    const size_t offset = frame * shape->ratio * shape->slots;
+    if (shape->bits == 32U) {
+      const int32_t *words = source_interleaved;
+      processed_destination[frame] =
+          q31_word_to_pcm16(words[offset + shape->uplink_slot]);
+      if (shape->diagnostic_slot >= 0) {
+        non_aec_destination[frame] =
+            q31_word_to_pcm16(words[offset + (uint8_t)shape->diagnostic_slot]);
+      }
+    } else {
+      const int16_t *words = source_interleaved;
+      processed_destination[frame] = words[offset + shape->uplink_slot];
+      if (shape->diagnostic_slot >= 0) {
+        non_aec_destination[frame] = words[offset + (uint8_t)shape->diagnostic_slot];
+      }
+    }
   }
-  *destination_frames_written = source_stereo_frames;
+  *destination_frames_written = output_frames;
   return ITERATE_KIT_OK;
 }

@@ -48,7 +48,7 @@
 #include "freertos/task.h"
 
 #include "voice_pe_hardware_config.h"
-#include "voice_pe_pcm_format.h"
+#include "iterate/kit/pcm_format.h"
 
 static const char tag[] = "havpe-audio";
 
@@ -406,7 +406,9 @@ static void capture_hardware_task(void *argument) {
      * is part of this consolidation. Only the echo-cancelled ch0 plane may
      * reach the uplink.
      */
-    if (iterate_kit_voice_pe_extract_capture(
+    const struct iterate_kit_pcm_shape capture_shape = {32, 2, 0, 1, 1};
+    if (iterate_kit_pcm_extract_capture(
+            &capture_shape,
             stereo_words,
             HAVPE_AUDIO_FRAME_SAMPLES,
             frame.samples,
@@ -502,8 +504,8 @@ static void playback_hardware_task(void *argument) {
   /* One expanded 20 ms frame: 320 * 6 words = 7680 bytes. */
   static int32_t stereo_words
       [HAVPE_AUDIO_FRAME_SAMPLES *
-       ITERATE_KIT_VOICE_PE_PLAYBACK_WORDS_PER_PCM16_SAMPLE];
-  static struct iterate_kit_voice_pe_playback_resampler resampler;
+       ITERATE_KIT_PCM_PLAYBACK_WORDS_PER_PCM16_SAMPLE];
+  static struct iterate_kit_pcm_playback_resampler resampler;
   (void)argument;
   for (;;) {
     /*
@@ -542,7 +544,7 @@ static void playback_hardware_task(void *argument) {
       continue;
     }
     size_t words_written = 0U;
-    if (iterate_kit_voice_pe_expand_playback(
+    if (iterate_kit_pcm_expand_playback(
             &resampler,
             frame.samples,
             frame.sample_count,

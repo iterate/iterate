@@ -236,8 +236,8 @@ iterate_kit_add_havpe_pure_test(
   ../devices/havpe/voice_pe_hardware_config.c
   DEFINES ITERATE_KIT_VOICE_PE_XMOS_UPLINK_STAGE=1)
 
-iterate_kit_add_havpe_pure_test(iterate-kit-havpe-pcm-format-test
-  havpe_pcm_format_test.c ../devices/havpe/voice_pe_pcm_format.c)
+iterate_kit_add_test(iterate-kit-pcm-format-test pcm_format_test.c
+  LINK iterate-kit-audio)
 
 # The dial: mode table (a wire contract with four provisioned streams), the
 # polled quadrature decoder, and the spin-then-settle wheel policy. What the
