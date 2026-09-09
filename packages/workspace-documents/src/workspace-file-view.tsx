@@ -1,8 +1,9 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { FileIcon } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
 import { SourceCodeBlock } from "@iterate-com/ui/components/source-code-block";
 import { Spinner } from "@iterate-com/ui/components/spinner";
+import { changedLinesGutter } from "./change-gutter.ts";
 import { workspaceFileKind } from "./file-kinds.ts";
 import type { WorkspaceTransport } from "./types.ts";
 
@@ -27,6 +28,9 @@ export function WorkspaceFileView({
 }) {
   const kind = workspaceFileKind(path);
   const [content, setContent] = useState<string | null>(null);
+  // The mount's version at HEAD, for the change bars in the gutter; null
+  // for a file the mount does not have (an addition, or the own directory).
+  const [base, setBase] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
   useEffect(() => {
@@ -35,11 +39,20 @@ export function WorkspaceFileView({
     setContent(null);
     setError(null);
     void transport
-      .run((workspace) => workspace.readFile(path))
-      .then((read) => {
+      .run(async (workspace) => {
+        const [read, head] = await Promise.all([
+          workspace.readFile(path),
+          workspace.readBase(path),
+        ]);
+        return { read, head };
+      })
+      .then(({ read, head }) => {
         if (cancelled) return;
         if (read === null) setError(`file "${path}" does not exist`);
-        else setContent(read);
+        else {
+          setContent(read);
+          setBase(head);
+        }
       })
       .catch((cause: unknown) => {
         if (!cancelled) setError(cause instanceof Error ? cause.message : String(cause));
@@ -48,6 +61,10 @@ export function WorkspaceFileView({
       cancelled = true;
     };
   }, [kind.kind, path, transport, attempt]);
+  const extensions = useMemo(
+    () => (base === null || base === content ? [] : [changedLinesGutter(base)]),
+    [base, content],
+  );
 
   return (
     <div className="flex min-h-full flex-1 flex-col bg-background">
@@ -86,6 +103,7 @@ export function WorkspaceFileView({
           <SourceCodeBlock
             code={content}
             language={kind.kind === "text" ? kind.language : "text"}
+            codeMirrorExtensions={extensions}
             plainChrome
             showCopyButton={false}
             wrapLongLines={false}

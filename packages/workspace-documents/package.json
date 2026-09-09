@@ -14,11 +14,13 @@
     "./server": "./src/server.ts",
     "./types": "./src/types.ts",
     "./review": "./src/use-document-review.tsx",
+    "./change-gutter": "./src/change-gutter.ts",
     "./change-summary": "./src/change-summary.ts",
     "./commit-controls": "./src/commit-controls.tsx",
     "./file-kinds": "./src/file-kinds.ts",
     "./use-commit": "./src/use-commit.ts",
     "./workspace-changes": "./src/workspace-changes.tsx",
+    "./workspace-file-diff": "./src/workspace-file-diff.tsx",
     "./workspace-file-view": "./src/workspace-file-view.tsx",
     "./workspace-files": "./src/workspace-files.ts",
     "./workspace-tree": "./src/workspace-tree.tsx"

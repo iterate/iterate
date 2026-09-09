@@ -3,6 +3,10 @@ import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { SidebarTrigger } from "@iterate-com/ui/components/sidebar";
 import { cn } from "@iterate-com/ui/lib/utils";
 import { workspaceFileKind } from "@iterate-com/workspace-documents/file-kinds";
+import {
+  DiffToggle,
+  WorkspaceFileDiff,
+} from "@iterate-com/workspace-documents/workspace-file-diff";
 import { WorkspaceFileView } from "@iterate-com/workspace-documents/workspace-file-view";
 import { useWorkspaceFiles } from "@iterate-com/workspace-documents/workspace-files";
 import { WorkspaceTree } from "@iterate-com/workspace-documents/workspace-tree";
@@ -15,7 +19,8 @@ import { workspaceTransport } from "../lib/project-rpc.ts";
 export const Route = createFileRoute("/")({
   validateSearch: (
     search: Record<string, unknown>,
-  ): { path?: string; repo?: string; workspace?: string } => ({
+  ): { diff?: boolean; path?: string; repo?: string; workspace?: string } => ({
+    diff: search.diff === true || search.diff === "true" ? true : undefined,
     path: typeof search.path === "string" ? search.path : undefined,
     // The docs view ignores repo; it rides along so switching back to the
     // tasks view lands on the same board mount instead of the default.
@@ -29,7 +34,12 @@ function DocumentPage() {
   const search = Route.useSearch();
   if (search.workspace === undefined) return <DeepLinkEmptyState />;
   return (
-    <WorkspaceFiles key={search.workspace} workspacePath={search.workspace} path={search.path} />
+    <WorkspaceFiles
+      key={search.workspace}
+      workspacePath={search.workspace}
+      path={search.path}
+      diff={search.diff === true}
+    />
   );
 }
 
@@ -42,17 +52,26 @@ function DocumentPage() {
 function WorkspaceFiles({
   workspacePath,
   path,
+  diff,
 }: {
   workspacePath: string;
   path: string | undefined;
+  /** Show the open file's diff against HEAD instead of the file. */
+  diff: boolean;
 }) {
   const transport = useMemo(() => workspaceTransport(workspacePath), [workspacePath]);
   const files = useWorkspaceFiles({ transport, workspacePath, listAtOnce: [DEFAULT_REPO_PATH] });
   const navigate = useNavigate({ from: Route.fullPath });
   const onSelect = useCallback(
     (path: string | null) =>
-      void navigate({ search: (current) => ({ ...current, path: path ?? undefined }) }),
+      void navigate({
+        search: (current) => ({ ...current, path: path ?? undefined, diff: undefined }),
+      }),
     [navigate],
+  );
+  const toggleDiff = useCallback(
+    () => void navigate({ search: (current) => ({ ...current, diff: diff ? undefined : true }) }),
+    [diff, navigate],
   );
   // Bumped when the open document was replaced under its editor (a discard
   // ended the collab session): the page remounts and attaches afresh.
@@ -70,23 +89,28 @@ function WorkspaceFiles({
   // down its live editor, refs, and attach gate before the next snapshot shows.
   const documentKey = JSON.stringify([workspacePath, path, revision]);
   const actions = (
-    <WorkspaceActions
-      files={files}
-      workspacePath={workspacePath}
-      selectedPath={selectedPath}
-      onDiscarded={(scope) => {
-        // The open file was under the discarded mount: an addition is gone
-        // (close it), anything else was replaced under its editor (remount).
-        if (selectedPath === undefined) return;
-        const underScope =
-          scope === null
-            ? selectedPath.startsWith(`${workspacePath}/`)
-            : selectedPath.startsWith(`${scope}/`);
-        if (!underScope) return;
-        if (files.changes.get(selectedPath) === "added") onSelect(null);
-        else onDocumentRevised();
-      }}
-    />
+    <>
+      {selectedPath !== undefined && files.changes.has(selectedPath) ? (
+        <DiffToggle active={diff} onToggle={toggleDiff} />
+      ) : null}
+      <WorkspaceActions
+        files={files}
+        workspacePath={workspacePath}
+        selectedPath={selectedPath}
+        onDiscarded={(scope) => {
+          // The open file was under the discarded mount: an addition is gone
+          // (close it), anything else was replaced under its editor (remount).
+          if (selectedPath === undefined) return;
+          const underScope =
+            scope === null
+              ? selectedPath.startsWith(`${workspacePath}/`)
+              : selectedPath.startsWith(`${scope}/`);
+          if (!underScope) return;
+          if (files.changes.get(selectedPath) === "added") onSelect(null);
+          else onDocumentRevised();
+        }}
+      />
+    </>
   );
   return (
     <div className="flex min-h-svh flex-col lg:h-svh lg:flex-row">
@@ -120,6 +144,15 @@ function WorkspaceFiles({
               Pick a file, or add one.
             </div>
           </>
+        ) : diff ? (
+          <div key={documentKey} className="flex min-h-svh flex-col lg:h-svh lg:overflow-hidden">
+            <WorkspaceFileDiff
+              transport={transport}
+              path={selectedPath}
+              leading={<SidebarTrigger className="-ml-1 md:hidden" />}
+              actions={actions}
+            />
+          </div>
         ) : workspaceFileKind(selectedPath).kind === "document" ? (
           <WorkspaceDocumentPage
             key={documentKey}

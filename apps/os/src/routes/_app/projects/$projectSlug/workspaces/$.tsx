@@ -4,6 +4,10 @@ import { z } from "zod";
 import { useItx } from "iterate/sdk/itx/react";
 import type { WorkspaceSurface, WorkspaceTransport } from "@iterate-com/workspace-documents/types";
 import { WorkspaceChanges } from "@iterate-com/workspace-documents/workspace-changes";
+import {
+  DiffToggle,
+  WorkspaceFileDiff,
+} from "@iterate-com/workspace-documents/workspace-file-diff";
 import { WorkspaceFileView } from "@iterate-com/workspace-documents/workspace-file-view";
 import { useWorkspaceFiles } from "@iterate-com/workspace-documents/workspace-files";
 import { WorkspaceTree } from "@iterate-com/workspace-documents/workspace-tree";
@@ -18,6 +22,7 @@ import { StreamViewSearch } from "~/lib/stream-view-search.ts";
 /** The stream-view params plus the open file. */
 const WorkspaceDetailSearch = StreamViewSearch.extend({
   file: z.string().optional().catch(undefined),
+  diff: z.boolean().optional().catch(undefined),
 });
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/workspaces/$")({
@@ -56,10 +61,17 @@ function ProjectWorkspaceDetailContent() {
   }, [itx, workspacePath]);
   const files = useWorkspaceFiles({ transport, workspacePath, listAtOnce: ["/repos/config"] });
   const selectedPath = search.file;
+  const diff = search.diff === true;
   const onSelect = useCallback(
     (path: string | null) =>
-      void navigate({ search: (current) => ({ ...current, file: path ?? undefined }) }),
+      void navigate({
+        search: (current) => ({ ...current, file: path ?? undefined, diff: undefined }),
+      }),
     [navigate],
+  );
+  const toggleDiff = useCallback(
+    () => void navigate({ search: (current) => ({ ...current, diff: diff ? undefined : true }) }),
+    [diff, navigate],
   );
   const { ensureLoaded } = files;
   useEffect(() => {
@@ -70,20 +82,25 @@ function ProjectWorkspaceDetailContent() {
   const onDocumentRevised = useCallback(() => setRevision((current) => current + 1), []);
 
   const actions = (
-    <WorkspaceChanges
-      files={files}
-      canCommit
-      onDiscarded={(scope) => {
-        if (selectedPath === undefined) return;
-        const underScope =
-          scope === null
-            ? selectedPath.startsWith(`${workspacePath}/`)
-            : selectedPath.startsWith(`${scope}/`);
-        if (!underScope) return;
-        if (files.changes.get(selectedPath) === "added") onSelect(null);
-        else onDocumentRevised();
-      }}
-    />
+    <>
+      {selectedPath !== undefined && files.changes.has(selectedPath) ? (
+        <DiffToggle active={diff} onToggle={toggleDiff} />
+      ) : null}
+      <WorkspaceChanges
+        files={files}
+        canCommit
+        onDiscarded={(scope) => {
+          if (selectedPath === undefined) return;
+          const underScope =
+            scope === null
+              ? selectedPath.startsWith(`${workspacePath}/`)
+              : selectedPath.startsWith(`${scope}/`);
+          if (!underScope) return;
+          if (files.changes.get(selectedPath) === "added") onSelect(null);
+          else onDocumentRevised();
+        }}
+      />
+    </>
   );
   const panel = (
     <div className="flex min-h-0 flex-1">
@@ -106,6 +123,13 @@ function ProjectWorkspaceDetailContent() {
               Pick a file.
             </div>
           </>
+        ) : diff ? (
+          <WorkspaceFileDiff
+            key={`${selectedPath}:${revision}`}
+            transport={transport}
+            path={selectedPath}
+            actions={actions}
+          />
         ) : (
           <WorkspaceFileView
             key={`${selectedPath}:${revision}`}
