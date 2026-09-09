@@ -53,7 +53,8 @@ export type MobileFeedItem =
   | (Extract<AgentUiItem, { kind: "stream-woken" }> & { wakeCount: number });
 
 // packages/ui doesn't export its local `Event` type (StreamEvent + streamPath)
-// from the package boundary, so use the exported reducer parameter type.
+// from the package boundary, so we borrow it the same way the browser-feed
+// projector does — the parameter type of the exported reducer function.
 type AgentUiEvent = Parameters<typeof reduceAgentUi>[1];
 
 export function reduceFeed(agentPath: string, events: StreamEvent[]): AgentFeed {
