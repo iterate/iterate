@@ -160,9 +160,9 @@ packages/v3/project-worker/
       events.ts                  StreamEventInput / StreamEvent (plain types), defineProcessorContract (zod)
       processor.ts               StreamProcessor (the pure author class), ProcessorEngine, consumesEvent
       reduce-checkpoint.ts       the one persisted reduce-checkpoint shape
-      core-processor.ts          CoreStreamProcessor (slug core, 8.0.0): created/woken/paused/resumed
+      core-processor.ts          the core reduce (slug core, 8.0.0): created/woken/paused/resumed
                                  + the rewrite rules (a map) + the subscriptions + the secrets catalog,
-                                 one reduce (reduceBatch: each table copied once per batch, a draft)
+                                 one reduce (reduceCoreEventBatch: each table copied once per batch, a draft)
       subscriptions.ts           the subscriptions' one command: subscriptionConfiguredEvent
                                  ({ name, target | null, consumes?, afterOffset? })
       subscription-delivery.ts   THE ONE DELIVERY LOOP: push to a facet or lent stub, else a
@@ -707,13 +707,13 @@ reachable the same way, and a terminal `.fetch(request)` rides the facet's own
 fetch channel (so a 101 works).
 
 One reduce-only processor is always on and runs **inline** in the commit
-transaction: `CoreStreamProcessor` (`src/stream/core-processor.ts`, slug `core`,
+transaction: the core reduce (`src/stream/core-processor.ts`, slug `core`,
 contract 8.0.0), owned by the `Stream` itself (`stream.coreReducedState`). It reduces the context's own control
 events — and nothing else — into everything the DO needs synchronously at its
 doors: who it is, which incarnation runs, whether appends are paused, the
 rewrite rules every call goes through, the subscriptions every commit is sent
 to, and the secrets catalog (names and origins, never a value). A commit's batch
-is reduced at once (`reduceBatch`): each table is copied ONCE per batch, on its
+is reduced at once (`reduceCoreEventBatch`): each table is copied ONCE per batch, on its
 first touch, then mutated in place; the contract's single-event `reduce` stays
 pure. It has no facet, but `snapshot()`, `liveSnapshot()` and `waitUntilProcessed()` (always
 `{ ok: true }`) are exposed through the same door (it publishes
@@ -973,7 +973,7 @@ type ProcessEventArgs<State> = {
 };
 ```
 
-The core reduce (`CoreStreamProcessor`, section 4.5) is the same
+The core reduce (`reduceCoreEventBatch`, section 4.5) is the same
 `StreamProcessor` class, hosted INLINE at the commit point instead of in a facet:
 only its `reduce` is ever called — the stream reduces it inside every commit and
 never runs `processEvent`. A processor class is a contract plus a reduce — nothing
@@ -1558,7 +1558,7 @@ sequenceDiagram
   participant A as caller (itx.append)
   participant D as context DO
   participant S as Stream
-  participant I as core reduce (Stream.coreReducedState, a CoreStreamProcessor)
+  participant I as core reduce (Stream.coreReducedState, reduceCoreEventBatch)
   participant L as SubscriptionDelivery
   participant F as facet (processor)
   participant P as lent rpc stub (tab)

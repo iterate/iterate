@@ -193,7 +193,7 @@ test("an idempotent RETRY of a 64-deep payload dedupes instead of tripping the d
 // ── the core reduce's pause slice (control is ordinary events; enforcement reads the reduce) ──
 
 test("a bare stream/paused event (no payload) actually pauses the stream", async () => {
-  // CoreStreamProcessor.reduce defaults `event.payload ?? {}` — a pause that silently doesn't pause
+  // the core reduce defaults `event.payload ?? {}` — a pause that silently doesn't pause
   // would be an operator trap (the control fact is in the log while writes keep landing).
   const itx = openItx(freshCtx("barepause"));
   await append(itx, { type: "events.iterate.com/stream/paused" });

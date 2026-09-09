@@ -195,10 +195,10 @@ deployed(
 );
 
 // STILL RED after two DO-side attempts (live-50 delivery budgets 16→8, live-51 classifying facets
-// as push rows at catch-up so onCommit never pins their batches in #pushedEventBatches). Diagnosis
+// as push rows at catch-up so onCommit never pins their batches on the delivery record). Diagnosis
 // (deployed): the SAME 30 × 7 MiB burst to 0 facets is ABSORBED (workerd paces the arg
 // deserialization), and even 3 facets RESET — so it is the FAN-OUT, not the raw args, and it is not
-// facet-count-linear. Neither delivery-retention bound nor the #pushedEventBatches fix closes it,
+// facet-count-linear. Neither delivery-retention bound nor the pushed-batch fix closes it,
 // which places the dominant term OUTSIDE the parent's delivery accounting: a FACET is a same-worker
 // facet that SHARES the parent's 128 MiB isolate (reference: DO isolate ceiling is shared by
 // co-located instances and same-worker facets), so each pushed 7 MiB event is DESERIALIZED into the

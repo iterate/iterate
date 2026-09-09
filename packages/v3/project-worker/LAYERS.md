@@ -59,9 +59,9 @@ the post-commit fan-out, and the pause check is one `if` in `Stream.append` read
 log-derived where there is one: a subscription's id is the offset of its subscription-configured
 fact; a rewrite rule has no identity beyond its `match` (one map entry per match).
 
-ONE reduce-only processor runs INLINE at the commit point: `CoreStreamProcessor`
+ONE reduce runs INLINE at the commit point: `reduceCoreEventBatch` (core-processor.ts)
 (`stream/core-processor.ts`, slug `core`, contract 8.0.0), owned by the `Stream` itself (`#coreReducedState`) with
-zero runner apparatus. It reduces a whole batch at once (`reduceBatch`: each table copied ONCE per batch,
+zero runner apparatus. It reduces a whole batch at once (each table copied ONCE per batch,
 on first touch, then mutated in place) — the context's own control events into
 `{ projectId, path, createdAt, incarnation, paused, itxExpressionRewriteRules, subscriptions, secrets }`
 (`secrets` is the catalog `itx.secrets.list()` reads — names and origins from `secrets/changed`, never

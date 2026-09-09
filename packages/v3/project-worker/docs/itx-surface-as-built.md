@@ -414,8 +414,8 @@ HALTS a cursor row at its first attempt instead of climbing the retry ladder. Ev
 the stream runs lives in ONE typed module, `src/stream/stream-storage.ts`, over `ctx.storage.sql`
 (`node-sqlite-durable-object-storage.ts` is its 41-line node shim for the unit lane).
 
-ONE reduce-only processor runs INLINE at the commit point: `CoreStreamProcessor`
-(slug `core`, contract `8.0.0`). It reduces a whole batch at once (`reduceBatch`): each core table is
+ONE reduce runs INLINE at the commit point: `reduceCoreEventBatch` (core-processor.ts)
+(slug `core`, contract `8.0.0`). It reduces a whole batch at once: each core table is
 copied ONCE per batch, on its first touch (a draft), and mutated in place from then on, so a page of N
 control events costs one copy, not N; the contract's single-event `reduce` stays pure (every touch
 copies). Its state is everything the DO needs synchronously:

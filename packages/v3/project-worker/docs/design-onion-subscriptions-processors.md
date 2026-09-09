@@ -255,7 +255,7 @@ replaces the pager and is not a close).
 ### 4.1 Events and reduce
 
 Three events of the layer's own, reduced by the ONE core reduce (`stream/core-processor.ts`,
-`CoreStreamProcessor`, slug `core`, contract 8.0.0 — the `subscriptions` slice beside
+the core reduce (`reduceCoreEventBatch`), slug `core`, contract 8.0.0 — the `subscriptions` slice beside
 `itxExpressionRewriteRules`). DECIDED 2026-09-02, reversing this doc's earlier "own inline reduce
 beside `core` and a separate rule reduce" (§8): the layering lives in the EVENTS, and one reduce
 serves every synchronous reader — the append door, the dispatcher, the delivery loop. Jonas: "a core
