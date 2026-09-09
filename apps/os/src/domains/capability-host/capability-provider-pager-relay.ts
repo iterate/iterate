@@ -79,7 +79,7 @@ type CapabilityHostStreamStub = {
   fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response>;
   provideCapability(
     record: CapabilityProvidedPayload,
-  ): Promise<{ path: string[]; providedAtOffset: number }>;
+  ): Promise<{ path: string[]; providedAtOffset: number } & Disposable>;
   revokeCapability(input: RevokeCapabilityInput): Promise<void>;
 };
 
@@ -145,7 +145,9 @@ export class CapabilityProviderPagerRelay {
         type: "live",
         types: input.types,
       };
-      const provision = await this.#durableObject.provideCapability(record);
+      // Even this data-only Workers RPC result owns its call's lifetime.
+      // Retain the coordinates, then release the registration call immediately.
+      using provision = await this.#durableObject.provideCapability(record);
       const mounted = { ...provision, provider } satisfies MountedProvider;
       this.#mounts.set(provision.providedAtOffset, mounted);
       return this.#provisionHandle(mounted);
