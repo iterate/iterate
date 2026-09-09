@@ -304,11 +304,12 @@ static const struct iterate_kit_i2s_codec_facts audio = {
   .capture = { /* same bus */ },
   .dma_frames = 480, .dma_descriptors = 6,        /* 3840 B / 10 ms, 60 ms ring: havpe's TX geometry */
   .playback_shape = {.bits = 32, .slots = 2, .ratio = 3},
-  /* XMOS emits each 16 kHz sample three times. slot 0 = AEC+IC+NS+AGC, slot 1 = AEC+IC+NS.
-   * Uplink starts on slot 1 at x16, havpe's measured lesson (AGC re-triggers server VAD);
-   * the bench decides. */
-  .capture_shape = {.bits = 32, .slots = 2, .uplink_slot = 1, .diagnostic_slot = 0, .ratio = 3},
-  .capture_gain = 16,
+  /* XMOS emits each 16 kHz sample three times. MEASURED 2026-09-09 on XMOS 1.0.3:
+   * slot 0 carries the microphone, slot 1 is SILENT (whatever the source comments say).
+   * Uplink = slot 0 at unity gain (it is the AGC'd tap; x16 after an AGC is the HAVPE
+   * essay's self-trigger); slot 1 stays the diagnostic plane. */
+  .capture_shape = {.bits = 32, .slots = 2, .uplink_slot = 0, .diagnostic_slot = 1, .ratio = 3},
+  .capture_gain = 1,
   .amplifier_gpio = -1,                           /* TAS2780 is I2C, and TX never stops: it is the AEC reference */
 };
 
@@ -340,8 +341,9 @@ read from status register byte 1 by polling `iterate_kit_xmos_spi_status` at
 the 25 ms control poll in `extra->poll` (~40 lines): Vol± = speaker ±5 with the
 ring borrowed for a volume bar (havpe's dial arithmetic,
 `havpe_device.c:279-287`); Mute is a hardware cut of the mic rail that the
-XMOS only reports, so it sets `microphone_muted` on the visual state and a
-`micMuted` health field. Read only status byte 1; the shipped XMOS build's
+XMOS only reports (bit 3, NOT inverted: the vendor's `buttons.yaml` says
+`inverted: false`, unlike Vol±), so it sets `microphone_muted` on the visual
+state and a `micMuted` health field. Read only status byte 1; the shipped XMOS build's
 bytes 0 and 3 are noise (3-byte buffer copied as 10).
 
 `open_codec`: SPI2 mode 3 at 8 MHz; poll `{240, 0xD8}` up to 4 s at 250 ms
@@ -361,8 +363,11 @@ LD2450 radar, AHT20, LTR-303, jack auto-switch.
 
 ## Open bench decisions
 
-- Which XMOS tap is the uplink (slot 1 NS at x16 vs slot 0 AGC at x1).
-  `voicelab aec` decides; the table makes it a one-line change.
+- ~~Which XMOS tap is the uplink~~ DECIDED by measurement: slot 0 (the only
+  live one) at unity gain. A voice agent must be set up on the board's stream
+  before the first call (`pnpm cli voicelab talk --project <slug> --setup-only
+  --stream-path /agents/voice/<board>`); a bare `agents.create()` births a chat
+  agent, not a voice agent.
 - GPIO16 MCLK: all audits say leave the pad unused on a slave; nobody has
   scoped it. Verify on first flash.
 - The Voice PE capture DMA geometry: 320×5 today vs the shared 480×6. Keep
