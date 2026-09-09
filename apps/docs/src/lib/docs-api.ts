@@ -54,17 +54,12 @@ export interface DocsProject {
   /** Every workspace of the project (the platform catalog), newest first. */
   workspaces(): Promise<WorkspaceListEntry[]>;
   /**
-   * CREATE a workspace — the one deliberate exception to the plain-`get`
-   * posture (createJam is the same call with a different seed). Without a
-   * path it mints an ephemeral scratch workspace under /workspaces/scratch/
-   * (app-neutral: the same workspace opens through every view) seeded with
-   * one starter document, returned as `path`; with a path (a board under
-   * /workspaces/tasks/) it creates exactly that workspace, unseeded.
+   * CREATE a scratch workspace under /workspaces/scratch/ — the one
+   * deliberate exception to the plain-`get` posture (createJam is the same
+   * call with a different seed). App-neutral: the same workspace opens
+   * through every view. Seeded with one starter document, returned as `path`.
    */
-  createWorkspace(input?: { path?: string }): Promise<{
-    workspacePath: string;
-    path: string | null;
-  }>;
+  createWorkspace(): Promise<{ workspacePath: string; path: string }>;
   /**
    * Start a jam: mint and CREATE a scratch workspace seeded with one
    * document inside the config mount (committable later), and return the

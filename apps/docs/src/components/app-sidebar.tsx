@@ -185,10 +185,7 @@ function WorkspaceSwitcher({
     setCreateError(null);
     void withDocsProject((project) => project.createWorkspace())
       .then(({ workspacePath: created, path }) =>
-        navigate({
-          to: "/",
-          search: path === null ? { workspace: created } : { workspace: created, path },
-        }),
+        navigate({ to: "/", search: { workspace: created, path } }),
       )
       // The menu has closed by the time this settles — surface the failure
       // under the trigger, where the eye already is.

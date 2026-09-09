@@ -34,14 +34,13 @@ export function DeepLinkEmptyState() {
     };
   }, []);
 
-  const open = (workspace: string, path: string | null) =>
-    void navigate({ to: "/", search: path === null ? { workspace } : { workspace, path } });
-
   const createScratch = () => {
     setCreating(true);
     setCreateError(null);
     void withDocsProject((project) => project.createWorkspace())
-      .then(({ workspacePath, path }) => open(workspacePath, path))
+      .then(({ workspacePath, path }) =>
+        navigate({ to: "/", search: { workspace: workspacePath, path } }),
+      )
       .catch((error: unknown) => {
         setCreateError(error instanceof Error ? error.message : String(error));
         setCreating(false);
@@ -83,7 +82,9 @@ export function DeepLinkEmptyState() {
             className="mt-1 flex gap-2"
             onSubmit={(event) => {
               event.preventDefault();
-              if (chosen.startsWith("/workspaces/")) open(chosen, null);
+              if (chosen.startsWith("/workspaces/")) {
+                void navigate({ to: "/", search: { workspace: chosen } });
+              }
             }}
           >
             <Input

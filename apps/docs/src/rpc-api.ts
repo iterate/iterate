@@ -18,10 +18,9 @@ import {
 } from "./config-bridge.ts";
 import type { AppEnv } from "./env.ts";
 import {
-  BOARD_WORKSPACE_PREFIX,
   SCRATCH_WORKSPACE_PREFIX,
   isGuestWorkspacePath,
-  newBoardId,
+  newScratchWorkspaceName,
   normalizeRepoPath,
 } from "./lib/board-shared.ts";
 import { jamAgentPath, jamDocumentPath, jamInvitation, jamWorkspacePath } from "./lib/jam.ts";
@@ -186,18 +185,9 @@ class DocsProjectApi extends RpcTarget implements DocsProject {
       .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
   }
 
-  async createWorkspace(
-    input: { path?: string } = {},
-  ): Promise<{ workspacePath: string; path: string | null }> {
-    // An explicit path is a board under this app's own namespace — the only
-    // caller-named workspaces this method creates; a scratch workspace wears
-    // the human-readable stamp + random tail of a board id.
-    const explicit = input.path === undefined ? null : requireWorkspacePath(input.path);
-    if (explicit !== null && !explicit.startsWith(BOARD_WORKSPACE_PREFIX)) {
-      throw new Error(`createWorkspace only names workspaces under ${BOARD_WORKSPACE_PREFIX}`);
-    }
-    const workspacePath = explicit ?? `${SCRATCH_WORKSPACE_PREFIX}${newBoardId()}`;
-    const path = explicit === null ? "notes.md" : null;
+  async createWorkspace(): Promise<{ workspacePath: string; path: string }> {
+    const workspacePath = `${SCRATCH_WORKSPACE_PREFIX}${newScratchWorkspaceName()}`;
+    const path = "notes.md";
     await this.#withPlatform(async (project) => {
       // Birth stays explicit (this is the app's ONE create call). Mounts are
       // not create's business: every project repo is derived onto its own
@@ -206,13 +196,13 @@ class DocsProjectApi extends RpcTarget implements DocsProject {
       await stub.create({});
       // The document must EXIST before the editor opens it (no lazy file
       // create anywhere in Docs) — seed the starter note in the same breath.
-      if (path !== null) await stub.writeFile(`${workspacePath}/${path}`, "# Notes\n\n");
+      await stub.writeFile(`${workspacePath}/${path}`, "# Notes\n\n");
     });
     return { workspacePath, path };
   }
 
   async createJam(): Promise<{ workspacePath: string; path: string }> {
-    const id = newBoardId();
+    const id = newScratchWorkspaceName();
     const workspacePath = jamWorkspacePath(id);
     const path = jamDocumentPath(id);
     await this.#withPlatform(async (project) => {

@@ -53,9 +53,9 @@ export type BoardSearch = {
  * The tasks board on the WORKSPACE mechanism: every read and write is the
  * platform workspace — the overlay is the diff, commits are workspace
  * commits, and the detail editor is the live rebase-model collab session
- * with redlines. Mounted by the /w route on an existing workspace (plain
- * get: the app's own boards under /workspaces/tasks/ are created from the
- * board home before the route ever opens them). On a workspace the app doesn't own the page is a GUEST lens: read,
+ * with redlines. Mounted by the /w route on an existing workspace of any
+ * path (plain get: the board home creates a scratch workspace before it
+ * opens one there). On a workspace the app doesn't own the page is a GUEST lens: read,
  * comment, edit — the owner acts (Commit, Discard all, Assign agent) stay
  * hidden, and publishing remains the workspace owner's call.
  */

@@ -3,16 +3,16 @@ import { useEffect, useState } from "react";
 import { ClockIcon, FolderGit2Icon, Loader2Icon, PlusIcon, TelescopeIcon } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
 import { SidebarTrigger } from "@iterate-com/ui/components/sidebar";
-import { boardWorkspacePath, newBoardId } from "../lib/board-shared.ts";
 import { listRepos, listWorkspaces, withProject } from "../lib/project-rpc.ts";
 import type { WorkspaceListEntry } from "../lib/docs-api.ts";
 
 /**
  * The tasks view's home — /w without a workspace addressed. One flat list of
- * every workspace (the app's own boards, agents' workspaces as guest views),
- * then one button per repo for starting a new board workspace on that
- * repo's task files. Nothing actionable renders until the lists are actually
- * known — a spinner, never a premature empty state.
+ * every workspace of the project (any path opens as a board: this app's
+ * scratch ones, agents' own as guest views), then one button per repo that
+ * mints a fresh scratch workspace and opens it on that repo's task files.
+ * Nothing actionable renders until the lists are actually known — a spinner,
+ * never a premature empty state.
  */
 export function BoardHome() {
   const navigate = useNavigate();
@@ -35,15 +35,13 @@ export function BoardHome() {
     };
   }, []);
 
-  // A board workspace is CREATED here, explicitly, then opened by path —
-  // the route itself never creates (plain get), so a shared link to a
-  // workspace that does not exist says so instead of minting one.
+  // A workspace is CREATED here, explicitly, then opened by path — the
+  // route itself never creates (plain get), so a shared link to a workspace
+  // that does not exist says so instead of minting one.
   const openNewBoard = (repoPath: string) => {
     setCreating(repoPath);
     setCreateError(null);
-    void withProject((project) =>
-      project.createWorkspace({ path: boardWorkspacePath(newBoardId()) }),
-    )
+    void withProject((project) => project.createWorkspace())
       .then(({ workspacePath }) =>
         navigate({
           to: "/w",
@@ -69,10 +67,10 @@ export function BoardHome() {
           <div>
             <h1 className="text-xl font-semibold tracking-tight">Task boards</h1>
             <p className="mt-1 text-sm text-muted-foreground">
-              Pick a workspace first — every repo is mounted inside it, and the tasks view is a lens
-              over one repo&rsquo;s task files. Your own board workspaces commit to the repo&rsquo;s
-              main; agents&rsquo; workspaces open as guest lenses (read, comment, edit — publishing
-              stays the owner&rsquo;s act).
+              Pick a workspace — every repo is mounted inside it, and the board is a view over one
+              repo&rsquo;s task files. Your own scratch workspaces commit to the repo&rsquo;s main;
+              agents&rsquo; workspaces open as guest views (read, comment, edit — publishing stays
+              the owner&rsquo;s act).
             </p>
           </div>
           {workspaces.length === 0 ? null : (
@@ -108,9 +106,10 @@ export function BoardHome() {
           )}
           <section className="rounded-xl border bg-background shadow-xs">
             <div className="border-b px-5 py-4">
-              <h2 className="text-sm font-semibold">Start a new board workspace</h2>
+              <h2 className="text-sm font-semibold">New workspace as a board</h2>
               <p className="mt-1 text-xs text-muted-foreground">
-                Every repo is mounted in it; pick which repo&rsquo;s task files the board shows.
+                Mints a scratch workspace — every repo is mounted in it — and opens it on this
+                repo&rsquo;s task files.
               </p>
             </div>
             <ul className="divide-y">
@@ -126,7 +125,7 @@ export function BoardHome() {
                     onClick={() => openNewBoard(repoPath)}
                   >
                     <PlusIcon aria-hidden className="size-4" />
-                    {creating === repoPath ? "Creating…" : "New board"}
+                    {creating === repoPath ? "Creating…" : "New workspace"}
                   </Button>
                 </li>
               ))}

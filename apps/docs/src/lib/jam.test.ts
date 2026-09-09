@@ -19,7 +19,7 @@ describe("jam naming", () => {
   test.each([
     { workspacePath: "/workspaces/scratch/abc", becomes: true },
     { workspacePath: "/workspaces/agents/reviewer", becomes: false },
-    { workspacePath: "/workspaces/tasks/b1~repos--config-1234abcd", becomes: false },
+    { workspacePath: "/workspaces/agents/reviewer", becomes: false },
   ])("$workspacePath is a jam workspace: $becomes", ({ workspacePath, becomes }) => {
     expect(isJamWorkspacePath(workspacePath)).toBe(becomes);
     expect(jamAgentPath(workspacePath) !== null).toBe(becomes);

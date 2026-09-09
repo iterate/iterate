@@ -133,9 +133,11 @@ docs, {workspace, repo, task?} board). Remaining from the /goal list: the
 pierre-style tree + diff views (item 3's extraction) and the root-folder
 constraint.
 
-**DONE (2026-09-09): the workspace is the tree.** Board workspaces are named
-by id alone (`/workspaces/tasks/<id>`, the repo is a `?repo=` view choice) and
-created explicitly from the board home; the Docs vessel forwards the platform
+**DONE (2026-09-09): the workspace is the tree.** A workspace is its path and
+nothing else: the board is a view on ANY workspace (`/w?workspace=<path>&repo=`),
+the minted `/workspaces/tasks/<id>~<repo-hash>` naming is gone, and "New
+workspace" on the board home is an ordinary scratch workspace opened on a
+repo's task files; the Docs vessel forwards the platform
 workspace surface verbatim (fs, `git`, `collab` as sub-targets) and the shared
 transport type is that surface; the Docs view shows the WHOLE workspace
 (every mount plus the own directory) with listings loaded per mount and one
