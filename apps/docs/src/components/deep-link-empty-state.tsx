@@ -5,7 +5,6 @@ import { Button } from "@iterate-com/ui/components/button";
 import { Input } from "@iterate-com/ui/components/input";
 import { SidebarTrigger } from "@iterate-com/ui/components/sidebar";
 import { withDocsProject } from "../lib/docs-client.ts";
-import { NewWorkspaceForm } from "./new-workspace-form.tsx";
 
 /**
  * Docs home — the workspace picker: every workspace of the project (agents'
@@ -36,21 +35,16 @@ export function DeepLinkEmptyState() {
     <div className="relative min-h-svh bg-muted/20 px-6 py-10">
       <SidebarTrigger className="absolute top-3 left-3 md:hidden" />
       <div className="mx-auto flex w-full max-w-2xl flex-col gap-6">
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <div className="mb-4 flex size-10 items-center justify-center rounded-xl bg-foreground text-background">
-              <FileTextIcon aria-hidden className="size-5" />
-            </div>
-            <h1 className="text-xl font-semibold tracking-tight">Workspaces</h1>
-            <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-              Every file lives in a workspace: every project repo mounted under repos/, the
-              workspace&rsquo;s own files beside them. Agents have one each; make your own by name.
-            </p>
+        <div>
+          <div className="mb-4 flex size-10 items-center justify-center rounded-xl bg-foreground text-background">
+            <FileTextIcon aria-hidden className="size-5" />
           </div>
-          <NewWorkspaceForm
-            className="w-72 shrink-0"
-            onCreated={(workspace) => void navigate({ to: "/", search: { workspace } })}
-          />
+          <h1 className="text-xl font-semibold tracking-tight">Workspaces</h1>
+          <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
+            Every file lives in a workspace: every project repo mounted under repos/, the
+            workspace&rsquo;s own files beside them. Agents have one each; make your own from the
+            sidebar.
+          </p>
         </div>
 
         <div>
@@ -86,7 +80,10 @@ export function DeepLinkEmptyState() {
             <h2 className="truncate text-sm font-semibold">All workspaces</h2>
           </div>
           {workspaces === null ? (
-            <p className="flex items-center gap-2 px-5 py-4 text-sm text-muted-foreground">
+            <p
+              className="flex items-center gap-2 px-5 py-4 text-sm text-muted-foreground"
+              data-spinner={listError === null ? "true" : undefined}
+            >
               {listError === null ? (
                 <>
                   <Loader2Icon aria-hidden className="size-4 animate-spin" /> Loading…

@@ -1,20 +1,17 @@
-import { Link, useNavigate } from "@tanstack/react-router";
+import { Link } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { ClockIcon, Loader2Icon, TelescopeIcon } from "lucide-react";
 import { SidebarTrigger } from "@iterate-com/ui/components/sidebar";
-import { DEFAULT_REPO_PATH } from "../lib/board-shared.ts";
 import { listWorkspaces } from "../lib/project-rpc.ts";
 import type { WorkspaceListEntry } from "../lib/docs-api.ts";
-import { NewWorkspaceForm } from "./new-workspace-form.tsx";
 
 /**
  * The tasks view's home — /w without a workspace addressed. Every workspace
- * of the project (any path opens as a board), and a new one by name. Nothing
+ * of the project (any path opens as a board). Nothing
  * actionable renders until the list is actually known — a spinner, never a
  * premature empty state.
  */
 export function BoardHome() {
-  const navigate = useNavigate();
   const [workspaces, setWorkspaces] = useState<WorkspaceListEntry[]>([]);
   const [loaded, setLoaded] = useState(false);
 
@@ -81,22 +78,6 @@ export function BoardHome() {
               </ul>
             </section>
           )}
-          <section className="rounded-xl border bg-background p-5 shadow-xs">
-            <h2 className="text-sm font-semibold">New workspace</h2>
-            <p className="mt-1 mb-3 text-xs text-muted-foreground">
-              Every project repo is mounted in it; the board opens on the config repo&rsquo;s task
-              files.
-            </p>
-            <NewWorkspaceForm
-              className="max-w-md"
-              onCreated={(workspace) =>
-                void navigate({
-                  to: "/w",
-                  search: { group: "folder", q: "", repo: DEFAULT_REPO_PATH, task: "", workspace },
-                })
-              }
-            />
-          </section>
         </div>
       )}
     </div>

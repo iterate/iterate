@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useRouterState } from "@tanstack/react-router";
 import {
   ArrowLeft,
@@ -269,16 +269,33 @@ function NewWorkspaceItem({ boardView, repo }: { boardView: boolean; repo: strin
   const navigate = useNavigate();
   const { state, setOpen: setSidebarOpen } = useSidebar();
   const [open, setOpen] = useState(false);
+  const openTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(
+    () => () => {
+      if (openTimer.current !== null) clearTimeout(openTimer.current);
+    },
+    [],
+  );
   return (
     <SidebarMenuItem>
       <SidebarMenuButton
         tooltip="New workspace — every project repo mounted, named however you like"
         isActive={open}
         onClick={() => {
-          // The form has no room in the icon-collapsed sidebar: opening it
-          // expands the sidebar too, or the click would change nothing.
-          if (!open && state === "collapsed") setSidebarOpen(true);
-          setOpen((current) => !current);
+          if (open) {
+            setOpen(false);
+            return;
+          }
+          if (state === "collapsed") {
+            // The form has no room in the icon-collapsed sidebar: expand it,
+            // and show the form once the width transition has run (the
+            // sidebar's duration-200) — rendered during it, the form
+            // squeezes into the still-narrow rail.
+            setSidebarOpen(true);
+            openTimer.current = setTimeout(() => setOpen(true), 220);
+            return;
+          }
+          setOpen(true);
         }}
       >
         <Plus aria-hidden />

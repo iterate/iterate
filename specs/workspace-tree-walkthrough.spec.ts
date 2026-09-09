@@ -43,14 +43,15 @@ test("workspace tree walkthrough", async ({ page }) => {
   //    in the tree.
   await page.goto(`${docsHost}/`);
   await passProjectGate(page);
-  // The home is server-rendered with an EMPTY name in its own form; the
-  // three-word suggestion (and its resolved path under it) appears on the
-  // client after hydration. A click before then hits controls with no
-  // handlers yet, so wait for that path before touching the sidebar.
+  // The home is server-rendered; its workspace list arrives over the app's
+  // socket only once hydrated. A click before then hits controls with no
+  // handlers yet, so wait for the list itself (a row, or the empty line of
+  // a fresh project) — the loading row it replaces carries data-spinner.
   await page
-    .getByText(/^\/workspaces\/[a-z]+-[a-z]+-[a-z]+$/)
+    .getByRole("button", { name: /^\/workspaces\// })
+    .or(page.getByText("No workspaces yet"))
     .first()
-    .waitFor({ timeout: 30_000 }); // timeout: the auth callback redirect + hydration on the preview — no loading UI for the spinner-waiter in between
+    .waitFor({ timeout: 30_000 }); // timeout: the auth callback redirect on the preview before the home renders — no loading UI for the spinner-waiter in between
   const sidebar = page.locator('[data-slot="sidebar"]');
   await sidebar.getByRole("button", { name: "New workspace" }).click();
   await sidebar.getByRole("button", { name: "Create" }).click();
@@ -81,7 +82,8 @@ test("workspace tree walkthrough", async ({ page }) => {
   await page.getByRole("heading", { name: /AGENTS\.md$/ }).waitFor();
   await page.getByText(/^live · v/).waitFor({ timeout: 60_000 }); // timeout: a second collab attach on the preview — past the spinner-waiter's 30s ceiling
   await page.locator(".cm-content").first().click();
-  await page.keyboard.press("End");
+  // CodeMirror's document-end binding (End alone stops at the line's end).
+  await page.keyboard.press(process.platform === "darwin" ? "Meta+ArrowDown" : "Control+End");
   await page.keyboard.type("\n\nEdited from the workspace tree.\n");
   await page.getByRole("button", { name: /^Commit/ }).waitFor({ timeout: 15_000 }); // timeout: the control arms on the next status poll (5s cadence) after the session flushes — no loading UI for the spinner-waiter in between
   await page.getByRole("button", { name: "Show diff against HEAD" }).click();

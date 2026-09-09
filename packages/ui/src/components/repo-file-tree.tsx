@@ -95,6 +95,9 @@ export function RepoFileTree({
   // The inline-rename affordance doubles as the "name a new file" input:
   // while this holds a path, the next rename event is a file CREATION.
   const pendingNewFileRef = useRef<string | null>(null);
+  // Only host-listed files exist. Pierre also selects temporary rename rows.
+  // react-doctor-disable-next-line react-doctor/rerender-lazy-ref-init -- empty-container allocation per render is the rule's concern; trivial here, and the ??= lazy idiom trips exhaustive-deps instead
+  const knownPathsRef = useRef(new Set(mergedPaths));
 
   const { model } = useFileTree({
     paths: mergedPaths,
@@ -105,7 +108,8 @@ export function RepoFileTree({
       const path = paths[0];
       if (path === undefined) return;
       const item = model.getItem(path);
-      if (item?.isDirectory() === false) onSelectRef.current(path);
+      if (item?.isDirectory() === false && knownPathsRef.current.has(path))
+        onSelectRef.current(path);
       else if (item?.isDirectory() === true) {
         onOpenDirectoryRef.current?.(path.replace(/\/$/, ""));
       }
@@ -140,8 +144,6 @@ export function RepoFileTree({
   // rows pierre already moved itself (inline renames): a double add/remove of
   // the same path must not blow up the sync.
   const mergedPathsKey = mergedPaths.join("\n");
-  // react-doctor-disable-next-line react-doctor/rerender-lazy-ref-init -- empty-container allocation per render is the rule's concern; trivial here, and the ??= lazy idiom trips exhaustive-deps instead
-  const knownPathsRef = useRef(new Set(mergedPaths));
   useEffect(() => {
     const next = new Set(mergedPathsKey === "" ? [] : mergedPathsKey.split("\n"));
     const known = knownPathsRef.current;

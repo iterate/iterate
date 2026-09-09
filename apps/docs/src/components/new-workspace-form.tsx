@@ -54,25 +54,23 @@ export function NewWorkspaceForm({
   };
 
   return (
-    <form onSubmit={submit} className={cn("flex flex-col gap-1.5", className)}>
-      <div className="flex gap-1.5">
-        <Input
-          value={name}
-          onChange={(event) => setName(event.currentTarget.value)}
-          aria-label="Workspace name"
-          placeholder="apple-cow-hat"
-          spellCheck={false}
-          ref={inputRef}
-          className="h-8 font-mono text-xs"
-        />
-        <Button type="submit" size="sm" className="h-8" disabled={path === null || creating}>
-          {creating ? "Creating…" : "Create"}
-        </Button>
-      </div>
+    <form onSubmit={submit} className={cn("flex min-w-0 flex-col gap-1.5", className)}>
+      <Input
+        value={name}
+        onChange={(event) => setName(event.currentTarget.value)}
+        aria-label="Workspace name"
+        placeholder="apple-cow-hat"
+        spellCheck={false}
+        ref={inputRef}
+        className="h-8 w-full min-w-0 font-mono text-xs"
+      />
       <p className="truncate font-mono text-[11px] text-muted-foreground" title={path ?? undefined}>
         {path ?? "letters, digits, dots, dashes; segments with /"}
       </p>
       {error !== null && <p className="text-xs text-red-700">{error}</p>}
+      <Button type="submit" size="sm" className="h-8 self-end" disabled={path === null || creating}>
+        {creating ? "Creating…" : "Create"}
+      </Button>
     </form>
   );
 }
