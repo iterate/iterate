@@ -4432,5 +4432,7 @@ pin naming its mechanism, or declined with the reason above. The red pins are th
   sides; the workers lane boots through them, the local e2e lane proves the bundle does.
 - COUNTS: 12,039 source lines in 25 files (net +76: map lines, section markers, five `vi.mock` blocks);
   the worker bundle 1,739,894 → 1,739,285 bytes. GATES: tsc ×3 · `node build-sdk.mjs` · oxlint · knip ·
-  unit 19 files / 492 passed / 5 expected-fail · workers 10 files / 45 passed / 9 expected-fail. The
-  full `pnpm test` and the deployed proof: the line below.
+  unit 19 files / 492 passed / 5 expected-fail · workers 10 files / 45 passed / 9 expected-fail ·
+  `pnpm test` 51 files / 716 passed / 18 expected-fail / 17 deployed-only skips (the local e2e lane
+  boots the bundle through the two new cycles). DEPLOYED (0e7df5979, version 0547a39c): 23 files / 195
+  passed / 4 expected-fail — ALL GREEN.
