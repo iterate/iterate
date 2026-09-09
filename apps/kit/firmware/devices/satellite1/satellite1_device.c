@@ -131,8 +131,11 @@ static void iterate_kit_satellite1_poll(void *context, struct iterate_kit_voice_
   const uint64_t now_ms = (uint64_t)(esp_timer_get_time() / 1000);
   iterate_kit_button_update(&volume_up, (pressed & 1U) != 0U, now_ms);
   iterate_kit_button_update(&volume_down, (pressed & 4U) != 0U, now_ms);
-  /* Specification uses inverted bit 3; verify polarity on the physical rail. */
-  const bool muted = (pressed & 8U) != 0U;
+  /* NOT inverted, unlike Vol+/Vol-: the vendor's buttons.yaml declares the
+   * hardware-mute pin `inverted: false` (bit 3 HIGH = the mic rail is cut).
+   * Reading it through the same ~status mask as the volume keys made a
+   * fresh board report micMuted 1 and refuse every call on the first bench. */
+  const bool muted = (status[1] & 8U) != 0U;
   if (microphone_muted != muted) iterate_kit_led_ring_borrow(NULL, 0);
   microphone_muted = muted;
   const int step = (int)iterate_kit_button_take_press(&volume_up) -
@@ -228,10 +231,16 @@ static const struct iterate_kit_i2s_codec_facts audio = {
   },
   .dma_frames = 480, .dma_descriptors = 6,
   .playback_shape = {32, 2, 0, -1, 3},
-  /* Both taps are post-AEC: slot 0 adds AGC, slot 1 is AEC+IC+NS.
-   * Keep every third repeated frame; start uplink at slot 1 x16 for the bench. */
-  .capture_shape = {32, 2, 1, 0, 3},
-  .capture_gain = 16,
+  /* MEASURED 2026-09-09 on XMOS 1.0.3: slot 0 carries the microphone
+   * (micRawPeak 891 on room noise) and slot 1 is SILENT (peak 2), whatever
+   * the source comments say about which tap is which. The uplink is slot 0;
+   * slot 1 stays the diagnostic plane so the oracle can show it waking up if
+   * a later XMOS build populates it. Slot 0 is the AGC'd tap, and the HA Voice
+   * PE's essay (board/codecs/aic3204.c) measured a x16 make-up gain AFTER an
+   * AGC as the thing that fed the provider its own echo; so start at unity
+   * and let the bench raise it. */
+  .capture_shape = {32, 2, 0, 1, 3},
+  .capture_gain = 1,
   .amplifier_gpio = -1,
 };
 
@@ -267,6 +276,7 @@ static const struct iterate_kit_board board = {
   .ring = {.gpio = 21, .pixels = 24, .order = LED_PIXEL_FORMAT_GRB, .power_gpio = -1},
   .status_led_gpio = 45,
   .button = {.gpio = 0, .active_low = true, .tap_wakes = true, .tap_ends = true},
+  .wake_word = "jarvis",
   .sounds = {
     .wake = satellite1_sound_chime_press, .wake_bytes = sizeof(satellite1_sound_chime_press),
     .ended = satellite1_sound_chime_ended, .ended_bytes = sizeof(satellite1_sound_chime_ended),
