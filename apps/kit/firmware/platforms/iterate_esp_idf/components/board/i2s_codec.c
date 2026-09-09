@@ -227,6 +227,10 @@ static void capture_hardware_task(void *argument) {
   }
 }
 
+/** Set by the table path when its TX is a DSP's AEC reference (no gated
+ * amplifier); boards that bring their own channels leave it false. */
+static bool idle_silence_wanted;
+
 static void playback_hardware_task(void *argument) {
   static struct iterate_kit_i2s_codec_frame frame;
   static struct iterate_kit_i2s_codec_frame idle_silence;
@@ -289,6 +293,11 @@ static void playback_hardware_task(void *argument) {
        * playout (a face must not mouth silence). A board whose write is
        * fenced returns UNAVAILABLE and nothing happens, as before.
        */
+      /* Only where TX must never stop (a DSP reads its AEC reference off it,
+       * i.e. no gated amplifier). A board that gates its amp between answers
+       * (M5, Waveshare) has nothing listening to the ring while idle, and the
+       * hovering-full ring would only add one ring of latency to every chime. */
+      if (!idle_silence_wanted) continue;
       if (!idle_silence_started) {
         memset(idle_silence.samples, 0, sizeof(idle_silence.samples));
         idle_silence.sample_count = 320;
@@ -567,6 +576,7 @@ bool iterate_kit_i2s_codec_prepare_amplifier(const struct iterate_kit_i2s_codec_
   if (facts == NULL || facts->amplifier_gpio < -1 || facts->amplifier_gpio >= GPIO_NUM_MAX ||
       facts->playback.clk_cfg.sample_rate_hz == 0U) return false;
   channel_facts = *facts;
+  idle_silence_wanted = !facts->amplifier_gated;
   if (facts->amplifier_gpio >= 0) {
     const gpio_config_t config = {
       .pin_bit_mask = UINT64_C(1) << facts->amplifier_gpio,

@@ -121,7 +121,9 @@ bool iterate_kit_tas2780_read_faults(struct iterate_kit_tas2780 *amp, uint32_t *
   for (size_t i = 0; i < sizeof(addresses); ++i) {
     if (!iterate_kit_tas2780_read(amp, addresses[i], &latches[i])) return false;
   }
-  amp->faults = iterate_kit_tas2780_decode_faults(latches[0], latches[1], latches[2], latches[3]);
+  /* The latches clear on read: accumulate, so a fault the amp is still shut
+   * down for does not vanish from the second health document. */
+  amp->faults |= iterate_kit_tas2780_decode_faults(latches[0], latches[1], latches[2], latches[3]);
   *faults = amp->faults;
   return true;
 }

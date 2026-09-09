@@ -133,11 +133,13 @@ static bool IRAM_ATTR on_dma_sent(
   (void)handle;
   (void)context;
   if (event == NULL || event->dma_buf == NULL) return false;
+  /* PHYSICAL ring occupancy, whatever phase the answer is in: idle silence
+   * is written too, so every sent descriptor must be subtracted, and the
+   * debt must not be zeroed at FEEDING while the ring still holds up to 90 ms
+   * of that silence ahead of the first real frame (review round 2, #4). */
   portENTER_CRITICAL_ISR(&dma_ledger_lock);
-  if (dma_watch) {
-    dma_owed_ms -= DMA_DESCRIPTOR_MS;
-    if (dma_owed_ms < 0) dma_owed_ms = 0;
-  }
+  dma_owed_ms -= DMA_DESCRIPTOR_MS;
+  if (dma_owed_ms < 0) dma_owed_ms = 0;
   portEXIT_CRITICAL_ISR(&dma_ledger_lock);
   return false;
 }
@@ -151,7 +153,6 @@ static void phase(void *context, enum iterate_kit_voice_phase phase) {
   portENTER_CRITICAL(&dma_ledger_lock);
   switch (phase) {
     case ITERATE_KIT_VOICE_PHASE_FEEDING:
-      if (!dma_watch) dma_owed_ms = 0;
       dma_watch = true;
       break;
     case ITERATE_KIT_VOICE_PHASE_WAITING:

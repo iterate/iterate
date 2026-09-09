@@ -277,12 +277,17 @@ static void present(
    * grammar reads last pass's facts — one poll of lag, invisible at 5 ms. */
   mode_state.call_active = view->call_active;
   mode_state.wants_call = view->wants_call;
-  /* One fleet mapping. This board's physical playout meter is passed as the
-   * mapping's microphone_peak input; the speaking cue remains the shared
-   * screen cue, and pending calls follow the same readiness rule as the ring. */
-  struct iterate_kit_voice_view lights_view = *view;
-  lights_view.microphone_peak = iterate_kit_stackchan_avatar_speaker_status_peak();
-  iterate_kit_voice_view_lights(&lights_view, &visual);
+  /* One fleet mapping, then two facts only this board has:
+   * (a) the FACE opens its eyes on conversation_active, and it must open on
+   *     the press, not seconds later when the provider session is live —
+   *     otherwise the chime answers a sleeping face (the regression the
+   *     deleted mapping's comment recorded, and review round 2 found again);
+   * (b) the physical playout meter is the SPEAKER's level, not the mic's;
+   *     routing it through microphone_peak painted the speaker in the mic
+   *     sector and dropped the person's level while listening. */
+  iterate_kit_voice_view_lights(view, &visual);
+  visual.conversation_active = view->call_active || view->wants_call;
+  visual.speaker_peak = iterate_kit_stackchan_avatar_speaker_status_peak();
   /*
    * The OVERLAY comparison for the face, not the lights one: the screen also
    * carries a word, and "connecting" and "ready" can render the same twelve

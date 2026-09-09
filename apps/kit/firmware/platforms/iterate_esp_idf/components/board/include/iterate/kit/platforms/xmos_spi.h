@@ -24,14 +24,16 @@ struct iterate_kit_xmos_spi {
  * on EACH half. For read commands, len must equal reply_len (1..253), payload
  * contains request dummy bytes; wait one tick and clock reply_len+3 zeros.
  * Copy rx[1..] only on DONE, leaving reply unchanged on failure. Writes
- * require reply=NULL, reply_len=0. A status report's nonzero command return
- * is failure even though its shape classifies as STATUS_REPORT.
+ * require reply=NULL, reply_len=0. A status report clocked in during a
+ * transfer carries the PREVIOUS command's return code (the slave fills its
+ * TX buffer in the transfer-done callback), so it is never this command's
+ * verdict and is not treated as failure.
  * Source: satellite1.cpp:118-180; device_control_spi.c:63-90. */
 bool iterate_kit_xmos_spi_transfer(struct iterate_kit_xmos_spi *handle,
     uint8_t resource, uint8_t command, const uint8_t *payload, size_t len,
     uint8_t *reply, size_t reply_len);
 /** Request resource 240 command 88|0x80, five bytes; at most attempts calls
- * one second apart, with no delay after the last. Zero attempts is false.
+ * interval_ms apart, with no delay after the last. Zero attempts is false.
  * Output changes only for nonzero version. satellite1.cpp:194-212. */
 bool iterate_kit_xmos_spi_read_version(struct iterate_kit_xmos_spi *handle,
     struct iterate_kit_xmos_version *version, uint8_t attempts, uint16_t interval_ms);

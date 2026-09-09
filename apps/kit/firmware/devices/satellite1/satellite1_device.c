@@ -55,7 +55,10 @@ static bool iterate_kit_satellite1_open_codec(void) {
   if (gpio_set_level(GPIO_NUM_10, 1) != ESP_OK ||
       gpio_config(&cs) != ESP_OK) goto failed;
   stage = "SPI bus";
-  if (spi_bus_initialize(SPI2_HOST, &bus, SPI_DMA_CH_AUTO) != ESP_OK) goto failed;
+  /* Every transaction here is at most 8 bytes; with DMA on, the driver copies
+   * each stack buffer into internal DMA memory it mallocs per transaction,
+   * twice per 25 ms poll, on a board that reserves that memory for Wi-Fi. */
+  if (spi_bus_initialize(SPI2_HOST, &bus, SPI_DMA_DISABLED) != ESP_OK) goto failed;
   bus_open = true;
   if (spi_bus_add_device(SPI2_HOST, &device, &xmos.device) != ESP_OK) goto failed;
   stage = "XMOS version";
@@ -89,6 +92,11 @@ failed:
     ESP_LOGE("satellite1", "SPI detach failed");
   if (bus_open && spi_bus_free(SPI2_HOST) != ESP_OK)
     ESP_LOGE("satellite1", "SPI bus release failed");
+  line_out = NULL;
+  amp_device = NULL;
+  amp.device = NULL;
+  amp.initialized = false;
+  xmos.device = NULL;
   return false;
 }
 

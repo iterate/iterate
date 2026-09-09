@@ -151,6 +151,15 @@ static bool iterate_kit_wake_word_detect(void *context, int16_t *samples) {
 static void iterate_kit_wake_word_task(void *context) {
   (void)context;
   uint32_t previous_generation = UINT32_MAX;
+  /*
+   * NEVER clean a model that has not run. esp-sr's model_clean() zeroes an
+   * internal convolution queue that create() leaves NULL until the first
+   * detect() allocates it; the first table build panicked (LoadProhibited
+   * at dl_convq_queue_bzero, EXCVADDR 0x10) in a boot loop on exactly that
+   * call, made on the first frame because the generation had "changed" from
+   * the sentinel. History is empty before the first detect anyway.
+   */
+  bool detected_once = false;
   struct iterate_kit_wake_word_frame frame;
   for (;;) {
     if (xQueueReceive(iterate_kit_wake_word_queue, &frame, portMAX_DELAY) != pdTRUE) continue;
@@ -159,7 +168,7 @@ static void iterate_kit_wake_word_task(void *context) {
     portEXIT_CRITICAL(&iterate_kit_wake_word_lock);
     if (generation != previous_generation) {
       iterate_kit_wake_word_buffer.used = 0U;
-      iterate_kit_wake_word_iface->clean(iterate_kit_wake_word_model);
+      if (detected_once) iterate_kit_wake_word_iface->clean(iterate_kit_wake_word_model);
       previous_generation = generation;
     }
     if (frame.generation != generation || !iterate_kit_wake_word_enabled()) continue;
@@ -173,6 +182,7 @@ static void iterate_kit_wake_word_task(void *context) {
     }
     (void)iterate_kit_wake_word_buffer_feed(&iterate_kit_wake_word_buffer,
         frame.samples, frame.count, iterate_kit_wake_word_detect, &frame.generation);
+    detected_once = detected_once || iterate_kit_wake_word_buffer.used == 0U;
   }
 }
 
