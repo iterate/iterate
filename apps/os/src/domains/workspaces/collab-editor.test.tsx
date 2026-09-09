@@ -19,13 +19,15 @@ import type {
 } from "@iterate-com/workspace-documents/types";
 import { expect, test, vi } from "vitest";
 
-/** The five collab doors the editor drives, as the only member of a fake workspace. */
+/** The five collab methods the editor drives, as the only member of a fake workspace. */
 type FakeDocumentSession = Pick<
   WorkspaceCollabSurface,
   "changes" | "open" | "present" | "push" | "wait"
 >;
 
-/** A transport over one fake session: the editor never touches fs or git here. */
+/** A transport over one fake session: the editor never touches fs or git
+ * here, so a workspace holding only `collab` is the whole surface these
+ * tests exercise — the assertion widens that partial fake to the full type. */
 function transportFor(documentSession: FakeDocumentSession): WorkspaceTransport {
   const workspace = { collab: documentSession } as unknown as WorkspaceSurface;
   return {

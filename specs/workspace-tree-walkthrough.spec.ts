@@ -16,7 +16,7 @@ import { test } from "./test-support/test.ts";
  *
  * Opt-in only — `DEMO_RECORDING=1 VIDEO_MODE=1 DEMO_PREVIEW_SLOT=<n>
  * DEMO_PROJECT=pr2611 pnpm spec -g "workspace tree walkthrough"`. Skipped
- * everywhere else, including the preview lane: it drives a slot whose
+ * everywhere else, including the preview e2e run: it drives a slot whose
  * project has its docs-app-origin knob pointed at that slot's docs vessel.
  */
 test("workspace tree walkthrough", async ({ page }) => {

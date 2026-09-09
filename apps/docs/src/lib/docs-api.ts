@@ -55,7 +55,7 @@ export interface DocsProject {
   workspaces(): Promise<WorkspaceListEntry[]>;
   /**
    * CREATE a workspace — the one deliberate exception to the plain-`get`
-   * posture (createJam is the same door with a different seed). Without a
+   * posture (createJam is the same call with a different seed). Without a
    * path it mints an ephemeral scratch workspace under /workspaces/scratch/
    * (app-neutral: the same workspace opens through every view) seeded with
    * one starter document, returned as `path`; with a path (a board under
@@ -98,8 +98,8 @@ export interface DocsProject {
 export interface DocsWorkspace extends WorkspaceSurface {
   /** The newest page of the workspace's stream events, newest first. */
   events(limit?: number): Promise<WorkspaceStreamEvent[]>;
-  /** Live push lane: replay after `afterOffset`, then new commits, delivered
-   * to the retained callback until the handle unsubscribes. */
+  /** Live push: replay after `afterOffset`, then new commits, delivered to
+   * the retained callback until the handle unsubscribes. */
   subscribeEvents(
     processEventBatch: (batch: { events: WorkspaceStreamEvent[] }) => unknown,
     afterOffset?: number,

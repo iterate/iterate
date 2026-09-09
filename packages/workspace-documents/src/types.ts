@@ -46,7 +46,7 @@ export type CollabChanges = {
 /** Fresh caret presence per live session, index-matched (the platform's flat, generator-legal shape). */
 export type CollabPresenceFlat = { clientIds: string[]; paths: string[] };
 
-/** The collaborative session lane of one workspace (`workspace.collab`). */
+/** The collaborative session surface of one workspace (`workspace.collab`). */
 export interface WorkspaceCollabSurface {
   open(path: string): Promise<CollabOpened>;
   changes(path: string): Promise<CollabChanges>;

@@ -13,8 +13,10 @@ const withProjectOnce = withDocsProjectOnce;
 
 /**
  * One workspace on a live project stub — the platform surface forwarded
- * verbatim, plain get. (The stub is a capnweb Proxy; the local cast just
- * names the door.)
+ * verbatim, plain get. The stub arrives untyped from the shared client (its
+ * type parameter is the vessel's DocsApi, whose `workspace` returns a
+ * DocsWorkspace): the two assertions only restate that method's declared
+ * shape, and no cast-free spelling exists for a capnweb Proxy's members.
  */
 export function workspaceFor(project: unknown, workspacePath: string): DocsWorkspace {
   return (project as { workspace(workspacePath: string): unknown }).workspace(
@@ -23,7 +25,7 @@ export function workspaceFor(project: unknown, workspacePath: string): DocsWorks
 }
 
 /**
- * The shared workspace components' door to one workspace: reconnect-aware
+ * The shared workspace components' access to one workspace: reconnect-aware
  * `run` for ordinary calls, quiet `runOnce` for teardown flushes that must
  * never replace the shared session under live polls.
  */

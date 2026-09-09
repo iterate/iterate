@@ -46,10 +46,13 @@ const AUTH_COOKIE = "iterate-project-auth";
 
 /**
  * The platform itx members this vessel touches, asserted locally: the
- * generated `Project` client type carries the project's own doors, not the
+ * generated `Project` client type carries the project's own methods, not the
  * capability tree, and capnweb stubs are Proxies, so these members resolve
  * at runtime. The workspace handle IS the shared WorkspaceSurface plus the
- * one lifecycle door (create) the vessel births workspaces through.
+ * one lifecycle method (create) the vessel creates workspaces through. Every
+ * `project as unknown as PlatformProject` below is this same fact — the
+ * generated type has no `workspaces`/`streams`/`agents` members to narrow
+ * from, so a cast-free spelling does not exist.
  */
 type PlatformProject = {
   agents: { get(path: string): PlatformAgent };
@@ -187,7 +190,7 @@ class DocsProjectApi extends RpcTarget implements DocsProject {
     input: { path?: string } = {},
   ): Promise<{ workspacePath: string; path: string | null }> {
     // An explicit path is a board under this app's own namespace — the only
-    // caller-named workspaces this door births; a scratch workspace wears
+    // caller-named workspaces this method creates; a scratch workspace wears
     // the human-readable stamp + random tail of a board id.
     const explicit = input.path === undefined ? null : requireWorkspacePath(input.path);
     if (explicit !== null && !explicit.startsWith(BOARD_WORKSPACE_PREFIX)) {
@@ -196,7 +199,7 @@ class DocsProjectApi extends RpcTarget implements DocsProject {
     const workspacePath = explicit ?? `${SCRATCH_WORKSPACE_PREFIX}${newBoardId()}`;
     const path = explicit === null ? "notes.md" : null;
     await this.#withPlatform(async (project) => {
-      // Birth stays explicit (this is the app's ONE create door). Mounts are
+      // Birth stays explicit (this is the app's ONE create call). Mounts are
       // not create's business: every project repo is derived onto its own
       // /repos/** path.
       const stub = project.workspaces.get(workspacePath);
@@ -284,7 +287,7 @@ class DocsProjectApi extends RpcTarget implements DocsProject {
 
 /**
  * One workspace, forwarded verbatim: the platform's fs surface here, its git
- * and collab lanes as sub-targets, and the workspace's stream. Stateless
+ * and collab surfaces as sub-targets, and the workspace's stream. Stateless
  * beyond the dial — versions, epochs, and the overlay all live in the
  * workspace DO; live sessions settle inside the workspace's own barriers.
  */
@@ -350,6 +353,9 @@ class WorkspaceApi extends RpcTarget implements DocsWorkspace {
 
   /** The newest page of the workspace's stream events, newest first. */
   async events(limit = 50): Promise<WorkspaceStreamEvent[]> {
+    // The platform's StreamEvent shape, restated for the four fields read
+    // below: the pinned client's getEvents returns the capnweb-mapped type,
+    // which does not assign to a plain array type without this assertion.
     const events = (await this.#dial.withProject((project) =>
       (project as unknown as PlatformProject).streams
         .get(this.#path)
@@ -369,8 +375,10 @@ class WorkspaceApi extends RpcTarget implements DocsWorkspace {
   /**
    * Live event feed: durable history after `afterOffset`, then every new
    * commit, PUSHED over the retained callback — the platform's ephemeral
-   * subscription lane composed end-to-end (browser stub → vessel → stream
-   * DO). Returns the platform's subscription handle (unsubscribe()-able).
+   * subscription composed end-to-end (browser stub → vessel → stream DO).
+   * Returns the platform's subscription handle (unsubscribe()-able); the
+   * assertion restates that handle's two members, which the capnweb-mapped
+   * return type does not spell.
    */
   async subscribeEvents(
     processEventBatch: (batch: { events: WorkspaceStreamEvent[] }) => unknown,
@@ -386,7 +394,7 @@ class WorkspaceApi extends RpcTarget implements DocsWorkspace {
   }
 }
 
-/** `workspace.git`, forwarded — with the owner rule on the commit door. */
+/** `workspace.git`, forwarded — with the owner rule on commit. */
 class WorkspaceGitApi extends RpcTarget implements WorkspaceGitSurface {
   readonly #workspacePath: string;
   readonly #run: WorkspaceRun;
