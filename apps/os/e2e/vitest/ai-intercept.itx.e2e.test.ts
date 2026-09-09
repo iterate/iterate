@@ -1,4 +1,5 @@
 import { expect, test, vi } from "vitest";
+import { aiJsonResponse } from "@iterate-com/shared/test-support/resilient-ai-interceptor";
 import { adminSecret, withItxSession } from "./test-helpers.ts";
 
 // The intercepted/* namespace's ai-run path from very far away: a live handler installed
@@ -13,13 +14,21 @@ test("itx.ai.run('intercepted/…') is served by the live interceptor; releasing
   });
   using project = await itx.projects.get(`ai-intercept-${crypto.randomUUID()}`).create({});
 
-  using interception = await project.ai.intercept(async ({ source, model, body }) => {
-    return { served: { source, model, body } };
+  using interception = await project.ai.intercept(async (input) => {
+    return {
+      status: 200,
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ served: input }),
+    };
   });
 
   const result = await project.ai.run("intercepted/echo-args", { prompt: "ping" });
   expect(result).toMatchObject({
-    served: { source: "ai-run", model: "intercepted/echo-args", body: { prompt: "ping" } },
+    served: {
+      source: "ai-run",
+      model: "intercepted/echo-args",
+      request: { body: { prompt: "ping" } },
+    },
   });
 
   await interception.release();
@@ -46,10 +55,12 @@ test("a root stream DO restart closes the installing session with 4901; reconnec
     onWebSocketClose: (close) => closes.push(close),
   });
   using interceptorProject = interceptorSession.projects.get(description.projectId);
-  using _interception = await interceptorProject.ai.intercept(async ({ model }) => ({
-    servedBy: "first install",
-    model,
-  }));
+  using _interception = await interceptorProject.ai.intercept(async ({ model }) =>
+    aiJsonResponse({
+      servedBy: "first install",
+      model,
+    }),
+  );
   const consultStart = performance.now();
   expect(await project.ai.run("intercepted/echo", {})).toMatchObject({
     servedBy: "first install",
@@ -78,9 +89,11 @@ test("a root stream DO restart closes the installing session with 4901; reconnec
     auth: { type: "admin-secret", secret: adminSecret() },
   });
   using recoveredProject = recoveredSession.projects.get(description.projectId);
-  using _recovered = await recoveredProject.ai.intercept(async () => ({
-    servedBy: "re-install",
-  }));
+  using _recovered = await recoveredProject.ai.intercept(async () =>
+    aiJsonResponse({
+      servedBy: "re-install",
+    }),
+  );
   expect(await project.ai.run("intercepted/echo", {})).toMatchObject({ servedBy: "re-install" });
 });
 
@@ -98,9 +111,9 @@ test("a newer intercept() supersedes the older one; the older handle's release c
     auth: { type: "admin-secret", secret: adminSecret() },
   });
   using firstProject = firstSession.projects.get(description.projectId);
-  using first = await firstProject.ai.intercept(async () => ({ servedBy: "first" }));
+  using first = await firstProject.ai.intercept(async () => aiJsonResponse({ servedBy: "first" }));
 
-  using _second = await project.ai.intercept(async () => ({ servedBy: "second" }));
+  using _second = await project.ai.intercept(async () => aiJsonResponse({ servedBy: "second" }));
   expect(await project.ai.run("intercepted/echo", {})).toMatchObject({ servedBy: "second" });
 
   // The superseded handle is inert: releasing it must not tear down the winner.

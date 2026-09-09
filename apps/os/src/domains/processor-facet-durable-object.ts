@@ -33,17 +33,18 @@ import {
   type ProcessorFacetIdentity,
   type StreamProcessorRegistry,
 } from "iterate/processors/cloudflare";
+import type { ProjectAiInterceptorInput } from "../lib/model-interception.ts";
 import { trustedInternalAuthContext } from "../auth.ts";
 import { parseConfig } from "../config.ts";
 import { workerVersion, type Env } from "../env.ts";
 import { itxForScope, StreamRpcTarget } from "../rpc-targets.ts";
 import { readProjectById } from "../project-directory.ts";
+import { createAiGatewayIdentityReader } from "./agents/ai-gateway-metadata.ts";
 import { facetProcessorFamilyForPath } from "./processor-facet-families.ts";
 import { projectStub } from "./projects/egress.ts";
 import type { CapabilityDescription } from "./itx/describe.ts";
 import { DurableObjectNameCodec } from "./durable-object-names.ts";
 import { AgentProcessor } from "./agents/agent-processor-implementation.ts";
-import type { WorkersAiMessage } from "./agents/workers-ai-transport.ts";
 import {
   type AgentFileAttachment,
   type AgentLiveState,
@@ -535,6 +536,11 @@ export class ProcessorFacet extends ProcessorFacetBase<Env> {
         projectId,
       }),
     );
+    const readGatewayIdentity = createAiGatewayIdentityReader({
+      environment: () => parseConfig(this.env).environmentName,
+      projectId,
+      directory: this.env.PROJECT_DIRECTORY,
+    });
     // Constructor args shared by the classic and headless agent processors —
     // one stream, one deps recipe, two compositions.
     const agentArgs = {
@@ -542,15 +548,16 @@ export class ProcessorFacet extends ProcessorFacetBase<Env> {
       path,
       projectId,
       ai: this.env.AI,
+      getAiGatewayMetadataInput: async (eventOffset: number) => ({
+        identity: await readGatewayIdentity(),
+        context: { kind: "agent-turn" as const, streamPath: path, eventOffset },
+        includeEventOffset: parseConfig(this.env).cloudflareAiGateway.includeEventOffset,
+      }),
       // intercepted/* model turns are served by the project's live AI interceptor
       // (itx.ai.intercept); the slot lives on the Project DO so both egress
       // paths share one handler, and this hop only happens for intercepted/* models.
-      consultAiInterceptor: (input: {
-        source: "agent-turn";
-        agentPath: string;
-        model: string;
-        body: { messages: WorkersAiMessage[] };
-      }) => projectStub(this.env.PROJECT, projectId).consultAiInterceptor(input),
+      consultAiInterceptor: (input: ProjectAiInterceptorInput) =>
+        projectStub(this.env.PROJECT, projectId).consultAiInterceptor(input),
       // Resolved per attempt (not at construction) so a config problem
       // fails the turn with a journaled error instead of bricking the host.
       // The OpenAI prompt_cache_key is per agent stream: repeated turns
@@ -558,7 +565,8 @@ export class ProcessorFacet extends ProcessorFacetBase<Env> {
       // provider-side prompt-cache shard.
       cloudflareAiGatewayTransport: () => {
         const gateway = parseConfig(this.env).cloudflareAiGateway;
-        if (gateway.transport === "unified") return { kind: "unified" as const };
+        if (gateway.transport === "unified")
+          return { kind: "unified" as const, gatewayId: gateway.id };
         return {
           kind: "byok" as const,
           gatewayId: gateway.id,

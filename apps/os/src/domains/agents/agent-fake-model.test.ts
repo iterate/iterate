@@ -7,6 +7,7 @@
 import { expect, test } from "vitest";
 import { makeProcessorHarness } from "iterate/processors/testing";
 import type { ConsumedInput } from "iterate/processors";
+import { aiTextResponse } from "@iterate-com/shared/test-support/resilient-ai-interceptor";
 import { AgentProcessorContract } from "./agent-processor-contract.ts";
 import { AgentProcessor, type AgentProcessorDeps } from "./agent-processor-implementation.ts";
 
@@ -26,8 +27,20 @@ test("an intercepted/* turn is served by the interceptor: prompt in, text out, u
     ["advanceTime", 10_000],
   );
 
-  expect(seen).toMatchObject([{ source: "agent-turn", model: "intercepted/main" }]);
-  expect(seen[0]!.body.messages.some((m) => m.content.includes("Hello fake model"))).toBe(true);
+  expect(seen).toMatchObject([
+    {
+      source: "agent-turn",
+      model: "intercepted/main",
+      request: {
+        kind: "workers-ai",
+        options: { gateway: { metadata: { projectId: "prj_test" } } },
+      },
+    },
+  ]);
+  expect(JSON.stringify(seen)).not.toContain("must-not-leak");
+  expect(
+    (seen[0] as any).request.body.messages.some((m: any) => m.content.includes("Hello fake model")),
+  ).toBe(true);
 
   const requested = h.events(REQUESTED)[0]!;
   expect(h.events(SETTLED)).toMatchObject([
@@ -128,6 +141,57 @@ test("callLlm outranks the interceptor: a scripted transport takes intercepted/*
   ]);
 });
 
+test("Gateway 429 responses exhaust ordinary retries without introducing a budget pause", async () => {
+  let calls = 0;
+  const h = makeProcessorHarness<AgentProcessorContract>({
+    path: "/agents/test",
+    createProcessor: (deps) =>
+      new AgentProcessor({
+        ...deps,
+        ai: {
+          run: async () => {
+            throw new Error("Interception must not dial a provider");
+          },
+        },
+        getAiGatewayMetadataInput: async (eventOffset) => ({
+          identity: { environment: "test", projectId: "prj_test", projectSlug: "test" },
+          context: { kind: "agent-turn", streamPath: "/agents/test", eventOffset },
+          includeEventOffset: true,
+        }),
+        consultAiInterceptor: async () => {
+          calls++;
+          return {
+            status: 429,
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              name: "AiGatewayError",
+              internalCode: 2041,
+              message: "Spend limit exceeded",
+            }),
+          };
+        },
+      }),
+  });
+  await h.play(
+    ["append", ...newFakeAgentEvents("intercepted/test"), userMessage("Hello")],
+    ["advanceTime", 600_000],
+  );
+  expect(calls).toBe(3);
+  expect(h.events(SETTLED)).toHaveLength(3);
+  for (const event of h.events(SETTLED)) {
+    expect(event).toMatchObject({
+      payload: { result: { status: "failed", errorMessage: expect.stringContaining("429") } },
+    });
+  }
+  expect(h.state()).toMatchObject({
+    paused: null,
+    openRequest: null,
+    pendingLlmRequestTrigger: null,
+  });
+  await h.play(["advanceTime", 600_000]);
+  expect(calls).toBe(3);
+});
+
 // -----------------------------------------------------------------------------
 // Helpers
 // -----------------------------------------------------------------------------
@@ -169,7 +233,31 @@ function makeInterceptedModelHarness(
     createProcessor: (deps) =>
       new AgentProcessor({
         ...deps,
-        ...(consultAiInterceptor === undefined ? {} : { consultAiInterceptor }),
+        ai: {
+          run: async () => {
+            throw new Error("An intercepted model must never dial");
+          },
+        },
+        cloudflareAiGatewayTransport: () => ({
+          kind: "byok",
+          gatewayId: "default",
+          openaiApiKey: "must-not-leak",
+        }),
+        getAiGatewayMetadataInput: async (eventOffset) => ({
+          identity: {
+            environment: "test",
+            projectId: "prj_test",
+            projectSlug: "test",
+          },
+          context: { kind: "agent-turn", streamPath: "/agents/test", eventOffset },
+          includeEventOffset: false,
+        }),
+        ...(consultAiInterceptor === undefined
+          ? {}
+          : {
+              consultAiInterceptor: async (input) =>
+                aiTextResponse((await consultAiInterceptor(input)) as any, input),
+            }),
       }),
     path: "/agents/test",
   });

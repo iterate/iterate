@@ -10,7 +10,8 @@
 // decides WHEN a normal request runs and calls `run()`/`abortInFlight()`.
 
 import type { EmittedInput, ProcessEventArgs, StreamEvent } from "iterate/processors";
-import * as modelInterception from "../../lib/model-interception.ts";
+import { aiGatewayMetadata } from "./ai-gateway-metadata.ts";
+import type { AgentLlmCompletion } from "./agent-processor-contract.ts";
 import { appendUnlessLostIdempotencyRace, stringifyError, type AgentHost } from "./agent-host.ts";
 import {
   AgentProcessorContract,
@@ -26,7 +27,6 @@ import {
 import {
   extractChunkText,
   jsonCompatible,
-  normalizeLlmUsage,
   runWorkersAiAttempt,
   type WorkersAiMessage,
 } from "./workers-ai-transport.ts";
@@ -216,6 +216,7 @@ export class AgentLlmRequest {
         const events = await this.readConsumedEvents();
         const body = buildAgentLlmRequestBody({ events, llmRequestOffset: requestOffset });
         const completion = await this.attempt({
+          eventOffset: requestOffset,
           model: open.model,
           messages: await prepareAgentLlmMessages(
             body.messages,
@@ -418,21 +419,13 @@ export class AgentLlmRequest {
    * void with `onChunk` gated on the same signal.
    */
   async attempt(input: {
+    eventOffset: number;
     model: string;
     messages: WorkersAiMessage[];
     signal: AbortSignal;
     deadlineMs: number;
     onChunk: (chunk: unknown) => Promise<void>;
-  }): Promise<{
-    text: string;
-    usage?: {
-      inputTokens: number;
-      outputTokens: number;
-      cachedInputTokens?: number;
-      reasoningOutputTokens?: number;
-    };
-    rawResponse?: unknown;
-  }> {
+  }): Promise<AgentLlmCompletion> {
     if (this.#host.deps.callLlm !== undefined) {
       return await this.#host.deps.callLlm({
         model: input.model,
@@ -441,42 +434,19 @@ export class AgentLlmRequest {
         onChunk: (text) => input.onChunk(text),
       });
     }
-    if (modelInterception.isInterceptedModel(input.model)) {
-      const consult = this.#host.deps.consultAiInterceptor;
-      if (consult === undefined) throw modelInterception.noAiInterceptorError(input.model);
-      const result = await raceAbort(
-        input.signal,
-        consult({
-          source: "agent-turn",
-          agentPath: this.#host.path,
-          model: input.model,
-          body: { messages: input.messages },
-        }),
-      );
-      const normalized = modelInterception.normalizeInterceptedTurnResult({
-        result,
-        model: input.model,
-        inputCharacters: input.messages.reduce((sum, message) => sum + message.content.length, 0),
-      });
-      // Word-split delivery keeps journaled chunk events flowing. An
-      // abort mid-delivery fails the attempt like the real transport's
-      // raceAbort-over-the-drain does — a succeeded completion must never
-      // race the interrupt's cancelled settle on the shared idempotency key.
-      for (const chunk of normalized.text.split(/\b/)) {
-        if (chunk.length === 0) continue;
-        if (input.signal.aborted) break;
-        await input.onChunk(chunk);
-      }
-      if (input.signal.aborted) throw new Error("Interception attempt aborted mid-response.");
-      return { text: normalized.text, usage: normalized.usage, rawResponse: result };
-    }
     const ai = this.#host.deps.ai;
     if (ai === undefined) {
       throw new Error("Agent processor has no AI binding configured.");
     }
+    if (!this.#host.deps.getAiGatewayMetadataInput)
+      throw new Error("Agent host has no AI Gateway metadata provider");
+    const metadataInput = await this.#host.deps.getAiGatewayMetadataInput(input.eventOffset);
     const completion = await raceAbort(
       input.signal,
       runWorkersAiAttempt({
+        metadata: aiGatewayMetadata(metadataInput),
+        agentPath: this.#host.path,
+        consultInterceptor: this.#host.deps.consultAiInterceptor,
         ai,
         transport: this.#host.deps.cloudflareAiGatewayTransport?.(),
         deadlineMs: input.deadlineMs,
@@ -487,12 +457,7 @@ export class AgentLlmRequest {
         onChunk: async (chunk) => input.onChunk(chunk),
       }),
     );
-    const usage = normalizeLlmUsage(completion.usage);
-    return {
-      text: completion.text,
-      ...(usage === undefined ? {} : { usage }),
-      rawResponse: completion.rawResponse,
-    };
+    return completion;
   }
 
   /**
@@ -556,6 +521,7 @@ export class AgentLlmRequest {
       // a later configuration event may already have selected another model,
       // but switching here would forfeit that cache.
       const summary = await this.attempt({
+        eventOffset: triggerOffset,
         model,
         messages: await prepareAgentLlmMessages(
           buildAgentCompactionRequestBody({ events, llmRequestOffset }).messages,

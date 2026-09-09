@@ -8,6 +8,13 @@ real (debounce, journaled llm-request events, chunk streaming, codemode, chat
 reply); only the model is scripted. Non-fake models are never interceptable —
 a journaled `openai/*` turn is always the real provider.
 
+When testing provider-specific preparation, name the provider/model explicitly, for example
+`intercepted/openai/gpt-4.1-nano` or `intercepted/@cf/meta/llama-3.2-1b-instruct`.
+The prefix is stripped before request preparation; the configured transport
+still chooses BYOK versus Cloudflare billing. Interception does not choose the provider.
+For provider-independent tests, synthetic names such as `intercepted/echo-args`
+are sufficient; they use generic Workers AI preparation without calling a provider.
+
 ## Quick start
 
 ```ts
@@ -19,14 +26,16 @@ using session = await connectItxReady({
 });
 using project = session.projects.get("my-project");
 
-// Serve every intercepted/* call with your function. Last writer wins.
-using interception = await project.ai.intercept(async (call) => {
-  if (call.source === "ai-run") return { echo: call.body }; // returned verbatim
-  // call.source === "agent-turn": call.body.messages is the chat projection.
-  // Return assistant text — or { text, usage } to also script token usage
-  // (inflate the numbers to drive compaction deterministically).
-  return "scripted reply";
-});
+// Replace only provider dispatch, after host request preparation.
+using interception = await project.ai.intercept(async (call) => ({
+  status: 200,
+  headers: { "content-type": "application/json" },
+  body: JSON.stringify(
+    call.source === "ai-run"
+      ? { echo: call.request.body }
+      : { choices: [{ message: { content: "scripted reply" } }] },
+  ),
+}));
 
 // Direct invocation path:
 await project.ai.run("intercepted/anything", { prompt: "hi" });
@@ -43,12 +52,23 @@ await agent.ask({ message: "hello" });
 await interception.release(); // or let `using` dispose it
 ```
 
-Handler input is
-`{ source: "agent-turn" | "ai-run", model, body }`
-([model-interception.ts](../apps/os/src/lib/model-interception.ts) has the
-exact types; they're also exported from `iterate/node` as
-`ProjectAiInterceptor` / `ProjectAiInterceptorInput`). A malformed agent-turn
-result fails the attempt loudly; omitted usage gets a text-length estimate.
+Handlers receive `source` (`agent-turn`, `ai-run`, or `egress`), the original
+`model`, and a completed `request` with one of two shapes:
+
+- `kind: "openai-http"`: gateway ID, endpoint, body, and headers (including trusted metadata).
+- `kind: "workers-ai"`: model, body, and binding options (including the host-owned gateway ID and metadata).
+
+Agent calls also carry `agentPath`. Credentials are excluded from both shapes.
+The sender does not change the prepared body or choose a provider from the model name.
+
+Return `{ status, headers, body }`, where body is an HTTP response string (JSON
+or SSE). The normal response decoder processes
+it. Malformed results fail the attempt. There is one intercepted namespace and
+one request preparation path.
+
+Tests can use `aiTextResponse(textOrUsage, call)` or `aiJsonResponse(value)` from
+`@iterate-com/shared/test-support/resilient-ai-interceptor`. Text/usage estimates live in that test
+helper; production interception always consumes a provider-shaped response.
 
 ## The lifetime contract
 
@@ -89,7 +109,7 @@ dedicated to the interception:
 
 ```ts
 await using fixture = await helpers.createFixture("my-spec");
-await using interception = await fixture.interceptAi(async (call) => "reply");
+await using interception = await fixture.interceptAi(async (call) => aiTextResponse("reply", call));
 ```
 
 (`fixture.interceptAi` wraps
@@ -114,3 +134,9 @@ async function keepIntercepting(handler) {
 [ai-intercept.itx.e2e.test.ts](../apps/os/e2e/vitest/ai-intercept.itx.e2e.test.ts)
 exercises install, release, the 4901 close on a real DO restart, and
 supersession.
+
+## Gateway response fixtures
+
+Use any `intercepted/*` model with an HTTP fixture. The same handler can return
+streamed success or an HTTP failure. Refusals use the existing bounded agent
+failure policy; interception does not introduce budget-specific outcomes.

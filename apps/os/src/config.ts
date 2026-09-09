@@ -109,6 +109,7 @@ export const AppConfig = z.object({
     .object({
       transport: z.enum(["unified", "byok"]).default("byok"),
       id: z.string().trim().min(1).default("default"),
+      includeEventOffset: z.boolean().default(false),
       responseCacheTtlSeconds: z
         .preprocess(
           (value) => (value === "" ? undefined : value),
