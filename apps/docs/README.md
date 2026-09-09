@@ -10,9 +10,16 @@ workspace: every project repo mounted at its own `repos/<name>` path plus the
 workspace's own directory, with git-status badges for the workspace's
 uncommitted changes and new/rename/delete/discard. Documents (`.md`,
 `.markdown`, `.html`, `.htm`) open in the collaborative editor; any other
-text file opens read-only. Each dirty repo gets its own Commit button, which
+text file opens read-only, with change bars against HEAD in the gutter and
+a diff toggle (`?diff=1`) that shows the file's uncommitted change in
+CodeMirror's merge view. Each dirty repo gets its own Commit button, which
 publishes that mount's dirty set to the repo's main — a commit never spans
-mounts, and the workspace's own files are never committed. A relative
+mounts, and the workspace's own files are never committed. Listings load
+per mount: the config repo and the workspace's own directory at once, any
+other mount when its row is opened, so a big repo costs nothing until then.
+The tree, file view, diff, and commit controls are the shared
+`@iterate-com/workspace-documents` components that apps/os renders too, over
+the same platform workspace surface. A relative
 `path` resolves against the workspace's own stream path; an absolute `path`
 must be a fully qualified stream path (e.g. `/repos/config/docs/plan.md`):
 

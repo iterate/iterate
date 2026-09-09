@@ -74,7 +74,9 @@ namespace is simply dropped; only the class/binding names carry the scar.
 - **No branch mode.** `policy: "branch"` (workspace branch + auto-draft-PR on
   GitHub-linked repos, commit synthesis via GitHub's Git Database API) is the
   next policy value; today big imported repos deviate to `read-only`.
-- **`listAllFiles`/`glob` still enumerate every mount.** With many or huge
+- **`listAllFiles` still enumerates every mount** (`glob` no longer does: it
+  lists only the subtree its pattern's literal prefix can match, so a glob
+  under `/repos/config` never pulls a big sibling mount). With many or huge
   repos mounted that is a full `listFiles` per repo; per-mount lazy listing
   is the follow-up if it hurts. Status and commit inference already skip
   clean mounts.

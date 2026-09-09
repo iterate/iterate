@@ -133,6 +133,22 @@ docs, {workspace, repo, task?} board). Remaining from the /goal list: the
 pierre-style tree + diff views (item 3's extraction) and the root-folder
 constraint.
 
+**DONE (2026-09-09): the workspace is the tree.** Board workspaces are named
+by id alone (`/workspaces/tasks/<id>`, the repo is a `?repo=` view choice) and
+created explicitly from the board home; the Docs vessel forwards the platform
+workspace surface verbatim (fs, `git`, `collab` as sub-targets) and the shared
+transport type is that surface; the Docs view shows the WHOLE workspace
+(every mount plus the own directory) with listings loaded per mount and one
+Commit control per dirty mount; the tree, files hook, read-only file view,
+diff-against-HEAD (CodeMirror merge view), commit controls and file kinds
+live in `@iterate-com/workspace-documents`; apps/os renders them at
+`/projects/<slug>/workspaces/<path>` over the live itx stub, with an "Open
+workspace" link on the agent details sheet. Platform: `itx.workspaces.list()`
+and prefix-scoped globs. Remaining: the collaborative document page and the
+board are still Docs-only; a jam still births a second workspace for its
+agent (the recorded decision — jam in the agent's own workspace — is not
+implemented); a `readDir` for per-folder lazy listing inside a big mount.
+
 ## Platform follow-up: a real `workspaces.list()`
 
 The picker currently enumerates via `streams.list()` filtered to
