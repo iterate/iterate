@@ -94,7 +94,9 @@ the same), and an entry in `apps/os/scripts/voicelab/boards.ts`.
 
 ### Push-to-talk or open microphone
 
-Decide it from `capture_is_echo_cancelled`, not from taste:
+Decide it from whether the hardware really cancels echo, not from taste (the
+board declares it through `facts.turns`; the old codec property that claimed
+it was deleted because nobody checked it):
 
 - **Cancellation exists** (StackChan's esp-sr, HA Voice PE's XMOS) →
   **open mic**, `.turns = "vad"`, no turn machine. The microphone rides the
