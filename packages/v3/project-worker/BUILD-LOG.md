@@ -4170,4 +4170,9 @@ lane) reported; the stream reviewer was cut off by a session limit twice and re-
   three-way `PushReport`) deleted and its header rewritten to what it serves.
 - GATES: tsc ×3 · oxlint · knip · `pnpm test` 86 files / 702 passed / 15 expected-fail / 17
   deployed-only skips (one timing bound — a built-in root's median 162 ms against 150 — tripped
-  under the reviewer's parallel load and passed alone). Deployed proof: the next line.
+  under the reviewer's parallel load and passed alone). DEPLOYED (dd7b136a0, version ed4432f6):
+  48 files / 198 passed / 4 expected-fail; two failures — a platform network drop mid-way through
+  the 1001-key kv list (green alone), and the CONCURRENT READERS red pin going GREEN twice running:
+  24 sessions paging the 144 MiB log did not reset the DO. No ceiling in this code holds that; the
+  platform's GC timing decides, so the row is now a plain test asserting the claim the code OWNS
+  (recovery) and REPORTING the reset count — a `.fails` that flips on luck signals nothing.

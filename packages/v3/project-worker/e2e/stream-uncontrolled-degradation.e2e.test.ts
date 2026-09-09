@@ -133,12 +133,14 @@ beforeAll(async () => {
 // that ceiling on 2026-09-07 because it forced `read()` async — rippling an await through every
 // same-isolate caller and splitting the door into read/readInternal — to defend a case no real
 // workload hits (one client fanning out 24 six-MiB reads at once). If a real workload ever does,
-// restore the ceiling and promote this back to a plain `test`.
+// restore the ceiling and assert a ZERO reset count below.
 //
-// HOUSE CONVENTION: `.fails` over a body asserting the HEALTHY expectation (no reset). Green while
-// the reset stands; it flips the row RED the day the ceiling holds — the signal to promote it.
-deployed.fails(
-  "CONCURRENT READERS (accepted limit): 24 sessions paging one 144 MiB log at once reset the DO — the per-read byte budget bounds one read, not their sum; the ctx recovers on the next call",
+// WHETHER the storm resets the DO is the platform's call, not this code's: 24 readers × an 8 MiB page
+// peaks near the 128 MiB isolate, and the GC's timing decides (a deployed run on 2026-09-09 saw no
+// reset at all). So the row asserts only the claim this code OWNS — recovery — and REPORTS the reset
+// count; it is not a `.fails` pin, because a flip here would signal luck, never a ceiling.
+deployed(
+  "CONCURRENT READERS (accepted limit): 24 sessions paging one 144 MiB log at once may reset the DO — the per-read byte budget bounds one read, not their sum; the ctx recovers on the next call",
   { timeout: 300_000 },
   async () => {
     const readers = Array.from({ length: 24 }, () => openItx(seededCtx));
@@ -150,12 +152,10 @@ deployed.fails(
     expect(recovered.ok, "the seeded ctx must recover after the storm and still page to head").toBe(
       true,
     );
-    // THE HEALTHY EXPECTATION, asserted last so `.fails` stays green while the reset stands: no
-    // reader resets the DO. It DOES reset today — accepted; see the block above.
-    expect(
-      resetErrors.length,
-      `${resetErrors.length}/24 concurrent readers reset the DO: ${String(resetErrors[0]?.message ?? "")}`,
-    ).toBe(0);
+    // The reset count is REPORTED, never asserted (the block above): the platform decides it.
+    console.log(
+      `[concurrent readers] ${resetErrors.length}/24 readers reset the DO${resetErrors.length ? `: ${String(resetErrors[0]?.message ?? "")}` : ""}`,
+    );
   },
 );
 
