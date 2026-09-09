@@ -338,6 +338,33 @@ static size_t health(void *context, char *out, size_t capacity) {
   return added == 0U ? 0U : used + added;
 }
 
+/** Queue exactly the tap the table GPIO classifier would consume. */
+static enum capnweb_status iterate_kit_board_button_press(
+    void *context, const struct capnweb_call *call, struct capnweb_reply *reply) {
+  (void)context;
+  (void)call;
+  iterate_kit_board_inject_tap();
+  return capnweb_reply_set_boolean(reply, true);
+}
+
+/** Mount the table button first, then append extra's board-only capabilities. */
+static size_t iterate_kit_board_modules(
+    void *context, struct iterate_kit_module *out, size_t capacity) {
+  (void)context;
+  static const char *const path[] = {"button", "press"};
+  static const struct iterate_kit_method methods[] = {
+    {path, 2U, iterate_kit_board_button_press},
+  };
+  size_t count = 0U;
+  if (board->button.gpio >= 0 && capacity != 0U) {
+    out[count++] = (struct iterate_kit_module){.methods = methods, .method_count = 1U};
+  }
+  if (board->extra != NULL && board->extra->modules != NULL && count < capacity) {
+    count += board->extra->modules(NULL, out + count, capacity - count);
+  }
+  return count;
+}
+
 void iterate_kit_board_run(const struct iterate_kit_board *value) {
   board = value;
   turns = board->facts.turns;
@@ -352,6 +379,7 @@ void iterate_kit_board_run(const struct iterate_kit_board *value) {
   ops.poll = poll;
   ops.phase = phase;
   ops.health = health;
+  ops.modules = iterate_kit_board_modules;
   iterate_kit_voice_loop_run(&ops, &facts, NULL);
 }
 #endif

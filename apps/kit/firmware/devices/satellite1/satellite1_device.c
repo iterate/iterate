@@ -192,33 +192,10 @@ static size_t iterate_kit_satellite1_health(void *context, char *out, size_t cap
   return added == 0U ? 0U : used + added;
 }
 
-/** A synthetic action-button tap uses the same classifier as GPIO0. */
-static enum capnweb_status iterate_kit_satellite1_button_press(
-    void *context, const struct capnweb_call *call, struct capnweb_reply *reply) {
-  (void)context;
-  (void)call;
-  iterate_kit_board_inject_tap();
-  return capnweb_reply_set_boolean(reply, true);
-}
-
-/** Mount the action button RPC beside the loop's shared capabilities. */
-static size_t iterate_kit_satellite1_modules(
-    void *context, struct iterate_kit_module *out, size_t capacity) {
-  (void)context;
-  static const char *const path[] = {"button", "press"};
-  static const struct iterate_kit_method methods[] = {
-    {path, 2U, iterate_kit_satellite1_button_press},
-  };
-  if (capacity == 0U) return 0U;
-  out[0] = (struct iterate_kit_module){.methods = methods, .method_count = 1U};
-  return 1U;
-}
-
 static const struct iterate_kit_board_ops satellite1_extra = {
   .present = iterate_kit_satellite1_present,
   .poll = iterate_kit_satellite1_poll,
   .health = iterate_kit_satellite1_health,
-  .modules = iterate_kit_satellite1_modules,
 };
 
 static const struct iterate_kit_gpio_step boot[] = {{4, 0, 0}};

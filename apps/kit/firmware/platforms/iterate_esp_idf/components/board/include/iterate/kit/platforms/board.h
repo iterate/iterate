@@ -38,7 +38,8 @@ struct iterate_kit_board_sounds { const uint8_t *wake; uint32_t wake_bytes; cons
  * a dial, side buttons). board.c runs its own half of each op first, then extra's:
  * extra->start before the codec; extra->present after the ring; extra->poll after the
  * table button (it may OR into the intent, or own the grammar when button.gpio is -1);
- * extra->health and extra->modules appended.
+ * extra->health is appended; button.gpio >= 0 mounts button.press first, then
+ * extra->modules appends the board-only capabilities.
  */
 struct iterate_kit_board {
   struct iterate_kit_board_facts facts;    /* .speaker.set_volume/.volume filled by board.c */
