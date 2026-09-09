@@ -233,13 +233,16 @@ static const struct iterate_kit_i2s_codec_facts audio = {
   .playback_shape = {32, 2, 0, -1, 3},
   /* MEASURED 2026-09-09 on XMOS 1.0.3: slot 0 carries the microphone
    * (micRawPeak 891 on room noise) and slot 1 is SILENT (peak 2), whatever
-   * the source comments say about which tap is which. The uplink is slot 0;
-   * slot 1 stays the diagnostic plane so the oracle can show it waking up if
-   * a later XMOS build populates it. Slot 0 is the AGC'd tap, and the HA Voice
+   * the source comments say about which tap is which. The uplink is slot 0.
+   * There is NO raw microphone tap on this bus, so no diagnostic plane: with
+   * slot 1 declared as one, the echo oracle read +45 dB (a dead plane against
+   * the AGC'd uplink) and would have sent the next reader chasing a phantom.
+   * On this board the self-trigger detector is the transcript of a long
+   * answer, not the oracle. Slot 0 is the AGC'd tap, and the HA Voice
    * PE's essay (board/codecs/aic3204.c) measured a x16 make-up gain AFTER an
    * AGC as the thing that fed the provider its own echo; so start at unity
    * and let the bench raise it. */
-  .capture_shape = {32, 2, 0, 1, 3},
+  .capture_shape = {32, 2, 0, -1, 3},
   .capture_gain = 1,
   .amplifier_gpio = -1,
 };
