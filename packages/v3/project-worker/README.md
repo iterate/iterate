@@ -21,6 +21,7 @@ await itx.append({ type: "note", payload: { n: 1 } });
 - `docs/design-onion-subscriptions-processors.md` — the design of record for subscriptions + processors
 - `LAYERS.md` — the layer map; `BUILD-LOG.md` — what landed, when, and the proofs
 - `docs/plan-v4-features-layered-on-v3.md` — the roadmap (its STATUS block says what is done)
+- `docs/history/` — every earlier plan, review, proposal and log, dated; read as history, never as the code
 
 ## Run
 

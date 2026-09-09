@@ -2,8 +2,8 @@
 
 Chronological log of every increment: what was built, how it was proven, the platform facts learned, and the
 commit. Design ref: `apps/os/docs/simplification/wayfinder/innermost-core/target-core.md`. Deploy target: the
-POC account: `project-worker.iterate.workers.dev` (the inner core) + `iterate-control-plane.iterate.workers.dev`
-(the shell, from increment 11).
+POC account, `project-worker.iterate.workers.dev` — ONE worker: the inner core and the control plane, in-process
+since the 2026-09-08 consolidation (the shell worker of increment 11 is gone).
 
 Convention: each increment ends at a **working gate** — typecheck green + proven on the deployment + committed.
 

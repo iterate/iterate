@@ -3,7 +3,7 @@
 // (a DurableObject hosted as the durable facet `name`). Plus `itx.facets.get(name)` — the same door,
 // addressing a RUNNING facet. The
 // SOURCE is the worker's MODULES (module name → code, `"cap.js"` is the main module), handed over
-// at the `workers.get` / `facets.get` site; `itx.runScript(lambda)` is the source-less sugar. A source
+// at the `workers.get` / `facets.get` site; there is no bare-lambda sugar — every source exports its host. A source
 // may instead be an EXPRESSION that produces the modules, but only under a required `cacheKey`.
 
 import { RpcTarget } from "capnweb";

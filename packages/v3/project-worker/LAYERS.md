@@ -169,5 +169,5 @@ DO, so the lend happens here through the DON'T-PIN pager relay `context/rpc-stub
 `lendRpcStubOverPager`; an expression target is the rule alone), and `subscribe` /
 `enableProcessor` / `disableProcessor` — each visibly "build the event, append it";
 the DO has `append` and no configuration verbs. Every lend is undone at session end by the
-session's `SessionTeardown` (`session.ts`), keyed `"<iterateContextName> <rpcStubKey>"`. Everything a
+session's `SessionTeardown` (`session.ts`), keyed `JSON.stringify([iterateContextName, rpcStubKey])` (a context path may hold a space). Everything a
 client ever does — Slack-bridge RpcTargets included — is these layers composed.
