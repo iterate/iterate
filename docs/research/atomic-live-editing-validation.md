@@ -32,6 +32,11 @@ existing timeout inside both substring-search loops. The application asks for a
 30 seconds to about 51 ms. A normal comment operation produced three disjoint
 edits in about 0.3 ms. No document-size threshold forces whole-file replacement.
 
+The recording dependency is pinned to [Middlewright PR #44](https://github.com/iterate/middlewright/pull/44),
+which balances FFmpeg cursor expressions so long walkthroughs can render. Its
+77 video tests passed locally with subtitle-enabled FFmpeg. This changes test
+recording only.
+
 ## Browser timing
 
 Local Chromium, actual production rich-editor modules, one RFM comment and
@@ -77,19 +82,42 @@ The first deployed walkthrough exposed a one-pixel remote-caret footprint that
 wrapped at the end of a full-width table row. Cancelling that footprint keeps
 the caret in the row (browser row height: 49.6 px → 31.4 px). The table test
 also now double-clicks the visible word rather than the empty center of its
-wide cell, and checks the native selection before replacing it.
+wide cell, and checks the native selection before replacing it. Peer-caret
+labels are included in DOM text, so propagation checks scope to the cell and
+independently require the exact saved Markdown rows.
 
-The deployed two-browser walkthrough and rendered multiplayer video are still
-pending. Local project app hosts incorrectly served OS's
-Vite graph for Docs's virtual client entry, before reaching the editor; the
-spec therefore targets a deployed preview. Temporary proxy experiments were
-reverted.
+Both hosted Bugbot findings were checked against source and reproductions:
+multiline inline replacements are valid when supplied by a state field, and
+a partial parser request must retain its original source origin even if its
+first range is hidden. A new regression covers that hidden first range; a
+browser exercise confirmed a multiline comment stays hidden during native edits.
+
+The deployed two-browser walkthrough initially passed while its video exposed
+a missed native-caret defect: Chrome collapsed Select All → ArrowRight to the
+start of the last visible line when a hidden metadata block followed it. Later
+pastes consequently prepended and concatenated text. The footer now uses an inline replacement, keeping the browser caret at the
+visible body end. The saved-source assertion requires the tail
+paragraphs in order with their blank lines intact. The native Chromium
+reproduction passes; the deployed walkthrough tests this same EOF/paste path.
+
+Preview telemetry also exposed a legacy live-state subscription fallback that
+pinned its Durable Object after a Pager failure. That fallback is removed;
+subscription failures remain visible and use the existing ten-second retry timer
+for at most two retries. Success, manual refresh, or a new logical subscription
+resets the budget. Focused tests cover recovery, exhausted attempts, and changing
+subscriptions after exhaustion. Provider WebSocket lifecycle close records are
+classified separately from application errors; exact deployment evidence and
+the rendered two-client recording are attached to PR #2608.
 
 ## Known format limits
 
 RFM cannot represent crossing inline anchors. Existing exact expected-failure
 tests cover concurrent first-footer creation, overlapping anchors, and upstream
-metadata/endmatter behavior; see
+metadata/endmatter behavior. A new narrow expected failure reproduces a stale
+client appending at the old EOF while another creates the first comment footer:
+ordinary text rebasing preserves the append after the footer and invalidates
+its YAML. The browser undo walkthrough waits for the peer to receive that
+footer before proceeding; it does not claim to fix this race. See
 [the tracked task](../../tasks/roughdraft-concurrent-endmatter.md). This work does
 not claim semantic merging of arbitrary Markdown/YAML edits. A stale full-file
 write made after another edit was already confirmed still replaces that content.

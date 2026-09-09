@@ -195,7 +195,9 @@ function reviewDecorations(state: EditorState) {
         : undefined;
     ranges.push(
       Decoration.replace({
-        block: control.kind === "frontmatter" || control.kind === "endmatter",
+        // An inline footer leaves the browser a caret position after the last
+        // visible line; a terminal block replacement does not.
+        block: control.kind === "frontmatter",
         widget: suggestion ? new SuggestionWidget(suggestion) : undefined,
       }).range(control.from, control.to),
     );

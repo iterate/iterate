@@ -40,6 +40,14 @@ async function session(initial = source) {
         clientId,
         ops: [{ changes: changes.toJSON(), clientSeq: 0 }],
       }),
+    pushBatch: (changes: readonly ChangeSet[], clientId: string) =>
+      host.push({
+        path,
+        epoch: opened.epoch,
+        baseVersion: 0,
+        clientId,
+        ops: changes.map((change, clientSeq) => ({ changes: change.toJSON(), clientSeq })),
+      }),
   };
 }
 
@@ -156,6 +164,68 @@ fails("simultaneous first comments should share one valid endmatter", async () =
   expect(review.threads).toHaveLength(2);
   expect(review.projection.markdown.trimEnd()).toBe(source.trimEnd());
 });
+
+// Deliberately accepted for client-side RFM editing; see
+// tasks/roughdraft-concurrent-endmatter.md.
+const staleEndmatterFails = createFailing(test, /STALE ENDMATTER APPEND/);
+staleEndmatterFails(
+  "a stale EOF append remains document body while another client creates endmatter",
+  async () => {
+    const { host, push, pushBatch } = await session();
+    const comment = applyReviewOperation(source, {
+      type: "add-selected-comment",
+      expectedSource: source,
+      range: { start: 0, end: "First paragraph.\n".length },
+      body: "Check First.",
+      author: "alice",
+      createdAt: "2026-09-09T00:00:00.000Z",
+    });
+    if (!comment.ok) throw new Error(comment.message);
+    const bodyEnd = readReview(comment.source).body.range.end;
+    const localWithAppend =
+      comment.source.slice(0, bodyEnd) + "\n\nLOCAL_UNDONE" + comment.source.slice(bodyEnd);
+    expect(readReview(localWithAppend).diagnostics).toEqual([]);
+    const staleAppend = ChangeSet.of(
+      { from: source.length, insert: "\n\nREMOTE_KEPT" },
+      source.length,
+    );
+    expect(
+      (
+        await pushBatch(
+          [
+            ChangeSet.of(textEdits(source, comment.source), source.length),
+            ChangeSet.of(textEdits(comment.source, localWithAppend), comment.source.length),
+          ],
+          "alice",
+        )
+      ).status,
+    ).toBe("accepted");
+    expect((await push(staleAppend, "bob")).status).toBe("accepted");
+
+    const saved = (await host.readFile(path))!;
+    const review = readReview(saved);
+    const codes = review.diagnostics.map((diagnostic) => diagnostic.code);
+    const footerStart = saved.indexOf("\n---\ncomments:");
+    const remoteAppendIsAfterFooter =
+      footerStart >= 0 &&
+      footerStart < saved.lastIndexOf("REMOTE_KEPT") &&
+      saved.endsWith("REMOTE_KEPT");
+    if (
+      remoteAppendIsAfterFooter &&
+      codes.length === 2 &&
+      codes.includes("missing-endmatter-entry") &&
+      codes.includes("invalid-endmatter-yaml")
+    ) {
+      throw new Error(`STALE ENDMATTER APPEND: ${codes.join(", ")}`);
+    }
+    // Any different diagnostic must remain a real test failure rather than
+    // satisfying this narrow expected-failure pin.
+    expect(review.diagnostics).toEqual([]);
+    expect(review.projection.markdown).toContain("LOCAL_UNDONE");
+    expect(review.projection.markdown).toContain("REMOTE_KEPT");
+    expect(review.threads).toHaveLength(1);
+  },
+);
 
 const overlappingCommentsFail = createFailing(test, /CONCURRENT COMMENT OVERLAP/);
 for (const wordFirst of [true, false]) {

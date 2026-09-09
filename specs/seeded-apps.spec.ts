@@ -277,14 +277,45 @@ test("review a workspace document in the seeded Docs app", async ({ baseURL, pag
       await replaceCellWord(peer, "Pending", "Scheduled");
     })(),
   ]);
-  await peer.getByText("Approved", { exact: true }).waitFor({ timeout: 10_000 }); // timeout: remote CodeMirror update is optimistic UI with no spinnerWaiter-visible progress
-  await page.getByText("Scheduled", { exact: true }).waitFor({ timeout: 10_000 }); // timeout: remote CodeMirror update is optimistic UI with no spinnerWaiter-visible progress
+  // Peer carets are children of the native table cell, so exact text locators
+  // include their a11y label. Scope to the rendered cells instead.
+  await peer
+    .locator(".cm-markdown-table-cell")
+    .filter({ hasText: "Approved" })
+    .waitFor({ timeout: 10_000 }); // timeout: remote CodeMirror update is optimistic UI with no spinnerWaiter-visible progress
+  await page
+    .locator(".cm-markdown-table-cell")
+    .filter({ hasText: "Scheduled" })
+    .waitFor({ timeout: 10_000 }); // timeout: remote CodeMirror update is optimistic UI with no spinnerWaiter-visible progress
+  await expect
+    .poll(() => workspace.readFile(documentPath), {
+      timeout: 30_000, // timeout: source durability follows the live push, not spinnerWaiter-visible UI
+    })
+    .toContain("| Launch copy | Approved |");
+  await expect
+    .poll(() => workspace.readFile(documentPath), {
+      timeout: 30_000, // timeout: source durability follows the live push, not spinnerWaiter-visible UI
+    })
+    .toContain("| Rollout | Scheduled |");
   await Promise.all([
     appendAtEnd(page, "\n\nPRIMARY_CONCURRENT_BODY"),
     appendAtEnd(peer, "\n\nPEER_CONCURRENT_BODY"),
   ]);
-  await page.getByText("PEER_CONCURRENT_BODY", { exact: true }).waitFor({ timeout: 10_000 }); // timeout: remote CodeMirror update has no spinnerWaiter-visible progress
-  await peer.getByText("PRIMARY_CONCURRENT_BODY", { exact: true }).waitFor({ timeout: 10_000 }); // timeout: remote CodeMirror update has no spinnerWaiter-visible progress
+  // A peer-caret label is rendered beside remote text, so use the content
+  // projection for the visual assertion and verify both exact markers in the
+  // plain-text file below.
+  await editor.getByText("PEER_CONCURRENT_BODY").waitFor({ timeout: 10_000 }); // timeout: remote CodeMirror update has no spinnerWaiter-visible progress
+  await peerEditor.getByText("PRIMARY_CONCURRENT_BODY").waitFor({ timeout: 10_000 }); // timeout: remote CodeMirror update has no spinnerWaiter-visible progress
+  await expect
+    .poll(() => workspace.readFile(documentPath), {
+      timeout: 30_000, // timeout: source durability follows the live push, not spinnerWaiter-visible UI
+    })
+    .toContain("PRIMARY_CONCURRENT_BODY");
+  await expect
+    .poll(() => workspace.readFile(documentPath), {
+      timeout: 30_000, // timeout: source durability follows the live push, not spinnerWaiter-visible UI
+    })
+    .toContain("PEER_CONCURRENT_BODY");
 
   // The primary user keeps a native selection while the peer inserts text.
   // Comment submission reads the mapped bookmark from the editor's live doc,
@@ -293,18 +324,28 @@ test("review a workspace document in the seeded Docs app", async ({ baseURL, pag
     .locator(".cm-content")
     .getByText("Make review decisions directly in the workspace file.", { exact: true });
   await reviewSentence.click({ clickCount: 3 });
-  await appendAtEnd(peer, "\n\nPeer inserted while the passage was selected.");
+  await peerEditor.click();
+  await peer.keyboard.press("ControlOrMeta+a");
+  await peer.keyboard.press("ArrowLeft");
+  await peer.keyboard.insertText("Peer inserted before the selected passage.\n\n");
+  await editor.getByText("Peer inserted before the selected passage.").waitFor({ timeout: 10_000 }); // timeout: remote CodeMirror update has no spinnerWaiter-visible progress
   await page.getByRole("button", { name: "Comment on selected text" }).click();
   await page
     .getByPlaceholder("Comment on selected text…")
     .fill("Can we make this promise more concrete?");
   await page.getByRole("button", { name: "Add comment" }).click();
+  // The comment footer changes the canonical source length. Wait until the
+  // peer has the same RFM before it contributes its later independent edit.
+  await peer
+    .getByRole("complementary")
+    .getByText("Can we make this promise more concrete?", { exact: true })
+    .waitFor({ timeout: 10_000 }); // timeout: peer RFM parse follows a remote collab push, not spinnerWaiter-visible UI
 
   // Undo only removes the local operation. A remote insertion that arrived
   // between local typing and undo remains in both buffers and durable source.
   await appendAtEnd(page, "\n\nLOCAL_UNDONE");
   await appendAtEnd(peer, "\n\nREMOTE_KEPT");
-  await page.getByText("REMOTE_KEPT", { exact: true }).waitFor({ timeout: 10_000 }); // timeout: remote CodeMirror update has no spinnerWaiter-visible progress
+  await editor.getByText("REMOTE_KEPT").waitFor({ timeout: 10_000 }); // timeout: remote CodeMirror update has no spinnerWaiter-visible progress
   await editor.click();
   await page.keyboard.press("ControlOrMeta+z");
   await expect
@@ -318,7 +359,7 @@ test("review a workspace document in the seeded Docs app", async ({ baseURL, pag
 
   // Rich end-of-document insertion belongs before the hidden endmatter.
   await appendAtEnd(page, "\n\nReviewed in Docs.");
-  await page.getByText("Reviewed in Docs.", { exact: true }).waitFor({ timeout: 10_000 }); // timeout: tight manual budget — rich syntax projection has no spinnerWaiter-visible UI
+  await editor.getByText("Reviewed in Docs.").waitFor({ timeout: 10_000 }); // timeout: tight manual budget — rich syntax projection has no spinnerWaiter-visible UI
 
   // Track changes stays on the rich editor instead of forcing a source view.
   await page.getByRole("button", { name: "Track changes" }).click();
@@ -342,10 +383,19 @@ test("review a workspace document in the seeded Docs app", async ({ baseURL, pag
   // A live session that dies under the editor (a laptop waking, a colo
   // hiccup) comes back by itself, and edits made after it landed sync
   // through the replacement session.
-  await page.evaluate(() => {
-    for (const socket of (window as unknown as { __sockets: WebSocket[] }).__sockets) {
+  const socketClose = await page.evaluate(() => {
+    const sockets = (window as unknown as { __sockets: WebSocket[] }).__sockets;
+    const openSockets = sockets.filter((socket) => socket.readyState === WebSocket.OPEN).length;
+    const closedAt = new Date().toISOString();
+    for (const socket of sockets) {
       socket.close();
     }
+    return { closedAt, openSockets, sockets: sockets.length };
+  });
+  expect(socketClose.openSockets).toBeGreaterThan(0);
+  await testInfo.attach("intentional-websocket-close", {
+    body: JSON.stringify({ documentPath, projectSlug: slug, ...socketClose }, null, 2),
+    contentType: "application/json",
   });
   await appendAtEnd(page, "\n\nStill here after the socket dropped.");
   await page.getByText(/^live · v\d+$/).waitFor({ timeout: 30_000 }); // timeout: the pull loop's backoff before its re-dial — the a11y-only badge gives the spinner-waiter nothing to watch
@@ -354,6 +404,9 @@ test("review a workspace document in the seeded Docs app", async ({ baseURL, pag
       timeout: 30_000, // timeout: a workspace read over RPC — no loading UI for the spinner-waiter
     })
     .toContain("Still here after the socket dropped.");
+  expect(readReview((await workspace.readFile(documentPath))!).projection.markdown).toMatch(
+    /REMOTE_KEPT\n{2,}Reviewed in Docs\.\n{2,}Still here after the socket dropped\./,
+  );
 
   await page.getByRole("button", { name: "Rich editing", exact: true }).click();
 
@@ -386,7 +439,15 @@ test("review a workspace document in the seeded Docs app", async ({ baseURL, pag
   expect(review.threads.find((thread) => thread.anchor)?.comments[0]?.body).toBe(
     "Can we make this promise more concrete?",
   );
-  expect(saved).toContain("{==Make review decisions directly in the workspace file.==}");
+  // Browser paragraph selection includes its final line break; the RFM anchor
+  // preserves that live selection after the peer prepended source text.
+  expect(saved).toContain("{==Make review decisions directly in the workspace file.\n==}");
+  // Endmatter is hidden in rich mode. The real native EOF edits must retain
+  // their paragraph breaks and order immediately before it, not concatenate
+  // into the last visible line or spill into the YAML footer.
+  expect(saved).toMatch(
+    /\n{2,}REMOTE_KEPT\n{2,}Reviewed in Docs\.\n{2,}Still here after the socket dropped\.\n+---\ncomments:\n/,
+  );
   expect(saved).toContain("\ncomments:");
 
   await page.reload();
@@ -417,7 +478,10 @@ async function appendAtEnd(page: import("@playwright/test").Page, text: string):
   // Cmd/Ctrl+End is not a consistent CodeMirror binding across both.
   await page.keyboard.press("ControlOrMeta+a");
   await page.keyboard.press("ArrowRight");
-  await page.keyboard.type(text);
+  // One native input event keeps a concurrent end-of-file insertion atomic.
+  // Character-by-character concurrent typing is already exercised in the two
+  // distinct table cells above, without making this marker proof interleave.
+  await page.keyboard.insertText(text);
 }
 
 async function replaceCellWord(

@@ -86,6 +86,28 @@ test("a parse requested after hidden controls keeps positions relative to its re
   expect(source.slice(from + heading.from, from + heading.to)).toBe("# Second");
 });
 
+test("a fully hidden first requested range does not shift later projected Markdown", () => {
+  const source = commented("# Before\n\n# First\n\n# Second\n", "# First");
+  const hiddenControlStart = source.indexOf("{==");
+  const hiddenControlEnd = source.indexOf("# First");
+  const secondHeading = source.indexOf("# Second");
+  const tree = projectedMarkdown().language.parser.parse(
+    source,
+    [],
+    [
+      { from: hiddenControlStart, to: hiddenControlEnd },
+      { from: secondHeading, to: source.length },
+    ],
+  );
+  const heading = tree.topNode.firstChild!;
+
+  expect(tree.length).toBe(source.length - hiddenControlStart);
+  expect(heading.name).toBe("ATXHeading1");
+  expect(source.slice(hiddenControlStart + heading.from, hiddenControlStart + heading.to)).toBe(
+    "# Second",
+  );
+});
+
 test("an interrupted parse resumes through a large commented document", () => {
   const source = commented("# First\n\n" + "Another **paragraph**.\n\n".repeat(500), "# First");
   const parser = projectedMarkdown().language.parser;
