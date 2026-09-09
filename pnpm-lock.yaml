@@ -1697,8 +1697,8 @@ importers:
   packages/v3/project-worker:
     dependencies:
       '@cloudflare/workers-oauth-provider':
-        specifier: ^0.8.3
-        version: 0.8.3
+        specifier: 0.10.3
+        version: 0.10.3
       '@modelcontextprotocol/server':
         specifier: 2.0.0
         version: 2.0.0

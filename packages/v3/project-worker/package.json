@@ -18,7 +18,7 @@
     "db:schema:remote": "wrangler d1 execute control-plane-directory --remote --file src/control-plane.sql"
   },
   "dependencies": {
-    "@cloudflare/workers-oauth-provider": "^0.8.3",
+    "@cloudflare/workers-oauth-provider": "0.10.3",
     "@modelcontextprotocol/server": "2.0.0",
     "capnweb": "npm:@iterate-com/capnweb@^0.12.2",
     "json5": "^2.2.3",
