@@ -251,9 +251,16 @@ Phase 3, the Satellite1:
     (`tas2780.cpp:277-338`), chip id `0x05 == 0x41`, `activate` =
     ACTIVE_MUTED → 100 ms → SAR reads `0x52..0x55` (`vbat1s = raw/128`,
     `pvdd = raw/64`) → PVDD ≥ 7.4 V mode 2 else 2.9 < VBAT1S ≤ 5.5 mode 0 →
-    rewrite `0x03/0x04/0x71` → ACTIVE; DVC `0x1A` 0..0xC8, mute 0xC9. PCM5122:
-    reset, `0x25` RMW, `0x28 = 0x03`, `0x0D` PLL from BCK, unmute `0x03 = 0`;
-    jack detect = GPIO3 via reg `0x77`. SPI: `[resource, cmd|0x80, len+1]`
+    rewrite `0x03/0x04/0x71` → ACTIVE; DVC `0x1A` 0..0xC8, mute 0xC9. PCM5122
+    (the shipped config uses UPSTREAM ESPHome's driver, not the deleted
+    in-repo one): reset `0x01 = 0x10`, 20 ms, `0x01 = 0`; `0x25` RMW set bit 3
+    clear bit 1; `0x28` = I2S | ALEN, and set ALEN for **32-bit** (upstream
+    defaults to 16-bit and the YAML does not override, which latches only the
+    top 16 bits of each 32-bit slot; choose 32 deliberately); `0x2A = 0x11`
+    stereo; page 1 `0x02 = 0` analog gain 0 dB; `0x0D` RMW bits[6:4] = 001 PLL
+    from BCK; mute `0x03 = 0x11` / unmute `0`; volume `0x3D`/`0x3E` =
+    `0x30 - dB*2`, range 0 dB (0x30) to −52.5 dB (0x99); jack detect = GPIO3
+    via reg `0x77`. SPI: `[resource, cmd|0x80, len+1]`
     padded to the 4-byte status report, retry ×3 on 7, NOP second transfer
     for reads, mode 3, 8 MHz. ≈ +400.
 18. `devices/satellite1/` + `targets/satellite1/` (table below). Register
