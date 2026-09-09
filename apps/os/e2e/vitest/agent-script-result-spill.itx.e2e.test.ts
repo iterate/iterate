@@ -55,10 +55,9 @@ test(
     );
     expect(forgedContext).toBeUndefined();
 
-    using workspace = agent.workspace;
     await expect(
       measurePhase("verify no spill file", "assertion", () =>
-        workspace.readFile("/workspace/script-results/agent-output-1.json"),
+        agent.workspace.readFile("/workspace/script-results/agent-output-1.json"),
       ),
     ).resolves.toBeNull();
   },
