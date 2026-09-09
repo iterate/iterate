@@ -41,9 +41,12 @@ bool iterate_kit_xmos_spi_transfer(struct iterate_kit_xmos_spi *handle,
   if (length == 0 || !iterate_kit_xmos_spi_exchange(handle, tx, rx, length)) return false;
   const enum iterate_kit_xmos_spi_reply kind = iterate_kit_xmos_spi_classify(rx, length, NULL);
   const bool payload_available = read && rx[0] == 1 && rx[1] == 23;
-  if (kind == ITERATE_KIT_XMOS_SPI_STATUS_REPORT) {
-    if (rx[1] != 0) return false;
-  } else if (kind != ITERATE_KIT_XMOS_SPI_OK && !payload_available) return false;
+  /* The slave fills its TX buffer in the transfer-done callback
+   * (device_control_spi.c:56-90), so a status report clocked in during THIS
+   * transfer carries the PREVIOUS command's return code. It is not this
+   * command's verdict: do not fail on it (the reference does not either). */
+  if (kind != ITERATE_KIT_XMOS_SPI_STATUS_REPORT && kind != ITERATE_KIT_XMOS_SPI_OK &&
+      !payload_available) return false;
   if (!read) return true;
   vTaskDelay(1);
   const size_t read_length = reply_len + 3;
@@ -56,19 +59,26 @@ bool iterate_kit_xmos_spi_transfer(struct iterate_kit_xmos_spi *handle,
 }
 
 bool iterate_kit_xmos_spi_read_version(struct iterate_kit_xmos_spi *handle,
-    struct iterate_kit_xmos_version *version, uint8_t attempts_1s_apart) {
+    struct iterate_kit_xmos_version *version, uint8_t attempts, uint16_t interval_ms) {
   if (handle == NULL || version == NULL) return false;
   uint8_t command[3];
   if (iterate_kit_xmos_version_command(command, sizeof(command)) != ITERATE_KIT_OK) return false;
   const uint8_t dummy[5] = {0};
-  for (unsigned int attempt = 0; attempt < attempts_1s_apart; ++attempt) {
+  /* A freshly booted slave answers the FIRST exchange with an all-zero
+   * buffer, which classifies as NO_DEVICE; the reference primes with one dummy
+   * byte in setup(). One NOP here so the first real attempt can succeed. */
+  {
+    uint8_t status[4];
+    (void)iterate_kit_xmos_spi_read_status(handle, status);
+  }
+  for (unsigned int attempt = 0; attempt < attempts; ++attempt) {
     uint8_t payload[5];
     /* Shared resource/command; Satellite1 adds prerelease and n to the
      * three-part version, so its read length is five, not the I2C four. */
     if (iterate_kit_xmos_spi_transfer(handle, command[0], command[1], dummy, sizeof(dummy),
             payload, sizeof(payload)) &&
         iterate_kit_xmos_spi_parse_version(payload, sizeof(payload), version)) return true;
-    if (attempt + 1 < attempts_1s_apart) vTaskDelay(pdMS_TO_TICKS(1000));
+    if (attempt + 1 < attempts) vTaskDelay(pdMS_TO_TICKS(interval_ms));
   }
   return false;
 }

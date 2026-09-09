@@ -59,7 +59,7 @@ static bool iterate_kit_satellite1_open_codec(void) {
   bus_open = true;
   if (spi_bus_add_device(SPI2_HOST, &device, &xmos.device) != ESP_OK) goto failed;
   stage = "XMOS version";
-  if (!iterate_kit_xmos_spi_read_version(&xmos, &xmos_version, 4)) goto failed;
+  if (!iterate_kit_xmos_spi_read_version(&xmos, &xmos_version, 6, 250)) goto failed;
   ESP_LOGI("satellite1", "XMOS %u.%u.%u", xmos_version.major,
       xmos_version.minor, xmos_version.patch);
   stage = "I2C devices";

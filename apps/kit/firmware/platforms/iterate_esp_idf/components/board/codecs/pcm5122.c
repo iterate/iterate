@@ -49,10 +49,13 @@ bool iterate_kit_pcm5122_mute(i2c_master_dev_handle_t device, bool muted) {
 }
 
 bool iterate_kit_pcm5122_read_gpio(i2c_master_dev_handle_t device, uint8_t pin, bool *level) {
-  if (device == NULL || level == NULL || pin < 1U || pin > 6U) return false;
+  /* GPIN1..GPIN5 sit at bits 1..5 of register 0x77 (TI SLAS763C, table 114);
+   * bits 0, 6 and 7 are reserved and GPIO6 has no input bit. The deleted
+   * FutureProofHomes driver masked (pin - 1) and so read the neighbour. */
+  if (device == NULL || level == NULL || pin < 1U || pin > 5U) return false;
   uint8_t gpio;
   if (!iterate_kit_pcm5122_write(device, 0x00, 0x00) ||
       !iterate_kit_pcm5122_read(device, 0x77, &gpio)) return false;
-  *level = (gpio & (1U << (pin - 1U))) != 0;
+  *level = (gpio & (1U << pin)) != 0;
   return true;
 }

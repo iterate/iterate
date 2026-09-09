@@ -66,8 +66,14 @@ bool iterate_kit_tas2780_activate(struct iterate_kit_tas2780 *amp) {
   amp->pvdd_centivolts = iterate_kit_tas2780_pvdd_centivolts(sar[2], sar[3]);
   const enum iterate_kit_tas2780_power_mode mode = iterate_kit_tas2780_power_mode_for(
       amp->pvdd_centivolts, amp->vbat1s_centivolts);
-  if (mode == ITERATE_KIT_TAS2780_POWER_MODE_NONE ||
-      !iterate_kit_tas2780_set_power_mode(amp, mode) ||
+  if (mode == ITERATE_KIT_TAS2780_POWER_MODE_NONE) goto failed;
+  /* The reference only ever writes CDS/VBAT1S/UVLO from the post-reset
+   * shutdown state (tas2780.cpp:375-379 re-runs init() on a mode change). A
+   * live rewrite while ACTIVE_MUTED is a different sequence on a PD supply;
+   * drop to software shutdown first when leaving the bootstrap mode. */
+  if (mode != ITERATE_KIT_TAS2780_POWER_MODE_0 &&
+      !iterate_kit_tas2780_write(amp, 0x02, 0x82)) goto failed;
+  if (!iterate_kit_tas2780_set_power_mode(amp, mode) ||
       !iterate_kit_tas2780_write(amp, 0x02, 0x80)) goto failed;
   return true;
 

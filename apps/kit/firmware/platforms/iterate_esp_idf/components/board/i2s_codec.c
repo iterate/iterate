@@ -207,8 +207,10 @@ static void capture_hardware_task(void *argument) {
         portENTER_CRITICAL(&codec_lock);
         ++capture_driver_failures;
         portEXIT_CRITICAL(&codec_lock);
-        vTaskDelay(1U);
       }
+      /* A fenced board is asked to sleep inside its read; this tick is the
+       * insurance that priority 19 never spins core 1 if one does not. */
+      vTaskDelay(1U);
       continue;
     }
     if (atomic_load_explicit(&capture_consumer_started, memory_order_acquire) &&
@@ -227,7 +229,10 @@ static void playback_hardware_task(void *argument) {
   static bool idle_silence_started;
   (void)argument;
   for (;;) {
-    if (playback_ready != NULL && !playback_ready(hardware_context)) continue;
+    if (playback_ready != NULL && !playback_ready(hardware_context)) {
+      vTaskDelay(1U);
+      continue;
+    }
     /*
      * A local sound outranks the mailbox — see the note at `sound_pcm`. The
      * slice bounds are taken under the lock and the flash copy happens

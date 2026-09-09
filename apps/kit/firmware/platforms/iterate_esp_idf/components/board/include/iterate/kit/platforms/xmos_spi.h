@@ -34,7 +34,7 @@ bool iterate_kit_xmos_spi_transfer(struct iterate_kit_xmos_spi *handle,
  * one second apart, with no delay after the last. Zero attempts is false.
  * Output changes only for nonzero version. satellite1.cpp:194-212. */
 bool iterate_kit_xmos_spi_read_version(struct iterate_kit_xmos_spi *handle,
-    struct iterate_kit_xmos_version *version, uint8_t attempts_1s_apart);
+    struct iterate_kit_xmos_version *version, uint8_t attempts, uint16_t interval_ms);
 /** Send resource 0 command 0 NOP and require a status report; copy four
  * bytes only on success. Only byte 1 is reliable; see classify docstring.
  * Source: device_control_spi.c:63-90 / satellite1.cpp:151-158. */
