@@ -2,11 +2,68 @@
 #define ITERATE_KIT_PLATFORMS_I2S_CODEC_H
 
 #include "iterate/kit/audio_codec.h"
+#include "iterate/kit/pcm_format.h"
+#include "driver/i2s_std.h"
 #include "iterate/kit/voice_playout.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+/** I2S pins, wire formats and DMA geometry, using IDF's configuration types.
+ * Equal ports mean ONE duplex pair with matching clocks/pins. Separate ports
+ * have independent clocks and capture_dma_* (HAVPE: TX 480x6, RX 320x5).
+ * The slave policy retains HAVPE's priority-3 interrupt and clear-after TX;
+ * the master policy retains M5's priority-2 interrupt and clear-before TX.
+ * Neither permits power-down. capture_gain is a fixed, saturating multiplier,
+ * never a speaker-dependent duck or gate: that would also delete barge-in.
+ * amplifier_gpio -1 means board-owned; gated rails follow ARRIVED/QUIET,
+ * otherwise raised once after enable and codec power-up, before tasks start.
+ */
+struct iterate_kit_i2s_codec_facts {
+  i2s_port_t playback_port;
+  i2s_port_t capture_port;
+  i2s_role_t role;
+  i2s_std_config_t playback;
+  i2s_std_config_t capture;
+  uint16_t dma_frames;
+  uint8_t dma_descriptors;
+  struct iterate_kit_pcm_shape playback_shape;
+  struct iterate_kit_pcm_shape capture_shape;
+  uint8_t capture_gain;
+  int8_t amplifier_gpio;
+  bool amplifier_gated;
+  uint16_t amplifier_settle_ms;
+  uint16_t capture_dma_frames;
+  uint8_t capture_dma_descriptors;
+};
+
+/** Validate and open the table, preload the complete TX ring with silence,
+ * enable both channels, then start_over the shape converters. Invalid byte
+ * geometry (>4092/descriptor), rate/ratio, or conflicting pins fails before
+ * hardware allocation. Failures return false; the board loop must park with
+ * its fault, never return past an enrolled watchdog. Start once per boot.
+ */
+bool iterate_kit_i2s_codec_start(
+    const struct iterate_kit_i2s_codec_facts *facts,
+    struct iterate_kit_audio_codec *out);
+/** Open/init/preload only TX using the same table policy, leaving it disabled.
+ * M5 keeps delete/rebuild board-local: after this call it configures ES8311
+ * while muted, enables, and eventually disables/deletes the returned handle
+ * before M5.Mic takes the shared pins. Capture facts are unused here. No task
+ * is started, and callers must own the handle's entire lifetime.
+ */
+bool iterate_kit_i2s_codec_open_playback(
+    const struct iterate_kit_i2s_codec_facts *facts, i2s_chan_handle_t *out);
+/** Install the board's post-enable codec script before start, or NULL.
+ * HAVPE powers the AIC3204 up AFTER I2S enable but BEFORE the speaker rail
+ * and tasks. false aborts start and releases the channels; no tasks survive.
+ */
+void iterate_kit_i2s_codec_set_after_enable(bool (*power_up)(void));
+/** Reset the accumulated echo oracle when XMOS changes either selected tap.
+ * Latest-frame mic peaks and the lifetime gain-clipped count are retained.
+ */
+void iterate_kit_i2s_codec_reset_echo_peaks(void);
 
 /** Start the singleton 16 kHz mono codec over board-owned BLOCKING operations.
  * read fills exactly 320 samples; write consumes 1..320. UNAVAILABLE is a
@@ -63,7 +120,8 @@ bool iterate_kit_i2s_codec_sound_active(void);
  * echo oracle window); this does not include a local sound's amp hold.
  */
 bool iterate_kit_i2s_codec_speaker_is_playing(void);
-/** Append the six task/ledger health fields, returning 0 on insufficient space.
+/** Append task/ledger health and, for table-owned channels, DMA overflows
+ * and the raw/clean gain oracle. Return 0 on insufficient space.
  * Counters are copied under the codec lock; uses health_append_fields' contract.
  */
 size_t iterate_kit_i2s_codec_health(char *out, size_t capacity);

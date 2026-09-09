@@ -1,5 +1,16 @@
 #include "iterate/kit/pcm_format.h"
 
+size_t iterate_kit_pcm_bytes_for_frames(
+    const struct iterate_kit_pcm_shape *shape, size_t wire_frames) {
+  if (shape == NULL || (shape->bits != 16U && shape->bits != 32U) ||
+      (shape->slots != 1U && shape->slots != 2U) ||
+      shape->uplink_slot >= shape->slots || shape->diagnostic_slot < -1 ||
+      shape->diagnostic_slot >= (int8_t)shape->slots ||
+      (shape->ratio != 1U && shape->ratio != 3U)) return 0U;
+  const size_t frame_bytes = (size_t)shape->slots * shape->bits / 8U;
+  return wire_frames > SIZE_MAX / frame_bytes ? 0U : wire_frames * frame_bytes;
+}
+
 void iterate_kit_pcm_playback_resampler_reset(
     struct iterate_kit_pcm_playback_resampler *resampler) {
   if (resampler == NULL) {
@@ -95,6 +106,47 @@ enum iterate_kit_status iterate_kit_pcm_expand_playback(
   *destination_samples_written =
       source_samples *
       ITERATE_KIT_PCM_PLAYBACK_WORDS_PER_PCM16_SAMPLE;
+  return ITERATE_KIT_OK;
+}
+
+enum iterate_kit_status iterate_kit_pcm_expand_playback_shape(
+    const struct iterate_kit_pcm_shape *shape,
+    struct iterate_kit_pcm_playback_resampler *resampler,
+    const int16_t *source, size_t source_samples,
+    void *destination, size_t destination_capacity_bytes,
+    size_t *destination_bytes_written) {
+  if (destination_bytes_written == NULL) return ITERATE_KIT_INVALID_ARGUMENT;
+  *destination_bytes_written = 0U;
+  if (iterate_kit_pcm_bytes_for_frames(shape, 1U) == 0U ||
+      resampler == NULL || source == NULL || destination == NULL ||
+      source_samples == 0U || source_samples > SIZE_MAX / shape->ratio) {
+    return ITERATE_KIT_INVALID_ARGUMENT;
+  }
+  const size_t bytes = iterate_kit_pcm_bytes_for_frames(shape, source_samples * shape->ratio);
+  if (bytes == 0U || bytes > destination_capacity_bytes) return ITERATE_KIT_LIMIT;
+  if (shape->bits == 32U && shape->slots == 2U && shape->ratio == 3U) {
+    size_t words = 0U;
+    const enum iterate_kit_status status = iterate_kit_pcm_expand_playback(
+        resampler, source, source_samples, destination,
+        destination_capacity_bytes / sizeof(int32_t), &words);
+    *destination_bytes_written = words * sizeof(int32_t);
+    return status;
+  }
+  for (size_t index = 0U; index < source_samples; ++index) {
+    const int16_t current = source[index];
+    for (uint8_t repeat = 0U; repeat < shape->ratio; ++repeat) {
+      const int16_t sample = shape->ratio == 1U || !resampler->primed
+          ? current : interpolate_third(resampler->previous_sample, current, repeat);
+      for (uint8_t slot = 0U; slot < shape->slots; ++slot) {
+        const size_t offset = (index * shape->ratio + repeat) * shape->slots + slot;
+        if (shape->bits == 32U) ((int32_t *)destination)[offset] = (int32_t)sample * 65536;
+        else ((int16_t *)destination)[offset] = sample;
+      }
+    }
+    resampler->previous_sample = current;
+    resampler->primed = true;
+  }
+  *destination_bytes_written = bytes;
   return ITERATE_KIT_OK;
 }
 

@@ -77,9 +77,8 @@ enum {
   CAPTURE_STARTUP_DISCARD_FRAMES = 1,
 };
 
-static_assert(
-    DMA_FRAMES_PER_DESCRIPTOR * 2 * 16 / 8 <= 4092,
-    "I2S descriptor exceeds the ESP32-S3 DMA limit");
+/** Native stereo PCM16: no interpolation and no software gain. */
+constexpr struct iterate_kit_pcm_shape playback_shape = {16, 2, 0, -1, 1};
 
 constexpr std::uint8_t es8311Address = 0x18U;
 constexpr std::uint8_t m5pm1Address = 0x6eU;
@@ -280,23 +279,14 @@ void release_playback_channel(void) {
   playback_channel = nullptr;
 }
 
+/** Keep M5's codec-before-enable and delete/rebuild fence board-local. */
 bool build_playback_channel(void) {
-  i2s_chan_config_t channel_config =
-      I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_MASTER);
-  channel_config.dma_desc_num = DMA_DESCRIPTOR_COUNT;
-  channel_config.dma_frame_num = DMA_FRAMES_PER_DESCRIPTOR;
-  /*
-   * Clear BEFORE the callback reuses a descriptor, so a missed refill plays
-   * silence on the next wrap instead of replaying old speech.
-   */
-  channel_config.auto_clear_before_cb = true;
-  channel_config.auto_clear_after_cb = false;
-  channel_config.allow_pd = false;
-  channel_config.intr_priority = 2;
-  if (i2s_new_channel(&channel_config, &playback_channel, nullptr) != ESP_OK) {
-    playback_channel = nullptr;
-    return false;
-  }
+  struct iterate_kit_i2s_codec_facts facts = {};
+  facts.playback_port = I2S_NUM_0;
+  facts.role = I2S_ROLE_MASTER;
+  facts.dma_frames = DMA_FRAMES_PER_DESCRIPTOR;
+  facts.dma_descriptors = DMA_DESCRIPTOR_COUNT;
+  facts.playback_shape = playback_shape;
   i2s_std_config_t std_config = {};
   std_config.clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(
       M5STICKS3_AUDIO_SAMPLE_RATE_HZ);
@@ -310,10 +300,8 @@ bool build_playback_channel(void) {
   std_config.gpio_cfg.dout = static_cast<gpio_num_t>(PIN_I2S_DOUT);
   std_config.gpio_cfg.din = I2S_GPIO_UNUSED;
   std_config.gpio_cfg.invert_flags = {};
-  if (i2s_channel_init_std_mode(playback_channel, &std_config) != ESP_OK) {
-    release_playback_channel();
-    return false;
-  }
+  facts.playback = std_config;
+  if (!iterate_kit_i2s_codec_open_playback(&facts, &playback_channel)) return false;
   /*
    * Codec setup happens with the channel not yet enabled and the amplifier
    * muted. Several ES8311 registers transiently select/reset signal paths;
@@ -367,12 +355,14 @@ enum iterate_kit_status hardware_write(void *context, const int16_t *samples, si
     return ITERATE_KIT_UNAVAILABLE;
   }
   static int16_t stereo[M5STICKS3_AUDIO_FRAME_SAMPLES * 2];
-  for (size_t index = 0; index < count; ++index) {
-    stereo[index * 2U] = samples[index];
-    stereo[index * 2U + 1U] = samples[index];
+  static struct iterate_kit_pcm_playback_resampler resampler;
+  size_t bytes = 0U;
+  if (iterate_kit_pcm_expand_playback_shape(&playback_shape, &resampler,
+          samples, count, stereo, sizeof(stereo), &bytes) != ITERATE_KIT_OK) {
+    return ITERATE_KIT_IO_ERROR;
   }
   size_t written = 0;
-  return i2s_channel_write(playback_channel, stereo, count * 2U * sizeof(int16_t),
+  return i2s_channel_write(playback_channel, stereo, bytes,
       &written, 1000U) == ESP_OK ? ITERATE_KIT_OK : ITERATE_KIT_IO_ERROR;
 }
 

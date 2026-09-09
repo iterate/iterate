@@ -387,22 +387,8 @@ static size_t health(void *context, char *out, size_t capacity) {
      * counters below say which.
      */
     {"xmosVnr", vnr},
-    {"captureGainClipped", havpe_audio_capture_gain_clipped()},
-    /*
-     * THE AEC ORACLE. cleanPeak/rawPeak measured WHILE THE SPEAKER WAS RUNNING
-     * is the cancellation, and it is the only form of the claim that can be
-     * checked: the same DSP with both taps exposed, one raw and one cancelled,
-     * moved by aec.setStage above.
-     */
-    {"micRawPeak", havpe_audio_capture_raw_peak()},
-    {"micCleanPeak", havpe_audio_capture_clean_peak()},
     {"aecUplinkStage", havpe_audio_pipeline_stage(0U)},
     {"aecDiagnosticStage", havpe_audio_pipeline_stage(1U)},
-    {"echoRawPeak", havpe_audio_capture_echo_raw_peak()},
-    {"echoCleanPeak", havpe_audio_capture_echo_clean_peak()},
-    /* Driver-level DMA overflows: the slave buses' own loss signals. */
-    {"captureQueueOverflows", havpe_audio_capture_queue_overflows()},
-    {"playbackQueueOverflows", havpe_audio_playback_queue_overflows()},
     /*
      * WHERE THE DIAL SITS, 1-4 in the spoken order (grok ptt, grok open-mic,
      * openai ptt, openai open-mic). The adopted stream already shows as

@@ -184,7 +184,67 @@ static void validates_shapes_and_extracts_pcm16(void) {
   }
 }
 
+/** Literal DMA sizes include HAVPE's two geometries and M5's stereo ring. */
+static void wire_byte_counts(void) {
+  const struct {
+    struct iterate_kit_pcm_shape shape;
+    size_t frames;
+    size_t bytes;
+  } cases[] = {
+    {{32, 2, 0, -1, 3}, 480, 3840},
+    {{32, 2, 0, 1, 1}, 320, 2560},
+    {{16, 2, 0, -1, 1}, 320, 1280},
+    {{16, 1, 0, -1, 1}, 240, 480},
+    {{32, 2, 0, -1, 3}, 960, 7680},
+    {{16, 1, 0, -1, 1}, SIZE_MAX, 0},
+    {{16, 1, 0, -1, 1}, 0, 0},
+    {{24, 2, 0, -1, 1}, 320, 0},
+    {{16, 0, 0, -1, 1}, 320, 0},
+    {{16, 1, 0, -1, 0}, 320, 0},
+    {{16, 1, 1, -1, 1}, 320, 0},
+    {{16, 1, 0, 1, 1}, 320, 0},
+  };
+  for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+    assert(iterate_kit_pcm_bytes_for_frames(&cases[i].shape, cases[i].frames) == cases[i].bytes);
+  }
+  assert(iterate_kit_pcm_bytes_for_frames(NULL, 320) == 0U);
+}
+
+/** Native mono/stereo expansion preserves extrema and repeats exactly one slot pair. */
+static void playback_shapes(void) {
+  const int16_t source[] = {INT16_MIN, INT16_MAX};
+  const struct {
+    struct iterate_kit_pcm_shape shape;
+    size_t bytes;
+    int16_t expected[12];
+  } cases[] = {
+    {{16, 1, 0, -1, 1}, 4, {INT16_MIN, INT16_MAX}},
+    {{16, 2, 0, -1, 1}, 8, {INT16_MIN, INT16_MIN, INT16_MAX, INT16_MAX}},
+    {{32, 1, 0, -1, 1}, 8, {INT16_MIN, INT16_MAX}},
+    {{32, 2, 0, -1, 1}, 16, {INT16_MIN, INT16_MIN, INT16_MAX, INT16_MAX}},
+    {{16, 1, 0, -1, 3}, 12, {INT16_MIN, INT16_MIN, INT16_MIN, INT16_MIN, -10923, 10922}},
+  };
+  for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+    union { int16_t pcm16[12]; int32_t pcm32[12]; } output = {0};
+    struct iterate_kit_pcm_playback_resampler resampler = {0};
+    size_t bytes = 99;
+    assert(iterate_kit_pcm_expand_playback_shape(&cases[i].shape, &resampler,
+        source, 2, &output, sizeof(output), &bytes) == ITERATE_KIT_OK);
+    assert(bytes == cases[i].bytes);
+    const size_t words = bytes / (cases[i].shape.bits / 8U);
+    for (size_t j = 0; j < words; ++j) {
+      if (cases[i].shape.bits == 16U) assert(output.pcm16[j] == cases[i].expected[j]);
+      else assert(output.pcm32[j] == (int32_t)cases[i].expected[j] * 65536);
+    }
+    assert(iterate_kit_pcm_expand_playback_shape(&cases[i].shape, &resampler,
+        source, 2, &output, bytes - 1U, &bytes) == ITERATE_KIT_LIMIT);
+    assert(bytes == 0U);
+  }
+}
+
 int main(void) {
+  wire_byte_counts();
+  playback_shapes();
   interpolates_without_changing_the_hardware_contract();
   preserves_interpolation_across_lane_edges();
   extracts_processed_and_non_aec_capture_channels();

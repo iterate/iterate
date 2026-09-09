@@ -79,12 +79,6 @@ enum {
    */
   CAPTURE_MAKEUP_GAIN = 16,
   /*
-   * How long after the last queued audio the speaker still counts as active.
-   * Longer than the pause between two counted numbers and far shorter than
-   * the gap before somebody replies.
-   */
-  SPEAKER_ACTIVITY_HOLD_MS = 1500,
-  /*
    * DMA geometry from Espressif's standard-mode sizing formula:
    *
    *   playback descriptor bytes = 480 frames * 2 slots * 32 bits / 8
@@ -102,11 +96,8 @@ enum {
    */
   PLAYBACK_DMA_DESCRIPTOR_COUNT = 6,
   PLAYBACK_DMA_FRAMES = 480,
-  PLAYBACK_RING_MS = 60,
   CAPTURE_DMA_DESCRIPTOR_COUNT = 5,
   CAPTURE_DMA_FRAMES = 320,
-  CAPTURE_READ_TIMEOUT_MS = 40,
-  PLAYBACK_WRITE_TIMEOUT_MS = 1000,
   PIN_I2C_SDA = 5,
   PIN_I2C_SCL = 6,
   PIN_XMOS_RESET = 4,
@@ -129,184 +120,14 @@ enum {
   XMOS_BOOT_MS = 3000,
 };
 
-_Static_assert(
-    PLAYBACK_DMA_FRAMES * 2 * 32 / 8 <= 4092,
-    "playback I2S descriptor exceeds the ESP32-S3 DMA limit");
-_Static_assert(
-    CAPTURE_DMA_FRAMES * 2 * 32 / 8 <= 4092,
-    "capture I2S descriptor exceeds the ESP32-S3 DMA limit");
-
 static i2c_master_bus_handle_t i2c_bus;
 static i2c_master_dev_handle_t xmos_device;
 static i2c_master_dev_handle_t codec_device;
-static i2s_chan_handle_t playback_channel;
-static i2s_chan_handle_t capture_channel;
 
 static struct iterate_kit_audio_codec codec;
 
-static volatile uint32_t capture_queue_overflow_count;
-static volatile uint32_t playback_queue_overflow_count;
-static volatile uint32_t capture_gain_clipped_samples;
-static volatile uint32_t capture_raw_peak;
-static volatile uint32_t capture_clean_peak;
-/* Maxima seen WHILE THE SPEAKER WAS RUNNING: the echo, before and after. */
-static volatile uint32_t capture_echo_raw_peak;
-static volatile uint32_t capture_echo_clean_peak;
 /* What each XMOS output tap is currently selecting; 0..4, see the stage enum. */
 static uint8_t pipeline_stage[2];
-
-static enum iterate_kit_status read_hardware(void *context, int16_t *samples, size_t count) {
-  /* One 20 ms stereo Q31 read, and its two extracted mono planes. */
-  static int32_t stereo_words[HAVPE_AUDIO_FRAME_SAMPLES * 2];
-  static int16_t raw_plane[HAVPE_AUDIO_FRAME_SAMPLES];
-  (void)context;
-  (void)count;
-  size_t bytes_read = 0U;
-  if (i2s_channel_read(
-          capture_channel,
-          stereo_words,
-          sizeof(stereo_words),
-          &bytes_read,
-          CAPTURE_READ_TIMEOUT_MS) != ESP_OK ||
-      bytes_read != sizeof(stereo_words)) {
-    return ITERATE_KIT_IO_ERROR;
-  }
-  size_t frames_written = 0U;
-  /*
-   * The raw ch1 plane is extracted because the adopted converter conserves
-   * both same-time taps, then deliberately discarded: it is XMOS-defined
-   * diagnostic data for acoustic evidence harnesses, and no such harness
-   * is part of this consolidation. Only the echo-cancelled ch0 plane may
-   * reach the uplink.
-   */
-  const struct iterate_kit_pcm_shape capture_shape = {32, 2, 0, 1, 1};
-  if (iterate_kit_pcm_extract_capture(
-          &capture_shape,
-          stereo_words,
-          HAVPE_AUDIO_FRAME_SAMPLES,
-          samples,
-          raw_plane,
-          HAVPE_AUDIO_FRAME_SAMPLES,
-          &frames_written) != ITERATE_KIT_OK ||
-      frames_written != HAVPE_AUDIO_FRAME_SAMPLES) {
-    return ITERATE_KIT_IO_ERROR;
-  }
-  /*
-   * THE AEC ORACLE, AND IT COSTS TWO COMPARISONS PER SAMPLE. Channel one is
-   * the microphone before any DSP and channel zero is after cancellation,
-   * captured at the same instant; the ratio between their peaks while the
-   * speaker is running IS this board's echo cancellation, measured live
-   * rather than argued about. The raw plane used to be extracted and thrown
-   * away with a comment saying no harness needed it.
-   */
-  {
-    int32_t raw_peak = 0;
-    int32_t clean_peak = 0;
-    for (size_t index = 0U; index < HAVPE_AUDIO_FRAME_SAMPLES; ++index) {
-      const int32_t raw = raw_plane[index] < 0
-          ? -(int32_t)raw_plane[index]
-          : (int32_t)raw_plane[index];
-      const int32_t clean = samples[index] < 0
-          ? -(int32_t)samples[index]
-          : (int32_t)samples[index];
-      if (raw > raw_peak) raw_peak = raw;
-      if (clean > clean_peak) clean_peak = clean;
-    }
-    capture_raw_peak = (uint32_t)raw_peak;
-    capture_clean_peak = (uint32_t)clean_peak;
-    /*
-     * ACCUMULATED ON THE DEVICE, because the interesting window is the one
-     * where the speaker is running and it is a few hundred milliseconds
-     * long. Sampling these over RPC catches almost none of it — a first
-     * attempt collected thirteen samples across a thirty-second answer and
-     * could say nothing at all. One health() read now answers the question.
-     */
-    if (iterate_kit_i2s_codec_speaker_is_playing()) {
-      if ((uint32_t)raw_peak > capture_echo_raw_peak) {
-        capture_echo_raw_peak = (uint32_t)raw_peak;
-      }
-      if ((uint32_t)clean_peak > capture_echo_clean_peak) {
-        capture_echo_clean_peak = (uint32_t)clean_peak;
-      }
-    }
-  }
-  /* The one constant, unconditionally. See CAPTURE_MAKEUP_GAIN. */
-  for (size_t index = 0U; index < HAVPE_AUDIO_FRAME_SAMPLES; ++index) {
-    const int32_t amplified = (int32_t)samples[index] * CAPTURE_MAKEUP_GAIN;
-    if (amplified > INT16_MAX) {
-      samples[index] = INT16_MAX;
-      ++capture_gain_clipped_samples;
-    } else if (amplified < INT16_MIN) {
-      samples[index] = INT16_MIN;
-      ++capture_gain_clipped_samples;
-    } else {
-      samples[index] = (int16_t)amplified;
-    }
-  }
-  /*
-   * AND THE UPLINK CARRIES IT, WHOLE, WHETHER OR NOT THE SPEAKER IS RUNNING.
-   *
-   * What stood here was a fence: while the speaker played, every frame that
-   * did not clear an absolute floor was overwritten with zeros, so that the
-   * provider's VAD would never hear this device's own echo and cancel the
-   * answer it was generating. It worked on the echo. It also deleted the
-   * person — measured, a Mac speaking a full sentence a couple of feet away
-   * came out as digital silence, and `voicelab aec` read it as -120 dBFS
-   * through a whole double-talk window.
-   *
-   * A loudness threshold cannot separate a quiet person from a loud residue,
-   * so a fence built out of one is always trading one failure for the other.
-   * The separation has to happen where the far-end reference is — the XMOS
-   * AGC stage, which is what this board's uplink now reads. Full duplex
-   * means the microphone testifies continuously and something upstream that
-   * can actually tell the two apart decides; it does not mean a device that
-   * covers its own mouth and hopes nobody spoke during it.
-   */
-  return ITERATE_KIT_OK;
-}
-
-static enum iterate_kit_status write_hardware(void *context, const int16_t *samples, size_t count) {
-  /* One expanded 20 ms frame: 320 * 6 words = 7680 bytes. */
-  static int32_t stereo_words
-      [HAVPE_AUDIO_FRAME_SAMPLES *
-       ITERATE_KIT_PCM_PLAYBACK_WORDS_PER_PCM16_SAMPLE];
-  static struct iterate_kit_pcm_playback_resampler resampler;
-  (void)context;
-  size_t words_written = 0U;
-  if (iterate_kit_pcm_expand_playback(
-          &resampler,
-          samples,
-          count,
-          stereo_words,
-          sizeof(stereo_words) / sizeof(stereo_words[0]),
-          &words_written) != ITERATE_KIT_OK) {
-    return ITERATE_KIT_IO_ERROR;
-  }
-  size_t bytes_written = 0U;
-  return i2s_channel_write(playback_channel, stereo_words,
-      words_written * sizeof(stereo_words[0]), &bytes_written,
-      PLAYBACK_WRITE_TIMEOUT_MS) == ESP_OK ? ITERATE_KIT_OK : ITERATE_KIT_IO_ERROR;
-}
-
-/* --- boot ------------------------------------------------------------------ */
-
-static bool IRAM_ATTR note_playback_queue_overflow(
-    i2s_chan_handle_t handle, i2s_event_data_t *event, void *context) {
-  (void)handle;
-  (void)event;
-  (void)context;
-  ++playback_queue_overflow_count;
-  return false;
-}
-
-static bool IRAM_ATTR note_capture_queue_overflow(
-    i2s_chan_handle_t handle, i2s_event_data_t *event, void *context) {
-  (void)handle;
-  (void)event;
-  (void)context;
-  ++capture_queue_overflow_count;
-  return false;
-}
 
 static esp_err_t write_codec_registers(
     const struct iterate_kit_voice_pe_register_write *writes, size_t count) {
@@ -519,28 +340,14 @@ static esp_err_t initialize_control_gpios(void) {
   return ESP_OK;
 }
 
-static esp_err_t initialize_i2s(void) {
-  i2s_chan_config_t playback_channel_config =
-      I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_SLAVE);
-  playback_channel_config.dma_desc_num = PLAYBACK_DMA_DESCRIPTOR_COUNT;
-  playback_channel_config.dma_frame_num = PLAYBACK_DMA_FRAMES;
-  /* Underrun plays silence, never a stale ring (donor-proven setting). */
-  playback_channel_config.auto_clear_after_cb = true;
-  playback_channel_config.auto_clear_before_cb = false;
-  playback_channel_config.intr_priority = 3;
-
-  i2s_chan_config_t capture_channel_config =
-      I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_1, I2S_ROLE_SLAVE);
-  capture_channel_config.dma_desc_num = CAPTURE_DMA_DESCRIPTOR_COUNT;
-  capture_channel_config.dma_frame_num = CAPTURE_DMA_FRAMES;
-  capture_channel_config.intr_priority = 3;
-
-  /*
-   * Slave mode still derives internal timing from sample_rate_hz; a
-   * mismatch with the XMOS's real clocking is silent data corruption with
-   * no error path anywhere in the driver.
-   */
-  const i2s_std_config_t playback_config = {
+/** Separate XMOS slave clock domains: capture ratio 1, playback ratio 3.
+ * Keep capture's 320x5 geometry distinct from playback's 480x6 ring.
+ */
+static const struct iterate_kit_i2s_codec_facts audio_facts = {
+  .playback_port = I2S_NUM_0,
+  .capture_port = I2S_NUM_1,
+  .role = I2S_ROLE_SLAVE,
+  .playback = {
     .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(PLAYBACK_RATE_HZ),
     .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(
         I2S_DATA_BIT_WIDTH_32BIT, I2S_SLOT_MODE_STEREO),
@@ -552,8 +359,8 @@ static esp_err_t initialize_i2s(void) {
       .din = I2S_GPIO_UNUSED,
       .invert_flags = {0},
     },
-  };
-  const i2s_std_config_t capture_config = {
+  },
+  .capture = {
     .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(HAVPE_AUDIO_SAMPLE_RATE_HZ),
     .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(
         I2S_DATA_BIT_WIDTH_32BIT, I2S_SLOT_MODE_STEREO),
@@ -565,80 +372,31 @@ static esp_err_t initialize_i2s(void) {
       .din = PIN_CAPTURE_DATA,
       .invert_flags = {0},
     },
-  };
+  },
+  .dma_frames = PLAYBACK_DMA_FRAMES,
+  .dma_descriptors = PLAYBACK_DMA_DESCRIPTOR_COUNT,
+  .playback_shape = {32, 2, 0, -1, 3},
+  .capture_shape = {32, 2, 0, 1, 1},
+  .capture_gain = CAPTURE_MAKEUP_GAIN,
+  .amplifier_gpio = PIN_SPEAKER_ENABLE,
+  .amplifier_gated = false,
+  .amplifier_settle_ms = 0,
+  .capture_dma_frames = CAPTURE_DMA_FRAMES,
+  .capture_dma_descriptors = CAPTURE_DMA_DESCRIPTOR_COUNT,
+};
 
-  esp_err_t status =
-      i2s_new_channel(&playback_channel_config, &playback_channel, NULL);
-  if (status != ESP_OK) {
-    return status;
-  }
-  status = i2s_channel_init_std_mode(playback_channel, &playback_config);
-  if (status != ESP_OK) {
-    return status;
-  }
-  {
-    const i2s_event_callbacks_t playback_callbacks = {
-      .on_send_q_ovf = note_playback_queue_overflow,
-    };
-    status = i2s_channel_register_event_callback(
-        playback_channel, &playback_callbacks, NULL);
-    if (status != ESP_OK) {
-      return status;
-    }
-  }
-  status = i2s_new_channel(&capture_channel_config, NULL, &capture_channel);
-  if (status != ESP_OK) {
-    return status;
-  }
-  status = i2s_channel_init_std_mode(capture_channel, &capture_config);
-  if (status != ESP_OK) {
-    return status;
-  }
-  {
-    const i2s_event_callbacks_t capture_callbacks = {
-      .on_recv_q_ovf = note_capture_queue_overflow,
-    };
-    return i2s_channel_register_event_callback(
-        capture_channel, &capture_callbacks, NULL);
-  }
-}
-
-static esp_err_t preload_playback_silence(void) {
-  /*
-   * The whole TX ring starts as silence so enabling the slave channel never
-   * clocks out uninitialized memory while the first real frame is written.
-   */
-  static int32_t silence[PLAYBACK_DMA_FRAMES * 2];
-  memset(silence, 0, sizeof(silence));
-  const size_t total_dma_bytes = (size_t)PLAYBACK_DMA_DESCRIPTOR_COUNT *
-      PLAYBACK_DMA_FRAMES * 2U * sizeof(int32_t);
-  size_t total_loaded = 0U;
-  while (total_loaded < total_dma_bytes) {
-    size_t loaded = 0U;
-    const size_t remaining = total_dma_bytes - total_loaded;
-    const size_t requested =
-        remaining < sizeof(silence) ? remaining : sizeof(silence);
-    const esp_err_t status = i2s_channel_preload_data(
-        playback_channel, silence, requested, &loaded);
-    if (status != ESP_OK) {
-      return status;
-    }
-    if (loaded == 0U) {
-      /* The ring is full; preload cannot make further progress. */
-      break;
-    }
-    total_loaded += loaded;
-  }
-  return ESP_OK;
+/** AIC3204 powers up after I2S enable; the shared start raises the rail last. */
+static bool power_up_codec(void) {
+  size_t count = 0U;
+  const struct iterate_kit_voice_pe_register_write *writes =
+      iterate_kit_voice_pe_aic3204_power_up_writes(&count);
+  return write_codec_registers(writes, count) == ESP_OK;
 }
 
 bool havpe_audio_init(void) {
   size_t initial_write_count = 0U;
-  size_t power_up_write_count = 0U;
   const struct iterate_kit_voice_pe_register_write *initial_writes =
       iterate_kit_voice_pe_aic3204_initial_writes(&initial_write_count);
-  const struct iterate_kit_voice_pe_register_write *power_up_writes =
-      iterate_kit_voice_pe_aic3204_power_up_writes(&power_up_write_count);
 
   if (initialize_control_gpios() != ESP_OK) {
     ESP_LOGE(tag, "control GPIO bring-up failed");
@@ -682,70 +440,16 @@ bool havpe_audio_init(void) {
    * from the first-party implementation.
    */
   vTaskDelay(pdMS_TO_TICKS(ITERATE_KIT_VOICE_PE_AIC3204_SETTLE_MS));
-  if (initialize_i2s() != ESP_OK) {
-    ESP_LOGE(tag, "I2S bring-up failed");
+  iterate_kit_i2s_codec_set_after_enable(power_up_codec);
+  if (!iterate_kit_i2s_codec_start(&audio_facts, &codec)) {
+    ESP_LOGE(tag, "I2S/codec power-up failed");
     return false;
   }
-  if (preload_playback_silence() != ESP_OK ||
-      i2s_channel_enable(playback_channel) != ESP_OK ||
-      i2s_channel_enable(capture_channel) != ESP_OK) {
-    ESP_LOGE(tag, "I2S preload/enable failed");
-    return false;
-  }
-  if (write_codec_registers(power_up_writes, power_up_write_count) !=
-      ESP_OK) {
-    ESP_LOGE(tag, "AIC3204 power-up register script failed");
-    return false;
-  }
-  /*
-   * The rail stays ON for the life of the boot, unlike the amp-gated
-   * boards: the XMOS AEC — not silence discipline — is this board's echo
-   * story, and its reference rides the always-running TX stream.
-   */
-  if (gpio_set_level(PIN_SPEAKER_ENABLE, 1) != ESP_OK) {
-    ESP_LOGE(tag, "speaker rail enable failed");
-    return false;
-  }
-
-  if (!iterate_kit_i2s_codec_start_over(read_hardware, write_hardware, NULL, PLAYBACK_RING_MS, &codec)) return false;
   ESP_LOGI(tag, "XMOS/AIC3204 full-duplex audio ready at 16 kHz");
   return true;
 }
 
 struct iterate_kit_audio_codec havpe_audio_codec(void) { return codec; }
-
-uint32_t havpe_audio_capture_queue_overflows(void) {
-  return capture_queue_overflow_count;
-}
-
-uint32_t havpe_audio_playback_queue_overflows(void) {
-  return playback_queue_overflow_count;
-}
-
-uint32_t havpe_audio_capture_gain_clipped(void) {
-  return capture_gain_clipped_samples;
-}
-
-uint32_t havpe_audio_capture_raw_peak(void) {
-  return capture_raw_peak;
-}
-
-uint32_t havpe_audio_capture_clean_peak(void) {
-  return capture_clean_peak;
-}
-
-uint32_t havpe_audio_capture_echo_raw_peak(void) {
-  return capture_echo_raw_peak;
-}
-
-uint32_t havpe_audio_capture_echo_clean_peak(void) {
-  return capture_echo_clean_peak;
-}
-
-void havpe_audio_reset_echo_peaks(void) {
-  capture_echo_raw_peak = 0U;
-  capture_echo_clean_peak = 0U;
-}
 
 enum iterate_kit_status havpe_audio_set_pipeline_stage(
     uint8_t channel, uint8_t stage) {
@@ -766,7 +470,7 @@ enum iterate_kit_status havpe_audio_set_pipeline_stage(
     return ITERATE_KIT_IO_ERROR;
   }
   pipeline_stage[channel] = stage;
-  havpe_audio_reset_echo_peaks();
+  iterate_kit_i2s_codec_reset_echo_peaks();
   return ITERATE_KIT_OK;
 }
 

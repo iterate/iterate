@@ -36,6 +36,13 @@ struct iterate_kit_pcm_shape {
   uint8_t ratio;
 };
 
+/** Bytes occupied by wire frames (not 16 kHz samples), or 0 for an invalid
+ * shape, zero frames, or overflow. DMA descriptors count wire frames; one
+ * portable frame occupies bytes_for_frames(shape, 320 * shape->ratio).
+ */
+size_t iterate_kit_pcm_bytes_for_frames(
+    const struct iterate_kit_pcm_shape *shape, size_t wire_frames);
+
 /** One-sample interpolation history; reset only at a stream discontinuity. */
 struct iterate_kit_pcm_playback_resampler {
   int16_t previous_sample;
@@ -74,6 +81,18 @@ enum iterate_kit_status iterate_kit_pcm_expand_playback(
     int32_t *destination,
     size_t destination_capacity_samples,
     size_t *destination_samples_written);
+
+/** Expand PCM16 into a table's wire shape. Ratio 1 duplicates slots without
+ * gain; ratio 3 retains the proven one-sample 3:1 interpolation across calls.
+ * Destination must be aligned for shape->bits. Capacity and result are bytes;
+ * invalid inputs or insufficient capacity never produce a partial frame.
+ */
+enum iterate_kit_status iterate_kit_pcm_expand_playback_shape(
+    const struct iterate_kit_pcm_shape *shape,
+    struct iterate_kit_pcm_playback_resampler *resampler,
+    const int16_t *source, size_t source_samples,
+    void *destination, size_t destination_capacity_bytes,
+    size_t *destination_bytes_written);
 
 /**
  * Extracts the selected capture slots, keeping the first frame of each group.

@@ -63,37 +63,6 @@ bool havpe_audio_init(void);
  */
 struct iterate_kit_audio_codec havpe_audio_codec(void);
 
-/** RX DMA overflows (oldest buffer silently dropped by the driver). */
-uint32_t havpe_audio_capture_queue_overflows(void);
-
-/** TX DMA send-queue overflows reported by the driver ISR. */
-uint32_t havpe_audio_playback_queue_overflows(void);
-
-/** Samples the fixed capture make-up gain had to clip (lifetime). */
-uint32_t havpe_audio_capture_gain_clipped(void);
-
-/**
- * The echo-cancellation oracle, sampled every 20 ms frame.
- *
- * `raw` is the microphone before any XMOS processing and `clean` is the same
- * instant at whatever stage channel 0 is tapped at. Nothing scales either one
- * on the way past — the uplink is the XMOS output unaltered — so while the
- * speaker is running, clean/raw IS this board's cancellation, watchable
- * during a real conversation rather than reconstructed from files.
- */
-uint32_t havpe_audio_capture_raw_peak(void);
-uint32_t havpe_audio_capture_clean_peak(void);
-
-/**
- * The same two peaks, but only ever sampled while the speaker was running.
- *
- * These are the echo: what the microphone heard of this device's own voice
- * before the XMOS and after it. Their ratio is the cancellation, and it is
- * accumulated here rather than polled because the window is short.
- */
-uint32_t havpe_audio_capture_echo_raw_peak(void);
-uint32_t havpe_audio_capture_echo_clean_peak(void);
-
 /**
  * Moves an XMOS output tap, and forgets the echo measured through the old one.
  *
@@ -105,7 +74,6 @@ uint32_t havpe_audio_capture_echo_clean_peak(void);
 enum iterate_kit_status havpe_audio_set_pipeline_stage(
     uint8_t channel, uint8_t stage);
 uint8_t havpe_audio_pipeline_stage(uint8_t channel);
-void havpe_audio_reset_echo_peaks(void);
 
 #ifdef __cplusplus
 }
