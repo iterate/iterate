@@ -4,6 +4,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include "iterate/kit/voice/loop.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -16,56 +18,10 @@ extern "C" {
  */
 bool havpe_ui_init(void);
 
-/* Mirrors the state vocabulary of the screen boards. */
-enum havpe_ui_state {
-  HAVPE_UI_IDLE = 0,
-  HAVPE_UI_CONNECTING,
-  HAVPE_UI_LISTENING,
-  HAVPE_UI_SPEAKING,
-};
-
-void havpe_ui_set_state(enum havpe_ui_state state);
-void havpe_ui_set_status(const char *status);
-void havpe_ui_set_call_active(bool active);
-void havpe_ui_set_link_ready(bool ready);
-/** The first rung: the Cap'n Web session to /api is up and this device is on it. */
-void havpe_ui_set_api_ready(bool ready);
-/**
- * The middle rung: a conversation stream exists and this device is on it.
- *
- * Separate from `link_ready` because they fail separately and a person needs
- * to see which. A session to /api with no stream is a board that will accept a
- * press and then take seconds to find somewhere to send it.
+/** Copy the loop's whole view, latch faults, and mark changed lights dirty.
+ * Call from the app task before ticking; microphone peaks alone do not repaint.
  */
-void havpe_ui_set_stream_ready(bool ready);
-
-/**
- * The loudest sample in the most recent captured frame.
- *
- * Called from the CAPTURE task, which is why it stores a single aligned word
- * and nothing else. Presentation only: the microphone sector of the ring
- * meters it so a person can SEE the device hearing them, and nothing in AEC,
- * VAD or flow control reads it.
- */
-void havpe_ui_set_microphone_peak(uint32_t peak);
-/**
- * Latches an unrecoverable start-up fault onto this device's status surface.
- *
- * Distinct from "not connected": a device that is still trying looks like one
- * that is trying, and a device that will never work must not. Nothing clears
- * this — the only exit is a reboot, which is the truth.
- */
-void havpe_ui_set_fault(void);
-
-/**
- * Mirror of the loop's call intent, so the ring answers the press ITSELF.
- *
- * While a call is wanted but not yet active the ring shows the shared amber
- * "working on it" comet — the press acknowledged within a frame instead of
- * after the seconds the far end takes to accept. The moment call_active
- * flips, the view owns the ring again.
- */
-void havpe_ui_set_wants_call(bool wanted);
+void havpe_ui_present(const struct iterate_kit_voice_view *view);
 
 /**
  * Borrow the ring for ~1 s of direct dial feedback.

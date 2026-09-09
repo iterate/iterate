@@ -186,26 +186,10 @@ static bool start(void *context, struct iterate_kit_board_audio *out) {
 static void present(
     void *context, const struct iterate_kit_voice_view *view) {
   (void)context;
-  havpe_ui_set_state((enum havpe_ui_state)view->screen);
-  havpe_ui_set_status(view->status == NULL ? "" : view->status);
-  havpe_ui_set_call_active(view->call_active);
-  /* The press's own acknowledgement: the ring chases from wants_call, not
-   * from the call the far end takes seconds to accept. */
-  havpe_ui_set_wants_call(view->wants_call);
-  /* Mirrored for `poll`, which classifies the session and routes the dial
-   * before this pass's view exists. */
+  havpe_ui_present(view);
+  /* Mirrored for poll, which runs before this pass's view exists. */
   mode_state.call_active = view->call_active;
   mode_state.wants_call = view->wants_call;
-  havpe_ui_set_api_ready(view->api_ready);
-  havpe_ui_set_stream_ready(view->stream_ready);
-  havpe_ui_set_link_ready(view->link_ready);
-  /*
-   * THE ONE THING THIS RING SAYS THAT NOTHING ELSE CAN. The microphone sector
-   * meters this so a person can SEE the device hearing them; with no screen
-   * there is no other way to tell listening from deaf.
-   */
-  havpe_ui_set_microphone_peak(view->microphone_peak);
-  if (view->fault) havpe_ui_set_fault();
   /* This ring has no timer behind it: `present` is also its pump. */
   havpe_ui_tick();
 }

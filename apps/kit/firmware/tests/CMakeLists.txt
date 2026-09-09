@@ -277,3 +277,6 @@ iterate_kit_add_audio_test(
 iterate_kit_add_stackchan_pure_test(
   iterate-kit-core-s3-capture-reserve-test core_s3_capture_reserve_test.c
   ../devices/stackchan/core_s3_capture_reserve.c)
+
+iterate_kit_add_test(iterate-kit-voice-view-lights-test voice_view_lights_test.c
+  STD 11 LINK iterate-kit-voice iterate-kit-esp-idf-fakes)

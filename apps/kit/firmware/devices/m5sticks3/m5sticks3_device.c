@@ -128,23 +128,10 @@ static bool start(void *context, struct iterate_kit_board_audio *out) {
 static void present(
     void *context, const struct iterate_kit_voice_view *view) {
   (void)context;
-  /*
-   * The setters already compare before marking dirty, so writing all of them
-   * every pass costs six compares and repaints nothing. `tick` is the throttled
-   * repaint, and this panel is pumped by its caller — there is no LVGL timer
-   * behind it — which is why `present` is also the pump.
-   */
-  m5sticks3_ui_set_state((enum m5sticks3_ui_state)view->screen);
-  m5sticks3_ui_set_status(view->status == NULL ? "" : view->status);
-  m5sticks3_ui_set_call_active(view->call_active);
-  /* Mirrored for `poll`, which classifies the session before this pass's
-   * view exists — one poll of lag, invisible at the loop's cadence. */
+  m5sticks3_ui_present(view);
+  /* Mirrored for poll, which runs before this pass's view exists. */
   session_state.call_active = view->call_active;
   session_state.wants_call = view->wants_call;
-  m5sticks3_ui_set_api_ready(view->api_ready);
-  m5sticks3_ui_set_stream_ready(view->stream_ready);
-  m5sticks3_ui_set_link_ready(view->link_ready);
-  if (view->fault) m5sticks3_ui_set_fault();
   m5sticks3_ui_tick();
 }
 

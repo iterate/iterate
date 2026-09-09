@@ -9,6 +9,7 @@
 #include "iterate/kit/audio_processor.h"
 #include "iterate/kit/capabilities/speaker.h"
 #include "iterate/kit/peer.h"
+#include "iterate/kit/conversation_lights.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -105,6 +106,17 @@ struct iterate_kit_voice_view {
   /** Unrecoverable start-up fault. Nothing clears it; the only exit is a reboot. */
   bool fault;
 };
+
+/**
+ * Map one voice view to the conversation lights; both pointers must be valid.
+ * A wanted but inactive call reads as not-ready so the press is acknowledged
+ * immediately by the amber comet. Speaking is the loop's screen cue (4096),
+ * one frame early without a physical playout tap; only brightness depends on it.
+ * Listening follows the screen, and the microphone peak comes from the view.
+ */
+void iterate_kit_voice_view_lights(
+    const struct iterate_kit_voice_view *view,
+    struct iterate_kit_conversation_visual_state *out);
 
 /**
  * What the board's physical controls are asking for: the explicit edges the

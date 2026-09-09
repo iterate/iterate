@@ -4122,3 +4122,29 @@ void iterate_kit_voice_loop_set_stream_path(const char *path) {
 void iterate_kit_voice_loop_set_turns(enum iterate_kit_voice_turns turns) {
   turn_policy = turns;
 }
+
+void iterate_kit_voice_view_lights(
+    const struct iterate_kit_voice_view *view,
+    struct iterate_kit_conversation_visual_state *out) {
+  *out = (struct iterate_kit_conversation_visual_state){
+    .network = view->link_ready ? ITERATE_KIT_NETWORK_CONNECTED
+                                : ITERATE_KIT_NETWORK_CONNECTING,
+    .reach = iterate_kit_reach_from(
+        view->api_ready, view->stream_ready, view->call_active),
+    .has_wifi_rssi = false,
+    .wifi_rssi_dbm = 0,
+    .conversation_active = view->call_active,
+    .media_ready = view->link_ready,
+    .media_failed = view->fault,
+    .microphone_listening = view->screen == ITERATE_KIT_VOICE_SCREEN_LISTENING,
+    .microphone_peak = view->microphone_peak,
+    .speaker_peak = view->screen == ITERATE_KIT_VOICE_SCREEN_SPEAKING ? 4096U : 0U,
+    .restart_armed = false,
+  };
+  /*
+   * HAVPE's ring is its only status surface. A press ahead of a call used to
+   * look like a dead button for seconds. The shared not-ready amber comet
+   * acknowledges it immediately and keeps the tick repainting the chase.
+   */
+  if (view->wants_call && !view->call_active) out->media_ready = false;
+}

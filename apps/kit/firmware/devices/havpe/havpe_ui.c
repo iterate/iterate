@@ -64,13 +64,7 @@ enum ring_overlay {
 
 static struct {
   led_strip_handle_t strip;
-  enum havpe_ui_state state;
-  bool call_active;
-  /*
-   * INTENT, mirrored so the ring can say "trying" from the press itself —
-   * see ring_state() for what wanting an inactive call does to the snapshot.
-   */
-  bool wants_call;
+  struct iterate_kit_voice_view view;
   enum ring_overlay overlay;
   /* Volume percent or mode index, depending on the overlay kind. */
   uint8_t overlay_value;
@@ -78,35 +72,12 @@ static struct {
   /* The adopted mode, whose quadrant is the idle ring. HAVPE_MODE_COUNT
    * until the composition's restore sets it. */
   uint8_t mode;
-  bool link_ready;
-  /*
-   * The two rungs beneath a call, kept apart from `link_ready` on purpose.
-   *
-   * `link_ready` is the gate every producer sits behind and is true only when
-   * the WHOLE chain is usable. These two say which half of it is up, which is
-   * the difference between "wait a second" and "this will never work".
-   */
-  bool api_ready;
-  bool stream_ready;
-  /* Unrecoverable start-up fault; see havpe_ui_set_fault. */
-  bool fault;
   bool dirty;
   /* False until the ring has actually been written once; see the tick. */
   bool painted;
   int64_t last_refresh_us;
   struct iterate_kit_rgb8 shown[LED_COUNT];
 } ui;
-
-/*
- * Written by the capture task, read by the app task. A single aligned word,
- * so a torn read is impossible here and the worst case is one stale frame of
- * a meter that redraws twenty times a second.
- */
-static volatile uint32_t microphone_peak;
-
-void havpe_ui_set_microphone_peak(uint32_t peak) {
-  microphone_peak = peak;
-}
 
 static struct iterate_kit_button button;
 
@@ -195,82 +166,28 @@ bool havpe_ui_init(void) {
         gpio_get_level(DIAL_B_GPIO) != 0);
   }
 
-  ui.state = HAVPE_UI_CONNECTING;
+  ui.view.screen = ITERATE_KIT_VOICE_SCREEN_CONNECTING;
   ui.mode = HAVPE_MODE_COUNT;
   ui.dirty = true;
   havpe_ui_tick();
   return true;
 }
 
-/*
- * THIS RING IS THE ONLY THING THIS BOARD CAN SAY, so the snapshot it renders
- * has to be honest about the two states that matter most: whether the network
- * is there, and whether the microphone is open. Everything else this board
- * knows already reaches a person some other way.
- */
-static struct iterate_kit_conversation_visual_state ring_state(void) {
-  struct iterate_kit_conversation_visual_state state = {
-    .network = ui.link_ready ? ITERATE_KIT_NETWORK_CONNECTED
-                             : ITERATE_KIT_NETWORK_CONNECTING,
-    .reach =
-        iterate_kit_reach_from(ui.api_ready, ui.stream_ready, ui.call_active),
-    .has_wifi_rssi = false,
-    .wifi_rssi_dbm = 0,
-    .conversation_active = ui.call_active,
-    .media_ready = ui.link_ready,
-    .media_failed = ui.fault,
-    .microphone_listening = ui.state == HAVPE_UI_LISTENING,
-    .microphone_peak = microphone_peak,
-    /*
-     * This board has no physical playout tap to sample, so speaking is taken
-     * from the state the app loop settles. It is one frame early rather than
-     * wrong, and only the LED brightness depends on it.
-     */
-    .speaker_peak = ui.state == HAVPE_UI_SPEAKING ? 4096U : 0U,
-    .restart_armed = false,
-  };
-  /*
-   * A PRESS THAT IS NOT YET A CALL MUST LOOK LIKE THE DEVICE WORKING ON IT.
-   * The tap used to be answered by nothing at all until the far end accepted
-   * the call seconds later — a still ring under a pressed button reads as a
-   * dead button. The fleet has exactly ONE "working on it" animation, the
-   * amber comet, and `needs_attention` is its trigger; so for as long as the
-   * intent is ahead of the call the snapshot says not-ready on purpose, and
-   * the instant call_active flips the view owns the ring again. This also
-   * keeps the tick breathing, which is what repaints the chase.
-   */
-  if (ui.wants_call && !ui.call_active) state.media_ready = false;
-  return state;
-}
-
-void havpe_ui_set_state(enum havpe_ui_state state) {
-  if (ui.state == state) return;
-  ui.state = state;
-  ui.dirty = true;
-}
-
-void havpe_ui_set_status(const char *status) {
-  /*
-   * A twelve-pixel ring cannot render prose. Status strings still arrive so
-   * the composition can rhyme with the screen boards; the interesting ones
-   * are already visible as state colours, and the exact text goes to the
-   * console log where a person debugging actually reads it.
-   */
-  if (status != NULL && status[0] != '\0') {
-    ESP_LOGI(tag, "status: %s", status);
+void havpe_ui_present(const struct iterate_kit_voice_view *view) {
+  if (ui.view.screen != view->screen ||
+      ui.view.call_active != view->call_active ||
+      ui.view.wants_call != view->wants_call ||
+      ui.view.link_ready != view->link_ready ||
+      ui.view.api_ready != view->api_ready ||
+      ui.view.stream_ready != view->stream_ready ||
+      (!ui.view.fault && view->fault)) ui.dirty = true;
+  const bool fault = ui.view.fault || view->fault;
+  ui.view = *view;
+  ui.view.fault = fault;
+  /* A twelve-pixel ring cannot render prose; retain the console status. */
+  if (view->status != NULL && view->status[0] != '\0') {
+    ESP_LOGI(tag, "status: %s", view->status);
   }
-}
-
-void havpe_ui_set_call_active(bool active) {
-  if (ui.call_active == active) return;
-  ui.call_active = active;
-  ui.dirty = true;
-}
-
-void havpe_ui_set_wants_call(bool wanted) {
-  if (ui.wants_call == wanted) return;
-  ui.wants_call = wanted;
-  ui.dirty = true;
 }
 
 void havpe_ui_show_volume(uint8_t percent) {
@@ -298,30 +215,6 @@ int havpe_ui_take_dial(void) {
   const int steps = dial.steps;
   dial.steps = 0;
   return steps;
-}
-
-void havpe_ui_set_fault(void) {
-  if (ui.fault) return;
-  ui.fault = true;
-  ui.dirty = true;
-}
-
-void havpe_ui_set_link_ready(bool ready) {
-  if (ui.link_ready == ready) return;
-  ui.link_ready = ready;
-  ui.dirty = true;
-}
-
-void havpe_ui_set_api_ready(bool ready) {
-  if (ui.api_ready == ready) return;
-  ui.api_ready = ready;
-  ui.dirty = true;
-}
-
-void havpe_ui_set_stream_ready(bool ready) {
-  if (ui.stream_ready == ready) return;
-  ui.stream_ready = ready;
-  ui.dirty = true;
 }
 
 /*
@@ -380,7 +273,8 @@ void havpe_ui_tick(void) {
     ui.overlay = OVERLAY_NONE;
     ui.dirty = true;
   }
-  const struct iterate_kit_conversation_visual_state state = ring_state();
+  struct iterate_kit_conversation_visual_state state;
+  iterate_kit_voice_view_lights(&ui.view, &state);
   /*
    * A DEVICE THAT IS NOT READY MUST NOT LOOK LIKE A STILL PHOTOGRAPH. While
    * the link is down the ring breathes, so this tick has real work to do on
@@ -404,7 +298,7 @@ void havpe_ui_tick(void) {
       render_volume(pixels);
     } else if (ui.overlay == OVERLAY_MODE) {
       render_quadrant(pixels, ui.overlay_value, MODE_QUADRANT_BRIGHT);
-    } else if (!breathing && !ui.wants_call && !ui.call_active &&
+    } else if (!breathing && !ui.view.wants_call && !ui.view.call_active &&
                ui.mode < HAVPE_MODE_COUNT) {
       /*
        * IDLE HAS A FACE. No session and nothing wrong: the ring shows the
