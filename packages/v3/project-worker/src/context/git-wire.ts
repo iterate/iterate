@@ -83,6 +83,12 @@ function* pktFrames(
     yield { kind: "line", payload: body.subarray(cursor + 4, cursor + length) };
     cursor += length;
   }
+  // A body cut mid-header (1–3 trailing bytes) is a TRUNCATED response, never a complete stream:
+  // read as complete, an empty ref list would mean "unborn repo" → "no file" to itx.repos.
+  if (cursor !== body.length)
+    throw new Error(
+      `truncated pkt-line stream: ${body.length - cursor} trailing byte(s) after byte ${cursor}`,
+    );
 }
 
 function pktText(payload: Uint8Array): string {

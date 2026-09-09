@@ -118,11 +118,16 @@ test(
 // ── the delivery loop ──
 
 test(
-  "delivery backlog: 200 × 1 MiB commits behind a facet that never answers stay bounded",
+  "delivery backlog: 200 × 1 MiB commits behind ONE facet that never answers stay bounded",
   { timeout: 110_000 },
   () => {
-    const run = runScenario("delivery-backlog", { batchCount: 200, batchChars: 1 * MiB });
-    expectSurvived(run, "delivery-backlog");
+    const run = runScenario("stuck-facet-rows", {
+      rowCount: 1,
+      batchCount: 200,
+      batchChars: 1 * MiB,
+      disjointTypes: 0,
+    });
+    expectSurvived(run, "stuck-facet-rows");
     expect(Number(run.facts.appended)).toBe(200);
   },
 );
@@ -300,6 +305,43 @@ test(
     expectSurvived(run, "cursor-rows-behind-one-commit");
     expect(Number(run.facts.callsStarted)).toBeGreaterThanOrEqual(20); // every row called (a 16 MiB log is two pages a row)
     expect(Number(run.facts.maxCallsInFlight)).toBeLessThan(20); // the ledger, not the row count, sets the fan-out
+  },
+);
+
+/** Cursor rows on disjoint event types, sinks that never answer, 7 MiB ephemerals — three per row. */
+const CURSOR_ROWS_PUSHED_EPHEMERALS = { batchChars: 7 * MiB };
+
+test(
+  "control: 2 cursor rows remembering a 7 MiB pushed ephemeral batch each stay within the budget",
+  { timeout: 60_000 },
+  () => {
+    const run = runScenario("cursor-rows-pushed-ephemerals", {
+      ...CURSOR_ROWS_PUSHED_EPHEMERALS,
+      rowCount: 2,
+      batchCount: 6,
+    });
+    expectSurvived(run, "cursor-rows-pushed-ephemerals");
+    expect(Number(run.facts.callsStarted)).toBeGreaterThanOrEqual(1);
+  },
+);
+
+// Dies of: oom. The loop remembers ONE pushed batch per CURSOR row (`#pushedEventBatches`, latest
+// wins — how ephemerals reach a caught-up cursor target) outside every budget: the pending fold is
+// bounded per row and across rows, the in-flight ledgers bound the calls, but this second copy is
+// bounded by nothing but the row count — 24 rows × 7 MiB, plus the batch the in-flight row holds.
+// The fix is a new mechanism, not a constant: either the remembered batch joins a cross-row ledger
+// (dropped oldest-first like the fold, the cursor lane reading the log instead), or a cursor row
+// stops remembering ephemerals it cannot deliver yet.
+test.fails(
+  "cursor rows: 24 cursor rows each remembering a 7 MiB pushed ephemeral batch retain ~170 MiB outside every budget",
+  { timeout: 60_000 },
+  () => {
+    const run = runScenario("cursor-rows-pushed-ephemerals", {
+      ...CURSOR_ROWS_PUSHED_EPHEMERALS,
+      rowCount: 24,
+      batchCount: 72,
+    });
+    expectSurvived(run, "cursor-rows-pushed-ephemerals");
   },
 );
 

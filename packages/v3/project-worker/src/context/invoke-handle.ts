@@ -51,7 +51,9 @@ installPrototypeInvokeFallback(InvokeHandle, []);
  *  property, a call yields a promise that is itself a stub — so an n-step chain costs ONE round trip,
  *  flushed by the caller's single await; a rejection anywhere in the chain lands there too. A DIRECT
  *  call on the stub, never `.apply`: reading `.apply` off a capnweb stub's method is itself a
- *  pipelined remote path (dispatch.ts's DataCloneError learning). */
+ *  pipelined remote path (dispatch.ts's DataCloneError learning). Lives HERE, beside the handle, and
+ *  not with `walkSteps` in dispatch.ts: the library tier may import this module and the codec only
+ *  (library/boundary.test.ts), and library/capnweb.ts walks a remote's stub with it. */
 export function walkStepsOnRpcStub(stub: unknown, steps: ItxExpression): unknown {
   let value: unknown = stub;
   for (const step of steps) {

@@ -174,55 +174,9 @@ const scenarios: Record<string, (args: Record<string, number>) => Promise<void>>
     const rebuilt = bareStream(storage);
     notePeakHeap();
     fact("rebuiltDurableOffset", rebuilt.highestDurableOffset());
-    fact("rebuiltIncarnation", rebuilt.currentIncarnation());
+    fact("rebuiltIncarnation", rebuilt.storage.incarnation);
     if (rebuilt.coreReducedStateSnapshot().offset !== stream.highestDurableOffset())
       throw new Error("the re-reduce did not reach the durable head");
-  },
-
-  /** A facet subscriber that never answers while commits keep landing: the delivery loop must not
-   *  retain every undelivered batch (a facet owns its progress and heals durables from the log). */
-  async "delivery-backlog"(args) {
-    const storage = nodeSqliteDurableObjectStorage();
-    let delivery!: SubscriptionDelivery;
-    const stream = bareStream(storage, (fresh, after, through) =>
-      delivery.onCommit(fresh, after, through),
-    );
-    let pushesStarted = 0;
-    // The calls a real stuck facet leaves IN FLIGHT: a Workers-RPC call is referenced by the runtime
-    // until it settles, so its promise — and every delivery chained behind it — stays reachable. An
-    // unreferenced never-resolving promise would be garbage-collected together with the chain
-    // (measured: the backlog vanished), which is not what a hung facet does.
-    const callsInFlight: ((value: unknown) => void)[] = [];
-    delivery = new SubscriptionDelivery({
-      stream,
-      // The row's target evaluates to a facet whose every call hangs — a stuck processor.
-      evaluateItxExpression: async () =>
-        new FacetHandle(() => {
-          pushesStarted++;
-          return new Promise((resolve) => callsInFlight.push(resolve));
-        }),
-      recordActivityForQuietClock: () => {},
-    });
-    stream.append(
-      subscriptionConfiguredEvent({
-        name: "stuck",
-        target: ["itx", "facets", ["get", "stuck"], "processEventBatch"],
-        consumes: ["blob"],
-      }),
-    );
-    await new Promise((r) => setImmediate(r));
-    for (let i = 0; i < args.batchCount; i++) {
-      // Ephemeral: zero storage — pure fan-out memory, exactly what a backlog retains.
-      stream.append({
-        type: "blob",
-        ephemeral: true,
-        payload: { blob: flatHeapString(args.batchChars) },
-      });
-      if (i % 10 === 0) await new Promise((r) => setImmediate(r));
-      notePeakHeap();
-    }
-    fact("pushesStarted", pushesStarted);
-    fact("appended", args.batchCount);
   },
 
   /** One event past the platform's own ceiling must be REFUSED at the door with a coded error —
@@ -492,10 +446,13 @@ const scenarios: Record<string, (args: Record<string, number>) => Promise<void>>
     fact("deltasRefused", deltasRefused);
   },
 
-  /** MANY facet rows stuck at once. The backlog budget is PER ROW (8 MiB each). Rows that consume
-   *  the SAME events share the StreamEvent objects, so N stuck rows retain about one page between
-   *  them; rows that consume DISJOINT types — N processors each on its own event type — retain a
-   *  page EACH: N × 8 MiB. `disjointTypes` picks which; the producer round-robins the types. */
+  /** Facet rows stuck — their every call hangs — while ephemeral commits keep landing: the loop must
+   *  not retain every undelivered batch (a facet owns its progress and heals durables from the log).
+   *  ONE row is the backlog proof; MANY at once test the budgets across rows: rows that consume the
+   *  SAME events share the StreamEvent objects, so N stuck rows retain about one page between them;
+   *  rows that consume DISJOINT types — N processors each on its own event type — would retain a
+   *  page EACH without the cross-row ledger. `disjointTypes` picks which; the producer round-robins
+   *  the types. */
   async "stuck-facet-rows"(args) {
     const storage = nodeSqliteDurableObjectStorage();
     let delivery!: SubscriptionDelivery;
@@ -503,6 +460,10 @@ const scenarios: Record<string, (args: Record<string, number>) => Promise<void>>
       delivery.onCommit(fresh, after, through),
     );
     let callsStarted = 0;
+    // The calls a real stuck facet leaves IN FLIGHT: a Workers-RPC call is referenced by the runtime
+    // until it settles, so its promise — and every delivery chained behind it — stays reachable. An
+    // unreferenced never-resolving promise would be garbage-collected together with the chain
+    // (measured: the backlog vanished), which is not what a hung facet does.
     const callsInFlight: ((value: unknown) => void)[] = [];
     delivery = new SubscriptionDelivery({
       stream,
@@ -595,6 +556,56 @@ const scenarios: Record<string, (args: Record<string, number>) => Promise<void>>
     fact("rows", args.rowCount);
     fact("callsStarted", callsStarted);
     fact("maxCallsInFlight", maxCallsInFlight);
+  },
+
+  /** N CURSOR rows on DISJOINT event types whose sinks never answer, fed large EPHEMERALS. The loop
+   *  remembers ONE pushed batch per cursor row (`#pushedEventBatches`, latest wins — how ephemerals
+   *  reach a caught-up cursor target), outside every budget; the row whose call is in flight holds
+   *  the batch it took as well, and a row waiting for cursor-read room holds nothing but its latest.
+   *  The fold (`#pendingPushByRow`) is bounded across rows; the remembered batches are not: about
+   *  `batchChars` × (rows + 1). */
+  async "cursor-rows-pushed-ephemerals"(args) {
+    const storage = nodeSqliteDurableObjectStorage();
+    let delivery: SubscriptionDelivery | undefined;
+    const stream = bareStream(storage, (fresh, after, through) =>
+      delivery?.onCommit(fresh, after, through),
+    );
+    let callsStarted = 0;
+    const callsInFlight: ((value: unknown) => void)[] = [];
+    delivery = new SubscriptionDelivery({
+      stream,
+      evaluateItxExpression: async () => () => {
+        callsStarted++;
+        return new Promise((resolve) => callsInFlight.push(resolve));
+      },
+      recordActivityForQuietClock: () => {},
+    });
+    stream.append(
+      ...Array.from({ length: args.rowCount }, (_, i) =>
+        subscriptionConfiguredEvent({
+          name: `sink${i}`,
+          target: "itx.sink",
+          consumes: [`blob-${i}`],
+        }),
+      ),
+    );
+    await new Promise((r) => setImmediate(r));
+    // ONE durable after the configures: every cursor catches up to it, so the pushed ephemerals that
+    // follow are contiguous — the first row's call goes in flight, the rest wait for cursor-read room.
+    stream.append({ type: "tick" });
+    await new Promise((r) => setImmediate(r));
+    for (let i = 0; i < args.batchCount; i++) {
+      stream.append({
+        type: `blob-${i % args.rowCount}`,
+        ephemeral: true,
+        payload: { blob: flatHeapString(args.batchChars) },
+      });
+      if (i % 10 === 0) await new Promise((r) => setImmediate(r));
+      notePeakHeap();
+    }
+    fact("rows", args.rowCount);
+    fact("appended", args.batchCount);
+    fact("callsStarted", callsStarted);
   },
 
   /** `waitForEvent` with an explicit `afterOffset: 0` and a type the log never carries: the history

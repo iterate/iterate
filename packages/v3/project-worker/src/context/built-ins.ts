@@ -528,8 +528,6 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
           return callEntrypoint(spec, call[0], call.slice(1));
         }),
     },
-    // `RUN_SCRIPT_ENTRYPOINT` wraps the lambda string into a WorkerEntrypoint default export, so even
-    // this bare-lambda door bottoms out at `workers.get({ source }).run(...)`.
     // THE LIBRARY: its verbs closed over the context's own `itx` handle, built and owned by the DO
     // (library/index.ts — it also owns the live connections' release at the idle quiesce).
     ...deps.library,

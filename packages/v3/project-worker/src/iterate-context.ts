@@ -235,7 +235,8 @@ export class IterateContext extends RpcTarget {
    *      un-sets that rule when the stub's LAST pager closes. Re-providing the same match re-lends
    *      (reconnect — the pager is replaced);
    *    • an itx EXPRESSION — a pure rewrite: literally `append(rewriteRuleConfiguredEvent(match, target))`;
-   *    • `null` — un-set the rule at `match` (and recall a stub THIS session lent under it).
+   *    • `null` — MASK `match` when a platform row lies beneath it, delete the row otherwise (and
+   *      recall a stub THIS session lent under it).
    *  Either way the durable thing made is the rule, so the handle is a `RewriteRuleHandle`: disposing
    *  it, or the session ending, un-does the act. */
   async provide(

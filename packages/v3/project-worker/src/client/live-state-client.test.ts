@@ -67,3 +67,20 @@ test("a delta delivered WHILE a gap heal is in flight re-reads the door once the
   expect(connection.store.get()).toEqual({ n: 9 });
   await connection.dispose();
 });
+
+test("the first door read FAILING disposes the row it just configured — no callback is left lent to a connection nobody holds", async () => {
+  let disposals = 0;
+  const itx = {
+    async subscribe() {
+      return {
+        [Symbol.dispose]() {
+          disposals += 1;
+        },
+      };
+    },
+  };
+  await expect(
+    connectLiveState(itx, { key: "k", door: () => Promise.reject(new Error("door down")) }),
+  ).rejects.toThrow("door down");
+  expect(disposals).toBe(1);
+});

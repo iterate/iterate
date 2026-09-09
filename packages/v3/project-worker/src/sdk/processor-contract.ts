@@ -7,8 +7,15 @@
 // API mirrors apps/os (`packages/iterate/src/processors/schemas.ts`) so processors port both ways.
 
 import { z } from "zod";
-import type { EventDefinition, ProcessorContract } from "../stream/processor.ts";
+import type { ProcessorContract } from "../stream/processor.ts";
 import type { StreamEventInput } from "../stream/events.ts";
+
+/** One owned event type: its payload schema (and prose for humans/docs) — userspace contracts carry
+ *  real zod schemas, same as built-ins. */
+export type EventDefinition = {
+  description?: string;
+  payloadSchema: z.ZodType;
+};
 
 export function defineProcessorContract<StateSchema extends z.ZodType>(contract: {
   slug: string;

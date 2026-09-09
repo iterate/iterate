@@ -113,6 +113,15 @@ test("/expression refuses to re-enter itself: `itx=itx.fetch` (an expression fet
   expect(await response.text()).toMatch(/re-entered itself/);
 });
 
+test("a hop count the platform never wrote (an app spelling `NaN` to defeat the budget) is over budget on arrival: 508, never a loop", async () => {
+  const response = await fetch(expressionUrl(freshCtx("lane-nan-hops"), "itx.whoami"), {
+    headers: { "x-itx-expression-hops": "NaN" },
+    signal: AbortSignal.timeout(8000),
+  });
+  expect(response.status).toBe(508);
+  expect(await response.text()).toContain('"NaN"');
+});
+
 test("deleted routes fall through to the control plane's 404 — /call, /ws and /cap answer Not found, a WebSocket upgrade to /ws gets no 101", async () => {
   // The fetch door is /expression and nothing else: the old /call, /ws and /cap routes are gone and
   // land on the in-process control plane's catch-all (a plain 404 — never a 500), and an upgrade

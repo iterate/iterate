@@ -17,8 +17,15 @@
 //     made for a row since replaced halts nothing.
 //   • `subscribe({ afterOffset })`: the cursor is born where the row asked (0 = the whole log) and
 //     the configure is its wake — history is delivered now; the push lane is unaffected.
+//   • THE CURSOR LANE'S READ RESERVATION is never re-acquired while held: a page whose events
+//     serialize past it (a body near the ceiling plus its envelope) is delivered, and the other
+//     cursor rows keep flowing.
+//   • A rule RE-POINT re-classifies: a facet row re-pointed at a cursor target leaves the push set,
+//     so the alarm's pass retries its ladder.
+//   • A SUPERSEDED evaluation (the row replaced while its target evaluated) can neither classify nor
+//     invoke its replacement.
 
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import { print, type ItxExpression } from "../context/expression.ts";
 import { FacetHandle } from "../context/invoke-handle.ts";
 import { codedError } from "../lib/errors.ts";
@@ -420,5 +427,166 @@ describe("the cursor lane across an eviction and a replace", () => {
     expect(delivered).toEqual([[1]]);
     expect(evaluated.length).toBeGreaterThan(0);
     expect(evaluated.every((printed) => printed === "itx.sink")).toBe(true);
+  });
+});
+
+describe("the cursor lane's read reservation is never re-acquired while held", () => {
+  // The read branch reserves the whole cursor budget (8 MiB) before its read. A page's BODIES fill
+  // the read budget (8 MiB of stored bytes) and each event's offset and path ride on top, so a full
+  // page serializes PAST the reservation. Acquiring the overshoot while holding the whole budget
+  // waited on the reservation itself — forever — and every other cursor row on the context behind it.
+  test.each([
+    { bodyShortfall: 100, label: "CONTROL: a body 100 chars under the ceiling (the page fits)" },
+    {
+      bodyShortfall: 5,
+      label: "a body 5 chars under the ceiling (the page overshoots by its envelope)",
+    },
+  ])("$label — delivered, and the other cursor row keeps flowing", async ({ bodyShortfall }) => {
+    const delivered: Record<string, number[]> = { history: [], now: [] };
+    const rig = incarnation((printed) => {
+      const name =
+        printed === "itx.history" ? "history" : printed === "itx.now" ? "now" : undefined;
+      return (
+        name && {
+          push: (events: { offset: number }[]) =>
+            void delivered[name].push(...events.map((e) => e.offset)),
+        }
+      );
+    });
+    const overhead = JSON.stringify({
+      type: "blob",
+      payload: { blob: "" },
+      createdAt: new Date().toISOString(),
+    }).length;
+    const [big] = rig.stream.append({
+      type: "blob",
+      payload: { blob: "x".repeat(8 * MiB - overhead - bodyShortfall) },
+    });
+    // `history` must READ the page holding the big event (the whole log); `now` is "from now".
+    rig.stream.append(
+      subscriptionConfiguredEvent({
+        name: "history",
+        target: "itx.history.push",
+        consumes: ["blob"],
+        afterOffset: 0,
+      }),
+    );
+    rig.stream.append(
+      subscriptionConfiguredEvent({ name: "now", target: "itx.now.push", consumes: ["tick"] }),
+    );
+    const [tick] = rig.stream.append({ type: "tick" });
+    await settled();
+    expect(delivered).toEqual({ history: [big.offset], now: [tick.offset] });
+    expect(rig.delivery.cursor("now")?.confirmedOffset).toBe(tick.offset);
+  });
+});
+
+describe("a rule re-point re-classifies a row", () => {
+  test("push → cursor: a facet row re-pointed at a plain function leaves the push set, so the alarm's pass retries its ladder", async () => {
+    let lane: "facet" | "sink" = "facet";
+    let sinkCalls = 0;
+    const rig = incarnation((printed) =>
+      printed !== "itx.proc"
+        ? undefined
+        : lane === "facet"
+          ? new FacetHandle(() => Promise.resolve())
+          : () => {
+              sinkCalls++;
+              throw new Error("sink down");
+            },
+    );
+    // A two-step target (`itx.proc`) — root-called whole; what it evaluates to decides the lane.
+    rig.stream.append(
+      subscriptionConfiguredEvent({ name: "s", target: "itx.proc", consumes: ["blob"] }),
+    );
+    await settled();
+    rig.stream.append({ type: "blob" });
+    await settled();
+    expect(rig.delivery.cursor("s")).toBeUndefined(); // a facet: the push lane keeps no cursor
+    // THE RE-POINT: a rule commit replaces the rule table (the per-row target memo keys on it), and
+    // `itx.proc` now evaluates to a plain function — a target that cannot own its progress.
+    lane = "sink";
+    rig.stream.append({
+      type: "events.iterate.com/itx/rewrite-rule-configured",
+      payload: { match: "itx.unrelated", target: "itx.kv" },
+    });
+    rig.stream.append({ type: "blob" });
+    await settled();
+    const failed = rig.delivery.cursor("s");
+    expect(sinkCalls).toBe(1);
+    expect(failed).toMatchObject({ attempt: 1 });
+    // The alarm's row-driven pass, past the ladder's next attempt: the row is retried from its cursor.
+    vi.useFakeTimers({ now: Date.now(), toFake: ["Date"] });
+    try {
+      vi.setSystemTime(failed!.nextAttemptAtMs! + 1);
+      await rig.delivery.deliverEveryCursorSubscription();
+    } finally {
+      vi.useRealTimers();
+    }
+    await settled();
+    expect(sinkCalls).toBe(2);
+    expect(rig.delivery.cursor("s")).toMatchObject({ attempt: 2 });
+  });
+});
+
+describe("a superseded evaluation can neither classify nor invoke its replacement", () => {
+  test("a facet row replaced by a cursor row while its target was still evaluating — at configure, and under a push: the old facet is never called again, the replacement is classified by its OWN evaluation and delivered", async () => {
+    const facetCalls: string[] = [];
+    const sink: number[][] = [];
+    let gate = Promise.resolve();
+    let openGate = () => {};
+    const facet = new FacetHandle((steps) => {
+      const [call] = steps;
+      facetCalls.push(Array.isArray(call) ? call[0] : call);
+      return Promise.resolve();
+    });
+    const rig = incarnation((printed) =>
+      printed === "itx.proc"
+        ? gate.then(() => facet) // the evaluation parks on the gate
+        : printed === "itx.sink"
+          ? { push: (events: { payload?: { n?: number } }[]) => void sink.push(ns(events)) }
+          : undefined,
+    );
+    const configureFacet = () =>
+      rig.stream.append(
+        subscriptionConfiguredEvent({
+          name: "s",
+          target: "itx.proc.processEventBatch",
+          consumes: ["blob"],
+        }),
+      );
+    const configureSink = () =>
+      rig.stream.append(
+        subscriptionConfiguredEvent({ name: "s", target: "itx.sink.push", consumes: ["blob"] }),
+      );
+    // AT CONFIGURE: the facet row's catch-up parks on its evaluation; the row is replaced meanwhile.
+    gate = new Promise((r) => (openGate = r));
+    configureFacet();
+    await settled();
+    configureSink(); // REPLACES the row (a new identity) under the parked evaluation
+    await settled();
+    openGate();
+    await settled();
+    expect(facetCalls).toEqual([]); // the superseded catch-up called nothing
+    rig.stream.append({ type: "blob", payload: { n: 1 } });
+    await settled();
+    expect(sink).toEqual([[1]]); // the replacement is its own row: a cursor target, delivered
+    expect(rig.delivery.cursor("s")).toBeDefined();
+    // UNDER A PUSH: back to a facet row (caught up), then a push whose evaluation parks.
+    gate = Promise.resolve();
+    configureFacet();
+    await settled();
+    expect(facetCalls).toEqual(["catchUpFromLog"]);
+    gate = new Promise((r) => (openGate = r));
+    rig.stream.append({ type: "blob", payload: { n: 2 } });
+    await settled(); // the push's evaluation is parked
+    configureSink();
+    await settled();
+    openGate();
+    await settled();
+    expect(facetCalls).toEqual(["catchUpFromLog"]); // the superseded push called nothing
+    rig.stream.append({ type: "blob", payload: { n: 3 } });
+    await settled();
+    expect(sink).toEqual([[1], [3]]);
   });
 });

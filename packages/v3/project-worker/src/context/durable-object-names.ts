@@ -19,11 +19,6 @@ const PROJECT_ID = /^[A-Za-z0-9_-]+$/;
  *  halves together (no separate re-stringify field at call sites). */
 export type DurableObjectAddress = { projectId: string; path: string; name: string };
 
-/** Normalize a path to leading-slash form (`""` → `"/"`, `"x"` → `"/x"`). */
-function normalizePath(path: string): string {
-  return path === "" ? "/" : path.startsWith("/") ? path : `/${path}`;
-}
-
 /** Resolve a `cd` target against a context's own path — the one resolver both `cd` doors (the
  *  edge method and the built-in root) share. Absolute ("/agents/x") stands alone; relative
  *  ("agents/x", "../inbox", ".") joins onto `base`. `.` and `..` resolve; the root cannot be
@@ -39,9 +34,11 @@ export function resolveContextPath(basePath: string, contextPath: string): strin
 }
 
 export const DurableObjectNameCodec = {
-  /** Formats the project-scoped Durable Object name `{projectId}.iterate{path}`. */
+  /** Formats the project-scoped Durable Object name `{projectId}.iterate{path}` — the path in the
+   *  CANONICAL form `cd` resolves to (`resolveContextPath`), so `/a`, `/a/`, `/a/./` and `a` are ONE
+   *  name and no door (the `?context=` query included) can mint a twin DO for a logical context. */
   stringify({ projectId, path }: { projectId: string; path: string }): string {
-    return `${projectId}${DURABLE_OBJECT_HOST_SUFFIX}${normalizePath(path)}`;
+    return `${projectId}${DURABLE_OBJECT_HOST_SUFFIX}${resolveContextPath("/", path)}`;
   },
   /** Parses a Durable Object name. A bare name (no `.iterate`) is that project's root — what
    *  `projects.get("prj_x")` and the /cap door's `?context=prj_x` hand in. */
@@ -52,7 +49,7 @@ export const DurableObjectNameCodec = {
         ? { projectId: name, path: "/" }
         : {
             projectId: name.slice(0, i),
-            path: normalizePath(name.slice(i + DURABLE_OBJECT_HOST_SUFFIX.length)),
+            path: resolveContextPath("/", name.slice(i + DURABLE_OBJECT_HOST_SUFFIX.length)),
           };
     if (!PROJECT_ID.test(parts.projectId))
       throw codedError(

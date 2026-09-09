@@ -67,17 +67,20 @@ export default {
     const url = new URL(request.url);
     // THE HOP COUNT, for both lanes into a context: an app or an expression that fetches its own
     // host or the fetch lane's URL re-enters here through egress; each pass counts, a few is a loop.
-    const hops = Number(request.headers.get(ITX_EXPRESSION_LANE_HOPS_HEADER) ?? "0") + 1;
+    // The platform writes the count as digits; anything else (an app spelling "NaN" to defeat the
+    // budget — `NaN > max` is never true) is over budget by definition.
+    const hopsHeader = request.headers.get(ITX_EXPRESSION_LANE_HOPS_HEADER) ?? "0";
+    const hops = /^\d{1,3}$/.test(hopsHeader) ? Number(hopsHeader) + 1 : Infinity;
     if (hops > ITX_EXPRESSION_LANE_MAX_HOPS)
       return new Response(
-        `the request re-entered itself ${hops} times (an app or an expression fetching its own lane)\n`,
+        `the request re-entered itself ${Number.isFinite(hops) ? hops : `"${hopsHeader}"`} times (an app or an expression fetching its own lane)\n`,
         { status: 508 },
       );
 
     // PROJECT-HOST INGRESS (project-host.ts): a request on `<label>--<projectId>.<base>` IS the app
-    // `itx.apps.<label>` of that project's ROOT context, the Request riding VERBATIM into the fetch
-    // lane below — the URL, host-scoped cookies and WebSocket upgrades all survive, so a served page's
-    // relative links work. Inbound `x-itx-*` are stripped first: the lane's headers are the platform's,
+    // `itx.apps.<label>` of that project's ROOT context, the Request riding into the fetch lane
+    // below with its URL, the app's own cookies and a WebSocket upgrade intact (the platform's
+    // session cookie is dropped), so a served page's relative links work. Inbound `x-itx-*` are stripped first: the lane's headers are the platform's,
     // never a visitor's. Everything on a project host is the app's; the platform's own doors (`/api`,
     // `/expression`, `/version`) live on the worker's hostname.
     const {

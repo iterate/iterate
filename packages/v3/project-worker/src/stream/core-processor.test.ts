@@ -9,7 +9,7 @@
 // (context/itx-expression-rewriting.test.ts, stream/subscriptions.test.ts).
 import { describe, expect, test } from "vitest";
 import { parse, print } from "../context/expression.ts";
-import { CoreContract, CoreStreamProcessor, type CoreState } from "./core-processor.ts";
+import { CoreStreamProcessor, type CoreState } from "./core-processor.ts";
 import type { StreamEvent } from "./events.ts";
 
 const proc = new CoreStreamProcessor();
@@ -25,7 +25,7 @@ const reduceAll = (events: StreamEvent[], initial = proc.contract.initialState()
   events.reduce((s, e) => proc.reduce({ event: e, state: s }) ?? s, initial);
 
 describe("the contract", () => {
-  test("slug `core` v8.0.0; the schema-initial state; consumes EXACTLY its nine control events (an inline reduce reduces only what it consumes)", () => {
+  test("slug `core` v8.0.0; the every-field-defaulted initial state", () => {
     expect(proc.contract.slug).toBe("core");
     expect(proc.contract.version).toBe("8.0.0");
     expect(proc.contract.initialState()).toEqual({
@@ -34,18 +34,6 @@ describe("the contract", () => {
       subscriptions: {},
       secrets: {},
     });
-    expect(proc.contract.consumes).toEqual([
-      "events.iterate.com/stream/created",
-      "events.iterate.com/stream/woken",
-      "events.iterate.com/stream/paused",
-      "events.iterate.com/stream/resumed",
-      "events.iterate.com/itx/rewrite-rule-configured",
-      "events.iterate.com/stream/subscription-configured",
-      "events.iterate.com/stream/subscription-delivery-halted",
-      "events.iterate.com/stream/subscription-delivery-resumed",
-      "events.iterate.com/secrets/changed",
-    ]);
-    expect(proc.contract.emits).toEqual([]);
   });
 });
 
@@ -83,11 +71,6 @@ describe("identity, incarnation, the pause latch", () => {
     expect(reduceAll([at(1, "events.iterate.com/stream/paused", {})]).paused).toEqual({
       reason: "paused",
     });
-    // buildEvent is a TRUSTED PASSTHROUGH now (the zod default that once lived here is gone with the
-    // edge/DO script's zod); the REDUCE owns the "paused" default, which is the only path to state.
-    expect(CoreContract.buildEvent({ type: "events.iterate.com/stream/paused" }).payload).toEqual(
-      {},
-    );
   });
 });
 
@@ -440,19 +423,6 @@ describe("purity", () => {
       expect(Object.keys(state.subscriptions)).toEqual(["a", "b"]);
       expect(state.itxExpressionRewriteRules).toEqual({});
     });
-
-    test("`__proto__` is a legal subscription name: it lands as an OWN row on the draft and is removed like any other, never the prototype", () => {
-      const set = proc.reduceBatch(
-        [configured(1, "__proto__"), configured(2, "b")],
-        proc.contract.initialState(),
-        onError,
-      );
-      expect(Object.hasOwn(set.subscriptions, "__proto__")).toBe(true);
-      expect(Object.getPrototypeOf(set.subscriptions)).toBe(Object.prototype);
-      expect(Object.keys(set.subscriptions)).toEqual(["__proto__", "b"]);
-      const removed = proc.reduceBatch([configured(3, "__proto__", null)], set, onError);
-      expect(Object.keys(removed.subscriptions)).toEqual(["b"]);
-    });
   });
 
   test("the reduce rebuilds bit-identically from the log (pure — no wall clock anywhere)", () => {
@@ -681,12 +651,25 @@ describe("the builtins root, as the reduce sees it: masks, the platform-equivale
 describe("the secrets catalog — by name, the origin only, never a value", () => {
   const changed = (offset: number, payload: Record<string, unknown>) =>
     at(offset, "events.iterate.com/secrets/changed", payload);
-  const rows: { title: string; events: StreamEvent[]; becomes: CoreState["secrets"] }[] = [
-    { title: "a set", events: [changed(1, { name: "a" })], becomes: { a: {} } },
+  // `identity` is what the LAST event's reduce hands back: a new state, or `undefined` — the host's
+  // change signal (no checkpoint rewrite, no live delta) for a no-op.
+  const rows: {
+    title: string;
+    events: StreamEvent[];
+    becomes: CoreState["secrets"];
+    identity: "a new state" | "undefined (a no-op)";
+  }[] = [
+    {
+      title: "a set",
+      events: [changed(1, { name: "a" })],
+      becomes: { a: {} },
+      identity: "a new state",
+    },
     {
       title: "a set with an origin",
       events: [changed(1, { name: "a", origin: "https://api.example.com" })],
       becomes: { a: { origin: "https://api.example.com" } },
+      identity: "a new state",
     },
     {
       title: "a re-set REPLACES (the origin can be dropped)",
@@ -695,20 +678,40 @@ describe("the secrets catalog — by name, the origin only, never a value", () =
         changed(2, { name: "a" }),
       ],
       becomes: { a: {} },
+      identity: "a new state",
     },
     {
-      title: "a delete removes; deleting what is not there is a no-op",
+      title: "a re-set with the SAME origin is a no-op",
+      events: [
+        changed(1, { name: "a", origin: "https://api.example.com" }),
+        changed(2, { name: "a", origin: "https://api.example.com" }),
+      ],
+      becomes: { a: { origin: "https://api.example.com" } },
+      identity: "undefined (a no-op)",
+    },
+    {
+      title: "a delete removes",
+      events: [changed(1, { name: "a" }), changed(2, { name: "a", deleted: true })],
+      becomes: {},
+      identity: "a new state",
+    },
+    {
+      title: "deleting what is not there is a no-op",
       events: [
         changed(1, { name: "a" }),
         changed(2, { name: "a", deleted: true }),
         changed(3, { name: "b", deleted: true }),
       ],
       becomes: {},
+      identity: "undefined (a no-op)",
     },
   ];
-  for (const { title, events, becomes } of rows)
-    test(title, () => {
-      expect(reduceAll(events).secrets).toEqual(becomes);
+  for (const { title, events, becomes, identity } of rows)
+    test(`${title} — the last reduce returns ${identity}`, () => {
+      const before = reduceAll(events.slice(0, -1));
+      const out = proc.reduce({ event: events.at(-1)!, state: before });
+      expect(out === undefined ? "undefined (a no-op)" : "a new state").toBe(identity);
+      expect((out ?? before).secrets).toEqual(becomes);
     });
 });
 

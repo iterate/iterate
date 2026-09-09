@@ -5,8 +5,8 @@
 // chain, checkpoint, gap repair, at-head pass, version re-reduce, live-state publishing); the SDK's
 // `StreamProcessorDurableObject` (sdk/) builds one per hosted facet. The author surface mirrors
 // apps/os (`blockProcessorWhile`/`runInBackground`, `delivery.caughtUp`) so processors port both
-// ways. Node-testable; bundled with zod into every loaded isolate as `processor.js` via
-// sdk/index.ts (build-sdk.mjs). Runtime imports: lib/, stream/live-state.ts, stream/reduce-checkpoint.ts.
+// ways. Node-testable; bundled into every loaded isolate as `processor.js` via sdk/index.ts
+// (build-sdk.mjs, zod beside it). Runtime imports: lib/, stream/live-state.ts, stream/reduce-checkpoint.ts.
 //
 // THE CONCURRENCY CONTRACT:
 //   1. ONE SERIAL CHAIN per processor — batches never interleave.
@@ -36,19 +36,13 @@
 // (never re-running side effects) — and a re-reduce reads durable rows only, which is why durable
 // product truth must never be derived from an ephemeral event.
 
-import type { z } from "zod";
 import { reportIssue } from "../lib/errors.ts";
 import { LiveState } from "./live-state.ts";
 import type { ReduceCheckpointStore } from "./reduce-checkpoint.ts";
 import type { StreamEvent, StreamEventInput } from "./events.ts";
 
-/** One owned event type: its payload schema (and prose for humans/docs). Shipped in the SDK
- *  too — userspace contracts carry real zod schemas, same as built-ins. */
-export type EventDefinition = {
-  description?: string;
-  payloadSchema: z.ZodType;
-};
-
+/** What a processor declares: its checkpoint slug and reducer version, what it consumes and emits,
+ *  and its initial state (sdk/processor-contract.ts builds one from zod schemas). */
 export type ProcessorContract<State = unknown> = {
   slug: string;
   /** Bumping this re-reduces state from offset 0 (reduce only — side effects never re-run). */

@@ -460,7 +460,7 @@ test("C2 — one unparseable row body is a coded EVENT_UNREADABLE naming its off
   await corruptRow(ctx, seed);
   const readErr = await rejectionOf(() => s.read(0));
   const waitErr = await rejectionOf(() =>
-    s.waitForEvent({ type: "never", afterOffset: 0, timeoutMs: 100 }),
+    s.invoke(["itx", ["waitForEvent", { type: "never", afterOffset: 0, timeoutMs: 100 }]]),
   );
   expect(codeOf(readErr)).toBe("EVENT_UNREADABLE");
   expect(codeOf(waitErr)).toBe("EVENT_UNREADABLE");

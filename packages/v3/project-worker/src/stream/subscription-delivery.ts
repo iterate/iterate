@@ -63,10 +63,12 @@ const DELIVERY_IN_FLIGHT_BUDGET_CHARS = 8 * 1024 * 1024;
  *  once — a SEPARATE ceiling from the push budget so a cursor reserving a worst-case page never trips
  *  a live-client push drop. N cursor rows firing on one commit each read a page and hold the batch
  *  across the awaited call; without this they coexist (20 × an 8 MiB page = 160 MiB, a reset). A
- *  worst-case page (READ_PAGE_BUDGET_BYTES, and a lone oversized event up to EVENT_BODY_MAX_CHARS) is
- *  8 MiB, so a full catch-up page fills it and the next cursor read WAITS — big catch-up serializes;
- *  a small batch is trimmed to its real size and frees the reserve so small cursor deliveries stay
- *  concurrent and no call head-of-line-blocks the lane. */
+ *  worst-case page is READ_PAGE_BUDGET_BYTES of stored BODIES (8 MiB — a lone event at
+ *  EVENT_BODY_MAX_CHARS rides alone); with each event's offset and path it serializes to slightly
+ *  MORE, so a full catch-up page OVERFILLS it: the read branch holds the whole budget from before the
+ *  read and only ever RELEASES (the overshoot stays charged as the page), so big catch-up serializes
+ *  and the next cursor read WAITS; a small batch is trimmed to its real size and frees the reserve so
+ *  small cursor deliveries stay concurrent and no call head-of-line-blocks the lane. */
 const CURSOR_READ_BUDGET_CHARS = 8 * 1024 * 1024;
 /** The most pending-push chars ALL rows together may hold back — past it the oldest events are
  *  dropped from the LARGEST queue first (each row's own PENDING_PUSH_BUDGET_CHARS still applies).
@@ -148,9 +150,11 @@ export class SubscriptionDelivery {
    *  storage: ephemerals are not in the log, and after an eviction the persisted cursor rewinds to
    *  the last durable boundary and durables are redelivered from there, which at-least-once allows). */
   readonly #cursors = new Map<string, SubscriptionCursor>();
-  /** Rows whose target evaluated to a handle that OWNS ITS PROGRESS (a facet, a lent rpc stub) this
-   *  incarnation — classified once, on their first push or by the alarm's row pass; the pass and the
-   *  commit-time arming skip them from then on. Memory: a fresh incarnation classifies again. */
+  /** Rows whose target LAST evaluated to a handle that OWNS ITS PROGRESS (a facet, a lent rpc stub)
+   *  this incarnation — classified on their first push or by the alarm's row pass, and RE-classified
+   *  whenever the push path evaluates again (a rule re-point, `#evaluateTargetHeadForRow`): a row
+   *  re-pointed at a target that cannot own its progress leaves the set, so the alarm's pass and the
+   *  commit-time arming see it again. Memory: a fresh incarnation classifies again. */
   readonly #pushSubscriptionNames = new Set<string>();
   /** The evaluated target head per row, reused across pushes: a row delivered every commit (a PCM
    *  stream, an audio call) would otherwise re-walk its target and re-mint a Facet/RpcStub handle on
@@ -202,11 +206,12 @@ export class SubscriptionDelivery {
         case "events.iterate.com/stream/subscription-configured": {
           // A configured row REPLACES (a `null` target REMOVES — the row is gone by now, so only the
           // forget below runs): everything remembered about the old row under this name belonged to
-          // the old target. The new target is evaluated ONCE right away, whatever its `consumes`
-          // says — a processor's facet is materialized at enable time and catches up from the log, so
+          // the old target. The new target is evaluated right away, whatever its `consumes` says — a
+          // processor's facet is materialized at enable time and catches up from the log, so
           // `itx.facets.get(name)` answers before its first consumed event, and a target whose head
-          // cannot be evaluated is reported here once instead of once per commit. That catch-up is the
-          // HEAD of this name's delivery chain, so the first push queues behind it: one materialization.
+          // cannot be evaluated is reported here, at configure (a later push evaluates again, silently
+          // for a row that merely dangles — #deliverEventBatch). That catch-up is the HEAD of this
+          // name's delivery chain, so the first push queues behind it: one materialization.
           const name = (event.payload as { name: string }).name;
           this.#forgetSubscription(name);
           const row = rows[name];
@@ -252,10 +257,19 @@ export class SubscriptionDelivery {
   }
 
   /** Evaluate a row's target and, when it is a facet, have it catch up from the log — a
-   *  materialization (at configure) or a resume; the row must still exist once the load returns.
-   *  Resolves whether the target WAS a facet. */
+   *  materialization (at configure) or a resume. Resolves TRUE when there is nothing more for the
+   *  caller to do: the target was a facet (it caught up here), or the row was SUPERSEDED while its
+   *  target evaluated — removed, or replaced under this name (`configuredAtOffset` is the identity);
+   *  a superseded evaluation classifies nothing and calls nothing, the replacement's own configure
+   *  runs its own. FALSE for a target that cannot own its progress: the caller's to deliver from the
+   *  cursor. */
   async #catchUpFacetRow(name: string, row: Subscription): Promise<boolean> {
     const { head } = await this.#evaluateItxExpressionTargetHead(row.target);
+    if (
+      this.#stream.coreReducedState.subscriptions[name]?.configuredAtOffset !==
+      row.configuredAtOffset
+    )
+      return true;
     if (!(head instanceof FacetHandle)) return false;
     // Classify it as a PUSH row NOW (a facet owns its progress), so onCommit never retains its
     // batches in #pushedEventBatches — the cursor-lane path, one batch per row, latest-wins and
@@ -266,7 +280,6 @@ export class SubscriptionDelivery {
     // classifies too (a fresh incarnation, a live-client row).
     this.#pushSubscriptionNames.add(name);
     this.#pushedEventBatches.delete(name);
-    if (!this.#stream.coreReducedState.subscriptions[name]) return true;
     try {
       await head.invoke([["catchUpFromLog"]]);
     } catch (error) {
@@ -449,14 +462,26 @@ export class SubscriptionDelivery {
     range: ScannedRange,
   ): Promise<void> {
     try {
-      // The row must still exist on BOTH sides of the (async) evaluation: evaluating a processor's
-      // load chain materializes its facet, so a push racing `disableProcessor` must not call — and
-      // must not resurrect what `facets.delete` just removed.
+      // The row must still be THIS row on BOTH sides of the (async) evaluation — not removed
+      // (evaluating a processor's load chain materializes its facet, so a push racing
+      // `disableProcessor` must not call, and must not resurrect what `facets.delete` just removed)
+      // and not REPLACED under this name (`configuredAtOffset` is the identity): a superseded
+      // evaluation classifies nothing and calls nothing — the replacement's own pushes evaluate for it.
       if (!this.#stream.coreReducedState.subscriptions[name]) return;
       const { head, call } = await this.#evaluateTargetHeadForRow(name, row);
-      if (!this.#stream.coreReducedState.subscriptions[name]) return;
-      if (head instanceof FacetHandle || head instanceof RpcStubHandle)
+      if (
+        this.#stream.coreReducedState.subscriptions[name]?.configuredAtOffset !==
+        row.configuredAtOffset
+      )
+        return;
+      if (head instanceof FacetHandle || head instanceof RpcStubHandle) {
         this.#pushSubscriptionNames.add(name);
+        // A cursor born while the target evaluated to something else (a rule re-point): not this row's.
+        if (this.#cursors.has(name)) this.#dropCursor(name);
+      } else {
+        // Re-pointed at a target that cannot own its progress: the alarm's pass must see it again.
+        this.#pushSubscriptionNames.delete(name);
+      }
       if (head instanceof RpcStubHandle) {
         // A LIVE CLIENT owns its offset: fire-and-forget — the pager socket is the queue, its order is
         // the order, and a stalled client blocks nothing but itself. RPC_STUB_OFFLINE is the benign
@@ -519,7 +544,10 @@ export class SubscriptionDelivery {
       });
     } catch (error) {
       // NO_FACET is a disable that landed under an in-flight push — the row is gone too.
-      if (errorCode(error) !== "NO_FACET")
+      // NO_ITX_EXPRESSION_MATCH is a row that DANGLES (its rule removed, or not configured yet): it
+      // errors until the rule lands and revives with it, so a push into it is no issue per commit.
+      const code = errorCode(error);
+      if (code !== "NO_FACET" && code !== "NO_ITX_EXPRESSION_MATCH")
         reportIssue("subscription-delivery.deliver", error, { name });
     } finally {
       this.#recordActivityForQuietClock();
@@ -683,18 +711,24 @@ export class SubscriptionDelivery {
             through: eventBatch.through,
           };
           const durable = eventBatch.events.some((event) => !event.ephemeral);
-          // Adjust the held room to the batch's REAL size. A full catch-up page keeps holding (so
-          // concurrent catch-up reads stay serialized and bounded); a SMALL batch frees the worst-case
-          // reserve so a racing PUSH is not dropped for a full budget and other reads get room. The
-          // read branch (held a worst-case page) only ever RELEASES here — synchronous with the read,
-          // no yield, so it never lets a second read pile a page on. The pushed branch (held 0) acquires
-          // its batch's worth, which may wait.
+          // Adjust the held room to the batch's REAL size. The read branch (held a worst-case page)
+          // only ever RELEASES here — synchronous with the read, no yield, so it never lets a second
+          // read pile a page on: a full catch-up page keeps holding (concurrent catch-up reads stay
+          // serialized and bounded), a SMALL batch frees the worst-case reserve so a racing PUSH is
+          // not dropped for a full budget and other reads get room. A page that serializes PAST the
+          // reserve (a full page: its bodies fill the read budget, each event's offset and path ride
+          // on top) stays charged as the page — acquiring the overshoot while holding the whole budget
+          // would wait on this very reservation, forever, and every cursor row behind it. The pushed
+          // branch (held 0) acquires its batch's worth, which may wait; a batch over the whole budget
+          // runs alone.
           const batchChars = serializedChars(eventBatch.events);
-          if (batchChars > inFlightRoomHeld)
-            await this.#acquireCursorReadRoom(batchChars - inFlightRoomHeld);
-          else if (batchChars < inFlightRoomHeld)
+          if (inFlightRoomHeld === 0) {
+            await this.#acquireCursorReadRoom(batchChars);
+            inFlightRoomHeld = batchChars;
+          } else if (batchChars < inFlightRoomHeld) {
             this.#releaseCursorReadRoom(inFlightRoomHeld - batchChars);
-          inFlightRoomHeld = batchChars;
+            inFlightRoomHeld = batchChars;
+          }
           if (eventBatch.events.length === 0) {
             this.#adoptCursor(name, { ...cursor, confirmedOffset: range.through }, true); // a log page: durable ground
             continue;
@@ -715,7 +749,7 @@ export class SubscriptionDelivery {
             // Die mid-call and the alarm survives to re-derive from the rows (memo'd: one write per window).
             this.#stream.armAlarmNoLaterThan(Date.now() + CURSOR_DELIVERY_CALL_WATCHDOG_MS);
             const target = evaluatedTarget;
-            // Room for this call is already held (batchChars), reserved above before the read.
+            // Room for this call is already held (the batch, or the page it overshoots), from above.
             await withTimeout(
               target.call([eventBatch.events, range]),
               CURSOR_DELIVERY_CALL_WATCHDOG_MS,

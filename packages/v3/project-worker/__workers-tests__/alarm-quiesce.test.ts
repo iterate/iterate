@@ -229,6 +229,125 @@ test("a facet TWO rows host survives the removal of ONE of them — memo and sto
   expect({ memoKept: memo !== null, count }).toEqual({ memoKept: true, count: 2 });
 });
 
+test("RE-ENABLE WITH NEW SOURCE: a materialized processor re-enabled under the same name and class with changed source runs the NEW code on its next call, its storage preserved", async () => {
+  // The reduced row carries no source (M1); the facet's startup memo is the one place a
+  // materialization reads it from. PINS: the hosting configure refreshes that memo (the DO's commit
+  // effect), so the next call loads the new source under a new loader identity and restarts the
+  // facet IN PLACE — its checkpoint continues, never a rebuild from 0.
+  const ctx = "prj_reenable_source";
+  const s = stub(ctx);
+  await enableCounter(ctx); // counts by 1
+  await s.append({ type: "a/1" });
+  await new Promise((r) => setTimeout(r, 300));
+  const before = await snapCounter(ctx);
+  expect(before.state.n).toBe(await durableCount(ctx));
+  // The same name and class, NEW source: counts by 10.
+  await s.append(
+    subscriptionConfiguredEvent({
+      name: "counter",
+      target: [
+        "itx",
+        "facets",
+        [
+          "get",
+          "counter",
+          {
+            source: { "cap.js": COUNTER_SRC.replace("state.n + 1", "state.n + 10") },
+            className: "CounterDurableObject",
+          },
+        ],
+        "processEventBatch",
+      ],
+    }),
+  );
+  await new Promise((r) => setTimeout(r, 400));
+  await s.append({ type: "a/2" });
+  await new Promise((r) => setTimeout(r, 400));
+  const after = await snapCounter(ctx);
+  // The re-configure and a/2 — two durable events — each counted by TEN by the new code, on top of
+  // the preserved count (a rebuild from 0 would count the whole log by ten; the old code by one).
+  expect(after.state.n).toBe(before.state.n + 20);
+});
+
+// ─────────── THE BREAKER'S RESIDUAL: a facet call in flight at the halting pass ───────────
+
+/** A hosted class whose push takes a while: the call is IN FLIGHT while the alarm passes below. */
+const SLOW_PUSH_SRC = /* js */ `
+import { DurableObject } from "cloudflare:workers";
+export class SlowPushDurableObject extends DurableObject {
+  async processEventBatch() { await new Promise((r) => setTimeout(r, 3000)); }
+  catchUpFromLog() {}
+}
+`;
+
+// WHAT IT DIES OF: the breaker NEVER TRIPS on the "/" context. Every wake's `config` delivery —
+// `itx.cd('/').worker.processEventBatch`, and on the root context `cd('/')` IS this DO
+// (`deps.context(ownPath)` hands back the instance) — goes through `this.invoke`, the public door
+// (context/built-ins.ts `cd`): `#notePublicDoor` marks the incarnation as in use and clears the
+// durable streak before the alarm can count it, so an alarm-only wake of the root context is never a
+// self-wake. Behind it, unreachable until this moves, sits the halt's own residual: a facet call in
+// flight at the halting pass (`#facetWorkInFlight` — never abort a facet mid-reduce) finishes after
+// it and re-notes activity through `Stream.armAlarmNoLaterThan`, which the breaker gates — nothing
+// scheduled, the facet stays live, a live facet pins the actor (workerd#6800), billed for duration.
+// The fix is a NEW mechanism, not a flag: the own-context door must be a PRIVATE one (the resolver's
+// run door, the stream's append — never `this.invoke`), or the breaker must count doors at the RPC
+// entry only; and the quiet clock's arm must bypass the breaker (it is self-limiting — the quiesce
+// branch never re-arms). Staged: a facet consuming `stream/woken` (pushed by every wake) whose push
+// parks 3 s; a fresh incarnation woken with NO request (runInDurableObject touches no door); the
+// scheduled alarm fired eight times — eight alarm-only passes, and no halt fact.
+test.fails("the self-wake breaker never trips on the root context: the wake's own `config` delivery goes through this.invoke — a public door — so eight alarm-only passes append no halt fact (and the halt's residual, a facet left pinned mid-call, stays unreachable behind it)", async () => {
+  const ctx = "prj_q_halt_pinned";
+  const s = stub(ctx);
+  await s.append(
+    subscriptionConfiguredEvent({
+      name: "slow",
+      target: [
+        "itx",
+        "facets",
+        [
+          "get",
+          "slow",
+          { source: { "cap.js": SLOW_PUSH_SRC }, className: "SlowPushDurableObject" },
+        ],
+        "processEventBatch",
+      ],
+      consumes: ["events.iterate.com/stream/woken"],
+    }),
+  );
+  await new Promise((r) => setTimeout(r, 300)); // materialized (catchUpFromLog)
+  await quiesce(ctx);
+  await evictDurableObject(s);
+  // THE WAKE, with no public door: the constructor's `woken` commit pushes the facet (its call parks
+  // 3 s) and the `config` row arms the cursor lane's insurance alarm. The push materializes the facet
+  // asynchronously (the loader) — wait until its call is IN FLIGHT before the alarm passes, else the
+  // first pass finds no live facet, arms nothing (alarm() re-arms only with something to quiesce),
+  // and there is no alarm left to fire.
+  await runInDurableObject(s, () => Promise.resolve());
+  await new Promise((r) => setTimeout(r, 600));
+  const haltFacts = () =>
+    runInDurableObject(s, (_instance, state) =>
+      Promise.resolve(
+        Number(
+          state.storage.sql
+            .exec("SELECT count(*) AS n FROM events WHERE body LIKE '%stream/self-wake-halted%'")
+            .one().n,
+        ),
+      ),
+    );
+  // Eight alarm-only passes — the facet is live throughout (its call parks, then stays materialized),
+  // so every pass re-arms the quiet clock and there is always an alarm to fire. A pass that finds
+  // NO alarm scheduled is a staging change, not the pinned failure: the guard turns the pin red.
+  for (let pass = 1; pass <= 8; pass++) {
+    if (await runDurableObjectAlarm(s)) continue;
+    console.warn(
+      `PIN MOVED — pinned: eight alarm-only passes — observed: no alarm scheduled at pass ${pass}`,
+    );
+    return;
+  }
+  // WANTED: five alarm-only passes are a self-wake streak — the halt fact landed.
+  expect(await haltFacts()).toBe(1);
+});
+
 test("A BORROW RACES THE QUIESCE ALARM: a stub invoke fired concurrently with the alarm still answers", async () => {
   // A quiesce RETURNS borrowed stubs (#borrowed) but never touches a PENDING page (#rpcStubPagesInFlight),
   // and the invoke's own #recordActivityForQuietClock keeps the actor warm. PINS: an invoke that

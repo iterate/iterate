@@ -26,9 +26,8 @@
 // `itx.workers.get({ source, className? })`) or a `DurableObject` class (hosted with
 // `itx.facets.get(name, { source, className })`) — one door per host kind over Cloudflare's own
 // `worker.getEntrypoint()` / `worker.getDurableObjectClass()` + `ctx.facets.get(name, startup)`. There is
-// NO host-injected wrapper: the code the author wrote IS what runs. The one bare-lambda ergonomic —
-// `itx.runScript("async (itx, x) => …")` — wraps its string into a WorkerEntrypoint at the call
-// site (built-ins.ts `RUN_SCRIPT_ENTRYPOINT`), so even that bottoms out at an EXPORTED entrypoint.
+// NO host-injected wrapper and no bare-lambda door: the code the author wrote IS what runs, and it
+// always enters through an EXPORTED entrypoint.
 
 import { PROCESSOR_SDK_MODULE } from "../generated/processor-sdk.ts";
 import { codedError } from "../lib/errors.ts";
@@ -100,11 +99,11 @@ const isWorkerModules = (source: unknown): source is WorkerModules =>
  *  outside this (same key ⇒ same code — the author's bug) and is replayed until upstream lands. */
 const loaderIdGenerations = new Map<string, { generation: number; dead: boolean }>();
 
-/** The content hash of a literal module map, memoized by the map's IDENTITY. A warm facet push
- *  evaluates `itx.facets.get(name, spec).processEventBatch` with the SAME `spec.source` object every
- *  commit (the row's parsed target in core state), so the per-character hash (on the producer's
- *  append RTT in workerd) runs ONCE per source per incarnation instead of once per push. A bare-name
- *  call reads a fresh kv memo, so it misses — rare, and correct. SYNCHRONOUS on purpose (it runs in
+/** The content hash of a literal module map, memoized by the map's IDENTITY. A facet push is a
+ *  bare-name call (`itx.facets.get(name).processEventBatch` — the row's source is elided, M1) and
+ *  the DO hands the SAME startup-memo object per facet per incarnation (`#facetStartupMemoByName`,
+ *  iterate-context-durable-object.ts), so the per-character hash (on the producer's append RTT in
+ *  workerd) runs ONCE per source per incarnation instead of once per push. SYNCHRONOUS on purpose (it runs in
  *  the commit path, where `crypto.subtle` cannot), so it is two independent 32-bit hashes (djb2 and
  *  FNV-1a) plus the length: djb2 alone collides on two-character differences (`"Aa"` and `"B@"` hash
  *  alike), and one shared hash is one shared isolate — the v4 review's finding. Not a defence against

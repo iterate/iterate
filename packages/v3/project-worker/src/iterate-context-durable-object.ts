@@ -5,7 +5,8 @@
 //   • the STREAM — a `Stream` (stream/stream.ts), DI'd with this DO's storage: the whole commit
 //     pipeline (validation + the pause check + idempotency + offsets + chunking + waitForEvent +
 //     the alarm armer), `appendCreatedAndWokenEvents()` — the constructor's created/woken records — and
-//     `coreReducedState`, the stream's own reduced state. The DO's append/read/waitForEvent are thin wrappers; the stream's
+//     `coreReducedState`, the stream's own reduced state. The DO's append/read are thin wrappers (a
+//     wait is the built-in `itx.waitForEvent`, through `invoke`); the stream's
 //     one injected callback (onCommit) closes over this class — nothing in stream/stream.ts reaches back;
 //   • the CORE REDUCE — ONE reduce-only processor (core-processor.ts) reduced INSIDE the commit
 //     transaction, always on: who this context is, which incarnation runs, whether appends are
@@ -35,10 +36,11 @@
 // replay, all against the inline core state; this class only delegates. Every OTHER change to this
 // context is an appended event: the edge's `provide`/`subscribe`/`enableProcessor` verbs build one
 // and call `append` (a lent stub's rule or row rides its pager upgrade and is appended as the pager
-// is accepted — same door, one round trip) — there are no configuration verbs here. The ONE event
-// this class appends on its own initiative is the un-set of whatever named an rpc stub whose last
-// pager closed (onPresence); the ONE effect it runs off a committed event is deleting the facet a
-// removed subscription hosted.
+// is accepted — same door, one round trip) — there are no configuration verbs here. The events this
+// class appends on its own initiative: the birth `config` subscription (the constructor), the un-set
+// of whatever named an rpc stub whose last pager closed (onPresence), and the self-wake-halted fact
+// (alarm); the two effects it runs off a committed event: deleting the facet a removed subscription
+// hosted, and refreshing the startup memo of the facet a hosting subscription configures.
 
 import { AsyncLocalStorage } from "node:async_hooks";
 import { DurableObject } from "cloudflare:workers";
@@ -56,7 +58,7 @@ import {
   type CoreState,
   type Subscription,
 } from "./stream/core-processor.ts";
-import { codedError, errorCode } from "./lib/errors.ts";
+import { codedError, errorCode, reportIssue } from "./lib/errors.ts";
 import { withTimeout } from "./lib/timeout.ts";
 import type { StreamEvent, StreamEventInput } from "./stream/events.ts";
 import {
@@ -75,7 +77,7 @@ import {
 import { walkSteps } from "./context/dispatch.ts";
 import { FacetHandle, InvokeHandle, RpcStubHandle } from "./context/invoke-handle.ts";
 import { buildLibrary, type LibraryItx } from "./library/index.ts";
-import { Stream, type StreamPage, type WaitForEventFilter } from "./stream/stream.ts";
+import { Stream, type StreamPage } from "./stream/stream.ts";
 import {
   RpcStubDirectory,
   RPC_STUB_PAGER_KEEPALIVE_REQUEST,
@@ -258,12 +260,13 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     // EVERY STREAM SUBSCRIBES THE "/" CONTEXT'S CONFIG WORKER (the apps/os project-worker shape): the
     // root's `itx.worker.processEventBatch` is delivered every committed event, cross-context, at-least-
     // once. `consumes: ["*"]` is honest — the config worker sees everything, `woken` included, so a
-    // fresh context's first batch arms the delivery alarm. A DOWN config worker cannot wake-loop
-    // forever: the self-wake breaker (stream.ts SELF_WAKE_HALT_STREAK) halts alarm-arming after a few
-    // no-public-door wakes, and the retry ladder halts a failing delivery on its own. `itx.worker`
-    // always resolves (a bundled no-op default until a project writes its source to KV —
-    // itx-expression-rewriting.ts), so this never halts on a config-less project. Idempotent — one row
-    // per context whatever the incarnation.
+    // fresh context's first batch arms the cursor lane's insurance alarm (one billed wake per real
+    // wake, which finds the delivery acked and, with nothing to quiesce, arms nothing more — alarm()).
+    // A DOWN config worker cannot wake-loop forever: its retry ladder is bounded (15 attempts), and
+    // the self-wake breaker (stream.ts SELF_WAKE_HALT_STREAK) halts alarm-arming after a few
+    // no-public-door wakes regardless. `itx.worker` always resolves (a bundled no-op default until a
+    // project writes its source to KV — itx-expression-rewriting.ts), so this never halts on a
+    // config-less project. Idempotent — one row per context whatever the incarnation.
     this.#stream.append({
       ...subscriptionConfiguredEvent({
         name: "config",
@@ -309,8 +312,46 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       committedEvents,
       subscriptionsBeforeCommit,
     );
+    this.#refreshFacetStartupMemosFromHostingConfigurations(committedEvents);
     this.#unsetWhatNamesDeadRpcStubsOnResume(committedEvents);
     return committedEvents;
+  }
+
+  /** THE ONE EFFECT of a hosting configuration: a row that HOSTS a facet (the reduce marked it
+   *  `hostedFacet`, its source elided from the reduced target — M1) refreshes the facet's startup
+   *  memo from the event that configured it, source and all. The memo is the ONLY place a
+   *  materialization reads the source from, so a re-enable with NEW source under the same name and
+   *  class is a new loader identity on the facet's next call (#invokeFacet restarts it in place, its
+   *  storage preserved) — without this the old memo kept running the old code. A target that cannot
+   *  resolve right now (the marker was kept conservatively) is left to the next call's recovery. */
+  #refreshFacetStartupMemosFromHostingConfigurations(committedEvents: StreamEvent[]): void {
+    for (const event of committedEvents) {
+      if (event.type !== "events.iterate.com/stream/subscription-configured") continue;
+      const { name, target } = event.payload as {
+        name: string;
+        target: ItxExpressionInput | null;
+      };
+      if (target === null || !this.#stream.coreReducedState.subscriptions[name]?.hostedFacet)
+        continue;
+      try {
+        const spec = facetSpecFromHostingTarget(
+          this.#itxExpressionResolver.resolve(toItxExpression(target)).at(-1)!,
+        );
+        if (!spec) continue;
+        const storedSpec = facetSpecOf(spec as FacetSpec);
+        const facetStartupMemo =
+          this.#facetStartupMemoByName.get(spec.name) ??
+          (this.ctx.storage.kv.get(`facet:${spec.name}`) as FacetSpec | undefined);
+        if (facetStartupMemo && JSON.stringify(facetStartupMemo) === JSON.stringify(storedSpec))
+          continue;
+        this.ctx.storage.kv.put(`facet:${spec.name}`, storedSpec);
+        this.#facetStartupMemoByName.set(spec.name, storedSpec);
+      } catch (error) {
+        // The row landed; a memo that cannot be written now (a source over the cell cap, a target
+        // that does not resolve yet) is the next call's to recover or refuse — never the append's.
+        reportIssue("iterate-context.facet-startup-memo", error, { name });
+      }
+    }
   }
 
   /** THE ONE EFFECT of a subscription removal: a row whose target HOSTED a facet — one that RESOLVED
@@ -340,15 +381,6 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       );
       if (!stillHosted) this.#deleteFacet(facetName);
     }
-  }
-
-  /** Wait for the next event matching `filter` (or the first committed durable match already in
-   *  the log after an explicit `afterOffset`) — see Stream.waitForEvent for the whole contract.
-   *  Deliberately not counted as activity: the caller's own open RPC keeps this DO awake for the
-   *  wait's duration, and a wait quiesces nothing. */
-  waitForEvent(filter?: WaitForEventFilter): Promise<StreamEvent> {
-    this.#notePublicDoor();
-    return this.#stream.waitForEvent(filter);
   }
 
   /** One BUDGETED page of the log (Stream.read: at most `limit` rows and at most the server's byte
@@ -528,10 +560,14 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     this.#stream.armAlarmNoLaterThan(this.#lastActivityMs + IDLE_QUIESCE_AFTER_MS);
   }
 
-  /** THE BILLING CIRCUIT-BREAKER's other half (stream.ts holds the durable streak). Set the moment a
-   *  REAL public door is touched this incarnation (append/read/invoke/waitForEvent/fetch) — as
-   *  opposed to an alarm-only pass (delivery, quiesce). `#notePublicDoor` clears the self-wake streak
-   *  (Stream.notePublicDoor), so a context in use never halts and one that halted resumes at once. */
+  /** THE BILLING CIRCUIT-BREAKER's other half (stream.ts holds the durable streak). Set the moment
+   *  any RPC into this DO is answered this incarnation (append/read/invoke/waitForEvent/fetch) — as
+   *  opposed to an alarm-only pass (delivery, quiesce). "Any RPC" includes the wake's own facet
+   *  loopbacks: a processor pushed by the constructor's `woken` reads or appends through
+   *  `itx.builtins` and lands here, so a context hosting a `*`-consuming processor counts its wakes
+   *  as doors (accepted: the loop that would mask needs an eviction between alarms, which a live
+   *  facet prevents). `#notePublicDoor` clears the self-wake streak (Stream.notePublicDoor), so a
+   *  context in use never halts and one that halted resumes at once. */
   #publicDoorTouched = false;
   #notePublicDoor(): void {
     this.#publicDoorTouched = true;
@@ -543,6 +579,11 @@ export class IterateContextDurableObject extends DurableObject<Env> {
    *  incarnation, and a fresh call re-materializes from the durable startup memo (the facet's own
    *  storage having survived). */
   readonly #liveFacetNames = new Set<string>();
+  /** Each facet's startup memo (`facet:<name>` in kv), read ONCE per incarnation: every push then
+   *  hands the loader the SAME object, so its identity-keyed content hash (worker-loader.ts) runs once
+   *  per source per incarnation, not once per push. Replaced when a hosting spec changes it; dropped
+   *  with the facet. */
+  readonly #facetStartupMemoByName = new Map<string, FacetSpec>();
   // The in-flight count the quiesce alarm respects (aborting a facet mid-REDUCE is exactly the
   // stall a reduce would have to repair from the log — never cause it).
   #facetWorkInFlight = 0;
@@ -558,42 +599,40 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     // and borrowed stubs.
     await this.#subscriptionDelivery.deliverEveryCursorSubscription();
     // THE BILLING CIRCUIT-BREAKER (wave-0 3b, Jonas: "we need runaway billing controls"): an alarm
-    // pass with NO public door touched this incarnation is a SELF-WAKE. N in a row — a cursor sub on
-    // stream/woken re-waking the context, or a retry grinding on a context no one is using — halts
-    // the alarm (Stream.armAlarmNoLaterThan then no-ops) until a real request clears the streak, so
-    // the loop bills at most N. Recorded once, when it first crosses: one durable fact + one log line.
+    // pass with NO public door touched this incarnation is a SELF-WAKE. N in a row — a retry ladder
+    // grinding on a context no one is using, or any arm that fires and re-arms with nothing to show
+    // for it — halts the alarm (Stream.armAlarmNoLaterThan then no-ops) until a real request clears
+    // the streak, so a loop bills at most N. Recorded once, when it first crosses: one durable fact +
+    // one log line. A halted context FALLS THROUGH to the quiesce below: it will not wake itself
+    // again, so it must not stay pinned (billed for duration) by what this wake materialized — the
+    // facet the constructor's `woken` pushed, a stub a delivery borrowed.
     if (!this.#publicDoorTouched) {
-      const { streak, halted, justHalted } = this.#stream.noteSelfWake();
-      if (halted) {
-        if (justHalted) {
-          console.warn({
-            event: "self-wake-halted",
-            namespace: "iterate-context",
-            message: `context self-woke ${streak} times with no public door — halting the alarm (runaway billing control) until a real request arrives`,
-            name: this.#durableObjectAddress.name,
-            streak,
+      const { streak, justHalted } = this.#stream.noteSelfWake();
+      if (justHalted) {
+        console.warn({
+          event: "self-wake-halted",
+          namespace: "iterate-context",
+          message: `context self-woke ${streak} times with no public door — halting the alarm (runaway billing control) until a real request arrives`,
+          name: this.#durableObjectAddress.name,
+          streak,
+        });
+        try {
+          this.#stream.append({
+            type: "events.iterate.com/stream/self-wake-halted",
+            payload: { streak },
           });
-          try {
-            this.#stream.append({
-              type: "events.iterate.com/stream/self-wake-halted",
-              payload: { streak },
-            });
-          } catch (error) {
-            console.warn({
-              event: "self-wake-halted.fact-failed",
-              namespace: "iterate-context",
-              message: "could not append the self-wake-halted fact (the halt still holds)",
-              error: String(error),
-            });
-          }
+        } catch (error) {
+          console.warn({
+            event: "self-wake-halted.fact-failed",
+            namespace: "iterate-context",
+            message: "could not append the self-wake-halted fact (the halt still holds)",
+            error: String(error),
+          });
         }
-        return; // do not re-arm — the loop stops here until a public door clears the streak
       }
     }
-    if (
-      Date.now() - this.#lastActivityMs >= IDLE_QUIESCE_AFTER_MS &&
-      this.#facetWorkInFlight === 0
-    ) {
+    const quiet = Date.now() - this.#lastActivityMs >= IDLE_QUIESCE_AFTER_MS;
+    if ((quiet || this.#stream.selfWakeHalted()) && this.#facetWorkInFlight === 0) {
       for (const facetName of this.#liveFacetNames)
         this.#abortFacetIfRunning(facetName, "idle quiesce");
       this.#liveFacetNames.clear(); // aborted facets re-materialize on their next call
@@ -602,9 +641,12 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       // connections (an MCP session, an open capnweb WebSocket): released here, reopened on use.
       this.#rpcStubs.returnBorrowedRpcStubs();
       this.#library.releaseConnections();
-    } else {
-      // Not quiet yet — look again when the quiet period would end; but never in the PAST (work in
-      // flight for over a minute would otherwise re-fire this alarm in a tight, billed loop).
+    } else if (this.#liveFacetNames.size > 0 || this.#rpcStubs.hasBorrowedRpcStubs()) {
+      // Not quiet yet, and something to quiesce — look again when the quiet period would end; but
+      // never in the PAST (work in flight for over a minute would otherwise re-fire this alarm in a
+      // tight, billed loop). With NOTHING to quiesce there is no re-arm — the same rule as
+      // #recordActivityForQuietClock; re-arming regardless was one extra billed wake per real wake
+      // and, with an eviction in between, the every-minute `woken` loop the breaker was measured on.
       this.#stream.armAlarmNoLaterThan(
         Math.max(this.#lastActivityMs + IDLE_QUIESCE_AFTER_MS, Date.now() + 10_000),
       );
@@ -647,16 +689,22 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       ).value;
     }
     // THE STARTUP MEMO `facet:<name>` = the FacetSpec in this DO's kv (the source is its modules,
-    // literally, or the producer expression — stored as given): a hosting spec writes it (when it
-    // changed) BEFORE the load, so `itx.facets.get(name)` alone re-materializes the facet after an
-    // eviction; a bare name reads it — an unknown name is NO_FACET.
-    let facetStartupMemo = this.ctx.storage.kv.get(`facet:${name}`) as FacetSpec | undefined;
+    // literally, or the producer expression — stored as given), read once per incarnation into
+    // #facetStartupMemoByName: a hosting spec writes it (when it changed) BEFORE the load, so
+    // `itx.facets.get(name)` alone re-materializes the facet after an eviction; a bare name reads it
+    // — an unknown name is NO_FACET.
+    let facetStartupMemo =
+      this.#facetStartupMemoByName.get(name) ??
+      (this.ctx.storage.kv.get(`facet:${name}`) as FacetSpec | undefined);
     if (spec) {
       assertFacetSourceWithinCeiling(spec, `facet "${name}"`);
       const storedSpec = facetSpecOf(spec);
-      if (!facetStartupMemo || JSON.stringify(facetStartupMemo) !== JSON.stringify(storedSpec))
+      // Replaced only when it CHANGED: an unchanged spec keeps the memo object, and with it the
+      // loader's identity-keyed content hash.
+      if (!facetStartupMemo || JSON.stringify(facetStartupMemo) !== JSON.stringify(storedSpec)) {
         this.ctx.storage.kv.put(`facet:${name}`, storedSpec);
-      facetStartupMemo = storedSpec;
+        facetStartupMemo = storedSpec;
+      }
     }
     if (!facetStartupMemo) {
       // M1: a hosting row keeps NO source in core state — recover it from the DURABLE log event that
@@ -686,6 +734,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     }
     if (!facetStartupMemo)
       throw codedError("NO_FACET", `no facet "${name}" — load a class into it first`);
+    this.#facetStartupMemoByName.set(name, facetStartupMemo);
     // Counted so a CONCURRENT alarm's quiesce never aborts the facet mid-call.
     this.#facetWorkInFlight++;
     try {
@@ -716,8 +765,6 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       const klass = worker.getDurableObjectClass(facetStartupMemo.className, {
         props: { iterateContextName: this.#durableObjectAddress.name, name },
       });
-      if (!klass)
-        throw new Error(`loaded worker does not export class "${facetStartupMemo.className}"`);
       const previousLoaderId = this.ctx.storage.kv.get(`facet:${name}:loader-id`) as
         | string
         | undefined;
@@ -798,6 +845,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     this.ctx.facets.delete(name);
     this.ctx.storage.kv.delete(`facet:${name}`);
     this.ctx.storage.kv.delete(`facet:${name}:loader-id`);
+    this.#facetStartupMemoByName.delete(name);
     this.#liveFacetNames.delete(name);
   }
 

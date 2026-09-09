@@ -142,7 +142,7 @@ test("waitForEvent: a timed-out wait writes nothing — construction made the ta
   expect(persistedIncarnation(storage)).toBe(1);
   expect(persistedDurableMark(storage)).toBeUndefined();
   expect(persistedEventRows(storage)).toBe(0);
-  expect(stream.currentIncarnation()).toBe(1);
+  expect(stream.storage.incarnation).toBe(1);
   expect(stream.highestAssignedOffset()).toBe(0);
 });
 
@@ -234,7 +234,7 @@ test("appendCreatedAndWokenEvents(): a fresh store gets created@1 + woken@2 in O
   ]);
   expect(page.events[0].payload).toEqual({ projectId: "prj_bare", path: "/" });
   expect(page.events[1].payload).toEqual({ incarnation: 1 });
-  expect(first.currentIncarnation()).toBe(1);
+  expect(first.storage.incarnation).toBe(1);
   // the wake batch, then core's live-state delta (the reduce changed identity + incarnation) at 3
   expect(batches.map((b) => b.map((e) => [e.type, e.offset]))).toEqual([
     [
@@ -255,7 +255,7 @@ test("appendCreatedAndWokenEvents(): a fresh store gets created@1 + woken@2 in O
   // a LATER incarnation over the same store: born once, so woken ONLY — as its first event
   const second = bareStream({ storage, batches }); // the SAME store
   second.appendCreatedAndWokenEvents();
-  expect(second.currentIncarnation()).toBe(2);
+  expect(second.storage.incarnation).toBe(2);
   const all = second.read(0).events;
   expect(all.map((e) => e.type)).toEqual([
     "events.iterate.com/stream/created",
@@ -318,6 +318,20 @@ test("a raw subscription-configured named `core` is refused at the append door, 
   }
   expect(code).toBe("RESERVED_SUBSCRIPTION_NAME");
   expect(stream.highestDurableOffset()).toBe(headBefore); // refused before any write — nothing burned
+});
+
+test("a raw subscription-configured named after a key of Object.prototype (`__proto__`, `constructor`) is refused the same way — the table is a plain record by name", () => {
+  const stream = bareStream();
+  for (const name of ["__proto__", "constructor"]) {
+    let code: string | undefined;
+    try {
+      stream.append({ type: CONFIGURED, payload: { name, target: ["itx", "builtins", "kv"] } });
+    } catch (error) {
+      code = errorCode(error);
+    }
+    expect(code).toBe("RESERVED_SUBSCRIPTION_NAME");
+  }
+  expect(stream.highestDurableOffset()).toBe(0);
 });
 
 test("a subscription-configured for any OTHER name still lands (the guard is `core`-only)", () => {
@@ -589,4 +603,31 @@ test("a public door is a NO-OP write when the streak is already zero (the common
   stream.notePublicDoor();
   stream.notePublicDoor();
   expect(stream.selfWakeHalted()).toBe(false);
+});
+
+test("a paused stream ADMITS the replay of an event already in the log (the DO constructor's birth `config` row rides an idempotency key on every incarnation) — checked before the dedupe, a paused context could never be rebuilt after an eviction, so never resumed", () => {
+  const storage = nodeSqliteDurableObjectStorage();
+  const first = bareStream({ storage });
+  first.appendCreatedAndWokenEvents();
+  const birthRow = {
+    type: "events.iterate.com/stream/subscription-configured",
+    payload: { name: "config", target: "itx.cd('/').worker.processEventBatch", consumes: ["*"] },
+    idempotencyKey: "config-subscription",
+  };
+  const [configured] = first.append(birthRow);
+  first.append({ type: "events.iterate.com/stream/paused", payload: { reason: "operator" } });
+  expect(first.coreReducedState.paused).toEqual({ reason: "operator" });
+
+  // A fresh event is still refused…
+  expect(() => first.append({ type: "mark" })).toThrow(/stream paused/);
+  // …the replay lands as the event it already is, and consumes no offset.
+  expect(first.append(birthRow)[0].offset).toBe(configured.offset);
+
+  // The next incarnation (what an eviction makes): its constructor's replay, then the resume.
+  const second = bareStream({ storage });
+  second.appendCreatedAndWokenEvents();
+  expect(second.append(birthRow)[0].offset).toBe(configured.offset);
+  second.append({ type: "events.iterate.com/stream/resumed" });
+  expect(second.coreReducedState.paused).toBeNull();
+  expect(second.append({ type: "mark" })[0].type).toBe("mark");
 });

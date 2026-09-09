@@ -93,7 +93,19 @@ export async function connectLiveState<S>(
       }
     },
   });
-  store.seed(await opts.door());
+  try {
+    store.seed(await opts.door());
+  } catch (error) {
+    // The seed failed after the row was configured: recall it, or the server keeps delivering to a
+    // callback no one holds (and the session's other rows wait behind it).
+    disposed = true;
+    try {
+      subscription[Symbol.dispose]();
+    } catch {
+      // a dead session has already removed it
+    }
+    throw error;
+  }
   return {
     store,
     async dispose() {

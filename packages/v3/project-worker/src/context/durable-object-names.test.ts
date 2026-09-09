@@ -24,3 +24,25 @@ test("a ':' (or other breach char) in the projectId is rejected loudly", () => {
   expect(() => DurableObjectNameCodec.parse("prj_x:evil")).toThrow(/only \[A-Za-z0-9_-\]/);
   expect(() => DurableObjectNameCodec.parse("prj/x")).toThrow(/only \[A-Za-z0-9_-\]/);
 });
+
+test("`/a`, `/a/`, `/a/./`, `a` and `//a` are ONE name — the codec canonicalizes like cd() does, so no door (the ?context= query included) can mint a twin DO for a logical context", () => {
+  const canonical = DurableObjectNameCodec.stringify({ projectId: "prj_t", path: "/a" });
+  expect(canonical).toBe("prj_t.iterate/a");
+  for (const path of ["/a", "/a/", "/a/./", "a", "a/", "//a", "/b/../a"])
+    expect(DurableObjectNameCodec.stringify({ projectId: "prj_t", path })).toBe(canonical);
+  for (const name of ["prj_t.iterate/a/", "prj_t.iterate/a/./", "prj_t.iterate//a"])
+    expect(DurableObjectNameCodec.parse(name)).toEqual({
+      projectId: "prj_t",
+      path: "/a",
+      name: canonical,
+    });
+  // the root's spellings collapse the same way
+  for (const name of [
+    "prj_t",
+    "prj_t.iterate",
+    "prj_t.iterate/",
+    "prj_t.iterate/./",
+    "prj_t.iterate/..",
+  ])
+    expect(DurableObjectNameCodec.parse(name).name).toBe("prj_t.iterate/");
+});

@@ -4176,3 +4176,81 @@ lane) reported; the stream reviewer was cut off by a session limit twice and re-
   24 sessions paging the 144 MiB log did not reset the DO. No ceiling in this code holds that; the
   platform's GC timing decides, so the row is now a plain test asserting the claim the code OWNS
   (recovery) and REPORTING the reset count — a `.fails` that flips on luck signals nothing.
+
+## 2026-09-09 — review pass 3: codex (gpt-6-astra, xhigh) over pass 2 + the stream review applied
+
+The codex read of the pass-2 tree, every claim verified in the code before a line moved:
+
+- BUG (the dangerous one): a PAUSED context could never be rebuilt after an eviction. The DO
+  constructor replays its birth `config` row under an idempotency key on every incarnation, and the
+  append pipeline checked the pause BEFORE the idempotency lookup — so the constructor threw
+  STREAM_PAUSED, the DO never came up, and the resume had no door to land in. The pause is now checked
+  per event AFTER the dedupe: a replay answers with the event it already is, paused or not; a fresh
+  event is refused as before. Pinned twice: the stream unit (two incarnations over one store) and the
+  workers lane (pause → `evictDurableObject` → resume).
+- BUG: a hop count the platform never wrote (`x-itx-expression-hops: NaN`; `NaN > 4` is never true)
+  defeated the four-hop budget — now over budget on arrival, 508 naming the spelling. e2e pin.
+- BUG: the DO-name codec kept `/a/` and `/a/./` as paths of their own while `cd` canonicalizes, so
+  the `?context=` door could mint a twin DO (its own log and rule table) for one logical context. The
+  codec canonicalizes through the same `resolveContextPath`; a table row pins seven spellings → one name.
+- BUG: a pkt-line body cut mid-header (1–3 trailing bytes) parsed as a COMPLETE, empty ref list —
+  "unborn repo" → "no file" to `itx.repos`, one more way to blank the config worker's source. It now
+  throws `truncated pkt-line stream`; git-wire's first unit test.
+- BUG: `connectLiveState` whose first door read rejected left its just-configured row lent to a
+  callback nobody held. The failure now recalls the row before rethrowing. Unit pin.
+- LESS CODE: the raw DO `waitForEvent` door (one workers test called it; the built-in already wires
+  to `Stream.waitForEvent`) — deleted, the test goes through `invoke`.
+- CLARITY: the two `runScript` paragraphs describing a deleted door; "VERBATIM" on a request whose
+  cookie and headers are stripped; `null` on `provide` described as an un-set (it masks or deletes);
+  a blank token secret described as making sessions anonymous (a cookie session is independent).
+- Handed to the stream implementer (its files): a superseded target evaluation classifying or
+  invoking its replacement; a re-enabled processor keeping its old source while the startup memo
+  stands.
+- STILL OPEN from codex: a handle's undo is a read-then-append (two RPCs), so a replacement installed
+  between them by another session is deleted — a compare-and-set carried IN the removal event and
+  checked in the reduce would close it (and make the identical-handles pin moot); next.
+
+THE STREAM REVIEW (the third Fable launch; every contested claim first reproduced on a node:sqlite
+rig with the real `Stream` + `SubscriptionDelivery`, then applied by the same agent):
+
+- BUG (the dangerous one): the cursor lane DEADLOCKED ITSELF on a page whose events serialized past
+  the 8 MiB cursor budget — the read branch held the budget, read a page bounded to 8 MiB of STORED
+  bytes, measured the events WITH their envelope (offset, path: +~25 chars each), and re-acquired the
+  overshoot while still holding everything: a wait for a release that never comes, every cursor row
+  on the context behind it, permanent across evictions (the alarm pass re-derives the same wait).
+  One legal event within ~30 chars of the ceiling did it. The read branch now only ever RELEASES.
+  Pinned with the rig's control + pin case.
+- BUG: the alarm's "not quiet yet" branch re-armed +60 s with NOTHING to quiesce — THE ENGINE of the
+  self-wake loop the breaker was built for (commit → the lane's insurance alarm → nothing due → re-arm
+  → eviction → the alarm re-creates the DO → `woken` → …). It re-arms only while a facet is live or a
+  stub is borrowed. The breaker STAYS (the measured control, Jonas's ask); deleting it (~190 LOC) is
+  the owner's option once this soaks.
+- BUG: the halting pass returned BEFORE the quiesce, leaving a facet the wake's own push had
+  materialized pinning the actor — the breaker turned one billed wake a minute into continuous
+  billing. It falls through to the quiesce now.
+- BUG: a row reclassified push → cursor never left `#pushSubscriptionNames`, so the alarm pass skipped
+  its retry ladder for the rest of the incarnation (and the reverse left a stale cursor row).
+- BUG: the secrets reduce returned a NEW state object on a no-op (deleting an absent name, re-setting
+  the same origin) — identity is the host's change signal, so every such event rewrote the checkpoint
+  and published a live delta. Identity column in the table test.
+- BUG (codex's): a superseded target evaluation — the row re-pointed WHILE its old target was being
+  awaited — classified or invoked the replacement. `configuredAtOffset` is checked after each await.
+- BUG (codex's): re-enabling a MATERIALIZED processor with new source kept running the old — M1
+  elides the source from the row, the startup memo was the only source a materialization read, and a
+  reconfigure left it intact. A hosting configure now refreshes the memo at commit: a new loader
+  identity, restarted in place, storage preserved. Workers pin counts on across the swap.
+- PERF: the facet source content-hash memo never hit post-M1 (a fresh kv object per push, so a full
+  1 MiB hash on every push) — one per-facet memo per incarnation, the same object handed to the loader.
+- `__proto__`: refused at the two doors beside `core` (one condition each) and the draft-table
+  machinery deleted, the trusted-client way. Dangling-row issues reported once, not per commit.
+- LESS CODE: `CoreContract.buildEvent` + the ownership set + the decorative `extends StreamProcessor`;
+  the `delivery-backlog` scenario (≡ `stuck-facet-rows {rowCount: 1}`); the dead `if (!klass)`;
+  `currentIncarnation()`; the waiter's redundant `afterOffset` check; `EventDefinition` moved to the SDK.
+- RED PINS: `#pushedEventBatches` retains one whole batch per cursor row outside every budget (24 rows
+  × 7 MiB dies at 128 MiB; the 2-row control survives) — a bounded second copy is a new mechanism.
+  And the breaker CANNOT TRIP on the root context: `itx.cd('/')` on "/" is the DO itself, and the
+  wake's own `config` delivery calls `this.invoke` — a public door — clearing the streak before the
+  alarm counts it (eight alarm-only passes, no halt fact). A design call — a private own-context door,
+  or counting doors at the RPC entry — not made here.
+- Declined by evidence: moving `walkStepsOnRpcStub` to dispatch.ts breaks the library's import
+  boundary pin; skipping the pending-push fold for cursor rows needs a known-cursor set (a new noun).

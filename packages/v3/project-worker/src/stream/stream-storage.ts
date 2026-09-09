@@ -10,7 +10,7 @@
 //   event_chunks          offset · chunk_index · chunk      a body over EVENT_CHUNK_SIZE, sliced —
 //                         the events row keeps an EMPTY body as the chunked marker (a real body is
 //                         never empty JSON); reads and the idempotency lookup reassemble it
-//   stream_meta           key · value                       the incarnation counter
+//   stream_meta           key · value                       the incarnation counter, the self-wake streak
 //   subscription_cursors  name · cursor (JSON)              the delivery loop's at-least-once cursors
 //   reduce_checkpoints    reduce-checkpoint.ts              the core reduce's checkpoint (a facet host
 //                                                           keeps its own, in its own storage)

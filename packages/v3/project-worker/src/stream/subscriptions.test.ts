@@ -150,11 +150,18 @@ describe("configure — ONE event: set, replace, or remove", () => {
     expect(events).toHaveLength(0);
   });
 
-  test("a name is ONE segment, [A-Za-z0-9_-]+ — a dotted or spaced name is refused at the door, nothing appended", () => {
+  test("a name is ONE segment, [A-Za-z0-9_-]+, never a key of Object.prototype — a dotted, spaced, `__proto__` or `constructor` name is refused at the door, nothing appended", () => {
     const { configure, events } = setup();
     expect(() => configure({ name: "a.b", target: "itx.whoami" })).toThrow(/one segment/);
     expect(() => configure({ name: "has space", target: "itx.whoami" })).toThrow(/one segment/);
     expect(() => configure({ name: "a.b", target: null })).toThrow(/one segment/);
+    // a key of Object.prototype would name the table's prototype, never a row
+    expect(() => configure({ name: "__proto__", target: "itx.whoami" })).toThrow(
+      /Object.prototype/,
+    );
+    expect(() => configure({ name: "constructor", target: "itx.whoami" })).toThrow(
+      /Object.prototype/,
+    );
     expect(events).toHaveLength(0);
   });
 

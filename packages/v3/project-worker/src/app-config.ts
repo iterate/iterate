@@ -30,7 +30,7 @@ export interface AppConfig {
    *  project-host ingress (the workers lane). */
   readonly projectHostnameBase: string;
   /** The HMAC secret project tokens are signed with (principal.ts) — a wrangler SECRET on a deployment,
-   *  a var in the e2e lane; blank ⇒ no token verifies, sessions stay anonymous. */
+   *  a var in the e2e lane; blank ⇒ no project token verifies (a cookie session is independent of it). */
   readonly projectTokenSecret: string;
   /** The Cloudflare account + Artifacts namespace `itx.repos` builds git remotes from
    *  (`https://<account>.artifacts.cloudflare.net/git/<namespace>/<repo>.git`); blank where no

@@ -66,15 +66,17 @@ const READ_PAGE_MAX_EVENTS = 1000;
 
 /** THE SELF-WAKE HALT STREAK — the billing circuit-breaker (wave-0 3b, Jonas: "we need runaway
  *  billing controls"). A context that fires its alarm this many times IN A ROW with NO public door
- *  touched in between has woken itself for nothing — a cursor subscription on `stream/woken`
- *  re-waking the context every minute (the constructor appends `woken`, the cursor row arms the
- *  alarm to deliver it, the delivery records activity so the quiesce is skipped and the alarm
- *  re-arms, the isolate is evicted, the alarm re-creates it), or a retry ladder grinding on a
- *  context no one is using. Past this, `armAlarmNoLaterThan` stops arming (below) — one billed wake
- *  per minute becomes zero — until a real request clears the streak. Low, because each self-wake is
- *  a billed wake and a durable row: five is a few minutes of a loop, not hours. A live retry ladder
- *  is self-limiting anyway (≤ 15 attempts, then it halts on its own); this bounds the UNBOUNDED
- *  case. The durable count lives in stream-storage's `stream_meta`. */
+ *  touched in between has woken itself for nothing — a retry ladder grinding on a context no one is
+ *  using, or any arm that fires and re-arms with nothing to show for it. (The loop it was measured
+ *  on — the constructor appends `woken`, the `config` cursor row arms the lane's insurance alarm to
+ *  deliver it, that alarm found nothing due and the DO's alarm() re-armed its quiet clock with
+ *  nothing to quiesce, the isolate was evicted in between, the alarm re-created it every minute —
+ *  is closed at its root: alarm() re-arms only while a facet is live or a stub is borrowed.) Past
+ *  this, `armAlarmNoLaterThan` stops arming (below) — one billed wake per minute becomes zero —
+ *  until a real request clears the streak. Low, because each self-wake is a billed wake and a durable
+ *  row: five is a few minutes of a loop, not hours. A live retry ladder is self-limiting anyway (≤ 15
+ *  attempts, then it halts on its own); this bounds the UNBOUNDED case. The durable count lives in
+ *  stream-storage's `stream_meta`. */
 const SELF_WAKE_HALT_STREAK = 5;
 
 /** The waitForEvent selector: `type` is an exact event-type match (absent = any type); only events
@@ -89,7 +91,6 @@ export type WaitForEventFilter = { type?: string; afterOffset?: number; timeoutM
  *  caller already handles. */
 type WaitForEventWaiter = {
   type: string | undefined;
-  afterOffset: number;
   resolve: (event: StreamEvent) => void;
   reject: (error: Error) => void;
   timer: ReturnType<typeof setTimeout>;
@@ -124,16 +125,15 @@ export class Stream {
   readonly #path: string;
   readonly #projectId: string;
   readonly #onCommit: StreamDeps["onCommit"];
-  /** This incarnation's number — the `stream_meta` counter, bumped by the storage's constructor; growth across idle ⇒ it hibernated. */
-  readonly #incarnation: number;
   /** The highest offset assigned THIS INCARNATION — ephemerals included. Seeded from the durable
    *  mark; an ephemeral-only batch advances this alone (an ephemeral's offset is unique within an
    *  incarnation and may be reused by the next one — see the header). */
   #highestAssignedOffset: number;
-  /** The DURABLE head as of the last COMMITTED durable batch — the core reduce's cursor offset
-   *  (the core checkpoint's offset, written every durable commit; there is no separate mark).
-   *  What `read()` proves a scan through, what the core reduce has reduced to, and what a
-   *  resume's seek is clamped to — never the in-memory head above. */
+  /** THE DURABLE MARK: the through-offset of the last COMMITTED durable batch — the core reduce's
+   *  cursor offset (the core checkpoint's offset, written every durable commit; there is no separate
+   *  mark). A batch that ends in an ephemeral commits that ephemeral's number as the mark (never
+   *  reused: the next incarnation resumes above it). What `read()` proves a scan through, what the
+   *  core reduce has reduced to, and what a resume's seek is clamped to — never the in-memory head above. */
   #highestDurableOffset: number;
   /** FIFO; resolved from `freshEvents` in append's step 5. */
   readonly #waitForEventWaiters: WaitForEventWaiter[] = [];
@@ -163,7 +163,6 @@ export class Stream {
     this.#path = deps.path;
     this.#projectId = deps.projectId;
     this.#onCommit = deps.onCommit;
-    this.#incarnation = this.storage.incarnation;
     // THE DURABLE HEAD is the core checkpoint's offset — written every durable commit anyway (the
     // reduce inside the transaction below), so there is no separate mark to write. Read WHATEVER
     // version wrote it: a core-version bump still recovers the head and re-reduces the log up to it.
@@ -246,12 +245,11 @@ export class Stream {
             },
           ]
         : []),
-      { type: "events.iterate.com/stream/woken", payload: { incarnation: this.#incarnation } },
+      {
+        type: "events.iterate.com/stream/woken",
+        payload: { incarnation: this.storage.incarnation },
+      },
     );
-  }
-
-  currentIncarnation(): number {
-    return this.#incarnation;
   }
 
   highestAssignedOffset(): number {
@@ -286,9 +284,10 @@ export class Stream {
 
   /** Commit a batch. Synchronous end to end (sync SQLite), so the steps never interleave:
    *
-   *    1. MAY THIS LAND?  well-formed · not paused
-   *    2. OFFSETS         idempotency (dedupe or refuse) · expected offsets · one shared sequence,
-   *                       ephemerals included — decided in memory, nothing written yet
+   *    1. MAY THIS LAND?  well-formed
+   *    2. OFFSETS         idempotency (dedupe or refuse) · the pause (a dedupe hit is admitted, a
+   *                       fresh event refused) · expected offsets · one shared sequence, ephemerals
+   *                       included — decided in memory, nothing written yet
    *    3 + 4. REDUCE + COMMIT   rows + the high-water mark + the core reduce with its checkpoint, ONE
    *                             transaction (an ephemeral-only batch skips this entirely: zero SQL)
    *    5. AFTER           waiters, then the host's fan-out (every subscriber), then core's live delta
@@ -303,20 +302,25 @@ export class Stream {
     for (const event of events) {
       if (typeof event.type !== "string" || event.type.trim() === "")
         throw new Error("append: every event needs a non-empty type");
-      // §2.4 — RESERVE `core`: the always-on core reduce is addressable as a facet but never a
-      // configurable subscription. A raw `subscription-configured { name: "core" }` (bypassing the
-      // facet doors that guard it) would otherwise install an undeliverable row that climbs the
-      // retry ladder to a halt. Refuse it here, at the one append door, before it lands.
-      if (
-        event.type === "events.iterate.com/stream/subscription-configured" &&
-        (event.payload as { name?: unknown } | undefined)?.name ===
-          this.#coreProcessor.contract.slug
-      )
-        throw codedError(
-          "RESERVED_SUBSCRIPTION_NAME",
-          `"${this.#coreProcessor.contract.slug}" is the core reduce, not a configurable subscription`,
-          { name: this.#coreProcessor.contract.slug },
-        );
+      // §2.4 — RESERVED NAMES: `core` (the always-on core reduce is addressable as a facet but never
+      // a configurable subscription — a raw `subscription-configured { name: "core" }`, bypassing the
+      // facet doors that guard it, would install an undeliverable row that climbs the retry ladder to
+      // a halt) and any key of `Object.prototype` (`__proto__`, `constructor`, … — the subscriptions
+      // table is a plain record by name, so such a row would read or write the prototype). Refused
+      // here, at the one append door, before either lands (parseSubscriptionName refuses them at the
+      // command door too).
+      if (event.type === "events.iterate.com/stream/subscription-configured") {
+        const name = (event.payload as { name?: unknown } | undefined)?.name;
+        if (
+          name === this.#coreProcessor.contract.slug ||
+          (typeof name === "string" && name in Object.prototype)
+        )
+          throw codedError(
+            "RESERVED_SUBSCRIPTION_NAME",
+            `${JSON.stringify(name)} is reserved as a subscription name: "${this.#coreProcessor.contract.slug}" is the core reduce, and a key of Object.prototype would name the table's prototype`,
+            { name },
+          );
+      }
       // An EPHEMERAL is never stored, but it rides every push over the same 32 MiB RPC and sits in
       // the same delivery memory — the same ceiling, measured here (a durable is measured at its insert).
       if (event.ephemeral) {
@@ -329,22 +333,22 @@ export class Stream {
           );
       }
     }
-    //    then the pause: a paused stream refuses everything except the platform's own records and
-    //    the pause/resume pair itself (it must always accept its own resume)
+    // 2. offsets — decided in memory, nothing written yet. THE PAUSE is checked in here, per event,
+    //    AFTER the idempotency lookup: a replay of an event already in the log answers with that
+    //    event whatever the stream's state — the DO constructor replays its birth `config` row on
+    //    every incarnation, and checked before the dedupe a paused context could never be rebuilt
+    //    after an eviction, so never resumed. A FRESH event on a paused stream is refused, except
+    //    the platform's own records and the pause/resume pair itself (it must always accept its
+    //    own resume).
     const paused = this.#coreReducedState.paused;
-    if (paused) {
-      const exempt = [
-        "events.iterate.com/stream/created",
-        "events.iterate.com/stream/woken",
-        "events.iterate.com/stream/paused",
-        "events.iterate.com/stream/resumed",
-        // the delivery loop's own record of a halted row — a paused stream's ladder must still end
-        "events.iterate.com/stream/subscription-delivery-halted",
-      ];
-      if (events.some((event) => !exempt.includes(event.type)))
-        throw codedError("STREAM_PAUSED", `stream paused: ${paused.reason}`);
-    }
-    // 2. offsets — decided in memory, nothing written yet
+    const pauseExempt = [
+      "events.iterate.com/stream/created",
+      "events.iterate.com/stream/woken",
+      "events.iterate.com/stream/paused",
+      "events.iterate.com/stream/resumed",
+      // the delivery loop's own record of a halted row — a paused stream's ladder must still end
+      "events.iterate.com/stream/subscription-delivery-halted",
+    ];
     const afterOffset = this.#highestAssignedOffset;
     const createdAt = new Date().toISOString();
     const committedEvents: StreamEvent[] = []; // one per appended event, in order (a dedupe hit echoes the existing event)
@@ -377,6 +381,8 @@ export class Stream {
         committedEvents.push(existingEvent); // a retry answers with the event it already has, whatever `offset` it hoped for
         continue;
       }
+      if (paused && !pauseExempt.includes(eventInput.type))
+        throw codedError("STREAM_PAUSED", `stream paused: ${paused.reason}`);
       // EXPECTED OFFSET: an event carrying `offset` lands exactly there or the batch is refused —
       // "nothing has happened since I last looked" (apps/os's optimistic-concurrency shape).
       const offset = throughOffset + 1;
@@ -540,7 +546,6 @@ export class Stream {
     return new Promise<StreamEvent>((resolve, reject) => {
       const waiter: WaitForEventWaiter = {
         type,
-        afterOffset,
         resolve,
         reject,
         timer: setTimeout(() => {
@@ -558,13 +563,14 @@ export class Stream {
     });
   }
 
-  /** Settle every waiter the fresh events match (a Promise's own `resolve` cannot throw). */
+  /** Settle every waiter the fresh events match (a Promise's own `resolve` cannot throw). The type
+   *  is a waiter's only filter: it registered after its scan reached the head, and offsets are
+   *  monotonic within an incarnation, so every fresh event is past the offset it waited from. */
   #resolveWaitForEventWaiters(freshEvents: StreamEvent[]): void {
     for (const event of freshEvents) {
       if (this.#waitForEventWaiters.length === 0) return;
       for (const w of [...this.#waitForEventWaiters]) {
-        if ((w.type !== undefined && event.type !== w.type) || event.offset <= w.afterOffset)
-          continue;
+        if (w.type !== undefined && event.type !== w.type) continue;
         this.#waitForEventWaiters.splice(this.#waitForEventWaiters.indexOf(w), 1);
         clearTimeout(w.timer);
         w.resolve(event);
@@ -602,22 +608,21 @@ export class Stream {
   }
 
   /** THE HOST calls this at the end of an alarm-only pass (no public door touched this incarnation):
-   *  one more self-wake. Returns the new streak, whether it is now halted, and whether THIS call is
-   *  the one that crossed the ceiling (so the host records the durable fact + log line exactly once,
-   *  even if a pre-armed alarm fires once more after the halt). Durable. */
-  noteSelfWake(): { streak: number; halted: boolean; justHalted: boolean } {
+   *  one more self-wake. Returns the new streak and whether THIS call is the one that crossed the
+   *  ceiling (so the host records the durable fact + log line exactly once, even if a pre-armed alarm
+   *  fires once more after the halt); `selfWakeHalted()` is the state. Durable. */
+  noteSelfWake(): { streak: number; justHalted: boolean } {
     const before = this.#selfWakeStreak;
     this.#selfWakeStreak += 1;
     this.storage.writeSelfWakeStreak(this.#selfWakeStreak);
-    const halted = this.selfWakeHalted();
     return {
       streak: this.#selfWakeStreak,
-      halted,
-      justHalted: halted && before < SELF_WAKE_HALT_STREAK,
+      justHalted: this.selfWakeHalted() && before < SELF_WAKE_HALT_STREAK,
     };
   }
 
-  /** THE HOST calls this when a real public door is touched: the loop is broken, so reset the streak
+  /** THE HOST calls this when any RPC into it is answered (a request, or the wake's own facet
+   *  loopback — the host's `#notePublicDoor` says which): the loop is broken, so reset the streak
    *  (and lift the halt). A no-op — and NO write — when already zero, so the common request path
    *  pays nothing. */
   notePublicDoor(): void {

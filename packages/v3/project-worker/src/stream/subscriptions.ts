@@ -12,7 +12,7 @@
 // plain `itx.append`.
 
 import { normalizedItxExpression, print, type ItxExpressionInput } from "../context/expression.ts";
-import { CoreContract, parseSubscriptionName } from "./core-processor.ts";
+import { parseSubscriptionName } from "./core-processor.ts";
 import type { StreamEventInput } from "./events.ts";
 
 /** The `subscription-configured` event for (or replacing, or with `target: null` removing)
@@ -40,7 +40,7 @@ export function subscriptionConfiguredEvent(input: {
     throw new Error(
       `a subscription target must be rooted at "itx" (got ${JSON.stringify(print(target))})`,
     );
-  return CoreContract.buildEvent({
+  return {
     type: "events.iterate.com/stream/subscription-configured",
     payload: {
       name,
@@ -48,5 +48,5 @@ export function subscriptionConfiguredEvent(input: {
       ...(target && input.consumes && { consumes: input.consumes }),
       ...(target && afterOffset !== undefined && { afterOffset }),
     },
-  });
+  };
 }

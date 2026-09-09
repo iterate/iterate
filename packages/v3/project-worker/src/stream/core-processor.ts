@@ -9,8 +9,9 @@
 //   who is sent each commit   stream/subscription-configured { name, target|null }|
 //                             -delivery-halted|-delivery-resumed            → subscriptions (the delivery loop)
 //
-// ONE reduce, no effects, no verbs — the same `StreamProcessor` class every facet processor is,
-// owned by the Stream itself (stream.ts `#coreReducedState`, reduced inside every commit) because
+// ONE reduce, no effects, no verbs — a pure fold with a batch door (`reduceBatch`), NOT a hosted
+// `StreamProcessor` (nothing pushes it, nothing checkpoints it but the Stream): owned by the Stream
+// itself (stream.ts `#coreReducedState`, reduced inside every commit) because
 // its readers are the append door, the dispatcher and the delivery loop, all synchronous. The COMMANDS that append these events live
 // beside the code that reads each slice (context/itx-expression-rewriting.ts for the rules,
 // stream/subscriptions.ts for rows); the READERS are pure functions over the state. Control is
@@ -39,8 +40,8 @@ import {
   type ItxExpressionRewriteRule,
 } from "../context/itx-expression-rewriting.ts";
 import { jsonEqual } from "../lib/patch.ts";
-import type { StreamEvent, StreamEventInput } from "./events.ts";
-import { StreamProcessor, type ProcessorContract, type ReduceArgs } from "./processor.ts";
+import type { StreamEvent } from "./events.ts";
+import type { ReduceArgs } from "./processor.ts";
 
 export type { ItxExpressionRewriteRule } from "../context/itx-expression-rewriting.ts";
 
@@ -164,16 +165,6 @@ function draftOf<Table extends object>(table: Table, draftTables: DraftTables): 
   draftTables?.add(draft);
   return draft;
 }
-/** Set a row on a draft as an OWN property: a valid subscription name may be `__proto__`, which a
- *  plain assignment would route to the prototype setter (a spread's computed key never did). */
-function setDraftRow<Row>(draft: Record<string, Row>, key: string, row: Row): void {
-  Object.defineProperty(draft, key, {
-    value: row,
-    enumerable: true,
-    writable: true,
-    configurable: true,
-  });
-}
 
 /** THE MARKERS FOLLOW THE RULES: after the table changed, a row whose target is NOT builtins-rooted
  *  may host a different facet than its `hostedFacet` says — the rule that makes it host landed
@@ -205,7 +196,7 @@ function withHostedFacetMarkersFollowingRules(
     if (jsonEqual(next ?? null, row.hostedFacet ?? null)) continue;
     subscriptions ??= draftOf(state.subscriptions, draftTables);
     const { hostedFacet: _previous, ...rest } = row;
-    setDraftRow(subscriptions, name, next ? { ...rest, hostedFacet: next } : rest);
+    subscriptions[name] = next ? { ...rest, hostedFacet: next } : rest;
   }
   return subscriptions ? { ...state, subscriptions } : state;
 }
@@ -271,66 +262,39 @@ export type CoreState = {
 };
 
 /** A subscription/registry name is ONE segment, [A-Za-z0-9_-]: the facet name for a processor, the
- *  registry key's tail for a live callback. (Was a zod `.regex` on the SDK; hand-checked here now.) */
+ *  registry key's tail for a live callback — and never a key of `Object.prototype` (`__proto__`,
+ *  `constructor`, …): the tables are plain records indexed by name, so such a name would read or
+ *  write the prototype instead of a row. Refused here and at the append door (stream.ts, beside
+ *  `core`). (Was a zod `.regex` on the SDK; hand-checked here now.) */
 const SUBSCRIPTION_NAME_PATTERN = /^[A-Za-z0-9_-]+$/;
 export function parseSubscriptionName(name: string): string {
-  if (typeof name !== "string" || !SUBSCRIPTION_NAME_PATTERN.test(name))
+  if (typeof name !== "string" || !SUBSCRIPTION_NAME_PATTERN.test(name) || name in Object.prototype)
     throw new Error(
-      `a subscription name is one segment: [A-Za-z0-9_-]+ (got ${JSON.stringify(name)})`,
+      `a subscription name is one segment: [A-Za-z0-9_-]+, never a key of Object.prototype (got ${JSON.stringify(name)})`,
     );
   return name;
 }
 
-/** The event types the core reduce consumes — and the only types its `buildEvent` will build. */
-const CORE_EVENT_TYPES = [
-  "events.iterate.com/stream/created",
-  "events.iterate.com/stream/woken",
-  "events.iterate.com/stream/paused",
-  "events.iterate.com/stream/resumed",
-  "events.iterate.com/itx/rewrite-rule-configured",
-  "events.iterate.com/stream/subscription-configured",
-  "events.iterate.com/stream/subscription-delivery-halted",
-  "events.iterate.com/stream/subscription-delivery-resumed",
-  "events.iterate.com/secrets/changed",
-] as const;
-const CORE_EVENT_TYPE_SET = new Set<string>(CORE_EVENT_TYPES);
-
-/** THE CORE CONTRACT — hand-built (was `defineProcessorContract` + a zod schema). `buildEvent` for a
- *  trusted core command checks the type is owned and passes the payload through: the command builders
+/** THE CORE CONTRACT — what the Stream reads (stream.ts): the checkpoint's slug and reducer version,
+ *  and the literal every-field-defaulted initial state. The command builders that mint core events
  *  (itx-expression-rewriting.ts `rewriteRuleConfiguredEvent`, subscriptions.ts
- *  `subscriptionConfiguredEvent`) construct the exact payload and validate rooting themselves.
- *  `initialState` is the literal every-field-defaulted state. */
-export const CoreContract: ProcessorContract<CoreState> & {
-  buildEvent: (event: {
-    type: string;
-    payload?: Record<string, unknown>;
-    idempotencyKey?: string;
-  }) => StreamEventInput;
-} = {
+ *  `subscriptionConfiguredEvent`) construct their literal payloads and validate rooting themselves;
+ *  the reduce below is the one list of the types it consumes. */
+export const CoreContract = {
   slug: "core",
   version: "8.0.0", // 8.0.0: the secrets catalog (names + origins, reduced from `secrets/changed`). 7.0.0: a subscription row carries its optional `afterOffset` (where the cursor lane starts). 6.0.0 (the builtins root): `null` rows kept as MASKS under a built-in root, the platform-equivalent target deletes, hosting detected on the RESOLVED target, hostedFacet carries the facet's `name`. 5.0.0 (M1): a hosted facet's SOURCE is elided from the reduced target (kept in the log + facet:<name> kv)
-  description:
-    "The context's own state, reduced inline at the commit point: who it is, which incarnation runs, whether appends are paused, the itx-expression rewrite rules every call goes through, the subscriptions every commit is sent to, and the secrets catalog (names and origins, never a value).",
-  consumes: CORE_EVENT_TYPES,
-  emits: [],
   initialState: (): CoreState => ({
     paused: null,
     itxExpressionRewriteRules: {},
     subscriptions: {},
     secrets: {},
   }),
-  buildEvent: (event) => {
-    if (!CORE_EVENT_TYPE_SET.has(event.type))
-      throw new Error(`contract "core": buildEvent event type "${event.type}" is not owned`);
-    return {
-      type: event.type,
-      payload: event.payload ?? {},
-      ...(event.idempotencyKey && { idempotencyKey: event.idempotencyKey }),
-    };
-  },
 };
 
-export class CoreStreamProcessor extends StreamProcessor<CoreState> {
+/** THE CORE REDUCE, as a class: `reduceBatch` is the Stream's door (a commit's fresh events, a page
+ *  of the constructor's re-reduce); `reduce` is the pure single-event fold the tests drive. Not a
+ *  `StreamProcessor`: nothing hosts it and nothing pushes it — the Stream reduces it inline. */
+export class CoreStreamProcessor {
   readonly contract = CoreContract;
 
   /** ONE BATCH — a commit's fresh events, a page of the constructor's re-reduce: the events in
@@ -354,8 +318,8 @@ export class CoreStreamProcessor extends StreamProcessor<CoreState> {
     return state;
   }
 
-  /** The processor contract's PURE single-event reduce (no draft: every touch copies). */
-  override reduce({ event, state }: ReduceArgs<CoreState>): CoreState | undefined {
+  /** The PURE single-event reduce (no draft: every touch copies). */
+  reduce({ event, state }: ReduceArgs<CoreState>): CoreState | undefined {
     return this.#reduce({ event, state }, undefined);
   }
 
@@ -373,19 +337,23 @@ export class CoreStreamProcessor extends StreamProcessor<CoreState> {
     /** The subscriptions table with `name` set to `row` (or removed): the batch's draft, mutated. */
     const withSubscription = (name: string, row: Subscription | undefined): CoreState => {
       const subscriptions = draftOf(state.subscriptions, draftTables);
-      if (row) setDraftRow(subscriptions, name, row);
+      if (row) subscriptions[name] = row;
       else delete subscriptions[name];
       return { ...state, subscriptions };
     };
     switch (event.type) {
       case "events.iterate.com/secrets/changed": {
         const name = payload.name as string;
+        const next = payload.deleted
+          ? undefined
+          : { ...(typeof payload.origin === "string" && { origin: payload.origin }) };
+        // A no-op is `undefined`, not a fresh object (the rules table below says why): deleting what
+        // is not there, or re-setting the same origin, rewrites no checkpoint and publishes no delta.
+        if (next ? jsonEqual(state.secrets[name], next) : state.secrets[name] === undefined)
+          return undefined;
         const secrets = draftOf(state.secrets, draftTables);
-        if (payload.deleted) delete secrets[name];
-        else
-          setDraftRow(secrets, name, {
-            ...(typeof payload.origin === "string" && { origin: payload.origin }),
-          });
+        if (next) secrets[name] = next;
+        else delete secrets[name];
         return { ...state, secrets };
       }
       case "events.iterate.com/stream/created":
@@ -441,9 +409,7 @@ export class CoreStreamProcessor extends StreamProcessor<CoreState> {
       case "events.iterate.com/stream/subscription-configured": {
         const name = payload.name as string;
         if (payload.target === null)
-          return Object.hasOwn(state.subscriptions, name)
-            ? withSubscription(name, undefined)
-            : undefined;
+          return state.subscriptions[name] ? withSubscription(name, undefined) : undefined;
         const consumes = payload.consumes as string[] | undefined;
         const afterOffset = payload.afterOffset as number | undefined;
         // M1: a hosting target (one that RESOLVES to `itx.builtins.facets.get(name, spec)…`) keeps its
@@ -464,9 +430,7 @@ export class CoreStreamProcessor extends StreamProcessor<CoreState> {
         });
       }
       case "events.iterate.com/stream/subscription-delivery-halted": {
-        const row = Object.hasOwn(state.subscriptions, payload.name as string)
-          ? state.subscriptions[payload.name as string]
-          : undefined; // a hand-appended `__proto__` must not find the prototype
+        const row = state.subscriptions[payload.name as string];
         if (!row) return undefined;
         return withSubscription(payload.name as string, {
           ...row,
@@ -478,9 +442,7 @@ export class CoreStreamProcessor extends StreamProcessor<CoreState> {
         });
       }
       case "events.iterate.com/stream/subscription-delivery-resumed": {
-        const row = Object.hasOwn(state.subscriptions, payload.name as string)
-          ? state.subscriptions[payload.name as string]
-          : undefined;
+        const row = state.subscriptions[payload.name as string];
         if (!row) return undefined;
         const { halted: _cleared, ...kept } = row;
         return withSubscription(payload.name as string, {

@@ -1,8 +1,8 @@
 // __workers-tests__/do-doors.test.ts — the IterateContextDurableObject's Workers-RPC doors,
 // pinned at zero distance (the workers lane is the only one that can BOTH call the DO verbs raw —
 // no capnweb edge reducing the returns away — AND inspect the DO's own storage via
-// runInDurableObject). The DO has exactly these doors: the STREAM (`append`, `read`,
-// `waitForEvent`), the ONE dispatch door (`invoke`), native `fetch` (the pager door, the
+// runInDurableObject). The DO has exactly these doors: the STREAM (`append`, `read` — a wait is
+// the built-in `itx.waitForEvent`, through `invoke`), the ONE dispatch door (`invoke`), native `fetch` (the pager door, the
 // fetch-upgrade leg, the itx-expression fetch lane, egress) and the rpc-stub plumbing
 // (`lendRpcStub`, `rpcStubTransportState`; the pager attach IS the upgrade). There are NO configuration
 // verbs: every change to a context is an appended event, so a Workers-RPC caller configures a
@@ -28,7 +28,7 @@
 //     un-set match answers NO_ITX_EXPRESSION_MATCH; disposing the provide HANDLE is the other half
 //     — it recalls the stub (presence shrinks) AND un-sets the rule it was provided with.
 
-import { runInDurableObject } from "cloudflare:test";
+import { evictDurableObject, runInDurableObject } from "cloudflare:test";
 import { RpcTarget } from "capnweb";
 import { expect, test } from "vitest";
 import { print, type ItxExpression } from "../src/context/expression.ts";
@@ -128,7 +128,6 @@ test("the DO's doors are the stream, invoke, fetch and the rpc-stub plumbing —
     for (const door of [
       "append",
       "read",
-      "waitForEvent",
       "invoke",
       "fetch",
       "lendRpcStub",
@@ -214,4 +213,22 @@ test("disposing the provide HANDLE is the other half: the stub is recalled — i
   await until("the rule was un-set", async () => !("itx.doomed" in (await rewriteRulesOf(ctx))));
   expect(await s.invoke("itx.rpcStubs.list()")).toEqual([]); // presence shrank
   expect(await deniedCode(itx, "itx.doomed.ping()")).toBe("NO_ITX_EXPRESSION_MATCH");
+});
+
+test("a PAUSED context survives an eviction: the constructor's birth-row replay is admitted while paused, so the next incarnation can take the resume (BORN RED: the pause check ran before the idempotency lookup, and a paused context could never be rebuilt)", async () => {
+  const ctx = "prj_doors_paused_evict";
+  const s = stub(ctx);
+  await s.append({ type: "events.iterate.com/stream/paused", payload: { reason: "operator" } });
+  await evictDurableObject(s);
+  // The fresh incarnation's constructor replays `config` under its idempotency key — on a paused
+  // stream. Then the resume lands like any other day.
+  await stub(ctx).append({ type: "events.iterate.com/stream/resumed" });
+  const page = (await stub(ctx).invoke(["itx", ["readEvents", 0, 50]])) as {
+    events: { type: string }[];
+  };
+  expect(page.events.map((e) => e.type)).toContain("events.iterate.com/stream/resumed");
+  const [afterResume] = (await stub(ctx).append({ type: "after-resume" })) as unknown as {
+    type: string;
+  }[];
+  expect(afterResume.type).toBe("after-resume");
 });
