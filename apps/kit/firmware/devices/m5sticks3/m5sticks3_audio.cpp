@@ -24,7 +24,7 @@
  * electrically present but semantically irrelevant to the codec.
  */
 #include "m5sticks3_audio.h"
-#include "iterate/kit/starvation_ledger.h"
+#include "iterate/kit/platforms/i2s_codec.h"
 
 #include "m5sticks3_board.h"
 
@@ -40,7 +40,6 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
-#include "freertos/queue.h"
 #include "freertos/task.h"
 
 namespace {
@@ -121,24 +120,13 @@ enum class Stage : int {
   playbackHandoff,
 };
 
-struct audio_frame {
-  int16_t samples[M5STICKS3_AUDIO_FRAME_SAMPLES];
-  size_t sample_count;
-};
-
 std::atomic<int> stage{static_cast<int>(Stage::playback)};
 std::atomic<bool> capture_wanted{false};
 
-QueueHandle_t capture_mailbox;
-QueueHandle_t playback_mailbox;
+struct iterate_kit_audio_codec shared_codec;
 i2s_chan_handle_t playback_channel;
 bool playback_enabled;
 
-/* Startup capture is not loss until the portable consumer has started. */
-std::atomic<bool> capture_consumer_started{false};
-std::atomic<uint32_t> capture_overruns{0};
-std::atomic<uint32_t> capture_driver_failures{0};
-std::atomic<uint32_t> playback_driver_failures{0};
 std::atomic<uint32_t> mode_switches{0};
 
 Stage current_stage() {
@@ -149,66 +137,22 @@ void publish_stage(Stage next) {
   stage.store(static_cast<int>(next), std::memory_order_release);
 }
 
-/*
- * STARVATION MEASURED AGAINST AN ABSOLUTE DEADLINE, on the writing task.
- *
- * At every write the ledger knows when the hardware ring will be empty; a
- * write arriving after that moment is starvation the listener heard, for
- * exactly the difference. Callback counting is deliberately not promoted to
- * a correctness signal here: the Waveshare port measured a 600 ms injected
- * gap that moved its ISR counter by zero, because the descriptors the ISR
- * catches are the refill after the gap. The deadline is the authoritative
- * measure and this board keeps only it.
- */
-portMUX_TYPE ledger_lock = portMUX_INITIALIZER_UNLOCKED;
-struct iterate_kit_starvation_ledger ledger;
-
-/* --- the shared codec seam ------------------------------------------------ */
-
+/** The public mailbox remains nonblocking, including the half-duplex fence. */
 enum iterate_kit_status codec_read(
-    void *context,
-    int16_t *capture,
-    int16_t *reference,
-    size_t capacity_samples,
-    size_t *sample_count) {
-  struct audio_frame frame;
-  (void)context;
-  (void)reference;
-  if (capture_mailbox == nullptr ||
-      capacity_samples < M5STICKS3_AUDIO_FRAME_SAMPLES) {
-    return ITERATE_KIT_INVALID_ARGUMENT;
-  }
-  capture_consumer_started.store(true, std::memory_order_release);
-  if (xQueueReceive(capture_mailbox, &frame, 0) != pdTRUE) {
-    return ITERATE_KIT_UNAVAILABLE;
-  }
-  memcpy(capture, frame.samples, frame.sample_count * sizeof(*capture));
-  *sample_count = frame.sample_count;
-  return ITERATE_KIT_OK;
+    void *context, int16_t *capture, int16_t *reference,
+    size_t capacity_samples, size_t *sample_count) {
+  return shared_codec.ops->read(context, capture, reference, capacity_samples, sample_count);
 }
 
 enum iterate_kit_status codec_write(
     void *context, const int16_t *playback, size_t sample_count) {
-  struct audio_frame frame;
-  (void)context;
-  if (playback_mailbox == nullptr || sample_count == 0U ||
-      sample_count > M5STICKS3_AUDIO_FRAME_SAMPLES) {
+  if (sample_count == 0U || sample_count > M5STICKS3_AUDIO_FRAME_SAMPLES) {
     return ITERATE_KIT_INVALID_ARGUMENT;
   }
-  /*
-   * Playback is DISABLED, not backpressured, while the microphone owns the
-   * pins. UNAVAILABLE tells the portable playback loop this is the fence,
-   * not a full queue that waiting would clear.
-   */
-  if (capture_wanted.load(std::memory_order_acquire) ||
-      current_stage() != Stage::playback) {
+  if (capture_wanted.load(std::memory_order_acquire) || current_stage() != Stage::playback) {
     return ITERATE_KIT_UNAVAILABLE;
   }
-  memcpy(frame.samples, playback, sample_count * sizeof(*playback));
-  frame.sample_count = sample_count;
-  return xQueueSend(playback_mailbox, &frame, 0) == pdTRUE
-      ? ITERATE_KIT_OK
-      : ITERATE_KIT_BACKPRESSURE;
+  return shared_codec.ops->write(context, playback, sample_count);
 }
 
 std::uint8_t speakerVolumePercent = 100U;
@@ -238,33 +182,7 @@ const struct iterate_kit_audio_codec_ops codec_ops = {
 
 /* --- local sounds --------------------------------------------------------- */
 
-/*
- * THE BOARD'S OWN VOICE: the wake chime and "call ended", straight from flash.
- *
- * Everything else this speaker plays arrives over the stream, seconds after
- * the gesture that asked for it — which is exactly the problem these solve: a
- * press that answers within a frame instead of after a dial. So they bypass
- * the stream entirely and cut in at the last seam before the DAC, where the
- * playback hardware task drains them BEFORE it looks at the mailbox.
- * Preemption, not mixing, on purpose: a chime stepping on the first
- * milliseconds of an answer is acceptable and a mixer is not simpler than
- * this. The stream's frames are not lost — the depth-one mailbox holds one
- * and the portable playback task absorbs the rest as backpressure it already
- * knows how to wait out.
- *
- * The half-duplex fence outranks the sound: while the microphone owns or is
- * taking the pins there is no playback channel to play through, so a sound is
- * DROPPED at that boundary (see play_sound and the fence branch below), never
- * deferred to a moment when it would acknowledge nothing.
- *
- * Allocation-free: the PCM lives in .rodata (flash), the cursor walks it in
- * 20 ms slices, and the lock is held only to move a few words — the flash
- * read itself happens outside the critical section.
- */
 portMUX_TYPE sound_lock = portMUX_INITIALIZER_UNLOCKED;
-const uint8_t *sound_pcm; /* nullptr when idle; guarded by sound_lock */
-uint32_t sound_bytes;
-uint32_t sound_cursor;
 /*
  * Until when the amplifier must be left up for a local sound. The loop
  * re-raises PHASE_QUIET on every idle pass and this board answers it by
@@ -277,7 +195,7 @@ int64_t sound_amp_hold_until_us;
 /* The fence is taking the pins: whatever was chiming is over, not pending. */
 void drop_pending_sound(void) {
   portENTER_CRITICAL(&sound_lock);
-  sound_pcm = nullptr;
+  iterate_kit_i2s_codec_drop_pending_sound();
   sound_amp_hold_until_us = 0;
   portEXIT_CRITICAL(&sound_lock);
 }
@@ -357,7 +275,7 @@ void release_playback_channel(void) {
    * delete would leave two masters contending, so it is counted loudly.
    */
   if (i2s_del_channel(playback_channel) != ESP_OK) {
-    playback_driver_failures.fetch_add(1U, std::memory_order_relaxed);
+    iterate_kit_i2s_codec_note_failure(false);
   }
   playback_channel = nullptr;
 }
@@ -413,115 +331,61 @@ bool build_playback_channel(void) {
   return true;
 }
 
-void playback_hardware_task(void *argument) {
-  static struct audio_frame frame;
-  /* Mono provider PCM duplicated into both slots for the stereo channel. */
-  static int16_t stereo[M5STICKS3_AUDIO_FRAME_SAMPLES * 2];
-  (void)argument;
-  for (;;) {
-    const Stage now_stage = current_stage();
-    if (now_stage == Stage::playback) {
-      if (capture_wanted.load(std::memory_order_acquire)) {
-        /* Fence to capture: quiet first, then give the pins away. A pending
-         * sound goes with the channel — dropped, not deferred, because a
-         * chime played back seconds later acknowledges nothing. */
-        drop_pending_sound();
-        (void)amplifier_set(false);
-        release_playback_channel();
-        mode_switches.fetch_add(1U, std::memory_order_relaxed);
-        publish_stage(Stage::micHandoff);
-        continue;
-      }
-      /*
-       * A local sound outranks the mailbox — see the note at `sound_pcm`. The
-       * slice bounds are taken under the lock and the flash copy happens
-       * outside it; if the app task replaces the sound mid-slice, this frame
-       * finishes from the superseded PCM and the next one starts the new
-       * sound, which is the preemption behaving as specified.
-       */
-      const uint8_t *sound = nullptr;
-      uint32_t sound_offset = 0U;
-      uint32_t sound_take = 0U;
-      portENTER_CRITICAL(&sound_lock);
-      if (sound_pcm != nullptr) {
-        const uint32_t remaining = sound_bytes - sound_cursor;
-        sound = sound_pcm;
-        sound_offset = sound_cursor;
-        sound_take = remaining < sizeof(frame.samples)
-            ? remaining
-            : static_cast<uint32_t>(sizeof(frame.samples));
-        sound_cursor += sound_take;
-        if (sound_cursor >= sound_bytes) sound_pcm = nullptr;
-      }
-      portEXIT_CRITICAL(&sound_lock);
-      const bool from_sound = sound != nullptr;
-      if (from_sound) {
-        memcpy(frame.samples, sound + sound_offset, sound_take);
-        frame.sample_count = sound_take / sizeof(frame.samples[0]);
-      } else if (
-          xQueueReceive(
-              playback_mailbox, &frame, pdMS_TO_TICKS(DMA_DESCRIPTOR_MS)) !=
-          pdTRUE) {
-        /*
-         * The MOUTH decays only when it is fed, and this task feeds it only
-         * what it plays — so between deltas and at every answer's end the
-         * envelope froze mid-shape and the face hung open. The boards whose
-         * mouths read right never stop feeding: the CoreS3's DMA tap pushes
-         * its idle silence, the Waveshare's delay line drains continuously.
-         * One zero frame per empty tick is that same discipline here.
-         */
-        {
-          static const int16_t silence[M5STICKS3_AUDIO_FRAME_SAMPLES] = {0};
-          m5sticks3_board_observe_playout(
-              silence, M5STICKS3_AUDIO_FRAME_SAMPLES);
-        }
-        continue;
-      }
-      const uint32_t frame_ms = static_cast<uint32_t>(
-          frame.sample_count * 1000U / M5STICKS3_AUDIO_SAMPLE_RATE_HZ);
-      for (size_t index = 0; index < frame.sample_count; ++index) {
-        stereo[index * 2U] = frame.samples[index];
-        stereo[index * 2U + 1U] = frame.samples[index];
-      }
-      /*
-       * Credit before the blocking write: the deadline ledger must see the
-       * audio being handed over while it is being handed over. The rollback
-       * keeps the ledger conserved on driver failure.
-       */
-      m5sticks3_audio_reserve_write(frame_ms);
-      size_t written = 0;
-      if (i2s_channel_write(
-              playback_channel,
-              stereo,
-              frame.sample_count * 2U * sizeof(int16_t),
-              &written,
-              1000U) != ESP_OK) {
-        m5sticks3_audio_rollback_write(frame_ms);
-        playback_driver_failures.fetch_add(1U, std::memory_order_relaxed);
-      } else if (from_sound) {
-        /* MOUTH still while a chime plays: the board's own interface noises
-         * are not speech, and a face mouthing its ding reads as a glitch.
-         * Silence, not nothing — the envelope must keep decaying. */
-        static const int16_t silence[M5STICKS3_AUDIO_FRAME_SAMPLES] = {0};
-        m5sticks3_board_observe_playout(silence, frame.sample_count);
-      } else {
-        /* The mouth animates audio the hardware actually accepted — the
-         * mono frame, not the stereo expansion the amplifier eats. */
-        m5sticks3_board_observe_playout(frame.samples, frame.sample_count);
-      }
-    } else if (now_stage == Stage::playbackHandoff) {
-      if (build_playback_channel()) {
-        mode_switches.fetch_add(1U, std::memory_order_relaxed);
-        publish_stage(Stage::playback);
-      } else {
-        /* Loud, bounded retry: the board is silent until this succeeds. */
-        playback_driver_failures.fetch_add(1U, std::memory_order_relaxed);
-        vTaskDelay(pdMS_TO_TICKS(100));
-      }
-    } else {
-      vTaskDelay(pdMS_TO_TICKS(5));
+/** Only the playback task exchanges I2S0 ownership; it runs even without PCM.
+ * Drop the sound BEFORE amp-off and deletion. A fenced tick sleeps one frame
+ * so the shared priority-20 task cannot spin while M5.Mic owns the pins.
+ */
+bool playback_ready(void *context) {
+  (void)context;
+  const Stage now_stage = current_stage();
+  if (now_stage == Stage::playback) {
+    if (!capture_wanted.load(std::memory_order_acquire)) return true;
+    drop_pending_sound();
+    (void)amplifier_set(false);
+    release_playback_channel();
+    mode_switches.fetch_add(1U, std::memory_order_relaxed);
+    publish_stage(Stage::micHandoff);
+  } else if (now_stage == Stage::playbackHandoff) {
+    if (build_playback_channel()) {
+      mode_switches.fetch_add(1U, std::memory_order_relaxed);
+      publish_stage(Stage::playback);
+      return true;
     }
+    iterate_kit_i2s_codec_note_failure(false);
+    vTaskDelay(pdMS_TO_TICKS(100));
+    return false;
   }
+  vTaskDelay(pdMS_TO_TICKS(20));
+  return false;
+}
+
+/** M5's stereo I2S writer retains the half-duplex fence even after admission. */
+enum iterate_kit_status hardware_write(void *context, const int16_t *samples, size_t count) {
+  (void)context;
+  if (capture_wanted.load(std::memory_order_acquire) || current_stage() != Stage::playback) {
+    vTaskDelay(pdMS_TO_TICKS(20));
+    return ITERATE_KIT_UNAVAILABLE;
+  }
+  static int16_t stereo[M5STICKS3_AUDIO_FRAME_SAMPLES * 2];
+  for (size_t index = 0; index < count; ++index) {
+    stereo[index * 2U] = samples[index];
+    stereo[index * 2U + 1U] = samples[index];
+  }
+  size_t written = 0;
+  return i2s_channel_write(playback_channel, stereo, count * 2U * sizeof(int16_t),
+      &written, 1000U) == ESP_OK ? ITERATE_KIT_OK : ITERATE_KIT_IO_ERROR;
+}
+
+/** Chimes are interface sounds, not speech: decay the mouth with silence. */
+void playback_observed(void *context, const int16_t *samples, size_t count, bool from_sound) {
+  (void)context;
+  static const int16_t silence[M5STICKS3_AUDIO_FRAME_SAMPLES] = {0};
+  m5sticks3_board_observe_playout(from_sound ? silence : samples, count);
+}
+
+/** An idle mouth must keep decaying, even when the mailbox has no next delta. */
+void playback_idle(void *context) {
+  playback_observed(context, nullptr, M5STICKS3_AUDIO_FRAME_SAMPLES, true);
 }
 
 /* --- capture hardware ----------------------------------------------------- */
@@ -553,7 +417,9 @@ void recorder_reset(void) {
   recorder.slot_recording[1] = false;
 }
 
-void recorder_pump(void) {
+/** Take one completed FIFO buffer and rearm its slot; two slots bound hardware continuity. */
+bool recorder_pump(int16_t *samples) {
+  bool captured = false;
   const size_t pending = M5.Mic.isRecording();
   if (pending > recorder.recording_count) {
     /*
@@ -561,9 +427,9 @@ void recorder_pump(void) {
      * rather than guess which sample pointer remains live; the loss is one
      * frame and the counter says it happened.
      */
-    capture_driver_failures.fetch_add(1U, std::memory_order_relaxed);
+    iterate_kit_i2s_codec_note_failure(true);
     recorder_reset();
-    return;
+    return false;
   }
   while (recorder.recording_count > pending) {
     const uint8_t completed = recorder.order[recorder.head];
@@ -574,17 +440,9 @@ void recorder_pump(void) {
       /* Microphone settling noise never reaches the wire. */
       --recorder.discard_left;
     } else {
-      static struct audio_frame frame;
-      memcpy(
-          frame.samples,
-          recorder.slots[completed],
-          sizeof(frame.samples));
-      frame.sample_count = M5STICKS3_AUDIO_FRAME_SAMPLES;
-      if (capture_consumer_started.load(std::memory_order_acquire) &&
-          uxQueueMessagesWaiting(capture_mailbox) > 0U) {
-        capture_overruns.fetch_add(1U, std::memory_order_relaxed);
-      }
-      (void)xQueueOverwrite(capture_mailbox, &frame);
+      memcpy(samples, recorder.slots[completed], M5STICKS3_AUDIO_FRAME_SAMPLES * sizeof(*samples));
+      captured = true;
+      break;
     }
   }
   while (recorder.recording_count < 2U) {
@@ -610,10 +468,16 @@ void recorder_pump(void) {
         free_slot;
     ++recorder.recording_count;
   }
+  return captured;
 }
 
-void capture_hardware_task(void *argument) {
-  (void)argument;
+/** Block until one complete recorder frame, or sleep 20 ms for a pin fence.
+ * The recorder keeps two hardware buffers armed; completed buffers are taken
+ * in submission order, with the startup settling frame discarded as before.
+ */
+enum iterate_kit_status hardware_read(void *context, int16_t *samples, size_t count) {
+  (void)context;
+  (void)count;
   for (;;) {
     const Stage now_stage = current_stage();
     if (now_stage == Stage::micHandoff) {
@@ -626,7 +490,7 @@ void capture_hardware_task(void *argument) {
         recorder_reset();
         publish_stage(Stage::capture);
       } else {
-        capture_driver_failures.fetch_add(1U, std::memory_order_relaxed);
+        iterate_kit_i2s_codec_note_failure(true);
         M5.Mic.end();
         /* Give the pins back rather than latching a dead microphone. */
         publish_stage(Stage::playbackHandoff);
@@ -643,10 +507,11 @@ void capture_hardware_task(void *argument) {
         publish_stage(Stage::playbackHandoff);
         continue;
       }
-      recorder_pump();
+      if (recorder_pump(samples)) return ITERATE_KIT_OK;
       vTaskDelay(pdMS_TO_TICKS(5));
     } else {
-      vTaskDelay(pdMS_TO_TICKS(5));
+      vTaskDelay(pdMS_TO_TICKS(20));
+      return ITERATE_KIT_UNAVAILABLE;
     }
   }
 }
@@ -658,39 +523,15 @@ void capture_hardware_task(void *argument) {
 extern "C" {
 
 bool m5sticks3_audio_init(void) {
-  iterate_kit_starvation_ledger_init(&ledger, DMA_RING_MS);
-  capture_mailbox = xQueueCreate(1U, sizeof(struct audio_frame));
-  playback_mailbox = xQueueCreate(1U, sizeof(struct audio_frame));
-  if (capture_mailbox == nullptr || playback_mailbox == nullptr) {
-    ESP_LOGE(tag, "audio seam queue allocation failed");
-    return false;
-  }
   /* Amplifier stays muted until audio actually arrives. */
   (void)amplifier_set(false);
   if (!build_playback_channel()) {
     ESP_LOGE(tag, "playback bring-up failed");
     return false;
   }
-  TaskHandle_t capture_task_handle = nullptr;
-  if (xTaskCreatePinnedToCore(
-          capture_hardware_task,
-          "audio-hw-capture",
-          4096U,
-          nullptr,
-          19U,
-          &capture_task_handle,
-          1) != pdPASS ||
-      xTaskCreatePinnedToCore(
-          playback_hardware_task,
-          "audio-hw-playback",
-          4096U,
-          nullptr,
-          20U,
-          nullptr,
-          1) != pdPASS) {
-    if (capture_task_handle != nullptr) {
-      vTaskDelete(capture_task_handle);
-    }
+  iterate_kit_i2s_codec_set_playback_callbacks(playback_ready, playback_observed, playback_idle);
+  if (!iterate_kit_i2s_codec_start_over(
+          hardware_read, hardware_write, nullptr, DMA_RING_MS, &shared_codec)) {
     ESP_LOGE(tag, "audio hardware task creation failed");
     return false;
   }
@@ -736,17 +577,15 @@ void m5sticks3_audio_play_sound(const uint8_t *pcm, uint32_t bytes) {
           M5STICKS3_AUDIO_SAMPLE_RATE_HZ +
       static_cast<int64_t>(DMA_RING_MS) * 1000;
   portENTER_CRITICAL(&sound_lock);
-  sound_pcm = pcm;
-  sound_bytes = bytes & ~1U; /* whole PCM16 samples only */
-  sound_cursor = 0U;
   sound_amp_hold_until_us = esp_timer_get_time() + hold_us;
   portEXIT_CRITICAL(&sound_lock);
+  iterate_kit_i2s_codec_play_sound(pcm, bytes);
 }
 
 bool m5sticks3_audio_sound_active(void) {
   bool active;
   portENTER_CRITICAL(&sound_lock);
-  active = sound_pcm != nullptr ||
+  active = iterate_kit_i2s_codec_sound_active() ||
       esp_timer_get_time() < sound_amp_hold_until_us;
   portEXIT_CRITICAL(&sound_lock);
   return active;
@@ -780,55 +619,8 @@ void m5sticks3_audio_amplifier(bool on) {
    */
 }
 
-uint32_t m5sticks3_audio_capture_overruns(void) {
-  return capture_overruns.load(std::memory_order_relaxed);
-}
-
-uint32_t m5sticks3_audio_capture_driver_failures(void) {
-  return capture_driver_failures.load(std::memory_order_relaxed);
-}
-
-uint32_t m5sticks3_audio_playback_driver_failures(void) {
-  return playback_driver_failures.load(std::memory_order_relaxed);
-}
-
 uint32_t m5sticks3_audio_mode_switches(void) {
   return mode_switches.load(std::memory_order_relaxed);
-}
-
-void m5sticks3_audio_phase(enum iterate_kit_voice_phase phase) {
-  portENTER_CRITICAL(&ledger_lock);
-  iterate_kit_starvation_ledger_phase(&ledger, phase, esp_timer_get_time());
-  portEXIT_CRITICAL(&ledger_lock);
-}
-
-void m5sticks3_audio_reserve_write(uint32_t ms) {
-  const int64_t now_us = esp_timer_get_time();
-  portENTER_CRITICAL(&ledger_lock);
-  iterate_kit_starvation_ledger_reserve_write(&ledger, ms, now_us);
-  portEXIT_CRITICAL(&ledger_lock);
-}
-
-void m5sticks3_audio_rollback_write(uint32_t ms) {
-  portENTER_CRITICAL(&ledger_lock);
-  iterate_kit_starvation_ledger_rollback_write(&ledger, ms);
-  portEXIT_CRITICAL(&ledger_lock);
-}
-
-uint32_t m5sticks3_audio_starved_ms(void) {
-  struct iterate_kit_starvation_ledger_metrics metrics;
-  portENTER_CRITICAL(&ledger_lock);
-  iterate_kit_starvation_ledger_metrics(&ledger, &metrics);
-  portEXIT_CRITICAL(&ledger_lock);
-  return metrics.starved_ms;
-}
-
-uint32_t m5sticks3_audio_starve_events(void) {
-  struct iterate_kit_starvation_ledger_metrics metrics;
-  portENTER_CRITICAL(&ledger_lock);
-  iterate_kit_starvation_ledger_metrics(&ledger, &metrics);
-  portEXIT_CRITICAL(&ledger_lock);
-  return metrics.starve_events;
 }
 
 enum iterate_kit_status m5sticks3_audio_set_volume(

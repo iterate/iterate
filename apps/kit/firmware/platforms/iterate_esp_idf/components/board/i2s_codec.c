@@ -26,6 +26,25 @@ static enum iterate_kit_status (*hardware_read)(void *, int16_t *, size_t);
 static enum iterate_kit_status (*hardware_write)(void *, const int16_t *, size_t);
 static void *hardware_context;
 static void (*before_write)(void *);
+static bool (*playback_ready)(void *);
+static void (*playback_observed)(void *, const int16_t *, size_t, bool);
+static void (*playback_idle)(void *);
+
+void iterate_kit_i2s_codec_set_playback_callbacks(
+    bool (*ready)(void *),
+    void (*observed)(void *, const int16_t *, size_t, bool),
+    void (*idle)(void *)) {
+  playback_ready = ready;
+  playback_observed = observed;
+  playback_idle = idle;
+}
+
+void iterate_kit_i2s_codec_note_failure(bool capture) {
+  portENTER_CRITICAL(&codec_lock);
+  if (capture) ++capture_driver_failures;
+  else ++playback_driver_failures;
+  portEXIT_CRITICAL(&codec_lock);
+}
 
 void iterate_kit_i2s_codec_set_before_write(void (*wait)(void *)) {
   before_write = wait;
@@ -131,6 +150,12 @@ void iterate_kit_i2s_codec_play_sound(const uint8_t *pcm, uint32_t bytes) {
   portEXIT_CRITICAL(&codec_lock);
 }
 
+void iterate_kit_i2s_codec_drop_pending_sound(void) {
+  portENTER_CRITICAL(&codec_lock);
+  sound_pcm = NULL;
+  portEXIT_CRITICAL(&codec_lock);
+}
+
 bool iterate_kit_i2s_codec_sound_active(void) {
   portENTER_CRITICAL(&codec_lock);
   const bool active = sound_pcm != NULL;
@@ -166,6 +191,7 @@ static void playback_hardware_task(void *argument) {
   static struct iterate_kit_i2s_codec_frame frame;
   (void)argument;
   for (;;) {
+    if (playback_ready != NULL && !playback_ready(hardware_context)) continue;
     /*
      * A local sound outranks the mailbox — see the note at `sound_pcm`. The
      * slice bounds are taken under the lock and the flash copy happens
@@ -199,6 +225,7 @@ static void playback_hardware_task(void *argument) {
          */
         xQueueReceive(playback_mailbox, &frame, pdMS_TO_TICKS(20)) !=
         pdTRUE) {
+      if (playback_idle != NULL) playback_idle(hardware_context);
       continue;
     }
     if (before_write != NULL) before_write(hardware_context);
@@ -213,6 +240,8 @@ static void playback_hardware_task(void *argument) {
       iterate_kit_starvation_ledger_rollback_write(&ledger, frame_ms);
       if (status != ITERATE_KIT_UNAVAILABLE) ++playback_driver_failures;
       portEXIT_CRITICAL(&codec_lock);
+    } else if (playback_observed != NULL) {
+      playback_observed(hardware_context, frame.samples, frame.sample_count, sound != NULL);
     }
   }
 }

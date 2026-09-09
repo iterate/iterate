@@ -10,7 +10,11 @@ extern "C" {
 
 /** Start the singleton 16 kHz mono codec over board-owned BLOCKING operations.
  * read fills exactly 320 samples; write consumes 1..320. UNAVAILABLE is a
- * fence/no frame, not a driver failure; failed writes receive no ledger credit.
+ * fence/no frame, not a driver failure. The capture task immediately retries
+ * UNAVAILABLE: a fenced read MUST block for one frame period (20 ms) before
+ * returning it, or priority 19 spins core 1. A repeatedly fenced hardware
+ * write must likewise wait 20 ms. The public mailbox ops remain nonblocking;
+ * failed writes receive no ledger credit.
  * Only the two hardware tasks call these operations (capture: priority 19,
  * playback: 20; core 1, 4 KiB). Depth-one mailboxes bound latency and expose
  * nonblocking read/write to the loop. Startup capture is not counted as loss.
@@ -28,6 +32,24 @@ bool iterate_kit_i2s_codec_start_over(
  * context is the start_over context. NULL leaves the blocking writer ready.
  */
 void iterate_kit_i2s_codec_set_before_write(void (*wait)(void *));
+/** Install optional playback-task callbacks before start_over.
+ * ready runs before taking a sound/mailbox slice, including while idle; M5
+ * exchanges pin ownership here and blocks when false. observed runs only after
+ * successful writes, with the source flag so M5 mouths stream PCM but silence
+ * for chimes. idle runs after a 20 ms empty mailbox wait so its mouth decays.
+ * HAVPE/Waveshare leave these NULL. All use the start_over context.
+ */
+void iterate_kit_i2s_codec_set_playback_callbacks(
+    bool (*ready)(void *),
+    void (*observed)(void *, const int16_t *, size_t, bool),
+    void (*idle)(void *));
+/** Drop unsliced sound before M5 mutes its amp and deletes the shared pins. */
+void iterate_kit_i2s_codec_drop_pending_sound(void);
+/** Count a board-owned mode-switch/recorder failure with the task failures.
+ * capture selects the direction. Do not also count an IO_ERROR returned to a
+ * hardware task: that path is already counted by start_over.
+ */
+void iterate_kit_i2s_codec_note_failure(bool capture);
 /** Apply the shared starvation phase under one lock; boards own amp actions. */
 void iterate_kit_i2s_codec_phase(enum iterate_kit_voice_phase phase);
 /** Preempt stream PCM with flash-resident PCM16LE, without mixing or allocation.

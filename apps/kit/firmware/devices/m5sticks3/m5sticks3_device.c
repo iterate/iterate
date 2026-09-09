@@ -23,6 +23,7 @@
 
 #include "iterate/kit/audio_processor.h"
 #include "iterate/kit/capabilities/health.h"
+#include "iterate/kit/platforms/i2s_codec.h"
 #include "iterate/kit/capabilities/arguments.h"
 #include "iterate/kit/devices/m5sticks3.h"
 #include "iterate/kit/session_grammar.h"
@@ -182,7 +183,7 @@ static void poll(void *context, struct iterate_kit_voice_intent *out) {
 
 static void phase(void *context, enum iterate_kit_voice_phase phase_value) {
   (void)context;
-  m5sticks3_audio_phase(phase_value);
+  iterate_kit_i2s_codec_phase(phase_value);
   if (phase_value == ITERATE_KIT_VOICE_PHASE_ARRIVED) {
     m5sticks3_audio_amplifier(true);
   } else if (phase_value == ITERATE_KIT_VOICE_PHASE_QUIET) {
@@ -217,12 +218,6 @@ static uint8_t volume(void *context) {
 
 static size_t health(void *context, char *out, size_t capacity) {
   const struct iterate_kit_health_field fields[] = {
-    {"codecCaptureOverruns", m5sticks3_audio_capture_overruns()},
-    {"codecCaptureFailures", m5sticks3_audio_capture_driver_failures()},
-    {"codecPlaybackFailures", m5sticks3_audio_playback_driver_failures()},
-    /* The task-side starvation measure: ms the ring was empty, and how often. */
-    {"spkStarvedMs", m5sticks3_audio_starved_ms()},
-    {"spkStarveEvents", m5sticks3_audio_starve_events()},
     /* The half-duplex fence, this board's one structural novelty. */
     {"audioModeSwitches", m5sticks3_audio_mode_switches()},
     /*
@@ -234,8 +229,11 @@ static size_t health(void *context, char *out, size_t capacity) {
     {"faceFailures", m5sticks3_board_face_failures()},
   };
   (void)context;
-  return iterate_kit_health_append_fields(
-      out, capacity, fields, sizeof(fields) / sizeof(fields[0]));
+  const size_t used = iterate_kit_i2s_codec_health(out, capacity);
+  if (used == 0U) return 0U;
+  const size_t added = iterate_kit_health_append_fields(
+      out + used, capacity - used, fields, sizeof(fields) / sizeof(fields[0]));
+  return added == 0U ? 0U : used + added;
 }
 
 static const struct iterate_kit_board_ops ops = {

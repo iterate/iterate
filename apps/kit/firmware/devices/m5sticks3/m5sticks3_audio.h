@@ -104,40 +104,8 @@ bool m5sticks3_audio_mode_switching(void);
  */
 void m5sticks3_audio_amplifier(bool on);
 
-/** Complete capture frames replaced before the portable task could read them. */
-uint32_t m5sticks3_audio_capture_overruns(void);
-
-/** Microphone starts/records that failed after hardware ownership began. */
-uint32_t m5sticks3_audio_capture_driver_failures(void);
-
-/** I2S writes or mode switches that failed after admission through the seam. */
-uint32_t m5sticks3_audio_playback_driver_failures(void);
-
 /** Half-duplex fence crossings, for the health surface. */
 uint32_t m5sticks3_audio_mode_switches(void);
-
-/** Apply the shared starvation phase under this board's lock; amplifier
- * control remains with the device. Safe on the app and playback tasks.
- */
-void m5sticks3_audio_phase(enum iterate_kit_voice_phase phase);
-
-/**
- * Reserve credit for `ms` of audio ABOUT to be written, before the blocking
- * write. Lateness is measured here against an absolute audio-empty deadline:
- * every reservation pushes the deadline out by exactly the audio written, and
- * a write arriving after the deadline passed is starvation the listener heard.
- */
-void m5sticks3_audio_reserve_write(uint32_t ms);
-
-/** Undo a reservation whose write did not happen. */
-void m5sticks3_audio_rollback_write(uint32_t ms);
-
-/** Milliseconds the DAC spent with an empty ring while being fed. */
-uint32_t m5sticks3_audio_starved_ms(void);
-
-/** How many separate times that happened. */
-uint32_t m5sticks3_audio_starve_events(void);
-
 
 #ifdef __cplusplus
 }
