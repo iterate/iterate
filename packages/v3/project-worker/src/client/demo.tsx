@@ -9,30 +9,9 @@ import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { newWebSocketRpcSession } from "capnweb";
 import { useLiveState } from "./react.tsx";
+import { PRESENCE_PROCESSOR_SOURCE } from "./presence-processor-source.ts";
 
 const CTX = "prj_demo_livestate";
-
-// The demo processor, inline (a self-contained page needs no repo files): reduced `ticks` reduced
-// from durable 'tick' events, runtime `lastPokeMs` bumped by a 'poke' ephemeral in processEvent (the
-// engine re-projects after the batch). Two classes: the pure `PresenceProcessor`, and the one-line host
-// `PresenceDurableObject` that `enableProcessor`'s `className` names.
-const PRESENCE_SRC = `import { StreamProcessor, StreamProcessorDurableObject, defineProcessorContract, z } from "./processor.js";
-const contract = defineProcessorContract({
-  slug: "presence", version: "1.0.0",
-  description: "Reduced tick count beside a runtime lastPokeMs.",
-  stateSchema: z.object({ ticks: z.number().default(0) }),
-  consumes: ["tick", "poke"], emits: [],
-});
-class PresenceProcessor extends StreamProcessor {
-  contract = contract;
-  #lastPokeMs = 0;
-  reduce({ event, state }) { if (event.type === "tick") return { ...state, ticks: state.ticks + 1 }; }
-  processEvent({ event }) { if (event && event.type === "poke") this.#lastPokeMs = Date.now(); }
-  projectLiveState(state) { return { ticks: state.ticks, lastPokeMs: this.#lastPokeMs }; }
-}
-export class PresenceDurableObject extends StreamProcessorDurableObject {
-  processor = new PresenceProcessor();
-}`;
 
 async function connectAndEnable(): Promise<any> {
   const url = new URL("/api", location.href);
@@ -41,7 +20,7 @@ async function connectAndEnable(): Promise<any> {
     .authenticate()
     .projects.get(CTX);
   await itx.enableProcessor("presence", {
-    source: { "cap.js": PRESENCE_SRC }, // the modules, literally — nothing seeded anywhere first
+    source: PRESENCE_PROCESSOR_SOURCE, // the modules, literally — nothing seeded anywhere first
     className: "PresenceDurableObject",
     // What is SENT: the contract above says what is reduced. `poke` is ephemeral, and an
     // ephemeral reaches a processor only when its subscription names the type.

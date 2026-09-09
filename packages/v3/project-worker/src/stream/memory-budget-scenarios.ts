@@ -559,10 +559,10 @@ const scenarios: Record<string, (args: Record<string, number>) => Promise<void>>
   },
 
   /** N CURSOR rows on DISJOINT event types whose sinks never answer, fed large EPHEMERALS. The loop
-   *  remembers ONE pushed batch per cursor row (`#pushedEventBatches`, latest wins — how ephemerals
+   *  remembers ONE pushed batch per cursor row (the record's `pushedEventBatch`, latest wins — how ephemerals
    *  reach a caught-up cursor target), outside every budget; the row whose call is in flight holds
    *  the batch it took as well, and a row waiting for cursor-read room holds nothing but its latest.
-   *  The fold (`#pendingPushByRow`) is bounded across rows; the remembered batches are not: about
+   *  The fold (the record's `pendingPush`) is bounded across rows; the remembered batches are not: about
    *  `batchChars` × (rows + 1). */
   async "cursor-rows-pushed-ephemerals"(args) {
     const storage = nodeSqliteDurableObjectStorage();
@@ -630,7 +630,7 @@ const scenarios: Record<string, (args: Record<string, number>) => Promise<void>>
    *  platform's own uncoded SQLITE_TOOBIG where every other door refusal is coded. Rows land
    *  `rowsPerAppend` at a time (one core diff per commit; one at a time the Nth configure also pays
    *  an O(N) live-state diff — `configureMsAtCap` is that cost). Then a core-version bump: the
-   *  constructor re-reduces every configure — one table copy per 500-event page (`reduceBatch`),
+   *  constructor re-reduces every configure — one table copy per 500-event page (`reduceCoreEventBatch`),
    *  where it once spread the whole table per event, O(rows²) — timed. */
   async "core-rows-until-cell-cap"(args) {
     const storage = nodeSqliteDurableObjectStorage();

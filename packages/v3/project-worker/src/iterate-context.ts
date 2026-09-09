@@ -49,10 +49,10 @@
 
 import { RpcTarget } from "capnweb";
 import type { IterateContextDurableObject } from "./iterate-context-durable-object.ts";
-import { ITX_EXPRESSION_FETCH_HEADER } from "./fetch/rpc-stub-fetch.ts";
+import { ITX_EXPRESSION_FETCH_HEADER, terminalFetchOf } from "./fetch/rpc-stub-fetch.ts";
 import {
   canonicalItxExpressionPrefix,
-  toItxExpression,
+  normalizedItxExpression,
   type ItxExpression,
   type ItxExpressionInput,
   print,
@@ -66,7 +66,7 @@ import {
   facetSpecOf,
   type FacetSpec,
 } from "./context/worker-loader.ts";
-import { installPrototypeInvokeFallback } from "./context/dotted-path-proxy.ts";
+import { installPrototypeInvokeFallback } from "./context/invoke-handle.ts";
 import type { BuiltInScope } from "./context/built-ins.ts";
 import {
   DurableObjectNameCodec,
@@ -201,25 +201,14 @@ export class IterateContext extends RpcTarget {
    *  fetch channel is the only hop kind that carries a socket-bearing Response back (a 101 from a
    *  tunnel or a WS-serving worker; fetch/rpc-stub-fetch.ts doctrine, points 1 & 4). */
   invoke(call: ItxExpressionInput, ...args: unknown[]): Promise<unknown> {
-    let itxExpression = toItxExpression(call);
-    // `invoke("itx.laptop.fetch", request)` is the terminal-fetch call spelled with its live arg —
-    // fold it, so the fork below sees the one shape.
-    if (args.length === 1 && args[0] instanceof Request && itxExpression.at(-1) === "fetch") {
-      itxExpression = [...itxExpression.slice(0, -1), ["fetch", args[0]]];
-      args = [];
-    }
-    const last = itxExpression.at(-1);
-    if (
-      Array.isArray(last) &&
-      last[0] === "fetch" &&
-      last.length === 2 &&
-      last[1] instanceof Request
-    ) {
-      const headers = new Headers(last[1].headers);
-      headers.set(ITX_EXPRESSION_FETCH_HEADER, JSON.stringify(itxExpression.slice(0, -1))); // the lane parses a JSON ItxExpression
+    const itxExpression = normalizedItxExpression(call);
+    const terminalFetch = terminalFetchOf(itxExpression, args);
+    if (terminalFetch) {
+      const headers = new Headers(terminalFetch.request.headers);
+      headers.set(ITX_EXPRESSION_FETCH_HEADER, JSON.stringify(terminalFetch.steps)); // the lane parses a JSON ItxExpression
       headers.delete(ITX_PRINCIPAL_HEADER); // the stamp is this session's, never the Request's own
       if (this.#principal) headers.set(ITX_PRINCIPAL_HEADER, JSON.stringify(this.#principal));
-      return this.#durableObject.fetch(new Request(last[1], { headers }));
+      return this.#durableObject.fetch(new Request(terminalFetch.request, { headers }));
     }
     return this.#invokeOnDurableObject(itxExpression, args);
   }
@@ -452,10 +441,8 @@ export class IterateContext extends RpcTarget {
   }
 }
 
-// THE NATURAL DOTTED SURFACE. Insert the dynamic fallback into `IterateContext.prototype`'s chain so
-// an unknown segment (`itx.slack`, `itx.kv`, `itx.append`) becomes an accumulated `invoke` dispatch,
-// while the declared methods above always win. The receiver IS the invoker — the accumulated access
-// reduces into ONE `invoke(expression)` call (`[...root, ...prefix, [method, ...args]]`). Runs once at
-// module load, after the class body. See context/dotted-path-proxy.ts for the workerd brand-check
-// reason this is a prototype hop and not a Proxy AROUND the instance.
+// THE NATURAL DOTTED SURFACE: an unknown segment (`itx.slack`, `itx.kv`, `itx.append`) reduces into
+// ONE `invoke(expression)` dispatch through the prototype hop (context/invoke-handle.ts — the workerd
+// brand-check reason it is a hop and not a Proxy AROUND the instance), the declared methods above
+// always winning. Runs once at module load, after the class body.
 installPrototypeInvokeFallback(IterateContext, ["itx"]);

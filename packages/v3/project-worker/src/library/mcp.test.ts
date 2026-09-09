@@ -116,7 +116,11 @@ describe("connectToMcp", () => {
     expect(requests[0].request.headers.get("accept")).toBe("application/json, text/event-stream");
     expect(requests[2].request.headers.get("mcp-session-id")).toBe("s-1");
     expect(conn.serverInfo().serverInfo).toEqual({ name: "fake", version: "0" });
-    expect(conn.tools().map((t) => t.name)).toEqual(["echo", "add", "callTool"]);
+    // the connection grew one method per listed tool (`callTool`, a reserved name, stays its own)
+    expect(["echo", "add"].map((name) => typeof (conn as any)[name])).toEqual([
+      "function",
+      "function",
+    ]);
   });
 
   const rows: Array<{
@@ -199,7 +203,7 @@ describe("connectToMcp", () => {
       );
     });
     const conn = await connectToMcp(itx, "https://mcp.example/rpc");
-    expect(conn.tools()).toEqual([]);
+    expect(conn.serverInfo().serverInfo).toEqual({ name: "plain" });
   });
 
   test("a non-2xx answer throws with the status and the body", async () => {

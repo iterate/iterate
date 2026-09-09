@@ -36,6 +36,9 @@ import type { ItxEntrypoint } from "../itx-entrypoint.ts";
 /** What the parent mints the class with — the whole identity. */
 export type StreamProcessorProps = { iterateContextName: string; name: string };
 
+/** The itx scope as `env.ITX.get()` hands it over: the pipelined `IterateContext` stub. */
+type ItxScope = ReturnType<Service<ItxEntrypoint>["get"]>;
+
 export abstract class StreamProcessorDurableObject<
   State = unknown,
   Env extends { ITX: Service<ItxEntrypoint> } = { ITX: Service<ItxEntrypoint> },
@@ -83,34 +86,28 @@ export abstract class StreamProcessorDurableObject<
       // THE PLATFORM NEVER SPELLS A SHORT NAME: the engine's own emits, catch-up and gap repair go to
       // the fixed point, `itx.builtins.…` — a context's rows (a whole-context override, a mask at
       // `itx.append`) redirect the processor's calls to `itx.…`, never its log traffic.
-      // §2.2 — RELEASE the itx capability. `env.ITX.get()` builds an IterateContext RpcTarget, and
-      // both it and the append/read call pipeline PIN THE PARENT DO until GC (the "GC is too late"
-      // defect #invokeFacet fixes in the other direction: an un-disposed result keeps the actor
-      // billed). Hold the pipelined chain, await the answer (plain data — the wire already copied
-      // it), then dispose the call AND the get — one round trip still, no dangling capability.
       stream: {
-        append: async (...events) => {
-          const itx = this.env.ITX.get();
-          const result = itx.builtins.append(...events);
-          try {
-            return await result;
-          } finally {
-            (result as unknown as Disposable)[Symbol.dispose]?.();
-            (itx as unknown as Disposable)[Symbol.dispose]?.();
-          }
-        },
-        read: async (after, limit) => {
-          const itx = this.env.ITX.get();
-          const result = itx.builtins.readEvents(after, limit);
-          try {
-            return await result;
-          } finally {
-            (result as unknown as Disposable)[Symbol.dispose]?.();
-            (itx as unknown as Disposable)[Symbol.dispose]?.();
-          }
-        },
+        append: (...events) => this.#withItx((itx) => itx.builtins.append(...events)),
+        read: (after, limit) => this.#withItx((itx) => itx.builtins.readEvents(after, limit)),
       },
       storage: new ReduceCheckpointTable(this.ctx.storage.sql),
     }));
+  }
+
+  /** ONE pipelined round trip on the itx scope, then RELEASE it (§2.2). `env.ITX.get()` builds an
+   *  IterateContext RpcTarget, and both it and the call pipelined on it PIN THE PARENT DO until GC
+   *  (the "GC is too late" defect #invokeFacet fixes in the other direction: an un-disposed result
+   *  keeps the actor billed). Hold the pipelined chain, await the answer (plain data — the wire
+   *  already copied it), then dispose the call AND the get — one round trip still, no dangling
+   *  capability. */
+  async #withItx<T>(call: (itx: ItxScope) => T): Promise<Awaited<T>> {
+    const itx = this.env.ITX.get();
+    const result = call(itx);
+    try {
+      return await result;
+    } finally {
+      (result as unknown as Disposable)[Symbol.dispose]?.();
+      (itx as unknown as Disposable)[Symbol.dispose]?.();
+    }
   }
 }

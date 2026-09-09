@@ -16,8 +16,7 @@ import {
   identity,
   type Session as ControlPlaneSession,
 } from "./control-plane/session.ts";
-import controlPlane from "./control-plane/index.ts";
-import type { Env as ControlPlaneEnv } from "./control-plane/env.ts";
+import { controlPlane, type Env as ControlPlaneEnv } from "./control-plane/app.ts";
 
 /** The one worker's env: the DO's bindings plus the in-process control plane's (D1, OAuth KV, …). */
 type WorkerEnv = Env & ControlPlaneEnv;
@@ -30,11 +29,9 @@ import {
 import { UnauthenticatedSession } from "./session.ts";
 import { appConfigOf, type AppConfig } from "./app-config.ts";
 import {
-  PROJECT_SESSION_PATH,
   projectHostOf,
   projectSessionCookieOf,
-  projectSessionSetCookie,
-  sameOriginPath,
+  projectSessionResponse,
   withoutProjectSessionCookie,
 } from "./project-host.ts";
 import {
@@ -164,29 +161,10 @@ export default {
         return new Response(`421: no project ${JSON.stringify(projectId)} is served here\n`, {
           status: 421,
         });
-      // THE SESSION DOOR on a project host: a project token (src/principal.ts) for THIS project
-      // becomes the host-scoped cookie, and the browser goes on to `next`; `?logout` clears it.
-      if (url.pathname === PROJECT_SESSION_PATH) {
-        const location = sameOriginPath(url.searchParams.get("next") ?? "/", url.origin);
-        if (url.searchParams.has("logout"))
-          return new Response(null, {
-            status: 303,
-            headers: { location, "set-cookie": projectSessionSetCookie("", 0) },
-          });
-        const token = url.searchParams.get("token") ?? "";
-        const claims = await verifyProjectToken(token, projectTokenSecret);
-        if (!claims || claims.projectId !== projectId)
-          return new Response("the project token did not verify for this project\n", {
-            status: 401,
-          });
-        return new Response(null, {
-          status: 303,
-          headers: {
-            location,
-            "set-cookie": projectSessionSetCookie(token, (claims.expiresAt - Date.now()) / 1000),
-          },
-        });
-      }
+      // THE SESSION DOOR on a project host (`/.itx/session`, project-host.ts): a project token for
+      // THIS project becomes the host-scoped cookie; every other path is the app's.
+      const sessionResponse = await projectSessionResponse(url, projectId, projectTokenSecret);
+      if (sessionResponse) return sessionResponse;
       // WHO (laneIdentityOf) and WHAT THE APP SEES (laneRequestTo): the visitor's own cookies reach
       // the app; the platform's project-session cookie and a project-token bearer never do — only
       // the verified stamp.

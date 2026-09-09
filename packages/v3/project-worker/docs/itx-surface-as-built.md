@@ -134,7 +134,7 @@ The one codec every door speaks. String half ⇄ structured half.
   to the value the expression denotes (`invoke("itx.kv.get", "k")` ≡ `itx.kv.get("k")`; the fetch
   lane's Request rides the same door).
 - **The dotted surface is a prototype hop**, not a Proxy around the instance
-  (`src/context/dotted-path-proxy.ts`, `installPrototypeInvokeFallback`). Declared methods
+  (`src/context/invoke-handle.ts`, `installPrototypeInvokeFallback`). Declared methods
   win; every unknown segment accumulates and lands on `invoke` as ONE expression. It is a
   prototype hop so workerd's pipelining brand-check still passes (workerd#6873).
 
@@ -598,7 +598,7 @@ skipped on 45 files (the deployed-only ones run against the deployed worker).
 | the edge                 | `worker.ts` · `session.ts` · `session-teardown.ts` · `iterate-context.ts` · `itx-entrypoint.ts` · `project-host.ts` · `principal.ts` · `types.ts`                                                | 1,250 |
 | the control plane        | `control-plane/app.ts` · `directory.ts` · `session.ts` · `mcp.ts` · `definitions.sql` |   ≈ 470 |
 | the DO                   | `iterate-context-durable-object.ts`                                                                                                                                                              |   949 |
-| expressions + dispatch   | `context/expression.ts` · `dispatch.ts` · `dotted-path-proxy.ts` · `invoke-handle.ts`                                                                                                            |   623 |
+| expressions + dispatch   | `context/expression.ts` · `dispatch.ts` · `invoke-handle.ts`                                                                                                            |   623 |
 | built-ins + loader       | `context/built-ins.ts` · `worker-loader.ts` · `durable-object-names.ts`                                                                                                                          |   859 |
 | artifacts + repos        | `context/repos.ts` · `git-wire.ts`                                                                                                                                                               |   820 |
 | (a) rpc stubs            | `context/rpc-stub-directory.ts` · `rpc-stub-relay.ts`                                                                                                                                            |   654 |

@@ -1,7 +1,7 @@
 // context-dotted-calls-fall-back-to-the-invoke-door.e2e.test.ts — the NATURAL DOTTED CLIENT SURFACE. A
 // client speaks deep dotted itx expressions as PLAIN PROPERTY ACCESS on the capnweb stub —
 // `itx.slack.chat.postMessage({...})`, `itx.kv.put('k','v')` — even though only fixed members are
-// real methods anywhere along the path: the prototype hop (context/dotted-path-proxy.ts) turns every
+// real methods anywhere along the path: the prototype hop (context/invoke-handle.ts) turns every
 // unknown segment into ONE accumulated `invoke(expression)` dispatch. Proves the root and depth-2
 // built-ins, a lent rpc stub through its rewrite rule's match, that a wrong guess REJECTS (raw — the
 // NOT_A_METHOD re-grammar was removed, an apps/os error-normalizer nicety with no clean-room
@@ -132,8 +132,8 @@ test("JSON.stringify of a dangling chain node must not dispatch, and the node st
   expect(await node.hello()).toBe("hello-from-rec"); // still a live handle afterwards
 });
 
-// PINS context/dotted-path-proxy.ts's reserved-word promise AGAINST THE LIVE SURFACE (unit half:
-// dotted-path-proxy.test.ts "hides reserved path segments from function-backed path proxies").
+// PINS context/invoke-handle.ts's reserved-word promise AGAINST THE LIVE SURFACE (unit half:
+// invoke-handle.test.ts "hides reserved path segments from function-backed path proxies").
 // RESERVED hides JS/transport machinery ('then', 'dup', 'onRpcBroken', …) at
 // the prototype hop AND inside every path proxy it hands out, so a protocol probe can never conjure
 // a dispatcher. Observable stakes on the live itx: a probe that DID dispatch would commit through

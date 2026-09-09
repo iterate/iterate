@@ -205,8 +205,7 @@ function makeWorkspaceDocumentsWorkspace(): WorkspaceConfig {
 function makeProjectWorkerWorkspace(): WorkspaceConfig {
   // The clean-room platform worker (wip/kernel-wayfinder). Entries: the worker, the SDK bundle's
   // source (build-sdk.mjs bundles src/sdk/index.ts + src/client/demo.tsx into src/generated and
-  // public/), the ONE vitest config (four projects) + its global setup, the sqlfu config, and the
-  // Playwright specs.
+  // public/), the ONE vitest config (four projects) + its global setup, and the Playwright specs.
   return {
     entry: [
       "src/worker.ts!",
@@ -215,7 +214,6 @@ function makeProjectWorkerWorkspace(): WorkspaceConfig {
       "build-sdk.mjs",
       "vitest.config.ts",
       "vitest.global-setup.ts",
-      "sqlfu.config.ts",
       // the e2e lane's test files and the two vitest hooks are entries; e2e/support/** is project code,
       // so an unused support export is reported
       "e2e/**/*.e2e.test.ts",
@@ -235,9 +233,8 @@ function makeProjectWorkerWorkspace(): WorkspaceConfig {
       "specs/**/*.ts",
       "!src/generated/**",
     ],
-    // src/generated is the SDK bundle (gitignored); sql/.generated is sqlfu's typed-query output,
-    // whose exports are its own catalogue (row types, the query sources).
-    ignore: ["src/generated/**", "src/control-plane/sql/.generated/**"],
+    // src/generated is the SDK bundle (gitignored).
+    ignore: ["src/generated/**"],
     // `cloudflare:workers` parses as the "cloudflare" package; wrangler backs the deploy script.
     ignoreDependencies: ["cloudflare", "wrangler"],
     ignoreBinaries: ["playwright"],

@@ -325,7 +325,7 @@ test(
   },
 );
 
-// Dies of: oom. The loop remembers ONE pushed batch per CURSOR row (`#pushedEventBatches`, latest
+// Dies of: oom. The loop remembers ONE pushed batch per CURSOR row (the record's `pushedEventBatch`, latest
 // wins — how ephemerals reach a caught-up cursor target) outside every budget: the pending fold is
 // bounded per row and across rows, the in-flight ledgers bound the calls, but this second copy is
 // bounded by nothing but the row count — 24 rows × 7 MiB, plus the batch the in-flight row holds.
@@ -364,7 +364,7 @@ test(
 
 /** ONE run (17,000 rows configured, then re-reduced after a version bump) feeds the two rows below
  *  — a memo, so the second row reads the first's facts instead of paying the run again. Under a
- *  second since `reduceBatch` (was ~55 s when every configure copied the whole table). */
+ *  second since `reduceCoreEventBatch` (was ~55 s when every configure copied the whole table). */
 let coreRowsRun: ScenarioRun | undefined;
 const runCoreRowsUntilCellCap = () =>
   (coreRowsRun ??= runScenario("core-rows-until-cell-cap", {
@@ -391,7 +391,7 @@ test(
 // A core-version bump re-reduces every configure inside the DO constructor. BORN RED (the
 // `rereduceMs` fact): each configure spread the whole subscriptions table — O(rows²), 25 s for
 // 17,000 rows on this laptop, past the 30 s CPU limit on an edge core (≈ half as fast), and the next
-// wake ran the same constructor: a reboot loop. FLIPPED by `CoreStreamProcessor.reduceBatch`
+// wake ran the same constructor: a reboot loop. FLIPPED by `reduceCoreEventBatch`
 // (v4 §2.1): a table is copied once per 500-event page, not once per event. The bound stays 15 s for
 // the reason above; the fixed cost is well under a second.
 test(

@@ -35,20 +35,9 @@ export type ReduceCheckpoint<State> = {
   state: State | undefined;
 };
 
-/** What a host reads and writes its checkpoints through — the table below, or the unit lane's
- *  in-memory stand-in (stream/test-support.ts). */
-export interface ReduceCheckpointStore {
-  read<State>(slug: string): ReduceCheckpoint<State> | undefined;
-  /** ALWAYS the cursor; the state ONLY when `stateChanged` — one write either way. */
-  write<State>(
-    slug: string,
-    cursor: { reducerVersion: string; reducedThroughOffset: number },
-    state: State,
-    stateChanged: boolean,
-  ): void;
-}
-
-export class ReduceCheckpointTable implements ReduceCheckpointStore {
+/** What BOTH hosts read and write their checkpoints through — the stream's storage and a facet's
+ *  own (the unit lane drives it over node:sqlite, stream/test-support.ts). */
+export class ReduceCheckpointTable {
   readonly #sql: SqlStorageHandle;
 
   /** `createTable: false` when the caller knows the table exists (the stream's storage skips every
@@ -84,6 +73,7 @@ export class ReduceCheckpointTable implements ReduceCheckpointStore {
     };
   }
 
+  /** ALWAYS the cursor; the state ONLY when `stateChanged` — one write either way. */
   write<State>(
     slug: string,
     cursor: { reducerVersion: string; reducedThroughOffset: number },

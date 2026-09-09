@@ -38,7 +38,7 @@
 
 import { reportIssue } from "../lib/errors.ts";
 import { LiveState } from "./live-state.ts";
-import type { ReduceCheckpointStore } from "./reduce-checkpoint.ts";
+import type { ReduceCheckpointTable } from "./reduce-checkpoint.ts";
 import type { StreamEvent, StreamEventInput } from "./events.ts";
 
 /** What a processor declares: its checkpoint slug and reducer version, what it consumes and emits,
@@ -154,7 +154,7 @@ export class ProcessorEngine<State> {
   readonly processor: StreamProcessor<State>;
   readonly #contract: ProcessorContract<State>;
   readonly #stream: ProcessorStream;
-  readonly #storage: ReduceCheckpointStore;
+  readonly #storage: ReduceCheckpointTable;
 
   /** Rule 1: every batch runs on this chain, one after another. */
   #serialBatchChain: Promise<void> = Promise.resolve();
@@ -181,7 +181,7 @@ export class ProcessorEngine<State> {
 
   constructor(
     processor: StreamProcessor<State>,
-    deps: { stream: ProcessorStream; storage: ReduceCheckpointStore },
+    deps: { stream: ProcessorStream; storage: ReduceCheckpointTable },
   ) {
     this.processor = processor;
     this.#contract = processor.contract;

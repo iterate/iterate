@@ -1,14 +1,46 @@
-// The default handler — everything that is NOT the OAuth token/metadata endpoints or the /mcp API route.
-// This is the FIRST-PARTY world: the login form, the session, the home page/console, and the OAuth
-// /authorize consent page (which reuses the same session and grants the client the USER — what /mcp
-// acts as). No first-party surface is ever an OAuth client; they all just carry the session cookie.
+// The CONTROL PLANE — mounted IN-PROCESS as the project worker's front-door catch-all (src/worker.ts
+// keeps /api, /expression, /version, /demo and delegates everything else to `controlPlane` below).
+// The whole handler is wrapped in an OAuth 2.1 Authorization Server whose routing is the library's;
+// the AS owns only a thin edge — the /token endpoint, the .well-known metadata, and token-validation
+// on /mcp (mcp.ts). EVERYTHING ELSE (login, session, console, /authorize consent, project creation)
+// falls through to `app`, the FIRST-PARTY world: the login form, the session, the home page/console,
+// and the OAuth /authorize consent page (which reuses the same session and grants the client the
+// USER — what /mcp acts as). No first-party surface is ever an OAuth client; they all just carry the
+// session cookie.
+//
+//   • first-party surfaces  → session cookie via `app`   (0 OAuth clients)
+//   • external MCP clients  → OAuth on /mcp, self-describing via CIMD  (0 hand-registered clients)
 
-import { appConfigOf } from "../app-config.ts";
+import { OAuthProvider, type OAuthHelpers } from "@cloudflare/workers-oauth-provider";
+import { appConfigOf, type AppConfigEnv } from "../app-config.ts";
 import { sameOriginPath } from "../project-host.ts";
-import type { Env, Handler } from "./env.ts";
-import { directory } from "./directory.ts";
-import { slugify } from "./ids.ts";
-import { clearSessionCookie, identity, setSessionCookie, type Session } from "./session.ts";
+import { directory, slugify } from "./directory.ts";
+import { mcpHandler } from "./mcp.ts";
+import {
+  ANONYMOUS,
+  clearSessionCookie,
+  identity,
+  setSessionCookie,
+  type Session,
+} from "./session.ts";
+
+/** The control plane's bindings — a slice of the one worker's env (src/worker.ts intersects it with the
+ *  DO's `Env`). Its configuration (the login mode, the session secret) is the worker's, through
+ *  `appConfigOf(env)` (src/app-config.ts). `OAUTH_PROVIDER` is injected by the OAuthProvider wrapper at
+ *  request time. */
+export interface Env extends AppConfigEnv {
+  /** Provider-owned store: grants, tokens, DCR clients. Required by @cloudflare/workers-oauth-provider. */
+  OAUTH_KV: KVNamespace;
+  /** The directory: users, orgs, org_members, projects (definitions.sql). Strongly consistent (D1). */
+  DB: D1Database;
+  /** Injected by the provider — the OAuth helper surface (parseAuthRequest / completeAuthorization / …). */
+  OAUTH_PROVIDER: OAuthHelpers;
+}
+
+/** A worker handler with a REQUIRED fetch — what OAuthProvider expects for defaultHandler/apiHandler. */
+export interface Handler {
+  fetch(request: Request, env: Env, ctx: ExecutionContext): Response | Promise<Response>;
+}
 
 const esc = (s: string) =>
   s
@@ -114,7 +146,9 @@ async function authorize(request: Request, env: Env, session: Session | null): P
   );
 }
 
-export const app: Handler = {
+/** The provider's default handler — everything that is NOT the OAuth token/metadata endpoints or the
+ *  /mcp API route. */
+const app: Handler = {
   async fetch(request, env) {
     const url = new URL(request.url);
     const session = await identity(request, env);
@@ -173,5 +207,33 @@ export const app: Handler = {
     }
 
     return new Response("Not found", { status: 404 });
+  },
+};
+
+const provider = new OAuthProvider<Env>({
+  apiRoute: "/mcp", // the ONLY OAuth-protected boundary
+  apiHandler: mcpHandler,
+  defaultHandler: app, // login + session + /authorize consent + console
+  authorizeEndpoint: "/authorize",
+  tokenEndpoint: "/token",
+  scopesSupported: ["project"],
+  allowPlainPKCE: false, // OAuth 2.1: S256 only
+  clientIdMetadataDocumentEnabled: true, // CIMD — clients register themselves by URL (proved on HTTPS)
+  clientRegistrationEndpoint: "/register", // DCR — the spec-sanctioned MAY-fallback (the local http proof)
+});
+
+/** The control plane's front door. `open` login mode (APP_CONFIG_LOGIN_MODE): no OAuth, so `/mcp` is
+ *  TOKENLESS — short-circuit before the provider's apiRoute would 401, running the MCP server with the
+ *  single anonymous identity. `email` mode goes through the provider unchanged. */
+export const controlPlane: Handler = {
+  async fetch(request, env, ctx) {
+    if (appConfigOf(env).loginMode === "open" && new URL(request.url).pathname === "/mcp") {
+      (ctx as ExecutionContext & { props: unknown }).props = {
+        sub: ANONYMOUS.sub,
+        email: ANONYMOUS.email,
+      };
+      return mcpHandler.fetch(request, env, ctx);
+    }
+    return provider.fetch(request, env, ctx);
   },
 };

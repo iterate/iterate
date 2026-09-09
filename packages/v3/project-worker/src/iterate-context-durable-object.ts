@@ -62,7 +62,7 @@ import { codedError, errorCode, reportIssue } from "./lib/errors.ts";
 import { withTimeout } from "./lib/timeout.ts";
 import type { StreamEvent, StreamEventInput } from "./stream/events.ts";
 import {
-  toItxExpression,
+  normalizedItxExpression,
   canonicalItxExpressionPrefix,
   parse,
   print,
@@ -100,10 +100,10 @@ import { subscriptionConfiguredEvent } from "./stream/subscriptions.ts";
 import { ITX_PRINCIPAL_HEADER, stampPrincipal, type Principal } from "./principal.ts";
 import {
   buildBuiltIns,
-  type ArtifactsNamespace,
   type RewriteRuleListEntry,
   type SubscriptionListEntry,
 } from "./context/built-ins.ts";
+import type { ArtifactsNamespace } from "./context/repos.ts";
 import { SubscriptionDelivery } from "./stream/subscription-delivery.ts";
 
 function parseIterateContextDurableObjectName(name: string | undefined) {
@@ -335,7 +335,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         continue;
       try {
         const spec = facetSpecFromHostingTarget(
-          this.#itxExpressionResolver.resolve(toItxExpression(target)).at(-1)!,
+          this.#itxExpressionResolver.resolve(normalizedItxExpression(target)).at(-1)!,
         );
         if (!spec) continue;
         const storedSpec = facetSpecOf(spec as FacetSpec);
@@ -680,7 +680,6 @@ export class IterateContextDurableObject extends DurableObject<Env> {
             value: {
               snapshot: () => this.#stream.coreReducedStateSnapshot(),
               liveSnapshot: () => this.#stream.coreLiveStateSnapshot(),
-              waitUntilProcessed: () => ({ ok: true }),
             },
             receiver: undefined,
           },
@@ -688,53 +687,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         )
       ).value;
     }
-    // THE STARTUP MEMO `facet:<name>` = the FacetSpec in this DO's kv (the source is its modules,
-    // literally, or the producer expression — stored as given), read once per incarnation into
-    // #facetStartupMemoByName: a hosting spec writes it (when it changed) BEFORE the load, so
-    // `itx.facets.get(name)` alone re-materializes the facet after an eviction; a bare name reads it
-    // — an unknown name is NO_FACET.
-    let facetStartupMemo =
-      this.#facetStartupMemoByName.get(name) ??
-      (this.ctx.storage.kv.get(`facet:${name}`) as FacetSpec | undefined);
-    if (spec) {
-      assertFacetSourceWithinCeiling(spec, `facet "${name}"`);
-      const storedSpec = facetSpecOf(spec);
-      // Replaced only when it CHANGED: an unchanged spec keeps the memo object, and with it the
-      // loader's identity-keyed content hash.
-      if (!facetStartupMemo || JSON.stringify(facetStartupMemo) !== JSON.stringify(storedSpec)) {
-        this.ctx.storage.kv.put(`facet:${name}`, storedSpec);
-        facetStartupMemo = storedSpec;
-      }
-    }
-    if (!facetStartupMemo) {
-      // M1: a hosting row keeps NO source in core state — recover it from the DURABLE log event that
-      // configured it (its `configuredAtOffset`), write the memo once, and proceed. The memo survives
-      // eviction (kv), so this log read happens at most once per facet per deployment, never per push.
-      // The row that HOSTS this facet (its marker names it — the subscription's own name may differ).
-      const row = Object.values(this.#stream.coreReducedState.subscriptions).find(
-        (candidate) => candidate.hostedFacet?.name === name,
-      );
-      if (row?.hostedFacet) {
-        const [configuredEvent] = this.#stream.read(row.configuredAtOffset - 1, 1).events;
-        const configuredTarget = (
-          configuredEvent?.payload as { target?: ItxExpressionInput } | undefined
-        )?.target;
-        // RESOLVED before reading the spec off it, as the reduce did when it marked the row.
-        const spec = configuredTarget
-          ? facetSpecFromHostingTarget(
-              this.#itxExpressionResolver.resolve(toItxExpression(configuredTarget)).at(-1)!,
-            )
-          : undefined;
-        if (spec) {
-          const recovered = facetSpecOf(spec as FacetSpec);
-          this.ctx.storage.kv.put(`facet:${name}`, recovered);
-          facetStartupMemo = recovered;
-        }
-      }
-    }
-    if (!facetStartupMemo)
-      throw codedError("NO_FACET", `no facet "${name}" — load a class into it first`);
-    this.#facetStartupMemoByName.set(name, facetStartupMemo);
+    const facetStartupMemo = this.#facetStartupMemoFor(name, spec);
     // Counted so a CONCURRENT alarm's quiesce never aborts the facet mid-call.
     this.#facetWorkInFlight++;
     try {
@@ -825,6 +778,60 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       this.#facetWorkInFlight--;
       this.#recordActivityForQuietClock(); // a finished call earns a fresh quiet period
     }
+  }
+
+  /** THE STARTUP MEMO `facet:<name>` = the FacetSpec in this DO's kv (the source is its modules,
+   *  literally, or the producer expression — stored as given), read once per incarnation into
+   *  #facetStartupMemoByName and resolved here for one call: a hosting `spec` writes it (when it
+   *  changed) BEFORE the load, so `itx.facets.get(name)` alone re-materializes the facet after an
+   *  eviction; a bare name reads it; a name with neither is recovered from the durable log (M1,
+   *  below); an unknown name is NO_FACET. Synchronous, so nothing can slip in between the checks. */
+  #facetStartupMemoFor(name: string, spec: FacetSpec | undefined): FacetSpec {
+    let facetStartupMemo =
+      this.#facetStartupMemoByName.get(name) ??
+      (this.ctx.storage.kv.get(`facet:${name}`) as FacetSpec | undefined);
+    if (spec) {
+      assertFacetSourceWithinCeiling(spec, `facet "${name}"`);
+      const storedSpec = facetSpecOf(spec);
+      // Replaced only when it CHANGED: an unchanged spec keeps the memo object, and with it the
+      // loader's identity-keyed content hash.
+      if (!facetStartupMemo || JSON.stringify(facetStartupMemo) !== JSON.stringify(storedSpec)) {
+        this.ctx.storage.kv.put(`facet:${name}`, storedSpec);
+        facetStartupMemo = storedSpec;
+      }
+    }
+    if (!facetStartupMemo) {
+      // M1: a hosting row keeps NO source in core state — recover it from the DURABLE log event that
+      // configured it (its `configuredAtOffset`), write the memo once, and proceed. The memo survives
+      // eviction (kv), so this log read happens at most once per facet per deployment, never per push.
+      // The row that HOSTS this facet (its marker names it — the subscription's own name may differ).
+      const row = Object.values(this.#stream.coreReducedState.subscriptions).find(
+        (candidate) => candidate.hostedFacet?.name === name,
+      );
+      if (row?.hostedFacet) {
+        const [configuredEvent] = this.#stream.read(row.configuredAtOffset - 1, 1).events;
+        const configuredTarget = (
+          configuredEvent?.payload as { target?: ItxExpressionInput } | undefined
+        )?.target;
+        // RESOLVED before reading the spec off it, as the reduce did when it marked the row.
+        const recoveredSpec = configuredTarget
+          ? facetSpecFromHostingTarget(
+              this.#itxExpressionResolver
+                .resolve(normalizedItxExpression(configuredTarget))
+                .at(-1)!,
+            )
+          : undefined;
+        if (recoveredSpec) {
+          const recovered = facetSpecOf(recoveredSpec as FacetSpec);
+          this.ctx.storage.kv.put(`facet:${name}`, recovered);
+          facetStartupMemo = recovered;
+        }
+      }
+    }
+    if (!facetStartupMemo)
+      throw codedError("NO_FACET", `no facet "${name}" — load a class into it first`);
+    this.#facetStartupMemoByName.set(name, facetStartupMemo);
+    return facetStartupMemo;
   }
 
   /** Abort a facet that is running; one that is not (already quiesced, never started) is nothing. */

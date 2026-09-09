@@ -43,15 +43,9 @@ import type { SubscriptionCursor } from "./stream-storage.ts";
  *  failed (the ladder armed), and an eviction in between leaves the alarm behind to re-derive. */
 const CURSOR_DELIVERY_CALL_WATCHDOG_MS = 20_000;
 
-/** THE PENDING-PUSH BUDGET: the most serialized event chars one row may hold back while a delivery
- *  is in flight. Past it the OLDEST events are dropped and the push's `after` moves up to the last
- *  dropped offset — the span a facet heals from the log (its ephemerals are gone; nothing can
- *  redeliver an ephemeral); a cursor row never needed them (its lane pages the log). One read page,
- *  so a stuck subscriber costs this actor one page, not every commit since it stalled. */
-const PENDING_PUSH_BUDGET_CHARS = 8 * 1024 * 1024;
 /** THE IN-FLIGHT BUDGET, per context: the most serialized event chars ALL rows together may have
  *  handed to calls that have not settled — a push's arguments live in this isolate until the RPC
- *  returns, and the per-row bounds multiply by rows (20 stuck rows × 8 MiB is an isolate). A facet
+ *  returns, and per-row bounds would multiply by rows (20 stuck rows × 8 MiB is an isolate). A facet
  *  push or a cursor delivery WAITS for room (its row's pending push folds meanwhile, bounded); a
  *  push to a live client is dropped past it — the client heals by read, every dropped push's contract.
  *  8 MiB, not 16: a FACET push is a LOOPBACK RPC, so each in-flight push holds the event AND its
@@ -70,9 +64,16 @@ const DELIVERY_IN_FLIGHT_BUDGET_CHARS = 8 * 1024 * 1024;
  *  and the next cursor read WAITS; a small batch is trimmed to its real size and frees the reserve so
  *  small cursor deliveries stay concurrent and no call head-of-line-blocks the lane. */
 const CURSOR_READ_BUDGET_CHARS = 8 * 1024 * 1024;
-/** The most pending-push chars ALL rows together may hold back — past it the oldest events are
- *  dropped from the LARGEST queue first (each row's own PENDING_PUSH_BUDGET_CHARS still applies).
- *  8 MiB, not 16: the pending queue pins ephemeral arg payloads the same way (see above). */
+/** THE PENDING-PUSH BUDGET, per context: the most serialized event chars ALL rows together may hold
+ *  back while their deliveries are in flight. Past it the OLDEST events are dropped from the LARGEST
+ *  queue first and that push's `after` moves up to the last dropped offset — the span a facet heals
+ *  from the log (its ephemerals are gone; nothing can redeliver an ephemeral); a cursor row never
+ *  needed them (its lane pages the log). One read page, so a stuck subscriber costs this actor one
+ *  page, not every commit since it stalled. There is no per-row bound beside it: a row past 8 MiB on
+ *  its own is past the total and is the largest queue, so the trim starts on that row and holds back
+ *  the same 8 MiB. Only which of several backed-up rows loses its oldest events can differ from a
+ *  per-row trim, and every row heals the same way. 8 MiB, not 16: the pending queue pins ephemeral
+ *  arg payloads the same way the in-flight budget does (above). */
 const PENDING_PUSHES_TOTAL_BUDGET_CHARS = 8 * 1024 * 1024;
 
 /** A failure that can only repeat — halt the row now, not after the ladder: the flag workerd itself
@@ -108,6 +109,82 @@ type EvaluatedSubscriptionTarget = {
   forRowConfiguredAtOffset: number;
 };
 
+/** Everything the loop remembers about ONE subscription row this incarnation, by name — made on
+ *  first touch and dropped whole when the row is replaced or removed (`#forgetSubscription`). */
+type SubscriptionDeliveryRecord = {
+  /** Deliveries queue here: a slow target never lets a later batch overtake an earlier one. */
+  deliveryChain: Promise<unknown>;
+  /** THE ONE push waiting behind the in-flight delivery. A commit landing while one waits FOLDS
+   *  into it (one range, one call, one facet commit) — never a closure per commit — and it is
+   *  measured only once something folds in: the keeping-up case pays no stringify. Its presence IS
+   *  "a delivery closure is coming": the closure takes it before it delivers, so the next commit
+   *  starts a fresh one. */
+  pendingPush?: PendingPush;
+  /** The last `through` handed over — a batch the filter skipped rides inside the next range. */
+  lastDeliveredThroughOffset?: number;
+  /** The freshest pushed batch of a CURSOR row — how ephemerals reach a caught-up cursor target
+   *  (the log has no ephemerals; the push does). Latest wins; a stale one is ignored. */
+  pushedEventBatch?: { events: StreamEvent[]; after: number; through: number };
+  /** The cursor, in memory — the truth for this incarnation; the `subscription_cursors` table
+   *  mirrors it at DURABLE boundaries only (an ephemeral-only batch advances memory and touches no
+   *  storage: ephemerals are not in the log, and after an eviction the persisted cursor rewinds to
+   *  the last durable boundary and durables are redelivered from there, which at-least-once allows).
+   *  Absent for a push target. */
+  cursor?: SubscriptionCursor;
+  /** THE PUSH/CURSOR BIT: true once the target LAST evaluated to a handle that OWNS ITS PROGRESS (a
+   *  facet, a lent rpc stub) this incarnation. SET where the head is evaluated, never derived: a
+   *  materialization's or resume's catch-up, the alarm's row pass, and the push path — which
+   *  RE-classifies, so a row re-pointed at a target that cannot own its progress clears the bit and
+   *  the alarm's pass and the commit-time arming see it again. A fresh incarnation classifies again. */
+  targetOwnsProgress: boolean;
+  /** The evaluated target head, reused across pushes: a row delivered every commit (a PCM stream,
+   *  an audio call) would otherwise re-walk its target and re-mint a Facet/RpcStub handle on EVERY
+   *  push. Valid while the row's identity (`configuredAtOffset`) AND the rewrite-rule table (its
+   *  object identity in core state — any `provide`/un-set replaces it) are unchanged; either moving
+   *  re-evaluates. */
+  evaluatedTargetHead?: {
+    configuredAtOffset: number;
+    rewriteRulesRef: object;
+    head: unknown;
+    call: (args: unknown[]) => Promise<unknown>;
+  };
+};
+
+/** A CHARS BUDGET with waiters — the most serialized event chars one lane may hold at once.
+ *  `acquire` waits for room (a call larger than the whole budget runs alone when nothing is held —
+ *  never a deadlock); `release` wakes every waiter, each re-checks; `tryTake` takes the room now or
+ *  refuses (the live-client push's drop). Two instances, kept apart on purpose (the constants above). */
+class DeliveryCharsBudget {
+  readonly #budgetChars: number;
+  #heldChars = 0;
+  readonly #waiters: (() => void)[] = [];
+
+  constructor(budgetChars: number) {
+    this.#budgetChars = budgetChars;
+  }
+
+  get heldChars(): number {
+    return this.#heldChars;
+  }
+
+  async acquire(chars: number): Promise<void> {
+    while (this.#heldChars > 0 && this.#heldChars + chars > this.#budgetChars)
+      await new Promise<void>((resolve) => this.#waiters.push(resolve));
+    this.#heldChars += chars;
+  }
+
+  release(chars: number): void {
+    this.#heldChars -= chars;
+    for (const wake of this.#waiters.splice(0)) wake();
+  }
+
+  tryTake(chars: number): boolean {
+    if (this.#heldChars + chars > this.#budgetChars) return false;
+    this.#heldChars += chars;
+    return true;
+  }
+}
+
 type SubscriptionDeliveryDeps = {
   /** The stream: its rows (`coreReducedState.subscriptions`), its log, its durable mark, its alarm. */
   stream: Stream;
@@ -121,55 +198,19 @@ export class SubscriptionDelivery {
   readonly #stream: Stream;
   readonly #evaluateItxExpression: SubscriptionDeliveryDeps["evaluateItxExpression"];
   readonly #recordActivityForQuietClock: () => void;
-  /** Deliveries queue per subscription: a slow target never lets a later batch overtake an earlier one. */
-  readonly #deliveryChainBySubscription = new Map<string, Promise<unknown>>();
-  /** Per row: THE ONE push waiting behind its in-flight delivery. A commit landing while one waits
-   *  FOLDS into it (one range, one call, one facet commit) — never a closure per commit — and it is
-   *  measured only once something folds in: the keeping-up case pays no stringify. */
-  readonly #pendingPushByRow = new Map<string, PendingPush>();
+  /** What the loop remembers per row, by name (SubscriptionDeliveryRecord). */
+  readonly #deliveryRecordByName = new Map<string, SubscriptionDeliveryRecord>();
+  /** The cursor lane's lock, per NAME and outside the record on purpose: one `#deliverFromCursor`
+   *  loop drains a name at a time, and the loop that was draining a row when it was replaced goes on
+   *  to deliver the replacement once its call returns — so the lock outlives `#forgetSubscription`. */
+  readonly #cursorDeliveryRunning = new Set<string>();
   /** Chars handed to calls that have not settled, all rows (DELIVERY_IN_FLIGHT_BUDGET_CHARS). */
-  #deliveryCharsInFlight = 0;
-  /** Deliveries waiting for in-flight room — all woken whenever a call settles, each re-checks. */
-  readonly #deliveryRoomWaiters: (() => void)[] = [];
-  /** A SEPARATE budget for the CURSOR lane's read-through-call (CURSOR_READ_BUDGET_CHARS) — kept apart
-   *  from `#deliveryCharsInFlight` on purpose: a cursor delivery reserving a worst-case page must NOT
+  readonly #deliveryCharsInFlight = new DeliveryCharsBudget(DELIVERY_IN_FLIGHT_BUDGET_CHARS);
+  /** The CURSOR lane's read-through-call (CURSOR_READ_BUDGET_CHARS) — kept apart from
+   *  `#deliveryCharsInFlight` on purpose: a cursor delivery reserving a worst-case page must NOT
    *  count against the push budget, or it would spuriously DROP a racing live-client push (whose drop
    *  test reads that counter). This bounds only the cursor lane's own catch-up reads. */
-  #cursorReadCharsInFlight = 0;
-  readonly #cursorReadRoomWaiters: (() => void)[] = [];
-  readonly #lastDeliveredThroughOffset = new Map<string, number>();
-  /** The freshest pushed batch per cursor subscription — how ephemerals reach a caught-up cursor
-   *  target (the log has no ephemerals; the push does). Latest wins; a stale one is ignored. */
-  readonly #pushedEventBatches = new Map<
-    string,
-    { events: StreamEvent[]; after: number; through: number }
-  >();
-  readonly #cursorDeliveryRunning = new Set<string>();
-  /** The cursors, in memory — the truth for this incarnation; the `subscription_cursors` table
-   *  mirrors it at DURABLE boundaries only (an ephemeral-only batch advances memory and touches no
-   *  storage: ephemerals are not in the log, and after an eviction the persisted cursor rewinds to
-   *  the last durable boundary and durables are redelivered from there, which at-least-once allows). */
-  readonly #cursors = new Map<string, SubscriptionCursor>();
-  /** Rows whose target LAST evaluated to a handle that OWNS ITS PROGRESS (a facet, a lent rpc stub)
-   *  this incarnation — classified on their first push or by the alarm's row pass, and RE-classified
-   *  whenever the push path evaluates again (a rule re-point, `#evaluateTargetHeadForRow`): a row
-   *  re-pointed at a target that cannot own its progress leaves the set, so the alarm's pass and the
-   *  commit-time arming see it again. Memory: a fresh incarnation classifies again. */
-  readonly #pushSubscriptionNames = new Set<string>();
-  /** The evaluated target head per row, reused across pushes: a row delivered every commit (a PCM
-   *  stream, an audio call) would otherwise re-walk its target and re-mint a Facet/RpcStub handle on
-   *  EVERY push. Valid while the row's identity (`configuredAtOffset`) AND the rewrite-rule table
-   *  (its object identity in core state — any `provide`/un-set replaces it) are unchanged; either
-   *  moving re-evaluates. Dropped in `#forgetSubscription`. */
-  readonly #evaluatedTargetHeadByRow = new Map<
-    string,
-    {
-      configuredAtOffset: number;
-      rewriteRulesRef: object;
-      head: unknown;
-      call: (args: unknown[]) => Promise<unknown>;
-    }
-  >();
+  readonly #cursorReadCharsInFlight = new DeliveryCharsBudget(CURSOR_READ_BUDGET_CHARS);
 
   constructor(deps: SubscriptionDeliveryDeps) {
     this.#stream = deps.stream;
@@ -177,7 +218,17 @@ export class SubscriptionDelivery {
     this.#recordActivityForQuietClock = deps.recordActivityForQuietClock;
     // The persisted cursors seed memory once, here — after this, memory is the one truth.
     for (const [name, cursor] of this.#stream.storage.listSubscriptionCursors())
-      this.#cursors.set(name, cursor);
+      this.#deliveryRecordFor(name).cursor = cursor;
+  }
+
+  /** The record under `name`, made on first touch. */
+  #deliveryRecordFor(name: string): SubscriptionDeliveryRecord {
+    let record = this.#deliveryRecordByName.get(name);
+    if (!record) {
+      record = { deliveryChain: Promise.resolve(), targetOwnsProgress: false };
+      this.#deliveryRecordByName.set(name, record);
+    }
+    return record;
   }
 
   /** The post-commit hook: one pass over the rows. Fire-and-forget from append's view. */
@@ -193,7 +244,7 @@ export class SubscriptionDelivery {
           const row = rows[name];
           if (!row) break;
           // A halted FACET row resumes by catching up from the log itself; anything else by the
-          // cursor lane. Classified by EVALUATING, never by `#pushSubscriptionNames`: a fresh
+          // cursor lane. Classified by EVALUATING, never by the record's push bit: a fresh
           // incarnation knows no push rows (a halted row is skipped by every commit, the wake's
           // included), and the cursor lane, meeting a facet, only classifies it and returns — the
           // undelivered span would wait for the next consumed commit. (A live client's row never
@@ -216,22 +267,17 @@ export class SubscriptionDelivery {
           this.#forgetSubscription(name);
           const row = rows[name];
           if (row)
-            this.#deliveryChainBySubscription.set(
-              name,
-              this.#catchUpFacetRow(name, row)
-                .then((facet) =>
-                  // A row that asked for HISTORY (`afterOffset`) is delivered from there NOW — its
-                  // configure is its wake, as a resume is — not on its next consumed commit.
-                  facet || row.afterOffset === undefined
-                    ? undefined
-                    : this.#deliverFromCursor(name),
-                )
-                .catch((error) => {
-                  // NO_FACET here is a disable that landed during the load — nothing to report.
-                  if (errorCode(error) !== "NO_FACET")
-                    reportIssue("subscription-delivery.configured", error, { name });
-                }),
-            );
+            this.#deliveryRecordFor(name).deliveryChain = this.#catchUpFacetRow(name, row)
+              .then((facet) =>
+                // A row that asked for HISTORY (`afterOffset`) is delivered from there NOW — its
+                // configure is its wake, as a resume is — not on its next consumed commit.
+                facet || row.afterOffset === undefined ? undefined : this.#deliverFromCursor(name),
+              )
+              .catch((error) => {
+                // NO_FACET here is a disable that landed during the load — nothing to report.
+                if (errorCode(error) !== "NO_FACET")
+                  reportIssue("subscription-delivery.configured", error, { name });
+              });
           break;
         }
       }
@@ -242,16 +288,17 @@ export class SubscriptionDelivery {
       // A batch the filter skipped is NOT handed over — the watermark stays put and the skipped span
       // rides inside the NEXT delivered range (the subscriber's chain stays contiguous).
       if (events.length === 0) continue;
-      const after = this.#lastDeliveredThroughOffset.get(name) ?? afterOffset;
-      this.#lastDeliveredThroughOffset.set(name, throughOffset);
-      // Remembered for the CURSOR lane only (how ephemerals reach a caught-up cursor target); a row
-      // known to own its progress would just retain the batch until its next delivery.
-      if (!this.#pushSubscriptionNames.has(name))
-        this.#pushedEventBatches.set(name, { events, after, through: throughOffset });
-      // A delivery is owed from here: arm the alarm (memo'd — one write per window) so an eviction
-      // before the cursor lane even evaluates the target leaves something behind to come back.
-      if (!this.#pushSubscriptionNames.has(name))
+      const record = this.#deliveryRecordFor(name);
+      const after = record.lastDeliveredThroughOffset ?? afterOffset;
+      record.lastDeliveredThroughOffset = throughOffset;
+      if (!record.targetOwnsProgress) {
+        // Remembered for the CURSOR lane only (how ephemerals reach a caught-up cursor target); a row
+        // known to own its progress would just retain the batch until its next delivery.
+        record.pushedEventBatch = { events, after, through: throughOffset };
+        // A delivery is owed from here: arm the alarm (memo'd — one write per window) so an eviction
+        // before the cursor lane even evaluates the target leaves something behind to come back.
         this.#stream.armAlarmNoLaterThan(Date.now() + CURSOR_DELIVERY_CALL_WATCHDOG_MS);
+      }
       this.#queuePushBehindInFlightDelivery(name, events, { after, through: throughOffset });
     }
   }
@@ -272,14 +319,15 @@ export class SubscriptionDelivery {
       return true;
     if (!(head instanceof FacetHandle)) return false;
     // Classify it as a PUSH row NOW (a facet owns its progress), so onCommit never retains its
-    // batches in #pushedEventBatches — the cursor-lane path, one batch per row, latest-wins and
+    // batches as a pushed batch — the cursor-lane path, one batch per row, latest-wins and
     // UNBOUNDED by the delivery budgets. A burst to freshly-enabled facets would otherwise pin one
     // ephemeral per facet there (10 × 7 MiB) on top of the args workerd is deserializing, and reset
     // the parent (the large-ephemeral fan-out: 0 facets is absorbed, 10 facets was not). Classifying
     // at materialize/resume closes the window between enable and the first push; the push path still
     // classifies too (a fresh incarnation, a live-client row).
-    this.#pushSubscriptionNames.add(name);
-    this.#pushedEventBatches.delete(name);
+    const record = this.#deliveryRecordFor(name);
+    record.targetOwnsProgress = true;
+    record.pushedEventBatch = undefined;
     try {
       await head.invoke([["catchUpFromLog"]]);
     } catch (error) {
@@ -296,25 +344,26 @@ export class SubscriptionDelivery {
   }
 
   /** Queue a push behind the row's in-flight delivery — or FOLD it into the one already waiting.
-   *  The pending entry's existence IS "a delivery closure is coming": the closure takes the entry
-   *  before it delivers, so the next commit starts a fresh one. Past PENDING_PUSH_BUDGET_CHARS the
-   *  oldest events are dropped (never the newest) and `after` moves up to the last dropped offset —
-   *  `(cursor, after]` is then exactly what a facet's gap repair reads from the log. */
+   *  Past PENDING_PUSHES_TOTAL_BUDGET_CHARS the oldest events are dropped (never the newest) and
+   *  `after` moves up to the last dropped offset — `(cursor, after]` is then exactly what a facet's
+   *  gap repair reads from the log. */
   #queuePushBehindInFlightDelivery(name: string, events: StreamEvent[], range: ScannedRange): void {
-    const pending = this.#pendingPushByRow.get(name);
+    const record = this.#deliveryRecordFor(name);
+    const pending = record.pendingPush;
     if (pending) {
       pending.chars = (pending.chars ?? serializedChars(pending.events)) + serializedChars(events);
       pending.events = pending.events.concat(events); // a fresh array: the old one may be an in-flight call's argument
       pending.range.through = range.through;
-      this.#dropOldestPendingEvents(pending, PENDING_PUSH_BUDGET_CHARS);
       this.#dropPendingEventsOverTotalBudget();
       return;
     }
-    this.#pendingPushByRow.set(name, { events, range, droppedEvents: 0 });
-    const chain = (this.#deliveryChainBySubscription.get(name) ?? Promise.resolve()).then(
-      async () => {
-        const push = this.#pendingPushByRow.get(name);
-        this.#pendingPushByRow.delete(name);
+    record.pendingPush = { events, range, droppedEvents: 0 };
+    record.deliveryChain = record.deliveryChain
+      .then(async () => {
+        // Read again: the record may have been dropped (#forgetSubscription) while this waited.
+        const current = this.#deliveryRecordByName.get(name);
+        const push = current?.pendingPush;
+        if (current) current.pendingPush = undefined;
         const row = this.#stream.coreReducedState.subscriptions[name];
         // Removed meanwhile (#forgetSubscription emptied it) — or HALTED meanwhile: a halted row is
         // skipped by every commit from then on, and a push already waiting is no exception (it would
@@ -331,12 +380,8 @@ export class SubscriptionDelivery {
             healFromOffset: push.range.after,
           });
         await this.#deliverEventBatch(name, row, push.events, push.range);
-      },
-    );
-    this.#deliveryChainBySubscription.set(
-      name,
-      chain.catch(() => undefined),
-    );
+      })
+      .catch(() => undefined);
   }
 
   /** Drop the OLDEST events of a pending push until it holds at most `keepUnderChars` (never its
@@ -358,56 +403,16 @@ export class SubscriptionDelivery {
     for (;;) {
       let total = 0;
       let largest: PendingPush | undefined;
-      for (const pending of this.#pendingPushByRow.values()) {
-        if (pending.chars === undefined) continue;
-        total += pending.chars;
-        if (pending.events.length > 1 && (!largest || pending.chars > largest.chars!))
-          largest = pending;
+      for (const { pendingPush } of this.#deliveryRecordByName.values()) {
+        if (pendingPush?.chars === undefined) continue;
+        total += pendingPush.chars;
+        if (pendingPush.events.length > 1 && (!largest || pendingPush.chars > largest.chars!))
+          largest = pendingPush;
       }
       const excess = total - PENDING_PUSHES_TOTAL_BUDGET_CHARS;
       if (excess <= 0 || !largest) return;
       this.#dropOldestPendingEvents(largest, largest.chars! - excess);
     }
-  }
-
-  /** Run `call` holding `chars` of the in-flight budget, after waiting for room. A call larger than
-   *  the whole budget runs alone — never a deadlock. */
-  async #acquireInFlightRoom(chars: number): Promise<void> {
-    while (
-      this.#deliveryCharsInFlight > 0 &&
-      this.#deliveryCharsInFlight + chars > DELIVERY_IN_FLIGHT_BUDGET_CHARS
-    )
-      await new Promise<void>((resolve) => this.#deliveryRoomWaiters.push(resolve));
-    this.#deliveryCharsInFlight += chars;
-  }
-
-  async #callWithInFlightRoom<T>(chars: number, call: () => Promise<T>): Promise<T> {
-    await this.#acquireInFlightRoom(chars);
-    try {
-      return await call();
-    } finally {
-      this.#releaseInFlightRoom(chars);
-    }
-  }
-
-  #releaseInFlightRoom(chars: number): void {
-    this.#deliveryCharsInFlight -= chars;
-    for (const wake of this.#deliveryRoomWaiters.splice(0)) wake();
-  }
-
-  /** The cursor lane's own room (CURSOR_READ_BUDGET_CHARS), separate from the push budget. */
-  async #acquireCursorReadRoom(chars: number): Promise<void> {
-    while (
-      this.#cursorReadCharsInFlight > 0 &&
-      this.#cursorReadCharsInFlight + chars > CURSOR_READ_BUDGET_CHARS
-    )
-      await new Promise<void>((resolve) => this.#cursorReadRoomWaiters.push(resolve));
-    this.#cursorReadCharsInFlight += chars;
-  }
-
-  #releaseCursorReadRoom(chars: number): void {
-    this.#cursorReadCharsInFlight -= chars;
-    for (const wake of this.#cursorReadRoomWaiters.splice(0)) wake();
   }
 
   /** The alarm's half: every cursor subscription — a due retry, or one an eviction left mid-delivery.
@@ -417,7 +422,7 @@ export class SubscriptionDelivery {
   async deliverEveryCursorSubscription(): Promise<void> {
     await Promise.all(
       Object.keys(this.#stream.coreReducedState.subscriptions)
-        .filter((name) => !this.#pushSubscriptionNames.has(name))
+        .filter((name) => !this.#deliveryRecordByName.get(name)?.targetOwnsProgress)
         .map((name) =>
           this.#deliverFromCursor(name).catch((error) =>
             reportIssue("subscription-delivery.cursor", error, { name }),
@@ -428,28 +433,26 @@ export class SubscriptionDelivery {
 
   /** The cursor of a subscription the stream delivers at-least-once — absent for a push target. */
   cursor(name: string): SubscriptionCursor | undefined {
-    return this.#cursors.get(name);
+    return this.#deliveryRecordByName.get(name)?.cursor;
   }
 
+  /** Everything remembered about the row under `name` goes with it — the persisted cursor too. A
+   *  closure still queued finds no pending push and exits; the cursor lane's lock stays (above). */
   #forgetSubscription(name: string): void {
-    this.#dropCursor(name);
-    this.#evaluatedTargetHeadByRow.delete(name);
-    this.#pushSubscriptionNames.delete(name);
-    this.#deliveryChainBySubscription.delete(name);
-    this.#pendingPushByRow.delete(name); // a closure still queued finds nothing and exits
-    this.#lastDeliveredThroughOffset.delete(name);
-    this.#pushedEventBatches.delete(name);
+    this.#stream.storage.deleteSubscriptionCursor(name);
+    this.#deliveryRecordByName.delete(name);
   }
 
   #dropCursor(name: string): void {
-    this.#cursors.delete(name);
+    const record = this.#deliveryRecordByName.get(name);
+    if (record) record.cursor = undefined;
     this.#stream.storage.deleteSubscriptionCursor(name);
   }
 
   /** Memory always; the table only when `persist` (a durable boundary moved, a ladder step, a halt,
    *  a resume — never an ephemeral-only advance). */
   #adoptCursor(name: string, cursor: SubscriptionCursor, persist: boolean): void {
-    this.#cursors.set(name, cursor);
+    this.#deliveryRecordFor(name).cursor = cursor;
     if (persist) this.#stream.storage.writeSubscriptionCursor(name, cursor);
   }
 
@@ -474,22 +477,23 @@ export class SubscriptionDelivery {
         row.configuredAtOffset
       )
         return;
+      const record = this.#deliveryRecordFor(name);
       if (head instanceof FacetHandle || head instanceof RpcStubHandle) {
-        this.#pushSubscriptionNames.add(name);
+        record.targetOwnsProgress = true;
         // A cursor born while the target evaluated to something else (a rule re-point): not this row's.
-        if (this.#cursors.has(name)) this.#dropCursor(name);
+        if (record.cursor) this.#dropCursor(name);
       } else {
         // Re-pointed at a target that cannot own its progress: the alarm's pass must see it again.
-        this.#pushSubscriptionNames.delete(name);
+        record.targetOwnsProgress = false;
       }
       if (head instanceof RpcStubHandle) {
         // A LIVE CLIENT owns its offset: fire-and-forget — the pager socket is the queue, its order is
         // the order, and a stalled client blocks nothing but itself. RPC_STUB_OFFLINE is the benign
         // heal-by-pull case (the stub is not there right now; the row stays until its last pager closes, the client re-lends);
         // anything else is a real drop worth a line — the subscriber sees the range gap and heals.
-        this.#pushedEventBatches.delete(name);
+        record.pushedEventBatch = undefined;
         const chars = serializedChars(events);
-        if (this.#deliveryCharsInFlight + chars > DELIVERY_IN_FLIGHT_BUDGET_CHARS) {
+        if (!this.#deliveryCharsInFlight.tryTake(chars)) {
           console.warn({
             event: "delivery.push.dropped",
             namespace: "subscription-delivery",
@@ -497,11 +501,10 @@ export class SubscriptionDelivery {
               "push delivery dropped: the context's in-flight budget is full (the subscriber heals by read)",
             name,
             healFromOffset: range.after,
-            inFlightChars: this.#deliveryCharsInFlight,
+            inFlightChars: this.#deliveryCharsInFlight.heldChars,
           });
           return;
         }
-        this.#deliveryCharsInFlight += chars;
         void call([events, range])
           .catch((error) => {
             if (errorCode(error) !== "RPC_STUB_OFFLINE")
@@ -514,16 +517,22 @@ export class SubscriptionDelivery {
                 errorStack: error instanceof Error ? error.stack : undefined,
               });
           })
-          .finally(() => this.#releaseInFlightRoom(chars));
+          .finally(() => this.#deliveryCharsInFlight.release(chars));
         return;
       }
       if (head instanceof FacetHandle) {
         // A FACET owns its checkpoint: push, AWAITED, so this facet's batches stay in order and the
         // quiesce never aborts it mid-reduce. The DO's facet watchdog (#invokeFacet, 60 s) bounds a
         // hung facet; its own gap repair covers a dropped push.
-        this.#pushedEventBatches.delete(name);
+        record.pushedEventBatch = undefined;
         try {
-          await this.#callWithInFlightRoom(serializedChars(events), () => call([events, range]));
+          const chars = serializedChars(events);
+          await this.#deliveryCharsInFlight.acquire(chars);
+          try {
+            await call([events, range]);
+          } finally {
+            this.#deliveryCharsInFlight.release(chars);
+          }
         } catch (error) {
           // A refusal that can only repeat HALTS the row — the same fact the cursor lane's ladder
           // ends in — instead of being re-pushed into on every commit; an operator's resume is the
@@ -590,7 +599,7 @@ export class SubscriptionDelivery {
     row: Subscription,
   ): Promise<{ head: unknown; call: (args: unknown[]) => Promise<unknown> }> {
     const rewriteRulesRef = this.#stream.coreReducedState.itxExpressionRewriteRules;
-    const cached = this.#evaluatedTargetHeadByRow.get(name);
+    const cached = this.#deliveryRecordByName.get(name)?.evaluatedTargetHead;
     if (
       cached &&
       cached.configuredAtOffset === row.configuredAtOffset &&
@@ -598,12 +607,12 @@ export class SubscriptionDelivery {
     )
       return { head: cached.head, call: cached.call };
     const evaluated = await this.#evaluateItxExpressionTargetHead(row.target);
-    this.#evaluatedTargetHeadByRow.set(name, {
+    this.#deliveryRecordFor(name).evaluatedTargetHead = {
       configuredAtOffset: row.configuredAtOffset,
       rewriteRulesRef,
       head: evaluated.head,
       call: evaluated.call,
-    });
+    };
     return evaluated;
   }
 
@@ -643,7 +652,7 @@ export class SubscriptionDelivery {
       for (;;) {
         const row = this.#stream.coreReducedState.subscriptions[name];
         if (!row) return this.#forgetSubscription(name);
-        let cursor = this.#cursors.get(name);
+        let cursor = this.cursor(name);
         if (!cursor) {
           // A subscription's FIRST cursor: born where the row asked (`afterOffset`; 0 = the whole
           // log) or at its configuration offset ("now"), in memory only — the first durable delivery
@@ -682,17 +691,18 @@ export class SubscriptionDelivery {
         // This is the same budget the call needs — taken early because the READ is what allocates.
         let inFlightRoomHeld = 0;
         try {
-          let pushedEventBatch = this.#pushedEventBatches.get(name);
+          const record = this.#deliveryRecordFor(name); // the cursor above put it there
+          let pushedEventBatch = record.pushedEventBatch;
           if (pushedEventBatch && pushedEventBatch.after < cursor.confirmedOffset) {
-            this.#pushedEventBatches.delete(name);
+            record.pushedEventBatch = undefined;
             pushedEventBatch = undefined;
           }
           let eventBatch: { events: StreamEvent[]; through: number };
           if (pushedEventBatch && pushedEventBatch.after === cursor.confirmedOffset) {
-            this.#pushedEventBatches.delete(name);
+            record.pushedEventBatch = undefined;
             eventBatch = { events: pushedEventBatch.events, through: pushedEventBatch.through };
           } else {
-            await this.#acquireCursorReadRoom(CURSOR_READ_BUDGET_CHARS);
+            await this.#cursorReadCharsInFlight.acquire(CURSOR_READ_BUDGET_CHARS);
             inFlightRoomHeld = CURSOR_READ_BUDGET_CHARS;
             const page = this.#stream.read(cursor.confirmedOffset, 100);
             const ceiling = pushedEventBatch
@@ -723,10 +733,10 @@ export class SubscriptionDelivery {
           // runs alone.
           const batchChars = serializedChars(eventBatch.events);
           if (inFlightRoomHeld === 0) {
-            await this.#acquireCursorReadRoom(batchChars);
+            await this.#cursorReadCharsInFlight.acquire(batchChars);
             inFlightRoomHeld = batchChars;
           } else if (batchChars < inFlightRoomHeld) {
-            this.#releaseCursorReadRoom(inFlightRoomHeld - batchChars);
+            this.#cursorReadCharsInFlight.release(inFlightRoomHeld - batchChars);
             inFlightRoomHeld = batchChars;
           }
           if (eventBatch.events.length === 0) {
@@ -739,12 +749,12 @@ export class SubscriptionDelivery {
               if (head instanceof FacetHandle || head instanceof RpcStubHandle) {
                 // Reached by the alarm's row-driven pass: a target that owns its progress is never this
                 // lane's — remember that, and drop the birth cursor above (this lane's guess).
-                this.#pushSubscriptionNames.add(name);
+                this.#deliveryRecordFor(name).targetOwnsProgress = true;
                 this.#dropCursor(name);
                 return;
               }
               evaluatedTarget = { call, forRowConfiguredAtOffset: row.configuredAtOffset };
-              if (!this.#cursors.has(name)) continue; // replaced while the target was evaluated
+              if (!this.cursor(name)) continue; // replaced while the target was evaluated
             }
             // Die mid-call and the alarm survives to re-derive from the rows (memo'd: one write per window).
             this.#stream.armAlarmNoLaterThan(Date.now() + CURSOR_DELIVERY_CALL_WATCHDOG_MS);
@@ -757,7 +767,7 @@ export class SubscriptionDelivery {
             );
             // Removed or replaced while the call was in flight? Its progress belonged to the old row —
             // and so did the evaluation: the identity check above re-evaluates for the replacement.
-            if (!this.#cursors.has(name)) continue;
+            if (!this.cursor(name)) continue;
             this.#adoptCursor(
               name,
               {
@@ -769,7 +779,7 @@ export class SubscriptionDelivery {
             );
             this.#recordActivityForQuietClock();
           } catch (error) {
-            if (!this.#cursors.has(name)) continue; // replaced mid-flight: re-evaluated for the new row
+            if (!this.cursor(name)) continue; // replaced mid-flight: re-evaluated for the new row
             // A delivery-resumed that landed DURING this attempt is not yet applied: loop back and apply
             // it instead of arming the old ladder or, worse, appending a halt on top of the operator's resume.
             const latest = this.#stream.coreReducedState.subscriptions[name];
@@ -791,7 +801,7 @@ export class SubscriptionDelivery {
             return;
           }
         } finally {
-          if (inFlightRoomHeld > 0) this.#releaseCursorReadRoom(inFlightRoomHeld);
+          if (inFlightRoomHeld > 0) this.#cursorReadCharsInFlight.release(inFlightRoomHeld);
         }
       }
     } finally {

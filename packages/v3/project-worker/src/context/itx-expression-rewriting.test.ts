@@ -8,7 +8,11 @@
 // `itx.builtins.rpcStubs`), and the reduce as the DO runs it — the rules are `core` state, reduced
 // from the log.
 import { describe, expect, test } from "vitest";
-import { CoreStreamProcessor, type ItxExpressionRewriteRule } from "../stream/core-processor.ts";
+import {
+  CoreContract,
+  reduceCoreEvent,
+  type ItxExpressionRewriteRule,
+} from "../stream/core-processor.ts";
 import type { StreamEvent } from "../stream/events.ts";
 import { memoryStream } from "../stream/test-support.ts";
 import { parse, parseItxExpressionPrefix, print, type ItxExpressionInput } from "./expression.ts";
@@ -518,10 +522,10 @@ describe("rewriteRuleConfiguredEvent — ONE event, both halves canonical, loud 
     { match: "itx.a()", target: "itx.kv", throws: /pins literal args.*spell "a"/ }, // an argless pinned step pins nothing
     { match: "itx.a('x')(1)", target: "itx.kv", throws: /cannot call a result/ },
     { match: "itx.broken(", target: "itx.kv", throws: /unbalanced/ },
-    { match: ["itx", "builtins.kv"], target: "itx.kv", throws: /identifiers/ }, // the ARRAY half reads like the string half
-    { match: ["itx", "a b"], target: "itx.kv", throws: /identifiers/ },
-    { match: ["itx", "cd.x"], target: "itx.kv", throws: /identifiers/ }, // …a dotted step never bypasses the proxy-verb refusal
-    { match: ["itx", ["builtins.kv", 1]], target: "itx.kv", throws: /identifiers/ }, // …a call step's name too
+    { match: ["itx", "builtins.kv"], target: "itx.kv", throws: /not an identifier/ }, // the ARRAY half reads like the string half
+    { match: ["itx", "a b"], target: "itx.kv", throws: /not an identifier/ },
+    { match: ["itx", "cd.x"], target: "itx.kv", throws: /not an identifier/ }, // …a dotted step never bypasses the proxy-verb refusal
+    { match: ["itx", ["builtins.kv", 1]], target: "itx.kv", throws: /not an identifier/ }, // …a call step's name too
     { match: ["itx", "__proto__"], target: "itx.kv", throws: /reserved/ },
   ];
   for (const { match, target, throws } of doorRefusals)
@@ -622,7 +626,7 @@ const fakeBuiltIns = () => {
 
 const setup = () => {
   const { stream, events } = memoryStream();
-  const core = new CoreStreamProcessor();
+  const core = { reduce: reduceCoreEvent, contract: CoreContract }; // the DO's inline reduce, as functions
   const builtIns = fakeBuiltIns();
   // INLINE, exactly like the DO: the rules are core state, reduced from the durable log per call —
   // and, as in Stream.#reduceEventsIntoCoreReducedState, a malformed control event is skipped
@@ -790,9 +794,9 @@ describe("built-in resolution + default-deny", () => {
     await expect(invoke("itx.broken.x()")).rejects.toThrow(/no rewrite rule matches/);
   });
 
-  test("a hand-built call step at the scope root is denied like any other non-match", async () => {
+  test("a hand-built call step at the scope root is refused by the codec — the ARRAY half reads like the string half (`itx(1)` never parses), before any rule is consulted", async () => {
     const { invoke } = setup();
-    await expect(invoke([["itx", 1]])).rejects.toThrow(/no rewrite rule matches "itx\(1\)"/);
+    await expect(invoke([["itx", 1]])).rejects.toThrow(/a call on the root itself/);
   });
 });
 

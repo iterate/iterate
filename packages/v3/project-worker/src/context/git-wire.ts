@@ -3,8 +3,9 @@ import { deflate, Inflate } from "pako";
 /**
  * A minimal git protocol-v2 wire client for the Artifacts git endpoint —
  * exactly what `repos.ts`'s one-file read/write needs, nothing more: `ls-refs`
- * for the branch tip, a shallow `fetch` of the tip's snapshot, `receive-pack`
- * for one commit, and the object/pack codecs between.
+ * for ONE branch tip (`tipOf`), a shallow `fetch` of the tip's snapshot
+ * (`fetchObjects`), `receive-pack` for one commit (`push`), and the object/pack
+ * codecs between.
  *
  * The endpoint ("gitty/1.0") was probed empirically; the load-bearing
  * behaviors this module relies on:
@@ -18,7 +19,8 @@ import { deflate, Inflate } from "pako";
  *   and may contain ofs- and ref-deltas against in-pack bases.
  */
 
-export type GitObjectType = "blob" | "commit" | "tag" | "tree";
+/** The object kinds the two verbs read and write — a shallow branch-tip fetch carries no tag. */
+export type GitObjectType = "blob" | "commit" | "tree";
 
 export interface RawGitObject {
   oid: string;
@@ -30,11 +32,10 @@ const OBJECT_TYPE_CODES: Record<number, GitObjectType | "ofs-delta" | "ref-delta
   1: "commit",
   2: "tree",
   3: "blob",
-  4: "tag",
   6: "ofs-delta",
   7: "ref-delta",
 };
-const CODE_BY_TYPE: Record<GitObjectType, number> = { blob: 3, commit: 1, tag: 4, tree: 2 };
+const CODE_BY_TYPE: Record<GitObjectType, number> = { blob: 3, commit: 1, tree: 2 };
 
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();
@@ -459,39 +460,35 @@ export async function buildPack(
 
 // -- protocol v2 requests --------------------------------------------------------
 
-function encodeFetchRequest(input: { deepen?: number; wants: string[] }): Uint8Array {
+function encodeFetchRequest(input: { deepen: number; wants: string[] }): Uint8Array {
   const parts = [pktLine("command=fetch"), DELIM];
   for (const want of input.wants) parts.push(pktLine(`want ${want}`));
-  if (input.deepen !== undefined) parts.push(pktLine(`deepen ${input.deepen}`));
+  parts.push(pktLine(`deepen ${input.deepen}`));
   parts.push(pktLine("no-progress"));
   parts.push(pktLine("done"));
   parts.push(FLUSH);
   return concat(parts);
 }
 
-function encodeLsRefsRequest(input: { prefixes: string[] }): Uint8Array {
-  const parts = [pktLine("command=ls-refs"), DELIM, pktLine("peel")];
-  for (const prefix of input.prefixes) parts.push(pktLine(`ref-prefix ${prefix}`));
-  parts.push(FLUSH);
-  return concat(parts);
+function encodeLsRefsRequest(ref: string): Uint8Array {
+  return concat([
+    pktLine("command=ls-refs"),
+    DELIM,
+    pktLine("peel"),
+    pktLine(`ref-prefix ${ref}`),
+    FLUSH,
+  ]);
 }
 
-export interface LsRefsEntry {
-  name: string;
-  oid: string;
-}
-
-/** Each `<oid> <name> [attributes…]` line as `{ name, oid }` — the attributes (peeled, symref
- *  targets) are not read. */
-function parseLsRefs(body: Uint8Array): LsRefsEntry[] {
-  const refs: LsRefsEntry[] = [];
+/** The oid of `ref` among the `<oid> <name> [attributes…]` lines (the attributes — peeled, symref
+ *  targets — are not read), or undefined when the response names no such ref (an unborn branch). */
+function tipOfLsRefs(body: Uint8Array, ref: string): string | undefined {
   for (const frame of pktFrames(body)) {
     if (frame.kind !== "line") continue;
     const [oid, name] = pktText(frame.payload).split(" ");
-    if (oid === undefined || name === undefined) continue;
-    refs.push({ name, oid });
+    if (name === ref) return oid;
   }
-  return refs;
+  return undefined;
 }
 
 /** The pack out of a v2 fetch response: sideband channel 1 after the `packfile` marker; channel 3 is
@@ -526,12 +523,10 @@ function encodeReceivePackRequest(input: {
   return concat([pktLine(update), FLUSH, input.pack]);
 }
 
-/** `applied` is a PROOF the server moved our ref (`unpack ok` + `ok <ref>`); anything else — an
- *  explicit `ng`, an unpack failure, a report with no status line for our ref — is `rejected` with
- *  the server's words in `detail`. */
-export type PushReport = { kind: "applied" } | { detail: string; kind: "rejected" };
-
-function parseReceivePackResponse(body: Uint8Array, expectedRef: string): PushReport {
+/** null is a PROOF the server moved `expectedRef` (`unpack ok` + `ok <ref>`); anything else — an
+ *  explicit `ng`, an unpack failure, a report with no status line for the ref — is the refusal, in
+ *  the server's words. */
+function pushRefused(body: Uint8Array, expectedRef: string): string | null {
   // The report may arrive sidebanded (channel 1 wraps an inner pkt stream) or
   // plain; sniff the first frame. Channel 3 carries fatal detail.
   const frames = [...pktFrames(body)].filter((frame) => frame.kind === "line");
@@ -564,35 +559,24 @@ function parseReceivePackResponse(body: Uint8Array, expectedRef: string): PushRe
       notes.push(`unexpected ref in report: ${line}`);
     }
   }
-  if (unpackLine !== undefined && unpackLine !== "unpack ok") {
-    return { detail: unpackLine, kind: "rejected" };
-  }
-  if (expectedRefNg !== undefined) return { detail: expectedRefNg, kind: "rejected" };
-  if (unpackLine === "unpack ok" && expectedRefOk) return { kind: "applied" };
+  if (unpackLine !== undefined && unpackLine !== "unpack ok") return unpackLine;
+  if (expectedRefNg !== undefined) return expectedRefNg;
+  if (unpackLine === "unpack ok" && expectedRefOk) return null;
   notes.push(expectedRefOk ? "ok without unpack status" : `no status line for ${expectedRef}`);
-  return { detail: notes.join("; "), kind: "rejected" };
+  return notes.join("; ");
 }
 
 // -- transport ---------------------------------------------------------------------
 
-export interface GitWireTransport {
-  lsRefs(prefixes: string[]): Promise<LsRefsEntry[]>;
-  /** Send a v2 fetch; returns verified objects from the response pack. */
-  fetchObjects(input: { deepen?: number; wants: string[] }): Promise<RawGitObject[]>;
-  push(input: {
-    newOid: string;
-    oldOid: string;
-    pack: Uint8Array;
-    ref: string;
-  }): Promise<PushReport>;
-}
-
 /**
- * HTTP transport against one Artifacts remote. `token` is the repo access
- * token Artifacts minted (`createToken` / `create`), sent as a basic-auth
- * password.
+ * HTTP transport against one Artifacts remote — the three verbs `repos.ts`
+ * calls: `tipOf(ref)` (the branch tip's oid, or undefined for an unborn
+ * branch), `fetchObjects` (a v2 fetch; the verified objects of the response
+ * pack) and `push` (one receive-pack; null when the server moved the ref,
+ * else the refusal in its words). `token` is the repo access token Artifacts
+ * minted (`createToken` / `create`), sent as a basic-auth password.
  */
-export function createGitWireTransport(input: { remote: string; token: string }): GitWireTransport {
+export function createGitWireTransport(input: { remote: string; token: string }) {
   const authorization = `Basic ${btoa(`x:${input.token}`)}`;
   const post = async (service: string, body: Uint8Array): Promise<Uint8Array> => {
     const response = await fetch(`${input.remote}/${service}`, {
@@ -611,14 +595,16 @@ export function createGitWireTransport(input: { remote: string; token: string })
     return new Uint8Array(await response.arrayBuffer());
   };
   return {
-    fetchObjects: async (request) =>
+    fetchObjects: async (request: { deepen: number; wants: string[] }): Promise<RawGitObject[]> =>
       parsePack(demuxFetchResponse(await post("git-upload-pack", encodeFetchRequest(request)))),
-    lsRefs: async (prefixes) =>
-      parseLsRefs(await post("git-upload-pack", encodeLsRefsRequest({ prefixes }))),
-    push: async (request) =>
-      parseReceivePackResponse(
-        await post("git-receive-pack", encodeReceivePackRequest(request)),
-        request.ref,
-      ),
+    tipOf: async (ref: string): Promise<string | undefined> =>
+      tipOfLsRefs(await post("git-upload-pack", encodeLsRefsRequest(ref)), ref),
+    push: async (request: {
+      newOid: string;
+      oldOid: string;
+      pack: Uint8Array;
+      ref: string;
+    }): Promise<string | null> =>
+      pushRefused(await post("git-receive-pack", encodeReceivePackRequest(request)), request.ref),
   };
 }

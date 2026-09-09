@@ -1,22 +1,20 @@
-// context/dotted-path-proxy.test.ts — the pure mechanism, in-process (unit lane), driven over a real
-// capnweb RpcStub. PORTED (not verbatim) from apps/os/src/domains/itx/path-proxy.test.ts. The
-// end-to-end dotted surface over the real worker is pinned in the e2e lane.
+// context/invoke-handle.test.ts — the dotted door's pure mechanism (the prototype hop and the path
+// proxies it hands out), in-process (unit lane), driven over a real capnweb RpcStub. PORTED (not
+// verbatim) from apps/os/src/domains/itx/path-proxy.test.ts. The end-to-end dotted surface over the
+// real worker is pinned in the e2e lane.
 
 import { RpcStub, RpcTarget } from "capnweb";
 import { describe, expect, it } from "vitest";
-import {
-  createItxExpressionPathProxy,
-  installPrototypeInvokeFallback,
-} from "./dotted-path-proxy.ts";
-import { toItxExpression, type ItxExpressionInput } from "./expression.ts";
+import { installPrototypeInvokeFallback } from "./invoke-handle.ts";
+import type { ItxExpression } from "./expression.ts";
 
 type DynamicCall = { args: unknown[]; path: string[] };
 
-// The fallback now reduces dotted access into ONE relative `ItxExpressionInput` (root `[]`): property-read
-// steps then a final call step. Unpack it back to `{ path, args }` so these tests can keep asserting
-// on the accumulated path — the mechanism under test is the accumulation, not the wire shape.
-function unpackRelative(call: ItxExpressionInput): DynamicCall {
-  const expr = toItxExpression(call);
+// The fallback reduces dotted access into ONE relative `ItxExpression` (root `[]`, always the array
+// form): property-read steps then a final call step. Unpack it back to `{ path, args }` so these
+// tests can keep asserting on the accumulated path — the mechanism under test is the accumulation,
+// not the wire shape.
+function unpackRelative(expr: ItxExpression): DynamicCall {
   const tail = expr.at(-1);
   if (tail === undefined) return { path: [], args: [] };
   const [method, args] =
@@ -42,7 +40,7 @@ class HostTarget extends RpcTarget {
     return `known:${value}`;
   }
 
-  invoke(call: ItxExpressionInput) {
+  invoke(call: ItxExpression) {
     const c = unpackRelative(call);
     this.calls.push(c);
     return `dynamic:${c.path.join(".")}:${c.args.join(",")}`;
@@ -158,7 +156,7 @@ describe("prototype-chain dynamic fallback", () => {
         void (this as unknown as { probedDuringConstruction: unknown }).probedDuringConstruction;
         this.ready = true;
       }
-      invoke(call: ItxExpressionInput) {
+      invoke(call: ItxExpression) {
         if (!this.ready) throw new Error("invoker resolved before construction finished");
         recorded.push(unpackRelative(call));
         return "late";
@@ -190,12 +188,11 @@ describe("prototype-chain dynamic fallback", () => {
     expect(sub.calls).toEqual([{ args: ["z"], path: ["subTool"] }]);
   });
 
-  it("hides reserved path segments from function-backed path proxies", () => {
-    const proxy = createItxExpressionPathProxy({ invoke: () => "unreachable" }, []) as {
-      alpha: { then: unknown };
-      then: unknown;
-    };
-    expect(proxy.then).toBeUndefined();
+  it("hides reserved path segments from the path proxies the hop hands out, at every depth", () => {
+    const target = new HostTarget();
+    const proxy = target as unknown as { alpha: { then: unknown; beta: { then: unknown } } };
     expect(proxy.alpha.then).toBeUndefined();
+    expect(proxy.alpha.beta.then).toBeUndefined();
+    expect(target.calls).toEqual([]);
   });
 });

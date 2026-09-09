@@ -1,10 +1,10 @@
 // Executable spec for the expression codec — two directions over one table.
 import { describe, expect, test } from "vitest";
 import {
+  normalizedItxExpression,
   parse,
   parseItxExpressionPrefix,
   print,
-  toItxExpression,
   type ItxExpression,
 } from "./expression.ts";
 
@@ -74,6 +74,10 @@ test("a string expression over the char limit is refused, coded, before any pars
   const big = `itx.workers.get({ source: { "cap.js": ${JSON.stringify("x".repeat(3000))} } })`;
   expect(() => parse(big)).toThrowError(/EXPRESSION_TOO_LONG|over the 2048-char limit/);
   expect(
-    toItxExpression(["itx", "workers", ["get", { source: { "cap.js": "x".repeat(3000) } }]]),
+    normalizedItxExpression([
+      "itx",
+      "workers",
+      ["get", { source: { "cap.js": "x".repeat(3000) } }],
+    ]),
   ).toHaveLength(3);
 });

@@ -4,23 +4,22 @@
 // `core` is the APPEND door's refusal — stream.test.ts). A subscription is PURE DATA — a name, a target expression stored as its printed string,
 // an optional `consumes` filter; nothing here knows HOW a target is served (subscription-delivery.ts
 // decides that by evaluating it). The rows THEMSELVES are `core` state, reduced here through
-// `CoreStreamProcessor` exactly as the DO does; the reduce's own pins (replace / drop / halted /
+// `reduceCoreEvent` exactly as the DO does; the reduce's own pins (replace / drop / halted /
 // resumed) live in core-processor.test.ts.
 import { describe, expect, test } from "vitest";
 import { print, type ItxExpression, type ItxExpressionInput } from "../context/expression.ts";
-import { CoreStreamProcessor, type Subscription } from "./core-processor.ts";
+import { CoreContract, reduceCoreEvent, type Subscription } from "./core-processor.ts";
 import type { StreamEvent } from "./events.ts";
 import { subscriptionConfiguredEvent } from "./subscriptions.ts";
 import { memoryStream } from "./test-support.ts";
 
 const setup = () => {
   const { stream, events } = memoryStream();
-  const core = new CoreStreamProcessor();
   // INLINE, exactly like the DO: the rows are core state, reduced from the durable log per call.
   const rows = (): Record<string, Subscription> =>
     events.reduce(
-      (st, e) => core.reduce({ event: e, state: st }) ?? st,
-      core.contract.initialState(),
+      (st, e) => reduceCoreEvent({ event: e, state: st }) ?? st,
+      CoreContract.initialState(),
     ).subscriptions;
   /** The edge's `subscribe`: build the event, append it. */
   const configure = (input: {

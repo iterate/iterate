@@ -16,9 +16,10 @@
 //
 // THE HOUSE CONVENTION (stream-memory-budget.e2e.ts): a known-red proof is `test.fails` whose body
 // asserts the HEALTHY expectation ("no isolate reset"); a ceiling that HOLDS is a plain `test`. Two
-// resets are RED BY DESIGN — accepted client-behaviour limits deliberately not defended: CONCURRENT
-// READERS (`.fails`, since 2026-09-07 — the read-admission ceiling was removed to keep `read()`
-// synchronous) and, documented as a plain reset-tolerant `test`, the large-ephemeral FAN-OUT. Local
+// resets are accepted client-behaviour limits deliberately not defended, each a plain reset-tolerant
+// `test` that asserts recovery and REPORTS the reset count: CONCURRENT READERS (the read-admission
+// ceiling was removed on 2026-09-07 to keep `read()` synchronous; whether 24 readers reset the
+// isolate is the platform's GC timing — see the row) and the large-ephemeral FAN-OUT. Local
 // workerd runs NullIsolateLimitEnforcer (NO memory limit), so the reset behaviour only proves out on
 // the DEPLOYED worker; locally the file skips.
 //
@@ -26,7 +27,7 @@
 // `Durable Object's isolate exceeded its memory limit and was reset.` with `.overloaded` +
 // `.durableObjectReset` stamped, and the ctx recovers on the very next call (the log is durable):
 //   • LIMIT concurrent readers      — 24 sessions paging one 144 MiB log at once reset the parent (24 × ~6 MiB pages coexist):
-//              the per-read byte budget bounds ONE read, not their sum — an accepted limit (`.fails`), the ctx recovers next call;
+//              the per-read byte budget bounds ONE read, not their sum — an accepted limit (reported, not asserted), the ctx recovers next call;
 //   • edge slow live client        — a stalled subscriber's pushes are DROPPED past the DO in-flight budget; the producer floods on, no reset;
 //   • LIMIT large ephemeral fan-out — 30 × 7 MiB ephemerals to N co-located facets MAY reset the parent (0 facets absorbed,
 //              3+ reset): the dominant term is CO-LOCATED FACET memory in the shared isolate, which the parent's JS cannot bound

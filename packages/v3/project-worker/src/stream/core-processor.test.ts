@@ -9,10 +9,14 @@
 // (context/itx-expression-rewriting.test.ts, stream/subscriptions.test.ts).
 import { describe, expect, test } from "vitest";
 import { parse, print } from "../context/expression.ts";
-import { CoreStreamProcessor, type CoreState } from "./core-processor.ts";
+import {
+  CoreContract,
+  reduceCoreEvent,
+  reduceCoreEventBatch,
+  type CoreState,
+} from "./core-processor.ts";
 import type { StreamEvent } from "./events.ts";
 
-const proc = new CoreStreamProcessor();
 /** A committed DURABLE event at `offset`; createdAt derives from the offset so identity pins read. */
 const at = (offset: number, type: string, payload?: Record<string, unknown>): StreamEvent => ({
   type,
@@ -21,14 +25,14 @@ const at = (offset: number, type: string, payload?: Record<string, unknown>): St
   createdAt: new Date(offset * 1000).toISOString(),
   path: "/",
 });
-const reduceAll = (events: StreamEvent[], initial = proc.contract.initialState()): CoreState =>
-  events.reduce((s, e) => proc.reduce({ event: e, state: s }) ?? s, initial);
+const reduceAll = (events: StreamEvent[], initial = CoreContract.initialState()): CoreState =>
+  events.reduce((s, e) => reduceCoreEvent({ event: e, state: s }) ?? s, initial);
 
 describe("the contract", () => {
   test("slug `core` v8.0.0; the every-field-defaulted initial state", () => {
-    expect(proc.contract.slug).toBe("core");
-    expect(proc.contract.version).toBe("8.0.0");
-    expect(proc.contract.initialState()).toEqual({
+    expect(CoreContract.slug).toBe("core");
+    expect(CoreContract.version).toBe("8.0.0");
+    expect(CoreContract.initialState()).toEqual({
       paused: null,
       itxExpressionRewriteRules: {},
       subscriptions: {},
@@ -117,7 +121,7 @@ describe("the rewrite-rule table — a MAP by match", () => {
     // deleting a match that has no rule (already gone, or never set) changes nothing — a benign
     // double-delete must not rewrite the checkpoint or publish a live-state delta
     expect(
-      proc.reduce({
+      reduceCoreEvent({
         event: at(5, "events.iterate.com/itx/rewrite-rule-configured", {
           match: "itx.greeter",
           target: null,
@@ -128,14 +132,14 @@ describe("the rewrite-rule table — a MAP by match", () => {
   });
 
   test("a malformed configured (a match with an argless call step, an unbalanced target) THROWS at the reduce — the host skips it (stream.test.ts); a well-formed one still reduces", () => {
-    const state = proc.contract.initialState();
+    const state = CoreContract.initialState();
     for (const payload of [
       { match: "itx.broken(", target: "itx.kv" },
       { match: "itx.call()", target: "itx.kv" },
       { match: "itx.dangling", target: "itx.kv.get(" },
     ])
       expect(() =>
-        proc.reduce({
+        reduceCoreEvent({
           event: at(1, "events.iterate.com/itx/rewrite-rule-configured", payload),
           state,
         }),
@@ -160,20 +164,22 @@ describe("the rewrite-rule table — a MAP by match", () => {
       });
     const replaced = reduceAll([configure(1, "itx.tab1"), configure(2, "itx.tab2")]);
     // the first handle's undo arrives after the replacement: a no-op, the very same state object
-    expect(proc.reduce({ event: remove(3, parse("itx.tab1")), state: replaced })).toBeUndefined();
+    expect(
+      reduceCoreEvent({ event: remove(3, parse("itx.tab1")), state: replaced }),
+    ).toBeUndefined();
     // the row's own handle removes it
     expect(reduceAll([remove(3, parse("itx.tab2"))], replaced).itxExpressionRewriteRules).toEqual(
       {},
     );
     // an undo over a row that is already gone: a no-op too
     expect(
-      proc.reduce({ event: remove(4, parse("itx.tab2")), state: proc.contract.initialState() }),
+      reduceCoreEvent({ event: remove(4, parse("itx.tab2")), state: CoreContract.initialState() }),
     ).toBeUndefined();
     // a MASK's handle undoes with `ifTarget: null` — lifting the mask, never someone else's rewrite
     const masked = reduceAll([configure(1, null)]);
     expect(reduceAll([remove(2, null)], masked).itxExpressionRewriteRules).toEqual({});
     const rewritten = reduceAll([configure(1, null), configure(2, "itx.tab1")]);
-    expect(proc.reduce({ event: remove(3, null), state: rewritten })).toBeUndefined();
+    expect(reduceCoreEvent({ event: remove(3, null), state: rewritten })).toBeUndefined();
   });
 });
 
@@ -245,7 +251,7 @@ describe("the subscriptions table — by name", () => {
     ]);
     expect(Object.keys(s.subscriptions)).toEqual(["b"]);
     expect(
-      proc.reduce({
+      reduceCoreEvent({
         event: at(4, "events.iterate.com/stream/subscription-configured", {
           name: "ghost",
           target: null,
@@ -268,10 +274,10 @@ describe("the subscriptions table — by name", () => {
         ifConfiguredAtOffset,
       });
     const replaced = reduceAll([configure(1), configure(2)]);
-    expect(proc.reduce({ event: remove(3, 1), state: replaced })).toBeUndefined(); // the first handle's stale undo
+    expect(reduceCoreEvent({ event: remove(3, 1), state: replaced })).toBeUndefined(); // the first handle's stale undo
     expect(reduceAll([remove(3, 2)], replaced).subscriptions).toEqual({}); // the row's own handle
     expect(
-      proc.reduce({ event: remove(4, 2), state: proc.contract.initialState() }),
+      reduceCoreEvent({ event: remove(4, 2), state: CoreContract.initialState() }),
     ).toBeUndefined(); // already gone
   });
 
@@ -312,7 +318,7 @@ describe("the subscriptions table — by name", () => {
     expect(rehalted.subscriptions.digest.halted).toEqual({ afterOffset: 9, attempts: 1 });
     // a halt for a name that has no row is dropped on the floor
     expect(
-      proc.reduce({
+      reduceCoreEvent({
         event: at(4, "events.iterate.com/stream/subscription-delivery-halted", {
           name: "nobody",
           afterOffset: 1,
@@ -356,7 +362,7 @@ describe("the subscriptions table — by name", () => {
     expect(print(plain.subscriptions.digest.target)).toBe("itx.digest.processEventBatch");
     expect(plain.subscriptions.digest.configuredAtOffset).toBe(1);
     expect(
-      proc.reduce({
+      reduceCoreEvent({
         event: at(5, "events.iterate.com/stream/subscription-delivery-resumed", { name: "nobody" }),
         state: plain,
       }),
@@ -365,12 +371,12 @@ describe("the subscriptions table — by name", () => {
 
   test("a malformed target THROWS at the reduce (no row) — the host skips it (stream.test.ts); a well-formed one still reduces", () => {
     expect(() =>
-      proc.reduce({
+      reduceCoreEvent({
         event: at(1, "events.iterate.com/stream/subscription-configured", {
           name: "broken",
           target: "itx.broken(", // does not parse
         }),
-        state: proc.contract.initialState(),
+        state: CoreContract.initialState(),
       }),
     ).toThrow();
     const s = reduceAll([
@@ -385,7 +391,7 @@ describe("the subscriptions table — by name", () => {
 
 describe("purity", () => {
   test("an EPHEMERAL event is never reduced, whatever its type — the state is rebuildable from the durable log alone", () => {
-    const state = proc.contract.initialState();
+    const state = CoreContract.initialState();
     const ephemeral = (type: string, payload: Record<string, unknown>): StreamEvent => ({
       ...at(1, type, payload),
       ephemeral: true,
@@ -403,20 +409,20 @@ describe("purity", () => {
         target: "itx.whoami",
       }),
     ])
-      expect(proc.reduce({ event: e, state })).toBeUndefined();
+      expect(reduceCoreEvent({ event: e, state })).toBeUndefined();
   });
 
   test("an event the reduce does not know → undefined (keep the state)", () => {
     expect(
-      proc.reduce({ event: at(1, "work"), state: proc.contract.initialState() }),
+      reduceCoreEvent({ event: at(1, "work"), state: CoreContract.initialState() }),
     ).toBeUndefined();
   });
 
-  // `reduceBatch` is the host's door (Stream reduces a commit's fresh events and each page of the
+  // `reduceCoreEventBatch` is the host's door (Stream reduces a commit's fresh events and each page of the
   // constructor's re-reduce through it): each core table is copied ONCE per batch and mutated as a
   // draft after — O(rows + events), not O(rows × events) (memory-budget.test.ts pins the time). What
   // that must NOT cost is purity at the batch's edges: the state handed in stays what it was.
-  describe("reduceBatch — a batch's draft tables never leak into the state it was given", () => {
+  describe("reduceCoreEventBatch — a batch's draft tables never leak into the state it was given", () => {
     const configured = (
       offset: number,
       name: string,
@@ -436,12 +442,12 @@ describe("purity", () => {
         rule(5, "itx.x", null),
         configured(6, "b", null),
       ];
-      const initial = proc.contract.initialState();
-      const afterFirst = proc.reduceBatch(first, initial, onError);
+      const initial = CoreContract.initialState();
+      const afterFirst = reduceCoreEventBatch(first, initial, onError);
       expect(afterFirst).toEqual(reduceAll(first));
-      expect(initial).toEqual(proc.contract.initialState()); // the given state: not a row leaked into it
+      expect(initial).toEqual(CoreContract.initialState()); // the given state: not a row leaked into it
       const afterFirstSnapshot = JSON.parse(JSON.stringify(afterFirst));
-      const afterSecond = proc.reduceBatch(second, afterFirst, onError);
+      const afterSecond = reduceCoreEventBatch(second, afterFirst, onError);
       expect(afterSecond).toEqual(reduceAll([...first, ...second]));
       expect(afterFirst).toEqual(afterFirstSnapshot); // the previous batch's result: immutable
       expect(afterSecond.subscriptions).not.toBe(afterFirst.subscriptions); // a fresh draft, not a shared table
@@ -449,9 +455,13 @@ describe("purity", () => {
     });
 
     test("a batch that touches nothing hands the SAME state back (identity is the host's change signal — no checkpoint rewrite, no live delta)", () => {
-      const state = proc.reduceBatch([configured(1, "a")], proc.contract.initialState(), onError);
+      const state = reduceCoreEventBatch(
+        [configured(1, "a")],
+        CoreContract.initialState(),
+        onError,
+      );
       expect(
-        proc.reduceBatch(
+        reduceCoreEventBatch(
           [at(2, "work"), { ...configured(3, "z"), ephemeral: true }],
           state,
           onError,
@@ -461,9 +471,9 @@ describe("purity", () => {
 
     test("a throwing event is handed to onError and SKIPPED — the events after it still reduce, and its state is the previous event's", () => {
       const reported: number[] = [];
-      const state = proc.reduceBatch(
+      const state = reduceCoreEventBatch(
         [configured(1, "a"), rule(2, "itx.call()", "itx.kv"), configured(3, "b")],
-        proc.contract.initialState(),
+        CoreContract.initialState(),
         (_error, event) => void reported.push(event.offset),
       );
       expect(reported).toEqual([2]);
@@ -521,7 +531,7 @@ describe("the builtins root, as the reduce sees it: masks, the platform-equivale
       target: null,
     });
     expect(
-      proc.reduce({
+      reduceCoreEvent({
         event: at(6, "events.iterate.com/itx/rewrite-rule-configured", {
           match: "itx.kv",
           target: null,
@@ -530,7 +540,7 @@ describe("the builtins root, as the reduce sees it: masks, the platform-equivale
       }),
     ).toBeUndefined();
     expect(
-      proc.reduce({
+      reduceCoreEvent({
         event: at(7, "events.iterate.com/itx/rewrite-rule-configured", {
           match: "itx.other",
           target: null,
@@ -558,7 +568,7 @@ describe("the builtins root, as the reduce sees it: masks, the platform-equivale
     ]);
     expect(s.itxExpressionRewriteRules).toEqual({});
     expect(
-      proc.reduce({
+      reduceCoreEvent({
         event: at(5, "events.iterate.com/itx/rewrite-rule-configured", {
           match: "itx.kv",
           target: "itx.builtins.kv",
@@ -756,7 +766,7 @@ describe("the secrets catalog — by name, the origin only, never a value", () =
   for (const { title, events, becomes, identity } of rows)
     test(`${title} — the last reduce returns ${identity}`, () => {
       const before = reduceAll(events.slice(0, -1));
-      const out = proc.reduce({ event: events.at(-1)!, state: before });
+      const out = reduceCoreEvent({ event: events.at(-1)!, state: before });
       expect(out === undefined ? "undefined (a no-op)" : "a new state").toBe(identity);
       expect((out ?? before).secrets).toEqual(becomes);
     });

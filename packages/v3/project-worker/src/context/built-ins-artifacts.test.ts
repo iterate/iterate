@@ -15,7 +15,7 @@ import {
   ScopedArtifactRepo,
   type ArtifactRepoHandle,
   type ArtifactsNamespace,
-} from "./built-ins.ts";
+} from "./repos.ts";
 
 function recordingNamespace(allRepos: string[] = []) {
   const calls: { method: string; name: string }[] = [];

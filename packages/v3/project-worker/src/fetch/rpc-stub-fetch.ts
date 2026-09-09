@@ -5,7 +5,8 @@
 //   1. Some capabilities are FETCH-SHAPED: `(request: Request) => Promise<Response>`. They are
 //      ALWAYS called through a terminal `fetch` — `itx.site.fetch(request)`, never a method of
 //      any other name. `itxExpressionEndingInFetch` (below) is the one normalizer that enforces the
-//      spelling at the fetch lane.
+//      spelling at the fetch lane; `terminalFetchOf` is the one reader of the shape a LIVE call
+//      carries.
 //
 //   2. Some fetch-shaped capabilities answer with a WEBSOCKET UPGRADE (a 101 Response carrying
 //      `webSocket`). Whether a given fetch upgrades is the PROVIDER'S decision, expressed in its
@@ -39,18 +40,48 @@ import type { ItxExpression } from "../context/expression.ts";
 
 export const ITX_EXPRESSION_FETCH_HEADER = "x-itx-expression";
 
+/** THE one reader of the terminal-fetch shape: the steps before a terminal `fetch` step and that
+ *  step's expression args (`[]` for the property spelling `[..., "fetch"]`), or null when the
+ *  expression does not end in `fetch`. */
+function splitTerminalFetch(
+  expression: ItxExpression,
+): { steps: ItxExpression; fetchArgs: unknown[] } | null {
+  const last = expression.at(-1);
+  if (last === "fetch") return { steps: expression.slice(0, -1), fetchArgs: [] };
+  if (Array.isArray(last) && last[0] === "fetch")
+    return { steps: expression.slice(0, -1), fetchArgs: last.slice(1) };
+  return null;
+}
+
 /** Normalize any spelling to the canonical terminal-fetch call (doctrine point 1): strip a
  *  trailing `fetch` step (property or call) and append the one `fetch` PROPERTY step — the live
  *  Request always rides as the runtime arg, never as expression data. A `fetch(...)` call
  *  carrying expression args is a LOUD error: the author meant something the lane cannot do. */
 export function itxExpressionEndingInFetch(expr: ItxExpression): ItxExpression {
-  const last = expr.at(-1);
-  if (Array.isArray(last) && last[0] === "fetch" && last.length > 1)
+  const terminal = splitTerminalFetch(expr);
+  if (terminal && terminal.fetchArgs.length > 0)
     throw new Error(
-      `fetch takes no expression args — the live Request rides in as the runtime arg (got ${JSON.stringify(last.slice(1))})`,
+      `fetch takes no expression args — the live Request rides in as the runtime arg (got ${JSON.stringify(terminal.fetchArgs)})`,
     );
-  const endsInFetch = last === "fetch" || (Array.isArray(last) && last[0] === "fetch");
-  return [...(endsInFetch ? expr.slice(0, -1) : expr), "fetch"];
+  return [...(terminal?.steps ?? expr), "fetch"];
+}
+
+/** A LIVE call that is the terminal fetch carrying the one Request — `[..., ["fetch", request]]`, or
+ *  `[..., "fetch"]` with the Request as the one runtime arg (`invoke("itx.laptop.fetch", request)`)
+ *  — split into the steps before `fetch` and the Request; null for any other call. The edge routes
+ *  it down the DO's fetch channel (iterate-context.ts) and the directory into
+ *  `RpcStubFetchServer.serve` (rpc-stub-directory.ts): the fetch channel is the only hop kind that
+ *  carries a socket-bearing Response back (doctrine points 1 & 4). */
+export function terminalFetchOf(
+  expression: ItxExpression,
+  args: unknown[],
+): { steps: ItxExpression; request: Request } | null {
+  const terminal = splitTerminalFetch(expression);
+  if (!terminal) return null;
+  const [request, ...rest] = [...terminal.fetchArgs, ...args];
+  return rest.length === 0 && request instanceof Request
+    ? { steps: terminal.steps, request }
+    : null;
 }
 
 // ═══════════════════════════════════ WORKAROUND ══════════════════════════════════════

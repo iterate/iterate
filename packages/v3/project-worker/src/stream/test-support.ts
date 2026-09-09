@@ -17,8 +17,9 @@ import {
   type StreamEvent,
   type StreamEventInput,
 } from "./events.ts";
+import { nodeSqliteDurableObjectStorage } from "./node-sqlite-durable-object-storage.ts";
 import type { ProcessorEngine, ProcessorStream } from "./processor.ts";
-import type { ReduceCheckpoint, ReduceCheckpointStore } from "./reduce-checkpoint.ts";
+import { ReduceCheckpointTable } from "./reduce-checkpoint.ts";
 
 export function memoryStream(path = "/") {
   const durableEvents: StreamEvent[] = []; // the durable log — what `read` answers
@@ -85,25 +86,25 @@ export function memoryStream(path = "/") {
   };
 }
 
-/** A facet's checkpoint store (reduce-checkpoint.ts `ReduceCheckpointStore`), in memory — one
- *  checkpoint per slug, exactly as the table keeps it. `writes` counts every write — rule 4 ("one
- *  durable commit per batch") and the ephemeral zero-write rule are pinned by counting it. */
-export function memoryStorage(): ReduceCheckpointStore & { readonly writes: number } {
-  const checkpoints = new Map<string, ReduceCheckpoint<unknown>>();
-  let writes = 0;
-  return {
-    read: <State>(slug: string) => checkpoints.get(slug) as ReduceCheckpoint<State> | undefined,
-    write: (slug, cursor, state, stateChanged) => {
-      writes++;
-      checkpoints.set(slug, {
-        ...cursor,
-        state: stateChanged ? structuredClone(state) : checkpoints.get(slug)?.state,
-      });
-    },
-    get writes() {
-      return writes;
-    },
-  };
+/** A facet's checkpoint table (reduce-checkpoint.ts `ReduceCheckpointTable`) over an in-memory
+ *  node:sqlite database — the real table, so the unit lane checkpoints exactly as a facet does —
+ *  with `writes` counting every write: rule 4 ("one durable commit per batch") and the ephemeral
+ *  zero-write rule are pinned by counting it. */
+class WriteCountingReduceCheckpointTable extends ReduceCheckpointTable {
+  writes = 0;
+  override write<State>(
+    slug: string,
+    cursor: { reducerVersion: string; reducedThroughOffset: number },
+    state: State,
+    stateChanged: boolean,
+  ): void {
+    this.writes++;
+    super.write(slug, cursor, state, stateChanged);
+  }
+}
+
+export function memoryStorage(): WriteCountingReduceCheckpointTable {
+  return new WriteCountingReduceCheckpointTable(nodeSqliteDurableObjectStorage().sql);
 }
 
 /** Let fire-and-forget pushes land. */

@@ -8,8 +8,8 @@
 //   pager (below) is one-shot: after the return the key is offline until someone lends again.
 //
 //   LAYER 2 — THE RPC-STUB PAGERS. A hibernatable WebSocket per key, opened by the stateless edge
-//   relay (context/rpc-stub-relay.ts), carrying `{ transportId, rpcStubKey }` in its attachment and
-//   nothing else. It is a standing offer: "I can lend this key back on demand". When a call finds
+//   relay (context/rpc-stub-relay.ts), carrying `{ rpcStubKey }` in its attachment and nothing
+//   else. It is a standing offer: "I can lend this key back on demand". When a call finds
 //   the key not borrowed, the DO sends `{type:"page"}` down the pager, the edge answers with
 //   `lendRpcStub`, and layer 1 takes over. Between pages the DO holds only hibernatable sockets.
 //
@@ -19,9 +19,9 @@
 //
 // WHAT A STUB IS HERE: its KEY — an opaque string the lender picks (the edge's `provide` sugar uses
 // whatever key it likes — a reconnect re-lends under the same key; the registry never parses
-// it; connection metadata may attach to a pager record later). A TRANSPORT ID is per pager socket,
-// so a NEW pager under an existing key can attach before the old one drops (the reconnect swap;
-// the newest pager wins). PRESENCE (`listRpcStubKeys`) is the keys borrowed or pager-backed right now.
+// it; connection metadata may attach to a pager record later). A PAGER IS ITS SOCKET: a NEW pager
+// under an existing key attaches beside the old one, then wins (the reconnect swap). PRESENCE
+// (`listRpcStubKeys`) is the keys borrowed or pager-backed right now.
 //
 // ONE-SHOT pager attach: the pager upgrade's `x-itx-rpc-stub-pager` header carries the KEY and the
 // EVENTS THAT NAME IT (a rewrite rule, a subscription row); this side accepts the socket and appends
@@ -30,7 +30,11 @@
 // paused stream) un-accepts: the socket closes silently, nothing was named, and the refusal — its
 // CODE — is the upgrade's answer. So a `provide(stub)` costs the edge ONE round trip to this DO.
 
-import type { RpcStubFetchServer, RpcStubFetchTransport } from "../fetch/rpc-stub-fetch.ts";
+import {
+  terminalFetchOf,
+  type RpcStubFetchServer,
+  type RpcStubFetchTransport,
+} from "../fetch/rpc-stub-fetch.ts";
 import { codedError, errorCode } from "../lib/errors.ts";
 import type { StreamEventInput } from "../stream/events.ts";
 import type { ItxExpression } from "./expression.ts";
@@ -82,8 +86,10 @@ export type BorrowedRpcStub = RpcStubFetchTransport & {
   dup?(): BorrowedRpcStub;
 };
 
-/** One pager socket's durable record — its attachment (survives hibernation). */
-type RpcStubPagerRecord = { transportId: string; rpcStubKey: string };
+/** One pager socket's durable record — its attachment (survives hibernation). The key alone: the
+ *  socket is its own identity (an attachment from an earlier deploy may carry more; only the key
+ *  is read). */
+type RpcStubPagerRecord = { rpcStubKey: string };
 
 /** THE one disposer for any RPC-ish stub (borrowed Workers-RPC legs here, the session's own capnweb
  *  stubs in rpc-stub-relay.ts): a no-op for anything that is not disposable. */
@@ -178,14 +184,9 @@ export class RpcStubDirectory {
       // path; the borrowed stub is the transport. Everything else is a plain dotted dispatch. Either
       // way, a lender that dies mid-call is re-coded to RPC_STUB_OFFLINE at the relay, where the
       // break is LOCAL — the CODE, never a message, crosses this hop (lib/errors.ts).
-      const last = itxExpressionSteps.at(-1);
-      if (
-        Array.isArray(last) &&
-        last[0] === "fetch" &&
-        last.length === 2 &&
-        last[1] instanceof Request
-      )
-        return await this.#rpcStubFetch.serve(borrowed, itxExpressionSteps.slice(0, -1), last[1]);
+      const terminalFetch = terminalFetchOf(itxExpressionSteps, []);
+      if (terminalFetch)
+        return await this.#rpcStubFetch.serve(borrowed, terminalFetch.steps, terminalFetch.request);
       return await borrowed.invoke(itxExpressionSteps);
     } catch (error) {
       // A BROKEN STUB IS DROPPED, NEVER KEPT (v4 §2.7): every later call on it would fail the same
@@ -233,13 +234,12 @@ export class RpcStubDirectory {
       );
     }
     const { rpcStubKey, appendEvents } = attachRequest;
-    const transportId = crypto.randomUUID(); // per SOCKET: a reconnect's new pager attaches beside the old one, then wins
     const hadPager = this.#rpcStubPagerFor(rpcStubKey) !== undefined;
     // Accepted and stamped in ONE synchronous turn, so every pager socket this side ever sees
     // carries its record — through hibernation too (the attachment is what survives).
     const pair = new WebSocketPair();
     this.#ctx.acceptWebSocket(pair[1], [RPC_STUB_PAGER_WEBSOCKET_TAG]);
-    pair[1].serializeAttachment({ transportId, rpcStubKey } satisfies RpcStubPagerRecord);
+    pair[1].serializeAttachment({ rpcStubKey } satisfies RpcStubPagerRecord);
     // THE SET HALF: the events that name this key (`match ⇒ itx.builtins.rpcStubs.get('<key>')`, a
     // subscription row) land now, with the pager already accepted — so a push the commit fans out
     // finds the pager to page, exactly as when the edge appended after the upgrade. Still the same
@@ -257,14 +257,14 @@ export class RpcStubDirectory {
     }
     // ONE pager per key, enforced when a pager becomes VISIBLE: a CONCURRENT provide at the same key
     // may still be opening its own pager, invisible to any earlier scan — so when THIS pager opens,
-    // drop every OTHER same-key pager now (the newest wins). "replaced" ⇒ a swap, not a real close:
+    // drop every OTHER same-key socket now (the newest wins). "replaced" ⇒ a swap, not a real close:
     // a page in flight for the key SURVIVES it — parked out of the drop's reach, then re-sent down
     // this pager, which can answer it (its own 10 s timeout stays the backstop).
     const pageInFlight = this.#rpcStubPagesInFlight.get(rpcStubKey);
     if (pageInFlight) this.#rpcStubPagesInFlight.delete(rpcStubKey);
-    for (const record of this.#rpcStubPagerRecords())
-      if (record.rpcStubKey === rpcStubKey && record.transportId !== transportId)
-        this.dropRpcStubPager(record.transportId, "replaced");
+    for (const ws of this.#rpcStubPagerSockets())
+      if (ws !== pair[1] && this.#rpcStubPagerRecord(ws).rpcStubKey === rpcStubKey)
+        this.#dropRpcStubPager(ws, "replaced");
     if (pageInFlight) {
       this.#rpcStubPagesInFlight.set(rpcStubKey, pageInFlight);
       pair[1].send(JSON.stringify({ type: "page" }));
@@ -287,10 +287,8 @@ export class RpcStubDirectory {
     this.#onPresence("detached", rpcStubKey);
   }
 
-  /** Close a pager WebSocket (kick / replace) and forget it. */
-  dropRpcStubPager(transportId: string, reason: string): void {
-    const ws = this.#rpcStubPagerSocketFor(transportId);
-    if (!ws) return;
+  /** Close a pager WebSocket (the replaced one of a reconnect swap) and forget it. */
+  #dropRpcStubPager(ws: WebSocket, reason: string): void {
     this.#closedRpcStubPagerSockets.add(ws); // its late close event must not touch the key again
     try {
       ws.close(1000, reason);
@@ -345,11 +343,6 @@ export class RpcStubDirectory {
   #rpcStubPagerFor(rpcStubKey: string): WebSocket | undefined {
     return this.#rpcStubPagerSockets().find(
       (ws) => this.#rpcStubPagerRecord(ws).rpcStubKey === rpcStubKey,
-    );
-  }
-  #rpcStubPagerSocketFor(transportId: string): WebSocket | undefined {
-    return this.#rpcStubPagerSockets().find(
-      (ws) => this.#rpcStubPagerRecord(ws).transportId === transportId,
     );
   }
   /** The record a pager socket carries (stamped in the same synchronous turn the socket was

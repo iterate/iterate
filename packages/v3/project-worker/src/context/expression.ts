@@ -23,8 +23,8 @@ export type ItxExpressionStep = string | [method: string, ...args: unknown[]];
 export type ItxExpression = ItxExpressionStep[];
 /** THE dispatch target, in EITHER codec half — a dotted string that starts with the scope root
  *  (`"itx.facets.get('core')"`) OR the parsed structured form (`["itx","facets",["get","core"]]`).
- *  Both carry call args (the string via `.method(args)`), and `toItxExpression` normalizes either to the
- *  structured form — so either works wherever one works, at every door that dispatches. */
+ *  Both carry call args (the string via `.method(args)`), and `normalizedItxExpression` normalizes
+ *  either to the structured form — so either works wherever one works, at every door that dispatches. */
 export type ItxExpressionInput = string | ItxExpression;
 /** An itx-expression PREFIX — a rewrite rule's `match`: dotted names, any of which may be a call step
  *  PINNING literal args — `itx.ai.run` or `itx.ai.run('gpt-5')` or `itx.repo.get('main').files`. A
@@ -157,14 +157,6 @@ export function parse(source: string, options?: { holes?: boolean }): ItxExpress
   return steps;
 }
 
-/** Accept either half of an `ItxExpressionInput`; normalize to the structured form. */
-export function toItxExpression(
-  input: ItxExpressionInput,
-  options?: { holes?: boolean },
-): ItxExpression {
-  return typeof input === "string" ? parse(input, options) : input;
-}
-
 /** The array half, checked the way the parser checks the string half — every name step an identifier
  *  that is not reserved, every call step `[method, ...args]` with an identifier method (or `""`, the
  *  anonymous call, only right after a call) — WITHOUT printing and re-parsing: a stored target carries a worker's whole source as
@@ -199,8 +191,10 @@ function assertItxExpressionShape(expression: ItxExpression): void {
   // STRING form lexes a bare `@` into the marker, and only for a rule's target.
 }
 
-/** Either half, normalized to the array half and checked: a string is parsed (short by rule), an
- *  array is shape-checked in place. THE one door the event builders use for a configured target. */
+/** THE ONE NORMALIZING DOOR: either half, normalized to the array half and checked — a string is
+ *  parsed (short by rule), an array is shape-checked in place. Every door that takes an
+ *  `ItxExpressionInput` (the edge `invoke`, the resolver, the event builders, the prefix parser
+ *  below) enters through it. */
 export function normalizedItxExpression(
   input: ItxExpressionInput,
   options?: { holes?: boolean },
@@ -243,28 +237,18 @@ export function print(expr: ItxExpression, options?: { holes?: boolean }): strin
     .join("");
 }
 
-/** Parse an itx-expression prefix (either codec half) — dotted names, optionally pinning literal args
- *  on call steps (`itx.ai.run('gpt-5')`). A call step with NO args pins nothing and is the same prefix
- *  as the plain name, so it is refused: spell `itx.ai.run`. */
+/** Parse an itx-expression prefix (either codec half) — `normalizedItxExpression` (so every step is
+ *  an identifier that is not reserved, in either half) plus the two refusals only a PREFIX has: the
+ *  anonymous call step (`f(x)(y)` — a prefix cannot call a result), and a call step with NO args,
+ *  which pins nothing and is the same prefix as the plain name: spell `itx.ai.run`. */
 export function parseItxExpressionPrefix(source: ItxExpressionInput): ItxExpressionPrefix {
-  const expr = toItxExpression(source);
+  const expr = normalizedItxExpression(source);
   const spelled = typeof source === "string" ? source : print(expr);
   for (const step of expr) {
-    // The ARRAY half enters here un-lexed: a name step must be ONE identifier, exactly what the
-    // string half's `readName` accepts — `["itx", "builtins.kv"]` or `["itx", "a b"]` is not a prefix
-    // (it would print as a dotted name the door never saw, or as one the reduce cannot parse).
-    const name = itxExpressionStepName(step);
-    if (name === "")
+    if (!Array.isArray(step)) continue;
+    if (step[0] === "")
       throw new Error(`an itx-expression prefix cannot call a result — ${JSON.stringify(spelled)}`);
-    if (typeof name !== "string" || IDENT.exec(name)?.[0] !== name)
-      throw new Error(
-        `an itx-expression prefix's steps are identifiers — ${JSON.stringify(spelled)} has ${JSON.stringify(name)}`,
-      );
-    if (RESERVED.has(name))
-      throw new Error(
-        `expression: reserved name ${JSON.stringify(name)} in ${JSON.stringify(spelled)}`,
-      );
-    if (Array.isArray(step) && step.length === 1)
+    if (step.length === 1)
       throw new Error(
         `an itx-expression prefix pins literal args with a call step — ${JSON.stringify(spelled)} has "${step[0]}()" with none; spell "${step[0]}"`,
       );

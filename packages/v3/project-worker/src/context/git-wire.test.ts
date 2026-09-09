@@ -13,5 +13,5 @@ test("a pkt-line body cut mid-header rejects instead of yielding an empty ref li
     remote: "https://account.artifacts.example/git/ns/prj.config.git",
     token: "t",
   });
-  await expect(transport.lsRefs(["refs/heads/main"])).rejects.toThrow(/truncated pkt-line/);
+  await expect(transport.tipOf("refs/heads/main")).rejects.toThrow(/truncated pkt-line/);
 });

@@ -1,12 +1,12 @@
 // The /mcp API route — the ONLY OAuth-protected boundary. The provider validated the bearer (an OAuth
-// access token) BEFORE this runs and put the granted props on ctx.props; in `open` login mode index.ts
+// access token) BEFORE this runs and put the granted props on ctx.props; in `open` login mode app.ts
 // short-circuits here with the anonymous identity. An MCP server (@modelcontextprotocol/server) mounts
 // here, scoped to that identity: every tool acts as the USER the grant names (/authorize, app.ts).
 
 import { createMcpHandler, fromJsonSchema, McpServer } from "@modelcontextprotocol/server";
 import { CfWorkerJsonSchemaValidator } from "@modelcontextprotocol/server/validators/cf-worker";
 import { directory } from "./directory.ts";
-import type { Env, Handler } from "./env.ts";
+import type { Env, Handler } from "./app.ts";
 
 /** The props the provider put on ctx after validating the bearer: the user the grant names. */
 interface AuthProps {

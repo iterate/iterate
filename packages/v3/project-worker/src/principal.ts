@@ -63,7 +63,8 @@ async function hmacKey(secret: string, usage: "sign" | "verify"): Promise<Crypto
   );
 }
 
-/** Sign any JSON claims with `secret`. */
+/** Sign any JSON claims with `secret` — a project token's `ProjectTokenClaims` (e2e/support/principal.ts
+ *  mints them), the control plane's session (control-plane/session.ts). */
 export async function signClaims(claims: unknown, secret: string): Promise<string> {
   const payload = base64url(encoder.encode(JSON.stringify(claims)));
   const signature = await crypto.subtle.sign(
@@ -98,10 +99,6 @@ export async function verifyClaims(token: string, secret: string): Promise<unkno
   );
   return valid ? claims : null;
 }
-
-/** Mint a project token. */
-export const signProjectToken = (claims: ProjectTokenClaims, secret: string): Promise<string> =>
-  signClaims(claims, secret);
 
 /** The claims of a project token that verifies (`verifyClaims`), has the claims' shape and is not
  *  yet expired — else null. */

@@ -31,7 +31,11 @@
 
 import { PROCESSOR_SDK_MODULE } from "../generated/processor-sdk.ts";
 import { codedError } from "../lib/errors.ts";
-import { toItxExpression, type ItxExpression, type ItxExpressionInput } from "./expression.ts";
+import {
+  normalizedItxExpression,
+  type ItxExpression,
+  type ItxExpressionInput,
+} from "./expression.ts";
 
 /** Compose the loader cacheKey `owner` (context + a discriminator: a processor slug or a stateful
  *  className) COLLISION-FREE. The naive `${context}:${discriminator}` aliased across a different
@@ -196,7 +200,7 @@ export async function loadConfinedWorker(
       );
     sourceVersion = cacheKey;
     getModules = async () => {
-      const produced = await opts.invoke(toItxExpression(source));
+      const produced = await opts.invoke(normalizedItxExpression(source));
       return requireMainModule(typeof produced === "string" ? { "cap.js": produced } : produced);
     };
   }

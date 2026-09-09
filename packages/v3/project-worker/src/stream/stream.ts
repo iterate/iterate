@@ -30,7 +30,7 @@
 
 import { codedError, errorCode, reportIssue } from "../lib/errors.ts";
 import type { ItxExpressionInput } from "../context/expression.ts";
-import { CoreStreamProcessor, type CoreState } from "./core-processor.ts";
+import { CoreContract, reduceCoreEventBatch, type CoreState } from "./core-processor.ts";
 import {
   idempotencyConflictMessage,
   sameIdempotentEvent,
@@ -145,12 +145,11 @@ export class Stream {
   #selfWakeStreak = 0;
 
   // ── THE CORE REDUCE: the stream's own state (core-processor.ts), event-sourced from its own log.
-  // The processor is a pure reduce; the REDUCED STATE lives here — rehydrated by the constructor from
-  // the versioned checkpoint (reduce-checkpoint.ts) and caught up to the durable mark, reduced inside
-  // every durable commit and checkpointed with it (the cursor every batch, the state on change),
-  // published as a live-state delta after the commit. Durable events only, so it rebuilds
-  // bit-identically. ──
-  readonly #coreProcessor = new CoreStreamProcessor();
+  // The reduce is a pure function (`reduceCoreEventBatch`, under `CoreContract`); the REDUCED STATE
+  // lives here — rehydrated by the constructor from the versioned checkpoint (reduce-checkpoint.ts)
+  // and caught up to the durable mark, reduced inside every durable commit and checkpointed with it
+  // (the cursor every batch, the state on change), published as a live-state delta after the commit.
+  // Durable events only, so it rebuilds bit-identically. ──
   #coreReducedState: CoreState;
   #coreReducedThroughOffset: number;
   /** ONE LiveState holder for the core reduced state, born with the stream over the rehydrated state
@@ -166,8 +165,7 @@ export class Stream {
     // THE DURABLE HEAD is the core checkpoint's offset — written every durable commit anyway (the
     // reduce inside the transaction below), so there is no separate mark to write. Read WHATEVER
     // version wrote it: a core-version bump still recovers the head and re-reduces the log up to it.
-    const { contract } = this.#coreProcessor;
-    const checkpoint = this.storage.reduceCheckpoints.read<CoreState>(contract.slug);
+    const checkpoint = this.storage.reduceCheckpoints.read<CoreState>(CoreContract.slug);
     // A log with rows but NO checkpoint (a lost row; a store from before the SQL layout) is
     // recoverable: the log is the truth and the checkpoint its cache — the mark is the highest row,
     // and the state is re-reduced below exactly as after a version bump. Reported, never fatal: the
@@ -190,11 +188,11 @@ export class Stream {
     // rows it was reduced from, so after any commit the two cannot disagree; it is only ever ABSENT
     // on a store with no commits (mark 0, nothing to reduce) or written under ANOTHER contract
     // version — then the durable log is re-reduced from offset 0, the one-time cost of a version bump.
-    if (checkpoint?.reducerVersion === contract.version) {
-      this.#coreReducedState = checkpoint.state ?? contract.initialState();
+    if (checkpoint?.reducerVersion === CoreContract.version) {
+      this.#coreReducedState = checkpoint.state ?? CoreContract.initialState();
       this.#coreReducedThroughOffset = checkpoint.reducedThroughOffset;
     } else {
-      this.#coreReducedState = contract.initialState();
+      this.#coreReducedState = CoreContract.initialState();
       this.#coreReducedThroughOffset = 0;
       // Budgeted pages (READ_PAGE_BUDGET_BYTES): this runs in the DO constructor, where a page that
       // did not fit the isolate would be a reboot loop — every wake re-running the same re-reduce.
@@ -220,7 +218,7 @@ export class Stream {
     }
     this.#coreLiveState = new LiveState(
       { append: (event) => this.append(event) },
-      contract.slug,
+      CoreContract.slug,
       this.#coreReducedState,
       // The sink is this stream's OWN synchronous append (same isolate): no cross-hop reorder is
       // possible, and the core delta must land densely inside the commit that triggered it — so it
@@ -311,13 +309,10 @@ export class Stream {
       // command door too).
       if (event.type === "events.iterate.com/stream/subscription-configured") {
         const name = (event.payload as { name?: unknown } | undefined)?.name;
-        if (
-          name === this.#coreProcessor.contract.slug ||
-          (typeof name === "string" && name in Object.prototype)
-        )
+        if (name === CoreContract.slug || (typeof name === "string" && name in Object.prototype))
           throw codedError(
             "RESERVED_SUBSCRIPTION_NAME",
-            `${JSON.stringify(name)} is reserved as a subscription name: "${this.#coreProcessor.contract.slug}" is the core reduce, and a key of Object.prototype would name the table's prototype`,
+            `${JSON.stringify(name)} is reserved as a subscription name: "${CoreContract.slug}" is the core reduce, and a key of Object.prototype would name the table's prototype`,
             { name },
           );
       }
@@ -435,11 +430,10 @@ export class Stream {
         // reduced state on change.
         // Reduced into a LOCAL: the fields move only after the transaction commits, so a failed
         // write never leaves phantom core state in memory (a subscription row the log never got).
-        const { contract } = this.#coreProcessor;
         reducedState = this.#reduceEventsIntoCoreReducedState(freshEvents, reducedState);
         this.storage.reduceCheckpoints.write(
-          contract.slug,
-          { reducerVersion: contract.version, reducedThroughOffset: throughOffset },
+          CoreContract.slug,
+          { reducerVersion: CoreContract.version, reducedThroughOffset: throughOffset },
           reducedState,
           reducedState !== this.#coreReducedState,
         );
@@ -465,11 +459,11 @@ export class Stream {
 
   /** Reduce a batch of events into the core reduced state — the commit's fresh events and each page
    *  of the constructor's version-bump re-reduce both come here, THE ONE DOOR (the reduce itself
-   *  ignores ephemerals and the types it does not own; `reduceBatch` copies each core table once per
-   *  batch, never once per event — the O(rows²) re-reduce memory-budget.test.ts pins). A malformed
-   *  control event must not wedge the stream: record the skip, move on. */
+   *  ignores ephemerals and the types it does not own; `reduceCoreEventBatch` copies each core table
+   *  once per batch, never once per event — the O(rows²) re-reduce memory-budget.test.ts pins). A
+   *  malformed control event must not wedge the stream: record the skip, move on. */
   #reduceEventsIntoCoreReducedState(events: StreamEvent[], state: CoreState): CoreState {
-    return this.#coreProcessor.reduceBatch(events, state, (error, event) =>
+    return reduceCoreEventBatch(events, state, (error, event) =>
       reportIssue("stream.core-reduce", error, { offset: event.offset, type: event.type }),
     );
   }

@@ -2,7 +2,7 @@
 // subscription-delivery.test.ts — the one delivery loop in node over the real Stream (node:sqlite
 // storage), `evaluateItxExpression` standing in for the context's dispatch:
 //   • THE PENDING-PUSH BOUND: commits that land while a delivery is in flight FOLD into one pending
-//     push; past PENDING_PUSH_BUDGET_CHARS the oldest events are dropped and the push's `after`
+//     push; past PENDING_PUSHES_TOTAL_BUDGET_CHARS the oldest events are dropped and the push's `after`
 //     moves up to the last dropped offset — the gap a facet's own repair reads from the log. The
 //     memory half (200 × 1 MiB behind a stuck facet survives a 128 MiB budget) is
 //     memory-budget.test.ts's row; this file is the semantics.

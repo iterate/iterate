@@ -21,7 +21,6 @@
 // `worker.getEntrypoint()` / `worker.getDurableObjectClass()`); the two-step is folded into one door
 // per host on purpose.
 
-import { RpcTarget } from "capnweb";
 import type { ReachableContext, StreamPage, WaitForEventFilter } from "../stream/stream.ts";
 import { stampPrincipal, type Principal } from "../principal.ts";
 import type { StreamEvent, StreamEventInput } from "../stream/events.ts";
@@ -33,10 +32,21 @@ import {
   type WorkerSource,
 } from "./worker-loader.ts";
 import { resolveContextPath } from "./durable-object-names.ts";
-import { print, type ItxExpression, type ItxExpressionInput } from "./expression.ts";
+import {
+  print,
+  type ItxExpression,
+  type ItxExpressionInput,
+  type ItxExpressionStep,
+} from "./expression.ts";
 import { FacetHandle, InvokeHandle, RpcStubHandle } from "./invoke-handle.ts";
 import type { BuiltInRoot } from "./built-in-roots.ts";
-import { projectScopedRepos, type ReposScope } from "./repos.ts";
+import {
+  projectScopedArtifacts,
+  projectScopedRepos,
+  type ArtifactsNamespace,
+  type ArtifactsScope,
+  type ReposScope,
+} from "./repos.ts";
 
 /** One row of `itx.rewriteRules.list()`: a context row (`target` a string, or `null` for a mask) or an
  *  implicit platform row. */
@@ -61,86 +71,6 @@ export type SubscriptionListEntry = {
   cursor?: { confirmedOffset: number; attempt: number; nextAttemptAtMs?: number };
   halted?: { afterOffset: number; attempts: number; error?: string };
 };
-
-/** Cloudflare Artifacts ("git for agents", beta) — the per-namespace binding, CONTROL PLANE ONLY, and
- *  typed minimally here (not in `@cloudflare/workers-types` yet; reconcile against `wrangler types`
- *  when the namespace is provisioned). `create` returns the repo's initial git credential; `get`
- *  returns a repo HANDLE (mint a credential with `createToken`); `list` is UNFILTERED. A repo's file
- *  BYTES ride git over the remote — the `itx.repos` layer's job, later, not this raw escape hatch. */
-export interface ArtifactsNamespace {
-  create(name: string, options?: { setDefaultBranch?: string }): Promise<ArtifactCreateResult>;
-  get(name: string): Promise<ArtifactRepoHandle>;
-  list(options?: { limit?: number; cursor?: string }): Promise<ArtifactListResult>;
-  delete(name: string): Promise<boolean>;
-}
-/** `create`/`import`'s result: the repo's initial git credential (typed minimally — there may be more). */
-export interface ArtifactCreateResult {
-  token: string;
-}
-/** The REAL repo handle `get()` yields (a live RPC stub), typed to what is read: `createToken` is
- *  scoped to this one repo and safe; `fork(name, …)` is NOT — its name is unprefixed and would escape
- *  the project — so the scoped handle `itx.cfArtifacts.get` returns (`ScopedArtifactRepo`) re-exposes
- *  only `createToken`. */
-export interface ArtifactRepoHandle {
-  createToken(scope: "read" | "write", ttlSeconds: number): Promise<ArtifactToken>;
-  fork(name: string, options?: { setDefaultBranch?: string }): Promise<ArtifactCreateResult>;
-}
-/** `createToken`'s result — `plaintext` is the git credential string. */
-export interface ArtifactToken {
-  plaintext: string;
-  expiresAt?: string;
-}
-/** What `itx.cfArtifacts.get` returns: a genuine capnweb `RpcTarget`, so a client can pipeline
- *  `get(name).createToken(...)` ACROSS the /api hop exactly like the real binding's handle — a plain
- *  object cannot (its `createToken` closure is NonPipelinable and fails to serialize; invoke-handle.ts).
- *  It re-exposes ONLY `createToken`, delegated to the already-prefixed repo; the real handle's `fork`
- *  (whose unprefixed name escapes the wall) and everything else are deliberately withheld. */
-export class ScopedArtifactRepo extends RpcTarget {
-  readonly #handle: ArtifactRepoHandle;
-  constructor(handle: ArtifactRepoHandle) {
-    super();
-    this.#handle = handle;
-  }
-  createToken(scope: "read" | "write", ttlSeconds: number): Promise<ArtifactToken> {
-    return this.#handle.createToken(scope, ttlSeconds);
-  }
-}
-/** `list`'s result: repos in the WHOLE namespace (the binding does NOT filter by name), one page. */
-export interface ArtifactListResult {
-  repos: { name: string }[];
-  cursor?: string;
-}
-
-/** `itx.cfArtifacts` — the RAW Artifacts binding, project-scoped, and shaped like the real binding.
- *  Every repo name is forced under this project's `${projectId}.` prefix (the isolation wall, like
- *  `itx.kv`'s `${projectId}:`). The delimiter is `.` ON PURPOSE: project IDs are `[A-Za-z0-9_-]` (no
- *  `.`), so `${projectId}.` cannot collide even when IDs contain `-` (a `--` delimiter could: `a` +
- *  `b--x` == `a--b` + `x`), and repo names allow `.`. `create` and `list` return the real shapes
- *  (`list` filtered to this prefix LOCALLY — the binding returns EVERY project's repos). `get` returns
- *  a `ScopedArtifactRepo` RpcTarget exposing only `createToken` (the real handle's `fork` — whose
- *  unprefixed name escapes the wall — is withheld). Pure and namespace-injected: unit-tests alone. */
-export function projectScopedArtifacts(
-  namespace: ArtifactsNamespace,
-  projectId: string,
-): BuiltInScope["cfArtifacts"] {
-  const prefix = `${projectId}.`;
-  return {
-    create: (name, options) => namespace.create(prefix + name, options),
-    // Wrap the raw handle in an RpcTarget so `get(name).createToken(...)` pipelines across /api; the
-    // wrapper exposes only `createToken` (scoped to this already-prefixed repo), never `fork`.
-    get: async (name) => new ScopedArtifactRepo(await namespace.get(prefix + name)),
-    list: async (options) => {
-      const page = await namespace.list(options);
-      return {
-        repos: page.repos.flatMap((r) =>
-          r.name.startsWith(prefix) ? [{ name: r.name.slice(prefix.length) }] : [],
-        ),
-        ...(page.cursor !== undefined && { cursor: page.cursor }),
-      };
-    },
-    delete: (name) => namespace.delete(prefix + name),
-  };
-}
 
 /** THE built-in scope, as ONE interface — the physical-layer roots: `itx.builtins.<root>` runs
  *  against them directly; `itx.<root>` reaches them through the implicit platform row unless the
@@ -183,24 +113,14 @@ export interface BuiltInScope extends LibraryRoots {
    *  model with `@` (`itx.fable ⇒ itx.ai.run('@cf/…', @)`). A test shadows it with `provide("itx.ai",
    *  fake)`; the physical door stays `itx.builtins.ai`. */
   ai: Ai;
-  /** THE ESCAPE HATCH: Cloudflare Artifacts, project-scoped. `itx.cfArtifacts` proxies the ONE bound
-   *  namespace, forcing every repo name under this project's `${projectId}.` prefix (the isolation
-   *  wall, exactly like `itx.kv`). The nicer `itx.repos` API is built ON TOP of this; anyone who wants
-   *  raw Artifacts falls back here — same shape as `itx.ai` proxying `env.AI`, and its methods return
-   *  the SAME SHAPES as the real binding: `create` a repo (→ its initial git token), `get` a repo's
-   *  handle (mint a git credential with `createToken`; NO `fork` — its name escapes the wall), `list`
-   *  this project's repos, or `delete` one (project teardown deletes a project's repos). A repo's
-   *  bytes are git-over-HTTPS (the `itx.repos` layer's job). */
-  cfArtifacts: {
-    create(name: string, options?: { setDefaultBranch?: string }): Promise<ArtifactCreateResult>;
-    get(name: string): Promise<ScopedArtifactRepo>;
-    list(options?: { limit?: number; cursor?: string }): Promise<ArtifactListResult>;
-    delete(name: string): Promise<boolean>;
-  };
+  /** THE ESCAPE HATCH: Cloudflare Artifacts, project-scoped (repos.ts `ArtifactsScope` — the ONE
+   *  bound namespace behind the project's `${projectId}.` prefix wall) — same shape as `itx.ai`
+   *  proxying `env.AI`. The nicer `itx.repos` is built ON TOP of it. */
+  cfArtifacts: ArtifactsScope;
   /** THE PRIMARY REPO DOOR — `itx.repos` (repos.ts): a repo's file BYTES, git-over-HTTPS, built ON TOP
-   *  of `cfArtifacts` + `context/git-wire`. `cfArtifacts` is the raw control-plane escape hatch
-   *  beneath it. Minimal today: `readFile`/`writeFile` one root-level path on `main` — enough to move
-   *  the config worker's source out of KV (`itx.provide("itx.worker", "…itx.repos.readFile(…)")`). */
+   *  of `cfArtifacts` + `context/git-wire`. Minimal today: `readFile`/`writeFile` one root-level path
+   *  on `main` — enough to move the config worker's source out of KV
+   *  (`itx.provide("itx.worker", "…itx.repos.readFile(…)")`). */
   repos: ReposScope;
   /** Append to this context's append-only event log (the facets that REDUCE it are
    *  `itx.facets.get(name)`). A top-level root, so the expression surface mirrors the edge
@@ -356,40 +276,6 @@ interface BuildBuiltInsDeps {
 export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> {
   const { projectId, path, iterateContextName, env } = deps;
 
-  /** THE stateless host — `itx.workers.get(spec)`: a fresh confined isolate (no DO, no storage,
-   *  `env.ITX` bound) over the loaded WorkerEntrypoint, and ONE method on it by name — `run`,
-   *  `fetch`, `processEventBatch`, whatever the class declares. A terminal `fetch(request)` is this
-   *  same call: `entrypoint.fetch(request)` IS the entrypoint's fetch channel, socket-bearing
-   *  Responses included (fetch/rpc-stub-fetch.ts doctrine, points 1 & 4). The source EXPORTS the
-   *  entrypoint (no host-injected wrapper — Cloudflare's `worker.getEntrypoint()` underneath).
-   *  Re-resolves per call, but the loader caches by the key (cacheKey | content hash) so a warm
-   *  isolate is reused and a producer expression never re-runs. */
-  const callEntrypoint = async (
-    spec: { source: WorkerSource; cacheKey?: WorkerCacheKey; className?: string; props?: unknown },
-    method: string,
-    args: unknown[],
-  ) => {
-    const { worker } = await loadConfinedWorker({
-      env,
-      deployId: deps.deployId,
-      itxEntrypoint: deps.itxEntrypoint,
-      kind: "worker",
-      owner: iterateContextName,
-      source: spec.source,
-      cacheKey: spec.cacheKey,
-      invoke: deps.invoke,
-      where: "workers.get",
-    });
-    const entrypoint = worker.getEntrypoint(
-      spec.className,
-      spec.props === undefined ? undefined : { props: spec.props },
-    ) as Fetcher & Record<string, (...a: unknown[]) => Promise<unknown>>;
-    const fn = entrypoint[method];
-    if (typeof fn !== "function")
-      throw new Error(`workers.get(spec): the entrypoint has no method "${method}"`);
-    return Reflect.apply(fn, entrypoint, args);
-  };
-
   const kvPrefix = `${projectId}:`;
   const ownContext = () => deps.context(path);
   // A project secret lives at `secret:<projectId>:<name>` — the key the DO's egress door reads.
@@ -404,8 +290,12 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
    *  stamp, never a client's (src/principal.ts): the session's verified principal, or none. */
   const append = (...events: StreamEventInput[]) =>
     ownContext().append(...events.map((event) => stampPrincipal(event, deps.principal())));
-  /** The project's ROOT context when this is not it — where the secrets catalog lives. */
+  /** Secrets are the PROJECT's: the value's key is project-scoped, so the catalog lives in ONE log —
+   *  the root context's. Each `secrets` verb runs `here` on the root context, and on a child context
+   *  runs as the same call on the root, over the DO hop. */
   const rootContext = path === "/" ? null : deps.context("/");
+  const onRootContext = <T>(call: ItxExpressionStep, here: () => Promise<T>): Promise<T> =>
+    rootContext ? (rootContext.invoke(["itx", "builtins", "secrets", call]) as Promise<T>) : here();
 
   // Each root implements one member of the BuiltInScope interface above (the canonical doc of the
   // kernel surface); the comments here add only what the interface can't say — the WHY of a code branch.
@@ -436,47 +326,32 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
         }
       },
     },
-    // Secrets are the PROJECT's: the value's key is project-scoped, so the catalog lives in ONE log —
-    // the root context's. A child context's `itx.secrets` is the root's, over the DO hop.
     secrets: {
-      set: async (name, value, options) => {
-        if (rootContext)
-          return rootContext.invoke([
-            "itx",
-            "builtins",
-            "secrets",
-            ["set", name, value, options],
-          ]) as Promise<{ ok: true }>;
-        const origin = options?.origin === undefined ? undefined : new URL(options.origin).origin;
-        // The change is appended FIRST: a refused append (a paused stream) leaves the value untouched;
-        // a KV failure after it leaves a catalog row whose value egress cannot find — loud, not silent.
-        const key = secretKey(name);
-        await append({
-          type: "events.iterate.com/secrets/changed",
-          payload: { name, ...(origin && { origin }) },
-        });
-        await env.SECRETS_KV.put(key, String(value), { metadata: { ...(origin && { origin }) } });
-        return { ok: true };
-      },
-      delete: async (name) => {
-        if (rootContext)
-          return rootContext.invoke(["itx", "builtins", "secrets", ["delete", name]]) as Promise<{
-            ok: true;
-          }>;
-        const key = secretKey(name);
-        await append({
-          type: "events.iterate.com/secrets/changed",
-          payload: { name, deleted: true },
-        });
-        await env.SECRETS_KV.delete(key);
-        return { ok: true };
-      },
-      list: async () =>
-        rootContext
-          ? (rootContext.invoke(["itx", "builtins", "secrets", ["list"]]) as Promise<
-              { name: string; origin?: string }[]
-            >)
-          : deps.secrets(),
+      set: (name, value, options) =>
+        onRootContext(["set", name, value, options], async () => {
+          const origin = options?.origin === undefined ? undefined : new URL(options.origin).origin;
+          // The change is appended FIRST: a refused append (a paused stream) leaves the value
+          // untouched; a KV failure after it leaves a catalog row whose value egress cannot find —
+          // loud, not silent.
+          const key = secretKey(name);
+          await append({
+            type: "events.iterate.com/secrets/changed",
+            payload: { name, ...(origin && { origin }) },
+          });
+          await env.SECRETS_KV.put(key, String(value), { metadata: { ...(origin && { origin }) } });
+          return { ok: true as const };
+        }),
+      delete: (name) =>
+        onRootContext(["delete", name], async () => {
+          const key = secretKey(name);
+          await append({
+            type: "events.iterate.com/secrets/changed",
+            payload: { name, deleted: true },
+          });
+          await env.SECRETS_KV.delete(key);
+          return { ok: true as const };
+        }),
+      list: () => onRootContext(["list"], async () => deps.secrets()),
     },
     // The binding object itself — dispatch walks its methods (`run`, `models`, `gateway`, …).
     ai: env.AI,
@@ -511,7 +386,15 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
     facets: deps.facets,
     subscriptions: deps.subscriptions,
     rewriteRules: deps.rewriteRules,
-    // A genuine InvokeHandle, so `workers.get(spec).run()` pipelines on every lane (workerd#6873).
+    // THE stateless host — `itx.workers.get(spec)`: a genuine InvokeHandle (so `workers.get(spec).run()`
+    // pipelines on every lane, workerd#6873) over a fresh confined isolate (no DO, no storage,
+    // `env.ITX` bound) hosting the loaded WorkerEntrypoint, and ONE method on it by name — `run`,
+    // `fetch`, `processEventBatch`, whatever the class declares. A terminal `fetch(request)` is this
+    // same call: `entrypoint.fetch(request)` IS the entrypoint's fetch channel, socket-bearing
+    // Responses included (fetch/rpc-stub-fetch.ts doctrine, points 1 & 4). The source EXPORTS the
+    // entrypoint (no host-injected wrapper — Cloudflare's `worker.getEntrypoint()` underneath).
+    // Re-resolves per call, but the loader caches by the key (cacheKey | content hash) so a warm
+    // isolate is reused and a producer expression never re-runs.
     workers: {
       get: (spec: {
         source: WorkerSource;
@@ -519,13 +402,32 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
         className?: string;
         props?: unknown;
       }) =>
-        new InvokeHandle((methodSteps) => {
+        new InvokeHandle(async (methodSteps) => {
           const [call] = methodSteps;
           if (methodSteps.length !== 1 || !Array.isArray(call) || call[0] === "")
             throw new Error(
               `workers.get(spec).${print(methodSteps)}: a WorkerEntrypoint exposes flat methods`,
             );
-          return callEntrypoint(spec, call[0], call.slice(1));
+          const [method, ...args] = call;
+          const { worker } = await loadConfinedWorker({
+            env,
+            deployId: deps.deployId,
+            itxEntrypoint: deps.itxEntrypoint,
+            kind: "worker",
+            owner: iterateContextName,
+            source: spec.source,
+            cacheKey: spec.cacheKey,
+            invoke: deps.invoke,
+            where: "workers.get",
+          });
+          const entrypoint = worker.getEntrypoint(
+            spec.className,
+            spec.props === undefined ? undefined : { props: spec.props },
+          ) as Fetcher & Record<string, (...a: unknown[]) => Promise<unknown>>;
+          const fn = entrypoint[method];
+          if (typeof fn !== "function")
+            throw new Error(`workers.get(spec): the entrypoint has no method "${method}"`);
+          return Reflect.apply(fn, entrypoint, args);
         }),
     },
     // THE LIBRARY: its verbs closed over the context's own `itx` handle, built and owned by the DO

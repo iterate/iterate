@@ -72,7 +72,6 @@ import {
   itxExpressionStepName,
   parseItxExpressionPrefix,
   print,
-  toItxExpression,
   type ItxExpression,
   type ItxExpressionInput,
   type ItxExpressionPrefix,
@@ -478,7 +477,7 @@ export class ItxExpressionResolver {
   /** PURE: the chain of rewrites from `call` to the builtins-rooted call that would run (rules 3–5).
    *  Nothing is dispatched. The one law: `invoke(call)` ≡ `invoke(resolve(call).at(-1))`. */
   resolve(call: ItxExpressionInput): ItxExpression[] {
-    return resolveItxExpression(this.#rewriteRules, toItxExpression(call));
+    return resolveItxExpression(this.#rewriteRules, normalizedItxExpression(call));
   }
 
   /** Resolve + run one call: the chain's last element, walked against the physical scope from the
@@ -489,7 +488,7 @@ export class ItxExpressionResolver {
    *  matches and a mask refuses exactly as the dotted call would; when it ends in a call they apply to
    *  the value the expression denotes. */
   async invoke(call: ItxExpressionInput, ...extraArgs: unknown[]): Promise<unknown> {
-    let expression = toItxExpression(call);
+    let expression = normalizedItxExpression(call);
     const last = expression.at(-1);
     if (extraArgs.length > 0 && typeof last === "string" && expression.length > 1) {
       expression = [...expression.slice(0, -1), [last, ...extraArgs]];

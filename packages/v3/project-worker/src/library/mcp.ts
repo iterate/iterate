@@ -42,27 +42,21 @@ export async function connectToMcp(
     tools.map((tool) => tool.name),
     (self, name, args) => self.callTool(name, args as Record<string, unknown> | undefined),
   );
-  return new Connection(client, tools, serverInfo);
+  return new Connection(client, serverInfo);
 }
 
 /** A connected MCP server. Held across calls it is an RpcTarget; disposed, it DELETEs its session. */
 export class McpConnection extends RpcTarget {
   readonly #jsonRpcClient: McpJsonRpcClient;
-  readonly #tools: McpTool[];
   readonly #serverInfo: McpServerInfo;
-  constructor(client: McpJsonRpcClient, tools: McpTool[], serverInfo: McpServerInfo) {
+  constructor(client: McpJsonRpcClient, serverInfo: McpServerInfo) {
     super();
     this.#jsonRpcClient = client;
-    this.#tools = tools;
     this.#serverInfo = serverInfo;
   }
   /** The `initialize` answer. */
   serverInfo(): McpServerInfo {
     return this.#serverInfo;
-  }
-  /** The tools as listed at connect (the methods this connection grew). */
-  tools(): McpTool[] {
-    return this.#tools;
   }
   /** Ask the server again — `tools/list` now. */
   async listTools(): Promise<McpTool[]> {

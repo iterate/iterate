@@ -7,13 +7,17 @@
 // is a DNS label by construction (the directory slugifies it); the in-process directory admits it
 // (worker.ts). The edge half (worker.ts `laneRequestTo`) strips inbound `x-itx-*`, the platform's own
 // cookie (below) and a project-token bearer, and rides the Request otherwise unchanged into the fetch
-// lane, so relative links, the app's host-scoped cookies and WebSocket upgrades all work.
+// lane, so relative links, the app's host-scoped cookies and WebSocket upgrades all work. The one
+// door the platform itself answers on a project host — the session cookie's — is here too
+// (`projectSessionResponse`), beside the cookie it sets.
+
+import { verifyProjectToken } from "./principal.ts";
 
 /** The cookie a project host holds a project token in (a browser's lane; `/.itx/session` sets it). */
 const PROJECT_SESSION_COOKIE = "itx-project-session";
 /** The one path the platform answers on a project host — `?token=<projectToken>&next=<path>` sets
  *  the cookie and redirects to `next`; `?logout` clears it. Everything else is the app's. */
-export const PROJECT_SESSION_PATH = "/.itx/session";
+const PROJECT_SESSION_PATH = "/.itx/session";
 
 /** The project token a request's cookie carries, or null. */
 export function projectSessionCookieOf(cookieHeader: string | null): string | null {
@@ -35,7 +39,8 @@ export function withoutProjectSessionCookie(cookieHeader: string | null): string
 }
 
 /** `next` as a path on `origin`, else "/" — a redirect never leaves the host: `//evil.example`,
- *  `/\evil.example` and an absolute URL all resolve to a foreign origin and fall back to "/". */
+ *  `/\evil.example` and an absolute URL all resolve to a foreign origin and fall back to "/". The
+ *  control plane's login redirect uses it too (control-plane/app.ts). */
 export function sameOriginPath(next: string, origin: string): string {
   try {
     const url = new URL(next, origin);
@@ -48,8 +53,37 @@ export function sameOriginPath(next: string, origin: string): string {
 /** The `Set-Cookie` value that stores `token` for `maxAgeSeconds` (≤ 0 clears it): host-scoped,
  *  HttpOnly, Secure (a browser exempts localhost), SameSite=Lax so a top-level navigation from the
  *  control plane's login carries it. */
-export const projectSessionSetCookie = (token: string, maxAgeSeconds: number): string =>
+const projectSessionSetCookie = (token: string, maxAgeSeconds: number): string =>
   `${PROJECT_SESSION_COOKIE}=${maxAgeSeconds > 0 ? token : ""}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${Math.max(0, Math.floor(maxAgeSeconds))}`;
+
+/** THE SESSION DOOR on a project host (PARTIAL: null when `url` is not its path): a project token
+ *  (principal.ts) for `projectId` — `?token=` — becomes the host-scoped cookie and the browser goes
+ *  on to `next` (303); `?logout` clears the cookie; a token that does not verify for this project
+ *  is a 401. */
+export async function projectSessionResponse(
+  url: URL,
+  projectId: string,
+  projectTokenSecret: string,
+): Promise<Response | null> {
+  if (url.pathname !== PROJECT_SESSION_PATH) return null;
+  const location = sameOriginPath(url.searchParams.get("next") ?? "/", url.origin);
+  if (url.searchParams.has("logout"))
+    return new Response(null, {
+      status: 303,
+      headers: { location, "set-cookie": projectSessionSetCookie("", 0) },
+    });
+  const token = url.searchParams.get("token") ?? "";
+  const claims = await verifyProjectToken(token, projectTokenSecret);
+  if (!claims || claims.projectId !== projectId)
+    return new Response("the project token did not verify for this project\n", { status: 401 });
+  return new Response(null, {
+    status: 303,
+    headers: {
+      location,
+      "set-cookie": projectSessionSetCookie(token, (claims.expiresAt - Date.now()) / 1000),
+    },
+  });
+}
 
 /** A DNS label: lowercase letters and digits, single hyphens inside. */
 const DNS_LABEL = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;

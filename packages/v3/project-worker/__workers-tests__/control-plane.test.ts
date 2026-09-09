@@ -16,7 +16,7 @@ import { createExecutionContext, env } from "cloudflare:test";
 import { newWebSocketRpcSession } from "capnweb";
 import { afterAll, beforeAll, expect, test } from "vitest";
 import definitionsSql from "../src/control-plane/definitions.sql?raw";
-import { signProjectToken } from "../src/principal.ts";
+import { signClaims } from "../src/principal.ts";
 import worker from "../src/worker.ts";
 
 const openMode = env as unknown as Record<string, unknown>;
@@ -316,7 +316,7 @@ async function mcpLaneToolsCall(headers: Record<string, string>): Promise<Respon
 }
 
 test("email mode: mcp--<p>.<base> serves a tools/call bearing the project's token (the control for the pin below)", async () => {
-  const token = await signProjectToken(
+  const token = await signClaims(
     { projectId: "mcp-lane", actor: "user_mcp-ada@example.com", expiresAt: Date.now() + 60_000 },
     "mcp-host-secret",
   );

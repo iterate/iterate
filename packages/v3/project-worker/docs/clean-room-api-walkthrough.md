@@ -140,8 +140,8 @@ packages/v3/project-worker/
       itx-expression-rewriting.ts  THE RULES 1–7 (match / pick / apply / rules-first to the fixed point `itx.builtins` / the door / `@`), the ONE
                                  event (rewriteRuleConfiguredEvent), the reader (ItxExpressionResolver)
       dispatch.ts                walkSteps / callOn — execute a rewritten call's steps on a live object graph
-      dotted-path-proxy.ts       the prototype hop: unknown dotted members reduce into ONE invoke(expression)
-      invoke-handle.ts           InvokeHandle + the two brands FacetHandle / RpcStubHandle
+      invoke-handle.ts           the dotted door: the prototype hop (unknown dotted members reduce into ONE invoke),
+                                 InvokeHandle + the two brands FacetHandle / RpcStubHandle
       rpc-stub-directory.ts      the rpc stubs, DO side, two layers: the BORROWED table (lendRpcStub /
                                  invokeRpcStub / returnBorrowedRpcStubs), then the PAGERS (the one-shot
                                  pager upgrade: key + the events that name it, pages); presence events
@@ -249,7 +249,7 @@ await itx.invoke(["itx", "kv", ["get", "greeting"]]); // structured expression
 ```
 
 The dotted sugar works because `IterateContext.prototype` carries a prototype
-hop (`src/context/dotted-path-proxy.ts`): a member the class does not declare
+hop (`src/context/invoke-handle.ts`): a member the class does not declare
 becomes an accumulating path, and the final call reduces everything into one
 `invoke([...])`. The structured form is the only one that can carry non-JSON
 args (a callback function, a Date, bytes, a `Request`).

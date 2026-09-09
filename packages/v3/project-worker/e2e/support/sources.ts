@@ -4,6 +4,7 @@
 //   ...source: SOURCES.site...
 
 import type { WorkerSource } from "../../src/context/worker-loader.ts";
+import { PRESENCE_PROCESSOR_SOURCE } from "../../src/client/presence-processor-source.ts";
 
 /** THE fixture sources, keyed by fixture NAME — each value is the worker's modules, handed over
  *  literally at every load site (`itx.workers.get({ source: SOURCES.probe })`, `facets.get(name, { source: … })`). */
@@ -85,37 +86,8 @@ export class ChunkyDurableObject extends StreamProcessorDurableObject {
   processor = new ChunkyProcessor();
 }`,
   },
-  // A processor whose live state COMBINES reduced state (ticks, reduced from durable 'tick' events)
-  // with RUNTIME state (lastPokeMs — a plain field on the pure class, NOT the reduce checkpoint, gone
-  // on eviction). A 'poke' ephemeral event bumps the runtime field in processEvent; the engine
-  // re-projects after the batch and emits the delta itself (the reduce never touches it). Proves
-  // reduced ⊕ runtime through ONE projection + ONE revision chain (live-state-chains-client-side.e2e).
-  presence: {
-    "cap.js": `import { StreamProcessor, StreamProcessorDurableObject, defineProcessorContract, z } from "./processor.js";
-const contract = defineProcessorContract({
-  slug: "presence",
-  version: "1.0.0",
-  description: "Reduced tick count beside a runtime lastPokeMs the reduce never sees.",
-  stateSchema: z.object({ ticks: z.number().default(0) }),  consumes: ["tick", "poke"],
-  emits: [],
-});
-class PresenceProcessor extends StreamProcessor {
-  contract = contract;
-  #lastPokeMs = 0; // RUNTIME: a field, not reduced state — reset to 0 on eviction, never re-reduced
-  reduce({ event, state }) {
-    if (event.type === "tick") return { ...state, ticks: state.ticks + 1 };
-    // 'poke' is deliberately NOT reduced — it drives a runtime field, not durable truth
-  }
-  processEvent({ event }) {
-    // no publish call: the engine re-projects after every batch and emits the delta itself
-    if (event && event.type === "poke") this.#lastPokeMs = Date.now();
-  }
-  projectLiveState(state) { return { ticks: state.ticks, lastPokeMs: this.#lastPokeMs }; }
-}
-export class PresenceDurableObject extends StreamProcessorDurableObject {
-  processor = new PresenceProcessor();
-}`,
-  },
+  // The presence processor (reduced ⊕ runtime) — the hosted demo's source, shared (src/client).
+  presence: PRESENCE_PROCESSOR_SOURCE,
   "user-tally": {
     "cap.js": `import { StreamProcessor, StreamProcessorDurableObject, defineProcessorContract, z } from "./processor.js";
 const contract = defineProcessorContract({
