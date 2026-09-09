@@ -29,6 +29,9 @@ test("/expression serves a LOADED WORKER behind a rewrite rule: GET → 200 HTML
   const page = await fetch(expressionUrl(ctx, "itx.site", "http"));
   expect(page.status).toBe(200);
   expect(await page.text()).toContain("dynamic web capability");
+  // Loaded code's document, served on the PLATFORM's origin: CSP-sandboxed to an opaque origin, so
+  // its script can never reach `/api` with the visitor's session (scripts and forms still run).
+  expect(page.headers.get("content-security-policy")).toBe("sandbox allow-scripts allow-forms");
 
   const ws = await wsRoundTrip(expressionUrl(ctx, "itx.site", "ws"), "hello-from-eyeball", 15_000);
   expect(ws.error).toBeUndefined();
@@ -120,14 +123,6 @@ test("a hop count the platform never wrote (an app spelling `NaN` to defeat the 
   });
   expect(response.status).toBe(508);
   expect(await response.text()).toContain('"NaN"');
-});
-
-test("an /expression answer is CSP-sandboxed: loaded code's document runs on an opaque origin, never as the platform origin that holds the visitor's session", async () => {
-  const response = await fetch(expressionUrl(freshCtx("lane-sandbox"), "itx.whoami"), {
-    signal: AbortSignal.timeout(8000),
-  });
-  expect(response.status).toBe(200);
-  expect(response.headers.get("content-security-policy")).toBe("sandbox allow-scripts allow-forms");
 });
 
 test("deleted routes fall through to the control plane's 404 — /call, /ws and /cap answer Not found, a WebSocket upgrade to /ws gets no 101", async () => {
