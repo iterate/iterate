@@ -4310,3 +4310,8 @@ miniflare for the lane, node for the library), then applied by the same agent:
   verifies nothing, a double-escaped consent note, …). The teardown key is `JSON.stringify([name, key])`
   — a context path may hold a space.
 - 34 files, +371 / −343; source ≈ −110 net, the rest tests, pins and docs.
+- GATES: tsc ×3 · oxlint · knip · `pnpm test` 88 files / 725 passed / 18 expected-fail / 17
+  deployed-only skips. DEPLOY SIDE: the deployed D1's `orgs` rebuilt without `slug` (one batch under
+  `PRAGMA defer_foreign_keys`, the FKs intact), `APP_CONFIG_SESSION_SECRET` rotated into a wrangler
+  secret and its var deleted. DEPLOYED (24c1c6d8a, version aa522bf4): 50 files / 202 passed / 4
+  expected-fail — ALL GREEN, the first full deployed run without the kv-list platform reset.
