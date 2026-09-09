@@ -37,7 +37,7 @@ const CHARS_PER_TOKEN = 4;
 // Three short code patterns keep the lifecycle concrete.
 // 3800 → 4100 (2026-07-30): the workspace became a private working copy of
 // the project's one path namespace (every repo mounted at its /repos/** path,
-// scratch under the workspace's own path) — an explicit product ask that
+// scratch under /workspace) — an explicit product ask that
 // rewrote every path the prompt teaches and added three one-line teaches:
 // clone-your-own-source, skills discovery, and scoped commits.
 // 4100 → 4150 (2026-07-31): the tasks app became a lens on workspaces; one
@@ -89,7 +89,7 @@ test(`the default prompt stays under ${DEFAULT_PROMPT_TOKEN_CEILING} tokens`, ()
 
 test("the default prompt teaches agents to share workspace files through Docs", () => {
   expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain(
-    'itx.worker.docs.link({ workspace: "/workspaces/agents/you", path: "review.md" })',
+    'itx.worker.docs.link({ workspace: "/agents/you", path: "review.md" })',
   );
   expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("Comments and Markdown edits write directly");
   expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain(
@@ -109,7 +109,7 @@ test("the default prompt teaches results retention, not defensive file copies", 
 
 test("the default prompt teaches agents to share task boards through Tasks", () => {
   expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain(
-    'itx.worker.docs.link({ workspace: "/workspaces/agents/you", repo: "/repos/config" })',
+    'itx.worker.docs.link({ workspace: "/agents/you", repo: "/repos/config" })',
   );
 });
 

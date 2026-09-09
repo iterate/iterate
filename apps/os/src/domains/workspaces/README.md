@@ -5,9 +5,10 @@ COPY of the project's one path namespace, for agents and tooling.
 
 ## Shape
 
-- **Identity + configuration are stream facts.** A workspace lives at a
-  `/workspaces/**` path; that path is its Durable Object name AND its stream
-  path. `workspace/created` is the existence marker; `workspace/configured`
+- **Identity + configuration are stream facts.** An agent workspace shares its
+  agent’s `/agents/**` path; standalone workspaces use `/workspaces/**`. That
+  identity is its Durable Object name AND its stream path. Agent streams host
+  both agent and workspace processors with independently named state. `workspace/created` is the existence marker; `workspace/configured`
   patches the OVERLAY table. `WorkspaceProcessor` is a pure reducer — reduce
   only, no side effects — hosted by the DO under the standard registry/runner
   machinery.
@@ -29,14 +30,16 @@ COPY of the project's one path namespace, for agents and tooling.
   configuration methods reject loudly before creation; no read, write, or
   first touch can birth a workspace. Agent creation explicitly creates the
   agent's own workspace before the agent handle is returned.
+  `agent.workspace` is shorthand for `itx.workspaces.get(agentPath)`.
 - **`itx.workspaces.list()` reads the project catalog.** The project reducer
   records each copied `workspace/created` under its source path (the same
   `repo-catalog` shape repos use), so the list holds exactly the workspaces
   that were born — a nested agent workspace never drags never-created
   ancestor streams into it.
-- **Private files live under the workspace's own path.** The workspace's
-  stream path doubles as its scratch directory: writable, never committable,
-  invisible to everyone else. RELATIVE paths resolve there. Writes anywhere
+- **Private files live under `/workspace`.** This directory belongs to the
+  selected workspace regardless of its stream identity: writable, never
+  committable, isolated from other workspaces. RELATIVE paths resolve there.
+  `/workspace` and its descendants are reserved and cannot be repo mounts. Writes anywhere
   outside the scratch directory and the mounted repos error loudly — a typo'd
   absolute path fails instead of silently becoming stray scratch. Reads try
   the private local layer (DO-SQLite via `@cloudflare/shell`, R2 spill past

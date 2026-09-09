@@ -1,7 +1,7 @@
 /**
  * What the board view needs to address a workspace, shared by the vessel
  * (rpc-api.ts) and the browser (routes, hooks). A workspace is its path and
- * nothing else — an agent's `/workspaces/agents/x`, a scratch one this app
+ * nothing else — an agent's `/agents/x`, a scratch one this app
  * minted, any path at all opens the same way; the board adds only WHICH
  * repo mount's task files it shows.
  */

@@ -79,7 +79,7 @@ export interface WorkspaceGitSurface {
  * the shape of `itx.workspaces.get(path)`, spelled with plain promises. A
  * host inside OS hands over the live stub; a vessel outside forwards it
  * method for method. Paths are fully qualified workspace paths throughout
- * (`/repos/config/docs/plan.md`, `/workspaces/agents/x/notes.md`).
+ * (`/repos/config/docs/plan.md`, `/workspace/notes.md`).
  */
 export interface WorkspaceSurface {
   /** One file's contents from the merged view (overlay, then its mount at HEAD); null when missing. */

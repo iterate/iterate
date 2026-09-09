@@ -10,6 +10,9 @@ describe("canonical workspace paths", () => {
   test("mount paths must be resolved-absolute and .git-free", () => {
     expect(isCanonicalMountPath("/")).toBe(true);
     expect(isCanonicalMountPath("/config")).toBe(true);
+    expect(isCanonicalMountPath("/workspace")).toBe(false);
+    expect(isCanonicalMountPath("/workspace/nested")).toBe(false);
+    expect(isCanonicalMountPath("/workspace-tools")).toBe(true);
     expect(isCanonicalMountPath("/config/")).toBe(false);
     expect(isCanonicalMountPath("/a/../b")).toBe(false);
     expect(isCanonicalMountPath("/a/.git")).toBe(false);

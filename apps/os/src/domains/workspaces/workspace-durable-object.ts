@@ -40,7 +40,7 @@ import {
   WorkspaceCore,
 } from "./workspace-core.ts";
 import { effectiveWorkspaceMounts, normalizeWorkspaceMountKeys } from "./utils.ts";
-import { resolveAbsolutePath } from "./paths.ts";
+import { resolveAbsolutePath, WORKSPACE_DIRECTORY } from "./paths.ts";
 import type { CollabPull, CollabPush, CollabPushResult } from "./collab-engine.ts";
 import { CollabHost, type CollabPresenceFlat } from "./collab-host.ts";
 import { sqliteCollabStore } from "./collab-store.ts";
@@ -125,7 +125,6 @@ export class WorkspaceV2DurableObject extends DurableObject<Env> {
     // the per-incarnation cache, refreshed by the doors — see #repoPaths).
     mounts: () => this.#effectiveMounts(),
     repo: (repoPath) => this.#repoStub(repoPath),
-    scratchRoot: this.#name.path,
     workspace: this.#workspace,
   });
 
@@ -145,7 +144,7 @@ export class WorkspaceV2DurableObject extends DurableObject<Env> {
     ).processorFacade({
       name: PROCESSOR_SLUG,
       // The Stream DO's facade forwards to the facet registered for this
-      // path family; /workspaces/** registers exactly the workspace
+      // path family; both /workspaces/** and /agents/** register the workspace
       // processor under this name, so its snapshot/waitUntilProcessed doors
       // carry WorkspaceProcessorState. Double assertion because the
       // generated stub type erases the per-name state parameter.
@@ -238,13 +237,12 @@ export class WorkspaceV2DurableObject extends DurableObject<Env> {
   }
 
   /**
-   * Workspace paths are absolute within the project's one namespace; a
-   * RELATIVE path resolves against this workspace's own directory (its
-   * stream path) — `readFile("notes.md")` is
-   * `readFile("/workspaces/agents/you/notes.md")`.
+   * Repo paths are absolute within the project's namespace; private files
+   * live in /workspace inside this particular workspace. A relative path
+   * resolves there: readFile("notes.md") is readFile("/workspace/notes.md").
    */
   #resolvePath(path: string): string {
-    return resolveAbsolutePath(path.startsWith("/") ? path : `${this.#name.path}/${path}`);
+    return resolveAbsolutePath(path.startsWith("/") ? path : `${WORKSPACE_DIRECTORY}/${path}`);
   }
 
   /** Pull the reduced state current and require an explicit birth certificate.
@@ -584,12 +582,10 @@ export class WorkspaceV2DurableObject extends DurableObject<Env> {
   async glob(pattern: string): Promise<string[]> {
     // listAllFiles runs the birth assertion (same error, no duplicate round).
     // A relative pattern globs this workspace's own directory; `.`/`..`
-    // segments collapse exactly like the file doors' paths do (glob magic
+    // segments collapse exactly like file paths do (glob magic
     // like `**` and `*.md` never contains a slash, so it survives the
     // resolve untouched).
-    const resolved = resolveAbsolutePath(
-      pattern.startsWith("/") ? pattern : `${this.#name.path}/${pattern}`,
-    );
+    const resolved = this.#resolvePath(pattern);
     // Only the subtree the pattern can match: mounts outside it are never
     // enumerated (a glob under /repos/config must not list /repos/iterate).
     const all = await this.listAllFiles({ under: literalDirectoryOfGlob(resolved) });

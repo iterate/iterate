@@ -44,7 +44,7 @@ test("workspace tree walkthrough", async ({ page }) => {
   // click that lands before then hits a server-rendered button with no
   // handler yet, so wait for the list to replace its loading row.
   await page
-    .getByRole("button", { name: /^\/workspaces\// })
+    .getByRole("button", { name: /^\/(?:agents|workspaces)\// })
     .first()
     .waitFor();
   await page.getByRole("button", { name: "New workspace" }).click();
@@ -53,7 +53,7 @@ test("workspace tree walkthrough", async ({ page }) => {
   // the compacted mount row comes first among everything under it.
   const configRow = page.locator('[data-item-path^="repos/config"]').first();
   await configRow.waitFor();
-  await page.locator('[data-item-path^="workspaces/scratch/"]').first().waitFor();
+  await page.locator('[data-item-path="workspace/"]').first().waitFor();
 
   // 3. Type into the starter note; the own directory shows the addition,
   //    and a repo file opens read-only.

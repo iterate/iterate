@@ -11,7 +11,7 @@ import { DEFAULT_REPO_PATH, normalizeRepoPath } from "../lib/board-shared.ts";
  * workspace. Plain get: nothing is created; outside the app's own
  * namespaces the board is a guest (read, comment, edit — never Commit or
  * Discard all).
- *   /w?workspace=/workspaces/agents/you&repo=/repos/config&task=<path>
+ *   /w?workspace=/agents/you&repo=/repos/config&task=<path>
  */
 export const Route = createFileRoute("/w/")({
   validateSearch: (search: Record<string, unknown>) => ({
@@ -58,7 +58,7 @@ function BoardLensPage() {
     );
   }
   // No workspace addressed: /w is the tasks view's HOME, not an error.
-  if (!search.workspace.startsWith("/workspaces/")) {
+  if (!search.workspace.startsWith("/workspaces/") && !search.workspace.startsWith("/agents/")) {
     return <BoardHome />;
   }
   return (

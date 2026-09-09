@@ -15,7 +15,7 @@ import type {
 } from "./types.ts";
 import type { WorkspaceMount } from "./workspace-processor-contract.ts";
 import { encodeRepoContent } from "./utils.ts";
-import { resolveAbsolutePath } from "./paths.ts";
+import { resolveAbsolutePath, WORKSPACE_DIRECTORY } from "./paths.ts";
 import { filterPublishablePaths } from "./overlay-ignore.ts";
 
 // Overlay whiteouts: mount paths hidden by a local delete, kept as ONE kv
@@ -95,14 +95,6 @@ type WorkspaceCoreOptions = {
    * re-derived per call, never held across them.
    */
   repo: (repoPath: string) => MountRepoAccess;
-  /**
-   * The workspace's own directory — its stream path (e.g.
-   * `/workspaces/agents/foo`). The ONLY subtree where unmounted private
-   * files may be written; everything else is either a mounted repo or not
-   * writable at all, so a typo'd path fails loudly instead of silently
-   * becoming stray scratch.
-   */
-  scratchRoot: string;
   /** The local layer: this workspace's own private virtual filesystem. */
   workspace: Workspace;
 };
@@ -142,14 +134,12 @@ export class WorkspaceCore {
   readonly #kv: WorkspaceKv;
   readonly #mounts: () => Promise<Record<string, WorkspaceMount>>;
   readonly #repo: (repoPath: string) => MountRepoAccess;
-  readonly #scratchRoot: string;
   readonly #workspace: Workspace;
 
   constructor(options: WorkspaceCoreOptions) {
     this.#kv = options.kv;
     this.#mounts = options.mounts;
     this.#repo = options.repo;
-    this.#scratchRoot = resolveAbsolutePath(options.scratchRoot);
     this.#workspace = options.workspace;
   }
 
@@ -253,7 +243,7 @@ export class WorkspaceCore {
    *   would commit as an empty repo path).
    * - A path inside a mounted repo is writable (the write is a private
    *   shadow; the mount's POLICY gates commit, not the overlay).
-   * - A path under the workspace's own directory (its stream path) is private
+   * - A path under /workspace is private
    *   scratch — always writable, never committable.
    * - Everything else is rejected loudly: an unmounted absolute path is
    *   almost always a typo (a repo that does not exist, another workspace's
@@ -269,9 +259,9 @@ export class WorkspaceCore {
       );
     }
     if (routeMount(mounts, resolved) !== null) return;
-    if (resolved.startsWith(`${this.#scratchRoot}/`)) return;
+    if (resolved.startsWith(`${WORKSPACE_DIRECTORY}/`)) return;
     throw new Error(
-      `Workspace path is not writable: "${path}". Private files live under your workspace directory ("${this.#scratchRoot}/..."; relative paths resolve there), repo files under a mounted repo path (${summarizeMountPoints(mounts)}).`,
+      `Workspace path is not writable: "${path}". Private files live under your workspace directory ("${WORKSPACE_DIRECTORY}/..."; relative paths resolve there), repo files under a mounted repo path (${summarizeMountPoints(mounts)}).`,
     );
   }
 
