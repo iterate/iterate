@@ -450,3 +450,23 @@ Order, each gate before the next:
    `iterate_kit_button_inject_tap` so the shared grammar starts the call
    exactly as a press would, ring shows the listening state. No backend
    change: the call is a normal open-mic call.
+
+## Outcome so far (2026-09-09 evening)
+
+- Steps 1–19 and 21 landed (twenty commits on `futurehomes`, each build-verified on
+  every target); fleet source 10,020 → ~9,000 lines with the Satellite1 added.
+- HA Voice PE on the table firmware: `voicelab boards` PASS with a verbatim
+  transcript, barge answered; AEC on tap 3 measured −25 dB on long answers
+  (taps 1 and 4 falsified again); idle TX overflows 95/s → 0, dial 15 s → 3.5 s.
+- Satellite1 on the table firmware: first boot clean, `voicelab boards` PASS
+  (verbatim, barge answered) at unity gain on slot 0, long answer with no
+  self-trigger. Three measured fixes: mute polarity, mic slot, stream posture.
+- CLI: boards / device --name / transcript / itx run all work on templestein.
+- Wake word: model partition + WakeNet "Jarvis" build; first flash boot-looped
+  on esp-sr `model_clean` before the first detect (guarded).
+- Fable reviews: round 1 (Phases 0–1 + chips) and round 2 (table + boards +
+  Satellite1) applied; round 3 (whole branch) in progress.
+- Open: the Satellite1 stopped answering on USB after a failed flash (the
+  hour-one GPIO0 strap fault; needs an unplug, a tap on the right button, a
+  replug) and still has to take the wake-word build; the wake-word bench on
+  the HAVPE; round 2's consolidation list (#10) as the last codex chunk.
