@@ -541,7 +541,7 @@ token is the control plane's; the ingress only verifies.
 not `/api`, `/expression`, `/version` or `/demo` is its catch-all — one worker, one front door). An
 OAuth 2.1 Authorization Server (`@cloudflare/workers-oauth-provider`: `/authorize`, `/token`,
 `/register`, `/.well-known/*`; `/mcp` its ONLY protected route, tokenless in `open` mode), a D1
-directory through sqlfu (`definitions.sql`: users → orgs via `org_members` → projects; access is org
+directory over D1 (`definitions.sql`: users → orgs via `org_members` → projects; access is org
 membership), a console at `/` with an email login form (`/login`, `/logout`, `POST /projects`) whose
 session is a signed cookie (`itx-control-plane-session`), and `/mcp` (three tools: `whoami`,
 `list_projects`, `create_project`). `APP_CONFIG_LOGIN_MODE` is `open` (no login: the one seeded
@@ -596,7 +596,7 @@ skipped on 45 files (the deployed-only ones run against the deployed worker).
 | Layer                    | Files (raw lines, comments included)                                                                                                                                                             | Lines |
 | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----: |
 | the edge                 | `worker.ts` · `session.ts` · `session-teardown.ts` · `iterate-context.ts` · `itx-entrypoint.ts` · `project-host.ts` · `principal.ts` · `types.ts`                                                | 1,250 |
-| the control plane        | `control-plane/index.ts` · `app.ts` · `directory.ts` · `session.ts` · `mcp.ts` · `ids.ts` · `env.ts` · `definitions.sql` · `sql/queries.sql` (the sqlfu client under `sql/.generated/` excluded) |   662 |
+| the control plane        | `control-plane/app.ts` · `directory.ts` · `session.ts` · `mcp.ts` · `definitions.sql` |   ≈ 470 |
 | the DO                   | `iterate-context-durable-object.ts`                                                                                                                                                              |   949 |
 | expressions + dispatch   | `context/expression.ts` · `dispatch.ts` · `dotted-path-proxy.ts` · `invoke-handle.ts`                                                                                                            |   623 |
 | built-ins + loader       | `context/built-ins.ts` · `worker-loader.ts` · `durable-object-names.ts`                                                                                                                          |   859 |
@@ -786,7 +786,7 @@ LibraryRoots`, the resolver walks from the record with one built-in predicate, t
 
 - The separate control-plane Worker — with the service binding the DO's egress used to fall through
   to, its local stand-in and its own test lane — and the shared package are DELETED. The control plane runs in-process as
-  `src/worker.ts`'s catch-all (`src/control-plane/`, section 10): an OAuth AS, a D1/sqlfu directory of
+  `src/worker.ts`'s catch-all (`src/control-plane/`, section 10): an OAuth AS, a D1 directory of
   users, orgs and projects (a project's id IS its DNS-safe name), `/mcp`, a console with an email login
   form; `APP_CONFIG_LOGIN_MODE` open | email. Ingress admits a project host by ONE directory read.
 - The session is the catalog (section 4): `authenticate()` is the request's control-plane identity or a

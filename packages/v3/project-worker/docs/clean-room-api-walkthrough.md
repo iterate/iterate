@@ -117,13 +117,12 @@ packages/v3/project-worker/
                                  codec), stampPrincipal (source.principal), x-itx-principal
     app-config.ts                ONE typed configuration per isolate from the APP_CONFIG_* vars
     types.ts                     the `./types` export: the session and context types, hand-written
-    control-plane/               THE CONTROL PLANE, in-process (the catch-all): index.ts (the OAuth AS wrapper:
-                                 /authorize /token /register /.well-known; /mcp its one protected route),
-                                 app.ts (login form, session, console, /projects, /authorize consent),
-                                 directory.ts (D1/sqlfu: users → orgs → projects; a project's id IS its slug),
+    control-plane/               THE CONTROL PLANE, in-process (the catch-all): app.ts (the OAuth AS wrapper —
+                                 /authorize /token /register /.well-known, /mcp its one protected route — plus
+                                 the login form, session, console, /projects, the /authorize consent),
+                                 directory.ts (D1: users → orgs → projects; a project's id IS its slug),
                                  session.ts (the itx-control-plane-session cookie), mcp.ts (/mcp: whoami,
-                                 list_projects, create_project), ids.ts, env.ts, definitions.sql (the schema),
-                                 sql/queries.sql (sqlfu; its generated client under sql/.generated/)
+                                 list_projects, create_project), definitions.sql (the schema),
     iterate-context.ts           IterateContext, the client-facing RpcTarget: a PROXY in front of the DO —
                                  cd · invoke · provide · subscribe · enableProcessor · disableProcessor;
                                  RewriteRuleHandle / SubscriptionHandle (disposable)
@@ -1430,7 +1429,7 @@ at `/`, the email login form (`POST /login`, `/logout`; the session is the signe
 `itx-control-plane-session` cookie, `signClaims` under `APP_CONFIG_SESSION_SECRET`), `POST /projects`
 (the console's form; a program creates projects over `/api`, `projects.create`), the `/authorize`
 consent page (approve, or switch account — the grant is the user; the tools act on the user's projects). `/mcp` serves three tools:
-`whoami`, `list_projects`, `create_project`. The directory (`directory.ts`, D1 through sqlfu,
+`whoami`, `list_projects`, `create_project`. The directory (`directory.ts`, D1 through `prepare().bind()`,
 `definitions.sql`): users → orgs via `org_members` → projects; access is org membership; a project's
 id is ONE DNS-safe slug — the directory row, the DO name and the host label. `APP_CONFIG_LOGIN_MODE`:
 `open` (no login, the one seeded anonymous user `user_anonymous`) or `email`.
