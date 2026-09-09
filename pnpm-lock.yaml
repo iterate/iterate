@@ -614,6 +614,9 @@ importers:
       '@iterate-com/ui':
         specifier: workspace:*
         version: link:../../packages/ui
+      '@iterate-com/voice-agent':
+        specifier: workspace:*
+        version: link:../../packages/voice-agent
       '@noble/curves':
         specifier: ^2.2.0
         version: 2.2.0
@@ -1016,6 +1019,9 @@ importers:
       '@iterate-com/docs':
         specifier: workspace:*
         version: link:../docs
+      '@iterate-com/voice-agent':
+        specifier: workspace:*
+        version: link:../../packages/voice-agent
       '@microsoft/tui-test':
         specifier: 0.0.4
         version: 0.0.4(@swc/helpers@0.5.19)
@@ -1708,6 +1714,28 @@ importers:
       vitest:
         specifier: ^4.1.10
         version: 4.1.10(@opentelemetry/api@1.9.0)(@types/node@26.1.1)(jsdom@27.4.0(@noble/hashes@2.2.0))(msw@2.13.3(@types/node@26.1.1)(typescript@5.9.3))(vite@8.0.16(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))
+
+  packages/voice-agent:
+    dependencies:
+      zod:
+        specifier: 4.5.4
+        version: 4.5.4(patch_hash=bf04bb1ec1f0b9f31a7416bf98f83d3451e5011852877ca0ac19c12fcb3129b5)
+    devDependencies:
+      '@cloudflare/workers-types':
+        specifier: catalog:cloudflare
+        version: 4.20260621.1(patch_hash=ae8908e1d45f2ea02ffeabf1230701598cc2878240ef700403ff76df72677af2)
+      iterate:
+        specifier: workspace:*
+        version: link:../iterate
+      tsdown:
+        specifier: 0.22.2
+        version: 0.22.2(@typescript/native-preview@7.0.0-dev.20260624.1)(oxc-resolver@11.19.1)(tsx@4.21.0)(typescript@5.9.3)
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: 4.0.15
+        version: 4.0.15(@opentelemetry/api@1.9.0)(@types/node@26.1.1)(@vitest/browser-playwright@4.0.15)(@vitest/ui@4.0.15)(jiti@2.7.0)(jsdom@27.4.0(@noble/hashes@2.2.0))(lightningcss@1.32.0)(msw@2.13.3(@types/node@26.1.1)(typescript@5.9.3))(terser@5.46.0)(tsx@4.21.0)(yaml@2.9.0)
 
   packages/workspace-documents:
     dependencies:
@@ -27912,7 +27940,7 @@ snapshots:
     dependencies:
       '@babel/generator': 8.0.0-rc.6
       '@babel/helper-validator-identifier': 8.0.0-rc.6
-      '@babel/parser': 7.29.0
+      '@babel/parser': 7.29.7
       ast-kit: 3.0.0-beta.1
       birpc: 4.0.0
       dts-resolver: 3.0.0(oxc-resolver@11.19.1)
