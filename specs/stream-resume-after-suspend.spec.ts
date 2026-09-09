@@ -40,6 +40,19 @@ const HEALTHY_DELIVERY_MS = 30_000;
 // a real wedge (the wedge is permanent; any finite window catches it).
 const RECOVERY_DELIVERY_MS = 90_000;
 
+test.afterEach(async ({ page }, testInfo) => {
+  if (testInfo.status === testInfo.expectedStatus || page.isClosed()) return;
+  const mirrors = await page.evaluate(() =>
+    (
+      window as unknown as { __streamRuntimeDebug?: () => Record<string, unknown> }
+    ).__streamRuntimeDebug?.(),
+  );
+  await testInfo.attach("stream-mirror-state", {
+    body: JSON.stringify(mirrors ?? {}, null, 2),
+    contentType: "application/json",
+  });
+});
+
 test("control: appended event is delivered to a live stream feed", async ({ helpers, page }) => {
   await using fixture = await helpers.createFixture("suspend-control");
   const agent = await fixture.createAgent();
