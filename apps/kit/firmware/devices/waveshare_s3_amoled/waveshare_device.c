@@ -442,6 +442,7 @@ static size_t modules(
   return 1U;
 }
 
+/** Present the display and drain mouth timing each pass; board.c owns the view. */
 static void present(
     void *context, const struct iterate_kit_voice_view *view) {
   (void)context;

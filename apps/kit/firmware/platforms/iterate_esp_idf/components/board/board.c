@@ -1,5 +1,6 @@
 #include "iterate/kit/platforms/board.h"
 
+/** Clamp once and map signed register endpoints without losing the applied percent. */
 uint8_t iterate_kit_board_volume_code(
     const struct iterate_kit_volume_register *volume, uint8_t ceiling,
     uint8_t percent, uint8_t *applied) {
@@ -379,6 +380,7 @@ static size_t iterate_kit_board_modules(
   return count;
 }
 
+/** Install shared startup, presentation, controls, health and modules, then run. */
 void iterate_kit_board_run(const struct iterate_kit_board *value) {
   board = value;
   turns = board->facts.turns;

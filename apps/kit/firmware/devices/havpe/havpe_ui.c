@@ -23,10 +23,8 @@ enum {
   OVERLAY_HOLD_US = 1000000,
 };
 
-/*
- * What the dial has borrowed the ring for. The overlay outranks the state
- * animation for OVERLAY_HOLD_US after the last gesture, because feedback that
- * arrives after the finger has left is decoration, not feedback.
+/** The adopted mode's idle quadrant. The shared ring owns the gesture hold:
+ * feedback arriving after the finger has left is decoration, not feedback.
  */
 static uint8_t mode = HAVPE_MODE_COUNT;
 
@@ -78,12 +76,11 @@ int havpe_ui_take_dial(void) {
 }
 
 /*
- * The dial overlays and the idle quadrant. All are the WHITE of no particular
- * sector — the shared grammar's colours all mean something, and a level meter
- * borrowing the network's green would say the network moved — and they are
- * told apart by shape and brightness: the volume fills from pixel zero, a
- * mode lights one quadrant, bright for the second a gesture owns the ring and
- * dim for the idle steady state.
+ * The mode overlay and idle quadrant remain board-specific. Like the shared
+ * volume bar they are WHITE of no particular sector: the grammar's colours
+ * mean something, and a meter borrowing the network's green says it moved.
+ * Shape and brightness distinguish them: volume fills from light zero; a
+ * mode lights one quadrant, bright during the gesture and dim while idle.
  */
 enum {
   /* Plainly lit for the one-second overlay a finger just asked for... */
@@ -103,6 +100,7 @@ static void render_quadrant(
   }
 }
 
+/** Borrow the selected bright quadrant for the official one-second dwell. */
 void havpe_ui_show_mode(uint8_t value) {
   if (value >= HAVPE_MODE_COUNT) return;
   struct iterate_kit_rgb8 pixels[LED_COUNT];
@@ -112,6 +110,9 @@ void havpe_ui_show_mode(uint8_t value) {
 
 static char last_status[64];
 
+/** Sample the dial every app pass, log changed status, and renew the idle
+ * quadrant only after iterate_kit_led_ring_borrowed releases timed gestures.
+ */
 void havpe_ui_present(const struct iterate_kit_voice_view *view) {
   /* Every app pass (~5 ms), not the slower 25 ms control poll: missed
    * intermediate quadrature states are lost counts. */

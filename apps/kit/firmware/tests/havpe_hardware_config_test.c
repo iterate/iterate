@@ -6,7 +6,7 @@
 #include <stdint.h>
 #include <string.h>
 
-/*
+/**
  * These literal vectors are copied from the first-party ESPHome AIC3204 and
  * voice_kit implementations, not derived from the production table under
  * test. A swapped register or invented pipeline tap can still produce audio,
@@ -104,7 +104,9 @@ static void selects_a_truthful_raw_and_server_vad_xmos_pair(void) {
           sizeof(command)) == ITERATE_KIT_INVALID_ARGUMENT);
 }
 
-/** Literal signed half-dB codes pin both endpoints, rounding and clamping. */
+/** Literal signed half-dB codes pin the shared production map's endpoints,
+ * rounding and clamping, including the separately reported applied percent.
+ */
 static void volume_register_table(void) {
   const struct { uint8_t percent; uint8_t code; } cases[] = {
     {0, 0x82}, {1, 0x83}, {25, 0xa1}, {50, 0xc1},

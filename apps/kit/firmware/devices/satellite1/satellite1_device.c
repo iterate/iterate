@@ -109,7 +109,8 @@ static enum iterate_kit_status iterate_kit_satellite1_set_volume(
 
 /** Add the hardware mute fact to the shared renderer, after board.c presents.
  * Borrow once for its next refresh; a fault still uses the shared fault chase.
- * Poll clears the overlay on mute transitions before any new volume gesture.
+ * Poll clears the overlay on mute transitions before any new volume gesture,
+ * and reuses this renderer to replace a volume bar while the mic rail is cut.
  */
 static void iterate_kit_satellite1_present(
     void *context, const struct iterate_kit_voice_view *view) {
@@ -126,7 +127,7 @@ static void iterate_kit_satellite1_present(
 
 /** Read only trustworthy GPIO_IN_A at the shared 25 ms control cadence.
  * A failed read releases both debouncers immediately, clears mute and counts
- * the failure. Bit 1 is the action button's duplicate; GPIO0 owns its grammar.
+ * the failure. Only bits 0/2/3 are used; GPIO0 owns the action-button grammar.
  */
 static void iterate_kit_satellite1_poll(void *context, struct iterate_kit_voice_intent *out) {
   (void)context;

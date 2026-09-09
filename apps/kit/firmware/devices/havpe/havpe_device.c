@@ -211,6 +211,7 @@ static bool start(void *context, struct iterate_kit_board_audio *out) {
   return true;
 }
 
+/** Sample and present the dial; board.c already retained this view for poll. */
 static void present(
     void *context, const struct iterate_kit_voice_view *view) {
   (void)context;

@@ -27,16 +27,19 @@ struct iterate_kit_tas2780 {
  * False leaves initialized false. tas2780.cpp:277-338. */
 bool iterate_kit_tas2780_init(struct iterate_kit_tas2780 *amp, i2c_master_dev_handle_t device);
 /** Bootstrap mode 0, ACTIVE_MUTED, wait 100 ms for SAR, select valid supply
- * mode and become ACTIVE. Failure attempts shutdown; any failed recovery I2C
- * is counted too. Requires init and running I2S clocks. tas2780.cpp:340-383. */
+ * mode and become ACTIVE. A change from bootstrap mode shuts down before the
+ * supply registers are rewritten. Failure attempts shutdown; failed recovery
+ * I2C is counted too. Requires init and running I2S clocks. tas2780.cpp:340-383. */
 bool iterate_kit_tas2780_activate(struct iterate_kit_tas2780 *amp);
 /** Clamp to 100, write DVC (retain mute), then publish applied on success.
  * applied must be non-NULL. tas2780.cpp:547-598; step 17 percent mapping. */
 bool iterate_kit_tas2780_set_volume(struct iterate_kit_tas2780 *amp, uint8_t percent, uint8_t *applied);
 /** Write MODE_CTRL=0x82; false means shutdown was not confirmed. tas2780.cpp:385-392. */
 bool iterate_kit_tas2780_shutdown(struct iterate_kit_tas2780 *amp);
-/** Read 0x49/0x4A/0x4B/0x4F; cache and output only a complete successful read.
- * Reading latches may consume them; poll separately from health. tas2780.cpp:445-521. */
+/** Read 0x49/0x4A/0x4B/0x4F; accumulate and output complete successful reads.
+ * The latches clear on read, so cached faults survive subsequent health polls
+ * until iterate_kit_tas2780_init resets state. A failed partial read can consume
+ * latches; its bus failure is counted. tas2780.cpp:445-521. */
 bool iterate_kit_tas2780_read_faults(struct iterate_kit_tas2780 *amp, uint32_t *faults);
 /** Append cached amp fields using health_append_fields; 0 means invalid/no
  * space. No bus reads or state changes. Board-table step 17 health contract. */

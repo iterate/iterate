@@ -637,6 +637,9 @@ failed:
   return false;
 }
 
+/** Raise an ungated amplifier before tasks; prepare_amplifier already installed
+ * iterate_kit_i2s_codec_set_before_write, so the wait has exactly one owner.
+ */
 bool iterate_kit_i2s_codec_finish(struct iterate_kit_audio_codec *out) {
   if (out == NULL || table_playback_channel == NULL || table_capture_channel == NULL || table_started) return false;
   const uint16_t ring_ms = (uint16_t)((uint64_t)channel_facts.dma_frames *

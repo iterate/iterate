@@ -225,7 +225,7 @@ static bool start(void *context, struct iterate_kit_board_audio *out) {
   return true;
 }
 
-/*
+/**
  * TWO SURFACES, ONE SNAPSHOT, TWO CEILINGS.
  *
  * The face's status rail and the body's LED run consume the same semantic

@@ -116,6 +116,7 @@ static bool start(void *context, struct iterate_kit_board_audio *out) {
   return true;
 }
 
+/** Present and tick the face; board.c already retained this view for poll. */
 static void present(
     void *context, const struct iterate_kit_voice_view *view) {
   (void)context;
