@@ -10,7 +10,6 @@ idf_component_register(
     havpe_audio.c
     havpe_modes.c
     havpe_ui.c
-    voice_pe_hardware_config.c
   INCLUDE_DIRS include
   PRIV_INCLUDE_DIRS .
   REQUIRES

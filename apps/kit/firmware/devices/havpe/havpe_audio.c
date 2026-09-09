@@ -10,7 +10,7 @@
  * the XMOS, and no MCLK reaches the ESP32 on either bus. Capture is a
  * separate controller (I2S_NUM_1, slave RX, 16 kHz stereo 32-bit) whose two
  * channels are same-time XMOS taps: ch0 = the selected cumulative DSP output
- * (AEC — see voice_pe_hardware_config.c for why not the AGC tap), ch1 = the
+ * (AEC — see board/codecs/aic3204.c for why not the AGC tap), ch1 = the
  * original microphone (diagnostic only, and the oracle). Both ESP channels
  * are slaves on SEPARATE controllers precisely because one duplex channel
  * pair would force shared BCLK/WS, impossible with two independent clock
@@ -46,7 +46,8 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
-#include "voice_pe_hardware_config.h"
+#include "iterate/kit/platforms/aic3204.h"
+#include "iterate/kit/platforms/xmos_i2c.h"
 #include "iterate/kit/pcm_format.h"
 
 static const char tag[] = "havpe-audio";
@@ -111,7 +112,6 @@ enum {
   XMOS_I2C_ADDRESS = 0x42,
   AIC3204_I2C_ADDRESS = 0x18,
   I2C_FREQUENCY_HZ = 400000,
-  I2C_TIMEOUT_MS = 50,
   /*
    * A first-party hardware contract, not retry padding: sending
    * configuration while XMOS firmware is still booting can NACK once and
@@ -129,61 +129,12 @@ static struct iterate_kit_audio_codec codec;
 /* What each XMOS output tap is currently selecting; 0..4, see the stage enum. */
 static uint8_t pipeline_stage[2];
 
-static esp_err_t write_codec_registers(
-    const struct iterate_kit_voice_pe_register_write *writes, size_t count) {
-  if (writes == NULL || count == 0U) {
-    return ESP_ERR_INVALID_ARG;
-  }
-  for (size_t index = 0U; index < count; ++index) {
-    const uint8_t command[] = {writes[index].address, writes[index].value};
-    const esp_err_t status = i2c_master_transmit(
-        codec_device, command, sizeof(command), I2C_TIMEOUT_MS);
-    if (status != ESP_OK) {
-      return status;
-    }
-  }
-  return ESP_OK;
-}
-
-/*
- * Write a pipeline stage, then read it back and fail on mismatch: XMOS
- * defaults are ch0=AGC, ch1=NS, taps are volatile across the reset this boot
- * pulses, and a write ACK alone does not establish the live stage.
- */
 static uint8_t speaker_volume_percent = 100U;
-
-/*
- * Percent to the AIC3204's two DAC channel-gain registers (0x41, 0x42), in
- * half-decibel steps on page 0.
- *
- * 100 IS 0 dB, NOT THE CHIP'S +24 dB CEILING. Positive digital gain here made
- * the provider transcribe this device's own speaker output almost verbatim on
- * the XMOS processed channel — the gain exhausted acoustic and AEC headroom
- * before the DSP could cancel anything. 0 dB is also the loudest setting that
- * cannot electrically clip a full-scale provider sample, and PCM reaches this
- * boundary unscaled. So the knob spans silence to 0 dB, which is the whole of
- * the safe range; anything above it is a different measurement, not a setting.
- *
- * The scale is in dB rather than linear percent because the ear is: halfway
- * along this control is -31.5 dB, which is quiet but not inaudible.
- */
-static esp_err_t apply_dac_volume(uint8_t percent) {
-  enum { MINIMUM_HALF_DB = -126 };  /* -63 dB, the register's floor */
-  const int8_t half_db = percent == 0U
-      ? (int8_t)MINIMUM_HALF_DB
-      : (int8_t)(MINIMUM_HALF_DB + ((int)-MINIMUM_HALF_DB * (int)percent) / 100);
-  const struct iterate_kit_voice_pe_register_write writes[] = {
-    {0x00U, 0x00U},
-    {0x41U, (uint8_t)half_db},
-    {0x42U, (uint8_t)half_db},
-  };
-  return write_codec_registers(writes, sizeof(writes) / sizeof(writes[0]));
-}
 
 enum iterate_kit_status havpe_audio_set_volume(
     uint8_t percent, uint8_t *applied) {
   if (percent > 100U) percent = 100U;
-  if (apply_dac_volume(percent) != ESP_OK) return ITERATE_KIT_IO_ERROR;
+  if (iterate_kit_aic3204_set_volume(codec_device, percent) != ESP_OK) return ITERATE_KIT_IO_ERROR;
   speaker_volume_percent = percent;
   if (applied != NULL) *applied = percent;
   return ITERATE_KIT_OK;
@@ -191,83 +142,8 @@ enum iterate_kit_status havpe_audio_set_volume(
 
 uint8_t havpe_audio_volume(void) { return speaker_volume_percent; }
 
-static esp_err_t configure_xmos_pipeline(
-    uint8_t channel, enum iterate_kit_xmos_stage stage) {
-  uint8_t command[4];
-  if (iterate_kit_xmos_pipeline_command(
-          channel, stage, command, sizeof(command)) != ITERATE_KIT_OK) {
-    return ESP_ERR_INVALID_ARG;
-  }
-  esp_err_t status = i2c_master_transmit(
-      xmos_device, command, sizeof(command), I2C_TIMEOUT_MS);
-  if (status != ESP_OK) {
-    return status;
-  }
-  uint8_t read_command[3];
-  uint8_t response[2] = {0xffU, 0xffU};
-  if (iterate_kit_xmos_pipeline_read_command(
-          channel, read_command, sizeof(read_command)) != ITERATE_KIT_OK) {
-    return ESP_ERR_INVALID_ARG;
-  }
-  status = i2c_master_transmit(
-      xmos_device, read_command, sizeof(read_command), I2C_TIMEOUT_MS);
-  if (status != ESP_OK) {
-    return status;
-  }
-  status = i2c_master_receive(
-      xmos_device, response, sizeof(response), I2C_TIMEOUT_MS);
-  if (status != ESP_OK) {
-    return status;
-  }
-  return iterate_kit_xmos_pipeline_response_matches(
-             response, sizeof(response), stage)
-      ? ESP_OK
-      : ESP_ERR_INVALID_RESPONSE;
-}
-
 enum iterate_kit_status havpe_audio_read_vnr(uint8_t *vnr) {
-  uint8_t command[3];
-  uint8_t response[2] = {0xffU, 0xffU};
-  if (vnr == NULL) return ITERATE_KIT_INVALID_ARGUMENT;
-  if (xmos_device == NULL) return ITERATE_KIT_UNAVAILABLE;
-  if (iterate_kit_xmos_vnr_command(command, sizeof(command)) !=
-      ITERATE_KIT_OK) {
-    return ITERATE_KIT_INVALID_ARGUMENT;
-  }
-  if (i2c_master_transmit(
-          xmos_device, command, sizeof(command), I2C_TIMEOUT_MS) != ESP_OK ||
-      i2c_master_receive(
-          xmos_device, response, sizeof(response), I2C_TIMEOUT_MS) != ESP_OK) {
-    return ITERATE_KIT_IO_ERROR;
-  }
-  return iterate_kit_xmos_parse_vnr(response, sizeof(response), vnr);
-}
-
-static esp_err_t verify_xmos_version(
-    struct iterate_kit_xmos_version *version) {
-  uint8_t command[3];
-  uint8_t response[4] = {0xffU, 0xffU, 0xffU, 0xffU};
-  if (version == NULL ||
-      iterate_kit_xmos_version_command(command, sizeof(command)) !=
-          ITERATE_KIT_OK) {
-    return ESP_ERR_INVALID_ARG;
-  }
-  esp_err_t status = i2c_master_transmit(
-      xmos_device, command, sizeof(command), I2C_TIMEOUT_MS);
-  if (status != ESP_OK) {
-    return status;
-  }
-  status = i2c_master_receive(
-      xmos_device, response, sizeof(response), I2C_TIMEOUT_MS);
-  if (status != ESP_OK) {
-    return status;
-  }
-  if (iterate_kit_xmos_parse_version(
-          response, sizeof(response), version) != ITERATE_KIT_OK ||
-      !iterate_kit_xmos_version_is_supported(version)) {
-    return ESP_ERR_INVALID_VERSION;
-  }
-  return ESP_OK;
+  return iterate_kit_xmos_i2c_read_vnr(xmos_device, vnr);
 }
 
 static esp_err_t initialize_i2c(void) {
@@ -387,16 +263,12 @@ static const struct iterate_kit_i2s_codec_facts audio_facts = {
 
 /** AIC3204 powers up after I2S enable; the shared start raises the rail last. */
 static bool power_up_codec(void) {
-  size_t count = 0U;
-  const struct iterate_kit_voice_pe_register_write *writes =
-      iterate_kit_voice_pe_aic3204_power_up_writes(&count);
-  return write_codec_registers(writes, count) == ESP_OK;
+  return iterate_kit_aic3204_write_script(
+      codec_device, iterate_kit_aic3204_power_up_script()) == ESP_OK;
 }
 
 bool havpe_audio_init(void) {
-  size_t initial_write_count = 0U;
-  const struct iterate_kit_voice_pe_register_write *initial_writes =
-      iterate_kit_voice_pe_aic3204_initial_writes(&initial_write_count);
+  const struct iterate_kit_register_script *initial = iterate_kit_aic3204_initial_script();
 
   if (initialize_control_gpios() != ESP_OK) {
     ESP_LOGE(tag, "control GPIO bring-up failed");
@@ -408,7 +280,7 @@ bool havpe_audio_init(void) {
   }
   {
     struct iterate_kit_xmos_version xmos_version;
-    if (verify_xmos_version(&xmos_version) != ESP_OK) {
+    if (iterate_kit_xmos_i2c_verify_version(xmos_device, &xmos_version) != ESP_OK) {
       ESP_LOGE(tag, "XMOS version verification failed — failing closed");
       return false;
     }
@@ -419,18 +291,18 @@ bool havpe_audio_init(void) {
         xmos_version.minor,
         xmos_version.patch);
   }
-  pipeline_stage[0] = (uint8_t)iterate_kit_voice_pe_xmos_uplink_stage();
+  pipeline_stage[0] = (uint8_t)iterate_kit_xmos_uplink_stage();
   pipeline_stage[1] = (uint8_t)ITERATE_KIT_XMOS_STAGE_NONE;
-  if (configure_xmos_pipeline(
-          0U, (enum iterate_kit_xmos_stage)pipeline_stage[0]) !=
+  if (iterate_kit_xmos_i2c_configure_pipeline(
+          xmos_device, 0U, (enum iterate_kit_xmos_stage)pipeline_stage[0]) !=
           ESP_OK ||
-      configure_xmos_pipeline(
-          1U, (enum iterate_kit_xmos_stage)pipeline_stage[1]) !=
+      iterate_kit_xmos_i2c_configure_pipeline(
+          xmos_device, 1U, (enum iterate_kit_xmos_stage)pipeline_stage[1]) !=
           ESP_OK) {
     ESP_LOGE(tag, "XMOS pipeline configuration failed — failing closed");
     return false;
   }
-  if (write_codec_registers(initial_writes, initial_write_count) != ESP_OK) {
+  if (iterate_kit_aic3204_write_script(codec_device, initial) != ESP_OK) {
     ESP_LOGE(tag, "AIC3204 initial register script failed");
     return false;
   }
@@ -439,7 +311,7 @@ bool havpe_audio_init(void) {
    * the power-up table early can pop and enter a different analogue state
    * from the first-party implementation.
    */
-  vTaskDelay(pdMS_TO_TICKS(ITERATE_KIT_VOICE_PE_AIC3204_SETTLE_MS));
+  vTaskDelay(pdMS_TO_TICKS(initial->settle_ms));
   iterate_kit_i2s_codec_set_after_enable(power_up_codec);
   if (!iterate_kit_i2s_codec_start(&audio_facts, &codec)) {
     ESP_LOGE(tag, "I2S/codec power-up failed");
@@ -465,8 +337,8 @@ enum iterate_kit_status havpe_audio_set_pipeline_stage(
   if (channel > 1U || stage >= (uint8_t)ITERATE_KIT_XMOS_STAGE_COUNT) {
     return ITERATE_KIT_INVALID_ARGUMENT;
   }
-  if (configure_xmos_pipeline(
-          channel, (enum iterate_kit_xmos_stage)stage) != ESP_OK) {
+  if (iterate_kit_xmos_i2c_configure_pipeline(
+          xmos_device, channel, (enum iterate_kit_xmos_stage)stage) != ESP_OK) {
     return ITERATE_KIT_IO_ERROR;
   }
   pipeline_stage[channel] = stage;

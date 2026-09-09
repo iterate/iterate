@@ -1,4 +1,4 @@
-#include "voice_pe_hardware_config.h"
+#include "iterate/kit/platforms/aic3204.h"
 
 /*
  * NS remains the unqualified production default. A release experiment may
@@ -38,7 +38,7 @@
  * test makes any divergence an intentional hardware change with reviewable
  * evidence rather than an unexplained acoustic regression.
  */
-static const struct iterate_kit_voice_pe_register_write initial_writes[] = {
+static const struct iterate_kit_register_write initial_writes[] = {
   {0x00, 0x00}, {0x01, 0x01}, {0x0b, 0x82}, {0x0c, 0x82},
   {0x0e, 0x80}, {0x1b, 0x30}, {0x38, 0x02}, {0x1f, 0x01},
   {0x20, 0x01}, {0x3c, 0x01}, {0x00, 0x01}, {0x02, 0x09},
@@ -59,7 +59,7 @@ static const struct iterate_kit_voice_pe_register_write initial_writes[] = {
  * only behind a measured unclipped/AEC gate; intelligibility is not permission
  * to reintroduce self-triggering server VAD.
  */
-static const struct iterate_kit_voice_pe_register_write power_up_writes[] = {
+static const struct iterate_kit_register_write power_up_writes[] = {
   {0x00, 0x00},
   {0x3f, 0xd4},
   {0x41, 0x00},
@@ -67,24 +67,30 @@ static const struct iterate_kit_voice_pe_register_write power_up_writes[] = {
   {0x40, 0x00},
 };
 
-const struct iterate_kit_voice_pe_register_write *
-iterate_kit_voice_pe_aic3204_initial_writes(size_t *count) {
-  if (count != NULL) {
-    *count = sizeof(initial_writes) / sizeof(initial_writes[0]);
-  }
-  return initial_writes;
+const struct iterate_kit_register_script *iterate_kit_aic3204_initial_script(void) {
+  static const struct iterate_kit_register_script script = {
+    .i2c_address = 0x18,
+    .writes = initial_writes,
+    .count = sizeof(initial_writes) / sizeof(initial_writes[0]),
+    .settle_ms = 2500,
+    .when = ITERATE_KIT_SCRIPT_BEFORE_I2S,
+  };
+  return &script;
 }
 
-const struct iterate_kit_voice_pe_register_write *
-iterate_kit_voice_pe_aic3204_power_up_writes(size_t *count) {
-  if (count != NULL) {
-    *count = sizeof(power_up_writes) / sizeof(power_up_writes[0]);
-  }
-  return power_up_writes;
+const struct iterate_kit_register_script *iterate_kit_aic3204_power_up_script(void) {
+  static const struct iterate_kit_register_script script = {
+    .i2c_address = 0x18,
+    .writes = power_up_writes,
+    .count = sizeof(power_up_writes) / sizeof(power_up_writes[0]),
+    .settle_ms = 0,
+    .when = ITERATE_KIT_SCRIPT_AFTER_I2S,
+  };
+  return &script;
 }
 
 enum iterate_kit_xmos_stage
-iterate_kit_voice_pe_xmos_uplink_stage(void) {
+iterate_kit_xmos_uplink_stage(void) {
   /*
    * AEC, WITH A FIXED GAIN AFTER IT — because the choice between the taps is a
    * choice between two ways of being wrong, and only one of them is fixable
@@ -186,3 +192,55 @@ iterate_kit_voice_pe_xmos_uplink_stage(void) {
   return (enum iterate_kit_xmos_stage)
       ITERATE_KIT_VOICE_PE_XMOS_UPLINK_STAGE;
 }
+
+/*
+ * Percent to the AIC3204's two DAC channel-gain registers (0x41, 0x42), in
+ * half-decibel steps on page 0.
+ *
+ * 100 IS 0 dB, NOT THE CHIP'S +24 dB CEILING. Positive digital gain here made
+ * the provider transcribe this device's own speaker output almost verbatim on
+ * the XMOS processed channel — the gain exhausted acoustic and AEC headroom
+ * before the DSP could cancel anything. 0 dB is also the loudest setting that
+ * cannot electrically clip a full-scale provider sample, and PCM reaches this
+ * boundary unscaled. So the knob spans silence to 0 dB, which is the whole of
+ * the safe range; anything above it is a different measurement, not a setting.
+ *
+ * The scale is in dB rather than linear percent because the ear is: halfway
+ * along this control is -31.5 dB, which is quiet but not inaudible.
+ */
+uint8_t iterate_kit_aic3204_volume_register(uint8_t percent) {
+  if (percent > 100U) percent = 100U;
+  enum { MINIMUM_HALF_DB = -126 }; /* -63 dB, the register floor */
+  const int8_t half_db = percent == 0U
+      ? (int8_t)MINIMUM_HALF_DB
+      : (int8_t)(MINIMUM_HALF_DB + ((int)-MINIMUM_HALF_DB * (int)percent) / 100);
+  return (uint8_t)half_db;
+}
+
+#ifdef ESP_PLATFORM
+esp_err_t iterate_kit_aic3204_write_script(
+    i2c_master_dev_handle_t device, const struct iterate_kit_register_script *script) {
+  if (script == NULL || script->writes == NULL || script->count == 0U) return ESP_ERR_INVALID_ARG;
+  for (size_t index = 0U; index < script->count; ++index) {
+    const uint8_t command[] = {script->writes[index].address, script->writes[index].value};
+    const esp_err_t status = i2c_master_transmit(device, command, sizeof(command), 50);
+    if (status != ESP_OK) return status;
+  }
+  return ESP_OK;
+}
+
+esp_err_t iterate_kit_aic3204_set_volume(i2c_master_dev_handle_t device, uint8_t percent) {
+  const uint8_t code = iterate_kit_aic3204_volume_register(percent);
+  const struct iterate_kit_register_write writes[] = {
+    {0x00U, 0x00U}, {0x41U, code}, {0x42U, code},
+  };
+  const struct iterate_kit_register_script script = {
+    .i2c_address = 0x18,
+    .writes = writes,
+    .count = sizeof(writes) / sizeof(writes[0]),
+    .settle_ms = 0,
+    .when = ITERATE_KIT_SCRIPT_AFTER_I2S,
+  };
+  return iterate_kit_aic3204_write_script(device, &script);
+}
+#endif

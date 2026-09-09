@@ -220,21 +220,22 @@ endif()
 
 # HAVPE's adopted pure hardware policy: byte-exact register/wire vectors and
 # the deliberately compiler-visible XMOS uplink-stage selector. These build
-# the device sources directly because devices/ are ESP-IDF components, not
-# host libraries; the two files under test are pure C99 by construction.
+# the pure hardware table directly, including the diagnostic override; no
+# I2C transport or ESP-IDF runtime is required by these literal table tests.
 function(iterate_kit_add_havpe_pure_test NAME)
   iterate_kit_add_test(${NAME} ${ARGN}
     INCLUDES ../devices/havpe ../components/core/include)
 endfunction()
 
-iterate_kit_add_havpe_pure_test(iterate-kit-havpe-hardware-config-test
-  havpe_hardware_config_test.c ../devices/havpe/voice_pe_hardware_config.c
+iterate_kit_add_test(iterate-kit-havpe-hardware-config-test
+  havpe_hardware_config_test.c ../platforms/iterate_esp_idf/components/board/codecs/aic3204.c
+  INCLUDES ../platforms/iterate_esp_idf/components/board/include
   LINK iterate-kit-core)
 
-iterate_kit_add_havpe_pure_test(
-  iterate-kit-havpe-hardware-config-aec-override-test
+iterate_kit_add_test(iterate-kit-havpe-hardware-config-aec-override-test
   havpe_hardware_config_aec_override_test.c
-  ../devices/havpe/voice_pe_hardware_config.c
+  ../platforms/iterate_esp_idf/components/board/codecs/aic3204.c
+  INCLUDES ../platforms/iterate_esp_idf/components/board/include
   DEFINES ITERATE_KIT_VOICE_PE_XMOS_UPLINK_STAGE=1
   LINK iterate-kit-core)
 
