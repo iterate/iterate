@@ -113,13 +113,14 @@ export function StreamFeedView({
   const candidateLive = filter.agent == null ? null : (liveState?.live ?? null);
   const publishedLive = useStreamQuery(
     database,
-    `SELECT EXISTS(SELECT 1 FROM events
+    `SELECT json_extract(raw_jsonb, '$.payload.item.id') AS item_id FROM events
       WHERE type = 'events.iterate.com/feed/item-published'
-        AND json_extract(raw_jsonb, '$.payload.item.id') = ?) AS published`,
+        AND json_extract(raw_jsonb, '$.payload.item.id') = ? LIMIT 1`,
     [candidateLive?.id ?? null],
   );
-  // The journal can win the race against live-state delivery. Render that activity once.
-  const live = publishedLive.data[0]?.published ? null : candidateLive;
+  // Query handles can retain the previous parameters' result while loading.
+  // Only suppress the live item whose publication is actually in that result.
+  const live = publishedLive.data[0]?.item_id === candidateLive?.id ? null : candidateLive;
   const scrollRef = useRef<HTMLDivElement>(null);
   // Ids of activity summaries the user expanded. Operation rows inside an
   // expanded activity open their URL-backed inspector instead of nesting a

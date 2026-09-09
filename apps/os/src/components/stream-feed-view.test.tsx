@@ -16,11 +16,11 @@ const publication = vi.hoisted(() => ({
 }));
 vi.mock("~/domains/streams/client-libraries/browser/hooks/use-stream-query.ts", () => ({
   useStreamQuery: (_database: unknown, sql: string) => ({
-    status: "ok",
+    status: sql.includes("FROM events") ? "pending" : "ok",
     data: sql.includes("COUNT(*)")
       ? [{ count: 1 }]
-      : sql.includes("EXISTS")
-        ? [{ published: 1 }]
+      : sql.includes("FROM events")
+        ? [{ published: 1, item_id: "activity-1" }]
         : [
             {
               local_index: 10,
@@ -68,4 +68,16 @@ test("keeps work visible when a published activity arrives before the next live 
   // The next activity snapshot is independently delivered and may arrive later.
   expect(render(1).querySelector('[aria-label="Loading"]')).not.toBeNull();
   expect(render(0).querySelector('[aria-label="Loading"]')).toBeNull();
+});
+
+test("keeps the next live activity visible while its query retains the prior activity result", () => {
+  const html = renderToStaticMarkup(
+    <StreamFeedView
+      database={{} as StreamBrowserDatabase}
+      filter={{ agent: { showDebug: false, searchQuery: null }, raw: null }}
+      liveState={{ live: { ...staleLive, id: "activity-2" } }}
+      runtime={{ ...ZERO_AGENT_RUNTIME, runningScripts: 1 }}
+    />,
+  );
+  expect(html).toContain('data-testid="agent-live-status"');
 });
