@@ -4346,3 +4346,13 @@ Five bugs, one cut, one clarity item; every claim verified in the code first.
 - The three calls codex hands the owner: where email-mode `serveMcp` admission belongs (ingress or the
   mount); an aggregate memory ceiling for cursor delivery and concurrent readers; whether handles
   promise durable ownership across pauses and identical replacements.
+- GATES: tsc ×3 · oxlint · knip · `pnpm test` 88 files / 728 passed / 18 expected-fail / 17
+  deployed-only skips (the sandbox pin first rode a bare `itx.whoami`, which the fetch lane cannot
+  serve — it rides the loaded-worker page test now). DEPLOYED (6f7f30288 + 9cf152ddf, version
+  fed19375): 49 files / 201 passed / 4 expected-fail; the one failure the kv-list platform reset
+  (measured above), green alone.
+
+STATE AT THE END OF THE REVIEW ROUNDS (2026-09-09): five passes — codex (gpt-6-astra, xhigh) ×3 and
+Fable reviewers over the context, the stream and the edge half — each applied, gated locally and
+proven against the deployed worker. Every finding is either fixed with a pin, or a `test.fails` red
+pin naming its mechanism, or declined with the reason above. The red pins are the owner's list.
