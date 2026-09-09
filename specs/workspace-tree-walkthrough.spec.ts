@@ -48,7 +48,7 @@ test("workspace tree walkthrough", async ({ page }) => {
   // handlers yet, so wait for the list itself (a row, or the empty line of
   // a fresh project) — the loading row it replaces carries data-spinner.
   await page
-    .getByRole("button", { name: /^\/workspaces\// })
+    .getByRole("button", { name: /^\/(?:agents|workspaces)\// })
     .or(page.getByText("No workspaces yet"))
     .first()
     .waitFor({ timeout: 30_000 }); // timeout: the auth callback redirect on the preview before the home renders — no loading UI for the spinner-waiter in between
@@ -60,7 +60,7 @@ test("workspace tree walkthrough", async ({ page }) => {
   // the compacted mount row comes first among everything under it.
   const configRow = page.locator('[data-item-path^="repos/config"]').first();
   await configRow.waitFor();
-  await page.locator('[data-item-path^="workspaces/"]').first().waitFor();
+  await page.locator('[data-item-path="workspace/"]').first().waitFor();
 
   // 3. A first file of my own: New file typed at the tree's root lands in the
   //    workspace's own directory (".md" implied) and opens live; the own

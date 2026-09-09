@@ -422,10 +422,10 @@ async function briefAgent(agent: PlatformAgent, brief: string): Promise<void> {
   await agent.message(brief);
 }
 
-/** Relative document paths join onto the workspace's own stream path; absolute paths are used verbatim. */
-export function resolveDocumentPath(workspacePath: string, value: string): string {
+/** Relative document paths join onto /workspace; absolute paths are used verbatim. */
+export function resolveDocumentPath(value: string): string {
   const path = requireDocumentPath(value);
-  return path.startsWith("/") ? path : `${workspacePath}/${path}`;
+  return path.startsWith("/") ? path : `/workspace/${path}`;
 }
 
 function stringClaim(value: unknown): string | null {

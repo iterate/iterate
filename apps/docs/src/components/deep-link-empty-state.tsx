@@ -16,6 +16,7 @@ export function DeepLinkEmptyState() {
   const [workspaces, setWorkspaces] = useState<{ path: string; createdAt: string }[] | null>(null);
   const [listError, setListError] = useState<string | null>(null);
   const [chosen, setChosen] = useState("");
+  const canOpen = chosen.startsWith("/workspaces/") || chosen.startsWith("/agents/");
 
   useEffect(() => {
     let cancelled = false;
@@ -55,7 +56,7 @@ export function DeepLinkEmptyState() {
             className="mt-1 flex gap-2"
             onSubmit={(event) => {
               event.preventDefault();
-              if (chosen.startsWith("/workspaces/")) {
+              if (canOpen) {
                 void navigate({ to: "/", search: { workspace: chosen } });
               }
             }}
@@ -64,11 +65,11 @@ export function DeepLinkEmptyState() {
               id="workspace-path"
               value={chosen}
               onChange={(event) => setChosen(event.currentTarget.value.trim())}
-              placeholder="/workspaces/agents/…"
+              placeholder="/agents/…"
               spellCheck={false}
               className="font-mono text-sm"
             />
-            <Button type="submit" variant="outline" disabled={!chosen.startsWith("/workspaces/")}>
+            <Button type="submit" variant="outline" disabled={!canOpen}>
               Open
             </Button>
           </form>

@@ -1,9 +1,9 @@
 /**
  * What the board view needs to address a workspace, shared by the vessel
  * (rpc-api.ts) and the browser (routes, hooks). A workspace is its path and
- * nothing else — an agent's `/workspaces/agents/x`, one a person named, any
- * path at all opens the same way; the board adds only WHICH repo mount's
- * task files it shows.
+ * nothing else — an agent's `/agents/x`, one a person named, any path
+ * at all opens the same way; the board adds only WHICH repo mount's task
+ * files it shows.
  */
 
 /** The repo a board edits when none is picked. */

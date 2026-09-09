@@ -21,8 +21,8 @@ export type WorkspaceMountChanges = {
  * 40k+ files) must cost nothing until someone opens it — so the roots come
  * from status, which is cheap, and never from a listing.
  */
-export function workspaceRoots(status: WorkspaceStatus, workspacePath: string): string[] {
-  return [...new Set([...status.mounts.map((mount) => mount.path), workspacePath])].sort();
+export function workspaceRoots(status: WorkspaceStatus): string[] {
+  return [...new Set([...status.mounts.map((mount) => mount.path), "/workspace"])].sort();
 }
 
 /** The root a path lives under, or null outside every root. */
@@ -89,11 +89,9 @@ export function workspaceTree(
  */
 export function useWorkspaceFiles({
   transport,
-  workspacePath,
   listAtOnce = [],
 }: {
   transport: WorkspaceTransport;
-  workspacePath: string;
   /** Mount paths listed as soon as the workspace opens (the config repo, say). */
   listAtOnce?: readonly string[];
 }) {
@@ -149,14 +147,14 @@ export function useWorkspaceFiles({
   /** Load the root a path lives under, once (a later refresh re-lists it). */
   const ensureLoaded = useCallback(
     (path: string) => {
-      const roots = status === null ? [] : workspaceRoots(status, workspacePath);
+      const roots = status === null ? [] : workspaceRoots(status);
       const root = rootOf(roots, path);
       if (root === null || loaded.current.has(root)) return;
       void loadRoot(root).catch((cause: unknown) =>
         setError(cause instanceof Error ? cause.message : String(cause)),
       );
     },
-    [loadRoot, status, workspacePath],
+    [loadRoot, status],
   );
 
   // The heartbeat: status every few seconds. A root whose change count
@@ -172,16 +170,16 @@ export function useWorkspaceFiles({
       void refreshStatus()
         .then((next) => {
           if (cancelled || next === null) return;
-          const roots = workspaceRoots(next, workspacePath);
+          const roots = workspaceRoots(next);
           const previous = previousStatus.current;
           previousStatus.current = next;
           const changedCount = (snapshot: WorkspaceStatus, root: string) =>
-            root === workspacePath
+            root === "/workspace"
               ? snapshot.unmounted.length
               : (snapshot.mounts.find((mount) => mount.path === root)?.changes.length ?? 0);
           const atOnce = new Set(listAtOnceKey === "" ? [] : listAtOnceKey.split("\n"));
           for (const root of roots) {
-            const opensAtOnce = root === workspacePath || atOnce.has(root);
+            const opensAtOnce = root === "/workspace" || atOnce.has(root);
             const shrank =
               previous !== null && changedCount(next, root) < changedCount(previous, root);
             if (
@@ -203,12 +201,12 @@ export function useWorkspaceFiles({
       cancelled = true;
       clearInterval(timer);
     };
-  }, [listAtOnceKey, loadRoot, refreshStatus, workspacePath]);
+  }, [listAtOnceKey, loadRoot, refreshStatus]);
 
   /** One mutation, then status + the touched roots again; false (and the error shown) when it failed. */
   const run = useCallback(
     async (work: () => Promise<unknown>, touched: readonly string[]): Promise<boolean> => {
-      const roots = status === null ? [] : workspaceRoots(status, workspacePath);
+      const roots = status === null ? [] : workspaceRoots(status);
       const reload = async () => {
         await refreshStatus();
         const reloads: Promise<void>[] = [];
@@ -231,11 +229,10 @@ export function useWorkspaceFiles({
         return false;
       }
     },
-    [loadRoot, refreshStatus, status, workspacePath],
+    [loadRoot, refreshStatus, status],
   );
 
-  const tree =
-    status === null ? null : workspaceTree(workspaceRoots(status, workspacePath), listings, status);
+  const tree = status === null ? null : workspaceTree(workspaceRoots(status), listings, status);
   const changes = tree?.changes ?? new Map<string, RepoFileStatus>();
   const pathsUnder = (directoryPath: string) => {
     const prefix = `${directoryPath}/`;

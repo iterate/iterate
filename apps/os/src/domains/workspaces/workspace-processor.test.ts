@@ -327,3 +327,15 @@ describe("registry + runner drive (the workspace DO's wiring)", () => {
     await expect(reads.waitUntilEvent({ offset: 2, timeoutMs: 1_000 })).resolves.toBeUndefined();
   });
 });
+
+test.for(["/workspace", "/workspace/docs"])(
+  "raw workspace config cannot mount a repo at %s",
+  (path) => {
+    const result = WorkspaceProcessorContract.events[
+      "events.iterate.com/workspace/configured"
+    ].payloadSchema.safeParse({
+      config: { mounts: { [path]: { policy: "commit-to-main", repoPath: "/repos/config" } } },
+    });
+    expect(result.success).toBe(false);
+  },
+);

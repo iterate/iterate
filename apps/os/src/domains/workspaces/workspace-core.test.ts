@@ -128,9 +128,9 @@ function fakeRepo(tree: Record<string, string>) {
   return { commits, repo, snapshotCalls };
 }
 
-// The workspace's own directory (its stream path): the ONLY subtree where
+// The workspace's fixed /workspace directory: the ONLY subtree where
 // unmounted private scratch may be written.
-const SCRATCH_ROOT = "/workspaces/test";
+const SCRATCH_ROOT = "/workspace";
 
 const MOUNTS: Record<string, WorkspaceMount> = {
   "/config": { policy: "commit-to-main", repoPath: "/repos/config" },
@@ -149,7 +149,6 @@ function subject(mounts: Record<string, WorkspaceMount> = MOUNTS) {
       if (repoPath === "/repos/iterate") return iterate.repo;
       throw new Error(`unexpected repo "${repoPath}"`);
     },
-    scratchRoot: SCRATCH_ROOT,
     workspace,
   });
   return { config, core, iterate, localFiles: files };
@@ -290,7 +289,6 @@ describe("batched mount reads", () => {
       kv: fakeKv(),
       mounts: async () => ({ "/repos/big": { policy: "commit-to-main", repoPath: "/repos/big" } }),
       repo: () => big.repo,
-      scratchRoot: SCRATCH_ROOT,
       workspace,
     });
     await expect(core.readMountFiles(["/repos/big/tasks/board.md"])).resolves.toEqual({
@@ -471,7 +469,7 @@ describe("strict writes and private scratch", () => {
     // The rejection teaches where writes belong: the workspace's own
     // directory and the mounted repo subtrees.
     await expect(core.writeFile("/notes.md", "x")).rejects.toThrow(
-      /Private files live under your workspace directory \("\/workspaces\/test\//,
+      /Private files live under your workspace directory \("\/workspace\//,
     );
   });
 
@@ -512,7 +510,6 @@ describe("strict writes and private scratch", () => {
       kv: fakeKv(),
       mounts: async () => MOUNTS,
       repo: (repoPath) => (repoPath === "/repos/config" ? countingConfig : countingIterate),
-      scratchRoot: SCRATCH_ROOT,
       workspace,
     });
     // A fully clean workspace: with every project repo mounted by derivation,
@@ -553,7 +550,6 @@ describe("thermo regressions", () => {
       kv: fakeKv(),
       mounts: async () => ({ "/config": { policy: "commit-to-main", repoPath: "/repos/config" } }),
       repo: () => failing,
-      scratchRoot: SCRATCH_ROOT,
       workspace,
     });
     failProbe = true;
@@ -575,7 +571,6 @@ describe("thermo regressions", () => {
       kv: fakeKv(),
       mounts: async () => nested,
       repo: (repoPath) => (repoPath === "/repos/config" ? config.repo : iterate.repo),
-      scratchRoot: SCRATCH_ROOT,
       workspace,
     });
     await core.deleteFile("/repos/config/side/note.md");
@@ -612,7 +607,6 @@ describe("thermo regressions", () => {
         "/iterate": { policy: "read-only", repoPath: "/repos/iterate" },
       }),
       repo: (repoPath) => (repoPath === "/repos/config" ? config.repo : countingIterate),
-      scratchRoot: SCRATCH_ROOT,
       workspace,
     });
     await core.writeFile("/config/a.md", "a");
@@ -630,7 +624,6 @@ describe("thermo regressions", () => {
       kv: fakeKv(),
       mounts: async () => ({ "/config": { policy: "commit-to-main", repoPath: "/repos/config" } }),
       repo: () => config.repo,
-      scratchRoot: SCRATCH_ROOT,
       workspace,
     });
     await crashCore.deleteFile("/config/only.md");
@@ -655,7 +648,6 @@ describe("thermo regressions", () => {
         "/repos/config/side": { policy: "commit-to-main", repoPath: "/repos/iterate" },
       }),
       repo: (repoPath) => (repoPath === "/repos/config" ? config.repo : iterate.repo),
-      scratchRoot: SCRATCH_ROOT,
       workspace,
     });
     // An OUTER-mount .gitignore suppressing *.log must not hide the nested
@@ -694,7 +686,6 @@ describe("thermo round-two regressions", () => {
       kv: fakeKv(),
       mounts: async () => ({ "/config": { policy: "commit-to-main", repoPath: "/repos/config" } }),
       repo: () => failing,
-      scratchRoot: SCRATCH_ROOT,
       workspace,
     });
     await core.writeFile("/config/worker.ts", "precious local edits");
@@ -724,7 +715,6 @@ describe("thermo round-two regressions", () => {
       kv: fakeKv(),
       mounts: async () => ({ "/config": { policy: "commit-to-main", repoPath: "/repos/config" } }),
       repo: () => config.repo,
-      scratchRoot: SCRATCH_ROOT,
       workspace,
     });
     await core.deleteFile("/config/only.md");
@@ -754,7 +744,6 @@ describe("thermo round-three regressions", () => {
       kv: fakeKv(),
       mounts: async () => table,
       repo: (repoPath) => (repoPath === "/repos/config" ? config.repo : vendorRepo.repo),
-      scratchRoot: SCRATCH_ROOT,
       workspace,
     });
     // Delete the FILE /repos/config/vendor from the outer repo...
@@ -787,7 +776,6 @@ describe("thermo round-three regressions", () => {
       kv: fakeKv(),
       mounts: async () => ({ "/config": { policy: "commit-to-main", repoPath: "/repos/config" } }),
       repo: () => config.repo,
-      scratchRoot: SCRATCH_ROOT,
       workspace: failing,
     });
     await expect(core.deleteFile("/config/worker.ts")).rejects.toThrow(/injected local/);
@@ -808,7 +796,6 @@ describe("thermo round-four regressions", () => {
       kv: fakeKv(),
       mounts: async () => table,
       repo: (repoPath) => (repoPath === "/repos/config" ? config.repo : vendorRepo.repo),
-      scratchRoot: SCRATCH_ROOT,
       workspace,
     });
     await core.deleteFile("/repos/config/vendor");
@@ -826,7 +813,6 @@ describe("thermo round-four regressions", () => {
         "/repos/nested": { policy: "read-only", repoPath: "/repos/nested" },
       }),
       repo: () => nested.repo,
-      scratchRoot: SCRATCH_ROOT,
       workspace,
     });
     await expect(core.writeFile("/repos", "not a file")).rejects.toThrow(/mount point/);
@@ -930,7 +916,6 @@ describe("post-merge follow-ups (Bugbot round)", () => {
         "/repos/config/a/b": { policy: "read-only", repoPath: "/repos/nested" },
       }),
       repo: (repoPath) => (repoPath === "/repos/config" ? config.repo : nested.repo),
-      scratchRoot: SCRATCH_ROOT,
       workspace,
     });
     // "/repos/config/a" exists as a repo FILE in the outer mount but is also
@@ -960,7 +945,6 @@ describe("virtual directory coherence", () => {
         "/repos/config/a/b": { policy: "read-only", repoPath: "/repos/nested" },
       }),
       repo: (repoPath) => (repoPath === "/repos/config" ? config.repo : nested.repo),
-      scratchRoot: SCRATCH_ROOT,
       workspace,
     });
     return { config, core, nested };

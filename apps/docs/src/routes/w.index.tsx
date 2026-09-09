@@ -9,7 +9,7 @@ import { DEFAULT_REPO_PATH, normalizeRepoPath } from "../lib/board-shared.ts";
  * platform path — the deep-link form `docs.link` mints and agents share,
  * and the form the board home navigates to after creating a workspace.
  * Plain get: nothing is created here.
- *   /w?workspace=/workspaces/agents/you&repo=/repos/config&task=<path>
+ *   /w?workspace=/agents/you&repo=/repos/config&task=<path>
  */
 export const Route = createFileRoute("/w/")({
   validateSearch: (search: Record<string, unknown>) => ({
@@ -56,7 +56,7 @@ function BoardLensPage() {
     );
   }
   // No workspace addressed: /w is the tasks view's HOME, not an error.
-  if (!search.workspace.startsWith("/workspaces/")) {
+  if (!search.workspace.startsWith("/workspaces/") && !search.workspace.startsWith("/agents/")) {
     return <BoardHome />;
   }
   return (

@@ -59,7 +59,7 @@ function ProjectWorkspaceDetailContent() {
       Promise.resolve(operation(itx.workspaces.get(workspacePath) as unknown as WorkspaceSurface));
     return { run, runOnce: run };
   }, [itx, workspacePath]);
-  const files = useWorkspaceFiles({ transport, workspacePath, listAtOnce: ["/repos/config"] });
+  const files = useWorkspaceFiles({ transport, listAtOnce: ["/repos/config"] });
   const selectedPath = search.file;
   const diff = search.diff === true;
   // The diff exists only while the file differs from HEAD: once a commit or
@@ -94,7 +94,7 @@ function ProjectWorkspaceDetailContent() {
           if (selectedPath === undefined) return;
           const underScope =
             scope === null
-              ? selectedPath.startsWith(`${workspacePath}/`)
+              ? selectedPath.startsWith("/workspace/")
               : selectedPath.startsWith(`${scope}/`);
           if (!underScope) return;
           if (files.changes.get(selectedPath) === "added") onSelect(null);
@@ -156,5 +156,6 @@ function ProjectWorkspaceDetailContent() {
 
 function workspacePathFromSplat(splat: string | undefined) {
   const suffix = splat?.replace(/^\/+/, "") ?? "";
-  return `/workspaces/${suffix}`;
+  // The splat carries the full identity: agents/** or workspaces/**.
+  return `/${suffix}`;
 }

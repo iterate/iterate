@@ -60,7 +60,7 @@ function WorkspaceFiles({
   diff: boolean;
 }) {
   const transport = useMemo(() => workspaceTransport(workspacePath), [workspacePath]);
-  const files = useWorkspaceFiles({ transport, workspacePath, listAtOnce: [DEFAULT_REPO_PATH] });
+  const files = useWorkspaceFiles({ transport, listAtOnce: [DEFAULT_REPO_PATH] });
   const navigate = useNavigate({ from: Route.fullPath });
   const onSelect = useCallback(
     (path: string | null) =>
@@ -78,7 +78,7 @@ function WorkspaceFiles({
   const [revision, setRevision] = useState(0);
   const onDocumentRevised = useCallback(() => setRevision((current) => current + 1), []);
   const selectedPath =
-    path === undefined ? undefined : path.startsWith("/") ? path : `${workspacePath}/${path}`;
+    path === undefined ? undefined : path.startsWith("/") ? path : `/workspace/${path}`;
   // The diff exists only while the file differs from HEAD: once a commit or
   // discard clears it, the file shows again even though ?diff=1 lingers.
   const dirty = selectedPath !== undefined && files.changes.has(selectedPath);
@@ -103,7 +103,7 @@ function WorkspaceFiles({
           if (selectedPath === undefined) return;
           const underScope =
             scope === null
-              ? selectedPath.startsWith(`${workspacePath}/`)
+              ? selectedPath.startsWith("/workspace/")
               : selectedPath.startsWith(`${scope}/`);
           if (!underScope) return;
           if (files.changes.get(selectedPath) === "added") onSelect(null);

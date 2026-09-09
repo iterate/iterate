@@ -84,7 +84,7 @@ function ProjectWorkspacesIndexContent() {
                         to="/projects/$projectSlug/workspaces/$"
                         params={{
                           projectSlug: params.projectSlug,
-                          _splat: workspace.path.slice(`${WORKSPACES_ROOT}/`.length),
+                          _splat: workspace.path.slice(1),
                         }}
                         search={{}}
                       >
