@@ -348,22 +348,12 @@ const IDLE_STAMP_STEP_MS = 5_000;
 
 /** How often the idle countdown looks at the facet clock. */
 const IDLE_TICK_MS = 5_000;
-/**
- * How long the idle reaper waits for its farewell to START before giving up
- * on saying it and burying the call silently. A provider that has not even
- * created the response in this long is not going to; a farewell that HAS
- * started is owned by the drain point, which ends the call once it has
- * played. Under IDLE_TIMEOUT_MS's own slack on purpose: an announced end
- * must never make a dead call outlive the deadline by more than this.
- */
+/** How long the idle reaper waits for the provider to START its farewell
+ * before burying the call silently; a farewell that has started is the
+ * drain point's to finish. Under IDLE_TIMEOUT_MS's own slack on purpose. */
 export const IDLE_FAREWELL_GRACE_MS = 8_000;
 
-/**
- * What the reaper says before it hangs up. Said in the model's own voice
- * through the ordinary `say` path, so the transcript shows it like anything
- * else the assistant said. Worded per client: a push-to-talk client presses
- * to come back; an open-mic board presses AND talks.
- */
+/** The reaper's goodbye, worded per client: press, or press and talk, to come back. */
 function idleFarewell(clientTakesTurns: boolean): string {
   return clientTakesTurns
     ? "I haven't heard anything for a minute, so I'm closing this call now. Press the button when you want me back."
@@ -1237,17 +1227,9 @@ export const VoiceAgentContract = defineProcessorContract({
    * greets with the thread in mind, and every provider session's whole
    * briefing is recorded (`session-configured`) so the stream shows how
    * the frontend was initialized. Clean break as ever. */
-  /* 20.0.0: a call is never ended silently when there is a voice to say
-   * so. `say` — a durable event anybody outside the model may append (the
-   * idle reaper, an operator's script through the entrypoint's `say()`, a
-   * colleague) — is spoken through the live call in the model's own voice,
-   * recorded as an answer-transcript of kind "say", and with `thenHangUp`
-   * closes the call once the line has PLAYED, the obituary carrying the
-   * asker's reason. The idle reaper uses it: a farewell first, then the
-   * hang-up, and the silent obituary only if the provider never starts the
-   * line. `consumes` grows by one type, so a stream set up by an older
-   * build needs its setup re-run before it hears a `say`. Clean break as
-   * ever. */
+  /* 20.0.0: `say` — a line anybody outside the model may have the live
+   * call speak, with `thenHangUp` — and the idle reaper's announced
+   * farewell. `consumes` grows by one type: see the README's troubleshooting. */
   version: "20.0.0",
   description: "Runs a voice call in the stream's own Durable Object, one flush watermark deep.",
   stateSchema: VoiceState,
@@ -1442,13 +1424,10 @@ export const VoiceAgentContract = defineProcessorContract({
     },
     "events.iterate.com/voice-agent/say": {
       description:
-        "Somebody outside the model wants the listener told something, now, in the model's own " +
-        "voice: the idle reaper's farewell, an operator's script, a colleague. Durable so the " +
-        "record shows who asked (`by`) and why (`reason`); what was actually said follows as an " +
-        'answer-transcript of kind "say". `thenHangUp` closes the call once the line has ' +
-        "finished PLAYING, with `reason` as the obituary — the precedent: a call is never ended " +
-        "silently when there is a voice to say so. `conversationId` scopes it to one call; " +
-        "absent, it addresses whichever call is live.",
+        "A line for the live call's voice to say now — the idle reaper's farewell, an operator's " +
+        "script, a colleague. Durable: `by` and `reason` are the record; what was said follows as an " +
+        'answer-transcript of kind "say". `thenHangUp` closes the call once the line has PLAYED, ' +
+        "with `reason` as the obituary. `conversationId` scopes it to one call.",
       payloadSchema: z.looseObject({
         text: z.string(),
         reason: z.string().optional(),
@@ -1554,8 +1533,6 @@ export const VoiceAgentContract = defineProcessorContract({
     "events.iterate.com/voice-agent/colleague-note",
     /* Appended by the dial's own recap fetch; consumed for the fold only. */
     "events.iterate.com/voice-agent/colleague-recap",
-    /* A line to be spoken now — by the idle reaper (this processor's own
-     * append), a script through the entrypoint's `say`, or a colleague. */
     "events.iterate.com/voice-agent/say",
     /* The live half. Naming them is the whole opt-in — `"*"` never matches an
      * ephemeral event, so nobody gets this firehose by accident. */
@@ -1967,24 +1944,14 @@ interface Dial {
    * press the button again to hear an answer that had already arrived.
    */
   pendingNoteResponse: boolean;
-  /**
-   * Which follow-up the pending re-create at `response.done` draws — a
-   * colleague note, or a `say`. A say that lands while a note answer holds
-   * the floor waits exactly like a note would, but must come back as ITSELF:
-   * its answer kind is what the transcript records and what arms the
-   * hang-up below.
-   */
+  /** What the pending re-create at `response.done` speaks: a say that waits
+   * behind a note answer must come back as ITSELF, kind and hang-up included. */
   pendingFollowUpKind: "note" | "say";
-  /**
-   * A `say` with `thenHangUp` is queued or about to play: the obituary's
-   * reason. Moved onto `hangUpAfterAnswerDrains` at the say's own
-   * `response.created`, so the line PLAYS before the call ends — the same
-   * drain-point discipline as the model's hang_up tool. Still set once the
-   * reaper's grace has passed means the provider never started the line.
-   */
+  /** A `thenHangUp` say is queued or about to play: the obituary's reason,
+   * moved onto `hangUpAfterAnswerDrains` at the say's own `response.created`
+   * so the line PLAYS first. Still set after the reaper's grace: never started. */
   sayHangUpReason: string | null;
-  /** Idle farewells announced on this dial — the per-episode key suffix,
-   * so a listener who came back once can be seen off again later. */
+  /** Farewells announced on this dial: the per-episode idempotency suffix. */
   idleFarewells: number;
   /** The answer in flight — replaced wholesale at `response.created`. */
   answer: Answer;
@@ -2736,60 +2703,15 @@ export class VoiceAgentProcessor extends StreamProcessor<
          * code now") is not dropped to the next press: pendingNoteResponse
          * re-creates at `response.done`, so the answer follows the status
          * straight away. */
-        if (
-          dial.openToolCallIds.size === 0 &&
-          dial.answer.phase === "settled" &&
-          !dial.followUpResponsePending
-        ) {
-          dial.followUpResponsePending = true;
-          dial.followUpKind = "note";
-          this.#sendControl(dial, { type: "response.create" }, append);
-        } else if (
-          dial.answer.phase === "streaming" &&
-          (dial.answer.kind === "status" || dial.answer.kind === "turn")
-        ) {
-          /* THE AWAITED ANSWER OUTRANKS WHATEVER IS PLAYING — the facet's
-           * own status commentary, and the person's turn-answers too:
-           * anyone listening while a note is pending is waiting, and hold
-           * music ("count to 100 while it works") must lose to the thing
-           * being waited for. Only note/tool answers stay protected — the
-           * previous answer's delivery must not be cut by the next one.
-           * Cancel + silence the device; the note speaks the moment the
-           * provider settles the cancelled response (creating before its
-           * response.done is a provider error, so the done arm below
-           * finishes the job). */
-          this.#dropAnswerInFlight(dial, this.deps.nowAtFacetMs(), append);
-          dial.answer.endsWhenQueueDrains = false;
-          this.#sendControl(dial, { type: "response.cancel" }, append);
-          dial.answerCancelledForNote = true;
-          dial.pendingNoteResponse = true;
-        } else {
-          /* ALWAYS pend when we did not create. The note item goes out
-           * AFTER any in-flight response.create, so it never rides that
-           * response — assuming it would left an answered note unspoken
-           * until the caller pressed again (observed live, 2026-08-29:
-           * "the backend says it's answered... I'm waiting for the actual
-           * note", with the note already in context). */
-          dial.pendingNoteResponse = true;
-        }
+        this.#askForFollowUp(dial, "note", append);
         return;
       }
 
       case "events.iterate.com/voice-agent/say": {
-        /*
-         * A LINE SOMEBODY OUTSIDE THE MODEL WANTS SAID — the idle reaper's
-         * farewell, an operator's script through the entrypoint, a colleague
-         * — spoken through the same channel as a note: one system item, one
-         * response.create when the floor is free, the same precedence over
-         * commentary and hold music, the same patience behind a note or tool
-         * answer. Durable and offset-deduped like the note, so a redelivery
-         * does not say it twice. Both providers speak this dialect.
-         *
-         * `thenHangUp` does NOT end the call here. It parks the reason on the
-         * dial; the say's own `response.created` moves it onto the model's
-         * hang-up path, so the line plays out before the obituary is written
-         * and the obituary carries the reason the asker gave.
-         */
+        /* A line somebody outside the model wants said — spoken through the
+         * same channel as a colleague note, offset-deduped like it. `thenHangUp`
+         * only PARKS the reason: the say's own `response.created` moves it onto
+         * the hang-up path, so the line plays out before the obituary. */
         if (event.offset <= this.#lastSayOffset) return;
         this.#lastSayOffset = event.offset;
         const sayText = event.payload.text;
@@ -2832,30 +2754,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
           },
           append,
         );
-        if (
-          dial.openToolCallIds.size === 0 &&
-          dial.answer.phase === "settled" &&
-          !dial.followUpResponsePending
-        ) {
-          dial.followUpResponsePending = true;
-          dial.followUpKind = "say";
-          this.#sendControl(dial, { type: "response.create" }, append);
-        } else if (
-          dial.answer.phase === "streaming" &&
-          (dial.answer.kind === "status" || dial.answer.kind === "turn")
-        ) {
-          /* Same precedence as a note: commentary and hold music yield;
-           * the say speaks when the provider settles the cancelled one. */
-          this.#dropAnswerInFlight(dial, this.deps.nowAtFacetMs(), append);
-          dial.answer.endsWhenQueueDrains = false;
-          this.#sendControl(dial, { type: "response.cancel" }, append);
-          dial.answerCancelledForNote = true;
-          dial.pendingNoteResponse = true;
-          dial.pendingFollowUpKind = "say";
-        } else {
-          dial.pendingNoteResponse = true;
-          dial.pendingFollowUpKind = "say";
-        }
+        this.#askForFollowUp(dial, "say", append);
         return;
       }
 
@@ -3481,11 +3380,8 @@ export class VoiceAgentProcessor extends StreamProcessor<
             }
             dial.answer = freshAnswer();
             dial.answer.kind = followUp ? dial.followUpKind : "turn";
-            /* A farewell's response has started: from here the drain point
-             * owns the ending, exactly as after the hang_up tool. Moving the
-             * reason here rather than at the say's arrival is what makes
-             * "say it, THEN hang up" true — set earlier, the drain point
-             * would have settled the hang-up before the line existed. */
+            /* A thenHangUp say's response has started: from here the drain
+             * point owns the ending, exactly as after the hang_up tool. */
             if (followUp && dial.followUpKind === "say" && dial.sayHangUpReason !== null) {
               dial.hangUpAfterAnswerDrains = dial.sayHangUpReason;
               dial.sayHangUpReason = null;
@@ -3793,10 +3689,8 @@ export class VoiceAgentProcessor extends StreamProcessor<
      * milliseconds from Cloudflare's own clock and the deadline is a
      * minute. Anything tighter than that would need a single clock.
      */
-    /* Set by the farewell's grace once it has buried the call: the tick and
-     * the grace can come due in the same clock step, and a tick that ran
-     * between the obituary's append and its fold would otherwise read "no
-     * farewell pending" and say goodbye to a call already ended. */
+    /* Set once the farewell's grace has buried the call, so a tick due in the
+     * same clock step does not say goodbye to a call already ended. */
     let buriedByReaper = false;
     const idleTick = async (): Promise<void> => {
       await this.deps.sleep(IDLE_TICK_MS);
@@ -3846,18 +3740,11 @@ export class VoiceAgentProcessor extends StreamProcessor<
       }
       const idleReason = `no input from the device for ${IDLE_TIMEOUT_MS / 1000}s`;
       /*
-       * SAY SO, THEN HANG UP. The reaper used to bury the call in silence:
-       * the listener heard nothing, and the record showed an obituary with
-       * no goodbye. Now it appends a `say` with `thenHangUp` — the same
-       * path a script or a colleague would use — and the call ends the
-       * moment the farewell has finished playing, with the obituary
-       * carrying this reason. The precedent this sets: whoever ends a call
-       * tells the listener what is happening and why, and leaves events
-       * behind that read that way afterwards.
-       *
-       * The chain keeps ticking behind the farewell: a listener who answers
-       * it barges the answer and un-decides the hang-up (#bargeAnswer), and
-       * from there the deadline simply starts again.
+       * SAY SO, THEN HANG UP. A call is never ended silently when there is a
+       * voice to say so: the reaper appends a `say` with `thenHangUp`, and
+       * the call ends once the farewell has played. The chain keeps ticking
+       * behind it — a listener who answers barges the goodbye and un-decides
+       * the hang-up (#bargeAnswer), and the deadline starts again.
        */
       if (dial.hangUpAfterAnswerDrains !== null || dial.sayHangUpReason !== null) {
         this.runInBackground(idleTick);
@@ -3870,8 +3757,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
         return;
       }
       const farewellReason = `idle: ${idleReason}`;
-      /* Set BEFORE the append: the say arm confirms it when the event comes
-       * back round, and a say that never comes back (append refused, facet
+      /* Set BEFORE the append, so a say that never comes back round (facet
        * evicted) still leaves the grace below with something to bury. */
       dial.sayHangUpReason = farewellReason;
       const episode = ++dial.idleFarewells;
@@ -3889,15 +3775,9 @@ export class VoiceAgentProcessor extends StreamProcessor<
           },
         });
       } catch (error) {
-        /*
-         * A REFUSED FAREWELL MUST NOT DISARM THE REAPER. The reason was set
-         * before the append so a say that never comes back round still has
-         * something for the grace to bury — but if the append itself throws,
-         * neither the grace nor the next tick below is ever armed, and with
-         * the reason still set every later tick would defer to a hang-up
-         * that is not coming. Forget this attempt and tick on: the next
-         * deadline tries again under a fresh episode key.
-         */
+        /* A refused farewell must not disarm the reaper: with the reason
+         * left set, every later tick would defer to a hang-up that is not
+         * coming. Forget this attempt; the next tick tries again. */
         console.error("voice-agent idle farewell could not be queued", { error });
         dial.sayHangUpReason = null;
         this.runInBackground(idleTick);
@@ -3906,15 +3786,11 @@ export class VoiceAgentProcessor extends StreamProcessor<
       this.runInBackground(async () => {
         await this.deps.sleep(IDLE_FAREWELL_GRACE_MS);
         if (this.#dial !== dial) return;
-        /* Null means one of two good things: the farewell's response was
-         * created (the drain point now owns the end), or a returning
-         * listener un-decided it. Still set means the provider never
-         * started the line — bury the call the old way, and say so. */
+        /* Null: the farewell's response was created (the drain point owns
+         * the end) or a returning listener un-decided it. Still set: the
+         * provider never started the line — bury the call the old way. */
         if (dial.sayHangUpReason === null) return;
-        /* Unless the listener came back in the meantime: a press inside the
-         * grace, before the provider had even started the goodbye, is a
-         * person who wants the call, and the reaper's deadline has already
-         * restarted from it. Forget the farewell; nothing is buried. */
+        /* Backstop for the press-inside-the-grace case #bargeAnswer covers. */
         if (this.#lastDeviceInputAtStreamMsMirror > farewellAtMs) {
           dial.sayHangUpReason = null;
           return;
@@ -4211,6 +4087,56 @@ export class VoiceAgentProcessor extends StreamProcessor<
 
   /** Highest `say` offset already spoken — the same redelivery dedupe as the note's. */
   #lastSayOffset = 0;
+
+  /**
+   * Ask the provider to speak an item just placed in context — a colleague
+   * note or a `say` — with a note's precedence: created at once when the
+   * floor is free; otherwise the awaited line outranks whatever is playing.
+   */
+  #askForFollowUp(
+    dial: Dial,
+    kind: "note" | "say",
+    append: ProcessEventArgs<VoiceAgentContract>["append"],
+  ): void {
+    if (
+      dial.openToolCallIds.size === 0 &&
+      dial.answer.phase === "settled" &&
+      !dial.followUpResponsePending
+    ) {
+      dial.followUpResponsePending = true;
+      dial.followUpKind = kind;
+      this.#sendControl(dial, { type: "response.create" }, append);
+    } else if (
+      dial.answer.phase === "streaming" &&
+      (dial.answer.kind === "status" || dial.answer.kind === "turn")
+    ) {
+      /* THE AWAITED ANSWER OUTRANKS WHATEVER IS PLAYING — the facet's
+       * own status commentary, and the person's turn-answers too:
+       * anyone listening while a note is pending is waiting, and hold
+       * music ("count to 100 while it works") must lose to the thing
+       * being waited for. Only note/tool answers stay protected — the
+       * previous answer's delivery must not be cut by the next one.
+       * Cancel + silence the device; the note speaks the moment the
+       * provider settles the cancelled response (creating before its
+       * response.done is a provider error, so the done arm
+       * finishes the job). */
+      this.#dropAnswerInFlight(dial, this.deps.nowAtFacetMs(), append);
+      dial.answer.endsWhenQueueDrains = false;
+      this.#sendControl(dial, { type: "response.cancel" }, append);
+      dial.answerCancelledForNote = true;
+      dial.pendingNoteResponse = true;
+      dial.pendingFollowUpKind = kind;
+    } else {
+      /* ALWAYS pend when we did not create. The note item goes out
+       * AFTER any in-flight response.create, so it never rides that
+       * response — assuming it would left an answered note unspoken
+       * until the caller pressed again (observed live, 2026-08-29:
+       * "the backend says it's answered... I'm waiting for the actual
+       * note", with the note already in context). */
+      dial.pendingNoteResponse = true;
+      dial.pendingFollowUpKind = kind;
+    }
+  }
 
   /** The last note's text and when it was injected — the belt behind the
    * offset dedupe: a stale duplicate FORWARDER (the legacy shared-name
@@ -4810,16 +4736,10 @@ export class VoiceAgentProcessor extends StreamProcessor<
     cancel: boolean,
   ): void {
     dial.hangUpAfterAnswerDrains = null;
-    /*
-     * AND A FAREWELL NOT YET STARTED. `sayHangUpReason` is parked on the
-     * dial between a `thenHangUp` say arriving and its `response.created`;
-     * that window is normally under a second, but a press inside it is a
-     * person who wants the call, and the created arm would otherwise arm
-     * the hang-up anyway — the reaper's grace only looks at this AFTER the
-     * provider has had 8 s to start the line, which is too late to stop a
-     * response.create that already went out. Cleared here, the goodbye (if
-     * the provider does say it) is just a line, and the call stays up.
-     */
+    /* And a farewell not yet started: a press between a thenHangUp say and
+     * its response.created is a person who wants the call, and the created
+     * arm would otherwise arm the hang-up anyway. Cleared, the goodbye (if
+     * the provider still says it) is just a line. */
     dial.sayHangUpReason = null;
     dial.face?.barge(decidedAtFacetMs);
     /* Read BEFORE the repair moves a streaming answer to "cancelled". */
@@ -5445,22 +5365,10 @@ export default class VoiceAgentEntrypoint extends IterateWorkerEntrypoint implem
   }
 
   /**
-   * Have the live call's voice say something now — the scripted equivalent
-   * of a slash command, for an operator, a cron, or an agent:
-   *
-   *   await itx.workers.get(voiceAgentEntrypointRef).say({
-   *     streamPath: "/agents/voice/home-assistant-voice-preview-edition",
-   *     text: "I'm closing this call now; the shop is done.",
-   *     reason: "operator: shop complete",
-   *     thenHangUp: true,
-   *   });
-   *
-   * One durable `say` event; the facet speaks it through whichever call is
-   * live on that stream (nothing happens on an idle stream, and the event
-   * still records that somebody tried), and `thenHangUp` closes the call
-   * once the line has finished playing. Afterwards the stream reads:
-   * say → answer-transcript (kind "say") → conversation-end-requested →
-   * conversation-ended — who asked, why, what was said, that it ended.
+   * Have the live call's voice say something now. One durable `say` event;
+   * the facet speaks it through whichever call is live on that stream (an
+   * idle stream just keeps the record), and `thenHangUp` closes the call
+   * once the line has finished playing.
    */
   async say(options: SayOptions): Promise<SayResult> {
     if (!options.streamPath.startsWith("/")) {

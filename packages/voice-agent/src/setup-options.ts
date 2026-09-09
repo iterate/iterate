@@ -111,13 +111,8 @@ export interface VoiceAgentHealth {
  * method signatures: the declaration bundler's printer cannot emit the latter
  * inside an interface, and a class method satisfies either.
  */
-/**
- * A line for the live call's voice to say now — the idle reaper's farewell
- * uses the same path. One durable `say` event lands on the stream; the facet
- * speaks it through whichever call is live (an idle stream just keeps the
- * record that somebody tried), and `thenHangUp` closes the call once the
- * line has finished playing, with `reason` as the obituary.
- */
+/** A line for the live call's voice to say now; the idle reaper's farewell
+ * uses the same path. An idle stream just keeps the record. */
 export interface SayOptions {
   /** The conversation stream the line is for. */
   streamPath: string;

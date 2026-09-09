@@ -3439,13 +3439,8 @@ describe("edges nothing was holding down", () => {
   });
 });
 
-/*
- * A CALL IS NEVER ENDED SILENTLY WHEN THERE IS A VOICE TO SAY SO. `say` is
- * the one path for a line somebody outside the model wants said now — an
- * operator's script, a colleague, the idle reaper — and `thenHangUp` is the
- * announced ending: the line PLAYS, then the call closes, with the asker's
- * reason as the obituary.
- */
+/* `say`: a line somebody outside the model wants said now; `thenHangUp` is
+ * the announced ending — the line plays, then the call closes. */
 describe("say, and the announced farewell", () => {
   const instructionsSent = (h: Harness) =>
     h.provider
