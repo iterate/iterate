@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore, type FormEvent } from "react";
 import { Button } from "@iterate-com/ui/components/button";
 import { Input } from "@iterate-com/ui/components/input";
 import { cn } from "@iterate-com/ui/lib/utils";
@@ -19,7 +19,19 @@ export function NewWorkspaceForm({
   focusOnMount?: boolean;
   className?: string;
 }) {
-  const [name, setName] = useState(() => newWorkspaceName());
+  // The suggestion shows on the client only: the home server-renders this
+  // form, and a name drawn during SSR never matches the client's draw (React
+  // hydration error #418 — after which a click lands on an un-hydrated form
+  // and submits it natively). Server render and hydration show an empty,
+  // disabled form; the client's own draw appears right after.
+  // A store that never changes: hydration is its only "event".
+  const hydrated = useSyncExternalStore(
+    () => () => {},
+    () => true,
+    () => false,
+  );
+  const [draw, setName] = useState(() => newWorkspaceName());
+  const name = hydrated ? draw : "";
   // Focus on mount when asked (the sidebar item just opened the form) — an
   // effect, not the autoFocus attribute, which jsx-a11y warns against.
   const inputRef = useRef<HTMLInputElement | null>(null);

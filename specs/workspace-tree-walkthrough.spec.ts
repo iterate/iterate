@@ -2,20 +2,22 @@ import { openRepoTreeFile } from "./test-support/repo-tree.ts";
 import { test } from "./test-support/test.ts";
 
 /**
- * PR #2611 demo recording — the Docs app as a workspace app, on a preview:
+ * Demo recording (PRs #2611, #2618) — the Docs app as a workspace app, on
+ * a preview:
  *
  *   1. Sign in through the preview's one-click test login.
- *   2. Docs: name a new workspace; the tree shows the config repo
- *      mounted at repos/config beside the workspace's own directory.
- *   3. Edit the starter note (live collab editor), open a repo file
- *      read-only, watch the Commit control arm for the config mount.
+ *   2. Docs: the sidebar's New workspace item opens an inline form with a
+ *      three-word name; Create lands on the workspace, whose tree shows
+ *      the config repo mounted at repos/config beside its own directory.
+ *   3. Add a first file of my own (live collab editor), open a repo file
+ *      read-only.
  *   4. Edit a repo document; the config mount's Commit control arms;
  *      toggle the diff against HEAD.
  *   5. OS: the same workspace at /projects/<slug>/workspaces/<path> —
  *      the shared tree, file view, and commit controls over the live stub.
  *
  * Opt-in only — `DEMO_RECORDING=1 VIDEO_MODE=1 DEMO_PREVIEW_SLOT=<n>
- * DEMO_PROJECT=pr2611 pnpm spec -g "workspace tree walkthrough"`. Skipped
+ * DEMO_PROJECT=pr<N> pnpm spec -g "workspace tree walkthrough"`. Skipped
  * everywhere else, including the preview e2e run: it drives a slot whose
  * project has its docs-app-origin knob pointed at that slot's docs vessel.
  */
@@ -37,17 +39,21 @@ test("workspace tree walkthrough", async ({ page }) => {
   );
   await page.getByRole("button", { name: "Toggle Sidebar" }).waitFor({ timeout: 90_000 }); // timeout: cross-server OAuth hop + cold preview shell — past the spinner-waiter's 30s ceiling
 
-  // 2. Docs: a new workspace by name, the whole workspace in the tree.
+  // 2. Docs: a new workspace by name from the sidebar, the whole workspace
+  //    in the tree.
   await page.goto(`${docsHost}/`);
   await passProjectGate(page);
-  // The picker lists workspaces over the app's socket once hydrated: a
-  // click that lands before then hits a server-rendered button with no
-  // handler yet, so wait for the list to replace its loading row.
+  // The home is server-rendered with an EMPTY name in its own form; the
+  // three-word suggestion (and its resolved path under it) appears on the
+  // client after hydration. A click before then hits controls with no
+  // handlers yet, so wait for that path before touching the sidebar.
   await page
-    .getByRole("button", { name: /^\/workspaces\// })
+    .getByText(/^\/workspaces\/[a-z]+-[a-z]+-[a-z]+$/)
     .first()
-    .waitFor();
-  await page.getByRole("button", { name: "Create" }).click();
+    .waitFor({ timeout: 30_000 }); // timeout: the auth callback redirect + hydration on the preview — no loading UI for the spinner-waiter in between
+  const sidebar = page.locator('[data-slot="sidebar"]');
+  await sidebar.getByRole("button", { name: "New workspace" }).click();
+  await sidebar.getByRole("button", { name: "Create" }).click();
   await page.locator('[data-item-path^="repos/config"]').first().waitFor({ timeout: 60_000 }); // timeout: docs vessel cold load + first status on the preview — past the spinner-waiter's 30s ceiling
   // Tree rows carry their path (directories in pierre's trailing-slash form);
   // the compacted mount row comes first among everything under it.
@@ -55,8 +61,13 @@ test("workspace tree walkthrough", async ({ page }) => {
   await configRow.waitFor();
   await page.locator('[data-item-path^="workspaces/"]').first().waitFor();
 
-  // 3. Type into the starter note; the own directory shows the addition,
-  //    and a repo file opens read-only.
+  // 3. A first file of my own: New file typed at the tree's root lands in the
+  //    workspace's own directory (".md" implied) and opens live; the own
+  //    directory shows the addition, and a repo file opens read-only.
+  await page.getByTitle("New file").click();
+  await page.locator("[data-item-rename-input]").fill("notes");
+  await page.locator("[data-item-rename-input]").press("Enter");
+  await page.locator('[data-item-path$="notes.md"]').waitFor({ timeout: 15_000 }); // timeout: the row lands on the re-list after the write — no loading UI for the spinner-waiter in between
   await page.getByText(/^live · v/).waitFor({ timeout: 60_000 }); // timeout: collab-session attach on the preview — past the spinner-waiter's 30s ceiling
   await page.locator(".cm-content").first().click();
   await page.keyboard.press("End");

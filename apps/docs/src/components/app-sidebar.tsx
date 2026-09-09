@@ -267,13 +267,19 @@ function WorkspaceSwitcher({
  */
 function NewWorkspaceItem({ boardView, repo }: { boardView: boolean; repo: string | undefined }) {
   const navigate = useNavigate();
+  const { state, setOpen: setSidebarOpen } = useSidebar();
   const [open, setOpen] = useState(false);
   return (
     <SidebarMenuItem>
       <SidebarMenuButton
         tooltip="New workspace — every project repo mounted, named however you like"
         isActive={open}
-        onClick={() => setOpen((current) => !current)}
+        onClick={() => {
+          // The form has no room in the icon-collapsed sidebar: opening it
+          // expands the sidebar too, or the click would change nothing.
+          if (!open && state === "collapsed") setSidebarOpen(true);
+          setOpen((current) => !current);
+        }}
       >
         <Plus aria-hidden />
         <span>New workspace</span>

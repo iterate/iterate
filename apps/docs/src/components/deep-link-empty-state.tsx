@@ -95,6 +95,8 @@ export function DeepLinkEmptyState() {
                 listError
               )}
             </p>
+          ) : workspaces.length === 0 ? (
+            <p className="px-5 py-4 text-sm text-muted-foreground">No workspaces yet</p>
           ) : (
             <ul className="divide-y">
               {workspaces.map((entry) => (
