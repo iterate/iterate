@@ -56,7 +56,6 @@ export function WorkspaceDocumentPage({
   const [source, setSource] = useState("");
   const [view, setView] = useState<"rich" | "source">("rich");
   const [status, setStatus] = useState("connecting…");
-  const [showChanges, setShowChanges] = useState(false);
   const [commentsOpen, setCommentsOpen] = useState(false);
   // Everyone with a live caret on this document, self first — delivered by
   // the editor's collab session whenever the presence generation advances
@@ -220,8 +219,6 @@ export function WorkspaceDocumentPage({
             }
           } else commentsRef.current?.focusDocumentComment();
         }}
-        showChanges={showChanges}
-        onShowChangesChange={setShowChanges}
         view={view}
         onViewChange={setView}
         actions={actions}
@@ -259,7 +256,6 @@ export function WorkspaceDocumentPage({
                 mode={loaded.snapshot.format}
                 presentation={view}
                 review={loaded.snapshot.format === "markdown" ? editorReview : undefined}
-                redline={showChanges}
                 emptyPlaceholder={
                   loaded.snapshot.format === "html" ? "Write HTML…" : "Write in Markdown…"
                 }

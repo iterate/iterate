@@ -5,7 +5,6 @@
   "type": "module",
   "exports": {
     "./text-edits": "./src/text-edits.ts",
-    "./attribution": "./src/collab-attribution.ts",
     "./collab": "./src/collab.ts",
     "./editor": "./src/workspace-document-editor.tsx",
     "./editor-api": "./src/collab-editor-api.ts",

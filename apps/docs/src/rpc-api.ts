@@ -422,10 +422,6 @@ class WorkspaceCollabApi extends RpcTarget implements WorkspaceCollabSurface {
     return this.#run((workspace) => workspace.collab.open(path));
   }
 
-  changes(path: string) {
-    return this.#run((workspace) => workspace.collab.changes(path));
-  }
-
   push(input: Parameters<WorkspaceCollabSurface["push"]>[0]) {
     return this.#run((workspace) => workspace.collab.push(input));
   }

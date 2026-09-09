@@ -16,7 +16,7 @@ import { authorColor, authorLabel } from "./collab-author.ts";
  * flag, plus a tinted span for their selection. Positions arrive in the
  * sender's head coordinates over the session's wait() long-poll; between
  * refreshes the decorations MAP through local and remote edits (the same
- * anchoring trick the redlines use), and every announce self-heals drift.
+ * anchoring trick), and every announce self-heals drift.
  *
  * Budgeted for ten concurrent participants: sends are trailing-throttled per
  * client, the server coalesces wakes, and one refresh rebuilds one small

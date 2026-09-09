@@ -31,25 +31,12 @@ export type CollabWaitResult =
     }
   | { status: "ended" };
 
-export type CollabChangeSegment =
-  | { clientId: string; createdAt?: number; from: number; kind: "inserted"; to: number }
-  | { at: number; clientId: string; createdAt?: number; kind: "deleted"; text: string };
-
-export type CollabChanges = {
-  baseContent: string;
-  baseVersion: number;
-  deleted: { at: number; clientId: string; createdAt?: number; text: string }[];
-  headVersion: number;
-  inserted: { clientId: string; createdAt?: number; from: number; to: number }[];
-};
-
 /** Fresh caret presence per live session, index-matched (the platform's flat, generator-legal shape). */
 export type CollabPresenceFlat = { clientIds: string[]; paths: string[] };
 
 /** The collaborative session surface of one workspace (`workspace.collab`). */
 export interface WorkspaceCollabSurface {
   open(path: string): Promise<CollabOpened>;
-  changes(path: string): Promise<CollabChanges>;
   push(input: {
     baseVersion: number;
     clientId: string;

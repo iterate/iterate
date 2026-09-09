@@ -1,11 +1,5 @@
 import type { ReactNode } from "react";
-import {
-  Code2Icon,
-  FileTextIcon,
-  MessageSquarePlusIcon,
-  PenLineIcon,
-  SparklesIcon,
-} from "lucide-react";
+import { Code2Icon, FileTextIcon, MessageSquarePlusIcon, PenLineIcon } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
 import { SidebarTrigger } from "@iterate-com/ui/components/sidebar";
 import { authorLabel } from "@iterate-com/workspace-documents/collab";
@@ -21,8 +15,6 @@ export function DocumentToolbar({
   onReconnect,
   canComment,
   onComment,
-  showChanges,
-  onShowChangesChange,
   view,
   onViewChange,
   actions,
@@ -34,8 +26,6 @@ export function DocumentToolbar({
   onReconnect: () => void;
   canComment: boolean;
   onComment: () => void;
-  showChanges: boolean;
-  onShowChangesChange: (value: boolean) => void;
   view: "rich" | "source";
   onViewChange: (value: "rich" | "source") => void;
   actions?: ReactNode;
@@ -84,17 +74,6 @@ export function DocumentToolbar({
             onClick={onComment}
           >
             <MessageSquarePlusIcon aria-hidden className="size-3.5" />
-          </Button>
-        </WithTooltip>
-        <WithTooltip label={showChanges ? "Hide changes" : "Track changes"}>
-          <Button
-            variant={showChanges ? "secondary" : "outline"}
-            size="icon-sm"
-            aria-label="Track changes"
-            aria-pressed={showChanges}
-            onClick={() => onShowChangesChange(!showChanges)}
-          >
-            <SparklesIcon />
           </Button>
         </WithTooltip>
         <ShareButton />
