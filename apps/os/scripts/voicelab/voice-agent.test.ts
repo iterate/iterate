@@ -3636,4 +3636,45 @@ describe("say, and the announced farewell", () => {
     await stepTime(h, IDLE_FAREWELL_GRACE_MS + 5_000);
     expect(endReason(h)).toBe("no input from the device for 60s; the farewell was never spoken");
   });
+
+  /*
+   * A NOTE BEHIND A PENDING SAY. The re-create at response.done comes back
+   * as ONE kind; a note that lands after a thenHangUp say has pended must
+   * not turn that re-create into a note, or the hang-up is never armed and
+   * the reaper defers forever to a reason nothing collects.
+   */
+  it("a note that lands behind a pending hang-up say does not lose the hang-up", async () => {
+    const h = makeHarness();
+    await callIsLive(h);
+    await h.append({
+      type: "events.iterate.com/voice-agent/colleague-note",
+      payload: { text: "The shop is done." },
+    });
+    await h.settle();
+    expect(h.provider.sentOfType("response.create")).toHaveLength(1);
+    h.provider.responseCreated();
+    h.provider.answerAudio(200, "item_note");
+    /* The say pends behind the note answer, which is protected. */
+    await h.append({
+      type: "events.iterate.com/voice-agent/say",
+      payload: { text: "Closing this call now.", reason: "operator: done", thenHangUp: true },
+    });
+    await h.settle();
+    expect(h.provider.sentOfType("response.create")).toHaveLength(1);
+    await h.append({
+      type: "events.iterate.com/voice-agent/colleague-note",
+      payload: { text: "One more thing." },
+    });
+    await h.settle();
+    /* The note answer settles: the pending re-create is the SAY's. */
+    h.provider.answerComplete();
+    await h.settle();
+    expect(h.provider.sentOfType("response.create")).toHaveLength(2);
+    h.provider.responseCreated();
+    h.provider.answerAudio(200);
+    h.provider.answerComplete();
+    await playOutEverything(h, 800);
+    expect(eventsOfType(h, "conversation-ended")).toHaveLength(1);
+    expect(endReason(h)).toBe("operator: done");
+  });
 });

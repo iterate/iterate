@@ -4125,7 +4125,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
       this.#sendControl(dial, { type: "response.cancel" }, append);
       dial.answerCancelledForNote = true;
       dial.pendingNoteResponse = true;
-      dial.pendingFollowUpKind = kind;
+      this.#pendFollowUp(dial, kind);
     } else {
       /* ALWAYS pend when we did not create. The note item goes out
        * AFTER any in-flight response.create, so it never rides that
@@ -4134,8 +4134,20 @@ export class VoiceAgentProcessor extends StreamProcessor<
        * "the backend says it's answered... I'm waiting for the actual
        * note", with the note already in context). */
       dial.pendingNoteResponse = true;
-      dial.pendingFollowUpKind = kind;
+      this.#pendFollowUp(dial, kind);
     }
+  }
+
+  /**
+   * A PENDING SAY OUTRANKS A NOTE. The re-create at `response.done` comes
+   * back as ONE kind, and a `thenHangUp` say's hang-up is armed only if
+   * that kind is "say" — so a note that lands behind a pending say must not
+   * overwrite it (the note's text is in context and is spoken regardless).
+   * Overwritten, the call never hung up and the reaper deferred forever to
+   * a reason nothing was going to collect.
+   */
+  #pendFollowUp(dial: Dial, kind: "note" | "say"): void {
+    if (kind === "say") dial.pendingFollowUpKind = "say";
   }
 
   /** The last note's text and when it was injected — the belt behind the
