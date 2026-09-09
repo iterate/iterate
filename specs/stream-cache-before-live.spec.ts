@@ -23,7 +23,7 @@ test("empty agent feeds distinguish waiting from filtered zero matches", async (
           ).__streamRuntimeDebug;
           const entry = read?.()[key] as { connectionStatus?: string } | undefined;
           return entry?.connectionStatus;
-        }, `${fixture.project.id} ${agentPath} browser-stream-processors`),
+        }, `${fixture.project.id} ${agentPath}`),
       )
       .toBe("receiving-events");
 

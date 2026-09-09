@@ -60,7 +60,9 @@ describe("server feed publications", () => {
     await harness.settle();
     const prior = publications.get("user-1")!;
     publications.save({ ...prior, firstOffset: 50, revisionOffset: 100 }, 101);
+    expect(harness.processor().presentation(harness.state()).publicationOffset).toBe(101);
     harness.processor().resetForStream();
+    expect(harness.processor().presentation(harness.state()).publicationOffset).toBe(0);
     expect(publications.get("user-1")).toBeUndefined();
     publications.save(prior, 2);
     expect(publications.get("user-1")).toEqual(prior);
@@ -71,6 +73,9 @@ describe("server feed publications", () => {
     await harness.stream.append(userMessage());
     await harness.settle();
     expect(harness.events(FEED_ITEM_PUBLISHED)).toHaveLength(1);
+    expect(harness.processor().presentation(harness.state()).publicationOffset).toBe(
+      harness.events(FEED_ITEM_PUBLISHED)[0]!.offset,
+    );
     expect(
       FeedItemPublication.parse(harness.events(FEED_ITEM_PUBLISHED)[0]!.payload),
     ).toMatchObject({

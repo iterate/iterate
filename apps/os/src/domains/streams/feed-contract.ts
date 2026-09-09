@@ -23,6 +23,8 @@ export const FeedItemPublication = z.strictObject({
 export type FeedItemPublication = z.infer<typeof FeedItemPublication>;
 
 export const FeedLiveState = z.strictObject({
+  /** Mirror this publication before displaying the snapshot, so settled rows replace live activity. */
+  publicationOffset: z.number().int().nonnegative(),
   agent: z.strictObject({
     live: AgentUiStateSchema.shape.live,
     queuedUserMessages: AgentUiStateSchema.shape.queuedUserMessages,

@@ -101,8 +101,9 @@ export async function openStreamEventMirror(
     `SELECT stream_id, through_offset FROM stream_sync WHERE singleton = 1`,
   );
   const reset =
-    previous?.stream_id !== source.streamId ||
-    Number(previous?.through_offset) > source.streamMaxOffset;
+    previous !== undefined &&
+    (previous.stream_id !== source.streamId ||
+      Number(previous.through_offset) > source.streamMaxOffset);
   const owner = crypto.randomUUID();
   // The writer lock remains held until these transactions finish. A new owner
   // also fences delayed callbacks from a superseded connection within that tab.

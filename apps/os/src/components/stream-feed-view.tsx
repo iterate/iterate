@@ -101,7 +101,16 @@ export function StreamFeedView({
     params,
   );
   const itemCount = Number(countResult.data[0]?.count ?? 0);
-  const live = filter.agent == null ? null : (liveState?.live ?? null);
+  const candidateLive = filter.agent == null ? null : (liveState?.live ?? null);
+  const publishedLive = useStreamQuery(
+    database,
+    `SELECT EXISTS(SELECT 1 FROM events
+      WHERE type = 'events.iterate.com/feed/item-published'
+        AND json_extract(raw_jsonb, '$.payload.item.id') = ?) AS published`,
+    [candidateLive?.id ?? null],
+  );
+  // The journal can win the race against live-state delivery. Render that activity once.
+  const live = publishedLive.data[0]?.published ? null : candidateLive;
   const scrollRef = useRef<HTMLDivElement>(null);
   // Ids of activity summaries the user expanded. Operation rows inside an
   // expanded activity open their URL-backed inspector instead of nesting a
@@ -217,36 +226,18 @@ export function StreamFeedView({
     });
   }, []);
 
-  const filtersNarrow =
-    (filter.agent?.searchQuery != null && filter.agent.searchQuery !== "") ||
-    (filter.raw != null &&
-      ((filter.raw.eventTypes?.length ?? 0) > 0 ||
-        (filter.raw.components?.length ?? 0) > 0 ||
-        (filter.raw.searchQuery != null && filter.raw.searchQuery !== "") ||
-        filter.raw.offsetFrom != null ||
-        filter.raw.offsetTo != null));
-
   return (
     <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto">
       {/* Horizontal chrome only — vertical spacing is the virtualizer's
           paddingStart/paddingEnd so its coordinates match the DOM exactly. */}
       <div className="mx-auto w-full max-w-3xl px-4 md:px-6">
         {totalCount === 0 ? (
-          <Empty className="min-h-48">
-            <EmptyHeader>
-              {isPending || !filtersNarrow ? <Spinner className="size-4" /> : null}
-              <EmptyTitle>
-                {isPending
-                  ? pendingLabel
-                  : filtersNarrow
-                    ? "Nothing matches the current filters"
-                    : "Waiting for events…"}
-              </EmptyTitle>
-              {isPending || filtersNarrow || emptyLabel === null ? null : (
-                <EmptyDescription>{emptyLabel}</EmptyDescription>
-              )}
-            </EmptyHeader>
-          </Empty>
+          <StreamFeedEmptyState
+            filter={filter}
+            isPending={isPending}
+            pendingLabel={pendingLabel}
+            emptyLabel={emptyLabel}
+          />
         ) : null}
         <div
           ref={contentRef}
@@ -316,6 +307,46 @@ export function StreamFeedView({
         </div>
       </div>
     </div>
+  );
+}
+
+function StreamFeedEmptyState({
+  filter,
+  isPending,
+  pendingLabel,
+  emptyLabel,
+}: {
+  filter: StreamFeedQueryInput;
+  isPending: boolean;
+  pendingLabel: string;
+  emptyLabel: string | null;
+}) {
+  const { agent, raw } = filter;
+  const filtersNarrow = [
+    agent?.searchQuery,
+    raw?.eventTypes?.length,
+    raw?.components?.length,
+    raw?.searchQuery,
+    raw?.offsetFrom != null,
+    raw?.offsetTo != null,
+  ].some(Boolean);
+
+  return (
+    <Empty className="min-h-48">
+      <EmptyHeader>
+        {isPending || !filtersNarrow ? <Spinner className="size-4" /> : null}
+        <EmptyTitle>
+          {isPending
+            ? pendingLabel
+            : filtersNarrow
+              ? "Nothing matches the current filters"
+              : "Waiting for events…"}
+        </EmptyTitle>
+        {isPending || filtersNarrow || emptyLabel === null ? null : (
+          <EmptyDescription>{emptyLabel}</EmptyDescription>
+        )}
+      </EmptyHeader>
+    </Empty>
   );
 }
 

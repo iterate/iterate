@@ -61,6 +61,7 @@ export function reduceFeed(
 /** Durable index of publications, used only for stable positions and late corrections. */
 type FeedPublicationStore = {
   clear(): void;
+  latestOffset(): number;
   get(itemId: string): FeedItemPublication | undefined;
   findInferredActivity(executionId: string): FeedItemPublication | undefined;
   save(publication: FeedItemPublication, offset: number): void;
@@ -88,6 +89,7 @@ export class FeedProcessor extends StreamProcessor<
   presentation(state: FeedState): FeedLiveState {
     const agent = this.#volatileAgent ?? state.agent;
     return {
+      publicationOffset: this.deps.publications.latestOffset(),
       agent: {
         live: agent.live,
         queuedUserMessages: agent.queuedUserMessages,
@@ -116,13 +118,15 @@ export class FeedProcessor extends StreamProcessor<
       this.deps.refreshLive();
       return;
     }
-    if (this.#volatileAgent && event.offset > this.#volatileThroughOffset) {
-      this.#volatileThroughOffset = event.offset;
-      this.#volatileAgent = reduceFeed(
-        { ...args.previousState, agent: this.#volatileAgent },
-        event,
-      ).state.agent;
-    }
+    const advanceVolatile = () => {
+      if (this.#volatileAgent && event.offset > this.#volatileThroughOffset) {
+        this.#volatileThroughOffset = event.offset;
+        this.#volatileAgent = reduceFeed(
+          { ...args.previousState, agent: this.#volatileAgent },
+          event,
+        ).state.agent;
+      }
+    };
     const { items } = reduceFeed(args.previousState, event);
     if (event.type === "events.iterate.com/capability-host/script-run-settled") {
       const { executionId } = ScriptSettlement.parse(event.payload);
@@ -140,7 +144,10 @@ export class FeedProcessor extends StreamProcessor<
         items.push(...corrected.items);
       }
     }
-    if (items.length === 0) return;
+    if (items.length === 0) {
+      advanceVolatile();
+      return;
+    }
     args.blockProcessorWhile(async () => {
       const publications = items.map((item, ordinal) => {
         const previous = this.deps.publications.get(item.id);
@@ -161,6 +168,8 @@ export class FeedProcessor extends StreamProcessor<
       for (let index = 0; index < publications.length; index++) {
         this.deps.publications.save(publications[index]!, committed[index]!.offset);
       }
+      // Do not expose the settled volatile state until its publication offset exists.
+      advanceVolatile();
       this.deps.refreshLive();
     });
   }
@@ -175,6 +184,13 @@ export function createFeedPublicationStore(sql: SqlStorage): FeedPublicationStor
     `CREATE INDEX IF NOT EXISTS feed_publications_recent ON feed_publications(publication_offset)`,
   );
   return {
+    latestOffset() {
+      return sql
+        .exec<{ offset: number }>(
+          `SELECT COALESCE(MAX(publication_offset), 0) AS offset FROM feed_publications`,
+        )
+        .toArray()[0]!.offset;
+    },
     clear() {
       sql.exec(`DELETE FROM feed_publications`);
     },

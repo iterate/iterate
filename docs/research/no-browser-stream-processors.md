@@ -212,12 +212,13 @@ the same socket. If the server removes a live item before its durable feed
 publication reaches the local store, the UI can briefly lose it; the reverse
 order can duplicate it.
 
-The first implementation keeps current activity in live state and settled items
-in the synchronized journal. It does not send recent settled items through live
-state: that overlay duplicated corrected items while the mirror lagged. Browser
-verification must check both arrival orders for duplicate activity and visible
-flicker. If a barrier is needed, it should identify the one current activity,
-without adding a second client history store.
+Live snapshots carry `publicationOffset`, the latest committed feed publication.
+The browser retains its previous server snapshot until its event mirror reaches
+that offset. If the journal arrives first, an indexed item-ID query hides the
+matching live activity. Both arrival orders therefore replace the live activity
+with its settled row without a second client history store or any browser
+reduction. The server exposes settled volatile state only after its publication
+and offset exist.
 
 ### Deletion scope, measured at this checkout
 

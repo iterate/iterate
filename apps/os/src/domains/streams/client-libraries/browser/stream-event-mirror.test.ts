@@ -237,7 +237,8 @@ describe("feed queries over immutable events", () => {
   it("reports a reset only when opening a new lifetime or invalid cursor", async () => {
     const { sql } = database();
     const first = await openStreamEventMirror(sql, { streamId: "stream-a", streamMaxOffset: 3 });
-    expect(first.reset).toBe(true);
+    // Initial synchronization must not remount an editor already accepting input.
+    expect(first.reset).toBe(false);
     await first.ingest(batch([1, 3]));
     expect(
       (await openStreamEventMirror(sql, { streamId: "stream-a", streamMaxOffset: 3 })).reset,

@@ -4085,6 +4085,7 @@ export type StreamRuntimeDebugState = {
 
 /** Current server-rendered activity, queued messages, presence, and agent runtime. */
 export type FeedLiveState = {
+  publicationOffset: number;
   agent: {
     live: {
       kind: "activity";

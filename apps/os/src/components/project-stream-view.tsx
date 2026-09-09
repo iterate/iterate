@@ -16,6 +16,7 @@ import { useLiveState } from "iterate/sdk/capnweb/react";
 import type { Stream } from "../itx-api.generated.ts";
 import type { FeedLiveState } from "~/domains/streams/feed-contract.ts";
 import { useStreamQuery } from "~/domains/streams/client-libraries/browser/hooks/use-stream-query.ts";
+import { useEventSynchronizedLiveState } from "~/domains/streams/client-libraries/browser/hooks/use-event-synchronized-live-state.ts";
 import { useBrowserStreamStore } from "~/domains/streams/client-libraries/browser/hooks/use-browser-stream-store.ts";
 import type { StreamBrowserDatabase } from "~/domains/streams/client-libraries/browser/stream-browser-db.ts";
 import { asBrowserStreamClient } from "~/domains/streams/client-libraries/browser/stream-transport.ts";
@@ -167,49 +168,18 @@ function BrowserDatabaseProjectStreamView({
   streamSource,
   streamPath,
 }: ProjectStreamViewProps) {
-  const { session: authSession } = useAuthClient();
-  const subscriberUser = useMemo<BrowserStreamSubscriberUser | undefined>(() => {
-    if (!authSession?.authenticated) return undefined;
-    const name = authSession.user.name?.trim();
-    const picture = authSession.user.picture?.trim();
-    return {
-      id: authSession.user.id,
-      email: authSession.user.email,
-      ...(name === undefined || name === "" ? {} : { name }),
-      ...(picture === undefined || picture === "" ? {} : { picture }),
-    };
-  }, [authSession]);
-  const { resolvedStreamSource, store, snapshot } = useProjectStreamDatabase({
-    projectId,
-    resetStreamSourceTransport,
-    subscriberUser,
-    streamSource,
-    streamPath,
-  });
+  const subscriberUser = useStreamSubscriberUser();
+  const { resolvedStreamSource, store, snapshot, eventCount, feed, presentedFeed } =
+    useProjectStreamData({
+      projectId,
+      resetStreamSourceTransport,
+      subscriberUser,
+      streamSource,
+      streamPath,
+    });
 
-  // Trigger-maintained counts (O(#types)) instead of COUNT(*) (full local-table
-  // scan): this query re-runs after every delivered batch and shares the one
-  // OPFS connection with ingest writes — see the event mirror schema.
-  const countResult = useStreamQuery(
-    store.streamDatabase,
-    `SELECT COALESCE(SUM(n), 0) AS count FROM event_type_counts`,
-  );
-  const eventCount = Number(countResult.data[0]?.count ?? 0);
-  // While this view shows the newest agent reply in a visible tab, claim it
-  // so the chat-reply push stays quiet (suppression, not read-state) — the
-  // web half of the mobile thread screen's identical claim.
   useClaimReplyPresented({ database: store.streamDatabase, projectId, streamPath });
-  const makeFeedConnection = useCallback(
-    () => resolvedStreamSource(streamPath),
-    [resolvedStreamSource, streamPath],
-  );
-  const feed = useLiveState(
-    (stream: Stream) => stream.feedLiveState,
-    (state) => state,
-    [streamPath],
-    { makeConnection: makeFeedConnection },
-  );
-  const agentUiState = feed.value?.agent ?? null;
+  const agentUiState = presentedFeed?.agent ?? null;
   // Real, browser-measured: transport RTT from RPCs the store already makes,
   // plus the hosted processor's self-measured consumption report.
   const metrics = useBrowserStreamMetrics(store);
@@ -230,7 +200,7 @@ function BrowserDatabaseProjectStreamView({
     void store.nudge();
   }, [store]);
 
-  const agentRuntimeTransition = suppliedAgentRuntimeTransition ?? feed.value?.runtimeChange;
+  const agentRuntimeTransition = suppliedAgentRuntimeTransition ?? presentedFeed?.runtimeChange;
   const presentedAgentUiState = agentUiState;
   const agentRuntime = agentRuntimeTransition?.runtime;
 
@@ -253,13 +223,9 @@ function BrowserDatabaseProjectStreamView({
     streamPath,
   });
 
-  // A reader uses another tab's database writer but still owns a usable RPC
-  // transport for appends. A writer is fully ready once its event callback is open.
-  // Election starts only after createStreamClient resolves, so every non-idle
-  // role has a usable transport — including readers, which never open the
-  // stream's live connection themselves but still append over their own itx
-  // socket.
-  const streamTransportReady = snapshot.databaseRole !== "idle";
+  // Live state uses this tab's transport even when another tab owns event sync.
+  // Database ownership alone says nothing about whether writes can reach the server.
+  const streamTransportReady = feed.status === "live";
   // Cached rows can paint immediately. With an empty local database, the writer
   // stays pending until reconciliation and the event callback have finished;
   // a reader can paint the database already owned by another tab.
@@ -457,8 +423,24 @@ function BrowserDatabaseProjectStreamView({
   );
 }
 
-/** Owns transport generation, recovery, and the one local event database for a stream. */
-function useProjectStreamDatabase({
+function useStreamSubscriberUser() {
+  const { session: authSession } = useAuthClient();
+  const subscriberUser = useMemo<BrowserStreamSubscriberUser | undefined>(() => {
+    if (!authSession?.authenticated) return undefined;
+    const name = authSession.user.name?.trim();
+    const picture = authSession.user.picture?.trim();
+    return {
+      id: authSession.user.id,
+      email: authSession.user.email,
+      ...(name === undefined || name === "" ? {} : { name }),
+      ...(picture === undefined || picture === "" ? {} : { picture }),
+    };
+  }, [authSession]);
+  return subscriberUser;
+}
+
+/** Owns the server live snapshot and local event mirror, including their publication barrier. */
+function useProjectStreamData({
   projectId,
   resetStreamSourceTransport,
   streamSource,
@@ -523,7 +505,27 @@ function useProjectStreamDatabase({
     ...(subscriberUser === undefined ? {} : { subscriberUser }),
     streamPath,
   });
-  return { resolvedStreamSource, ...browserStore };
+  const { store } = browserStore;
+  // Trigger-maintained counts (O(#types)) instead of COUNT(*) (full local-table
+  // scan): this query re-runs after every delivered batch and shares the one
+  // OPFS connection with ingest writes — see the event mirror schema.
+  const countResult = useStreamQuery(
+    store.streamDatabase,
+    `SELECT COALESCE(SUM(n), 0) AS count FROM event_type_counts`,
+  );
+  const eventCount = Number(countResult.data[0]?.count ?? 0);
+  const makeFeedConnection = useCallback(
+    () => resolvedStreamSource(streamPath),
+    [resolvedStreamSource, streamPath],
+  );
+  const feed = useLiveState(
+    (stream: Stream) => stream.feedLiveState,
+    (state) => state,
+    [streamPath],
+    { makeConnection: makeFeedConnection },
+  );
+  const presentedFeed = useEventSynchronizedLiveState(store.streamDatabase, feed.value);
+  return { resolvedStreamSource, ...browserStore, eventCount, feed, presentedFeed };
 }
 
 /**
