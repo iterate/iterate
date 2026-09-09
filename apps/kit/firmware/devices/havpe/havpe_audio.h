@@ -6,6 +6,7 @@
 #include <stdint.h>
 
 #include "iterate/kit/audio_codec.h"
+#include "iterate/kit/platforms/i2s_codec.h"
 #include "iterate/kit/voice_playout.h"
 
 #ifdef __cplusplus
@@ -62,15 +63,6 @@ bool havpe_audio_init(void);
  */
 struct iterate_kit_audio_codec havpe_audio_codec(void);
 
-/** Complete capture frames replaced before the portable task could read them. */
-uint32_t havpe_audio_capture_overruns(void);
-
-/** Blocking capture reads that failed or timed out after ownership began. */
-uint32_t havpe_audio_capture_driver_failures(void);
-
-/** Blocking playback writes that failed after admission through the seam. */
-uint32_t havpe_audio_playback_driver_failures(void);
-
 /** RX DMA overflows (oldest buffer silently dropped by the driver). */
 uint32_t havpe_audio_capture_queue_overflows(void);
 
@@ -79,31 +71,6 @@ uint32_t havpe_audio_playback_queue_overflows(void);
 
 /** Samples the fixed capture make-up gain had to clip (lifetime). */
 uint32_t havpe_audio_capture_gain_clipped(void);
-
-/** Apply the shared starvation phase under this board's lock; amplifier
- * control remains with the device. Safe on the app and playback tasks.
- */
-void havpe_audio_phase(enum iterate_kit_voice_phase phase);
-
-void havpe_audio_reserve_write(uint32_t ms);
-void havpe_audio_rollback_write(uint32_t ms);
-uint32_t havpe_audio_starved_ms(void);
-uint32_t havpe_audio_starve_events(void);
-
-/** Whether the hardware ring still holds audio due out of the speaker. */
-bool havpe_audio_speaker_is_playing(void);
-
-/**
- * Play a flash-resident 16 kHz mono PCM16LE sound through the speaker, now.
- *
- * The board's local voice — button chimes, mode announcements — with none of
- * the stream's latency: the playback hardware task drains this BEFORE the
- * paced mailbox, so it starts within one frame period. It PREEMPTS rather
- * than mixes; whatever the stream delivers meanwhile waits as backpressure.
- * A second call replaces the first mid-note. `pcm` must stay valid for the
- * whole playback, which the generated .rodata arrays trivially are.
- */
-void havpe_audio_play_sound(const uint8_t *pcm, uint32_t bytes);
 
 /**
  * The echo-cancellation oracle, sampled every 20 ms frame.

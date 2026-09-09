@@ -33,9 +33,8 @@
  *    underrun.
  */
 #include "havpe_audio.h"
-#include "iterate/kit/starvation_ledger.h"
+#include "iterate/kit/platforms/i2s_codec.h"
 
-#include <stdatomic.h>
 #include <string.h>
 
 #include "driver/gpio.h"
@@ -45,7 +44,6 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
-#include "freertos/queue.h"
 #include "freertos/task.h"
 
 #include "voice_pe_hardware_config.h"
@@ -138,25 +136,14 @@ _Static_assert(
     CAPTURE_DMA_FRAMES * 2 * 32 / 8 <= 4092,
     "capture I2S descriptor exceeds the ESP32-S3 DMA limit");
 
-struct audio_frame {
-  int16_t samples[HAVPE_AUDIO_FRAME_SAMPLES];
-  size_t sample_count;
-};
-
 static i2c_master_bus_handle_t i2c_bus;
 static i2c_master_dev_handle_t xmos_device;
 static i2c_master_dev_handle_t codec_device;
 static i2s_chan_handle_t playback_channel;
 static i2s_chan_handle_t capture_channel;
 
-static QueueHandle_t capture_mailbox;
-static QueueHandle_t playback_mailbox;
+static struct iterate_kit_audio_codec codec;
 
-/* Startup capture is not loss until the portable consumer has started. */
-static atomic_bool capture_consumer_started;
-static volatile uint32_t capture_overruns;
-static volatile uint32_t capture_driver_failures;
-static volatile uint32_t playback_driver_failures;
 static volatile uint32_t capture_queue_overflow_count;
 static volatile uint32_t playback_queue_overflow_count;
 static volatile uint32_t capture_gain_clipped_samples;
@@ -168,357 +155,137 @@ static volatile uint32_t capture_echo_clean_peak;
 /* What each XMOS output tap is currently selecting; 0..4, see the stage enum. */
 static uint8_t pipeline_stage[2];
 
-/* --- the shared codec seam ------------------------------------------------ */
-
-static enum iterate_kit_status codec_read(
-    void *context,
-    int16_t *capture,
-    int16_t *reference,
-    size_t capacity_samples,
-    size_t *sample_count) {
-  struct audio_frame frame;
-  (void)context;
-  (void)reference;
-  if (capture_mailbox == NULL ||
-      capacity_samples < HAVPE_AUDIO_FRAME_SAMPLES) {
-    return ITERATE_KIT_INVALID_ARGUMENT;
-  }
-  atomic_store_explicit(
-      &capture_consumer_started, true, memory_order_release);
-  if (xQueueReceive(capture_mailbox, &frame, 0) != pdTRUE) {
-    return ITERATE_KIT_UNAVAILABLE;
-  }
-  memcpy(capture, frame.samples, frame.sample_count * sizeof(*capture));
-  *sample_count = frame.sample_count;
-  return ITERATE_KIT_OK;
-}
-
-static enum iterate_kit_status codec_write(
-    void *context, const int16_t *playback, size_t sample_count) {
-  struct audio_frame frame;
-  (void)context;
-  if (playback_mailbox == NULL || sample_count == 0U ||
-      sample_count > HAVPE_AUDIO_FRAME_SAMPLES) {
-    return ITERATE_KIT_INVALID_ARGUMENT;
-  }
-  memcpy(frame.samples, playback, sample_count * sizeof(*playback));
-  frame.sample_count = sample_count;
-  return xQueueSend(playback_mailbox, &frame, 0) == pdTRUE
-      ? ITERATE_KIT_OK
-      : ITERATE_KIT_BACKPRESSURE;
-}
-
-static const struct iterate_kit_audio_codec_ops codec_ops = {
-  .read = codec_read,
-  .write = codec_write,
-};
-
-static const struct iterate_kit_audio_codec_properties codec_properties = {
-  .capture_sample_rate_hz = HAVPE_AUDIO_SAMPLE_RATE_HZ,
-  .playback_sample_rate_hz = HAVPE_AUDIO_SAMPLE_RATE_HZ,
-  .capture_channels = 1,
-  .playback_channels = 1,
-  /*
-   * FALSE is the load-bearing fact of this board: the XMOS keeps its AEC
-   * reference private, nothing on the ESP capture bus carries it, and zero
-   * or scheduler-aligned intended playback must never be presented as a
-   * measured reference.
-   */
-  .has_reference_channel = false,
-  /*
-   * The AIC3204 DAC is pinned at 0 dB: a production run at ESPHome's +24 dB
-   * endpoint made the provider transcribe its own speaker output. Exposing
-   * a gain control here would be an invitation to reintroduce that.
-   */
-  .has_output_gain_control = false,
-  .output_gain_ceiling_centi_db = 0,
-};
-
-/* --- absolute-deadline starvation ledger (shared components/audio policy) ---------- */
-
-static portMUX_TYPE ledger_lock = portMUX_INITIALIZER_UNLOCKED;
-static struct iterate_kit_starvation_ledger ledger;
-
-void havpe_audio_phase(enum iterate_kit_voice_phase phase) {
-  portENTER_CRITICAL(&ledger_lock);
-  iterate_kit_starvation_ledger_phase(&ledger, phase, esp_timer_get_time());
-  portEXIT_CRITICAL(&ledger_lock);
-}
-
-void havpe_audio_reserve_write(uint32_t ms) {
-  const int64_t now_us = esp_timer_get_time();
-  portENTER_CRITICAL(&ledger_lock);
-  iterate_kit_starvation_ledger_reserve_write(&ledger, ms, now_us);
-  portEXIT_CRITICAL(&ledger_lock);
-}
-
-void havpe_audio_rollback_write(uint32_t ms) {
-  portENTER_CRITICAL(&ledger_lock);
-  iterate_kit_starvation_ledger_rollback_write(&ledger, ms);
-  portEXIT_CRITICAL(&ledger_lock);
-}
-
-uint32_t havpe_audio_starved_ms(void) {
-  struct iterate_kit_starvation_ledger_metrics metrics;
-  portENTER_CRITICAL(&ledger_lock);
-  iterate_kit_starvation_ledger_metrics(&ledger, &metrics);
-  portEXIT_CRITICAL(&ledger_lock);
-  return metrics.starved_ms;
-}
-
-uint32_t havpe_audio_starve_events(void) {
-  struct iterate_kit_starvation_ledger_metrics metrics;
-  portENTER_CRITICAL(&ledger_lock);
-  iterate_kit_starvation_ledger_metrics(&ledger, &metrics);
-  portEXIT_CRITICAL(&ledger_lock);
-  return metrics.starve_events;
-}
-
-bool havpe_audio_speaker_is_playing(void) {
-  const int64_t now_us = esp_timer_get_time();
-  portENTER_CRITICAL(&ledger_lock);
-  const bool playing = iterate_kit_starvation_ledger_speaker_is_playing(
-      &ledger, now_us, SPEAKER_ACTIVITY_HOLD_MS);
-  portEXIT_CRITICAL(&ledger_lock);
-  return playing;
-}
-
-/* --- local sounds ---------------------------------------------------------- */
-
-/*
- * THE BOARD'S OWN VOICE: chimes and mode announcements, straight from flash.
- *
- * Everything else this speaker plays arrives over the stream, paced by the
- * server, seconds after the gesture that asked for it — which is exactly the
- * problem these solve: a press that answers within a frame instead of after a
- * dial. So they bypass the stream entirely and cut in at the last seam before
- * the DAC, where the playback hardware task drains them BEFORE it looks at
- * the mailbox. Preemption, not mixing, on purpose: a chime stepping on the
- * first milliseconds of an answer is acceptable and a mixer is not simpler
- * than this. The stream's frames are not lost — the depth-one mailbox holds
- * one and the portable playback task absorbs the rest as backpressure it
- * already knows how to wait out.
- *
- * Allocation-free: the PCM lives in .rodata (flash), the cursor walks it in
- * 20 ms slices, and the lock is held only to move three words — the flash
- * read itself happens outside the critical section.
- */
-static portMUX_TYPE sound_lock = portMUX_INITIALIZER_UNLOCKED;
-static const uint8_t *sound_pcm; /* NULL when idle; guarded by sound_lock */
-static uint32_t sound_bytes;
-static uint32_t sound_cursor;
-
-void havpe_audio_play_sound(const uint8_t *pcm, uint32_t bytes) {
-  if (pcm == NULL || bytes < 2U) return;
-  portENTER_CRITICAL(&sound_lock);
-  sound_pcm = pcm;
-  sound_bytes = bytes & ~1U; /* whole PCM16 samples only */
-  sound_cursor = 0U;
-  portEXIT_CRITICAL(&sound_lock);
-}
-
-/* --- hardware tasks -------------------------------------------------------- */
-
-/*
- * ONLY THESE TASKS CALL THE BLOCKING I2S DRIVER. Capture keeps the newest
- * complete frame in a depth-one mailbox; playback accepts at most one
- * complete frame beyond the one being handed to DMA.
- */
-static void capture_hardware_task(void *argument) {
+static enum iterate_kit_status read_hardware(void *context, int16_t *samples, size_t count) {
   /* One 20 ms stereo Q31 read, and its two extracted mono planes. */
   static int32_t stereo_words[HAVPE_AUDIO_FRAME_SAMPLES * 2];
   static int16_t raw_plane[HAVPE_AUDIO_FRAME_SAMPLES];
-  static struct audio_frame frame = {
-    .sample_count = HAVPE_AUDIO_FRAME_SAMPLES,
-  };
-  (void)argument;
-  for (;;) {
-    size_t bytes_read = 0U;
-    if (i2s_channel_read(
-            capture_channel,
-            stereo_words,
-            sizeof(stereo_words),
-            &bytes_read,
-            CAPTURE_READ_TIMEOUT_MS) != ESP_OK ||
-        bytes_read != sizeof(stereo_words)) {
-      ++capture_driver_failures;
-      vTaskDelay(1U);
-      continue;
-    }
-    size_t frames_written = 0U;
-    /*
-     * The raw ch1 plane is extracted because the adopted converter conserves
-     * both same-time taps, then deliberately discarded: it is XMOS-defined
-     * diagnostic data for acoustic evidence harnesses, and no such harness
-     * is part of this consolidation. Only the echo-cancelled ch0 plane may
-     * reach the uplink.
-     */
-    const struct iterate_kit_pcm_shape capture_shape = {32, 2, 0, 1, 1};
-    if (iterate_kit_pcm_extract_capture(
-            &capture_shape,
-            stereo_words,
-            HAVPE_AUDIO_FRAME_SAMPLES,
-            frame.samples,
-            raw_plane,
-            HAVPE_AUDIO_FRAME_SAMPLES,
-            &frames_written) != ITERATE_KIT_OK ||
-        frames_written != HAVPE_AUDIO_FRAME_SAMPLES) {
-      ++capture_driver_failures;
-      continue;
-    }
-    /*
-     * THE AEC ORACLE, AND IT COSTS TWO COMPARISONS PER SAMPLE. Channel one is
-     * the microphone before any DSP and channel zero is after cancellation,
-     * captured at the same instant; the ratio between their peaks while the
-     * speaker is running IS this board's echo cancellation, measured live
-     * rather than argued about. The raw plane used to be extracted and thrown
-     * away with a comment saying no harness needed it.
-     */
-    {
-      int32_t raw_peak = 0;
-      int32_t clean_peak = 0;
-      for (size_t index = 0U; index < HAVPE_AUDIO_FRAME_SAMPLES; ++index) {
-        const int32_t raw = raw_plane[index] < 0
-            ? -(int32_t)raw_plane[index]
-            : (int32_t)raw_plane[index];
-        const int32_t clean = frame.samples[index] < 0
-            ? -(int32_t)frame.samples[index]
-            : (int32_t)frame.samples[index];
-        if (raw > raw_peak) raw_peak = raw;
-        if (clean > clean_peak) clean_peak = clean;
-      }
-      capture_raw_peak = (uint32_t)raw_peak;
-      capture_clean_peak = (uint32_t)clean_peak;
-      /*
-       * ACCUMULATED ON THE DEVICE, because the interesting window is the one
-       * where the speaker is running and it is a few hundred milliseconds
-       * long. Sampling these over RPC catches almost none of it — a first
-       * attempt collected thirteen samples across a thirty-second answer and
-       * could say nothing at all. One health() read now answers the question.
-       */
-      if (havpe_audio_speaker_is_playing()) {
-        if ((uint32_t)raw_peak > capture_echo_raw_peak) {
-          capture_echo_raw_peak = (uint32_t)raw_peak;
-        }
-        if ((uint32_t)clean_peak > capture_echo_clean_peak) {
-          capture_echo_clean_peak = (uint32_t)clean_peak;
-        }
-      }
-    }
-    /* The one constant, unconditionally. See CAPTURE_MAKEUP_GAIN. */
-    for (size_t index = 0U; index < HAVPE_AUDIO_FRAME_SAMPLES; ++index) {
-      const int32_t amplified = (int32_t)frame.samples[index] * CAPTURE_MAKEUP_GAIN;
-      if (amplified > INT16_MAX) {
-        frame.samples[index] = INT16_MAX;
-        ++capture_gain_clipped_samples;
-      } else if (amplified < INT16_MIN) {
-        frame.samples[index] = INT16_MIN;
-        ++capture_gain_clipped_samples;
-      } else {
-        frame.samples[index] = (int16_t)amplified;
-      }
-    }
-    /*
-     * AND THE UPLINK CARRIES IT, WHOLE, WHETHER OR NOT THE SPEAKER IS RUNNING.
-     *
-     * What stood here was a fence: while the speaker played, every frame that
-     * did not clear an absolute floor was overwritten with zeros, so that the
-     * provider's VAD would never hear this device's own echo and cancel the
-     * answer it was generating. It worked on the echo. It also deleted the
-     * person — measured, a Mac speaking a full sentence a couple of feet away
-     * came out as digital silence, and `voicelab aec` read it as -120 dBFS
-     * through a whole double-talk window.
-     *
-     * A loudness threshold cannot separate a quiet person from a loud residue,
-     * so a fence built out of one is always trading one failure for the other.
-     * The separation has to happen where the far-end reference is — the XMOS
-     * AGC stage, which is what this board's uplink now reads. Full duplex
-     * means the microphone testifies continuously and something upstream that
-     * can actually tell the two apart decides; it does not mean a device that
-     * covers its own mouth and hopes nobody spoke during it.
-     */
-    if (atomic_load_explicit(
-            &capture_consumer_started, memory_order_acquire) &&
-        uxQueueMessagesWaiting(capture_mailbox) > 0U) {
-      ++capture_overruns;
-    }
-    (void)xQueueOverwrite(capture_mailbox, &frame);
+  (void)context;
+  (void)count;
+  size_t bytes_read = 0U;
+  if (i2s_channel_read(
+          capture_channel,
+          stereo_words,
+          sizeof(stereo_words),
+          &bytes_read,
+          CAPTURE_READ_TIMEOUT_MS) != ESP_OK ||
+      bytes_read != sizeof(stereo_words)) {
+    return ITERATE_KIT_IO_ERROR;
   }
+  size_t frames_written = 0U;
+  /*
+   * The raw ch1 plane is extracted because the adopted converter conserves
+   * both same-time taps, then deliberately discarded: it is XMOS-defined
+   * diagnostic data for acoustic evidence harnesses, and no such harness
+   * is part of this consolidation. Only the echo-cancelled ch0 plane may
+   * reach the uplink.
+   */
+  const struct iterate_kit_pcm_shape capture_shape = {32, 2, 0, 1, 1};
+  if (iterate_kit_pcm_extract_capture(
+          &capture_shape,
+          stereo_words,
+          HAVPE_AUDIO_FRAME_SAMPLES,
+          samples,
+          raw_plane,
+          HAVPE_AUDIO_FRAME_SAMPLES,
+          &frames_written) != ITERATE_KIT_OK ||
+      frames_written != HAVPE_AUDIO_FRAME_SAMPLES) {
+    return ITERATE_KIT_IO_ERROR;
+  }
+  /*
+   * THE AEC ORACLE, AND IT COSTS TWO COMPARISONS PER SAMPLE. Channel one is
+   * the microphone before any DSP and channel zero is after cancellation,
+   * captured at the same instant; the ratio between their peaks while the
+   * speaker is running IS this board's echo cancellation, measured live
+   * rather than argued about. The raw plane used to be extracted and thrown
+   * away with a comment saying no harness needed it.
+   */
+  {
+    int32_t raw_peak = 0;
+    int32_t clean_peak = 0;
+    for (size_t index = 0U; index < HAVPE_AUDIO_FRAME_SAMPLES; ++index) {
+      const int32_t raw = raw_plane[index] < 0
+          ? -(int32_t)raw_plane[index]
+          : (int32_t)raw_plane[index];
+      const int32_t clean = samples[index] < 0
+          ? -(int32_t)samples[index]
+          : (int32_t)samples[index];
+      if (raw > raw_peak) raw_peak = raw;
+      if (clean > clean_peak) clean_peak = clean;
+    }
+    capture_raw_peak = (uint32_t)raw_peak;
+    capture_clean_peak = (uint32_t)clean_peak;
+    /*
+     * ACCUMULATED ON THE DEVICE, because the interesting window is the one
+     * where the speaker is running and it is a few hundred milliseconds
+     * long. Sampling these over RPC catches almost none of it — a first
+     * attempt collected thirteen samples across a thirty-second answer and
+     * could say nothing at all. One health() read now answers the question.
+     */
+    if (iterate_kit_i2s_codec_speaker_is_playing()) {
+      if ((uint32_t)raw_peak > capture_echo_raw_peak) {
+        capture_echo_raw_peak = (uint32_t)raw_peak;
+      }
+      if ((uint32_t)clean_peak > capture_echo_clean_peak) {
+        capture_echo_clean_peak = (uint32_t)clean_peak;
+      }
+    }
+  }
+  /* The one constant, unconditionally. See CAPTURE_MAKEUP_GAIN. */
+  for (size_t index = 0U; index < HAVPE_AUDIO_FRAME_SAMPLES; ++index) {
+    const int32_t amplified = (int32_t)samples[index] * CAPTURE_MAKEUP_GAIN;
+    if (amplified > INT16_MAX) {
+      samples[index] = INT16_MAX;
+      ++capture_gain_clipped_samples;
+    } else if (amplified < INT16_MIN) {
+      samples[index] = INT16_MIN;
+      ++capture_gain_clipped_samples;
+    } else {
+      samples[index] = (int16_t)amplified;
+    }
+  }
+  /*
+   * AND THE UPLINK CARRIES IT, WHOLE, WHETHER OR NOT THE SPEAKER IS RUNNING.
+   *
+   * What stood here was a fence: while the speaker played, every frame that
+   * did not clear an absolute floor was overwritten with zeros, so that the
+   * provider's VAD would never hear this device's own echo and cancel the
+   * answer it was generating. It worked on the echo. It also deleted the
+   * person — measured, a Mac speaking a full sentence a couple of feet away
+   * came out as digital silence, and `voicelab aec` read it as -120 dBFS
+   * through a whole double-talk window.
+   *
+   * A loudness threshold cannot separate a quiet person from a loud residue,
+   * so a fence built out of one is always trading one failure for the other.
+   * The separation has to happen where the far-end reference is — the XMOS
+   * AGC stage, which is what this board's uplink now reads. Full duplex
+   * means the microphone testifies continuously and something upstream that
+   * can actually tell the two apart decides; it does not mean a device that
+   * covers its own mouth and hopes nobody spoke during it.
+   */
+  return ITERATE_KIT_OK;
 }
 
-static void playback_hardware_task(void *argument) {
-  static struct audio_frame frame;
+static enum iterate_kit_status write_hardware(void *context, const int16_t *samples, size_t count) {
   /* One expanded 20 ms frame: 320 * 6 words = 7680 bytes. */
   static int32_t stereo_words
       [HAVPE_AUDIO_FRAME_SAMPLES *
        ITERATE_KIT_PCM_PLAYBACK_WORDS_PER_PCM16_SAMPLE];
   static struct iterate_kit_pcm_playback_resampler resampler;
-  (void)argument;
-  for (;;) {
-    /*
-     * A local sound outranks the mailbox — see the note at `sound_pcm`. The
-     * slice bounds are taken under the lock and the flash copy happens
-     * outside it; if the app task replaces the sound mid-slice, this frame
-     * finishes from the superseded PCM and the next one starts the new
-     * sound, which is the preemption behaving as specified.
-     */
-    const uint8_t *sound = NULL;
-    uint32_t sound_offset = 0U;
-    uint32_t sound_take = 0U;
-    portENTER_CRITICAL(&sound_lock);
-    if (sound_pcm != NULL) {
-      const uint32_t remaining = sound_bytes - sound_cursor;
-      sound = sound_pcm;
-      sound_offset = sound_cursor;
-      sound_take = remaining < sizeof(frame.samples)
-          ? remaining
-          : (uint32_t)sizeof(frame.samples);
-      sound_cursor += sound_take;
-      if (sound_cursor >= sound_bytes) sound_pcm = NULL;
-    }
-    portEXIT_CRITICAL(&sound_lock);
-    if (sound != NULL) {
-      memcpy(frame.samples, sound + sound_offset, sound_take);
-      frame.sample_count = sound_take / sizeof(frame.samples[0]);
-    } else if (
-        /*
-         * One frame period instead of portMAX_DELAY, so a chime requested
-         * while the stream is silent starts within 20 ms. An idle wake that
-         * finds neither sound nor frame costs one queue peek.
-         */
-        xQueueReceive(playback_mailbox, &frame, pdMS_TO_TICKS(20)) !=
-        pdTRUE) {
-      continue;
-    }
-    size_t words_written = 0U;
-    if (iterate_kit_pcm_expand_playback(
-            &resampler,
-            frame.samples,
-            frame.sample_count,
-            stereo_words,
-            sizeof(stereo_words) / sizeof(stereo_words[0]),
-            &words_written) != ITERATE_KIT_OK) {
-      ++playback_driver_failures;
-      continue;
-    }
-    const uint32_t frame_ms = (uint32_t)(
-        frame.sample_count * 1000U / HAVPE_AUDIO_SAMPLE_RATE_HZ);
-    /*
-     * Credit before the blocking write: the deadline ledger must see the
-     * audio being handed over while it is being handed over.
-     */
-    havpe_audio_reserve_write(frame_ms);
-    size_t bytes_written = 0U;
-    if (i2s_channel_write(
-            playback_channel,
-            stereo_words,
-            words_written * sizeof(stereo_words[0]),
-            &bytes_written,
-            PLAYBACK_WRITE_TIMEOUT_MS) != ESP_OK) {
-      havpe_audio_rollback_write(frame_ms);
-      ++playback_driver_failures;
-    }
+  (void)context;
+  size_t words_written = 0U;
+  if (iterate_kit_pcm_expand_playback(
+          &resampler,
+          samples,
+          count,
+          stereo_words,
+          sizeof(stereo_words) / sizeof(stereo_words[0]),
+          &words_written) != ITERATE_KIT_OK) {
+    return ITERATE_KIT_IO_ERROR;
   }
+  size_t bytes_written = 0U;
+  return i2s_channel_write(playback_channel, stereo_words,
+      words_written * sizeof(stereo_words[0]), &bytes_written,
+      PLAYBACK_WRITE_TIMEOUT_MS) == ESP_OK ? ITERATE_KIT_OK : ITERATE_KIT_IO_ERROR;
 }
 
 /* --- boot ------------------------------------------------------------------ */
@@ -866,7 +633,6 @@ static esp_err_t preload_playback_silence(void) {
 }
 
 bool havpe_audio_init(void) {
-  iterate_kit_starvation_ledger_init(&ledger, PLAYBACK_RING_MS);
   size_t initial_write_count = 0U;
   size_t power_up_write_count = 0U;
   const struct iterate_kit_voice_pe_register_write *initial_writes =
@@ -941,60 +707,12 @@ bool havpe_audio_init(void) {
     return false;
   }
 
-  capture_mailbox = xQueueCreate(1U, sizeof(struct audio_frame));
-  playback_mailbox = xQueueCreate(1U, sizeof(struct audio_frame));
-  if (capture_mailbox == NULL || playback_mailbox == NULL) {
-    ESP_LOGE(tag, "audio seam queue allocation failed");
-    return false;
-  }
-  {
-    TaskHandle_t capture_task_handle = NULL;
-    if (xTaskCreatePinnedToCore(
-            capture_hardware_task,
-            "audio-hw-capture",
-            4096U,
-            NULL,
-            19U,
-            &capture_task_handle,
-            1) != pdPASS ||
-        xTaskCreatePinnedToCore(
-            playback_hardware_task,
-            "audio-hw-playback",
-            4096U,
-            NULL,
-            20U,
-            NULL,
-            1) != pdPASS) {
-      if (capture_task_handle != NULL) {
-        vTaskDelete(capture_task_handle);
-      }
-      ESP_LOGE(tag, "audio hardware task creation failed");
-      return false;
-    }
-  }
+  if (!iterate_kit_i2s_codec_start_over(read_hardware, write_hardware, NULL, PLAYBACK_RING_MS, &codec)) return false;
   ESP_LOGI(tag, "XMOS/AIC3204 full-duplex audio ready at 16 kHz");
   return true;
 }
 
-struct iterate_kit_audio_codec havpe_audio_codec(void) {
-  return (struct iterate_kit_audio_codec){
-    .ops = &codec_ops,
-    .properties = &codec_properties,
-    .context = NULL,
-  };
-}
-
-uint32_t havpe_audio_capture_overruns(void) {
-  return capture_overruns;
-}
-
-uint32_t havpe_audio_capture_driver_failures(void) {
-  return capture_driver_failures;
-}
-
-uint32_t havpe_audio_playback_driver_failures(void) {
-  return playback_driver_failures;
-}
+struct iterate_kit_audio_codec havpe_audio_codec(void) { return codec; }
 
 uint32_t havpe_audio_capture_queue_overflows(void) {
   return capture_queue_overflow_count;

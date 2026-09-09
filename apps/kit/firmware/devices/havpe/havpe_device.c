@@ -131,7 +131,7 @@ static void adopt_mode(uint8_t mode, bool settled) {
           : ITERATE_KIT_VOICE_TURNS_SERVER_VAD);
   if (settled) {
     if (mode != mode_state.mode) store_mode(mode);
-    havpe_audio_play_sound(
+    iterate_kit_i2s_codec_play_sound(
         havpe_mode_sounds[mode].pcm, havpe_mode_sounds[mode].bytes);
   }
   mode_state.mode = mode;
@@ -230,11 +230,11 @@ static void poll(void *context, struct iterate_kit_voice_intent *out) {
     /* End before wake: play_sound replaces, so if one poll carries both
      * edges the newer intent — the wake — is the one heard. */
     if (actions.end_chime) {
-      havpe_audio_play_sound(
+      iterate_kit_i2s_codec_play_sound(
           havpe_sound_chime_ended, sizeof(havpe_sound_chime_ended));
     }
     if (actions.wake_chime) {
-      havpe_audio_play_sound(
+      iterate_kit_i2s_codec_play_sound(
           havpe_sound_chime_press, sizeof(havpe_sound_chime_press));
     }
     if (actions.mode_flash) havpe_ui_show_mode(mode_state.mode);
@@ -288,7 +288,7 @@ static void poll(void *context, struct iterate_kit_voice_intent *out) {
 
 static void phase(void *context, enum iterate_kit_voice_phase phase_value) {
   (void)context;
-  havpe_audio_phase(phase_value);
+  iterate_kit_i2s_codec_phase(phase_value);
   /* The rail stays up for the life of the boot: the XMOS AEC reference
    * rides the always-running TX stream. ARRIVED/QUIET do not gate it. */
 }
@@ -387,12 +387,6 @@ static size_t health(void *context, char *out, size_t capacity) {
      * counters below say which.
      */
     {"xmosVnr", vnr},
-    {"codecCaptureOverruns", havpe_audio_capture_overruns()},
-    {"codecCaptureFailures", havpe_audio_capture_driver_failures()},
-    /* The task-side starvation measure: ms the ring was empty, and how often. */
-    {"spkStarvedMs", havpe_audio_starved_ms()},
-    {"spkStarveEvents", havpe_audio_starve_events()},
-    {"codecPlaybackFailures", havpe_audio_playback_driver_failures()},
     {"captureGainClipped", havpe_audio_capture_gain_clipped()},
     /*
      * THE AEC ORACLE. cleanPeak/rawPeak measured WHILE THE SPEAKER WAS RUNNING
@@ -402,7 +396,6 @@ static size_t health(void *context, char *out, size_t capacity) {
      */
     {"micRawPeak", havpe_audio_capture_raw_peak()},
     {"micCleanPeak", havpe_audio_capture_clean_peak()},
-    {"speakerPlaying", havpe_audio_speaker_is_playing() ? 1U : 0U},
     {"aecUplinkStage", havpe_audio_pipeline_stage(0U)},
     {"aecDiagnosticStage", havpe_audio_pipeline_stage(1U)},
     {"echoRawPeak", havpe_audio_capture_echo_raw_peak()},
@@ -419,8 +412,11 @@ static size_t health(void *context, char *out, size_t capacity) {
     {"dialMode", (uint32_t)mode_state.mode + 1U},
   };
   (void)context;
-  return iterate_kit_health_append_fields(
-      out, capacity, fields, sizeof(fields) / sizeof(fields[0]));
+  const size_t used = iterate_kit_i2s_codec_health(out, capacity);
+  if (used == 0U) return 0U;
+  const size_t added = iterate_kit_health_append_fields(
+      out + used, capacity - used, fields, sizeof(fields) / sizeof(fields[0]));
+  return added == 0U ? 0U : used + added;
 }
 
 static const struct iterate_kit_board_ops ops = {
