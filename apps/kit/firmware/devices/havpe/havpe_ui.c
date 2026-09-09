@@ -2,6 +2,7 @@
 
 #include "driver/gpio.h"
 #include "esp_log.h"
+#include <string.h>
 #include "esp_timer.h"
 #include "havpe_modes.h"
 #include "iterate/kit/conversation_lights.h"
@@ -133,12 +134,22 @@ void havpe_ui_show_mode(uint8_t value) {
   iterate_kit_led_ring_borrow(pixels, OVERLAY_HOLD_US / 1000);
 }
 
+static char last_status[64];
+
 void havpe_ui_present(const struct iterate_kit_voice_view *view) {
   /* Every app pass (~5 ms), not the slower 25 ms control poll: missed
    * intermediate quadrature states are lost counts. */
   dial.steps += havpe_dial_decoder_step(
       &dial.decoder, gpio_get_level(DIAL_A_GPIO) != 0, gpio_get_level(DIAL_B_GPIO) != 0);
-  if (view->status != NULL && view->status[0] != '\0') ESP_LOGI(tag, "status: %s", view->status);
+  /* A twelve-pixel ring cannot render prose, so the console carries the
+   * status word: ONCE PER CHANGE. Logging it every 5 ms pass (the table
+   * step's first boot printed it 5,749 times in 75 s) buries every other
+   * line and costs the app task a UART write per pass. */
+  if (view->status != NULL && view->status[0] != '\0' &&
+      strncmp(view->status, last_status, sizeof(last_status)) != 0) {
+    strlcpy(last_status, view->status, sizeof(last_status));
+    ESP_LOGI(tag, "status: %s", view->status);
+  }
   if (esp_timer_get_time() < overlay_until_us) return;
   iterate_kit_led_ring_borrow(NULL, 0);
   struct iterate_kit_conversation_visual_state state;
