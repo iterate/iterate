@@ -1,4 +1,5 @@
 #include "iterate/kit/platforms/i2s_codec.h"
+#include "iterate/kit/platforms/wake_word.h"
 #include "iterate/kit/starvation_ledger.h"
 #include "iterate/kit/capabilities/health.h"
 #include <stdatomic.h>
@@ -213,6 +214,9 @@ static void capture_hardware_task(void *argument) {
       vTaskDelay(1U);
       continue;
     }
+#ifdef CONFIG_ITERATE_KIT_WAKE_WORD
+    if (iterate_kit_wake_word_enabled()) iterate_kit_wake_word_feed(frame.samples, frame.sample_count);
+#endif
     if (atomic_load_explicit(&capture_consumer_started, memory_order_acquire) &&
         uxQueueMessagesWaiting(capture_mailbox) > 0U) {
       portENTER_CRITICAL(&codec_lock);

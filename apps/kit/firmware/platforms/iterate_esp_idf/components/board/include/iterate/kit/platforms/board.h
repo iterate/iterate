@@ -51,6 +51,7 @@ struct iterate_kit_board {
   int8_t status_led_gpio;                            /* mirrors view->link_ready */
   struct iterate_kit_gpio_button button;
   struct iterate_kit_board_sounds sounds;
+  const char *wake_word;                 /**< NULL disables; "jarvis" uses WakeNet. */
   bool (*open_codec)(void);                          /* after I2S enable, before the first sample */
   enum iterate_kit_status (*set_volume)(uint8_t percent, uint8_t *applied);
   const struct iterate_kit_board_ops *extra;

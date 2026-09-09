@@ -530,6 +530,7 @@ static const struct iterate_kit_board board = {
   .ring = {.gpio = 21, .pixels = 12, .order = LED_PIXEL_FORMAT_GRB, .power_gpio = 45},
   .status_led_gpio = -1,
   .button = {.gpio = 0, .active_low = true, .tap_wakes = false, .tap_ends = true},
+  .wake_word = "jarvis",
   .sounds = {.wake = havpe_sound_chime_press, .wake_bytes = sizeof(havpe_sound_chime_press),
     .ended = havpe_sound_chime_ended, .ended_bytes = sizeof(havpe_sound_chime_ended)},
   .open_codec = open_codec,

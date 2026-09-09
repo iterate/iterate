@@ -60,6 +60,11 @@ iterate_kit_add_test(iterate-kit-board-table-test
   INCLUDES fakes/board ../platforms/iterate_esp_idf/components/board/include
   LINK iterate-kit-voice iterate-kit-audio iterate-kit-core)
 
+# Exact WakeNet chunk assembly is pure; inference remains an ESP bench check.
+iterate_kit_add_test(iterate-kit-wake-word-test
+  wake_word_test.c ../platforms/iterate_esp_idf/components/board/wake_word.c
+  INCLUDES ../platforms/iterate_esp_idf/components/board/include)
+
 iterate_kit_add_core_test(iterate-kit-atomic-test atomic_test.c)
 iterate_kit_add_core_test(iterate-kit-button-test button_test.c)
 iterate_kit_add_core_test(iterate-kit-configuration-test configuration_test.c)

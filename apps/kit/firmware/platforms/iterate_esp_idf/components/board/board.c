@@ -88,6 +88,7 @@ bool iterate_kit_i2s_codec_valid(const struct iterate_kit_i2s_codec_facts *facts
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "iterate/kit/button.h"
+#include "iterate/kit/platforms/wake_word.h"
 
 static const struct iterate_kit_board *board;
 static i2c_master_bus_handle_t i2c_bus;
@@ -203,6 +204,19 @@ void iterate_kit_board_set_turns(enum iterate_kit_voice_turns value) {
 }
 const struct iterate_kit_session_actions *iterate_kit_board_button_actions(void) { return &actions; }
 
+/** Finish wake-word startup on the app task, before accepting any detections.
+ * Boards with an extra-owned button classifier must wire that classifier first.
+ */
+static bool iterate_kit_board_finish_wake_word(void) {
+  if (board->wake_word == NULL) return true;
+#ifdef CONFIG_ITERATE_KIT_WAKE_WORD
+  if (board->button.gpio < 0) return false;
+  return iterate_kit_wake_word_start(board->wake_word);
+#else
+  return false; /* A non-NULL table must never silently lack its component. */
+#endif
+}
+
 static bool start(void *context, struct iterate_kit_board_audio *out) {
   (void)context;
   if (board->volume.register_count > 2U ||
@@ -247,6 +261,7 @@ static bool start(void *context, struct iterate_kit_board_audio *out) {
     if (board->audio != NULL) iterate_kit_i2s_codec_abort();
     return false;
   }
+  if (!iterate_kit_board_finish_wake_word()) return false;
   if (board->facts.speaker.volume != NULL) {
     volume_percent = board->facts.speaker.volume(board->facts.speaker.context);
   }
@@ -256,6 +271,9 @@ static bool start(void *context, struct iterate_kit_board_audio *out) {
 static void present(void *context, const struct iterate_kit_voice_view *value) {
   (void)context;
   view = *value;
+#ifdef CONFIG_ITERATE_KIT_WAKE_WORD
+  if (board->wake_word != NULL) iterate_kit_wake_word_set_enabled(!view.call_active && !view.wants_call);
+#endif
   if (board->ring.pixels != 0U) {
     struct iterate_kit_conversation_visual_state lights;
     iterate_kit_voice_view_lights(value, &lights);
@@ -268,6 +286,14 @@ static void present(void *context, const struct iterate_kit_voice_view *value) {
 static void poll(void *context, struct iterate_kit_voice_intent *out) {
   (void)context;
   *out = (struct iterate_kit_voice_intent){0};
+#ifdef CONFIG_ITERATE_KIT_WAKE_WORD
+  /* Worker detections reach the classifier only on this app task. Recheck
+   * both mirrors: a queued idle detection must never become a hang-up tap.
+   * The existing actions.wake_chime below plays the shared sound exactly once.
+   */
+  if (board->wake_word != NULL && !view.call_active && !view.wants_call &&
+      iterate_kit_wake_word_take_detection()) iterate_kit_board_inject_tap();
+#endif
   if (board->button.gpio >= 0) {
     const uint64_t now_ms = (uint64_t)(esp_timer_get_time() / 1000);
     const bool pressed = (gpio_get_level(board->button.gpio) == 0) == board->button.active_low;
@@ -299,7 +325,14 @@ static void phase(void *context, enum iterate_kit_voice_phase value) {
 
 static size_t health(void *context, char *out, size_t capacity) {
   (void)context;
-  const size_t used = iterate_kit_i2s_codec_health(out, capacity);
+  size_t used = iterate_kit_i2s_codec_health(out, capacity);
+#ifdef CONFIG_ITERATE_KIT_WAKE_WORD
+  if (used != 0U && board->wake_word != NULL) {
+    const size_t added = iterate_kit_wake_word_health(out + used, capacity - used);
+    if (added == 0U) return 0U;
+    used += added;
+  }
+#endif
   if (used == 0U || board->extra == NULL || board->extra->health == NULL) return used;
   const size_t added = board->extra->health(NULL, out + used, capacity - used);
   return added == 0U ? 0U : used + added;

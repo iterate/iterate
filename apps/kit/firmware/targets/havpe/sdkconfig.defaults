@@ -63,3 +63,7 @@ CONFIG_LWIP_TCP_OOSEQ_MAX_PBUFS=12
 # TLS record buffers come from PSRAM, not the internal heap.
 CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y
 CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
+
+# WakeNet Jarvis; esp-sr movemodel.py packs srmodels.bin for the model partition.
+CONFIG_MODEL_IN_FLASH=y
+CONFIG_SR_WN_WN9_JARVIS_TTS=y
