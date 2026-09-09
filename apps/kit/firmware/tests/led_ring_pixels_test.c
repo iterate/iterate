@@ -59,7 +59,27 @@ static void dirty_table(void) {
   }
 }
 
+/** Literal boundaries pin rounding, clamping and every channel of the bar. */
+static void iterate_kit_led_ring_test_volume(void) {
+  const struct { uint8_t percent, lit; } rows[] = {
+    {0, 0}, {1, 0}, {4, 0}, {5, 1}, {12, 1}, {13, 2}, {25, 3},
+    {50, 6}, {75, 9}, {95, 11}, {96, 12}, {100, 12}, {255, 12},
+  };
+  for (size_t i = 0; i < sizeof(rows) / sizeof(rows[0]); ++i) {
+    struct iterate_kit_rgb8 pixels[12];
+    iterate_kit_led_ring_render_volume(rows[i].percent, pixels);
+    for (size_t j = 0; j < 12; ++j) {
+      const struct iterate_kit_rgb8 expected = rows[i].percent == 0 && j == 0
+          ? (struct iterate_kit_rgb8){255, 64, 48}
+          : j < rows[i].lit ? (struct iterate_kit_rgb8){64, 64, 64}
+                            : (struct iterate_kit_rgb8){0, 0, 0};
+      assert(memcmp(&pixels[j], &expected, sizeof(expected)) == 0);
+    }
+  }
+}
+
 int main(void) {
+  iterate_kit_led_ring_test_volume();
   repeat_table();
   dirty_table();
   return 0;

@@ -252,15 +252,7 @@ static void poll(void *context, struct iterate_kit_voice_intent *out) {
        * is — and the driver's measured 0 dB ceiling clamps the wheel
        * exactly as it clamps the RPC.
        */
-      int target =
-          (int)iterate_kit_board_volume() + steps * DIAL_VOLUME_STEP_PERCENT;
-      if (target < 0) target = 0;
-      if (target > 100) target = 100;
-      uint8_t applied = 0U;
-      if (iterate_kit_board_set_volume((uint8_t)target, &applied) ==
-          ITERATE_KIT_OK) {
-        havpe_ui_show_volume(applied);
-      }
+      (void)iterate_kit_board_nudge_volume(steps * DIAL_VOLUME_STEP_PERCENT);
     } else {
       havpe_mode_wheel_turn(&mode_state.wheel, steps, now);
       havpe_ui_show_mode(mode_state.wheel.shown);

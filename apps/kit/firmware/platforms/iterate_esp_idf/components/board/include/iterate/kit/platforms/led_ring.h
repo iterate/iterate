@@ -30,6 +30,14 @@ bool iterate_kit_led_ring_start(const struct iterate_kit_led_ring *facts);
  */
 bool iterate_kit_led_ring_present(
     const struct iterate_kit_conversation_visual_state *state, int64_t now_us);
+/** Borrow a white volume bar, or one red light at zero, for hold_ms. Percent
+ * clamps to 100; hold and replacement follow iterate_kit_led_ring_borrow.
+ */
+void iterate_kit_led_ring_show_volume(uint8_t percent, uint32_t hold_ms);
+/** Whether a timed borrow is still held. One-shot idle quadrants do not count;
+ * their board may renew them once the timed gesture expires. App task only.
+ */
+bool iterate_kit_led_ring_borrowed(void);
 /** Borrow the twelve logical lights for hold_ms from now, replacing a prior
  * overlay. Positive holds are for dial gestures; zero borrows exactly the
  * next successful presentation (HAVPE's idle quadrant, recalculated by its

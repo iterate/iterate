@@ -17,6 +17,21 @@ bool iterate_kit_led_ring_dirty(
   return !painted || memcmp(shown, next, 12U * sizeof(*next)) != 0;
 }
 
+/** The white volume bar fills from light zero; silence remains visible in red. */
+void iterate_kit_led_ring_render_volume(
+    uint8_t percent, struct iterate_kit_rgb8 pixels[ITERATE_KIT_CONVERSATION_LIGHT_COUNT]) {
+  if (percent > 100U) percent = 100U;
+  const int lit = ((int)percent * ITERATE_KIT_CONVERSATION_LIGHT_COUNT + 50) / 100;
+  for (int index = 0; index < ITERATE_KIT_CONVERSATION_LIGHT_COUNT; ++index) {
+    pixels[index] = index < lit
+        ? (struct iterate_kit_rgb8){64U, 64U, 64U}
+        : (struct iterate_kit_rgb8){0U, 0U, 0U};
+  }
+  /* Silence is a state, not an absence: one red pixel, as the official
+   * firmware's volume display marks a muted speaker. */
+  if (percent == 0U) pixels[0] = (struct iterate_kit_rgb8){255U, 64U, 48U};
+}
+
 #ifdef ESP_PLATFORM
 #include "iterate/kit/platforms/led_ring.h"
 #include "iterate/kit/conversation_overlay.h"
@@ -79,6 +94,18 @@ void iterate_kit_led_ring_borrow(const struct iterate_kit_rgb8 lights[12], uint3
   memcpy(ring.borrowed, lights, sizeof(ring.borrowed));
   ring.borrowed_until_us = esp_timer_get_time() + (int64_t)hold_ms * 1000;
   ring.borrow_once = hold_ms == 0U;
+}
+
+/** Share the twelve-light volume arithmetic across physical ring sizes. */
+void iterate_kit_led_ring_show_volume(uint8_t percent, uint32_t hold_ms) {
+  struct iterate_kit_rgb8 pixels[ITERATE_KIT_CONVERSATION_LIGHT_COUNT];
+  iterate_kit_led_ring_render_volume(percent, pixels);
+  iterate_kit_led_ring_borrow(pixels, hold_ms);
+}
+
+/** Timed gestures outrank HAVPE's continually renewed idle quadrant. */
+bool iterate_kit_led_ring_borrowed(void) {
+  return esp_timer_get_time() < ring.borrowed_until_us;
 }
 
 bool iterate_kit_led_ring_present(

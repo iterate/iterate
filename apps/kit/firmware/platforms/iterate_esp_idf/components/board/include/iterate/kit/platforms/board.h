@@ -82,6 +82,17 @@ bool iterate_kit_board_boot_steps(
  * reported value. The dial and RPC share this exact path.
  */
 enum iterate_kit_status iterate_kit_board_set_volume(uint8_t percent, uint8_t *applied);
+/** Nudge by signed percentage points, clamp to 0..100 then the table ceiling,
+ * and set through iterate_kit_board_set_volume. Success borrows the ring for
+ * a one-second volume bar; failure leaves the reported volume and bar alone.
+ * App task only; board-specific mute feedback may immediately replace the bar.
+ */
+enum iterate_kit_status iterate_kit_board_nudge_volume(int step);
+/** Last view copied by board.c before presenting the ring and extra. Initially
+ * zero; borrowed singleton storage changes on the next presentation. App task
+ * only: poll reads the previous presentation, including call_active/wants_call.
+ */
+const struct iterate_kit_voice_view *iterate_kit_board_view(void);
 /** Last successfully applied percent; startup adopts the board's driver value
  * when extra supplies one, otherwise the table's full-scale initial setting.
  */

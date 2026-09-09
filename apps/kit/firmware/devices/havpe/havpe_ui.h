@@ -10,8 +10,6 @@ bool havpe_ui_init(void);
  * board.c paints the ring. A timed dial overlay wins for one second.
  */
 void havpe_ui_present(const struct iterate_kit_voice_view *view);
-/** Show N of twelve white lights; zero is one red muted pixel. */
-void havpe_ui_show_volume(uint8_t percent);
 /** Borrow one bright quadrant for the selected mode, for one second. */
 void havpe_ui_show_mode(uint8_t mode);
 /** Adopt the dim idle quadrant; the next press's posture is glanceable. */

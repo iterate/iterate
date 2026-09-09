@@ -29,7 +29,6 @@ enum {
  * arrives after the finger has left is decoration, not feedback.
  */
 static uint8_t mode = HAVPE_MODE_COUNT;
-static int64_t overlay_until_us;
 
 /*
  * The dial, sampled by the tick rather than the control poll on purpose: the
@@ -94,21 +93,6 @@ enum {
   MODE_QUADRANT_DIM = 8,
 };
 
-static void render_volume(struct iterate_kit_rgb8 pixels[LED_COUNT], uint8_t percent) {
-  const int lit =
-      ((int)percent * LED_COUNT + 50) / 100;
-  for (int index = 0; index < LED_COUNT; ++index) {
-    pixels[index] = index < lit
-        ? (struct iterate_kit_rgb8){64U, 64U, 64U}
-        : (struct iterate_kit_rgb8){0U, 0U, 0U};
-  }
-  /* Silence is a state, not an absence: one red pixel, as the official
-   * firmware's volume display marks a muted speaker. */
-  if (percent == 0U) {
-    pixels[0] = (struct iterate_kit_rgb8){255U, 64U, 48U};
-  }
-}
-
 static void render_quadrant(
     struct iterate_kit_rgb8 pixels[LED_COUNT], uint8_t mode, uint8_t level) {
   const int first = (int)mode * 3;
@@ -119,16 +103,8 @@ static void render_quadrant(
   }
 }
 
-void havpe_ui_show_volume(uint8_t percent) {
-  overlay_until_us = esp_timer_get_time() + OVERLAY_HOLD_US;
-  struct iterate_kit_rgb8 pixels[LED_COUNT];
-  render_volume(pixels, percent > 100U ? 100U : percent);
-  iterate_kit_led_ring_borrow(pixels, OVERLAY_HOLD_US / 1000);
-}
-
 void havpe_ui_show_mode(uint8_t value) {
   if (value >= HAVPE_MODE_COUNT) return;
-  overlay_until_us = esp_timer_get_time() + OVERLAY_HOLD_US;
   struct iterate_kit_rgb8 pixels[LED_COUNT];
   render_quadrant(pixels, value, MODE_QUADRANT_BRIGHT);
   iterate_kit_led_ring_borrow(pixels, OVERLAY_HOLD_US / 1000);
@@ -150,7 +126,7 @@ void havpe_ui_present(const struct iterate_kit_voice_view *view) {
     strlcpy(last_status, view->status, sizeof(last_status));
     ESP_LOGI(tag, "status: %s", view->status);
   }
-  if (esp_timer_get_time() < overlay_until_us) return;
+  if (iterate_kit_led_ring_borrowed()) return;
   iterate_kit_led_ring_borrow(NULL, 0);
   struct iterate_kit_conversation_visual_state state;
   iterate_kit_voice_view_lights(view, &state);

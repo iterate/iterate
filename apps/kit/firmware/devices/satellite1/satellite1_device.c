@@ -107,16 +107,21 @@ static enum iterate_kit_status iterate_kit_satellite1_set_volume(
       ? ITERATE_KIT_OK : ITERATE_KIT_IO_ERROR;
 }
 
-/** HAVPE havpe_ui.c render_volume arithmetic, repeated onto 24 physical LEDs. */
-static void iterate_kit_satellite1_show_volume(uint8_t percent) {
+/** Add the hardware mute fact to the shared renderer, after board.c presents.
+ * Borrow once for its next refresh; a fault still uses the shared fault chase.
+ * Poll clears the overlay on mute transitions before any new volume gesture.
+ */
+static void iterate_kit_satellite1_present(
+    void *context, const struct iterate_kit_voice_view *view) {
+  (void)context;
+  if (!microphone_muted) return;
+  struct iterate_kit_conversation_visual_state state;
   struct iterate_kit_rgb8 pixels[ITERATE_KIT_CONVERSATION_LIGHT_COUNT];
-  const int lit = ((int)percent * ITERATE_KIT_CONVERSATION_LIGHT_COUNT + 50) / 100;
-  for (int i = 0; i < ITERATE_KIT_CONVERSATION_LIGHT_COUNT; ++i) {
-    pixels[i] = i < lit ? (struct iterate_kit_rgb8){64U, 64U, 64U}
-                        : (struct iterate_kit_rgb8){0U, 0U, 0U};
-  }
-  if (percent == 0U) pixels[0] = (struct iterate_kit_rgb8){255U, 64U, 48U};
-  iterate_kit_led_ring_borrow(pixels, 1000);
+  iterate_kit_voice_view_lights(view, &state);
+  state.microphone_muted = true;
+  iterate_kit_conversation_lights_animate(
+      &state, (uint32_t)(esp_timer_get_time() / 1000), pixels);
+  iterate_kit_led_ring_borrow(pixels, 0);
 }
 
 /** Read only trustworthy GPIO_IN_A at the shared 25 ms control cadence.
@@ -149,30 +154,12 @@ static void iterate_kit_satellite1_poll(void *context, struct iterate_kit_voice_
   const int step = (int)iterate_kit_button_take_press(&volume_up) -
       (int)iterate_kit_button_take_press(&volume_down);
   if (step == 0) return;
-  int target = (int)iterate_kit_board_volume() + step * 5;
-  if (target < 0) target = 0;
-  if (target > 100) target = 100;
-  uint8_t applied;
-  if (iterate_kit_board_set_volume((uint8_t)target, &applied) == ITERATE_KIT_OK) {
-    if (!microphone_muted) iterate_kit_satellite1_show_volume(applied);
+  if (iterate_kit_board_nudge_volume(step * 5) == ITERATE_KIT_OK && microphone_muted) {
+    /* A volume gesture still changes the amp while the hardware mic rail is
+     * cut, but must never flash a white bar over the mute indication. Both
+     * borrows happen on this task before the ring can refresh. */
+    iterate_kit_satellite1_present(NULL, iterate_kit_board_view());
   }
-}
-
-/** Add the hardware mute fact to the shared renderer, after board.c presents.
- * Borrow once for its next refresh; a fault still uses the shared fault chase.
- * Poll clears the overlay on mute transitions before any new volume gesture.
- */
-static void iterate_kit_satellite1_present(
-    void *context, const struct iterate_kit_voice_view *view) {
-  (void)context;
-  if (!microphone_muted) return;
-  struct iterate_kit_conversation_visual_state state;
-  struct iterate_kit_rgb8 pixels[ITERATE_KIT_CONVERSATION_LIGHT_COUNT];
-  iterate_kit_voice_view_lights(view, &state);
-  state.microphone_muted = true;
-  iterate_kit_conversation_lights_animate(
-      &state, (uint32_t)(esp_timer_get_time() / 1000), pixels);
-  iterate_kit_led_ring_borrow(pixels, 0);
 }
 
 /** Refresh amplifier faults before appending its fields and the XMOS facts. */
