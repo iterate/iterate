@@ -72,6 +72,10 @@ test("submission applies locally, retains a rejected draft, and never clears lat
   document.body.appendChild(host);
   const root = createRoot(host);
   let available = false;
+  let savedDraft = "";
+  const onDraftChange = (draft: string) => {
+    savedDraft = draft;
+  };
   const onSubmit = vi.fn(() => available);
   try {
     await act(async () => {
@@ -80,6 +84,7 @@ test("submission applies locally, retains a rejected draft, and never clears lat
           initialValue="First comment"
           placeholder="Comment"
           submitLabel="Send"
+          onDraftChange={onDraftChange}
           onSubmit={onSubmit}
         />,
       );
@@ -100,6 +105,19 @@ test("submission applies locally, retains a rejected draft, and never clears lat
     });
     expect(textarea.value).toBe("Next comment");
     expect(textarea.disabled).toBe(false);
+    await act(async () => root.render(null));
+    await act(async () =>
+      root.render(
+        <ReviewComposer
+          initialValue={savedDraft}
+          onDraftChange={onDraftChange}
+          placeholder="Comment"
+          submitLabel="Send"
+          onSubmit={onSubmit}
+        />,
+      ),
+    );
+    expect(host.querySelector("textarea")!.value).toBe("Next comment");
   } finally {
     await act(async () => root.unmount());
     host.remove();

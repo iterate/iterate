@@ -12,6 +12,12 @@ endmatter can each add a valid first comment. Rebasing preserves both insertions
 but creates two YAML footers; Roughdraft then reports a missing metadata entry.
 This limitation is explicitly accepted for the initial implementation.
 
+A related stale-client case is pinned as `STALE ENDMATTER APPEND`: one client
+creates its first comment and footer while another appends at the old EOF. Text
+OT preserves that stale append after the new footer, where it corrupts YAML.
+It cannot be fixed by relocating remote changes in one client, which would
+diverge from the shared document.
+
 The executable reproduction is
 `apps/os/src/domains/workspaces/collab-review.test.ts`, named
 “simultaneous first comments should share one valid endmatter”. It uses the real

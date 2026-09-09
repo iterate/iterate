@@ -2152,7 +2152,13 @@ class AgentCollectionLiveStateRpcTarget
   async subscribe(
     onUpdate: (update: LiveUpdate<AgentCollectionProcessorState>) => unknown,
   ): Promise<LiveStateSubscriptionHandle> {
-    return await this.#bornThenRetry(() => this.#relay().subscribe(onUpdate));
+    // The Pager's upgrade is routed by the Stream DO's committed subscription
+    // catalog and therefore fails before the relay can inspect the facade's
+    // unconfigured-subscription refusal. Ensure this collection's idempotent
+    // birth batch first; get() supplies that narrow initialization and leaves
+    // no retained subscription.
+    await this.get();
+    return await this.#relay().subscribe(onUpdate);
   }
 }
 
@@ -9001,10 +9007,9 @@ type LiveStateDurableObjectStub<State> = {
  * read must never leave a capability pinning the DO for the session's life.
  * `subscribe()` rides the client-given hibernatable Live State Pager
  * (domains/live-state-pager.ts) when the host declares the lane, so a
- * watched idle DO leaves memory; a host without the lane — and any socket
- * failure — falls back to forwarding the subscription into the DO, which
- * retains the callback there and pins it (exactly the pre-socket behavior,
- * loudly logged so pinning regressions are greppable).
+ * watched idle DO leaves memory. A Pager failure rejects the subscription;
+ * the browser hook reports it and performs its bounded re-subscribe, rather
+ * than retaining a callback that pins the Durable Object.
  */
 class LiveStateRelayRpcTarget<State extends object>
   extends IterateRpcRelay<"LiveStateRpc">
@@ -9081,14 +9086,7 @@ class LiveStateRelayRpcTarget<State extends object>
     onUpdate: (update: LiveUpdate<State>) => unknown,
   ): Promise<LiveStateSubscriptionHandle> {
     if (this.#relay !== undefined) {
-      try {
-        return new LiveStateSubscriptionRpcTarget(await this.#relay.subscribe(onUpdate));
-      } catch (error) {
-        console.warn(
-          "Live State Pager unavailable; subscription falls back to pinning the durable object",
-          { label: this.#label, error },
-        );
-      }
+      return new LiveStateSubscriptionRpcTarget(await this.#relay.subscribe(onUpdate));
     }
     return await (await (await this.#stub()).liveState).subscribe(onUpdate);
   }

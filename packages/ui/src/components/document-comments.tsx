@@ -513,6 +513,7 @@ export function ReviewComposer({
   placeholder,
   submitLabel,
   textareaRef,
+  onDraftChange,
   onSubmit,
   onCancel,
 }: {
@@ -520,17 +521,23 @@ export function ReviewComposer({
   placeholder: string;
   submitLabel: string;
   textareaRef?: React.RefObject<HTMLTextAreaElement | null>;
+  /** Lets a temporary host retain its draft across unmounts. */
+  onDraftChange?: (draft: string) => void;
   /** Absent while unavailable: keep the draft editable and disable submission. */
   onSubmit?: (body: string) => boolean;
   onCancel?: () => void;
 }) {
   const [draft, setDraft] = React.useState(initialValue);
   const [error, setError] = React.useState<string | null>(null);
+  const updateDraft = (value: string) => {
+    setDraft(value);
+    onDraftChange?.(value);
+  };
   const submit = () => {
     if (!onSubmit || draft.trim() === "") return;
     setError(null);
     try {
-      if (onSubmit(draft)) setDraft("");
+      if (onSubmit(draft)) updateDraft("");
     } catch (error) {
       setError(error instanceof Error ? error.message : "The comment could not be saved.");
     }
@@ -547,7 +554,7 @@ export function ReviewComposer({
           <Textarea
             ref={textareaRef}
             value={draft}
-            onChange={(event) => setDraft(event.target.value)}
+            onChange={(event) => updateDraft(event.target.value)}
             onKeyDown={(event) => {
               if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
                 event.preventDefault();

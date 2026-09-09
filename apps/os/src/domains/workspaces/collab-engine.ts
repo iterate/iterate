@@ -1,5 +1,6 @@
 import { ChangeSet, Text } from "@codemirror/state";
 import { rebaseUpdates, type Update } from "@codemirror/collab";
+import { textEdits } from "@iterate-com/workspace-documents/text-edits";
 
 /**
  * Server authority for per-file collaborative editing — the rebase model
@@ -97,24 +98,12 @@ export type CollabBroadcast = {
   toVersion: number;
 };
 
-/** Whole-content replacement as a common-prefix/suffix splice — preserves
- * concurrent edits outside the changed region (null when nothing changed). */
+/** Whole-content replacement as disjoint edits — preserves concurrent changes
+ * in unchanged regions (null when nothing changed). */
 export function minimalSplice(doc: Text, next: string): ChangeSet | null {
   const current = doc.toString();
   if (current === next) return null;
-  let start = 0;
-  const maxStart = Math.min(current.length, next.length);
-  while (start < maxStart && current[start] === next[start]) start++;
-  let endCurrent = current.length;
-  let endNext = next.length;
-  while (endCurrent > start && endNext > start && current[endCurrent - 1] === next[endNext - 1]) {
-    endCurrent--;
-    endNext--;
-  }
-  return ChangeSet.of(
-    { from: start, insert: next.slice(start, endNext), to: endCurrent },
-    current.length,
-  );
+  return ChangeSet.of(textEdits(current, next), current.length);
 }
 
 const SNAPSHOT_EVERY = 256;

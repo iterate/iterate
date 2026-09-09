@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Compartment, EditorState, type Extension } from "@codemirror/state";
 import { getSyncedVersion, sendableUpdates } from "@codemirror/collab";
 import { EditorView } from "@codemirror/view";
+import { readOnlyExtension } from "@atomic-editor/editor";
 import { textEdits } from "./text-edits.ts";
 import { CollabConnection, peerExtension } from "./collab-client.ts";
 import { redlineExtension } from "./collab-redline.ts";
@@ -25,10 +26,13 @@ export function useCollabEditor(input: {
   displayName?: string;
   /** Host-facing document identifier used in callbacks and CollabEditorApi. */
   path: string;
-  /** Path sent to the workspace collab lane. Defaults to `path`. */
+  /** Path sent to the workspace collaboration session. Defaults to `path`. */
   workspacePath?: string;
   /** Extra extensions for the surface (keymaps, theme, listeners). */
   extensions: Extension;
+  /** The in-place document presentation. Reconfigured without remounting the
+   * collab session, history, selection, or remote cursor state. */
+  presentation?: Extension;
   /** Redline layers on at build time (kept in sync with toggle()). */
   redline: boolean;
   /** Place the caret on mount: select the `# headline` text (so typing
@@ -51,6 +55,8 @@ export function useCollabEditor(input: {
   const [recovery, setRecovery] = useState<string | null>(null);
   const redlineRef = useRef(input.redline);
   const toggleRef = useRef<((on: boolean) => void) | null>(null);
+  const presentationRef = useRef<Extension>(input.presentation ?? []);
+  const presentationToggleRef = useRef<((extension: Extension) => void) | null>(null);
   // Same ref discipline as redline: the session effect must NOT depend on
   // the callback's identity (an unstable prop would remount the editor),
   // but the adapter must still call the LATEST one.
@@ -74,6 +80,11 @@ export function useCollabEditor(input: {
   useEffect(() => {
     onPeersRef.current = input.onPeers;
   }, [input.onPeers]);
+  useEffect(() => {
+    const presentation = input.presentation ?? [];
+    presentationRef.current = presentation;
+    presentationToggleRef.current?.(presentation);
+  }, [input.presentation]);
   const setStatus = useCallback(
     (next: string) => {
       setStatusState(next);
@@ -89,7 +100,6 @@ export function useCollabEditor(input: {
     // while the new session is still seeding.
     setStatus("connecting…");
     const connection = new CollabConnection(transport, workspacePath, displayName);
-    connection.onStatus = setStatus;
     connection.onPeers = (clients) => {
       // Empty delivery = a dead session (the client fires [] on ended):
       // clear the strip rather than re-injecting a self that is not live.
@@ -104,6 +114,8 @@ export function useCollabEditor(input: {
       );
     };
     const redlineLayer = new Compartment();
+    const presentationLayer = new Compartment();
+    const editableLayer = new Compartment();
     let view: EditorView | null = null;
     let cancelled = false;
 
@@ -133,11 +145,21 @@ export function useCollabEditor(input: {
           // redline toggle is off.
           remoteCursorsExtension(connection),
           redlineLayer.of(redlines),
+          presentationLayer.of(presentationRef.current),
+          editableLayer.of(readOnlyExtension(connection.dead)),
         ],
       });
 
     toggleRef.current = (on: boolean) => {
       view?.dispatch({ effects: redlineLayer.reconfigure(redlines(on)) });
+    };
+    presentationToggleRef.current = (presentation: Extension) => {
+      view?.dispatch({ effects: presentationLayer.reconfigure(presentation) });
+    };
+
+    connection.onStatus = (next) => {
+      view?.dispatch({ effects: editableLayer.reconfigure(readOnlyExtension(connection.dead)) });
+      setStatus(next);
     };
 
     connection.onReseed = (snapshot, unsynced) => {
@@ -166,9 +188,14 @@ export function useCollabEditor(input: {
           const live = view;
           apiRef.current = {
             applyTransform: (transform) => {
+              if (connection.dead) throw new Error("Reconnect before editing this document.");
               const current = live.state.doc.toString();
               const next = transform(current);
-              live.dispatch({ changes: textEdits(current, next) });
+              live.dispatch({
+                changes: textEdits(current, next),
+                filter: false,
+                userEvent: "transform",
+              });
               // Explicit actions update their controls immediately, unlike continuous typing.
               if (reflectTimer) clearTimeout(reflectTimer);
               onLiveContent?.(path, live.state.doc.toString());
@@ -224,6 +251,7 @@ export function useCollabEditor(input: {
         }
       }
       toggleRef.current = null;
+      presentationToggleRef.current = null;
       if (apiRef !== undefined) apiRef.current = null;
       view?.destroy();
     };

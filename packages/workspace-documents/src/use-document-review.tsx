@@ -14,6 +14,7 @@ import {
   type ReviewOperation,
 } from "iterate/document-review";
 import { authorColor } from "./collab-author.ts";
+import type { EditorReviewConfig } from "./collab-editor-api.ts";
 import type { CommentIdentity } from "./types.ts";
 
 /** Connect RFM source to the format-independent preview and comments UI. */
@@ -26,21 +27,25 @@ export function useDocumentReview({
   source: string;
   identity: CommentIdentity | null;
   busy: boolean;
-  /** Apply to the current local source; false means the editor is unavailable. */
-  onTransform: (transform: (current: string) => string) => boolean;
+  /** Absent while unavailable; apply to the current source, preserving a failed draft. */
+  onTransform?: (transform: (current: string) => string) => boolean;
 }) {
   const review = useMemo(() => readReview(source), [source]);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const canWrite =
-    identity !== null && !busy && !review.diagnostics.some((d) => d.severity === "error");
+    identity !== null &&
+    !busy &&
+    !!onTransform &&
+    !review.diagnostics.some((d) => d.severity === "error");
 
-  const apply = (operation: ReviewOperation) => {
+  const apply = (operationFor: (current: string) => ReviewOperation) => {
     try {
-      const applied = onTransform((current) => {
-        const result = applyReviewOperation(current, operation);
-        if (!result.ok) throw new Error(result.message);
-        return result.source;
-      });
+      const applied =
+        onTransform?.((current) => {
+          const result = applyReviewOperation(current, operationFor(current));
+          if (!result.ok) throw new Error(result.message);
+          return result.source;
+        }) ?? false;
       if (!applied) {
         toast.error(
           "The document editor is unavailable. Your draft is saved here; reconnect to continue.",
@@ -57,23 +62,23 @@ export function useDocumentReview({
     if (!identity) return false;
     switch (action.kind) {
       case "add-document-comment":
-        return apply({ type: action.kind, body: action.body, author: identity.author });
+        return apply(() => ({ type: action.kind, body: action.body, author: identity.author }));
       case "reply":
-        return apply({
+        return apply(() => ({
           type: "reply",
           parentId: action.threadId,
           body: action.body,
           author: identity.author,
-        });
+        }));
       case "edit-comment":
-        return apply({ type: "edit", id: action.commentId, body: action.body });
+        return apply(() => ({ type: "edit", id: action.commentId, body: action.body }));
       case "delete-comment":
-        return apply({ type: "delete", id: action.commentId });
+        return apply(() => ({ type: "delete", id: action.commentId }));
       case "set-thread-status":
-        return apply({ type: "set-status", id: action.threadId, status: action.status });
+        return apply(() => ({ type: "set-status", id: action.threadId, status: action.status }));
       case "accept-suggestion":
       case "reject-suggestion":
-        return apply({ type: action.kind, id: action.threadId });
+        return apply(() => ({ type: action.kind, id: action.threadId }));
     }
   };
 
@@ -176,15 +181,34 @@ export function useDocumentReview({
             toast.error("This selection cannot be attached to the Markdown source.");
             return false;
           }
-          return apply({
+          return apply(() => ({
             type: "add-selected-comment",
             expectedSource: source,
             range: sourceRange,
             body,
             author: identity.author,
+          }));
+        }
+      : undefined,
+  };
+  const editor: EditorReviewConfig = {
+    selectedThreadId: selectedIds[0] ?? null,
+    onSelectThread: (id) => setSelectedIds(id ? [id] : []),
+    onComment: canWrite
+      ? (range, body) => {
+          if (!identity) return false;
+          return apply((current) => {
+            const bodyStart = readReview(current).body.range.start;
+            return {
+              type: "add-selected-comment",
+              expectedSource: current,
+              range: { start: range.from - bodyStart, end: range.to - bodyStart },
+              body,
+              author: identity.author,
+            };
           });
         }
       : undefined,
   };
-  return { preview, comments };
+  return { editor, preview, comments };
 }
