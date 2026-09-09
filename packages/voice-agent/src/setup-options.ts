@@ -111,8 +111,37 @@ export interface VoiceAgentHealth {
  * method signatures: the declaration bundler's printer cannot emit the latter
  * inside an interface, and a class method satisfies either.
  */
+/**
+ * A line for the live call's voice to say now — the idle reaper's farewell
+ * uses the same path. One durable `say` event lands on the stream; the facet
+ * speaks it through whichever call is live (an idle stream just keeps the
+ * record that somebody tried), and `thenHangUp` closes the call once the
+ * line has finished playing, with `reason` as the obituary.
+ */
+export interface SayOptions {
+  /** The conversation stream the line is for. */
+  streamPath: string;
+  /** What to say, as close to word-for-word as natural speech allows. */
+  text: string;
+  /** Why — recorded on the event and, with `thenHangUp`, on the obituary. */
+  reason?: string;
+  /** Who asked; defaults to "entrypoint.say". */
+  by?: string;
+  /** Close the call once the line has PLAYED (never before). */
+  thenHangUp?: boolean;
+  /** Address one call; absent, whichever call is live. */
+  conversationId?: string;
+}
+
+/** What `say` appended: the stream and the event's offset. */
+export interface SayResult {
+  streamPath: string;
+  offset: number;
+}
+
 export interface VoiceAgentRpc {
   health: () => Promise<VoiceAgentHealth>;
   setupVoiceAgent: (options?: SetupVoiceAgentOptions) => Promise<SetupVoiceAgentResult>;
   removeVoiceAgent: (options: { streamPath: string }) => Promise<{ streamPath: string }>;
+  say: (options: SayOptions) => Promise<SayResult>;
 }

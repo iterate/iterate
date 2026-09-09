@@ -1,5 +1,7 @@
 import { voiceAgentEntrypointRef } from "./ref.ts";
 import type {
+  SayOptions,
+  SayResult,
   SetupVoiceAgentOptions,
   SetupVoiceAgentResult,
   VoiceAgentRpc,
@@ -85,6 +87,8 @@ export const VoiceAgentApp = {
       /** Take the agent off a stream. */
       remove: (target: { streamPath: string }): Promise<{ streamPath: string }> =>
         dial((guest) => guest.removeVoiceAgent(target)),
+      /** Have the live call on a stream say a line now — and hang up after it, if asked. */
+      say: (line: SayOptions): Promise<SayResult> => dial((guest) => guest.say(line)),
     };
   },
 };

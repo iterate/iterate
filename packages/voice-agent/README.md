@@ -144,6 +144,19 @@ const line = await this.#voice.setup({
 // → { streamPath, warmMs }
 
 await this.#voice.remove({ streamPath: line.streamPath });
+
+// Have the live call say a line now — an operator's script, a cron, an agent.
+// With thenHangUp the call closes once the line has PLAYED, and the obituary
+// carries the reason: a call is never ended silently when there is a voice
+// to say so. (The idle reaper's own farewell goes through the same path.)
+await this.#voice.say({
+  streamPath: line.streamPath,
+  text: "I'm closing this call now; the shop is done.",
+  reason: "operator: shop complete",
+  thenHangUp: true,
+});
+// → { streamPath, offset }; afterwards the stream reads say → answer-transcript
+//   (kind "say") → conversation-end-requested → conversation-ended.
 ```
 
 `create(env)` takes the worker's `this.env` (anything with an `ITX` binding
@@ -239,7 +252,7 @@ project's key.
 — and the subscription that wakes the facet for that stream (the worker ref
 above). Then it waits for the facet to fold the certificate (a cold build is
 most of the wait; `warmMs` in the result is that clock), so a returned
-`setup` means the line is live. Contract version `19.0.0`.
+`setup` means the line is live. Contract version `20.0.0`.
 
 Every stream is born with a **colleague**: a normal text agent
 (`/agents/voice-notes/…` by default, or the chat you named in
@@ -257,19 +270,20 @@ and slow, on one stream.
 A client is anything that can append to the stream and receive its ephemeral
 events. Every type below is prefixed `events.iterate.com/voice-agent/`.
 
-| Event                        | Direction | Durable   | Payload                                                                                                         |
-| ---------------------------- | --------- | --------- | --------------------------------------------------------------------------------------------------------------- |
-| `ptt-start`                  | client →  | durable   | `{}` — the user began speaking; opens a call if none is up (push-to-talk clients only)                          |
-| `mic-frame`                  | client →  | ephemeral | `{ conversationId, seq, pcm }` — 20 ms of base64 PCM16 mono 16 kHz, numbered by the device                      |
-| `ptt-end`                    | client →  | durable   | `{}` — the turn is complete                                                                                     |
-| `conversation-end-requested` | either    | durable   | `{ conversationId, reason }` — somebody decided the call is over (the hang-up button, the `hang_up` tool, idle) |
-| `call-started`               | ← server  | durable   | `{ conversationId }` — the server opened a call                                                                 |
-| `conversation-accepted`      | ← server  | durable   | `{ conversationId, handshakeTookMs, heldMicFrames }` — the provider accepted the session; the call is live      |
-| `spk-frame`                  | ← server  | ephemeral | `{ conversationId, deviceSpeakerFrameSeq, pcm, drop?, last? }` — one paced chunk of the answer                  |
-| `utterance-transcript`       | ← server  | durable   | `{ conversationId, text }` — the provider's transcription of one finished listener turn                         |
-| `answer-transcript`          | ← server  | durable   | `{ conversationId, text, cancelled?, kind? }` — one finished answer, in words                                   |
-| `conversation-ended`         | ← server  | durable   | `{ conversationId, reason }` — the call is over                                                                 |
-| `colleague-note`             | ← server  | durable   | `{ text }` — one message from the colleague, spoken into the live call                                          |
+| Event                        | Direction | Durable   | Payload                                                                                                                                                                                    |
+| ---------------------------- | --------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `ptt-start`                  | client →  | durable   | `{}` — the user began speaking; opens a call if none is up (push-to-talk clients only)                                                                                                     |
+| `mic-frame`                  | client →  | ephemeral | `{ conversationId, seq, pcm }` — 20 ms of base64 PCM16 mono 16 kHz, numbered by the device                                                                                                 |
+| `ptt-end`                    | client →  | durable   | `{}` — the turn is complete                                                                                                                                                                |
+| `conversation-end-requested` | either    | durable   | `{ conversationId, reason }` — somebody decided the call is over (the hang-up button, the `hang_up` tool, idle)                                                                            |
+| `call-started`               | ← server  | durable   | `{ conversationId }` — the server opened a call                                                                                                                                            |
+| `conversation-accepted`      | ← server  | durable   | `{ conversationId, handshakeTookMs, heldMicFrames }` — the provider accepted the session; the call is live                                                                                 |
+| `spk-frame`                  | ← server  | ephemeral | `{ conversationId, deviceSpeakerFrameSeq, pcm, drop?, last? }` — one paced chunk of the answer                                                                                             |
+| `utterance-transcript`       | ← server  | durable   | `{ conversationId, text }` — the provider's transcription of one finished listener turn                                                                                                    |
+| `answer-transcript`          | ← server  | durable   | `{ conversationId, text, cancelled?, kind? }` — one finished answer, in words                                                                                                              |
+| `conversation-ended`         | ← server  | durable   | `{ conversationId, reason }` — the call is over                                                                                                                                            |
+| `colleague-note`             | ← server  | durable   | `{ text }` — one message from the colleague, spoken into the live call                                                                                                                     |
+| `say`                        | either    | durable   | `{ text, reason?, by?, thenHangUp?, conversationId? }` — a line for the live call's voice to say now; `thenHangUp` closes the call once it has played (the idle reaper's farewell uses it) |
 
 **A client's entire speaker policy is three lines.** On a `spk-frame`: if
 `drop`, clear the speaker buffer (the listener barged in; discard what has not
@@ -442,3 +456,10 @@ The agent's behavioural tests live with the lab tooling in
 - **A migrated project still lists `face.ts` and friends** — harmless dead
   weight; `voicelab deploy --prune-legacy` or `removeLegacyGuest` removes
   them.
+- **`say` (or any newly consumed event) is appended but the call never
+  speaks it** — the stream's facet subscription filters on a SNAPSHOT of
+  `contract.consumes`, taken by whichever build ran setup. A stream set up
+  before an event type joined `consumes` never receives it. Re-run
+  `setupVoiceAgent` on that stream (the CLI's `talk` does so on every run):
+  the subscription's idempotency key is a hash of its filter, so a changed
+  `consumes` installs the new filter and an unchanged one is a no-op.

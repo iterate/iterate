@@ -151,6 +151,8 @@ import { createFace } from "./face.ts";
  * load-bearing rather than cosmetic. */
 import { voiceAgentFacetRef } from "./ref.ts";
 import type {
+  SayOptions,
+  SayResult,
   SetupVoiceAgentOptions,
   SetupVoiceAgentResult,
   VoiceAgentHealth,
@@ -346,6 +348,27 @@ const IDLE_STAMP_STEP_MS = 5_000;
 
 /** How often the idle countdown looks at the facet clock. */
 const IDLE_TICK_MS = 5_000;
+/**
+ * How long the idle reaper waits for its farewell to START before giving up
+ * on saying it and burying the call silently. A provider that has not even
+ * created the response in this long is not going to; a farewell that HAS
+ * started is owned by the drain point, which ends the call once it has
+ * played. Under IDLE_TIMEOUT_MS's own slack on purpose: an announced end
+ * must never make a dead call outlive the deadline by more than this.
+ */
+export const IDLE_FAREWELL_GRACE_MS = 8_000;
+
+/**
+ * What the reaper says before it hangs up. Said in the model's own voice
+ * through the ordinary `say` path, so the transcript shows it like anything
+ * else the assistant said. Worded per client: a push-to-talk client presses
+ * to come back; an open-mic board presses AND talks.
+ */
+function idleFarewell(clientTakesTurns: boolean): string {
+  return clientTakesTurns
+    ? "I haven't heard anything for a minute, so I'm closing this call now. Press the button when you want me back."
+    : "I haven't heard anything for a minute, so I'm closing this call now. Press the button and start talking when you want me back.";
+}
 
 /**
  * How long after a dial failure before anything may dial again.
@@ -1214,7 +1237,18 @@ export const VoiceAgentContract = defineProcessorContract({
    * greets with the thread in mind, and every provider session's whole
    * briefing is recorded (`session-configured`) so the stream shows how
    * the frontend was initialized. Clean break as ever. */
-  version: "19.0.0",
+  /* 20.0.0: a call is never ended silently when there is a voice to say
+   * so. `say` — a durable event anybody outside the model may append (the
+   * idle reaper, an operator's script through the entrypoint's `say()`, a
+   * colleague) — is spoken through the live call in the model's own voice,
+   * recorded as an answer-transcript of kind "say", and with `thenHangUp`
+   * closes the call once the line has PLAYED, the obituary carrying the
+   * asker's reason. The idle reaper uses it: a farewell first, then the
+   * hang-up, and the silent obituary only if the provider never starts the
+   * line. `consumes` grows by one type, so a stream set up by an older
+   * build needs its setup re-run before it hears a `say`. Clean break as
+   * ever. */
+  version: "20.0.0",
   description: "Runs a voice call in the stream's own Durable Object, one flush watermark deep.",
   stateSchema: VoiceState,
   events: {
@@ -1406,6 +1440,23 @@ export const VoiceAgentContract = defineProcessorContract({
         "to an existing chat greets with the thread in mind, and a reconnect keeps it.",
       payloadSchema: z.looseObject({ text: z.string() }),
     },
+    "events.iterate.com/voice-agent/say": {
+      description:
+        "Somebody outside the model wants the listener told something, now, in the model's own " +
+        "voice: the idle reaper's farewell, an operator's script, a colleague. Durable so the " +
+        "record shows who asked (`by`) and why (`reason`); what was actually said follows as an " +
+        'answer-transcript of kind "say". `thenHangUp` closes the call once the line has ' +
+        "finished PLAYING, with `reason` as the obituary — the precedent: a call is never ended " +
+        "silently when there is a voice to say so. `conversationId` scopes it to one call; " +
+        "absent, it addresses whichever call is live.",
+      payloadSchema: z.looseObject({
+        text: z.string(),
+        reason: z.string().optional(),
+        by: z.string().optional(),
+        thenHangUp: z.boolean().optional(),
+        conversationId: z.string().optional(),
+      }),
+    },
     "events.iterate.com/voice-agent/session-configured": {
       description:
         "The whole briefing one provider session was configured with — instructions " +
@@ -1503,6 +1554,9 @@ export const VoiceAgentContract = defineProcessorContract({
     "events.iterate.com/voice-agent/colleague-note",
     /* Appended by the dial's own recap fetch; consumed for the fold only. */
     "events.iterate.com/voice-agent/colleague-recap",
+    /* A line to be spoken now — by the idle reaper (this processor's own
+     * append), a script through the entrypoint's `say`, or a colleague. */
+    "events.iterate.com/voice-agent/say",
     /* The live half. Naming them is the whole opt-in — `"*"` never matches an
      * ephemeral event, so nobody gets this firehose by accident. */
     "events.iterate.com/voice-agent/ptt-start",
@@ -1513,6 +1567,7 @@ export const VoiceAgentContract = defineProcessorContract({
     "events.iterate.com/voice-agent/keepalive",
   ],
   emits: [
+    "events.iterate.com/voice-agent/say",
     "events.iterate.com/voice-agent/call-started",
     "events.iterate.com/voice-agent/conversation-accepted",
     "events.iterate.com/voice-agent/conversation-end-requested",
@@ -1547,7 +1602,7 @@ interface Answer {
    * (measured 2026-08-29: two waffly status lines played out in full while
    * the found answer waited behind them).
    */
-  kind: "turn" | "status" | "note" | "tool";
+  kind: "turn" | "status" | "note" | "tool" | "say";
   /**
    * The provider's identity for the answer now playing, beside the two
    * clocks a truthful interruption needs (`receivedMs`, `sentMs`). On a
@@ -1879,7 +1934,7 @@ interface Dial {
   /** What asked for the pending follow-up — stamped onto the answer
    * at response.created so the note-barge can tell commentary from
    * conversation. */
-  followUpKind: "status" | "note" | "tool";
+  followUpKind: "status" | "note" | "tool" | "say";
   /** A colleague note cancelled the streaming answer (status commentary
    * or the person's hold music); its response.done is the cue to create
    * the note's response (creating before the provider settles the
@@ -1912,6 +1967,25 @@ interface Dial {
    * press the button again to hear an answer that had already arrived.
    */
   pendingNoteResponse: boolean;
+  /**
+   * Which follow-up the pending re-create at `response.done` draws — a
+   * colleague note, or a `say`. A say that lands while a note answer holds
+   * the floor waits exactly like a note would, but must come back as ITSELF:
+   * its answer kind is what the transcript records and what arms the
+   * hang-up below.
+   */
+  pendingFollowUpKind: "note" | "say";
+  /**
+   * A `say` with `thenHangUp` is queued or about to play: the obituary's
+   * reason. Moved onto `hangUpAfterAnswerDrains` at the say's own
+   * `response.created`, so the line PLAYS before the call ends — the same
+   * drain-point discipline as the model's hang_up tool. Still set once the
+   * reaper's grace has passed means the provider never started the line.
+   */
+  sayHangUpReason: string | null;
+  /** Idle farewells announced on this dial — the per-episode key suffix,
+   * so a listener who came back once can be seen off again later. */
+  idleFarewells: number;
   /** The answer in flight — replaced wholesale at `response.created`. */
   answer: Answer;
 }
@@ -1951,6 +2025,9 @@ const freshDial = (
   lastColleagueActivity: null,
   lastStatusSpokenAtMs: null,
   pendingNoteResponse: false,
+  pendingFollowUpKind: "note",
+  sayHangUpReason: null,
+  idleFarewells: 0,
   answer: freshAnswer(),
 });
 
@@ -2698,6 +2775,90 @@ export class VoiceAgentProcessor extends StreamProcessor<
         return;
       }
 
+      case "events.iterate.com/voice-agent/say": {
+        /*
+         * A LINE SOMEBODY OUTSIDE THE MODEL WANTS SAID — the idle reaper's
+         * farewell, an operator's script through the entrypoint, a colleague
+         * — spoken through the same channel as a note: one system item, one
+         * response.create when the floor is free, the same precedence over
+         * commentary and hold music, the same patience behind a note or tool
+         * answer. Durable and offset-deduped like the note, so a redelivery
+         * does not say it twice. Both providers speak this dialect.
+         *
+         * `thenHangUp` does NOT end the call here. It parks the reason on the
+         * dial; the say's own `response.created` moves it onto the model's
+         * hang-up path, so the line plays out before the obituary is written
+         * and the obituary carries the reason the asker gave.
+         */
+        if (event.offset <= this.#lastSayOffset) return;
+        this.#lastSayOffset = event.offset;
+        const sayText = event.payload.text;
+        if (typeof sayText !== "string" || sayText.trim() === "") return;
+        const dial = this.#dial;
+        if (dial === null) return;
+        if (
+          typeof event.payload.conversationId === "string" &&
+          event.payload.conversationId !== dial.conversationId
+        ) {
+          return; /* addressed to a call that is already over */
+        }
+        const thenHangUp = event.payload.thenHangUp === true;
+        if (thenHangUp) {
+          const by = typeof event.payload.by === "string" ? ` by ${event.payload.by}` : "";
+          dial.sayHangUpReason =
+            typeof event.payload.reason === "string" && event.payload.reason !== ""
+              ? event.payload.reason
+              : `asked to hang up${by}`;
+        }
+        this.#sendControl(
+          dial,
+          {
+            type: "conversation.item.create",
+            item: {
+              type: "message",
+              role: "system",
+              content: [
+                {
+                  type: "input_text",
+                  text:
+                    "[instruction] Say this to the listener now, as close to word-for-word as " +
+                    `natural speech allows, and nothing else: "${sayText}"` +
+                    (thenHangUp
+                      ? " The call closes by itself once you have said it; do not call any tool."
+                      : ""),
+                },
+              ],
+            },
+          },
+          append,
+        );
+        if (
+          dial.openToolCallIds.size === 0 &&
+          dial.answer.phase === "settled" &&
+          !dial.followUpResponsePending
+        ) {
+          dial.followUpResponsePending = true;
+          dial.followUpKind = "say";
+          this.#sendControl(dial, { type: "response.create" }, append);
+        } else if (
+          dial.answer.phase === "streaming" &&
+          (dial.answer.kind === "status" || dial.answer.kind === "turn")
+        ) {
+          /* Same precedence as a note: commentary and hold music yield;
+           * the say speaks when the provider settles the cancelled one. */
+          this.#dropAnswerInFlight(dial, this.deps.nowAtFacetMs(), append);
+          dial.answer.endsWhenQueueDrains = false;
+          this.#sendControl(dial, { type: "response.cancel" }, append);
+          dial.answerCancelledForNote = true;
+          dial.pendingNoteResponse = true;
+          dial.pendingFollowUpKind = "say";
+        } else {
+          dial.pendingNoteResponse = true;
+          dial.pendingFollowUpKind = "say";
+        }
+        return;
+      }
+
       case "events.iterate.com/voice-agent/conversation-ended": {
         /*
          * THE ARM THAT WAS DELETED AS DEAD, AND WHY IT IS BACK. Reduce nulls
@@ -3320,6 +3481,15 @@ export class VoiceAgentProcessor extends StreamProcessor<
             }
             dial.answer = freshAnswer();
             dial.answer.kind = followUp ? dial.followUpKind : "turn";
+            /* A farewell's response has started: from here the drain point
+             * owns the ending, exactly as after the hang_up tool. Moving the
+             * reason here rather than at the say's arrival is what makes
+             * "say it, THEN hang up" true — set earlier, the drain point
+             * would have settled the hang-up before the line existed. */
+            if (followUp && dial.followUpKind === "say" && dial.sayHangUpReason !== null) {
+              dial.hangUpAfterAnswerDrains = dial.sayHangUpReason;
+              dial.sayHangUpReason = null;
+            }
             /* A new answer supersedes any cancelled-status bookkeeping. */
             dial.answerCancelledForNote = false;
             dial.answer.phase = "streaming";
@@ -3533,7 +3703,8 @@ export class VoiceAgentProcessor extends StreamProcessor<
               dial.pendingNoteResponse = false;
               dial.answerCancelledForNote = false;
               dial.followUpResponsePending = true;
-              dial.followUpKind = "note";
+              dial.followUpKind = dial.pendingFollowUpKind;
+              dial.pendingFollowUpKind = "note";
               this.#sendControl(dial, { type: "response.create" }, append);
             }
             return;
@@ -3622,9 +3793,14 @@ export class VoiceAgentProcessor extends StreamProcessor<
      * milliseconds from Cloudflare's own clock and the deadline is a
      * minute. Anything tighter than that would need a single clock.
      */
+    /* Set by the farewell's grace once it has buried the call: the tick and
+     * the grace can come due in the same clock step, and a tick that ran
+     * between the obituary's append and its fold would otherwise read "no
+     * farewell pending" and say goodbye to a call already ended. */
+    let buriedByReaper = false;
     const idleTick = async (): Promise<void> => {
       await this.deps.sleep(IDLE_TICK_MS);
-      if (this.#dial !== dial) return;
+      if (this.#dial !== dial || buriedByReaper) return;
       const nowAtFacetMs = this.deps.nowAtFacetMs();
       /*
        * IDLE SINCE THE LAST THING THAT HAPPENED, whichever end it happened
@@ -3668,12 +3844,75 @@ export class VoiceAgentProcessor extends StreamProcessor<
         this.runInBackground(idleTick);
         return;
       }
-      await this.#requestEnd(
-        conversationId,
-        "idle",
-        `no input from the device for ${IDLE_TIMEOUT_MS / 1000}s`,
-        append,
-      );
+      const idleReason = `no input from the device for ${IDLE_TIMEOUT_MS / 1000}s`;
+      /*
+       * SAY SO, THEN HANG UP. The reaper used to bury the call in silence:
+       * the listener heard nothing, and the record showed an obituary with
+       * no goodbye. Now it appends a `say` with `thenHangUp` — the same
+       * path a script or a colleague would use — and the call ends the
+       * moment the farewell has finished playing, with the obituary
+       * carrying this reason. The precedent this sets: whoever ends a call
+       * tells the listener what is happening and why, and leaves events
+       * behind that read that way afterwards.
+       *
+       * The chain keeps ticking behind the farewell: a listener who answers
+       * it barges the answer and un-decides the hang-up (#bargeAnswer), and
+       * from there the deadline simply starts again.
+       */
+      if (dial.hangUpAfterAnswerDrains !== null || dial.sayHangUpReason !== null) {
+        this.runInBackground(idleTick);
+        return;
+      }
+      if (!dial.ready || dial.socket === null) {
+        /* Nobody to say it: a dial that never resolved, or a dead socket.
+         * The silent end is the honest one here. */
+        await this.#requestEnd(conversationId, "idle", idleReason, append);
+        return;
+      }
+      const farewellReason = `idle: ${idleReason}`;
+      /* Set BEFORE the append: the say arm confirms it when the event comes
+       * back round, and a say that never comes back (append refused, facet
+       * evicted) still leaves the grace below with something to bury. */
+      dial.sayHangUpReason = farewellReason;
+      const episode = ++dial.idleFarewells;
+      const farewellAtMs = nowAtFacetMs;
+      await append({
+        type: "events.iterate.com/voice-agent/say",
+        idempotencyKey: this.idempotencyKey(`say:idle:${conversationId}:${episode}`),
+        payload: {
+          conversationId,
+          text: idleFarewell(state.clientTakesTurns),
+          reason: farewellReason,
+          by: "idle-reaper",
+          thenHangUp: true,
+        },
+      });
+      this.runInBackground(async () => {
+        await this.deps.sleep(IDLE_FAREWELL_GRACE_MS);
+        if (this.#dial !== dial) return;
+        /* Null means one of two good things: the farewell's response was
+         * created (the drain point now owns the end), or a returning
+         * listener un-decided it. Still set means the provider never
+         * started the line — bury the call the old way, and say so. */
+        if (dial.sayHangUpReason === null) return;
+        /* Unless the listener came back in the meantime: a press inside the
+         * grace, before the provider had even started the goodbye, is a
+         * person who wants the call, and the reaper's deadline has already
+         * restarted from it. Forget the farewell; nothing is buried. */
+        if (this.#lastDeviceInputAtStreamMsMirror > farewellAtMs) {
+          dial.sayHangUpReason = null;
+          return;
+        }
+        dial.sayHangUpReason = null;
+        buriedByReaper = true;
+        await this.#requestEnd(
+          conversationId,
+          "idle",
+          `${idleReason}; the farewell was never spoken`,
+          append,
+        );
+      });
+      this.runInBackground(idleTick);
     };
     this.runInBackground(idleTick);
   }
@@ -3953,6 +4192,9 @@ export class VoiceAgentProcessor extends StreamProcessor<
   /** Highest colleague-note offset already injected into a session — the
    * redelivery dedupe for the note whisper (see the colleague-note arm). */
   #lastInjectedNoteOffset = 0;
+
+  /** Highest `say` offset already spoken — the same redelivery dedupe as the note's. */
+  #lastSayOffset = 0;
 
   /** The last note's text and when it was injected — the belt behind the
    * offset dedupe: a stale duplicate FORWARDER (the legacy shared-name
@@ -5172,6 +5414,57 @@ export default class VoiceAgentEntrypoint extends IterateWorkerEntrypoint implem
       return { streamPath, warmMs: Date.now() - warmStartedAt };
     } finally {
       disposeRpcStub(stream, "setup stream");
+    }
+  }
+
+  /**
+   * Have the live call's voice say something now — the scripted equivalent
+   * of a slash command, for an operator, a cron, or an agent:
+   *
+   *   await itx.workers.get(voiceAgentEntrypointRef).say({
+   *     streamPath: "/agents/voice/home-assistant-voice-preview-edition",
+   *     text: "I'm closing this call now; the shop is done.",
+   *     reason: "operator: shop complete",
+   *     thenHangUp: true,
+   *   });
+   *
+   * One durable `say` event; the facet speaks it through whichever call is
+   * live on that stream (nothing happens on an idle stream, and the event
+   * still records that somebody tried), and `thenHangUp` closes the call
+   * once the line has finished playing. Afterwards the stream reads:
+   * say → answer-transcript (kind "say") → conversation-end-requested →
+   * conversation-ended — who asked, why, what was said, that it ended.
+   */
+  async say(options: SayOptions): Promise<SayResult> {
+    if (!options.streamPath.startsWith("/")) {
+      throw new Error(
+        `say streamPath must be absolute; received ${JSON.stringify(options.streamPath)}`,
+      );
+    }
+    if (options.text.trim() === "") throw new Error("say needs something to say");
+    const project = await this.itx;
+    const stream = project.streams.get(options.streamPath);
+    try {
+      const appended = await stream.append({
+        type: "events.iterate.com/voice-agent/say",
+        idempotencyKey: `voice-agent/say:${options.streamPath}:${crypto.randomUUID()}`,
+        payload: {
+          text: options.text,
+          by: options.by ?? "entrypoint.say",
+          ...(options.reason !== undefined && { reason: options.reason }),
+          ...(options.thenHangUp === true && { thenHangUp: true }),
+          ...(options.conversationId !== undefined && { conversationId: options.conversationId }),
+        },
+      });
+      let offset = 0;
+      try {
+        for (const event of appended) offset = Math.max(offset, event.offset);
+      } finally {
+        disposeRpcStub(appended, "say append result");
+      }
+      return { streamPath: options.streamPath, offset };
+    } finally {
+      disposeRpcStub(stream, "say stream");
     }
   }
 

@@ -27,6 +27,8 @@ export {
 // enable and reach it.
 export type {
   ItxExpressionStepInput,
+  SayOptions,
+  SayResult,
   SetupVoiceAgentOptions,
   SetupVoiceAgentResult,
   VoiceAgentHealth,

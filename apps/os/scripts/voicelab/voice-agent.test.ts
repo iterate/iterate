@@ -18,6 +18,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeProcessorHarness } from "iterate/processors/testing";
 import {
   dialProviderSocket,
+  IDLE_FAREWELL_GRACE_MS,
   IDLE_TIMEOUT_MS,
   MAX_DEVICE_SPEAKER_BACKLOG_BYTES,
   MAX_SPEAKER_PAYLOAD_BYTES,
@@ -369,6 +370,32 @@ async function playOutEverything(h: Harness, ms: number): Promise<void> {
     spent += step;
   }
 }
+
+/**
+ * Time in steps, settling between them. The harness clock releases only the
+ * sleeps pending when an advance BEGAN, so a chain that arms its next sleep
+ * mid-advance — the idle reaper's tick, the farewell's grace — needs the
+ * clock to move in pieces.
+ */
+async function stepTime(h: Harness, ms: number, step = 5_000): Promise<void> {
+  for (let spent = 0; spent < ms; ) {
+    const size = Math.min(step, ms - spent);
+    await h.advanceTime(size);
+    await h.settle();
+    spent += size;
+  }
+}
+
+/** Past the idle deadline: the reaper has appended its farewell and asked
+ * for the line; its grace has NOT run out yet. (The reaper ticks every 5 s
+ * from the call's start, so the farewell lands within one tick of the
+ * deadline; the grace is 8 s beyond that.) */
+const idleDeadline = (h: Harness) => stepTime(h, IDLE_TIMEOUT_MS + 5_000);
+
+/** Past the deadline AND the farewell's grace: a provider that never spoke
+ * the goodbye has had the call buried under it. */
+const idleOut = (h: Harness) =>
+  stepTime(h, IDLE_TIMEOUT_MS + 10_000 + IDLE_FAREWELL_GRACE_MS + 5_000);
 
 beforeEach(() => {
   vi.unstubAllGlobals();
@@ -1181,8 +1208,7 @@ describe("tools on the birth certificate", () => {
 
     /* The person waits quietly for the answer, so the idle deadline kills
      * the call while the colleague is still thinking. */
-    await h.advanceTime(IDLE_TIMEOUT_MS + 10_000);
-    await h.settle();
+    await idleOut(h);
     expect(eventsOfType(h, "conversation-ended")).toHaveLength(1);
 
     /* The colleague's first reply lands BETWEEN calls — spoken to nobody,
@@ -1290,8 +1316,7 @@ describe("tools on the birth certificate", () => {
      * extra beat before the press clears the 1.5s dying-breath mint
      * cooldown — a press in the same instant as the obituary is treated as
      * the dead call's own drained input, by design. */
-    await h.advanceTime(IDLE_TIMEOUT_MS + 10_000);
-    await h.settle();
+    await idleOut(h);
     expect(eventsOfType(h, "conversation-ended")).toHaveLength(1);
     await h.advanceTime(2_000);
     await h.settle();
@@ -1381,8 +1406,7 @@ describe("tools on the birth certificate", () => {
 
     /* The reconnect's briefing carries the folded status, mid-task framing
      * and all — the line that stops a fresh session re-sending the note. */
-    await h.advanceTime(IDLE_TIMEOUT_MS + 10_000);
-    await h.settle();
+    await idleOut(h);
     await h.advanceTime(2_000);
     await h.settle();
     await h.append({ type: "events.iterate.com/voice-agent/ptt-start", payload: {} });
@@ -1733,8 +1757,7 @@ describe("tools on the birth certificate", () => {
     }
     expect(eventsOfType(h, "conversation-ended")).toHaveLength(0);
     /* The heartbeat stops; the reaper takes it from there. */
-    await h.advanceTime(IDLE_TIMEOUT_MS + 10_000);
-    await h.settle();
+    await idleOut(h);
     expect(eventsOfType(h, "conversation-ended")).toHaveLength(1);
   });
 
@@ -2995,8 +3018,7 @@ describe("ending a call", () => {
   it("ends after a minute with no input from the device", async () => {
     const h = makeHarness();
     await callIsLive(h);
-    await h.advanceTime(IDLE_TIMEOUT_MS + 10_000);
-    await h.settle();
+    await idleOut(h);
 
     const requested = eventsOfType(h, "conversation-end-requested");
     expect(requested).toHaveLength(1);
@@ -3025,8 +3047,7 @@ describe("ending a call", () => {
     await h.settle();
     expect(eventsOfType(h, "call-started")).toHaveLength(1);
 
-    await h.advanceTime(IDLE_TIMEOUT_MS + 10_000);
-    await h.settle();
+    await idleOut(h);
     const requested = eventsOfType(h, "conversation-end-requested");
     expect(requested).toHaveLength(1);
     expect((requested[0]!.payload as { reason: string }).reason).toContain("no input");
@@ -3054,6 +3075,9 @@ describe("ending a call", () => {
     /* Three minutes of answer, which is longer than the deadline. */
     h.provider.answerAudio(180_000);
     await h.settle();
+    /* One jump, not steps: stepping would PLAY the answer through this
+     * stretch and shorten what the 200 s below has left to play, which is
+     * the thing the third phase's deadline is measured from. */
     await h.advanceTime(IDLE_TIMEOUT_MS + 10_000);
     await h.settle();
     expect(eventsOfType(h, "conversation-end-requested")).toHaveLength(0);
@@ -3076,8 +3100,7 @@ describe("ending a call", () => {
 
     /* A minute of silence AFTER it stopped talking does end it: the deadline is
      * postponed and restarted, never removed. */
-    await h.advanceTime(IDLE_TIMEOUT_MS + 10_000);
-    await h.settle();
+    await idleOut(h);
     expect(eventsOfType(h, "conversation-end-requested")).toHaveLength(1);
   });
 
@@ -3128,8 +3151,7 @@ describe("ending a call", () => {
       payload: { conversationId, reason: "the person said goodbye" },
     });
     await h.settle();
-    await h.advanceTime(IDLE_TIMEOUT_MS + 10_000);
-    await h.settle();
+    await idleOut(h);
     expect(eventsOfType(h, "conversation-end-requested")).toHaveLength(1);
     expect(eventsOfType(h, "conversation-ended")).toHaveLength(1);
   });
@@ -3414,5 +3436,162 @@ describe("edges nothing was holding down", () => {
     expect(seen[2]!.headers.Authorization).toContain("/secrets/openai");
     expect(seen[2]!.url).toContain("api.openai.com");
     expect(seen[2]!.url).toContain("model=gpt-realtime");
+  });
+});
+
+/*
+ * A CALL IS NEVER ENDED SILENTLY WHEN THERE IS A VOICE TO SAY SO. `say` is
+ * the one path for a line somebody outside the model wants said now — an
+ * operator's script, a colleague, the idle reaper — and `thenHangUp` is the
+ * announced ending: the line PLAYS, then the call closes, with the asker's
+ * reason as the obituary.
+ */
+describe("say, and the announced farewell", () => {
+  const instructionsSent = (h: Harness) =>
+    h.provider
+      .sentOfType("conversation.item.create")
+      .map((message) => (message.item as { content: { text: string }[] }).content[0]!.text);
+  const endReason = (h: Harness) =>
+    (eventsOfType(h, "conversation-end-requested")[0]!.payload as { reason: string }).reason;
+
+  it("speaks a say through the live call and records it as a say answer", async () => {
+    const h = makeHarness();
+    await callIsLive(h);
+    await h.append({
+      type: "events.iterate.com/voice-agent/say",
+      payload: { text: "Your taxi is outside.", by: "operator" },
+    });
+    await h.settle();
+    expect(instructionsSent(h).at(-1)).toContain('"Your taxi is outside."');
+    expect(instructionsSent(h).at(-1)).not.toContain("do not call any tool");
+    expect(h.provider.sentOfType("response.create")).toHaveLength(1);
+    h.provider.responseCreated();
+    h.provider.answerAudio(200, "item_say");
+    h.provider.push({
+      type: "response.output_audio_transcript.done",
+      item_id: "item_say",
+      transcript: "Your taxi is outside.",
+    });
+    h.provider.answerComplete();
+    await playOutEverything(h, 400);
+    const transcripts = eventsOfType(h, "answer-transcript").map(
+      (event) => event.payload as { text: string; kind?: string },
+    );
+    expect(transcripts.at(-1)).toMatchObject({ text: "Your taxi is outside.", kind: "say" });
+    /* Said, not ended: no thenHangUp. */
+    expect(eventsOfType(h, "conversation-ended")).toHaveLength(0);
+  });
+
+  it("thenHangUp ends the call only after the line has played, with the asker's reason", async () => {
+    const h = makeHarness();
+    await callIsLive(h);
+    await h.append({
+      type: "events.iterate.com/voice-agent/say",
+      payload: {
+        text: "I'm closing this call now; the shop is done.",
+        reason: "operator: shop complete",
+        by: "operator",
+        thenHangUp: true,
+      },
+    });
+    await h.settle();
+    expect(instructionsSent(h).at(-1)).toContain("do not call any tool");
+    h.provider.responseCreated();
+    h.provider.answerAudio(200);
+    h.provider.answerComplete();
+    await h.settle();
+    /* Generated is not heard: the call is still up while the line plays. */
+    expect(eventsOfType(h, "conversation-ended")).toHaveLength(0);
+    await playOutEverything(h, 400);
+    expect(eventsOfType(h, "conversation-ended")).toHaveLength(1);
+    expect(endReason(h)).toBe("operator: shop complete");
+  });
+
+  it("a say addressed to another conversation is ignored, hang-up and all", async () => {
+    const h = makeHarness();
+    await callIsLive(h);
+    const itemsBefore = instructionsSent(h).length;
+    await h.append({
+      type: "events.iterate.com/voice-agent/say",
+      payload: { text: "Hello?", conversationId: "conv_from_last_week", thenHangUp: true },
+    });
+    await h.settle();
+    expect(instructionsSent(h)).toHaveLength(itemsBefore);
+    expect(h.provider.sentOfType("response.create")).toHaveLength(0);
+    await playOutEverything(h, 400);
+    expect(eventsOfType(h, "conversation-ended")).toHaveLength(0);
+  });
+
+  it("the idle reaper says goodbye first, and hangs up once the goodbye has played", async () => {
+    const h = makeHarness();
+    await callIsLive(h, CLIENT_TAKES_TURNS);
+    await idleDeadline(h);
+    const farewells = eventsOfType(h, "say").map(
+      (event) => event.payload as { text: string; by: string; thenHangUp: boolean },
+    );
+    expect(farewells).toHaveLength(1);
+    expect(farewells[0]).toMatchObject({ by: "idle-reaper", thenHangUp: true });
+    /* Worded for a client that presses to come back. */
+    expect(farewells[0]!.text).toContain("Press the button when you want me back");
+    expect(h.provider.sentOfType("response.create")).toHaveLength(1);
+    expect(eventsOfType(h, "conversation-ended")).toHaveLength(0);
+    h.provider.responseCreated();
+    h.provider.answerAudio(200);
+    h.provider.answerComplete();
+    await h.settle();
+    expect(eventsOfType(h, "conversation-ended")).toHaveLength(0);
+    await playOutEverything(h, 400);
+    expect(eventsOfType(h, "conversation-ended")).toHaveLength(1);
+    expect(endReason(h)).toBe("idle: no input from the device for 60s");
+  });
+
+  it("an open-mic board is told to press AND talk", async () => {
+    const h = makeHarness();
+    await callIsLive(h, GROK_LISTENS);
+    await idleDeadline(h);
+    const farewell = eventsOfType(h, "say")[0]!.payload as { text: string };
+    expect(farewell.text).toContain("Press the button and start talking");
+  });
+
+  it("a farewell the provider never starts is followed by the silent end, which says so", async () => {
+    const h = makeHarness();
+    await callIsLive(h);
+    await idleDeadline(h);
+    expect(eventsOfType(h, "say")).toHaveLength(1);
+    expect(eventsOfType(h, "conversation-ended")).toHaveLength(0);
+    await stepTime(h, IDLE_FAREWELL_GRACE_MS + 5_000);
+    expect(eventsOfType(h, "conversation-ended")).toHaveLength(1);
+    expect(endReason(h)).toBe("no input from the device for 60s; the farewell was never spoken");
+  });
+
+  it("a listener who comes back before the goodbye even starts keeps the call too", async () => {
+    const h = makeHarness();
+    await callIsLive(h, CLIENT_TAKES_TURNS);
+    await idleDeadline(h);
+    expect(eventsOfType(h, "say")).toHaveLength(1);
+    /* The press lands inside the grace, with no response.created yet. */
+    await h.append({ type: "events.iterate.com/voice-agent/ptt-start", payload: {} });
+    await h.settle();
+    await stepTime(h, IDLE_FAREWELL_GRACE_MS + 5_000);
+    expect(eventsOfType(h, "conversation-end-requested")).toHaveLength(0);
+    /* And the deadline restarted from the press: a minute later it is
+     * seen off again, with a fresh farewell. */
+    await idleDeadline(h);
+    expect(eventsOfType(h, "say")).toHaveLength(2);
+  });
+
+  it("a listener who answers the farewell keeps the call", async () => {
+    const h = makeHarness();
+    await callIsLive(h, CLIENT_TAKES_TURNS);
+    await idleDeadline(h);
+    h.provider.responseCreated();
+    h.provider.answerAudio(200);
+    /* The press barges the goodbye and un-decides the hang-up. */
+    await h.append({ type: "events.iterate.com/voice-agent/ptt-start", payload: {} });
+    await h.settle();
+    h.provider.answerComplete();
+    await playOutEverything(h, 400);
+    await stepTime(h, IDLE_FAREWELL_GRACE_MS + 5_000);
+    expect(eventsOfType(h, "conversation-ended")).toHaveLength(0);
   });
 });

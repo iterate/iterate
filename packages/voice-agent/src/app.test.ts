@@ -3,7 +3,7 @@ import { VoiceAgentApp } from "./app.ts";
 import { voiceAgentEntrypointRef } from "./ref.ts";
 
 /** A project handle that records what was dialed and whether it was released. */
-function fakeEnv(guest: Partial<Record<"setupVoiceAgent" | "removeVoiceAgent", unknown>>) {
+function fakeEnv(guest: Partial<Record<"setupVoiceAgent" | "removeVoiceAgent" | "say", unknown>>) {
   const log: string[] = [];
   const env = {
     ITX: {
@@ -56,6 +56,10 @@ describe("VoiceAgentApp", () => {
         warmMs: 12,
       }),
       removeVoiceAgent: async (options: { streamPath: string }) => options,
+      say: async (options: { streamPath: string; text: string }) => ({
+        streamPath: options.streamPath,
+        offset: options.text.length,
+      }),
     });
     const app = VoiceAgentApp.create(env);
     expect(await app.setup({ streamPath: "/agents/voice/x", provider: "openai" })).toEqual({
@@ -66,8 +70,11 @@ describe("VoiceAgentApp", () => {
     expect(await app.remove({ streamPath: "/agents/voice/x" })).toEqual({
       streamPath: "/agents/voice/x",
     });
+    expect(
+      await app.say({ streamPath: "/agents/voice/x", text: "bye now", thenHangUp: true }),
+    ).toEqual({ streamPath: "/agents/voice/x", offset: 7 });
     expect(log).toEqual(
-      Array(3).fill(["workers.get entrypoint ref", "guest disposed", "project disposed"]).flat(),
+      Array(4).fill(["workers.get entrypoint ref", "guest disposed", "project disposed"]).flat(),
     );
   });
 

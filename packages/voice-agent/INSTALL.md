@@ -64,7 +64,9 @@ export default class extends IterateWorkerEntrypoint {
 returns null for everything else, so the worker's own routing carries on.
 `this.#voice.setup({ streamPath, colleaguePath, instructions, tools, … })`
 puts the agent on a stream; `this.#voice.remove({ streamPath })` takes it
-off. The package README documents every option.
+off; `this.#voice.say({ streamPath, text, reason?, thenHangUp? })` has the
+live call speak a line now (and hang up after it, if asked). The package
+README documents every option.
 
 ## Before the first call: a provider secret
 
