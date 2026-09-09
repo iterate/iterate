@@ -3,13 +3,14 @@
 // loads from the same host; inbound `x-itx-*` never reach it; the apex `<projectId>.<base>` is the
 // label `default`; a label with no rule is a 404; and — deployed only, the local lane cannot set Host on a
 // WebSocket — an upgrade rides through the host to the app. The app is one rule row: the log never
-// names a hostname. WHO, on a host: a project token (the `/.itx/session` cookie, or a bearer) and
-// the project's own secret as a bearer — the device lane — each stamp `x-itx-principal`; the
-// platform's credential never reaches the app.
+// names a hostname. WHO, on a host: a project token a member minted becomes the `/.itx/session`
+// cookie and stamps `x-itx-principal`; the platform's credential never reaches the app (the bearer
+// lanes — a token, the admin secret, the project's own secret — are
+// __workers-tests__/session-doors.test.ts).
 
 import { expect, test } from "vitest";
 import { openItx } from "./support/client.ts";
-import { mintProjectApiKey, mintProjectToken } from "./support/principal.ts";
+import { mintProjectToken } from "./support/principal.ts";
 import {
   deployedOnly,
   fetchProjectHost,
@@ -94,13 +95,15 @@ test("an app is served at / on its project host — URL verbatim, relative asset
 // clears the cookie.
 test("the session door on a project host: a token becomes the cookie, the cookie becomes the principal the app sees", async () => {
   const projectId = freshDnsSafeProjectId("ingress-who");
-  await registerProject(projectId);
+  const email = `${projectId}@example.com`;
+  const ada = { sub: `user_${email}`, email };
+  await registerProject(projectId, ada); // her project: she mints her own token through the door
   const base = projectHostnameBase();
   const itx = openItx(projectId);
   await itx.provide("itx.apps.site", siteRule());
   const host = `site--${projectId}.${base}`;
-  const principal = { actor: "user_ada", email: "ada@example.com" };
-  const token = await mintProjectToken({ projectId, ...principal });
+  const principal = { actor: ada.sub, email };
+  const token = await mintProjectToken(projectId, ada);
 
   const door = await fetchProjectHost(host, `/.itx/session?token=${token}&next=/w`);
   expect(door.status, door.text).toBe(303);
@@ -131,38 +134,12 @@ test("the session door on a project host: a token becomes the cookie, the cookie
   );
   expect(forged.principal).toBeNull();
   // a token for another project is refused at the door
-  const foreign = await mintProjectToken({ projectId: `${projectId}-other`, ...principal });
+  const foreign = await mintProjectToken(`${projectId}-other`);
   expect((await fetchProjectHost(host, `/.itx/session?token=${foreign}&next=/`)).status).toBe(401);
   // logout clears the cookie
   const out = await fetchProjectHost(host, "/.itx/session?logout&next=/");
   expect(out.status).toBe(303);
   expect(out.headers["set-cookie"]).toContain("Max-Age=0");
-});
-
-// THE DEVICE LANE: the project's own secret (`rotateApiKey` — the key a kit's provisioning partition
-// carries beside the project slug) as `Authorization: Bearer` on the project's host. The app sees the
-// project as the principal and never the key; another project's key is nobody here — it passes
-// through untouched, as an app's own bearer scheme would.
-test("the project's secret as the bearer on its host: the app sees principal project:<id> and no bearer; another project's secret stamps nothing", async () => {
-  const projectId = freshDnsSafeProjectId("ingress-device");
-  const other = freshDnsSafeProjectId("ingress-device-other");
-  await registerProject(projectId);
-  await registerProject(other);
-  const itx = openItx(projectId);
-  await itx.provide("itx.apps.site", siteRule());
-  const host = `site--${projectId}.${projectHostnameBase()}`;
-  const key = await mintProjectApiKey(projectId);
-  const seen = JSON.parse(
-    (await fetchProjectHost(host, "/echo", { authorization: `Bearer ${key}` })).text,
-  );
-  expect(seen.principal).toEqual({ actor: `project:${projectId}` });
-  expect(seen.authorization).toBeNull(); // the platform's credential, stripped
-  const foreignKey = await mintProjectApiKey(other);
-  const foreign = JSON.parse(
-    (await fetchProjectHost(host, "/echo", { authorization: `Bearer ${foreignKey}` })).text,
-  );
-  expect(foreign.principal).toBeNull();
-  expect(foreign.authorization).toBe(`Bearer ${foreignKey}`); // not this project's: the app's own bearer, passed through
 });
 
 deployedOnly("deployed: a WebSocket upgrade on the project host reaches the app", async () => {

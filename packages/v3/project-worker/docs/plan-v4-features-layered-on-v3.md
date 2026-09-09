@@ -13,7 +13,7 @@
 > lease is the handle, §2.7 poisoned-stub drop), 1.1 (`itx.secrets` + origin binding), 1.2
 > (the bearer on project hosts; the per-project MCP mount was replaced on 2026-09-09 by the one `/mcp` for every project), 1.3 (`src/types.ts`), 1.11's
 > `subscribe({ afterOffset })`. The files half of 1.4 arrived as `itx.repos` over Cloudflare
-> Artifacts (real git) rather than a facet. Sign-in is the control plane's (`authenticate()` +
+> Artifacts (real git) rather than a facet. Sign-in is the control plane's (`authenticate(credentials)` +
 > `projects.list/get/create`), which settles decision 5. OPEN: 1.5 build/check, 1.6's structural
 > estimate + parsed-bytes page cut, 1.8 Docs, 1.9 (conditional), 1.11's line budget and the
 > named-loader telemetry probe. The wave table below is the original plan.
@@ -93,6 +93,9 @@ answer. Effort is calibrated on 2026-09-06: ~300 code lines with tests, docs and
 
 ### 1.2 The MCP server as a library member; the bearer is the project token (Gap 7, the machine lane)
 
+> Superseded 2026-09-09 by the one `/mcp` on the platform host for every project
+> (`docs/plan-auth-one-lane-2026-09-09.md` §5): no library member, no per-project mount.
+
 - **v4 has:** `src/auth.ts` (236) — a login proving possession of an email-shaped string, an opaque KV session, an
   OAuth 2.1 AS whose consent form asks the user to TYPE a project id — and `src/mcp-server.ts` (71): one Streamable
   HTTP tool `itx.invoke` at `/mcp?project=<id>`. The principal terminates at `Session.identity()` and never reaches an
@@ -101,7 +104,7 @@ answer. Effort is calibrated on 2026-09-06: ~300 code lines with tests, docs and
 - **v3 has:** the project token, `session.whoami()`, `source.principal`, the `/.itx/session` cookie door; and in
   `packages/v3/control-plane` a richer AS (CIMD + PKCE + `resolveExternalToken`), a D1 directory, `StampedCaller`, an
   MCP server.
-- **Layering on v3:** LIBRARY `itx.serveMcp()` — a handle whose one member is `fetch(request)`, one tool
+- **Layering on v3** (superseded 2026-09-09 by the one `/mcp`): LIBRARY `itx.serveMcp()` — a handle whose one member is `fetch(request)`, one tool
   `itx.invoke({ expression, args? })`, mounted by userspace as `itx.provide("itx.apps.mcp", "itx.serveMcp()")` and
   served by tonight's ingress at `mcp--<projectId>.<base>/`; the fetch lane already runs the call under the request's
   principal, so the appended events carry `source.principal`. EDGE: a project host accepts
@@ -357,7 +360,7 @@ graph TD
   W0 --> K
   S["1.1 secrets write door + origin binding<br/>~70 lines · 1.5–2 h"]
   T["1.3 client types export<br/>~15 lines · 1 h"]
-  M["1.2 MCP server (library) + bearer = project token<br/>~230 lines · 3–4 h"]
+  M["1.2 MCP server (library) + bearer = project token<br/>~230 lines · 3–4 h<br/>superseded 2026-09-09 by the one /mcp"]
   B["1.6 memory budgets (4 pieces)<br/>~130 lines · 6–8 h"]
   D["1.7 directory admission · slugs · custom domains<br/>~50 lines · 3–4 h"]
   F["1.4 files as a userspace facet + pinned-source proof<br/>~260 lines · 3–4 h"]

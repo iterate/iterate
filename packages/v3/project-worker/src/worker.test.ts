@@ -1,6 +1,5 @@
 // worker.test.ts — the edge's pure halves as tables: the app config (what the vars become, what is refused,
-// the per-env memo), the same-origin check `from-server-cookie` rides on, and the project-host
-// convention (`{ hostname, base, becomes }` rows).
+// the per-env memo) and the project-host convention (`{ hostname, base, becomes }` rows).
 
 import { describe, expect, test, vi } from "vitest";
 
@@ -14,19 +13,15 @@ vi.mock("cloudflare:workers", () => ({
   RpcPromise: class {},
   RpcProperty: class {},
 }));
-import {
-  appConfigOf,
-  isSameOriginBrowserRequest,
-  parseAppConfig,
-  projectHostOf,
-} from "./worker.ts";
+import { appConfigOf, parseAppConfig, projectHostOf } from "./worker.ts";
 
 // ── app config ── THE TABLE for the app config: what the vars become, what is refused (by name),
 // and the per-env memo. Each row is `{ vars, becomes | throws }`.
 
-/** The smallest valid configuration: the name and the two required secrets. */
+/** The smallest valid configuration: the name and the three required secrets. */
 const MINIMAL = {
   APP_CONFIG_ENVIRONMENT_NAME: "poc",
+  APP_CONFIG_PROJECT_TOKEN_SECRET: "token-secret",
   APP_CONFIG_SESSION_SECRET: "cookie-secret",
   APP_CONFIG_ADMIN_API_SECRET: "admin-secret",
 };
@@ -34,7 +29,7 @@ const MINIMAL = {
 const MINIMAL_CONFIG = {
   environmentName: "poc",
   projectHostnameBase: "",
-  projectTokenSecret: "",
+  projectTokenSecret: "token-secret",
   artifactsAccountId: "",
   artifactsNamespace: "",
   sessionSecret: "cookie-secret",
@@ -78,8 +73,17 @@ describe("parseAppConfig", () => {
       vars: { ...MINIMAL, APP_CONFIG_ENVIRONMENT_NAME: "   " },
       throws: /^APP_CONFIG_ENVIRONMENT_NAME: required, but unset or blank$/,
     },
-    // the session secret signs the cookie: a blank one would sign none (a zero-length HMAC key
-    // throws) and verify none (principal.ts) — refused at first use, not a silent lock-out
+    // the token secret signs project tokens (`mintToken`, the console's project links): a blank one
+    // would sign none (a zero-length HMAC key throws) and verify none (principal.ts)
+    {
+      vars: { ...MINIMAL, APP_CONFIG_PROJECT_TOKEN_SECRET: undefined },
+      throws: /^APP_CONFIG_PROJECT_TOKEN_SECRET: required, but unset or blank$/,
+    },
+    {
+      vars: { ...MINIMAL, APP_CONFIG_PROJECT_TOKEN_SECRET: " " },
+      throws: /^APP_CONFIG_PROJECT_TOKEN_SECRET: required, but unset or blank$/,
+    },
+    // the session secret signs the cookie, the same way — refused at first use, not a silent lock-out
     {
       vars: { ...MINIMAL, APP_CONFIG_SESSION_SECRET: undefined },
       throws: /^APP_CONFIG_SESSION_SECRET: required, but unset or blank$/,
@@ -140,28 +144,6 @@ describe("appConfigOf — once per env object", () => {
       /^APP_CONFIG_ENVIRONMENT_NAME: required, but unset or blank$/,
     );
   });
-});
-
-// ── same-origin ── the check `from-server-cookie` rides on (session.ts): `{ origin, becomes }` rows
-// for a request to https://worker.example/api.
-
-describe("isSameOriginBrowserRequest", () => {
-  const rows: { origin: string | null; becomes: boolean }[] = [
-    { origin: null, becomes: true }, // no Origin: a non-browser client
-    { origin: "https://worker.example", becomes: true }, // the page is this origin
-    { origin: "https://evil.example", becomes: false }, // another site drove the browser
-    { origin: "http://worker.example", becomes: false }, // the scheme is part of the origin
-    { origin: "https://worker.example:8443", becomes: false }, // so is the port
-    { origin: "null", becomes: false }, // an opaque origin (a sandboxed document) is foreign
-    { origin: "not a url", becomes: false },
-  ];
-  for (const { origin, becomes } of rows)
-    test(`Origin ${JSON.stringify(origin)} ⇒ ${becomes}`, () => {
-      const headers = new Headers(origin === null ? {} : { origin });
-      expect(isSameOriginBrowserRequest({ url: "https://worker.example/api", headers })).toBe(
-        becomes,
-      );
-    });
 });
 
 // ── project host ── the hostname convention as a table: `{ hostname, base, becomes }` rows.

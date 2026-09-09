@@ -44,21 +44,21 @@ userspace code runs in Worker Loader isolates or as facets of the DO, and its
 entire world is one binding, `env.ITX`. The control plane — an OAuth AS, the D1
 directory of users, orgs and projects (a project's id IS its DNS-safe name),
 `/mcp`, a console with an email login form — runs IN-PROCESS as the same
-worker's catch-all (`src/control-plane/`); a project host
+worker's catch-all (`src/control-plane.ts`); a project host
 (`<app>--<projectId>.<base>`) is admitted by one directory read before any DO is
 dialled. Egress is terminal: secrets substituted, then `fetch`.
 
 ```mermaid
 flowchart LR
   subgraph client["Client: browser / CLI / device (dependency: capnweb only)"]
-    c["capnweb session<br/>api.authenticate().projects.get(id)"]
+    c["capnweb session<br/>api.authenticate(credentials).projects.get(project)"]
   end
   subgraph edge["project-worker, ONE stateless worker (src/worker.ts)"]
     api["/api → UnauthenticatedSession → Session → ProjectCollection → IterateContext<br/>src/session.ts, src/iterate-context.ts"]
     relay["pager relay + SessionTeardown<br/>the session's lent rpc stubs"]
     lane["/expression?context=…&itx=… fetch lane"]
-    host["project-host ingress: app--projectId.base → itx.apps.app<br/>src/worker.ts · /.itx/session · Bearer projectToken"]
-    cp["the control plane, in-process (the catch-all)<br/>OAuth AS · D1 directory · /mcp · console<br/>src/control-plane/"]
+    host["project-host ingress: app--projectId.base → itx.apps.app<br/>src/worker.ts · /.itx/session · Bearer token | admin secret | project secret"]
+    cp["the control plane, in-process (the catch-all)<br/>OAuth AS · D1 directory · /mcp · console<br/>src/control-plane.ts"]
   end
   subgraph do["IterateContextDurableObject, one per {projectId, path}"]
     stream["Stream: log, offsets, idempotency, waitForEvent"]

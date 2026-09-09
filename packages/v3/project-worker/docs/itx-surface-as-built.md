@@ -178,19 +178,29 @@ the slug IS the id, globally unique — `PROJECT_NAME_TAKEN` names another org's
 secret, in `org_admin`. Nothing here touches a DO: `get` is addressing plus the directory's
 membership answer.
 
-**Who** (`src/principal.ts`, `src/session.ts`). `SessionCredentials` is a union of four kinds, and
-`authenticate` has a check and a coded refusal for each. `from-server-cookie`: the control plane's
-session cookie the request carried — a browser cannot set a header on a WebSocket, so the cookie
-rides the handshake and the call names it; honoured only when the request's `Origin` is this origin
-or absent (`isSameOriginBrowserRequest`, `src/worker.ts`), else `UNAUTHENTICATED`, as is no cookie.
+**Who** (`src/principal.ts`, `src/session.ts`). `SessionCredentials` is a union of four kinds;
+`verifyCredentials(credentials, input)` is THE ONE verifier — it answers the principal or null, no
+reason — shared by `/api` (`authenticate`, which names the refusal per kind, coded), both lanes into
+a context (`src/worker.ts` `laneIdentityOf`: the kinds read off a request and tried in order, the
+first that verifies for the project wins) and `/mcp` (`resolveExternalToken`). What a session
+reaches is its `Reach` (`src/control-plane.ts`): `"every"` (the admin secret), `{ userId }` (a
+user: the cookie, the admin's `as`) or `{ projectIds }` (a token, the secret, an OAuth grant that
+chose) — `directory.reachableProjects(reach)` is `list()`, `directory.reachesProject(reach, id)` is
+`get`'s admission, `directory.createProject(reach, name)` is every create door. `from-server-cookie`:
+the control plane's session cookie the request carried — a browser cannot set a header on a
+WebSocket, so the cookie rides the handshake and the call names it; honoured only when the request's
+`Origin` is this origin or absent (`isSameOriginBrowserRequest`, `src/lib.ts`), else
+`UNAUTHENTICATED`, as is no cookie.
 `project-token`: a PROJECT TOKEN — `{ projectId, actor, email?, expiresAt }` signed HMAC-SHA256 with
 `APP_CONFIG_PROJECT_TOKEN_SECRET` (the one signed-claims codec; the control plane's session cookie is
 the same codec under `APP_CONFIG_SESSION_SECRET`), minted by whoever fronts the users after their
 membership check, or by `projects.get(project).mintToken({ ttlSeconds? })` — a session that knows
 who it is and is BOUND to that one project: `session.whoami()` → `{ actor, email?, projectId }`,
 `projects.get` refuses any other project (`FORBIDDEN`), `list()` is that project's directory row,
-`create()` refuses (`FORBIDDEN`: a bound session has no catalog writer); a token that does not verify
-is `INVALID_CREDENTIALS`, whatever is wrong with it. `admin-secret`: `APP_CONFIG_ADMIN_API_SECRET`
+`create()` refuses (`FORBIDDEN`: a bound session has no catalog writer), and its contexts carry
+neither project door — a token is a delegation, minutes long, never a minter of tokens or keys; a
+token that does not verify is `INVALID_CREDENTIALS`, whatever is wrong with it. `admin-secret`:
+`APP_CONFIG_ADMIN_API_SECRET`
 compared in constant time (`verifyAdminSecret`, both SHA-256 hashed) — `{ actor: "admin" }` on every
 project, or with `as: { sub, email }` that user's session without a login (the directory row upserted
 as `/login` does); a wrong secret is `INVALID_CREDENTIALS`. `project-secret`: the project's OWN
@@ -202,8 +212,9 @@ no key until the first call. `verifyProjectSecret(project, secret, kv)` hashes t
 compares in constant time ⇒ `{ actor: "project:<projectId>" }`: a session bound to that one project
 exactly like a token's — the project speaking as itself (a device, a headless app); a wrong, stale
 or foreign key is `INVALID_CREDENTIALS`. Both project doors ride the root `IterateContext` that
-`get` vends (section 4), so `get`'s admission is their gate. A user's `projects.get` admits members
-of the owning org only (`FORBIDDEN` otherwise). The principal rides every dispatch the session makes
+`get` vends (section 4), so `get`'s admission is their gate — for a member, the admin and the
+project's own session; not for a token's. A user's `projects.get` admits members of the owning org
+only (`FORBIDDEN` otherwise). The principal rides every dispatch the session makes
 (`IterateContextDurableObject.invokeAs`, a DO-only Workers-RPC verb, or the `x-itx-principal` header
 on a terminal fetch), and the built-in append root stamps it as `source.principal` on every event —
 the DO's field: a client's own `source.principal` is overwritten, a loaded worker's `env.ITX` (the
@@ -550,12 +561,15 @@ app's; the platform's own doors stay on the worker's hostname. WHO, on a project
 <projectToken>` (a script; the bearer wins when both are present) —
 stamps `x-itx-principal` (the JSON principal) on the Request the app sees, and the lane's call runs
 under it; the token itself never reaches the app: the platform's cookie is stripped from the cookie
-header, and a bearer that IS a project token is dropped (an app's own bearer scheme passes through
-untouched, as a visitor's other cookies do); a visitor's own `x-itx-principal` is stripped with every
-inbound `x-itx-*`; a token for another project is a 401 at the session door. The admin secret as the
-bearer is `{ actor: "admin" }` on any project, and is dropped the same way. Who logs in and mints the
-token is the control plane's; the ingress only verifies. `/expression` on the platform host admits a
-member's control-plane cookie, a project token for the project, or the admin secret — else 401.
+header, and a bearer that verified for THIS project — its token, the admin secret, its own secret —
+is dropped (an app's own bearer scheme, and a credential of another project, pass through untouched,
+as a visitor's other cookies do); a visitor's own `x-itx-principal` is stripped with every inbound
+`x-itx-*`; a token for another project is a 401 at the session door. The admin secret as the bearer
+is `{ actor: "admin" }` on any project. The control plane's session cookie is never a lane
+credential: a cross-site top-level navigation carries it with no `Origin` to check, so it counts on
+`/api` alone (`from-server-cookie`). Who logs in and mints the token is the control plane's; the
+ingress only verifies. `/expression` on the platform host admits the project's token, its secret or
+the admin secret — else 401.
 
 **The control plane** (`src/control-plane.ts`, IN-PROCESS: everything on the worker's hostname that
 is not `/api`, `/expression`, `/version` or `/demo` is its catch-all — one worker, one front door).
@@ -564,20 +578,26 @@ request's origin: `/authorize` app-owned, `/oauth/token`, `/oauth/register` (DCR
 `global_fetch_strictly_public` flag), `/.well-known/*`; `/mcp` its ONLY protected route and its ONE
 pinned resource, `<origin>/mcp`, this origin the authorization server — every token bound to it, a
 foreign one refused), a D1 directory (`control-plane.sql`: users → orgs via `org_members` →
-projects; access is org membership), a console at `/` with an email login form (`/login`, `/logout`,
-`POST /projects`) whose session is a signed cookie (`itx-control-plane-session`), the `/authorize`
-consent page with PROJECT SELECTION (the user's projects as checkboxes, all checked; the grant's
-`props: { sub, email, projects }` — `projects` absent when there was nothing to choose from ⇒ every
-project of the user's orgs, per call), and `/mcp` — THE ONE MCP SERVER for every project, four
-tools: `whoami` (the props), `list_projects` (what the bearer reaches), `create_project({ project })`,
+projects; access is org membership), a console at `/` with an email login form (`POST /login`,
+`POST /logout`, `POST /projects` — every POST refused with 403 from a foreign `Origin`; every page
+`Cache-Control: no-store`) whose session is a signed cookie (`itx-control-plane-session`,
+`src/principal.ts` verifies it), the `/authorize` consent page with PROJECT SELECTION (the user's
+projects as checkboxes, all checked; the grant's `props: { actor, email, projects }` — `projects`
+absent when there was nothing to choose from ⇒ every project of the user's orgs, per call; a
+request the provider refuses is sent back to the client with `error`, `error_description`, `state`
+and `iss` once its redirect URI validated, rendered here otherwise), and `/mcp` — THE ONE MCP SERVER
+for every project, four tools: `whoami` (the props), `list_projects` (what the bearer reaches),
+`create_project({ project })` (a user or the admin; a grant that chose is bound to its choice),
 `itx.invoke({ project?, expression, args? })` — the expression, in either codec half with `args`
 appended to its terminal call, evaluated through THAT project's root context in-process under the
 bearer's principal (`invokeAs`); `project` optional when the grant reaches exactly one, required
 for the admin secret, refused outside the grant (apps/os `resolveToolProject`); an expression error
-an `isError` result led by its code. The provider's `resolveExternalToken` admits two more bearers:
-the admin secret (`{ actor: "admin" }`, every project) and a project's own secret on
-`/mcp?project=<id>` (`{ actor: "project:<id>" }`, that project). The admin secret's projects live
-in `org_admin`, the deployment's own org (no members; `directory.adminOrg`).
+an `isError` result led by its code. The provider's `resolveExternalToken` admits the platform's
+own credentials as bearers, through the one `verifyCredentials`: a project token (its principal on
+its one project), the admin secret (`{ actor: "admin" }`, every project) and a project's own secret,
+which names its project with `?project=<id>` on the `/mcp` URL (`{ actor: "project:<id>" }`, that
+project). The admin secret's projects live in `org_admin`, the deployment's own org (no members;
+`directory.adminOrg`).
 
 **Configuration** (`src/worker.ts`). ONE typed object per isolate, parsed once from the
 `APP_CONFIG_*` wrangler vars (the apps/os shape, without its schema library) plus the version-metadata
@@ -614,7 +634,8 @@ the generated bundles and the sqlfu client excluded: 4,481 on the morning of 202
 the 09-02 review → 6,004 on 2026-09-04 after round two (the builtins root, `@`, `itx.ai`, the library
 tier with three connectors, the app config, the memory-hygiene arc's storage module and ledger, and
 the two review rounds' fixes) → 8,313 on 2026-09-09 (the in-process control plane, project hosts and
-the principal, `itx.secrets`, `itx.cfArtifacts` + `itx.repos` with the git wire, `serveMcp`). **Raw
+the principal, `itx.secrets`, `itx.cfArtifacts` + `itx.repos` with the git wire — and `serveMcp`,
+deleted the same day). **Raw
 lines** including comments and blanks: 12,670 in 62 files. About a third of the source is comment.
 
 Every number in this section is a COUNT OF A MOMENT (the file table recounted 2026-09-09; the test
@@ -663,7 +684,7 @@ Error codes (`src/lib.ts`): `NO_ITX_EXPRESSION_MATCH`, `RPC_STUB_OFFLINE`,
 - The edge `IterateContext` TYPE includes every built-in root (declaration merging).
 - `env.CONTEXT` → `env.ITERATE_CONTEXT` (project worker and control-plane shell); the prop
   `contextName` → `iterateContextName`. Singular, as Cloudflare and apps/os name DO bindings.
-- `authenticate()` stays a no-op gate.
+- `authenticate()` stays a gate — a no-op one that day; `authenticate(credentials)` since 2026-09-06 (section 4).
 - **A, done ("ok" on the recommendations):** ONE front door `provide(match, target)`; `rewrite`
   deleted; a live stub is lent under the key = the canonical match; `ProvidedRpcStubHandle` gone,
   `RewriteRuleHandle` for both cases; read root `itx.rewriteRules`; a rule's match must be rooted

@@ -1,6 +1,6 @@
-// __workers-tests__/session-doors.test.ts — THE PROJECT SECRET and THE TOKEN MINTER, pinned in the
-// one local lane that binds a D1 and a KV (src/session.ts, src/iterate-context.ts, src/principal.ts,
-// src/worker.ts):
+// __workers-tests__/session-doors.test.ts — THE PROJECT SECRET, THE TOKEN MINTER and THE PROJECT
+// HOST's doors, pinned in the one local lane that binds a D1 and a KV (src/session.ts,
+// src/iterate-context.ts, src/principal.ts, src/worker.ts):
 //   • `projects.get(project).rotateApiKey()` mints the project's own key — a reveal IS a rotation:
 //     only the hash is stored, the previous key dies, a project has none until the first call;
 //   • `authenticate({ type: "project-secret", project, secret })` IS the project — `whoami` is
@@ -9,25 +9,33 @@
 //     a wrong key, another project's key and a never-rotated project are INVALID_CREDENTIALS;
 //   • `projects.get(project).mintToken({ ttlSeconds? })` signs a project token the project-token
 //     door accepts — bound to the project, carrying the minter's principal (the admin, a member,
-//     the project itself), 15 minutes by default, 24 hours at most, `cd` carrying the door;
+//     the project itself), 15 minutes by default, 24 hours at most, `cd` carrying the door; a
+//     project-token session is a delegation: it mints nothing and rotates nothing (FORBIDDEN); a
+//     bad token and an expired token are INVALID_CREDENTIALS over /api;
 //   • THE LANES: this project's secret as `Authorization: Bearer` admits `/expression` and stamps
 //     `x-itx-principal` on what the app sees; on a project host the same, the bearer stripped;
-//     another project's secret is nobody — 401 on `/expression`, an unstamped pass-through on a host.
-// The worker's default fetch is called directly with this lane's env plus a token secret and a
-// project-host base (wrangler.test.jsonc sets neither): worker.ts's app config memoizes per env object.
+//     another project's secret is nobody — 401 on `/expression`, an unstamped pass-through on a
+//     host; the control plane's session cookie stamps nothing on a host;
+//   • THE PROJECT HOST: `/.itx/session?token=` turns a token for THIS project into the host cookie
+//     and the cookie into the principal the app sees, a foreign token is 401, `?logout` clears it,
+//     the redirect never leaves the host; a host for a project the directory does not know is 421.
+// The worker's default fetch is called directly with this lane's env plus a project-host base
+// (wrangler.test.jsonc sets none): worker.ts's app config memoizes per env object.
 
 import { createExecutionContext, env } from "cloudflare:test";
 import { newWebSocketRpcSession } from "capnweb";
 import { afterAll, beforeAll, expect, test } from "vitest";
-import { verifyProjectToken } from "../src/principal.ts";
+import { signProjectToken, verifyProjectToken } from "../src/principal.ts";
 import worker from "../src/worker.ts";
 import { applyDirectorySchema } from "./support.ts";
 
-const TOKEN_SECRET = "session-doors-token-secret";
-/** This lane's env, with the two vars the doors under test need. ONE object: the app config memo. */
+/** This lane's token secret (wrangler.test.jsonc) — what a token minted over /api verifies with. */
+const TOKEN_SECRET = String(
+  (env as unknown as Record<string, unknown>).APP_CONFIG_PROJECT_TOKEN_SECRET,
+);
+/** This lane's env, with the one var the project-host doors need. ONE object: the app config memo. */
 const laneEnv = {
   ...(env as unknown as Record<string, unknown>),
-  APP_CONFIG_PROJECT_TOKEN_SECRET: TOKEN_SECRET,
   APP_CONFIG_PROJECT_HOSTNAME_BASE: "projects.test",
 };
 const ADMIN = {
@@ -143,6 +151,11 @@ test("mintToken: the admin's, a member's and the project's own handle each sign 
   const claims = await verifyProjectToken(token, TOKEN_SECRET);
   expect(claims?.expiresAt).toBeGreaterThanOrEqual(before + 15 * 60_000);
   expect(claims?.expiresAt).toBeLessThanOrEqual(Date.now() + 15 * 60_000);
+  // a token session is a delegation, minutes long: it mints no token (no 24-hour extension of a
+  // 15-minute grant) and rotates no key — FORBIDDEN, the handle carries neither door
+  const delegated = bearer.projects.get("doors-mint");
+  expect(await codeOf(delegated.mintToken({ ttlSeconds: 24 * 60 * 60 }))).toBe("FORBIDDEN");
+  expect(await codeOf(delegated.rotateApiKey())).toBe("FORBIDDEN");
 
   // a member (the admin's `as`): her token carries her, for her project only
   const ada = (await api()).authenticate({
@@ -181,6 +194,22 @@ test("mintToken: the admin's, a member's and the project's own handle each sign 
   ).toBe("doors-mint");
 });
 
+test("over /api: a bad token and an expired token are INVALID_CREDENTIALS", async () => {
+  const token = await (await api()).authenticate(ADMIN).projects.get("doors-expiry").mintToken();
+  const whoamiCode = (candidate: string) =>
+    codeOf(
+      (api() as Promise<any>).then((session) =>
+        session.authenticate({ type: "project-token", token: candidate }).whoami(),
+      ),
+    );
+  expect(await whoamiCode(`${token}x`)).toBe("INVALID_CREDENTIALS");
+  expect(
+    await whoamiCode(
+      await signProjectToken({ projectId: "doors-expiry", actor: "admin" }, -1, TOKEN_SECRET),
+    ),
+  ).toBe("INVALID_CREDENTIALS");
+});
+
 /** An app that answers with what the platform handed it: the principal stamp and the bearer. */
 const SRC_ECHO = {
   "cap.js": `import { WorkerEntrypoint } from "cloudflare:workers";
@@ -194,7 +223,7 @@ export default class Echo extends WorkerEntrypoint {
 }`,
 };
 
-test("the lanes: this project's secret as the bearer admits /expression and stamps project:<id>; on a project host the app sees the stamp and never the bearer; another project's secret is 401 on /expression and an unstamped pass-through on the host", async () => {
+test("the lanes: this project's secret as the bearer admits /expression and stamps project:<id>; on a project host the app sees the stamp and never the bearer; another project's secret is 401 on /expression and an unstamped pass-through on the host; the control plane's cookie stamps nothing on a host", async () => {
   const admin = (await api()).authenticate(ADMIN);
   const itx = await admin.projects.create({ project: "doors-lane" });
   await admin.projects.create({ project: "doors-lane-other" });
@@ -229,4 +258,49 @@ test("the lanes: this project's secret as the bearer admits /expression and stam
     principal: null,
     authorization: `Bearer ${foreignKey}`,
   });
+
+  // the control plane's session cookie is `/api`'s credential, never a lane's: a signed-in user who
+  // is no member of this project — or one who is — stamps nothing on its host
+  const login = await call("https://control.test/login", {
+    method: "POST",
+    body: new URLSearchParams({ email: "doors-stranger@example.com", next: "/" }),
+  });
+  const stranger = (login.headers.get("set-cookie") ?? "").split(";")[0]!;
+  const seenByStranger = await call("https://echo--doors-lane.projects.test/", {
+    headers: { cookie: stranger },
+  });
+  expect(await seenByStranger.json()).toEqual({ principal: null, authorization: null });
+});
+
+test("the session door on a project host: /.itx/session?token= turns a token for THIS project into the host cookie, the cookie into the principal the app sees; a foreign token is 401; ?logout clears it; the redirect never leaves the host; an unknown project's host is 421", async () => {
+  const admin = (await api()).authenticate(ADMIN);
+  const itx = await admin.projects.create({ project: "doors-host" });
+  await itx.provide("itx.apps.echo", ["itx", "workers", ["get", { source: SRC_ECHO }]]);
+  const token = await itx.mintToken();
+  const host = (path: string, headers: Record<string, string> = {}) =>
+    call(`https://echo--doors-host.projects.test${path}`, { headers });
+
+  const door = await host(`/.itx/session?token=${token}&next=/w`);
+  expect(door.status, await door.clone().text()).toBe(303);
+  expect(door.headers.get("location")).toBe("/w");
+  const setCookie = door.headers.get("set-cookie") ?? "";
+  expect(setCookie).toContain(`itx-project-session=${token}`);
+  expect(setCookie).toContain("HttpOnly");
+  const cookie = setCookie.split(";")[0]!;
+  expect(await (await host("/", { cookie: `${cookie}; theme=dark` })).json()).toEqual({
+    principal: { actor: "admin" },
+    authorization: null,
+  });
+  // a token for another project is refused at the door
+  const foreign = await admin.projects.get("doors-host-other").mintToken();
+  expect((await host(`/.itx/session?token=${foreign}&next=/`)).status).toBe(401);
+  // the redirect never leaves the host; logout clears the cookie
+  const out = await host("/.itx/session?logout&next=//evil.example/x");
+  expect(out.status).toBe(303);
+  expect(out.headers.get("location")).toBe("/");
+  expect(out.headers.get("set-cookie")).toContain("Max-Age=0");
+  // a host for a project the directory does not know is 421 at the edge, before any DO is dialled
+  const unknown = await call("https://echo--doors-never-created.projects.test/");
+  expect(unknown.status).toBe(421);
+  expect(await unknown.text()).toContain("doors-never-created");
 });

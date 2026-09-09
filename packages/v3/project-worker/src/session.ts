@@ -3,36 +3,41 @@
 // `list()`, `get(project)`, `create({ project })` — get and create vend the project's ROOT
 // `IterateContext`, and `cd(path)` reaches the rest. One session may hold contexts of many projects;
 // the SessionTeardown is keyed by context name so they never undo each other's lends.
+//   who       — `verifyCredentials`: THE ONE verifier every door shares — `/api` (`authenticate`), the
+//               two lanes into a context (worker.ts, the credentials read off a request) and `/mcp`
+//               (control-plane.ts `resolveExternalToken`)
 //   session teardown — `SessionTeardown`: what a session must undo at its end, one entry per key
 //
 //   using api = newWebSocketRpcSession("wss://<worker>/api");
 //   const itx = api.authenticate({ type: "from-server-cookie" }).projects.get("my-project");
 //   const fresh = await api.authenticate({ type: "project-token", token }).projects.get("my-project");
 //
-// Authority is org membership (control-plane.ts) — membership being whatever `/login` was told (the
-// demo login form verifies nothing, so a cookie is attribution, not authentication) — except for a
-// project token and the project secret, each of which names its one project, and the admin secret,
-// which reaches every project. The two project-level doors a session vends ride the root context it
-// hands out: `projects.get(project).mintToken()` and `.rotateApiKey()` (iterate-context.ts).
+// What a session reaches is its `Reach` (control-plane.ts, the directory's word): org membership for
+// a control-plane user — membership being whatever `/login` was told (the demo login form verifies
+// nothing, so a cookie is attribution, not authentication) — the one project a project token or the
+// project secret names, every project for the admin secret. The two project-level doors a session
+// vends ride the root context it hands out: `projects.get(project).mintToken()` and
+// `.rotateApiKey()` (iterate-context.ts) — a project-token session gets neither.
 //
 // Every class here is a server-side capnweb RpcTarget (the client is JUST capnweb — iterate-context.ts).
 // None of them touches a Durable Object: `projects.get(project)` is addressing (plus the directory's
-// membership answer); the first door that reaches a context materializes it.
+// reach answer); the first door that reaches a context materializes it.
 
 import { RpcTarget } from "capnweb";
-import { isSameOriginBrowserRequest } from "./worker.ts";
 import {
   DurableObjectNameCodec,
   IterateContext,
   type IterateContextNamespace,
   type WaitUntil,
 } from "./iterate-context.ts";
-import type { Directory, Project, Session as ControlPlaneSession } from "./control-plane.ts";
-import { codedError } from "./lib.ts";
+import type { Directory, Project, Reach } from "./control-plane.ts";
+import type { AppConfig } from "./worker.ts";
+import { codedError, isSameOriginBrowserRequest } from "./lib.ts";
 import {
   verifyAdminSecret,
   verifyProjectSecret,
   verifyProjectToken,
+  verifySessionCookie,
   type Principal,
 } from "./principal.ts";
 
@@ -60,23 +65,67 @@ export type SessionCredentials =
  *  project secret (`projectId`). The admin secret's is `{ actor: "admin" }`. */
 export type SessionPrincipal = Principal & { projectId?: string };
 
-/** What every session is built from: the edge's bindings and THIS request. */
+/** What every session is built from: the edge's bindings, the configuration and THIS request. */
 export interface SessionInput {
   contextNamespace: IterateContextNamespace;
   waitUntil: WaitUntil;
   directory: Directory;
-  /** The request that dialled `/api` — its `Origin` is what `from-server-cookie` checks
-   *  (`isSameOriginBrowserRequest`, worker.ts). */
+  /** The request that dialled `/api` — `from-server-cookie` reads the session cookie off it and
+   *  checks its `Origin` (`isSameOriginBrowserRequest`, lib.ts). */
   request: Pick<Request, "url" | "headers">;
-  /** The request's control-plane user — the session cookie's (control-plane.ts `identity`), or null. */
-  user: ControlPlaneSession | null;
-  /** The secret project tokens verify with (blank ⇒ none does). */
-  projectTokenSecret: string;
-  /** The deployment's admin secret (`APP_CONFIG_ADMIN_API_SECRET`). */
-  adminApiSecret: string;
+  /** The deployment's configuration (worker.ts) — the three secrets the credentials verify with:
+   *  `projectTokenSecret`, `sessionSecret`, `adminApiSecret`. */
+  appConfig: AppConfig;
   /** The `SECRETS_KV` binding — where a project's API-key hash lives (`project-api-key:<projectId>`,
    *  principal.ts), read at `authenticate({ type: "project-secret" })`, written by `rotateApiKey`. */
   secretsKv: KVNamespace;
+}
+
+/** The principal `credentials` prove, or null when they do not — no reason given, so a door that
+ *  tries several kinds in turn (the lanes, `/mcp`) treats every miss alike; `authenticate` names
+ *  the miss per kind. A bearer is opaque, so its kind IS its verification: each kind has one
+ *  verifier (principal.ts). The cookie counts on a same-origin request only; the admin's `as`
+ *  upserts the user's directory row as `/login` does, so membership works. */
+export async function verifyCredentials(
+  credentials: SessionCredentials,
+  {
+    request,
+    directory,
+    appConfig,
+    secretsKv,
+  }: Pick<SessionInput, "request" | "directory" | "appConfig" | "secretsKv">,
+): Promise<SessionPrincipal | null> {
+  switch (credentials.type) {
+    case "from-server-cookie": {
+      if (!isSameOriginBrowserRequest(request)) return null;
+      const claims = await verifySessionCookie(
+        request.headers.get("cookie"),
+        appConfig.sessionSecret,
+      );
+      return claims && { actor: claims.sub, email: claims.email };
+    }
+    case "project-token": {
+      const claims = await verifyProjectToken(credentials.token, appConfig.projectTokenSecret);
+      if (!claims) return null;
+      const { expiresAt: _expiresAt, ...principal } = claims;
+      return principal;
+    }
+    case "project-secret": {
+      const principal = await verifyProjectSecret(
+        credentials.project,
+        credentials.secret,
+        secretsKv,
+      );
+      return principal && { projectId: credentials.project, ...principal };
+    }
+    case "admin-secret": {
+      const admin = await verifyAdminSecret(credentials.secret, appConfig.adminApiSecret);
+      if (!admin || !credentials.as) return admin;
+      const { sub, email } = credentials.as;
+      await directory.upsertUser(email);
+      return { actor: sub, email };
+    }
+  }
 }
 
 /** What `/api` serves: nothing but the gate. The ROOT capnweb target, so its lifetime IS the
@@ -97,68 +146,42 @@ export class UnauthenticatedSession extends RpcTarget {
   }
 
   /** THE introduction door (the `authenticate()` pattern: the only way to hold authority is to be
-   *  handed it by a gate that checked something). Each credential kind (`SessionCredentials`) has
-   *  its check and its refusal, coded: the cookie on a cross-origin browser request, or no cookie at
-   *  all, is `UNAUTHENTICATED`; a token or a secret that does not verify is `INVALID_CREDENTIALS`,
-   *  whatever is wrong with it. The admin's `as` upserts the user's directory row as `/login` does,
-   *  so membership works. */
+   *  handed it by a gate that checked something): `verifyCredentials`, or the refusal coded per
+   *  kind — the cookie on a cross-origin browser request, or no cookie at all, is
+   *  `UNAUTHENTICATED`; a token or a secret that does not verify is `INVALID_CREDENTIALS`, whatever
+   *  is wrong with it. What verified sets the session's reach: every project for the admin secret,
+   *  the projects of their orgs for a user (the cookie, the admin's `as`), the one project a token
+   *  or the secret names. A project token is a delegation, minutes long — its session mints no
+   *  token and rotates no key (the project doors are the member's, the admin's and the project's
+   *  own). */
   async authenticate(credentials: SessionCredentials): Promise<Session> {
-    const { request, user, directory, projectTokenSecret, adminApiSecret, secretsKv } = this.#input;
-    switch (credentials.type) {
-      case "from-server-cookie": {
-        if (!isSameOriginBrowserRequest(request))
+    const principal = await verifyCredentials(credentials, this.#input);
+    if (!principal) {
+      switch (credentials.type) {
+        case "from-server-cookie":
           throw codedError(
             "UNAUTHENTICATED",
-            `authenticate({ type: "from-server-cookie" }): the session cookie counts on a same-origin request only — this one's Origin is ${JSON.stringify(request.headers.get("origin"))}`,
+            `authenticate({ type: "from-server-cookie" }): no session cookie counts on this request — sign in at / first; the cookie counts on a same-origin request only, and this one's Origin is ${JSON.stringify(this.#input.request.headers.get("origin"))}`,
           );
-        if (!user)
-          throw codedError(
-            "UNAUTHENTICATED",
-            'authenticate({ type: "from-server-cookie" }): no session cookie on this request — sign in at / first',
-          );
-        return this.#sessionOf(user);
-      }
-      case "project-token": {
-        const claims = await verifyProjectToken(credentials.token, projectTokenSecret);
-        if (!claims) throw codedError("INVALID_CREDENTIALS", "the project token did not verify");
-        const { projectId, actor, email } = claims;
-        return new Session(this.#input, this.#sessionTeardown, null, {
-          projectId,
-          actor,
-          ...(email && { email }),
-        });
-      }
-      case "project-secret": {
-        const { project, secret } = credentials;
-        const principal = await verifyProjectSecret(project, secret, secretsKv);
-        if (!principal)
+        case "project-token":
+          throw codedError("INVALID_CREDENTIALS", "the project token did not verify");
+        case "project-secret":
           throw codedError(
             "INVALID_CREDENTIALS",
-            `the project secret did not verify for project ${JSON.stringify(project)}`,
+            `the project secret did not verify for project ${JSON.stringify(credentials.project)}`,
           );
-        return new Session(this.#input, this.#sessionTeardown, null, {
-          projectId: project,
-          ...principal,
-        });
-      }
-      case "admin-secret": {
-        if (!(await verifyAdminSecret(credentials.secret, adminApiSecret)))
+        case "admin-secret":
           throw codedError("INVALID_CREDENTIALS", "the admin secret did not match");
-        if (!credentials.as)
-          return new Session(this.#input, this.#sessionTeardown, null, { actor: "admin" });
-        const { sub, email } = credentials.as;
-        await directory.upsertUser(email);
-        return this.#sessionOf({ sub, email, iat: Math.floor(Date.now() / 1000) });
       }
     }
-  }
-
-  /** A control-plane user's session — the cookie's user, or the admin's `as`. */
-  #sessionOf(user: ControlPlaneSession): Session {
-    return new Session(this.#input, this.#sessionTeardown, user, {
-      actor: user.sub,
-      email: user.email,
-    });
+    const reach: Reach =
+      credentials.type === "admin-secret" && !credentials.as
+        ? "every"
+        : principal.projectId !== undefined
+          ? { projectIds: [principal.projectId] }
+          : { userId: principal.actor };
+    const projectDoors = credentials.type === "project-token" ? null : this.#input;
+    return new Session(this.#input, this.#sessionTeardown, principal, reach, projectDoors);
   }
 }
 
@@ -171,12 +194,13 @@ class Session extends RpcTarget {
   constructor(
     input: SessionInput,
     sessionTeardown: SessionTeardown,
-    user: ControlPlaneSession | null,
     principal: SessionPrincipal,
+    reach: Reach,
+    projectDoors: Pick<SessionInput, "appConfig" | "secretsKv"> | null,
   ) {
     super();
     this.#principal = principal;
-    this.#projects = new ProjectCollection(input, sessionTeardown, user, principal);
+    this.#projects = new ProjectCollection(input, sessionTeardown, principal, reach, projectDoors);
   }
 
   /** Who this session is: the user (the cookie's, the admin's `as`), the token's principal (and its
@@ -194,90 +218,65 @@ class Session extends RpcTarget {
 }
 
 /** The project catalog: `list()`, `get(project)`, `create({ project })` — get and create vend the
- *  project's root context. What a session reaches is what its credential earned (`authenticate`): a
- *  control-plane user (the cookie's, the admin's `as`) reaches the projects of their orgs; a
- *  project-bound session (a project token, the project secret) reaches its one project; the admin
- *  secret — no user, no binding — reaches every project. */
+ *  project's root context. What a session reaches is its `Reach` (control-plane.ts): every project,
+ *  the projects of the user's orgs, or the projects named outright. */
 class ProjectCollection extends RpcTarget {
   readonly #input: SessionInput;
   readonly #sessionTeardown: SessionTeardown;
-  readonly #user: ControlPlaneSession | null;
-  readonly #principal: SessionPrincipal;
-  /** The admin secret's session: no user, no token — every project. */
-  readonly #admin: boolean;
+  readonly #reach: Reach;
   /** The principal a context stamps on events: the session's, minus the token's binding. */
   readonly #contextPrincipal: Principal;
+  /** What the project doors a vended context carries (`mintToken`, `rotateApiKey`) sign and write
+   *  with — null for a project-token session, whose contexts carry neither. */
+  readonly #projectDoors: Pick<SessionInput, "appConfig" | "secretsKv"> | null;
 
   constructor(
     input: SessionInput,
     sessionTeardown: SessionTeardown,
-    user: ControlPlaneSession | null,
     principal: SessionPrincipal,
+    reach: Reach,
+    projectDoors: Pick<SessionInput, "appConfig" | "secretsKv"> | null,
   ) {
     super();
     this.#input = input;
     this.#sessionTeardown = sessionTeardown;
-    this.#user = user;
-    this.#principal = principal;
-    this.#admin = user === null && principal.projectId === undefined;
-    this.#contextPrincipal = {
-      actor: principal.actor,
-      ...(principal.email && { email: principal.email }),
-    };
+    this.#reach = reach;
+    this.#projectDoors = projectDoors;
+    const { projectId: _boundProjectId, ...contextPrincipal } = principal;
+    this.#contextPrincipal = contextPrincipal;
   }
 
-  /** The projects this session can reach: the projects of the orgs the user belongs to, with their
-   *  role; the one project a bound session names (its directory row, no role — none when the
-   *  directory never heard of it); for the admin secret, every project in the directory (no role). */
-  async list(): Promise<Project[]> {
-    const { directory } = this.#input;
-    if (this.#admin) return directory.listAllProjects();
-    if (this.#principal.projectId !== undefined) {
-      const project = await directory.getProject(this.#principal.projectId);
-      return project ? [project] : [];
-    }
-    return directory.listProjects(this.#signedInUser().sub);
+  /** The projects this session reaches, as directory rows: the projects of the orgs the user
+   *  belongs to, with their role; the one project a bound session names (its row, no role — none
+   *  when the directory never heard of it); for the admin secret, every project (no role). */
+  list(): Promise<Project[]> {
+    return this.#input.directory.reachableProjects(this.#reach);
   }
 
   /** Create the project named `project` (slugified: that IS its id) — in the user's org (the first
    *  by name when they have several, created on first use when they have none), or in the
-   *  deployment's own org for the admin secret — and vend its root context. A name ANY org already
-   *  holds is refused, coded (PROJECT_NAME_TAKEN); the same org's again is idempotent. */
+   *  deployment's own org for the admin secret — and vend its root context. A bound session (a
+   *  project token, the project secret) creates none: FORBIDDEN. A name ANY org already holds is
+   *  refused, coded (PROJECT_NAME_TAKEN); the same org's again is idempotent. */
   async create(input: { project: ProjectIdOrSlug }): Promise<IterateContext> {
-    const { directory } = this.#input;
-    const user = this.#admin ? null : this.#signedInUser();
-    const org = user
-      ? await directory.ensureOrg(user.sub, `${user.email}'s org`)
-      : await directory.adminOrg();
-    const project = await directory.createProject(org.id, input.project);
+    const project = await this.#input.directory.createProject(this.#reach, input.project);
     return this.#context(project.id);
   }
 
   /** The project's root context ("/") — and, on it, the project's two session doors: `mintToken()`
    *  and `rotateApiKey()` (iterate-context.ts), gated by this very admission. A project only — a
-   *  context name belongs to `cd`. A bound session (a project token, the project secret) holds its
-   *  ONE project; a user's session holds the projects of their orgs (one directory read); the admin
-   *  secret's holds any. */
+   *  context name belongs to `cd`. Outside this session's reach is FORBIDDEN. */
   async get(project: ProjectIdOrSlug): Promise<IterateContext> {
     const address = DurableObjectNameCodec.parse(project);
     if (address.path !== "/")
       throw new Error(
         `projects.get(project): got a context name ${JSON.stringify(project)} — pass the project and cd(path) from its root`,
       );
-    if (this.#principal.projectId !== undefined) {
-      if (this.#principal.projectId !== address.projectId)
-        throw codedError(
-          "FORBIDDEN",
-          `projects.get(${JSON.stringify(project)}): this session is bound to project ${JSON.stringify(this.#principal.projectId)}`,
-        );
-    } else if (this.#user) {
-      const projects = await this.#input.directory.listProjects(this.#user.sub);
-      if (!projects.some((candidate) => candidate.id === address.projectId))
-        throw codedError(
-          "FORBIDDEN",
-          `projects.get(${JSON.stringify(project)}): not a project of an org ${this.#user.email} belongs to`,
-        );
-    } // the admin secret: every project
+    if (!(await this.#input.directory.reachesProject(this.#reach, address.projectId)))
+      throw codedError(
+        "FORBIDDEN",
+        `projects.get(${JSON.stringify(project)}): outside this session's reach — ${describeReach(this.#reach)}`,
+      );
     return this.#context(address.projectId);
   }
 
@@ -288,21 +287,18 @@ class ProjectCollection extends RpcTarget {
       this.#sessionTeardown,
       this.#input.waitUntil,
       this.#contextPrincipal,
-      this.#input,
+      this.#projectDoors,
     );
   }
-
-  /** The catalog's writer: a control-plane user. A bound session (a project token, the project
-   *  secret) has none — it holds one project and reaches it with `get`. */
-  #signedInUser(): ControlPlaneSession {
-    if (!this.#user)
-      throw codedError(
-        "FORBIDDEN",
-        "this session is bound to one project — projects.get(project); create() needs a signed-in user or the admin secret",
-      );
-    return this.#user;
-  }
 }
+
+/** `reach`, for a refusal's message. */
+const describeReach = (reach: Reach): string =>
+  reach === "every"
+    ? "every project"
+    : "userId" in reach
+      ? `the projects of the orgs ${reach.userId} belongs to`
+      : `bound to ${reach.projectIds.map((projectId) => JSON.stringify(projectId)).join(", ") || "no project"}`;
 
 // ── session teardown ── WHAT A SESSION MUST UNDO AT ITS END, as a leaf (no imports): the one-entry-per-key
 // register every IterateContext of a session shares, testable in the node lane.

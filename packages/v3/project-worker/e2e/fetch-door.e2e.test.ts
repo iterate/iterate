@@ -11,11 +11,11 @@
 //   • a lent stub's plain HTTP fetch (eyeball → /expression → DO fetch lane → rule → the rpcStubs
 //     registry → relay → capnweb → the Node provider and back, the request crossing intact) and its
 //     WebSocket upgrade (101, echo, close through the Node provider)
-//   • every row into `/expression` bears the admin secret (the lane admits a member's cookie, a project
-//     token or the admin secret); the lane cannot re-enter itself (`itx=itx.fetch` is cut at the second
-//     hop — the platform's bearer never rides into loaded code, so the re-entry is 401, never a loop);
-//     a hop count the platform never wrote (`NaN`) is over budget on arrival; the deleted routes /call,
-//     /ws, /cap fall through to the control plane's 404, an upgrade to /ws gets no 101
+//   • every row into `/expression` bears the admin secret (the lane admits the project's token, its
+//     secret or the admin secret — never the control plane's cookie; the admission rows are
+//     __workers-tests__/control-plane.test.ts); a hop count the platform never wrote (`NaN`) is over
+//     budget on arrival; the deleted routes /call, /ws, /cap fall through to the control plane's 404,
+//     an upgrade to /ws gets no 101
 //   • egress: a `{{secret:project:NAME}}` token that survives substitution means no such secret is
 //     stored, and forwarding it would leak the secret's NAME and send a garbage credential — the door
 //     scans the request (URL first, then every header) as it substitutes and answers 502 BEFORE the
@@ -150,16 +150,6 @@ test("lent stub WebSocket fetch: a plain eyeball WebSocket opens (101), echoes, 
 // The workerd-provider half of the same lane is pinned in __workers-tests__/ws-fetch-live-101
 // .test.ts (the dedicated fetch-upgrade leg; the DO mints the eyeball pair natively). A tunnel
 // (`iterate tunnel bla 3000`) is this same lent stub proxying to localhost — the same three hops.
-
-test("/expression cannot re-enter itself: `itx=itx.fetch` (an expression fetching its own lane, the same query every hop) is cut at the second hop — the admin bearer never rides into loaded code, so the re-entry arrives with no credential and is 401, never a loop", async () => {
-  const ctx = freshCtx("lane-reentry");
-  const response = await fetch(expressionUrl(ctx, "itx.fetch"), {
-    headers: adminBearer(),
-    signal: AbortSignal.timeout(8000),
-  });
-  expect(response.status).toBe(401);
-  expect(await response.text()).toMatch(/sign in as a member/);
-});
 
 test("a hop count the platform never wrote (an app spelling `NaN` to defeat the budget) is over budget on arrival: 508, never a loop", async () => {
   const response = await fetch(expressionUrl(freshCtx("lane-nan-hops"), "itx.whoami"), {

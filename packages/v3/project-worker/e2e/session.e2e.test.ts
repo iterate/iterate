@@ -1,18 +1,13 @@
-// session.e2e.test.ts — the /api SESSION: its identity (src/principal.ts, session.ts, the DO's append
-// root), its doors, and the ONE SessionTeardown every context it hands out shares. Pins:
-//   • a project token: `whoami`, `source.principal` on every append — set by the DO, so a client's own
-//     is overwritten (the admin session's becomes `{ actor: "admin" }`); the platform's own rows
-//     carry it too
-//   • the token names ONE project (FORBIDDEN elsewhere); a bad or expired token is INVALID_CREDENTIALS
-//   • the admin secret: `{ actor: "admin" }` on any project, every project listed; a wrong secret is
-//     INVALID_CREDENTIALS; `as` is that user's session — confined to their orgs' projects, creating
-//     in their own org; `from-server-cookie` with no cookie is UNAUTHENTICATED; a `project-secret`
-//     for a project that never rotated a key is INVALID_CREDENTIALS
-//   • the project secret: `rotateApiKey()` mints it (a reveal IS a rotation; the previous key dies);
-//     `authenticate({ type: "project-secret" })` IS the project — `{ actor: "project:<id>" }` on every
-//     append, bound to its one project (FORBIDDEN elsewhere, `list()` is that project, `create()` is
-//     FORBIDDEN); `mintToken()` on the admin's, a member's and the project's own handle signs a token
-//     the project-token door accepts, carrying the minter's principal
+// session.e2e.test.ts — the /api SESSION on the deployed worker: one row per door, its identity
+// (src/principal.ts, session.ts, the DO's append root), and the ONE SessionTeardown every context it
+// hands out shares. Pins:
+//   • a project token, minted through the real door by a member (`projects.get(p).mintToken()`):
+//     `whoami`, `source.principal` on every append — set by the DO, so a client's own is overwritten
+//     (the admin session's becomes `{ actor: "admin" }`); the platform's own rows carry it too; the
+//     token names ONE project (FORBIDDEN elsewhere); a bad token and a token past its ttl are
+//     INVALID_CREDENTIALS
+//   • the project secret authenticates over the wire: the key `rotateApiKey` minted opens a session
+//     that IS the project (the rest of both doors is __workers-tests__/session-doors.test.ts)
 //   • the built-in cd carries the principal to a SIBLING context
 //   • one-shot HTTP batch at /api (a socketless CLI client), an inline-source worker, a fetch-shaped
 //     target through the session as a dotted `.fetch(request)` behind a rewrite rule (the commissioned
@@ -37,17 +32,30 @@ import {
   workerUrl,
 } from "./support/client.ts";
 import { mintProjectApiKey, mintProjectToken } from "./support/principal.ts";
-import { freshDnsSafeProjectId, projectHostsAreLocal } from "./support/project-host.ts";
+import {
+  freshDnsSafeProjectId,
+  projectHostsAreLocal,
+  registerProject,
+} from "./support/project-host.ts";
 import { SOURCES } from "./support/sources.ts";
+
+/** A member of a fresh project: their `as` claims (`user_<email>`, the directory's own id) and the
+ *  principal a token they mint carries. */
+const memberOf = (projectId: string) => {
+  const email = `${projectId}@example.com`;
+  const as = { sub: `user_${email}`, email };
+  return { as, principal: { actor: as.sub, email } };
+};
 
 // ── identity ──
 
 test("a project token: whoami, source.principal on every append (unforgeable), the project bound, bad tokens refused", async () => {
-  const projectId = freshCtx("identity");
-  const principal = { actor: "user_ada", email: "ada@example.com" };
-  const token = await mintProjectToken({ projectId, ...principal });
+  const projectId = freshDnsSafeProjectId("identity");
+  const { as: ada, principal } = memberOf(projectId);
+  await registerProject(projectId, ada); // her project, in her org: she mints her own token
+  const token = await mintProjectToken(projectId, ada);
   const api = session();
-  const authenticated = api.authenticate({ type: "project-token", token: token });
+  const authenticated = api.authenticate({ type: "project-token", token });
   expect(await authenticated.whoami()).toEqual({ projectId, ...principal });
 
   // every append the session makes carries the principal — the DO sets it, a client's own is overwritten
@@ -72,143 +80,34 @@ test("a project token: whoami, source.principal on every append (unforgeable), t
   // the token names ONE project
   const other = await rejection(authenticated.projects.get(`${projectId}-other`).whoami());
   expect(codeOf(other), other.message).toBe("FORBIDDEN");
-  // a bad token, an expired token: refused the same way
+  // a bad token, and a token past its ttl (one second, minted through the door): refused the same way
   const bad = await rejection(
     api.authenticate({ type: "project-token", token: `${token}x` }).whoami(),
   );
   expect(codeOf(bad), bad.message).toBe("INVALID_CREDENTIALS");
-  const expired = await mintProjectToken({ projectId, ...principal, expiresAt: Date.now() - 1 });
+  const expiring = await mintProjectToken(projectId, ada, 1);
+  await sleep(1200);
   expect(
-    codeOf(await rejection(api.authenticate({ type: "project-token", token: expired }).whoami())),
+    codeOf(await rejection(api.authenticate({ type: "project-token", token: expiring }).whoami())),
   ).toBe("INVALID_CREDENTIALS");
 });
 
-test('the admin secret: `{ actor: "admin" }` on any project and every project listed; `as` is that user\'s session, confined to their orgs; a wrong secret, a cookie this socket never carried and a project secret no rotation minted are refused, coded', async () => {
-  const api = session();
-  const admin = api.authenticate(adminCredentials());
-  expect(await admin.whoami()).toEqual({ actor: "admin" });
-  // any project, no directory row needed; a created one lands in the deployment's own org
-  const projectId = freshDnsSafeProjectId("admin");
-  expect(await admin.projects.get(`${projectId}-never-created`).whoami()).toEqual({
-    projectId: `${projectId}-never-created`,
-    path: "/",
-  });
-  expect(await (await admin.projects.create({ project: projectId })).whoami()).toEqual({
-    projectId,
-    path: "/",
-  });
-  const listed = (await admin.projects.list()) as { id: string; orgId: string; role?: string }[];
-  expect(listed.find((p) => p.id === projectId)).toEqual({ id: projectId, orgId: "org_admin" });
-
-  // `as`: the user's session — their projects only, created in their own org, without a login
-  const email = `${projectId}@example.com`;
-  const ada = api.authenticate(adminCredentials({ sub: `user_${email}`, email }));
-  expect(await ada.whoami()).toEqual({ actor: `user_${email}`, email });
-  const adminOnly = await rejection(ada.projects.get(projectId).whoami());
-  expect(codeOf(adminOnly), adminOnly.message).toBe("FORBIDDEN");
-  const own = `${projectId}-own`;
-  expect(await (await ada.projects.create({ project: own })).whoami()).toEqual({
-    projectId: own,
-    path: "/",
-  });
-  expect(await ada.projects.get(own).whoami()).toEqual({ projectId: own, path: "/" });
-  expect((await ada.projects.list()).map((p: { id: string }) => p.id)).toEqual([own]);
-  expect(listed.some((p) => p.id === own)).toBe(false); // listed before it existed
-  expect((await admin.projects.list()).some((p: { id: string }) => p.id === own)).toBe(true);
-
-  // the refusals
-  const wrong = await rejection(
-    api.authenticate({ type: "admin-secret", secret: "not-the-secret" }).whoami(),
-  );
-  expect(codeOf(wrong), wrong.message).toBe("INVALID_CREDENTIALS");
-  const noCookie = await rejection(api.authenticate({ type: "from-server-cookie" }).whoami());
-  expect(codeOf(noCookie), noCookie.message).toBe("UNAUTHENTICATED");
-  const secret = await rejection(
-    api.authenticate({ type: "project-secret", project: projectId, secret: "x" }).whoami(),
-  );
-  expect(codeOf(secret), secret.message).toBe("INVALID_CREDENTIALS"); // no key until the first rotateApiKey
-});
-
-test("the project secret: rotateApiKey mints it and the previous key dies; the session it opens IS the project — bound to it, listing it, stamping project:<id>; mintToken signs a token the project-token door accepts, as the admin, a member, and the project itself", async () => {
-  const api = session();
-  const admin = api.authenticate(adminCredentials());
+test("the project secret authenticates over the wire: the key rotateApiKey minted opens a session that IS the project", async () => {
   const projectId = freshDnsSafeProjectId("secret");
-  const itx = await admin.projects.create({ project: projectId });
-
-  // a reveal IS a rotation: the key comes back once, only its hash is kept
   const key = await mintProjectApiKey(projectId);
-  expect(key).toMatch(/^[A-Za-z0-9_-]{43}$/);
-  const device = api.authenticate({ type: "project-secret", project: projectId, secret: key });
-  expect(await device.whoami()).toEqual({ projectId, actor: `project:${projectId}` });
-  // every append the device makes is the project's — the DO's stamp, a client's own overwritten
-  await device.projects.get(projectId).append({
-    type: "reading",
-    payload: { celsius: 21 },
-    source: { principal: { actor: "forged" } },
-  });
-  expect((await readAll(itx)).find((e) => e.type === "reading")?.source?.principal).toEqual({
-    actor: `project:${projectId}`,
-  });
-  // bound to its one project
-  expect((await device.projects.list()).map((p: { id: string }) => p.id)).toEqual([projectId]);
-  const elsewhere = await rejection(device.projects.get(`${projectId}-other`).whoami());
-  expect(codeOf(elsewhere), elsewhere.message).toBe("FORBIDDEN");
-  const create = await rejection(device.projects.create({ project: `${projectId}-new` }));
-  expect(codeOf(create), create.message).toBe("FORBIDDEN");
-  const wrong = await rejection(
-    api.authenticate({ type: "project-secret", project: projectId, secret: `${key}x` }).whoami(),
-  );
-  expect(codeOf(wrong), wrong.message).toBe("INVALID_CREDENTIALS");
-
-  // a rotation — from any handle that reaches the project, the device's own included — retires the key
-  const next = await device.projects.get(projectId).rotateApiKey();
-  expect(next).not.toBe(key);
-  const stale = await rejection(
-    api.authenticate({ type: "project-secret", project: projectId, secret: key }).whoami(),
-  );
-  expect(codeOf(stale), stale.message).toBe("INVALID_CREDENTIALS");
   expect(
-    await api.authenticate({ type: "project-secret", project: projectId, secret: next }).whoami(),
+    await session()
+      .authenticate({ type: "project-secret", project: projectId, secret: key })
+      .whoami(),
   ).toEqual({ projectId, actor: `project:${projectId}` });
-
-  // mintToken: a project token as whoever holds the handle — 15 minutes by default, 24 hours at most
-  const adminToken = await itx.mintToken();
-  expect(await api.authenticate({ type: "project-token", token: adminToken }).whoami()).toEqual({
-    projectId,
-    actor: "admin",
-  });
-  const email = `${projectId}@example.com`;
-  const ada = api.authenticate(adminCredentials({ sub: `user_${email}`, email }));
-  const own = `${projectId}-own`;
-  await ada.projects.create({ project: own });
-  const hers = await ada.projects.get(own).mintToken({ ttlSeconds: 60 });
-  expect(await api.authenticate({ type: "project-token", token: hers }).whoami()).toEqual({
-    projectId: own,
-    actor: `user_${email}`,
-    email,
-  });
-  const notHers = await rejection(ada.projects.get(projectId).mintToken()); // `get` refuses first
-  expect(codeOf(notHers), notHers.message).toBe("FORBIDDEN");
-  const asItself = await api
-    .authenticate({ type: "project-secret", project: projectId, secret: next })
-    .projects.get(projectId)
-    .mintToken();
-  expect(await api.authenticate({ type: "project-token", token: asItself }).whoami()).toEqual({
-    projectId,
-    actor: `project:${projectId}`,
-  });
-  const tooLong = await rejection(itx.mintToken({ ttlSeconds: 24 * 60 * 60 + 1 }));
-  expect(tooLong.message).toMatch(/between 1 second and 24 hours/);
 });
 
 test("the built-in cd carries the principal to a SIBLING context — an event appended through `itx.cd('/x').append(…)` is attributed like one appended at the root", async () => {
-  const projectId = freshCtx("cd-who");
-  const principal = { actor: "user_ada", email: "ada@example.com" };
+  const projectId = freshDnsSafeProjectId("cd-who");
+  const { as: ada, principal } = memberOf(projectId);
+  await registerProject(projectId, ada);
   const itx = session()
-    .authenticate({
-      type: "project-token",
-      token: await mintProjectToken({ projectId, ...principal }),
-    })
+    .authenticate({ type: "project-token", token: await mintProjectToken(projectId, ada) })
     .projects.get(projectId);
   await itx.invoke("itx.cd('/sibling').append({ type: 'note', payload: { via: 'cd' } })");
   const note = (await readAll(itx.cd("/sibling"))).find((e) => e.type === "note");

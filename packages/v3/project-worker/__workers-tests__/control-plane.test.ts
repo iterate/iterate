@@ -10,11 +10,13 @@
 //   THE ADMIN SECRET (this lane's configured one, wrangler.test.jsonc): `{ actor: "admin" }` on a
 //   project the admin is no member of, every project listed, a project of its own in `org_admin`;
 //   `as` is a user's session confined to their orgs; a wrong secret is INVALID_CREDENTIALS.
-//   THE FETCH LANE: a member's cookie, the project's bearer or the admin bearer admits; anyone else
-//   is 401; a visitor's `x-itx-*` headers never reach the DO's internal protocol.
+//   THE FETCH LANE: the project's token, its secret or the admin bearer admits; the control plane's
+//   cookie never does (a cross-site navigation carries it), nor anyone else: 401; a visitor's
+//   `x-itx-*` headers never reach the DO's internal protocol.
+//   THE CONSOLE's POST doors refuse a foreign Origin (403) and `/logout` is a POST.
 //   /mcp (the last block): the ONE MCP server for every project — the metadata documents, the
-//   code + PKCE flow with project selection at consent, the four tools, the admin secret and a
-//   project secret as bearers, a token for another resource refused.
+//   code + PKCE flow with project selection at consent, the four tools, a project token, the admin
+//   secret and a project secret as bearers, a token for another resource refused.
 // The worker's default fetch is called directly so a test can hand it its own env (worker.ts's app
 // config memoizes the configuration per env object).
 
@@ -22,12 +24,13 @@ import { createExecutionContext, env } from "cloudflare:test";
 import { newWebSocketRpcSession } from "capnweb";
 import { afterAll, beforeAll, expect, test } from "vitest";
 import definitionsSql from "../src/control-plane.sql?raw";
-import { rotateProjectApiKey, signClaims } from "../src/principal.ts";
+import { rotateProjectApiKey, signProjectToken } from "../src/principal.ts";
 import worker from "../src/worker.ts";
 
 const workersLaneEnv = env as unknown as Record<string, unknown>;
-/** This lane's admin secret (wrangler.test.jsonc). */
+/** This lane's admin secret and token secret (wrangler.test.jsonc). */
 const ADMIN_API_SECRET = String(workersLaneEnv.APP_CONFIG_ADMIN_API_SECRET);
+const TOKEN_SECRET = String(workersLaneEnv.APP_CONFIG_PROJECT_TOKEN_SECRET);
 const ADMIN = { type: "admin-secret", secret: ADMIN_API_SECRET } as const;
 const COOKIE = { type: "from-server-cookie" } as const;
 const ORIGIN = "https://control.test";
@@ -127,7 +130,7 @@ beforeAll(async () => {
   await db.batch(statements.map((statement) => db.prepare(statement)));
 });
 
-test("the cookie: sign in on the console, then the cookie's same-origin socket to /api authenticates — projects.create vends the root context, list catalogs it, get admits members only, a taken name is coded; a foreign Origin and no cookie are UNAUTHENTICATED", async () => {
+test("the cookie: sign in on the console, then the cookie's same-origin socket to /api authenticates — projects.create vends the root context, list catalogs it, get admits members only, a taken name is coded; a foreign Origin and no cookie are UNAUTHENTICATED; the console's POST doors refuse a foreign Origin and /logout is a POST", async () => {
   const anonymousHome = await call(workersLaneEnv, "/");
   expect(anonymousHome.status).toBe(200);
   expect(await anonymousHome.text()).toContain("Sign in");
@@ -206,6 +209,21 @@ test("the cookie: sign in on the console, then the cookie's same-origin socket t
     "my-project",
   ]);
   expect((await call(workersLaneEnv, "/projects", form({ slug: "nope" }))).status).toBe(302); // no cookie: back to sign in
+  // a POST from a foreign origin — another site's form, her cookie riding along — is 403 and
+  // creates nothing; a GET cannot log out (the door is a POST); her pages are never cached
+  const forged = await call(workersLaneEnv, "/projects", {
+    ...form({ slug: "forged-project" }),
+    headers: { cookie: ada, origin: "https://evil.example" },
+  });
+  expect(forged.status).toBe(403);
+  expect((await session.projects.list()).map((p: { id: string }) => p.id)).toEqual([
+    "form-project",
+    "my-project",
+  ]);
+  expect((await call(workersLaneEnv, "/logout", { headers: { cookie: ada } })).status).toBe(404);
+  expect(
+    (await call(workersLaneEnv, "/", { headers: { cookie: ada } })).headers.get("cache-control"),
+  ).toBe("no-store");
   // /mcp is the OAuth-protected boundary: without a bearer the provider refuses
   expect((await mcp(workersLaneEnv, "initialize", {})).status).toBe(401);
   // logout clears the cookie
@@ -283,7 +301,7 @@ test("the admin secret: { actor: 'admin' } reaches a project the admin is no mem
   ).toBe("INVALID_CREDENTIALS"); // no key rotated for danas, so nothing verifies (session-doors.test.ts has the rest)
 });
 
-test("the fetch lane (/expression): a member's cookie, the project's bearer or the admin bearer admits, anyone else is 401; a visitor's `x-itx-*` headers never reach the DO's internal protocol", async () => {
+test("the fetch lane (/expression): the project's token, its secret or the admin bearer admits; the control plane's cookie never does — a cross-site navigation carries it, and appends nothing — nor anyone else: 401; a visitor's `x-itx-*` headers never reach the DO's internal protocol", async () => {
   const lane = (await api(workersLaneEnv)).authenticate(ADMIN);
   const target = await lane.projects.create({ project: "lane-project" });
   // a forged pager header (the DO's internal attach protocol, which appends the events it carries)
@@ -305,35 +323,49 @@ test("the fetch lane (/expression): a member's cookie, the project's bearer or t
   const events = (await target.readEvents(0, 100)).events as { type: string }[];
   expect(events.some((e) => e.type === "events.iterate.com/stream/paused")).toBe(false);
 
-  // admission: a member's cookie, the admin bearer, a project-token bearer for the project (under a
-  // configuration that signs tokens — a second env object, its own configuration); anyone else is 401
+  // admission: the admin bearer, a project-token bearer for the project; anyone else is 401
   const ada = await signIn(workersLaneEnv, "lane-ada@example.com");
-  await (await api(workersLaneEnv, { cookie: ada })).authenticate(COOKIE).projects.create({
-    project: "adas-lane",
-  });
+  const adasLane = await (
+    await api(workersLaneEnv, { cookie: ada })
+  )
+    .authenticate(COOKIE)
+    .projects.create({ project: "adas-lane" });
   const bob = await signIn(workersLaneEnv, "lane-bob@example.com");
-  const laneStatus = async (headers: Record<string, string>): Promise<number> =>
-    (await call(workersLaneEnv, "/expression?context=adas-lane&itx=itx.whoami()", { headers }))
-      .status;
+  const laneStatus = async (
+    headers: Record<string, string>,
+    itx = "itx.whoami()",
+  ): Promise<number> =>
+    (
+      await call(workersLaneEnv, `/expression?context=adas-lane&itx=${encodeURIComponent(itx)}`, {
+        headers,
+      })
+    ).status;
   expect(await laneStatus({ cookie: bob })).toBe(401);
   expect(await laneStatus({})).toBe(401);
   expect(await laneStatus({ authorization: "Bearer neither-a-token-nor-the-secret" })).toBe(401);
-  expect(await laneStatus({ cookie: ada })).not.toBe(401); // admitted — what the lane answers for a non-fetch-shaped target is its own business
-  expect(await laneStatus({ authorization: `Bearer ${ADMIN_API_SECRET}` })).not.toBe(401);
-  const tokenLaneEnv = { ...workersLaneEnv, APP_CONFIG_PROJECT_TOKEN_SECRET: "lane-token-secret" };
+  expect(await laneStatus({ authorization: `Bearer ${ADMIN_API_SECRET}` })).not.toBe(401); // admitted — what the lane answers for a non-fetch-shaped target is its own business
+  // the member's OWN cookie is no credential here: as a cross-site top-level navigation sends it —
+  // an <a href> on another site: the Lax cookie rides, no Origin is stamped — it is 401, and the
+  // expression it named never ran (the browser's door is /api, `from-server-cookie`, same origin only)
+  expect(
+    await laneStatus(
+      { cookie: ada, "sec-fetch-site": "cross-site", "sec-fetch-mode": "navigate" },
+      "itx.append({ type: 'csrf-landed', payload: { from: 'evil' } })",
+    ),
+  ).toBe(401);
+  expect(
+    ((await adasLane.readEvents(0, 100)).events as { type: string }[]).some(
+      (e) => e.type === "csrf-landed",
+    ),
+  ).toBe(false);
   const projectToken = (projectId: string) =>
-    signClaims(
-      { projectId, actor: "user_lane-ada@example.com", expiresAt: Date.now() + 60_000 },
-      "lane-token-secret",
-    );
-  const tokenLaneStatus = async (token: string): Promise<number> =>
-    (
-      await call(tokenLaneEnv, "/expression?context=adas-lane&itx=itx.whoami()", {
-        headers: { authorization: `Bearer ${token}` },
-      })
-    ).status;
-  expect(await tokenLaneStatus(await projectToken("adas-lane"))).not.toBe(401);
-  expect(await tokenLaneStatus(await projectToken("someone-elses"))).toBe(401); // a token names ONE project
+    signProjectToken({ projectId, actor: "user_lane-ada@example.com" }, 60_000, TOKEN_SECRET);
+  expect(await laneStatus({ authorization: `Bearer ${await projectToken("adas-lane")}` })).not.toBe(
+    401,
+  );
+  expect(await laneStatus({ authorization: `Bearer ${await projectToken("someone-elses")}` })).toBe(
+    401,
+  ); // a token names ONE project
 });
 
 // ── /mcp ── THE ONE MCP SERVER, for every project, behind the OAuth provider's bearer check: an
@@ -489,7 +521,7 @@ test("the metadata documents: the AS names /authorize, /oauth/token and /oauth/r
   ).toBe(401);
 });
 
-test("the code + PKCE flow: the cookie's user authorizes an MCP client on two of her three projects; the token lists the four tools, whoami is the grant; itx.invoke runs in a granted project under her principal (string and parsed forms, args appended), an expression error is an isError result; the ungranted project and a call naming none are refused", async () => {
+test("the code + PKCE flow: the cookie's user authorizes an MCP client on two of her three projects; the token lists the four tools, whoami is the grant; itx.invoke runs in a granted project under her principal (string and parsed forms, args appended), an expression error is an isError result; the ungranted project and a call naming none are refused; a grant that chose creates no project", async () => {
   const ada = await signIn(workersLaneEnv, "oauth-ada@example.com");
   const session = (await api(workersLaneEnv, { cookie: ada, origin: ORIGIN })).authenticate(COOKIE);
   for (const project of ["oa-one", "oa-two", "oa-three"])
@@ -510,7 +542,7 @@ test("the code + PKCE flow: the cookie's user authorizes an MCP client on two of
     "itx.invoke",
   ]);
   expect(JSON.parse((await callTool(workersLaneEnv, bearer, "whoami", {})).text)).toEqual({
-    sub: "user_oauth-ada@example.com",
+    actor: "user_oauth-ada@example.com",
     email: "oauth-ada@example.com",
     projects: ["oa-one", "oa-two"],
   });
@@ -561,11 +593,15 @@ test("the code + PKCE flow: the cookie's user authorizes an MCP client on two of
   const unnamed = await invoke({ expression: "itx.whoami()" });
   expect(unnamed.isError).toBe(true);
   expect(unnamed.text).toMatch(/pass project — this token reaches oa-one, oa-two/);
-  // a project created through this token is outside its grant (the consent chose)
+  // a grant that chose its projects is bound to them: it creates none (a project it could not
+  // reach would be the only outcome) — authorize again with nothing chosen, or create over /api
   const created = await callTool(workersLaneEnv, bearer, "create_project", { project: "oa-four" });
-  expect(created.isError, created.text).toBeFalsy();
-  expect(created.text).toContain("created project 'oa-four'");
-  expect((await invoke({ project: "oa-four", expression: "itx.whoami()" })).isError).toBe(true);
+  expect(created.isError).toBe(true);
+  expect(created.text).toContain("FORBIDDEN");
+  expect(await (await session.projects.create({ project: "oa-four" })).whoami()).toEqual({
+    projectId: "oa-four",
+    path: "/",
+  }); // hers to create over /api
 });
 
 test("a grant with nothing to choose follows membership: a user with no project authorizes, create_project through /mcp makes one, and itx.invoke reaches it with no project named", async () => {
@@ -574,7 +610,7 @@ test("a grant with nothing to choose follows membership: a user with no project 
   expect(offered).toEqual([]);
   const bearer = { authorization: `Bearer ${accessToken}` };
   expect(JSON.parse((await callTool(workersLaneEnv, bearer, "whoami", {})).text)).toEqual({
-    sub: "user_oauth-eve@example.com",
+    actor: "user_oauth-eve@example.com",
     email: "oauth-eve@example.com",
   });
   const none = await callTool(workersLaneEnv, bearer, "itx.invoke", { expression: "itx.whoami()" });
@@ -588,7 +624,7 @@ test("a grant with nothing to choose follows membership: a user with no project 
   ).toEqual({ projectId: "eves", path: "/" });
 });
 
-test("the admin secret as the bearer: whoami is { actor: 'admin' }, list_projects is the whole directory, itx.invoke must name its project and then runs as the admin; a project's own secret on /mcp?project=<id> reaches that one project as project:<id>", async () => {
+test("the admin secret as the bearer: whoami is { actor: 'admin' }, list_projects is the whole directory, itx.invoke must name its project and then runs as the admin; a project's own secret on /mcp?project=<id> reaches that one project as project:<id>; a project token reaches its one project as its principal", async () => {
   const ada = await signIn(workersLaneEnv, "mcp-admin-ada@example.com");
   await (await api(workersLaneEnv, { cookie: ada })).authenticate(COOKIE).projects.create({
     project: "adas-mcp",
@@ -600,7 +636,7 @@ test("the admin secret as the bearer: whoami is { actor: 'admin' }, list_project
   const created = await callTool(workersLaneEnv, admin, "create_project", {
     project: "admins-mcp",
   });
-  expect(created.text).toContain("(org_admin)");
+  expect(created.text).toContain("in org 'org_admin'");
   const all = (await callTool(workersLaneEnv, admin, "list_projects", {})).text;
   expect(all).toContain("adas-mcp");
   expect(all).toContain("admins-mcp");
@@ -659,13 +695,43 @@ test("the admin secret as the bearer: whoami is { actor: 'admin' }, list_project
   expect(
     (await mcp(workersLaneEnv, "tools/list", {}, { authorization: `Bearer ${apiKey}` })).status,
   ).toBe(401);
+
+  // a project token as the bearer: its one project, its principal — nothing to name
+  const token = await signProjectToken(
+    {
+      projectId: "adas-mcp",
+      actor: "user_mcp-admin-ada@example.com",
+      email: "mcp-admin-ada@example.com",
+    },
+    60_000,
+    TOKEN_SECRET,
+  );
+  const asToken = { authorization: `Bearer ${token}` };
+  expect(JSON.parse((await callTool(workersLaneEnv, asToken, "whoami", {})).text)).toEqual({
+    actor: "user_mcp-admin-ada@example.com",
+    email: "mcp-admin-ada@example.com",
+    projects: ["adas-mcp"],
+  });
+  expect(
+    (await callTool(workersLaneEnv, asToken, "itx.invoke", { expression: "itx.whoami()" })).result,
+  ).toEqual({ projectId: "adas-mcp", path: "/" });
+  const outside = await callTool(workersLaneEnv, asToken, "itx.invoke", {
+    project: "admins-mcp",
+    expression: "itx.whoami()",
+  });
+  expect(outside.isError).toBe(true);
+  expect(outside.text).toContain("outside this token's grant");
 });
 
-test('a token for another resource is never issued: /authorize with a foreign `resource` is answered by the provider\'s own "Invalid authorization request" page (200, no consent, no code) — the one pinned resource is `<origin>/mcp`, so no bearer for another can ever reach /mcp', async () => {
+test("a token for another resource is never issued: /authorize with a foreign `resource` is sent back to the client (its redirect URI validated) with error=invalid_target, the state and the issuer — no consent, no code; the one pinned resource is `<origin>/mcp`, so no bearer for another can ever reach /mcp", async () => {
   const cookie = await signIn(workersLaneEnv, "oauth-other@example.com");
   const { query } = await authorizeQuery(workersLaneEnv, { resource: "https://other.test/mcp" });
-  const consent = await call(workersLaneEnv, `/authorize?${query}`, { headers: { cookie } });
-  const body = await consent.text();
-  expect(body).toContain("Invalid authorization request");
-  expect(body).not.toMatch(/name="project"/); // no consent form was rendered
+  const refused = await call(workersLaneEnv, `/authorize?${query}`, { headers: { cookie } });
+  expect(refused.status, await refused.clone().text()).toBe(302);
+  const location = new URL(refused.headers.get("location")!);
+  expect(`${location.origin}${location.pathname}`).toBe(REDIRECT_URI);
+  expect(location.searchParams.get("error")).toBe("invalid_target");
+  expect(location.searchParams.get("state")).toBe("s1");
+  expect(location.searchParams.get("iss")).toBe(ORIGIN);
+  expect(location.searchParams.get("code")).toBeNull();
 });

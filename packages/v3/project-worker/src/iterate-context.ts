@@ -54,9 +54,8 @@ import { SessionTeardown, type SessionInput } from "./session.ts";
 import {
   ITX_PRINCIPAL_HEADER,
   rotateProjectApiKey,
-  signClaims,
+  signProjectToken,
   type Principal,
-  type ProjectTokenClaims,
 } from "./principal.ts";
 import type { StreamEvent, StreamEventInput } from "./stream/processor.ts";
 import { subscriptionConfiguredEvent } from "./stream/core-processor.ts";
@@ -115,10 +114,11 @@ export class IterateContext extends RpcTarget {
    *  session, a loaded worker's `env.ITX`). Every dispatch runs under it, so every event it appends
    *  carries `source.principal`. */
   readonly #principal: Principal | null;
-  /** The session that vended this context — the two secret-bearing inputs its project doors need
-   *  (`mintToken` signs with the token secret, `rotateApiKey` writes the key hash) — or null for a
-   *  handle no session vended (a loaded worker's `env.ITX`), which has neither door. */
-  readonly #session: Pick<SessionInput, "projectTokenSecret" | "secretsKv"> | null;
+  /** What the two project doors sign and write with — `mintToken` signs with the configuration's
+   *  token secret, `rotateApiKey` writes the key hash to `SECRETS_KV` — or null for a handle that
+   *  carries neither door: one no session vended (a loaded worker's `env.ITX`), or a project-token
+   *  session's (a delegation, minutes long, never a minter of tokens or keys — session.ts). */
+  readonly #projectDoors: Pick<SessionInput, "appConfig" | "secretsKv"> | null;
 
   constructor(
     contextNamespace: IterateContextNamespace,
@@ -126,7 +126,7 @@ export class IterateContext extends RpcTarget {
     sessionTeardown: SessionTeardown,
     waitUntil: WaitUntil,
     principal: Principal | null = null,
-    session: Pick<SessionInput, "projectTokenSecret" | "secretsKv"> | null = null,
+    projectDoors: Pick<SessionInput, "appConfig" | "secretsKv"> | null = null,
   ) {
     super();
     this.#contextNamespace = contextNamespace;
@@ -134,7 +134,7 @@ export class IterateContext extends RpcTarget {
     this.#sessionTeardown = sessionTeardown;
     this.#waitUntil = waitUntil;
     this.#principal = principal;
-    this.#session = session;
+    this.#projectDoors = projectDoors;
   }
 
   /** The context DO's stub, minted PER CALL (a stub is a cheap handle onto one shared connection):
@@ -171,7 +171,7 @@ export class IterateContext extends RpcTarget {
       this.#sessionTeardown,
       this.#waitUntil,
       this.#principal,
-      this.#session,
+      this.#projectDoors,
     );
   }
 
@@ -205,28 +205,23 @@ export class IterateContext extends RpcTarget {
    *  presents as `Authorization: Bearer`, what `authenticate({ type: "project-token" })` takes.
    *  Reaching this context IS the gate: `projects.get` admitted a member, the admin, or the project's
    *  own secret (then the token's actor is `project:<projectId>`). `ttlSeconds` defaults to 15
-   *  minutes; 24 hours is the most. A handle no session vended (a loaded worker's `env.ITX`) has no
-   *  principal to sign as — FORBIDDEN. */
+   *  minutes; 24 hours is the most. A handle without the project doors — a loaded worker's
+   *  `env.ITX`, a project-token session's — is FORBIDDEN. */
   async mintToken({ ttlSeconds = 15 * 60 }: { ttlSeconds?: number } = {}): Promise<string> {
-    if (!this.#session || !this.#principal)
+    if (!this.#projectDoors || !this.#principal)
       throw codedError(
         "FORBIDDEN",
-        "mintToken(): no session principal to sign as — a loaded worker's env.ITX speaks for the project, never for a person",
+        "mintToken(): this handle carries no project doors — a loaded worker's env.ITX speaks for the project, never for a person, and a project-token session is a delegation that mints no further token",
       );
     if (!(Number.isFinite(ttlSeconds) && ttlSeconds > 0 && ttlSeconds <= 24 * 60 * 60))
       throw new Error(
         `mintToken({ ttlSeconds }): a token lives between 1 second and 24 hours, got ${JSON.stringify(ttlSeconds)}`,
       );
-    if (!this.#session.projectTokenSecret)
-      throw new Error(
-        "mintToken(): this deployment signs no project tokens (APP_CONFIG_PROJECT_TOKEN_SECRET is blank)",
-      );
-    const claims: ProjectTokenClaims = {
-      projectId: this.#durableObjectAddress.projectId,
-      ...this.#principal,
-      expiresAt: Date.now() + ttlSeconds * 1000,
-    };
-    return signClaims(claims, this.#session.projectTokenSecret);
+    return signProjectToken(
+      { projectId: this.#durableObjectAddress.projectId, ...this.#principal },
+      ttlSeconds * 1000,
+      this.#projectDoors.appConfig.projectTokenSecret,
+    );
   }
 
   /** The project's API KEY — its own long-lived secret (`authenticate({ type: "project-secret" })`;
@@ -234,14 +229,14 @@ export class IterateContext extends RpcTarget {
    *  ONCE: only its SHA-256 hash is stored (principal.ts `rotateProjectApiKey`), so a reveal IS a
    *  rotation and the previous key stops verifying at once (a project has no key until the first
    *  call). Reaching this context is the gate, as for `mintToken`; the key is the PROJECT's, so any
-   *  context of it (`cd`) rotates the same key. */
+   *  context of it (`cd`) rotates the same key. A handle without the project doors is FORBIDDEN. */
   async rotateApiKey(): Promise<string> {
-    if (!this.#session)
+    if (!this.#projectDoors)
       throw codedError(
         "FORBIDDEN",
-        "rotateApiKey(): only a context a session vended rotates the project's key — a loaded worker's env.ITX cannot",
+        "rotateApiKey(): this handle carries no project doors — a loaded worker's env.ITX cannot rotate the project's key, and a project-token session is a delegation that reaches no key",
       );
-    return rotateProjectApiKey(this.#durableObjectAddress.projectId, this.#session.secretsKv);
+    return rotateProjectApiKey(this.#durableObjectAddress.projectId, this.#projectDoors.secretsKv);
   }
 
   // ── THE ONE FRONT DOOR: make `match` mean `target` — (a) a lent rpc stub or (b) a pure rewrite ──

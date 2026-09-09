@@ -1,29 +1,32 @@
 // control-plane.ts — THE CONTROL PLANE, in-process behind the project worker's front door (worker.ts
-// keeps /api, /expression, /version, /demo and delegates everything else to `controlPlane`). Four
-// concepts, one file; the schema is control-plane.sql:
-//   directory — `directory(db)`: ONE D1 store, users → orgs → projects — the control plane IS the directory
-//   session   — `currentSession` / `setSessionCookie`: the signed first-party cookie, "you are this user"
+// keeps /api, /expression, /version, /demo and delegates everything else to `controlPlane`). Three
+// concepts, one file; the schema is control-plane.sql; the session cookie it sets is verified in
+// principal.ts beside every other credential:
+//   directory — `directory(db)`: ONE D1 store, users → orgs → projects — the control plane IS the
+//               directory, and `Reach` is its word for what a session may touch
 //   mcp       — `mcpHandler`: /mcp, the ONE MCP server for every project — the only OAuth-protected boundary
 //   app       — `controlPlane`: the OAuth 2.1 AS wrapper around the first-party pages (login, console, /authorize)
 
 import { createMcpHandler, fromJsonSchema, McpServer } from "@modelcontextprotocol/server";
 import { CfWorkerJsonSchemaValidator } from "@modelcontextprotocol/server/validators/cf-worker";
 import {
+  AuthorizationError,
   OAuthProvider,
   type OAuthHelpers,
   type ResolveExternalTokenInput,
   type ResolveExternalTokenResult,
 } from "@cloudflare/workers-oauth-provider";
-import { codedError } from "./lib.ts";
+import { codedError, errorCode, isSameOriginBrowserRequest } from "./lib.ts";
 import { appConfigOf, type AppConfigEnv, sameOriginPath } from "./worker.ts";
 import {
-  signClaims,
-  verifyAdminSecret,
-  verifyClaims,
-  verifyProjectSecret,
+  clearSessionCookie,
+  setSessionCookie,
+  signProjectToken,
+  verifySessionCookie,
   type Principal,
-  type ProjectTokenClaims,
+  type SessionCookieClaims,
 } from "./principal.ts";
+import { verifyCredentials, type SessionCredentials } from "./session.ts";
 import { DurableObjectNameCodec, type IterateContextNamespace } from "./iterate-context.ts";
 import {
   normalizedItxExpression,
@@ -58,19 +61,26 @@ export interface Project {
 
 /** Slugify as @iterate-com/shared/slug normalizes (lowercase, non-alphanumeric → dash, trimmed). A
  *  PROJECT has no minted id — its slug IS its id; an org has no slug at all. */
-const slugify = (s: string) =>
-  s
+const slugify = (name: string) =>
+  name
     .trim()
     .toLowerCase()
     .replace(/[^a-z0-9-]/g, "-")
     .replace(/-+/g, "-")
     .replace(/^-+|-+$/g, "");
 
+/** The projects a session may touch — what its credential earned (session.ts `authenticate`, the
+ *  `/mcp` grant): `"every"` for the admin secret; the projects of the orgs `userId` belongs to for a
+ *  control-plane user (the cookie, the admin's `as`, a grant that chose nothing); the projects named
+ *  outright for a project token or the project secret (one) and for an OAuth grant (the consent's
+ *  choice). */
+export type Reach = "every" | { userId: string } | { projectIds: string[] };
+
 /** `org_<32hex>`. */
 const newOrgId = () => `org_${crypto.randomUUID().replaceAll("-", "")}`;
 
 export function directory(db: D1Database) {
-  const dir = {
+  const d1Directory = {
     /** Find-or-create the user for an email (login is the only writer). */
     async upsertUser(email: string): Promise<User> {
       const normalized = email.trim().toLowerCase();
@@ -122,31 +132,49 @@ ORDER BY o.name ASC;`,
       return results;
     },
 
-    /** Create a project inside an org: `name` slugified IS the id, GLOBALLY unique — a name already
-     *  taken in ANY org throws "already taken". Idempotent within the same org (the insert is ON
-     *  CONFLICT DO NOTHING, then re-selected to cover both "just created" and "already existed"). */
-    async createProject(orgId: string, name: string): Promise<Project> {
+    /** Create the project `name` (slugified: that IS its id, GLOBALLY unique) for `reach` — in the
+     *  user's first org by name, created as `<email>'s org` with them as owner when they have none;
+     *  in the deployment's own org for the admin secret. A reach that names its projects (a token,
+     *  the secret, a grant that chose) creates none: FORBIDDEN. A name already taken in ANY org is
+     *  PROJECT_NAME_TAKEN; the same org's again is idempotent (the insert is ON CONFLICT DO NOTHING,
+     *  then re-selected to cover both "just created" and "already existed"). Every create-a-project
+     *  door — `projects.create` over /api, the console's form, /mcp's `create_project` — is this. */
+    async createProject(reach: Reach, name: string): Promise<Project> {
+      if (typeof reach === "object" && "projectIds" in reach)
+        throw codedError(
+          "FORBIDDEN",
+          `this session is bound to ${reach.projectIds.map((projectId) => JSON.stringify(projectId)).join(", ") || "no project"} — creating a project needs a signed-in user or the admin secret`,
+        );
       const id = slugify(name);
       if (!id) throw new Error("project name is empty or invalid");
+      const org =
+        reach === "every"
+          ? await d1Directory.adminOrg()
+          : await d1Directory.ensureOrg(reach.userId);
       await db
         .prepare(
           `INSERT INTO projects (id, org_id) VALUES (?, ?)
 ON CONFLICT DO NOTHING;`,
         )
-        .bind(id, orgId)
+        .bind(id, org.id)
         .run();
-      const project = await dir.getProject(id);
+      const project = await d1Directory.getProject(id);
       if (!project) throw new Error(`failed to create project '${id}'`);
-      if (project.orgId !== orgId)
+      if (project.orgId !== org.id)
         throw codedError("PROJECT_NAME_TAKEN", `project name '${id}' is already taken`);
       return project;
     },
 
-    /** The user's first org, created as `orgName` (with them as owner) when they have none yet — every
-     *  create-a-project door (the console, /authorize, /mcp) goes through here, then `createProject`. */
-    async ensureOrg(userId: string, orgName: string): Promise<Org> {
-      const orgs = await dir.listOrgs(userId);
-      return orgs[0] ?? dir.createOrg(userId, orgName);
+    /** The user's first org — created as `<email>'s org`, with them as owner, when they have none
+     *  yet (the row `/login` or the admin's `as` upserted names the email). */
+    async ensureOrg(userId: string): Promise<Org> {
+      const orgs = await d1Directory.listOrgs(userId);
+      if (orgs[0]) return orgs[0];
+      const user = await db
+        .prepare(`SELECT id, email FROM users WHERE id = ?;`)
+        .bind(userId)
+        .first<User>();
+      return d1Directory.createOrg(userId, `${user!.email}'s org`);
     },
 
     /** Projects the user can reach (member of the owning org), with their role. */
@@ -172,12 +200,35 @@ ORDER BY p.id ASC;`,
         .first<Project>();
     },
 
-    /** EVERY project in the directory, no role — the admin secret's catalog (src/session.ts). */
+    /** EVERY project in the directory, no role — the admin secret's catalog. */
     async listAllProjects(): Promise<Project[]> {
       const { results } = await db
         .prepare(`SELECT id, org_id AS orgId FROM projects ORDER BY id ASC;`)
         .all<Project>();
       return results;
+    },
+
+    /** The projects `reach` reaches, as directory rows: every project for the admin secret; the
+     *  user's, with their role; the named ones (their rows — a name the directory never heard of
+     *  is no row). */
+    async reachableProjects(reach: Reach): Promise<Project[]> {
+      if (reach === "every") return d1Directory.listAllProjects();
+      if ("userId" in reach) return d1Directory.listProjects(reach.userId);
+      const rows = await Promise.all(
+        reach.projectIds.map((projectId) => d1Directory.getProject(projectId)),
+      );
+      return rows.filter((row): row is Project => row !== null);
+    },
+
+    /** Whether `reach` reaches `projectId` — the admission behind `projects.get` (session.ts) and a
+     *  `/mcp` tool's `project`. The admin reaches a project the directory never heard of (the door
+     *  is the admin's); a named reach is its list; a user's is one membership read. */
+    async reachesProject(reach: Reach, projectId: string): Promise<boolean> {
+      if (reach === "every") return true;
+      if ("projectIds" in reach) return reach.projectIds.includes(projectId);
+      return (await d1Directory.listProjects(reach.userId)).some(
+        (project) => project.id === projectId,
+      );
     },
 
     /** The deployment's own org — `org_admin`, created on first use, no members: where the admin
@@ -193,72 +244,11 @@ ORDER BY p.id ASC;`,
     },
   };
 
-  return dir;
+  return d1Directory;
 }
 
 /** The directory as the edge holds it (src/session.ts). */
 export type Directory = ReturnType<typeof directory>;
-
-// ── session ── a signed cookie that says "you are this user". This is the FIRST-PARTY auth mechanism:
-// browser pages carry it, no OAuth involved. OAuth only appears at the MCP edge, and its /authorize
-// consent reuses whatever session this module minted. One login, reused everywhere. The token is the
-// platform's one signed-claims codec (src/principal.ts) under the session secret.
-
-/** The identity behind a browser session. */
-export interface Session {
-  /** Directory user id, e.g. `user_ada@example.com`. */
-  sub: string;
-  email: string;
-  /** Issued-at (epoch seconds). */
-  iat: number;
-}
-
-/** WHO a request is, for every door on the platform host (the console, `/api`, the fetch lane): the
- *  session cookie's user, or nobody. */
-export async function identity(request: Request, env: AppConfigEnv): Promise<Session | null> {
-  return currentSession(request, appConfigOf(env).sessionSecret);
-}
-
-const COOKIE = "itx-control-plane-session";
-const MAX_AGE = 60 * 60 * 24 * 30; // 30 days
-
-/** The session a token carries, or null: malformed, a bad signature, the wrong shape, or past
- *  MAX_AGE (the signed token is otherwise valid forever — Max-Age is only a browser hint, so a
- *  captured token could be replayed indefinitely). */
-async function verifySession(token: string, secret: string): Promise<Session | null> {
-  const session = (await verifyClaims(token, secret)) as Session | null;
-  if (typeof session?.sub !== "string" || typeof session?.iat !== "number") return null;
-  if (Math.floor(Date.now() / 1000) - session.iat > MAX_AGE) return null;
-  return session;
-}
-
-function readCookie(request: Request): string | null {
-  const header = request.headers.get("cookie");
-  if (!header) return null;
-  for (const part of header.split(";")) {
-    const eq = part.indexOf("=");
-    if (eq < 0) continue;
-    if (part.slice(0, eq).trim() === COOKIE) return part.slice(eq + 1).trim();
-  }
-  return null;
-}
-
-/** The current session for a request, or null if unauthenticated. */
-export async function currentSession(request: Request, secret: string): Promise<Session | null> {
-  const token = readCookie(request);
-  return token ? verifySession(token, secret) : null;
-}
-
-/** `Set-Cookie` value that establishes the session. */
-async function setSessionCookie(session: Session, secret: string): Promise<string> {
-  const token = await signClaims(session, secret);
-  return `${COOKIE}=${token}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${MAX_AGE}`;
-}
-
-/** `Set-Cookie` value that clears the session. */
-function clearSessionCookie(): string {
-  return `${COOKIE}=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0`;
-}
 
 // ── mcp ── /mcp: the ONE MCP server, for every project — the only OAuth-protected boundary. The
 // provider validated the bearer BEFORE this runs and put the granted props on ctx.props: an OAuth
@@ -271,63 +261,44 @@ function clearSessionCookie(): string {
 // optional when the bearer reaches exactly one, required for the admin secret, refused outside the
 // grant.
 
-/** What the provider puts on `ctx.props` once the bearer is validated — WHO the tools act as and
- *  WHICH projects they reach. An OAuth grant carries the user (`sub`, `email`) and `projects`, the
- *  ids checked at consent; `projects` absent — a grant older than project selection, or a user who
- *  had no project to choose from — means every project of the user's orgs, read from the directory
- *  per call. `resolveExternalToken` puts the admin secret here as `{ actor: "admin" }` (every
- *  project: a tool call must name one) and a project secret as `{ actor: "project:<id>",
- *  projects: [id] }`. */
-type McpProps =
-  | { sub: string; email: string; projects?: string[] }
-  | { actor: string; projects?: string[] };
+/** What the provider puts on `ctx.props` once the bearer is validated — WHO the tools act as (the
+ *  principal `invokeAs` stamps on every event) and WHICH projects they reach: `projects` names them
+ *  outright — an OAuth grant's, chosen at consent (`authorize`); a project secret's or a project
+ *  token's one (`resolveExternalToken`); absent — a grant older than project selection, or a user
+ *  who had no project to choose from — the projects of the user's orgs, read per call; the admin
+ *  secret's `{ actor: "admin" }` reaches every project, so its tool calls must name one. */
+type McpProps = Principal & { projects?: string[] };
 
-/** The principal a tool call runs under — what `invokeAs` stamps on every event it appends. */
-const principalOf = (props: McpProps): Principal =>
-  "sub" in props ? { actor: props.sub, email: props.email } : { actor: props.actor };
+/** The projects `props` reaches (`Reach`, the directory's word). */
+const reachOf = (props: McpProps): Reach =>
+  props.actor === "admin"
+    ? "every"
+    : props.projects
+      ? { projectIds: props.projects }
+      : { userId: props.actor };
 
-const isAdminSecret = (props: McpProps): boolean => !("sub" in props) && props.actor === "admin";
-
-/** The projects `props` reaches, as directory rows: every project for the admin secret; the user's,
- *  narrowed to the consent's choice when it made one, for a grant; the one named for a project
- *  secret (its row, when the directory has it). */
-async function reachableProjects(dir: Directory, props: McpProps): Promise<Project[]> {
-  if ("sub" in props) {
-    const mine = await dir.listProjects(props.sub);
-    return props.projects ? mine.filter((p) => props.projects!.includes(p.id)) : mine;
-  }
-  if (props.actor === "admin") return dir.listAllProjects();
-  const rows = await Promise.all((props.projects ?? []).map((id) => dir.getProject(id)));
-  return rows.filter((row): row is Project => row !== null);
-}
-
-/** The project a tool call runs in (apps/os `resolveToolProject`): `project` may be omitted only
- *  when the bearer reaches exactly one; the admin secret reaches every project, so it must name one
- *  — any one, as `projects.get` admits the admin (session.ts), the name checked by the codec; a
- *  project outside the grant is refused. */
+/** The project a tool call runs in (apps/os `resolveToolProject`): `project`, when named, must be
+ *  within the grant (the name checked by the codec); omitted, it is the one project the bearer
+ *  reaches — the admin secret reaches every project, so it must name one. */
 async function projectOfToolCall(
-  dir: Directory,
-  props: McpProps,
+  d1Directory: Directory,
+  reach: Reach,
   requested: string,
 ): Promise<string> {
-  if (isAdminSecret(props)) {
-    if (!requested) throw new Error("the admin secret reaches every project — pass project");
-    return DurableObjectNameCodec.parse(requested).projectId;
+  if (requested) {
+    const { projectId } = DurableObjectNameCodec.parse(requested);
+    if (!(await d1Directory.reachesProject(reach, projectId)))
+      throw new Error(`project ${JSON.stringify(requested)} is outside this token's grant`);
+    return projectId;
   }
-  const reachable = (await reachableProjects(dir, props)).map((p) => p.id);
-  if (!requested) {
-    if (reachable.length === 1) return reachable[0]!;
-    throw new Error(
-      reachable.length
-        ? `pass project — this token reaches ${reachable.join(", ")}`
-        : "this token reaches no project",
-    );
-  }
-  if (!reachable.includes(requested))
-    throw new Error(
-      `project ${JSON.stringify(requested)} is outside this token's grant (${reachable.join(", ") || "none"})`,
-    );
-  return requested;
+  if (reach === "every") throw new Error("the admin secret reaches every project — pass project");
+  const reachable = (await d1Directory.reachableProjects(reach)).map((project) => project.id);
+  if (reachable.length === 1) return reachable[0]!;
+  throw new Error(
+    reachable.length
+      ? `pass project — this token reaches ${reachable.join(", ")}`
+      : "this token reaches no project",
+  );
 }
 
 /** The tool's expression as ONE expression for `invokeAs`: either codec half normalized (a string
@@ -350,30 +321,25 @@ function itxExpressionWithArgs(input: ItxExpressionInput, args: unknown[]): ItxE
 
 const validator = new CfWorkerJsonSchemaValidator();
 type JsonSchema = Parameters<typeof fromJsonSchema>[0];
-const input = (properties: Record<string, unknown>, required: string[] = []) =>
+const objectSchema = (properties: Record<string, unknown>, required: string[] = []) =>
   fromJsonSchema(
     { type: "object", properties, required, additionalProperties: false } as JsonSchema,
     validator,
   );
-const text = (t: string, isError = false) => ({
-  content: [{ type: "text" as const, text: t }],
+const textResult = (text: string, isError = false) => ({
+  content: [{ type: "text" as const, text }],
   isError,
 });
-const str = (a: Record<string, unknown>, k: string) => String(a[k] ?? "");
 /** A tool FAILURE as the protocol's own channel — an `isError` result, never a thrown error and
  *  never a 500 — its text led by the platform's CODE when the error carries one (lib.ts —
  *  `NO_ITX_EXPRESSION_MATCH`, `INVALID_CONTEXT`, …), the machine-readable channel a client
  *  classifies by, then the message. */
 const failure = (error: unknown) => {
   const message = error instanceof Error ? error.message : String(error);
-  const code =
-    typeof error === "object" && error !== null && "code" in error
-      ? String((error as { code: unknown }).code)
-      : undefined;
-  return text(code ? `${code}: ${message}` : message, true);
+  const code = errorCode(error);
+  return textResult(code ? `${code}: ${message}` : message, true);
 };
 
-/** The project field every tool that acts on a project takes. */
 const PROJECT_INPUT = {
   type: "string",
   description:
@@ -381,71 +347,68 @@ const PROJECT_INPUT = {
 };
 
 function buildServer(env: Env, props: McpProps): McpServer {
-  const dir = directory(env.DB);
-  const s = new McpServer({ name: "control-plane", version: "0.1.0" });
+  const d1Directory = directory(env.DB);
+  const reach = reachOf(props);
+  const mcpServer = new McpServer({ name: "control-plane", version: "0.1.0" });
 
-  s.registerTool(
+  mcpServer.registerTool(
     "whoami",
     {
       description:
-        "Who this token authenticates as and which projects it reaches: the user and the projects chosen at authorization, the admin secret (every project), or a project secret (its one project).",
-      inputSchema: input({}),
+        "Who this token authenticates as and which projects it reaches: the user and the projects chosen at authorization; the admin secret (every project); a project token (its one project); a project secret (its one project — the secret names it with ?project=<id> on the /mcp URL).",
+      inputSchema: objectSchema({}),
     },
-    async () => text(JSON.stringify(props, null, 2)),
+    async () => textResult(JSON.stringify(props, null, 2)),
   );
 
-  s.registerTool(
+  mcpServer.registerTool(
     "list_projects",
     {
       description: "List the projects this token reaches (the admin secret: every project).",
-      inputSchema: input({}),
+      inputSchema: objectSchema({}),
     },
     async () => {
-      const ps = await reachableProjects(dir, props);
-      return text(
-        ps.length
-          ? ps.map((p) => `${p.id}  (org ${p.orgId}${p.role ? `, ${p.role}` : ""})`).join("\n")
+      const projects = await d1Directory.reachableProjects(reach);
+      return textResult(
+        projects.length
+          ? projects
+              .map(
+                (project) =>
+                  `${project.id}  (org ${project.orgId}${project.role ? `, ${project.role}` : ""})`,
+              )
+              .join("\n")
           : "(none yet)",
       );
     },
   );
 
-  s.registerTool(
+  mcpServer.registerTool(
     "create_project",
     {
       description:
-        "Create a project in your first org (creating that org if you have none; the admin secret's land in the deployment's own org) and return it. A token whose grant chose projects at authorization does not reach a project created afterwards — authorize again with it checked.",
-      inputSchema: input({ project: { type: "string" }, orgName: { type: "string" } }, ["project"]),
+        "Create a project in your first org (creating that org if you have none; the admin secret's land in the deployment's own org) and return it. A token bound to named projects — a grant that chose projects at authorization, a project secret, a project token — creates none: authorize again with nothing chosen, or create over /api.",
+      inputSchema: objectSchema({ project: { type: "string" } }, ["project"]),
     },
     async (raw: unknown) => {
-      const a = raw as Record<string, unknown>;
+      const toolArguments = raw as { project?: string };
       try {
-        const name = str(a, "project");
-        if (!name) return text("create_project needs a project name", true);
-        if (!("sub" in props) && !isAdminSecret(props))
-          return text(
-            "a project secret names one project — create_project needs a signed-in user",
-            true,
-          );
-        const org =
-          "sub" in props
-            ? await dir.ensureOrg(props.sub, str(a, "orgName") || `${props.email}'s org`)
-            : await dir.adminOrg();
-        const project = await dir.createProject(org.id, name);
-        return text(`created project '${project.id}' in org '${org.name}' (${org.id})`);
-      } catch (e) {
-        return failure(e);
+        const name = String(toolArguments.project ?? "").trim();
+        if (!name) return textResult("create_project needs a project name", true);
+        const project = await d1Directory.createProject(reach, name);
+        return textResult(`created project '${project.id}' in org '${project.orgId}'`);
+      } catch (error) {
+        return failure(error);
       }
     },
   );
 
-  s.registerTool(
+  mcpServer.registerTool(
     "itx.invoke",
     {
       title: "Invoke itx",
       description:
         "Evaluate one itx expression in a project's context, exactly as itx evaluates it (through the project's rewrite rules), under this token's principal: a dotted string such as itx.kv.get('k'), or its parsed form; args are appended to the terminal call. Returns the result as JSON.",
-      inputSchema: input(
+      inputSchema: objectSchema(
         {
           project: PROJECT_INPUT,
           expression: {
@@ -466,12 +429,24 @@ function buildServer(env: Env, props: McpProps): McpServer {
       ),
     },
     async (raw: unknown) => {
-      const a = raw as { project?: string; expression: ItxExpressionInput; args?: unknown[] };
+      const toolArguments = raw as {
+        project?: string;
+        expression: ItxExpressionInput;
+        args?: unknown[];
+      };
+      const { projects: _grantedProjects, ...principal } = props; // the stamp is the principal, never its grant
       try {
-        const projectId = await projectOfToolCall(dir, props, a.project?.trim() ?? "");
+        const projectId = await projectOfToolCall(
+          d1Directory,
+          reach,
+          toolArguments.project?.trim() ?? "",
+        );
         const value = await env.ITERATE_CONTEXT.getByName(
           DurableObjectNameCodec.stringify({ projectId, path: "/" }),
-        ).invokeAs(principalOf(props), itxExpressionWithArgs(a.expression, a.args ?? []));
+        ).invokeAs(
+          principal,
+          itxExpressionWithArgs(toolArguments.expression, toolArguments.args ?? []),
+        );
         // THE JSON BOUNDARY: a round trip drops what JSON cannot carry (undefined members, a
         // function-valued handle's members) and throws on what it refuses (a cycle, a BigInt).
         const json = JSON.stringify(value) ?? "null";
@@ -479,13 +454,13 @@ function buildServer(env: Env, props: McpProps): McpServer {
           content: [{ type: "text" as const, text: json }],
           structuredContent: { result: JSON.parse(json) as unknown },
         };
-      } catch (e) {
-        return failure(e);
+      } catch (error) {
+        return failure(error);
       }
     },
   );
 
-  return s;
+  return mcpServer;
 }
 
 const mcpHandler: Handler = {
@@ -498,11 +473,12 @@ const mcpHandler: Handler = {
   },
 };
 
-/** The provider's hook for a bearer on /mcp that is not one of its own tokens: the deployment's
- *  admin secret ⇒ `{ actor: "admin" }`, every project; a project secret (principal.ts
- *  `verifyProjectSecret`) for the project `?project=` names on the request URL ⇒ that one project.
- *  Either is a first-party credential consumed at this resource, so the result is bound to it
- *  (`audience`) like every provider token. Anything else is null: the provider's 401. */
+/** The provider's hook for a bearer on /mcp that is not one of its own tokens — the platform's
+ *  credentials, tried as `/api` and the lanes try them (session.ts `verifyCredentials`): a project
+ *  token (its one project), the deployment's admin secret (`{ actor: "admin" }`, every project), a
+ *  project secret for the project `?project=` names on the request URL (that one project). Each is
+ *  a first-party credential consumed at this resource, so the result is bound to it (`audience`)
+ *  like every provider token. Anything else is null: the provider's 401. */
 async function resolveExternalToken({
   token,
   request,
@@ -510,14 +486,31 @@ async function resolveExternalToken({
 }: ResolveExternalTokenInput): Promise<ResolveExternalTokenResult | null> {
   const bindings = env as Env;
   const url = new URL(request.url);
-  const audience = `${url.origin}/mcp`;
-  if (await verifyAdminSecret(token, appConfigOf(bindings).adminApiSecret))
-    return { props: { actor: "admin" } satisfies McpProps, audience };
   const project = url.searchParams.get("project");
-  const principal = project ? await verifyProjectSecret(project, token, bindings.SECRETS_KV) : null;
-  return principal
-    ? { props: { actor: principal.actor, projects: [project!] } satisfies McpProps, audience }
-    : null;
+  const candidates: SessionCredentials[] = [
+    { type: "project-token", token },
+    { type: "admin-secret", secret: token },
+    ...(project ? [{ type: "project-secret" as const, project, secret: token }] : []),
+  ];
+  const input = {
+    request,
+    directory: directory(bindings.DB),
+    appConfig: appConfigOf(bindings),
+    secretsKv: bindings.SECRETS_KV,
+  };
+  for (const credentials of candidates) {
+    const sessionPrincipal = await verifyCredentials(credentials, input);
+    if (!sessionPrincipal) continue;
+    const { projectId, ...principal } = sessionPrincipal;
+    return {
+      props: {
+        ...principal,
+        ...(projectId !== undefined && { projects: [projectId] }),
+      } satisfies McpProps,
+      audience: `${url.origin}/mcp`,
+    };
+  }
+  return null;
 }
 
 // ── app ── THE CONTROL PLANE, mounted IN-PROCESS as the project worker's front-door catch-all (src/worker.ts
@@ -564,6 +557,7 @@ const esc = (s: string) =>
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;");
 
+/** A console page — never cached: every one is the visitor's own (the session, the consent). */
 function page(title: string, body: string, headers: HeadersInit = {}): Response {
   const html = `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${esc(title)}</title>
@@ -584,7 +578,11 @@ function page(title: string, body: string, headers: HeadersInit = {}): Response 
 </style>
 ${body}`;
   return new Response(html, {
-    headers: { "content-type": "text/html; charset=utf-8", ...headers },
+    headers: {
+      "content-type": "text/html; charset=utf-8",
+      "cache-control": "no-store",
+      ...headers,
+    },
   });
 }
 
@@ -599,28 +597,24 @@ ${note ? `<p>${esc(note)}</p>` : ""}
 <p class="muted">Enter an email and you become that user. (The demo login verifies nothing.)</p>`;
 }
 
-async function home(_request: Request, env: Env, session: Session): Promise<Response> {
-  const dir = directory(env.DB);
+async function home(env: Env, session: SessionCookieClaims): Promise<Response> {
+  const d1Directory = directory(env.DB);
   const [orgs, projects] = await Promise.all([
-    dir.listOrgs(session.sub),
-    dir.listProjects(session.sub),
+    d1Directory.listOrgs(session.sub),
+    d1Directory.listProjects(session.sub),
   ]);
   const orgList = orgs.length
     ? `<ul>${orgs.map((o) => `<li>${esc(o.name)} <span class="muted">(${esc(o.role ?? "")})</span></li>`).join("")}</ul>`
     : `<p class="muted">No orgs yet.</p>`;
   // Each project links to its own host through `/.itx/session`: a project token for this user,
   // good for 15 minutes, becomes the host-scoped cookie there (worker.ts `projectSessionResponse`).
-  // Only where project hosts exist: a hostname base AND a token secret (the workers lane has neither).
+  // Only where project hosts exist: a hostname base (the workers lane has none).
   const { projectTokenSecret, projectHostnameBase } = appConfigOf(env);
   const projectHostLink = async (p: Project): Promise<string> => {
-    if (!projectHostnameBase || !projectTokenSecret) return "";
-    const token = await signClaims(
-      {
-        projectId: p.id,
-        actor: session.sub,
-        email: session.email,
-        expiresAt: Date.now() + 15 * 60_000,
-      } satisfies ProjectTokenClaims,
+    if (!projectHostnameBase) return "";
+    const token = await signProjectToken(
+      { projectId: p.id, actor: session.sub, email: session.email },
+      15 * 60_000,
       projectTokenSecret,
     );
     return ` <a href="https://${esc(p.id)}.${esc(projectHostnameBase)}/.itx/session?token=${encodeURIComponent(token)}&amp;next=/">open</a>`;
@@ -646,16 +640,34 @@ async function home(_request: Request, env: Env, session: Session): Promise<Resp
 
 /** The OAuth /authorize consent page — reuses the session and is THE PROJECT SELECTION: the user's
  *  projects as checkboxes, all checked; approving grants the client the USER on the checked ones
- *  (`props.sub` / `props.email` / `props.projects`, what every /mcp tool acts within). The checked
+ *  (`props.actor` / `props.email` / `props.projects`, what every /mcp tool acts within). The checked
  *  ids are intersected with the directory's — the door's membership check; a user with no project
  *  to choose from grants a `projects`-less grant, which follows their membership (`McpProps`). The
- *  provider reads the OAuth parameters off the URL, so the POST's body is this form's alone. */
-async function authorize(request: Request, env: Env, session: Session | null): Promise<Response> {
+ *  provider reads the OAuth parameters off the URL, so the POST's body is this form's alone. A
+ *  request the provider refuses (`AuthorizationError`) is answered as the provider's README says:
+ *  sent back to the client with `error`, `error_description`, `state` and `iss` when the client and
+ *  its redirect URI validated (`redirectUri` present), rendered here when they did not. */
+async function authorize(
+  request: Request,
+  env: Env,
+  session: SessionCookieClaims | null,
+): Promise<Response> {
   let oauthRequest;
   try {
     oauthRequest = await env.OAUTH_PROVIDER.parseAuthRequest(request);
-  } catch {
-    return page("Invalid request", `<h1>Invalid authorization request</h1>`);
+  } catch (error) {
+    if (!(error instanceof AuthorizationError)) throw error;
+    if (!error.redirectUri)
+      return page(
+        "Invalid request",
+        `<h1>Invalid authorization request</h1><p>${esc(error.description)}</p>`,
+      );
+    const redirect = new URL(error.redirectUri);
+    redirect.searchParams.set("error", error.code);
+    redirect.searchParams.set("error_description", error.description);
+    if (error.state) redirect.searchParams.set("state", error.state);
+    if (error.issuer) redirect.searchParams.set("iss", error.issuer);
+    return Response.redirect(redirect.toString(), 302);
   }
   const client = await env.OAUTH_PROVIDER.lookupClient(oauthRequest.clientId);
   const clientName = client?.clientName ?? oauthRequest.clientId;
@@ -676,7 +688,7 @@ async function authorize(request: Request, env: Env, session: Session | null): P
       metadata: { clientName },
       scope: ["project"],
       props: {
-        sub: session.sub,
+        actor: session.sub,
         email: session.email,
         ...(projects.length > 0 && { projects: granted }),
       } satisfies McpProps,
@@ -706,22 +718,30 @@ ${choice}
 }
 
 /** The provider's default handler — everything that is NOT the OAuth token/metadata endpoints or the
- *  /mcp API route. */
+ *  /mcp API route. Every door that ACTS is a POST, and a POST from a foreign origin is 403: a
+ *  browser stamps the page's origin on a form post, so a foreign one is another site driving the
+ *  visitor's session cookie (the login form, the consent, the project form; a script's POST carries
+ *  no Origin and passes). `/logout` is a POST like the rest — a GET cannot end a session. */
 const app: Handler = {
   async fetch(request, env) {
     const url = new URL(request.url);
-    const session = await identity(request, env);
-    const dir = directory(env.DB);
+    if (request.method === "POST" && !isSameOriginBrowserRequest(request))
+      return new Response("403: a cross-site request cannot act on this session\n", {
+        status: 403,
+      });
+    const { sessionSecret } = appConfigOf(env);
+    const session = await verifySessionCookie(request.headers.get("cookie"), sessionSecret);
+    const d1Directory = directory(env.DB);
 
     if (url.pathname === "/login" && request.method === "POST") {
       const form = await request.formData();
       const email = String(form.get("email") ?? "").trim();
       const next = String(form.get("next") ?? "/");
       if (!email) return page("Sign in", loginForm(next, "Enter an email."));
-      const user = await dir.upsertUser(email);
+      const user = await d1Directory.upsertUser(email);
       const cookie = await setSessionCookie(
         { sub: user.id, email: user.email, iat: Math.floor(Date.now() / 1000) },
-        appConfigOf(env).sessionSecret,
+        sessionSecret,
       );
       return new Response(null, {
         status: 302,
@@ -729,7 +749,7 @@ const app: Handler = {
       });
     }
 
-    if (url.pathname === "/logout") {
+    if (url.pathname === "/logout" && request.method === "POST") {
       return new Response(null, {
         status: 302,
         headers: { location: "/", "set-cookie": clearSessionCookie() },
@@ -745,11 +765,10 @@ const app: Handler = {
       // (src/session.ts) — the same directory door.
       const back = new Response(null, { status: 302, headers: { location: "/" } });
       if (!session) return back;
-      const slug = slugify(String((await request.formData()).get("slug") ?? ""));
-      if (!slug) return back;
-      const org = await dir.ensureOrg(session.sub, `${session.email}'s org`);
+      const slug = String((await request.formData()).get("slug") ?? "");
+      if (!slugify(slug)) return back;
       try {
-        await dir.createProject(org.id, slug);
+        await d1Directory.createProject({ userId: session.sub }, slug);
         return back;
       } catch (error) {
         // a name another org holds — the visitor's problem, shown, not a 500
@@ -762,7 +781,7 @@ const app: Handler = {
     }
 
     if (url.pathname === "/") {
-      return session ? home(request, env, session) : page("Sign in", loginForm("/"));
+      return session ? home(env, session) : page("Sign in", loginForm("/"));
     }
 
     return new Response("Not found", { status: 404 });
@@ -776,26 +795,30 @@ const app: Handler = {
  *  as an absolute URL at construction, and the platform's origin is the request's
  *  (`https://project-worker.iterate.workers.dev`, the custom hostname, `http://localhost:<port>` in
  *  the local lanes), so the provider is built per request from `new URL(request.url).origin` — its
- *  constructor only checks its options. */
+ *  constructor only checks its options. An issuer must be https (RFC 8414; the provider refuses
+ *  another), so on an http origin — a local lane — the provider carries no resource document: the
+ *  console, the login and the bearer check still serve, and no token binds to a resource. */
 export const controlPlane: Handler = {
   fetch(request, env, ctx) {
-    const origin = new URL(request.url).origin;
+    const { origin, protocol } = new URL(request.url);
     return new OAuthProvider<Env>({
       apiRoute: "/mcp", // the ONLY OAuth-protected boundary
       apiHandler: mcpHandler,
       defaultHandler: app, // login + session + /authorize consent + console
       authorizeEndpoint: "/authorize",
       tokenEndpoint: "/oauth/token",
-      clientRegistrationEndpoint: "/oauth/register", // DCR — the spec-sanctioned MAY-fallback (Cursor has no CIMD; the local http proof)
+      clientRegistrationEndpoint: "/oauth/register", // DCR — the spec-sanctioned MAY-fallback: a client with no CIMD document (Cursor; a client on an http origin, which CIMD cannot serve)
       scopesSupported: ["project"],
-      resourceMetadata: {
-        resource: `${origin}/mcp`,
-        authorization_servers: [origin],
-        scopes_supported: ["project"],
-      },
+      ...(protocol === "https:" && {
+        resourceMetadata: {
+          resource: `${origin}/mcp`,
+          authorization_servers: [origin],
+          scopes_supported: ["project"],
+        },
+      }),
       clientIdMetadataDocumentEnabled: true, // CIMD — clients register themselves by URL (the `global_fetch_strictly_public` flag, wrangler.jsonc)
       allowPlainPKCE: false, // OAuth 2.1: S256 only
-      resolveExternalToken, // the admin secret, a project secret
+      resolveExternalToken, // a project token, the admin secret, a project secret
     }).fetch(request, env, ctx);
   },
 };

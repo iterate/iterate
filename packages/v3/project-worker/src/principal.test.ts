@@ -1,12 +1,18 @@
 // principal.test.ts — the project token as a table: what verifies, what does not; the admin secret's
-// compare; and the project secret — minted as a key whose hash alone is stored, verified against it.
+// compare; the project secret — minted as a key whose hash alone is stored, verified against it;
+// and the session cookie — set, read back, refused.
 import { expect, test } from "vitest";
 import {
+  clearSessionCookie,
+  cookieValueOf,
   rotateProjectApiKey,
+  setSessionCookie,
   signClaims,
+  signProjectToken,
   verifyAdminSecret,
   verifyProjectSecret,
   verifyProjectToken,
+  verifySessionCookie,
 } from "./principal.ts";
 
 const SECRET = "test-secret";
@@ -66,6 +72,20 @@ for (const { title, token, secret = SECRET, now = NOW } of refusals)
     expect(await verifyProjectToken(await token(), secret, now)).toBeNull();
   });
 
+test("signProjectToken signs the claims with an expiry ttlMs from now; a ttl at or below zero mints a token that never verifies", async () => {
+  const before = Date.now();
+  const token = await signProjectToken({ projectId: "prj-1", actor: "user_a" }, 60_000, SECRET);
+  const verified = await verifyProjectToken(token, SECRET);
+  expect(verified?.expiresAt).toBeGreaterThanOrEqual(before + 60_000);
+  expect(verified?.expiresAt).toBeLessThanOrEqual(Date.now() + 60_000);
+  expect(
+    await verifyProjectToken(
+      await signProjectToken({ projectId: "prj-1", actor: "user_a" }, -1, SECRET),
+      SECRET,
+    ),
+  ).toBeNull();
+});
+
 // ── the admin secret ── `verifyAdminSecret(candidate, secret)`: `{ candidate, secret, becomes }` rows.
 const adminRows: { candidate: string; secret: string; becomes: boolean }[] = [
   { candidate: "s3cret", secret: "s3cret", becomes: true },
@@ -76,8 +96,47 @@ const adminRows: { candidate: string; secret: string; becomes: boolean }[] = [
   { candidate: "", secret: "", becomes: false },
 ];
 for (const { candidate, secret, becomes } of adminRows)
-  test(`verifyAdminSecret(${JSON.stringify(candidate)}, ${JSON.stringify(secret)}) ⇒ ${becomes}`, async () => {
-    expect(await verifyAdminSecret(candidate, secret)).toBe(becomes);
+  test(`verifyAdminSecret(${JSON.stringify(candidate)}, ${JSON.stringify(secret)}) ⇒ ${becomes ? '{ actor: "admin" }' : "null"}`, async () => {
+    expect(await verifyAdminSecret(candidate, secret)).toEqual(becomes ? { actor: "admin" } : null);
+  });
+
+// ── the session cookie ── `setSessionCookie` → `verifySessionCookie`: the round trip and the
+// refusals; `cookieValueOf` as `{ header, name, becomes }` rows.
+
+test("the session cookie round-trips its claims beside a visitor's other cookies; no cookie, the wrong secret and a cookie past its age verify nothing; the cleared cookie expires at once", async () => {
+  const cookieClaims = {
+    sub: "user_a@example.com",
+    email: "a@example.com",
+    iat: Math.floor(Date.now() / 1000),
+  };
+  const setCookie = await setSessionCookie(cookieClaims, SECRET);
+  expect(setCookie).toMatch(
+    /^itx-control-plane-session=[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+; HttpOnly; Secure; SameSite=Lax; Path=\/; Max-Age=2592000$/,
+  );
+  const cookie = setCookie.split(";")[0]!;
+  expect(await verifySessionCookie(`theme=dark; ${cookie}`, SECRET)).toEqual(cookieClaims);
+  expect(await verifySessionCookie(null, SECRET)).toBeNull();
+  expect(await verifySessionCookie("theme=dark", SECRET)).toBeNull();
+  expect(await verifySessionCookie(cookie, "other")).toBeNull();
+  const stale = await setSessionCookie(
+    { ...cookieClaims, iat: cookieClaims.iat - 31 * 24 * 60 * 60 },
+    SECRET,
+  );
+  expect(await verifySessionCookie(stale.split(";")[0]!, SECRET)).toBeNull();
+  expect(clearSessionCookie()).toMatch(/^itx-control-plane-session=; .*Max-Age=0$/);
+});
+
+const cookieRows: { header: string | null; name: string; becomes: string | null }[] = [
+  { header: null, name: "a", becomes: null },
+  { header: "a=1", name: "a", becomes: "1" },
+  { header: "b=2; a=x=y", name: "a", becomes: "x=y" }, // a value may hold `=`
+  { header: "a=", name: "a", becomes: "" },
+  { header: "ab=1", name: "a", becomes: null }, // the whole name
+  { header: "a", name: "a", becomes: null }, // no `=`: not a cookie
+];
+for (const { header, name, becomes } of cookieRows)
+  test(`cookieValueOf(${JSON.stringify(header)}, ${JSON.stringify(name)}) ⇒ ${JSON.stringify(becomes)}`, () => {
+    expect(cookieValueOf(header, name)).toBe(becomes);
   });
 
 // ── the project secret ── `rotateProjectApiKey(projectId, kv)` / `verifyProjectSecret(project, secret,

@@ -1,21 +1,23 @@
-// principal.ts — WHO is calling, as the platform carries it. A PROJECT TOKEN is a signed claim
-// `{ projectId, actor, email?, expiresAt }` minted by a holder of the secret — `mintToken` on a
-// project's handle (iterate-context.ts), the e2e support (e2e/support/principal.ts) — and verified
-// here with the shared secret (`APP_CONFIG_PROJECT_TOKEN_SECRET`). The principal it yields rides the
-// session (`authenticate({ type: "project-token", token })` → `session.whoami()`), is stamped by the
-// DO onto every event that session appends (`source.principal`, unforgeable: the DO owns the field),
-// and reaches an app on a project host as the `x-itx-principal` header after the token check (cookie
-// or bearer, worker.ts). On an EVENT the principal is ATTRIBUTION; at the SESSION it is also
-// authority (session.ts): a project token binds its session to the token's one project, a
-// control-plane user's session admits the projects of their orgs, the ADMIN SECRET
+// principal.ts — WHO is calling, as the platform carries it: every credential's verifier, in one
+// leaf file. A PROJECT TOKEN is a signed claim `{ projectId, actor, email?, expiresAt }` minted by a
+// holder of the secret (`signProjectToken`: `mintToken` on a project's handle, iterate-context.ts;
+// the console's project links, control-plane.ts) and verified here with the shared secret
+// (`APP_CONFIG_PROJECT_TOKEN_SECRET`). The principal it yields rides the session
+// (`authenticate({ type: "project-token", token })` → `session.whoami()`), is stamped by the DO onto
+// every event that session appends (`source.principal`, unforgeable: the DO owns the field), and
+// reaches an app on a project host as the `x-itx-principal` header after the token check (cookie or
+// bearer, worker.ts). On an EVENT the principal is ATTRIBUTION; at the SESSION it is also authority
+// (session.ts): a project token binds its session to the token's one project, a control-plane
+// user's session (the SESSION COOKIE, `verifySessionCookie`, signed with
+// `APP_CONFIG_SESSION_SECRET`) admits the projects of their orgs, the ADMIN SECRET
 // (`verifyAdminSecret`, `APP_CONFIG_ADMIN_API_SECRET`) is `{ actor: "admin" }` on every project, and
 // a PROJECT SECRET — the project's own long-lived key (`rotateProjectApiKey` mints it, only its hash
 // is kept; `verifyProjectSecret` checks a candidate) — is `{ actor: "project:<projectId>" }` on that
 // one project: a device, a headless app, speaking AS the project.
 //
 // `signClaims` / `verifyClaims` is THE ONE signed-claims codec — `<payload>.<sig>`, payload =
-// base64url(UTF-8 JSON), sig = base64url(HMAC-SHA256(payload)) — the control plane's session cookie
-// (control-plane.ts) is the same codec under its own secret.
+// base64url(UTF-8 JSON), sig = base64url(HMAC-SHA256(payload)) — the project token and the session
+// cookie are the same codec under their own secrets.
 
 /** Who is acting: a stable actor id (the control plane's user id) and, when known, an email. */
 export type Principal = { actor: string; email?: string };
@@ -66,8 +68,8 @@ async function hmacKey(secret: string, usage: "sign" | "verify"): Promise<Crypto
   );
 }
 
-/** Sign any JSON claims with `secret` — a project token's `ProjectTokenClaims` (e2e/support/principal.ts
- *  mints them), the control plane's session (control-plane.ts). */
+/** Sign any JSON claims with `secret` — a project token's `ProjectTokenClaims` (`signProjectToken`),
+ *  the session cookie's `SessionCookieClaims` (`setSessionCookie`). */
 export async function signClaims(claims: unknown, secret: string): Promise<string> {
   const payload = base64url(encoder.encode(JSON.stringify(claims)));
   const signature = await crypto.subtle.sign(
@@ -81,7 +83,7 @@ export async function signClaims(claims: unknown, secret: string): Promise<strin
 /** The claims of a token that is well-formed and signed with `secret` — else null (no reason: a
  *  caller answers every bad token the same way). A blank secret verifies nothing. The caller checks
  *  the claims' SHAPE and expiry. */
-export async function verifyClaims(token: string, secret: string): Promise<unknown> {
+async function verifyClaims(token: string, secret: string): Promise<unknown> {
   if (!secret) return null;
   const dot = token.indexOf(".");
   if (dot <= 0) return null;
@@ -120,6 +122,19 @@ export async function verifyProjectToken(
   };
 }
 
+/** A project token: `claims` — the principal, for ONE project — signed with `secret`, expiring
+ *  `ttlMs` from now (a past expiry, `ttlMs ≤ 0`, mints a token that never verifies). */
+export function signProjectToken(
+  claims: Omit<ProjectTokenClaims, "expiresAt">,
+  ttlMs: number,
+  secret: string,
+): Promise<string> {
+  return signClaims(
+    { ...claims, expiresAt: Date.now() + ttlMs } satisfies ProjectTokenClaims,
+    secret,
+  );
+}
+
 const sha256 = async (text: string): Promise<Uint8Array> =>
   new Uint8Array(await crypto.subtle.digest("SHA-256", encoder.encode(text)));
 
@@ -132,13 +147,17 @@ const digestsEqual = (a: Uint8Array, b: Uint8Array): boolean => {
   return difference === 0;
 };
 
-/** Whether `candidate` IS `secret` — the admin secret's check (`APP_CONFIG_ADMIN_API_SECRET`: at
- *  `authenticate({ type: "admin-secret" })` and as a lane's bearer, worker.ts). Both are SHA-256
- *  hashed and the digests compared in constant time. A blank secret matches nothing. */
-export async function verifyAdminSecret(candidate: string, secret: string): Promise<boolean> {
-  if (!secret) return false;
-  const [a, b] = await Promise.all([sha256(candidate), sha256(secret)]);
-  return digestsEqual(a, b);
+/** The principal the admin secret grants — `{ actor: "admin" }`, every project — when `candidate`
+ *  IS `secret` (`APP_CONFIG_ADMIN_API_SECRET`: at `authenticate({ type: "admin-secret" })`, as a
+ *  lane's bearer and on `/mcp`), else null. Both are SHA-256 hashed and the digests compared in
+ *  constant time. A blank secret matches nothing. */
+export async function verifyAdminSecret(
+  candidate: string,
+  secret: string,
+): Promise<{ actor: "admin" } | null> {
+  if (!secret) return null;
+  const [candidateDigest, secretDigest] = await Promise.all([sha256(candidate), sha256(secret)]);
+  return digestsEqual(candidateDigest, secretDigest) ? { actor: "admin" } : null;
 }
 
 // ── the project secret ── the project's own long-lived key, kept as a HASH in SECRETS_KV.
@@ -183,6 +202,57 @@ export async function verifyProjectSecret(
     return null;
   }
   return digestsEqual(await sha256(secret), storedDigest) ? { actor: `project:${project}` } : null;
+}
+
+// ── the session cookie ── the control plane's signed first-party cookie, "you are this user": the
+// login form sets it (control-plane.ts), a browser carries it to the console and, on a same-origin
+// WebSocket handshake, to `/api` — `authenticate({ type: "from-server-cookie" })` (session.ts).
+
+/** The claims the session cookie carries: the directory user (`sub`, `user_<email>`), their email,
+ *  and when it was issued (`iat`, epoch seconds — the cookie is good for `SESSION_COOKIE_MAX_AGE`
+ *  from then, the signed token being otherwise valid forever). */
+export type SessionCookieClaims = { sub: string; email: string; iat: number };
+
+const SESSION_COOKIE = "itx-control-plane-session";
+const SESSION_COOKIE_MAX_AGE = 60 * 60 * 24 * 30; // 30 days
+
+/** The value of the cookie `name` in a `Cookie` header, or null. */
+export function cookieValueOf(cookieHeader: string | null, name: string): string | null {
+  for (const part of (cookieHeader ?? "").split(";")) {
+    const separator = part.indexOf("=");
+    if (separator < 0) continue;
+    if (part.slice(0, separator).trim() === name) return part.slice(separator + 1).trim();
+  }
+  return null;
+}
+
+/** The claims of the session cookie a `Cookie` header carries, when it verifies with `secret`
+ *  (`verifyClaims`), has the claims' shape and is within `SESSION_COOKIE_MAX_AGE` of its issue —
+ *  else null: no cookie, malformed, a bad signature, the wrong shape, or too old. */
+export async function verifySessionCookie(
+  cookieHeader: string | null,
+  secret: string,
+): Promise<SessionCookieClaims | null> {
+  const token = cookieValueOf(cookieHeader, SESSION_COOKIE);
+  if (!token) return null;
+  const claims = (await verifyClaims(token, secret)) as SessionCookieClaims | null;
+  if (typeof claims?.sub !== "string" || typeof claims?.iat !== "number") return null;
+  if (Math.floor(Date.now() / 1000) - claims.iat > SESSION_COOKIE_MAX_AGE) return null;
+  return claims;
+}
+
+/** The `Set-Cookie` value that establishes the session `claims` describe, signed with `secret`. */
+export async function setSessionCookie(
+  claims: SessionCookieClaims,
+  secret: string,
+): Promise<string> {
+  const token = await signClaims(claims, secret);
+  return `${SESSION_COOKIE}=${token}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${SESSION_COOKIE_MAX_AGE}`;
+}
+
+/** The `Set-Cookie` value that clears the session. */
+export function clearSessionCookie(): string {
+  return `${SESSION_COOKIE}=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0`;
 }
 
 const isProjectTokenClaims = (value: unknown): value is ProjectTokenClaims =>

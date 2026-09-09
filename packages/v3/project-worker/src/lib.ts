@@ -1,8 +1,9 @@
-// lib.ts — the pure helpers every layer shares; three concepts, one platform-neutral file (it rides
+// lib.ts — the pure helpers every layer shares; four concepts, one platform-neutral file (it rides
 // the SDK bundle and the node unit lane, so no cloudflare:workers here):
 //   errors  — `codedError` / `errorCode` / `reportIssue`: THE machine-readable error channel
 //   patch   — `diff` / `applyPatch` / `jsonEqual`: the live-state delta (an RFC 6902 subset)
 //   timeout — `withTimeout`: a promise raced against a deadline (code TIMEOUT)
+//   origin  — `isSameOriginBrowserRequest`: may a request spend the cookies it carries
 
 // ── errors ── THE machine-readable error channel, after cloudflare-os
 // (workshop-shared/src/api.ts: plain Error + a `code` own-property via Object.assign, read with
@@ -253,5 +254,23 @@ export async function withTimeout<T>(
     ]);
   } finally {
     if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
+// ── origin ── the one check that makes an ambient cookie safe to honour (session.ts
+// `from-server-cookie`, the console's POST doors in control-plane.ts).
+
+/** Whether `request` may spend the cookies it carries: its `Origin` header is this origin, or absent
+ *  (a non-browser client — curl, a script). A browser stamps the page's origin on every WebSocket
+ *  handshake, every cross-site fetch and every form POST, so a foreign origin means a foreign site
+ *  drove the request with the visitor's cookie riding along. A malformed `Origin` (the literal
+ *  `null` of a sandboxed document included) is foreign. */
+export function isSameOriginBrowserRequest(request: Pick<Request, "url" | "headers">): boolean {
+  const origin = request.headers.get("origin");
+  if (origin === null) return true;
+  try {
+    return new URL(origin).origin === new URL(request.url).origin;
+  } catch {
+    return false;
   }
 }

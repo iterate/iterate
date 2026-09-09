@@ -1,30 +1,21 @@
-// principal.ts — the credentials a test mints for the worker under test. PROJECT TOKENS are signed
-// here with the lane's secret (the local e2e worker's is the one worker-config.ts sets; a deployed
-// worker's is a wrangler secret, handed to the run as PROJECT_TOKEN_SECRET, never in the tree). A
-// PROJECT API KEY is minted over the wire, through the real door.
-import { signClaims, type ProjectTokenClaims } from "../../src/principal.ts";
+// principal.ts — the credentials a test mints for the worker under test, each through the real door
+// on the admin session: a PROJECT TOKEN through `projects.get(project).mintToken()`, a PROJECT API
+// KEY through `.rotateApiKey()`. Nothing is signed locally, so a deployed run needs no secret but the
+// admin's.
 import { adminCredentials, session } from "./client.ts";
-import { projectHostsAreLocal } from "./project-host.ts";
-import { E2E_PROJECT_TOKEN_SECRET } from "./worker-config.ts";
 
-function projectTokenSecret(): string {
-  if (projectHostsAreLocal()) return E2E_PROJECT_TOKEN_SECRET;
-  const secret = process.env.PROJECT_TOKEN_SECRET;
-  if (!secret)
-    throw new Error(
-      "PROJECT_TOKEN_SECRET unset — the deployed worker's APP_CONFIG_PROJECT_TOKEN_SECRET, needed to mint tokens against it",
-    );
-  return secret;
-}
-
-/** A token for `projectId`, good for a minute. */
+/** A project token for `project` — `projects.get(project).mintToken({ ttlSeconds })` as `as` (a
+ *  member: `registerProject(project, as)` made them one — the token carries them) or, without, as
+ *  the admin (`{ actor: "admin" }`). 15 minutes unless `ttlSeconds` says otherwise. */
 export const mintProjectToken = (
-  claims: Omit<ProjectTokenClaims, "expiresAt"> & { expiresAt?: number },
+  project: string,
+  as?: { sub: string; email: string },
+  ttlSeconds?: number,
 ): Promise<string> =>
-  signClaims(
-    { expiresAt: Date.now() + 60_000, ...claims } satisfies ProjectTokenClaims,
-    projectTokenSecret(),
-  );
+  session()
+    .authenticate(adminCredentials(as))
+    .projects.get(project)
+    .mintToken(ttlSeconds === undefined ? {} : { ttlSeconds });
 
 /** The project's API key, minted fresh — `projects.get(project).rotateApiKey()` on the admin session
  *  (a previous key stops verifying). What a device presents: `authenticate({ type: "project-secret",

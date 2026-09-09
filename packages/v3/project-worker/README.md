@@ -48,7 +48,7 @@ plain vars in the test lanes:
 | `APP_CONFIG_ENVIRONMENT_NAME`                                       | yes      | the deployment's name at `/version` ("poc", "test", "e2e")                                   |
 | `APP_CONFIG_SESSION_SECRET`                                         | yes      | signs the control plane's login cookie (secret)                                              |
 | `APP_CONFIG_ADMIN_API_SECRET`                                       | yes      | the admin secret: `authenticate({ type: "admin-secret" })`, the lanes' admin bearer (secret) |
-| `APP_CONFIG_PROJECT_TOKEN_SECRET`                                   | no       | signs project tokens; blank ⇒ none verifies (secret)                                         |
+| `APP_CONFIG_PROJECT_TOKEN_SECRET`                                   | yes      | signs project tokens (`mintToken`, the console's project links) (secret)                     |
 | `APP_CONFIG_PROJECT_HOSTNAME_BASE`                                  | no       | the base project hosts hang under; blank ⇒ no project-host ingress                           |
 | `APP_CONFIG_ARTIFACTS_ACCOUNT_ID`, `APP_CONFIG_ARTIFACTS_NAMESPACE` | no       | `itx.repos`' git remotes                                                                     |
 
@@ -57,6 +57,6 @@ plain vars in the test lanes:
 ```bash
 pnpm test                       # every lane: unit (node), workers (workerd), e2e (one real worker), bench
 pnpm e2e                        # the wire lane alone, against a local worker
-WORKER_BASE_URL=https://project-worker.iterate.workers.dev ADMIN_API_SECRET=… pnpm e2e   # the proof that counts (plus PROJECT_TOKEN_SECRET for the token rows)
+WORKER_BASE_URL=https://project-worker.iterate.workers.dev ADMIN_API_SECRET=… pnpm e2e   # the proof that counts
 pnpm run typecheck && pnpm run deploy
 ```

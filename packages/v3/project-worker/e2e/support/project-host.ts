@@ -26,13 +26,16 @@ export function projectHostnameBase(): string {
   return String((rawConfig.vars as Record<string, unknown>).APP_CONFIG_PROJECT_HOSTNAME_BASE);
 }
 
-/** Register `projectId` with the directory — the admin session's `projects.create({ project })` over
- *  the worker's own /api (the project lands in the deployment's own org) — so its host serves. A
- *  project's id IS its slug (a DNS label), so one name addresses both the DO (`openItx(projectId)`)
- *  and the host (`site--<projectId>.<base>`). Idempotent; identical against the local and the
- *  deployed worker. */
-export async function registerProject(projectId: string): Promise<void> {
-  await session().authenticate(adminCredentials()).projects.create({ project: projectId });
+/** Register `projectId` with the directory — `projects.create({ project })` over the worker's own
+ *  /api, on the admin session (the project lands in the deployment's own org) or as `as` (a user's
+ *  session: their org, with them a member) — so its host serves. A project's id IS its slug (a DNS
+ *  label), so one name addresses both the DO (`openItx(projectId)`) and the host
+ *  (`site--<projectId>.<base>`). Idempotent; identical against the local and the deployed worker. */
+export async function registerProject(
+  projectId: string,
+  as?: { sub: string; email: string },
+): Promise<void> {
+  await session().authenticate(adminCredentials(as)).projects.create({ project: projectId });
 }
 
 /** A project id that is a DNS label — the convention needs one (`freshCtx` names carry `_`). */

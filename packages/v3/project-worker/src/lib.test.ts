@@ -1,8 +1,9 @@
-// Executable spec for the live-state delta format. The one invariant that matters:
-// applyPatch(a, diff(a, b)) always deep-equals b — every shape below proves it, then asserts
-// the op shapes we promised (append fast path, wholesale array replace, key remove).
+// lib.test.ts — the live-state delta format (the one invariant that matters: applyPatch(a, diff(a, b))
+// always deep-equals b — every shape below proves it, then asserts the op shapes we promised: append
+// fast path, wholesale array replace, key remove) and the same-origin check as `{ origin, becomes }`
+// rows.
 import { describe, expect, test } from "vitest";
-import { applyPatch, diff } from "./lib.ts";
+import { applyPatch, diff, isSameOriginBrowserRequest } from "./lib.ts";
 
 const roundtrip = (a: unknown, b: unknown) => {
   const ops = diff(a, b);
@@ -90,4 +91,27 @@ describe("diff + applyPatch", () => {
     ).toThrow(/missing path/);
     expect(({} as Record<string, unknown>).polluted).toBeUndefined();
   });
+});
+
+// ── origin ── the check `from-server-cookie` (session.ts) and the console's POST doors
+// (control-plane.ts) ride on: `{ origin, becomes }` rows for a request to https://worker.example/api.
+
+describe("isSameOriginBrowserRequest", () => {
+  const rows: { origin: string | null; becomes: boolean }[] = [
+    { origin: null, becomes: true }, // no Origin: a non-browser client
+    { origin: "https://worker.example", becomes: true }, // the page is this origin
+    { origin: "https://evil.example", becomes: false }, // another site drove the browser
+    { origin: "https://site--prj.worker.example", becomes: false }, // same site is not same origin: a project host
+    { origin: "http://worker.example", becomes: false }, // the scheme is part of the origin
+    { origin: "https://worker.example:8443", becomes: false }, // so is the port
+    { origin: "null", becomes: false }, // an opaque origin (a sandboxed document) is foreign
+    { origin: "not a url", becomes: false },
+  ];
+  for (const { origin, becomes } of rows)
+    test(`Origin ${JSON.stringify(origin)} ⇒ ${becomes}`, () => {
+      const headers = new Headers(origin === null ? {} : { origin });
+      expect(isSameOriginBrowserRequest({ url: "https://worker.example/api", headers })).toBe(
+        becomes,
+      );
+    });
 });

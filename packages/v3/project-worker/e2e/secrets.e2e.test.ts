@@ -47,13 +47,13 @@ test("set / list / delete: names and origins are listed, values never are; each 
 });
 
 test("an authenticated session's set is attributed — the change carries the principal, never the value", async () => {
-  const projectId = freshCtx("secrets-who");
-  const principal = { actor: "user_ada", email: "ada@example.com" };
+  const projectId = freshDnsSafeProjectId("secrets-who");
+  const email = `${projectId}@example.com`;
+  const ada = { sub: `user_${email}`, email };
+  const principal = { actor: ada.sub, email };
+  await registerProject(projectId, ada); // her project: she mints her own token through the door
   const itx = session()
-    .authenticate({
-      type: "project-token",
-      token: await mintProjectToken({ projectId, ...principal }),
-    })
+    .authenticate({ type: "project-token", token: await mintProjectToken(projectId, ada) })
     .projects.get(projectId);
   await itx.secrets.set("token", "t0p");
   const change = (await readAll(itx)).find((e) => e.type === CHANGED);
