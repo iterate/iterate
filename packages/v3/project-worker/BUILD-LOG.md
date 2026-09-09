@@ -4218,6 +4218,12 @@ ifConfiguredAtOffset })` only while the row is still the one configured at that 
   still one identity to a target-compare. GATES: `pnpm test` 88 files / 720 passed / 17 expected-
   fail; DEPLOYED (d304cbe7c, version 17290289): 49 files / 200 passed / 4 expected-fail, the 1001-key
   kv list socket drop the one failure for the third full run running (green alone every time).
+- MEASURED (a `wrangler tail` over a fourth full deployed run, 464 events, the drop reproduced): the
+  ONE erroring event on the run is Cloudflare's own — "Internal error in Durable Object storage caused
+  object to be reset; reference = a6u47ln6cm67nht6omc8i4al" on the kv-list context's DO mid-burst —
+  which the relay's broken stub reports as "Network connection lost." to the client. Not code; a
+  platform transient that the busiest DO of a loaded run draws. (The public-door note writes its
+  durable row only when a streak stands, so the burst itself is 1001 KV puts and nothing else.)
 
 THE STREAM REVIEW (the third Fable launch; every contested claim first reproduced on a node:sqlite
 rig with the real `Stream` + `SubscriptionDelivery`, then applied by the same agent):
