@@ -97,6 +97,11 @@ const struct iterate_kit_session_actions *iterate_kit_board_button_actions(void)
 
 #ifdef ESP_PLATFORM
 #include "driver/i2c_master.h"
+/** Use a bus extra->start already opened (Waveshare's BSP display owns I2C0).
+ * The table's pin/speed facts describe that same bus. No second creator or
+ * deletion: its lifetime belongs to the BSP. Call before board startup scripts.
+ */
+void iterate_kit_board_i2c_use(i2c_master_bus_handle_t bus);
 /** Attach to the table's I2C bus at its declared speed. open_codec owns the
  * returned device; scripts use temporary handles, preserving page order.
  */

@@ -254,6 +254,10 @@ static void playback_hardware_task(void *argument) {
   }
 }
 
+struct iterate_kit_audio_codec iterate_kit_i2s_codec(void) {
+  return (struct iterate_kit_audio_codec){&codec_ops, &codec_properties, NULL};
+}
+
 bool iterate_kit_i2s_codec_start_over(
     enum iterate_kit_status (*read)(void *, int16_t *, size_t),
     enum iterate_kit_status (*write)(void *, const int16_t *, size_t),
@@ -316,6 +320,7 @@ static uint32_t mic_raw_peak;
 static uint32_t mic_clean_peak;
 static uint32_t echo_raw_peak;
 static uint32_t echo_clean_peak;
+static bool amplifier_configured;
 static bool amplifier_on;
 static int64_t amplifier_settled_at_us;
 static int64_t amplifier_sound_hold_until_us;
@@ -416,7 +421,7 @@ static void wait_for_table_amplifier(void *context) {
 }
 
 static void table_amplifier_phase(enum iterate_kit_voice_phase phase) {
-  if (!table_started || !channel_facts.amplifier_gated) return;
+  if (!amplifier_configured || !channel_facts.amplifier_gated) return;
   if (phase == ITERATE_KIT_VOICE_PHASE_ARRIVED) {
     if (!set_table_amplifier(true)) iterate_kit_i2s_codec_note_failure(false);
   } else if (phase == ITERATE_KIT_VOICE_PHASE_QUIET) {
@@ -428,7 +433,7 @@ static void table_amplifier_phase(enum iterate_kit_voice_phase phase) {
 }
 
 static void table_amplifier_sound(uint32_t bytes) {
-  if (!table_started || !channel_facts.amplifier_gated) return;
+  if (!amplifier_configured || !channel_facts.amplifier_gated) return;
   if (!set_table_amplifier(true)) iterate_kit_i2s_codec_note_failure(false);
   const uint32_t ring_ms = (uint32_t)((uint64_t)channel_facts.dma_frames *
       channel_facts.dma_descriptors * 1000U / channel_facts.playback.clk_cfg.sample_rate_hz);
@@ -496,15 +501,10 @@ static enum iterate_kit_status write_channels(void *context, const int16_t *samp
       ? ITERATE_KIT_OK : ITERATE_KIT_IO_ERROR;
 }
 
-bool iterate_kit_i2s_codec_start(
-    const struct iterate_kit_i2s_codec_facts *facts, struct iterate_kit_audio_codec *out) {
-  if (facts == NULL || out == NULL || capture_mailbox != NULL || !iterate_kit_i2s_codec_valid(facts)) return false;
-  const uint64_t ring_ms = (uint64_t)facts->dma_frames * facts->dma_descriptors * 1000U /
-      facts->playback.clk_cfg.sample_rate_hz;
-  if (ring_ms == 0U || ring_ms > UINT16_MAX) return false;
+bool iterate_kit_i2s_codec_prepare_amplifier(const struct iterate_kit_i2s_codec_facts *facts) {
+  if (facts == NULL || facts->amplifier_gpio < -1 || facts->amplifier_gpio >= GPIO_NUM_MAX ||
+      facts->playback.clk_cfg.sample_rate_hz == 0U) return false;
   channel_facts = *facts;
-  bool tx_enabled = false;
-  bool rx_enabled = false;
   if (facts->amplifier_gpio >= 0) {
     const gpio_config_t config = {
       .pin_bit_mask = UINT64_C(1) << facts->amplifier_gpio,
@@ -515,6 +515,21 @@ bool iterate_kit_i2s_codec_start(
     };
     if (gpio_config(&config) != ESP_OK || gpio_set_level(facts->amplifier_gpio, 0) != ESP_OK) return false;
   }
+  amplifier_configured = true;
+  iterate_kit_i2s_codec_set_before_write(wait_for_table_amplifier);
+  return true;
+}
+
+bool iterate_kit_i2s_codec_start(
+    const struct iterate_kit_i2s_codec_facts *facts, struct iterate_kit_audio_codec *out) {
+  if (facts == NULL || out == NULL || capture_mailbox != NULL || !iterate_kit_i2s_codec_valid(facts)) return false;
+  const uint64_t ring_ms = (uint64_t)facts->dma_frames * facts->dma_descriptors * 1000U /
+      facts->playback.clk_cfg.sample_rate_hz;
+  if (ring_ms == 0U || ring_ms > UINT16_MAX) return false;
+  channel_facts = *facts;
+  bool tx_enabled = false;
+  bool rx_enabled = false;
+  if (!iterate_kit_i2s_codec_prepare_amplifier(facts)) return false;
   if (facts->capture_port == facts->playback_port) {
     i2s_chan_config_t config = playback_config(facts);
     if (i2s_new_channel(&config, &table_playback_channel, &table_capture_channel) != ESP_OK ||

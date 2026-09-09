@@ -7,7 +7,6 @@ endif()
 idf_component_register(
   SRCS
     waveshare_device.c
-    waveshare_audio.c
     waveshare_avatar.c
     waveshare_buttons.c
     waveshare_display.c

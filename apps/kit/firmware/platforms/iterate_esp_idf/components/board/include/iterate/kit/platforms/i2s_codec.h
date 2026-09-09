@@ -76,6 +76,17 @@ void iterate_kit_i2s_codec_abort(void);
  */
 void iterate_kit_i2s_codec_reset_echo_peaks(void);
 
+/** The shared mailbox operations and default properties. extra->start can
+ * hand these to the loop before open_codec initializes start_over; no read
+ * or write is valid until start_over succeeds. */
+struct iterate_kit_audio_codec iterate_kit_i2s_codec(void);
+/** Configure only the table amplifier for board-owned channels (Waveshare).
+ * facts carries the real TX ring geometry so chime tails keep the rail up.
+ * Call after codec open and before start_over. Gated rails start off; the
+ * playback wait occurs before ledger credit, preventing a missing syllable.
+ */
+bool iterate_kit_i2s_codec_prepare_amplifier(const struct iterate_kit_i2s_codec_facts *facts);
+
 /** Start the singleton 16 kHz mono codec over board-owned BLOCKING operations.
  * read fills exactly 320 samples; write consumes 1..320. UNAVAILABLE is a
  * fence/no frame, not a driver failure. The capture task immediately retries

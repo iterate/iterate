@@ -112,6 +112,8 @@ static bool drive_gpio(int8_t gpio, uint8_t level) {
   return gpio_config(&config) == ESP_OK && gpio_set_level(gpio, level) == ESP_OK;
 }
 
+void iterate_kit_board_i2c_use(i2c_master_bus_handle_t bus) { i2c_bus = bus; }
+
 esp_err_t iterate_kit_board_i2c_device(uint8_t address, i2c_master_dev_handle_t *out) {
   if (i2c_bus == NULL) return ESP_ERR_INVALID_STATE;
   const i2c_device_config_t config = {
@@ -129,7 +131,8 @@ bool iterate_kit_i2c_write_script(const struct iterate_kit_register_script *scri
   esp_err_t status = ESP_OK;
   for (size_t i = 0; i < script->count && status == ESP_OK; ++i) {
     const uint8_t command[] = {script->writes[i].address, script->writes[i].value};
-    status = i2c_master_transmit(device, command, sizeof(command), 50);
+    status = i2c_master_transmit(device, command, sizeof(command),
+        script->timeout_ms == 0U ? 50 : script->timeout_ms);
   }
   const esp_err_t removed = i2c_master_bus_rm_device(device);
   if (status != ESP_OK || removed != ESP_OK) return false;
@@ -215,7 +218,7 @@ static bool start(void *context, struct iterate_kit_board_audio *out) {
     };
     if (gpio_config(&config) != ESP_OK) return false;
   }
-  if (board->i2c.sda >= 0 && board->i2c.scl >= 0) {
+  if (i2c_bus == NULL && board->i2c.sda >= 0 && board->i2c.scl >= 0) {
     const i2c_master_bus_config_t config = {
       .i2c_port = -1, .sda_io_num = board->i2c.sda, .scl_io_num = board->i2c.scl,
       .clk_source = I2C_CLK_SRC_DEFAULT, .glitch_ignore_cnt = 7,

@@ -19,6 +19,11 @@ struct iterate_kit_register_script {
   size_t count;
   uint16_t settle_ms;
   enum { ITERATE_KIT_SCRIPT_BEFORE_I2S, ITERATE_KIT_SCRIPT_AFTER_I2S } when;
+  /** Zero keeps the AIC3204's 50 ms transfer deadline. Waveshare's AXP2101
+   * rail writes retain their 100 ms deadline; settle is a separate interval.
+   * Native transports (M5Unified) keep their own bus driver's deadline.
+   */
+  uint16_t timeout_ms;
 };
 
 #ifdef __cplusplus

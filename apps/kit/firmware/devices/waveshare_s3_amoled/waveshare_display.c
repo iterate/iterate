@@ -81,7 +81,7 @@ static struct {
   bool stream_ready;
   bool call_active;
   bool call_requested;
-  bool talk_held;
+  struct iterate_kit_voice_view view;
   /* Unrecoverable start-up fault; latched by present() and never cleared. */
   bool fault;
 } ui;
@@ -122,7 +122,7 @@ void waveshare_display_present(const struct iterate_kit_voice_view *view) {
   ui.stream_ready = view->stream_ready;
   ui.call_active = view->call_active;
   ui.call_requested = view->wants_call;
-  ui.talk_held = view->talk_held;
+  ui.view = *view;
   /* Latching, not copied: nothing clears a fault but a reboot. */
   if (view->fault) ui.fault = true;
   xSemaphoreGive(ui.lock);
@@ -133,16 +133,8 @@ void waveshare_display_present(const struct iterate_kit_voice_view *view) {
 static struct iterate_kit_conversation_visual_state face_status(void) {
   struct iterate_kit_conversation_visual_state status = {0};
   xSemaphoreTake(ui.lock, portMAX_DELAY);
-  status.network = ui.link_ready ? ITERATE_KIT_NETWORK_CONNECTED
-                                 : ITERATE_KIT_NETWORK_CONNECTING;
-  status.reach =
-      iterate_kit_reach_from(ui.api_ready, ui.stream_ready, ui.call_active);
-  status.media_ready = ui.link_ready;
-  status.media_failed = ui.fault;
-  status.conversation_active = ui.call_active;
-  status.microphone_listening =
-      ui.talk_held || ui.state == ITERATE_KIT_VOICE_SCREEN_LISTENING;
-  status.speaker_peak = ui.state == ITERATE_KIT_VOICE_SCREEN_SPEAKING ? 4096U : 0U;
+  ui.view.fault = ui.fault;
+  iterate_kit_voice_view_lights(&ui.view, &status);
   xSemaphoreGive(ui.lock);
   return status;
 }
