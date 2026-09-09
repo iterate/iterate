@@ -2152,7 +2152,13 @@ class AgentCollectionLiveStateRpcTarget
   async subscribe(
     onUpdate: (update: LiveUpdate<AgentCollectionProcessorState>) => unknown,
   ): Promise<LiveStateSubscriptionHandle> {
-    return await this.#bornThenRetry(() => this.#relay().subscribe(onUpdate));
+    // The Pager's upgrade is routed by the Stream DO's committed subscription
+    // catalog and therefore fails before the relay can inspect the facade's
+    // unconfigured-subscription refusal. Ensure this collection's idempotent
+    // birth batch first; get() supplies that narrow initialization and leaves
+    // no retained subscription.
+    await this.get();
+    return await this.#relay().subscribe(onUpdate);
   }
 }
 

@@ -7,11 +7,16 @@ import { textEdits } from "./text-edits.ts";
 import { reviewForDocument } from "./rfm-document.ts";
 
 /** Map a rendered Markdown boundary into the sole editable source document. */
-function sourcePosition(review: DocumentReview, pos: number, side: -1 | 1) {
+function sourcePosition(review: DocumentReview, pos: number, side: -1 | 1, atomicBoundary = false) {
   for (const segment of review.projection.segments) {
     const { start, end } = segment.display;
     if (side > 0 ? start <= pos && pos < end : start < pos && pos <= end) {
-      if (segment.atomic && pos !== start && pos !== end) return null;
+      if (segment.atomic && pos !== start && pos !== end) {
+        if (!atomicBoundary) return null;
+        // A root/progress boundary cannot end inside opaque source markup.
+        // Its partial tree therefore owns the whole atomic source range.
+        return review.body.range.start + segment.source.end;
+      }
       return (
         review.body.range.start +
         segment.source.start +
@@ -91,6 +96,7 @@ export function projectedMarkdown() {
       const projectedStart = projectedRanges[0]?.from ?? 0;
       const sourceStart = ranges[0]?.from ?? 0;
       let stoppedAt: number | null = null;
+      let treeEnd: number | undefined;
 
       function mapNode(node: SyntaxNode, root = false): { tree: Tree; from: number } | null {
         const displayFrom = node.from + projectedStart;
@@ -99,7 +105,7 @@ export function projectedMarkdown() {
         const to =
           root && displayTo === projection.markdown.length
             ? input.length
-            : sourcePosition(review, displayTo, -1);
+            : sourcePosition(review, displayTo, -1, root);
         if (from === null || to === null || to < from) return null;
         // Most blocks live wholly within one unchanged source segment. Reusing
         // their actual trees preserves nested props and avoids walking every
@@ -129,9 +135,11 @@ export function projectedMarkdown() {
 
       return {
         get parsedPos() {
-          return base.parsedPos >= projection.markdown.length
-            ? input.length
-            : (sourcePosition(review, base.parsedPos, -1) ?? sourceStart);
+          const mapped =
+            base.parsedPos >= projection.markdown.length
+              ? input.length
+              : (sourcePosition(review, base.parsedPos, -1, true) ?? sourceStart);
+          return treeEnd === undefined ? mapped : Math.min(mapped, treeEnd);
         },
         get stoppedAt() {
           return stoppedAt;
@@ -144,6 +152,7 @@ export function projectedMarkdown() {
           const tree = base.advance();
           if (!tree) return null;
           const result = mapNode(tree.topNode, true)!.tree;
+          treeEnd = sourceStart + result.length;
           if (
             sourceStart === 0 &&
             projectedStart === 0 &&

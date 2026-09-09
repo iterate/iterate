@@ -355,9 +355,8 @@ export async function dialLiveStatePager(
  * stay snapshot-per-read and dial nothing.
  *
  * When the Pager cannot be established, `pagerFailureDegrade` picks the
- * posture: `"reject"` makes `subscribe` throw so the call site can fall back
- * (the four DO hosts fall back to today's pinning subscribe — no liveness
- * regression, loudly logged); `"snapshot-only"` seeds the engine once from
+ * posture: `"reject"` makes `subscribe` throw for the caller's bounded,
+ * observable recovery; `"snapshot-only"` seeds the engine once from
  * `readSnapshot` and serves a live-shaped but push-less subscription (the
  * stream posture — stream subscriptions must never pin their DO).
  */

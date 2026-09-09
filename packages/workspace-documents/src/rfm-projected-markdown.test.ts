@@ -1,7 +1,7 @@
 import { DocInput, ensureSyntaxTree, language, syntaxTree } from "@codemirror/language";
 import { Compartment, EditorState, Text } from "@codemirror/state";
 import { TreeFragment } from "@lezer/common";
-import { applyReviewOperation } from "iterate/document-review";
+import { applyReviewOperation, readReview } from "iterate/document-review";
 import { expect, test } from "vitest";
 import { projectedMarkdown } from "./rfm-projected-markdown.ts";
 import { richMarkdown } from "./rich-markdown.ts";
@@ -84,6 +84,28 @@ test("a parse requested after hidden controls keeps positions relative to its re
   const heading = tree.topNode.firstChild!;
   expect(heading.name).toBe("ATXHeading1");
   expect(source.slice(from + heading.from, from + heading.to)).toBe("# Second");
+});
+
+test("stopping inside a multi-line atomic suggestion returns a resumable source tree", () => {
+  const source =
+    'Before {++- item\n- next++}{id="s1" by="AI" at="2026-09-08T10:03:00.000Z"}.\n\nAfter.\n';
+  const review = readReview(source);
+  expect(review.diagnostics).toEqual([]);
+  const atomic = review.projection.segments.find((segment) => segment.atomic);
+  if (!atomic) throw new Error("Missing atomic suggestion");
+  const parser = projectedMarkdown().language.parser;
+  const partial = parser.startParse(source);
+  partial.stopAt(source.indexOf("- item") + 1);
+  let tree = partial.advance();
+  while (!tree) tree = partial.advance();
+
+  expect(tree.length).toBe(atomic.source.end + review.body.range.start);
+  expect(partial.parsedPos).toBe(tree.length);
+  const resumed = parser.parse(source, TreeFragment.addTree(tree, [], true));
+  expect(resumed.length).toBe(source.length);
+  expect(source.slice(resumed.topNode.lastChild!.from, resumed.topNode.lastChild!.to)).toBe(
+    "After.",
+  );
 });
 
 test("a fully hidden first requested range does not shift later projected Markdown", () => {
