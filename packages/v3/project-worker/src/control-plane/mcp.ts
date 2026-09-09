@@ -55,7 +55,7 @@ function buildServer(env: Env, props: AuthProps): McpServer {
     "create_project",
     {
       description:
-        "Create a new org + project and return it — how you 'emerge with a project' from MCP.",
+        "Create a project in your first org (creating that org if you have none) and return it — how you 'emerge with a project' from MCP.",
       inputSchema: input({ slug: { type: "string" }, orgName: { type: "string" } }, ["slug"]),
     },
     async (raw: unknown) => {

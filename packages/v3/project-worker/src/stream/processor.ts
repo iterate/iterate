@@ -390,7 +390,7 @@ export class ProcessorEngine<State> {
       const page = await this.#stream.read(reducedThroughOffset, 500);
       for (const event of page.events)
         if (event.offset <= target && reducesEvent(this.#contract.consumes, event))
-          state = this.processor.reduce({ event, state }) ?? state;
+          state = this.#reduceOrKeep(event, state);
       if (page.scannedThroughOffset <= reducedThroughOffset) break; // nothing left below the target
       reducedThroughOffset = Math.min(page.scannedThroughOffset, target);
     }
@@ -463,6 +463,20 @@ export class ProcessorEngine<State> {
     this.publishLiveState();
   }
 
+  /** THE GUARDED REDUCE — the one both the live flow and the version replay use. A reducer that
+   *  throws on an event (malformed, hostile, or one an OLDER version accepted and this one rejects)
+   *  must never wedge the processor: on the live flow it would stall the cursor; on a version replay
+   *  it would fail the catch-up before the new checkpoint is written, every incarnation. The skip is
+   *  recorded and the state kept. */
+  #reduceOrKeep(event: StreamEvent, state: State): State {
+    try {
+      return this.processor.reduce({ event, state }) ?? state;
+    } catch (error) {
+      reportIssue("processor.reduce", error, { slug: this.#contract.slug, offset: event.offset });
+      return state;
+    }
+  }
+
   /** THE per-event primitive (rules 2–3) — the batch loop and the eventless at-head pass both come
    *  here: a GUARDED reduce, then `processEvent` with a FIFO blocker chain drained to a FIXED POINT.
    *  Returns the next state; owns NO cursor / persist / waiter — the caller does. */
@@ -473,17 +487,7 @@ export class ProcessorEngine<State> {
   ): Promise<State> {
     const { slug, version, emits } = this.#contract;
     const previousState = state;
-    if (event) {
-      let next: State | null | undefined;
-      try {
-        next = this.processor.reduce({ event, state });
-      } catch (error) {
-        // A malformed/hostile event must not wedge the reduce forever: record the skip, move on.
-        reportIssue("processor.reduce", error, { slug, offset: event.offset });
-        next = undefined;
-      }
-      state = next ?? state;
-    }
+    if (event) state = this.#reduceOrKeep(event, state);
     // FIFO blocker chain for THIS event (rule 2); background work escapes it (rule 3).
     let blockers: Promise<unknown> = Promise.resolve();
     this.processor.processEvent({

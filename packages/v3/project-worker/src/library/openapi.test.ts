@@ -37,6 +37,11 @@ const SPEC: OpenApiDocument = {
       },
     },
     "/then": { get: { operationId: "then" } }, // reserved too: a thenable connection would never settle
+    "/items": {
+      parameters: [{ name: "limit", in: "query", required: true }],
+      // the operation OVERRIDES the path item's `limit` (same name, same location): optional here
+      get: { operationId: "listItems", parameters: [{ name: "limit", in: "query" }] },
+    },
   },
 };
 
@@ -120,6 +125,7 @@ describe("connectToOpenApi", () => {
       url: "",
       throws: /listPets needs query parameter "limit"/,
     },
+    { op: "listItems", input: {}, method: "GET", url: "https://api.example/v1/items" }, // the operation's optional `limit` overrides the path item's required one
     {
       op: "getText",
       input: { junk: 1 },
@@ -163,6 +169,7 @@ describe("connectToOpenApi", () => {
       "call",
       "whoami",
       "then",
+      "listItems",
     ]);
     expect((conn as { then?: unknown }).then).toBeUndefined();
     expect(await (conn as any).getPet({ id: 1 })).toEqual({ ok: true });

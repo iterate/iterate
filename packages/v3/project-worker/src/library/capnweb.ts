@@ -42,6 +42,13 @@ export async function connectToCapnweb(
   // never a dead socket.
   type SessionStub = RemoteMain & { onRpcBroken?: (cb: () => void) => void };
   let session: SessionStub | undefined;
+  /** ONE reopen in flight at a time: concurrent calls after the session is gone share it (each
+   *  opening its own would leak every socket but the last one assigned). */
+  let reopening: Promise<SessionStub> | undefined;
+  /** Bumped by close: a reopen that lands after a close disposes what it opened instead of reviving. */
+  let generation = 0;
+  const dispose = (stub: SessionStub | undefined) =>
+    (stub as unknown as { [Symbol.dispose]?: () => void } | undefined)?.[Symbol.dispose]?.();
   const open = async (): Promise<SessionStub> => {
     const stub = (await webSocketSessionOverEgress(itx, url, headers)) as SessionStub;
     stub.onRpcBroken?.(() => {
@@ -49,13 +56,28 @@ export async function connectToCapnweb(
     });
     return stub;
   };
+  const reopen = async (): Promise<SessionStub> => {
+    const startedIn = generation;
+    try {
+      const opened = await open();
+      if (startedIn !== generation) {
+        dispose(opened);
+        throw new Error("capnweb connection closed while it was reconnecting");
+      }
+      session = opened;
+      return opened;
+    } finally {
+      reopening = undefined;
+    }
+  };
   session = await open();
   return new CapnwebConnection(
-    () => session ?? open().then((opened) => (session = opened)),
+    () => session ?? (reopening ??= reopen()),
     () => {
+      generation += 1;
       const gone = session;
       session = undefined;
-      (gone as unknown as { [Symbol.dispose]?: () => void } | undefined)?.[Symbol.dispose]?.();
+      dispose(gone);
     },
   );
 }

@@ -84,3 +84,27 @@ test("the first door read FAILING disposes the row it just configured — no cal
   ).rejects.toThrow("door down");
   expect(disposals).toBe(1);
 });
+
+test("an abort while the FIRST seed is still pending (a component unmounting) recalls the row just configured and rejects the connect — a door that never answers leaves nothing lent", async () => {
+  let disposals = 0;
+  const itx = {
+    async subscribe() {
+      return {
+        [Symbol.dispose]() {
+          disposals += 1;
+        },
+      };
+    },
+  };
+  const unmounted = new AbortController();
+  const connecting = connectLiveState(itx, {
+    key: "k",
+    door: () => new Promise<Seed>(() => {}), // never answers
+    signal: unmounted.signal,
+  });
+  await settle();
+  expect(disposals).toBe(0); // configured, waiting on the seed
+  unmounted.abort();
+  await expect(connecting).rejects.toThrow(/aborted/); // the signal's own reason (a DOMException)
+  expect(disposals).toBe(1);
+});

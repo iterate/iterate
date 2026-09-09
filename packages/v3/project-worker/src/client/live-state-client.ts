@@ -45,6 +45,9 @@ export async function connectLiveState<S>(
     /** Called after each gap heal attempt: "healed" on a fresh seed, the error when the door read
      *  failed (the store keeps its last value; the next delta retries). */
     onResync?: (result: "healed" | Error) => void;
+    /** Abort while the FIRST seed is still pending (a component unmounting): the row just configured
+     *  is recalled and the connect rejects — a door that never answers leaves nothing lent. */
+    signal?: AbortSignal;
   },
 ): Promise<LiveStateConnection<S>> {
   const store = createLiveStateStore<S>();
@@ -94,7 +97,21 @@ export async function connectLiveState<S>(
     },
   });
   try {
-    store.seed(await opts.door());
+    const seed = opts.door();
+    const { signal } = opts;
+    const aborted =
+      signal &&
+      new Promise<never>((_, reject) => {
+        const abort = () =>
+          reject(
+            signal.reason ??
+              new Error("connectLiveState: aborted while the first seed was pending"),
+          );
+        if (signal.aborted) abort();
+        else signal.addEventListener("abort", abort, { once: true });
+      });
+    if (aborted) seed.catch(() => undefined); // the door may still settle after the abort — quietly
+    store.seed(await (aborted ? Promise.race([seed, aborted]) : seed));
   } catch (error) {
     // The seed failed after the row was configured: recall it, or the server keeps delivering to a
     // callback no one holds (and the session's other rows wait behind it).

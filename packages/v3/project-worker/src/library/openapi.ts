@@ -204,11 +204,13 @@ function listOperations(spec: OpenApiDocument): OpenApiOperation[] {
         operationId: op.operationId,
         method,
         path,
-        parameters: [...pathParameters, ...own].map(({ name, in: location, required }) => ({
-          name,
-          in: location,
-          required,
-        })),
+        // An operation's parameter OVERRIDES the path item's of the same (name, in) — the spec's rule.
+        parameters: [
+          ...pathParameters.filter(
+            (inherited) => !own.some((o) => o.name === inherited.name && o.in === inherited.in),
+          ),
+          ...own,
+        ].map(({ name, in: location, required }) => ({ name, in: location, required })),
         hasRequestBody: op.requestBody != null,
         ...(typeof op.summary === "string" && { summary: op.summary }),
       });

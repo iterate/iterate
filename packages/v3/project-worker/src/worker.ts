@@ -271,9 +271,21 @@ export default {
           });
       }
       // No cookie reaches the capability: every cookie on the platform host is the platform's own.
-      return env.ITERATE_CONTEXT.getByName(address.name).fetch(
+      const response = await env.ITERATE_CONTEXT.getByName(address.name).fetch(
         laneRequestTo(request, { itxExpression, hops, appCookies: null, identity }),
       );
+      if (response.status === 101) return response;
+      // The answer is LOADED code's, served on the PLATFORM's origin: a document it returns must not
+      // run as this origin (its script would reach `/api` with the visitor's session cookie — every
+      // project the visitor can reach). A CSP sandbox gives it an opaque origin: scripts and forms
+      // run, cookies and same-origin authority do not. An app that needs an origin is a project host.
+      const headers = new Headers(response.headers);
+      headers.set("content-security-policy", "sandbox allow-scripts allow-forms");
+      return new Response(response.body, {
+        status: response.status,
+        statusText: response.statusText,
+        headers,
+      });
     }
 
     // Everything else on the platform host is the CONTROL PLANE, in-process (src/control-plane): login

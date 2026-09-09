@@ -40,10 +40,12 @@ export function useLiveState<S>(
     const door = doorRef.current; // pinned to THIS key/session for the connection's whole life
     let disposed = false;
     let dispose: (() => Promise<void>) | undefined;
+    const unmounted = new AbortController(); // an unmount while the first seed is pending recalls the row
     connectLiveState<S>(itx, {
       key: opts.key,
       name: opts.name,
       door,
+      signal: unmounted.signal,
       onResync: (r) => {
         if (disposed) return;
         if (r === "healed") {
@@ -73,6 +75,7 @@ export function useLiveState<S>(
     );
     return () => {
       disposed = true;
+      unmounted.abort();
       void dispose?.();
     };
   }, [itx, opts.key, opts.name]);

@@ -575,3 +575,34 @@ describe("ephemeral windows and repair", () => {
     expect((await engine.snapshot()).state.n).toBe(3);
   });
 });
+
+describe("version bump re-reduce — a reducer that throws", () => {
+  test("an event the OLD version accepted and the NEW version's reducer rejects is skipped (reported) — the replay finishes and the new checkpoint is written, instead of failing every incarnation before it", async () => {
+    const mem = memoryStream();
+    const storage = memoryStorage();
+    const effects: string[] = [];
+    const p1 = makeVersioned(mem, storage, "1.0.0", effects);
+    mem.stream.append({ type: "e" }, { type: "e" }, { type: "e" }) as StreamEvent[];
+    await p1.catchUpFromLog(); // v1 reduced and processed 1..3
+    const Contract = contractOf("vbump", "2.0.0", ["e"]);
+    const p2 = new ProcessorEngine(
+      new (class extends StreamProcessor<{ n: number }> {
+        readonly contract = Contract;
+        override reduce({ event, state }: ReduceArgs<{ n: number }>) {
+          if (event.offset === 2) throw new Error("v2 rejects what v1 accepted");
+          return { n: state.n + 1 };
+        }
+        override processEvent(): undefined {}
+        override projectLiveState() {
+          return null;
+        }
+      })(),
+      { stream: mem.stream, storage },
+    );
+    // The replay is reduce-only over 1..3: offset 2 is skipped (kept state), the rest reduce.
+    expect((await p2.snapshot()).state.n).toBe(2);
+    // …and it happened ONCE: the checkpoint now carries v2, so a fresh incarnation replays nothing.
+    const p3 = makeVersioned(mem, storage, "2.0.0", effects);
+    expect((await p3.snapshot()).state.n).toBe(2);
+  });
+});

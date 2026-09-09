@@ -4315,3 +4315,34 @@ miniflare for the lane, node for the library), then applied by the same agent:
   `PRAGMA defer_foreign_keys`, the FKs intact), `APP_CONFIG_SESSION_SECRET` rotated into a wrangler
   secret and its var deleted. DEPLOYED (24c1c6d8a, version aa522bf4): 50 files / 202 passed / 4
   expected-fail — ALL GREEN, the first full deployed run without the kv-list platform reset.
+
+## 2026-09-09 — review pass 5: the closing codex read (gpt-6-astra, xhigh) over the finished tree
+
+Five bugs, one cut, one clarity item; every claim verified in the code first.
+
+- BUG (the trust-boundary one): an `/expression` answer is LOADED code's, served on the PLATFORM's
+  origin — a document it returned ran as that origin, and its script could reach `/api` with the
+  visitor's session cookie (every project the visitor can reach, in email mode). The lane now sets
+  `Content-Security-Policy: sandbox allow-scripts allow-forms` on every non-upgrade answer: an opaque
+  origin, scripts and forms run, cookies and same-origin authority do not. An app that needs an origin
+  is a project host. e2e pin on the header.
+- BUG: a capnweb WebSocket connection reopened once PER CONCURRENT CALLER after its session was gone
+  (`session ?? open()`), every socket but the last assigned leaked. ONE reopen in flight, shared; a
+  reopen that lands after a close disposes what it opened. (The transport needs workerd's
+  WebSocketPair — the e2e WS lane proves it; no unit pin for the race itself.)
+- BUG: the version-bump replay called the reducer RAW while the live flow guards it — an event the old
+  version accepted and the new one rejects failed the catch-up before the new checkpoint was written,
+  every incarnation. ONE guarded reduce (`#reduceOrKeep`) for both paths; the replay pin skips the
+  offending offset once and writes the checkpoint.
+- BUG (codex called it complex; it is an AbortSignal): a component unmounting while the first live-state
+  seed was still pending left the row it had just configured lent until the session ended. `connectLiveState`
+  takes `signal`; the React hook aborts on unmount; the row is recalled and the connect rejects. Unit pin.
+- BUG: an OpenAPI operation's parameter did not OVERRIDE the path item's of the same (name, in) — a
+  required path-level `limit` re-declared optional on the operation still refused the call. Table row.
+- CLARITY: the MCP `create_project` tool said it creates an org; it creates a project in the user's
+  first org, creating that org only when there is none.
+- DECLINED: the directory's five result projections (−4 LOC) — they are the public shape of what a
+  session hands a client, not a restatement of the SQL rows.
+- The three calls codex hands the owner: where email-mode `serveMcp` admission belongs (ingress or the
+  mount); an aggregate memory ceiling for cursor delivery and concurrent readers; whether handles
+  promise durable ownership across pauses and identical replacements.

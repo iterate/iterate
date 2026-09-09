@@ -122,6 +122,14 @@ test("a hop count the platform never wrote (an app spelling `NaN` to defeat the 
   expect(await response.text()).toContain('"NaN"');
 });
 
+test("an /expression answer is CSP-sandboxed: loaded code's document runs on an opaque origin, never as the platform origin that holds the visitor's session", async () => {
+  const response = await fetch(expressionUrl(freshCtx("lane-sandbox"), "itx.whoami"), {
+    signal: AbortSignal.timeout(8000),
+  });
+  expect(response.status).toBe(200);
+  expect(response.headers.get("content-security-policy")).toBe("sandbox allow-scripts allow-forms");
+});
+
 test("deleted routes fall through to the control plane's 404 — /call, /ws and /cap answer Not found, a WebSocket upgrade to /ws gets no 101", async () => {
   // The fetch door is /expression and nothing else: the old /call, /ws and /cap routes are gone and
   // land on the in-process control plane's catch-all (a plain 404 — never a 500), and an upgrade
