@@ -1,5 +1,3 @@
-import { Text } from "@codemirror/state";
-import { attributedChanges } from "@iterate-com/workspace-documents/attribution";
 import { countOccurrences, replaceLiteralOccurrences } from "../repos/edit-utils.ts";
 import { resolveAbsolutePath } from "./paths.ts";
 import type { EditWorkspaceFileInput, EditWorkspaceFileResult } from "./types.ts";
@@ -49,14 +47,6 @@ export interface CollabSessionStore extends CollabStore {
   hasSession(path: string): boolean;
   /** Record that `version` is settled into the overlay (epoch-conditional). */
   markFlushed(path: string, version: number, epoch?: string): void;
-  /** ONE atomic transition for every baseline a commit stamps — partial
-   * multi-file advancement after a crash is unrepresentable. Entries whose
-   * session ended (or rotated epoch) are skipped, never mis-stamped. */
-  setBases(files: { content: string; epoch: string; path: string; version: number }[]): void;
-  /** The redline baseline: seed content at birth, re-stamped at each commit
-   * (via setBases). Retention keeps ops back to this version, so tracked
-   * changes are always reconstructable — the op log IS the redline data. */
-  getBase(path: string): { content: string; version: number } | null;
   /** Delete the session, its snapshot, its ops, and its base — the durable end. */
   endSession(path: string): void;
 }
@@ -67,17 +57,6 @@ export interface CollabSessionStore extends CollabStore {
 export interface CollabPresenceFlat {
   clientIds: string[];
   paths: string[];
-}
-
-/** Attributed tracked changes since the last commit: author-tagged inserted
- * spans and deleted-text markers in current-head coordinates, plus the ONE
- * baseline both redline layers render against. */
-export interface CollabChangesResult {
-  baseContent: string;
-  baseVersion: number;
-  deleted: { at: number; clientId: string; createdAt?: number; text: string }[];
-  headVersion: number;
-  inserted: { clientId: string; createdAt?: number; from: number; to: number }[];
 }
 
 /** One settled file from a reconcile barrier — exactly what a commit that
@@ -101,9 +80,6 @@ const PRESENCE_WAKE_COALESCE_MS = 100;
 const PRESENCE_STALE_MS = 45_000;
 /** Sweeps are periodic housekeeping, not per-keystroke work. */
 const SWEEP_INTERVAL_MS = 60_000;
-/** Ops retained since the last commit; past this, pushes refuse until a
- * commit prunes (redline work and storage stay bounded). */
-const MAX_UNCOMMITTED_OPS = 10_000;
 
 export class CollabHost {
   readonly #fs: CollabSettledFs;
@@ -263,8 +239,7 @@ export class CollabHost {
     const input = { ...raw, path: CollabHost.canonical(raw.path) };
     this.#touch(input.path);
     this.#assertLive(input.path);
-    const head = await this.#opened(input.path);
-    this.#assertQuota(input.path, head.version);
+    await this.#opened(input.path);
     return this.#engine.push(input);
   }
 
@@ -410,8 +385,7 @@ export class CollabHost {
   async writeFile(rawPath: string, content: string, author?: string): Promise<boolean> {
     const path = CollabHost.canonical(rawPath);
     if (!this.isLive(path)) return false;
-    const head = await this.#opened(path);
-    this.#assertQuota(path, head.version);
+    await this.#opened(path);
     await this.#engine.applyExternal(path, (doc) => minimalSplice(doc, content), author);
     return true;
   }
@@ -423,8 +397,7 @@ export class CollabHost {
     if (typeof input.oldString !== "string" || input.oldString === "") {
       throw new Error("edit oldString must be a non-empty string.");
     }
-    const head = await this.#opened(input.path);
-    this.#assertQuota(input.path, head.version);
+    await this.#opened(input.path);
     let occurrenceCount = 0;
     await this.#engine.applyExternal(input.path, (doc) => {
       const content = doc.toString();
@@ -459,9 +432,7 @@ export class CollabHost {
    * re-dirty on the next flush (same contract as a live barrier).
    *
    * Returns every live session's settled state as of this barrier — a commit
-   * that follows contains exactly these; pass them to {@link markCommitted}
-   * so redline baselines advance to what was actually committed, never
-   * swallowing post-barrier keystrokes.
+   * that follows contains exactly these.
    */
   reconcile(): Promise<SettledFile[]> {
     return this.#exclusive(() => this.#settleAll());
@@ -470,12 +441,10 @@ export class CollabHost {
   async #settleAll(): Promise<SettledFile[]> {
     // WRITE only dirty sessions (flushing a clean one would pin its seed
     // over a mount HEAD that moved since), but REPORT every live session:
-    // a commit that follows contains work the debounce already settled, and
-    // its baseline must advance too or changes() keeps showing committed
-    // text and the uncommitted-ops quota never resets. Clean sessions are
-    // reported at their OVERLAY state (settled content + overlay version),
-    // never the live head — a push racing this loop stays above the stamped
-    // baseline and in the redline, exactly like a post-barrier keystroke.
+    // a commit that follows contains work the debounce already settled.
+    // Clean sessions are reported at their OVERLAY state (settled content +
+    // overlay version), never the live head — a push racing this loop is
+    // simply the next flush's work, exactly like a post-barrier keystroke.
     const settled: SettledFile[] = [];
     for (const session of this.#store.sessions()) {
       if (session.headVersion > session.overlayVersion) {
@@ -504,23 +473,15 @@ export class CollabHost {
   }
 
   /**
-   * THE commit fence: settle every session, run the commit, and stamp the
-   * committed mount's baselines — as ONE coordinated job. No debounce flush,
-   * open, configure, or destructive op can interleave, so the committed
-   * overlay, the stamped baselines, and the barrier snapshot are one state.
+   * THE commit fence: settle every session, then run the commit — as ONE
+   * coordinated job. No debounce flush, open, configure, or destructive op
+   * can interleave, so the committed overlay and the barrier snapshot are
+   * one state.
    */
-  async commitBarrier<T extends { mount?: string }>(
-    runCommit: () => Promise<T>,
-    ownsPath: (path: string, mount: string) => boolean,
-  ): Promise<T> {
+  async commitBarrier<T>(runCommit: () => Promise<T>): Promise<T> {
     return this.#exclusive(async () => {
-      const settled = await this.#settleAll();
-      const result = await runCommit();
-      if (result.mount !== undefined) {
-        const mount = result.mount;
-        this.#store.setBases(settled.filter((file) => ownsPath(file.path, mount)));
-      }
-      return result;
+      await this.#settleAll();
+      return runCommit();
     });
   }
 
@@ -530,54 +491,6 @@ export class CollabHost {
       await this.#settleAll();
       return operation();
     });
-  }
-
-  /**
-   * Attributed tracked changes since the last commit (or session birth):
-   * a pure fold of the retained op log over the stored baseline.
-   */
-  async changes(rawPath: string): Promise<CollabChangesResult> {
-    const path = CollabHost.canonical(rawPath);
-    this.#assertLive(path);
-    const head = await this.#opened(path);
-    const base = this.#store.getBase(path);
-    if (base === null) throw new Error(`no redline base recorded for ${path}`);
-    const ops = await this.#store.readOps(path, head.epoch, base.version - 1);
-    const segments = attributedChanges(Text.of(base.content.split("\n")), ops);
-    // Two plain arrays on the wire (a union array breaks the generated
-    // capnweb promise-mapped types); consumers re-interleave by position.
-    return {
-      // ONE baseline for both redline layers: the merge view diffs against
-      // the same content the attribution folded from — never two sources
-      // that can diverge under head motion or an interrupted commit.
-      baseContent: base.content,
-      baseVersion: base.version,
-      deleted: segments.flatMap((segment) =>
-        segment.kind === "deleted"
-          ? [
-              {
-                at: segment.at,
-                clientId: segment.clientId,
-                createdAt: segment.createdAt,
-                text: segment.text,
-              },
-            ]
-          : [],
-      ),
-      headVersion: head.version,
-      inserted: segments.flatMap((segment) =>
-        segment.kind === "inserted"
-          ? [
-              {
-                clientId: segment.clientId,
-                createdAt: segment.createdAt,
-                from: segment.from,
-                to: segment.to,
-              },
-            ]
-          : [],
-      ),
-    };
   }
 
   /** Durably end sessions (destructive ops: delete/byte-write/reset/revert).
@@ -637,8 +550,8 @@ export class CollabHost {
 
   /**
    * Settle one session and return EXACTLY what was settled. The head is
-   * captured ONCE — a push accepted mid-flush stays unflushed (and in the
-   * redline) rather than being stamped as committed — and the destruction
+   * captured ONCE — a push accepted mid-flush stays unflushed rather than
+   * being reported as settled — and the destruction
    * generation is re-checked after every await so an in-flight flush can
    * never resurrect a path a destructive op just ended.
    */
@@ -694,18 +607,5 @@ export class CollabHost {
 
   #assertLive(path: string): void {
     if (!this.isLive(path)) throw new Error(`no live session for ${path} — open first`);
-  }
-
-  /** "Bounded by commit cadence" needs an actual bound on EVERY acceptance
-   * lane (browser pushes AND the agent gateway): past the quota the session
-   * refuses new ops until a commit advances the baseline (which prunes).
-   * Typed and loud — never silent unbounded growth. */
-  #assertQuota(path: string, headVersion: number): void {
-    const base = this.#store.getBase(path);
-    if (base !== null && headVersion - base.version >= MAX_UNCOMMITTED_OPS) {
-      throw new Error(
-        `retention quota: ${path} has ${headVersion - base.version} uncommitted ops — commit to continue`,
-      );
-    }
   }
 }

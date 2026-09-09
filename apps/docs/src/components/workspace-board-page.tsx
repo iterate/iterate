@@ -53,7 +53,7 @@ export type BoardSearch = {
  * The tasks board on the WORKSPACE mechanism: every read and write is the
  * platform workspace — the overlay is the diff, commits are workspace
  * commits, and the detail editor is the live rebase-model collab session
- * with redlines. Mounted by the /w route on an existing workspace of any
+. Mounted by the /w route on an existing workspace of any
  * path (plain get: the board home creates a scratch workspace before it
  * opens one there). On a workspace the app doesn't own the page is a GUEST lens: read,
  * comment, edit — the owner acts (Commit, Discard all, Assign agent) stay
@@ -80,12 +80,10 @@ export function WorkspaceBoardPage({
   // Bumped on revert: the platform ends the file's session, so the open
   // editor must remount and reseed from the reverted content.
   const [editorEpoch, setEditorEpoch] = useState(0);
-  // Track changes (redlines) is a board-level setting, default on.
-  const [trackChanges, setTrackChanges] = useState(true);
   // A just-created task: the editor opens with the headline selected and the
   // filename trails the title — settled at REST POINTS (sheet close, commit),
   // never mid-typing: on this lane a rename is write+delete, which ends the
-  // file's collab session and wipes its redline fold, so renaming under the
+  // file's collab session, so renaming under the
   // open editor forced a remount that flashed the sheet and dropped the marks.
   const [draftPath, setDraftPath] = useState<string | null>(null);
   /** Fresh draft only: the editor opens with the headline selected so typing
@@ -278,13 +276,10 @@ export function WorkspaceBoardPage({
         const result = await board.commit(
           message?.trim() || fallbackCommitMessage(boardRef.current.taskChanges, "tasks"),
         );
-        // The redline baseline advanced: reseat an open editor so committed
-        // work stops wearing marks (same lever revert/discard use). The
-        // commit also ends any draft — the reseat must not replay its
-        // focus intent.
+        // The commit ends any draft; the open editor stays put (a commit
+        // changes nothing it shows).
         setDraftPath(null);
         draftFocusRef.current = undefined;
-        if (searchTaskRef.current !== "") setEditorEpoch((current) => current + 1);
         return result;
       } catch (cause) {
         setActionError(`commit failed: ${cause instanceof Error ? cause.message : String(cause)}`);
@@ -519,8 +514,6 @@ export function WorkspaceBoardPage({
                   group: next === null ? "none" : next === "label" ? "label" : "folder",
                 })
               }
-              trackChanges={trackChanges}
-              onChangeTrackChanges={setTrackChanges}
             />
           </div>
           <div className="sm:hidden">
@@ -604,7 +597,6 @@ export function WorkspaceBoardPage({
           openTask === null ? Promise.resolve(null) : renameTask(openTask, nextPath)
         }
         editorEpoch={editorEpoch}
-        redline={trackChanges}
         editorApiRef={editorApiRef}
         commentIdentity={commentIdentity}
         onApplyTransform={(transform) => {

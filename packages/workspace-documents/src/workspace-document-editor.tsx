@@ -24,7 +24,6 @@ export function WorkspaceDocumentEditor({
   mode = "markdown",
   presentation = "source",
   review,
-  redline,
   emptyPlaceholder = "Write in Markdown…",
   focusHeadline,
   onLiveContent,
@@ -42,7 +41,6 @@ export function WorkspaceDocumentEditor({
   mode?: "html" | "markdown";
   presentation?: "rich" | "source";
   review?: EditorReviewConfig;
-  redline: boolean;
   emptyPlaceholder?: string;
   focusHeadline?: "select" | "end" | { caret: number };
   apiRef?: { current: CollabEditorApi | null };
@@ -121,7 +119,6 @@ export function WorkspaceDocumentEditor({
     onStatus,
     path,
     workspacePath,
-    redline,
     transport,
   });
 

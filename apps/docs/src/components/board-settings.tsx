@@ -1,6 +1,5 @@
 import { SlidersHorizontalIcon } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
-import { Checkbox } from "@iterate-com/ui/components/checkbox";
 import { Popover, PopoverContent, PopoverTrigger } from "@iterate-com/ui/components/popover";
 import type { RowField } from "../lib/board-model.ts";
 import { WithTooltip } from "./board-header.tsx";
@@ -15,13 +14,9 @@ const GROUPINGS: { label: string; value: RowField }[] = [
 export function BoardSettings({
   grouping,
   onChangeGrouping,
-  trackChanges,
-  onChangeTrackChanges,
 }: {
   grouping: RowField;
   onChangeGrouping: (value: RowField) => void;
-  trackChanges: boolean;
-  onChangeTrackChanges: (value: boolean) => void;
 }) {
   return (
     <Popover>
@@ -54,19 +49,6 @@ export function BoardSettings({
               {option.label}
             </button>
           ))}
-        </div>
-        <div className="mt-2 border-t pt-2">
-          <label
-            htmlFor="track-changes-toggle"
-            className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-accent"
-          >
-            <Checkbox
-              id="track-changes-toggle"
-              checked={trackChanges}
-              onCheckedChange={(next) => onChangeTrackChanges(next === true)}
-            />
-            Track changes
-          </label>
         </div>
       </PopoverContent>
     </Popover>
