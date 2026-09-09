@@ -674,9 +674,13 @@ it("recovers an empty-body POST (Content-Length: 0) after clone-version skew", a
   // body. That must still replay, or the POST 500s where the same GET recovers.
   const workerFetch = vi
     .fn()
-    .mockRejectedValueOnce(
-      new Error("Unable to deserialize cloned data due to invalid or unsupported version."),
-    )
+    // The first dispatch hands the empty stream to the isolate (consuming it)
+    // before the skew — a clone() of the used body would then throw, so the
+    // retry must rebuild the request instead.
+    .mockImplementationOnce(async (received: Request) => {
+      await received.text();
+      throw new Error("Unable to deserialize cloned data due to invalid or unsupported version.");
+    })
     .mockResolvedValueOnce(new Response("recovered"));
   h.resolveWorkerSource.mockResolvedValue({
     ok: true,

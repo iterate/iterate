@@ -371,10 +371,18 @@ export class DynamicWorkerRunner {
         traceRole,
       });
       try {
-        // Cloudflare's clone() widens the Request metadata generics even though
-        // the runtime value stays the same Fetch API request; the request is
-        // bodyless here, so the clone is a cheap header/URL copy.
-        return await dispatch(request.clone() as typeof request, crypto.randomUUID());
+        // Rebuild the request rather than clone() it: the caller only reaches
+        // here for a null- or empty-body request, and the first dispatch may
+        // already have handed that empty stream to the isolate — clone() on a
+        // used body throws, which would defeat the retry. A fresh request from
+        // the method, URL, and headers carries everything the gate needs (the
+        // body was empty) and never touches a stream.
+        const retryRequest = new Request(request.url, {
+          headers: request.headers,
+          method: request.method,
+          redirect: request.redirect,
+        }) as typeof request;
+        return await dispatch(retryRequest, crypto.randomUUID());
       } catch (error) {
         lastError = error;
         if (!isWorkerRpcCloneVersionError(error)) throw error;
