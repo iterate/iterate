@@ -359,12 +359,13 @@ const base64url = (bytes: Uint8Array): string =>
  *  /oauth/register (a public client), /authorize as the cookie's user — `choose` narrows the
  *  projects the consent page offers (all of them, checked, by default) — and the code exchanged at
  *  /oauth/token. Returns the access token and the ids the consent page offered. */
-async function grantFlow(
+/** The flow's first half: DCR at /oauth/register (a public client) and the /authorize query with a
+ *  fresh PKCE pair — what a consent page is asked with, and what a refusal is asked with. */
+async function authorizeQuery(
   mode: Record<string, unknown>,
-  cookie: string,
-  options: { resource?: string; choose?: (offered: string[]) => string[] } = {},
-): Promise<{ accessToken: string; offered: string[] }> {
-  const registered = (await (
+  options: { resource?: string } = {},
+): Promise<{ client: { client_id: string }; verifier: string; query: URLSearchParams }> {
+  const client = (await (
     await call(mode, "/oauth/register", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -381,7 +382,7 @@ async function grantFlow(
   );
   const query = new URLSearchParams({
     response_type: "code",
-    client_id: registered.client_id,
+    client_id: client.client_id,
     redirect_uri: REDIRECT_URI,
     scope: "project",
     state: "s1",
@@ -389,6 +390,15 @@ async function grantFlow(
     code_challenge_method: "S256",
     ...(options.resource && { resource: options.resource }),
   });
+  return { client, verifier, query };
+}
+
+async function grantFlow(
+  mode: Record<string, unknown>,
+  cookie: string,
+  options: { resource?: string; choose?: (offered: string[]) => string[] } = {},
+): Promise<{ accessToken: string; offered: string[] }> {
+  const { client: registered, verifier, query } = await authorizeQuery(mode, options);
   const consent = await call(mode, `/authorize?${query}`, { headers: { cookie } });
   expect(consent.status).toBe(200);
   const offered = [
@@ -651,17 +661,11 @@ test("the admin secret as the bearer: whoami is { actor: 'admin' }, list_project
   ).toBe(401);
 });
 
-test("a token bound to another resource is refused at /mcp: the provider issues it (0.8.3 does not pin /authorize to the configured resource) and its audience check refuses it with 401", async () => {
+test('a token for another resource is never issued: /authorize with a foreign `resource` is answered by the provider\'s own "Invalid authorization request" page (200, no consent, no code) — the one pinned resource is `<origin>/mcp`, so no bearer for another can ever reach /mcp', async () => {
   const cookie = await signIn(workersLaneEnv, "oauth-other@example.com");
-  const { accessToken } = await grantFlow(workersLaneEnv, cookie, {
-    resource: "https://other.test/mcp",
-  });
-  const refused = await mcp(
-    workersLaneEnv,
-    "tools/list",
-    {},
-    { authorization: `Bearer ${accessToken}` },
-  );
-  expect(refused.status).toBe(401);
-  expect(refused.headers.get("www-authenticate")).toContain("Invalid audience");
+  const { query } = await authorizeQuery(workersLaneEnv, { resource: "https://other.test/mcp" });
+  const consent = await call(workersLaneEnv, `/authorize?${query}`, { headers: { cookie } });
+  const body = await consent.text();
+  expect(body).toContain("Invalid authorization request");
+  expect(body).not.toMatch(/name="project"/); // no consent form was rendered
 });

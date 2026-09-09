@@ -4466,3 +4466,30 @@ pin naming its mechanism, or declined with the reason above. The red pins are th
   red was the fan-out row's recovery call meeting the platform's backpressure ("Durable Object is
   overloaded. Requests queued for too long." — a draining queue, not poisoning); the row now retries
   the recovery through that message for a few seconds.
+
+## 2026-09-09 — auth, steps 2 and 3: the project secret and mintToken; ONE MCP server at /mcp; the provider at 0.10.3
+
+- STEP 2 (67de6adb9): `projects.get(project).rotateApiKey()` — 32 random bytes, only the SHA-256 hash
+  stored (`project-api-key:<projectId>` in SECRETS_KV, outside the `secret:` prefix so no egress
+  placeholder can substitute it), the key returned once; a reveal IS a rotation. No birth key: with
+  hash-only storage a key nobody was shown is dead weight — a person reveals one before provisioning
+  a device, which is the kit's own flow. `authenticate({ type: "project-secret" })` is a session bound
+  to that one project; a project host and `/expression` accept the key as a bearer (the device lane);
+  `mintToken({ ttlSeconds? })` signs a project token as the caller; the console links each project's
+  host through `/.itx/session`. A bound session's `list()` is its one project.
+- STEP 3 (same commit): ONE `/mcp` for every project. The provider built per request with one pinned
+  resource (`<origin>/mcp`), `/oauth/token`, `/oauth/register`, CIMD on, PKCE S256; consent IS the
+  project selection (`props.projects`); the tools `whoami`, `list_projects`, `create_project`,
+  `itx.invoke({ project?, expression, args? })` — run through that project's context in-process under
+  the caller's principal, apps/os's `resolveToolProject` rule for `project`; `resolveExternalToken`
+  takes the admin secret and a project secret. `itx.serveMcp()`, its e2e and the email-mode red pin
+  deleted — no unauthenticated MCP door remains. A full DCR + code + PKCE flow is pinned in the
+  workers lane. Net −3 lines of code and tests for the two steps together.
+- THE PROVIDER AT 0.10.3 (1d1cba980, the lockfile splice; the package had resolved 0.8.3 while the
+  config was written against 0.10.3): 0.10.3 refuses a foreign `resource` at `/authorize`; 0.8.3
+  issued the token and refused it at the door. The stronger guarantee is what the pinned resource
+  is for; the row that pinned 0.8.3's behaviour is repinned on 0.10.3's.
+- GATES: tsc ×3 · oxlint · knip · unit 19 files / 499 passed · workers 11 files / 51 passed / 8
+  expected-fail (the repinned row green) · `pnpm test` 51 files / 731 passed. DEPLOYED (version
+  b7da64e4, on 0.10.3): 22 files / 196 passed / 4 expected-fail — ALL GREEN.
+- REVIEW ROUNDS running: correctness + security, and simplification + cleanup, over the three commits.
