@@ -23,11 +23,17 @@ COPY of the project's one path namespace, for agents and tooling.
   clears an overlay. `"/"` is never a mount.
 - **Birth is explicit.** `itx.workspaces.get(path)` only addresses a possibly
   nonexistent handle. `await handle.create({ mounts? })` appends one atomic
-  batch: the existence marker, an optional initial overlay patch, and the
-  Workspace processor subscription. Filesystem and configuration methods
-  reject loudly before creation; no read, write, or first touch can birth a
-  workspace. Agent creation explicitly creates the agent's own workspace
-  before the agent handle is returned.
+  batch: the existence marker, an optional initial overlay patch, the
+  Workspace processor subscription, and a `workspace-catalog` subscription
+  that copies `workspace/created` to the project root `/`. Filesystem and
+  configuration methods reject loudly before creation; no read, write, or
+  first touch can birth a workspace. Agent creation explicitly creates the
+  agent's own workspace before the agent handle is returned.
+- **`itx.workspaces.list()` reads the project catalog.** The project reducer
+  records each copied `workspace/created` under its source path (the same
+  `repo-catalog` shape repos use), so the list holds exactly the workspaces
+  that were born — a nested agent workspace never drags never-created
+  ancestor streams into it.
 - **Private files live under the workspace's own path.** The workspace's
   stream path doubles as its scratch directory: writable, never committable,
   invisible to everyone else. RELATIVE paths resolve there. Writes anywhere
@@ -68,7 +74,9 @@ namespace is simply dropped; only the class/binding names carry the scar.
 - **No branch mode.** `policy: "branch"` (workspace branch + auto-draft-PR on
   GitHub-linked repos, commit synthesis via GitHub's Git Database API) is the
   next policy value; today big imported repos deviate to `read-only`.
-- **`listAllFiles`/`glob` still enumerate every mount.** With many or huge
+- **`listAllFiles` still enumerates every mount** (`glob` no longer does: it
+  lists only the subtree its pattern's literal prefix can match, so a glob
+  under `/repos/config` never pulls a big sibling mount). With many or huge
   repos mounted that is a full `listFiles` per repo; per-mount lazy listing
   is the follow-up if it hurts. Status and commit inference already skip
   clean mounts.

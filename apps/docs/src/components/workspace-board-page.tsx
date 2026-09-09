@@ -5,9 +5,11 @@ import { Button } from "@iterate-com/ui/components/button";
 import { commentIdentityFor } from "@iterate-com/workspace-documents/identity";
 import type { CollabEditorApi } from "@iterate-com/workspace-documents/editor-api";
 import { authorColor, authorLabel } from "@iterate-com/workspace-documents/collab";
+import { fallbackCommitMessage } from "@iterate-com/workspace-documents/change-summary";
+import { CommitControls } from "@iterate-com/workspace-documents/commit-controls";
+import { useCommit } from "@iterate-com/workspace-documents/use-commit";
 import { useWorkspaceBoard } from "../lib/use-workspace-board.ts";
-import { whoami, withProject, workspaceFor } from "../lib/project-rpc.ts";
-import { useTaskCommit } from "../lib/use-task-commit.ts";
+import { whoami, withProject } from "../lib/project-rpc.ts";
 import { projectBoard } from "../lib/board-engine.ts";
 import {
   taskPathInFolder,
@@ -18,7 +20,6 @@ import {
 import { isGuestWorkspacePath, type BoardAddress } from "../lib/board-shared.ts";
 import {
   columnsForTasks,
-  fallbackCommitMessage,
   isTaskFilePath,
   newTaskFile,
   parseTaskCard,
@@ -27,6 +28,7 @@ import {
   taskColumnState,
   taskPathForTitle,
 } from "../tasks-model.ts";
+import { WorkspacePresence } from "./workspace-presence.tsx";
 import {
   BoardBreadcrumbs,
   FilterControl,
@@ -35,7 +37,7 @@ import {
   WithTooltip,
 } from "./board-header.tsx";
 import { BoardSettings } from "./board-settings.tsx";
-import { CommitControls, DeletedTasksStrip } from "./commit-controls.tsx";
+import { DeletedTasksStrip } from "./deleted-tasks-strip.tsx";
 import { StreamEventsSheet } from "./stream-events-sheet.tsx";
 import { WorkspaceTaskSheet } from "./workspace-task-sheet.tsx";
 import { Board } from "./board.tsx";
@@ -47,48 +49,13 @@ export type BoardSearch = {
   task: string;
 };
 
-/** The corner presence strip: everyone with this board open — yourself
- * included, ringed in your own author color, even when alone. */
-function BoardPresence({
-  self,
-  clients,
-}: {
-  self: { clientId: string; name: string } | null;
-  clients: { clientId: string; name: string }[];
-}) {
-  const everyone = [
-    ...(self !== null && !clients.some((client) => client.clientId === self.clientId)
-      ? [self]
-      : []),
-    ...clients,
-  ];
-  if (everyone.length === 0) return null;
-  return (
-    <div className="mr-1 flex items-center -space-x-1.5">
-      {everyone.slice(0, 6).map((client) => (
-        <span
-          key={client.clientId}
-          title={client.name}
-          style={{ borderColor: authorColor(client.clientId, 1) }}
-          className="flex size-6 items-center justify-center rounded-full border-2 bg-background text-[10px] font-semibold uppercase"
-        >
-          {client.name.trim().slice(0, 1) || "?"}
-        </span>
-      ))}
-      {everyone.length > 6 ? (
-        <span className="pl-2 text-xs text-muted-foreground">+{everyone.length - 6}</span>
-      ) : null}
-    </div>
-  );
-}
-
 /**
  * The tasks board on the WORKSPACE mechanism: every read and write is the
  * platform workspace — the overlay is the diff, commits are workspace
  * commits, and the detail editor is the live rebase-model collab session
- * with redlines. Mounted by both board routes: the app's own boards
- * (/w/<id>, lazily created) and the lens form (/w?workspace=, plain get).
- * On a workspace the app doesn't own the page is a GUEST lens: read,
+ * with redlines. Mounted by the /w route on an existing workspace of any
+ * path (plain get: the board home creates a scratch workspace before it
+ * opens one there). On a workspace the app doesn't own the page is a GUEST lens: read,
  * comment, edit — the owner acts (Commit, Discard all, Assign agent) stay
  * hidden, and publishing remains the workspace owner's call.
  */
@@ -105,12 +72,10 @@ export function WorkspaceBoardPage({
   patchSearch: (patch: Partial<BoardSearch>) => void;
 }) {
   const { repoPath, workspacePath } = address;
-  const guest = isGuestWorkspacePath(workspacePath, repoPath);
+  const guest = isGuestWorkspacePath(workspacePath);
   const board = useWorkspaceBoard(address);
-  // Auto-commit defaults OFF on the workspace board: every commit advances
-  // the redline baseline, and a 60s autosave would wipe "what everyone did"
-  // minute by minute. Committing is an explicit act here.
-  const [autoCommit, setAutoCommit] = useState(false);
+  // Owners auto-commit by default; guest views never publish another workspace.
+  const [autoCommit, setAutoCommit] = useState(true);
   const [eventsOpen, setEventsOpen] = useState(false);
   // Bumped on revert: the platform ends the file's session, so the open
   // editor must remount and reseed from the reverted content.
@@ -296,11 +261,11 @@ export function WorkspaceBoardPage({
     [board.taskChanges],
   );
 
-  const commit = useTaskCommit({
+  const commit = useCommit({
     // The workspace lane summarizes deterministically; an AI one-liner can
     // become a vessel capability later.
     api: {
-      generateCommitMessage: async ({ changes }) => fallbackCommitMessage(changes),
+      generateCommitMessage: async ({ changes }) => fallbackCommitMessage(changes, "tasks"),
     },
     enabled: autoCommit && !guest,
     onCommit: async (message) => {
@@ -311,7 +276,7 @@ export function WorkspaceBoardPage({
         // it — afterwards would leave a rename as instant new dirtiness.
         await settleDraft();
         const result = await board.commit(
-          message?.trim() || fallbackCommitMessage(boardRef.current.taskChanges),
+          message?.trim() || fallbackCommitMessage(boardRef.current.taskChanges, "tasks"),
         );
         // The redline baseline advanced: reseat an open editor so committed
         // work stops wearing marks (same lever revert/discard use). The
@@ -328,10 +293,8 @@ export function WorkspaceBoardPage({
         setCommitPending(false);
       }
     },
-    taskChangeSignature: board.taskChanges
-      .map((change) => `${change.status}:${change.path}`)
-      .join("|"),
-    taskChanges: board.taskChanges,
+    changeSignature: board.taskChanges.map((change) => `${change.status}:${change.path}`).join("|"),
+    changes: board.taskChanges,
   });
 
   const moveTask = useCallback(
@@ -522,14 +485,9 @@ export function WorkspaceBoardPage({
 
   return (
     <>
-      <header className="flex h-11 shrink-0 items-center gap-2 border-b bg-background px-3">
+      <header className="flex h-14 shrink-0 items-center gap-2 border-b bg-background px-3">
         <SidebarTrigger className="-ml-1 md:hidden" />
-        <BoardBreadcrumbs
-          workspace={
-            address.boardId !== null ? `/workspaces/tasks/${address.boardId}` : workspacePath
-          }
-          rootPath={repoPath}
-        />
+        <BoardBreadcrumbs workspace={workspacePath} rootPath={repoPath} />
         {guest && (
           <span
             className="shrink-0 rounded-md bg-sky-500/15 px-1.5 py-0.5 text-[10px] font-semibold tracking-wide text-sky-800 uppercase"
@@ -539,7 +497,7 @@ export function WorkspaceBoardPage({
           </span>
         )}
         <div className="ml-auto flex shrink-0 items-center gap-1.5">
-          <BoardPresence self={board.self} clients={board.boardClients} />
+          <WorkspacePresence self={board.self} clients={board.boardClients} />
           <div className="hidden items-center gap-1.5 sm:flex">
             <WithTooltip label="Stream events">
               <Button
@@ -666,7 +624,7 @@ export function WorkspaceBoardPage({
                   // durable assignment (and clean status) without waiting on
                   // a poll tick.
                   await withProject((project) =>
-                    workspaceFor(project, address).assignAgent(openTask.path),
+                    project.assignAgent({ workspacePath, repoPath, path: openTask.path }),
                   );
                   await board.refresh();
                 } catch (cause) {

@@ -110,6 +110,22 @@ type WorkspaceCoreOptions = {
 /** One mount resolved against a concrete path: mount point, mount, repo-relative path. */
 type ResolvedMount = { mount: WorkspaceMount; mountPath: string; repoRelativePath: string };
 
+/** Whether `path` is `ancestor` itself or lies below it (`/` is above everything). */
+export function isPathUnder(path: string, ancestor: string): boolean {
+  return ancestor === "/" || path === ancestor || path.startsWith(`${ancestor}/`);
+}
+
+// The directory a glob pattern can only ever match under: its literal lead
+// up to the last slash before the first glob magic — `/repos/config/**/*`
+// gives `/repos/config`, a bare `/**` gives `/`. What `listAllFiles({ under })`
+// gets. (A line comment: the example pattern would close a block comment.)
+export function literalDirectoryOfGlob(pattern: string): string {
+  const magic = pattern.search(/[*?[\]{}()!+@]/);
+  const literal = magic === -1 ? pattern : pattern.slice(0, magic);
+  const slash = literal.lastIndexOf("/");
+  return slash <= 0 ? "/" : literal.slice(0, slash);
+}
+
 /**
  * The workspace semantics as a host-agnostic library object: ONE private
  * copy-on-write local layer over a TABLE OF REPO MOUNTS.
@@ -480,11 +496,25 @@ export class WorkspaceCore {
    * the local layer plus each mount's HEAD tree, minus whiteouts. Paths under
    * no mount are the workspace's private scratch and appear too.
    */
-  async listAllFiles(): Promise<string[]> {
+  /**
+   * Every file of the merged view, or of ONE subtree with `under`: a mount
+   * outside that subtree is never enumerated. That is what keeps a glob
+   * scoped to `/repos/config/**` cheap with a big repo mounted beside it —
+   * the listing of a 40k-file mount IS the cost of every enumeration.
+   */
+  async listAllFiles(options: { under?: string } = {}): Promise<string[]> {
+    const under = options.under === undefined ? "/" : resolveAbsolutePath(options.under);
     const mounts = await this.#mounts();
-    const merged = new Set(await this.#localFilePaths());
+    const merged = new Set(
+      (await this.#localFilePaths()).filter((path) => isPathUnder(path, under)),
+    );
     for (const [mountPath, mount] of Object.entries(mounts)) {
-      for (const path of await this.#mountFilePaths(resolveAbsolutePath(mountPath), mount)) {
+      const resolvedMountPath = resolveAbsolutePath(mountPath);
+      if (!isPathUnder(resolvedMountPath, under) && !isPathUnder(under, resolvedMountPath)) {
+        continue;
+      }
+      for (const path of await this.#mountFilePaths(resolvedMountPath, mount)) {
+        if (!isPathUnder(path, under)) continue;
         if (this.isMaskedFromMount(path)) continue;
         // A deeper mount shadows this one's files under its point.
         if (routeMount(mounts, path)?.mount !== mount) continue;

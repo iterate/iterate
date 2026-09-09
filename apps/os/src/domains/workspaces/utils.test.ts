@@ -8,7 +8,7 @@ import {
 } from "./utils.ts";
 
 describe("workspaceCreationEvents", () => {
-  test("builds the created/configured/subscription batch with stable identity keys", () => {
+  test("builds the created/configured/subscription/catalog batch with stable identity keys", () => {
     const first = workspaceCreationEvents({
       mounts: { "/cfg": { policy: "read-only", repoPath: "/repos/config" } },
       path: "/workspaces/example",
@@ -24,6 +24,7 @@ describe("workspaceCreationEvents", () => {
       "events.iterate.com/workspace/created",
       "events.iterate.com/workspace/configured",
       "events.iterate.com/stream/subscription-configured",
+      "events.iterate.com/stream/subscription-configured",
     ]);
     expect(first.map((event) => event.idempotencyKey)).toEqual(
       retryWithDifferentConfig.map((event) => event.idempotencyKey),
@@ -37,6 +38,19 @@ describe("workspaceCreationEvents", () => {
         },
       },
     });
+    // The catalog copy: workspace/created reaches the project root `/`, where
+    // the project reducer records it for itx.workspaces.list(). It is
+    // configured in the same batch as the birth, so delivery starts at the
+    // beginning — "now" would skip the very event it exists to copy.
+    expect(first[3]?.payload).toMatchObject({
+      name: "workspace-catalog",
+      filter: { eventTypes: ["events.iterate.com/workspace/created"] },
+      receiver: {
+        action: "copy-to-stream",
+        receivingStreamPath: "/",
+        delivery: { start: "beginning", onFailingEvent: "halt" },
+      },
+    });
   });
 
   test("omits the configured patch entirely when no initial overlay is supplied", () => {
@@ -46,6 +60,7 @@ describe("workspaceCreationEvents", () => {
     });
     expect(events.map((event) => event.type)).toEqual([
       "events.iterate.com/workspace/created",
+      "events.iterate.com/stream/subscription-configured",
       "events.iterate.com/stream/subscription-configured",
     ]);
     expect(events[0]?.payload).toEqual({});

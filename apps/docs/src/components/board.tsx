@@ -318,6 +318,34 @@ function BoardCard({
           {task.summary}
         </p>
       )}
+      <TaskCardMetadata task={task} showTags={showTags} showFolder={showFolder} />
+    </button>
+  );
+  if (hoverLines.length === 0) return card;
+  return (
+    <Tooltip>
+      <TooltipTrigger render={<span className="block w-full" />}>{card}</TooltipTrigger>
+      <TooltipContent side="bottom" className="flex flex-col gap-0.5">
+        {hoverLines.map((line) => (
+          <span key={line}>{line}</span>
+        ))}
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
+/** Folder, tags and discussion count are shared card metadata. */
+function TaskCardMetadata({
+  task,
+  showTags,
+  showFolder,
+}: {
+  task: BoardTask;
+  showTags: boolean;
+  showFolder: boolean;
+}) {
+  return (
+    <>
       {(showTags && task.labels.length > 0) ||
       (showFolder && task.folder !== "tasks") ||
       task.commentCount > 0 ? (
@@ -346,18 +374,7 @@ function BoardCard({
           ) : null}
         </div>
       ) : null}
-    </button>
-  );
-  if (hoverLines.length === 0) return card;
-  return (
-    <Tooltip>
-      <TooltipTrigger render={<span className="block w-full" />}>{card}</TooltipTrigger>
-      <TooltipContent side="bottom" className="flex flex-col gap-0.5">
-        {hoverLines.map((line) => (
-          <span key={line}>{line}</span>
-        ))}
-      </TooltipContent>
-    </Tooltip>
+    </>
   );
 }
 

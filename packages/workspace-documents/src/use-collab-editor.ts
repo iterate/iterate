@@ -8,7 +8,7 @@ import { CollabConnection, peerExtension } from "./collab-client.ts";
 import { redlineExtension } from "./collab-redline.ts";
 import { remoteCursorsExtension } from "./collab-cursors.ts";
 import type { CollabEditorApi } from "./collab-editor-api.ts";
-import type { WorkspaceDocumentTransport } from "./types.ts";
+import type { WorkspaceTransport } from "./types.ts";
 
 /**
  * The ONE collaborative-editor state machine, shared by every surface that
@@ -22,7 +22,7 @@ import type { WorkspaceDocumentTransport } from "./types.ts";
  * review — never silently merged into other people's text.
  */
 export function useCollabEditor(input: {
-  transport: WorkspaceDocumentTransport;
+  transport: WorkspaceTransport;
   displayName?: string;
   /** Host-facing document identifier used in callbacks and CollabEditorApi. */
   path: string;

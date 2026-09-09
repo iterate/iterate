@@ -11,7 +11,7 @@ import type {
   CollabChanges,
   CollabPresence,
   CollabWaitResult,
-  WorkspaceDocumentTransport,
+  WorkspaceTransport,
 } from "./types.ts";
 
 /**
@@ -80,7 +80,7 @@ export class CollabConnection {
   }
 
   constructor(
-    readonly transport: WorkspaceDocumentTransport,
+    readonly transport: WorkspaceTransport,
     readonly filePath: string,
     readonly displayName = "someone",
   ) {
@@ -90,7 +90,7 @@ export class CollabConnection {
   async open(): Promise<{ content: string; version: number }> {
     // Identity first: the client id embeds the display name for attribution.
     this.clientId = freshClientId(this.displayName);
-    const opened = await this.transport.run((lane) => lane.open(this.filePath));
+    const opened = await this.transport.run((workspace) => workspace.collab.open(this.filePath));
     this.epoch = opened.epoch;
     this.confirmed = 0;
     return opened;
@@ -101,8 +101,8 @@ export class CollabConnection {
       changes: update.changes.toJSON(),
       clientSeq: this.confirmed + index,
     }));
-    return this.transport.run((lane) =>
-      lane.push({
+    return this.transport.run((workspace) =>
+      workspace.collab.push({
         baseVersion,
         clientId: this.clientId,
         epoch: this.epoch,
@@ -119,8 +119,8 @@ export class CollabConnection {
       changes: update.changes.toJSON(),
       clientSeq: this.confirmed + index,
     }));
-    return this.transport.runOnce((lane) =>
-      lane.push({
+    return this.transport.runOnce((workspace) =>
+      workspace.collab.push({
         baseVersion,
         clientId: this.clientId,
         epoch: this.epoch,
@@ -131,8 +131,14 @@ export class CollabConnection {
   }
 
   async wait(afterVersion: number): Promise<CollabWaitResult> {
-    const result = await this.transport.run((lane) =>
-      lane.wait(this.filePath, this.epoch, afterVersion, this.clientId, this.presenceGeneration),
+    const result = await this.transport.run((workspace) =>
+      workspace.collab.wait(
+        this.filePath,
+        this.epoch,
+        afterVersion,
+        this.clientId,
+        this.presenceGeneration,
+      ),
     );
     if (result.status === "ops" && result.presence !== undefined) {
       this.presenceGeneration = result.presence.generation;
@@ -149,12 +155,12 @@ export class CollabConnection {
    * (presence is decoration; a dropped update self-heals on the next move). */
   present(selection: { anchor: number; head: number } | null): void {
     void this.transport
-      .runOnce((lane) => lane.present(this.filePath, this.clientId, selection))
+      .runOnce((workspace) => workspace.collab.present(this.filePath, this.clientId, selection))
       .catch(() => {});
   }
 
   async changes(): Promise<CollabChanges> {
-    return this.transport.run((lane) => lane.changes(this.filePath));
+    return this.transport.run((workspace) => workspace.collab.changes(this.filePath));
   }
 
   /** Fold delivered ops into the confirmed baseline and count own ones. */

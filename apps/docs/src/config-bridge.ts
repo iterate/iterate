@@ -161,6 +161,21 @@ export function requireDocumentPath(value: string): string {
   return path;
 }
 
+/**
+ * Any workspace file path: relative (resolved against a workspace's own
+ * directory when used) or a fully qualified stream path under "/workspaces/"
+ * or "/repos/" — the document rule minus the extension check.
+ */
+export function requireWorkspaceFilePath(value: string): string {
+  const path = requireCanonicalPath(value, "file path");
+  if (path.startsWith("/") && !path.startsWith("/workspaces/") && !path.startsWith("/repos/")) {
+    throw new Error(
+      'an absolute file path must be fully qualified (under "/workspaces/" or "/repos/"); use a relative path to target the workspace\'s own directory',
+    );
+  }
+  return path;
+}
+
 /** A board's repo path is a fully qualified /repos/** mount path — the SAME
  * rule the board applies on open (normalizeRepoPath), so a minted link can
  * never carry a repo the route would reject. */

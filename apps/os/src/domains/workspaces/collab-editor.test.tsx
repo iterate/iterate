@@ -13,10 +13,28 @@ import type { CollabEditorApi } from "@iterate-com/workspace-documents/editor-ap
 import type {
   CollabWaitResult,
   CollabChanges,
-  WorkspaceDocumentLane,
-  WorkspaceDocumentTransport,
+  WorkspaceCollabSurface,
+  WorkspaceTransport,
+  WorkspaceSurface,
 } from "@iterate-com/workspace-documents/types";
 import { expect, test, vi } from "vitest";
+
+/** The five collab methods the editor drives, as the only member of a fake workspace. */
+type FakeDocumentSession = Pick<
+  WorkspaceCollabSurface,
+  "changes" | "open" | "present" | "push" | "wait"
+>;
+
+/** A transport over one fake session: the editor never touches fs or git
+ * here, so a workspace holding only `collab` is the whole surface these
+ * tests exercise — the assertion widens that partial fake to the full type. */
+function transportFor(documentSession: FakeDocumentSession): WorkspaceTransport {
+  const workspace = { collab: documentSession } as unknown as WorkspaceSurface;
+  return {
+    run: async (operation) => await operation(workspace),
+    runOnce: async (operation) => await operation(workspace),
+  };
+}
 
 test("an acknowledgement retries redline loading after version mismatches exhaust retries", async () => {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
@@ -106,7 +124,7 @@ test("a recovery snapshot updates the preview and cancels stale debounced text",
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   const delivery = Promise.withResolvers<CollabWaitResult>();
-  const documentSession: WorkspaceDocumentLane = {
+  const documentSession: FakeDocumentSession = {
     open: async () => ({ content: "# Before", epoch: "first", version: 0 }),
     wait: vi
       .fn()
@@ -122,10 +140,7 @@ test("a recovery snapshot updates the preview and cancels stale debounced text",
       deleted: [],
     }),
   };
-  const transport: WorkspaceDocumentTransport = {
-    run: async (operation) => await operation(documentSession),
-    runOnce: async (operation) => await operation(documentSession),
-  };
+  const transport = transportFor(documentSession);
   const apiRef: { current: CollabEditorApi | null } = { current: null };
   const onLiveContent = vi.fn();
   const extensions: Extension[] = [];
@@ -169,7 +184,7 @@ test("presentation changes preserve the live session and selection; an ended ses
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   const delivery = Promise.withResolvers<CollabWaitResult>();
-  const documentSession: WorkspaceDocumentLane = {
+  const documentSession: FakeDocumentSession = {
     open: vi.fn(async () => ({ content: "# Shared", epoch: "first", version: 0 })),
     wait: () => delivery.promise,
     push: async () => ({ status: "accepted", version: 1 }),
@@ -182,10 +197,7 @@ test("presentation changes preserve the live session and selection; an ended ses
       deleted: [],
     }),
   };
-  const transport: WorkspaceDocumentTransport = {
-    run: async (operation) => operation(documentSession),
-    runOnce: async (operation) => operation(documentSession),
-  };
+  const transport = transportFor(documentSession);
   const apiRef: { current: CollabEditorApi | null } = { current: null };
   const extensions: Extension = [];
   const rich = EditorView.editorAttributes.of({ class: "rich-presentation" });

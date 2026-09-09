@@ -2,7 +2,13 @@ import { minimatch } from "minimatch";
 import { describe, expect, test } from "vitest";
 import type { Workspace } from "@cloudflare/shell";
 import type { WorkspaceMount } from "./workspace-processor-contract.ts";
-import { reRoutedPaths, WorkspaceCore, type MountRepoAccess } from "./workspace-core.ts";
+import {
+  isPathUnder,
+  literalDirectoryOfGlob,
+  reRoutedPaths,
+  WorkspaceCore,
+  type MountRepoAccess,
+} from "./workspace-core.ts";
 
 /** The slice of `@cloudflare/shell`'s Workspace the core touches, in memory. */
 function fakeLocalLayer() {
@@ -186,6 +192,59 @@ describe("mount-routed reads", () => {
         minimatch(path, "**/tasks/**/*.md", { dot: true }),
       ),
     ).toEqual(["/config/tasks/one.md", "/iterate/tasks/two.md"]);
+  });
+
+  test("a scoped listing never enumerates a mount outside its subtree", async () => {
+    const { config, core, iterate } = subject();
+    let configListings = 0;
+    let iterateListings = 0;
+    const configList = config.repo.listFiles;
+    const iterateList = iterate.repo.listFiles;
+    config.repo.listFiles = () => {
+      configListings++;
+      return configList();
+    };
+    iterate.repo.listFiles = () => {
+      iterateListings++;
+      return iterateList();
+    };
+    await core.writeFile(`${SCRATCH_ROOT}/notes.txt`, "hi");
+
+    await expect(core.listAllFiles({ under: "/config" })).resolves.toEqual([
+      "/config/tasks/one.md",
+      "/config/worker.ts",
+    ]);
+    expect([configListings, iterateListings]).toEqual([1, 0]);
+
+    await expect(core.listAllFiles({ under: "/config/tasks" })).resolves.toEqual([
+      "/config/tasks/one.md",
+    ]);
+    await expect(core.listAllFiles({ under: SCRATCH_ROOT })).resolves.toEqual([
+      `${SCRATCH_ROOT}/notes.txt`,
+    ]);
+    expect([configListings, iterateListings]).toEqual([2, 0]);
+
+    // An ancestor of a mount still enumerates it (the subtree contains it).
+    await expect(core.listAllFiles({ under: "/" })).resolves.toHaveLength(5);
+    expect([configListings, iterateListings]).toEqual([3, 1]);
+  });
+
+  test.each([
+    ["/repos/config/**/*", "/repos/config"],
+    ["/repos/config/tasks/*.md", "/repos/config/tasks"],
+    ["/repos/config/README.md", "/repos/config"],
+    ["/**", "/"],
+    ["/*.md", "/"],
+    ["/repos/{config,other}/**", "/repos"],
+  ])("the literal directory of %s is %s", (pattern, directory) => {
+    expect(literalDirectoryOfGlob(pattern)).toBe(directory);
+  });
+
+  test("isPathUnder is inclusive of the ancestor and never fooled by a prefix", () => {
+    expect(isPathUnder("/repos/config/a.md", "/repos/config")).toBe(true);
+    expect(isPathUnder("/repos/config", "/repos/config")).toBe(true);
+    expect(isPathUnder("/repos/config-2/a.md", "/repos/config")).toBe(false);
+    expect(isPathUnder("/anything", "/")).toBe(true);
   });
 
   test("readFileBytes decodes the mount's base64 lane", async () => {

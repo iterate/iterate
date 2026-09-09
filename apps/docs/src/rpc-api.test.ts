@@ -1,6 +1,10 @@
 import { describe, expect, test } from "vitest";
-import { requireDocumentPath, requireWorkspacePath } from "./config-bridge.ts";
-import { resolveDocumentPath } from "./rpc-api.ts";
+import {
+  requireDocumentPath,
+  requireWorkspaceFilePath,
+  requireWorkspacePath,
+} from "./config-bridge.ts";
+import { resolveDocumentPath, resolveWorkspaceFilePath } from "./rpc-api.ts";
 
 describe("Docs deep-link paths", () => {
   test("accepts canonical workspace and document paths", () => {
@@ -15,6 +19,18 @@ describe("Docs deep-link paths", () => {
     expect(requireDocumentPath("/repos/config/docs/report.html")).toBe(
       "/repos/config/docs/report.html",
     );
+  });
+
+  test("any workspace file resolves, documents or not", () => {
+    expect(requireWorkspaceFilePath("worker.ts")).toBe("worker.ts");
+    expect(resolveWorkspaceFilePath("/workspaces/scratch/x1", "notes.txt")).toBe(
+      "/workspaces/scratch/x1/notes.txt",
+    );
+    expect(resolveWorkspaceFilePath("/workspaces/scratch/x1", "/repos/config/worker.ts")).toBe(
+      "/repos/config/worker.ts",
+    );
+    expect(() => requireWorkspaceFilePath("/worker.ts")).toThrow(/fully qualified/);
+    expect(() => requireWorkspaceFilePath("../worker.ts")).toThrow(/invalid file path/);
   });
 
   test("joins relative document paths onto the workspace and keeps absolute paths verbatim", () => {

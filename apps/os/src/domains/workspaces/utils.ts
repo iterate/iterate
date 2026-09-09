@@ -1,4 +1,5 @@
 import { DurableObjectNameCodec, normalizePath } from "../durable-object-names.ts";
+import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
 import { buildFacetProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
 import { isCanonicalRepoPath, resolveAbsolutePath } from "./paths.ts";
 import {
@@ -134,10 +135,12 @@ export function normalizeWorkspaceMountKeys<
  * The complete atomic workspace birth batch: the `workspace/created`
  * existence marker, an optional initial `workspace/configured` overlay patch
  * (deviations from the derived table — every project repo at its own
- * /repos/** path), and the processor subscription. The created and configured
- * keys contain identity only: identical retries dedupe, while a retry with a
- * different initial overlay fails through the stream's
- * same-key-different-body check.
+ * /repos/** path), the processor subscription, and the catalog subscription
+ * that copies the birth to the project root `/` — what
+ * `itx.workspaces.list()` reads, the same `repo-catalog` pattern repos use.
+ * The created and configured keys contain identity only: identical retries
+ * dedupe, while a retry with a different initial overlay fails through the
+ * stream's same-key-different-body check.
  */
 export function workspaceCreationEvents(input: {
   mounts?: Record<string, WorkspaceMountOverlay>;
@@ -168,6 +171,26 @@ export function workspaceCreationEvents(input: {
     buildFacetProcessorSubscriptionConfiguredEvent({
       idempotencyKey: `stream/subscription-configured:${WorkspaceProcessorContract.slug}`,
       name: WorkspaceProcessorContract.slug,
+    }),
+    // The workspace processor is reduce-only, so the catalog copy is a
+    // subscription rather than a processor side effect. It is configured in
+    // the same batch as created, hence delivery starts at the beginning.
+    CoreProcessorContract.buildEvent({
+      type: "events.iterate.com/stream/subscription-configured",
+      idempotencyKey: `workspace-catalog-subscription:${input.projectId}:${input.path}`,
+      payload: {
+        name: "workspace-catalog",
+        description: "Copy the workspace's birth to the project catalog.",
+        filter: { eventTypes: ["events.iterate.com/workspace/created"] },
+        receiver: {
+          action: "copy-to-stream",
+          receivingStreamPath: "/",
+          delivery: {
+            start: "beginning",
+            onFailingEvent: "halt",
+          },
+        },
+      },
     }),
   ];
 }
