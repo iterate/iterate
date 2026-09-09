@@ -301,3 +301,23 @@ iterate_kit_add_test(iterate-kit-led-ring-pixels-test led_ring_pixels_test.c
   ../platforms/iterate_esp_idf/components/board/led_ring.c
   INCLUDES ../platforms/iterate_esp_idf/components/board/include
   LINK iterate-kit-core)
+
+# Satellite1 chip facts compile directly, like HAVPE's pure register scripts.
+# Keep this block independent of the concurrently refactored board component.
+set(ITERATE_KIT_SATELLITE1_CHIPS
+  "${CMAKE_CURRENT_SOURCE_DIR}/../platforms/iterate_esp_idf/components/satellite1_chips")
+
+iterate_kit_add_test(iterate-kit-tas2780-registers-test tas2780_registers_test.c
+  "${ITERATE_KIT_SATELLITE1_CHIPS}/tas2780_registers.c"
+  INCLUDES "${ITERATE_KIT_SATELLITE1_CHIPS}/include"
+  LINK iterate-kit-core iterate-kit-capabilities)
+
+iterate_kit_add_test(iterate-kit-pcm5122-registers-test pcm5122_registers_test.c
+  "${ITERATE_KIT_SATELLITE1_CHIPS}/pcm5122_registers.c"
+  INCLUDES "${ITERATE_KIT_SATELLITE1_CHIPS}/include"
+  LINK iterate-kit-core iterate-kit-capabilities)
+
+iterate_kit_add_test(iterate-kit-xmos-spi-registers-test xmos_spi_registers_test.c
+  "${ITERATE_KIT_SATELLITE1_CHIPS}/xmos_spi_registers.c"
+  INCLUDES "${ITERATE_KIT_SATELLITE1_CHIPS}/include"
+  LINK iterate-kit-core iterate-kit-capabilities)
