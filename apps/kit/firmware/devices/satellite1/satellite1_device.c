@@ -276,7 +276,6 @@ static const struct iterate_kit_board board = {
   .ring = {.gpio = 21, .pixels = 24, .order = LED_PIXEL_FORMAT_GRB, .power_gpio = -1},
   .status_led_gpio = 45,
   .button = {.gpio = 0, .active_low = true, .tap_wakes = true, .tap_ends = true},
-  .wake_word = "jarvis",
   .sounds = {
     .wake = satellite1_sound_chime_press, .wake_bytes = sizeof(satellite1_sound_chime_press),
     .ended = satellite1_sound_chime_ended, .ended_bytes = sizeof(satellite1_sound_chime_ended),
