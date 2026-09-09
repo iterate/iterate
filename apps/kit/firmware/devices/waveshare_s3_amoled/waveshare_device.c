@@ -97,18 +97,8 @@ static const struct iterate_kit_register_script scripts[] = {
  */
 #include "assets/waveshare_sounds_generated.inc"
 
-/*
- * The session the two buttons speak, and mirrors of the loop's two view
- * facts the grammar classifies against, because `poll` runs before the
- * pass's view exists. The machine is components/core's shared session
- * grammar; this file only wires gestures to it and its answers to the
- * loop's intent seams.
- */
-static struct {
-  struct iterate_kit_session session;
-  bool call_active;
-  bool wants_call;
-} session_state;
+/** The shared grammar driven by this board's distinct button inputs. */
+static struct iterate_kit_session session;
 
 static const struct iterate_kit_audio_codec_properties codec_properties = {
   .capture_sample_rate_hz = WAVESHARE_AUDIO_SAMPLE_RATE_HZ,
@@ -450,10 +440,6 @@ static size_t modules(
 static void present(
     void *context, const struct iterate_kit_voice_view *view) {
   (void)context;
-  /* Mirrored for `poll`, which classifies the session before this pass's
-   * view exists — one poll of lag, invisible at the loop's cadence. */
-  session_state.call_active = view->call_active;
-  session_state.wants_call = view->wants_call;
   waveshare_display_present(view);
   /*
    * Let the face's delay line drain on this task, which is the only one that
@@ -468,7 +454,9 @@ static void present(
   waveshare_avatar_tick();
 }
 
+/** Classify board inputs against the last view held by board.c. */
 static void poll(void *context, struct iterate_kit_voice_intent *out) {
+  const struct iterate_kit_voice_view *view = iterate_kit_board_view();
   (void)context;
   waveshare_buttons_poll();
   /*
@@ -493,14 +481,14 @@ static void poll(void *context, struct iterate_kit_voice_intent *out) {
     .tap = waveshare_buttons_take_upper_press(),
     .held = waveshare_buttons_upper_held(),
     .end_press = waveshare_buttons_take_lower_press(),
-    .wants_call = session_state.wants_call,
-    .call_active = session_state.call_active,
+    .wants_call = view->wants_call,
+    .call_active = view->call_active,
     .push_to_talk = true,
     .tap_wakes = true,
     .tap_ends = false,
     .now_ms = (uint64_t)(esp_timer_get_time() / 1000),
   };
-  iterate_kit_session_step(&session_state.session, &gestures, &actions);
+  iterate_kit_session_step(&session, &gestures, &actions);
   out->start_call = actions.start_call;
   out->end_call = actions.end_call;
   out->talk_held = actions.talk_held;

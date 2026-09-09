@@ -88,17 +88,13 @@ static bool body_shown_valid;
 static uint64_t last_body_write_ms;
 static uint64_t last_present_ms;
 
-/*
- * The provider choice, the menu that changes it, and the session the side
- * button speaks. The loop's two facts are mirrored here because `poll`
- * classifies the session before the pass's view exists.
+/** Provider choice, menu and PMIC-button session. Call facts come from
+ * iterate_kit_board_view; the 20 Hz display throttle only gates rendering.
  */
 static struct {
   struct stackchan_menu menu;
   struct iterate_kit_session session;
   uint8_t mode;
-  bool call_active;
-  bool wants_call;
 } mode_state;
 
 /*
@@ -273,10 +269,6 @@ static void present(
     return;
   }
   last_present_ms = now;
-  /* `poll` classifies the session before this pass's view exists, so the
-   * grammar reads last pass's facts — one poll of lag, invisible at 5 ms. */
-  mode_state.call_active = view->call_active;
-  mode_state.wants_call = view->wants_call;
   /* One fleet mapping, then two facts only this board has:
    * (a) the FACE opens its eyes on conversation_active, and it must open on
    *     the press, not seconds later when the provider session is live —
@@ -326,7 +318,9 @@ static void present(
   }
 }
 
+/** Classify board inputs against the last view held by board.c. */
 static void poll(void *context, struct iterate_kit_voice_intent *out) {
+  const struct iterate_kit_voice_view *view = iterate_kit_board_view();
   const uint64_t now = (uint64_t)(esp_timer_get_time() / 1000);
   (void)context;
   head_gesture_step(now);
@@ -344,8 +338,8 @@ static void poll(void *context, struct iterate_kit_voice_intent *out) {
   {
     const struct iterate_kit_session_poll session_poll = {
       .tap = iterate_kit_stackchan_avatar_take_side_button_tap(),
-      .wants_call = mode_state.wants_call,
-      .call_active = mode_state.call_active,
+      .wants_call = view->wants_call,
+      .call_active = view->call_active,
       .push_to_talk = false,
       .tap_ends = true,
       .now_ms = now,
@@ -371,7 +365,7 @@ static void poll(void *context, struct iterate_kit_voice_intent *out) {
     const struct stackchan_menu_poll menu_poll = {
       .tap = tap,
       .tap_left_half = left,
-      .call_in_play = mode_state.call_active || mode_state.wants_call,
+      .call_in_play = view->call_active || view->wants_call,
       .now_ms = now,
     };
     uint8_t pick = STACKCHAN_MENU_NO_PICK;

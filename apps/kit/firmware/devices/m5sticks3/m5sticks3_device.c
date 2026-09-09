@@ -23,7 +23,7 @@
 
 #include "iterate/kit/audio_processor.h"
 #include "iterate/kit/capabilities/health.h"
-#include "iterate/kit/platforms/i2s_codec.h"
+#include "iterate/kit/platforms/board.h"
 #include "iterate/kit/capabilities/arguments.h"
 #include "iterate/kit/devices/m5sticks3.h"
 #include "iterate/kit/session_grammar.h"
@@ -41,18 +41,8 @@
  */
 #include "assets/m5sticks3_sounds_generated.inc"
 
-/*
- * The session the two buttons speak, and mirrors of the loop's two view
- * facts the grammar classifies against, because `poll` runs before the
- * pass's view exists. The machine is components/core's shared session
- * grammar; this file only wires gestures to it and its answers to the
- * loop's intent seams.
- */
-static struct {
-  struct iterate_kit_session session;
-  bool call_active;
-  bool wants_call;
-} session_state;
+/** The shared grammar driven by this board's distinct button inputs. */
+static struct iterate_kit_session session;
 
 /*
  * `face.set({face})` — the same catalogue the CoreS3 wears, on the small
@@ -130,13 +120,12 @@ static void present(
     void *context, const struct iterate_kit_voice_view *view) {
   (void)context;
   m5sticks3_ui_present(view);
-  /* Mirrored for poll, which runs before this pass's view exists. */
-  session_state.call_active = view->call_active;
-  session_state.wants_call = view->wants_call;
   m5sticks3_ui_tick();
 }
 
+/** Classify board inputs against the last view held by board.c. */
 static void poll(void *context, struct iterate_kit_voice_intent *out) {
+  const struct iterate_kit_voice_view *view = iterate_kit_board_view();
   (void)context;
   m5sticks3_board_poll();
   /*
@@ -158,14 +147,14 @@ static void poll(void *context, struct iterate_kit_voice_intent *out) {
   const struct iterate_kit_session_poll gestures = {
     .tap = m5sticks3_board_take_side_press(),
     .held = m5sticks3_board_talk_held(),
-    .wants_call = session_state.wants_call,
-    .call_active = session_state.call_active,
+    .wants_call = view->wants_call,
+    .call_active = view->call_active,
     .push_to_talk = true,
     .tap_wakes = true,
     .tap_ends = true,
     .now_ms = (uint64_t)(esp_timer_get_time() / 1000),
   };
-  iterate_kit_session_step(&session_state.session, &gestures, &actions);
+  iterate_kit_session_step(&session, &gestures, &actions);
   out->start_call = actions.start_call;
   out->end_call = actions.end_call;
   out->talk_held = actions.talk_held;

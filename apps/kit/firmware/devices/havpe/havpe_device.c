@@ -126,19 +126,13 @@ enum {
   DIAL_VOLUME_STEP_PERCENT = 5,
 };
 
-/*
- * The dial's and the session's composition state. The wheel arithmetic
- * (havpe_modes.c) and the session grammar (components/core's shared machine)
- * are pure and host-tested; what lives here is the wiring — which gesture
- * reaches which seam — plus mirrors of the two view facts both machines
- * need, because `poll` runs before the pass's view exists.
+/** Dial wheel and adopted mode. The pure wheel and session grammar keep their
+ * existing cadence; poll reads call facts from iterate_kit_board_view.
  */
 static struct {
   struct havpe_mode_wheel wheel;
   /** The adopted mode: announced, dialled, persisted. */
   uint8_t mode;
-  bool call_active;
-  bool wants_call;
 } mode_state;
 
 /*
@@ -221,12 +215,11 @@ static void present(
     void *context, const struct iterate_kit_voice_view *view) {
   (void)context;
   havpe_ui_present(view);
-  /* Mirrored for poll, which runs before this pass's view exists. */
-  mode_state.call_active = view->call_active;
-  mode_state.wants_call = view->wants_call;
 }
 
+/** Classify board inputs against the last view held by board.c. */
 static void poll(void *context, struct iterate_kit_voice_intent *out) {
+  const struct iterate_kit_voice_view *view = iterate_kit_board_view();
   (void)context;
   (void)out;
   if (iterate_kit_board_button_actions()->mode_flash) havpe_ui_show_mode(mode_state.mode);
@@ -241,7 +234,7 @@ static void poll(void *context, struct iterate_kit_voice_intent *out) {
    * the call ends would be a complete surprise.
    */
   const uint64_t now = (uint64_t)(esp_timer_get_time() / 1000);
-  const bool call_in_play = mode_state.call_active || mode_state.wants_call;
+  const bool call_in_play = view->call_active || view->wants_call;
   if (call_in_play) havpe_mode_wheel_cancel(&mode_state.wheel);
   const int steps = havpe_ui_take_dial();
   if (steps != 0) {
