@@ -1,10 +1,11 @@
-status: in-progress
+status: complete
 
 # Intercept prepared AI requests
 
 The Gateway work is saved on `codex/ai-gateway-metadata`. This prerequisite
-extracts its interception changes onto current main. Implementation and independent
-review are complete. Repository checks and preview validation are finishing.
+extracts its interception changes onto current main. Implementation, independent
+review, repository CI, and deployed preview verification are complete. PR #2613
+is ready for human review; ongoing review comments are monitored.
 
 Intercepted models should exercise the same request preparation and response
 decoding as provider calls. Strip only `intercepted/`; tests choose their model
@@ -14,8 +15,8 @@ explicitly when provider behaviour matters, and keep generic test names otherwis
 - [x] Expose the prepared request to handlers without provider credentials. *Named OpenAI/Workers AI request types exclude the dispatch credential; parity matrix checks both.*
 - [x] Use the reviewed HTTP-shaped result (`status`, `headers`, `body`) and migrate callers through existing test helpers. *Existing resilient-ai-interceptor helper now creates provider-shaped text/JSON fixtures; null represents absent bodies.*
 - [x] Preserve public `ai.run` decoding and its existing `returnRawResponse` option. *JSON/media/raw e2e covers the binding’s decoding rules, HTTP failures, and empty versus absent bodies.*
-- [ ] Verify text, usage, provider errors, and interception lifecycle through meaningful tests and a preview.
-- [ ] Complete repository checks and independent PR review.
+- [x] Verify text, usage, provider errors, and interception lifecycle through meaningful tests and a preview. *119 focused tests, four local and deployed API tests, and both deployed agent browser scenarios passed.*
+- [x] Complete repository checks and independent PR review. *Full CI passed on 8c5e2fca9; independent review and Iterate GitHub AI linter found no remaining issues.*
 
 No Gateway metadata, budget rules, cost events, or budget-specific failure
 handling belong here. Returning actual `Response` objects from callbacks remains
@@ -42,3 +43,8 @@ response streaming over RPC. Leave the Gateway branch untouched until this lands
   bodies; the serialized contract now preserves both. Full tests caught missing
   API summaries on the two request types; summaries added and all 16 graph
   tests passed on rerun.
+
+- Preview slot 9: all six live test suites passed. One unrelated
+  `stream-resume-after-suspend.spec.ts` test passed on its existing retry;
+  interception scenarios passed first time. No retries or skips were added.
+- PR: https://github.com/iterate/iterate/pull/2613. Gateway branch left untouched.
