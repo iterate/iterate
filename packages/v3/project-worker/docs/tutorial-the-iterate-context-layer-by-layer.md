@@ -369,10 +369,9 @@ project-prefixed KV key can never alias another project's.
 ### The words that never become segments
 
 The prototype hop hides JS and transport machinery at every depth — `then`, `dup`, `onRpcBroken`,
-`toString`, `constructor` and their kin — so a protocol probe can never conjure a dispatcher.
-Awaiting a dangling chain node settles to a live handle instead of dispatching; `JSON.stringify` of
-one fires nothing; a settled stub is not a thenable
-(`e2e/context-dotted-calls-fall-back-to-the-invoke-door.e2e.test.ts`).
+`toString`, `constructor` and their kin — so a protocol probe can never conjure a dispatcher: awaiting
+a dangling chain node settles to a live handle, `JSON.stringify` of one fires nothing, a settled stub
+is not a thenable (`e2e/context-dotted-calls-fall-back-to-the-invoke-door.e2e.test.ts`).
 
 **What this brick leaves on the table:** every call so far resolved to a built-in or to a lent
 stub. Nothing durable names anything: your laptop's function has a name only while your socket is
@@ -488,8 +487,7 @@ disposing the deny lifts it; the platform-equivalent target deletes the row expl
 await itx.kv.put("k", "v");
 const deny = await itx.provide("itx.kv", null);
 expect((await rejection(itx.kv.get("k"))).code).toBe("NO_ITX_EXPRESSION_MATCH"); // "is masked"
-expect(await itx.builtins.kv.get("k")).toBe("v");
-expect(await itx.rewriteRules.get("itx.kv")).toEqual({ match: "itx.kv", target: null, origin: "context" });
+expect(await itx.builtins.kv.get("k")).toBe("v"); // the row: { match: "itx.kv", target: null, origin: "context" }
 await itx.provide("itx.kv.put", null); // a partial mask under the root
 deny[Symbol.dispose](); // lifts the mask at itx.kv…
 expect(await itx.kv.get("k")).toBe("v");
@@ -680,8 +678,7 @@ const batch = await itx.append(
 );
 expect(batch[1].offset).toBe(orig.offset); // the hit answers with the ORIGINAL identity
 expect(batch[2].offset).toBe(batch[0].offset + 1); // the hit did not burn an offset in between
-const err = await rejection(itx.append({ type: "fresh-before" }, { type: "seed", payload: { v: 2 }, idempotencyKey: "kc" }));
-expect(err.message).toContain('idempotency key "kc" already names a different event'); // the batch rolled back whole
+// the same key with a DIFFERENT body: 'idempotency key "kc" already names a different event' — the whole batch rolled back
 // e2e/stream-idempotency-pause-paging.e2e.test.ts
 ```
 
@@ -756,8 +753,7 @@ ephemeral, and a batch that mixes the resume with anything else — with `STREAM
 ```ts
 await itx.append({ type: "events.iterate.com/stream/paused", payload: { reason: "maintenance" } });
 const err = await rejection(itx.append({ type: "mark", payload: { n: 1 } }));
-expect(err.code).toBe("STREAM_PAUSED");
-expect(err.message).toContain("stream paused: maintenance");
+expect(err.code).toBe("STREAM_PAUSED"); // "stream paused: maintenance"
 await itx.append({ type: "events.iterate.com/stream/resumed", payload: {} });
 const [after] = await itx.append({ type: "mark", payload: { resumed: true } });
 // e2e/stream-idempotency-pause-paging.e2e.test.ts · e2e/context-built-ins-and-error-codes.e2e.test.ts
@@ -831,9 +827,8 @@ REPLACES — one row, one more event (`e2e/rpc-stubs-reconnect-same-path.e2e.tes
 
 ### The rows are a slice of core
 
-`itx.subscriptions.list()` is the read door: the table joined with the stream-kept cursors. Every
-context is born holding one row — the config-worker funnel of chapter 7 — so "nothing here" is
-`["config"]`, never `[]`:
+`itx.subscriptions.list()` is the read door, the table joined with the stream-kept cursors. Every
+context is born holding one row — the config-worker funnel of chapter 7 — so "nothing here" is `["config"]`:
 
 ```ts
 expect((await itx.subscriptions.list()).map((r) => r.name)).toEqual(["config"]);
@@ -910,12 +905,10 @@ configure offset, so events that landed BEFORE the subscription are delivered �
 the cursor the stream keeps. A push target ignores it.
 
 ```ts
-for (let i = 0; i < 3; i++) await itx.append({ type: "mark" }); // no subscription yet
-await itx.subscribe({ name: "digest", target: "itx.digest.processEventBatch", consumes: ["mark"] });
-await itx.append({ type: "mark" });
-await until(async () => (await digested(itx)) === 1); // from now: only the fourth
+for (let i = 0; i < 3; i++) await itx.append({ type: "mark" }); // three marks, no subscription yet
+await itx.subscribe({ name: "digest", target: "itx.digest.processEventBatch", consumes: ["mark"] }); // from now: a fourth mark → digested 1
 await itx.subscribe({ name: "digest", target: "itx.digest.processEventBatch", consumes: ["mark"], afterOffset: 0 });
-await until(async () => (await digested(itx)) === 5); // the whole log: all four, once each
+await until(async () => (await digested(itx)) === 5); // the whole log: all four again, once each
 // e2e/subscriptions-after-offset.e2e.test.ts
 ```
 
@@ -965,8 +958,7 @@ export class CounterDurableObject extends DurableObject {
 });
 await itx.invoke(`itx.facets.get('c1', { source: ${SRC_COUNTER}, className: 'CounterDurableObject' }).bump()`);
 expect(await itx.invoke(`itx.facets.get('c1', { source: ${SRC_COUNTER}, className: 'CounterDurableObject' }).bump()`)).toBe(2);
-expect(await itx.invoke(`itx.facets.get('c1').value()`)).toBe(2); // ADDRESS BY NAME: the same running instance
-expect(await itx.invoke(`itx.facets.get('c2', { source: ${SRC_COUNTER}, className: 'CounterDurableObject' }).bump()`)).toBe(1); // independent state
+expect(await itx.invoke(`itx.facets.get('c1').value()`)).toBe(2); // ADDRESS BY NAME: the same running instance; 'c2' would be independent state
 // e2e/workers-and-facets-sources.e2e.test.ts
 ```
 
@@ -1078,9 +1070,8 @@ const burst = await itx.append(...Array.from({ length: 8 }, (_, i) => ({ type: "
 expect(burst).toHaveLength(8); // the burst was admitted — policy reads the REDUCE, after the commit
 const paused = await itx.waitForEvent({ type: "events.iterate.com/stream/paused", afterOffset: 0, timeoutMs: 20_000 });
 expect(paused.payload).toEqual({ reason: "breaker: durable events exceeded the bucket" });
-expect(paused.source.processor).toMatchObject({ slug: "breaker", version: "1.0.0" }); // provenance
-expect((await rejection(itx.append({ type: "more" }))).code).toBe("STREAM_PAUSED");
-await itx.append({ type: "events.iterate.com/stream/resumed" }); // the operator's recovery
+expect(paused.source.processor).toMatchObject({ slug: "breaker", version: "1.0.0" }); // provenance: the log says WHO paused it
+expect((await rejection(itx.append({ type: "more" }))).code).toBe("STREAM_PAUSED"); // until the operator's `stream/resumed`
 // e2e/processor-facet-breaker-pauses-the-stream.e2e.test.ts
 ```
 
@@ -1169,21 +1160,11 @@ A source is the worker's MODULES, literally — `{ "cap.js": code, … }`, `cap.
 and it exports its own host: a `WorkerEntrypoint` for `workers.get`, a `DurableObject` class for
 `facets.get`. There is no host-injected wrapper and no bare-lambda door. `props` is Cloudflare's own
 `WorkerStubEntrypointOptions.props`, read back as `this.ctx.props`. Dialing a REMOTE capnweb API is
-userspace, exactly this shape — the SDK exports capnweb's client constructors:
-
-```ts
-const SRC_REMOTE = {
-  "cap.js": `import { WorkerEntrypoint } from "cloudflare:workers";
-import { newHttpBatchRpcSession } from "./processor.js";
-export class Remote extends WorkerEntrypoint {
-  #api() { return newHttpBatchRpcSession(this.ctx.props.url); }
-  whoami() { return this.#api().authenticate().projects.get(this.ctx.props.projectId).whoami(); }
-}`,
-};
-await itx.provide("itx.remoteApi", ["itx", "workers", ["get", { source: SRC_REMOTE, className: "Remote", props: { url: workerUrl("/api"), projectId: other } }]]);
-expect(await itx.remoteApi.whoami()).toEqual({ projectId: other, path: "/" }); // one HTTP batch per chain
-// e2e/workers-remote-capnweb.e2e.test.ts
-```
+userspace, exactly this shape: a `Remote extends WorkerEntrypoint` whose method opens
+`newHttpBatchRpcSession(this.ctx.props.url)` (the SDK exports capnweb's client constructors) and
+chains `.authenticate().projects.get(this.ctx.props.projectId).whoami()` in one POST, mounted with
+`provide("itx.remoteApi", ["itx", "workers", ["get", { source, className: "Remote", props: { url,
+projectId } }]])` and called as `itx.remoteApi.whoami()` (`e2e/workers-remote-capnweb.e2e.test.ts`).
 
 ### `env.ITX` inside loaded code
 
@@ -1403,24 +1384,17 @@ laptop, and upgrades WebSockets with capnweb's universal `WebSocketPair`:
 
 ```ts
 class HttpDevice extends RpcTarget {
-  async fetch(request: Request) { return new Response("pong-from-node-provider", { status: 201, headers: { "x-device": "node-live-cap" } }); }
+  async fetch(request: Request) { return new Response("pong-from-node-provider", { status: 201 }); }
 }
 await session().authenticate().projects.get(ctx).provide("itx.ws-device", new HttpDevice());
-const res = await fetch(expressionUrl(ctx, "itx.ws-device", "http"), { method: "POST", body: "ping" });
-expect(res.status).toBe(201);
+expect((await fetch(expressionUrl(ctx, "itx.ws-device", "http"), { method: "POST", body: "ping" })).status).toBe(201);
 // e2e/fetch-door-expression-http-and-websocket.e2e.test.ts
 ```
 
 Inside a session the second door is the dotted terminal `.fetch(request)`: `invoke` forks a call
 whose terminal step is `fetch` carrying a live Request onto the DO's fetch channel, the only hop kind
-that carries a socket-bearing Response back:
-
-```ts
-await itx.provide("itx.site", ["itx", "workers", ["get", { source: SOURCES.site }]]);
-const resp = await itx.site.fetch(new Request("https://itx.site/")); // rides the fetch channel, expression in x-itx-expression
-expect(resp.status).toBe(200);
-// e2e/session-doors.e2e.test.ts
-```
+that carries a socket-bearing Response back — `await itx.site.fetch(new Request("https://itx.site/"))`
+answers the loaded worker's 200 over capnweb (`e2e/session-doors.e2e.test.ts`).
 
 From loaded code, `env.ITX.fetch` is a real Fetcher — set `x-itx-expression` yourself and the same
 lane serves it (`e2e/fetch-door-dynamic-live-ws.e2e.test.ts`, the plain case). The lane refuses to
@@ -1443,8 +1417,7 @@ await itx.provide("itx.apps.site", ["itx", "workers", ["get", { source: SRC_SITE
 const page = await fetchProjectHost(`site--${projectId}.${base}`, "/w?repo=x");
 expect(page.status).toBe(200);
 expect(page.text).toContain(`<p>site--${projectId}.${base}/w?repo=x</p>`); // the URL verbatim
-await itx.provide("itx.apps.default", "itx.apps.site"); // the apex is the label `default`
-expect((await fetchProjectHost(`${projectId}.${base}`, "/")).status).toBe(200);
+await itx.provide("itx.apps.default", "itx.apps.site"); // the apex `<projectId>.<base>` is the label `default`: 200 from here on
 expect((await fetchProjectHost(`other--${projectId}.${base}`, "/")).status).toBe(404); // a label with no row: the lane's 404
 expect((await fetchProjectHost(`site--${unknown}.${base}`, "/")).status).toBe(421); // a project the directory does not know
 // e2e/ingress-project-host.e2e.test.ts
@@ -1524,8 +1497,7 @@ await itx.provide("itx.apps.mcp", "itx.serveMcp()");
 const host = `mcp--${projectId}.${projectHostnameBase()}`;
 expect((await mcp(host, "tools/list", {})).message.result.tools.map((t) => t.name)).toEqual(["itx.invoke"]);
 expect((await invokeTool(host, { expression: "itx.kv.put('k', 'v')" })).result).toEqual({ ok: true });
-expect((await invokeTool(host, { expression: ["itx", "kv", ["get", "k"]] })).result).toBe("v"); // the parsed form
-expect((await invokeTool(host, { expression: "itx.kv.get", args: ["k"] })).result).toBe("v"); // args appended
+expect((await invokeTool(host, { expression: "itx.kv.get", args: ["k"] })).result).toBe("v"); // args appended; the parsed form works too
 expect(await itx.kv.get("k")).toBe("v"); // the same kv the session sees
 const missing = await invokeTool(host, { expression: "itx.nope.run()" });
 expect(missing.isError).toBe(true); // an expression error is a tool FAILURE, a 200 — never a 500
@@ -1635,9 +1607,7 @@ expect(door.headers["set-cookie"]).toContain(`itx-project-session=${token}`);
 const seen = JSON.parse((await fetchProjectHost(host, "/echo", { cookie: `${cookieHeader}; theme=dark` })).text);
 expect(seen.principal).toEqual(principal); // the verified stamp…
 expect(seen.cookie).toBe("theme=dark"); // …never the platform's cookie; the visitor's own cookies still reach the app
-const forged = JSON.parse((await fetchProjectHost(host, "/echo", { "x-itx-principal": JSON.stringify({ actor: "mallory" }) })).text);
-expect(forged.principal).toBeNull(); // a visitor cannot stamp one
-expect((await fetchProjectHost(host, `/.itx/session?token=${foreign}&next=/`)).status).toBe(401); // another project's token
+expect((await fetchProjectHost(host, `/.itx/session?token=${foreign}&next=/`)).status).toBe(401); // another project's token; a visitor's own x-itx-principal is stripped
 // e2e/ingress-project-host.e2e.test.ts
 ```
 
@@ -1673,7 +1643,6 @@ every borrowed stub and releases every connection, so the actor can hibernate:
 // iterate-context-durable-object.ts — alarm(), abridged
 const IDLE_QUIESCE_AFTER_MS = 60_000;
 async alarm(): Promise<void> {
-  this.#stream.noteAlarmFired();
   await this.#subscriptionDelivery.deliverEveryCursorSubscription(); // 1. due retries — AWAITED, so a re-arm lands before hibernation
   // …the self-wake breaker (below)
   const quiet = Date.now() - this.#lastActivityMs >= IDLE_QUIESCE_AFTER_MS; // 2. the idle QUIESCE
@@ -1682,9 +1651,7 @@ async alarm(): Promise<void> {
     this.#liveFacetNames.clear(); // aborted facets re-materialize on their next call
     this.#rpcStubs.returnBorrowedRpcStubs();
     this.#library.releaseConnections();
-  } else if (this.#liveFacetNames.size > 0 || this.#rpcStubs.hasBorrowedRpcStubs()) {
-    this.#stream.armAlarmNoLaterThan(Math.max(this.#lastActivityMs + IDLE_QUIESCE_AFTER_MS, Date.now() + 10_000)); // never in the past
-  }
+  } // …else, with something still to quiesce, look again when the quiet period would end — never in the past
 }
 ```
 
@@ -1697,10 +1664,10 @@ append and read for the same reason.
 ### Alarms only while something is owed
 
 The quiet clock is armed only when there is something to quiesce — a live facet or a borrowed stub —
-and with nothing to quiesce there is no re-arm; a bare probe never pays a storage write plus a billed
-wake for nothing. The cursor lane arms the alarm itself whenever a delivery is owed: when a batch is
-queued for a row it does not know as a push row, and before every awaited call, so an eviction
-mid-call leaves the alarm behind to re-derive its obligations from the rows and the log.
+and never re-armed otherwise; a bare probe never pays a storage write plus a billed wake for nothing.
+The cursor lane arms the alarm itself whenever a delivery is owed — a batch queued for a row it does
+not know as a push row, and before every awaited call — so an eviction mid-call leaves the alarm
+behind to re-derive its obligations from the rows and the log.
 
 ### The watchdog on facet calls
 
@@ -1712,8 +1679,8 @@ with its storage surviving), runs the call under `withTimeout(call, FACET_CALL_W
 …)`, and on `TIMEOUT` aborts the facet — the pending call rejects, the counter drains, the next call
 re-materializes it. A finished call earns a fresh quiet period. A cursor delivery's awaited call is
 bounded by its own 20 s watchdog, and a push subscriber that stops reading is not buffered past 8 MiB
-per row and 8 MiB in flight per context — the oldest events are dropped and the push's `after` moves
-up, the span the subscriber heals from the log.
+pending across all rows and 8 MiB in flight per context — the oldest events are dropped and the
+push's `after` moves up, the span the subscriber heals from the log.
 
 ### The self-wake breaker
 

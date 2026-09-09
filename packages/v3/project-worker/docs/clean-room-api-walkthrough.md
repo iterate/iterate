@@ -1594,7 +1594,7 @@ a target in the parent:
 ```ts
 const child = itx.cd("/agents/support");
 // in-worker spelling; a client appends the literal (section 4.2)
-await child.append(rewriteRuleConfiguredEvent("itx", "itx.cd('/')")); // durable: misses go to the project root
+await child.append(rewriteRuleConfiguredEvent("itx", "itx.builtins.cd('/')")); // durable: misses go to the project root (a whole-context override must name the physical spelling)
 await child.someRootCapability.doThing(1); // not a built-in, no longer match → the default rule
 ```
 

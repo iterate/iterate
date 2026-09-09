@@ -4356,3 +4356,25 @@ STATE AT THE END OF THE REVIEW ROUNDS (2026-09-09): five passes — codex (gpt-6
 Fable reviewers over the context, the stream and the edge half — each applied, gated locally and
 proven against the deployed worker. Every finding is either fixed with a pin, or a `test.fails` red
 pin naming its mechanism, or declined with the reason above. The red pins are the owner's list.
+
+## 2026-09-09 — code cuts, round 1 (the structure report's map, applied), the docs triage and a new tutorial
+
+- DOCS TRIAGE (8c426bf3b, 0783c9a34): 87 files under `docs/history/` dated by their own banners, three
+  dead docs deleted, the living docs repointed; their three contradictions fixed (the walkthrough's
+  `runScript` and consent picker, LAYERS' teardown key) and BUILD-LOG's header (the shell worker is gone).
+- ROUND 1 (3ee2bcbdc; three Fable implementers on disjoint file sets, gated together): the control
+  plane on plain D1 with ONE router (sqlfu, its generated client, its Miniflare-booting generate step
+  and two dependencies gone — the lockfile spliced in a detached checkout, ffed85e9f; ≈ −360); the
+  context and edge with one codec door, one dotted-door file, no `transportId`, one blob fetch, git-wire
+  at the two verbs' surface, the Artifacts type model in repos.ts and the built-ins ↔ library ↔ repos
+  cycle gone (−42 net, five public names fewer); the delivery loop with one record per row, one chars
+  budget for both lanes, the per-row pending budget subsumed, the core reduce as two pure functions
+  (+3 net: the structure landed, its prose moves in the comment pass). GATES: tsc ×3 · oxlint · knip ·
+  `pnpm test` 88 files / 728 passed / 18 expected-fail / 17 deployed-only skips. DEPLOYED (version
+  758ff0f9): the line below.
+- THE TUTORIAL: `docs/tutorial-the-iterate-context-layer-by-layer.md` (1,796 lines, 13 chapters, 65
+  bricks), written fresh against today's surface in the brick-by-brick voice; every client snippet is a
+  call the e2e lane makes, cited by file; the 2026-09-06 tutorial is history. Its writer's list of
+  places where docs disagreed with the code is applied here (the walkthrough's whole-context ancestry
+  example, the as-built's budgets, the report's library row) or queued for the comment pass (a dangling
+  `run` docstring in built-ins.ts, config-worker.ts's named-export header, two e2e headers).

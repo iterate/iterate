@@ -134,7 +134,7 @@ physically as `itx.builtins.<root>`:
 | `facets`                                 | get(name, spec?)                                                               | Worker-Loader-hosted DurableObject classes                                    |
 | `subscriptions`                          | list, get                                                                      | the core reduce's table                                                       |
 | `workers`                                | get({ source, cacheKey?, className?, props? })                                 | Worker-Loader-hosted entrypoints                                              |
-| the library                              | connectToMcp, connectToOpenApi, connectToCapnweb, serveMcp, releaseConnections | `library/index.ts`, memoized per context                                      |
+| the library                              | connectToMcp, connectToOpenApi, connectToCapnweb, serveMcp (their connections released by the DO at the idle quiesce) | `library/index.ts`, memoized per context                                      |
 
 Rewrite rules sit between the two spellings: `itx.<name>` resolves through the context's table (seven rules,
 `itx-expression-rewriting.ts` header), `itx.builtins.<name>` never does.

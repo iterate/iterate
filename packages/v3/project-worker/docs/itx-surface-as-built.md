@@ -408,7 +408,7 @@ outstanding, `READ_OUTSTANDING_BUDGET_BYTES`) and rows (1000), `limit` only shri
 carries `atHead`; a reduce's checkpoint that would not fit one storage cell is refused BEFORE the
 write (`REDUCE_CHECKPOINT_TOO_LARGE`); a stored row whose body is not JSON surfaces coded
 (`EVENT_UNREADABLE`, `data.offset` names it); the delivery loop keeps a per-context ledger of
-in-flight and pending push bytes (16 MiB totals, 8 MiB per row) and drops a stalled client's pushes
+in-flight and pending push bytes (one 8 MiB in-flight budget, one 8 MiB pending total) and drops a stalled client's pushes
 rather than buffer them; a deterministic refusal (a coded `NOT_A_METHOD`, a `NO_ITX_EXPRESSION_MATCH`)
 HALTS a cursor row at its first attempt instead of climbing the retry ladder. Every SQL statement
 the stream runs lives in ONE typed module, `src/stream/stream-storage.ts`, over `ctx.storage.sql`
