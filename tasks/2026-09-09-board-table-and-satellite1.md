@@ -388,3 +388,60 @@ LD2450 radar, AHT20, LTR-303, jack auto-switch.
   and describes `capture_is_echo_cancelled` / `capture_clock_is_hardware_owned`
   properties that were deleted. Rewrite Part 1 around the table once step 13
   lands.
+
+## Bench plan (goal set 2026-09-09 ~16:45)
+
+Both connected boards must run the consolidated firmware against the prd
+project `templestein` (`prj_7d0fb56f09a54a298e3ddfb106c1fb9a`), which the
+HAVPE is already provisioned onto and connected to (`/clients/home-assistant-voice-preview-edition`,
+stream `/agents/voice/home-assistant-voice-preview-edition`). Its config repo
+runs the packaged `@iterate-com/voice-agent` from `main`; open-mic is the
+stream default (`clientTakesTurns` false), so a fresh
+`/agents/voice/satellite1` stream needs no backend change. Stock-firmware
+HAVPE health baseline captured before any reflash.
+
+Order, each gate before the next:
+
+1. HAVPE first (the known board): flash HEAD's havpe target, keep its
+   ITERKIT1 blob (plain `idf.py flash` leaves 0x510000 alone), watch the
+   console for the boot, then `health()` over the stream must show
+   `transport ready`, `voicelab ready`, `gateOpen`, `codecCaptureFailures 0`,
+   `spkStarvedMs 0`, `xmosVersion` 1.3.1, and the same `rpcExports` as the
+   baseline. Then `doppler run --config prd -- pnpm cli voicelab boards --project templestein --only havpe`
+   through the Mac speaker: verbatim transcript, answer played, no starvation.
+2. AEC on the HAVPE, the part that has been hard: the oracle is
+   `echoRawPeak` vs `echoCleanPeak` in `health()` (raw mic tap vs cancelled
+   tap, accumulated only while the speaker runs). Read it after a `boards`
+   run: healthy is ≥ 9 dB of separation (2026-08-11 measured −9.9 dB warm,
+   collapsing to −0.4 dB when TX underran between answers). If it collapses,
+   the suspects in order: TX ring not preloaded/auto-clearing (check
+   `playbackQueueOverflows` climbing while idle), the uplink stage (NS with
+   x16, `aec.setStage` flips it live), and the 2.5 s AIC3204 soft-start. The
+   barge test: speak over the answer; `bargeIns` must move and the transcript
+   must be the interruption, not the assistant's own words.
+3. Satellite1: provision with the HAVPE's blob (same SSID/project/key,
+   `make-config-image.py` with `--offset-for satellite1`), flash, console
+   boot, ring white-then-settled, `health()` with `xmosMajor/Minor/Patch`
+   non-zero, `ampPowerMode` 0 on Mac USB (5 V) or 2 on the 30 W brick, then
+   `voicelab boards --project templestein --only satellite1`. Its oracle
+   compares slot 0 (AGC) against slot 1 (NS) since no raw tap reaches the
+   ESP; both taps are post-AEC, so the number measures the AGC, and the real
+   AEC proof is the transcript under the barge test. Uplink starts on slot 1
+   at x16; if the provider's VAD self-triggers on the assistant's echo, try
+   slot 0 at x1.
+4. CLI still works: `pnpm cli voicelab talk` (the Mac as a client) against
+   templestein, and `pnpm cli itx run --context templestein` health reads.
+5. Review rounds: `claude -p --model fable --effort max` with the diffs on
+   disk and the brief on stdin, at least once after each phase lands and once
+   on the whole; act on every finding ranked "would break a board".
+6. Stretch, wake word: esp-sr ships WakeNet models in the component StackChan
+   already depends on (`espressif/esp-sr` 2.4.7, `model/wakenet_model/`):
+   English candidates `wn9_hiesp` ("Hi ESP"), `wn9_alexa`, `wn9_jarvis_tts`
+   ("Jarvis"), 292 KB each, loaded from a `model` partition or embedded.
+   The stock Satellite1 uses ESPHome's `micro_wake_word` TFLite models
+   ("Hey Jarvis", "Okay Nabu"), which esp-sr cannot run; use WakeNet
+   `wn9_jarvis_tts` so "Jarvis" stays the word. Feed it the AEC'd 16 kHz
+   uplink; on detect: play the press chime through the shared sound slot,
+   `iterate_kit_button_inject_tap` so the shared grammar starts the call
+   exactly as a press would, ring shows the listening state. No backend
+   change: the call is a normal open-mic call.
