@@ -69,16 +69,22 @@ test("a cold stream stays pending until its server history catches up", async ({
     },
   );
 
-  await page.goto(`/projects/${fixture.project.slug}/streams${streamPath}`);
-  await page
-    .getByRole("button", { name: "Append events (⌘↵)", disabled: false })
-    .waitFor({ timeout: 30_000 }); // timeout: the spec throttles every WS frame by 1s on purpose — a real delay the spinner-waiter should not paper over
-  await page.getByText("Connecting to the stream", { exact: true }).waitFor();
-  await page.getByText("Nothing here yet").waitFor({ state: "hidden" });
-  await page
-    .getByTestId("stream-feed-inspect")
-    .filter({ hasText: "spec/cold-history" })
-    .waitFor({ timeout: 30_000 }); // timeout: same deliberate 1s-per-frame WS throttle, outside the spinner-waiter's remit
+  // Assert the loading state before waiting for synchronization to enable input.
+  // The loading indicator is under test, so the spinner-waiter must not skip it.
+  await spinnerWaiter.settings.run({ disabled: true }, async () => {
+    await page.goto(`/projects/${fixture.project.slug}/streams${streamPath}`);
+    await page.getByText("Connecting to the stream", { exact: true }).waitFor({ timeout: 30_000 }); // timeout: every WS frame is delayed by 1s; spinner-waiter is disabled because the loading state is under test
+    await page.getByRole("button", { name: "Append events (⌘↵)", disabled: true }).waitFor();
+    await page.getByText("Nothing here yet").waitFor({ state: "hidden" });
+    await page
+      .getByTestId("stream-feed-inspect")
+      .filter({ hasText: "spec/cold-history" })
+      .waitFor({ timeout: 30_000 }); // timeout: deliberate 1s-per-frame throttle, outside the spinner-waiter's remit
+    await page
+      .getByRole("button", { name: "Append events (⌘↵)", disabled: false })
+      .waitFor({ timeout: 30_000 }); // timeout: the throttle delays readiness after history; spinner-waiter remains disabled while checking the loading transition
+    await page.getByText("Connecting to the stream", { exact: true }).waitFor({ state: "hidden" });
+  });
 });
 
 test("a cached stream opens before its live connection", async ({ helpers, page }) => {
