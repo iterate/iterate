@@ -62,6 +62,10 @@ function ProjectWorkspaceDetailContent() {
   const files = useWorkspaceFiles({ transport, workspacePath, listAtOnce: ["/repos/config"] });
   const selectedPath = search.file;
   const diff = search.diff === true;
+  // The diff exists only while the file differs from HEAD: once a commit or
+  // discard clears it, the file shows again even though ?diff lingers.
+  const dirty = selectedPath !== undefined && files.changes.has(selectedPath);
+  const showDiff = diff && dirty;
   const onSelect = useCallback(
     (path: string | null) =>
       void navigate({
@@ -83,9 +87,7 @@ function ProjectWorkspaceDetailContent() {
 
   const actions = (
     <>
-      {selectedPath !== undefined && files.changes.has(selectedPath) ? (
-        <DiffToggle active={diff} onToggle={toggleDiff} />
-      ) : null}
+      {dirty ? <DiffToggle active={showDiff} onToggle={toggleDiff} /> : null}
       <WorkspaceChanges
         files={files}
         canCommit
@@ -123,7 +125,7 @@ function ProjectWorkspaceDetailContent() {
               Pick a file.
             </div>
           </>
-        ) : diff ? (
+        ) : showDiff ? (
           <WorkspaceFileDiff
             key={`${selectedPath}:${revision}`}
             transport={transport}

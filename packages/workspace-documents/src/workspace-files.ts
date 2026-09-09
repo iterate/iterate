@@ -109,6 +109,10 @@ export function useWorkspaceFiles({
   // not restart the heartbeat every render.
   const listAtOnceKey = listAtOnce.join("\n");
 
+  // Roots whose listing was requested. A root is remembered when its request
+  // starts (so two requests never race), and forgotten again when that
+  // request fails, so the next ensureLoaded or heartbeat retries it.
+  const loaded = useRef(new Set<string>());
   // Newest wins, per root: a listing that started before a mutation must
   // not land after the post-mutation one and hide the user's own change.
   const listingGeneration = useRef(new Map<string, number>());
@@ -116,8 +120,15 @@ export function useWorkspaceFiles({
     async (root: string) => {
       const mine = (listingGeneration.current.get(root) ?? 0) + 1;
       listingGeneration.current.set(root, mine);
-      // One subtree walk, scoped server-side to this root's mount.
-      const paths = await withWorkspace((workspace) => workspace.glob(`${root}/**/*`));
+      loaded.current.add(root);
+      let paths: string[];
+      try {
+        // One subtree walk, scoped server-side to this root's mount.
+        paths = await withWorkspace((workspace) => workspace.glob(`${root}/**/*`));
+      } catch (cause) {
+        if (listingGeneration.current.get(root) === mine) loaded.current.delete(root);
+        throw cause;
+      }
       if (listingGeneration.current.get(root) !== mine) return;
       setListings((current) => new Map(current).set(root, paths));
     },
@@ -136,13 +147,11 @@ export function useWorkspaceFiles({
   }, [withWorkspace]);
 
   /** Load the root a path lives under, once (a later refresh re-lists it). */
-  const loaded = useRef(new Set<string>());
   const ensureLoaded = useCallback(
     (path: string) => {
       const roots = status === null ? [] : workspaceRoots(status, workspacePath);
       const root = rootOf(roots, path);
       if (root === null || loaded.current.has(root)) return;
-      loaded.current.add(root);
       void loadRoot(root).catch((cause: unknown) =>
         setError(cause instanceof Error ? cause.message : String(cause)),
       );
@@ -179,7 +188,6 @@ export function useWorkspaceFiles({
               (opensAtOnce && !loaded.current.has(root)) ||
               (shrank && loaded.current.has(root))
             ) {
-              loaded.current.add(root);
               void loadRoot(root).catch((cause: unknown) => {
                 if (!cancelled) setError(cause instanceof Error ? cause.message : String(cause));
               });

@@ -3,8 +3,8 @@ import { withDocumentExtension, workspaceFileKind } from "./file-kinds.ts";
 
 describe("workspace file kinds", () => {
   test.each([
-    ["docs/plan.md", { kind: "document" }],
-    ["page.HTML", { kind: "document" }],
+    ["docs/plan.md", { kind: "document", language: "markdown" }],
+    ["page.HTML", { kind: "document", language: "html" }],
     ["worker.ts", { kind: "text", language: "typescript" }],
     ["tsconfig.base.json", { kind: "text", language: "jsonc" }],
     ["Dockerfile", { kind: "text", language: "text" }],

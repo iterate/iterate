@@ -9,9 +9,10 @@ import type { WorkspaceTransport } from "./types.ts";
 
 /**
  * One file of a workspace, read-only: source text in the shared CodeMirror
- * block (highlighted by extension), or a note for files nothing renders.
- * Hosts open documents (.md/.html) in the collaborative editor instead;
- * editing everything else is an agent's job for now.
+ * block (highlighted by extension — documents as their Markdown or HTML
+ * source), or a note for files nothing renders. A host with a collaborative
+ * editor opens documents there instead; editing everything else is an
+ * agent's job for now.
  */
 export function WorkspaceFileView({
   transport,
@@ -34,7 +35,7 @@ export function WorkspaceFileView({
   const [error, setError] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
   useEffect(() => {
-    if (kind.kind !== "text") return;
+    if (kind.kind === "opaque") return;
     let cancelled = false;
     setContent(null);
     setError(null);
@@ -102,7 +103,7 @@ export function WorkspaceFileView({
         <div className="min-h-0 flex-1 overflow-auto [&_.cm-editor]:min-h-full">
           <SourceCodeBlock
             code={content}
-            language={kind.kind === "text" ? kind.language : "text"}
+            language={kind.language}
             codeMirrorExtensions={extensions}
             plainChrome
             showCopyButton={false}

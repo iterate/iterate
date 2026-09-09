@@ -79,6 +79,10 @@ function WorkspaceFiles({
   const onDocumentRevised = useCallback(() => setRevision((current) => current + 1), []);
   const selectedPath =
     path === undefined ? undefined : path.startsWith("/") ? path : `${workspacePath}/${path}`;
+  // The diff exists only while the file differs from HEAD: once a commit or
+  // discard clears it, the file shows again even though ?diff=1 lingers.
+  const dirty = selectedPath !== undefined && files.changes.has(selectedPath);
+  const showDiff = diff && dirty;
   // A deep link into a mount that is not open yet: list that root so the
   // tree can show (and select) the file.
   const { ensureLoaded } = files;
@@ -90,9 +94,7 @@ function WorkspaceFiles({
   const documentKey = JSON.stringify([workspacePath, path, revision]);
   const actions = (
     <>
-      {selectedPath !== undefined && files.changes.has(selectedPath) ? (
-        <DiffToggle active={diff} onToggle={toggleDiff} />
-      ) : null}
+      {dirty ? <DiffToggle active={showDiff} onToggle={toggleDiff} /> : null}
       <WorkspaceActions
         files={files}
         workspacePath={workspacePath}
@@ -147,7 +149,7 @@ function WorkspaceFiles({
               Pick a file, or add one.
             </div>
           </>
-        ) : diff ? (
+        ) : showDiff ? (
           <div key={documentKey} className="flex min-h-svh flex-col lg:h-svh lg:overflow-hidden">
             <WorkspaceFileDiff
               transport={transport}

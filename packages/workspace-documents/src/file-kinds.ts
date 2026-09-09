@@ -50,14 +50,15 @@ const OPAQUE_EXTENSIONS = new Set([
  * workspace file has no content-type channel.
  */
 export type WorkspaceFileKind =
-  | { kind: "document" }
+  | { kind: "document"; language: "html" | "markdown" }
   | { kind: "text"; language: SourceCodeLanguage }
   | { kind: "opaque" };
 
 export function workspaceFileKind(path: string): WorkspaceFileKind {
   const basename = path.split("/").pop() ?? path;
   const extension = basename.includes(".") ? basename.split(".").pop()!.toLowerCase() : "";
-  if (/^(?:md|markdown|html?)$/.test(extension)) return { kind: "document" };
+  if (/^(?:md|markdown)$/.test(extension)) return { kind: "document", language: "markdown" };
+  if (/^html?$/.test(extension)) return { kind: "document", language: "html" };
   if (OPAQUE_EXTENSIONS.has(extension)) return { kind: "opaque" };
   if (/^(?:tsconfig|jsconfig).*\.json$/.test(basename)) return { kind: "text", language: "jsonc" };
   // Everything else opens as text — unknown extensions (Dockerfile, .env,

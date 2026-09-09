@@ -53,7 +53,7 @@ export function WorkspaceFileDiff({
   }, [path, transport]);
 
   const kind = workspaceFileKind(path);
-  const language = kind.kind === "text" ? kind.language : "markdown";
+  const language = kind.kind === "opaque" ? "text" : kind.language;
   const extensions = useMemo(
     () =>
       sides === null
