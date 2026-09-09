@@ -4215,7 +4215,9 @@ ifConfiguredAtOffset })` only while the row is still the one configured at that 
   is ONE append (the read is gone, −20 LOC), and there is no window at all. Pinned in the reduce's
   table (both events, replacement / own / already-gone / mask rows) and in the workers lane through
   the raw DO door. The identical-rule handles pin stays red: two handles with the same target are
-  still one identity to a target-compare.
+  still one identity to a target-compare. GATES: `pnpm test` 88 files / 720 passed / 17 expected-
+  fail; DEPLOYED (d304cbe7c, version 17290289): 49 files / 200 passed / 4 expected-fail, the 1001-key
+  kv list socket drop the one failure for the third full run running (green alone every time).
 
 THE STREAM REVIEW (the third Fable launch; every contested claim first reproduced on a node:sqlite
 rig with the real `Stream` + `SubscriptionDelivery`, then applied by the same agent):
