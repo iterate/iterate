@@ -41,7 +41,7 @@ export const projectSlug = (name: string) =>
  *  control-plane user (the cookie, the admin's `as`, a grant with nothing to choose from); the
  *  projects named outright for a project token or the project secret (one) and for an OAuth grant
  *  (the consent's choice — none chosen is bound to none). */
-export type Reach = "every" | { userId: string } | { projectIds: string[] };
+export type Reach = "every" | { userId: string; projectIds?: string[] } | { projectIds: string[] };
 
 /** THE ONE RULE for what a principal reaches (`Reach`) — session.ts `authenticate` and `/mcp`
  *  (`buildServer`) both ask it. THE BINDING FIRST: a principal bound to projects — a session's
@@ -202,7 +202,12 @@ ORDER BY p.id ASC;`,
      *  is no row). */
     async reachableProjects(reach: Reach): Promise<Project[]> {
       if (reach === "every") return d1Directory.listAllProjects();
-      if ("userId" in reach) return d1Directory.listProjects(reach.userId);
+      if ("userId" in reach) {
+        const projects = await d1Directory.listProjects(reach.userId);
+        return reach.projectIds
+          ? projects.filter((project) => reach.projectIds!.includes(project.id))
+          : projects;
+      }
       const rows = await Promise.all(
         reach.projectIds.map((projectId) => d1Directory.getProject(projectId)),
       );
@@ -214,7 +219,8 @@ ORDER BY p.id ASC;`,
      *  is the admin's); a named reach is its list; a user's is one membership read. */
     async reachesProject(reach: Reach, projectId: string): Promise<boolean> {
       if (reach === "every") return true;
-      if ("projectIds" in reach) return reach.projectIds.includes(projectId);
+      if (reach.projectIds && !reach.projectIds.includes(projectId)) return false;
+      if (!("userId" in reach)) return true;
       return (await d1Directory.listProjects(reach.userId)).some(
         (project) => project.id === projectId,
       );

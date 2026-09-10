@@ -1,17 +1,11 @@
 // The OAuth authorization server and TanStack console. Directory policy lives in
 // directory.ts; MCP exposes that policy through the existing context capabilities.
 
-import {
-  AuthorizationError,
-  OAuthProvider,
-  type OAuthHelpers,
-  type ResolveExternalTokenInput,
-  type ResolveExternalTokenResult,
-} from "@cloudflare/workers-oauth-provider";
+import { AuthorizationError, type OAuthHelpers } from "@cloudflare/workers-oauth-provider";
 import type { ServerEntry } from "@tanstack/react-start/server-entry";
+import { parseAuthorization, type GrantProps } from "./oauth.ts";
 import { codedError, isSameOriginBrowserRequest } from "./lib.ts";
 import { directory, projectSlug, type Org, type Project } from "./directory.ts";
-import { mcpHandler, type McpProps } from "./mcp.ts";
 import { appConfigOf, sameOriginPath } from "./worker.ts";
 import {
   clearSessionCookie,
@@ -21,51 +15,8 @@ import {
   type Principal,
   type SessionCookieClaims,
 } from "./principal.ts";
-import { verifyCredentials, type SessionCredentials } from "./session.ts";
 import { DurableObjectNameCodec } from "./iterate-context.ts";
 import type { Env as DurableObjectEnv } from "./iterate-context-durable-object.ts";
-
-/** The provider's hook for a bearer on /mcp that is not one of its own tokens — the platform's
- *  credentials, tried as `/api` and the lanes try them (session.ts `verifyCredentials`): a project
- *  token (its one project), the deployment's admin secret (`{ actor: "admin" }`, every project), a
- *  project secret for the project `?project=` names on the request URL (that one project). Each is
- *  a first-party credential consumed at this resource, so the result is bound to it (`audience`)
- *  like every provider token. Anything else is null: the provider's 401. */
-async function resolveExternalToken({
-  token,
-  request,
-  env,
-}: ResolveExternalTokenInput): Promise<ResolveExternalTokenResult | null> {
-  const bindings = env as Env;
-  const url = new URL(request.url);
-  const project = url.searchParams.get("project");
-  const candidates: SessionCredentials[] = [
-    { type: "project-token", token },
-    { type: "admin-secret", secret: token },
-    ...(project ? [{ type: "project-secret" as const, project, secret: token }] : []),
-  ];
-  const input = {
-    request,
-    directory: directory(bindings.DB),
-    appConfig: appConfigOf(bindings),
-    secretsKv: bindings.SECRETS_KV,
-  };
-  for (const credentials of candidates) {
-    const sessionPrincipal = await verifyCredentials(credentials, input);
-    if (!sessionPrincipal) continue;
-    const { projectId, ...principal } = sessionPrincipal;
-    return {
-      props: {
-        ...principal,
-        ...(projectId !== undefined && { projects: [projectId] }),
-      } satisfies McpProps,
-      audience: appConfigOf(bindings).mcpOrigin
-        ? `${appConfigOf(bindings).mcpOrigin}/`
-        : `${url.origin}/mcp`,
-    };
-  }
-  return null;
-}
 
 // ── app ── THE CONTROL PLANE, mounted IN-PROCESS as the project worker's front-door catch-all
 // (src/worker.ts keeps the project hosts, /api, /version and the static assets, and delegates
@@ -253,7 +204,7 @@ export async function consentOf(env: Env, request: Request, query: string): Prom
   const session = await requireConsoleSession(env, request);
   let oauthRequest;
   try {
-    oauthRequest = await env.OAUTH_PROVIDER.parseAuthRequest(authorizeRequest(request, query));
+    oauthRequest = await parseAuthorization(env, authorizeRequest(request, query));
   } catch (error) {
     if (!(error instanceof AuthorizationError)) throw error;
     if (!error.redirectUri) return { kind: "invalid", description: error.description };
@@ -285,7 +236,7 @@ export async function approveConsent(
   chosen: string[],
 ): Promise<{ redirectTo: string }> {
   const session = await requireConsoleSession(env, request);
-  const oauthRequest = await env.OAUTH_PROVIDER.parseAuthRequest(authorizeRequest(request, query));
+  const oauthRequest = await parseAuthorization(env, authorizeRequest(request, query));
   const client = await env.OAUTH_PROVIDER.lookupClient(oauthRequest.clientId);
   const projects = await directory(env.DB).listProjects(session.sub);
   const checked = new Set(chosen);
@@ -294,12 +245,18 @@ export async function approveConsent(
     request: oauthRequest,
     userId: session.sub,
     metadata: { clientName: client?.clientName ?? oauthRequest.clientId },
-    scope: ["project"],
+    scope: oauthRequest.scope.includes("iterate") ? ["iterate"] : [],
+    revokeExistingGrants: false,
     props: {
-      actor: session.sub,
+      kind: "user-grant",
+      version: 1,
+      userId: session.sub,
       email: session.email,
-      ...(projects.length > 0 && { projects: granted }),
-    } satisfies McpProps,
+      projects: checked.has("*") ? null : granted,
+      resources: [oauthRequest.resource!].flat(),
+      tokenKind: "oauth",
+      deadline: Date.now() + 30 * 24 * 3600_000,
+    } satisfies GrantProps,
   });
 }
 
@@ -382,7 +339,7 @@ async function consoleDoor(request: Request, env: Env): Promise<Response | null>
  *  doors; then the Start server entry — the routes, SSR'd, and their server functions — handed the
  *  env, the execution context and the request as every server function's `context`. A page is the
  *  visitor's own (the session, the consent): never cached. */
-const consoleHandler: Handler = {
+export const consoleHandler: Handler = {
   async fetch(request, env, ctx) {
     if (request.method === "POST" && !isSameOriginBrowserRequest(request))
       return new Response("403: a cross-site request cannot act on this session\n", {
@@ -398,34 +355,5 @@ const consoleHandler: Handler = {
     const page = new Response(answer.body, answer);
     page.headers.set("cache-control", "no-store");
     return page;
-  },
-};
-
-/** The OAuth authorization server and MCP bearer gate. Both public hosts advertise
- *  the configured platform issuer. MCP's public origin is its resource audience;
- *  local configurations use /mcp on the platform origin. */
-export const controlPlane: Handler = {
-  fetch(request, env, ctx) {
-    const { origin } = new URL(request.url);
-    const config = appConfigOf(env);
-    const issuer = config.platformOrigin || origin;
-    const resource = config.mcpOrigin ? `${config.mcpOrigin}/` : `${issuer}/mcp`;
-    return new OAuthProvider<Env>({
-      apiRoute: "/mcp", // the ONLY OAuth-protected boundary
-      apiHandler: mcpHandler,
-      defaultHandler: consoleHandler, // login + session + /authorize consent + the account page
-      authorizeEndpoint: `${issuer}/authorize`,
-      tokenEndpoint: `${issuer}/oauth/token`,
-      clientRegistrationEndpoint: `${issuer}/oauth/register`,
-      scopesSupported: ["project"],
-      resourceMetadata: {
-        resource,
-        ...(issuer.startsWith("https:") && { authorization_servers: [issuer] }),
-        scopes_supported: ["project"],
-      },
-      clientIdMetadataDocumentEnabled: true, // CIMD — clients register themselves by URL (the `global_fetch_strictly_public` flag, wrangler.jsonc)
-      allowPlainPKCE: false, // OAuth 2.1: S256 only
-      resolveExternalToken, // a project token, the admin secret, a project secret
-    }).fetch(request, env, ctx);
   },
 };

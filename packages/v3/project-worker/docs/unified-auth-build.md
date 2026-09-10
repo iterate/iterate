@@ -39,3 +39,13 @@ Kit provisioning remains a subsequent slice of the earlier plan; RFC 8628 and
 - `253cc821a`: separated directory policy and MCP handling from the console.
   Typecheck, build and focused unit checks passed. Baseline unit suite: 519
   passing, five existing expected failures. Endpoints were unchanged.
+
+- Shared API gate: `/api` serves an authorized Cap’n Web Session; MCP uses the
+  same provider and grant checks. DCR is disabled, audiences remain distinct,
+  grants intersect current membership, and D1 markers deny use and refresh.
+  The old in-band entry moved to `/internal/rpc` and accepts only the configured
+  administrator (including explicit operator impersonation for fixtures).
+  Validation: five new workerd integration tests passed; all 522 unit tests
+  passed with the same five pre-existing expected failures; typecheck and lint
+  passed. The older cookie/project-token browser fixtures still need migration
+  with the browser-client slice. Live-connection revocation is not implemented yet.

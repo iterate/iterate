@@ -1,10 +1,10 @@
 import { createMcpHandler, fromJsonSchema, McpServer } from "@modelcontextprotocol/server";
 import { CfWorkerJsonSchemaValidator } from "@modelcontextprotocol/server/validators/cf-worker";
-import type { Env, Handler } from "./control-plane.ts";
-import { directory, reachOf, type Directory, type Reach } from "./directory.ts";
+import type { Env } from "./control-plane.ts";
+import { directory, type Directory, type Reach } from "./directory.ts";
 import { DurableObjectNameCodec } from "./iterate-context.ts";
 import { errorCode } from "./lib.ts";
-import type { Principal } from "./principal.ts";
+import type { Authorization } from "./oauth.ts";
 import {
   normalizedItxExpression,
   type ItxExpression,
@@ -22,15 +22,6 @@ import {
 // optional when the bearer reaches exactly one, required for the admin secret, refused outside the
 // grant. No tool creates a project: a project is created on the console or over `/api`
 // (`projects.create`) — a bearer that chose its projects at consent is bound to them.
-
-/** What the provider puts on `ctx.props` once the bearer is validated — WHO the tools act as (the
- *  principal `invokeAs` stamps on every event) and WHICH projects they reach, `reachOf`'s answer:
- *  `projects` names them outright and binds the bearer to them whoever it is — an OAuth grant's,
- *  chosen at consent (`authorize`); a project secret's or a project token's one
- *  (`resolveExternalToken`, the admin's own token included); absent — a user who had no project to
- *  choose from — the projects of the user's orgs, read per call; the admin secret's
- *  `{ actor: "admin" }` reaches every project, so its tool calls must name one. */
-export type McpProps = Principal & { projects?: string[] };
 
 /** The project a tool call runs in (apps/os `resolveToolProject`): `project`, when named, is a
  *  project — a context name is refused, as `projects.get` refuses it (session.ts): the expression
@@ -108,9 +99,9 @@ const PROJECT_INPUT = {
     "The project (its id/slug). Optional when this token reaches exactly one; required for the admin secret.",
 };
 
-function buildServer(env: Env, props: McpProps): McpServer {
+function buildServer(env: Env, authorization: Authorization): McpServer {
   const d1Directory = directory(env.DB);
-  const reach = reachOf(props);
+  const { reach, principal } = authorization;
   const mcpServer = new McpServer({ name: "control-plane", version: "0.1.0" });
 
   mcpServer.registerTool(
@@ -120,7 +111,7 @@ function buildServer(env: Env, props: McpProps): McpServer {
         "Who this token authenticates as and which projects it reaches: the user and the projects chosen at authorization; the admin secret (every project); a project token (its one project); a project secret (its one project — the secret names it with ?project=<id> on the /mcp URL).",
       inputSchema: objectSchema({}),
     },
-    async () => textResult(JSON.stringify(props, null, 2)),
+    async () => textResult(JSON.stringify(principal, null, 2)),
   );
 
   mcpServer.registerTool(
@@ -176,7 +167,6 @@ function buildServer(env: Env, props: McpProps): McpServer {
         expression: ItxExpressionInput;
         args?: unknown[];
       };
-      const { projects: _grantedProjects, ...principal } = props; // the stamp is the principal, never its grant
       try {
         const projectId = await projectOfToolCall(
           d1Directory,
@@ -205,12 +195,7 @@ function buildServer(env: Env, props: McpProps): McpServer {
   return mcpServer;
 }
 
-export const mcpHandler: Handler = {
-  async fetch(request, env, ctx) {
-    const { props } = ctx as ExecutionContext & { props: McpProps };
-    // A fresh handler per request under the default response mode (`auto`: one JSON body unless a
-    // notification precedes the result — these tools emit none). Not `responseMode: "json"`: the
-    // SDK `console.warn`s on every handler built that way, which here would be every request.
-    return createMcpHandler(() => buildServer(env, props)).fetch(request);
-  },
-};
+/** The shared bearer gate has established this principal and reach. */
+export function mcpResponse(request: Request, env: Env, authorization: Authorization) {
+  return createMcpHandler(() => buildServer(env, authorization)).fetch(request);
+}

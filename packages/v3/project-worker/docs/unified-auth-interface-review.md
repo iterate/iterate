@@ -79,3 +79,44 @@ Acceptance, in the workers lane, one test file replacing the `/mcp` block of con
 3. User grant: register a public client through `getOAuthApi(...).createClient` as the test fixture (the one thing CIMD cannot do on an http lane, stated in the test header), then run the real code plus PKCE exchange through `SELF.fetch`. The bearer on `/api` answers MCP `whoami` with the discriminated props. The same bearer on `/api/rpc` lists exactly the chosen projects, `projects.get(unchosen)` is FORBIDDEN, `mintToken()` and `rotateApiKey()` are FORBIDDEN, and deleting the user's `org_members` row makes a granted project FORBIDDEN on the next call.
 
 Deployed smoke for the same commit: `/version` at `os.iterate2.com`, admin bearer on `/api/rpc`, and one real CIMD fetch of `https://os.iterate2.com/.auth/client.json` from the worker itself, because that self-fetch is the single largest unknown in the whole plan.
+
+## Corrected resource-audience review
+
+The focused Fable 5.1 xhigh review confirmed multiple audiences work with the
+released provider when its global resource pin is omitted. The implementation
+validates a nonempty finite resource list at consent and rejects old unstamped
+grants. The browser adapter will turn its cookie into a bearer at the same gate;
+the reviewer’s suggestion to bypass that gate for cookies is not adopted.
+
+Done reading. Writing the recommendation now.
+
+**Conclusion: drop the global pin, keep one provider/KV/issuer, enforce the resource allow-list yourself at consent, and let the provider's array-aware admission do the rest.** The premise that an array audience is rejected at the API only holds while `resourceMetadata.resource` is set. With no pin, a single bearer carrying `[P/api, M]` is admitted at both hosts by the provider itself.
+
+**What the source establishes**
+
+- **Pin semantics are all-or-nothing.** `isExactResource` (`/tmp/iterate-oauth-provider-v0.10.3.ts:4711`) accepts a string or a length-1 array only. It gates parseAuthRequest (5186-5196), completeAuthorization (5283-5288), the token endpoint (4151-4167), API admission (3881-3890) and external tokens (3961-3970). Any pin forbids multi-resource tokens everywhere.
+- **Unpinned AS accepts arrays, no emptiness check.** parseAuthRequest collects repeated `resource` params (5149-5151) and only validates URI shape (5177-5185). completeAuthorization stores whatever it got, including `undefined` (5276-5288, 5442). Nonempty is your job.
+- **Token endpoint downscoping is provider-enforced.** `resolveTokenResource` (4132-4183): with no pin, every requested resource must string-equal a granted one (4170-4180), and omission inherits the full granted array (4182). Both code exchange and refresh use it (2527, 2752).
+- **API admission is per-request-URL and array-aware.** With no pin, 3907-3927 builds the resource server from the actual `request.url` and passes if any audience matches. `audienceMatches` (4653-4682) requires exact origin, then path-boundary prefix; an origin-only audience matches every path (4671). So `[https://os.iterate2.com/api, https://mcp.iterate2.com]` admits at `os/api/...` and `mcp/anything`, and nowhere else. An unbound token (no audience) skips the check entirely (3907).
+- **tokenExchangeCallback cannot see audience.** Its options (205-244, 2555-2563) carry no resource. Your only hook with the resource in hand is the caller of completeAuthorization. That is where the check belongs.
+- **PRM is auto-served per path.** Unpinned, `/.well-known/oauth-protected-resource[/suffix]` derives `origin + suffix` (1876-1882, 2297). On the mcp host this yields `https://mcp.iterate2.com`, no trailing slash. `resourceMatches` is string equality (4724), so your allow-list must use that exact spelling, not `M/`.
+- **Issuer follows tokenEndpoint.** `getAuthorizationServerIssuer` (2163-2166) and PRM `authorization_servers` (2291-2298) derive from the token endpoint origin. With the path form `"/oauth/token"` used today (`control-plane.ts:421`), the mcp host would advertise itself as AS. Use full URLs; `matchEndpoint` compares hostname+path (1826-1834).
+
+**Recommended shape**
+
+- One `OAuthProvider` with `apiHandlers: { "https://os.iterate2.com/api": capnwebBearerHandler, "https://mcp.iterate2.com/": mcpHandler }` (full-URL routes match hostname + path prefix, 2098-2110), full-URL `authorizeEndpoint`/`tokenEndpoint`/`clientRegistrationEndpoint` on os, `resourceMetadata: { authorization_servers: ["https://os.iterate2.com"], scopes_supported: [...] }` and **no** `resource`. Take the AS origin from app config, not the request, so the local lane keeps working.
+- Constants `ALLOWED = ["https://os.iterate2.com/api", "https://mcp.iterate2.com"]`, the same strings the PRM emits.
+- In `approveConsent` (`control-plane.ts:279`), before completeAuthorization: normalize `oauthRequest.resource` to an array, require length ≥ 1, dedupe, require every element `∈ ALLOWED`; otherwise throw `AuthorizationError('invalid_target')` with the redirect fields `consentOf` already forwards (255-263). Do the same in `consentOf` so the client gets the redirect early.
+- Stamp props: `{ ...principal, grantResources: resources, grantVersion: 2 }`. Props are encrypted by the provider and reach handlers as `ctx.props` (3930-3936); a caller cannot forge them. Both API handlers reject props lacking `grantVersion === 2`. This is the audited proof that the grant passed your nonempty check; the audience itself is enforced by the provider, so old `<origin>/mcp` or unbound grants fail either at admission (origin mismatch) or at the stamp check.
+- Personal tokens: no "smallest protocol" compromise needed. Via `exchangeToken` the `aud` subset is enforced by the same `resolveTokenResource` (3019-3032); via `resolveExternalToken` return `audience` as the chosen subset, default both (3973-3993 handles arrays).
+
+**Answer to the core question**
+
+A bearer valid for both surfaces exists iff the authorization request listed both resources. MCP SDK clients send exactly the PRM value, so they get `[M]`; the browser sends `[P/api]`; your own console flow may request both. The provider stores the array and issues it on omission. You never fork or re-verify anything.
+
+**Caveats**
+
+- The provider's api admission demands `Authorization: Bearer` (3841-3851). Cookie and project-token traffic on /api must still bypass the provider as `worker.ts:225` does today; route only bearer requests into it.
+- Path routes use bare `startsWith` (2105), so `/api` would also claim `/apiary`. Full-URL routes have the same behaviour; keep /api free of sibling paths.
+- Internal `/mcp` on os is not covered by M (origin mismatch, 4659). Either add it as a third allowed resource or drop it.
+- `resolveExternalToken` currently returns `${url.origin}/mcp` (`control-plane.ts:62`), which is tautological; return the configured constant for the handler instead.

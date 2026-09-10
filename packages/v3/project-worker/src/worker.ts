@@ -16,7 +16,8 @@ import {
 } from "capnweb";
 import { IterateContextDurableObject } from "./iterate-context-durable-object.ts";
 // the one worker's env: the DO's bindings plus the in-process control plane's (control-plane.ts `Env`)
-import { controlPlane, type Env as WorkerEnv } from "./control-plane.ts";
+import type { Env as WorkerEnv } from "./control-plane.ts";
+import { oauth } from "./oauth.ts";
 import { directory } from "./directory.ts";
 import { registerPipelinedRpcBrand } from "./context/expression.ts";
 import { ITX_EXPRESSION_FETCH_HEADER } from "./context/rpc-stubs.ts";
@@ -169,12 +170,10 @@ export default {
     const appConfig = appConfigOf(env);
     const { projectHostnameBase, projectTokenSecret, environmentName, deployId } = appConfig;
     if (appConfig.mcpOrigin && url.origin === appConfig.mcpOrigin) {
-      // The MCP origin exposes its root as the protocol endpoint. This internal
-      // rewrite preserves its public origin and leaves /api as Cap'n Web.
-      if (url.pathname === "/") url.pathname = "/mcp";
-      else if (!url.pathname.startsWith("/.well-known/"))
+      // MCP's public root is its protocol endpoint; /api remains Cap'n Web.
+      if (url.pathname !== "/" && !url.pathname.startsWith("/.well-known/"))
         return new Response("Not found", { status: 404 });
-      return controlPlane.fetch(new Request(url, request), env, ctx);
+      return oauth.fetch(request, env, ctx);
     }
     /** What every session and every lane's identity is built from — ONE object per request. */
     const sessionInput: SessionInput = {
@@ -233,13 +232,26 @@ export default {
     // the DO is reached only over Workers RPC. WHO dials is `authenticate(credentials)`'s answer
     // (session.ts): the control plane's session cookie on THIS request, a project token, a project
     // secret, or the admin secret.
-    if (url.pathname === "/api") {
+    if (url.pathname === "/internal/rpc") {
       // newWorkersRpcResponse serves BOTH a WebSocket upgrade AND a one-shot HTTP batch —
       // a CLI script or cron does one POST, no socket handshake. (Batch sessions cannot hold
       // live capabilities: a live provide needs the relay to outlive the response —
       // the relay's lend call simply fails there, which is the honest error.)
       return newWorkersRpcResponse(request, new UnauthenticatedSession(sessionInput));
     }
+
+    if (url.pathname === "/api") {
+      // Explicit header bearers do not rely on browser cookies. The browser
+      // adapter will enforce same-origin before replacing its cookie with a bearer.
+      // Strip Origin on upgrades so the provider does not reconstruct a 101 Response.
+      if (request.headers.get("upgrade")?.toLowerCase() === "websocket") {
+        const headers = new Headers(request.headers);
+        headers.delete("origin");
+        request = new Request(request, { headers });
+      }
+      return oauth.fetch(request, env, ctx);
+    }
+    if (url.pathname.startsWith("/api")) return new Response("Not found", { status: 404 });
 
     // THE STATIC ASSETS — the console's client bundle (dist/client, `vite build`) and the hosted /demo
     // page (public/demo.html, build-sdk.mjs) — are the PLATFORM HOST's. Every request runs
@@ -254,7 +266,7 @@ export default {
 
     // Everything else on the platform host is the CONTROL PLANE, in-process (src/control-plane.ts
     // lists its doors: the OAuth AS, /mcp, the console). One worker, one front door.
-    return controlPlane.fetch(request, env, ctx);
+    return oauth.fetch(request, env, ctx);
   },
 };
 

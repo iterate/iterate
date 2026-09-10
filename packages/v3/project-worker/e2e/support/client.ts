@@ -38,8 +38,8 @@ export const freshCtx = (prefix: string): string =>
   `prj_${prefix}_${Date.now().toString(36)}_${counter++}`;
 
 const wsApi = (): string => {
-  const u = new URL("/api", baseUrl());
-  u.protocol = "ws:";
+  const u = new URL("/internal/rpc", baseUrl());
+  u.protocol = u.protocol === "https:" ? "wss:" : "ws:";
   return u.toString();
 };
 

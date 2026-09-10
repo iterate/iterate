@@ -40,3 +40,14 @@ create table if not exists projects (
 
 create index if not exists idx_org_members_user on org_members (user_id, org_id);
 create index if not exists idx_projects_org on projects (org_id);
+
+-- Provider grants remain the inventory. These rows record observed activity and
+-- deny access durably before eventually-consistent provider cleanup completes.
+create table if not exists oauth_activity (
+  user_id text not null,
+  grant_id text not null,
+  last_used_at integer,
+  revoked_at integer,
+  cleanup_pending integer not null default 0,
+  primary key (user_id, grant_id)
+);

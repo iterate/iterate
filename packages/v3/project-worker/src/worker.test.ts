@@ -143,7 +143,7 @@ describe("public protocol origins", () => {
     )![1]!;
     expect(metadataUrl).toMatch(/^https:\/\/mcp\.iterate2\.com\//);
     expect(await (await request(metadataUrl)).json()).toMatchObject({
-      resource: "https://mcp.iterate2.com/",
+      resource: "https://mcp.iterate2.com",
       authorization_servers: ["https://os.iterate2.com"],
     });
     expect(

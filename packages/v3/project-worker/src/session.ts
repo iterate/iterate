@@ -161,39 +161,24 @@ export class UnauthenticatedSession extends RpcTarget {
    *  long — its session mints no token and rotates no key (the project doors are the member's, the
    *  admin's and the project's own). */
   async authenticate(credentials: SessionCredentials): Promise<Session> {
+    if (credentials.type !== "admin-secret")
+      throw codedError("INVALID_CREDENTIALS", "The operator RPC door requires the admin secret.");
     const principal = await verifyCredentials(credentials, this.#input);
-    if (!principal) {
-      switch (credentials.type) {
-        case "from-server-cookie":
-          throw codedError(
-            "UNAUTHENTICATED",
-            `authenticate({ type: "from-server-cookie" }): no session cookie counts on this request — sign in at / first; the cookie counts on a same-origin request only, and this one's Origin is ${JSON.stringify(this.#input.request.headers.get("origin"))}`,
-          );
-        case "project-token":
-          throw codedError("INVALID_CREDENTIALS", "the project token did not verify");
-        case "project-secret":
-          throw codedError(
-            "INVALID_CREDENTIALS",
-            `the project secret did not verify for project ${JSON.stringify(credentials.project)}`,
-          );
-        case "admin-secret":
-          throw codedError("INVALID_CREDENTIALS", "the admin secret did not match");
-      }
-    }
-    const projectDoors = credentials.type === "project-token" ? null : this.#input;
+    if (!principal) throw codedError("INVALID_CREDENTIALS", "The admin secret did not match.");
     return new Session(
       this.#input,
       this.#sessionTeardown,
       principal,
       reachOf(principal),
-      projectDoors,
+      this.#input,
     );
   }
 }
 
 /** What you authenticate into: a catalog that vends contexts. A session is NOT a context — it is
  *  the directory you reach one through (apps/os: "a session is what authenticate() returns"). */
-class Session extends RpcTarget {
+export class Session extends RpcTarget {
+  readonly #sessionTeardown: SessionTeardown;
   readonly #projects: ProjectCollection;
   readonly #principal: SessionPrincipal;
 
@@ -206,7 +191,12 @@ class Session extends RpcTarget {
   ) {
     super();
     this.#principal = principal;
+    this.#sessionTeardown = sessionTeardown;
     this.#projects = new ProjectCollection(input, sessionTeardown, principal, reach, projectDoors);
+  }
+
+  [Symbol.dispose](): void {
+    this.#sessionTeardown.disposeAll();
   }
 
   /** Who this session is: the user (the cookie's, the admin's `as`), the token's principal (and its
