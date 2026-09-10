@@ -221,10 +221,7 @@ test("a root stream DO restart closes the installing session with 4901; reconnec
   });
   using interceptorProject = interceptorSession.projects.get(description.projectId);
   using _interception = await interceptorProject.ai.intercept(async ({ model }) =>
-    Response.json({
-      servedBy: "first install",
-      model,
-    }),
+    Response.json({ servedBy: "first install", model }),
   );
   const consultStart = performance.now();
   expect(await project.ai.run("intercepted/echo", {})).toMatchObject({
@@ -255,9 +252,7 @@ test("a root stream DO restart closes the installing session with 4901; reconnec
   });
   using recoveredProject = recoveredSession.projects.get(description.projectId);
   using _recovered = await recoveredProject.ai.intercept(async () =>
-    Response.json({
-      servedBy: "re-install",
-    }),
+    Response.json({ servedBy: "re-install" }),
   );
   expect(await project.ai.run("intercepted/echo", {})).toMatchObject({ servedBy: "re-install" });
 });
