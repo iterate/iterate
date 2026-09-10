@@ -4611,3 +4611,36 @@ before a fix; every finding fixed and pinned, or left with its mechanism named. 
 §6 the TanStack console (the string console still serves), custom hostnames (a certificate task),
 the dotted host shape deployed (the same certificate), the client-helper stack (a proposal in the
 tutorial's chapter 0), and kernel-vs-library namespacing (an open question in chapter 9).
+
+## 2026-09-10 — the console as a TanStack Start app, and every auth flow proven in a real browser
+
+- JONAS: "Please do that super lightweight idiomatic tanstack start app next. I want all this stuff
+  proven out in the browser." THE CONSOLE (apps/auth's shape, minus Tailwind, the ui kit, react-query
+  and oRPC): Vite + `@cloudflare/vite-plugin` + `@tanstack/react-start`; four file routes — `/login`
+  (the email form; Google lands beside it later), `/` (the account page: the user's projects, each
+  with an "open" link through `/.itx/session?token=` minted server-side, a create form, logout),
+  `/authorize` (the OAuth consent AND the project selection: checkboxes, all checked, the chosen ids
+  into `props.projects`); ONE server function reads the `__Host-` cookie and returns display fields
+  only, never the cookie; the checked-in route tree with `routes:check`. The string HTML builders in
+  `control-plane.ts` are gone; the provider's `defaultHandler` is the Start server entry (a lazy
+  import, so the node lanes never load Start's graph); four plain form-POST doors (`/login`, `/logout`,
+  `/projects`, `/authorize`) stay beside the server functions for machines and the workers lane. The
+  SPA fallback and project hosts coexist by construction: the worker asks the ASSETS binding only on
+  the platform host after every other door; a project host returns before it. `build-sdk.mjs` runs at
+  Vite config load; `/demo` stays a static asset. `pnpm dev` is `vite build` → the schema into the
+  local D1 → `wrangler dev` (the Vite plugin's bundled workerd predates this worker's compat date);
+  the e2e and workers lanes run the BUILT worker.
+- THE BROWSER PROOF (`specs/auth.spec.ts`, Playwright, real Chromium; roles and labels, never markup):
+  login and the account page (the cookie HttpOnly, host-only, invisible to script); a project created
+  and listed; the "open" link through `/.itx/session` onto a project host, an echo app showing the
+  visitor's principal and no cookie; `from-server-cookie` over capnweb inside the page and refused from
+  a project-host page; the OAuth flow as an MCP client runs it — DCR, consent with one project
+  unchecked, the loopback redirect, PKCE, `tools/list`, `itx.invoke` granted and refused; the project
+  secret as a device bearer; logout; the cross-site negatives (403, UNAUTHENTICATED, 405). 8/8 against
+  the deployed string console (b7ab3cc06), 8/8 against the new console locally; the deployed run: the
+  line below. One finding, pinned as today's truth: the "open" link signs in the APEX host only —
+  `__Host-` cookies are host-only, so an app host is signed in through its own `/.itx/session` door.
+- The dependencies (TanStack Start + Router, React as a runtime dependency, Vite, the Cloudflare
+  plugin, the router generator, the React plugin — the versions apps/auth pins) spliced into the
+  lockfile in a detached checkout. GATES: tsc ×3 · `routes:check` · `vite build` · oxlint · knip ·
+  unit 519 · workers 59 · local e2e 177. DEPLOYED: the line below.

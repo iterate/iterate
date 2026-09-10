@@ -19,15 +19,19 @@
 //   code + PKCE flow with project selection at consent, the three tools, a project token, the admin
 //   secret and a project secret as bearers (a token the admin minted bound to its one project, as
 //   over /api), a token for another resource refused.
-// The worker's default fetch is called directly so a test can hand it its own env (worker.ts's app
-// config memoizes the configuration per env object).
+// THE CONSOLE under test is the TanStack Start app (src/routes/**) inside the BUILT worker
+// (vitest.config.ts: the lane's main is dist/server/index.js — the Start server entry resolves
+// only inside the Vite build), driven through SELF.fetch as a browser or a script would: the pages are
+// its SSR (`GET /` signed out redirects to /login; `/authorize` is the consent), the actions are the
+// MACHINE DOORS beside its server functions (control-plane.ts `consoleDoor`: `POST /login`, `/logout`,
+// `/projects`, `/authorize` as plain form posts — a server function's URL is the build's,
+// `/_serverFn/<id>`, no door for a script).
 
-import { createExecutionContext, env } from "cloudflare:test";
+import { env, SELF } from "cloudflare:test";
 import { newWebSocketRpcSession } from "capnweb";
 import { afterAll, beforeAll, expect, test } from "vitest";
 import definitionsSql from "../src/control-plane.sql?raw";
 import { rotateProjectApiKey, signProjectToken } from "../src/principal.ts";
-import worker from "../src/worker.ts";
 import { SRC_ECHO_APP } from "./support.ts";
 
 const workersLaneEnv = env as unknown as Record<string, unknown>;
@@ -38,9 +42,15 @@ const ADMIN = { type: "admin-secret", secret: ADMIN_API_SECRET } as const;
 const COOKIE = { type: "from-server-cookie" } as const;
 const ORIGIN = "https://control.test";
 
-/** One request to the worker's front door under `mode`'s configuration. */
-const call = (mode: Record<string, unknown>, path: string, init?: RequestInit): Promise<Response> =>
-  worker.fetch(new Request(`${ORIGIN}${path}`, init), mode as never, createExecutionContext());
+/** One request to the worker's front door (SELF: the built worker under this lane's configuration —
+ *  `mode` names it, as every row does). `redirect: "manual"`: SELF is a Fetcher, and a Fetcher
+ *  follows a 3xx as a client would — the rows assert the console's redirects (and the cookies on them). */
+const call = (
+  _mode: Record<string, unknown>,
+  path: string,
+  init?: RequestInit,
+): Promise<Response> =>
+  SELF.fetch(new Request(`${ORIGIN}${path}`, { redirect: "manual", ...init }));
 
 const form = (fields: Record<string, string>): RequestInit => ({
   method: "POST",
@@ -134,9 +144,14 @@ beforeAll(async () => {
 });
 
 test("the cookie: sign in on the console, then the cookie's same-origin socket to /api authenticates — projects.create vends the root context, list catalogs it, get admits members only, a taken name is coded; a foreign Origin and no cookie are UNAUTHENTICATED; the console's POST doors refuse a foreign Origin and /logout is a POST", async () => {
+  // signed out, the console is the sign-in: `/` (the account page, under the `_auth` layout) sends the
+  // visitor to /login with `next` pointing back, and /login is the form
   const anonymousHome = await call(workersLaneEnv, "/");
-  expect(anonymousHome.status).toBe(200);
-  expect(await anonymousHome.text()).toContain("Sign in");
+  expect(anonymousHome.status).toBe(307);
+  expect(anonymousHome.headers.get("location")).toBe("/login?next=%2F");
+  const loginPage = await call(workersLaneEnv, "/login?next=%2F");
+  expect(loginPage.status).toBe(200);
+  expect(await loginPage.text()).toContain("Sign in");
 
   // the login form: the post-login redirect never leaves the origin
   const login = await call(
@@ -313,10 +328,8 @@ test("a project host: a visitor's `x-itx-*` never reach the DO's internal protoc
   await target.provide("itx.apps.echo", ["itx", "workers", ["get", { source: SRC_ECHO_APP }]]);
   /** One request on the project's `echo` host under this lane's configuration. */
   const onHost = (project: string, init?: RequestInit): Promise<Response> =>
-    worker.fetch(
-      new Request(`https://echo--${project}.projects.test/`, init),
-      workersLaneEnv as never,
-      createExecutionContext(),
+    SELF.fetch(
+      new Request(`https://echo--${project}.projects.test/`, { redirect: "manual", ...init }),
     );
   // a forged pager header (the DO's internal attach protocol, which appends the events it carries)
   // is stripped at the edge: nothing lands in the log
@@ -442,9 +455,11 @@ async function grantFlow(
   const { client: registered, verifier, query } = await authorizeQuery(mode, options);
   const consent = await call(mode, `/authorize?${query}`, { headers: { cookie } });
   expect(consent.status).toBe(200);
-  const offered = [
-    ...(await consent.text()).matchAll(/name="project" value="([^"]+)" checked/g),
-  ].map((m) => m[1]!);
+  // her projects as checkboxes, all checked (React's SSR writes `checked` before `value`)
+  const offered = [...(await consent.text()).matchAll(/<input\b[^>]*>/g)]
+    .map((m) => m[0])
+    .filter((input) => input.includes('name="project"') && /\bchecked\b/.test(input))
+    .map((input) => /value="([^"]+)"/.exec(input)![1]!);
   const approval = new URLSearchParams();
   for (const id of options.choose ? options.choose(offered) : offered)
     approval.append("project", id);

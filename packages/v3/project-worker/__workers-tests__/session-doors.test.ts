@@ -29,19 +29,16 @@
 // The worker's default fetch is called directly with this lane's env (wrangler.test.jsonc: project
 // hosts hang under `projects.test`).
 
-import { createExecutionContext, env } from "cloudflare:test";
+import { env, SELF } from "cloudflare:test";
 import { newWebSocketRpcSession } from "capnweb";
 import { afterAll, beforeAll, expect, test } from "vitest";
 import { signProjectToken, verifyProjectToken } from "../src/principal.ts";
-import worker from "../src/worker.ts";
 import { applyDirectorySchema, SRC_ECHO_APP } from "./support.ts";
 
 /** This lane's token secret (wrangler.test.jsonc) — what a token minted over /api verifies with. */
 const TOKEN_SECRET = String(
   (env as unknown as Record<string, unknown>).APP_CONFIG_PROJECT_TOKEN_SECRET,
 );
-/** This lane's env — ONE object: the app config memo (worker.ts `appConfigOf`). */
-const laneEnv = env as unknown as Record<string, unknown>;
 const ADMIN = {
   type: "admin-secret",
   secret: String((env as unknown as Record<string, unknown>).APP_CONFIG_ADMIN_API_SECRET),
@@ -49,8 +46,10 @@ const ADMIN = {
 const BASE64URL_32_BYTES = /^[A-Za-z0-9_-]{43}$/;
 
 /** One request to the worker's front door, on the platform host or a project host. */
+// the BUILT worker (vitest.config.ts), as control-plane.test.ts drives it; `redirect: "manual"`: SELF
+// is a Fetcher and would follow the session door's 303 — the rows assert it
 const call = (url: string, init?: RequestInit): Promise<Response> =>
-  worker.fetch(new Request(url, init), laneEnv as never, createExecutionContext());
+  SELF.fetch(new Request(url, { redirect: "manual", ...init }));
 
 // capnweb sessions over /api, opened on the worker's own 101; disposed at teardown.
 const sessions: unknown[] = [];

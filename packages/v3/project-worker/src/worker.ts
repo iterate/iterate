@@ -1,8 +1,10 @@
 // The PROJECT WORKER — the stateless edge AND the front door. capnweb terminates at `/api`; a project
 // host — the ONE HTTP way into a project — forwards to the IterateContextDurableObject over Workers
-// RPC (the DO does the real work and stays hibernatable); the control plane (OAuth AS + D1 directory
-// + /mcp) runs IN-PROCESS here (control-plane.ts) — one worker, one front door. A project host names
-// its project; the directory confirms it exists. Two pure halves ride with the edge:
+// RPC (the DO does the real work and stays hibernatable); the static assets (the console's client
+// bundle, the hosted /demo page) are served on the platform host alone; the control plane (OAuth AS +
+// D1 directory + /mcp + the console, a TanStack Start app SSR'd in-process) runs IN-PROCESS here
+// (control-plane.ts) — one worker, one front door. A project host names its project; the directory
+// confirms it exists. Two pure halves ride with the edge:
 //   app config   — `appConfigOf` / `parseAppConfig`: THE WORKER'S CONFIGURATION, one typed object per isolate
 //   project host — `projectHostOf` + the project-session cookie door: which project and which app a hostname names
 
@@ -215,9 +217,6 @@ export default {
     // waits for (`wrangler deploy` prints it) — and which deployment this is (the app config section below).
     if (url.pathname === "/version") return new Response(`${deployId} ${environmentName}\n`);
 
-    // /demo — the hosted live-state demo — is a STATIC ASSET (public/demo.html, built by
-    // build-sdk.mjs; wrangler.jsonc `assets`): the platform serves it before this handler runs.
-
     // THE ONE capnweb ENTRYPOINT (the hard rule): capnweb terminates HERE, in the stateless worker;
     // the DO is reached only over Workers RPC. WHO dials is `authenticate(credentials)`'s answer
     // (session.ts): the control plane's session cookie on THIS request, a project token, a project
@@ -230,8 +229,19 @@ export default {
       return newWorkersRpcResponse(request, new UnauthenticatedSession(sessionInput));
     }
 
+    // THE STATIC ASSETS — the console's client bundle (dist/client, `vite build`) and the hosted /demo
+    // page (public/demo.html, build-sdk.mjs) — are the PLATFORM HOST's. Every request runs
+    // worker-first (wrangler.jsonc `run_worker_first: true` — the patterns are paths, never hostnames,
+    // so "every host but a project host" is spelled by asking the binding HERE, after the project
+    // hosts and the platform's own doors): no asset ever answers on a project host, and a miss falls
+    // through to the control plane — the console's SSR. Absent in the workers lane.
+    if ((request.method === "GET" || request.method === "HEAD") && env.ASSETS) {
+      const asset = await env.ASSETS.fetch(request);
+      if (asset.status !== 404) return asset;
+    }
+
     // Everything else on the platform host is the CONTROL PLANE, in-process (src/control-plane.ts
-    // lists its doors). One worker, one front door.
+    // lists its doors: the OAuth AS, /mcp, the console). One worker, one front door.
     return controlPlane.fetch(request, env, ctx);
   },
 };

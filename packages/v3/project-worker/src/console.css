@@ -1,0 +1,65 @@
+/* console.css — the ONE stylesheet of the console (src/routes/**): the string console's rules, verbatim. */
+:root {
+  color-scheme: light dark;
+}
+body {
+  font:
+    15px/1.5 ui-sans-serif,
+    system-ui,
+    sans-serif;
+  max-width: 34rem;
+  margin: 4rem auto;
+  padding: 0 1.25rem;
+}
+h1 {
+  font-size: 1.25rem;
+  margin: 0 0 1rem;
+}
+h2 {
+  font-size: 1rem;
+  margin: 1.4rem 0 0.4rem;
+}
+form {
+  margin: 1rem 0;
+}
+fieldset {
+  border: 1px solid color-mix(in oklab, currentColor 25%, transparent);
+  border-radius: 6px;
+  margin: 0.8rem 0;
+}
+legend {
+  padding: 0 0.4rem;
+  opacity: 0.7;
+  font-size: 0.85em;
+}
+input[type="email"],
+input[type="text"] {
+  font: inherit;
+  padding: 0.5rem 0.6rem;
+  width: 100%;
+  box-sizing: border-box;
+  margin-bottom: 0.6rem;
+}
+label {
+  display: block;
+  margin: 0.25rem 0;
+}
+button {
+  font: inherit;
+  padding: 0.5rem 0.9rem;
+  cursor: pointer;
+}
+.muted {
+  opacity: 0.6;
+  font-size: 0.85em;
+}
+ul {
+  padding-left: 1.1rem;
+}
+code {
+  font-size: 0.85em;
+  opacity: 0.8;
+}
+[role="alert"] {
+  color: color-mix(in oklab, currentColor 70%, red);
+}

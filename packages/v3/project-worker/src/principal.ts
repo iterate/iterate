@@ -47,7 +47,7 @@ const base64url = (bytes: Uint8Array): string =>
     .replaceAll("+", "-")
     .replaceAll("/", "_")
     .replace(/=+$/, "");
-const bytesFromBase64url = (text: string): Uint8Array =>
+const bytesFromBase64url = (text: string): Uint8Array<ArrayBuffer> =>
   Uint8Array.from(
     atob(
       text
@@ -88,7 +88,7 @@ async function verifyClaims(token: string, secret: string): Promise<unknown> {
   const dot = token.indexOf(".");
   if (dot <= 0) return null;
   const payload = token.slice(0, dot);
-  let signature: Uint8Array;
+  let signature: Uint8Array<ArrayBuffer>;
   let claims: unknown;
   try {
     signature = bytesFromBase64url(token.slice(dot + 1));

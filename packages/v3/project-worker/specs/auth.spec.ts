@@ -39,6 +39,13 @@ const APPROVE = /approve|allow|authorize/i;
 const LOG_OUT = /log ?out|sign out/i;
 
 const SESSION_COOKIE = "__Host-itx-control-plane-session";
+/** A hostname with the base URL's port (a local worker has one; the deployment has none). The `__Host-`
+ *  cookies need a secure origin, and Chromium counts `localhost` (not `127.0.0.1`) as one — so a local
+ *  run points DEMO_BASE_URL at `http://localhost:<port>`. */
+const hostWithPort = (hostname: string, baseURL: string): string => {
+  const { port } = new URL(baseURL);
+  return port ? `${hostname}:${port}` : hostname;
+};
 const PROJECT_SESSION_COOKIE = "__Host-itx-project-session";
 
 // ── the deployment under test ──
@@ -433,7 +440,7 @@ test("2. the account page's form creates a project: it appears in the list with 
   const open = openLinkOf(page, project);
   await expect(open).toHaveCount(1);
   const href = new URL((await open.getAttribute("href"))!, page.url());
-  expect(href.host).toBe(`${project}.${projectHostnameBase(baseURL!)}`);
+  expect(href.host).toBe(hostWithPort(`${project}.${projectHostnameBase(baseURL!)}`, baseURL!));
   expect(href.pathname).toBe("/.itx/session");
   expect(href.searchParams.get("token"), "the link carries a project token").toBeTruthy();
 });
@@ -457,7 +464,7 @@ test("3. 'open' lands the browser on the project's host with the __Host- project
   const token = new URL((await open.getAttribute("href"))!, page.url()).searchParams.get("token")!;
   const apexUrl = projectHostUrl(baseURL!, `${project}.${base}`);
   await Promise.all([page.waitForURL(apexUrl), open.click()]);
-  expect(new URL(page.url()).host).toBe(`${project}.${base}`);
+  expect(new URL(page.url()).host).toBe(hostWithPort(`${project}.${base}`, baseURL!));
   const apexCookie = await projectSessionCookieOf(context, apexUrl);
   expect(apexCookie, "the project-session cookie was set for the apex host").toBeDefined();
   expect(apexCookie!.httpOnly).toBe(true);

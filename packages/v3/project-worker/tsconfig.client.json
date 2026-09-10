@@ -1,14 +1,16 @@
 {
-  // The BROWSER client (src/client/demo.tsx: the demo page + its React hook) — React + DOM, NOT the
-  // worker runtime. Kept out of the main tsconfig (which is workerd-typed, no DOM/JSX on purpose) and
-  // checked here instead. The framework-free client half (live-state.ts) stays in the main tsconfig —
-  // it uses no DOM and belongs to the worker's type world.
+  // The CONSOLE + THE BROWSER CLIENT: the TanStack Start app (src/routes/**, src/router.tsx, the
+  // generated route tree — React, DOM, and the server functions inside them, which reach the worker's
+  // bindings through control-plane.ts) and src/client/demo.tsx (the demo page + its React hook). React
+  // + DOM + workers-types + Vite's `?url` imports, apps/auth's shape. Kept out of the main tsconfig
+  // (workerd-typed, no DOM/JSX on purpose) and checked here instead. The framework-free client half
+  // (live-state.ts) stays in the main tsconfig — it uses no DOM and belongs to the worker's type world.
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "jsx": "react-jsx",
     "lib": ["ES2022", "ESNext.Disposable", "DOM", "DOM.Iterable"],
-    "types": ["react", "react-dom"]
+    "types": ["@cloudflare/workers-types", "node", "react", "react-dom", "vite/client"]
   },
-  "include": ["src/client/demo.tsx"],
+  "include": ["src/routes", "src/router.tsx", "src/routeTree.gen.ts", "src/client/demo.tsx"],
   "exclude": []
 }

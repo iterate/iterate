@@ -1,16 +1,18 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "project-worker",
-  // The build hook regenerates the bundled processor SDK (src/generated/*, gitignored) before
-  // wrangler bundles src — for `wrangler dev` and `wrangler deploy` alike.
+  // THE BUILD IS VITE's (vite.config.ts): this file is the Cloudflare Vite plugin's input — `vite dev`
+  // runs the worker in workerd, `vite build` bundles it (with the console's routes and their server
+  // functions) to dist/server/index.js beside a resolved copy of this config,
+  // dist/server/wrangler.json, which `pnpm deploy` and the local lanes consume. The processor
+  // SDK bundle (src/generated/*, gitignored) and public/demo.html are built by build-sdk.mjs at Vite
+  // config load.
   "main": "src/worker.ts",
-  "build": {
-    "command": "node build-sdk.mjs",
-    "watch_dir": "src",
-  },
-  // At this date nodejs_compat is ON by default for THIS worker (harmless: nothing here imports
-  // node:*). Loaded userspace isolates are the pure-play half — context/worker-loader.ts mints them
-  // with no_nodejs_compat, so what runs inside a context stays portable across workerd builds.
+  // nodejs_compat, spelled out: the DO's AsyncLocalStorage (node:async_hooks) and the console's Start
+  // server (node:async_hooks, node:stream) need it, and the Vite plugin externalizes `node:*` for
+  // workerd only when it sees the flag (the default-on date is newer than its wrangler). Loaded
+  // userspace isolates are the pure-play half — context/worker-loader.ts mints them with
+  // no_nodejs_compat, so what runs inside a context stays portable across workerd builds.
   "compatibility_date": "2026-09-01",
   // allow_irrevocable_stub_storage (experimental, undocumented): lets loaded code STORE its env.ITX
   // stub in its own durable storage and replay it (e2e/workers-and-facets.e2e.test.ts pins it); every worker
@@ -18,7 +20,11 @@
   // global_fetch_strictly_public: the OAuth provider's Client ID Metadata Documents (control-plane.ts
   // `clientIdMetadataDocumentEnabled`) — its fetch of a client's metadata URL must reach the public
   // internet only, never same-zone routing; without the flag the provider advertises no CIMD.
-  "compatibility_flags": ["allow_irrevocable_stub_storage", "global_fetch_strictly_public"],
+  "compatibility_flags": [
+    "nodejs_compat",
+    "allow_irrevocable_stub_storage",
+    "global_fetch_strictly_public",
+  ],
   "account_id": "04b3b57291ef2626c6a8daa9d47065a7",
   "observability": { "enabled": true, "logs": { "head_sampling_rate": 1 } },
   "workers_dev": true,
@@ -35,9 +41,14 @@
   // CPU-limit abort. Neither is billed until used.
   "limits": { "subrequests": 1000000, "cpu_ms": 300000 },
 
-  // The hosted /demo page as a static asset (build-sdk.mjs writes public/demo.html): served by the
-  // platform, not the script — 255 KiB fewer in every /api and DO isolate.
-  "assets": { "directory": "./public" },
+  // THE STATIC ASSETS: the console's client bundle (Vite's dist/client) plus public/ verbatim — the
+  // hosted /demo page build-sdk.mjs writes there (255 KiB kept out of every /api and DO isolate). The
+  // Vite plugin sets the directory. `run_worker_first: true`, on purpose: the patterns are paths, never
+  // hostnames, and a project host (`<app>--<project>.<base>`) must never answer with a platform asset —
+  // so src/worker.ts asks the ASSETS binding itself, on the platform host only, after the project
+  // hosts; a miss falls through to the console's SSR (`not_found_handling: "none"` — the SSR is the
+  // fallback, not an index.html: the Start build emits none).
+  "assets": { "binding": "ASSETS", "not_found_handling": "none", "run_worker_first": true },
 
   // The Worker Loader that runs each project's confined config worker / agents.
   "worker_loaders": [{ "binding": "LOADER" }],

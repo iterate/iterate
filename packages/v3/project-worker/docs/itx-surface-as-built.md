@@ -587,18 +587,29 @@ credential: a cross-site top-level navigation carries it with no `Origin` to che
 ingress only verifies.
 
 **The control plane** (`src/control-plane.ts`, IN-PROCESS: everything on the worker's hostname that
-is not `/api`, `/version` or `/demo` is its catch-all — one worker, one front door).
+is not `/api`, `/version` or a static asset (`dist/client`: the console's bundle, the hosted `/demo`
+page — asked for on the platform host only, `run_worker_first: true`) is its catch-all — one worker,
+one front door).
 An OAuth 2.1 Authorization Server (`@cloudflare/workers-oauth-provider`, built per request from the
 request's origin: `/authorize` app-owned, `/oauth/token`, `/oauth/register` (DCR; CIMD on, with the
 `global_fetch_strictly_public` flag), `/.well-known/*`; `/mcp` its ONLY protected route and its ONE
 pinned resource, `<origin>/mcp`, this origin the authorization server — every token bound to it, a
 foreign one refused), a D1 directory (`control-plane.sql`: users → orgs via `org_members` →
-projects; access is org membership), a console at `/` with an email login form (`POST /login`,
-`POST /logout`, `POST /projects` — every POST refused with 403 from a foreign `Origin`; every page
-`Cache-Control: no-store`) whose session is a signed cookie (`__Host-itx-control-plane-session`,
-`src/principal.ts` verifies it) and whose project rows each link `open` through
-`/.itx/session?token=` to the project's APEX host — the config worker's `fetch`, which for a project
-with no config worker of its own is the bundled default's 404 — the `/authorize` consent page with PROJECT SELECTION (the user's
+projects; access is org membership), THE CONSOLE — a TanStack Start app (`src/routes/**`, SSR'd
+here through the Start server entry; `src/router.tsx`, `routeTree.gen.ts`, `console.css`): `/login`
+(the email form; "continue as / switch account" with a session), the `_auth` layout (no session ⇒
+`/login?next=`), the account page at `/` (orgs; projects, each with an `open` link through
+`/.itx/session?token=` to its APEX host — the config worker's `fetch`, the bundled default's 404 for
+a project with none of its own — and one per app it serves, `<label>--<project>`; a create-project
+form; log out) and the `/authorize` consent — every route reading and acting through its own
+`createServerFn`s, which call this file's console half (`consoleSessionOf` · `signIn` · `signOut` ·
+`accountOf` · `createProjectFor` · `consentOf` · `approveConsent`) with the worker's env and the
+request as `context` (`src/routes/-console-context.ts`); beside them THE MACHINE DOORS
+(`consoleDoor`): the same actions as plain form POSTs, `POST /login`, `/logout`, `/projects`,
+`/authorize`, for a script, the lanes, a `page.request.post` — every POST refused with 403 from a
+foreign `Origin`, every page `Cache-Control: no-store`; the session a signed cookie
+(`__Host-itx-control-plane-session`, `src/principal.ts` verifies it) — the `/authorize` consent
+being THE PROJECT SELECTION (the user's
 projects as checkboxes, all checked; the grant's `props: { actor, email, projects }` — `projects`
 absent when there was nothing to choose from ⇒ every project of the user's orgs, per call; a
 request the provider refuses is sent back to the client with `error`, `error_description`, `state`
@@ -669,7 +680,8 @@ skipped on 45 files (the deployed-only ones run against the deployed worker).
 | Layer                    | Files (raw lines, comments included)                                                                                                                                                             | Lines |
 | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----: |
 | the edge                 | `worker.ts` · `session.ts` · `iterate-context.ts` · `principal.ts` · `types.ts` | 1,250 |
-| the control plane        | `control-plane.ts` · `directory.ts` · `session.ts` · `mcp.ts` · `definitions.sql` |   ≈ 470 |
+| the control plane        | `control-plane.ts` · `control-plane.sql` |   ≈ 830 |
+| the console              | `routes/__root.tsx` · `login.tsx` · `_auth.tsx` · `_auth/index.tsx` · `_auth/authorize.tsx` · `-session.ts` · `-console-context.ts` · `router.tsx` · `console.css` (+ the generated `routeTree.gen.ts`) |   ≈ 480 |
 | the DO                   | `iterate-context-durable-object.ts`                                                                                                                                                              |   949 |
 | expressions + dispatch   | `context/expression.ts` · `dispatch.ts` · `invoke-handle.ts` |   623 |
 | built-ins + loader       | `context/built-ins.ts` · `worker-loader.ts` · `durable-object-names.ts` |   859 |

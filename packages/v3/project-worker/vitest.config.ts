@@ -2,7 +2,10 @@
 // Four PROJECTS (vitest's own word), each a genuinely different execution context:
 //   • unit    — in-process node, the fast lane (src/**/*.test.ts)
 //   • workers — INSIDE workerd next to the worker via @cloudflare/vitest-plugin, for the hibernation
-//               cases that genuinely need cloudflare:test controls (__workers-tests__/**)
+//               cases that genuinely need cloudflare:test controls (__workers-tests__/**). The worker
+//               under test is THE BUILT ONE (dist/server/index.js, `vite build`): the console's
+//               Start server entry resolves only inside the Vite build, so the lane drives the bundle
+//               a deploy ships — SELF.fetch, never `import worker from "../src/worker.ts"`.
 //   • e2e     — ONE real worker booted once by e2e/support/global-setup.ts (local workerd by default;
 //               the DEPLOYED worker with `WORKER_BASE_URL=https://project-worker.iterate.workers.dev`,
 //               the proof that counts), every file a capnweb client at /api exactly like a production
@@ -12,7 +15,8 @@
 //               files one at a time so scenarios never share the wire; `BENCH_OUT=<file.json>` writes
 //               the raw samples
 // The processor SDK bundle every lane needs (src/generated/*, gitignored) is built once by the root
-// globalSetup. Browser E2E is Playwright (playwright.config.ts + specs/**).
+// globalSetup, and the Vite build the workers and e2e lanes run (dist/, gitignored) with it — skipped
+// when only the unit lane runs. Browser E2E is Playwright (playwright.config.ts + specs/**).
 
 import { cloudflareTest } from "@cloudflare/vitest-plugin";
 import { defineConfig } from "vitest/config";
@@ -41,7 +45,7 @@ export default defineConfig({
       {
         plugins: [
           cloudflareTest({
-            main: "./src/worker.ts",
+            main: "./dist/server/index.js", // the Vite build (vitest.global-setup.ts)
             wrangler: { configPath: "./wrangler.test.jsonc" },
           }),
         ],

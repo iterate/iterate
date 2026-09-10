@@ -43,8 +43,9 @@ the only place capnweb terminates. It reaches the DO over Workers RPC. Loaded
 userspace code runs in Worker Loader isolates or as facets of the DO, and its
 entire world is one binding, `env.ITX`. The control plane — an OAuth AS, the D1
 directory of users, orgs and projects (a project's id IS its DNS-safe name),
-`/mcp`, a console with an email login form — runs IN-PROCESS as the same
-worker's catch-all (`src/control-plane.ts`); a project host
+`/mcp`, the console's server half — runs IN-PROCESS as the same worker's
+catch-all (`src/control-plane.ts`), and the console itself is a TanStack Start
+app (`src/routes/**`) the same worker SSRs; a project host
 (`<app>--<project>.<base>`, `<app>.<project>.<base>`, the apex `<project>.<base>` — the one
 HTTP way into a project) is admitted by one directory read before any DO is
 dialled. Egress is terminal: secrets substituted, then `fetch`.
@@ -98,15 +99,30 @@ packages/v3/project-worker/
   wrangler.jsonc                 bindings: ITERATE_CONTEXT (DO), LOADER, AI, ARTIFACTS, ITX_KV, SECRETS_KV,
                                  OAUTH_KV, DB (D1: the directory), CF_VERSION_METADATA; the APP_CONFIG_* vars;
                                  the *.project-worker.iterate.com route (project hosts)
-  wrangler.test.jsonc            the workers lane's config (no build, no AI; fresh local D1 + OAuth KV)
+  wrangler.test.jsonc            the workers lane's config (no AI; fresh local D1 + OAuth KV; its worker is the
+                                 BUILT one, dist/server/index.js)
+  vite.config.ts                 THE BUILD: the Cloudflare plugin + TanStack Start + React — `vite build` emits
+                                 dist/client (the console's bundle + public/) and dist/server (the worker +
+                                 wrangler.json, what `pnpm deploy` and both local lanes consume); runs build-sdk.mjs
   vitest.config.ts               THE ONE test config: four projects — unit · workers · e2e · bench
   build-sdk.mjs                  bundles src/sdk/index.ts → generated/processor-sdk.ts (processor.js),
-                                 client/demo.tsx → generated/demo-page.ts
+                                 client/demo.tsx → public/demo.html (the hosted /demo page, a static asset)
+  scripts/                       dev.ts (`pnpm dev`: vite build → the schema into the local D1 → wrangler dev on
+                                 dist/server/wrangler.json), generate-route-tree.ts (`routes:generate` / `routes:check`)
   src/
+    routes/                      THE CONSOLE, a TanStack Start app (file routes, SSR'd by the worker):
+                                 __root.tsx (the shell + console.css) · login.tsx (/login: the email form,
+                                 "continue as / switch account") · _auth.tsx (no session ⇒ /login?next=) ·
+                                 _auth/index.tsx (/: the account page — orgs, projects with an `open` link per
+                                 host, create a project, log out) · _auth/authorize.tsx (/authorize: the OAuth
+                                 consent and THE PROJECT SELECTION); -session.ts (the one session read) and
+                                 -console-context.ts (the one typed door to the worker's env + request for every
+                                 server function). router.tsx · routeTree.gen.ts (generated, checked in) · console.css
     worker.ts                    THE EDGE and the front door. default fetch: project-host ingress (the three
                                  host shapes, admission, x-iterate-app, /.itx/session, the principal stamp —
-                                 the one HTTP way into a project), /api, /version; everything else on the
-                                 worker's hostname is the in-process control plane.
+                                 the one HTTP way into a project), /api, /version, the static assets (the
+                                 platform host's alone); everything else on the worker's hostname is the
+                                 in-process control plane.
                                  Exports ItxEntrypoint, IterateContextDurableObject.
     session.ts                   UnauthenticatedSession → Session (whoami, projects) → ProjectCollection
                                  (list · get · create — the gate + catalog); SessionTeardown (what a session
@@ -116,11 +132,13 @@ packages/v3/project-worker/
     types.ts                     the `./types` export: the session and context types, hand-written
     control-plane.ts             THE CONTROL PLANE, in-process (the catch-all): the OAuth AS wrapper
                                  (/authorize /oauth/token /oauth/register /.well-known, /mcp its one
-                                 protected route and its one resource), the login form, the session cookie,
-                                 the console, /projects, the /authorize consent with project selection,
-                                 the D1 directory (users → orgs → projects; a project's id IS its slug),
-                                 /mcp — the ONE MCP server for every project (whoami, list_projects,
-                                 itx.invoke); control-plane.sql is the schema
+                                 protected route and its one resource), the console's server half (the
+                                 session cookie, signIn · accountOf · createProjectFor · consentOf ·
+                                 approveConsent — what the routes' server functions call) and its machine
+                                 doors (POST /login /logout /projects /authorize as forms), the Start server
+                                 entry as the provider's default handler, the D1 directory (users → orgs →
+                                 projects; a project's id IS its slug), /mcp — the ONE MCP server for every
+                                 project (whoami, list_projects, itx.invoke); control-plane.sql is the schema
     iterate-context.ts           IterateContext, the client-facing RpcTarget: a PROXY in front of the DO —
                                  cd · invoke · provide · subscribe · enableProcessor · disableProcessor · mintToken · rotateApiKey;
                                  RewriteRuleHandle / SubscriptionHandle (disposable); the DO-name codec
@@ -1455,12 +1473,17 @@ origin — the provider wants its one resource as an absolute URL) owning `/oaut
 `/oauth/register` (DCR; CIMD for clients that self-describe by URL), `/.well-known/*` and the bearer
 check on `/mcp` (its ONLY protected route, and its ONE resource: `<origin>/mcp`, this origin the
 authorization server — every token is bound to it, a foreign one refused); everything else falls
-through to `app` — the console at `/`, the email login form (`POST /login`, `/logout`; the session is
-the signed `__Host-itx-control-plane-session` cookie, `signClaims` under `APP_CONFIG_SESSION_SECRET`),
-`POST /projects` (the console's form; a program creates projects over `/api`, `projects.create`),
-and the `/authorize` consent page — THE PROJECT SELECTION: the user's projects as checkboxes, all
-checked; approving grants the client the user on the checked ones (`props: { actor, email, projects }`;
-a user with nothing to choose from grants a `projects`-less grant that follows their membership).
+through to THE CONSOLE — a TanStack Start app (`src/routes/**`: `/login`, the account page at `/`,
+the `/authorize` consent), SSR'd through the Start server entry with the worker's env and the
+request as every server function's `context`; the routes' `createServerFn`s call this file's
+console half (`signIn`, `accountOf`, `createProjectFor`, `consentOf`, `approveConsent`), and the
+machine doors beside them (`consoleDoor`) are the same actions as plain form POSTs — `POST /login`,
+`/logout` (the session is the signed `__Host-itx-control-plane-session` cookie, `signClaims` under
+`APP_CONFIG_SESSION_SECRET`), `POST /projects` (a program creates projects over `/api`,
+`projects.create`), `POST /authorize`. The `/authorize` consent is THE PROJECT SELECTION: the user's
+projects as checkboxes, all checked; approving grants the client the user on the checked ones
+(`props: { actor, email, projects }`; a user with nothing to choose from grants a `projects`-less
+grant that follows their membership).
 `/mcp` is the ONE MCP server for every project, three tools: `whoami` (the props), `list_projects`
 (what the bearer reaches), and `itx.invoke({ project?, expression, args? })` — the expression
 evaluated through THAT project's root context in-process under the bearer's principal (the DO's
@@ -1685,7 +1708,7 @@ itself.
 | incarnation           | one life of the DO between evictions; the constructor's `stream/woken` opens each (offset 1 is the first one's `stream/created`); ephemeral offsets are unique within one                                                                                                             |
 | live state            | a `LiveState` holder's `{ rev, state }` plus `live-state/changed` deltas; clients chain revs and re-seed on a gap                                                                                                                                                                     |
 | egress                | any fetch leaving project code: `getSecret("/secrets/NAME")` (and `{ field: "a.b" }`) substituted in the DO (URL + headers; a missing or origin-bound secret is a 502), then the terminal `fetch` — no next door                                                                     |
-| control plane         | the in-process catch-all of the one worker (`src/control-plane.ts`): the OAuth AS, the D1 directory (users → orgs → projects; a project's id IS its slug), `/mcp`, the console + email login; what admits a project host and answers membership                                         |
+| control plane         | the in-process catch-all of the one worker (`src/control-plane.ts`): the OAuth AS, the D1 directory (users → orgs → projects; a project's id IS its slug), `/mcp`, the console's server half + the Start entry that SSRs the console (`src/routes/**`); what admits a project host and answers membership                                         |
 | project host          | the one HTTP way into a project: `<app>--<project>.<base>` and `<app>.<project>.<base>` are the app `itx.apps.<app>` of the project's root context, the apex `<project>.<base>` its config worker's `fetch`; the Request verbatim, `x-iterate-app` the host's label; admitted by one directory read (421 otherwise); a project token as the `/.itx/session` cookie or as `Authorization: Bearer` stamps `x-itx-principal` |
 | fetch lane            | the DO's `x-itx-expression` door: a project host from outside, a terminal `itx.x.fetch(request)` from inside a session, `env.ITX.fetch` from loaded code                                                                                                                             |
 

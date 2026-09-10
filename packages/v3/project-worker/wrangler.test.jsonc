@@ -16,7 +16,11 @@
   "name": "project-worker",
   "main": "src/worker.ts",
   "compatibility_date": "2026-09-01",
-  "compatibility_flags": ["allow_irrevocable_stub_storage", "global_fetch_strictly_public"],
+  "compatibility_flags": [
+    "nodejs_compat",
+    "allow_irrevocable_stub_storage",
+    "global_fetch_strictly_public",
+  ],
   "worker_loaders": [{ "binding": "LOADER" }],
   // NO `ai` binding here, on purpose: Workers AI is REMOTE-ONLY in local dev, and vitest-pool-workers
   // starts a remote proxy session for it at boot (an account to pick, a network to reach). The

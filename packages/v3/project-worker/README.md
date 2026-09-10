@@ -2,9 +2,11 @@
 
 One Cloudflare Worker, one package: `src/worker.ts` is the stateless edge (capnweb at `/api`;
 project-host ingress — `<app>--<project>.<base>`, `<app>.<project>.<base>`, the apex
-`<project>.<base>` — the one HTTP way into a project) with the control plane in-process
-as its catch-all (`src/control-plane.ts`: OAuth AS + a D1 directory + `/mcp`, the ONE MCP server for
-every project + the console);
+`<project>.<base>` — the one HTTP way into a project; the static assets on the platform host) with
+the control plane in-process as its catch-all (`src/control-plane.ts`: OAuth AS + a D1 directory +
+`/mcp`, the ONE MCP server for every project + the console's server half) and THE CONSOLE — a
+TanStack Start app (`src/routes/**`: `/login`, the account page at `/`, the `/authorize` consent),
+SSR'd by the same worker, its server functions calling that server half;
 `src/iterate-context-durable-object.ts` is THE CONTEXT — one Durable Object per `{ projectId, path }`
 holding the event log, the core reduce, subscription delivery, the facets, the rpc-stub pagers and
 the fetch door. Everything a client does is one dotted expression on `itx`.
@@ -53,11 +55,36 @@ plain vars in the test lanes:
 | `APP_CONFIG_PROJECT_HOSTNAME_BASE`                                  | no       | the base project hosts hang under; blank ⇒ no project-host ingress                           |
 | `APP_CONFIG_ARTIFACTS_ACCOUNT_ID`, `APP_CONFIG_ARTIFACTS_NAMESPACE` | no       | `itx.repos`' git remotes                                                                     |
 
-## Run
+## The console
+
+`src/routes/**` is a TanStack Start app, apps/auth's shape without Tailwind or a query client: four
+file routes — `login.tsx` (`/login`: the email form; "continue as / switch account" with a session),
+`_auth.tsx` (no session ⇒ `/login?next=`), `_auth/index.tsx` (`/`: the account page — orgs, projects
+with an `open` link per host, create a project, log out) and `_auth/authorize.tsx` (`/authorize`:
+the OAuth consent and THE PROJECT SELECTION) — plus `router.tsx`, the checked-in `routeTree.gen.ts`
+(`pnpm routes:generate`; `pnpm routes:check` is part of `typecheck`) and one stylesheet,
+`console.css`. Every route reads and acts through its own `createServerFn`s, which call the console
+half of `src/control-plane.ts` (`signIn`, `accountOf`, `createProjectFor`, `consentOf`,
+`approveConsent`) with the worker's env and the request as `context` (`src/routes/-console-context.ts`).
+Beside the server functions, the same four actions are plain form POSTs for a script or a test —
+`POST /login`, `/logout`, `/projects`, `/authorize` (`consoleDoor`) — every POST refused with 403
+from a foreign `Origin`, every page `Cache-Control: no-store`.
+
+## Build, run, deploy
+
+The build is Vite's (`vite.config.ts`: the Cloudflare plugin + TanStack Start + React; `build-sdk.mjs`
+runs at config load for the processor SDK bundle and the hosted `/demo` page). `vite build` emits
+`dist/client` (the console's bundle + `public/`) and `dist/server` (the worker + `wrangler.json`,
+the config a deploy and both local lanes consume). The Cloudflare Vite plugin's own workerd is older
+than this worker's compatibility date, so local dev is the built worker under this package's wrangler:
 
 ```bash
-pnpm test                       # every lane: unit (node), workers (workerd), e2e (one real worker), bench
-pnpm e2e                        # the wire lane alone, against a local worker
+pnpm dev -- --port 8788         # vite build, the directory schema into the local D1, wrangler dev on dist/server/wrangler.json
+                                # (project hosts under `<project>.localhost:8788`; dev values for the three secrets — scripts/dev.ts)
+pnpm build                      # dist/client + dist/server
+pnpm run typecheck              # routes:check, then the three tsconfigs (worker · console · tests)
+pnpm test                       # every lane: unit (node), workers (workerd, the BUILT worker), e2e (one real worker), bench
+pnpm e2e                        # the wire lane alone, against a local worker built by `vite build`
 WORKER_BASE_URL=https://project-worker.iterate.workers.dev ADMIN_API_SECRET=… pnpm e2e   # the proof that counts
-pnpm run typecheck && pnpm run deploy
+pnpm run deploy                 # vite build, then wrangler deploy --config dist/server/wrangler.json
 ```

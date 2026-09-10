@@ -1624,7 +1624,7 @@ appended from a browser tab, a `provide` from a laptop, an MCP client's tool cal
 `authenticate(credentials)` takes a `SessionCredentials` — where the identity already is, or the
 secret that proves it — and every lane reads the same kinds off a request:
 
-- `from-server-cookie`: the control plane owns a signed session cookie (`itx-control-plane-session`);
+- `from-server-cookie`: the control plane owns a signed session cookie (`__Host-itx-control-plane-session`);
   `/login` is a form that verifies nothing (enter an email and you become that user — attribution,
   not authentication). A browser cannot set a header on a WebSocket, so the cookie rides the
   handshake and the call NAMES it — never implicit. It counts on a same-origin request only
@@ -1648,8 +1648,13 @@ takes the same bearers.
 
 ### The control plane, and MCP through the one login
 
-Everything on the worker's hostname that is not `/api`, `/version` or `/demo` is the
-control plane, in-process: the console at `/` (`/login`, `/logout`, `POST /projects`); the OAuth 2.1
+Everything on the worker's hostname that is not `/api`, `/version` or a static asset is the
+control plane, in-process: the console — a TanStack Start app the worker SSRs (`src/routes/**`),
+four screens: `/login` (the email form; "continue as / switch account" when a session exists), the
+`_auth` layout (no session ⇒ `/login?next=`), the account page at `/` (your orgs; your projects, each
+with an `open` link onto its hosts; create a project; log out) and the `/authorize` consent (below) —
+each screen acting through its own server functions, with `POST /login`, `/logout`, `/projects` and
+`/authorize` beside them as plain form doors for a script; the OAuth 2.1
 Authorization Server (`/authorize`, `/oauth/token`, `/oauth/register`, `/.well-known/*`) whose ONLY
 protected route — and ONE resource, `<origin>/mcp` — is `/mcp`. The directory is D1 — users → orgs →
 projects, access is org membership — and a project's id IS its DNS-safe slug: the directory row, the
@@ -1659,7 +1664,7 @@ DO name and the host label are one name.
 client discovers the AS from `/.well-known/oauth-protected-resource/mcp`, registers (CIMD by URL, or
 DCR), and sends the user to `/authorize`; the consent page is the project selection — her projects
 as checkboxes, all checked — and approving mints a grant whose props name her and the checked
-projects. The token then reaches four tools: `whoami`, `list_projects`, `create_project`, and
+projects. The token then reaches three tools: `whoami`, `list_projects` and
 `itx.invoke({ project?, expression, args? })` — the expression evaluated through THAT project's root
 context, in-process, under her principal (`invokeAs`), so what it appends carries her; `project` is
 optional when the grant reaches exactly one, required for the admin secret (which reaches every
