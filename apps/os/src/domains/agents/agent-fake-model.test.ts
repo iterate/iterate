@@ -7,7 +7,7 @@
 import { expect, test } from "vitest";
 import { makeProcessorHarness } from "iterate/processors/testing";
 import type { ConsumedInput } from "iterate/processors";
-import { aiTextResponse } from "@iterate-com/shared/test-support/resilient-ai-interceptor";
+import { aiTextResponse } from "@iterate-com/test-support";
 import { AgentProcessorContract } from "./agent-processor-contract.ts";
 import { AgentProcessor, type AgentProcessorDeps } from "./agent-processor-implementation.ts";
 

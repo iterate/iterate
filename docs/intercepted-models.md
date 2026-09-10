@@ -67,7 +67,7 @@ responses and stream failures fail the attempt. There is one intercepted namespa
 one request preparation path.
 
 Tests can use `aiTextResponse(textOrUsage, call)` from
-`@iterate-com/shared/test-support/resilient-ai-interceptor`. Text/usage estimates live in that test
+`@iterate-com/test-support`. Text/usage estimates live in that test
 helper; production interception always consumes a provider-shaped response.
 
 ## The lifetime contract

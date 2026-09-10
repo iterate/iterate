@@ -1,3 +1,5 @@
+import type { ProjectAiInterceptor } from "iterate/node";
+
 /**
  * Install an `intercepted/*` model handler that SURVIVES platform churn, on a
  * connection dedicated to the interception.
@@ -23,22 +25,22 @@
  */
 
 /** The slice of an itx session the loop needs: dial a project, mount a handler, hang up. */
-type InterceptorSession<Handler> = Disposable & {
+type InterceptorSession = Disposable & {
   projects: {
     get(projectId: string): {
-      ai: { intercept(handler: Handler): Promise<{ release(): Promise<void> }> };
+      ai: { intercept(handler: ProjectAiInterceptor): Promise<{ release(): Promise<void> }> };
     };
   };
 };
 
-export async function installResilientAiInterceptor<Handler>(input: {
+export async function installResilientAiInterceptor(input: {
   /** Project id or slug, as `session.projects.get` accepts. */
   projectId: string;
-  handler: Handler;
+  handler: ProjectAiInterceptor;
   /** Dial a fresh admin session; the close hook MUST be wired to the socket. */
   connect(options: {
     onWebSocketClose: (close: { code: number; reason: string }) => void;
-  }): Promise<InterceptorSession<Handler>> | InterceptorSession<Handler>;
+  }): Promise<InterceptorSession> | InterceptorSession;
 }): Promise<AsyncDisposable> {
   let disposed = false;
   // A close event triggers recovery only when it belongs to the CURRENT
@@ -66,7 +68,7 @@ export async function installResilientAiInterceptor<Handler>(input: {
     const previous = current;
     current = undefined;
     if (previous !== undefined) disposeSession(previous.session);
-    let session: InterceptorSession<Handler> | undefined;
+    let session: InterceptorSession | undefined;
     try {
       session = await input.connect({
         onWebSocketClose: (close) => {

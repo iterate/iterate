@@ -14,10 +14,7 @@ import {
   type ProjectAiInterceptorInput,
 } from "iterate/node";
 import dedent from "dedent";
-import {
-  installResilientAiInterceptor,
-  aiTextResponse,
-} from "@iterate-com/shared/test-support/resilient-ai-interceptor";
+import { installResilientAiInterceptor, aiTextResponse } from "@iterate-com/test-support";
 import { doppler, localOsDevServer } from "../../apps/os/scripts/dev.ts";
 import { mintForgedAccessToken, mintForgedIdToken } from "../../scripts/auth/forge-token.ts";
 import { signUpWithEmailOtp, uniqueSignupEmail } from "./email-otp-signup.ts";
@@ -467,7 +464,7 @@ export function createAgentHelper<
  * append events and assert the browser repaints from the push). Dispose with
  * `using` — the handle owns its WebSocket. `onWebSocketClose` observes the
  * socket dying, however it dies — the hook a reconnect loop hangs off (see
- * @iterate-com/shared/test-support/resilient-ai-interceptor).
+ * @iterate-com/test-support).
  */
 export async function connectAdminItx(
   baseUrl: string,
