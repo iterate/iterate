@@ -1,0 +1,240 @@
+import { codedError } from "./lib.ts";
+import type { Principal } from "./principal.ts";
+
+// ── directory ── the control plane IS the directory. One D1 store, strongly consistent (no KV
+// list() lag), relational and org-centric: users → orgs (via org_members) → projects. A project's id is
+// ONE DNS-safe name (control-plane.sql): the directory row, the context DO's name and the project-host
+// label — nothing a caller can mint escapes it. The statements below are the control plane's whole
+// SQL, each spelled once at its one call site and bound positionally; the three row interfaces are
+// the rows D1 hands back (`org_id` is selected `AS orgId`).
+
+/** A `users` row. */
+export interface User {
+  id: string; // user_<lowercased-email>
+  email: string;
+}
+/** An `orgs` row, with the reader's `role` when read through `org_members`. */
+export interface Org {
+  id: string; // org_<hex>
+  name: string;
+  role?: string;
+}
+/** A `projects` row, with the reader's `role` when read through `org_members`. */
+export interface Project {
+  id: string; // the DNS-safe name — the DO name and the host label
+  orgId: string;
+  role?: string;
+}
+
+/** Slugify as @iterate-com/shared/slug normalizes (lowercase, non-alphanumeric → dash, trimmed). A
+ *  PROJECT has no minted id — its slug IS its id; an org has no slug at all. */
+export const projectSlug = (name: string) =>
+  name
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9-]/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-+|-+$/g, "");
+
+/** The projects a session may touch — what its credential earned (session.ts `authenticate`, the
+ *  `/mcp` grant): `"every"` for the admin secret; the projects of the orgs `userId` belongs to for a
+ *  control-plane user (the cookie, the admin's `as`, a grant with nothing to choose from); the
+ *  projects named outright for a project token or the project secret (one) and for an OAuth grant
+ *  (the consent's choice — none chosen is bound to none). */
+export type Reach = "every" | { userId: string } | { projectIds: string[] };
+
+/** THE ONE RULE for what a principal reaches (`Reach`) — session.ts `authenticate` and `/mcp`
+ *  (`buildServer`) both ask it. THE BINDING FIRST: a principal bound to projects — a session's
+ *  `projectId` (a project token's, the project secret's), an `/mcp` grant's `projects` (the
+ *  consent's choice; a token's or a secret's one through `resolveExternalToken`) — reaches exactly
+ *  those, whoever it is: a project token the admin minted reaches its one project, never every.
+ *  Unbound, the admin secret's `{ actor: "admin" }` reaches every project and a user (the cookie,
+ *  the admin's `as` — `user_<email>`, never `admin`) the projects of their orgs. */
+export function reachOf(principal: Principal & { projectId?: string; projects?: string[] }): Reach {
+  if ("projects" in principal && principal.projects) return { projectIds: principal.projects };
+  if ("projectId" in principal && principal.projectId !== undefined)
+    return { projectIds: [principal.projectId] };
+  return principal.actor === "admin" ? "every" : { userId: principal.actor };
+}
+
+/** `reach`, for a refusal's message (session.ts `projects.get`, `createProject`). */
+export const describeReach = (reach: Reach): string =>
+  reach === "every"
+    ? "every project"
+    : "userId" in reach
+      ? `the projects of the orgs ${reach.userId} belongs to`
+      : `bound to ${reach.projectIds.map((projectId) => JSON.stringify(projectId)).join(", ") || "no project"}`;
+
+/** `org_<32hex>`. */
+const newOrgId = () => `org_${crypto.randomUUID().replaceAll("-", "")}`;
+
+export function directory(db: D1Database) {
+  const d1Directory = {
+    /** Find-or-create the user for an email (login is the only writer). */
+    async upsertUser(email: string): Promise<User> {
+      const normalized = email.trim().toLowerCase();
+      // NB: user id must be colon-free — the OAuth provider encodes tokens as `{userId}:{grantId}:{secret}`
+      // and splits on ':'. A `user:<email>` id would break that (and the token/grant KV keys).
+      const user = await db
+        .prepare(
+          `INSERT INTO users (id, email) VALUES (?, ?)
+ON CONFLICT(id) DO UPDATE SET email = excluded.email
+RETURNING id, email;`,
+        )
+        .bind(`user_${normalized}`, normalized)
+        .first<User>();
+      return user!;
+    },
+
+    /** Create an org (a minted org_ id; the name is free text, two orgs may share one) and make the
+     *  creator its owner. */
+    async createOrg(userId: string, name: string): Promise<Org> {
+      const org = await db
+        .prepare(
+          `INSERT INTO orgs (id, name) VALUES (?, ?)
+RETURNING id, name;`,
+        )
+        .bind(newOrgId(), name)
+        .first<Org>();
+      await db
+        .prepare(
+          `INSERT INTO org_members (org_id, user_id, role) VALUES (?, ?, ?)
+ON CONFLICT(org_id, user_id) DO NOTHING;`,
+        )
+        .bind(org!.id, userId, "owner")
+        .run();
+      return { ...org!, role: "owner" };
+    },
+
+    /** Orgs the user belongs to. */
+    async listOrgs(userId: string): Promise<Org[]> {
+      const { results } = await db
+        .prepare(
+          `SELECT o.id, o.name, m.role
+FROM orgs o
+JOIN org_members m ON m.org_id = o.id
+WHERE m.user_id = ?
+ORDER BY o.name ASC;`,
+        )
+        .bind(userId)
+        .all<Org>();
+      return results;
+    },
+
+    /** Create the project `name` (slugified: that IS its id, GLOBALLY unique) for `reach` — in the
+     *  user's first org by name, created as `<email>'s org` with them as owner when they have none;
+     *  in the deployment's own org for the admin secret. A reach that names its projects (a token,
+     *  the secret, a grant that chose) creates none: FORBIDDEN. A name already taken in ANY org is
+     *  PROJECT_NAME_TAKEN; the same org's again is idempotent (the insert is ON CONFLICT DO NOTHING,
+     *  then re-selected to cover both "just created" and "already existed"). Both create-a-project
+     *  doors — `projects.create` over /api and the console's form — are this. */
+    async createProject(reach: Reach, name: string): Promise<Project> {
+      if (typeof reach === "object" && "projectIds" in reach)
+        throw codedError(
+          "FORBIDDEN",
+          `this session is ${describeReach(reach)} — creating a project needs a signed-in user or the admin secret`,
+        );
+      const id = projectSlug(name);
+      if (!id) throw new Error("project name is empty or invalid");
+      const org =
+        reach === "every"
+          ? await d1Directory.adminOrg()
+          : await d1Directory.ensureOrg(reach.userId);
+      await db
+        .prepare(
+          `INSERT INTO projects (id, org_id) VALUES (?, ?)
+ON CONFLICT DO NOTHING;`,
+        )
+        .bind(id, org.id)
+        .run();
+      const project = await d1Directory.getProject(id);
+      if (!project) throw new Error(`failed to create project '${id}'`);
+      if (project.orgId !== org.id)
+        throw codedError("PROJECT_NAME_TAKEN", `project name '${id}' is already taken`);
+      return project;
+    },
+
+    /** The user's first org — created as `<email>'s org`, with them as owner, when they have none
+     *  yet (the row `/login` or the admin's `as` upserted names the email). */
+    async ensureOrg(userId: string): Promise<Org> {
+      const orgs = await d1Directory.listOrgs(userId);
+      if (orgs[0]) return orgs[0];
+      const user = await db
+        .prepare(`SELECT id, email FROM users WHERE id = ?;`)
+        .bind(userId)
+        .first<User>();
+      return d1Directory.createOrg(userId, `${user!.email}'s org`);
+    },
+
+    /** Projects the user can reach (member of the owning org), with their role. */
+    async listProjects(userId: string): Promise<Project[]> {
+      const { results } = await db
+        .prepare(
+          `SELECT p.id, p.org_id AS orgId, m.role
+FROM projects p
+JOIN org_members m ON m.org_id = p.org_id
+WHERE m.user_id = ?
+ORDER BY p.id ASC;`,
+        )
+        .bind(userId)
+        .all<Project>();
+      return results;
+    },
+
+    /** A project by id (its org), or null — the edge's admission (worker.ts). */
+    async getProject(id: string): Promise<Project | null> {
+      return db
+        .prepare(`SELECT id, org_id AS orgId FROM projects WHERE id = ?;`)
+        .bind(id)
+        .first<Project>();
+    },
+
+    /** EVERY project in the directory, no role — the admin secret's catalog. */
+    async listAllProjects(): Promise<Project[]> {
+      const { results } = await db
+        .prepare(`SELECT id, org_id AS orgId FROM projects ORDER BY id ASC;`)
+        .all<Project>();
+      return results;
+    },
+
+    /** The projects `reach` reaches, as directory rows: every project for the admin secret; the
+     *  user's, with their role; the named ones (their rows — a name the directory never heard of
+     *  is no row). */
+    async reachableProjects(reach: Reach): Promise<Project[]> {
+      if (reach === "every") return d1Directory.listAllProjects();
+      if ("userId" in reach) return d1Directory.listProjects(reach.userId);
+      const rows = await Promise.all(
+        reach.projectIds.map((projectId) => d1Directory.getProject(projectId)),
+      );
+      return rows.filter((row): row is Project => row !== null);
+    },
+
+    /** Whether `reach` reaches `projectId` — the admission behind `projects.get` (session.ts) and a
+     *  `/mcp` tool's `project`. The admin reaches a project the directory never heard of (the door
+     *  is the admin's); a named reach is its list; a user's is one membership read. */
+    async reachesProject(reach: Reach, projectId: string): Promise<boolean> {
+      if (reach === "every") return true;
+      if ("projectIds" in reach) return reach.projectIds.includes(projectId);
+      return (await d1Directory.listProjects(reach.userId)).some(
+        (project) => project.id === projectId,
+      );
+    },
+
+    /** The deployment's own org — `org_admin`, created on first use, no members: where the admin
+     *  secret's `projects.create` puts a project (a user reaches one only through the admin secret
+     *  or its `as`). */
+    async adminOrg(): Promise<Org> {
+      await db
+        .prepare(
+          `INSERT INTO orgs (id, name) VALUES ('org_admin', 'admin') ON CONFLICT DO NOTHING;`,
+        )
+        .run();
+      return { id: "org_admin", name: "admin" };
+    },
+  };
+
+  return d1Directory;
+}
+
+/** The directory as the edge holds it (src/session.ts). */
+export type Directory = ReturnType<typeof directory>;

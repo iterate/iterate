@@ -31,13 +31,7 @@ import {
   type IterateContextNamespace,
   type WaitUntil,
 } from "./iterate-context.ts";
-import {
-  describeReach,
-  reachOf,
-  type Directory,
-  type Project,
-  type Reach,
-} from "./control-plane.ts";
+import { describeReach, reachOf, type Directory, type Project, type Reach } from "./directory.ts";
 import type { AppConfig } from "./worker.ts";
 import { codedError, isSameOriginBrowserRequest } from "./lib.ts";
 import {

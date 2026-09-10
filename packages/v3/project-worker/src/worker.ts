@@ -16,7 +16,8 @@ import {
 } from "capnweb";
 import { IterateContextDurableObject } from "./iterate-context-durable-object.ts";
 // the one worker's env: the DO's bindings plus the in-process control plane's (control-plane.ts `Env`)
-import { directory, controlPlane, type Env as WorkerEnv } from "./control-plane.ts";
+import { controlPlane, type Env as WorkerEnv } from "./control-plane.ts";
+import { directory } from "./directory.ts";
 import { registerPipelinedRpcBrand } from "./context/expression.ts";
 import { ITX_EXPRESSION_FETCH_HEADER } from "./context/rpc-stubs.ts";
 import { DurableObjectNameCodec } from "./iterate-context.ts";
