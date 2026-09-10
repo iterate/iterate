@@ -74,6 +74,9 @@ iterate_kit_add_core_test(iterate-kit-spsc-ring-test spsc_ring_test.c)
 iterate_kit_add_core_test(iterate-kit-touch-tap-test touch_tap_test.c)
 iterate_kit_add_core_test(
   iterate-kit-voice-playback-clock-test voice_playback_clock_test.c)
+# THE STEP BOTH TARGETS RUN, against a ring that is an array and a sink that
+# counts: every branch the board's and the CLI's playback share, asserted once.
+iterate_kit_add_core_test(iterate-kit-voice-playout-test voice_playout_test.c)
 iterate_kit_add_core_test(iterate-kit-voicelab-stream-test voicelab_stream_test.c)
 iterate_kit_add_core_test(
   iterate-kit-websocket-frame-writer-test websocket_frame_writer_test.c)

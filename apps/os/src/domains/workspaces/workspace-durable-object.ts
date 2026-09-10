@@ -31,14 +31,16 @@ import {
 } from "./workspace-processor-contract.ts";
 import { mergeWorkspaceConfigPatch } from "./workspace-processor-implementation.ts";
 import {
+  isPathUnder,
   isVirtualDirectoryPath,
+  literalDirectoryOfGlob,
+  type MountRepoAccess,
   reRoutedPaths,
   routeMount,
   WorkspaceCore,
-  type MountRepoAccess,
 } from "./workspace-core.ts";
 import { effectiveWorkspaceMounts, normalizeWorkspaceMountKeys } from "./utils.ts";
-import { resolveAbsolutePath } from "./paths.ts";
+import { resolveAbsolutePath, WORKSPACE_DIRECTORY } from "./paths.ts";
 import type { CollabPull, CollabPush, CollabPushResult } from "./collab-engine.ts";
 import { CollabHost, type CollabPresenceFlat } from "./collab-host.ts";
 import { sqliteCollabStore } from "./collab-store.ts";
@@ -123,7 +125,6 @@ export class WorkspaceV2DurableObject extends DurableObject<Env> {
     // the per-incarnation cache, refreshed by the doors — see #repoPaths).
     mounts: () => this.#effectiveMounts(),
     repo: (repoPath) => this.#repoStub(repoPath),
-    scratchRoot: this.#name.path,
     workspace: this.#workspace,
   });
 
@@ -143,7 +144,7 @@ export class WorkspaceV2DurableObject extends DurableObject<Env> {
     ).processorFacade({
       name: PROCESSOR_SLUG,
       // The Stream DO's facade forwards to the facet registered for this
-      // path family; /workspaces/** registers exactly the workspace
+      // path family; both /workspaces/** and /agents/** register the workspace
       // processor under this name, so its snapshot/waitUntilProcessed doors
       // carry WorkspaceProcessorState. Double assertion because the
       // generated stub type erases the per-name state parameter.
@@ -236,13 +237,12 @@ export class WorkspaceV2DurableObject extends DurableObject<Env> {
   }
 
   /**
-   * Workspace paths are absolute within the project's one namespace; a
-   * RELATIVE path resolves against this workspace's own directory (its
-   * stream path) — `readFile("notes.md")` is
-   * `readFile("/workspaces/agents/you/notes.md")`.
+   * Repo paths are absolute within the project's namespace; private files
+   * live in /workspace inside this particular workspace. A relative path
+   * resolves there: readFile("notes.md") is readFile("/workspace/notes.md").
    */
   #resolvePath(path: string): string {
-    return resolveAbsolutePath(path.startsWith("/") ? path : `${this.#name.path}/${path}`);
+    return resolveAbsolutePath(path.startsWith("/") ? path : `${WORKSPACE_DIRECTORY}/${path}`);
   }
 
   /** Pull the reduced state current and require an explicit birth certificate.
@@ -566,28 +566,29 @@ export class WorkspaceV2DurableObject extends DurableObject<Env> {
     return this.#core.deleteFile(resolved);
   }
 
-  async listAllFiles(): Promise<string[]> {
+  async listAllFiles(options: { under?: string } = {}): Promise<string[]> {
     await this.#assertCreated();
     // Enumerations must see freshly created repos — refresh the derived
     // table up front (these are heavy, rare operations anyway).
     await this.#effectiveMounts({ refresh: true });
+    const under = options.under === undefined ? "/" : resolveAbsolutePath(options.under);
     // Live-only sessions (opened on a missing path, unflushed) are readable
     // and exist — listings must agree with readFile/exists.
-    const merged = new Set(await this.#core.listAllFiles());
-    for (const path of this.#collab.livePaths()) merged.add(path);
+    const merged = new Set(await this.#core.listAllFiles({ under }));
+    for (const path of this.#collab.livePaths()) if (isPathUnder(path, under)) merged.add(path);
     return [...merged].sort();
   }
 
   async glob(pattern: string): Promise<string[]> {
     // listAllFiles runs the birth assertion (same error, no duplicate round).
     // A relative pattern globs this workspace's own directory; `.`/`..`
-    // segments collapse exactly like the file doors' paths do (glob magic
+    // segments collapse exactly like file paths do (glob magic
     // like `**` and `*.md` never contains a slash, so it survives the
     // resolve untouched).
-    const resolved = resolveAbsolutePath(
-      pattern.startsWith("/") ? pattern : `${this.#name.path}/${pattern}`,
-    );
-    const all = await this.listAllFiles();
+    const resolved = this.#resolvePath(pattern);
+    // Only the subtree the pattern can match: mounts outside it are never
+    // enumerated (a glob under /repos/config must not list /repos/iterate).
+    const all = await this.listAllFiles({ under: literalDirectoryOfGlob(resolved) });
     return all.filter((path) => minimatch(path, resolved, { dot: true }));
   }
 
@@ -670,12 +671,6 @@ export class WorkspaceV2DurableObject extends DurableObject<Env> {
     return this.#collab.versions();
   }
 
-  /** Attributed tracked changes since the last commit (redline segments). */
-  async collabChanges(path: string) {
-    await this.#assertCreated();
-    return this.#collab.changes(this.#resolvePath(path));
-  }
-
   // Board-level viewer presence: who has the BOARD open (sheet or not),
   // heartbeat-refreshed, in-memory (rebuilds from heartbeats after eviction).
   readonly #boardClients = new Map<string, { at: number; name: string }>();
@@ -733,22 +728,12 @@ export class WorkspaceV2DurableObject extends DurableObject<Env> {
     await this.#effectiveMounts({ refresh: true });
     const resolved =
       input.scope === undefined ? input : { ...input, scope: this.#resolvePath(input.scope) };
-    // Settle → commit → stamp as ONE fence: no flush timer, open, or
-    // configure can interleave, and baselines advance mount-scoped to
-    // exactly what the commit contained (a commit never spans mounts;
-    // stamping another mount's session would erase its redline). ownsPath
-    // routes against the EXACT table the commit classified with — the core
-    // returns it — never a live table a concurrent refresh (getConfig, a
-    // routing miss, a repo created mid-commit) could move under the stamp.
-    let classifiedMounts: Record<string, WorkspaceMount> = {};
-    return this.#collab.commitBarrier(
-      async () => {
-        const { mounts, ...result } = await this.#core.gitCommit(resolved);
-        classifiedMounts = mounts;
-        return result;
-      },
-      (path, mount) => routeMount(classifiedMounts, path)?.mountPath === mount,
-    );
+    // Settle → commit as ONE fence: no flush timer, open, or configure can
+    // interleave between the settled overlay and the commit that reads it.
+    return this.#collab.commitBarrier(async () => {
+      const { mounts: _classifiedMounts, ...result } = await this.#core.gitCommit(resolved);
+      return result;
+    });
   }
 
   async gitLog(input: WorkspaceGitLogInput = {}): Promise<WorkspaceGitLogEntry[]> {

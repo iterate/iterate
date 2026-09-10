@@ -1770,6 +1770,9 @@ importers:
       '@codemirror/lang-html':
         specifier: ^6.4.11
         version: 6.4.11
+      '@codemirror/lang-javascript':
+        specifier: ^6.2.5
+        version: 6.2.5
       '@codemirror/lang-markdown':
         specifier: ^6.5.0
         version: 6.5.0
@@ -1797,6 +1800,9 @@ importers:
       iterate:
         specifier: workspace:*
         version: link:../iterate
+      lucide-react:
+        specifier: ^0.553.0
+        version: 0.553.0(@types/react@19.2.17)(react@19.2.7)
       react:
         specifier: ^19.2.7
         version: 19.2.7

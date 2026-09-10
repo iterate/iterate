@@ -1,30 +1,32 @@
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import { ChevronDownIcon, GitCommitVerticalIcon, SparklesIcon, Undo2Icon } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
 import { Checkbox } from "@iterate-com/ui/components/checkbox";
+import { Field, FieldLabel } from "@iterate-com/ui/components/field";
 import { Input } from "@iterate-com/ui/components/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@iterate-com/ui/components/popover";
 import { cn } from "@iterate-com/ui/lib/utils";
-import type { TaskChangeStatus, TaskChangeSummary } from "../state.ts";
+import type { RepoFileStatus } from "@iterate-com/ui/components/repo-file-tree";
+import type { FileChangeSummary } from "./change-summary.ts";
 
-const STATUS_LETTER: Record<TaskChangeStatus, string> = {
+const STATUS_LETTER: Record<RepoFileStatus, string> = {
   added: "A",
   modified: "M",
   deleted: "D",
 };
-const STATUS_CLASS: Record<TaskChangeStatus, string> = {
+const STATUS_CLASS: Record<RepoFileStatus, string> = {
   added: "text-emerald-600",
   modified: "text-amber-600",
   deleted: "text-red-600",
 };
-const STATUS_WORD: Record<TaskChangeStatus, string> = {
+const STATUS_WORD: Record<RepoFileStatus, string> = {
   added: "New",
   modified: "Edited",
   deleted: "Deleted",
 };
 
 /** The A/M/D letter a changed row wears. */
-function ChangeStatusMark({ status }: { status: TaskChangeStatus }) {
+function ChangeStatusMark({ status }: { status: RepoFileStatus }) {
   return (
     <span
       title={STATUS_WORD[status]}
@@ -36,13 +38,15 @@ function ChangeStatusMark({ status }: { status: TaskChangeStatus }) {
 }
 
 /**
- * The board's git surface, restyled to the apps/os dialect: a Commit button
- * with the autosave countdown beside it and a popover reviewing the pending
- * change set — one row per changed file, a message input (empty
- * auto-generates), the AI message helper, and Discard all.
+ * The commit surface of one change set, in the apps/os dialect: a Commit
+ * button with the autosave countdown beside it and a popover reviewing the
+ * pending changes — one row per changed file, a message input (empty
+ * auto-generates), the message helper, and Discard all.
  */
 export function CommitControls({
   taskChanges,
+  scope,
+  label,
   commitMessage,
   onCommitMessageChange,
   commitPending,
@@ -50,12 +54,15 @@ export function CommitControls({
   autoSaveDueAt,
   autoCommit,
   onAutoCommitChange,
-  canCommit,
   onMakeCommit,
   onWriteCommitMessage,
   onDiscardAll,
 }: {
-  taskChanges: readonly TaskChangeSummary[];
+  taskChanges: readonly FileChangeSummary[];
+  /** The mount the commit lands on (`/repos/config`), when the host knows it. */
+  scope?: string | null;
+  /** A short mount name on the button, when several mounts are dirty at once. */
+  label?: string | null;
   commitMessage: string;
   onCommitMessageChange: (message: string) => void;
   commitPending: boolean;
@@ -63,13 +70,14 @@ export function CommitControls({
   autoSaveDueAt: number | undefined;
   autoCommit: boolean;
   onAutoCommitChange: (value: boolean) => void;
-  canCommit: boolean;
   onMakeCommit: () => void;
   onWriteCommitMessage: () => void;
   onDiscardAll: () => void;
 }) {
+  const autoCommitId = useId();
   const dirty = taskChanges.length > 0;
   const busy = commitPending || generatingMessage;
+  const commitDisabled = busy || !dirty;
   const [open, setOpen] = useState(false);
   // A successful commit (or discard) empties the change set: the review
   // popover has nothing left to say, so it closes — and STAYS closed until
@@ -82,57 +90,31 @@ export function CommitControls({
   }
 
   return (
-    <div className="flex items-center gap-2">
+    <>
       <Popover open={open} onOpenChange={setOpen}>
         <PopoverTrigger
-          render={
-            <Button
-              variant={dirty ? "default" : "outline"}
-              size="sm"
-              className="h-8"
-              disabled={!dirty}
-            />
-          }
+          render={<Button variant={dirty ? "default" : "outline"} size="sm" className="h-8" />}
         >
-          <GitCommitVerticalIcon aria-hidden className="size-3.5" />
-          Commit{dirty ? ` (${taskChanges.length})` : ""}
+          <GitCommitVerticalIcon aria-hidden data-icon="inline-start" />
+          Commit{label ? ` ${label}` : ""}
+          {dirty ? ` (${taskChanges.length})` : ""}
           {dirty && !commitPending && autoSaveDueAt !== undefined ? (
             <AutoSaveCountdown dueAt={autoSaveDueAt} />
           ) : null}
-          <ChevronDownIcon aria-hidden className="size-3" />
+          <ChevronDownIcon aria-hidden data-icon="inline-start" />
         </PopoverTrigger>
-        <PopoverContent align="end" className="w-96 p-3">
+        <PopoverContent align="end" className="w-96 max-w-[calc(100vw-1rem)] p-3">
           <div className="flex flex-col gap-2.5">
-            <label
-              htmlFor="auto-commit-toggle"
-              className="flex items-center gap-2 text-xs font-medium"
-            >
+            <Field orientation="horizontal">
               <Checkbox
-                id="auto-commit-toggle"
+                id={autoCommitId}
+                aria-label="Auto-commit after 60s"
                 checked={autoCommit}
                 onCheckedChange={(checked) => onAutoCommitChange(checked === true)}
               />
-              Auto-commit after 60s of quiet
-            </label>
-            <p className="text-xs text-muted-foreground">
-              {taskChanges.length} uncommitted task {taskChanges.length === 1 ? "file" : "files"}.
-              An empty message auto-generates one.
-            </p>
-            <ul className="flex max-h-44 flex-col gap-1 overflow-y-auto rounded-md border bg-muted/30 p-2">
-              {taskChanges.map((change) => (
-                <li
-                  key={change.path}
-                  title={change.path}
-                  className="flex items-center gap-2 text-xs"
-                >
-                  <ChangeStatusMark status={change.status} />
-                  <span className="min-w-0 flex-1 truncate">{change.title}</span>
-                  <span className="flex-none text-muted-foreground">
-                    {STATUS_WORD[change.status]}
-                  </span>
-                </li>
-              ))}
-            </ul>
+              <FieldLabel htmlFor={autoCommitId}>Auto-commit after 60s</FieldLabel>
+            </Field>
+            <ChangeList taskChanges={taskChanges} scope={scope} />
             <Input
               value={commitMessage}
               onChange={(event) => onCommitMessageChange(event.target.value)}
@@ -141,33 +123,33 @@ export function CommitControls({
               disabled={busy}
               className="h-8 text-xs"
             />
-            <div className="flex items-center gap-1.5">
+            <div className="flex flex-wrap items-center gap-1.5">
               <Button
                 variant="ghost"
                 size="sm"
-                disabled={busy || !canCommit}
+                disabled={commitDisabled}
                 onClick={onWriteCommitMessage}
                 className="text-muted-foreground"
               >
-                <SparklesIcon aria-hidden className="size-3.5" />
+                <SparklesIcon aria-hidden data-icon="inline-start" />
                 {generatingMessage ? "Writing…" : "Write message"}
               </Button>
               <Button
                 variant="ghost"
                 size="sm"
-                disabled={busy}
+                disabled={busy || !dirty}
                 className="text-muted-foreground hover:text-destructive"
                 onClick={() => {
-                  if (window.confirm("Discard all uncommitted task changes?")) onDiscardAll();
+                  if (window.confirm("Discard all uncommitted changes?")) onDiscardAll();
                 }}
               >
-                <Undo2Icon aria-hidden className="size-3.5" />
+                <Undo2Icon aria-hidden data-icon="inline-start" />
                 Discard all
               </Button>
               <Button
                 size="sm"
                 className="ml-auto"
-                disabled={busy || !canCommit || !dirty}
+                disabled={commitDisabled}
                 onClick={onMakeCommit}
               >
                 {commitPending ? "Committing…" : "Commit"}
@@ -176,7 +158,39 @@ export function CommitControls({
           </div>
         </PopoverContent>
       </Popover>
-    </div>
+    </>
+  );
+}
+
+/** The pending change set under review: a count, where it lands, one row per file. */
+function ChangeList({
+  taskChanges,
+  scope,
+}: {
+  taskChanges: readonly FileChangeSummary[];
+  scope: string | null | undefined;
+}) {
+  return (
+    <>
+      <p className="text-xs text-muted-foreground">
+        {taskChanges.length} uncommitted {taskChanges.length === 1 ? "file" : "files"}
+        {scope ? (
+          <>
+            , committed to <span className="font-mono">{scope}</span> main
+          </>
+        ) : null}
+        . An empty message auto-generates one.
+      </p>
+      <ul className="flex max-h-44 flex-col gap-1 overflow-y-auto rounded-md border bg-muted/30 p-2">
+        {taskChanges.map((change) => (
+          <li key={change.path} title={change.path} className="flex items-center gap-2 text-xs">
+            <ChangeStatusMark status={change.status} />
+            <span className="min-w-0 flex-1 truncate">{change.title}</span>
+            <span className="flex-none text-muted-foreground">{STATUS_WORD[change.status]}</span>
+          </li>
+        ))}
+      </ul>
+    </>
   );
 }
 
@@ -195,43 +209,5 @@ function AutoSaveCountdown({ dueAt }: { dueAt: number }) {
     <span className="text-[11px] tabular-nums whitespace-nowrap opacity-70">
       {secondsLeft <= 0 ? "…" : `· ${secondsLeft}s`}
     </span>
-  );
-}
-
-/**
- * Deleted cards leave the board instantly, so this strip is where a pending
- * deletion stays visible — and reversible — until it is committed.
- */
-export function DeletedTasksStrip({
-  deletedChanges,
-  onRestore,
-}: {
-  deletedChanges: readonly TaskChangeSummary[];
-  onRestore: (path: string) => void;
-}) {
-  if (deletedChanges.length === 0) return null;
-  return (
-    <div className="flex flex-wrap items-center justify-end gap-2 border-b bg-background px-3 py-1">
-      <span className="text-xs text-muted-foreground">Deleted</span>
-      {deletedChanges.map((change) => (
-        <span
-          key={change.path}
-          title={change.path}
-          className="inline-flex items-center gap-1.5 rounded-full border py-0.5 pr-1 pl-2.5 text-xs text-muted-foreground"
-        >
-          <span className="size-1.5 rounded-full bg-red-500" aria-hidden />
-          <span className="line-through">{change.title}</span>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-5 px-1.5 text-[11px] text-foreground"
-            onClick={() => onRestore(change.path)}
-            title={`Restore ${change.title}`}
-          >
-            restore
-          </Button>
-        </span>
-      ))}
-    </div>
   );
 }

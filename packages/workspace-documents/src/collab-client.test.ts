@@ -1,8 +1,8 @@
 import { describe, expect, test } from "vitest";
 import { CollabConnection } from "./collab-client.ts";
-import type { WorkspaceDocumentTransport } from "./types.ts";
+import type { WorkspaceTransport } from "./types.ts";
 
-const unusedTransport: WorkspaceDocumentTransport = {
+const unusedTransport: WorkspaceTransport = {
   run: () => Promise.reject(new Error("not used by this test")),
   runOnce: () => Promise.reject(new Error("not used by this test")),
 };

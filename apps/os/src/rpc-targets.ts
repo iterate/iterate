@@ -137,7 +137,6 @@ import {
 } from "./domains/sandboxes/sandbox-processor-contract.ts";
 import { linkRepoToGithub, unlinkRepoFromGithub } from "./domains/repos/github-link.ts";
 import {
-  agentWorkspacePath,
   effectiveWorkspaceMounts,
   normalizeWorkspaceMountKeys,
   normalizeWorkspacePath,
@@ -412,7 +411,6 @@ import type {
   WorkspaceProcessorState,
 } from "./domains/workspaces/workspace-processor-contract.ts";
 import type { CollabPresenceFlat } from "./domains/workspaces/collab-host.ts";
-import type { CollabChangesResult } from "./domains/workspaces/collab-host.ts";
 import {
   DynamicWorkerRunner,
   type DynamicWorkerTraceRole,
@@ -2469,11 +2467,10 @@ class SandboxCollectionRpcTarget extends IterateRpcTarget<"SandboxCollection"> {
 /**
  * Catalog of durable workspaces within one project: EVENT-SOURCED,
  * MOUNT-ROUTED workspace filesystems (Durable-Object-hosted, no container,
- * always warm). Every workspace is addressed by its FULL path under
- * `/workspaces/` — the same domain-prefix convention as `/sandboxes/...` and
- * `/repos/...`: an agent's workspace is the agent path under the prefix
- * (`/workspaces/agents/...`, exposed as `itx.workspace` in that agent's
- * scope), and standalone workspaces live under `/workspaces/<anything>`.
+ * always warm). Agent workspaces share their agent's FULL path under `/agents/`
+ * (exposed as `itx.workspace` in that agent's scope). Standalone workspaces
+ * live under `/workspaces/<anything>`. These identities address streams;
+ * private files inside either kind of workspace live under `/workspace/`.
  *
  * A workspace's identity + configuration are stream facts. `get(path)` only
  * addresses a handle; `get(path).create({ mounts? })` appends the atomic birth
@@ -2483,9 +2480,10 @@ class WorkspaceCollectionRpcTarget extends IterateRpcTarget<"WorkspaceCollection
   async __describe(): Promise<Description> {
     return describeNode({
       instructions:
-        'Event-sourced, mount-routed workspaces. get("/workspaces/<name>") returns a handle without creating anything; call handle.create({ mounts? }) once before use. Every project repo is mounted at its own /repos/** path automatically (commit-to-main); supplied mounts are overlay DEVIATIONS committed atomically as an initial configured patch. An agent\'s own workspace is its agent path under the prefix (what itx.workspace resolves to).',
+        'Event-sourced, mount-routed workspaces. get("/workspaces/<name>") returns a handle without creating anything; call handle.create({ mounts? }) once before use. list() every created workspace (the project catalog of copied workspace/created facts). Every project repo is mounted at its own /repos/** path automatically (commit-to-main); supplied mounts are overlay DEVIATIONS committed atomically as an initial configured patch. An agent\'s own workspace shares its /agents/** path (what itx.workspace resolves to).',
       children: {
         get: "A possibly nonexistent workspace handle; call get(path).create({ mounts? }) before use.",
+        list: "Known workspaces: every workspace/created copied to the project catalog.",
       },
       parent: "a project itx (itx.workspaces)",
     });
@@ -2504,6 +2502,11 @@ class WorkspaceCollectionRpcTarget extends IterateRpcTarget<"WorkspaceCollection
       projectId: this.props.projectId,
     });
   }
+
+  /** Known workspaces, read from the project processor's reduced state. */
+  list(): Promise<StreamListItem[]> {
+    return projectProcessorState(this.props.projectId).then((state) => state.workspaces);
+  }
 }
 
 /**
@@ -2514,14 +2517,13 @@ class WorkspaceCollectionRpcTarget extends IterateRpcTarget<"WorkspaceCollection
  * HEAD, writes land in a private copy-on-write local layer (large files spill
  * to R2 transparently), and `git.commit({ scope })` turns ONE mount's changes
  * into one commit on that repo's main (honoring the mount's policy). Private
- * files live only under the workspace's own path (relative paths resolve
- * there); writes anywhere else error. The `.git` name is reserved
- * (platform-managed).
+ * files live only under /workspace (relative paths resolve there); writes
+ * anywhere else error. The `.git` name is reserved (platform-managed).
  */
 class WorkspaceRpcTarget extends IterateRpcTarget<"Workspace"> {
   async __describe(): Promise<Description> {
     return describeNode({
-      instructions: `A workspace at "${this.props.path}" — your private working copy of the project's one path namespace. Every project repo is mounted at its own /repos/** path automatically (reads track that repo's latest main until a local write shadows a path; a freshly created repo just appears). Private files live under the workspace's own directory ("${this.props.path}/..."; relative paths resolve there) — writable anywhere under it, never committable. Writes under a mounted repo stay in a private overlay until git.commit({ message, scope? }) commits ONE mount's changes to that repo's main (read-only mounts reject commits; scope is required when more than one mount is dirty). Writes anywhere else error loudly.`,
+      instructions: `A workspace at "${this.props.path}" — your private working copy of the project's one path namespace. Every project repo is mounted at its own /repos/** path automatically (reads track that repo's latest main until a local write shadows a path; a freshly created repo just appears). Private files live under "/workspace/..." (relative paths resolve there) — writable anywhere under it, never committable. Writes under a mounted repo stay in a private overlay until git.commit({ message, scope? }) commits ONE mount's changes to that repo's main (read-only mounts reject commits; scope is required when more than one mount is dirty). Writes anywhere else error loudly.`,
       children: {
         create:
           "Create this workspace (every project repo is auto-mounted at its /repos/** path; optional mounts are overlay deviations); waits through the atomic birth batch and returns this handle.",
@@ -2532,7 +2534,7 @@ class WorkspaceRpcTarget extends IterateRpcTarget<"Workspace"> {
         exists: "Whether a path exists in the merged view.",
         getConfig: "The live EFFECTIVE mount table (derived default merged with overlays).",
         collab:
-          "Collaborative editing API: open(path) / push(batch) / wait(path, epoch, afterVersion) / changes(path) — live rebase-model editing plus attributed redlines.",
+          "Collaborative editing API: open(path) / push(batch) / wait(path, epoch, afterVersion) — live rebase-model editing.",
         git: "Per-mount git surface: status (changes grouped by mount), commit ({ message, scope? }), log ({ scope? }).",
         glob: "Merged file paths matching a glob pattern.",
         kill: "Restart the workspace's server-side object; the next request boots it fresh.",
@@ -2662,7 +2664,7 @@ class WorkspaceRpcTarget extends IterateRpcTarget<"Workspace"> {
     return this.#read("readFile", () => this.durableObjectStub.readFile(path));
   }
 
-  /** The collaborative session lane (rebase model, no Yjs) — workspace.collab. */
+  /** Collaborative editing sessions (rebase model, no Yjs) — workspace.collab. */
   get collab(): WorkspaceCollabRpcTarget {
     return new WorkspaceCollabRpcTarget(this.props);
   }
@@ -2808,14 +2810,13 @@ class WorkspaceGitRpcTarget extends IterateRpcTarget<"WorkspaceGit"> {
  * versions, optimistic clients rebasing unconfirmed edits). Sessions are
  * durable; the workspace's ordinary filesystem RPC reads/writes route through
  * live sessions automatically, so this surface is only for LIVE participants
- * (editors) and redline consumers.
+ * (editors).
  */
 class WorkspaceCollabRpcTarget extends IterateRpcTarget<"WorkspaceCollab"> {
   async __describe(): Promise<Description> {
     return describeNode({
-      instructions: `Collaborative editing API of the workspace at "${this.props.path}": open(path) joins (or starts) a durable per-file session; push(batch) submits client updates (idempotent via clientSeq, rebased server-side when stale); wait(path, epoch, afterVersion) long-polls for accepted ops (snapshot past the retained floor, "ended" after a destructive op); changes(path) returns attributed redline segments since the last commit.`,
+      instructions: `Collaborative editing API of the workspace at "${this.props.path}": open(path) joins (or starts) a durable per-file session; push(batch) submits client updates (idempotent via clientSeq, rebased server-side when stale); wait(path, epoch, afterVersion) long-polls for accepted ops (snapshot past the retained floor, "ended" after a destructive op).`,
       children: {
-        changes: "Attributed tracked changes since the last commit (redline segments).",
         open: "Join (or start) the collaborative editing session for one file.",
         push: "Submit a client update batch ({ path, epoch, baseVersion, clientId, ops }).",
         wait: "Long-poll catch-up: ops after a version, a snapshot past the floor, or ended.",
@@ -2877,11 +2878,6 @@ class WorkspaceCollabRpcTarget extends IterateRpcTarget<"WorkspaceCollab"> {
   /** Head versions of every live session (a cheap board change cursor). */
   versions(): Promise<Record<string, number>> {
     return this.durableObjectStub.collabVersions();
-  }
-
-  /** Attributed tracked changes since the last commit (redline segments). */
-  changes(path: string): Promise<CollabChangesResult> {
-    return this.durableObjectStub.collabChanges(path);
   }
 
   /** Fresh caret presence per live session — "who has this file open". */
@@ -5070,6 +5066,16 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
     return this.#props.capabilityHost.revokeCapability(input);
   }
 
+  /** The workspace at this agent's path; equivalent to `itx.workspaces.get(agentPath)`.
+   * Addressing does not create it; `agent.create()` creates both. */
+  get workspace(): WorkspaceRpcTarget {
+    return new WorkspaceRpcTarget({
+      auth: this.#props.auth,
+      path: this.#path,
+      projectId: this.#props.projectId,
+    });
+  }
+
   /** The agent stream processor (snapshot/state) — facet-hosted on the agent stream. */
   get processor(): StreamProcessorRpc<AgentProcessorState> {
     return agentProcessorRelay({
@@ -5149,7 +5155,7 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
   ): Promise<AgentRpcTarget> {
     const workspace = new WorkspaceRpcTarget({
       auth: this.#props.auth,
-      path: agentWorkspacePath(this.#path),
+      path: this.#path,
       projectId: this.#props.projectId,
     });
     const workspaceReady = workspace.create({});
@@ -5432,6 +5438,7 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
         provideCapability: "Shortcut: mount a capability on THIS agent's scope.",
         revokeCapability: "Shortcut: remove a mount from THIS agent's scope.",
         stream: "The agent's own event stream.",
+        workspace: "The workspace at this same agent path; created by agent.create().",
       },
       parent: `project ${this.#props.projectId}, via agents.get("${this.#path}")`,
       agentPath: this.#path,
@@ -6616,7 +6623,7 @@ const PROJECT_BUILTIN_BLIPS: Record<string, string> = {
   worker: "The default repo-backed project worker.",
   workers: "Dynamic worker refs: get(ref).",
   workspaces:
-    "Event-sourced, mount-routed workspaces by path: get(\"/workspaces/<name>\") returns a possibly nonexistent handle; handle.create({}) commits the atomic birth batch. Every project repo is auto-mounted at its own /repos/** path; private files live under the workspace's own path. git.commit({ scope? }) commits per mount. An agent's own workspace is itx.workspace.",
+    'Event-sourced, mount-routed workspaces by path: get("/workspaces/<name>") returns a possibly nonexistent handle; handle.create({}) commits the atomic birth batch; list() every created workspace. Every project repo is auto-mounted at its own /repos/** path; private files live under /workspace. git.commit({ scope? }) commits per mount. An agent\'s own workspace is itx.workspace.',
 };
 
 type ExistingProjectRpcTargetProps = {

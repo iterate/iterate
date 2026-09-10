@@ -6,7 +6,7 @@
  */
 import { parseDocument, type Document } from "yaml";
 import { readReview } from "iterate/document-review";
-import { BOARD_COLUMNS, type TaskCard, type TaskChangeSummary } from "./state.ts";
+import { BOARD_COLUMNS, type TaskCard } from "./state.ts";
 import { DOCUMENT_REVIEW_INSTRUCTIONS } from "./lib/document-review-instructions.ts";
 
 const DEFAULT_TASK_STATE = BOARD_COLUMNS[0];
@@ -153,27 +153,6 @@ export function taskPathForTitle(title: string, suffix?: string): string {
       .slice(0, Math.max(1, MAX_TASK_FILENAME_SLUG_LENGTH - suffixText.length))
       .replace(/-+$/g, "") || "task";
   return `tasks/${collisionBase}${suffixText}.md`;
-}
-
-/** Deterministic commit message when AI is unavailable or empty. `noun` names
- * what the changes are ("tasks" for the board, "files" for the file tree). */
-export function fallbackCommitMessage(
-  changes: readonly TaskChangeSummary[],
-  noun = "tasks",
-): string {
-  if (changes.length === 0) return `Update ${noun}`;
-  const added = changes.filter((change) => change.status === "added");
-  const modified = changes.filter((change) => change.status === "modified");
-  const deleted = changes.filter((change) => change.status === "deleted");
-  const parts: string[] = [];
-  if (added.length === 1) parts.push(`add ${added[0]!.title}`);
-  else if (added.length > 1) parts.push(`add ${added.length} ${noun}`);
-  if (modified.length === 1) parts.push(`update ${modified[0]!.title}`);
-  else if (modified.length > 1) parts.push(`update ${modified.length} ${noun}`);
-  if (deleted.length === 1) parts.push(`delete ${deleted[0]!.title}`);
-  else if (deleted.length > 1) parts.push(`delete ${deleted.length} ${noun}`);
-  const body = parts.join(", ");
-  return body === "" ? `Update ${noun}` : `${body[0]!.toUpperCase()}${body.slice(1)}`;
 }
 
 /**

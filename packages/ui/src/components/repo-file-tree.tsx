@@ -49,46 +49,69 @@ export interface RepoTreeActions {
  */
 export function RepoFileTree({
   headPaths,
+  directories = [],
   changes,
   selectedPath,
   onSelect,
+  onOpenDirectory,
   actions,
   className,
   header,
+  headerClassName,
   untitledExtension = "txt",
+  flattenEmptyDirectories = false,
 }: {
   headPaths: string[];
+  /** Directories shown even when no file under them is known yet — a host
+   * that lists lazily seeds its roots here and fills them via onOpenDirectory. */
+  directories?: string[];
   changes: ReadonlyMap<string, RepoFileStatus>;
   selectedPath: string | undefined;
   onSelect: (path: string) => void;
+  /** A directory row was opened (clicked): a lazily listing host loads it. */
+  onOpenDirectory?: (path: string) => void;
   actions: RepoTreeActions;
   className?: string;
   /** Rendered at the left of the toolbar row (a label, a breadcrumb). */
   header?: ReactNode;
+  /** Match the toolbar height to the surrounding app header. */
+  headerClassName?: string;
   /** The extension a freshly named file gets before the user types a name. */
   untitledExtension?: string;
+  /** Collapse folder chains with a single child into one row (`repos/config`). */
+  flattenEmptyDirectories?: boolean;
 }) {
-  const mergedPaths = mergePaths(headPaths, changes);
+  const mergedPaths = mergePaths(headPaths, directories, changes);
   // The pierre callbacks below were bound at model construction; they reach
   // the latest handlers through refs, written after render (never during).
   const onSelectRef = useRef(onSelect);
+  const onOpenDirectoryRef = useRef(onOpenDirectory);
   const actionsRef = useRef(actions);
   useEffect(() => {
     onSelectRef.current = onSelect;
+    onOpenDirectoryRef.current = onOpenDirectory;
     actionsRef.current = actions;
   });
   // The inline-rename affordance doubles as the "name a new file" input:
   // while this holds a path, the next rename event is a file CREATION.
   const pendingNewFileRef = useRef<string | null>(null);
+  // Only host-listed files exist. Pierre also selects temporary rename rows.
+  // react-doctor-disable-next-line react-doctor/rerender-lazy-ref-init -- empty-container allocation per render is the rule's concern; trivial here, and the ??= lazy idiom trips exhaustive-deps instead
+  const knownPathsRef = useRef(new Set(mergedPaths));
 
   const { model } = useFileTree({
     paths: mergedPaths,
     initialExpansion: "open",
+    flattenEmptyDirectories,
     ...(selectedPath === undefined ? {} : { initialSelectedPaths: [selectedPath] }),
     onSelectionChange: (paths) => {
       const path = paths[0];
-      if (path !== undefined && model.getItem(path)?.isDirectory() === false) {
+      if (path === undefined) return;
+      const item = model.getItem(path);
+      if (item?.isDirectory() === false && knownPathsRef.current.has(path))
         onSelectRef.current(path);
+      else if (item?.isDirectory() === true) {
+        onOpenDirectoryRef.current?.(path.replace(/\/$/, ""));
       }
     },
     renaming: {
@@ -121,8 +144,6 @@ export function RepoFileTree({
   // rows pierre already moved itself (inline renames): a double add/remove of
   // the same path must not blow up the sync.
   const mergedPathsKey = mergedPaths.join("\n");
-  // react-doctor-disable-next-line react-doctor/rerender-lazy-ref-init -- empty-container allocation per render is the rule's concern; trivial here, and the ??= lazy idiom trips exhaustive-deps instead
-  const knownPathsRef = useRef(new Set(mergedPaths));
   useEffect(() => {
     const next = new Set(mergedPathsKey === "" ? [] : mergedPathsKey.split("\n"));
     const known = knownPathsRef.current;
@@ -170,7 +191,7 @@ export function RepoFileTree({
 
   return (
     <div className={cn("flex min-h-0 flex-col", className)}>
-      <div className="flex shrink-0 items-center gap-0.5 border-b px-2 py-1">
+      <div className={cn("flex shrink-0 items-center gap-0.5 border-b px-2 py-1", headerClassName)}>
         {header === undefined ? null : <div className="min-w-0 flex-1">{header}</div>}
         <Button
           variant="ghost"
@@ -311,11 +332,17 @@ function menuEntry(label: string, onClick: () => void, destructive = false) {
 }
 
 /** All visible tree paths: HEAD files plus additions (deletions stay
- * visible, annotated as deleted, until committed or discarded). */
-function mergePaths(headPaths: string[], changes: ReadonlyMap<string, RepoFileStatus>): string[] {
+ * visible, annotated as deleted, until committed or discarded), plus bare
+ * directories in pierre's trailing-slash form. */
+function mergePaths(
+  headPaths: string[],
+  directories: string[],
+  changes: ReadonlyMap<string, RepoFileStatus>,
+): string[] {
   const merged = new Set(headPaths);
   for (const [path, status] of changes) {
     if (status !== "deleted") merged.add(path);
   }
+  for (const directory of directories) merged.add(`${directory.replace(/\/$/, "")}/`);
   return [...merged].sort();
 }

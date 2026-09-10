@@ -81,7 +81,7 @@ events:
       key: agent/boot-context
       content: >-
         Context for this agent: Project "demo" (slug demo); your stream path /agents/web/demo;
-        workspace /workspaces/agents/web/demo; config repo at /repos/config…
+        workspace /agents/web/demo; config repo at /repos/config…
     note: per-agent boot facts
   - off: 21
     t: 1.9s
@@ -235,7 +235,7 @@ messages:
       </section>
 
       <section key="agent/boot-context">
-      Context for this agent: Project "demo" (slug demo); your stream path /agents/web/demo; workspace /workspaces/agents/web/demo; config repo at /repos/config…
+      Context for this agent: Project "demo" (slug demo); your stream path /agents/web/demo; workspace /agents/web/demo; config repo at /repos/config…
       </section>
 
       <section key="config/agents-md">

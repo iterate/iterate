@@ -56,6 +56,23 @@ ring ownership behind callbacks — a framework where the codebase wants two
 short rhyming implementations. If you change the grammar, change it in
 both files in the same commit.
 
+## The playout step is shared, and the transport is not, for the same reason
+
+`components/core/src/voice_playout.c` is the one speaker pass both the board
+(`components/voice/src/voice_loop.c`) and the Mac CLI
+(`targets/host_cli/main.c`) run — prime, take a frame, hole or end, skip or
+play, report — with only the ring and the sink injected as callbacks. That
+is the abstraction the transport refused, and it is right here because the
+ownership is different: playout is single-owner on both targets (one task on
+the board, the one loop on the host), so nothing inside the step is an
+atomic and no callback crosses a task. The two owners had drifted apart
+twice in one week before it was shared (2026-09-06 and 2026-09-09, both
+the answer timeline failing to restart, each on a path the other had
+fixed). What stays in each owner is exactly what is theirs: the queue's
+generations and reprime handshake, the codec's bounded wait, the room's
+lead — and the underrun promotion, which on the board is an app-task read
+of a playback-task stamp and so cannot live in a single-owner module.
+
 Run the fastest complete host check from `apps/kit`:
 
 ```bash

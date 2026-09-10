@@ -1,8 +1,7 @@
 import { DocInput, Language, LanguageSupport } from "@codemirror/language";
-import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
-import { highlightMarkdown } from "@atomic-editor/editor";
 import { Parser, Tree, TreeFragment, type Input, type SyntaxNode } from "@lezer/common";
 import { readReview, type DocumentReview } from "iterate/document-review";
+import { workspaceMarkdown } from "./workspace-markdown.ts";
 import { textEdits } from "./text-edits.ts";
 import { reviewForDocument } from "./rfm-document.ts";
 
@@ -48,7 +47,7 @@ interface ProjectedParse {
 
 /** Parse display Markdown, but expose syntax nodes in original file coordinates. */
 export function projectedMarkdown() {
-  const support = markdown({ base: markdownLanguage, extensions: highlightMarkdown });
+  const support = workspaceMarkdown();
   const previousParses = new WeakMap<Tree, ProjectedParse>();
   class ReviewMarkdownParser extends Parser {
     createParse(

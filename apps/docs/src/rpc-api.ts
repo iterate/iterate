@@ -1,6 +1,4 @@
 import { RpcTarget } from "capnweb";
-import type { RpcStub } from "capnweb";
-import type { Project } from "iterate/client";
 import {
   ProjectDial,
   projectCredentialAddress,
@@ -9,47 +7,67 @@ import {
   type ProjectCredential,
 } from "@iterate-com/workspace-documents/server";
 import type {
-  CollabAcceptResult,
-  CollabChanges,
-  CollabOpened,
-  CollabWaitResult,
+  WorkspaceCollabSurface,
+  WorkspaceGitSurface,
+  WorkspaceSurface,
 } from "@iterate-com/workspace-documents/types";
 import { requireDocumentPath, requireWorkspacePath } from "./config-bridge.ts";
 import type { AppEnv } from "./env.ts";
-import { TasksWorkspaceApi } from "./tasks-rpc-api.ts";
+import { normalizeRepoPath } from "./lib/board-shared.ts";
+import { workspacePathForName } from "./lib/workspace-names.ts";
 import {
-  DEFAULT_REPO_PATH,
-  boardAddressFor,
-  boardWorkspacePath,
-  isBoardId,
-  newBoardId,
-  normalizeRepoPath,
-} from "./lib/board-shared.ts";
-import {
-  isDocumentPath,
-  jamAgentPath,
-  jamDocumentPath,
-  jamInvitation,
-  jamWorkspacePath,
-} from "./lib/jam.ts";
-import type { TasksWorkspace, WorkspaceListEntry } from "./lib/tasks-api.ts";
+  parseTaskCard,
+  setTaskCardAgent,
+  setTaskCardState,
+  taskAgentPath,
+  taskAssignmentInstructions,
+  taskColumnState,
+} from "./tasks-model.ts";
 import type {
   DocsApi,
   DocsProject,
   DocsUser,
   DocsWorkspace,
-  WorkspaceDocumentSnapshot,
+  WorkspaceListEntry,
+  WorkspaceStreamEvent,
 } from "./lib/docs-api.ts";
 
 const AUTH_COOKIE = "iterate-project-auth";
 
-/** The agent surface inviteAgent touches (the pinned `iterate` client types
- * predate it; capnweb stubs are Proxies, so the members resolve at runtime). */
-type JamAgentStub = {
+/**
+ * The platform itx members this vessel touches, asserted locally: the
+ * generated `Project` client type carries the project's own methods, not the
+ * capability tree, and capnweb stubs are Proxies, so these members resolve
+ * at runtime. The workspace handle IS the shared WorkspaceSurface plus the
+ * one lifecycle method (create) the vessel creates workspaces through. Every
+ * `project as unknown as PlatformProject` below is this same fact — the
+ * generated type has no `workspaces`/`streams`/`agents` members to narrow
+ * from, so a cast-free spelling does not exist.
+ */
+type PlatformProject = {
+  agents: { get(path: string): PlatformAgent };
+  repos: { list(): Promise<{ path: string }[]> };
+  streams: {
+    get(path: string): {
+      getEvents(args: object): Promise<unknown[]>;
+      subscribe(args: object): Promise<unknown>;
+    };
+  };
+  workspaces: {
+    get(path: string): WorkspaceSurface & { create(input: object): Promise<unknown> };
+    list(): Promise<{ createdAt: string; path: string }[]>;
+  };
+};
+
+/** The agent surface the task assignment touches. */
+type PlatformAgent = {
   create(): Promise<unknown>;
   message(text: string): Promise<unknown>;
   processor: { snapshot(): Promise<{ state?: { birthCertificate?: unknown } }> };
 };
+
+/** Reconnect-aware access to one workspace's platform handle. */
+type WorkspaceRun = <T>(operation: (workspace: WorkspaceSurface) => Promise<T>) => Promise<T>;
 
 export class DocsApiRoot extends RpcTarget implements DocsApi {
   readonly #env: AppEnv;
@@ -117,47 +135,18 @@ class DocsProjectApi extends RpcTarget implements DocsProject {
     this.#credential = credential;
   }
 
+  #withPlatform<T>(operation: (project: PlatformProject) => Promise<T>): Promise<T> {
+    return this.#dial.withProject((project) => operation(project as unknown as PlatformProject));
+  }
+
   async projectId(): Promise<string> {
     return this.#projectId;
   }
 
   /** The project's repo catalog — paths a board can be opened against. */
   async repos(): Promise<string[]> {
-    const repos = (await this.#dial.withProject((project) => project.repos.list())) as Array<{
-      path: string;
-    }>;
+    const repos = await this.#withPlatform((project) => project.repos.list());
     return repos.map((repo) => repo.path).sort();
-  }
-
-  /**
-   * A board on the app's own workspace naming: the workspace path is derived
-   * from (boardId, repoPath) and lazily created on first use — opening a
-   * fresh board id IS how a new board workspace is born.
-   */
-  board(boardId: string, repoPath: string = DEFAULT_REPO_PATH): TasksWorkspace {
-    const normalized = normalizeRepoPath(repoPath);
-    if (!isBoardId(boardId) || normalized === null) {
-      throw new Error("bad board id or repo path");
-    }
-    return new TasksWorkspaceApi(this.#dial, boardWorkspacePath(boardId, normalized), normalized, {
-      lazyCreate: true,
-    });
-  }
-
-  /**
-   * A board lens on an EXISTING workspace, addressed by its platform path —
-   * the same plain-`get` posture as workspace(): no lazy creation, no side
-   * effects. Workspaces outside the app's own /workspaces/tasks/ namespace
-   * are someone else's (an agent's, mid-thought): the capability serves
-   * reads, comments, and edits there, but refuses the owner acts (commit,
-   * assignAgent).
-   */
-  workspaceAt(workspacePath: string, repoPath: string = DEFAULT_REPO_PATH): TasksWorkspace {
-    const normalized = normalizeRepoPath(repoPath);
-    if (normalized === null) throw new Error("bad repo path");
-    return new TasksWorkspaceApi(this.#dial, requireWorkspacePath(workspacePath), normalized, {
-      lazyCreate: false,
-    });
   }
 
   async whoami(): Promise<DocsUser> {
@@ -174,169 +163,68 @@ class DocsProjectApi extends RpcTarget implements DocsProject {
   }
 
   workspace(workspacePath: string): DocsWorkspace {
-    return new DocsWorkspaceApi(this.#dial, requireWorkspacePath(workspacePath));
+    const path = requireWorkspacePath(workspacePath);
+    return new WorkspaceApi(this.#dial, path, (operation) =>
+      this.#withPlatform((project) => operation(project.workspaces.get(path))),
+    );
   }
 
   async workspaces(): Promise<WorkspaceListEntry[]> {
-    // The pinned iterate client types predate this surface; capnweb stubs
-    // are Proxies, so the locally asserted members resolve at runtime — the
-    // same convention as #withWorkspace below.
-    const streams = (await this.#dial.withProject((project) => {
-      const catalog = (
-        project as unknown as {
-          streams: { list(): Promise<{ createdAt: string; path: string }[]> };
-        }
-      ).streams;
-      return catalog.list();
-      // The platform's StreamListItem shape ({ path, createdAt }) — asserted
-      // for the same pinned-client reason.
-    })) as { createdAt: string; path: string }[];
-    // The project's repos resolve board paths EXACTLY (a board path is
-    // re-minted per repo and compared) — no guessing at the "--" separator.
-    const repoPaths = await this.repos();
-    // Ancestor pruning: every stream announces to every ancestor path, so a
-    // nested workspace drags phantom ancestor streams into the catalog that
-    // were never created as workspaces.
-    const candidates = streams.filter((stream) => stream.path.startsWith("/workspaces/"));
-    const paths = candidates.map((stream) => stream.path);
-    const workspaces: WorkspaceListEntry[] = [];
-    for (const stream of candidates) {
-      if (paths.some((other) => other.startsWith(`${stream.path}/`))) continue;
-      workspaces.push({
-        path: stream.path,
-        createdAt: stream.createdAt,
-        board: boardAddressFor(stream.path, repoPaths),
-      });
+    const workspaces = await this.#withPlatform((project) => project.workspaces.list());
+    return workspaces
+      .map((workspace) => ({ path: workspace.path, createdAt: workspace.createdAt }))
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+  }
+
+  async createWorkspace(input: { name: string }): Promise<{ workspacePath: string }> {
+    const workspacePath = workspacePathForName(input.name);
+    if (workspacePath === null) {
+      throw new Error(`not a workspace name: ${JSON.stringify(input.name)}`);
     }
-    return workspaces.sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+    // Birth stays explicit (this is the app's ONE create call). Mounts are
+    // not create's business: every project repo is derived onto its own
+    // /repos/** path.
+    await this.#withPlatform((project) =>
+      project.workspaces.get(requireWorkspacePath(workspacePath)).create({}),
+    );
+    return { workspacePath };
   }
 
-  async documents(workspacePath: string): Promise<string[]> {
-    const workspace = requireWorkspacePath(workspacePath);
-    return this.#dial.withProject(async (project) => {
-      // Same pinned-client caveat as workspaces(): the glob member is part
-      // of the platform workspace surface, asserted locally.
-      const stub = (
-        project as unknown as {
-          workspaces: { get(path: string): { glob(pattern: string): Promise<string[]> } };
-        }
-      ).workspaces.get(workspace);
-      // ONE tree walk, filtered here to every extension requireDocumentPath
-      // accepts (no more and no less) — the platform glob enumerates the
-      // whole tree per pattern, so four extension globs cost four walks.
-      const everything = await stub.glob(`${workspace}/**/*`);
-      const documents: string[] = [];
-      for (const path of everything) {
-        const extension = path.slice(path.lastIndexOf(".") + 1).toLowerCase();
-        if (
-          extension === "md" ||
-          extension === "markdown" ||
-          extension === "html" ||
-          extension === "htm"
-        ) {
-          documents.push(path.slice(workspace.length + 1));
-        }
-      }
-      return documents.sort((left, right) => left.localeCompare(right)).slice(0, 200);
+  /**
+   * Assign an agent to one task, the apps/os way: frontmatter first
+   * (`state: in-progress` + `agent:`, visible to every collaborator through
+   * the live workspace), then ONE commit so a born agent always finds its
+   * durable assignment at HEAD, then birth-if-needed and the kickoff brief.
+   */
+  async assignAgent(input: {
+    workspacePath: string;
+    repoPath: string;
+    path: string;
+  }): Promise<{ agentPath: string }> {
+    const workspacePath = requireWorkspacePath(input.workspacePath);
+    const repoPath = normalizeRepoPath(input.repoPath);
+    if (repoPath === null) throw new Error("bad repo path");
+    const filePath = `${repoPath}/${input.path.replace(/^\/+/, "")}`;
+    const source = await this.#withPlatform((project) =>
+      project.workspaces.get(workspacePath).readFile(filePath),
+    );
+    if (source === null) throw new Error(`${input.path} does not exist in this workspace`);
+    const card = parseTaskCard(input.path, source);
+    if (card.agent !== null) return { agentPath: card.agent };
+    const agentPath = taskAgentPath(repoPath, input.path);
+    const staged =
+      taskColumnState(card.state) === "in-progress"
+        ? source
+        : setTaskCardState(source, "in-progress");
+    const content = setTaskCardAgent(staged, agentPath);
+    await this.#withPlatform(async (project) => {
+      const workspace = project.workspaces.get(workspacePath);
+      await workspace.writeFile(filePath, content);
+      await workspace.git.commit({ message: `Assign task: ${card.title}`, scope: repoPath });
     });
-  }
-
-  async createWorkspace(): Promise<{ workspacePath: string; path: string }> {
-    // Human-readable stamp + random tail, the tasks board-id recipe.
-    const now = new Date();
-    const pad = (value: number) => String(value).padStart(2, "0");
-    const stamp = `${now.getUTCFullYear()}${pad(now.getUTCMonth() + 1)}${pad(now.getUTCDate())}-${pad(now.getUTCHours())}${pad(now.getUTCMinutes())}`;
-    const workspacePath = `/workspaces/scratch/${stamp}-${Math.random().toString(36).slice(2, 6)}`;
-    const path = "notes.md";
-    await this.#dial.withProject(async (project) => {
-      // Same pinned-client caveat as workspaces(): create/writeFile are the
-      // platform workspace surface, asserted locally; birth stays explicit
-      // (this is the app's ONE create door).
-      const stub = (
-        project as unknown as {
-          workspaces: {
-            get(path: string): {
-              create(input: object): Promise<unknown>;
-              writeFile(path: string, content: string): Promise<void>;
-            };
-          };
-        }
-      ).workspaces.get(workspacePath);
-      await stub.create({});
-      // The document must EXIST before the editor opens it (no lazy file
-      // create anywhere in Docs) — seed the starter note in the same breath.
-      await stub.writeFile(`${workspacePath}/${path}`, "# Notes\n\n");
-    });
-    return { workspacePath, path };
-  }
-
-  async documentsUnder(workspacePath: string, repoPath: string): Promise<string[]> {
-    const workspace = requireWorkspacePath(workspacePath);
-    const mount = normalizeRepoPath(repoPath);
-    if (mount === null) throw new Error("bad repo path");
-    return this.#dial.withProject(async (project) => {
-      // The pinned `iterate` client types predate the workspace surface, so
-      // the one member this method calls is asserted locally; capnweb stubs
-      // are Proxies, so it resolves at runtime (the same caveat as documents()).
-      const stub = (
-        project as unknown as {
-          workspaces: { get(path: string): { glob(pattern: string): Promise<string[]> } };
-        }
-      ).workspaces.get(workspace);
-      // One tree walk of the mount (the merged view: overlay over the repo
-      // at HEAD), filtered here to what the editor can open.
-      const everything = await stub.glob(`${mount}/**/*`);
-      return everything
-        .filter(isDocumentPath)
-        .sort((left, right) => left.localeCompare(right))
-        .slice(0, 500);
-    });
-  }
-
-  async createJam(): Promise<{ workspacePath: string; path: string }> {
-    const id = newBoardId();
-    const workspacePath = jamWorkspacePath(id);
-    const path = jamDocumentPath(id);
-    await this.#dial.withProject(async (project) => {
-      // Creates through the same workspace `create` call as createWorkspace.
-      // The pinned `iterate` client types predate this surface; capnweb stubs
-      // are Proxies, so the locally asserted members resolve at runtime.
-      const stub = (
-        project as unknown as {
-          workspaces: {
-            get(path: string): {
-              create(input: object): Promise<unknown>;
-              writeFile(path: string, content: string): Promise<void>;
-            };
-          };
-        }
-      ).workspaces.get(workspacePath);
-      await stub.create({});
-      await stub.writeFile(path, `# Jam ${id}\n\n`);
-    });
-    return { workspacePath, path };
-  }
-
-  async inviteAgent(workspacePath: string, path?: string): Promise<{ agentPath: string }> {
-    const workspace = requireWorkspacePath(workspacePath);
-    const agentPath = jamAgentPath(workspace);
-    if (agentPath === null) {
-      throw new Error(`only a jam workspace can invite an agent; ${workspace} is not one`);
-    }
-    const document = path === undefined ? null : resolveDocumentPath(workspace, path);
-    await this.#dial.withProject(async (project) => {
-      // Same birth-if-needed sequence as the board's assignAgent; the brief
-      // goes out every time so a re-invite re-points an existing agent. The
-      // pinned client types predate the agents surface, so the three members
-      // used here are asserted locally (JamAgentStub); capnweb stubs are
-      // Proxies, so they resolve at runtime.
-      const agent = (
-        project as unknown as { agents: { get(path: string): JamAgentStub } }
-      ).agents.get(agentPath);
-      const snapshot = await agent.processor.snapshot();
-      if ((snapshot.state?.birthCertificate ?? null) === null) await agent.create();
-      await agent.message(jamInvitation(workspace, document));
-    });
+    await this.#withPlatform((project) =>
+      briefAgent(project.agents.get(agentPath), taskAssignmentInstructions(repoPath, input.path)),
+    );
     return { agentPath };
   }
 
@@ -346,133 +234,198 @@ class DocsProjectApi extends RpcTarget implements DocsProject {
   }
 }
 
-class DocsWorkspaceApi extends RpcTarget implements DocsWorkspace {
+/**
+ * One workspace, forwarded verbatim: the platform's fs surface here, its git
+ * and collab surfaces as sub-targets, and the workspace's stream. Stateless
+ * beyond the dial — versions, epochs, and the overlay all live in the
+ * workspace DO; live sessions settle inside the workspace's own barriers.
+ */
+class WorkspaceApi extends RpcTarget implements DocsWorkspace {
   readonly #dial: ProjectDial;
-  readonly #workspacePath: string;
+  readonly #path: string;
+  readonly #run: WorkspaceRun;
+  readonly #git: WorkspaceGitApi;
+  readonly #collab: WorkspaceCollabApi;
 
-  constructor(dial: ProjectDial, workspacePath: string) {
+  constructor(dial: ProjectDial, path: string, run: WorkspaceRun) {
     super();
     this.#dial = dial;
-    this.#workspacePath = workspacePath;
+    this.#path = path;
+    this.#run = run;
+    this.#git = new WorkspaceGitApi(run);
+    this.#collab = new WorkspaceCollabApi(run);
   }
 
-  async inspect(rawPath: string): Promise<WorkspaceDocumentSnapshot> {
-    const path = resolveDocumentPath(this.#workspacePath, rawPath);
-    return this.#withWorkspace(async (workspace) => {
-      const content = await workspace.readFile(path);
-      if (content === null) {
-        throw new Error(`document "${path}" does not exist`);
-      }
-      return {
-        content,
-        format: /\.html?$/i.test(path) ? "html" : "markdown",
-        path,
-        workspacePath: this.#workspacePath,
-      };
-    });
+  get git(): WorkspaceGitApi {
+    return this.#git;
   }
 
-  async open(rawPath: string): Promise<CollabOpened> {
-    const path = resolveDocumentPath(this.#workspacePath, rawPath);
-    return this.#withExistingDocument(path, (workspace) => workspace.collab.open(path));
+  get collab(): WorkspaceCollabApi {
+    return this.#collab;
   }
 
-  async changes(rawPath: string): Promise<CollabChanges> {
-    const path = resolveDocumentPath(this.#workspacePath, rawPath);
-    return this.#withWorkspace((workspace) => workspace.collab.changes(path));
+  readFile(path: string): Promise<string | null> {
+    return this.#run((workspace) => workspace.readFile(path));
   }
 
-  async push(input: {
-    baseVersion: number;
-    clientId: string;
-    epoch: string;
-    ops: { changes: unknown; clientSeq: number }[];
-    path: string;
-  }): Promise<CollabAcceptResult> {
-    const path = resolveDocumentPath(this.#workspacePath, input.path);
-    return this.#withWorkspace((workspace) => workspace.collab.push({ ...input, path }));
+  readFiles(paths: string[]): Promise<Record<string, string | null>> {
+    return this.#run((workspace) => workspace.readFiles(paths));
   }
 
-  async wait(
-    rawPath: string,
+  readBase(path: string): Promise<string | null> {
+    return this.#run((workspace) => workspace.readBase(path));
+  }
+
+  exists(path: string): Promise<boolean> {
+    return this.#run((workspace) => workspace.exists(path));
+  }
+
+  writeFile(path: string, content: string): Promise<void> {
+    return this.#run((workspace) => workspace.writeFile(path, content));
+  }
+
+  deleteFile(path: string): Promise<boolean> {
+    return this.#run((workspace) => workspace.deleteFile(path));
+  }
+
+  revert(path: string): Promise<void> {
+    return this.#run((workspace) => workspace.revert(path));
+  }
+
+  listAllFiles(): Promise<string[]> {
+    return this.#run((workspace) => workspace.listAllFiles());
+  }
+
+  glob(pattern: string): Promise<string[]> {
+    return this.#run((workspace) => workspace.glob(pattern));
+  }
+
+  /** The newest page of the workspace's stream events, newest first. */
+  async events(limit = 50): Promise<WorkspaceStreamEvent[]> {
+    // The platform's StreamEvent shape, restated for the four fields read
+    // below: the pinned client's getEvents returns the capnweb-mapped type,
+    // which does not assign to a plain array type without this assertion.
+    const events = (await this.#dial.withProject((project) =>
+      (project as unknown as PlatformProject).streams
+        .get(this.#path)
+        .getEvents({ includeEphemeral: true }),
+    )) as { createdAt?: string; offset: number; payload?: unknown; type: string }[];
+    return events
+      .slice(-limit)
+      .reverse()
+      .map((event) => ({
+        createdAt: event.createdAt ?? "",
+        offset: event.offset,
+        payload: event.payload ?? null,
+        type: event.type,
+      }));
+  }
+
+  /**
+   * Live event feed: durable history after `afterOffset`, then every new
+   * commit, PUSHED over the retained callback — the platform's ephemeral
+   * subscription composed end-to-end (browser stub → vessel → stream DO).
+   * Returns the platform's subscription handle (unsubscribe()-able); the
+   * assertion restates that handle's two members, which the capnweb-mapped
+   * return type does not spell.
+   */
+  async subscribeEvents(
+    processEventBatch: (batch: { events: WorkspaceStreamEvent[] }) => unknown,
+    afterOffset = 0,
+  ): Promise<{ ping?(): Promise<boolean> | boolean; unsubscribe(): void }> {
+    return this.#dial.withProject(
+      async (project) =>
+        (await (project as unknown as PlatformProject).streams.get(this.#path).subscribe({
+          processEventBatch,
+          replayAfterOffset: afterOffset,
+        })) as { ping?(): Promise<boolean> | boolean; unsubscribe(): void },
+    );
+  }
+}
+
+/** `workspace.git`, forwarded. */
+class WorkspaceGitApi extends RpcTarget implements WorkspaceGitSurface {
+  readonly #run: WorkspaceRun;
+
+  constructor(run: WorkspaceRun) {
+    super();
+    this.#run = run;
+  }
+
+  status(): ReturnType<WorkspaceGitSurface["status"]> {
+    return this.#run((workspace) => workspace.git.status());
+  }
+
+  commit(input: Parameters<WorkspaceGitSurface["commit"]>[0]) {
+    return this.#run((workspace) => workspace.git.commit(input));
+  }
+
+  log(input?: Parameters<WorkspaceGitSurface["log"]>[0]) {
+    return this.#run((workspace) => workspace.git.log(input));
+  }
+}
+
+/** `workspace.collab`, forwarded verbatim. */
+class WorkspaceCollabApi extends RpcTarget implements WorkspaceCollabSurface {
+  readonly #run: WorkspaceRun;
+
+  constructor(run: WorkspaceRun) {
+    super();
+    this.#run = run;
+  }
+
+  open(path: string) {
+    return this.#run((workspace) => workspace.collab.open(path));
+  }
+
+  push(input: Parameters<WorkspaceCollabSurface["push"]>[0]) {
+    return this.#run((workspace) => workspace.collab.push(input));
+  }
+
+  wait(
+    path: string,
     epoch: string,
     afterVersion: number,
     clientId?: string,
     afterPresence?: number,
-  ): Promise<CollabWaitResult> {
-    const path = resolveDocumentPath(this.#workspacePath, rawPath);
-    return this.#withWorkspace((workspace) =>
+  ) {
+    return this.#run((workspace) =>
       workspace.collab.wait(path, epoch, afterVersion, clientId, afterPresence),
     );
   }
 
-  async present(
-    rawPath: string,
-    clientId: string,
-    selection: { anchor: number; head: number } | null,
-  ): Promise<void> {
-    const path = resolveDocumentPath(this.#workspacePath, rawPath);
-    return this.#withWorkspace((workspace) => workspace.collab.present(path, clientId, selection));
+  present(path: string, clientId: string, selection: { anchor: number; head: number } | null) {
+    return this.#run((workspace) => workspace.collab.present(path, clientId, selection));
   }
 
-  async #withExistingDocument<T>(
-    path: string,
-    operation: (workspace: WorkspaceDocumentStub) => Promise<T>,
-  ): Promise<T> {
-    return this.#withWorkspace(async (workspace) => {
-      if ((await workspace.readFile(path)) === null) {
-        throw new Error(`document "${path}" does not exist`);
-      }
-      return operation(workspace);
-    });
+  versions() {
+    return this.#run((workspace) => workspace.collab.versions());
   }
 
-  async #withWorkspace<T>(operation: (workspace: WorkspaceDocumentStub) => Promise<T>): Promise<T> {
-    return this.#dial.withProject((project: RpcStub<Project>) => {
-      // RpcStub maps discriminated-union promises distributively, which is
-      // not assignable back to one Promise<union>. This local structural
-      // surface describes the exact workspace methods Docs forwards.
-      const workspaces = (
-        project as unknown as {
-          workspaces: { get(path: string): WorkspaceDocumentStub };
-        }
-      ).workspaces;
-      return operation(workspaces.get(this.#workspacePath));
-    });
+  presenceSummary() {
+    return this.#run((workspace) => workspace.collab.presenceSummary());
+  }
+
+  boardViewers() {
+    return this.#run((workspace) => workspace.collab.boardViewers());
+  }
+
+  boardPresent(clientId: string, name: string | null) {
+    return this.#run((workspace) => workspace.collab.boardPresent(clientId, name));
   }
 }
 
-type WorkspaceDocumentStub = {
-  readFile(path: string): Promise<string | null>;
-  collab: {
-    open(path: string): Promise<CollabOpened>;
-    changes(path: string): Promise<CollabChanges>;
-    push(input: {
-      baseVersion: number;
-      clientId: string;
-      epoch: string;
-      ops: { changes: unknown; clientSeq: number }[];
-      path: string;
-    }): Promise<CollabAcceptResult>;
-    wait(
-      path: string,
-      epoch: string,
-      afterVersion: number,
-      clientId?: string,
-      afterPresence?: number,
-    ): Promise<CollabWaitResult>;
-    present(
-      path: string,
-      clientId: string,
-      selection: { anchor: number; head: number } | null,
-    ): Promise<void>;
-  };
-};
+/** Birth the agent if it has never been born, then send it the brief. */
+async function briefAgent(agent: PlatformAgent, brief: string): Promise<void> {
+  const snapshot = await agent.processor.snapshot();
+  if ((snapshot.state?.birthCertificate ?? null) === null) await agent.create();
+  await agent.message(brief);
+}
 
-/** Relative document paths join onto the workspace's own stream path; absolute paths are used verbatim. */
-export function resolveDocumentPath(workspacePath: string, value: string): string {
+/** Relative document paths join onto /workspace; absolute paths are used verbatim. */
+export function resolveDocumentPath(value: string): string {
   const path = requireDocumentPath(value);
-  return path.startsWith("/") ? path : `${workspacePath}/${path}`;
+  return path.startsWith("/") ? path : `/workspace/${path}`;
 }
 
 function stringClaim(value: unknown): string | null {
