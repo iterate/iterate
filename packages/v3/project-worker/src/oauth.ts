@@ -16,12 +16,11 @@ import { appConfigOf } from "./app-config.ts";
 /** Encrypted by the provider. Every grant is created through parseAuthorization,
  * so this version also proves the grant has a nonempty, allowed resource audience. */
 export const GrantProps = z.object({
-  kind: z.literal("user-grant"),
-  version: z.literal(1),
+  kind: z.enum(["issuer", "app", "personal"]),
+  version: z.literal(2),
   userId: z.string().startsWith("user_"),
   email: z.string(),
   projects: z.array(z.string()).nullable(),
-  tokenKind: z.enum(["oauth", "personal"]),
   deadline: z.number().int().positive(),
 });
 export type GrantProps = z.infer<typeof GrantProps>;
@@ -165,9 +164,9 @@ export function providerOptions(
       const grant = parsed.data;
       if (grant.deadline - Date.now() < 60_000)
         throw new OAuthError("invalid_grant", { description: "The session has expired." });
-      if (grant.tokenKind === "personal" && input.grantType !== "authorization_code")
+      if (grant.kind === "personal" && input.grantType !== "authorization_code")
         throw new OAuthError("invalid_grant", { description: "Personal tokens cannot refresh." });
-      const ttl = grant.tokenKind === "personal" ? 30 * 24 * 3600 : 3600;
+      const ttl = grant.kind === "personal" ? 30 * 24 * 3600 : 3600;
       const accessTokenTTL = Math.min(ttl, Math.floor((grant.deadline - Date.now()) / 1000));
       return {
         accessTokenTTL,
@@ -179,7 +178,7 @@ export function providerOptions(
         } satisfies AccessGrant,
         // The key MUST be absent on refresh, including when its value is undefined.
         ...(input.grantType === "authorization_code" &&
-          grant.tokenKind === "personal" && { refreshTokenTTL: accessTokenTTL }),
+          grant.kind === "personal" && { refreshTokenTTL: accessTokenTTL }),
       };
     },
   };

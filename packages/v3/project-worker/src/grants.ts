@@ -6,6 +6,7 @@ import { codedError } from "./lib.ts";
 import { directory } from "./directory.ts";
 import {
   authorizationCodeRequest,
+  authorizationOf,
   exchangeToken,
   oauthAddresses,
   oauthHelpers,
@@ -73,12 +74,17 @@ FROM oauth_activity WHERE user_id = ? AND (grant_id IN (${page.items.map(() => "
       records.delete(grant.id);
       if (row?.revoked_at && !row.cleanup_pending) return [];
       const metadata = DisplayMetadata.parse(grant.metadata ?? {});
-      const expiresAt = grant.expiresAt ? grant.expiresAt * 1000 : null;
+      // The provider stores an unexchanged grant with the code's ten-minute KV TTL.
+      const expiresAt = (grant.expiresAt ?? grant.createdAt + 600) * 1000;
       return [
         {
           id: grant.id,
           name: metadata.clientName || grant.clientId,
-          kind: metadata.tokenKind === "personal" ? "API token" : "Session",
+          kind: !grant.expiresAt
+            ? "Pending sign-in"
+            : metadata.tokenKind === "personal"
+              ? "API token"
+              : "Session",
           createdAt: grant.createdAt * 1000,
           expiresAt,
           lastUsedAt: row?.last_used_at ?? null,
@@ -89,21 +95,21 @@ FROM oauth_activity WHERE user_id = ? AND (grant_id IN (${page.items.map(() => "
       ];
     });
     // A cleanup failure remains actionable even after the provider row disappeared.
-    for (const row of records.values())
-      if (row.cleanup_pending)
-        items.push({
-          id: row.grant_id,
-          name: "Revoked session",
-          kind: "Session",
-          createdAt: 0,
-          expiresAt: null,
-          lastUsedAt: row.last_used_at,
-          current: row.grant_id === session.grant.grantId,
-          cleanupPending: true,
-          expired: false,
-        });
+    const cleanup = [...records.values()]
+      .filter((row) => row.cleanup_pending)
+      .map((row) => ({
+        id: row.grant_id,
+        name: "Revoked session",
+        kind: "Session",
+        createdAt: 0,
+        expiresAt: null,
+        lastUsedAt: row.last_used_at,
+        current: row.grant_id === session.grant.grantId,
+        cleanupPending: true,
+        expired: false,
+      }));
     return {
-      items,
+      items: [...items, ...cleanup],
       cursor: page.cursor,
       projects: await directory(env.DB).reachableProjects(session.reach),
       canMintToken: oauthAddresses(env).issuer.startsWith("https:"),
@@ -139,6 +145,8 @@ FROM oauth_activity WHERE user_id = ? AND (grant_id IN (${page.items.map(() => "
     const env = this.#env;
     const ctx = this.#ctx;
     const session = this.#account();
+    if (!(await authorizationOf(env, session.grant)))
+      throw codedError("UNAUTHENTICATED", "This session has ended. Sign in again.");
     const data = MintInput.parse(input);
     const { issuer, api, mcp } = oauthAddresses(env);
     if (!issuer.startsWith("https:"))
@@ -168,12 +176,11 @@ FROM oauth_activity WHERE user_id = ? AND (grant_id IN (${page.items.map(() => "
       revokeExistingGrants: false,
       metadata: { clientName: data.name, tokenKind: "personal" },
       props: {
-        kind: "user-grant",
-        version: 1,
+        kind: "personal",
+        version: 2,
         userId: session.sub,
         email: session.email,
         projects,
-        tokenKind: "personal",
         deadline: expiresAt,
       } satisfies GrantProps,
     });

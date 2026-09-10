@@ -1,6 +1,7 @@
-import { env, SELF } from "cloudflare:test";
+import { env, SELF, createExecutionContext, waitOnExecutionContext } from "cloudflare:test";
 import { afterEach, beforeAll, expect, test, vi } from "vitest";
-import { verifySessionCookie } from "../src/principal.ts";
+import { appSession } from "../src/client/app-auth.ts";
+import { authorizationForToken } from "../src/oauth.ts";
 import { directory } from "../src/directory.ts";
 import { cleanGrantActivity } from "../src/oauth.ts";
 import type { Env } from "../src/control-plane.ts";
@@ -50,7 +51,7 @@ async function googleLogin(overrides: Record<string, unknown> = {}, invalidSigna
     id_token_signing_alg_values_supported: ["RS256"],
   };
   let tokenResponse: object | undefined;
-  vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+  vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
     const url = new URL(input instanceof Request ? input.url : String(input));
     if (url.href === "https://accounts.google.com/.well-known/openid-configuration")
       return Response.json(metadata);
@@ -58,6 +59,7 @@ async function googleLogin(overrides: Record<string, unknown> = {}, invalidSigna
       return Response.json({ keys: [jwk] });
     if (url.href === "https://oauth2.googleapis.com/token" && tokenResponse)
       return Response.json(tokenResponse);
+    if (url.origin === origin) return SELF.fetch(new Request(input, init));
     throw new Error(`Unexpected Google fixture fetch: ${url}`);
   });
   const begin = await SELF.fetch(`${origin}/.auth/identity?next=%2Fauthorize%3Fclient%3Dtest`, {
@@ -111,17 +113,26 @@ test("Google proves issuer identity; upstream credentials never become app token
   expect(response.headers.get("location")).toBe("/authorize?client=test");
   const cookies = response.headers.getSetCookie();
   expect(cookies.join()).not.toContain("upstream-google-access-token");
-  const sessionCookie = cookies.find((cookie) =>
-    cookie.startsWith("__Host-itx-control-plane-session="),
+  const sessionCookie = cookies.find((cookie) => cookie.startsWith("__Host-itx-session="))!;
+  const ctx = createExecutionContext();
+  const session = appSession(
+    bindings.BROWSER_SESSION,
+    new Request(origin, { headers: { cookie: sessionCookie } }),
   )!;
-  expect(
-    await verifySessionCookie(sessionCookie, bindings.APP_CONFIG_SESSION_SECRET!),
-  ).toMatchObject({
-    sub: "user_google_1234567890",
+  const auth = await authorizationForToken(bindings, ctx, (await session.bearer())!);
+  await waitOnExecutionContext(ctx);
+  expect(auth?.principal).toEqual({
+    actor: "user_google_1234567890",
     email: "verified@example.com",
   });
-  const api = await SELF.fetch(`${origin}/api`, { headers: { cookie: sessionCookie, origin } });
-  expect(api.status).toBe(401); // The console still needs its ordinary OAuth grant.
+  expect(auth?.grant?.kind).toBe("issuer");
+  const api = await SELF.fetch(`${origin}/api`, {
+    method: "POST",
+    body: "",
+    headers: { cookie: sessionCookie, origin },
+  });
+  expect(api.status).toBe(200);
+  expect(cookies).toHaveLength(2); // Cleared Google flow plus the sole app-session cookie.
 });
 
 test("Google subject keeps the same principal when its verified email changes", async () => {
@@ -142,9 +153,7 @@ test("wrong nonce, signature and unverified email cannot establish issuer identi
     const response = await googleLogin(claims, badSignature);
     expect(response.status).toBe(status);
     expect(
-      response.headers
-        .getSetCookie()
-        .some((cookie) => cookie.startsWith("__Host-itx-control-plane-session=")),
+      response.headers.getSetCookie().some((cookie) => cookie.startsWith("__Host-itx-session=")),
     ).toBe(false);
   }
 });

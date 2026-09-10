@@ -2,9 +2,10 @@ import * as oauth from "oauth4webapi";
 import { z } from "zod";
 import type { Env } from "./control-plane.ts";
 import { appConfigOf } from "./app-config.ts";
+import { startIssuerSession } from "./issuer-session.ts";
 import { directory } from "./directory.ts";
 import { errorCode, sameOriginPath } from "./lib.ts";
-import { cookieValueOf, setSessionCookie, signClaims, verifyClaims } from "./principal.ts";
+import { cookieValueOf, signClaims, verifyClaims } from "./principal.ts";
 
 const issuer = new URL("https://accounts.google.com");
 const cookie = "__Host-itx-identity-flow";
@@ -29,8 +30,7 @@ export function isLocalOrigin(origin: string) {
   return hostname === "localhost" || hostname.endsWith(".localhost") || hostname === "127.0.0.1";
 }
 
-/** This is the issuer's identity proof. The console subsequently uses the same
- * browser OAuth client and consent flow as every project app. */
+/** Google proves identity to our issuer; its credentials never authorize our API. */
 export async function identityDoor(request: Request, env: Env) {
   const url = new URL(request.url);
   if (!["/.auth/identity", "/.auth/identity/callback"].includes(url.pathname)) return null;
@@ -64,10 +64,10 @@ export async function identityDoor(request: Request, env: Env) {
       code_challenge: await oauth.calculatePKCECodeChallenge(flow.verifier),
       code_challenge_method: "S256",
     }).toString();
-    headers.set(
-      "Set-Cookie",
-      `${cookie}=${await signClaims(flow, config.sessionSecret)}; ${cookieAttributes}; Max-Age=600`,
-    );
+    const flowCookie = `${cookie}=${await signClaims(flow, config.sessionSecret)}; ${cookieAttributes}; Max-Age=600`;
+    if (new TextEncoder().encode(flowCookie).length > 4096)
+      return new Response("The sign-in request exceeds the browser cookie limit.", { status: 400 });
+    headers.set("Set-Cookie", flowCookie);
     headers.set("Location", authorization.href);
     return new Response(null, { status: 302, headers });
   }
@@ -99,18 +99,9 @@ export async function identityDoor(request: Request, env: Env) {
       });
     // Google's stable subject owns the account; an email change cannot change its actor.
     const user = await directory(env.DB).upsertGoogleUser(identity.data.sub, identity.data.email);
-    headers.append(
-      "Set-Cookie",
-      await setSessionCookie(
-        {
-          sub: user.id,
-          email: user.email,
-          iat: Math.floor(Date.now() / 1000),
-        },
-        config.sessionSecret,
-      ),
-    );
-    headers.set("Location", flow.data.next);
+    const session = await startIssuerSession(env, user, flow.data.next);
+    headers.append("Set-Cookie", session.setCookie);
+    headers.set("Location", session.location);
     return new Response(null, { status: 303, headers });
   } catch (error) {
     if (errorCode(error) === "IDENTITY_CONFLICT")

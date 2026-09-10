@@ -1,4 +1,4 @@
-import type { BrowserSession } from "../browser-session.ts";
+import type { BrowserHost, BrowserSession } from "../browser-session.ts";
 import { cookieValueOf } from "../principal.ts";
 import { isSameOriginBrowserRequest, sameOriginPath } from "../lib.ts";
 import { OAuthScopes } from "../oauth-scopes.ts";
@@ -15,6 +15,20 @@ export function appSession(namespace: DurableObjectNamespace<BrowserSession>, re
     : null;
 }
 
+/** Start one ordinary app session; the caller publishes its cookie after its own
+ * sign-in step succeeds. The issuer uses this same code/PKCE flow internally. */
+export async function startAppSession(
+  sessions: DurableObjectNamespace<BrowserSession>,
+  host: BrowserHost,
+  next: string,
+) {
+  const id = crypto.randomUUID();
+  const session = sessions.getByName(`${host.origin}:${id}`);
+  const location = await session.begin(host, next);
+  const setCookie = `${sessionCookieName(new URL(host.origin))}=${id}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=2592000`;
+  return { session, location, setCookie };
+}
+
 type AppAuth = {
   sessions: DurableObjectNamespace<BrowserSession>;
   issuer: string;
@@ -23,8 +37,8 @@ type AppAuth = {
   defaultScopes?: string[];
   /** Platform dispatches in process to avoid /api recursion; other apps pass fetch. */
   api: (request: Request) => Promise<Response> | Response;
-  /** The issuer also clears its upstream identity on explicit logout. */
-  logoutCookie?: string;
+  /** The issuer proves identity before establishing its own ordinary app session. */
+  loginPage?: string;
 };
 
 /** The same OAuth client and /api proxy on a platform host or a separate app worker. */
@@ -84,15 +98,24 @@ export async function appAuth(request: Request, config: AppAuth): Promise<Respon
       }
       await session!.discard();
     }
-    const id = crypto.randomUUID();
-    const location = await sessions
-      .getByName(`${url.origin}:${id}`)
-      .begin({ origin: url.origin, issuer, resource, scopes }, next);
+    if (config.loginPage)
+      return new Response(null, {
+        status: 303,
+        headers: {
+          Location: `${config.loginPage}?${new URLSearchParams({ next })}`,
+          "Cache-Control": "no-store",
+        },
+      });
+    const { location, setCookie } = await startAppSession(
+      sessions,
+      { origin: url.origin, issuer, resource, scopes },
+      next,
+    );
     return new Response(null, {
       status: 302,
       headers: {
         Location: location,
-        "Set-Cookie": `${sessionCookieName(url)}=${id}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=2592000`,
+        "Set-Cookie": setCookie,
         "Cache-Control": "no-store",
         "Referrer-Policy": "no-referrer",
       },
@@ -138,7 +161,6 @@ export async function appAuth(request: Request, config: AppAuth): Promise<Respon
       "Set-Cookie": clearCookie,
       "Cache-Control": "no-store",
     });
-    if (config.logoutCookie) headers.append("Set-Cookie", config.logoutCookie);
     return new Response(null, { status: 303, headers });
   }
   if (url.pathname === "/api") {

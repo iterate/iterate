@@ -49,28 +49,32 @@ plain vars in the test lanes:
 | Var                                                                 | Required | What                                                                                         |
 | ------------------------------------------------------------------- | -------- | -------------------------------------------------------------------------------------------- |
 | `APP_CONFIG_ENVIRONMENT_NAME`                                       | yes      | the deployment's name at `/version` ("poc", "test", "e2e")                                   |
-| `APP_CONFIG_SESSION_SECRET`                                         | yes      | signs the control plane's login cookie (secret)                                              |
+| `APP_CONFIG_SESSION_SECRET`                                         | yes      | signs the ten-minute Google login flow (secret)                                              |
 | `APP_CONFIG_ADMIN_API_SECRET`                                       | yes      | the admin secret: `authenticate({ type: "admin-secret" })`, the lanes' admin bearer (secret) |
-| `APP_CONFIG_PROJECT_TOKEN_SECRET`                                   | yes      | signs project tokens (`mintToken`, the console's project links) (secret)                     |
+| `APP_CONFIG_PROJECT_TOKEN_SECRET`                                   | yes      | signs operator-only project credentials (secret)                                             |
 | `APP_CONFIG_PROJECT_HOSTNAME_BASE`                                  | no       | the base project hosts hang under; blank ⇒ no project-host ingress                           |
 | `APP_CONFIG_ARTIFACTS_ACCOUNT_ID`, `APP_CONFIG_ARTIFACTS_NAMESPACE` | no       | `itx.repos`' git remotes                                                                     |
 
 ## The console
 
-`src/routes/**` is a TanStack Start app, apps/auth's shape without Tailwind or a query client: four
-file routes — `login.tsx` (`/login`: the email form; "continue as / switch account" with a session),
-`_auth.tsx` (no session ⇒ `/login?next=`), `_auth/index.tsx` (`/`: the account page — orgs, projects
-with an `open` link per host, create a project, log out) and `_auth/authorize.tsx` (`/authorize`:
-the OAuth consent and THE PROJECT SELECTION) — plus `router.tsx`, the checked-in `routeTree.gen.ts`
-(`pnpm routes:generate`; `pnpm routes:check` is part of `typecheck`) and one stylesheet,
-`console.css`. Every route reads and acts through its own `createServerFn`s, which call the console
-half of `src/control-plane.ts` (`signIn`, `accountOf`, `createProjectFor`, `consentOf`,
-`approveConsent`) with the worker's env and the request as `context` (`src/routes/-console-context.ts`).
-Beside the server functions, the same four actions are plain form POSTs — `POST /login`, `/logout`,
-`/projects`, `/authorize` (`consoleDoor`) — for a script or a test, and for the console's own forms,
-which post there until the page hydrates (`method="post"` to the door; the server function takes over
-once React has attached its handlers). Every POST is refused with 403 from a foreign `Origin`, every
-page `Cache-Control: no-store`.
+The dashboard, session management and OAuth consent are client-only TanStack Start routes.
+They share one `createIterateClient` and an ordinary `/api` Cap’n Web session. The dashboard
+component and loader are also used verbatim by the independently hosted Notes app.
+
+Google login proves identity to our issuer. Its callback establishes one ordinary, revocable
+issuer grant through the same `BrowserSession` used by other apps. There is no separate
+identity cookie. The explicit `/login` page has a small server function for safe login options;
+the local/admin `POST /login` fixture establishes that same issuer session.
+
+Only that issuer grant receives `session.consent`. The `/authorize` SPA can create an
+organization and project through `session.createOrg` and `session.projects.create`, then
+approve the pending client's access without leaving the flow. Other apps may request account
+permission through explicit consent, but cannot approve grants. All apps use the same
+`/.auth/*` adapter, opaque HttpOnly cookie, public token exchange and `/api` proxy.
+
+See [the current OAuth design](../../../docs/unified-oauth-architecture.md) for boundaries,
+revocation and the deferred impersonation design. The historical walkthroughs describe the
+pre-unification project-credential interface; they are not the public authorization contract.
 
 ## Build, run, deploy
 

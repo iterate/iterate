@@ -1,44 +1,25 @@
-// Issuer consent uses Start server functions; app data uses the public RPC session.
 import { useState, type FormEvent } from "react";
-import { createFileRoute, redirect } from "@tanstack/react-router";
-import { createServerFn } from "@tanstack/react-start";
-import { setResponseHeader } from "@tanstack/react-start/server";
-import { approveConsent, consentOf, signOut } from "../control-plane.ts";
-import { issuerOf } from "./-session.ts";
-import { consoleContext } from "./-console-context.ts";
-
-const consent = createServerFn({ method: "GET" })
-  .middleware([consoleContext])
-  .inputValidator((data: { query: string }) => data)
-  .handler(({ data, context }) => consentOf(context.env, context.request, data.query));
-
-const approve = createServerFn({ method: "POST" })
-  .middleware([consoleContext])
-  .inputValidator((data: { query: string; projects: string[] }) => data)
-  .handler(({ data, context }) =>
-    approveConsent(context.env, context.request, data.query, data.projects),
-  );
-
-const logout = createServerFn({ method: "POST" }).handler(() => {
-  setResponseHeader("set-cookie", signOut());
-  return null;
-});
+import { createFileRoute, redirect, useRouter } from "@tanstack/react-router";
+import { iterate } from "./-client.ts";
 
 export const Route = createFileRoute("/authorize")({
-  beforeLoad: async ({ location }) => {
-    if (!(await issuerOf())) throw redirect({ to: "/login", search: { next: location.href } });
-    const answer = await consent({ data: { query: location.searchStr } });
-    // the provider's refusal, sent back to the client (its redirect URI validated) as the README says
-    if (answer.kind === "redirect") throw redirect({ href: answer.location, statusCode: 302 });
-    return { consent: answer };
+  ssr: false,
+  beforeLoad: ({ location }) => iterate.authenticate(location.href),
+  loader: async ({ context, location }) => {
+    const answer = await context.api.consent.describe(location.searchStr);
+    if (answer.kind === "redirect") throw redirect({ href: answer.location, reloadDocument: true });
+    return answer;
   },
-  loader: ({ context }) => context.consent,
   component: ConsentPage,
 });
 
 function ConsentPage() {
   const answer = Route.useLoaderData();
+  const { api } = Route.useRouteContext();
+  const router = useRouter();
   const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [orgId, setOrgId] = useState("");
 
   if (answer.kind === "invalid")
     return (
@@ -48,20 +29,27 @@ function ConsentPage() {
       </main>
     );
 
-  const { query, clientName, email, projects, projectBound, scopes } = answer;
-  const submit = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    const chosen = new FormData(event.currentTarget).getAll("project").map(String);
+  const { query, clientName, email, projects, orgs, projectBound, scopes } = answer;
+  const perform = async (work: () => Promise<void>) => {
     setError(null);
+    setBusy(true);
     try {
-      const answer = await approve({ data: { query, projects: chosen } });
-      if ("error" in answer) throw new Error(answer.error);
-      window.location.assign(answer.redirectTo);
+      await work();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setBusy(false);
     }
   };
-  // "switch account": the session cleared, the login form with this consent as its `next`
+  const submit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const chosen = new FormData(event.currentTarget).getAll("project").map(String);
+    void perform(async () => {
+      const result = await api.consent.approve({ query, projects: chosen });
+      if ("error" in result) throw new Error(result.error);
+      window.location.assign(result.redirectTo);
+    });
+  };
   const loginAgain = `/login?next=${encodeURIComponent(`/authorize${query}`)}`;
 
   return (
@@ -70,50 +58,110 @@ function ConsentPage() {
       <p>
         <strong>{clientName}</strong> wants to connect as <strong>{email}</strong>.
       </p>
-      <form method="post" action={`/authorize${query}`} onSubmit={submit}>
+      <form onSubmit={submit}>
         {scopes.includes("account") && (
           <p>
             <strong>Account permission:</strong> this app can view and end all your sessions and
             create API tokens for the projects you grant it.
           </p>
         )}
-        <fieldset>
+        <fieldset disabled={busy}>
           <legend>Projects it may reach</legend>
           {!projectBound && (
             <label>
-              <input
-                type="checkbox"
-                name="project"
-                value="*"
-                defaultChecked={projects.length === 0}
-              />{" "}
-              All my current and future projects
+              <input type="checkbox" name="project" value="*" /> All my current and future projects
             </label>
           )}
           {projects.length ? (
             projects.map((project) => (
               <label key={project.id}>
                 <input type="checkbox" name="project" value={project.id} defaultChecked />{" "}
-                <code>{project.id}</code> <span className="muted">in {project.orgId}</span>
+                <code>{project.id}</code>{" "}
+                <span className="muted">
+                  in {orgs.find((org) => org.id === project.orgId)?.name || project.orgId}
+                </span>
               </label>
             ))
           ) : (
-            <p className="muted">No projects to choose from yet.</p>
+            <p className="muted">
+              Create your first organization and project below, then approve access.
+            </p>
           )}
         </fieldset>
-        <button type="submit">Approve</button>
+        <button type="submit" disabled={busy}>
+          Approve
+        </button>
       </form>
+      {!projectBound && (
+        <section aria-label="Create an organization or project">
+          <h2>{orgs.length ? "Organizations and projects" : "Create your first organization"}</h2>
+          <form
+            onSubmit={(event) => {
+              event.preventDefault();
+              const form = event.currentTarget;
+              const name = String(new FormData(form).get("name") || "");
+              void perform(async () => {
+                const org = await api.createOrg(name);
+                setOrgId(org.id);
+                form.reset();
+                await router.invalidate();
+              });
+            }}
+          >
+            <label>
+              Organization name
+              <input type="text" name="name" required />
+            </label>
+            <button type="submit" disabled={busy}>
+              Create organization
+            </button>
+          </form>
+          {orgs.length > 0 && (
+            <form
+              onSubmit={(event) => {
+                event.preventDefault();
+                const form = event.currentTarget;
+                const data = new FormData(form);
+                void perform(async () => {
+                  using _project = await api.projects.create({
+                    project: String(data.get("name")),
+                    orgId: String(data.get("org")),
+                  });
+                  form.reset();
+                  await router.invalidate();
+                });
+              }}
+            >
+              <label>
+                Organization
+                <select
+                  name="org"
+                  value={orgId || orgs[0]!.id}
+                  onChange={(event) => setOrgId(event.target.value)}
+                >
+                  {orgs.map((org) => (
+                    <option key={org.id} value={org.id}>
+                      {org.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Project name
+                <input type="text" name="name" required />
+              </label>
+              <button type="submit" disabled={busy}>
+                Create project
+              </button>
+            </form>
+          )}
+        </section>
+      )}
       {error && <p role="alert">{error}</p>}
-      <form
-        method="post"
-        action={`/logout?next=${encodeURIComponent(loginAgain)}`}
-        onSubmit={async (event) => {
-          event.preventDefault();
-          await logout();
-          window.location.assign(loginAgain);
-        }}
-      >
-        <button type="submit">Switch account</button>
+      <form method="post" action={`/.auth/logout?next=${encodeURIComponent(loginAgain)}`}>
+        <button type="submit" disabled={busy}>
+          Switch account
+        </button>
       </form>
     </main>
   );

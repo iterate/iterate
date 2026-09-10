@@ -1,23 +1,4 @@
-// principal.ts — WHO is calling, as the platform carries it: every credential's verifier, in one
-// leaf file. A PROJECT TOKEN is a signed claim `{ projectId, actor, email?, expiresAt }` minted by a
-// holder of the secret (`signProjectToken`: `mintToken` on a project's handle, iterate-context.ts;
-// the console's project links, control-plane.ts) and verified here with the shared secret
-// (`APP_CONFIG_PROJECT_TOKEN_SECRET`). The principal it yields rides the session
-// (`authenticate({ type: "project-token", token })` → `session.whoami()`), is stamped by the DO onto
-// every event that session appends (`source.principal`, unforgeable: the DO owns the field), and
-// reaches an app on a project host as the `x-itx-principal` header after the token check (cookie or
-// bearer, worker.ts). On an EVENT the principal is ATTRIBUTION; at the SESSION it is also authority
-// (session.ts): a project token binds its session to the token's one project, a control-plane
-// user's session (the SESSION COOKIE, `verifySessionCookie`, signed with
-// `APP_CONFIG_SESSION_SECRET`) admits the projects of their orgs, the ADMIN SECRET
-// (`verifyAdminSecret`, `APP_CONFIG_ADMIN_API_SECRET`) is `{ actor: "admin" }` on every project, and
-// a PROJECT SECRET — the project's own long-lived key (`rotateProjectApiKey` mints it, only its hash
-// is kept; `verifyProjectSecret` checks a candidate) — is `{ actor: "project:<projectId>" }` on that
-// one project: a device, a headless app, speaking AS the project.
-//
-// `signClaims` / `verifyClaims` is THE ONE signed-claims codec — `<payload>.<sig>`, payload =
-// base64url(UTF-8 JSON), sig = base64url(HMAC-SHA256(payload)) — the project token and the session
-// cookie are the same codec under their own secrets.
+// Verified attribution, the signed-claims codec, and operator-only project credentials.
 
 /** Who is acting: a stable actor id (the control plane's user id) and, when known, an email. */
 export type Principal = { actor: string; email?: string };
@@ -68,8 +49,7 @@ async function hmacKey(secret: string, usage: "sign" | "verify"): Promise<Crypto
   );
 }
 
-/** Sign any JSON claims with `secret` — a project token's `ProjectTokenClaims` (`signProjectToken`),
- *  the session cookie's `SessionCookieClaims` (`setSessionCookie`). */
+/** Sign JSON claims: operator project credentials and the bounded Google login flow. */
 export async function signClaims(claims: unknown, secret: string): Promise<string> {
   const payload = base64url(encoder.encode(JSON.stringify(claims)));
   const signature = await crypto.subtle.sign(
@@ -210,20 +190,6 @@ export async function verifyProjectSecret(
   return digestsEqual(await sha256(secret), storedDigest) ? { actor: `project:${project}` } : null;
 }
 
-// ── the session cookie ── the control plane's signed first-party cookie, "you are this user": the
-// login form sets it (control-plane.ts), a browser carries it to the console and, on a same-origin
-// WebSocket handshake, to `/api` — `authenticate({ type: "from-server-cookie" })` (session.ts).
-
-/** The claims the session cookie carries: the directory user (`sub`, `user_<email>`), their email,
- *  and when it was issued (`iat`, epoch seconds — the cookie is good for `SESSION_COOKIE_MAX_AGE`
- *  from then, the signed token being otherwise valid forever). */
-export type SessionCookieClaims = { sub: string; email: string; iat: number };
-
-/** `__Host-`: a browser accepts the cookie only as set here — `Secure`, `Path=/`, no `Domain` — so
- *  it is the platform host's alone and no sibling host under a shared parent can set or shadow it. */
-const SESSION_COOKIE = "__Host-itx-control-plane-session";
-const SESSION_COOKIE_MAX_AGE = 60 * 60 * 24 * 30; // 30 days
-
 /** The value of the cookie `name` in a `Cookie` header, or null. */
 export function cookieValueOf(cookieHeader: string | null, name: string): string | null {
   for (const part of (cookieHeader ?? "").split(";")) {
@@ -232,33 +198,4 @@ export function cookieValueOf(cookieHeader: string | null, name: string): string
     if (part.slice(0, separator).trim() === name) return part.slice(separator + 1).trim();
   }
   return null;
-}
-
-/** The claims of the session cookie a `Cookie` header carries, when it verifies with `secret`
- *  (`verifyClaims`), has the claims' shape and is within `SESSION_COOKIE_MAX_AGE` of its issue —
- *  else null: no cookie, malformed, a bad signature, the wrong shape, or too old. */
-export async function verifySessionCookie(
-  cookieHeader: string | null,
-  secret: string,
-): Promise<SessionCookieClaims | null> {
-  const token = cookieValueOf(cookieHeader, SESSION_COOKIE);
-  if (!token) return null;
-  const claims = (await verifyClaims(token, secret)) as SessionCookieClaims | null;
-  if (typeof claims?.sub !== "string" || typeof claims?.iat !== "number") return null;
-  if (Math.floor(Date.now() / 1000) - claims.iat > SESSION_COOKIE_MAX_AGE) return null;
-  return claims;
-}
-
-/** The `Set-Cookie` value that establishes the session `claims` describe, signed with `secret`. */
-export async function setSessionCookie(
-  claims: SessionCookieClaims,
-  secret: string,
-): Promise<string> {
-  const token = await signClaims(claims, secret);
-  return `${SESSION_COOKIE}=${token}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${SESSION_COOKIE_MAX_AGE}`;
-}
-
-/** The `Set-Cookie` value that clears the session. */
-export function clearSessionCookie(): string {
-  return `${SESSION_COOKIE}=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0`;
 }

@@ -1,6 +1,6 @@
 import { env, SELF, createExecutionContext, waitOnExecutionContext } from "cloudflare:test";
 import { newWebSocketRpcSession, RpcTarget, RpcStub } from "capnweb";
-import { afterEach, beforeAll, expect, test, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
 import { OAuthProvider } from "@cloudflare/workers-oauth-provider";
 import { directory } from "../src/directory.ts";
 import { browserAuthorization } from "../src/browser-client.ts";
@@ -31,7 +31,13 @@ beforeAll(async () => {
       .map((sql) => bindings.DB.prepare(sql)),
   );
 });
+beforeEach(() => {
+  vi.spyOn(globalThis, "fetch").mockImplementation((input, init) =>
+    SELF.fetch(new Request(input, init)),
+  );
+});
 afterEach(() => {
+  vi.restoreAllMocks();
   for (const session of sessions.splice(0)) session[Symbol.dispose]();
 });
 
@@ -115,13 +121,14 @@ async function grant(resources: string[], projects: string[] = ["oauth-a"]) {
     code_challenge_method: "S256",
   });
   for (const resource of resources) query.append("resource", resource);
-  const approval = await call(`/authorize?${query}`, {
-    method: "POST",
-    headers: { cookie },
-    body: new URLSearchParams(projects.map((project) => ["project", project])),
-  });
-  expect(approval.status, await approval.clone().text()).toBe(302);
-  const redirect = new URL(approval.headers.get("location")!);
+  const issuerSession = appSession(
+    bindings.BROWSER_SESSION,
+    new Request(ORIGIN, { headers: { cookie } }),
+  )!;
+  const { root: approver } = await rpc((await issuerSession.bearer())!);
+  const approval = await approver.consent.approve({ query: `?${query}`, projects });
+  if ("error" in approval) throw new Error(approval.error);
+  const redirect = new URL(approval.redirectTo);
   const code = redirect.searchParams.get("code");
   if (!code)
     return { error: redirect.searchParams.get("error"), cookie, clientId: client.clientId, user };
@@ -260,11 +267,27 @@ test("resource narrowing, refresh and the revocation marker use the provider lif
   ).toBe(400);
 });
 
-test("an issuer cookie alone cannot authorize API calls or the operator RPC door", async () => {
+test("issuer login uses the same revocable API session and has no independent identity cookie", async () => {
   const flow = await grant([`${ORIGIN}/api`]);
-  expect((await call("/api", { headers: { cookie: flow.cookie, Origin: ORIGIN } })).status).toBe(
-    401,
-  );
+  expect(flow.cookie).toMatch(/^__Host-itx-session=/);
+  expect(
+    (
+      await call("/api", {
+        method: "POST",
+        body: "",
+        headers: { cookie: flow.cookie, Origin: ORIGIN },
+      })
+    ).status,
+  ).toBe(200);
+  const logout = await call("/.auth/logout", {
+    method: "POST",
+    headers: { cookie: flow.cookie, Origin: ORIGIN },
+  });
+  expect(logout.status).toBe(303);
+  const fresh = await call("/.auth/login", { headers: { cookie: flow.cookie } });
+  expect(fresh.status).toBe(303);
+  expect(fresh.headers.get("location")).toBe("/login?next=%2F");
+  expect(fresh.headers.has("set-cookie")).toBe(false);
 });
 
 test.each(["revoked", "membership"])(
@@ -349,36 +372,38 @@ test("console and project browsers use the same CIMD flow and independent grants
     for (const origin of [ORIGIN, "https://notes--browser-a.projects.test"]) {
       const metadata = await SELF.fetch(`${origin}/.auth/client.json`);
       expect(metadata.status).toBe(200);
-      const start = await SELF.fetch(`${origin}/.auth/login?next=/`, { redirect: "manual" });
-      const cookie = start.headers.get("set-cookie")!.split(";")[0]!;
-      const authorize = new URL(start.headers.get("location")!);
-      expect(authorize.origin).toBe(ORIGIN);
-      expect(authorize.searchParams.get("client_id")).toBe(`${origin}/.auth/client.json`);
-      const approve = await SELF.fetch(authorize.href, {
-        method: "POST",
-        redirect: "manual",
-        headers: { cookie: issuerCookie, Origin: ORIGIN },
-        body: new URLSearchParams([
-          ["project", "*"],
-          ["project", "browser-a"],
-          ["project", "browser-b"],
-        ]),
-      });
-      expect(approve.status, await approve.clone().text()).toBe(302);
-      for (const field of ["state", "iss"]) {
-        const invalid = new URL(approve.headers.get("location")!);
-        invalid.searchParams.delete(field);
-        const rejected = await SELF.fetch(invalid.href, {
+      let cookie = issuerCookie;
+      if (origin !== ORIGIN) {
+        const start = await SELF.fetch(`${origin}/.auth/login?next=/`, { redirect: "manual" });
+        cookie = start.headers.get("set-cookie")!.split(";")[0]!;
+        const authorize = new URL(start.headers.get("location")!);
+        expect(authorize.origin).toBe(ORIGIN);
+        expect(authorize.searchParams.get("client_id")).toBe(`${origin}/.auth/client.json`);
+        const issuer = appSession(
+          bindings.BROWSER_SESSION,
+          new Request(ORIGIN, { headers: { cookie: issuerCookie } }),
+        )!;
+        const { root: approver } = await rpc((await issuer.bearer())!);
+        const approve = await approver.consent.approve({
+          query: authorize.search,
+          projects: ["*", "browser-a", "browser-b"],
+        });
+        if ("error" in approve) throw new Error(approve.error);
+        for (const field of ["state", "iss"]) {
+          const invalid = new URL(approve.redirectTo);
+          invalid.searchParams.delete(field);
+          const rejected = await SELF.fetch(invalid.href, {
+            redirect: "manual",
+            headers: { cookie },
+          });
+          expect(rejected.status).toBe(400);
+        }
+        const callback = await SELF.fetch(approve.redirectTo, {
           redirect: "manual",
           headers: { cookie },
         });
-        expect(rejected.status).toBe(400);
+        expect(callback.status, await callback.clone().text()).toBe(303);
       }
-      const callback = await SELF.fetch(approve.headers.get("location")!, {
-        redirect: "manual",
-        headers: { cookie },
-      });
-      expect(callback.status, await callback.clone().text()).toBe(303);
       const response = await SELF.fetch(`${origin}/api`, {
         headers: { cookie, Origin: origin, Upgrade: "websocket" },
       });
@@ -486,10 +511,7 @@ test("console and project browsers use the same CIMD flow and independent grants
     });
     expect(logout.status).toBe(303);
     expect(logout.headers.getSetCookie()).toEqual(
-      expect.arrayContaining([
-        expect.stringContaining("__Host-itx-session=;"),
-        expect.stringContaining("__Host-itx-control-plane-session=;"),
-      ]),
+      expect.arrayContaining([expect.stringContaining("__Host-itx-session=;")]),
     );
     expect(
       (await call("/api", { headers: { cookie: consoleLogin.cookie, Origin: ORIGIN } })).status,

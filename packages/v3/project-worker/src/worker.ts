@@ -217,9 +217,7 @@ export default {
     }
 
     const issuerRoute =
-      ["/login", "/logout", "/authorize", "/oauth/token", "/oauth/register"].includes(
-        url.pathname,
-      ) ||
+      ["/login", "/authorize", "/oauth/token", "/oauth/register"].includes(url.pathname) ||
       url.pathname.startsWith("/.well-known/") ||
       url.pathname.startsWith("/_serverFn/");
     if (!issuerRoute) {

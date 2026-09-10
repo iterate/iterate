@@ -3,16 +3,13 @@
 // and the session cookie — set, read back, refused.
 import { expect, test } from "vitest";
 import {
-  clearSessionCookie,
   cookieValueOf,
   rotateProjectApiKey,
-  setSessionCookie,
   signClaims,
   signProjectToken,
   verifyAdminSecret,
   verifyProjectSecret,
   verifyProjectToken,
-  verifySessionCookie,
 } from "./principal.ts";
 
 const SECRET = "test-secret";
@@ -99,32 +96,6 @@ for (const { candidate, secret, becomes } of adminRows)
   test(`verifyAdminSecret(${JSON.stringify(candidate)}, ${JSON.stringify(secret)}) ⇒ ${becomes ? '{ actor: "admin" }' : "null"}`, async () => {
     expect(await verifyAdminSecret(candidate, secret)).toEqual(becomes ? { actor: "admin" } : null);
   });
-
-// ── the session cookie ── `setSessionCookie` → `verifySessionCookie`: the round trip and the
-// refusals; `cookieValueOf` as `{ header, name, becomes }` rows.
-
-test("the session cookie round-trips its claims beside a visitor's other cookies; no cookie, the wrong secret and a cookie past its age verify nothing; the cleared cookie expires at once", async () => {
-  const cookieClaims = {
-    sub: "user_a@example.com",
-    email: "a@example.com",
-    iat: Math.floor(Date.now() / 1000),
-  };
-  const setCookie = await setSessionCookie(cookieClaims, SECRET);
-  expect(setCookie).toMatch(
-    /^__Host-itx-control-plane-session=[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+; HttpOnly; Secure; SameSite=Lax; Path=\/; Max-Age=2592000$/,
-  );
-  const cookie = setCookie.split(";")[0]!;
-  expect(await verifySessionCookie(`theme=dark; ${cookie}`, SECRET)).toEqual(cookieClaims);
-  expect(await verifySessionCookie(null, SECRET)).toBeNull();
-  expect(await verifySessionCookie("theme=dark", SECRET)).toBeNull();
-  expect(await verifySessionCookie(cookie, "other")).toBeNull();
-  const stale = await setSessionCookie(
-    { ...cookieClaims, iat: cookieClaims.iat - 31 * 24 * 60 * 60 },
-    SECRET,
-  );
-  expect(await verifySessionCookie(stale.split(";")[0]!, SECRET)).toBeNull();
-  expect(clearSessionCookie()).toMatch(/^__Host-itx-control-plane-session=; .*Max-Age=0$/);
-});
 
 const cookieRows: { header: string | null; name: string; becomes: string | null }[] = [
   { header: null, name: "a", becomes: null },

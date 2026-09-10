@@ -1,7 +1,6 @@
 import { oauthResponse } from "./api.ts";
 import type { Env } from "./control-plane.ts";
 import { authorizationForToken, oauthAddresses } from "./oauth.ts";
-import { clearSessionCookie } from "./principal.ts";
 import { appAuth, appSession } from "./client/app-auth.ts";
 
 /** Platform cookies never enter userspace or its outgoing requests. */
@@ -36,6 +35,6 @@ export function browserClient(
     resource: api,
     defaultScopes: projectId ? ["iterate"] : ["iterate", "account"],
     api: (request) => oauthResponse(request, env, ctx),
-    ...(new URL(request.url).origin === issuer && { logoutCookie: clearSessionCookie() }),
+    ...(new URL(request.url).origin === issuer && { loginPage: "/login" }),
   });
 }

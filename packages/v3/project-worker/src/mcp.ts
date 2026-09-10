@@ -11,17 +11,9 @@ import {
   type ItxExpressionInput,
 } from "./context/expression.ts";
 
-// ── mcp ── /mcp: the ONE MCP server, for every project — the only OAuth-protected boundary. The
-// provider validated the bearer BEFORE this runs and put the granted props on ctx.props: an OAuth
-// access token's (the user and the projects chosen at consent — `authorize`, the app section below)
-// or, through `resolveExternalToken`, the admin secret's or a project secret's. An MCP server
-// (@modelcontextprotocol/server) mounts here with three tools; `itx.invoke` runs an expression
-// through a named project's context IN-PROCESS under the bearer's principal (the DO's `invokeAs`),
-// so MCP is not a parallel capability API: a tool call reaches what an expression reaches, for any
-// project the bearer names. The project is resolved as apps/os's `resolveToolProject` does:
-// optional when the bearer reaches exactly one, required for the admin secret, refused outside the
-// grant. No tool creates a project: a project is created on the console or over `/api`
-// (`projects.create`) — a bearer that chose its projects at consent is bound to them.
+// MCP uses the same verified authorization as Cap’n Web. Its three tools expose
+// identity, reachable projects and context invocation under that principal.
+// Project creation belongs to the public Session's directory capabilities.
 
 /** The project a tool call runs in (apps/os `resolveToolProject`): `project`, when named, is a
  *  project — a context name is refused, as `projects.get` refuses it (session.ts): the expression
@@ -107,8 +99,7 @@ function buildServer(env: Env, authorization: Authorization): McpServer {
   mcpServer.registerTool(
     "whoami",
     {
-      description:
-        "Who this token authenticates as and which projects it reaches: the user and the projects chosen at authorization; the admin secret (every project); a project token (its one project); a project secret (its one project — the secret names it with ?project=<id> on the /mcp URL).",
+      description: "The verified user or configured administrator making this request.",
       inputSchema: objectSchema({}),
     },
     async () => textResult(JSON.stringify(principal, null, 2)),

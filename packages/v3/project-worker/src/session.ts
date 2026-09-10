@@ -3,6 +3,7 @@
 
 import { RpcTarget } from "capnweb";
 import { z } from "zod";
+import type { Consent } from "./consent.ts";
 import type { Grants } from "./grants.ts";
 import {
   DurableObjectNameCodec,
@@ -71,6 +72,7 @@ export class UnauthenticatedSession extends RpcTarget {
       this.#input.appConfig.adminApiSecret,
     );
     if (!admin) throw codedError("INVALID_CREDENTIALS", "The admin secret did not match.");
+    // Test/operator fixture only; product impersonation must retain operator attribution.
     const user =
       credentials.data.as && (await this.#input.directory.upsertUser(credentials.data.as.email));
     const principal = user ? { actor: user.id, email: user.email } : admin;
@@ -89,6 +91,7 @@ type SessionAuthority = {
   reach: Reach;
   projectDoors: ProjectDoorsInput | null;
   grants?: Grants;
+  consent?: Consent;
   scopes?: string[];
 };
 
@@ -132,12 +135,29 @@ export class Session extends RpcTarget {
   }
 
   async orgs() {
-    const { reach, principal } = this.#authority;
-    if (reach === "every") return [];
-    const orgs = await this.#input.directory.listOrgs(principal.actor);
+    const { reach } = this.#authority;
+    if (reach === "every" || !("userId" in reach)) return [];
+    const orgs = await this.#input.directory.listOrgs(reach.userId);
     if (!("projectIds" in reach)) return orgs;
     const projects = await this.#input.directory.reachableProjects(reach);
     return orgs.filter((org) => projects.some((project) => project.orgId === org.id));
+  }
+
+  /** The same directory operation is available to any unrestricted user grant. */
+  createOrg(name: string) {
+    const { reach } = this.#authority;
+    if (reach === "every" || "projectIds" in reach)
+      throw codedError(
+        "FORBIDDEN",
+        "An unrestricted user session is required to create an organization.",
+      );
+    return this.#input.directory.createOrg(reach.userId, z.string().trim().min(1).parse(name));
+  }
+
+  get consent() {
+    if (!this.#authority.consent)
+      throw codedError("FORBIDDEN", "Sign in to Iterate to approve access.");
+    return this.#authority.consent;
   }
 
   get grants() {
@@ -196,8 +216,13 @@ class ProjectCollection extends RpcTarget {
    *  deployment's own org for the admin secret — and vend its root context. A bound session (a
    *  project token, the project secret) creates none: FORBIDDEN. A name ANY org already holds is
    *  refused, coded (PROJECT_NAME_TAKEN); the same org's again is idempotent. */
-  async create(input: { project: ProjectIdOrSlug }): Promise<IterateContext> {
-    const project = await this.#input.directory.createProject(this.#reach, input.project);
+  async create(input: { project: ProjectIdOrSlug; orgId?: string }): Promise<IterateContext> {
+    const data = z.object({ project: z.string(), orgId: z.string().optional() }).parse(input);
+    const project = await this.#input.directory.createProject(
+      this.#reach,
+      data.project,
+      data.orgId,
+    );
     return this.#context(project.id);
   }
 

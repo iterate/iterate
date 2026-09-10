@@ -1,6 +1,6 @@
 import { env, SELF } from "cloudflare:test";
 import { newWebSocketRpcSession } from "capnweb";
-import { afterEach, beforeAll, expect, test } from "vitest";
+import { afterEach, beforeAll, expect, test, vi } from "vitest";
 import type { Env } from "../src/control-plane.ts";
 import type { UnauthenticatedSession } from "../src/session.ts";
 import { directory } from "../src/directory.ts";
@@ -12,6 +12,7 @@ const sessions: Disposable[] = [];
 beforeAll(applyDirectorySchema);
 afterEach(() => {
   for (const session of sessions.splice(0)) session[Symbol.dispose]();
+  vi.restoreAllMocks();
 });
 
 async function operator(email?: string) {
@@ -94,7 +95,10 @@ test("onboarding creates owned organizations atomically and checks the selected 
   ).toBeNull();
 });
 
-test("operator RPC accepts only its administrator credential; issuer cookies grant no API access", async () => {
+test("operator RPC accepts only its administrator credential; issuer login uses the public API", async () => {
+  vi.spyOn(globalThis, "fetch").mockImplementation((input, init) =>
+    SELF.fetch(new Request(input, init)),
+  );
   const login = await SELF.fetch(`${origin}/login`, {
     method: "POST",
     redirect: "manual",
@@ -104,9 +108,15 @@ test("operator RPC accepts only its administrator credential; issuer cookies gra
   expect(login.status).toBe(302);
   expect(login.headers.get("location")).toBe("/");
   const cookie = login.headers.get("set-cookie")!.split(";")[0]!;
-  expect((await SELF.fetch(`${origin}/api`, { headers: { cookie, Origin: origin } })).status).toBe(
-    401,
-  );
+  expect(
+    (
+      await SELF.fetch(`${origin}/api`, {
+        method: "POST",
+        body: "",
+        headers: { cookie, Origin: origin },
+      })
+    ).status,
+  ).toBe(200);
   const response = await SELF.fetch(`${origin}/internal/rpc`, {
     headers: { Upgrade: "websocket", cookie },
   });

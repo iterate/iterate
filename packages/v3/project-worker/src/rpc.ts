@@ -1,5 +1,6 @@
 import { newWorkersRpcResponse, RpcSession, WebSocketTransport } from "capnweb";
 import type { Env } from "./control-plane.ts";
+import { Consent } from "./consent.ts";
 import { Grants } from "./grants.ts";
 import { directory } from "./directory.ts";
 import { authorizationOf, recordGrantUse, type Authorization } from "./oauth.ts";
@@ -30,6 +31,7 @@ export async function rpcResponse(
     projectDoors: auth.grant ? null : input,
     grants: new Grants(env, ctx, auth),
     scopes: auth.grant?.scope,
+    ...(auth.grant?.kind === "issuer" && { consent: new Consent(env, auth.grant) }),
   });
   const grant = auth.grant;
   if (request.headers.get("upgrade")?.toLowerCase() !== "websocket") {

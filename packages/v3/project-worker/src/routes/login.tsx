@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
-import { issuerSessionOf } from "../control-plane.ts";
+import { browserAuthorization } from "../browser-client.ts";
 import { appConfigOf } from "../app-config.ts";
 import { isLocalOrigin } from "../identity.ts";
 import { sameOriginPath } from "../lib.ts";
@@ -11,9 +11,9 @@ const loginOptions = createServerFn({ method: "GET" })
   .inputValidator((next: string) => next)
   .handler(async ({ data, context }) => {
     const config = appConfigOf(context.env);
-    const session = await issuerSessionOf(context.env, context.request);
+    const session = await browserAuthorization(context.env, context.request, context.ctx);
     return {
-      session: session && { email: session.email },
+      session: session && { email: session.principal.email },
       local: isLocalOrigin(config.platformOrigin),
       google: Boolean(config.googleClientId && config.googleClientSecret),
       next: sameOriginPath(data, config.platformOrigin),
@@ -44,7 +44,7 @@ function LoginPage() {
           </p>
           <form
             method="post"
-            action={`/logout?next=${encodeURIComponent(`/login?next=${encodeURIComponent(next)}`)}`}
+            action={`/.auth/logout?next=${encodeURIComponent(`/login?next=${encodeURIComponent(next)}`)}`}
           >
             <button type="submit">Switch account</button>
           </form>
