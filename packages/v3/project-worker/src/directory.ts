@@ -1,5 +1,4 @@
 import { codedError } from "./lib.ts";
-import type { Principal } from "./principal.ts";
 
 // ── directory ── the control plane IS the directory. One D1 store, strongly consistent (no KV
 // list() lag), relational and org-centric: users → orgs (via org_members) → projects. A project's id is
@@ -36,26 +35,9 @@ export const projectSlug = (name: string) =>
     .replace(/-+/g, "-")
     .replace(/^-+|-+$/g, "");
 
-/** The projects a session may touch — what its credential earned (session.ts `authenticate`, the
- *  `/mcp` grant): `"every"` for the admin secret; the projects of the orgs `userId` belongs to for a
- *  control-plane user (the cookie, the admin's `as`, a grant with nothing to choose from); the
- *  projects named outright for a project token or the project secret (one) and for an OAuth grant
- *  (the consent's choice — none chosen is bound to none). */
+/** Membership-derived access, optionally capped to selected projects. The
+ * administrator alone reaches every project; explicit empty selections reach none. */
 export type Reach = "every" | { userId: string; projectIds?: string[] } | { projectIds: string[] };
-
-/** THE ONE RULE for what a principal reaches (`Reach`) — session.ts `authenticate` and `/mcp`
- *  (`buildServer`) both ask it. THE BINDING FIRST: a principal bound to projects — a session's
- *  `projectId` (a project token's, the project secret's), an `/mcp` grant's `projects` (the
- *  consent's choice; a token's or a secret's one through `resolveExternalToken`) — reaches exactly
- *  those, whoever it is: a project token the admin minted reaches its one project, never every.
- *  Unbound, the admin secret's `{ actor: "admin" }` reaches every project and a user (the cookie,
- *  the admin's `as` — `user_<email>`, never `admin`) the projects of their orgs. */
-export function reachOf(principal: Principal & { projectId?: string; projects?: string[] }): Reach {
-  if ("projects" in principal && principal.projects) return { projectIds: principal.projects };
-  if ("projectId" in principal && principal.projectId !== undefined)
-    return { projectIds: [principal.projectId] };
-  return principal.actor === "admin" ? "every" : { userId: principal.actor };
-}
 
 /** `reach`, for a refusal's message (session.ts `projects.get`, `createProject`). */
 export const describeReach = (reach: Reach): string =>

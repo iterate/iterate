@@ -20,7 +20,6 @@ export async function rpcResponse(
     contextNamespace: env.ITERATE_CONTEXT,
     waitUntil: (promise) => ctx.waitUntil(promise),
     directory: directory(env.DB),
-    request,
     appConfig: appConfigOf(env),
     secretsKv: env.SECRETS_KV,
     onProjectAccess: (projectId) => projects.add(projectId),

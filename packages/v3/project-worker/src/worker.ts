@@ -124,7 +124,6 @@ export default {
       contextNamespace: env.ITERATE_CONTEXT,
       waitUntil: (promise) => ctx.waitUntil(promise),
       directory: directory(env.DB),
-      request,
       appConfig,
       secretsKv: env.SECRETS_KV,
     };
