@@ -3,8 +3,9 @@ import { existsSync } from "node:fs";
 import { dirname, relative, resolve } from "node:path";
 import type { Rule } from "eslint";
 import type { StrictRule } from "./types.ts";
+import { prChangedLines } from "./pr-changed-lines.ts";
 
-/** Suppress reports whose start line was last authored at or before the cutoff.
+/** In PR mode, check only changed lines; otherwise suppress lines authored before the cutoff.
  * Uncommitted lines and lines without provable history are always checked.
  * Uses the linted source, so editor buffers and fixes retain correct line numbers.
  */
@@ -20,6 +21,8 @@ export function grandfatherRule({
     ...rule,
     create(context) {
       let dates: Map<number, number> | undefined;
+      let changed: Set<number> | null | undefined;
+      const prBase = process.env.ITERATE_LINT_PR_BASE;
       const wrapped = Object.create(context, {
         report: {
           value(descriptor: Rule.ReportDescriptor) {
@@ -28,9 +31,14 @@ export function grandfatherRule({
               ("node" in descriptor && descriptor.node.loc);
             const line = location && ("start" in location ? location.start.line : location.line);
             if (line) {
-              dates ||= blameDates(context);
-              const date = dates.get(line);
-              if (date !== undefined && date <= cutoff) return;
+              if (prBase) {
+                if (changed === undefined) changed = prChangedLines(context, prBase);
+                if (changed && !changed.has(line)) return;
+              } else {
+                dates ||= blameDates(context);
+                const date = dates.get(line);
+                if (date !== undefined && date <= cutoff) return;
+              }
             }
             context.report(descriptor);
           },

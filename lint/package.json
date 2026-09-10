@@ -11,6 +11,7 @@
     "@types/esquery": "^1.5.4",
     "@types/estree": "1.0.9",
     "@typescript-eslint/types": "8.56.1",
+    "diff": "^9.0.0",
     "vitest": "^4.1.8"
   }
 }

@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { expect, test } from "vitest";
@@ -126,6 +126,90 @@ test("handles renamed paths containing Git pathspec characters", () => {
   expect(fixture.lint("input[1].ts")).toMatchObject({ status: 0, names: [] });
 });
 
+test("PR mode checks changed lines regardless of dates and trusts untouched lines", () => {
+  using fixture = createFixture();
+  fixture.write("const BAD_BASE = 1;\nconst BAD_EDIT = 2;\n");
+  fixture.commit("2022-01-01T00:00:00Z");
+  const base = fixture.git(["rev-parse", "HEAD"]);
+  fixture.write(
+    "// shift old lines\nconst BAD_BASE = 1;\nconst BAD_EDIT = 3;\nconst BAD_PR = 4;\n",
+  );
+  fixture.commit("2020-01-01T00:00:00Z");
+
+  // The edited lines predate the cutoff; the untouched line is newer than it.
+  expect(fixture.lint()).toMatchObject({ status: 1, names: ["BAD_BASE"] });
+  fixture.env.ITERATE_LINT_PR_BASE = base;
+  expect(fixture.lint()).toMatchObject({ status: 1, names: ["BAD_EDIT", "BAD_PR"] });
+});
+
+test("PR mode works with shallow history and no usable blame", () => {
+  using fixture = createFixture();
+  fixture.write("const BAD_BASE = 1;\n");
+  fixture.commit("2022-01-01T00:00:00Z");
+  const base = fixture.git(["rev-parse", "HEAD"]);
+  fixture.write("const BAD_BASE = 1;\nconst BAD_NEW = 2;\n");
+  fixture.commit("2020-01-01T00:00:00Z");
+  const shallow = join(fixture.root, "shallow");
+  fixture.git(["clone", "--quiet", "--depth=1", "file://" + fixture.root, shallow]);
+  fixture.git(["-C", shallow, "fetch", "--quiet", "--depth=1", "origin", base]);
+  fixture.git(["-C", shallow, "config", "blame.ignoreRevsFile", "missing"]);
+  expect(fixture.git(["-C", shallow, "rev-parse", "--is-shallow-repository"])).toBe("true");
+  fixture.env.ITERATE_LINT_PR_BASE = base;
+  expect(fixture.lint("shallow/input.ts")).toMatchObject({
+    status: 1,
+    names: ["BAD_NEW", "BAD_NEW"],
+  });
+});
+
+test("PR autofix recomputes changed lines after a fix inserts a line", () => {
+  using fixture = createFixture();
+  fixture.write("const BAD_BASE = 1;\n");
+  fixture.commit("2022-01-01T00:00:00Z");
+  fixture.env.ITERATE_LINT_PR_BASE = fixture.git(["rev-parse", "HEAD"]);
+  fixture.write("const BAD_NEW = 2;\nconst BAD_BASE = 1;\n");
+  writeFileSync(
+    fixture.plugin,
+    readFileSync(fixture.plugin, "utf8").replace(
+      '"good" + node.name.slice(4)',
+      '"good" + node.name.slice(4) + "\\n"',
+    ),
+  );
+  expect(fixture.lint("--fix")).toMatchObject({ status: 0, names: [] });
+  expect(readFileSync(fixture.file, "utf8")).toBe("const goodNEW\n = 2;\nconst BAD_BASE = 1;\n");
+});
+
+test("PR mode follows a rename and checks only edits in the renamed file", () => {
+  using fixture = createFixture();
+  fixture.write(
+    "const BAD_BASE = 1;\n// padding for rename detection\n// more unchanged content\n",
+  );
+  fixture.commit("2022-01-01T00:00:00Z");
+  fixture.env.ITERATE_LINT_PR_BASE = fixture.git(["rev-parse", "HEAD"]);
+  mkdirSync(join(fixture.root, "nested folder"));
+  fixture.git(["mv", "input.ts", "nested folder/renamed.ts"]);
+  writeFileSync(
+    join(fixture.root, "nested folder/renamed.ts"),
+    "const BAD_BASE = 1;\n// padding for rename detection\n// more unchanged content\nconst BAD_NEW = 2;\n",
+  );
+  fixture.git(["add", "nested folder/renamed.ts"]);
+  fixture.git(["commit", "--quiet", "-m", "Rename and edit"]);
+  expect(fixture.lint("nested folder/renamed.ts")).toMatchObject({ status: 1, names: ["BAD_NEW"] });
+});
+
+test("PR mode checks new files and fails for unavailable comparison history", () => {
+  using fixture = createFixture();
+  fixture.git(["add", "plugin.ts"]);
+  fixture.git(["commit", "--quiet", "-m", "Initial"]);
+  fixture.env.ITERATE_LINT_PR_BASE = fixture.git(["rev-parse", "HEAD"]);
+  fixture.write("const BAD_NEW = 1;\n");
+  expect(fixture.lint()).toMatchObject({ status: 1, names: ["BAD_NEW"] });
+  fixture.env.ITERATE_LINT_PR_BASE = "a".repeat(40);
+  expect(fixture.lint()).toMatchObject({
+    status: 1,
+    output: expect.stringContaining("not a tree object"),
+  });
+});
+
 test("rejects invalid cutoff dates", () => {
   expect(() => grandfatherRule({ allowedUpTo: new Date("invalid"), create: () => ({}) })).toThrow(
     "valid allowedUpTo date",
@@ -178,7 +262,9 @@ function createFixture() {
   git(["init", "--quiet"]);
   git(["config", "user.name", "Lint Test"]);
   git(["config", "user.email", "lint@test.invalid"]);
+  const env = { ...process.env, ITERATE_LINT_PR_BASE: "" };
   return {
+    env,
     root,
     file,
     plugin: join(root, "plugin.ts"),
@@ -197,7 +283,7 @@ function createFixture() {
       const result = spawnSync(
         join(repoRoot, "node_modules/.bin/oxlint"),
         ["input.ts", "--config", join(root, ".oxlintrc.json"), "--threads", "1", ...args],
-        { cwd: root, encoding: "utf8" },
+        { cwd: root, encoding: "utf8", env },
       );
       const output = result.stdout + result.stderr;
       return {

@@ -17,6 +17,8 @@ export const noShoutingConstants = grandfatherRule({
 const wrapped = grandfatherRule({ allowedUpTo: new Date("2026-11-10"), ...existingRule });
 ```
 
+## Local and main-branch checks
+
 Reports at or before the cutoff are suppressed using the start line's Git
 **author timestamp**. An explicit report location takes precedence over the
 node location. A date-only string means midnight UTC, not the end of that day.
@@ -26,16 +28,32 @@ and uncommitted lines always count as new. Adding lines above an unchanged
 violation does not change its age. Blame measures when the line last changed,
 not when the surrounding code first became a violation.
 
+## Pull requests
+
+CI sets `ITERATE_LINT_PR_BASE` to the PR's merge-base SHA. In this mode,
+**only added/changed lines are checked; the date cutoff does not apply**.
+Untouched lines are trusted, even if their blame dates are after the cutoff.
+An old commit on a PR branch can therefore pass local lint but fail PR lint.
+
+`scripts/ci/prepare-pr-lint.ts` asks GitHub for the merge base of the event's
+base/head SHAs, verifies that the checked-out HEAD matches, and fetches only
+that commit. The PR checkout stays shallow. Main and other non-PR jobs retain
+full history for blame. API/fetch failures stop the job before lint runs.
+
+The helper compares the base file with the actual linted source on each pass,
+so autofix edits and shifted line numbers work. Git-detected renames preserve
+unchanged lines; new files are checked in full. Unknown report locations are
+checked rather than silently exempted. It needs no network calls while linting.
+
+## Shared behavior
+
 Rules keep their metadata, listeners, options, messages, suggestions and fixes.
-Suppressed reports do not apply fixes. Git runs lazily on the first report and
-is reused for subsequent reports from that rule on that file. Each new rule
-creation reads fresh history/source, including oxlint autofix passes.
+Suppressed reports do not apply fixes. Comparisons run lazily on the first report
+and are reused for subsequent reports from that rule on the file.
 
-Files without history and reports without a known start line are checked.
-Shallow boundary lines are also checked because their true age is unknown;
-CI lint/autofix jobs fetch full history. Unexpected Git failures stop linting
-instead of silently granting exemptions. No Git fetch or write is performed.
+Unexpected Git failures stop linting. Without PR mode, files without history
+and shallow boundary lines are checked because their true age is unknown.
 
-The shouting rule uses the example cutoff above. Until that date, committing
-an edit can make it exempt even though it was flagged while uncommitted. Use
-a past rollout timestamp when the goal is to block every new committed edit.
+The shouting rule uses the example cutoff above. In local/main mode, until
+that date, committing an edit can make it exempt even though it was flagged
+while uncommitted. PR mode always checks changed lines regardless of that date.
