@@ -1,0 +1,203 @@
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import { expect, test } from "vitest";
+import { grandfatherRule } from "./grandfather-rule.ts";
+
+test("grandfathers through the inclusive author-date cutoff, despite shifted line numbers", () => {
+  using fixture = createFixture();
+  fixture.write("const BAD_OLD = 1;\n");
+  fixture.commit("2020-01-01T00:00:00Z");
+  fixture.write("const BAD_OLD = 1;\nconst BAD_BOUNDARY = 2;\n");
+  fixture.commit("2021-01-01T00:00:00Z");
+  fixture.write(
+    "// inserted above old declarations\nconst BAD_OLD = 1;\nconst BAD_BOUNDARY = 2;\nconst BAD_NEW = 3;\n",
+  );
+  fixture.commit("2021-01-01T00:00:01Z");
+
+  expect(fixture.lint()).toMatchObject({ status: 1, names: ["BAD_NEW"] });
+});
+
+test("checks unstaged and staged edits even when the cutoff is in the future", () => {
+  using fixture = createFixture();
+  fixture.write("const BAD_OLD = 1;\nconst BAD_EDITED = 2;\n");
+  fixture.commit("2020-01-01T00:00:00Z");
+  fixture.write("const BAD_OLD = 1;\nconst BAD_EDITED = 3;\nconst BAD_ADDED = 4;\n");
+  writeFileSync(
+    fixture.plugin,
+    readFileSync(fixture.plugin, "utf8").replace("2021-01-01", "2999-01-01"),
+  );
+
+  expect(fixture.lint()).toMatchObject({ status: 1, names: ["BAD_EDITED", "BAD_ADDED"] });
+  fixture.git(["add", "input.ts"]);
+  expect(fixture.lint()).toMatchObject({ status: 1, names: ["BAD_EDITED", "BAD_ADDED"] });
+});
+
+test("checks files without committed history and files outside Git", () => {
+  using fixture = createFixture();
+  fixture.write("const BAD_UNTRACKED = 1;\n");
+  expect(fixture.lint()).toMatchObject({ status: 1, names: ["BAD_UNTRACKED"] });
+  fixture.git(["add", "input.ts"]);
+  expect(fixture.lint()).toMatchObject({ status: 1, names: ["BAD_UNTRACKED"] });
+  fixture.git(["reset"]);
+  fixture.git(["add", "plugin.ts"]);
+  fixture.git(["commit", "--quiet", "-m", "Plugin only"]);
+  expect(fixture.lint()).toMatchObject({ status: 1, names: ["BAD_UNTRACKED"] });
+  fixture.git(["add", "input.ts"]);
+  expect(fixture.lint()).toMatchObject({ status: 1, names: ["BAD_UNTRACKED"] });
+  rmSync(join(fixture.root, ".git"), { recursive: true });
+  expect(fixture.lint()).toMatchObject({ status: 1, names: ["BAD_UNTRACKED"] });
+});
+
+test("uses explicit report locations before node locations, including location-only reports", () => {
+  using fixture = createFixture();
+  fixture.write("const BAD_OLD = 1;\n");
+  fixture.commit("2020-01-01T00:00:00Z");
+  fixture.write("const BAD_OLD = 1;\nconst BAD_NEW = 2;\n");
+  fixture.commit("2022-01-01T00:00:00Z");
+  const plugin = readFileSync(fixture.plugin, "utf8");
+  writeFileSync(
+    fixture.plugin,
+    plugin.replace("{ node, messageId:", "{ node, loc: { line: 1, column: 0 }, messageId:"),
+  );
+  expect(fixture.lint()).toMatchObject({ status: 0, names: [] });
+  writeFileSync(
+    fixture.plugin,
+    plugin.replace(
+      "{ node, messageId:",
+      "{ loc: { start: { line: 2, column: 0 }, end: { line: 2, column: 5 } }, messageId:",
+    ),
+  );
+  expect(fixture.lint()).toMatchObject({ status: 1, names: ["BAD_OLD", "BAD_NEW"] });
+});
+
+test("keeps rule metadata and fixes, fixing only new violations", () => {
+  using fixture = createFixture();
+  fixture.write("const BAD_OLD = 1;\n");
+  fixture.commit("2020-01-01T00:00:00Z");
+  fixture.write("const BAD_OLD = 1;\nconst BAD_NEW = 2;\n");
+  expect(fixture.lint("--fix")).toMatchObject({ status: 0, names: [] });
+  expect(readFileSync(fixture.file, "utf8")).toBe("const BAD_OLD = 1;\nconst goodNEW = 2;\n");
+});
+
+test("checks shallow boundary lines whose true author date is unavailable", () => {
+  using fixture = createFixture();
+  fixture.write("const BAD_OLD = 1;\n");
+  fixture.commit("2020-01-01T00:00:00Z");
+  fixture.write("const BAD_OLD = 1;\n// second commit\n");
+  fixture.commit("2020-06-01T00:00:00Z");
+  fixture.git([
+    "clone",
+    "--quiet",
+    "--depth=1",
+    "file://" + fixture.root,
+    join(fixture.root, "shallow"),
+  ]);
+  expect(fixture.lint()).toMatchObject({ status: 0, names: [] });
+  expect(fixture.lint("shallow/input.ts")).toMatchObject({ status: 1, names: ["BAD_OLD"] });
+});
+
+test("resolves history in linked worktrees", () => {
+  using fixture = createFixture();
+  fixture.write("const BAD_OLD = 1;\n");
+  fixture.commit("2020-01-01T00:00:00Z");
+  fixture.git(["worktree", "add", "--detach", join(fixture.root, "linked"), "HEAD"]);
+  expect(fixture.lint("linked/input.ts")).toMatchObject({ status: 0, names: [] });
+});
+
+test("surfaces Git failures instead of silently exempting violations", () => {
+  using fixture = createFixture();
+  fixture.write("const BAD_OLD = 1;\n");
+  fixture.commit("2020-01-01T00:00:00Z");
+  fixture.git(["config", "blame.ignoreRevsFile", "missing-ignore-revs"]);
+  expect(fixture.lint()).toMatchObject({
+    status: 1,
+    output: expect.stringContaining("missing-ignore-revs"),
+  });
+});
+
+test("rejects invalid cutoff dates", () => {
+  expect(() =>
+    grandfatherRule({ create: () => ({}) }, { allowedUpTo: new Date("invalid") }),
+  ).toThrow("valid allowedUpTo date");
+});
+
+const repoRoot = resolve(import.meta.dirname, "..");
+
+function createFixture() {
+  const root = mkdtempSync(join(tmpdir(), "grandfather-rule-"));
+  const file = join(root, "input.ts");
+  writeFileSync(
+    join(root, "plugin.ts"),
+    `
+    import { grandfatherRule } from ${JSON.stringify(join(repoRoot, "lint/grandfather-rule.ts"))};
+    export default {
+      meta: { name: "fixture" },
+      rules: { old: grandfatherRule({
+        meta: { type: "suggestion", fixable: "code", messages: { banned: "Found {{name}}" } },
+        create(context) {
+          return { Identifier(node) {
+            if (!node.name.startsWith("BAD_")) return;
+            context.report({ node, messageId: "banned", data: { name: node.name },
+              fix(fixer) { return fixer.replaceText(node, "good" + node.name.slice(4)); }
+            });
+          } };
+        }
+      }, { allowedUpTo: new Date("2021-01-01") }) }
+    };
+  `,
+  );
+  writeFileSync(
+    join(root, ".oxlintrc.json"),
+    JSON.stringify({
+      categories: { correctness: "off" },
+      jsPlugins: [join(root, "plugin.ts")],
+      rules: { "fixture/old": "error" },
+    }),
+  );
+  function git(args: string[], env: Record<string, string> = {}) {
+    const result = spawnSync("git", args, {
+      cwd: root,
+      encoding: "utf8",
+      env: { ...process.env, ...env },
+    });
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    return result.stdout.trim();
+  }
+  git(["init", "--quiet"]);
+  git(["config", "user.name", "Lint Test"]);
+  git(["config", "user.email", "lint@test.invalid"]);
+  return {
+    root,
+    file,
+    plugin: join(root, "plugin.ts"),
+    git,
+    write(contents: string) {
+      writeFileSync(file, contents);
+    },
+    commit(date: string) {
+      git(["add", "input.ts"]);
+      git(["commit", "--quiet", "-m", "Change source"], {
+        GIT_AUTHOR_DATE: date,
+        GIT_COMMITTER_DATE: "2025-01-01T00:00:00Z",
+      });
+    },
+    lint(...args: string[]) {
+      const result = spawnSync(
+        join(repoRoot, "node_modules/.bin/oxlint"),
+        ["input.ts", "--config", join(root, ".oxlintrc.json"), "--threads", "1", ...args],
+        { cwd: root, encoding: "utf8" },
+      );
+      const output = result.stdout + result.stderr;
+      return {
+        status: result.status,
+        names: [...output.matchAll(/Found (BAD_\w+)/g)].map((match) => match[1]),
+        output,
+      };
+    },
+    [Symbol.dispose]() {
+      rmSync(root, { recursive: true, force: true });
+    },
+  };
+}
