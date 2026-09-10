@@ -21,6 +21,8 @@ jobs:
         uses: actions/checkout@v4
         with:
           clean: false
+          # grandfatherRule needs the actual author dates of existing lines.
+          fetch-depth: 0
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - name: Reconcile dependencies (baked)
         run: pnpm install --frozen-lockfile --prefer-offline
