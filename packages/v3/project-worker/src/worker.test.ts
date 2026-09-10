@@ -24,13 +24,14 @@ import type { Env } from "./control-plane.ts";
 /** The smallest valid configuration: the name and the three required secrets. */
 const MINIMAL = {
   APP_CONFIG_ENVIRONMENT_NAME: "poc",
+  APP_CONFIG_PLATFORM_ORIGIN: "https://control.test",
   APP_CONFIG_PROJECT_TOKEN_SECRET: "token-secret",
   APP_CONFIG_SESSION_SECRET: "cookie-secret",
   APP_CONFIG_ADMIN_API_SECRET: "admin-secret",
 };
 /** What MINIMAL becomes: every optional var blank, the deploy id defaulted. */
 const MINIMAL_CONFIG = {
-  platformOrigin: "",
+  platformOrigin: "https://control.test",
   mcpOrigin: "",
   environmentName: "poc",
   projectHostnameBase: "",

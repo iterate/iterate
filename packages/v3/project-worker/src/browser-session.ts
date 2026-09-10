@@ -1,7 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
 import { z } from "zod";
 import type { Env } from "./control-plane.ts";
-import { exchangeToken, oauthHelpers, revokeGrant } from "./oauth.ts";
+import { authorizationCodeRequest, exchangeToken, oauthHelpers, revokeGrant } from "./oauth.ts";
 
 const TokenResponse = z.object({
   token_type: z.literal("bearer"),
@@ -18,13 +18,13 @@ export type BrowserHost = {
 };
 type Base = BrowserHost & { clientId: string; next: string; localClient: boolean };
 type Pending = Base & {
-  phase: "pending" | "exchanging";
+  phase: "pending";
   state: string;
   verifier: string;
   until: number;
 };
 type Active = Base & {
-  phase: "active" | "refreshing";
+  phase: "active";
   accessToken: string;
   refreshToken: string;
   expiresAt: number;
@@ -53,7 +53,7 @@ export class BrowserSession extends DurableObject<Env> {
       // identical code/PKCE flow, and is deleted when this DO's session ends.
       const clientId = localClient
         ? (
-            await oauthHelpers(this.env, new Request(host.issuer)).createClient({
+            await oauthHelpers(this.env).createClient({
               clientName: new URL(host.origin).host,
               redirectUris: [`${host.origin}/.auth/callback`],
               tokenEndpointAuthMethod: "none",
@@ -62,16 +62,12 @@ export class BrowserSession extends DurableObject<Env> {
             })
           ).clientId
         : `${host.origin}/.auth/client.json`;
-      const state = crypto.randomUUID();
-      const verifier =
-        crypto.randomUUID().replaceAll("-", "") + crypto.randomUUID().replaceAll("-", "");
-      const hash = new Uint8Array(
-        await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier)),
-      );
-      const challenge = btoa(String.fromCharCode(...hash))
-        .replaceAll("+", "-")
-        .replaceAll("/", "_")
-        .replace(/=+$/, "");
+      const { url, state, verifier } = await authorizationCodeRequest({
+        issuer: host.issuer,
+        clientId,
+        redirectUri: `${host.origin}/.auth/callback`,
+        resources: [host.resource],
+      });
       const data: Pending = {
         ...host,
         next,
@@ -84,17 +80,6 @@ export class BrowserSession extends DurableObject<Env> {
       };
       await this.ctx.storage.put("session", data);
       await this.ctx.storage.setAlarm(data.until);
-      const url = new URL("/authorize", host.issuer);
-      url.search = new URLSearchParams({
-        response_type: "code",
-        client_id: clientId,
-        redirect_uri: `${host.origin}/.auth/callback`,
-        resource: host.resource,
-        scope: "iterate",
-        state,
-        code_challenge: challenge,
-        code_challenge_method: "S256",
-      }).toString();
       return url.href;
     });
   }
@@ -116,7 +101,6 @@ export class BrowserSession extends DurableObject<Env> {
         await this.#end(data, "Authorization declined");
         return { error: "Authorization was declined." };
       }
-      await this.ctx.storage.put("session", { ...data, phase: "exchanging" });
       const response = await this.#exchange(data, {
         grant_type: "authorization_code",
         code: input.code,
@@ -136,17 +120,13 @@ export class BrowserSession extends DurableObject<Env> {
     return this.ctx.blockConcurrencyWhile(async () => {
       const data = await this.ctx.storage.get<StoredSession>("session");
       if (!data || !("accessToken" in data)) return null;
-      if (data.phase === "refreshing" || data.until <= Date.now()) {
-        // An interrupted rotation has an ambiguous outcome. End this grant once;
-        // the user signs in again explicitly instead of an unbounded replay loop.
-        await this.#end(
-          data,
-          data.phase === "refreshing" ? "Refresh interrupted" : "Session expired",
-        );
+      if (data.until <= Date.now()) {
+        await this.#end(data, "Session expired");
         return null;
       }
+      // The provider retains the refresh token we used until we use a newer one.
+      // If a response or storage write is lost, this stored pair is safe to retry.
       if (data.expiresAt > Date.now() + 30_000) return data.accessToken;
-      await this.ctx.storage.put("session", { ...data, phase: "refreshing" });
       const response = await this.#exchange(data, {
         grant_type: "refresh_token",
         refresh_token: data.refreshToken,
@@ -171,17 +151,14 @@ export class BrowserSession extends DurableObject<Env> {
     const data = await this.ctx.storage.get<StoredSession>("session");
     if (!data) return;
     if (data.phase !== "ended") await this.#end(data, "Session expired");
-    if (data.localClient)
-      await oauthHelpers(this.env, new Request(data.issuer)).deleteClient(data.clientId);
+    if (data.localClient) await oauthHelpers(this.env).deleteClient(data.clientId);
     await this.ctx.storage.deleteAll();
     await this.ctx.storage.deleteAlarm();
   }
 
   async #end(data: Pending | Active, reason: string) {
     const result =
-      "grantId" in data
-        ? await revokeGrant(this.env, new Request(data.issuer), data)
-        : { cleanupPending: false };
+      "grantId" in data ? await revokeGrant(this.env, data) : { cleanupPending: false };
     const { origin, issuer, resource, projectId, clientId, localClient, next } = data;
     await this.ctx.storage.put("session", {
       origin,
@@ -210,9 +187,7 @@ export class BrowserSession extends DurableObject<Env> {
 
   async #saveTokens(data: Pending | Active, response: Response) {
     const tokens = TokenResponse.parse(await response.json());
-    const summary = await oauthHelpers(this.env, new Request(data.issuer)).unwrapToken<unknown>(
-      tokens.access_token,
-    );
+    const summary = await oauthHelpers(this.env).unwrapToken<unknown>(tokens.access_token);
     if (!summary) throw new Error("The newly issued browser token could not be resolved");
     const { origin, issuer, resource, projectId, clientId, localClient, next } = data;
     const stored: Active = {

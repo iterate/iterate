@@ -25,9 +25,10 @@ export async function startLoggedWorker(): Promise<LoggedWorker> {
     workers: [{ config: e2eWorkerConfig() }],
   });
   const { url } = await server.listen();
+  await server.update({ root: PACKAGE_DIR, workers: [{ config: e2eWorkerConfig(url.origin) }] });
   const sessions: unknown[] = [];
   const openSession = () => {
-    const s = newWebSocketRpcSession(`ws://${url.host}/api`);
+    const s = newWebSocketRpcSession(`ws://${url.host}/internal/rpc`);
     sessions.push(s);
     return s as any;
   };

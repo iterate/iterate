@@ -20,7 +20,6 @@ export const GrantProps = z.object({
   userId: z.string().startsWith("user_"),
   email: z.string(),
   projects: z.array(z.string()).nullable(),
-  resources: z.array(z.string()).min(1),
   tokenKind: z.enum(["oauth", "personal", "device"]),
   deadline: z.number().int().positive().nullable(),
 });
@@ -45,9 +44,9 @@ export type Authorization = {
 };
 
 /** Canonical resource identifiers, including the MCP root's explicit slash. */
-export function oauthAddresses(env: Env, request: Request) {
+export function oauthAddresses(env: Env) {
   const config = appConfigOf(env);
-  const issuer = config.platformOrigin || new URL(request.url).origin;
+  const issuer = config.platformOrigin;
   return {
     issuer,
     api: `${issuer}/api`,
@@ -59,7 +58,7 @@ export function oauthAddresses(env: Env, request: Request) {
  * resources this authorization server may grant; omission never creates an unbound token. */
 export async function parseAuthorization(env: Env, request: Request): Promise<AuthRequest> {
   const auth = await env.OAUTH_PROVIDER.parseAuthRequest(request);
-  const { api, mcp } = oauthAddresses(env, request);
+  const { api, mcp } = oauthAddresses(env);
   const resources = [...new Set(auth.resource ? [auth.resource].flat() : [])];
   if (
     !resources.length ||
@@ -129,11 +128,10 @@ WHERE oauth_activity.last_used_at IS NULL OR oauth_activity.last_used_at < ?`)
  * parseAuthorization is the only public consent path and requires allowed resources. */
 export function providerOptions(
   env: Env,
-  request: Request,
   apiHandler: Handler = notFound,
   defaultHandler: Handler = notFound,
 ): OAuthProviderOptions<Env> {
-  const { issuer, api, mcp } = oauthAddresses(env, request);
+  const { issuer, api, mcp } = oauthAddresses(env);
   return {
     apiHandlers: { [api]: apiHandler, [mcp]: apiHandler },
     defaultHandler,
@@ -185,18 +183,44 @@ export function providerOptions(
   };
 }
 
-export function oauthHelpers(env: Env, request: Request) {
-  return getOAuthApi(providerOptions(env, request), env);
+export function oauthHelpers(env: Env) {
+  return getOAuthApi(providerOptions(env), env);
+}
+
+/** The same code/PKCE parameters for browser login and a console-minted token. */
+export async function authorizationCodeRequest(input: {
+  issuer: string;
+  clientId: string;
+  redirectUri: string;
+  resources: string[];
+}) {
+  const verifier =
+    crypto.randomUUID().replaceAll("-", "") + crypto.randomUUID().replaceAll("-", "");
+  const hash = new Uint8Array(
+    await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier)),
+  );
+  const challenge = btoa(String.fromCharCode(...hash))
+    .replaceAll("+", "-")
+    .replaceAll("/", "_")
+    .replace(/=+$/, "");
+  const state = crypto.randomUUID();
+  const url = new URL("/authorize", input.issuer);
+  url.search = new URLSearchParams({
+    response_type: "code",
+    client_id: input.clientId,
+    redirect_uri: input.redirectUri,
+    scope: "iterate",
+    state,
+    code_challenge: challenge,
+    code_challenge_method: "S256",
+  }).toString();
+  for (const resource of input.resources) url.searchParams.append("resource", resource);
+  return { url, state, verifier };
 }
 
 /** The browser adapter asks the same provider gate to admit its server-held token
  * at the API resource. No public validation endpoint or second token verifier. */
-export async function authorizationForToken(
-  env: Env,
-  request: Request,
-  ctx: ExecutionContext,
-  token: string,
-) {
+export async function authorizationForToken(env: Env, ctx: ExecutionContext, token: string) {
   let authorization: Authorization | null = null;
   const admission: Handler = {
     async fetch(_request, bindings, context) {
@@ -204,27 +228,23 @@ export async function authorizationForToken(
       return new Response(null, { status: authorization ? 204 : 401 });
     },
   };
-  const apiRequest = new Request(oauthAddresses(env, request).api, {
+  const apiRequest = new Request(oauthAddresses(env).api, {
     headers: { Authorization: `Bearer ${token}` },
   });
-  await new OAuthProvider(providerOptions(env, request, admission)).fetch(apiRequest, env, ctx);
+  await new OAuthProvider(providerOptions(env, admission)).fetch(apiRequest, env, ctx);
   return authorization as Authorization | null; // Assigned inside the awaited handler; TS cannot track that closure assignment.
 }
 
 /** The caller must already own this grant: a checked provider inventory row or
  * the BrowserSession's stored token summary. The D1 marker precedes KV cleanup. */
-export async function revokeGrant(
-  env: Env,
-  request: Request,
-  grant: { userId: string; grantId: string },
-) {
+export async function revokeGrant(env: Env, grant: { userId: string; grantId: string }) {
   await env.DB.prepare(`INSERT INTO oauth_activity (user_id, grant_id, revoked_at, cleanup_pending)
 VALUES (?, ?, ?, 1) ON CONFLICT(user_id, grant_id) DO UPDATE
 SET revoked_at = COALESCE(oauth_activity.revoked_at, excluded.revoked_at), cleanup_pending = 1`)
     .bind(grant.userId, grant.grantId, Date.now())
     .run();
   try {
-    await oauthHelpers(env, request).revokeGrant(grant.grantId, grant.userId);
+    await oauthHelpers(env).revokeGrant(grant.grantId, grant.userId);
   } catch (error) {
     console.error("oauth.revoke_cleanup_failed", {
       userId: grant.userId,
@@ -245,5 +265,5 @@ const notFound: Handler = { fetch: () => new Response("Not found", { status: 404
 
 /** In-process token exchange, also used by the browser session DO. */
 export function exchangeToken(request: Request, env: Env, ctx: ExecutionContext) {
-  return new OAuthProvider(providerOptions(env, request)).fetch(request, env, ctx);
+  return new OAuthProvider(providerOptions(env)).fetch(request, env, ctx);
 }

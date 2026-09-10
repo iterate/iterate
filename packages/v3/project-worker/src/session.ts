@@ -85,6 +85,8 @@ export interface SessionInput {
   /** The `SECRETS_KV` binding — where a project's API-key hash lives (`project-api-key:<projectId>`,
    *  principal.ts), read at `authenticate({ type: "project-secret" })`, written by `rotateApiKey`. */
   secretsKv: KVNamespace;
+  /** A live transport tracks projects whose capabilities it has handed out. */
+  onProjectAccess?: (projectId: string) => void;
 }
 
 /** The principal `credentials` prove, or null when they do not — no reason given, so a door that
@@ -277,6 +279,7 @@ class ProjectCollection extends RpcTarget {
   }
 
   #context(projectId: string): IterateContext {
+    this.#input.onProjectAccess?.(projectId);
     return new IterateContext(
       this.#input.contextNamespace,
       DurableObjectNameCodec.parse(projectId),

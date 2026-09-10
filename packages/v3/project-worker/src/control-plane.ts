@@ -1,12 +1,17 @@
 // The OAuth authorization server and TanStack console. Directory policy lives in
 // directory.ts; MCP exposes that policy through the existing context capabilities.
 
-import { AuthorizationError, type OAuthHelpers } from "@cloudflare/workers-oauth-provider";
+import {
+  AuthorizationError,
+  CimdFetchError,
+  type OAuthHelpers,
+} from "@cloudflare/workers-oauth-provider";
 import type { ServerEntry } from "@tanstack/react-start/server-entry";
+import { grantsDoor } from "./grants.ts";
 import { parseAuthorization, type GrantProps } from "./oauth.ts";
 import { codedError, isSameOriginBrowserRequest } from "./lib.ts";
 import { directory, projectSlug, type Org, type Project } from "./directory.ts";
-import { browserAuthorization } from "./browser-client.ts";
+import { browserSessionOf, requireBrowserSession } from "./browser-client.ts";
 import { projectHostOf } from "./hosts.ts";
 import { appConfigOf } from "./app-config.ts";
 import { sameOriginPath } from "./lib.ts";
@@ -65,19 +70,6 @@ export function issuerSessionOf(env: Env, request: Request): Promise<SessionCook
   return verifySessionCookie(request.headers.get("cookie"), appConfigOf(env).sessionSecret);
 }
 
-/** Console pages use an ordinary browser OAuth grant; issuer identity is only
- * enough to sign in and approve a new client. */
-export async function consoleSessionOf(env: Env, request: Request, ctx: ExecutionContext) {
-  const auth = await browserAuthorization(env, request, ctx);
-  return auth?.grant
-    ? { sub: auth.grant.userId, email: auth.grant.email, reach: auth.reach, grant: auth.grant }
-    : null;
-}
-export async function requireConsoleSession(env: Env, request: Request, ctx: ExecutionContext) {
-  const session = await consoleSessionOf(env, request, ctx);
-  if (!session) throw codedError("UNAUTHENTICATED", "sign in first");
-  return session;
-}
 async function requireIssuerSession(env: Env, request: Request) {
   const session = await issuerSessionOf(env, request);
   if (!session) throw codedError("UNAUTHENTICATED", "sign in first");
@@ -118,7 +110,7 @@ export async function accountOf(
   request: Request,
   ctx: ExecutionContext,
 ): Promise<Account> {
-  const session = await requireConsoleSession(env, request, ctx);
+  const session = await requireBrowserSession(env, request, ctx);
   const d1Directory = directory(env.DB);
   const [orgs, projects] = await Promise.all([
     d1Directory.listOrgs(session.sub),
@@ -169,7 +161,7 @@ export async function createProjectFor(
   name: string,
   ctx: ExecutionContext,
 ): Promise<Project> {
-  const session = await requireConsoleSession(env, request, ctx);
+  const session = await requireBrowserSession(env, request, ctx);
   return directory(env.DB).createProject(session.reach, name);
 }
 
@@ -211,31 +203,40 @@ async function projectsForClient(env: Env, clientId: string, userId: string) {
   return { projects: projects.filter((p) => p.id === project?.id), projectBound: true };
 }
 
+/** Expected OAuth refusals retain the validated client redirect when one exists. */
+function authorizationFailure(error: unknown): Extract<Consent, { kind: "redirect" | "invalid" }> {
+  if (error instanceof CimdFetchError)
+    return {
+      kind: "invalid",
+      description: "The client metadata could not be loaded or validated.",
+    };
+  if (!(error instanceof AuthorizationError)) throw error;
+  if (!error.redirectUri) return { kind: "invalid", description: error.description };
+  const redirect = new URL(error.redirectUri);
+  redirect.searchParams.set("error", error.code);
+  redirect.searchParams.set("error_description", error.description);
+  if (error.state) redirect.searchParams.set("state", error.state);
+  if (error.issuer) redirect.searchParams.set("iss", error.issuer);
+  return { kind: "redirect", location: redirect.href };
+}
+
 /** The consent (src/routes/_auth/authorize.tsx): the provider parses the request, the client is
  *  named, the user's projects are offered. */
 export async function consentOf(env: Env, request: Request, query: string): Promise<Consent> {
   const session = await requireIssuerSession(env, request);
-  let oauthRequest;
   try {
-    oauthRequest = await parseAuthorization(env, authorizeRequest(request, query));
+    const oauthRequest = await parseAuthorization(env, authorizeRequest(request, query));
+    const client = await env.OAUTH_PROVIDER.lookupClient(oauthRequest.clientId);
+    return {
+      kind: "consent",
+      query,
+      clientName: client?.clientName ?? oauthRequest.clientId,
+      email: session.email,
+      ...(await projectsForClient(env, oauthRequest.clientId, session.sub)),
+    };
   } catch (error) {
-    if (!(error instanceof AuthorizationError)) throw error;
-    if (!error.redirectUri) return { kind: "invalid", description: error.description };
-    const redirect = new URL(error.redirectUri);
-    redirect.searchParams.set("error", error.code);
-    redirect.searchParams.set("error_description", error.description);
-    if (error.state) redirect.searchParams.set("state", error.state);
-    if (error.issuer) redirect.searchParams.set("iss", error.issuer);
-    return { kind: "redirect", location: redirect.toString() };
+    return authorizationFailure(error);
   }
-  const client = await env.OAUTH_PROVIDER.lookupClient(oauthRequest.clientId);
-  return {
-    kind: "consent",
-    query,
-    clientName: client?.clientName ?? oauthRequest.clientId,
-    email: session.email,
-    ...(await projectsForClient(env, oauthRequest.clientId, session.sub)),
-  };
 }
 
 /** Approve: the grant minted as the user on the projects they checked — the checked ids intersected
@@ -247,34 +248,40 @@ export async function approveConsent(
   request: Request,
   query: string,
   chosen: string[],
-): Promise<{ redirectTo: string }> {
+): Promise<{ redirectTo: string } | { error: string }> {
   const session = await requireIssuerSession(env, request);
-  const oauthRequest = await parseAuthorization(env, authorizeRequest(request, query));
-  const client = await env.OAUTH_PROVIDER.lookupClient(oauthRequest.clientId);
-  const { projects, projectBound } = await projectsForClient(
-    env,
-    oauthRequest.clientId,
-    session.sub,
-  );
-  const checked = new Set(chosen);
-  const granted = projects.filter((p) => checked.has(p.id)).map((p) => p.id);
-  return env.OAUTH_PROVIDER.completeAuthorization({
-    request: oauthRequest,
-    userId: session.sub,
-    metadata: { clientName: client?.clientName ?? oauthRequest.clientId },
-    scope: ["iterate"],
-    revokeExistingGrants: false,
-    props: {
-      kind: "user-grant",
-      version: 1,
+  try {
+    const oauthRequest = await parseAuthorization(env, authorizeRequest(request, query));
+    const client = await env.OAUTH_PROVIDER.lookupClient(oauthRequest.clientId);
+    const { projects, projectBound } = await projectsForClient(
+      env,
+      oauthRequest.clientId,
+      session.sub,
+    );
+    const checked = new Set(chosen);
+    const granted = projects.filter((p) => checked.has(p.id)).map((p) => p.id);
+    return await env.OAUTH_PROVIDER.completeAuthorization({
+      request: oauthRequest,
       userId: session.sub,
-      email: session.email,
-      projects: !projectBound && checked.has("*") ? null : granted,
-      resources: [oauthRequest.resource!].flat(),
-      tokenKind: "oauth",
-      deadline: Date.now() + 30 * 24 * 3600_000,
-    } satisfies GrantProps,
-  });
+      metadata: { clientName: client?.clientName ?? oauthRequest.clientId },
+      scope: ["iterate"],
+      revokeExistingGrants: false,
+      props: {
+        kind: "user-grant",
+        version: 1,
+        userId: session.sub,
+        email: session.email,
+        projects: !projectBound && checked.has("*") ? null : granted,
+        tokenKind: "oauth",
+        deadline: Date.now() + 30 * 24 * 3600_000,
+      } satisfies GrantProps,
+    });
+  } catch (error) {
+    const failure = authorizationFailure(error);
+    return failure.kind === "redirect"
+      ? { redirectTo: failure.location }
+      : { error: failure.description };
+  }
 }
 
 // ── the console ──
@@ -329,7 +336,7 @@ async function consoleDoor(
   if (pathname === "/projects") {
     // The console's form. A program creates projects over /api — `authenticate().projects.create`
     // (src/session.ts) — the same directory door.
-    if (!(await consoleSessionOf(env, request, ctx))) return redirectResponse("/"); // no session: back to sign in
+    if (!(await browserSessionOf(env, request, ctx))) return redirectResponse("/"); // no session: back to sign in
     const slug = String((await request.formData()).get("slug") ?? "");
     if (!projectSlug(slug)) return redirectResponse("/");
     try {
@@ -342,12 +349,11 @@ async function consoleDoor(
   if (pathname === "/authorize") {
     if (!(await issuerSessionOf(env, request)))
       return redirectResponse(`/login?next=${encodeURIComponent(pathname + search)}`);
-    const consent = await consentOf(env, request, search);
-    if (consent.kind === "redirect") return redirectResponse(consent.location);
-    if (consent.kind === "invalid")
-      return new Response(`400: ${consent.description}\n`, { status: 400 });
     const chosen = (await request.formData()).getAll("project").map(String);
-    return redirectResponse((await approveConsent(env, request, search, chosen)).redirectTo);
+    const answer = await approveConsent(env, request, search, chosen);
+    return "error" in answer
+      ? new Response(answer.error, { status: 400 })
+      : redirectResponse(answer.redirectTo);
   }
   return null;
 }
@@ -366,7 +372,8 @@ export const consoleHandler: Handler = {
       return new Response("403: a cross-site request cannot act on this session\n", {
         status: 403,
       });
-    const door = await consoleDoor(request, env, ctx);
+    const door =
+      (await grantsDoor({ env, request, ctx })) ?? (await consoleDoor(request, env, ctx));
     if (door) return door;
     const context: ConsoleRequestContext = { env, ctx, request };
     const entry = await loadStartServerEntry();

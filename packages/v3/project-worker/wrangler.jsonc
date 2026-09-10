@@ -108,6 +108,8 @@
   // wrangler secrets, never committed vars; all three are required.
   "vars": {
     "APP_CONFIG_ENVIRONMENT_NAME": "poc",
+    "APP_CONFIG_PLATFORM_ORIGIN": "https://os.iterate2.com",
+    "APP_CONFIG_MCP_ORIGIN": "https://mcp.iterate2.com",
     "APP_CONFIG_PROJECT_HOSTNAME_BASE": "project-worker.iterate.com",
     // The Artifacts git remote is `https://<ACCOUNT_ID>.artifacts.cloudflare.net/git/<NAMESPACE>/<repo>.git`
     // — the `itx.repos` layer builds it from these when it does git over HTTPS.

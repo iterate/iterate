@@ -2,7 +2,7 @@ import { oauthResponse } from "./api.ts";
 import type { Env } from "./control-plane.ts";
 import { authorizationForToken, oauthAddresses, type Authorization } from "./oauth.ts";
 import { cookieValueOf } from "./principal.ts";
-import { isSameOriginBrowserRequest } from "./lib.ts";
+import { codedError, isSameOriginBrowserRequest } from "./lib.ts";
 import { sameOriginPath } from "./lib.ts";
 
 /** Include the local port: cookies are host-scoped, while a dev session is
@@ -35,7 +35,7 @@ export async function browserAuthorization(
   const session = sessionFor(env, request);
   const token = await session?.bearer();
   if (!token) return null;
-  const authorization = await authorizationForToken(env, request, ctx, token);
+  const authorization = await authorizationForToken(env, ctx, token);
   if (!authorization) await session!.end();
   return authorization;
 }
@@ -49,7 +49,7 @@ export async function browserClient(
   projectId: string | null,
 ) {
   const url = new URL(request.url);
-  const { issuer, api } = oauthAddresses(env, request);
+  const { issuer, api } = oauthAddresses(env);
   if (url.pathname === "/.auth/client.json") {
     return Response.json(
       {
@@ -65,11 +65,18 @@ export async function browserClient(
   }
   if (url.pathname === "/.auth/login") {
     if (request.method !== "GET") return new Response("Method not allowed", { status: 405 });
+    const next = sameOriginPath(url.searchParams.get("next") || "/", url.origin);
+    // A GET cannot revoke an existing login. Reuse it; account switching is POST logout.
+    if (await browserAuthorization(env, request, ctx))
+      return new Response(null, {
+        status: 303,
+        headers: { Location: next, "Cache-Control": "no-store" },
+      });
     const id = crypto.randomUUID();
     const session = env.BROWSER_SESSION.getByName(`${url.origin}:${id}`);
     const location = await session.begin(
       { origin: url.origin, issuer, resource: api, projectId },
-      sameOriginPath(url.searchParams.get("next") || "/", url.origin),
+      next,
     );
     return new Response(null, {
       status: 302,
@@ -134,4 +141,18 @@ export async function browserClient(
   }
   if (url.pathname.startsWith("/.auth/")) return new Response("Not found", { status: 404 });
   return null;
+}
+
+/** Console pages use an ordinary browser OAuth grant; issuer identity is only
+ * enough to sign in and approve a new client. */
+export async function browserSessionOf(env: Env, request: Request, ctx: ExecutionContext) {
+  const auth = await browserAuthorization(env, request, ctx);
+  return auth?.grant
+    ? { sub: auth.grant.userId, email: auth.grant.email, reach: auth.reach, grant: auth.grant }
+    : null;
+}
+export async function requireBrowserSession(env: Env, request: Request, ctx: ExecutionContext) {
+  const session = await browserSessionOf(env, request, ctx);
+  if (!session) throw codedError("UNAUTHENTICATED", "sign in first");
+  return session;
 }

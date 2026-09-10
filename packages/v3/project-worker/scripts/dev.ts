@@ -23,6 +23,9 @@ const run = (command: string, args: string[]): void => {
   if (result.status !== 0) process.exit(result.status ?? 1);
 };
 
+const args = process.argv.slice(2).filter((argument) => argument !== "--");
+const portIndex = args.indexOf("--port");
+const port = portIndex >= 0 ? args[portIndex + 1] : "8788";
 run("pnpm", ["exec", "vite", "build"]);
 const { routes: _zoneRoutes, ...localConfig } = JSON.parse(
   readFileSync(path.join(root, "dist/server/wrangler.json"), "utf8"),
@@ -48,10 +51,14 @@ run("pnpm", [
   "--var",
   "APP_CONFIG_PROJECT_HOSTNAME_BASE:localhost",
   "--var",
+  `APP_CONFIG_PLATFORM_ORIGIN:http://localhost:${port}`,
+  "--var",
+  "APP_CONFIG_MCP_ORIGIN:",
+  "--var",
   "APP_CONFIG_PROJECT_TOKEN_SECRET:dev-project-token-secret",
   "--var",
   "APP_CONFIG_SESSION_SECRET:dev-session-secret",
   "--var",
   "APP_CONFIG_ADMIN_API_SECRET:dev-admin-api-secret",
-  ...process.argv.slice(2).filter((argument) => argument !== "--"), // pnpm passes its `--` through
+  ...args,
 ]);

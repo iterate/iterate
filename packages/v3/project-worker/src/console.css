@@ -7,7 +7,7 @@ body {
     15px/1.5 ui-sans-serif,
     system-ui,
     sans-serif;
-  max-width: 34rem;
+  max-width: 56rem;
   margin: 4rem auto;
   padding: 0 1.25rem;
 }
@@ -62,4 +62,27 @@ code {
 }
 [role="alert"] {
   color: color-mix(in oklab, currentColor 70%, red);
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9em;
+}
+th,
+td {
+  padding: 0.65rem 0.4rem;
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid color-mix(in oklab, currentColor 20%, transparent);
+  overflow-wrap: anywhere;
+}
+td form {
+  margin: 0;
+}
+textarea {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 0.6rem;
+  font: inherit;
 }

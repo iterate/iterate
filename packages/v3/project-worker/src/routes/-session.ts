@@ -1,12 +1,13 @@
 // Safe display fields only: no browser token or opaque cookie enters page data.
 import { createServerFn } from "@tanstack/react-start";
-import { consoleSessionOf, issuerSessionOf } from "../control-plane.ts";
+import { issuerSessionOf } from "../control-plane.ts";
+import { browserSessionOf } from "../browser-client.ts";
 import { consoleContext } from "./-console-context.ts";
 
 export const sessionOf = createServerFn({ method: "GET" })
   .middleware([consoleContext])
   .handler(async ({ context }) => {
-    const session = await consoleSessionOf(context.env, context.request, context.ctx);
+    const session = await browserSessionOf(context.env, context.request, context.ctx);
     return session && { sub: session.sub, email: session.email };
   });
 

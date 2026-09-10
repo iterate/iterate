@@ -64,8 +64,9 @@ function ConsentPage() {
     const chosen = new FormData(event.currentTarget).getAll("project").map(String);
     setError(null);
     try {
-      const { redirectTo } = await approve({ data: { query, projects: chosen } });
-      window.location.assign(redirectTo);
+      const answer = await approve({ data: { query, projects: chosen } });
+      if ("error" in answer) throw new Error(answer.error);
+      window.location.assign(answer.redirectTo);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
     }

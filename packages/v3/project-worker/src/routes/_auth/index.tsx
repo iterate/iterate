@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from "react";
-import { createFileRoute, useRouter } from "@tanstack/react-router";
+import { createFileRoute, Link, useRouter } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { accountOf, createProjectFor } from "../../control-plane.ts";
 import { consoleContext } from "../-console-context.ts";
@@ -89,7 +89,9 @@ function AccountPage() {
       </form>
       {error && <p role="alert">{error}</p>}
       <p>
-        <a href="/sessions">Sessions</a>
+        <Link to="/sessions" search={{ cursor: undefined }}>
+          Sessions
+        </Link>
       </p>
       <form method="post" action="/.auth/logout">
         <button type="submit">Log out</button>

@@ -13,6 +13,7 @@ import { Route as LoginRouteImport } from "./routes/login.tsx";
 import { Route as AuthorizeRouteImport } from "./routes/authorize.tsx";
 import { Route as AuthRouteImport } from "./routes/_auth.tsx";
 import { Route as AuthIndexRouteImport } from "./routes/_auth/index.tsx";
+import { Route as AuthSessionsRouteImport } from "./routes/_auth/sessions.tsx";
 
 const LoginRoute = LoginRouteImport.update({
   id: "/login",
@@ -33,15 +34,22 @@ const AuthIndexRoute = AuthIndexRouteImport.update({
   path: "/",
   getParentRoute: () => AuthRoute,
 } as any);
+const AuthSessionsRoute = AuthSessionsRouteImport.update({
+  id: "/sessions",
+  path: "/sessions",
+  getParentRoute: () => AuthRoute,
+} as any);
 
 export interface FileRoutesByFullPath {
   "/": typeof AuthIndexRoute;
   "/authorize": typeof AuthorizeRoute;
   "/login": typeof LoginRoute;
+  "/sessions": typeof AuthSessionsRoute;
 }
 export interface FileRoutesByTo {
   "/authorize": typeof AuthorizeRoute;
   "/login": typeof LoginRoute;
+  "/sessions": typeof AuthSessionsRoute;
   "/": typeof AuthIndexRoute;
 }
 export interface FileRoutesById {
@@ -49,14 +57,21 @@ export interface FileRoutesById {
   "/_auth": typeof AuthRouteWithChildren;
   "/authorize": typeof AuthorizeRoute;
   "/login": typeof LoginRoute;
+  "/_auth/sessions": typeof AuthSessionsRoute;
   "/_auth/": typeof AuthIndexRoute;
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath;
-  fullPaths: "/" | "/authorize" | "/login";
+  fullPaths: "/" | "/authorize" | "/login" | "/sessions";
   fileRoutesByTo: FileRoutesByTo;
-  to: "/authorize" | "/login" | "/";
-  id: "__root__" | "/_auth" | "/authorize" | "/login" | "/_auth/";
+  to: "/authorize" | "/login" | "/sessions" | "/";
+  id:
+    | "__root__"
+    | "/_auth"
+    | "/authorize"
+    | "/login"
+    | "/_auth/sessions"
+    | "/_auth/";
   fileRoutesById: FileRoutesById;
 }
 export interface RootRouteChildren {
@@ -95,14 +110,23 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof AuthIndexRouteImport;
       parentRoute: typeof AuthRoute;
     };
+    "/_auth/sessions": {
+      id: "/_auth/sessions";
+      path: "/sessions";
+      fullPath: "/sessions";
+      preLoaderRoute: typeof AuthSessionsRouteImport;
+      parentRoute: typeof AuthRoute;
+    };
   }
 }
 
 interface AuthRouteChildren {
+  AuthSessionsRoute: typeof AuthSessionsRoute;
   AuthIndexRoute: typeof AuthIndexRoute;
 }
 
 const AuthRouteChildren: AuthRouteChildren = {
+  AuthSessionsRoute: AuthSessionsRoute,
   AuthIndexRoute: AuthIndexRoute,
 };
 

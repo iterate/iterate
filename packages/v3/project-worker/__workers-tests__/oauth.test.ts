@@ -1,8 +1,9 @@
-import { env, SELF } from "cloudflare:test";
-import { newWebSocketRpcSession } from "capnweb";
+import { env, SELF, createExecutionContext, waitOnExecutionContext } from "cloudflare:test";
+import { newWebSocketRpcSession, RpcTarget, RpcStub } from "capnweb";
 import { afterEach, beforeAll, expect, test, vi } from "vitest";
 import { directory } from "../src/directory.ts";
 import { oauthHelpers } from "../src/oauth.ts";
+import { listGrants } from "../src/grants.ts";
 import type { Env } from "../src/control-plane.ts";
 import type { Session } from "../src/session.ts";
 import definitions from "../src/control-plane.sql?raw";
@@ -13,7 +14,7 @@ const adminSecret = bindings.APP_CONFIG_ADMIN_API_SECRET!;
 const sessions: Disposable[] = [];
 const call = (path: string, init?: RequestInit) =>
   SELF.fetch(new Request(`${ORIGIN}${path}`, { redirect: "manual", ...init }));
-const helpers = () => oauthHelpers(bindings, new Request(ORIGIN));
+const helpers = () => oauthHelpers(bindings);
 
 beforeAll(async () => {
   await bindings.DB.batch(
@@ -214,6 +215,20 @@ test("resource narrowing, refresh and the revocation marker use the provider lif
   });
   expect(refresh.status, await refresh.clone().text()).toBe(200);
   const renewed = await refresh.json<{ access_token: string; refresh_token: string }>();
+  // A lost response may leave the client with the old refresh token. The provider
+  // explicitly keeps that token usable until the client uses a newer one.
+  expect(
+    (
+      await call("/oauth/token", {
+        method: "POST",
+        body: new URLSearchParams({
+          grant_type: "refresh_token",
+          refresh_token: token.refresh_token,
+          client_id: flow.clientId,
+        }),
+      })
+    ).status,
+  ).toBe(200);
   const [userId, grantId] = renewed.access_token.split(":");
   // Deliberately retain all valid KV records to prove D1 denial despite KV propagation.
   await bindings.DB.prepare(
@@ -242,6 +257,64 @@ test("an issuer cookie alone cannot authorize API calls or the operator RPC door
     401,
   );
 });
+
+test.each(["revoked", "membership"])(
+  "a live session loses held capabilities after %s within 60 seconds",
+  async (reason) => {
+    const flow = await grant([`${ORIGIN}/api`]);
+    const { root } = await rpc(flow.token!.access_token);
+    using context = await root.projects.get("oauth-a");
+    const native = (await context.invoke(
+      `itx.workers.get({source: {"cap.js": "import { WorkerEntrypoint } from 'cloudflare:workers'; export default class extends WorkerEntrypoint { ping() { return 'pong'; } }"}})`,
+    )) as unknown as { ping(): Promise<string> };
+    expect(await native.ping()).toBe("pong");
+    class Echo extends RpcTarget {
+      ping() {
+        return "lent";
+      }
+    }
+    using echo = new RpcStub(new Echo());
+    // The local target becomes a ClientRpcStub on the wire; its index-signature type is wider than this typed stub.
+    await context.provide(
+      "itx.liveAuthEcho",
+      echo as unknown as Parameters<typeof context.provide>[1],
+    );
+    const lent = (await context.invoke("itx.liveAuthEcho")) as unknown as {
+      ping(): Promise<string>;
+    };
+    expect(await lent.ping()).toBe("lent");
+    const org = (await directory(bindings.DB).getProject("oauth-a"))!.orgId;
+    const [, grantId] = flow.token!.access_token.split(":");
+    if (reason === "revoked") {
+      await bindings.DB.prepare(
+        "INSERT INTO oauth_activity (user_id, grant_id, revoked_at) VALUES (?, ?, ?) ON CONFLICT(user_id, grant_id) DO UPDATE SET revoked_at = excluded.revoked_at",
+      )
+        .bind(flow.user.id, grantId, Date.now())
+        .run();
+    } else {
+      await bindings.DB.prepare("DELETE FROM org_members WHERE user_id = ? AND org_id = ?")
+        .bind(flow.user.id, org)
+        .run();
+    }
+    try {
+      // Real elapsed time: this proves the deployed timer interval, not a test-only configuration.
+      await new Promise((resolve) => setTimeout(resolve, 31_000));
+      await expect(root.whoami()).rejects.toThrow(/Session|closed|RPC|revoked/i);
+      await expect(context.invoke("itx.kv.get('live-auth-probe')")).rejects.toThrow(
+        /Session|closed|RPC|revoked/i,
+      );
+      await expect(native.ping()).rejects.toThrow(/Session|closed|RPC|revoked/i);
+      await expect(lent.ping()).rejects.toThrow(/Session|closed|RPC|revoked/i);
+    } finally {
+      if (reason === "membership")
+        await bindings.DB.prepare(
+          "INSERT OR IGNORE INTO org_members (user_id, org_id) VALUES (?, ?)",
+        )
+          .bind(flow.user.id, org)
+          .run();
+    }
+  },
+);
 
 test("console and project browsers use the same CIMD flow and independent grants", async () => {
   const metadataFetch = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
@@ -302,6 +375,76 @@ test("console and project browsers use the same CIMD flow and independent grants
     }
     expect((await helpers().listUserGrants(user.id)).items).toHaveLength(2);
     const consoleLogin = logins[0]!;
+    const repeatedLogin = await call("/.auth/login", { headers: { cookie: consoleLogin.cookie } });
+    expect(repeatedLogin.status).toBe(303);
+    expect(repeatedLogin.headers.get("set-cookie")).toBeNull();
+    expect((await helpers().listUserGrants(user.id)).items).toHaveLength(2);
+    const minted = await call("/sessions/token", {
+      method: "POST",
+      headers: { cookie: consoleLogin.cookie, Origin: ORIGIN },
+      body: new URLSearchParams({ name: "My CLI", project: "browser-a" }),
+    });
+    expect(minted.status, await minted.clone().text()).toBe(200);
+    const personal = await minted.json<{ token: string; expiresAt: number }>();
+    expect(personal.expiresAt - Date.now()).toBeGreaterThan(29 * 24 * 3600_000);
+    expect(JSON.parse((await tool(personal.token, "whoami")).body.result.content[0].text)).toEqual({
+      actor: user.id,
+      email: user.email,
+    });
+    const { root: personalApi } = await rpc(personal.token);
+    expect((await personalApi.projects.list()).map((p: { id: string }) => p.id)).toEqual([
+      "browser-a",
+    ]);
+    expect(
+      (
+        await call("/oauth/token", {
+          method: "POST",
+          body: new URLSearchParams({
+            grant_type: "refresh_token",
+            refresh_token: personal.token,
+            client_id: `${ORIGIN}/.auth/client.json`,
+          }),
+        })
+      ).status,
+    ).toBe(400);
+    const inventoryContext = createExecutionContext();
+    const inventory = await listGrants({
+      env: bindings,
+      ctx: inventoryContext,
+      request: new Request(`${ORIGIN}/sessions`, { headers: { cookie: consoleLogin.cookie } }),
+    });
+    await waitOnExecutionContext(inventoryContext);
+    const [, personalId] = personal.token.split(":");
+    expect(inventory.items.find((item) => item.id === personalId)).toMatchObject({
+      name: "My CLI",
+      kind: "API token",
+      current: false,
+    });
+    expect(JSON.stringify(inventory)).not.toContain(personal.token);
+    expect(
+      (
+        await call("/sessions/revoke", {
+          method: "POST",
+          headers: { cookie: consoleLogin.cookie, Origin: ORIGIN },
+          body: new URLSearchParams({ grantId: "foreign-grant" }),
+        })
+      ).status,
+    ).toBe(404);
+    expect(
+      await bindings.DB.prepare("SELECT 1 FROM oauth_activity WHERE user_id = ? AND grant_id = ?")
+        .bind(user.id, "foreign-grant")
+        .first(),
+    ).toBeNull();
+    expect(
+      (
+        await call("/sessions/revoke", {
+          method: "POST",
+          headers: { cookie: consoleLogin.cookie, Origin: ORIGIN },
+          body: new URLSearchParams({ grantId: personalId! }),
+        })
+      ).status,
+    ).toBe(303);
+    expect((await tool(personal.token, "whoami")).status).toBe(401);
     expect(
       (
         await call("/.auth/logout", {

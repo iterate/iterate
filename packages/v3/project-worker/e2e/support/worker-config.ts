@@ -23,7 +23,7 @@ export const E2E_ADMIN_API_SECRET = "e2e-admin-api-secret";
  *  The directory D1 + OAuth KV are inherited from wrangler.jsonc (a fresh local namespace; global-setup
  *  applies the schema). The DO lifecycle is declarative (`exports`), so there is no migration history
  *  to replay. */
-export function e2eWorkerConfig(): Unstable_RawConfig {
+export function e2eWorkerConfig(platformOrigin = "http://127.0.0.1"): Unstable_RawConfig {
   const { rawConfig } = experimental_readRawConfig({ config: join(BUILD_DIR, "wrangler.json") });
   return {
     ...rawConfig,
@@ -38,6 +38,8 @@ export function e2eWorkerConfig(): Unstable_RawConfig {
     vars: {
       ...rawConfig.vars,
       APP_CONFIG_ENVIRONMENT_NAME: "e2e",
+      APP_CONFIG_PLATFORM_ORIGIN: platformOrigin,
+      APP_CONFIG_MCP_ORIGIN: "",
       APP_CONFIG_PROJECT_HOSTNAME_BASE: "localhost",
       APP_CONFIG_PROJECT_TOKEN_SECRET: "e2e-project-token-secret",
       APP_CONFIG_SESSION_SECRET: "e2e-session-secret",

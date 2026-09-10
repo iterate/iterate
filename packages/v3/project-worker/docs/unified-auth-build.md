@@ -62,3 +62,19 @@ Kit provisioning remains a subsequent slice of the earlier plan; RFC 8628 and
   correctness error; its broad base-branch scan could not compute a complete
   score and reported existing diagnostics plus a navigation-link suggestion.
   The legacy auth browser/worker fixtures still need migration.
+
+- Sessions and live authority: the Start page lists provider grants, last use,
+  individual logout and 30-day named API tokens. The token mint uses the console's
+  same CIMD client and an in-process code/PKCE exchange; no refresh token or second
+  token store. A WebSocket lease revalidates grant and held-project membership
+  every 30 seconds with a 60-second hard deadline, guards every frame, and recalls
+  lent capabilities on shutdown. The issuer is now a required configured origin.
+  Validation: eight workerd OAuth tests passed, including real-time revocation
+  of held contexts, loaded-worker and lent client capabilities; named tokens at
+  both protocols; foreign-grant denial; refresh after a lost response. Typecheck,
+  lint, 38 configuration unit tests and 16 local network E2E context tests passed.
+  React Doctor: 72/100, 26 findings against the broad branch base; no finding in
+  the new Sessions route. The existing demo render-ref error remains outside
+  this change. HTTP-only local deployments do not mint personal tokens yet.
+  Claude's browser review and accepted/rejected findings are recorded in
+  [the review](unified-auth-browser-review.md). Live/token review is underway.

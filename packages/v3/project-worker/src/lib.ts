@@ -18,6 +18,7 @@
 
 /** The stable machine-readable codes — SCREAMING_SNAKE, defined once, both ends import this. */
 type ErrorCode =
+  | "GRANT_NOT_FOUND" // a caller may revoke only a grant in their own inventory
   | "NO_ITX_EXPRESSION_MATCH" // no rewrite rule matches the call (default-deny)
   | "IDEMPOTENCY_CONFLICT"
   | "OFFSET_CONFLICT" // an input's expected `offset` is not the offset it would land at

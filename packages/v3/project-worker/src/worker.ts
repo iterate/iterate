@@ -112,7 +112,7 @@ export default {
       // MCP's public root is its protocol endpoint; /api remains Cap'n Web.
       if (url.pathname !== "/" && !url.pathname.startsWith("/.well-known/"))
         return new Response("Not found", { status: 404 });
-      return oauthResponse(request, env, ctx, consoleHandler);
+      return oauthResponse(request, env, ctx);
     }
     /** What every session and every lane's identity is built from — ONE object per request. */
     const sessionInput: SessionInput = {
@@ -141,8 +141,13 @@ export default {
       if (browserResponse) return browserResponse;
       const bearer = /^Bearer\s+(\S+)$/i.exec(request.headers.get("authorization") ?? "")?.[1];
       const authorization = bearer
-        ? await authorizationForToken(env, request, ctx, bearer)
+        ? await authorizationForToken(env, ctx, bearer)
         : await browserAuthorization(env, request, ctx);
+      if (bearer && !authorization)
+        return new Response("Invalid or revoked bearer", {
+          status: 401,
+          headers: { "WWW-Authenticate": 'Bearer error="invalid_token"' },
+        });
       if (
         authorization &&
         !(await sessionInput.directory.reachesProject(authorization.reach, projectId))
@@ -173,7 +178,7 @@ export default {
         { status: 421 },
       );
 
-    if (appConfig.platformOrigin && url.origin !== appConfig.platformOrigin)
+    if (url.origin !== appConfig.platformOrigin)
       return new Response("Unknown platform origin", { status: 421 });
 
     // `<deployId> <environmentName>`: Cloudflare's version id of this deploy — the stamp a smoke

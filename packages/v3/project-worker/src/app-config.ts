@@ -24,7 +24,7 @@ type AppConfigVarName = (typeof APP_CONFIG_VARS)[number];
 /** THE WORKER'S CONFIGURATION: what differs between deployments of the same code, parsed once per
  *  isolate (`appConfigOf`) from the `APP_CONFIG_*` vars and the deploy identity. */
 export interface AppConfig {
-  /** Fixed public origins. Unset only in the existing local/test configuration. */
+  /** The fixed issuer/console origin, and an optional separate MCP origin. */
   readonly platformOrigin: string;
   readonly mcpOrigin: string;
   /** Which deployment this is, as a word a human reads at `/version`: "poc" (the deployment), "test"
@@ -89,6 +89,7 @@ export function parseAppConfig(vars: object, deployId = "unversioned"): AppConfi
   if (!adminApiSecret) throw new Error("APP_CONFIG_ADMIN_API_SECRET: required, but unset or blank");
   const platformOrigin = read("APP_CONFIG_PLATFORM_ORIGIN");
   const mcpOrigin = read("APP_CONFIG_MCP_ORIGIN");
+  if (!platformOrigin) throw new Error("APP_CONFIG_PLATFORM_ORIGIN: required, but unset or blank");
   for (const [name, value] of [
     ["APP_CONFIG_PLATFORM_ORIGIN", platformOrigin],
     ["APP_CONFIG_MCP_ORIGIN", mcpOrigin],

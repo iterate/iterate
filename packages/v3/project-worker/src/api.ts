@@ -26,7 +26,7 @@ export function oauthResponse(
   defaultHandler?: Handler,
 ) {
   const url = new URL(request.url);
-  const { issuer, api, mcp } = oauthAddresses(env, request);
+  const { issuer, api, mcp } = oauthAddresses(env);
   if (url.pathname.startsWith("/.well-known/oauth-protected-resource")) {
     const resource =
       url.origin === new URL(mcp).origin && mcp !== `${issuer}/mcp`
@@ -43,7 +43,7 @@ export function oauthResponse(
   }
   // Public registration is disabled; it must not fall through to a console route.
   if (url.pathname === "/oauth/register") return new Response("Not found", { status: 404 });
-  return new OAuthProvider(providerOptions(env, request, protectedApi, defaultHandler)).fetch(
+  return new OAuthProvider(providerOptions(env, protectedApi, defaultHandler)).fetch(
     request,
     env,
     ctx,

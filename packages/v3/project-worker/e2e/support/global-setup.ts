@@ -42,6 +42,7 @@ export default async function setup(project: TestProject): Promise<() => Promise
     workers: [{ config: e2eWorkerConfig() }],
   });
   const { url } = await server.listen();
+  await server.update({ root: PACKAGE_DIR, workers: [{ config: e2eWorkerConfig(url.origin) }] });
   // THE DIRECTORY SCHEMA into the local D1 the harness bound — applied through the worker's OWN binding
   // (`getEnv().DB`), so it lands in exactly the namespace the worker reads (a separate `wrangler d1
   // execute --local` persists elsewhere). control-plane.sql is the one source (idempotent: IF NOT EXISTS),
