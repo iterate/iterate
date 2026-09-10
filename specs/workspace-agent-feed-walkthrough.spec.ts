@@ -92,8 +92,8 @@ test("workspace agent feed walkthrough", async ({ page }) => {
 /**
  * A real model turn on a freshly born agent: its first turn waits up to a
  * minute for the config worker, then the model. Bounded slices keep every
- * inline timeout under the lane's heavy-test ceiling while the live activity
- * row (product UI, not a spinner) plays in the feed.
+ * inline timeout under the preview run's heavy-test ceiling while the live
+ * activity row (product UI, not a spinner) plays in the feed.
  */
 async function waitForAgentReply(
   locator: import("@playwright/test").Locator,

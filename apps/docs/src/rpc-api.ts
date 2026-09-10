@@ -287,6 +287,8 @@ class WorkspaceApi extends RpcTarget implements DocsWorkspace {
     afterOffset = 0,
   ): Promise<{ ping?(): Promise<boolean> | boolean; unsubscribe(): void }> {
     return this.#dial.withProject(async (project) => {
+      // The dialed stub is the full project capability tree at runtime; the
+      // generated Project type omits `streams` (see PlatformProject above).
       const connection = await (project as unknown as PlatformProject).streams
         .get(this.#path)
         .openConnection({ processEventBatch, replayAfterOffset: afterOffset });

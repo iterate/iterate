@@ -65,6 +65,9 @@ export function AgentRenderedRoundResult({
     const row = eventsResult.data[0];
     if (eventsResult.status !== "ok" || row == null) return null;
     try {
+      // raw_json is the mirrored context-added event verbatim; the assertion
+      // only names the two optional fields read below, and `content` is
+      // still type-checked at runtime before use.
       const parsed = JSON.parse(String(row.raw_json)) as { payload?: { content?: unknown } };
       const content = parsed.payload?.content;
       return typeof content === "string" ? content : null;

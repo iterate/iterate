@@ -117,9 +117,11 @@ export function useAgentFeed(agentPath: string): AgentFeed {
   }, []);
   const liveState = useLiveState(
     (root: ReturnType<typeof makeConnection>) =>
-      // Pipelined through the vessel's `agent()` promise: capnweb resolves
-      // the property chain on the stub, so no round trip precedes the
-      // subscribe call.
+      // `agent()` returns a promise, and capnweb's stub Proxy pipelines the
+      // property chain on it at runtime, so the value behaves as the Agent
+      // handle although its static type is the promise. The SDK hook's
+      // LiveStateRpc and the generated contract's are the same interface
+      // declared in two places; the second assertion joins them.
       (root.project.agent(agentPath) as unknown as Agent).stream
         .feedLiveState as unknown as LiveStateRpc<FeedLiveState>,
     (state) => state,
@@ -132,17 +134,25 @@ export function useAgentFeed(agentPath: string): AgentFeed {
   // settled row exists, so the previous snapshot stays until the
   // publications catch up. The reverse order hides the live activity whose
   // id is already published.
-  const presented = useRef<FeedLiveState | undefined>(undefined);
+  // Keyed by agent path: a previous workspace's snapshot must never outlive
+  // its feed, even for the render in which the path changes.
+  const presented = useRef<{ agentPath: string; snapshot: FeedLiveState } | undefined>(undefined);
+  if (presented.current !== undefined && presented.current.agentPath !== agentPath) {
+    presented.current = undefined;
+  }
   const incoming = liveState.value;
   if (incoming !== undefined && incoming.publicationOffset <= fold.latestPublicationOffset) {
-    presented.current = incoming;
+    presented.current = { agentPath, snapshot: incoming };
   }
   const live = useMemo(() => {
-    const snapshot = presented.current;
+    const snapshot = presented.current?.snapshot;
     if (snapshot === undefined) return undefined;
     // A preview the server omitted for size carries no agent presentation.
     const liveActivity = snapshot.agent?.live ?? null;
     if (liveActivity === null || !fold.publishedIds.has(liveActivity.id)) return snapshot;
+    // Spreading loses the discriminant: the input was the variant with an
+    // agent presentation, and only `live` changes, so the result is that
+    // same variant.
     return { ...snapshot, agent: { ...snapshot.agent, live: null } } as FeedLiveState;
     // presented.current changes exactly when incoming or the fold does.
     // oxlint-disable-next-line react-hooks/exhaustive-deps

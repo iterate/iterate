@@ -53,7 +53,11 @@ export function AgentFeedPane({ agentPath }: { agentPath: string }) {
   const runtime = feed.live?.runtimeChange?.runtime ?? IDLE_RUNTIME;
   const working = isAgentRuntimeVisiblyActive(runtime);
   const liveActivity = feed.live?.agent?.live ?? null;
+  // The contract flattens the reducer's message item type; the live snapshot
+  // serialises exactly AgentUiStateSchema.shape.queuedUserMessages, so the
+  // runtime shape IS AgentUiMessageItem — the assertion restores the name.
   const queued = (feed.live?.agent?.queuedUserMessages ?? []) as AgentUiMessageItem[];
+  const previewStatus = feed.live?.previewStatus;
   const viewers = (feed.live?.agent?.presence ?? [])
     .filter((entry) => entry.connected && entry.connectionKind === "session" && entry.user)
     .map((entry) => ({
@@ -138,11 +142,18 @@ export function AgentFeedPane({ agentPath }: { agentPath: string }) {
           <p className="flex items-center gap-2 text-sm text-muted-foreground">
             <Spinner className="size-4" /> Opening the agent…
           </p>
-        ) : feed.items.length === 0 && liveActivity === null ? (
+        ) : feed.items.length === 0 && liveActivity === null && previewStatus !== "omitted" ? (
           <p className="text-sm text-muted-foreground">
             Nothing yet. Say what you need; the agent reads and edits this workspace.
           </p>
         ) : null}
+        {previewStatus === undefined || previewStatus === "available" ? null : (
+          <p className="text-sm text-muted-foreground" role="status">
+            {previewStatus === "omitted"
+              ? "Live preview is too large to display; the agent is still working and every settled item lands here."
+              : "Live preview shortened; completed responses appear in full once settled."}
+          </p>
+        )}
         {feed.items.map((item) => (
           <AgentFeedItemRow key={item.id} item={item} toggledIds={toggledIds} onToggle={onToggle} />
         ))}

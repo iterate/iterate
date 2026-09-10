@@ -23,6 +23,7 @@ import { Drawer, DrawerContent, DrawerTitle } from "@iterate-com/ui/components/d
 import { isSessionTransportError, withDocsProject } from "../lib/docs-client.ts";
 import { workspaceTransport } from "../lib/project-rpc.ts";
 import { withRetries } from "../lib/retry.ts";
+import { useNarrowViewport } from "../lib/use-narrow-viewport.ts";
 import type { DocsUser, WorkspaceDocumentSnapshot } from "../lib/docs-api.ts";
 import { AgentFeedPane } from "./agent-feed-pane.tsx";
 import { DocumentError } from "./document-error.tsx";
@@ -61,6 +62,7 @@ export function WorkspaceDocumentPage({
   // The side column shows the document's comments or the workspace's agent
   // feed; on narrow screens the same choice fills the drawer.
   const [asidePane, setAsidePane] = useState<"comments" | "agent">("comments");
+  const narrow = useNarrowViewport();
   // Everyone with a live caret on this document, self first — delivered by
   // the editor's collab session whenever the presence generation advances
   // (join announces + 25s heartbeats keep idle readers present).
@@ -224,13 +226,21 @@ export function WorkspaceDocumentPage({
             }
           } else commentsRef.current?.focusDocumentComment();
         }}
-        agentOpen={asidePane === "agent"}
+        agentOpen={asidePane === "agent" && (!narrow || commentsOpen)}
         onToggleAgent={() => {
-          const next = asidePane === "agent" ? "comments" : "agent";
-          setAsidePane(next);
-          if (window.matchMedia("(max-width: 1023px)").matches) {
-            focusMobileComposer.current = false;
-            setCommentsOpen(next === "agent" ? true : commentsOpen);
+          if (!narrow) {
+            setAsidePane(asidePane === "agent" ? "comments" : "agent");
+            return;
+          }
+          // On a phone the pane lives in the drawer: a tap opens it on the
+          // agent, a second tap (or dismissing the drawer) closes it.
+          focusMobileComposer.current = false;
+          if (commentsOpen && asidePane === "agent") {
+            setCommentsOpen(false);
+            setAsidePane("comments");
+          } else {
+            setAsidePane("agent");
+            setCommentsOpen(true);
           }
         }}
         view={view}
@@ -282,8 +292,11 @@ export function WorkspaceDocumentPage({
           </div>
         </section>
 
+        {/* The feed pane mounts in exactly one place: the aside on wide
+            viewports, the drawer on narrow ones. A hidden second mount would
+            birth the agent twice and hold its own connections. */}
         <aside className="hidden min-h-0 border-l bg-muted/5 lg:block">
-          {asidePane === "agent" ? (
+          {asidePane === "agent" && !narrow ? (
             <AgentFeedPane agentPath={workspacePath} />
           ) : (
             <DocumentComments ref={commentsRef} {...review.comments} />
@@ -292,7 +305,12 @@ export function WorkspaceDocumentPage({
         <Drawer
           open={commentsOpen}
           onOpenChange={(open) => {
-            if (!open) focusMobileComposer.current = false;
+            if (!open) {
+              focusMobileComposer.current = false;
+              // A dismissed drawer forgets the agent choice, so the next
+              // Agent tap reopens it instead of toggling a closed pane.
+              setAsidePane("comments");
+            }
             setCommentsOpen(open);
           }}
         >
@@ -309,7 +327,7 @@ export function WorkspaceDocumentPage({
             <DrawerTitle className="sr-only">
               {asidePane === "agent" ? "Agent" : "Comments"}
             </DrawerTitle>
-            {asidePane === "agent" ? (
+            {asidePane === "agent" && narrow ? (
               <AgentFeedPane agentPath={workspacePath} />
             ) : (
               <DocumentComments ref={mobileCommentsRef} {...review.comments} />
