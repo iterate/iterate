@@ -530,7 +530,8 @@ async function resolveExternalToken({
 // the Start server entry, and their server functions call the functions of this section — with THE
 // MACHINE DOORS beside it (`consoleDoor`): the same four actions as plain form POSTs, /login /logout
 // /projects /authorize, for a script, the lanes, a `page.request.post` (a server function's URL is
-// the build's, `/_serverFn/<id>`). The consent page reuses the same session and grants the client the
+// the build's, `/_serverFn/<id>`) — and for the console's own forms, which post there until the
+// page hydrates (src/routes/login.tsx). The consent page reuses the same session and grants the client the
 // USER on the projects they check — what /mcp acts as. No first-party surface is ever an OAuth
 // client; they all just carry the session cookie.
 //
@@ -773,13 +774,16 @@ const loadStartServerEntry = (): Promise<ServerEntry> =>
 const redirectResponse = (location: string, headers: Record<string, string> = {}): Response =>
   new Response(null, { status: 302, headers: { location, ...headers } });
 
-/** THE MACHINE DOORS: the console's four actions as plain form POSTs — /login (email, next), /logout,
- *  /projects (slug), /authorize?<the OAuth query> (project, repeated) — each the very function the
- *  route's server function calls, answered as a form post is: a 302 on success (the session cookie
- *  set or cleared on it), a text refusal otherwise. Null for anything else: the console's. */
+/** THE MACHINE DOORS: the console's four actions as plain form POSTs — /login (email, next),
+ *  /logout (`?next=`, a path on this origin, `/` by default), /projects (slug), /authorize?<the OAuth
+ *  query> (project, repeated) — each the very function the route's server function calls, answered
+ *  as a form post is: a 302 on success (the session cookie set or cleared on it), a text refusal
+ *  otherwise. The console's own forms post here too (src/routes/login.tsx says how: a form submitted
+ *  before the page hydrates), so each door's fields are the form's. Null for anything else: the console's. */
 async function consoleDoor(request: Request, env: Env): Promise<Response | null> {
   if (request.method !== "POST") return null;
-  const { pathname, search } = new URL(request.url);
+  const url = new URL(request.url);
+  const { pathname, search } = url;
   const message = (error: unknown) => (error instanceof Error ? error.message : String(error));
   if (pathname === "/login") {
     const form = await request.formData();
@@ -793,7 +797,10 @@ async function consoleDoor(request: Request, env: Env): Promise<Response | null>
       return new Response(`400: ${message(error)}\n`, { status: 400 });
     }
   }
-  if (pathname === "/logout") return redirectResponse("/", { "set-cookie": signOut() });
+  if (pathname === "/logout")
+    return redirectResponse(sameOriginPath(url.searchParams.get("next") ?? "/", url.origin), {
+      "set-cookie": signOut(),
+    });
   if (pathname === "/projects") {
     // The console's form. A program creates projects over /api — `authenticate().projects.create`
     // (src/session.ts) — the same directory door.

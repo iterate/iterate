@@ -606,7 +606,8 @@ form; log out) and the `/authorize` consent — every route reading and acting t
 `accountOf` · `createProjectFor` · `consentOf` · `approveConsent`) with the worker's env and the
 request as `context` (`src/routes/-console-context.ts`); beside them THE MACHINE DOORS
 (`consoleDoor`): the same actions as plain form POSTs, `POST /login`, `/logout`, `/projects`,
-`/authorize`, for a script, the lanes, a `page.request.post` — every POST refused with 403 from a
+`/authorize`, for a script, the lanes, a `page.request.post` and the console's own forms until the
+page hydrates — every POST refused with 403 from a
 foreign `Origin`, every page `Cache-Control: no-store`; the session a signed cookie
 (`__Host-itx-control-plane-session`, `src/principal.ts` verifies it) — the `/authorize` consent
 being THE PROJECT SELECTION (the user's

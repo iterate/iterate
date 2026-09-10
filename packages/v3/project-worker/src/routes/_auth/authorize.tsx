@@ -5,8 +5,10 @@
 // refuses is sent back to the client with `error` (`AuthorizationError.redirectUri`) or shown here.
 // The user's projects are checkboxes, all checked; approving grants the client the USER on the
 // checked ones (`completeAuthorization` — `props.actor / email / projects`, what every /mcp tool
-// acts within), then the browser goes to the client's redirect URI. The machine's approve door is
-// `POST /authorize` (a form), the same `approveConsent`.
+// acts within), then the browser goes to the client's redirect URI. The form is a real one —
+// `method="post"` to the machine's approve door, `POST /authorize?<the same query>` (control-plane.ts
+// `consoleDoor`, the same `approveConsent`), the server function taking over once hydrated
+// (login.tsx says why).
 import { useState, type FormEvent } from "react";
 import { createFileRoute, redirect } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
@@ -44,9 +46,6 @@ export const Route = createFileRoute("/_auth/authorize")({
 
 function ConsentPage() {
   const answer = Route.useLoaderData();
-  const [chosen, setChosen] = useState<string[]>(() =>
-    answer.kind === "consent" ? answer.projects.map((project) => project.id) : [],
-  );
   const [error, setError] = useState<string | null>(null);
 
   if (answer.kind === "invalid")
@@ -60,6 +59,7 @@ function ConsentPage() {
   const { query, clientName, email, projects } = answer;
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    const chosen = new FormData(event.currentTarget).getAll("project").map(String);
     setError(null);
     try {
       const { redirectTo } = await approve({ data: { query, projects: chosen } });
@@ -68,10 +68,8 @@ function ConsentPage() {
       setError(caught instanceof Error ? caught.message : String(caught));
     }
   };
-  const switchAccount = async () => {
-    await logout();
-    window.location.assign(`/login?next=${encodeURIComponent(`/authorize${query}`)}`);
-  };
+  // "switch account": the session cleared, the login form with this consent as its `next`
+  const loginAgain = `/login?next=${encodeURIComponent(`/authorize${query}`)}`;
 
   return (
     <main>
@@ -79,25 +77,13 @@ function ConsentPage() {
       <p>
         <strong>{clientName}</strong> wants to connect as <strong>{email}</strong>.
       </p>
-      <form onSubmit={submit}>
+      <form method="post" action={`/authorize${query}`} onSubmit={submit}>
         <fieldset>
           <legend>Projects it may reach</legend>
           {projects.length ? (
             projects.map((project) => (
               <label key={project.id}>
-                <input
-                  type="checkbox"
-                  name="project"
-                  value={project.id}
-                  checked={chosen.includes(project.id)}
-                  onChange={(event) =>
-                    setChosen((previous) =>
-                      event.target.checked
-                        ? [...previous, project.id]
-                        : previous.filter((id) => id !== project.id),
-                    )
-                  }
-                />{" "}
+                <input type="checkbox" name="project" value={project.id} defaultChecked />{" "}
                 <code>{project.id}</code> <span className="muted">in {project.orgId}</span>
               </label>
             ))
@@ -109,9 +95,12 @@ function ConsentPage() {
       </form>
       {error && <p role="alert">{error}</p>}
       <form
-        onSubmit={(event) => {
+        method="post"
+        action={`/logout?next=${encodeURIComponent(loginAgain)}`}
+        onSubmit={async (event) => {
           event.preventDefault();
-          void switchAccount();
+          await logout();
+          window.location.assign(loginAgain);
         }}
       >
         <button type="submit">Switch account</button>

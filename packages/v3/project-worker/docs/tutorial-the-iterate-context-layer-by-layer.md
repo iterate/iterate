@@ -1654,7 +1654,8 @@ four screens: `/login` (the email form; "continue as / switch account" when a se
 `_auth` layout (no session ⇒ `/login?next=`), the account page at `/` (your orgs; your projects, each
 with an `open` link onto its hosts; create a project; log out) and the `/authorize` consent (below) —
 each screen acting through its own server functions, with `POST /login`, `/logout`, `/projects` and
-`/authorize` beside them as plain form doors for a script; the OAuth 2.1
+`/authorize` beside them as plain form doors — for a script, and for the screens' own forms until the
+page hydrates; the OAuth 2.1
 Authorization Server (`/authorize`, `/oauth/token`, `/oauth/register`, `/.well-known/*`) whose ONLY
 protected route — and ONE resource, `<origin>/mcp` — is `/mcp`. The directory is D1 — users → orgs →
 projects, access is org membership — and a project's id IS its DNS-safe slug: the directory row, the

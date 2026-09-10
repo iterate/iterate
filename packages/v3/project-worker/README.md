@@ -66,9 +66,11 @@ the OAuth consent and THE PROJECT SELECTION) — plus `router.tsx`, the checked-
 `console.css`. Every route reads and acts through its own `createServerFn`s, which call the console
 half of `src/control-plane.ts` (`signIn`, `accountOf`, `createProjectFor`, `consentOf`,
 `approveConsent`) with the worker's env and the request as `context` (`src/routes/-console-context.ts`).
-Beside the server functions, the same four actions are plain form POSTs for a script or a test —
-`POST /login`, `/logout`, `/projects`, `/authorize` (`consoleDoor`) — every POST refused with 403
-from a foreign `Origin`, every page `Cache-Control: no-store`.
+Beside the server functions, the same four actions are plain form POSTs — `POST /login`, `/logout`,
+`/projects`, `/authorize` (`consoleDoor`) — for a script or a test, and for the console's own forms,
+which post there until the page hydrates (`method="post"` to the door; the server function takes over
+once React has attached its handlers). Every POST is refused with 403 from a foreign `Origin`, every
+page `Cache-Control: no-store`.
 
 ## Build, run, deploy
 

@@ -4637,10 +4637,40 @@ tutorial's chapter 0), and kernel-vs-library namespacing (an open question in ch
   a project-host page; the OAuth flow as an MCP client runs it — DCR, consent with one project
   unchecked, the loopback redirect, PKCE, `tools/list`, `itx.invoke` granted and refused; the project
   secret as a device bearer; logout; the cross-site negatives (403, UNAUTHENTICATED, 405). 8/8 against
-  the deployed string console (b7ab3cc06), 8/8 against the new console locally; the deployed run: the
-  line below. One finding, pinned as today's truth: the "open" link signs in the APEX host only —
+  the deployed string console (b7ab3cc06), 8/8 against the new console locally; the deployed run: 7
+  passed / 3 failed — forms submitted before the page's script hydrated (the entry below). One finding,
+  pinned as today's truth: the "open" link signs in the APEX host only —
   `__Host-` cookies are host-only, so an app host is signed in through its own `/.itx/session` door.
 - The dependencies (TanStack Start + Router, React as a runtime dependency, Vite, the Cloudflare
   plugin, the router generator, the React plugin — the versions apps/auth pins) spliced into the
   lockfile in a detached checkout. GATES: tsc ×3 · `routes:check` · `vite build` · oxlint · knip ·
-  unit 519 · workers 59 · local e2e 177. DEPLOYED: the line below.
+  unit 519 · workers 59 · local e2e 177 · `pnpm test` 51 files / 755 passed. DEPLOYED (30c80c813 +
+  606c620fe, version d5b4b3e2): 22 files / 194 passed / 4 expected-fail / 2 skipped — the API lanes
+  green; the browser run 7/10 (the entry below).
+
+## 2026-09-10 — the deployed browser run: forms submitted before hydration, and the fix
+
+- THE DEPLOYED RUN of `specs/auth.spec.ts` against d5b4b3e2: 7 passed / 3 failed. Flow 1 ended on
+  `/login?email=…` — the login form had submitted as a plain GET; two more flows waited for an element
+  the page never showed. The diagnosis, against the deployment itself, not the source: the HTML names
+  the right assets and every one serves (200, the right types); a Playwright probe finds the form with
+  NO React handlers at the page's `load` event and hydrated about 250 ms later, with no console error.
+  Start loads the client bundle through a dynamic `import()`, which `load` does not wait for; the spec
+  types and submits inside that gap, and a `<form onSubmit>` with no `method` is, to the browser, a GET.
+  Locally the assets arrive in a few milliseconds and hydration wins — the same spec was 8/8 there. Not
+  a build or asset-serving fault: a race any visitor on a slow link can lose too.
+- THE FIX: every console form is a REAL form — `method="post"` to its machine door (`/login` with a
+  hidden `next`, `/projects`, `/logout`, `/authorize?<the OAuth query>`), its fields named as the door
+  reads them — so a submit before hydration posts to the door and follows its 302; hydrated, `onSubmit`
+  prevents the default and calls the server function: the same action, its refusal shown in the page.
+  Field values are read from the form at submit (`new FormData(form)`), never mirrored into state, so
+  typing before hydration is not lost (a controlled input would hydrate back to its empty state); the
+  consent's checkboxes are `defaultChecked`; "continue as" is a link — a navigation, not a button that
+  needs script. The `/logout` door takes an optional `?next=` (a same-origin path, `sameOriginPath`), so
+  "switch account" on the login and consent pages returns to the form with the same `next` without
+  script; the workers lane's body-less `POST /logout` still lands on `/`. Three `useState`s gone.
+- PROVEN three ways before the deploy: the spec 10/10 (8 auth + 2 demo) against the local worker; a
+  browser with every `/assets/*.js` request aborted — no hydration at all — logging in, creating a
+  project, logging out and switching account through the doors alone (7/7 checks); and the deployed
+  run: the line below. GATES: tsc ×3 · `routes:check` · oxlint · `pnpm test` 51 files / 755 passed /
+  17 expected-fail / 19 deployed-only skips. DEPLOYED: the line below.

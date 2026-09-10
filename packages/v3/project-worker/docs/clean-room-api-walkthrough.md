@@ -1477,7 +1477,8 @@ through to THE CONSOLE — a TanStack Start app (`src/routes/**`: `/login`, the 
 the `/authorize` consent), SSR'd through the Start server entry with the worker's env and the
 request as every server function's `context`; the routes' `createServerFn`s call this file's
 console half (`signIn`, `accountOf`, `createProjectFor`, `consentOf`, `approveConsent`), and the
-machine doors beside them (`consoleDoor`) are the same actions as plain form POSTs — `POST /login`,
+machine doors beside them (`consoleDoor`) are the same actions as plain form POSTs (the console's own
+forms post there until the page hydrates) — `POST /login`,
 `/logout` (the session is the signed `__Host-itx-control-plane-session` cookie, `signClaims` under
 `APP_CONFIG_SESSION_SECRET`), `POST /projects` (a program creates projects over `/api`,
 `projects.create`), `POST /authorize`. The `/authorize` consent is THE PROJECT SELECTION: the user's
