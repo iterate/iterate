@@ -73,7 +73,7 @@ test("workspace agent feed walkthrough", async ({ page }) => {
   const userRow = pane.locator('[data-testid="agent-feed-message"][data-kind="user"]').first();
   await userRow.waitFor({ timeout: 60_000 }); // timeout: the feed facet publishes the user message on the next commit — no loading UI for the spinner-waiter in between
   const reply = pane.locator('[data-testid="agent-feed-message"][data-kind="assistant"]').first();
-  await reply.waitFor({ timeout: 300_000 }); // timeout: a real model turn on a freshly born agent (its first turn waits for the config worker) — the live activity row is product UI the spinner-waiter cannot treat as a spinner
+  await waitForAgentReply(reply, "a chat reply");
 
   // 5. Back to Comments: the agent's comment is in the rail.
   await page.getByRole("button", { name: "Agent" }).click();
@@ -83,6 +83,27 @@ test("workspace agent feed walkthrough", async ({ page }) => {
     .first()
     .waitFor({ timeout: 60_000 }); // timeout: the comment lands through the live document — no loading UI for the spinner-waiter in between
 });
+
+/**
+ * A real model turn on a freshly born agent: its first turn waits up to a
+ * minute for the config worker, then the model. Bounded slices keep every
+ * inline timeout under the lane's heavy-test ceiling while the live activity
+ * row (product UI, not a spinner) plays in the feed.
+ */
+async function waitForAgentReply(
+  locator: import("@playwright/test").Locator,
+  what: string,
+): Promise<void> {
+  for (let slice = 0; slice < 3; slice++) {
+    try {
+      await locator.waitFor({ timeout: 120_000 }); // timeout: one bounded model-turn slice (see docstring) — the live activity row is product UI the spinner-waiter cannot treat as a spinner
+      return;
+    } catch {
+      // keep waiting — the turn is still running
+    }
+  }
+  throw new Error(`the agent never replied with ${what}`);
+}
 
 /** The project-member gate interstitial appears only when the project host
  * has no session cookie yet — click through when it does. */
