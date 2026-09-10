@@ -63,7 +63,7 @@ test("workspace agent feed walkthrough", async ({ page }) => {
   );
 
   // 3. The Agent pane: the workspace's own agent, born on first open.
-  await page.getByRole("button", { name: "Agent" }).click();
+  await page.getByRole("button", { name: "Agent", exact: true }).click();
   const pane = page.getByTestId("agent-feed-pane");
   await pane.waitFor();
   const composer = pane.getByRole("textbox", { name: "Message the agent" });
@@ -74,14 +74,16 @@ test("workspace agent feed walkthrough", async ({ page }) => {
   await composer.fill(
     "Read plan.md in this workspace and leave ONE document comment suggesting a concrete improvement, then tell me here when it is in.",
   );
-  await pane.getByRole("button", { name: "Send message" }).click();
+  const send = pane.getByRole("button", { name: "Send message" });
+  await send.waitFor();
+  await send.click();
   const userRow = pane.locator('[data-testid="agent-feed-message"][data-kind="user"]').first();
   await userRow.waitFor({ timeout: 60_000 }); // timeout: the feed facet publishes the user message on the next commit — no loading UI for the spinner-waiter in between
   const reply = pane.locator('[data-testid="agent-feed-message"][data-kind="assistant"]').first();
   await waitForAgentReply(reply, "a chat reply");
 
   // 5. Back to Comments: the agent's comment is in the rail.
-  await page.getByRole("button", { name: "Agent" }).click();
+  await page.getByRole("button", { name: "Agent", exact: true }).click();
   await page
     .getByLabel("Document comments")
     .locator("article")

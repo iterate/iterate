@@ -10,6 +10,7 @@ import {
 } from "@iterate-com/ui/components/agent-feed/agent-live-activity";
 import {
   isAgentRuntimeVisiblyActive,
+  isAgentUiActivityWorking,
   type AgentUiMessageItem,
 } from "@iterate-com/ui/components/events/agent-ui-reducer";
 import type { FeedLiveState } from "iterate/client";
@@ -51,8 +52,18 @@ export function AgentFeedPane({ agentPath }: { agentPath: string }) {
   const pinned = useRef(true);
 
   const runtime = feed.live?.runtimeChange?.runtime ?? IDLE_RUNTIME;
-  const working = isAgentRuntimeVisiblyActive(runtime);
   const liveActivity = feed.live?.agent?.live ?? null;
+  const previewOmitted = feed.live?.previewStatus === "omitted";
+  // Busy = work is actively running (the OS header's rule); an omitted
+  // preview hides the live steps, so the runtime counts stand in.
+  const working =
+    isAgentUiActivityWorking(liveActivity, runtime) ||
+    (previewOmitted && isAgentRuntimeVisiblyActive(runtime));
+  // Only a model request in flight can be interrupted (the OS composer's
+  // rule); a scheduled or debounced turn still accepts new messages.
+  const interruptible =
+    liveActivity?.steps.some((step) => step.kind === "llm" && step.status === "running") ??
+    (previewOmitted && runtime.llmRequests.started > 0);
   // The contract flattens the reducer's message item type; the live snapshot
   // serialises exactly AgentUiStateSchema.shape.queuedUserMessages, so the
   // runtime shape IS AgentUiMessageItem — the assertion restores the name.
@@ -188,7 +199,7 @@ export function AgentFeedPane({ agentPath }: { agentPath: string }) {
             rows={2}
             className="min-h-0 flex-1 resize-none text-sm"
           />
-          {working ? (
+          {interruptible ? (
             <Button
               type="button"
               size="sm"
