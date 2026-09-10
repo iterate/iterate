@@ -5,7 +5,7 @@ validation, including the full repository test suite. PR CI/reviews are monitore
 
 ## Request and decisions
 
-Add `grandfatherRule(rule: StrictRule, { allowedUpTo: Date })` and carry over
+Add `grandfatherRule({ allowedUpTo, ...rule }: StrictRule & { allowedUpTo: Date })` and carry over
 `no-shouting-constants` from the existing worktree, enabling it with the wrapper.
 Use the requested example cutoff, `2026-11-10T00:00:00Z` (inclusive).
 
@@ -34,3 +34,6 @@ checks PR #2620 every 20 minutes through 2026-09-11 09:00 UTC.
 
 All local checks passed. OS: 3,121 passed, 18 expected failures, one existing
 skip. The wrapper also covers history across renamed paths with brackets.
+
+API follow-up: `allowedUpTo` now sits at the top of the rule object; pre-built
+rules can be spread into that same argument. Blame behavior is unchanged.

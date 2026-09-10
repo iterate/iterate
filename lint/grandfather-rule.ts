@@ -8,10 +8,10 @@ import type { StrictRule } from "./types.ts";
  * Uncommitted lines and lines without provable history are always checked.
  * Uses the linted source, so editor buffers and fixes retain correct line numbers.
  */
-export function grandfatherRule(
-  rule: StrictRule,
-  { allowedUpTo }: { allowedUpTo: Date },
-): StrictRule {
+export function grandfatherRule({
+  allowedUpTo,
+  ...rule
+}: StrictRule & { allowedUpTo: Date }): StrictRule {
   const cutoff = allowedUpTo.getTime();
   if (!Number.isFinite(cutoff))
     throw new Error("grandfatherRule requires a valid allowedUpTo date");

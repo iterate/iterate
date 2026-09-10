@@ -127,9 +127,9 @@ test("handles renamed paths containing Git pathspec characters", () => {
 });
 
 test("rejects invalid cutoff dates", () => {
-  expect(() =>
-    grandfatherRule({ create: () => ({}) }, { allowedUpTo: new Date("invalid") }),
-  ).toThrow("valid allowedUpTo date");
+  expect(() => grandfatherRule({ allowedUpTo: new Date("invalid"), create: () => ({}) })).toThrow(
+    "valid allowedUpTo date",
+  );
 });
 
 const repoRoot = resolve(import.meta.dirname, "..");
@@ -144,6 +144,7 @@ function createFixture() {
     export default {
       meta: { name: "fixture" },
       rules: { old: grandfatherRule({
+        allowedUpTo: new Date("2021-01-01"),
         meta: { type: "suggestion", fixable: "code", messages: { banned: "Found {{name}}" } },
         create(context) {
           return { Identifier(node) {
@@ -153,7 +154,7 @@ function createFixture() {
             });
           } };
         }
-      }, { allowedUpTo: new Date("2021-01-01") }) }
+      }) }
     };
   `,
   );

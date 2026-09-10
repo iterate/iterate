@@ -3,14 +3,18 @@
 ```ts
 import { grandfatherRule } from "./grandfather-rule.ts";
 
-export const noShoutingConstants = grandfatherRule(
-  {
-    create(context) {
-      /* any normal StrictRule */
-    },
+export const noShoutingConstants = grandfatherRule({
+  allowedUpTo: new Date("2026-11-10"),
+  meta: {
+    /* normal rule metadata */
   },
-  { allowedUpTo: new Date("2026-11-10") },
-);
+  create(context) {
+    /* normal rule listeners */
+  },
+});
+
+// Or wrap a pre-built StrictRule:
+const wrapped = grandfatherRule({ allowedUpTo: new Date("2026-11-10"), ...existingRule });
 ```
 
 Reports at or before the cutoff are suppressed using the start line's Git
